@@ -14,6 +14,7 @@ export type CardRow = {
   resume_id: string | null;
   model: string | null;
   system_prompt: string | null;
+  group_id: string | null;
   updated_at: number;
 };
 
@@ -41,6 +42,7 @@ function migrate(db: Database.Database) {
     "system_prompt TEXT",
     "kind TEXT NOT NULL DEFAULT 'terminal'",
     `board_id TEXT NOT NULL DEFAULT '${DEFAULT_BOARD_ID}'`,
+    "group_id TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE cards ADD COLUMN ${col}`);
@@ -68,6 +70,7 @@ export function openStore(userDataDir: string) {
       resume_id TEXT,
       model TEXT,
       system_prompt TEXT,
+      group_id TEXT,
       updated_at INTEGER NOT NULL
     );
   `);
@@ -107,7 +110,7 @@ export function openStore(userDataDir: string) {
   }
 
   const listStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, updated_at FROM cards WHERE board_id = ?",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, updated_at FROM cards WHERE board_id = ?",
   );
   // Used only by acbridge's `list` command (main/message-bus.ts) — that
   // protocol has no notion of boards, and restricting it to the caller's
@@ -115,15 +118,16 @@ export function openStore(userDataDir: string) {
   // format that doesn't carry it today. Same "list every terminal card"
   // behavior this already had before boards existed.
   const listAllStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, updated_at FROM cards",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, updated_at FROM cards",
   );
   const upsertStmt = db.prepare(`
-    INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, updated_at)
-    VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @system_prompt, @updated_at)
+    INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, updated_at)
+    VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @system_prompt, @group_id, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       board_id = excluded.board_id, kind = excluded.kind, provider = excluded.provider, cwd = excluded.cwd,
       x = excluded.x, y = excluded.y, w = excluded.w, h = excluded.h,
       resume_id = excluded.resume_id, model = excluded.model, system_prompt = excluded.system_prompt,
+      group_id = excluded.group_id,
       updated_at = excluded.updated_at
   `);
   const deleteStmt = db.prepare("DELETE FROM cards WHERE id = ?");

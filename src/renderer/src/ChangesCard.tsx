@@ -10,24 +10,28 @@ export function ChangesCard({
   zIndex,
   root,
   interactionMode,
+  selected,
   reflowing,
   onChange,
   onCommit,
   onRaise,
   onClose,
   onConnectorStart,
+  onSelectStart,
 }: {
   rect: Rect;
   zoom: number;
   zIndex: number;
   root: string;
-  interactionMode?: "normal" | "connector";
+  interactionMode?: "normal" | "connector" | "select";
+  selected?: boolean;
   reflowing?: boolean;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onClose: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
+  onSelectStart?: (e: React.PointerEvent) => void;
 }) {
   const [status, setStatus] = useState<GitStatus | null>(null);
 
@@ -48,12 +52,14 @@ export function ChangesCard({
       zoom={zoom}
       zIndex={zIndex}
       interactionMode={interactionMode}
+      selected={selected}
       accent="var(--accent-changes)"
       reflowing={reflowing}
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
       onConnectorStart={onConnectorStart}
+      onSelectStart={onSelectStart}
       headerContent={
         <>
           <span className="card-head-label">

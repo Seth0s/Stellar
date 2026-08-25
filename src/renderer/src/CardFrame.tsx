@@ -17,6 +17,7 @@ export function CardFrame({
   headerContent,
   children,
   interactionMode = "normal",
+  selected = false,
   accent,
   reflowing,
   onChange,
@@ -24,6 +25,7 @@ export function CardFrame({
   onRaise,
   onResizeSettled,
   onConnectorStart,
+  onSelectStart,
 }: {
   rect: Rect;
   zoom: number;
@@ -31,9 +33,12 @@ export function CardFrame({
   className: string;
   headerContent: React.ReactNode;
   children: React.ReactNode;
-  /** "connector" disables the normal drag/resize gestures below so a click
-   * anywhere on the card can start a connector drag instead — see App.tsx. */
-  interactionMode?: "normal" | "connector";
+  /** "connector"/"select" both disable the normal drag/resize gestures below
+   * so a click anywhere on the card starts a connector drag or a selection
+   * toggle instead — see App.tsx. */
+  interactionMode?: "normal" | "connector" | "select";
+  /** Outline highlight while multi-selected (item 4) — see cards.css. */
+  selected?: boolean;
   /** CSS color value for the card's left accent bar (see cards.css's ::before) — omitted means no accent. */
   accent?: string;
   /** True for ~300ms right after an "organizar automaticamente" — animates the position change instead of jumping. */
@@ -43,13 +48,14 @@ export function CardFrame({
   onRaise: () => void;
   onResizeSettled?: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
+  onSelectStart?: (e: React.PointerEvent) => void;
 }) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
   const [dragging, setDragging] = useState(false);
 
   function onHeaderPointerDown(e: React.PointerEvent) {
-    if (interactionMode === "connector") return;
+    if (interactionMode !== "normal") return;
     if ((e.target as HTMLElement).closest("button, select, input")) return;
     onRaise();
     setDragging(true);
@@ -74,7 +80,7 @@ export function CardFrame({
   }
 
   function onResizePointerDown(e: React.PointerEvent) {
-    if (interactionMode === "connector") return;
+    if (interactionMode !== "normal") return;
     e.stopPropagation();
     onRaise();
     setDragging(true);
@@ -109,6 +115,7 @@ export function CardFrame({
     "spawning",
     dragging && "dragging",
     reflowing && "reflow",
+    selected && "selected",
   ]
     .filter(Boolean)
     .join(" ");
@@ -128,6 +135,7 @@ export function CardFrame({
       onPointerDown={(e) => {
         onRaise();
         if (interactionMode === "connector") onConnectorStart?.(e);
+        if (interactionMode === "select") onSelectStart?.(e);
       }}
     >
       {/* Owns overflow:hidden + border-radius (clips content to the rounded

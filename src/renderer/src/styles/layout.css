@@ -629,5 +629,95 @@ body {
   stroke-linecap: round;
   stroke-linejoin: round;
   fill: none;
-  stroke-width: 3;
+}
+
+/* ------------------------------------------------------- selection (item 4) */
+
+.marquee {
+  fill: color-mix(in srgb, var(--foam) 12%, transparent);
+  stroke: var(--foam);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+
+.group-outline {
+  fill: none;
+  stroke: var(--violet, var(--foam));
+  stroke-width: 1.5;
+  stroke-dasharray: 3 5;
+  rx: 10;
+}
+
+/* -------------------------------------------------------- pen panel (item 3) */
+
+.pen-size-row,
+.pen-type-row {
+  display: flex;
+  gap: 6px;
+}
+
+.pen-size-btn {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pen-size-btn:hover {
+  background: var(--surface);
+}
+
+.pen-size-btn.active {
+  border-color: var(--foam);
+}
+
+.pen-size-dot {
+  border-radius: 50%;
+  background: var(--text);
+}
+
+.pen-type-btn {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.pen-type-btn.active {
+  border-color: var(--foam);
+  color: var(--text);
+}
+
+.pen-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pen-shortcuts kbd {
+  display: inline-block;
+  min-width: 14px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text);
 }

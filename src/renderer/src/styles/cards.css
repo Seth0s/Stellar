@@ -3,6 +3,15 @@
   font-family: var(--font-ui);
 }
 
+/* Multi-select highlight (item 4) — an outline on the outer (unclipped)
+   frame, not .card-clip, so it isn't cut off by the card's own rounded
+   corners the way the old resize handle used to be. */
+.card-frame.selected {
+  outline: 2px solid var(--foam);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
 /* Clips card-head + body content to the rounded card shape. Deliberately
    NOT the element the resize handle lives on — see CardFrame.tsx. */
 .card-clip {

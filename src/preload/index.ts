@@ -13,6 +13,7 @@ export type CardRow = {
   resume_id: string | null;
   model: string | null;
   system_prompt: string | null;
+  group_id: string | null;
   updated_at: number;
 };
 

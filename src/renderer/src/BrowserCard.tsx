@@ -22,12 +22,14 @@ export function BrowserCard({
   url,
   ownerCardId,
   interactionMode,
+  selected,
   reflowing,
   onChange,
   onCommit,
   onRaise,
   onClose,
   onConnectorStart,
+  onSelectStart,
 }: {
   id: string;
   rect: Rect;
@@ -39,13 +41,15 @@ export function BrowserCard({
   visible: boolean;
   url: string;
   ownerCardId: string | null;
-  interactionMode?: "normal" | "connector";
+  interactionMode?: "normal" | "connector" | "select";
+  selected?: boolean;
   reflowing?: boolean;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onClose: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
+  onSelectStart?: (e: React.PointerEvent) => void;
 }) {
   const [bar, setBar] = useState(url);
   const occluded = useChromeOccluded();
@@ -102,6 +106,7 @@ export function BrowserCard({
       zoom={zoom}
       zIndex={zIndex}
       interactionMode={interactionMode}
+      selected={selected}
       accent="var(--accent-browser)"
       reflowing={reflowing}
       onChange={onChange}
@@ -111,6 +116,7 @@ export function BrowserCard({
         void window.browser.raise(id);
       }}
       onConnectorStart={onConnectorStart}
+      onSelectStart={onSelectStart}
       headerContent={
         <div className="browser-card-address">
           <button onClick={() => window.browser.back(id)}>

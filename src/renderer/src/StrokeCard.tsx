@@ -10,26 +10,35 @@ export function StrokeCard({
   zIndex,
   points,
   color,
+  width = 3,
+  style = "solid",
   interactionMode,
+  selected,
   reflowing,
   onChange,
   onCommit,
   onRaise,
   onClose,
   onConnectorStart,
+  onSelectStart,
 }: {
   rect: Rect;
   zoom: number;
   zIndex: number;
   points: [number, number][];
   color: string;
-  interactionMode?: "normal" | "connector";
+  /** In the 0–100 normalized viewBox unit, not px — see App.tsx's parseStroke. */
+  width?: number;
+  style?: "solid" | "marker";
+  interactionMode?: "normal" | "connector" | "select";
+  selected?: boolean;
   reflowing?: boolean;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onClose: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
+  onSelectStart?: (e: React.PointerEvent) => void;
 }) {
   const polyline = points.map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
   return (
@@ -39,11 +48,13 @@ export function StrokeCard({
       zoom={zoom}
       zIndex={zIndex}
       interactionMode={interactionMode}
+      selected={selected}
       reflowing={reflowing}
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
       onConnectorStart={onConnectorStart}
+      onSelectStart={onSelectStart}
       headerContent={
         <button className="stroke-card-close" onClick={onClose}>
           <Icon name="close" size={12} />
@@ -51,7 +62,15 @@ export function StrokeCard({
       }
     >
       <svg className="stroke-card-body" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <polyline points={polyline} fill="none" stroke={color} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
+        <polyline
+          points={polyline}
+          fill="none"
+          stroke={color}
+          strokeWidth={style === "marker" ? width * 1.8 : width}
+          strokeOpacity={style === "marker" ? 0.55 : 1}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </svg>
     </CardFrame>
   );

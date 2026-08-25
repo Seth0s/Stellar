@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
+import { PenPanel } from "./PenPanel";
 
-type Tool = "pointer" | "pen" | "connector";
+type Tool = "pointer" | "pen" | "connector" | "select";
 
 export function Rail({
   tool,
@@ -10,6 +11,14 @@ export function Rail({
   strokeColors,
   strokeColor,
   setStrokeColor,
+  strokeWidth,
+  setStrokeWidth,
+  strokeStyle,
+  setStrokeStyle,
+  canGroup,
+  canUngroup,
+  onGroup,
+  onUngroup,
   providers,
   newProvider,
   setNewProvider,
@@ -36,6 +45,14 @@ export function Rail({
   strokeColors: readonly string[];
   strokeColor: string;
   setStrokeColor: (c: string) => void;
+  strokeWidth: number;
+  setStrokeWidth: (w: number) => void;
+  strokeStyle: "solid" | "marker";
+  setStrokeStyle: (s: "solid" | "marker") => void;
+  canGroup: boolean;
+  canUngroup: boolean;
+  onGroup: () => void;
+  onUngroup: () => void;
   providers: string[];
   newProvider: string;
   setNewProvider: (p: string) => void;
@@ -60,6 +77,7 @@ export function Rail({
   const [openPopover, setOpenPopover] = useState<"terminal" | "ai" | null>(null);
   const terminalBtnRef = useRef<HTMLButtonElement>(null);
   const aiBtnRef = useRef<HTMLButtonElement>(null);
+  const penBtnRef = useRef<HTMLButtonElement>(null);
   const showAgentFields = newProvider !== "bash";
 
   function toggleTool(next: Tool) {
@@ -70,26 +88,19 @@ export function Rail({
     <div className="rail">
       <button
         className={`rail-btn${tool === "pointer" ? " active" : ""}`}
-        title="Selecionar"
+        title="Ponteiro"
         onClick={() => setTool("pointer")}
       >
         <Icon name="pointer" />
       </button>
-      <button className={`rail-btn${tool === "pen" ? " active" : ""}`} title="Caneta" onClick={() => toggleTool("pen")}>
+      <button
+        ref={penBtnRef}
+        className={`rail-btn${tool === "pen" ? " active" : ""}`}
+        title="Caneta"
+        onClick={() => toggleTool("pen")}
+      >
         <Icon name="pen" />
       </button>
-      {tool === "pen" && (
-        <span className="swatches">
-          {strokeColors.map((c) => (
-            <button
-              key={c}
-              className={`swatch${c === strokeColor ? " active" : ""}`}
-              style={{ background: c }}
-              onClick={() => setStrokeColor(c)}
-            />
-          ))}
-        </span>
-      )}
       <button
         className={`rail-btn${tool === "connector" ? " active" : ""}`}
         title="Conector"
@@ -97,6 +108,40 @@ export function Rail({
       >
         <Icon name="link" />
       </button>
+      <button
+        className={`rail-btn${tool === "select" ? " active" : ""}`}
+        title="Selecionar"
+        onClick={() => toggleTool("select")}
+      >
+        <Icon name="select" />
+      </button>
+      {tool === "select" && (canGroup || canUngroup) && (
+        <>
+          {canGroup && (
+            <button className="rail-btn" title="Agrupar" onClick={onGroup}>
+              <Icon name="group" size={16} />
+            </button>
+          )}
+          {canUngroup && (
+            <button className="rail-btn" title="Desagrupar" onClick={onUngroup}>
+              <Icon name="ungroup" size={16} />
+            </button>
+          )}
+        </>
+      )}
+
+      <PenPanel
+        anchorRef={penBtnRef}
+        open={tool === "pen"}
+        onClose={() => {}}
+        colors={strokeColors}
+        color={strokeColor}
+        setColor={setStrokeColor}
+        width={strokeWidth}
+        setWidth={setStrokeWidth}
+        style={strokeStyle}
+        setStyle={setStrokeStyle}
+      />
 
       <div className="rail-group-gap" />
 

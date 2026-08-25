@@ -27,6 +27,7 @@ export function TerminalCard({
   visible,
   seenUrls,
   interactionMode,
+  selected,
   reflowing,
   onChange,
   onCommit,
@@ -35,6 +36,7 @@ export function TerminalCard({
   onResumeIdDiscovered,
   onOpenUrl,
   onConnectorStart,
+  onSelectStart,
 }: {
   /** The card's own persisted id — also the PTY id and AGENT_CANVAS_CARD_ID, so acbridge/store/registry all speak the same id. */
   id: string;
@@ -51,7 +53,8 @@ export function TerminalCard({
   visible: boolean;
   /** URLs this card's own output has printed — never opened on its own, only offered (see AGENTS.md). */
   seenUrls: string[];
-  interactionMode?: "normal" | "connector";
+  interactionMode?: "normal" | "connector" | "select";
+  selected?: boolean;
   reflowing?: boolean;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
@@ -60,6 +63,7 @@ export function TerminalCard({
   onResumeIdDiscovered: (resumeId: string) => void;
   onOpenUrl: (url: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
+  onSelectStart?: (e: React.PointerEvent) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { exitCode, spawnError, discoveredResumeId, fitNow, interrupt } = useTerminal(
@@ -98,12 +102,14 @@ export function TerminalCard({
       zoom={zoom}
       zIndex={zIndex}
       interactionMode={interactionMode}
+      selected={selected}
       accent={PROVIDER_ACCENT[providerId] ?? PROVIDER_ACCENT.bash}
       reflowing={reflowing}
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
       onConnectorStart={onConnectorStart}
+      onSelectStart={onSelectStart}
       // The last onChange's state update lands in the DOM asynchronously
       // (React commit + layout) — measuring in fitNow() synchronously here
       // can read the pre-resize container size. Defer one frame.

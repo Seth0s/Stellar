@@ -30,7 +30,7 @@ import {
 import type { BoardRow, CardRow } from "../../preload/index";
 import "./app.css";
 
-type BaseCard = { id: string; rect: Rect };
+type BaseCard = { id: string; rect: Rect; groupId: string | null };
 
 type TerminalCardData = BaseCard & {
   kind: "terminal";
@@ -47,7 +47,13 @@ type FilesCardData = BaseCard & { kind: "files"; root: string };
 type ChangesCardData = BaseCard & { kind: "changes"; root: string };
 type StickyCardData = BaseCard & { kind: "sticky"; content: string; color: string };
 type BrowserCardData = BaseCard & { kind: "browser"; url: string; ownerCardId: string | null };
-type StrokeCardData = BaseCard & { kind: "stroke"; points: [number, number][]; color: string };
+type StrokeCardData = BaseCard & {
+  kind: "stroke";
+  points: [number, number][];
+  color: string;
+  width: number;
+  style: "solid" | "marker";
+};
 
 type Card =
   | TerminalCardData
@@ -58,7 +64,7 @@ type Card =
   | StrokeCardData;
 
 type Connector = { id: string; fromCardId: string; toCardId: string };
-type Tool = "pointer" | "pen" | "connector";
+type Tool = "pointer" | "pen" | "connector" | "select";
 
 const DEFAULT_CWD = "/home/lucas/Workplace/Projects/agent-canvas";
 const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor"];
@@ -85,7 +91,7 @@ const ACTIVE_BOARD_KEY = "ac.activeBoardId";
 // migration) by repurposing `cwd` (root path, or sticky note content) and
 // `provider` (unused/"" for files+changes, sticky's color for sticky).
 function toRow(card: Card, boardId: string): CardRow {
-  const base = { id: card.id, board_id: boardId, updated_at: Date.now(), ...card.rect };
+  const base = { id: card.id, board_id: boardId, group_id: card.groupId, updated_at: Date.now(), ...card.rect };
   switch (card.kind) {
     case "terminal":
       return {
@@ -126,7 +132,7 @@ function toRow(card: Card, boardId: string): CardRow {
         ...base,
         kind: "stroke",
         provider: card.color,
-        cwd: JSON.stringify(card.points),
+        cwd: JSON.stringify({ points: card.points, width: card.width, style: card.style }),
         resume_id: null,
         model: null,
         system_prompt: null,
@@ -134,29 +140,44 @@ function toRow(card: Card, boardId: string): CardRow {
   }
 }
 
-function parseStrokePoints(raw: string): [number, number][] {
+const DEFAULT_STROKE_WIDTH = 3;
+
+/** Accepts the current `{points, width, style}` shape and the legacy bare
+ * `[number,number][]` rows written before the pen panel (item 3) existed —
+ * any other/malformed shape renders as an empty stroke rather than crash. */
+function parseStroke(raw: string): { points: [number, number][]; width: number; style: "solid" | "marker" } {
   try {
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
+    if (Array.isArray(parsed)) return { points: parsed, width: DEFAULT_STROKE_WIDTH, style: "solid" };
+    if (parsed && Array.isArray(parsed.points)) {
+      return {
+        points: parsed.points,
+        width: typeof parsed.width === "number" ? parsed.width : DEFAULT_STROKE_WIDTH,
+        style: parsed.style === "marker" ? "marker" : "solid",
+      };
+    }
   } catch {
     // malformed/legacy row — render as an empty stroke rather than crash.
   }
-  return [];
+  return { points: [], width: DEFAULT_STROKE_WIDTH, style: "solid" };
 }
 
 function fromRow(r: CardRow): Card {
   const rect = { x: r.x, y: r.y, w: r.w, h: r.h };
+  const groupId = r.group_id ?? null;
   switch (r.kind) {
     case "files":
-      return { id: r.id, kind: "files", root: r.cwd, rect };
+      return { id: r.id, kind: "files", root: r.cwd, rect, groupId };
     case "changes":
-      return { id: r.id, kind: "changes", root: r.cwd, rect };
+      return { id: r.id, kind: "changes", root: r.cwd, rect, groupId };
     case "sticky":
-      return { id: r.id, kind: "sticky", content: r.cwd, color: r.provider || "yellow", rect };
+      return { id: r.id, kind: "sticky", content: r.cwd, color: r.provider || "yellow", rect, groupId };
     case "browser":
-      return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect };
-    case "stroke":
-      return { id: r.id, kind: "stroke", points: parseStrokePoints(r.cwd), color: r.provider || STROKE_COLORS[0], rect };
+      return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect, groupId };
+    case "stroke": {
+      const { points, width, style } = parseStroke(r.cwd);
+      return { id: r.id, kind: "stroke", points, width, style, color: r.provider || STROKE_COLORS[0], rect, groupId };
+    }
     default:
       return {
         id: r.id,
@@ -168,6 +189,7 @@ function fromRow(r: CardRow): Card {
         model: r.model,
         systemPrompt: r.system_prompt,
         rect,
+        groupId,
       };
   }
 }
@@ -188,8 +210,12 @@ export function App() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [tool, setTool] = useState<Tool>("pointer");
   const [newStrokeColor, setNewStrokeColor] = useState<string>(STROKE_COLORS[0]);
+  const [newStrokeWidth, setNewStrokeWidth] = useState<number>(DEFAULT_STROKE_WIDTH);
+  const [newStrokeStyle, setNewStrokeStyle] = useState<"solid" | "marker">("solid");
   const [drawingPoints, setDrawingPoints] = useState<Point[] | null>(null);
   const [connectorDraft, setConnectorDraft] = useState<{ fromId: string; point: Point } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [marquee, setMarquee] = useState<Rect | null>(null);
   const [reflowing, setReflowing] = useState(false);
   const [boards, setBoards] = useState<BoardRow[]>([]);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
@@ -224,7 +250,19 @@ export function App() {
       if (e.key === "F11") {
         e.preventDefault();
         void window.winControls.toggleFullscreen();
+        return;
       }
+      // Single-letter tool shortcuts (documented in the pen panel, item 3) —
+      // never fire while the user is typing into a real input (sticky note,
+      // files editor, browser address bar, any popover field).
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "v" || e.key === "V") setTool("pointer");
+      if (e.key === "p" || e.key === "P") setTool("pen");
+      if (e.key === "c" || e.key === "C") setTool("connector");
+      if (e.key === "s" || e.key === "S") setTool("select");
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -256,6 +294,7 @@ export function App() {
         model: null,
         systemPrompt: null,
         rect: cascadeSlot(0),
+        groupId: null,
       };
       setCards([card]);
       setOrder([id]);
@@ -368,7 +407,10 @@ export function App() {
       kind: "stroke",
       points: normalized,
       color,
+      width: newStrokeWidth,
+      style: newStrokeStyle,
       rect: { x: minX - STROKE_PADDING, y: minY - STROKE_PADDING, w, h },
+      groupId: null,
     });
   }
 
@@ -384,28 +426,29 @@ export function App() {
       model: newModel.trim() || null,
       systemPrompt: newSystemPrompt.trim() || null,
       rect: cascadeSlot(cards.length),
+      groupId: null,
     });
   }
 
   function addFilesCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "files", root: DEFAULT_CWD, rect: cascadeSlot(cards.length) });
+    addCard({ id, kind: "files", root: DEFAULT_CWD, rect: cascadeSlot(cards.length), groupId: null });
   }
 
   function addChangesCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "changes", root: DEFAULT_CWD, rect: cascadeSlot(cards.length) });
+    addCard({ id, kind: "changes", root: DEFAULT_CWD, rect: cascadeSlot(cards.length), groupId: null });
   }
 
   function addStickyCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "sticky", content: "", color: "yellow", rect: cascadeSlot(cards.length) });
+    addCard({ id, kind: "sticky", content: "", color: "yellow", rect: cascadeSlot(cards.length), groupId: null });
   }
 
   /** Human path, via the rail button — no owner, no consent gate (see AGENTS.md). */
   function addBrowserCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "browser", url: "about:blank", ownerCardId: null, rect: cascadeSlot(cards.length) });
+    addCard({ id, kind: "browser", url: "about:blank", ownerCardId: null, rect: cascadeSlot(cards.length), groupId: null });
   }
 
   /** Agent-requested (post-Allow) or a seenUrls chip click — both are already-consented. Reuses this owner's existing browser card if one is open, else opens a new one. No toast here — this path isn't the human "I just clicked +browser" moment the toasts above are for. */
@@ -418,7 +461,14 @@ export function App() {
       return;
     }
     const id = String(nextId.current++);
-    const card: Card = { id, kind: "browser", url, ownerCardId, rect: cascadeSlot(cardsRef.current.length) };
+    const card: Card = {
+      id,
+      kind: "browser",
+      url,
+      ownerCardId,
+      rect: cascadeSlot(cardsRef.current.length),
+      groupId: null,
+    };
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
@@ -527,7 +577,7 @@ export function App() {
       const result = await window.ai.summarize(newProvider, DEFAULT_CWD, prompt);
       const id = String(nextId.current++);
       const content = "text" in result ? result.text : `Erro: ${result.error}`;
-      addCard({ id, kind: "sticky", content, color: "blue", rect: cascadeSlot(cardsRef.current.length) });
+      addCard({ id, kind: "sticky", content, color: "blue", rect: cascadeSlot(cardsRef.current.length), groupId: null });
       toast("Nota de resumo criada");
     } finally {
       setAiBusy(false);
@@ -544,12 +594,32 @@ export function App() {
     setCards((prev) => prev.filter((c) => c.id !== id));
     setOrder((prev) => prev.filter((x) => x !== id));
     setConnectors((prev) => prev.filter((c) => c.fromCardId !== id && c.toCardId !== id));
+    setSelectedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     void window.store.delete(id);
     void window.store.connectors.deleteForCard(id);
   }
 
+  /** Moving a grouped card (item 4 — "just organization") drags every other
+   * member of its group by the same delta. A resize never triggers this:
+   * CardFrame's resize handler holds x/y fixed, so dx/dy is 0 and every
+   * sibling's rect map is a no-op. */
   function changeRect(id: string, rect: Rect) {
-    setCards((prev) => prev.map((c) => (c.id === id ? { ...c, rect } : c)));
+    setCards((prev) => {
+      const moving = prev.find((c) => c.id === id);
+      if (!moving?.groupId) return prev.map((c) => (c.id === id ? { ...c, rect } : c));
+      const dx = rect.x - moving.rect.x;
+      const dy = rect.y - moving.rect.y;
+      return prev.map((c) => {
+        if (c.id === id) return { ...c, rect };
+        if (c.groupId === moving.groupId) return { ...c, rect: { ...c.rect, x: c.rect.x + dx, y: c.rect.y + dy } };
+        return c;
+      });
+    });
   }
 
   /**
@@ -575,6 +645,37 @@ export function App() {
 
   function commitRect(card: Card, rect: Rect) {
     void window.store.upsert(toRow({ ...card, rect }, activeBoardIdRef.current!));
+    // changeRect already shifted every group sibling's rect in local state
+    // during the drag (onChange fires per pointermove, ahead of this
+    // pointerup-only commit) — persist their up-to-date rects too, reading
+    // from cardsRef so it's the post-drag values, not `card`'s stale ones.
+    if (card.groupId) {
+      for (const sibling of cardsRef.current) {
+        if (sibling.id !== card.id && sibling.groupId === card.groupId) {
+          void window.store.upsert(toRow(sibling, activeBoardIdRef.current!));
+        }
+      }
+    }
+  }
+
+  /** Group/ungroup (item 4) — organizational only, no containment or shared
+   * rect: grouping just stamps a shared `groupId` (reusing the same global
+   * id counter every other id in this app already shares) so a drag on any
+   * member moves the rest together (see changeRect above). */
+  function groupSelected() {
+    if (selectedIds.size < 2) return;
+    const groupId = String(nextId.current++);
+    const next = cardsRef.current.map((c) => (selectedIds.has(c.id) ? { ...c, groupId } : c));
+    setCards(next);
+    for (const c of next) if (selectedIds.has(c.id)) void window.store.upsert(toRow(c, activeBoardIdRef.current!));
+    toast("cards agrupados");
+  }
+
+  function ungroupSelected() {
+    const next = cardsRef.current.map((c) => (selectedIds.has(c.id) ? { ...c, groupId: null } : c));
+    setCards(next);
+    for (const c of next) if (selectedIds.has(c.id)) void window.store.upsert(toRow(c, activeBoardIdRef.current!));
+    toast("grupo desfeito");
   }
 
   function resumeIdDiscovered(id: string, sessionId: string) {
@@ -651,10 +752,64 @@ export function App() {
     window.addEventListener("pointerup", onUp);
   }
 
+  /** Rubber-band marquee (item 4) — a dedicated tool, deliberately not
+   * reusing the pointer tool's own background-drag (that's pan, already
+   * fixed/validated in an earlier round — see AGENTS.md). A click without a
+   * real drag clears the selection instead of selecting an empty rect. */
+  function startMarqueeSelect(e: React.PointerEvent) {
+    const startPoint = clientToWorld(e.clientX, e.clientY);
+    let currentRect: Rect = { x: startPoint.x, y: startPoint.y, w: 0, h: 0 };
+    setMarquee(currentRect);
+    function onMove(ev: PointerEvent) {
+      const p = clientToWorld(ev.clientX, ev.clientY);
+      currentRect = {
+        x: Math.min(startPoint.x, p.x),
+        y: Math.min(startPoint.y, p.y),
+        w: Math.abs(p.x - startPoint.x),
+        h: Math.abs(p.y - startPoint.y),
+      };
+      setMarquee(currentRect);
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setMarquee(null);
+      if (currentRect.w < 3 && currentRect.h < 3) {
+        setSelectedIds(new Set());
+        return;
+      }
+      const hits = cardsRef.current.filter((c) => rectsOverlap(currentRect, c.rect)).map((c) => c.id);
+      setSelectedIds(new Set(hits));
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  /** A click (not drag) directly on a card while the select tool is active —
+   * CardFrame routes this here instead of starting its normal drag (see its
+   * `interactionMode === "select"` guard). Shift/ctrl adds to the existing
+   * selection instead of replacing it. */
+  function selectCard(id: string, e: React.PointerEvent) {
+    e.stopPropagation();
+    setSelectedIds((prev) => {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }
+      return new Set([id]);
+    });
+  }
+
   function onBackgroundPointerDown(e: React.PointerEvent) {
     if (e.target !== e.currentTarget) return;
     if (tool === "pen") {
       startDrawing(e);
+      return;
+    }
+    if (tool === "select") {
+      startMarqueeSelect(e);
       return;
     }
     if (tool === "connector") return;
@@ -712,6 +867,14 @@ export function App() {
     backgroundPosition: `${world.panX % dotSize}px ${world.panY % dotSize}px`,
   };
 
+  const selectedCards = cards.filter((c) => selectedIds.has(c.id));
+  const canGroup = tool === "select" && selectedCards.length >= 2;
+  const commonGroupId =
+    selectedCards.length > 0 && selectedCards.every((c) => c.groupId && c.groupId === selectedCards[0].groupId)
+      ? selectedCards[0].groupId
+      : null;
+  const canUngroup = tool === "select" && commonGroupId !== null;
+
   return (
     <div
       className="viewport"
@@ -727,8 +890,10 @@ export function App() {
       >
         {cards.map((c) => {
           const zIndex = order.indexOf(c.id);
-          const interactionMode = tool === "connector" ? "connector" : "normal";
+          const interactionMode = tool === "connector" ? "connector" : tool === "select" ? "select" : "normal";
           const onConnectorStart = (e: React.PointerEvent) => startConnectorDrag(c.id, e);
+          const onSelectStart = (e: React.PointerEvent) => selectCard(c.id, e);
+          const selected = selectedIds.has(c.id);
           if (c.kind === "terminal") {
             return (
               <TerminalCard
@@ -754,6 +919,8 @@ export function App() {
                 onResumeIdDiscovered={(sessionId) => resumeIdDiscovered(c.id, sessionId)}
                 onOpenUrl={(url) => openBrowserFor(null, url)}
                 onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
               />
             );
           }
@@ -772,6 +939,8 @@ export function App() {
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
                 onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
               />
             );
           }
@@ -790,6 +959,8 @@ export function App() {
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
                 onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
               />
             );
           }
@@ -812,6 +983,8 @@ export function App() {
                 onContentCommit={(content) => commitStickyContent(c, content)}
                 onColorCommit={(color) => commitStickyColor(c, color)}
                 onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
               />
             );
           }
@@ -824,6 +997,8 @@ export function App() {
                 zIndex={zIndex}
                 points={c.points}
                 color={c.color}
+                width={c.width}
+                style={c.style}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 onChange={(r) => tryChangeRect(c.id, r)}
@@ -831,6 +1006,8 @@ export function App() {
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
                 onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
               />
             );
           }
@@ -854,6 +1031,8 @@ export function App() {
               onRaise={() => raise(c.id)}
               onClose={() => closeCard(c.id)}
               onConnectorStart={onConnectorStart}
+              onSelectStart={onSelectStart}
+              selected={selected}
             />
           );
         })}
@@ -863,6 +1042,24 @@ export function App() {
               <path d="M0,0 L10,5 L0,10 z" style={{ fill: "var(--foam)" }} />
             </marker>
           </defs>
+          {(() => {
+            const groupIds = new Set(cards.map((c) => c.groupId).filter((g): g is string => g !== null));
+            const GROUP_PAD = 10;
+            return [...groupIds].map((gid) => {
+              const box = bboxOf(cards.filter((c) => c.groupId === gid).map((c) => c.rect));
+              if (!box) return null;
+              return (
+                <rect
+                  key={`group-${gid}`}
+                  className="group-outline"
+                  x={box.x - GROUP_PAD}
+                  y={box.y - GROUP_PAD}
+                  width={box.w + GROUP_PAD * 2}
+                  height={box.h + GROUP_PAD * 2}
+                />
+              );
+            });
+          })()}
           {connectors.map((conn) => {
             const from = cards.find((c) => c.id === conn.fromCardId);
             const to = cards.find((c) => c.id === conn.toCardId);
@@ -915,8 +1112,11 @@ export function App() {
               className="pen-preview"
               points={drawingPoints.map((p) => `${p.x},${p.y}`).join(" ")}
               stroke={newStrokeColor}
+              strokeWidth={newStrokeStyle === "marker" ? newStrokeWidth * 1.8 : newStrokeWidth}
+              strokeOpacity={newStrokeStyle === "marker" ? 0.55 : 1}
             />
           )}
+          {marquee && <rect className="marquee" x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} />}
         </svg>
       </div>
       <Rail
@@ -925,6 +1125,14 @@ export function App() {
         strokeColors={STROKE_COLORS}
         strokeColor={newStrokeColor}
         setStrokeColor={setNewStrokeColor}
+        strokeWidth={newStrokeWidth}
+        setStrokeWidth={setNewStrokeWidth}
+        strokeStyle={newStrokeStyle}
+        setStrokeStyle={setNewStrokeStyle}
+        canGroup={canGroup}
+        canUngroup={canUngroup}
+        onGroup={groupSelected}
+        onUngroup={ungroupSelected}
         providers={PROVIDER_OPTIONS}
         newProvider={newProvider}
         setNewProvider={setNewProvider}
