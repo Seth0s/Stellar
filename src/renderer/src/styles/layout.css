@@ -195,13 +195,77 @@ body {
   background: var(--surface);
 }
 
+.topbar-crumb-sep {
+  color: var(--muted);
+}
+
+.topbar-counts {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .board-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 260px;
+  max-height: 340px;
   overflow-y: auto;
   margin-bottom: 8px;
+}
+
+.board-list-heading {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 2px 8px 4px;
+}
+
+.board-project-group + .board-project-group {
+  margin-top: 10px;
+}
+
+.board-project-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 4px 8px 2px;
+}
+
+.board-row-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: inherit;
+}
+
+.board-row-name-line svg {
+  color: var(--foam);
+  flex: none;
+}
+
+.board-row-counts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.board-row-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
 }
 
 .board-row {
@@ -223,6 +287,8 @@ body {
 
 .board-row-name {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   text-align: left;
   background: none;
   border: none;
@@ -230,6 +296,10 @@ body {
   cursor: pointer;
   padding: 6px 8px;
   font-size: 13px;
+  overflow: hidden;
+}
+
+.board-row-name-line {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

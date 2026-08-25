@@ -27,7 +27,7 @@ import {
   type Point,
   type Rect,
 } from "./board-model";
-import type { BoardRow, CardRow } from "../../preload/index";
+import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
 import "./app.css";
 
 type BaseCard = { id: string; rect: Rect; groupId: string | null };
@@ -67,6 +67,16 @@ type Connector = { id: string; fromCardId: string; toCardId: string };
 type Tool = "pointer" | "pen" | "connector" | "select";
 
 const DEFAULT_CWD = "/home/lucas/Workplace/Projects/agent-canvas";
+
+/** Suggests a project name for a new session (item 1) from the workspace
+ * convention this very app lives in — the path segment right after
+ * ".../Projects/" (e.g. "agent-canvas", "CentralByte"). Free-text and
+ * editable in the UI, never re-derived once a session exists; just a
+ * starting point, not a source of truth. */
+function suggestProjectFromCwd(cwd: string): string {
+  const match = cwd.match(/\/Projects\/([^/]+)/);
+  return match ? match[1] : "";
+}
 const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor"];
 const MIN_STROKE_POINTS = 2;
 const MIN_STROKE_DISTANCE = 2;
@@ -219,6 +229,13 @@ export function App() {
   const [reflowing, setReflowing] = useState(false);
   const [boards, setBoards] = useState<BoardRow[]>([]);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  const [boardCounts, setBoardCounts] = useState<Record<string, BoardCounts>>({});
+  /** Live per-card status (item 1) — only ever populated for the currently
+   * loaded board's terminal cards (see TerminalCard's onStatusChange); every
+   * OTHER board's "ativos" count falls back to the structural proxy from
+   * `boardCounts` (provider !== "bash"), since a non-loaded board's PTYs
+   * aren't running at all (switching boards kills them, see AGENTS.md). */
+  const [liveStatus, setLiveStatus] = useState<Record<string, "ok" | "error" | "exited">>({});
   const nextId = useRef(1);
   const viewportRef = useRef<HTMLDivElement>(null);
   const cardsRef = useRef<Card[]>([]);
@@ -275,6 +292,10 @@ export function App() {
    * it's a natural consequence of the id sets no longer overlapping). A
    * board with no rows yet (brand new, or the very first launch) seeds one
    * bash terminal, same as the original single-board bootstrap did. */
+  function refreshBoardCounts() {
+    void window.store.cardCounts().then(setBoardCounts);
+  }
+
   async function loadBoard(boardId: string) {
     const [rows, connectorRows] = await Promise.all([
       window.store.list(boardId),
@@ -282,6 +303,9 @@ export function App() {
     ]);
     setConnectors(connectorRows.map((r) => ({ id: r.id, fromCardId: r.from_card_id, toCardId: r.to_card_id })));
     setWorld({ panX: 0, panY: 0, zoom: 1 });
+    // Every id here belonged to the departing board — never valid for
+    // whatever loads next (see the module comment on liveStatus above).
+    setLiveStatus({});
     if (rows.length === 0) {
       const id = String(nextId.current++);
       const card: Card = {
@@ -304,6 +328,7 @@ export function App() {
       setCards(restored);
       setOrder(restored.map((c) => c.id));
     }
+    refreshBoardCounts();
   }
 
   useEffect(() => {
@@ -326,14 +351,14 @@ export function App() {
     await loadBoard(id);
   }
 
-  async function createBoard(name: string) {
+  async function createBoard(name: string, project: string) {
     const id = String(nextId.current++);
     const now = Date.now();
-    const board: BoardRow = { id, name, created_at: now, updated_at: now };
+    const board: BoardRow = { id, name, project, created_at: now, updated_at: now };
     setBoards((prev) => [...prev, board]);
     void window.store.boards.upsert(board);
     await switchBoard(id);
-    toast(`board "${name}" criado`);
+    toast(`sessão "${name}" criada`);
   }
 
   function renameBoard(id: string, name: string) {
@@ -342,18 +367,25 @@ export function App() {
     if (board) void window.store.boards.upsert({ ...board, name, updated_at: Date.now() });
   }
 
+  function changeBoardProject(id: string, project: string) {
+    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, project, updated_at: Date.now() } : b)));
+    const board = boards.find((b) => b.id === id);
+    if (board) void window.store.boards.upsert({ ...board, project, updated_at: Date.now() });
+  }
+
   async function deleteBoard(id: string) {
     if (boards.length <= 1) return;
     const remaining = boards.filter((b) => b.id !== id);
     setBoards(remaining);
     void window.store.boards.delete(id);
+    refreshBoardCounts();
     if (id === activeBoardIdRef.current) {
       const next = remaining[0].id;
       setActiveBoardId(next);
       localStorage.setItem(ACTIVE_BOARD_KEY, next);
       await loadBoard(next);
     }
-    toast("board excluído");
+    toast("sessão excluída");
   }
 
   function raise(id: string) {
@@ -600,8 +632,18 @@ export function App() {
       next.delete(id);
       return next;
     });
+    setLiveStatus((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     void window.store.delete(id);
     void window.store.connectors.deleteForCard(id);
+  }
+
+  function handleTerminalStatus(id: string, status: "ok" | "error" | "exited") {
+    setLiveStatus((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
   }
 
   /** Moving a grouped card (item 4 — "just organization") drags every other
@@ -875,6 +917,20 @@ export function App() {
       : null;
   const canUngroup = tool === "select" && commonGroupId !== null;
 
+  // Live override for the active board only (see liveStatus's comment) —
+  // every other board keeps the structural proxy fetched over IPC.
+  const activeTerminalCards = cards.filter((c) => c.kind === "terminal");
+  const effectiveBoardCounts: Record<string, BoardCounts> = activeBoardId
+    ? {
+        ...boardCounts,
+        [activeBoardId]: {
+          agents: activeTerminalCards.length,
+          active: activeTerminalCards.filter((c) => liveStatus[c.id] !== "error" && liveStatus[c.id] !== "exited")
+            .length,
+        },
+      }
+    : boardCounts;
+
   return (
     <div
       className="viewport"
@@ -917,6 +973,7 @@ export function App() {
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
                 onResumeIdDiscovered={(sessionId) => resumeIdDiscovered(c.id, sessionId)}
+                onStatusChange={(status) => handleTerminalStatus(c.id, status)}
                 onOpenUrl={(url) => openBrowserFor(null, url)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
@@ -1157,7 +1214,8 @@ export function App() {
       <Topbar
         boards={boards}
         activeBoardId={activeBoardId!}
-        cardCount={cards.length}
+        boardCounts={effectiveBoardCounts}
+        suggestedProject={suggestProjectFromCwd(DEFAULT_CWD)}
         zoom={world.zoom}
         onZoomIn={() => zoomBy(ZOOM_STEP)}
         onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
@@ -1165,6 +1223,7 @@ export function App() {
         onSwitchBoard={switchBoard}
         onCreateBoard={createBoard}
         onRenameBoard={renameBoard}
+        onChangeProject={changeBoardProject}
         onDeleteBoard={deleteBoard}
       />
       <Hint />

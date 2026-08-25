@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BoxSelect,
+  Check,
   ChevronDown,
   Copy,
   Folder,
@@ -63,7 +64,8 @@ export type IconName =
   | "fullscreenExit"
   | "resizeGrip"
   | "group"
-  | "ungroup";
+  | "ungroup"
+  | "check";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -94,6 +96,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   resizeGrip: GripHorizontal,
   group: Group,
   ungroup: Ungroup,
+  check: Check,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

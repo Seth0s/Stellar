@@ -67,9 +67,12 @@ export type ConnectorRow = {
 export type BoardRow = {
   id: string;
   name: string;
+  project: string;
   created_at: number;
   updated_at: number;
 };
+
+export type BoardCounts = { agents: number; active: number };
 
 const store = {
   list: (boardId: string): Promise<CardRow[]> => ipcRenderer.invoke("store:list", boardId),
@@ -88,6 +91,7 @@ const store = {
     upsert: (board: BoardRow): Promise<void> => ipcRenderer.invoke("store:boards:upsert", board),
     delete: (id: string): Promise<void> => ipcRenderer.invoke("store:boards:delete", id),
   },
+  cardCounts: (): Promise<Record<string, BoardCounts>> => ipcRenderer.invoke("store:card-counts"),
 };
 
 export type DirEntry = { name: string; path: string; isDir: boolean };

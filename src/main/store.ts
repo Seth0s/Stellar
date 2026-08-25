@@ -29,9 +29,15 @@ export type ConnectorRow = {
 export type BoardRow = {
   id: string;
   name: string;
+  /** Groups sessions under "Projects › {project} › {session}" (item 1) —
+   * "" means ungrouped, rendered as its own bucket in the UI rather than
+   * treated as an error. Free text, not a filesystem path. */
+  project: string;
   created_at: number;
   updated_at: number;
 };
+
+export type BoardCounts = { agents: number; active: number };
 
 const DEFAULT_BOARD_ID = "default";
 
@@ -52,6 +58,11 @@ function migrate(db: Database.Database) {
   }
   try {
     db.exec(`ALTER TABLE connectors ADD COLUMN board_id TEXT NOT NULL DEFAULT '${DEFAULT_BOARD_ID}'`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN project TEXT NOT NULL DEFAULT ''`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -84,26 +95,30 @@ export function openStore(userDataDir: string) {
     );
   `);
 
-  // Must run after every CREATE TABLE IF NOT EXISTS above: it ALTERs both
-  // cards and connectors, so on a brand-new database (fresh install, no
-  // prior tables) running it any earlier throws "no such table" — confirmed
-  // live against a fresh user-data dir, not a hypothetical.
-  migrate(db);
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS boards (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      project TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
   `);
+
+  // Must run after every CREATE TABLE IF NOT EXISTS above (cards,
+  // connectors, AND boards — it now ALTERs all three): on a brand-new
+  // database running it any earlier throws "no such table" for whichever
+  // table isn't created yet — confirmed live before with cards/connectors,
+  // same class of bug would hit boards.project otherwise.
+  migrate(db);
+
   const boardCount = (db.prepare("SELECT COUNT(*) as n FROM boards").get() as { n: number }).n;
   if (boardCount === 0) {
     const now = Date.now();
-    db.prepare("INSERT INTO boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+    db.prepare("INSERT INTO boards (id, name, project, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
       DEFAULT_BOARD_ID,
       "Board 1",
+      "",
       now,
       now,
     );
@@ -149,13 +164,30 @@ export function openStore(userDataDir: string) {
   );
   const deleteConnectorsForBoardStmt = db.prepare("DELETE FROM connectors WHERE board_id = ?");
 
-  const listBoardsStmt = db.prepare("SELECT id, name, created_at, updated_at FROM boards ORDER BY created_at ASC");
+  const listBoardsStmt = db.prepare(
+    "SELECT id, name, project, created_at, updated_at FROM boards ORDER BY created_at ASC",
+  );
   const upsertBoardStmt = db.prepare(`
-    INSERT INTO boards (id, name, created_at, updated_at)
-    VALUES (@id, @name, @created_at, @updated_at)
-    ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at
+    INSERT INTO boards (id, name, project, created_at, updated_at)
+    VALUES (@id, @name, @project, @created_at, @updated_at)
+    ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, updated_at = excluded.updated_at
   `);
   const deleteBoardStmt = db.prepare("DELETE FROM boards WHERE id = ?");
+
+  // Structural counts for the session-list popover (item 1) — "agents" is
+  // every terminal-kind card; "active" is a STATIC proxy (provider != bash,
+  // i.e. an actually-configured agent vs. a plain shell), not a live PTY
+  // signal: a non-loaded board's processes aren't running at all (switching
+  // boards kills them, see AGENTS.md), so there's no live state to report
+  // for anything but the currently-open board. The renderer overrides this
+  // with real spawnError/exitCode-derived status for whichever board is
+  // actually loaded (App.tsx's liveStatus).
+  const cardCountsStmt = db.prepare(`
+    SELECT board_id,
+      COUNT(*) as agents,
+      SUM(CASE WHEN provider != 'bash' THEN 1 ELSE 0 END) as active
+    FROM cards WHERE kind = 'terminal' GROUP BY board_id
+  `);
 
   // Ids are a single global sequence across every board (a PTY id in the
   // main-process registry, and a connector's from/to reference, both need
@@ -180,6 +212,10 @@ export function openStore(userDataDir: string) {
     deleteConnectorsForCard: (cardId: string) => deleteConnectorsForCardStmt.run(cardId, cardId),
     listBoards: (): BoardRow[] => listBoardsStmt.all() as BoardRow[],
     upsertBoard: (board: BoardRow) => upsertBoardStmt.run(board),
+    cardCounts: (): Record<string, BoardCounts> => {
+      const rows = cardCountsStmt.all() as { board_id: string; agents: number; active: number }[];
+      return Object.fromEntries(rows.map((r) => [r.board_id, { agents: r.agents, active: r.active }]));
+    },
     deleteBoard: (id: string) => {
       deleteConnectorsForBoardStmt.run(id);
       deleteCardsForBoardStmt.run(id);

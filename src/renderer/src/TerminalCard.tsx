@@ -37,6 +37,7 @@ export function TerminalCard({
   onOpenUrl,
   onConnectorStart,
   onSelectStart,
+  onStatusChange,
 }: {
   /** The card's own persisted id — also the PTY id and AGENT_CANVAS_CARD_ID, so acbridge/store/registry all speak the same id. */
   id: string;
@@ -64,6 +65,9 @@ export function TerminalCard({
   onOpenUrl: (url: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  /** Bubbles live status up for the session breadcrumb/list (item 1) — the
+   * only place this app has real (not structural-proxy) agent status. */
+  onStatusChange?: (status: "ok" | "error" | "exited") => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { exitCode, spawnError, discoveredResumeId, fitNow, interrupt } = useTerminal(
@@ -88,6 +92,10 @@ export function TerminalCard({
   }, [discoveredResumeId, onResumeIdDiscovered]);
 
   const statusClass = spawnError !== null ? "danger" : exitCode !== null ? "" : "ok";
+  useEffect(() => {
+    onStatusChange?.(spawnError !== null ? "error" : exitCode !== null ? "exited" : "ok");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spawnError, exitCode]);
   const footerParts = [
     cwd,
     resumeId || discoveredResumeId ? `resume:${resumeId ?? discoveredResumeId}` : null,

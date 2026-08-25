@@ -149,6 +149,7 @@ function createWindow() {
   ipcMain.handle("store:boards:list", () => store.listBoards());
   ipcMain.handle("store:boards:upsert", (_e, board: BoardRow) => store.upsertBoard(board));
   ipcMain.handle("store:boards:delete", (_e, id: string) => store.deleteBoard(id));
+  ipcMain.handle("store:card-counts", () => store.cardCounts());
   ipcMain.handle("store:next-id-seed", () => store.nextIdSeed());
 
   ipcMain.handle("fs:list", (_e, root: string, path: string) => listDir(root, path));

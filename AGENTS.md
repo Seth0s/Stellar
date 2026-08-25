@@ -1050,6 +1050,127 @@ instância uma segunda vez (migração já aplicada) confirma idempotência, e
 o log completo das duas execuções não contém `vaInitialize`/`vaapi`/
 `SqliteError`/segfault.
 
+## 2026-08-25 — 8 problemas reportados ao vivo pelo usuário (contra o app real, `npm run dev`)
+
+Usuário testou o app real e comparou com o artifact de referência
+(`0a9f9a77-755d-4e5e-a1ad-75b1915966e2`), reportando 8 problemas com
+screenshots. Plano completo em
+`/home/lucas/.claude/plans/polished-tickling-nebula.md`. Decisão do
+usuário, aplicada em todo o app: parar de desenhar ícones à mão
+(`icons.tsx` era um `Record<IconName, string>` de paths SVG manuais) e
+usar **uma única biblioteca**, `lucide-react` — `Icon name="..."` continua
+a mesma chamada em todo o resto do código, só a implementação interna
+mudou. Primeiro commit real do repositório (estava sem nenhum, "no
+commits yet on master") criado como checkpoint antes desta rodada.
+
+**Achado recorrente, raiz comum de 2 dos 8 itens**: `Popover.tsx`
+calculava `top`/`left` em coordenadas de **viewport**
+(`getBoundingClientRect()` do anchor) mas renderizava como filho comum de
+`Rail`/`Topbar` — ambos `position: absolute`, portanto o **containing
+block** real do popover, não o viewport. O resultado: o popover abria
+deslocado pra dentro da caixinha do próprio `Rail` (48px de largura) e o
+`overflow-y: auto` do `Rail` cortava o que sobrava — o popover de criar
+terminal **abria de verdade, só ficava invisível/cortado** (era isso, não
+falta de handler, o item "botão terminal não funcional"). Corrigido
+portando pra `document.body` via `createPortal` — beneficia de graça todo
+popover existente (terminal, IA, boards) e os novos (caneta, sessões).
+
+- **Fullscreen de verdade** — o botão que o usuário achava ser fullscreen
+  era `onFit` do `zoom-pill` (só reenquadra zoom/pan, nunca tocou a
+  janela). `win:toggle-fullscreen`/`win:is-fullscreen`/
+  `win:fullscreen-change` novos em `main/index.ts` (`win.setFullScreen`),
+  bridge em `winControls`, botão dedicado na `Titlebar` + atalho `F11`.
+- **Cards não redimensionáveis** — `.card-resize` (alça 16×16) era filho
+  do MESMO elemento que carregava `overflow:hidden`+`border-radius` —
+  clipado pelo próprio canto arredondado onde vive, sobrava pouco/nenhum
+  pixel clicável. `CardFrame.tsx` agora separa um wrapper interno
+  (`.card-clip`, carrega o clip) do frame externo (não clipado, é onde a
+  alça mora agora) — ganhou também um glifo visível e área maior (~22px).
+- **Régua ocupando a tela toda** — `.rail` já era estreita (48px) mas
+  esticava `top`+`bottom` quase do topo ao rodapé da janela inteira. Virou
+  `top:50%; transform:translateY(-50%)` com `max-height` — uma pílula
+  curta flutuante, do jeito que o artifact mostra.
+- **Navegador com bloco preto** — `WebContentsView` nunca setava
+  background — padrão do Electron é preto opaco, nunca foi problema
+  enquanto a composição por GPU funcionava; depois de
+  `app.disableHardwareAcceleration()` (sessão anterior, fix de crash de
+  GPU) o preto-default passou a aparecer no lugar da página nesta máquina.
+  `view.setBackgroundColor("#1a1d24")` em `browser-registry.ts`.
+- **Painel da caneta** (`PenPanel.tsx`, novo) — o antigo `<span
+  className="swatches">` injetado dentro da própria coluna da régua virou
+  um painel de verdade, ancorado à direita do botão (reaproveita o
+  `Popover` já corrigido): tamanho (3 presets), tipo (traço/marcador —
+  marcador = mais grosso + opacidade menor), cor, atalhos. Largura/estilo
+  persistem: `StrokeCardData` ganhou `width`/`style`, `cwd` de um stroke
+  agora guarda `{points, width, style}` em vez do array cru
+  (`parseStroke` mantém compat com linhas antigas).
+- **Ferramenta de seleção + agrupar** — novo `tool: "select"` (não
+  reaproveita o arraste-de-fundo do ponteiro, que já é pan validado numa
+  fase anterior): marquee de verdade (`startMarqueeSelect`, reaproveita
+  `rectsOverlap`), clique num card em modo seleção troca/alterna a seleção
+  em vez de arrastar (`CardFrame`'s guarda de `interactionMode`, antes só
+  cobria `"connector"`). ≥2 selecionados habilita "agrupar" — grava
+  `group_id` compartilhado (coluna nova, mesmo padrão de migração
+  guardada); mover qualquer membro do grupo desloca os outros pelo mesmo
+  delta (`changeRect`/`commitRect`). Atalhos de teclado novos `V/P/C/S`
+  pro ponteiro/caneta/conector/seleção, guardados contra disparar durante
+  digitação em qualquer input/textarea/contenteditable.
+- **Hierarquia Projects → Projeto → Sessão + modal de sessões** —
+  esclarecido com o usuário: "Projects" é o rótulo fixo do workspace, cada
+  projeto tem N sessões (o que já existia como "board"), cada sessão tem N
+  agentes com estado ativo/inativo. `boards.project` (coluna nova, migração
+  guardada — **atenção**: a `migrate()` teve que passar a rodar depois do
+  `CREATE TABLE boards` também, não só cards/connectors, mesma classe de
+  bug já achada antes pra vaapi/board_id). Sugestão automática de projeto a
+  partir do segmento de path depois de `.../Projects/` no cwd (edição
+  livre, não re-derivada). `Topbar.tsx` virou breadcrumb "📁 Projects ›
+  {projeto} › {sessão} · N agentes · M ativos" com popover agrupado por
+  projeto. **Contagem "ativos" é estrutural (`provider != 'bash'`) pra toda
+  sessão não carregada** (sem processo vivo pra reportar — trocar de
+  sessão mata os PTYs) — só a sessão **atualmente aberta** mostra estado
+  real, via `TerminalCard`'s `onStatusChange` novo bubblando
+  `spawnError`/`exitCode` pro `App.tsx` (`liveStatus`), nunca persistido.
+
+### Verificação real via CDP (todas as instâncias isoladas, nunca a sessão do usuário)
+
+Todos os 8 itens confirmados ao vivo, não só por leitura de código: popover
+do terminal renderizando na posição certa (antes: `top` calculado batia
+com o anchor, `top` real no DOM não batia — depois do fix, idênticos);
+arrastar a alça de resize cresceu o card exatamente pelo delta do arraste;
+navegador mostrando a página (fundo claro do `about:blank`) em vez de
+bloco preto; `win.isFullScreen()` alternando `false`→`true` via o IPC
+novo; régua com `height` bem menor que o viewport, centralizada; painel da
+caneta com as 3 seções + atalhos, um traço desenhado com
+"grosso"+"marcador" produziu `stroke-width:10.8` (6×1.8) e
+`stroke-opacity:0.55` — exatamente a fórmula; marquee selecionando
+exatamente os 2 cards sob o retângulo (`rectsOverlap`); agrupar + arrastar
+um membro moveu os dois pelo delta idêntico (+120,+70 nos dois);
+breadcrumb/popover de sessões com 2 projetos distintos, contagem viva
+1 agente/1 ativo na sessão aberta e 0 ativos (estrutural, bash) na sessão
+não carregada — todos batendo exatamente com o esperado. `tsc --noEmit`/
+`electron-vite build` limpos em cada etapa.
+
+**Bug real achado e corrigido durante a verificação, fora do escopo dos 8
+itens** (`main/message-bus.ts`): `server.listen(sockPath)` não tinha
+handler de `error` — uma falha de bind (socket path/arquivo stale,
+segunda instância competindo pelo mesmo `userData`, ver nota já registrada
+sobre dev+empacotado compartilharem `userData`) virava exceção não tratada
+e derrubava o processo principal **inteiro**, não só o acbridge. Achado ao
+vivo (uma instância de teste com `--user-data-dir` muito longo estourou o
+limite de path de socket Unix — não o cenário real do usuário, mas o gap
+de tratamento de erro é real e foi corrigido de qualquer forma: agora só
+loga e o resto do app continua funcionando).
+
+**Achado de metodologia de teste, não do produto, registrado pra não
+repetir**: a ferramenta de seleção alterna (clicar de novo desliga) — um
+script CDP separado que clica nela sem checar o estado atual pode desfazer
+o toggle de uma rodada anterior, já que o estado do app persiste entre
+reconexões à mesma página viva. Sempre checar `.rail-btn.active` antes de
+assumir que um clique "ligou" a ferramenta. Separadamente: um script que
+termina só com `ws.close()` (sem `process.exit(0)` explícito) pode travar
+o processo Node por minutos sem razão aparente — sempre terminar scripts
+de verificação com `process.exit(0)` depois do `ws.close()`.
+
 ## Comandos
 
 ```bash
