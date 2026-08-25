@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Generic anchored popover — every popover in this app (terminal-creation
@@ -36,9 +37,19 @@ export function Popover({
   const anchor = anchorRef.current?.getBoundingClientRect();
   const style: React.CSSProperties = anchor ? { top: anchor.top, left: anchor.right + 8 } : { top: 60, left: 80 };
 
-  return (
+  // Every caller anchors this from inside a `position: absolute` toolbar
+  // (Rail, Topbar) — a plain nested <div> would have that toolbar's own
+  // (tiny) box as its CSS containing block, so the viewport-relative
+  // top/left above would land relative to the toolbar instead of the
+  // window, and `.rail`'s own `overflow-y: auto` clips the mispositioned
+  // result away entirely (this is the real cause behind "the terminal
+  // button doesn't work" — the popover was opening, just invisible).
+  // Portaling straight to <body> makes the viewport the containing block
+  // again, matching what the top/left math already assumed.
+  return createPortal(
     <div className="popover" ref={popRef} style={style} onPointerDown={(e) => e.stopPropagation()}>
       {children}
-    </div>
+    </div>,
+    document.body,
   );
 }

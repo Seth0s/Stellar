@@ -39,6 +39,15 @@ export function createBrowserRegistry(
     const view = new WebContentsView({
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
+    // Electron defaults an unset background to opaque black — never an
+    // issue while GPU compositing worked, but since
+    // app.disableHardwareAcceleration() (see main/index.ts) this view's own
+    // paint can lag/fail on first composite on this machine's
+    // software-rendering path, and the black default shows through instead
+    // of the page. Matches --surface so a slow/failed paint at least reads
+    // as "loading", not "broken". (Not a constructor option on
+    // WebContentsView — set via the View method instead.)
+    view.setBackgroundColor("#1a1d24");
     entries.set(id, { view });
     win.contentView.addChildView(view);
 

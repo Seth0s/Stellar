@@ -165,6 +165,13 @@ const winControls = {
     ipcRenderer.on("win:maximized-change", listener);
     return () => ipcRenderer.removeListener("win:maximized-change", listener);
   },
+  toggleFullscreen: (): Promise<void> => ipcRenderer.invoke("win:toggle-fullscreen"),
+  isFullscreen: (): Promise<boolean> => ipcRenderer.invoke("win:is-fullscreen"),
+  onFullscreenChange: (cb: (fullscreen: boolean) => void) => {
+    const listener = (_e: unknown, fullscreen: boolean) => cb(fullscreen);
+    ipcRenderer.on("win:fullscreen-change", listener);
+    return () => ipcRenderer.removeListener("win:fullscreen-change", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("pty", pty);

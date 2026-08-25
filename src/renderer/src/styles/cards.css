@@ -3,13 +3,30 @@
   font-family: var(--font-ui);
 }
 
-.card-frame::before {
+/* Clips card-head + body content to the rounded card shape. Deliberately
+   NOT the element the resize handle lives on — see CardFrame.tsx. */
+.card-clip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* Not inherited by default — `inherit` here explicitly copies the
+     radius set on .terminal-card/.files-card/etc (the parent), so the
+     clip boundary always matches the card's own visible border. */
+  border-radius: inherit;
+}
+
+.card-clip::before {
   content: "";
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
   width: 4px;
+  /* --accent is set on .card-frame (the outer element) and inherits down
+     through .card-clip like any custom property. */
   background: var(--accent, transparent);
   z-index: 1;
   pointer-events: none;
@@ -109,11 +126,27 @@
 
 .card-resize {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 16px;
-  height: 16px;
+  right: -2px;
+  bottom: -2px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 2px;
+  color: var(--muted);
   cursor: nwse-resize;
+  /* Lives outside .card-clip on purpose — see CardFrame.tsx — so the
+     rounded corner never eats its hit area again. */
+}
+
+.card-resize svg {
+  transform: rotate(90deg);
+  pointer-events: none;
+}
+
+.card-resize:hover {
+  color: var(--text);
 }
 
 .terminal-card,
@@ -126,7 +159,6 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
   box-shadow: var(--shadow-card);
 }
 
@@ -424,6 +456,9 @@
   background: transparent;
   border: none;
   box-shadow: none;
+}
+
+.stroke-card .card-clip {
   overflow: visible;
 }
 

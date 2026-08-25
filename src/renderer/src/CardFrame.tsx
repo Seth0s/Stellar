@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 
 /**
@@ -129,11 +130,20 @@ export function CardFrame({
         if (interactionMode === "connector") onConnectorStart?.(e);
       }}
     >
-      <div className="card-head" onPointerDown={onHeaderPointerDown}>
-        {headerContent}
+      {/* Owns overflow:hidden + border-radius (clips content to the rounded
+          card shape). The resize handle below is deliberately OUTSIDE this
+          wrapper — it used to be a child of the clipped box itself, which
+          clipped away most of its own hit area right in the corner it
+          lives in, making cards effectively non-resizable in practice. */}
+      <div className="card-clip">
+        <div className="card-head" onPointerDown={onHeaderPointerDown}>
+          {headerContent}
+        </div>
+        {children}
       </div>
-      {children}
-      <div className="card-resize" onPointerDown={onResizePointerDown} />
+      <div className="card-resize" onPointerDown={onResizePointerDown}>
+        <Icon name="resizeGrip" size={11} />
+      </div>
     </div>
   );
 }

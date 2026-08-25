@@ -221,6 +221,10 @@ export function App() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setTool("pointer");
+      if (e.key === "F11") {
+        e.preventDefault();
+        void window.winControls.toggleFullscreen();
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

@@ -103,6 +103,18 @@ export function createMessageBus(
       handleLine(socket, line);
     });
   });
+  // Without this, a bind failure (stale non-socket file at sockPath, a
+  // second instance already holding it — see AGENTS.md's dev+packaged
+  // sharing the same userData note, or an overlong path) is an unhandled
+  // `error` event on a Node EventEmitter, which Node rethrows as an
+  // uncaught exception — crashing the ENTIRE main process (confirmed live:
+  // "Uncaught Exception: Error: listen EINVAL ..." took down PTYs, the
+  // board, everything, not just acbridge). Only acbridge messaging needs
+  // this socket; failing to bind it should never be fatal to the rest of
+  // the app.
+  server.on("error", (err) => {
+    console.error("message-bus: failed to bind, acbridge will be unavailable:", err);
+  });
   server.listen(sockPath);
 
   function close() {

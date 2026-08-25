@@ -5,10 +5,19 @@ import { Icon } from "./icons";
  * with something that matches the app's own dark theme. */
 export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     window.winControls.isMaximized().then(setMaximized);
     const off = window.winControls.onMaximizedChange(setMaximized);
+    return () => {
+      off();
+    };
+  }, []);
+
+  useEffect(() => {
+    window.winControls.isFullscreen().then(setFullscreen);
+    const off = window.winControls.onFullscreenChange(setFullscreen);
     return () => {
       off();
     };
@@ -20,6 +29,12 @@ export function Titlebar() {
         <span className="titlebar-title">agent-canvas</span>
       </span>
       <div className="titlebar-controls">
+        <button
+          title={fullscreen ? "Sair da tela cheia (F11)" : "Tela cheia (F11)"}
+          onClick={() => window.winControls.toggleFullscreen()}
+        >
+          <Icon name={fullscreen ? "fullscreenExit" : "fullscreenEnter"} size={14} />
+        </button>
         <button title="Minimizar" onClick={() => window.winControls.minimize()}>
           <Icon name="winMinimize" size={14} />
         </button>

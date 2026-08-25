@@ -181,6 +181,14 @@ function createWindow() {
   win.on("maximize", () => safeSend(win, "win:maximized-change", true));
   win.on("unmaximize", () => safeSend(win, "win:maximized-change", false));
 
+  // Real OS fullscreen — distinct from the topbar's "ajustar à tela" zoom
+  // button, which only reframes the canvas (pan/zoom), never touches the
+  // window itself. See AGENTS.md for the confusion that motivated this.
+  ipcMain.handle("win:toggle-fullscreen", () => win.setFullScreen(!win.isFullScreen()));
+  ipcMain.handle("win:is-fullscreen", () => win.isFullScreen());
+  win.on("enter-full-screen", () => safeSend(win, "win:fullscreen-change", true));
+  win.on("leave-full-screen", () => safeSend(win, "win:fullscreen-change", false));
+
   win.on("closed", () => {
     browserRegistry.destroyAll();
     messageBus.close();
