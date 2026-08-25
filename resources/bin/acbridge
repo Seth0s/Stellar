@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+// Standalone CLI, no project dependencies — put on PATH for every spawned
+// provider card. Lets a provider's own shell tool talk to the app: list
+// other open terminal cards, type a message into one of them, or ask
+// permission to open a URL in an embedded browser card.
+//
+// ESM, not CommonJS: Node resolves a shebang script with no .cjs extension
+// by walking up to the nearest package.json's "type" field, and
+// agent-canvas's is "module" — require() would fail here at runtime.
+import net from "node:net";
+
+const sockPath = process.env.AGENT_CANVAS_SOCK;
+const ownCardId = process.env.AGENT_CANVAS_CARD_ID || "";
+
+function fail(msg) {
+  process.stderr.write(`acbridge: ${msg}\n`);
+  process.exit(1);
+}
+
+if (!sockPath) {
+  fail("AGENT_CANVAS_SOCK is not set — not running inside agent-canvas?");
+}
+
+const [, , cmd, ...rest] = process.argv;
+
+let request;
+if (cmd === "list") {
+  request = { cmd: "list" };
+} else if (cmd === "send") {
+  const [target, ...msgParts] = rest;
+  if (!target || msgParts.length === 0) fail("usage: acbridge send <cardId> <message...>");
+  request = { cmd: "send", target, text: msgParts.join(" ") };
+} else if (cmd === "open") {
+  const [url] = rest;
+  if (!url) fail("usage: acbridge open <url>");
+  request = { cmd: "open", url, requesterId: ownCardId };
+} else {
+  fail("usage: acbridge <list | send <cardId> <message...> | open <url>>");
+}
+
+const socket = net.connect({ path: sockPath }, () => {
+  socket.end(JSON.stringify(request) + "\n");
+});
+
+let buf = "";
+socket.on("data", (chunk) => {
+  buf += chunk.toString("utf8");
+});
+socket.on("error", (err) => fail(err.message));
+socket.on("close", () => {
+  const line = (buf.split("\n")[0] ?? "").trim();
+  let res;
+  try {
+    res = JSON.parse(line);
+  } catch {
+    fail("bad response from agent-canvas");
+    return;
+  }
+  if (!res.ok) {
+    fail(res.error ?? "request failed");
+    return;
+  }
+  if (cmd === "list") {
+    const others = (res.cards ?? []).filter((c) => c.id !== ownCardId);
+    if (others.length === 0) console.log("(no other terminal cards open)");
+    else for (const c of others) console.log(`${c.id}\t${c.provider}\t${c.cwd}`);
+  } else if (cmd === "send") {
+    console.log(`sent to card ${rest[0]}`);
+  } else if (cmd === "open") {
+    console.log(`opened: ${rest[0]}`);
+  }
+  process.exit(0);
+});

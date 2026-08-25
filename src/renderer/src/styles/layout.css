@@ -1,0 +1,627 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--text);
+}
+
+.viewport {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--ink);
+}
+
+.world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+}
+
+.board-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* -------------------------------------------------------------- titlebar */
+
+.titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--ink);
+  border-bottom: 1px solid var(--border);
+  z-index: 1000;
+  -webkit-app-region: drag;
+}
+
+.titlebar-drag {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  min-width: 0;
+}
+
+.titlebar-title {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.titlebar-controls {
+  display: flex;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-controls button {
+  width: 44px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.titlebar-controls button:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.titlebar-controls button.titlebar-close:hover {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
+/* ---------------------------------------------------------------- rail */
+
+.rail {
+  position: absolute;
+  left: 12px;
+  top: calc(var(--titlebar-h) + 12px);
+  bottom: 12px;
+  width: 48px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 0;
+  gap: 2px;
+  overflow-y: auto;
+  z-index: 500;
+}
+
+.rail-btn {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.rail-btn:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.rail-btn.active {
+  background: var(--foam);
+  color: var(--on-accent);
+}
+
+/* Groups are separated by extra breathing room, not a visible line — icons
+   within a group stay tightly packed (see .rail's small `gap`). */
+.rail-group-gap {
+  height: 14px;
+  flex: none;
+}
+
+/* --------------------------------------------------------------- topbar */
+
+.topbar {
+  position: absolute;
+  top: calc(var(--titlebar-h) + 12px);
+  left: 72px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  z-index: 500;
+  pointer-events: none;
+}
+
+.topbar-title,
+.zoom-pill,
+.hint {
+  pointer-events: auto;
+}
+
+.topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text);
+  box-shadow: var(--shadow-card);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+  cursor: pointer;
+}
+
+.topbar-title:hover {
+  background: var(--surface);
+}
+
+.board-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.board-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.board-row:hover {
+  background: var(--surface);
+}
+
+.board-row.active .board-row-name {
+  color: var(--foam);
+  font-weight: 600;
+}
+
+.board-row-name {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 6px 8px;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-row button[title] {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  flex: none;
+}
+
+.board-row button[title]:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.board-row button[title]:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.board-create {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.zoom-pill {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  box-shadow: var(--shadow-card);
+  flex: none;
+}
+
+.zoom-pill button {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-pill button:hover {
+  background: var(--surface);
+}
+
+.zoom-readout {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 38px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------- hint */
+
+.hint {
+  position: absolute;
+  top: calc(var(--titlebar-h) + 60px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 8px 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  box-shadow: var(--shadow-card);
+  z-index: 450;
+  max-width: min(80vw, 520px);
+}
+
+.hint button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hint button:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------- toast */
+
+.toast-host {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  z-index: 900;
+  pointer-events: none;
+}
+
+.toast {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: var(--shadow-float);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- popover */
+
+.popover {
+  position: absolute;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+  padding: 10px;
+  z-index: 800;
+  min-width: 220px;
+  max-width: min(90vw, 320px);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.popover-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.popover-row:hover:not(:disabled) {
+  background: var(--surface);
+}
+
+.popover-row:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.popover-row-icon {
+  color: var(--foam);
+  flex: none;
+  margin-top: 2px;
+}
+
+.popover-row-title {
+  font-weight: 600;
+  font-size: 13px;
+  display: block;
+}
+
+.popover-row-desc {
+  font-size: 11px;
+  color: var(--muted);
+  display: block;
+  margin-top: 2px;
+}
+
+.popover-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.popover-field input,
+.popover-field select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+.popover-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.resume-input {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  width: 100%;
+}
+
+.continue-last-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.popover button.primary {
+  background: var(--foam);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.popover button.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+/* -------------------------------------------------------- shared swatches */
+
+.swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 0;
+  cursor: pointer;
+}
+
+.swatch.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+/* -------------------------------------------------------------- modal */
+
+.modal-root {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.modal {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  min-width: 320px;
+  max-width: 480px;
+  box-shadow: var(--shadow-float);
+}
+
+.modal h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.modal p {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-actions button {
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+
+.modal-actions .ghost {
+  background: none;
+  color: var(--muted);
+}
+
+.modal-actions .primary {
+  background: var(--foam);
+  color: var(--on-accent);
+  border-color: var(--foam);
+}
+
+/* ----------------------------------------------------------- connector */
+
+/* Single connector style — every connector today comes from the human
+   gesture via the 🔗 tool (see AGENTS.md); the artifact's IA/human dual
+   palette only applies once an AI action creates connectors of its own. */
+.connector-line {
+  fill: none;
+  stroke-width: 2;
+  stroke: var(--foam);
+  stroke-dasharray: 6 6;
+}
+
+.connector-delete {
+  cursor: pointer;
+  opacity: 0.5;
+}
+
+.connector-delete:hover {
+  opacity: 1;
+}
+
+.connector-delete circle {
+  fill: var(--panel);
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.connector-delete text {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.connector-draft {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.pen-preview {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  stroke-width: 3;
+}

@@ -1,0 +1,970 @@
+import { useEffect, useRef, useState } from "react";
+import { TerminalCard } from "./TerminalCard";
+import { FilesCard } from "./FilesCard";
+import { ChangesCard } from "./ChangesCard";
+import { StickyCard } from "./StickyCard";
+import { BrowserCard } from "./BrowserCard";
+import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
+import { BrowserAskModal } from "./BrowserAskModal";
+import { Rail } from "./Rail";
+import { Topbar } from "./Topbar";
+import { Titlebar } from "./Titlebar";
+import { Hint } from "./Hint";
+import { ToastHost } from "./ToastHost";
+import { toast } from "./useToast";
+import {
+  bboxOf,
+  cascadeSlot,
+  clipLineToRect,
+  hitTest,
+  isInView,
+  quadraticControlPoint,
+  rectCenter,
+  rectsOverlap,
+  screenToWorld,
+  viewportWorldRect,
+  type BoardItem,
+  type Point,
+  type Rect,
+} from "./board-model";
+import type { BoardRow, CardRow } from "../../preload/index";
+import "./app.css";
+
+type BaseCard = { id: string; rect: Rect };
+
+type TerminalCardData = BaseCard & {
+  kind: "terminal";
+  provider: string;
+  cwd: string;
+  resumeId: string | null;
+  /** One-shot launch preference, never persisted (see AGENTS.md) — always false for a card restored from the store. */
+  continueLast: boolean;
+  model: string | null;
+  systemPrompt: string | null;
+};
+
+type FilesCardData = BaseCard & { kind: "files"; root: string };
+type ChangesCardData = BaseCard & { kind: "changes"; root: string };
+type StickyCardData = BaseCard & { kind: "sticky"; content: string; color: string };
+type BrowserCardData = BaseCard & { kind: "browser"; url: string; ownerCardId: string | null };
+type StrokeCardData = BaseCard & { kind: "stroke"; points: [number, number][]; color: string };
+
+type Card =
+  | TerminalCardData
+  | FilesCardData
+  | ChangesCardData
+  | StickyCardData
+  | BrowserCardData
+  | StrokeCardData;
+
+type Connector = { id: string; fromCardId: string; toCardId: string };
+type Tool = "pointer" | "pen" | "connector";
+
+const DEFAULT_CWD = "/home/lucas/Workplace/Projects/agent-canvas";
+const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor"];
+const MIN_STROKE_POINTS = 2;
+const MIN_STROKE_DISTANCE = 2;
+const STROKE_PADDING = 8;
+const REFLOW_MS = 320;
+const GRID_SPACING = 28;
+const ZOOM_STEP = 1.15;
+
+const KIND_LABEL: Record<Card["kind"], string> = {
+  terminal: "terminal",
+  files: "arquivos",
+  changes: "changes",
+  sticky: "nota adesiva",
+  browser: "navegador",
+  stroke: "desenho",
+};
+
+const ACTIVE_BOARD_KEY = "ac.activeBoardId";
+
+// files/changes/sticky don't use provider/resume_id/model/system_prompt for
+// their vendor meaning — the generic `cards` schema is reused as-is (no
+// migration) by repurposing `cwd` (root path, or sticky note content) and
+// `provider` (unused/"" for files+changes, sticky's color for sticky).
+function toRow(card: Card, boardId: string): CardRow {
+  const base = { id: card.id, board_id: boardId, updated_at: Date.now(), ...card.rect };
+  switch (card.kind) {
+    case "terminal":
+      return {
+        ...base,
+        kind: "terminal",
+        provider: card.provider,
+        cwd: card.cwd,
+        resume_id: card.resumeId,
+        model: card.model,
+        system_prompt: card.systemPrompt,
+      };
+    case "files":
+      return { ...base, kind: "files", provider: "", cwd: card.root, resume_id: null, model: null, system_prompt: null };
+    case "changes":
+      return { ...base, kind: "changes", provider: "", cwd: card.root, resume_id: null, model: null, system_prompt: null };
+    case "sticky":
+      return {
+        ...base,
+        kind: "sticky",
+        provider: card.color,
+        cwd: card.content,
+        resume_id: null,
+        model: null,
+        system_prompt: null,
+      };
+    case "browser":
+      return {
+        ...base,
+        kind: "browser",
+        provider: card.ownerCardId ?? "",
+        cwd: card.url,
+        resume_id: null,
+        model: null,
+        system_prompt: null,
+      };
+    case "stroke":
+      return {
+        ...base,
+        kind: "stroke",
+        provider: card.color,
+        cwd: JSON.stringify(card.points),
+        resume_id: null,
+        model: null,
+        system_prompt: null,
+      };
+  }
+}
+
+function parseStrokePoints(raw: string): [number, number][] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // malformed/legacy row — render as an empty stroke rather than crash.
+  }
+  return [];
+}
+
+function fromRow(r: CardRow): Card {
+  const rect = { x: r.x, y: r.y, w: r.w, h: r.h };
+  switch (r.kind) {
+    case "files":
+      return { id: r.id, kind: "files", root: r.cwd, rect };
+    case "changes":
+      return { id: r.id, kind: "changes", root: r.cwd, rect };
+    case "sticky":
+      return { id: r.id, kind: "sticky", content: r.cwd, color: r.provider || "yellow", rect };
+    case "browser":
+      return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect };
+    case "stroke":
+      return { id: r.id, kind: "stroke", points: parseStrokePoints(r.cwd), color: r.provider || STROKE_COLORS[0], rect };
+    default:
+      return {
+        id: r.id,
+        kind: "terminal",
+        provider: r.provider,
+        cwd: r.cwd,
+        resumeId: r.resume_id,
+        continueLast: false,
+        model: r.model,
+        systemPrompt: r.system_prompt,
+        rect,
+      };
+  }
+}
+
+export function App() {
+  const [cards, setCards] = useState<Card[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [world, setWorld] = useState({ panX: 0, panY: 0, zoom: 1 });
+  const [order, setOrder] = useState<string[]>([]);
+  const [newProvider, setNewProvider] = useState("bash");
+  const [newResumeId, setNewResumeId] = useState("");
+  const [newContinueLast, setNewContinueLast] = useState(false);
+  const [newModel, setNewModel] = useState("");
+  const [newSystemPrompt, setNewSystemPrompt] = useState("");
+  const [seenUrls, setSeenUrls] = useState<Record<string, string[]>>({});
+  const [pendingAsk, setPendingAsk] = useState<{ requestId: string; requesterId: string; url: string } | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [connectors, setConnectors] = useState<Connector[]>([]);
+  const [tool, setTool] = useState<Tool>("pointer");
+  const [newStrokeColor, setNewStrokeColor] = useState<string>(STROKE_COLORS[0]);
+  const [drawingPoints, setDrawingPoints] = useState<Point[] | null>(null);
+  const [connectorDraft, setConnectorDraft] = useState<{ fromId: string; point: Point } | null>(null);
+  const [reflowing, setReflowing] = useState(false);
+  const [boards, setBoards] = useState<BoardRow[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  const nextId = useRef(1);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const cardsRef = useRef<Card[]>([]);
+  cardsRef.current = cards;
+  const activeBoardIdRef = useRef<string | null>(null);
+  activeBoardIdRef.current = activeBoardId;
+
+  useEffect(() => {
+    const offUrlSeen = window.pty.onUrlSeen((id, url) => {
+      setSeenUrls((prev) => (prev[id]?.includes(url) ? prev : { ...prev, [id]: [...(prev[id] ?? []), url] }));
+    });
+    const offAskOpen = window.browser.onAskOpen((requestId, requesterId, url) => {
+      setPendingAsk({ requestId, requesterId, url });
+    });
+    return () => {
+      offUrlSeen();
+      offAskOpen();
+    };
+  }, []);
+
+  // Escape exits pen/connector tool mode. Not required for correctness —
+  // releasing the pointer already ends any in-progress stroke/connector
+  // drag on its own (both are plain pointerdown→window pointermove/up
+  // closures, immune to this component re-rendering) — just a cheap,
+  // obvious way out for anyone who forgets which tool is active.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setTool("pointer");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  /** Swaps the whole board in: cards/connectors of the previous board are
+   * replaced wholesale, which unmounts their card components — that's what
+   * actually stops a departing board's terminal PTYs/browser views (see
+   * AGENTS.md, "switching boards" — no special-case cleanup code needed,
+   * it's a natural consequence of the id sets no longer overlapping). A
+   * board with no rows yet (brand new, or the very first launch) seeds one
+   * bash terminal, same as the original single-board bootstrap did. */
+  async function loadBoard(boardId: string) {
+    const [rows, connectorRows] = await Promise.all([
+      window.store.list(boardId),
+      window.store.connectors.list(boardId),
+    ]);
+    setConnectors(connectorRows.map((r) => ({ id: r.id, fromCardId: r.from_card_id, toCardId: r.to_card_id })));
+    setWorld({ panX: 0, panY: 0, zoom: 1 });
+    if (rows.length === 0) {
+      const id = String(nextId.current++);
+      const card: Card = {
+        id,
+        kind: "terminal",
+        provider: "bash",
+        cwd: DEFAULT_CWD,
+        resumeId: null,
+        continueLast: false,
+        model: null,
+        systemPrompt: null,
+        rect: cascadeSlot(0),
+      };
+      setCards([card]);
+      setOrder([id]);
+      void window.store.upsert(toRow(card, boardId));
+    } else {
+      const restored = rows.map(fromRow);
+      setCards(restored);
+      setOrder(restored.map((c) => c.id));
+    }
+  }
+
+  useEffect(() => {
+    (async () => {
+      const [fetchedBoards, seed] = await Promise.all([window.store.boards.list(), window.store.nextIdSeed()]);
+      nextId.current = seed + 1;
+      setBoards(fetchedBoards);
+      const stored = localStorage.getItem(ACTIVE_BOARD_KEY);
+      const initial = fetchedBoards.find((b) => b.id === stored)?.id ?? fetchedBoards[0]?.id ?? "default";
+      setActiveBoardId(initial);
+      await loadBoard(initial);
+      setLoaded(true);
+    })();
+  }, []);
+
+  async function switchBoard(id: string) {
+    if (id === activeBoardIdRef.current) return;
+    setActiveBoardId(id);
+    localStorage.setItem(ACTIVE_BOARD_KEY, id);
+    await loadBoard(id);
+  }
+
+  async function createBoard(name: string) {
+    const id = String(nextId.current++);
+    const now = Date.now();
+    const board: BoardRow = { id, name, created_at: now, updated_at: now };
+    setBoards((prev) => [...prev, board]);
+    void window.store.boards.upsert(board);
+    await switchBoard(id);
+    toast(`board "${name}" criado`);
+  }
+
+  function renameBoard(id: string, name: string) {
+    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, name, updated_at: Date.now() } : b)));
+    const board = boards.find((b) => b.id === id);
+    if (board) void window.store.boards.upsert({ ...board, name, updated_at: Date.now() });
+  }
+
+  async function deleteBoard(id: string) {
+    if (boards.length <= 1) return;
+    const remaining = boards.filter((b) => b.id !== id);
+    setBoards(remaining);
+    void window.store.boards.delete(id);
+    if (id === activeBoardIdRef.current) {
+      const next = remaining[0].id;
+      setActiveBoardId(next);
+      localStorage.setItem(ACTIVE_BOARD_KEY, next);
+      await loadBoard(next);
+    }
+    toast("board excluído");
+  }
+
+  function raise(id: string) {
+    setOrder((prev) => [...prev.filter((x) => x !== id), id]);
+  }
+
+  function addCard(card: Card) {
+    setCards((prev) => [...prev, card]);
+    setOrder((prev) => [...prev, card.id]);
+    void window.store.upsert(toRow(card, activeBoardIdRef.current!));
+    toast(`${KIND_LABEL[card.kind]} criado${card.kind === "sticky" ? "a" : ""}`);
+  }
+
+  function addConnector(fromCardId: string, toCardId: string) {
+    const id = String(nextId.current++);
+    const connector = { id, fromCardId, toCardId };
+    setConnectors((prev) => [...prev, connector]);
+    void window.store.connectors.upsert({
+      id,
+      board_id: activeBoardIdRef.current!,
+      from_card_id: fromCardId,
+      to_card_id: toCardId,
+      updated_at: Date.now(),
+    });
+    toast("conector criado");
+  }
+
+  function removeConnector(id: string) {
+    setConnectors((prev) => prev.filter((c) => c.id !== id));
+    void window.store.connectors.delete(id);
+    toast("conector removido");
+  }
+
+  /** Finalizes a pen stroke into a real `kind:"stroke"` card — its rect is the drawn bounding box, not the toolbar-button cascade slot. */
+  function finishStroke(points: Point[], color: string) {
+    if (points.length < MIN_STROKE_POINTS) return;
+    const minX = Math.min(...points.map((p) => p.x));
+    const minY = Math.min(...points.map((p) => p.y));
+    const maxX = Math.max(...points.map((p) => p.x));
+    const maxY = Math.max(...points.map((p) => p.y));
+    const w = maxX - minX + STROKE_PADDING * 2;
+    const h = maxY - minY + STROKE_PADDING * 2;
+    if (w <= STROKE_PADDING * 2 || h <= STROKE_PADDING * 2) return;
+    const normalized: [number, number][] = points.map((p) => [
+      (p.x - minX + STROKE_PADDING) / w,
+      (p.y - minY + STROKE_PADDING) / h,
+    ]);
+    const id = String(nextId.current++);
+    addCard({
+      id,
+      kind: "stroke",
+      points: normalized,
+      color,
+      rect: { x: minX - STROKE_PADDING, y: minY - STROKE_PADDING, w, h },
+    });
+  }
+
+  function addTerminalCard() {
+    const id = String(nextId.current++);
+    addCard({
+      id,
+      kind: "terminal",
+      provider: newProvider,
+      cwd: DEFAULT_CWD,
+      resumeId: newResumeId.trim() || null,
+      continueLast: newResumeId.trim() === "" && newContinueLast,
+      model: newModel.trim() || null,
+      systemPrompt: newSystemPrompt.trim() || null,
+      rect: cascadeSlot(cards.length),
+    });
+  }
+
+  function addFilesCard() {
+    const id = String(nextId.current++);
+    addCard({ id, kind: "files", root: DEFAULT_CWD, rect: cascadeSlot(cards.length) });
+  }
+
+  function addChangesCard() {
+    const id = String(nextId.current++);
+    addCard({ id, kind: "changes", root: DEFAULT_CWD, rect: cascadeSlot(cards.length) });
+  }
+
+  function addStickyCard() {
+    const id = String(nextId.current++);
+    addCard({ id, kind: "sticky", content: "", color: "yellow", rect: cascadeSlot(cards.length) });
+  }
+
+  /** Human path, via the rail button — no owner, no consent gate (see AGENTS.md). */
+  function addBrowserCard() {
+    const id = String(nextId.current++);
+    addCard({ id, kind: "browser", url: "about:blank", ownerCardId: null, rect: cascadeSlot(cards.length) });
+  }
+
+  /** Agent-requested (post-Allow) or a seenUrls chip click — both are already-consented. Reuses this owner's existing browser card if one is open, else opens a new one. No toast here — this path isn't the human "I just clicked +browser" moment the toasts above are for. */
+  function openBrowserFor(ownerCardId: string | null, url: string) {
+    const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
+    if (existing) {
+      void window.browser.navigate(existing.id, url);
+      raise(existing.id);
+      void window.browser.raise(existing.id);
+      return;
+    }
+    const id = String(nextId.current++);
+    const card: Card = { id, kind: "browser", url, ownerCardId, rect: cascadeSlot(cardsRef.current.length) };
+    setCards((prev) => [...prev, card]);
+    setOrder((prev) => [...prev, id]);
+    void window.store.upsert(toRow(card, activeBoardIdRef.current!));
+  }
+
+  function allowAsk() {
+    if (!pendingAsk) return;
+    const { requestId, requesterId, url } = pendingAsk;
+    setPendingAsk(null);
+    openBrowserFor(requesterId, url);
+    void window.browser.resolveAsk(requestId, true);
+  }
+
+  function denyAsk() {
+    if (!pendingAsk) return;
+    void window.browser.resolveAsk(pendingAsk.requestId, false);
+    setPendingAsk(null);
+  }
+
+  /** Reuses cascadeSlot (already the grid a new card lands on) — reorganize is just re-running that grid over every existing card. */
+  function aiReorganize() {
+    const next = cardsRef.current.map((c, i) => ({ ...c, rect: cascadeSlot(i) }));
+    setReflowing(true);
+    setCards(next);
+    next.forEach((c) => void window.store.upsert(toRow(c, activeBoardIdRef.current!)));
+    toast("Cards organizados");
+    window.setTimeout(() => setReflowing(false), REFLOW_MS);
+  }
+
+  function zoomBy(factor: number) {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const vw = vp.clientWidth;
+    const vh = vp.clientHeight;
+    setWorld((prev) => {
+      const newZoom = Math.min(3, Math.max(0.2, prev.zoom * factor));
+      const worldX = (vw / 2 - prev.panX) / prev.zoom;
+      const worldY = (vh / 2 - prev.panY) / prev.zoom;
+      return { zoom: newZoom, panX: vw / 2 - newZoom * worldX, panY: vh / 2 - newZoom * worldY };
+    });
+  }
+
+  function fitView() {
+    const vp = viewportRef.current;
+    const box = bboxOf(cardsRef.current.map((c) => c.rect));
+    if (!vp || !box) return;
+    const vw = vp.clientWidth;
+    const vh = vp.clientHeight;
+    const PAD = 60;
+    const scale = Math.min((vw - PAD * 2) / box.w, (vh - PAD * 2) / box.h);
+    const zoom = Math.min(3, Math.max(0.2, scale));
+    setWorld({
+      zoom,
+      panX: vw / 2 - (box.x + box.w / 2) * zoom,
+      panY: vh / 2 - (box.y + box.h / 2) * zoom,
+    });
+  }
+
+  /** Read-only snapshot for the AI action below — never mutates a card, never reads terminal scrollback (out of scope, see AGENTS.md). */
+  async function buildBoardSnapshot(): Promise<string> {
+    const lines: string[] = [];
+    for (const c of cardsRef.current) {
+      if (c.kind === "sticky") {
+        lines.push(`- [nota adesiva, ${c.color}] ${c.content || "(vazia)"}`);
+      } else if (c.kind === "files") {
+        lines.push(`- [arquivos] raiz: ${c.root}`);
+      } else if (c.kind === "changes") {
+        try {
+          const status = await window.git.status(c.root);
+          if (!status.repo) {
+            lines.push(`- [changes] raiz: ${c.root} (não é um repositório git)`);
+          } else {
+            const entries = status.entries.map((e) => `${e.status} ${e.path}`).join(", ");
+            lines.push(
+              `- [changes] raiz: ${c.root} (branch ${status.branch}, +${status.insertions}/-${status.deletions}${
+                entries ? `: ${entries}` : ""
+              })`,
+            );
+          }
+        } catch {
+          lines.push(`- [changes] raiz: ${c.root} (status indisponível)`);
+        }
+      } else if (c.kind === "browser") {
+        lines.push(`- [navegador] ${c.url}`);
+      } else if (c.kind === "stroke") {
+        lines.push(`- [desenho] ${c.points.length} pontos`);
+      } else {
+        lines.push(`- [terminal ${c.provider}] cwd: ${c.cwd}`);
+      }
+    }
+    for (const conn of connectors) {
+      lines.push(`- [conector] ${describeCard(conn.fromCardId)} → ${describeCard(conn.toCardId)}`);
+    }
+    return lines.length > 0 ? lines.join("\n") : "(board vazio)";
+  }
+
+  /** "Resumir" — the only AI action implemented so far. Read-only: the result becomes a new sticky note, nothing on the board is mutated on the AI's behalf (see AGENTS.md). */
+  async function summarizeBoard() {
+    if (newProvider === "bash" || aiBusy) return;
+    setAiBusy(true);
+    try {
+      const snapshot = await buildBoardSnapshot();
+      const prompt =
+        `Aqui está o estado atual de um board de cards (canvas de trabalho):\n\n${snapshot}\n\n` +
+        "Resuma esse estado em 2-4 frases, em português. Não use nenhuma ferramenta, responda só com o texto do resumo.";
+      const result = await window.ai.summarize(newProvider, DEFAULT_CWD, prompt);
+      const id = String(nextId.current++);
+      const content = "text" in result ? result.text : `Erro: ${result.error}`;
+      addCard({ id, kind: "sticky", content, color: "blue", rect: cascadeSlot(cardsRef.current.length) });
+      toast("Nota de resumo criada");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  function describeCard(id: string): string {
+    const c = cardsRef.current.find((x) => x.id === id);
+    if (c?.kind === "terminal") return `${c.provider} #${id}`;
+    return `card #${id}`;
+  }
+
+  function closeCard(id: string) {
+    setCards((prev) => prev.filter((c) => c.id !== id));
+    setOrder((prev) => prev.filter((x) => x !== id));
+    setConnectors((prev) => prev.filter((c) => c.fromCardId !== id && c.toCardId !== id));
+    void window.store.delete(id);
+    void window.store.connectors.deleteForCard(id);
+  }
+
+  function changeRect(id: string, rect: Rect) {
+    setCards((prev) => prev.map((c) => (c.id === id ? { ...c, rect } : c)));
+  }
+
+  /**
+   * A native browser view always paints above every DOM card regardless of
+   * z-index — there's no way to make a dragged terminal/files/sticky card
+   * visually cover a browser card the way DOM cards cover each other. Same
+   * mitigation CentralByte's Fase 1 used for the identical structural
+   * problem (native VTE over DOM): reject the move outright instead of
+   * pretending overlap works.
+   */
+  function tryChangeRect(id: string, rect: Rect) {
+    const moving = cardsRef.current.find((c) => c.id === id);
+    if (!moving) return;
+    const collides = cardsRef.current.some(
+      (other) =>
+        other.id !== id &&
+        (moving.kind === "browser" || other.kind === "browser") &&
+        rectsOverlap(rect, other.rect),
+    );
+    if (collides) return;
+    changeRect(id, rect);
+  }
+
+  function commitRect(card: Card, rect: Rect) {
+    void window.store.upsert(toRow({ ...card, rect }, activeBoardIdRef.current!));
+  }
+
+  function resumeIdDiscovered(id: string, sessionId: string) {
+    setCards((prev) => {
+      const next = prev.map((c) => (c.id === id && c.kind === "terminal" ? { ...c, resumeId: sessionId } : c));
+      const updated = next.find((c) => c.id === id);
+      if (updated) void window.store.upsert(toRow(updated, activeBoardIdRef.current!));
+      return next;
+    });
+  }
+
+  function changeStickyContent(id: string, content: string) {
+    setCards((prev) => prev.map((c) => (c.id === id && c.kind === "sticky" ? { ...c, content } : c)));
+  }
+
+  function commitStickyContent(card: StickyCardData, content: string) {
+    void window.store.upsert(toRow({ ...card, content }, activeBoardIdRef.current!));
+  }
+
+  function commitStickyColor(card: StickyCardData, color: string) {
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, color } : c)));
+    void window.store.upsert(toRow({ ...card, color }, activeBoardIdRef.current!));
+  }
+
+  /** Screen client coords -> world coords, via the viewport's own current bounding rect (matches onWheel's math). */
+  function clientToWorld(clientX: number, clientY: number): Point {
+    const rect = viewportRef.current?.getBoundingClientRect();
+    return screenToWorld({ x: clientX - (rect?.left ?? 0), y: clientY - (rect?.top ?? 0) }, world);
+  }
+
+  function startDrawing(e: React.PointerEvent) {
+    const points: Point[] = [];
+    function addPoint(clientX: number, clientY: number) {
+      const p = clientToWorld(clientX, clientY);
+      const last = points[points.length - 1];
+      if (last) {
+        const dx = p.x - last.x;
+        const dy = p.y - last.y;
+        if (Math.sqrt(dx * dx + dy * dy) < MIN_STROKE_DISTANCE) return;
+      }
+      points.push(p);
+      setDrawingPoints([...points]);
+    }
+    addPoint(e.clientX, e.clientY);
+    function onMove(ev: PointerEvent) {
+      addPoint(ev.clientX, ev.clientY);
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setDrawingPoints(null);
+      finishStroke(points, newStrokeColor);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  /** Drag from a card, in "connector" tool mode, to another card — released via CardFrame.onConnectorStart. */
+  function startConnectorDrag(fromId: string, e: React.PointerEvent) {
+    e.stopPropagation();
+    setConnectorDraft({ fromId, point: clientToWorld(e.clientX, e.clientY) });
+    function onMove(ev: PointerEvent) {
+      setConnectorDraft({ fromId, point: clientToWorld(ev.clientX, ev.clientY) });
+    }
+    function onUp(ev: PointerEvent) {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setConnectorDraft(null);
+      const releasePoint = clientToWorld(ev.clientX, ev.clientY);
+      const target = hitTest(cardsRef.current as BoardItem[], releasePoint, order);
+      if (target && target.id !== fromId) addConnector(fromId, target.id);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function onBackgroundPointerDown(e: React.PointerEvent) {
+    if (e.target !== e.currentTarget) return;
+    if (tool === "pen") {
+      startDrawing(e);
+      return;
+    }
+    if (tool === "connector") return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const start = world;
+    function onMove(ev: PointerEvent) {
+      setWorld({ ...start, panX: start.panX + (ev.clientX - startX), panY: start.panY + (ev.clientY - startY) });
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function onWheel(e: React.WheelEvent) {
+    e.preventDefault();
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const rect = vp.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+    const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+    setWorld((prev) => {
+      const newZoom = Math.min(3, Math.max(0.2, prev.zoom * factor));
+      const worldX = (screenX - prev.panX) / prev.zoom;
+      const worldY = (screenY - prev.panY) / prev.zoom;
+      return {
+        zoom: newZoom,
+        panX: screenX - newZoom * worldX,
+        panY: screenY - newZoom * worldY,
+      };
+    });
+  }
+
+  if (!loaded) return <div className="viewport" />;
+
+  const viewportSize = viewportRef.current
+    ? { width: viewportRef.current.clientWidth, height: viewportRef.current.clientHeight }
+    : { width: window.innerWidth, height: window.innerHeight };
+  const visibleRect = viewportWorldRect(viewportSize, world);
+  const viewportOrigin = viewportRef.current
+    ? (() => {
+        const r = viewportRef.current!.getBoundingClientRect();
+        return { x: r.x, y: r.y };
+      })()
+    : { x: 0, y: 0 };
+
+  const dotSize = GRID_SPACING * world.zoom;
+  const backgroundStyle: React.CSSProperties = {
+    backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px)",
+    backgroundSize: `${dotSize}px ${dotSize}px`,
+    backgroundPosition: `${world.panX % dotSize}px ${world.panY % dotSize}px`,
+  };
+
+  return (
+    <div
+      className="viewport"
+      ref={viewportRef}
+      onWheel={onWheel}
+      onPointerDown={onBackgroundPointerDown}
+      style={backgroundStyle}
+    >
+      <Titlebar />
+      <div
+        className="world"
+        style={{ transform: `translate(${world.panX}px, ${world.panY}px) scale(${world.zoom})` }}
+      >
+        {cards.map((c) => {
+          const zIndex = order.indexOf(c.id);
+          const interactionMode = tool === "connector" ? "connector" : "normal";
+          const onConnectorStart = (e: React.PointerEvent) => startConnectorDrag(c.id, e);
+          if (c.kind === "terminal") {
+            return (
+              <TerminalCard
+                key={c.id}
+                id={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                providerId={c.provider}
+                cwd={c.cwd}
+                resumeId={c.resumeId}
+                continueLast={c.continueLast}
+                model={c.model}
+                systemPrompt={c.systemPrompt}
+                visible={isInView(c.rect, visibleRect)}
+                seenUrls={seenUrls[c.id] ?? []}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onClose={() => closeCard(c.id)}
+                onResumeIdDiscovered={(sessionId) => resumeIdDiscovered(c.id, sessionId)}
+                onOpenUrl={(url) => openBrowserFor(null, url)}
+                onConnectorStart={onConnectorStart}
+              />
+            );
+          }
+          if (c.kind === "files") {
+            return (
+              <FilesCard
+                key={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                root={c.root}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onClose={() => closeCard(c.id)}
+                onConnectorStart={onConnectorStart}
+              />
+            );
+          }
+          if (c.kind === "changes") {
+            return (
+              <ChangesCard
+                key={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                root={c.root}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onClose={() => closeCard(c.id)}
+                onConnectorStart={onConnectorStart}
+              />
+            );
+          }
+          if (c.kind === "sticky") {
+            return (
+              <StickyCard
+                key={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                content={c.content}
+                color={c.color}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onClose={() => closeCard(c.id)}
+                onContentChange={(content) => changeStickyContent(c.id, content)}
+                onContentCommit={(content) => commitStickyContent(c, content)}
+                onColorCommit={(color) => commitStickyColor(c, color)}
+                onConnectorStart={onConnectorStart}
+              />
+            );
+          }
+          if (c.kind === "stroke") {
+            return (
+              <StrokeCard
+                key={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                points={c.points}
+                color={c.color}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onClose={() => closeCard(c.id)}
+                onConnectorStart={onConnectorStart}
+              />
+            );
+          }
+          return (
+            <BrowserCard
+              key={c.id}
+              id={c.id}
+              rect={c.rect}
+              zoom={world.zoom}
+              zIndex={zIndex}
+              world={world}
+              viewportOrigin={viewportOrigin}
+              viewportSize={viewportSize}
+              visible={isInView(c.rect, visibleRect)}
+              url={c.url}
+              ownerCardId={c.ownerCardId}
+              interactionMode={interactionMode}
+              reflowing={reflowing}
+              onChange={(r) => tryChangeRect(c.id, r)}
+              onCommit={(r) => commitRect(c, r)}
+              onRaise={() => raise(c.id)}
+              onClose={() => closeCard(c.id)}
+              onConnectorStart={onConnectorStart}
+            />
+          );
+        })}
+        <svg className="board-overlay">
+          <defs>
+            <marker id="connector-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" style={{ fill: "var(--foam)" }} />
+            </marker>
+          </defs>
+          {connectors.map((conn) => {
+            const from = cards.find((c) => c.id === conn.fromCardId);
+            const to = cards.find((c) => c.id === conn.toCardId);
+            if (!from || !to) return null;
+            const fromCenter = rectCenter(from.rect);
+            const toCenter = rectCenter(to.rect);
+            const start = clipLineToRect(fromCenter, toCenter, from.rect);
+            const end = clipLineToRect(toCenter, fromCenter, to.rect);
+            const control = quadraticControlPoint(start, end, 0.18);
+            const midX = 0.25 * start.x + 0.5 * control.x + 0.25 * end.x;
+            const midY = 0.25 * start.y + 0.5 * control.y + 0.25 * end.y;
+            return (
+              <g key={conn.id}>
+                <path
+                  className="connector-line"
+                  d={`M${start.x},${start.y} Q${control.x},${control.y} ${end.x},${end.y}`}
+                  markerEnd="url(#connector-arrow)"
+                />
+                <g
+                  className="connector-delete"
+                  style={{ pointerEvents: "auto" }}
+                  transform={`translate(${midX}, ${midY})`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => removeConnector(conn.id)}
+                >
+                  <circle r={8} />
+                  <text x={0} y={1} textAnchor="middle" dominantBaseline="middle">
+                    ×
+                  </text>
+                </g>
+              </g>
+            );
+          })}
+          {connectorDraft &&
+            (() => {
+              const from = cards.find((c) => c.id === connectorDraft.fromId);
+              if (!from) return null;
+              const fromCenter = rectCenter(from.rect);
+              const start = clipLineToRect(fromCenter, connectorDraft.point, from.rect);
+              const control = quadraticControlPoint(start, connectorDraft.point, 0.18);
+              return (
+                <path
+                  className="connector-draft"
+                  d={`M${start.x},${start.y} Q${control.x},${control.y} ${connectorDraft.point.x},${connectorDraft.point.y}`}
+                />
+              );
+            })()}
+          {drawingPoints && drawingPoints.length > 1 && (
+            <polyline
+              className="pen-preview"
+              points={drawingPoints.map((p) => `${p.x},${p.y}`).join(" ")}
+              stroke={newStrokeColor}
+            />
+          )}
+        </svg>
+      </div>
+      <Rail
+        tool={tool}
+        setTool={setTool}
+        strokeColors={STROKE_COLORS}
+        strokeColor={newStrokeColor}
+        setStrokeColor={setNewStrokeColor}
+        providers={PROVIDER_OPTIONS}
+        newProvider={newProvider}
+        setNewProvider={setNewProvider}
+        newResumeId={newResumeId}
+        setNewResumeId={setNewResumeId}
+        newContinueLast={newContinueLast}
+        setNewContinueLast={setNewContinueLast}
+        newModel={newModel}
+        setNewModel={setNewModel}
+        newSystemPrompt={newSystemPrompt}
+        setNewSystemPrompt={setNewSystemPrompt}
+        onCreateTerminal={addTerminalCard}
+        onCreateFiles={addFilesCard}
+        onCreateChanges={addChangesCard}
+        onCreateSticky={addStickyCard}
+        onCreateBrowser={addBrowserCard}
+        aiBusy={aiBusy}
+        summarizeDisabled={newProvider === "bash"}
+        onReorganize={aiReorganize}
+        onSummarize={summarizeBoard}
+      />
+      <Topbar
+        boards={boards}
+        activeBoardId={activeBoardId!}
+        cardCount={cards.length}
+        zoom={world.zoom}
+        onZoomIn={() => zoomBy(ZOOM_STEP)}
+        onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
+        onFit={fitView}
+        onSwitchBoard={switchBoard}
+        onCreateBoard={createBoard}
+        onRenameBoard={renameBoard}
+        onDeleteBoard={deleteBoard}
+      />
+      <Hint />
+      <ToastHost />
+      {pendingAsk && (
+        <BrowserAskModal
+          url={pendingAsk.url}
+          requesterLabel={describeCard(pendingAsk.requesterId)}
+          onAllow={allowAsk}
+          onDeny={denyAsk}
+        />
+      )}
+    </div>
+  );
+}

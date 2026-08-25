@@ -1,0 +1,43 @@
+:root {
+  --ink: #0e1014;
+  --panel: #1a1d24;
+  --surface: #20242c;
+  --border: #2c313c;
+  --text: #e6e8ec;
+  --muted: #8b93a1;
+
+  --foam: #45c8ff;
+  --violet: #8f7bff;
+  --signal: #e8c547;
+  --good: #4ad87a;
+  --warn: #e0a94a;
+  --danger: #ef6b6b;
+
+  --radius: 10px;
+  --titlebar-h: 34px;
+  --font-ui: "Manrope", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-float: 0 8px 28px rgba(0, 0, 0, 0.5);
+
+  /* Dark ink for text sitting on a bright surface (an active rail icon, a
+     primary popover button, sticky-note paper) — the one color role that's
+     the inverse of --text, so it gets its own token instead of a literal. */
+  --on-accent: #04141c;
+}
+
+/* Provider/kind accent colors — single source of truth, referenced by
+   PROVIDER_COLOR/KIND_COLOR in board-model.ts and by cards.css. Nothing
+   outside this file should hardcode a hex for these roles. */
+:root {
+  --accent-bash: var(--muted);
+  --accent-claude: var(--violet);
+  --accent-codex: var(--foam);
+  --accent-cursor: var(--good);
+  --accent-files: var(--violet);
+  --accent-changes: var(--warn);
+  --accent-browser: var(--foam);
+  --accent-sticky-human: var(--signal);
+  --accent-sticky-ai: var(--foam);
+}

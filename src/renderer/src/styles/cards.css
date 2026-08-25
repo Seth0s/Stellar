@@ -1,0 +1,457 @@
+.card-frame {
+  position: relative;
+  font-family: var(--font-ui);
+}
+
+.card-frame::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent, transparent);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px 0 14px;
+  background: var(--panel);
+  font-size: 13px;
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+  flex: none;
+}
+
+.card-head button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.card-head button:hover {
+  color: var(--text);
+}
+
+.card-head-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.card-head-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.card-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+
+.card-status-dot.ok {
+  background: var(--good);
+}
+
+.card-status-dot.warn {
+  background: var(--warn);
+}
+
+.card-status-dot.danger {
+  background: var(--danger);
+}
+
+.card-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent, var(--muted)) 22%, transparent);
+  color: var(--accent, var(--muted));
+  flex: none;
+}
+
+.card-foot {
+  flex: none;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+}
+
+.terminal-card,
+.files-card,
+.changes-card,
+.sticky-card,
+.browser-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.terminal-card-body {
+  flex: 1;
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+
+.terminal-card-exited {
+  position: absolute;
+  bottom: 50px;
+  left: 8px;
+  right: 8px;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.terminal-card-interrupt {
+  position: absolute;
+  top: 2px;
+  right: 24px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.files-card-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.files-tree {
+  width: 200px;
+  flex: none;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.files-node {
+  padding: 2px 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.files-node:hover {
+  background: var(--panel);
+}
+
+.files-node-active {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.files-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.files-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.files-editor-head button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.files-editor-head button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.files-editor-head-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.files-editor-msg {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.files-editor-textarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 8px;
+}
+
+.files-editor-image {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px;
+  background: var(--ink);
+}
+
+.files-editor-image img {
+  max-width: 100%;
+  height: auto;
+}
+
+.files-editor-preview {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+  background: var(--ink);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.files-editor-preview pre {
+  background: var(--panel);
+  padding: 8px;
+  border-radius: 4px;
+  overflow: auto;
+}
+
+.files-editor-preview code {
+  font-family: var(--font-mono);
+}
+
+.files-editor-preview img {
+  max-width: 100%;
+}
+
+.changes-card-body {
+  flex: 1;
+  overflow: auto;
+  font-size: 13px;
+}
+
+.changes-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.changes-header button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.changes-msg {
+  padding: 8px;
+  color: var(--muted);
+}
+
+.changes-list {
+  padding: 4px 0;
+}
+
+.changes-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.changes-entry-status {
+  color: var(--muted);
+  width: 20px;
+  flex: none;
+}
+
+.changes-entry-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.changes-ins {
+  color: var(--good);
+}
+
+.changes-del {
+  color: var(--danger);
+}
+
+.sticky-textarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--on-accent);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  padding: 10px;
+}
+
+.browser-card-address {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.browser-card-address button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+}
+
+.browser-card-address input {
+  flex: 1;
+  min-width: 0;
+  background: var(--ink);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.browser-card-owner {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
+.browser-card-body {
+  flex: 1;
+}
+
+.terminal-card-urls {
+  position: absolute;
+  bottom: 50px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.terminal-card-url-chip {
+  background: var(--panel);
+  color: var(--foam);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.stroke-card {
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.stroke-card .card-head {
+  background: transparent;
+  height: 18px;
+  justify-content: flex-end;
+  padding: 0 4px;
+}
+
+.stroke-card-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.stroke-card:hover .stroke-card-close {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.stroke-card-body {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}

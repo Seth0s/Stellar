@@ -1,0 +1,160 @@
+import { readdir, readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const POLL_MS = 1500;
+const TIMEOUT_MS = 30_000;
+
+function encodeCwdForClaude(cwd: string): string {
+  return cwd.replace(/\//g, "-");
+}
+
+async function findClaudeSession(cwd: string, spawnedAtMs: number): Promise<string | null> {
+  const dir = join(homedir(), ".claude", "projects", encodeCwdForClaude(cwd));
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return null;
+  }
+  let best: { id: string; mtimeMs: number } | null = null;
+  for (const name of entries) {
+    if (!name.endsWith(".jsonl")) continue;
+    const full = join(dir, name);
+    const st = await stat(full).catch(() => null);
+    if (!st || st.mtimeMs <= spawnedAtMs) continue;
+    if (!best || st.mtimeMs > best.mtimeMs) {
+      best = { id: name.slice(0, -".jsonl".length), mtimeMs: st.mtimeMs };
+    }
+  }
+  return best?.id ?? null;
+}
+
+// Codex's session_index.jsonl is append-only — track byte offset at spawn
+// time and only parse what's new, per watcher (module-level, keyed by cwd
+// isn't needed: each watcher tracks its own offset independently).
+async function findCodexSession(sinceOffset: number): Promise<{ id: string | null; newOffset: number }> {
+  const file = join(homedir(), ".codex", "session_index.jsonl");
+  let content: string;
+  try {
+    content = await readFile(file, "utf8");
+  } catch {
+    return { id: null, newOffset: sinceOffset };
+  }
+  if (content.length <= sinceOffset) return { id: null, newOffset: content.length };
+  const added = content.slice(sinceOffset);
+  const lines = added.split("\n").filter((l) => l.trim());
+  let id: string | null = null;
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      if (typeof parsed.id === "string") id = parsed.id;
+    } catch {
+      // partial line (file mid-write) — ignore, next poll will re-read it whole.
+    }
+  }
+  return { id, newOffset: content.length };
+}
+
+async function findCursorSession(cwd: string, spawnedAtMs: number): Promise<string | null> {
+  const chatsDir = join(homedir(), ".cursor", "chats");
+  let hashDirs: string[];
+  try {
+    hashDirs = await readdir(chatsDir);
+  } catch {
+    return null;
+  }
+  let best: { id: string; createdAtMs: number } | null = null;
+  for (const hash of hashDirs) {
+    const hashPath = join(chatsDir, hash);
+    let sessionDirs: string[];
+    try {
+      sessionDirs = await readdir(hashPath);
+    } catch {
+      continue;
+    }
+    for (const sessionId of sessionDirs) {
+      const metaPath = join(hashPath, sessionId, "meta.json");
+      let meta: { cwd?: string; createdAtMs?: number };
+      try {
+        meta = JSON.parse(await readFile(metaPath, "utf8"));
+      } catch {
+        continue;
+      }
+      if (meta.cwd !== cwd || typeof meta.createdAtMs !== "number" || meta.createdAtMs <= spawnedAtMs) continue;
+      if (!best || meta.createdAtMs > best.createdAtMs) {
+        best = { id: sessionId, createdAtMs: meta.createdAtMs };
+      }
+    }
+  }
+  return best?.id ?? null;
+}
+
+/**
+ * Polls the on-disk location each provider (undocumented, reverse-engineered
+ * on this machine — see AGENTS.md) writes new sessions to, looking for one
+ * created after `spawnedAtMs`. Stops after finding one or after ~30s.
+ * `bash` has no session concept — callers should never call this for it.
+ */
+export function watchForSession(
+  providerId: string,
+  cwd: string,
+  spawnedAtMs: number,
+  onFound: (sessionId: string) => void,
+): () => void {
+  if (providerId !== "claude" && providerId !== "codex" && providerId !== "cursor") {
+    return () => {};
+  }
+
+  let stopped = false;
+  let codexOffset = 0;
+  let codexOffsetReady = false;
+  // Establish the starting offset before the first poll so we only ever
+  // look at bytes appended after this watcher started — set once, then
+  // `findCodexSession` advances it every subsequent tick.
+  const initCodexOffset =
+    providerId === "codex"
+      ? readFile(join(homedir(), ".codex", "session_index.jsonl"), "utf8")
+          .then((c) => c.length)
+          .catch(() => 0)
+      : Promise.resolve(0);
+
+  const timer = setInterval(async () => {
+    if (stopped) return;
+    try {
+      let found: string | null = null;
+      if (providerId === "claude") {
+        found = await findClaudeSession(cwd, spawnedAtMs);
+      } else if (providerId === "codex") {
+        if (!codexOffsetReady) {
+          codexOffset = await initCodexOffset;
+          codexOffsetReady = true;
+        }
+        const result = await findCodexSession(codexOffset);
+        codexOffset = result.newOffset;
+        found = result.id;
+      } else if (providerId === "cursor") {
+        found = await findCursorSession(cwd, spawnedAtMs);
+      }
+      if (found) {
+        stopped = true;
+        clearInterval(timer);
+        clearTimeout(timeout);
+        onFound(found);
+      }
+    } catch {
+      // Best-effort — a transient read error just means try again next poll.
+    }
+  }, POLL_MS);
+
+  const timeout = setTimeout(() => {
+    stopped = true;
+    clearInterval(timer);
+  }, TIMEOUT_MS);
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    clearTimeout(timeout);
+  };
+}
