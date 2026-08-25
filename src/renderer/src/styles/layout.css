@@ -268,6 +268,34 @@ body {
   flex: 1;
 }
 
+.project-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-picker-back {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--foam);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+select.resume-input {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  width: 100%;
+  font-family: var(--font-ui);
+}
+
 .board-row {
   display: flex;
   align-items: center;

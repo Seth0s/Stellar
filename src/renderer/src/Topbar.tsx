@@ -30,11 +30,71 @@ function StatusDot({ counts }: { counts?: Counts }) {
   return <span className={`card-status-dot${cls ? ` ${cls}` : ""}`} />;
 }
 
+const CUSTOM_PROJECT = "__custom__";
+
+/** A real picker (real sibling project directories under the workspace,
+ * plus whatever's already in use) instead of a bare text box — the user
+ * asked to *select* a workspace, not type one blind. Falls back to free
+ * text only when "+ novo projeto" is chosen, so a name that isn't (yet) a
+ * real directory still works. */
+function ProjectPicker({
+  options,
+  value,
+  onChange,
+}: {
+  options: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [customMode, setCustomMode] = useState(!value || !options.includes(value));
+  if (customMode) {
+    return (
+      <div className="project-picker">
+        <input
+          className="resume-input"
+          placeholder="nome do projeto"
+          value={value}
+          autoFocus
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {options.length > 0 && (
+          <button type="button" className="project-picker-back" onClick={() => setCustomMode(false)}>
+            escolher da lista
+          </button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <select
+      className="resume-input"
+      value={value}
+      onChange={(e) => {
+        if (e.target.value === CUSTOM_PROJECT) {
+          setCustomMode(true);
+          onChange("");
+        } else {
+          onChange(e.target.value);
+        }
+      }}
+    >
+      {!value && <option value="">selecione…</option>}
+      {options.map((p) => (
+        <option key={p} value={p}>
+          {p}
+        </option>
+      ))}
+      <option value={CUSTOM_PROJECT}>+ novo projeto…</option>
+    </select>
+  );
+}
+
 export function Topbar({
   boards,
   activeBoardId,
   boardCounts,
   suggestedProject,
+  availableProjects,
   zoom,
   onZoomIn,
   onZoomOut,
@@ -49,6 +109,8 @@ export function Topbar({
   activeBoardId: string;
   boardCounts: Record<string, Counts>;
   suggestedProject: string;
+  /** Real sibling directories under the workspace (see App.tsx's WORKSPACE_ROOT) — best-effort, can be empty. */
+  availableProjects: string[];
   zoom: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -67,6 +129,9 @@ export function Topbar({
   const titleBtnRef = useRef<HTMLButtonElement>(null);
   const activeBoard = boards.find((b) => b.id === activeBoardId);
   const activeCounts = boardCounts[activeBoardId];
+  const allProjectOptions = Array.from(
+    new Set([...availableProjects, ...boards.map((b) => b.project).filter(Boolean)]),
+  ).sort((a, b) => a.localeCompare(b));
 
   function startRename(b: Board) {
     setRenamingId(b.id);
@@ -126,14 +191,10 @@ export function Topbar({
                           }}
                           onBlur={commitRename}
                         />
-                        <input
-                          className="resume-input"
-                          defaultValue={b.project}
-                          placeholder="projeto"
-                          onBlur={(e) => onChangeProject(b.id, e.target.value.trim())}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                          }}
+                        <ProjectPicker
+                          options={allProjectOptions}
+                          value={b.project}
+                          onChange={(v) => onChangeProject(b.id, v)}
                         />
                       </div>
                     ) : (
@@ -172,12 +233,7 @@ export function Topbar({
         </div>
         <div className="popover-field">
           <label>projeto</label>
-          <input
-            className="resume-input"
-            placeholder="ex. agent-canvas"
-            value={newBoardProject}
-            onChange={(e) => setNewBoardProject(e.target.value)}
-          />
+          <ProjectPicker options={allProjectOptions} value={newBoardProject} onChange={setNewBoardProject} />
         </div>
         <div className="popover-actions board-create">
           <input

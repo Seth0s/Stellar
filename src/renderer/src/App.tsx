@@ -67,6 +67,12 @@ type Connector = { id: string; fromCardId: string; toCardId: string };
 type Tool = "pointer" | "pen" | "connector" | "select";
 
 const DEFAULT_CWD = "/home/lucas/Workplace/Projects/agent-canvas";
+/** The multi-repo workspace this app itself lives in (see CLAUDE.md at
+ * this path) — its top-level directories are real sibling projects
+ * (CentralByte, IdyPlatform, ...), offered as a real picker for "which
+ * project is this session for" (item 1 follow-up: the user wants to
+ * *select* a workspace, not type one blind). */
+const WORKSPACE_ROOT = "/home/lucas/Workplace/Projects";
 
 /** Suggests a project name for a new session (item 1) from the workspace
  * convention this very app lives in — the path segment right after
@@ -236,6 +242,7 @@ export function App() {
    * `boardCounts` (provider !== "bash"), since a non-loaded board's PTYs
    * aren't running at all (switching boards kills them, see AGENTS.md). */
   const [liveStatus, setLiveStatus] = useState<Record<string, "ok" | "error" | "exited">>({});
+  const [workspaceProjects, setWorkspaceProjects] = useState<string[]>([]);
   const nextId = useRef(1);
   const viewportRef = useRef<HTMLDivElement>(null);
   const cardsRef = useRef<Card[]>([]);
@@ -254,6 +261,17 @@ export function App() {
       offUrlSeen();
       offAskOpen();
     };
+  }, []);
+
+  // Real sibling project directories, for the "select a project" picker
+  // (item 1 follow-up) — best-effort: an unreadable/moved workspace root
+  // just leaves the picker with only the free-text fallback, never blocks
+  // the app.
+  useEffect(() => {
+    window.fs
+      .list(WORKSPACE_ROOT, "")
+      .then((entries) => setWorkspaceProjects(entries.filter((e) => e.isDir).map((e) => e.name)))
+      .catch(() => {});
   }, []);
 
   // Escape exits pen/connector tool mode. Not required for correctness —
@@ -1216,6 +1234,7 @@ export function App() {
         activeBoardId={activeBoardId!}
         boardCounts={effectiveBoardCounts}
         suggestedProject={suggestProjectFromCwd(DEFAULT_CWD)}
+        availableProjects={workspaceProjects}
         zoom={world.zoom}
         onZoomIn={() => zoomBy(ZOOM_STEP)}
         onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
