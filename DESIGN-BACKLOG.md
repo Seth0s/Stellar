@@ -469,6 +469,123 @@ não só conveniência — candidato a entrar antes dos outros quatro.
 processo vivo, ver `AGENTS.md`. Os outros quatro (duplicar card,
 jump-to-card, template de sessão) continuam em aberto.
 
+## 8. Home — tela inicial sem sessão carregada
+
+**Gap real**: hoje o app sempre abre direto numa sessão (a última salva em
+`localStorage`, ver `ACTIVE_BOARD_KEY`/`useBoardStore`) — não existe estado
+"nenhuma sessão carregada". Não há lugar pra ver todas as sessões/projetos
+de uma vez, analytics básico (quantos agentes ativos no total, última
+sessão usada, etc.) nem uma forma robusta de organizar/classificar
+projetos além do popover raso do `Topbar`.
+
+- Precisa de uma rota/estado novo no `App.tsx` (`activeBoardId === null`
+  intencional, não só "ainda carregando") que renderiza uma home em vez do
+  canvas — grid ou lista de sessões agrupadas por projeto (mesma
+  hierarquia Projects → projeto → sessão do item 1, já implementada em
+  `useBoardStore`/`Topbar`), com algum analytics simples (contagem de
+  agentes/ativos por sessão, já existe via `boardCounts`/`cardCounts` IPC
+  — só falta um lugar pra mostrar em escala).
+- Provavelmente é aqui, não no popover apertado do `Topbar`, que faz mais
+  sentido reeditar/reclassificar projeto de uma sessão, renomear, excluir
+  — o popover vira só troca rápida (ver item 11 abaixo).
+- Precisa de decisão de produto ainda não tomada: home é a tela de boot
+  sempre, ou só quando não há sessão salva? Como voltar pra ela a partir
+  do canvas (atalho? botão no `Topbar`?).
+
+## 9. Navegador embutido — abordagem a revisar (não só bug pontual)
+
+**Contexto**: histórico longo e não resolvido em `AGENTS.md` (ver
+2026-08-25 "Navegador nasce com tela preta", "navegador preto de novo",
+"cards brancos sobrepostos" — múltiplas tentativas de fix incluindo
+`view.setBackgroundColor(...)` em `browser-registry.ts`). Usuário reporta
+que **até hoje é a única ferramenta que continua dando problema** —
+screenshot novo mostra o card do navegador nascendo **em branco sólido**
+ao ser invocado (não preto desta vez — mesma família de bug: composição
+de `WebContentsView` falhando, mas com o `about:blank`/fundo branco
+"vencendo" em vez do preto default).
+
+- **Pedido explícito do usuário**: antes de tentar mais um fix pontual,
+  pesquisar na internet quais são as práticas corretas de usar
+  Chromium/`WebContentsView` embutido dentro de um app Electron (o Canvas
+  é Electron) — e se `WebContentsView` é de fato a abordagem certa aqui ou
+  se existe alternativa mais robusta (ex.: `<webview>` tag — deprecated
+  mas ainda existe; offscreen rendering; outra estratégia de compositing
+  já usada por apps Electron de produção que embutem browser real).
+  Pesar contra o gotcha já confirmado nesta máquina: GPU desabilitada
+  (`app.disableHardwareAcceleration()`, fase "Fix definitivo do crash de
+  GPU") quebra composição de `WebContentsView`/`capturePage()` — qualquer
+  alternativa escolhida precisa funcionar SEM GPU também, ou a pesquisa
+  precisa achar como reabilitar GPU com segurança nesta máquina.
+- **Design do card também precisa de retrabalho** — usuário pede
+  reaproveitar o design do navegador do `CentralByte` (projeto irmão neste
+  mesmo workspace, Tauri), "bem mais organizado". Referências concretas
+  nesse repo: `CentralByte/src/BrowserPane.tsx` (componente da UI) e
+  `CentralByte/docs/adr/ADR-002-embedded-browser.md` (decisão arquitetural
+  documentada — vale ler antes de portar qualquer abordagem, já que
+  Tauri usa um mecanismo de webview nativo diferente de Electron, então é
+  a UI/UX que é reaproveitável, não necessariamente o mecanismo).
+- Não implementar sem verificação ao vivo via CDP antes de declarar
+  resolvido — este item já foi "corrigido" 2+ vezes e regrediu, mesmo
+  aviso que `AGENTS.md` já registra.
+
+## 10. Terminal — polimento visual + seleção ainda sem uso prático confirmado
+
+Três achados distintos reportados juntos, tratar cada um separado:
+
+- **Borda residual fina na direita do card** (screenshot mostra uma linha
+  vertical fina bem na borda direita do terminal, lendo como um artefato,
+  não uma borda intencional) — precisa investigar ao vivo qual elemento
+  está desenhando isso (candidatos: `.xterm-viewport`'s scrollbar,
+  `.card-resize` handle, ou uma borda de 1px sobrando de algum estado
+  hover/focus). Não assumir causa sem inspecionar via CDP.
+- **Botão de interromper (`^C`) no header do terminal** — hoje é texto
+  literal `^C` (`TerminalCard.tsx`, `className="terminal-card-interrupt"`,
+  `title="Ctrl+C"`) em vez de ícone. Usuário quer removido — provavelmente
+  quer dizer "trocado por um ícone", não "funcionalidade removida" (o
+  botão dispara `interrupt()`, mecanismo real, não decorativo). Isso é
+  exatamente o que a migração de ícones pra `lucide-react` (já decidida,
+  dependência já instalada em `package.json` — `"lucide-react": "^1.34.0"`
+  — mas `icons.tsx` ainda não migrado) deveria cobrir: um ícone real (ex.
+  `CircleDashed`/`Ban`/`SquareStop`) no lugar do texto `^C`. Confirmar com
+  o usuário se é troca de ícone ou remoção total antes de implementar.
+- **Ferramenta de seleção (`tool === "select"`) sem uso prático
+  confirmado**: usuário reporta que não dá pra agrupar/arrastar em grupo
+  "e etc". Pelo código, o mecanismo já existe (`useCardSelection`'s
+  `groupSelected`/`ungroupSelected`, `canGroup`/`canUngroup` em `App.tsx`,
+  drag-sync por `groupId` em `changeRect`, indicador visual de bbox do
+  grupo no `.board-overlay`) — mas o histórico deste projeto já mostrou
+  mais de uma vez que "parece certo lendo o código" não é o mesmo que
+  "funciona ao vivo" (ver o bug do rail-spawn achado na fase 2). Tratar
+  como bug a investigar empiricamente via CDP antes de assumir causa:
+  testar o fluxo completo (ativar `select`, marquee, `onGroup`/`onUngroup`
+  no `Rail`, arrastar um card do grupo e confirmar que os outros
+  acompanham) numa instância isolada.
+
+## 11. Modal/popover de sessões — fluxo pouco prático, redesenhar
+
+**Gap real**: o popover atual do `Topbar` (screenshot mostra "SESSÕES" →
+grupo "AGENT-CANVAS" → linha da sessão ativa com editar/excluir inline →
+campo "projeto" (select) → campo "nova sessão" + botão "criar", tudo
+espremido num popover estreito) mistura três fluxos diferentes num único
+espaço apertado: **trocar** de sessão, **editar** uma sessão existente
+(nome/projeto), e **criar** uma sessão nova — sem separação visual clara,
+o que o usuário descreve como "não prático".
+
+- **Direção pedida pelo usuário**: o popover/modal principal deveria ser
+  só pra **troca de sessão/projeto**, de forma organizada e informativa
+  (provavelmente mais parecido com o que a home do item 8 vai mostrar em
+  miniatura — lista por projeto, status, contagem) — só **um botão** de
+  "criar nova sessão ou projeto", que abre um **modal dedicado** separado
+  pra esse fluxo (nome, projeto, sugestão automática de projeto que já
+  existe hoje).
+- Consequência de design: editar/renomear/excluir uma sessão existente
+  também sai desse popover — provavelmente migra pra dentro da home (item
+  8) ou pra um modal de edição próprio, símétrico ao de criação.
+- Depende de decisão de produto do item 8 (se a home existir, faz sentido
+  esse popover do `Topbar` virar só um atalho rápido pra trocar, com
+  "gerenciar sessões" levando pra home cheia, em vez de duplicar toda a
+  gestão dentro do popover).
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
@@ -483,6 +600,13 @@ jump-to-card, template de sessão) continuam em aberto.
 5. ~~Gesto radial (item 1, parte de gestos)~~ — feito em 2026-08-26.
 6. Decisão de escopo pro remote control (item 2) — maior risco/tamanho do
    lote inteiro, não deveria começar sem a conversa de segurança primeiro.
-7. Organização de código (item 5) e otimização (item 6) — dívida técnica
-   real mas sem urgência de usuário; encaixam melhor como rodada dedicada
-   própria, não espremidas ao lado de mudanças visuais.
+7. ~~Organização de código (item 5)~~ — fase 1+2+3 feitas em 2026-08-26
+   (harness, 4 hooks extraídos, `SYSTEM.md`); otimização (item 6) e fase 4
+   do item 5 seguem sem urgência.
+8. **Itens 8-11 (anotados em 2026-08-26, reportados ao vivo pelo usuário,
+   ainda sem plano fechado nem implementação)**: home sem sessão carregada
+   (item 8), navegador — pesquisa de abordagem correta + redesign visual
+   (item 9, o único item ainda dando problema até hoje segundo o usuário),
+   polimento de terminal + verificação real da ferramenta de seleção (item
+   10), redesenho do modal de sessões (item 11). Precisam de plano
+   detalhado (e, no caso do navegador, pesquisa) antes de qualquer código.
