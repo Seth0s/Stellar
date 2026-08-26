@@ -147,7 +147,7 @@ export function TerminalCard({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={interrupt}
             >
-              ^C
+              <Icon name="interrupt" size={12} />
             </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />

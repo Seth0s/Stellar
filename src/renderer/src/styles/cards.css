@@ -238,14 +238,6 @@
   color: var(--danger);
 }
 
-/* Lives inside .card-head-actions now, alongside the close button — used
-   to be its own absolutely-positioned button floating near the top-right
-   corner, which put it on a different layout axis than the close button
-   and made the two visibly misalign. */
-.terminal-card-interrupt {
-  font-size: 11px;
-}
-
 .files-card-body {
   flex: 1;
   display: flex;
