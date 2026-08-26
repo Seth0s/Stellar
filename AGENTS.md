@@ -1262,6 +1262,62 @@ fixes confirmado ao vivo via CDP numa instância isolada (nunca a sessão
 `npm run dev` do usuário) — nenhum "resolvido" declarado sem ver
 funcionando de fato, mesma prática já registrada nas rodadas anteriores.
 
+## 2026-08-25 — Layout unificado do header/body/footer dos cards + navegador preto de novo
+
+Feedback ao vivo com screenshot de um terminal Claude: barra de acento
+colorida na lateral esquerda, "X" de fechar desalinhado num header
+"quebrado", espaço sem fundo entre o conteúdo do terminal e o rodapé, e o
+navegador voltando a nascer preto depois de já ter sido corrigido.
+
+- **Barra de acento lateral removida** (`.card-clip::before` em
+  `cards.css`) — pedido explícito do usuário. A cor por provider continua
+  visível, só que de forma discreta, no pill `.card-tag` do header (que já
+  existia e já usava a mesma variável `--accent`).
+- **Header desalinhado, causa real**: `.terminal-card-interrupt` (o botão
+  "^C") era um elemento `position: absolute; top: 2px; right: 24px`
+  **fora** do flex `.card-head` — vivia num eixo de posicionamento
+  totalmente diferente do botão de fechar (que é `align-items: center`
+  dentro do flex normal), então os dois nunca iam alinhar verticalmente
+  por construção, não por um valor errado de CSS. Fix: `^C` virou um
+  `<button>` normal dentro de `.card-head-actions`, ao lado do fechar.
+  Confirmado ao vivo via CDP: os dois botões têm o mesmo centro vertical
+  (237.66px) depois do fix. Header também ficou mais discreto por pedido
+  do usuário: `36px→32px` de altura, botões com hover-background sutil em
+  vez de só trocar a cor do texto.
+- **"Espaço sem fundo" antes do rodapé**: `.terminal-card-body` não tinha
+  `background` próprio (herdava `--surface`, um cinza-azulado). Como a
+  altura do container raramente é múltiplo exato da altura de célula do
+  xterm (ele só pinta linhas inteiras), a última fração de linha mostrava
+  esse cinza em vez de preto — uma emenda de cor visível bem onde o
+  usuário reportou "padding sobrando". Fix: `background: #000` direto
+  nesse elemento (xterm não recebe `theme` na constrution, então o preto
+  puro é o próprio default dele — bate exatamente). `.card-foot` também
+  ficou mais enxuto (`6px 14px`→`5px 12px`, `12px`→`11px` de fonte), no
+  mesmo espírito de header discreto.
+- **Navegador preto de novo — não era regressão do fix anterior, era o
+  mesmo bug nunca coberto por inteiro**: `view.setBackgroundColor(...)`
+  (já branco desde a rodada passada) só controla a cor de "segurar tinta"
+  do compositor, mostrada só até a página terminar seu próprio primeiro
+  paint — depois disso quem manda é o background da própria página. O
+  card do navegador nasce navegado pra `about:blank` de verdade
+  (`addBrowserCard` em `App.tsx` usa isso como url inicial, não é um
+  estado transitório) e o Chromium moderno pinta sua página interna
+  `about:blank` escura quando o sistema prefere dark mode,
+  **independente** do `setBackgroundColor`. Confirmado ao vivo via CDP:
+  screenshot direto do *target* da própria `WebContentsView` (não da
+  janela principal, que nunca mostra esse conteúdo — limitação já
+  documentada) num card recém-criado, nunca navegado, mostrou preto quase
+  puro mesmo com o fix anterior no lugar. Fix: `dom-ready` no
+  `webContents` da view injeta `insertCSS("html{color-scheme:light;
+  background:#fff;}")` — escopado só àquela página, não
+  `nativeTheme.themeSource` (que também inverteria o tema
+  intencionalmente escuro do app inteiro). Re-testado: screenshot do
+  mesmo target agora vem branco.
+
+Verificação: `tsc --noEmit`/`electron-vite build` limpos; alinhamento dos
+botões, cor computada do body/foot e o branco real da `WebContentsView`
+confirmados via CDP numa instância isolada, não só lidos no código.
+
 ## Comandos
 
 ```bash

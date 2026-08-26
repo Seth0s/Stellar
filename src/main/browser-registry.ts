@@ -55,6 +55,27 @@ export function createBrowserRegistry(
     entries.set(id, { view });
     win.contentView.addChildView(view);
 
+    // setBackgroundColor above only covers the compositor's paint-hold
+    // color, shown before the page's own first paint — once a page actually
+    // finishes loading, ITS background wins. `about:blank` (the default url
+    // for a freshly created browser card — see App.tsx's addBrowserCard) is
+    // a real page like any other here, and modern Chromium renders its own
+    // internal blank-page background dark when the OS/user prefers dark
+    // color scheme, regardless of setBackgroundColor. Confirmed live via
+    // CDP: screenshotting the view's own target directly (not the outer
+    // window, which never shows WebContentsView content) showed near-black,
+    // not white, on a brand new card that had never navigated anywhere
+    // else — this is what read as "the fix regressed" after a completely
+    // unrelated change; it never actually depended on that change, every
+    // still-on-about:blank card was always going to hit this. Force light
+    // color-scheme on this webContents specifically (not
+    // `nativeTheme.themeSource`, which would also flip the app's own
+    // intentionally-dark UI) so a blank/never-navigated card reads as
+    // "empty", not "broken".
+    view.webContents.on("dom-ready", () => {
+      void view.webContents.insertCSS("html{color-scheme:light;background:#fff;}");
+    });
+
     view.webContents.on("did-navigate", (_e, navUrl) => callbacks.onNavigate(id, navUrl));
     view.webContents.on("did-navigate-in-page", (_e, navUrl) => callbacks.onNavigate(id, navUrl));
     view.webContents.on("page-title-updated", (_e, title) => callbacks.onTitle(id, title));

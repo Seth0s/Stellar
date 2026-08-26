@@ -27,27 +27,13 @@
   border-radius: inherit;
 }
 
-.card-clip::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  /* --accent is set on .card-frame (the outer element) and inherits down
-     through .card-clip like any custom property. */
-  background: var(--accent, transparent);
-  z-index: 1;
-  pointer-events: none;
-}
-
 .card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  height: 36px;
-  padding: 0 10px 0 14px;
+  height: 32px;
+  padding: 0 8px 0 12px;
   background: var(--panel);
   font-size: 13px;
   color: var(--muted);
@@ -57,14 +43,21 @@
 }
 
 .card-head button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
   color: var(--muted);
   cursor: pointer;
   font-size: 15px;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 4px;
 }
 
 .card-head button:hover {
+  background: var(--border);
   color: var(--text);
 }
 
@@ -123,8 +116,8 @@
 
 .card-foot {
   flex: none;
-  padding: 6px 14px;
-  font-size: 12px;
+  padding: 5px 12px;
+  font-size: 11px;
   color: var(--muted);
   border-top: 1px solid var(--border);
   background: var(--panel);
@@ -175,6 +168,13 @@
   flex: 1;
   overflow: hidden;
   font-family: var(--font-mono);
+  /* Matches xterm's own default terminal background (no `theme` is passed
+     to `new Terminal()`, so it defaults to #000). The container's pixel
+     height rarely divides evenly by the cell height — xterm only ever
+     paints whole rows — so without this the last fractional row shows
+     this element's own background instead, a visible seam of the wrong
+     color right above .card-foot. */
+  background: #000;
 }
 
 .terminal-card-exited {
@@ -186,15 +186,12 @@
   color: var(--danger);
 }
 
+/* Lives inside .card-head-actions now, alongside the close button — used
+   to be its own absolutely-positioned button floating near the top-right
+   corner, which put it on a different layout axis than the close button
+   and made the two visibly misalign. */
 .terminal-card-interrupt {
-  position: absolute;
-  top: 2px;
-  right: 24px;
-  background: none;
-  border: none;
-  color: var(--muted);
   font-size: 11px;
-  cursor: pointer;
 }
 
 .files-card-body {

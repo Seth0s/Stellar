@@ -129,6 +129,14 @@ export function TerminalCard({
             <span className="card-tag">{providerId}</span>
           </span>
           <span className="card-head-actions">
+            <button
+              className="terminal-card-interrupt"
+              title="Ctrl+C"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={interrupt}
+            >
+              ^C
+            </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />
             </button>
@@ -156,14 +164,6 @@ export function TerminalCard({
       )}
       {spawnError !== null && <div className="terminal-card-exited">{spawnError}</div>}
       {exitCode !== null && <div className="terminal-card-exited">processo encerrado ({exitCode})</div>}
-      <button
-        className="terminal-card-interrupt"
-        title="Ctrl+C"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={interrupt}
-      >
-        ^C
-      </button>
     </CardFrame>
   );
 }
