@@ -1832,6 +1832,57 @@ manutenção escrito no próprio arquivo: atualizar quando a FORMA do
 sistema mudar, não a cada feature pequena — pra não virar um segundo
 changelog por acidente.
 
+## 2026-08-26 — Bug real achado verificando o refactor: spawn pelo rail caía em (0,0)/NaN (item 5, fase 2, 2/4)
+
+Continuação da extração de hooks (item 5): depois de `useWorldTransform`,
+extraí `useConnectorDrag` (o gesto de arrastar conector — `connectorDraft`
++ `startConnectorDrag`, recebendo `clientToWorld`/`cardsRef`/`order`/
+`onConnect` como parâmetros, mesma fronteira que `useWorldTransform` já
+tinha estabelecido). Escrevi um smoke script novo pro gesto de conector
+(`scripts/verify/smoke-connector.mjs`, não coberto pelos scripts
+anteriores) — e ele falhou.
+
+**Investigação, não suposição**: antes de assumir que era o refactor,
+testei o MESMO cenário no commit imediatamente anterior (`60e56e4`, antes
+de qualquer hook extraído) — **reproduziu idêntico**. Confirmado: não era
+o refactor de hoje. Instrumentei `addStickyCard` com `console.log` real
+(lido via CDP `Runtime.consoleAPICalled`) pra ver os valores de verdade
+em vez de adivinhar — achado: `visibleRect`/`cards.length` chegavam
+corretos (`{x:0,y:0,w:1280,h:800}`, `1`), mas `centeredSlot(...)` nunca
+era chamado — `pointSlot(at)` era, com `at` = um `SyntheticEvent` do
+React, porque `at.x`/`at.y` são `undefined` num evento sintético
+(diferente do DOM nativo, que tem `.x`/`.y` como alias de
+`clientX`/`clientY`), dando `NaN - NaN` → position `(NaN, NaN)` →
+renderiza como `(0,0)`/`auto` no CSS.
+
+**Causa raiz real**: `onCreateFiles={addFilesCard}` (e
+`onCreateChanges`/`onCreateSticky`/`onCreateBrowser`/
+`onCreateRemoteWindow`) no `App.tsx` passam a função direto pro `onClick`
+nativo do botão do rail — React chama esse handler com o `SyntheticEvent`
+como primeiro argumento. Isso sempre foi inócuo até a rodada do menu
+radial (item 1, mais cedo nesta mesma sessão) **adicionar um parâmetro
+opcional `at?: Point`** em todo `addXCard` — a partir daí, o evento
+sintético passou a ser silenciosamente interpretado como um `at` de
+verdade (objeto, então truthy), quebrando **todo spawn pelo rail** desses
+5 tipos de card (terminal ficou são porque `Rail.tsx` já chama
+`onCreateTerminal()` explicitamente sem argumento, via o botão "criar" do
+popover — não um `onClick` direto). Bug real, introduzido nesta mesma
+sessão (rodada do menu radial), só achado agora porque o smoke script do
+conector finalmente exercitou esse caminho de código pela primeira vez.
+
+**Fix**: `onCreateFiles={() => addFilesCard()}` (e os outros 4 do mesmo
+jeito) — nunca deixar o evento chegar no parâmetro opcional. Verificado
+ao vivo: `sticky rect: {x:316,y:156,...}` batendo exatamente com o
+cálculo manual esperado (`cx=640,cy=400,stagger=36` → `640-360+36=316`),
+mesmo pros outros tipos (files, changes). Suite completa (`npm run
+verify`, agora com o smoke script do conector incluso): 24 checks, todos
+PASS, zero processo órfão.
+
+**Por que isso importa pra além do bug em si**: é a prova de que os
+smoke scripts (item 5, fase 1) já pagam o investimento — sem o script do
+conector, esse bug (spawn quebrado pra 5 dos 7 tipos de card) continuaria
+silencioso.
+
 ## Comandos
 
 ```bash

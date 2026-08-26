@@ -22,19 +22,18 @@ import {
   cascadeSlot,
   centeredSlot,
   clipLineToRect,
-  hitTest,
   isInView,
   pointSlot,
   quadraticControlPoint,
   rectCenter,
   rectsOverlap,
   worldRectToScreen,
-  type BoardItem,
   type Point,
   type Rect,
 } from "./board-model";
 import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
 import { useWorldTransform } from "./useWorldTransform";
+import { useConnectorDrag } from "./useConnectorDrag";
 import type { Card, Connector, StickyCardData, Tool } from "./card-types";
 import "./app.css";
 
@@ -264,7 +263,6 @@ export function App() {
   const [newStrokeWidth, setNewStrokeWidth] = useState<number>(DEFAULT_STROKE_WIDTH);
   const [newStrokeStyle, setNewStrokeStyle] = useState<"solid" | "marker">("solid");
   const [drawingPoints, setDrawingPoints] = useState<Point[] | null>(null);
-  const [connectorDraft, setConnectorDraft] = useState<{ fromId: string; point: Point } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   /** Cards mid-close-animation — still rendered (with the .closing class),
    * removed from `cards` only once that finishes (see finalizeCloseCard). */
@@ -535,6 +533,8 @@ export function App() {
     });
     toast("conector criado");
   }
+
+  const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
 
   function removeConnector(id: string) {
     setConnectors((prev) => prev.filter((c) => c.id !== id));
@@ -981,25 +981,6 @@ export function App() {
     window.addEventListener("pointerup", onUp);
   }
 
-  /** Drag from a card, in "connector" tool mode, to another card — released via CardFrame.onConnectorStart. */
-  function startConnectorDrag(fromId: string, e: React.PointerEvent) {
-    e.stopPropagation();
-    setConnectorDraft({ fromId, point: clientToWorld(e.clientX, e.clientY) });
-    function onMove(ev: PointerEvent) {
-      setConnectorDraft({ fromId, point: clientToWorld(ev.clientX, ev.clientY) });
-    }
-    function onUp(ev: PointerEvent) {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      setConnectorDraft(null);
-      const releasePoint = clientToWorld(ev.clientX, ev.clientY);
-      const target = hitTest(cardsRef.current as BoardItem[], releasePoint, order);
-      if (target && target.id !== fromId) addConnector(fromId, target.id);
-    }
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }
-
   /** Rubber-band marquee (item 4) — a dedicated tool, deliberately not
    * reusing the pointer tool's own background-drag (that's pan, already
    * fixed/validated in an earlier round — see AGENTS.md). A click without a
@@ -1427,11 +1408,22 @@ export function App() {
         newSystemPrompt={newSystemPrompt}
         setNewSystemPrompt={setNewSystemPrompt}
         onCreateTerminal={addTerminalCard}
-        onCreateFiles={addFilesCard}
-        onCreateChanges={addChangesCard}
-        onCreateSticky={addStickyCard}
-        onCreateBrowser={addBrowserCard}
-        onCreateRemoteWindow={addRemoteWindowCard}
+        // Real bug found and fixed while verifying an unrelated refactor
+        // (see AGENTS.md): these five are wired straight to a native
+        // `onClick`, which React calls with the SyntheticEvent as the
+        // first argument — `addXCard`'s optional `at?: Point` (added for
+        // the radial menu, item 1) silently received that event object as
+        // `at` (truthy, so the `at ? pointSlot(at) : ...` branch always
+        // won), and `pointSlot(event)` read `event.x`/`.y` — undefined on
+        // a React SyntheticEvent — producing NaN coordinates that render
+        // as (0,0). `onCreateTerminal` above is safe as-is because
+        // Rail.tsx's own popover button already calls it with zero
+        // arguments explicitly; these five call the setter directly.
+        onCreateFiles={() => addFilesCard()}
+        onCreateChanges={() => addChangesCard()}
+        onCreateSticky={() => addStickyCard()}
+        onCreateBrowser={() => addBrowserCard()}
+        onCreateRemoteWindow={() => addRemoteWindowCard()}
         aiBusy={aiBusy}
         summarizeDisabled={newProvider === "bash"}
         onReorganize={aiReorganize}
