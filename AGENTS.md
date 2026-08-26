@@ -2058,6 +2058,47 @@ especificidade do seletor. Verificado ao vivo: `getComputedStyle` do
 slider retorna `rgb(44, 49, 60)` (`--border`) depois do fix. `npm run
 verify` completo: 24 checks, PASS.
 
+## 2026-08-26 — Item 10, achado 3: seleção/grupo/arrastar em grupo funcionam; o problema real é usabilidade em zoom 1
+
+Usuário reportou "a ferramenta de selecionar ainda não tem utilização
+prática, não tem como agrupar, arrastar em grupo e etc". Pelo código, o
+mecanismo já existia (`useCardSelection`, `changeRect`'s drag-sync por
+`groupId`) — mas seguindo a prática deste projeto (nunca assumir "deve
+funcionar" sem rodar, ver o histórico do bug de rail-spawn na fase 2),
+escrevi um teste ao vivo real em vez de confiar na leitura.
+
+**Escrever o teste revelou o achado antes mesmo de rodar contra o
+código**: sticky cards spawnam a 720×560 num viewport de 1280×800 — maior
+que metade da janela nas duas dimensões. O card de terminal auto-semeado
+sozinho já ocupa `(40,40)-(760,600)`. Consequência prática: em zoom 1,
+**não existe posição na tela que separe dois cards completamente** — as
+bounding boxes sempre se sobrepõem em algum lugar, e qual card fica por
+cima (cobrindo o outro nessa sobreposição) depende de qual foi
+clicado/arrastado por último (raise-on-interact). Um script de CDP com
+coordenadas fixas falhou repetidamente por causa disso antes de eu
+perceber a causa — nada de errado no app, só geometria genuína: dois
+retângulos maiores que metade da tela não cabem lado a lado sem
+sobrepor.
+
+**Fix pro teste, não pro app**: dar zoom out (10 cliques em "Diminuir
+zoom") antes de tentar separar os cards, reduzindo o footprint na tela o
+suficiente pra uma separação real. Depois disso, todo o fluxo funcionou
+de primeira: `scripts/verify/smoke-group-select.mjs` — 11 checks, seleção
+múltipla (clique + shift-clique), botão "Agrupar" aparece, arrastar um
+card do grupo move o outro pelo mesmo delta, botão "Desagrupar" aparece,
+e depois de desagrupar arrastar um NÃO move mais o outro. `npm run
+verify` completo: agora 5 smoke scripts, 33 checks, todos PASS.
+
+**O achado real não é um bug de código — é um achado de UX**: a razão do
+usuário achar a ferramenta "sem uso prático" provavelmente é a mesma
+razão do meu script ter falhado antes do zoom-out: em zoom 1, selecionar
+mais de um card sem querer pegar o card errado (ou sem espaço vazio pra
+começar um marquee) é genuinamente difícil dado o tamanho padrão dos
+cards. Registrado como candidato a item novo em `DESIGN-BACKLOG.md`
+(item 10) — não implementado ainda, precisa de decisão de produto
+(reduzir tamanho padrão de spawn? auto-zoom-out ao entrar na ferramenta
+`select`? outro affordance?).
+
 ## Comandos
 
 ```bash

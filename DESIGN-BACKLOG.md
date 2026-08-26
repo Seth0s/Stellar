@@ -569,18 +569,31 @@ Três achados distintos reportados juntos, tratar cada um separado:
   — mas `icons.tsx` ainda não migrado) deveria cobrir: um ícone real (ex.
   `CircleDashed`/`Ban`/`SquareStop`) no lugar do texto `^C`. Confirmar com
   o usuário se é troca de ícone ou remoção total antes de implementar.
-- **Ferramenta de seleção (`tool === "select"`) sem uso prático
-  confirmado**: usuário reporta que não dá pra agrupar/arrastar em grupo
-  "e etc". Pelo código, o mecanismo já existe (`useCardSelection`'s
-  `groupSelected`/`ungroupSelected`, `canGroup`/`canUngroup` em `App.tsx`,
-  drag-sync por `groupId` em `changeRect`, indicador visual de bbox do
-  grupo no `.board-overlay`) — mas o histórico deste projeto já mostrou
-  mais de uma vez que "parece certo lendo o código" não é o mesmo que
-  "funciona ao vivo" (ver o bug do rail-spawn achado na fase 2). Tratar
-  como bug a investigar empiricamente via CDP antes de assumir causa:
-  testar o fluxo completo (ativar `select`, marquee, `onGroup`/`onUngroup`
-  no `Rail`, arrastar um card do grupo e confirmar que os outros
-  acompanham) numa instância isolada.
+- ~~**Ferramenta de seleção sem uso prático confirmado**~~ — **investigado
+  e fechado em 2026-08-26**: o mecanismo (`groupSelected`/`ungroupSelected`,
+  drag-sync por `groupId`) **funciona corretamente** — verificado ao vivo
+  via `scripts/verify/smoke-group-select.mjs` (11 checks: seleção múltipla,
+  botão agrupar aparece, arrastar um card do grupo move o outro pelo mesmo
+  delta, botão desagrupar aparece, e depois de desagrupar arrastar um NÃO
+  move mais o outro). Não é o mesmo bug que o rail-spawn (fase 2) — dessa
+  vez o código realmente fazia o que a leitura sugeria.
+  **Achado real, diferente do que foi reportado**: o problema não é o
+  mecanismo, é a **usabilidade em telas normais**. Cards (`sticky`, e
+  presumivelmente os outros tipos) spawnam a 720×560 — maior que metade de
+  uma janela 1280×800 nas duas dimensões. Consequência: (a) **quase não
+  sobra "fundo vazio"** pra iniciar um marquee — o card auto-semeado de
+  terminal sozinho já ocupa (40,40)-(760,600); (b) **dois cards quase
+  sempre têm as bounding boxes sobrepostas**, então clicar precisamente
+  em UM sem acertar o outro (por trás, coberto por quem foi
+  clicado/arrastado por último) é genuinamente difícil — confirmado
+  porque o próprio script de verificação só ficou confiável depois de
+  **reduzir o zoom primeiro** (10 cliques em "Diminuir zoom") antes de
+  tentar separar os cards de verdade. Um usuário não tem motivo pra saber
+  que precisa dar zoom out antes de usar seleção múltipla — nada na UI
+  sugere isso. **Candidato a item novo de UX** (não implementado ainda):
+  ou reduzir o tamanho de spawn padrão dos cards, ou dar algum affordance
+  quando o usuário tenta selecionar/agrupar em zoom 1 com pouco espaço
+  livre (ex.: auto-zoom-out ao entrar na ferramenta `select`, ou um hint).
 
 ## 11. Modal/popover de sessões — fluxo pouco prático, redesenhar
 
@@ -629,8 +642,10 @@ o que o usuário descreve como "não prático".
    por segurança; item 4 continua deliberadamente adiado):
    1. ~~Terminal — borda residual fina na direita do card~~ — feito em
       2026-08-26 (item 10, achado 1).
-   2. Terminal — verificar ao vivo se agrupar/arrastar em grupo (ferramenta
-      de seleção) realmente funciona (item 10, achado 3).
+   2. ~~Terminal — verificar ao vivo se agrupar/arrastar em grupo (ferramenta
+      de seleção) realmente funciona~~ — feito em 2026-08-26 (item 10,
+      achado 3): mecanismo funciona; achado real foi de usabilidade
+      (cards grandes demais pra separar em zoom 1), não de código.
    3. Terminal — trocar o texto `^C` do header por um ícone real (item 10,
       achado 2) — migração pontual pra `lucide-react`, não o `icons.tsx`
       inteiro.
