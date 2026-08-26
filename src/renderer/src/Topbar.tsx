@@ -99,6 +99,8 @@ export function Topbar({
   onZoomIn,
   onZoomOut,
   onFit,
+  bgStyleLabel,
+  onCycleBgStyle,
   onSwitchBoard,
   onCreateBoard,
   onRenameBoard,
@@ -115,6 +117,8 @@ export function Topbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
+  bgStyleLabel: string;
+  onCycleBgStyle: () => void;
   onSwitchBoard: (id: string) => void;
   onCreateBoard: (name: string, project: string) => void;
   onRenameBoard: (id: string, name: string) => void;
@@ -260,6 +264,9 @@ export function Topbar({
         </button>
         <button onClick={onFit} title="Ajustar à tela (zoom, não é a tela cheia da janela — veja o botão na barra de título)">
           <Icon name="fit" size={16} />
+        </button>
+        <button onClick={onCycleBgStyle} title={`Fundo do canvas: ${bgStyleLabel} (clique para trocar)`}>
+          <Icon name="bgStyle" size={16} />
         </button>
       </div>
     </div>

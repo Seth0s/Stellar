@@ -15,10 +15,12 @@ export function StrokeCard({
   interactionMode,
   selected,
   reflowing,
+  closing,
   onChange,
   onCommit,
   onRaise,
   onClose,
+  onCloseAnimationEnd,
   onConnectorStart,
   onSelectStart,
 }: {
@@ -33,10 +35,12 @@ export function StrokeCard({
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
+  closing?: boolean;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onClose: () => void;
+  onCloseAnimationEnd?: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
 }) {
@@ -50,9 +54,11 @@ export function StrokeCard({
       interactionMode={interactionMode}
       selected={selected}
       reflowing={reflowing}
+      closing={closing}
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
+      onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
       headerContent={

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CardFrame } from "./CardFrame";
+import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import type { GitStatus } from "../../preload/index";
@@ -12,10 +13,14 @@ export function ChangesCard({
   interactionMode,
   selected,
   reflowing,
+  closing,
+  label,
   onChange,
   onCommit,
   onRaise,
   onClose,
+  onCloseAnimationEnd,
+  onRename,
   onConnectorStart,
   onSelectStart,
 }: {
@@ -26,10 +31,14 @@ export function ChangesCard({
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
+  closing?: boolean;
+  label: string | null;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onClose: () => void;
+  onCloseAnimationEnd?: () => void;
+  onRename: (label: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
 }) {
@@ -55,16 +64,18 @@ export function ChangesCard({
       selected={selected}
       accent="var(--accent-changes)"
       reflowing={reflowing}
+      closing={closing}
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
+      onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
       headerContent={
         <>
           <span className="card-head-label">
             <Icon name="changes" size={14} />
-            <span className="card-tag">changes</span>
+            <CardTag label={label ?? "changes"} onRename={onRename} />
           </span>
           <span className="card-head-actions">
             <button onClick={onClose}>

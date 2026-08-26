@@ -14,6 +14,7 @@ export type CardRow = {
   model: string | null;
   system_prompt: string | null;
   group_id: string | null;
+  label: string | null;
   updated_at: number;
 };
 

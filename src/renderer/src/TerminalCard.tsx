@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
+import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 
@@ -29,10 +30,14 @@ export function TerminalCard({
   interactionMode,
   selected,
   reflowing,
+  closing,
+  label,
   onChange,
   onCommit,
   onRaise,
   onClose,
+  onCloseAnimationEnd,
+  onRename,
   onResumeIdDiscovered,
   onOpenUrl,
   onConnectorStart,
@@ -57,10 +62,15 @@ export function TerminalCard({
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
+  closing?: boolean;
+  /** User-set header name, null = fall back to `providerId`. */
+  label: string | null;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onClose: () => void;
+  onCloseAnimationEnd?: () => void;
+  onRename: (label: string) => void;
   onResumeIdDiscovered: (resumeId: string) => void;
   onOpenUrl: (url: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
@@ -113,9 +123,11 @@ export function TerminalCard({
       selected={selected}
       accent={PROVIDER_ACCENT[providerId] ?? PROVIDER_ACCENT.bash}
       reflowing={reflowing}
+      closing={closing}
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
+      onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
       // The last onChange's state update lands in the DOM asynchronously
@@ -126,7 +138,7 @@ export function TerminalCard({
         <>
           <span className="card-head-label">
             <span className={`card-status-dot ${statusClass}`} />
-            <span className="card-tag">{providerId}</span>
+            <CardTag label={label ?? providerId} onRename={onRename} />
           </span>
           <span className="card-head-actions">
             <button

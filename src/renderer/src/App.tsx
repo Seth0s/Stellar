@@ -31,7 +31,10 @@ import {
 import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
 import "./app.css";
 
-type BaseCard = { id: string; rect: Rect; groupId: string | null };
+/** `label` is a user-set display name (header rename) — null means "use the
+ * kind-specific default" (provider id for terminals, KIND_LABEL for
+ * everything else), never re-derived once set. */
+type BaseCard = { id: string; rect: Rect; groupId: string | null; label: string | null };
 
 type TerminalCardData = BaseCard & {
   kind: "terminal";
@@ -103,12 +106,59 @@ const KIND_LABEL: Record<Card["kind"], string> = {
 
 const ACTIVE_BOARD_KEY = "ac.activeBoardId";
 
+/** Canvas background pattern — per-viewer preference (not per-board data,
+ * doesn't need to sync/persist to the store), cycled by a topbar button.
+ * "dots" is the original look; "grid"/"lines" answer the "personalização
+ * de fundo com coordenadas/linhas" ask (graph paper / ruled notebook
+ * paper); "plain" for when any pattern is unwanted. */
+type BgStyle = "dots" | "grid" | "lines" | "plain";
+const BG_STYLE_KEY = "ac.bgStyle";
+const BG_STYLE_ORDER: BgStyle[] = ["dots", "grid", "lines", "plain"];
+const BG_STYLE_LABEL: Record<BgStyle, string> = { dots: "pontos", grid: "grade", lines: "linhas", plain: "liso" };
+
+function backgroundCss(style: BgStyle, dotSize: number, panX: number, panY: number): React.CSSProperties {
+  const backgroundPosition = `${panX % dotSize}px ${panY % dotSize}px`;
+  switch (style) {
+    case "dots":
+      return {
+        backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.14) 1px, transparent 1px)",
+        backgroundSize: `${dotSize}px ${dotSize}px`,
+        backgroundPosition,
+      };
+    case "grid":
+      return {
+        backgroundImage:
+          "linear-gradient(rgba(255,255,255,0.07) 1px, transparent 1px), " +
+          "linear-gradient(90deg, rgba(255,255,255,0.07) 1px, transparent 1px)",
+        backgroundSize: `${dotSize}px ${dotSize}px`,
+        backgroundPosition,
+      };
+    case "lines":
+      // 2x the spacing of the other styles — reads as ruled notebook paper,
+      // not a measurement grid.
+      return {
+        backgroundImage: "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px)",
+        backgroundSize: `${dotSize * 2}px ${dotSize * 2}px`,
+        backgroundPosition,
+      };
+    case "plain":
+      return {};
+  }
+}
+
 // files/changes/sticky don't use provider/resume_id/model/system_prompt for
 // their vendor meaning — the generic `cards` schema is reused as-is (no
 // migration) by repurposing `cwd` (root path, or sticky note content) and
 // `provider` (unused/"" for files+changes, sticky's color for sticky).
 function toRow(card: Card, boardId: string): CardRow {
-  const base = { id: card.id, board_id: boardId, group_id: card.groupId, updated_at: Date.now(), ...card.rect };
+  const base = {
+    id: card.id,
+    board_id: boardId,
+    group_id: card.groupId,
+    label: card.label,
+    updated_at: Date.now(),
+    ...card.rect,
+  };
   switch (card.kind) {
     case "terminal":
       return {
@@ -182,18 +232,29 @@ function parseStroke(raw: string): { points: [number, number][]; width: number; 
 function fromRow(r: CardRow): Card {
   const rect = { x: r.x, y: r.y, w: r.w, h: r.h };
   const groupId = r.group_id ?? null;
+  const label = r.label ?? null;
   switch (r.kind) {
     case "files":
-      return { id: r.id, kind: "files", root: r.cwd, rect, groupId };
+      return { id: r.id, kind: "files", root: r.cwd, rect, groupId, label };
     case "changes":
-      return { id: r.id, kind: "changes", root: r.cwd, rect, groupId };
+      return { id: r.id, kind: "changes", root: r.cwd, rect, groupId, label };
     case "sticky":
-      return { id: r.id, kind: "sticky", content: r.cwd, color: r.provider || "yellow", rect, groupId };
+      return { id: r.id, kind: "sticky", content: r.cwd, color: r.provider || "yellow", rect, groupId, label };
     case "browser":
-      return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect, groupId };
+      return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect, groupId, label };
     case "stroke": {
       const { points, width, style } = parseStroke(r.cwd);
-      return { id: r.id, kind: "stroke", points, width, style, color: r.provider || STROKE_COLORS[0], rect, groupId };
+      return {
+        id: r.id,
+        kind: "stroke",
+        points,
+        width,
+        style,
+        color: r.provider || STROKE_COLORS[0],
+        rect,
+        groupId,
+        label,
+      };
     }
     default:
       return {
@@ -205,6 +266,7 @@ function fromRow(r: CardRow): Card {
         continueLast: false,
         model: r.model,
         systemPrompt: r.system_prompt,
+        label,
         rect,
         groupId,
       };
@@ -232,6 +294,13 @@ export function App() {
   const [drawingPoints, setDrawingPoints] = useState<Point[] | null>(null);
   const [connectorDraft, setConnectorDraft] = useState<{ fromId: string; point: Point } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  /** Cards mid-close-animation — still rendered (with the .closing class),
+   * removed from `cards` only once that finishes (see finalizeCloseCard). */
+  const [closingIds, setClosingIds] = useState<Set<string>>(new Set());
+  const [bgStyle, setBgStyle] = useState<BgStyle>(() => {
+    const saved = localStorage.getItem(BG_STYLE_KEY);
+    return (BG_STYLE_ORDER as string[]).includes(saved ?? "") ? (saved as BgStyle) : "dots";
+  });
   const [marquee, setMarquee] = useState<Rect | null>(null);
   const [reflowing, setReflowing] = useState(false);
   const [boards, setBoards] = useState<BoardRow[]>([]);
@@ -338,6 +407,7 @@ export function App() {
         systemPrompt: null,
         rect: cascadeSlot(0),
         groupId: null,
+        label: null,
       };
       setCards([card]);
       setOrder([id]);
@@ -462,6 +532,7 @@ export function App() {
       style: newStrokeStyle,
       rect: { x: minX - STROKE_PADDING, y: minY - STROKE_PADDING, w, h },
       groupId: null,
+      label: null,
     });
   }
 
@@ -478,17 +549,18 @@ export function App() {
       systemPrompt: newSystemPrompt.trim() || null,
       rect: centeredSlot(visibleRect, cards.length),
       groupId: null,
+      label: null,
     });
   }
 
   function addFilesCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "files", root: DEFAULT_CWD, rect: centeredSlot(visibleRect, cards.length), groupId: null });
+    addCard({ id, kind: "files", root: DEFAULT_CWD, rect: centeredSlot(visibleRect, cards.length), groupId: null, label: null });
   }
 
   function addChangesCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "changes", root: DEFAULT_CWD, rect: centeredSlot(visibleRect, cards.length), groupId: null });
+    addCard({ id, kind: "changes", root: DEFAULT_CWD, rect: centeredSlot(visibleRect, cards.length), groupId: null, label: null });
   }
 
   function addStickyCard() {
@@ -500,6 +572,7 @@ export function App() {
       color: "yellow",
       rect: centeredSlot(visibleRect, cards.length),
       groupId: null,
+      label: null,
     });
   }
 
@@ -513,6 +586,7 @@ export function App() {
       ownerCardId: null,
       rect: centeredSlot(visibleRect, cards.length),
       groupId: null,
+      label: null,
     });
   }
 
@@ -533,6 +607,7 @@ export function App() {
       ownerCardId,
       rect: centeredSlot(visibleRect, cardsRef.current.length),
       groupId: null,
+      label: null,
     };
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, id]);
@@ -642,7 +717,7 @@ export function App() {
       const result = await window.ai.summarize(newProvider, DEFAULT_CWD, prompt);
       const id = String(nextId.current++);
       const content = "text" in result ? result.text : `Erro: ${result.error}`;
-      addCard({ id, kind: "sticky", content, color: "blue", rect: cascadeSlot(cardsRef.current.length), groupId: null });
+      addCard({ id, kind: "sticky", content, color: "blue", rect: cascadeSlot(cardsRef.current.length), groupId: null, label: null });
       toast("Nota de resumo criada");
     } finally {
       setAiBusy(false);
@@ -655,7 +730,12 @@ export function App() {
     return `card #${id}`;
   }
 
-  function closeCard(id: string) {
+  /** The actual removal — cards/order/connectors/selection/liveStatus state
+   * plus the store. Split from `closeCard` below so the close animation can
+   * play first: the DOM node has to still exist while `.closing`'s
+   * animation runs, so this only fires once that animation ends, not on
+   * the click that requested the close. */
+  function finalizeCloseCard(id: string) {
     setCards((prev) => prev.filter((c) => c.id !== id));
     setOrder((prev) => prev.filter((x) => x !== id));
     setConnectors((prev) => prev.filter((c) => c.fromCardId !== id && c.toCardId !== id));
@@ -671,8 +751,45 @@ export function App() {
       delete next[id];
       return next;
     });
+    setClosingIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     void window.store.delete(id);
     void window.store.connectors.deleteForCard(id);
+  }
+
+  /** Every card's own onClose calls this, not finalizeCloseCard directly —
+   * marks the card as closing (CardFrame renders it with the .closing
+   * animation class) and lets the animation's own end event trigger the
+   * real removal. Also schedules finalizeCloseCard as a plain timeout, not
+   * just on animationend: `prefers-reduced-motion: reduce` drops the
+   * animation entirely (animations.css), which means no animationend event
+   * ever fires — without this fallback the card would stay stuck forever
+   * for anyone with that preference set. finalizeCloseCard no-ops safely
+   * if called twice (whichever path fires first wins). */
+  function closeCard(id: string) {
+    setClosingIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    setTimeout(() => finalizeCloseCard(id), 180);
+  }
+
+  function cycleBgStyle() {
+    setBgStyle((prev) => {
+      const next = BG_STYLE_ORDER[(BG_STYLE_ORDER.indexOf(prev) + 1) % BG_STYLE_ORDER.length];
+      localStorage.setItem(BG_STYLE_KEY, next);
+      return next;
+    });
+  }
+
+  function renameCard(id: string, label: string) {
+    setCards((prev) => {
+      const next = prev.map((c) => (c.id === id ? { ...c, label } : c));
+      const updated = next.find((c) => c.id === id);
+      if (updated) void window.store.upsert(toRow(updated, activeBoardIdRef.current!));
+      return next;
+    });
   }
 
   function handleTerminalStatus(id: string, status: "ok" | "error" | "exited") {
@@ -936,11 +1053,7 @@ export function App() {
     : { x: 0, y: 0 };
 
   const dotSize = GRID_SPACING * world.zoom;
-  const backgroundStyle: React.CSSProperties = {
-    backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px)",
-    backgroundSize: `${dotSize}px ${dotSize}px`,
-    backgroundPosition: `${world.panX % dotSize}px ${world.panY % dotSize}px`,
-  };
+  const backgroundStyle = backgroundCss(bgStyle, dotSize, world.panX, world.panY);
 
   const selectedCards = cards.filter((c) => selectedIds.has(c.id));
   const canGroup = tool === "select" && selectedCards.length >= 2;
@@ -1001,10 +1114,14 @@ export function App() {
                 seenUrls={seenUrls[c.id] ?? []}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                label={c.label}
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onRename={(label) => renameCard(c.id, label)}
                 onResumeIdDiscovered={(sessionId) => resumeIdDiscovered(c.id, sessionId)}
                 onStatusChange={(status) => handleTerminalStatus(c.id, status)}
                 onOpenUrl={(url) => openBrowserFor(null, url)}
@@ -1024,10 +1141,14 @@ export function App() {
                 root={c.root}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                label={c.label}
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onRename={(label) => renameCard(c.id, label)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1044,10 +1165,14 @@ export function App() {
                 root={c.root}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                label={c.label}
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onRename={(label) => renameCard(c.id, label)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1065,10 +1190,14 @@ export function App() {
                 color={c.color}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                label={c.label}
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onRename={(label) => renameCard(c.id, label)}
                 onContentChange={(content) => changeStickyContent(c.id, content)}
                 onContentCommit={(content) => commitStickyContent(c, content)}
                 onColorCommit={(color) => commitStickyColor(c, color)}
@@ -1091,10 +1220,12 @@ export function App() {
                 style={c.style}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
+                closing={closingIds.has(c.id)}
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
                 onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1116,10 +1247,12 @@ export function App() {
               ownerCardId={c.ownerCardId}
               interactionMode={interactionMode}
               reflowing={reflowing}
+              closing={closingIds.has(c.id)}
               onChange={(r) => tryChangeRect(c.id, r)}
               onCommit={(r) => commitRect(c, r)}
               onRaise={() => raise(c.id)}
               onClose={() => closeCard(c.id)}
+              onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
               onConnectorStart={onConnectorStart}
               onSelectStart={onSelectStart}
               selected={selected}
@@ -1254,6 +1387,8 @@ export function App() {
         onZoomIn={() => zoomBy(ZOOM_STEP)}
         onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
         onFit={fitView}
+        bgStyleLabel={BG_STYLE_LABEL[bgStyle]}
+        onCycleBgStyle={cycleBgStyle}
         onSwitchBoard={switchBoard}
         onCreateBoard={createBoard}
         onRenameBoard={renameBoard}

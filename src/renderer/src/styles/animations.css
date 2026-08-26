@@ -14,6 +14,26 @@
     animation: popin 0.18s ease-out;
   }
 
+  @keyframes popout {
+    from {
+      opacity: 1;
+      transform: scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+  }
+
+  /* App.tsx's closeCard also schedules a plain setTimeout fallback matched
+     to this duration — prefers-reduced-motion:reduce (below) drops this
+     animation entirely, and without that fallback the card would never
+     receive the animationend that normally triggers its real removal. */
+  .card-frame.closing {
+    animation: popout 0.16s ease-in forwards;
+    pointer-events: none;
+  }
+
   .card-frame.dragging {
     box-shadow: var(--shadow-float);
     transition: box-shadow 0.12s ease-out;

@@ -1,5 +1,8 @@
 :root {
-  --ink: #0e1014;
+  /* Canvas base. Was #0e1014 — reported as reading "too black", especially
+     with the dot grid at 7% opacity on top of it; lightened slightly and
+     the grid contrast raised to compensate (see App.tsx's BG_STYLES). */
+  --ink: #14171d;
   --panel: #1a1d24;
   --surface: #20242c;
   --border: #2c313c;

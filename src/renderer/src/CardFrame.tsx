@@ -20,12 +20,14 @@ export function CardFrame({
   selected = false,
   accent,
   reflowing,
+  closing,
   onChange,
   onCommit,
   onRaise,
   onResizeSettled,
   onConnectorStart,
   onSelectStart,
+  onCloseAnimationEnd,
 }: {
   rect: Rect;
   zoom: number;
@@ -39,16 +41,21 @@ export function CardFrame({
   interactionMode?: "normal" | "connector" | "select";
   /** Outline highlight while multi-selected (item 4) — see cards.css. */
   selected?: boolean;
-  /** CSS color value for the card's left accent bar (see cards.css's ::before) — omitted means no accent. */
+  /** CSS color value for the card's left accent bar — unused today (the
+   * bar itself was removed), kept only as the source for .card-tag's
+   * per-provider/kind tint. */
   accent?: string;
   /** True for ~300ms right after an "organizar automaticamente" — animates the position change instead of jumping. */
   reflowing?: boolean;
+  /** True while playing the close-out animation, right before removal — see App.tsx's closeCard/finalizeCloseCard split. */
+  closing?: boolean;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onResizeSettled?: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  onCloseAnimationEnd?: () => void;
 }) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
@@ -56,7 +63,11 @@ export function CardFrame({
 
   function onHeaderPointerDown(e: React.PointerEvent) {
     if (interactionMode !== "normal") return;
-    if ((e.target as HTMLElement).closest("button, select, input")) return;
+    // [data-no-drag]: the header's editable title (CardTag) — an inline
+    // <input> only while actively editing, but the double-click that
+    // enters edit mode has to survive its own first pointerdown too, so the
+    // plain (non-editing) tag span carries the same attribute.
+    if ((e.target as HTMLElement).closest("button, select, input, [data-no-drag]")) return;
     onRaise();
     setDragging(true);
     const startX = e.clientX;
@@ -116,6 +127,7 @@ export function CardFrame({
     dragging && "dragging",
     reflowing && "reflow",
     selected && "selected",
+    closing && "closing",
   ]
     .filter(Boolean)
     .join(" ");
@@ -133,9 +145,13 @@ export function CardFrame({
         ...(accent ? ({ "--accent": accent } as React.CSSProperties) : {}),
       }}
       onPointerDown={(e) => {
+        if (closing) return;
         onRaise();
         if (interactionMode === "connector") onConnectorStart?.(e);
         if (interactionMode === "select") onSelectStart?.(e);
+      }}
+      onAnimationEnd={(e) => {
+        if (closing && e.currentTarget === e.target) onCloseAnimationEnd?.();
       }}
     >
       {/* Owns overflow:hidden + border-radius (clips content to the rounded

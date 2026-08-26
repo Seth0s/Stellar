@@ -24,10 +24,12 @@ export function BrowserCard({
   interactionMode,
   selected,
   reflowing,
+  closing,
   onChange,
   onCommit,
   onRaise,
   onClose,
+  onCloseAnimationEnd,
   onConnectorStart,
   onSelectStart,
 }: {
@@ -44,10 +46,16 @@ export function BrowserCard({
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
+  /** Note: only the DOM chrome fades — a WebContentsView paints above every
+   * DOM element and has no CSS-driven opacity of its own, so the actual
+   * page content just sits there unfaded for the animation's ~160ms before
+   * this card (and the native view under it) are actually removed. */
+  closing?: boolean;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onClose: () => void;
+  onCloseAnimationEnd?: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
 }) {
@@ -109,8 +117,10 @@ export function BrowserCard({
       selected={selected}
       accent="var(--accent-browser)"
       reflowing={reflowing}
+      closing={closing}
       onChange={onChange}
       onCommit={onCommit}
+      onCloseAnimationEnd={onCloseAnimationEnd}
       onRaise={() => {
         onRaise();
         void window.browser.raise(id);
