@@ -6,6 +6,7 @@ import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { BrowserAskModal } from "./BrowserAskModal";
+import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { Rail } from "./Rail";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
@@ -301,6 +302,7 @@ export function App() {
     const saved = localStorage.getItem(BG_STYLE_KEY);
     return (BG_STYLE_ORDER as string[]).includes(saved ?? "") ? (saved as BgStyle) : "dots";
   });
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [marquee, setMarquee] = useState<Rect | null>(null);
   const [reflowing, setReflowing] = useState(false);
   const [boards, setBoards] = useState<BoardRow[]>([]);
@@ -351,7 +353,10 @@ export function App() {
   // obvious way out for anyone who forgets which tool is active.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setTool("pointer");
+      if (e.key === "Escape") {
+        setTool("pointer");
+        setShowShortcuts(false);
+      }
       if (e.key === "F11") {
         e.preventDefault();
         void window.winControls.toggleFullscreen();
@@ -368,6 +373,10 @@ export function App() {
       if (e.key === "p" || e.key === "P") setTool("pen");
       if (e.key === "c" || e.key === "C") setTool("connector");
       if (e.key === "s" || e.key === "S") setTool("select");
+      // "?" (shift+/ on most layouts, but e.key already reports the shifted
+      // character) — see DESIGN-BACKLOG.md item 1: shortcuts existed but
+      // were only discoverable inside the pen panel's own popover.
+      if (e.key === "?") setShowShortcuts((v) => !v);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -1397,6 +1406,7 @@ export function App() {
       />
       <Hint />
       <ToastHost />
+      {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
       {pendingAsk && (
         <BrowserAskModal
           url={pendingAsk.url}

@@ -690,6 +690,49 @@ select.resume-input {
   border-color: var(--foam);
 }
 
+.shortcuts-modal {
+  max-width: 560px;
+}
+
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+  margin-bottom: 16px;
+}
+
+.shortcuts-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  padding: 3px 0;
+}
+
+.shortcuts-row kbd {
+  display: inline-block;
+  min-width: 20px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  flex: none;
+}
+
 /* ----------------------------------------------------------- connector */
 
 /* Single connector style — every connector today comes from the human

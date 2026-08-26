@@ -36,12 +36,10 @@ canvas vazio abre um menu radial com as 6 ações de criar card, usando
 da viewport. Menor risco: não mexe em nada que já funciona, só adiciona um
 segundo caminho pro mesmo resultado.
 
-**Atalhos — parte independente e de baixo risco**: já existem `V/P/C/S`
-(ferramentas) e `F11` (fullscreen), mas não há nenhuma lista visível deles
-na UI. Adicionar um overlay de ajuda (tecla `?`, mesmo padrão do
-`PenPanel`'s lista de atalhos) é uma tarefa pequena e isolada — não feita
-nesta rodada só por escopo, não por risco. **Recomendação: primeiro item a
-fazer numa próxima rodada.**
+**Atalhos — feito em 2026-08-26**: overlay de ajuda (`?`, `ShortcutsOverlay.tsx`)
+listando ferramentas/janela/card/mouse num modal — ver `AGENTS.md`. O
+radial menu em si (a parte de gestos deste item) continua em aberto,
+depende da decisão de interação acima.
 
 ## 2. Sistema de controle remoto (mobile) via tunnel/reverse proxy
 
@@ -176,8 +174,7 @@ não só conveniência — candidato a entrar antes dos outros quatro.
 
 ## Ordem sugerida para a próxima rodada
 
-1. Overlay de atalhos (`?`) — baixo risco, baixo esforço, direto (item 1,
-   parte de atalhos).
+1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
 2. Confirmação ao fechar um terminal card ativo (item 7) — mesma
    categoria de "baixo risco, resolve perda de dado real".
 3. Sistema de snapshot pro agente (item 4) — maior valor agregado dos

@@ -1442,6 +1442,24 @@ linear-gradient; animação de fechar confirmada via classe `.closing`
 capturada no meio da transição e contagem de cards caindo só depois dela
 terminar (não instantaneamente).
 
+## 2026-08-26 — Overlay de atalhos (item 1 do `DESIGN-BACKLOG.md`)
+
+Primeiro item da ordem sugerida no backlog: `V/P/C/S`/`F11` já existiam
+mas só apareciam documentados dentro do popover da caneta (`PenPanel`) —
+invisível a menos que o usuário já soubesse abrir a caneta primeiro. Novo
+`ShortcutsOverlay.tsx` (tecla `?`, mesmo padrão de modal do
+`BrowserAskModal` — `.modal-root`/`.modal-backdrop`/`.modal` já
+existentes, reaproveitados) lista ferramentas, janela, ações de card
+(duplo-clique renomear, Ctrl+C interromper) e gestos de mouse (scroll
+zoom, arrastar fundo/header/canto) em quatro grupos. `Esc` fecha (mesmo
+handler que já resetava a ferramenta pro ponteiro). `Hint.tsx` ganhou "?
+pra atalhos" no texto estático, senão o atalho que existe pra descobrir
+atalhos seria ele mesmo indescobrível.
+
+Verificação: `tsc --noEmit`/`electron-vite build` limpos; `?` abrindo o
+modal (13 linhas, batendo com os 4 grupos) e `Esc` fechando, confirmado
+ao vivo via CDP numa instância isolada.
+
 ## Comandos
 
 ```bash

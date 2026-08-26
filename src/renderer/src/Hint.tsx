@@ -8,7 +8,7 @@ export function Hint() {
   if (dismissed) return null;
   return (
     <div className="hint">
-      <span>arraste os cards · caneta e conector na régua · scroll pra zoom</span>
+      <span>arraste os cards · caneta e conector na régua · scroll pra zoom · ? pra atalhos</span>
       <button
         title="Fechar dica"
         onClick={() => {
