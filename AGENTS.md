@@ -1549,6 +1549,76 @@ compuseram certo, navegador saiu cinza liso (achado acima);
 `acbridge snapshot 999` (id inexistente) devolveu erro claro em vez de
 travar; `acbridge snapshot <x> <y> <w> <h>` com rect explícito funcionou.
 
+## 2026-08-26 — Controle interativo de janela externa, fase 1 (item 3 do backlog, reescopado)
+
+Usuário reabriu o item 3 (antes engavetado por limitação de vídeo no
+Wayland) pedindo algo maior: em vez de só ver a janela externa, poder
+**mexer** nela pelo app, com uma fase futura pro agente também pedir
+permissão de controle. Duas perguntas por `AskUserQuestion`: fase 1 é só
+controle humano (permissão do agente fica pra depois); precisão do
+ponteiro começa relativa (trackpad), deixando base pra absoluta depois.
+
+**Mecanismo de input, testado isolado antes de tocar o projeto**
+(`/tmp/portal_test/test.js` → `test2.js`): `org.freedesktop.portal.RemoteDesktop`
+via D-Bus (`dbus-next`, nova dependência real do projeto). Dois bugs reais
+achados e corrigidos no script de teste, não no projeto:
+
+1. **ProxyObject não reconhece a interface `Request`** em paths recém-criados
+   pelo portal — troquei pro padrão de `bus.on("message", ...)` cru +
+   `AddMatch` manual via `org.freedesktop.DBus`.
+2. **Corrida entre a chamada de método e o registro do listener**:
+   `SelectDevices` dava timeout mesmo com o listener cru, porque o
+   `AddMatch` só era registrado depois do `await` da chamada resolver — e
+   o sinal de `Response` podia chegar antes disso. Corrigido prevendo o
+   path do handle *antes* de chamar o método (`sender` = nome único do
+   barramento do próprio processo, sem o `:` inicial, `.` trocado por `_`;
+   `/org/freedesktop/portal/desktop/request/{sender}/{handle_token}`) e
+   registrando o `AddMatch`/listener nesse path previsto antes da chamada.
+
+Confirmado (`predicted vs actual handle match: true` pros dois): `CreateSession`
+e `SelectDevices` completam de ponta a ponta sem diálogo nenhum — só
+`Start()` mostra o diálogo real de consentimento do GNOME, que exige um
+humano clicando (CDP não alcança UI nativa do SO, mesma limitação já
+documentada nesta sessão pra outros diálogos).
+
+**Implementado** (`src/main/remote-input.ts`,
+`src/renderer/src/RemoteWindowCard.tsx`, `src/renderer/src/keysyms.ts`,
+IPC novo em `main/index.ts`/`preload/index.ts`): sessão do portal é
+*singleton de app*, não por card — o grant é "deixe este app injetar
+input" pro sistema inteiro, não por janela, então um só diálogo de
+consentimento serve pra qualquer card aberto depois. Movimento relativo
+(`NotifyPointerMotion` com deltas de `movementX/Y`, não posição absoluta —
+posição exata precisaria correlacionar clique com um frame de vídeo real
+via um consumidor PipeWire próprio, risco/esforço maior, não construído
+agora mas nada aqui impede de adicionar depois). Teclado via
+`NotifyKeyboardKeysym` (tabela de keysyms X11 em `keysyms.ts` — mapeamento
+direto de caractere pra keysym Latin-1 pra tudo imprimível, tabela nomeada
+só pras teclas especiais) em vez de `NotifyKeyboardKeycode`, pra não
+precisar de uma segunda tabela DOM-code→evdev-keycode.
+
+**Vídeo**: `getDisplayMedia()` + `session.setDisplayMediaRequestHandler`
+chamando `desktopCapturer.getSources()` na hora do pedido (não no boot do
+app — já confirmado inútil ali, ver o achado anterior deste item no
+backlog), com `--enable-features=WebRTCPipeWireCapturer` ligado pra rotear
+a captura pelo portal ScreenCast em vez do enumerador X11-only. **Não
+verificado de ponta a ponta** — é outro diálogo nativo do SO, fora do
+alcance do CDP.
+
+**Verificação real feita** (instância isolada, `--remote-debugging-port` +
+`--user-data-dir` próprios, nunca a sessão do usuário): `window.remoteInput`
+exposto no preload; clique real via CDP no botão novo da régua cria o card
+`.remote-window-card`; o botão "escolher janela/tela" do placeholder
+renderiza; `window.remoteInput.ensure()` chega até `Start()` sem lançar
+erro síncrono e fica pendente aguardando o diálogo (exatamente o esperado
+— não dá pra fechar esse último passo sem um humano). `npx tsc --noEmit`
+e `npx electron-vite build` limpos.
+
+**Pendente pro usuário**: testar ao vivo os dois diálogos nativos (escolha
+de janela/tela do `getDisplayMedia`, consentimento do `Start()` do
+RemoteDesktop) e confirmar que o controle relativo de fato mexe a janela
+externa. Fase 2 (permissão do agente, exposta via `acbridge`) só começa
+depois dessa confirmação.
+
 ## Comandos
 
 ```bash

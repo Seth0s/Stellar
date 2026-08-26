@@ -4,6 +4,7 @@ import { FilesCard } from "./FilesCard";
 import { ChangesCard } from "./ChangesCard";
 import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
+import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { BrowserAskModal } from "./BrowserAskModal";
 import { ConfirmModal } from "./ConfirmModal";
@@ -54,6 +55,10 @@ type FilesCardData = BaseCard & { kind: "files"; root: string };
 type ChangesCardData = BaseCard & { kind: "changes"; root: string };
 type StickyCardData = BaseCard & { kind: "sticky"; content: string; color: string };
 type BrowserCardData = BaseCard & { kind: "browser"; url: string; ownerCardId: string | null };
+/** No meaningful state to persist — which window/screen it shows comes
+ * from a live OS picker at open time (DESIGN-BACKLOG.md item 3, phase 1),
+ * never restored across reloads. Mirrors files/changes' minimal treatment. */
+type RemoteWindowCardData = BaseCard & { kind: "remote-window" };
 type StrokeCardData = BaseCard & {
   kind: "stroke";
   points: [number, number][];
@@ -68,6 +73,7 @@ type Card =
   | ChangesCardData
   | StickyCardData
   | BrowserCardData
+  | RemoteWindowCardData
   | StrokeCardData;
 
 type Connector = { id: string; fromCardId: string; toCardId: string };
@@ -104,6 +110,7 @@ const KIND_LABEL: Record<Card["kind"], string> = {
   changes: "changes",
   sticky: "nota adesiva",
   browser: "navegador",
+  "remote-window": "janela externa",
   stroke: "desenho",
 };
 
@@ -197,6 +204,8 @@ function toRow(card: Card, boardId: string): CardRow {
         model: null,
         system_prompt: null,
       };
+    case "remote-window":
+      return { ...base, kind: "remote-window", provider: "", cwd: "", resume_id: null, model: null, system_prompt: null };
     case "stroke":
       return {
         ...base,
@@ -245,6 +254,8 @@ function fromRow(r: CardRow): Card {
       return { id: r.id, kind: "sticky", content: r.cwd, color: r.provider || "yellow", rect, groupId, label };
     case "browser":
       return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect, groupId, label };
+    case "remote-window":
+      return { id: r.id, kind: "remote-window", rect, groupId, label };
     case "stroke": {
       const { points, width, style } = parseStroke(r.cwd);
       return {
@@ -636,6 +647,11 @@ export function App() {
     });
   }
 
+  function addRemoteWindowCard() {
+    const id = String(nextId.current++);
+    addCard({ id, kind: "remote-window", rect: centeredSlot(visibleRect, cards.length), groupId: null, label: null });
+  }
+
   /** Agent-requested (post-Allow) or a seenUrls chip click — both are already-consented. Reuses this owner's existing browser card if one is open, else opens a new one. No toast here — this path isn't the human "I just clicked +browser" moment the toasts above are for. */
   function openBrowserFor(ownerCardId: string | null, url: string) {
     const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
@@ -741,6 +757,8 @@ export function App() {
         lines.push(`- [navegador] ${c.url}`);
       } else if (c.kind === "stroke") {
         lines.push(`- [desenho] ${c.points.length} pontos`);
+      } else if (c.kind === "remote-window") {
+        lines.push(`- [janela externa] controle remoto`);
       } else {
         lines.push(`- [terminal ${c.provider}] cwd: ${c.cwd}`);
       }
@@ -1306,6 +1324,29 @@ export function App() {
               />
             );
           }
+          if (c.kind === "remote-window") {
+            return (
+              <RemoteWindowCard
+                key={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                label={c.label}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onRename={(label) => renameCard(c.id, label)}
+                onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
+              />
+            );
+          }
           return (
             <BrowserCard
               key={c.id}
@@ -1446,6 +1487,7 @@ export function App() {
         onCreateChanges={addChangesCard}
         onCreateSticky={addStickyCard}
         onCreateBrowser={addBrowserCard}
+        onCreateRemoteWindow={addRemoteWindowCard}
         aiBusy={aiBusy}
         summarizeDisabled={newProvider === "bash"}
         onReorganize={aiReorganize}
