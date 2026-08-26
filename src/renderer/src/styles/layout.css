@@ -61,8 +61,12 @@ body {
 }
 
 .titlebar-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
-  color: var(--muted);
+  font-weight: 600;
+  color: var(--text);
   letter-spacing: 0.02em;
 }
 
@@ -174,7 +178,7 @@ body {
 
 .topbar-title,
 .zoom-pill,
-.hint {
+.modal-root {
   pointer-events: auto;
 }
 
@@ -194,6 +198,34 @@ body {
   text-overflow: ellipsis;
   max-width: 60%;
   cursor: pointer;
+}
+
+/* DESIGN-BACKLOG.md item 8 — back to the session grid. Own top-level
+   `position: absolute`, NOT inside `.topbar` (see Topbar.tsx's comment) —
+   same `left`/width as `.rail` so it stacks directly above it as one
+   floating column, instead of landing wherever `.topbar`'s flex row
+   happens to start (bug reported live: they didn't line up at all). */
+.topbar-home {
+  position: absolute;
+  top: calc(var(--titlebar-h) + 12px);
+  left: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  z-index: 500;
+}
+
+.topbar-home:hover {
+  background: var(--surface);
 }
 
 .topbar-title:hover {
@@ -266,17 +298,24 @@ body {
   margin-top: 1px;
 }
 
-.board-row-edit {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-}
-
 .project-picker {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
+}
+
+.project-picker input.resume-input {
+  width: 100%;
+}
+
+/* Holds both link-style actions (back to the list, change the workspace
+   root) below the free-text input — a row here would fight the input for
+   width in a narrow popover/modal. */
+.project-picker-links {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .project-picker-back {
@@ -373,7 +412,7 @@ select.resume-input {
   flex: none;
 }
 
-.zoom-pill button {
+.zoom-pill button:not(.zoom-readout) {
   width: 26px;
   height: 26px;
   border-radius: 50%;
@@ -391,52 +430,49 @@ select.resume-input {
   background: var(--surface);
 }
 
+/* DESIGN-BACKLOG.md item 12, achado 6 — was a read-only <span>, now a
+   button opening the popover below; explicit reset since it's excluded
+   from the generic `.zoom-pill button` circular-icon-button styling
+   above (a percentage label doesn't fit a 26px circle). */
 .zoom-readout {
   font-size: 12px;
   color: var(--muted);
   min-width: 38px;
   text-align: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 2px;
+  border-radius: 6px;
 }
 
-/* ---------------------------------------------------------------- hint */
+.zoom-readout:hover {
+  background: var(--surface);
+  color: var(--text);
+}
 
-.hint {
-  position: absolute;
-  top: calc(var(--titlebar-h) + 60px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 6px 8px 6px 14px;
+.zoom-popover {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 4px 2px;
+}
+
+.zoom-popover .zoom-input {
+  width: 52px;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+
+.zoom-popover-pct {
+  color: var(--muted);
   font-size: 12px;
-  color: var(--muted);
-  box-shadow: var(--shadow-card);
-  z-index: 450;
-  max-width: min(80vw, 520px);
+  margin-left: -4px;
 }
 
-.hint button {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 13px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.hint button:hover {
-  background: var(--surface);
-  color: var(--text);
+.zoom-slider {
+  width: 140px;
+  accent-color: var(--foam);
 }
 
 /* ---------------------------------------------------------------- toast */
@@ -463,6 +499,116 @@ select.resume-input {
   color: var(--text);
   box-shadow: var(--shadow-float);
   white-space: nowrap;
+}
+
+/* DESIGN-BACKLOG.md item 13 — update pill (UpdateBanner.tsx). Bottom-
+   center like `.toast-host`, but its own persistent element (never
+   auto-dismisses — an available update shouldn't vanish after 2.4s the
+   way a toast does) sitting just above where toasts stack. */
+/* Item 17 addendum — "lembrar depois"/changelog grew this from a fixed
+ * pill into a column: `.update-banner-row` is the original single-line
+ * pill-shaped row, `.update-banner-notes` (only present with
+ * `releaseNotes` toggled open) drops below it without fighting the
+ * pill's border-radius. */
+.update-banner {
+  position: absolute;
+  left: 50%;
+  bottom: 60px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 90vw;
+  z-index: 900;
+}
+
+.update-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--foam);
+  border-radius: 999px;
+  padding: 8px 10px 8px 16px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: var(--shadow-float);
+  white-space: nowrap;
+}
+
+.update-banner-row button {
+  background: var(--foam);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.update-banner-row button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.update-banner-notes-toggle {
+  background: none !important;
+  color: var(--foam) !important;
+  padding: 6px 4px !important;
+}
+
+.update-banner-later {
+  background: none !important;
+  color: var(--muted) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.update-banner-later:hover:not(:disabled) {
+  color: var(--text) !important;
+}
+
+.update-banner-error {
+  color: var(--danger);
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.update-banner-notes {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: inherit;
+  margin: 0;
+}
+
+/* Titlebar pending-update dot (item 17) — visible any time a version is
+ * known, even while the banner itself is "lembrar depois"-dismissed, so
+ * the update is never fully out of sight; click brings the banner back. */
+.titlebar-update-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px !important;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.titlebar-update-dot-mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--foam);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--foam) 25%, transparent);
 }
 
 /* ------------------------------------------------------------- popover */
@@ -523,6 +669,18 @@ select.resume-input {
   margin-top: 2px;
 }
 
+/* Rail's "localizar card" popover, empty-board state. */
+.popover-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px;
+  text-align: center;
+}
+
+.find-card-row {
+  width: 100%;
+}
+
 .popover-field {
   display: flex;
   flex-direction: column;
@@ -541,6 +699,42 @@ select.resume-input {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 12px;
+}
+
+/* DESIGN-BACKLOG.md item 12, achado 5 — icon buttons instead of the
+   provider <select>. Wraps so a longer `providers` list (App.tsx's
+   PROVIDER_OPTIONS) still fits a narrow popover instead of overflowing. */
+.provider-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.provider-picker-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 60px;
+  padding: 8px 4px 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.provider-picker-btn:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.provider-picker-btn.active {
+  background: var(--foam);
+  border-color: var(--foam);
+  color: var(--on-accent);
 }
 
 .popover-checkbox {
@@ -576,6 +770,16 @@ select.resume-input {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
+}
+
+/* Topbar's "+ nova sessão" — a single clear CTA reads better full-width
+   than right-aligned at button-content size. */
+.popover-actions-stretch {
+  justify-content: stretch;
+}
+
+.popover-actions-stretch button {
+  flex: 1;
 }
 
 .popover button.primary {
@@ -694,6 +898,59 @@ select.resume-input {
   background: var(--danger);
   color: var(--on-accent);
   border-color: var(--danger);
+}
+
+/* SessionModal's create mode — template picker (DESIGN-BACKLOG.md item 7). */
+.template-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.template-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.template-option:hover {
+  border-color: var(--muted);
+}
+
+.template-option.active {
+  border-color: var(--foam);
+  background: color-mix(in srgb, var(--foam) 12%, var(--surface));
+}
+
+.template-option-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.template-option-desc {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* SessionModal's edit mode — "excluir" sits on the left, cancel/save on
+   the right, in the same row (destructive actions get spatial separation
+   from the safe ones, same convention as most OS dialogs). */
+.modal-actions-split {
+  justify-content: space-between;
+}
+
+.modal-actions-right {
+  display: flex;
+  gap: 8px;
 }
 
 .shortcuts-modal {
@@ -920,6 +1177,21 @@ select.resume-input {
   color: var(--on-accent);
 }
 
+/* Item 1 revisited — tool-switch items (pointer/pen/connector/select) get
+ * a violet ring so the two clusters (tools vs. spawn) read apart at a
+ * glance in the single unbroken circle; the tool that's already active
+ * fills solid, same "already selected" language the rail's own
+ * `.active` button uses. */
+.radial-item--tool {
+  border-color: var(--violet);
+}
+
+.radial-item--tool.active {
+  background: var(--violet);
+  color: var(--on-accent);
+  border-color: var(--violet);
+}
+
 .radial-center {
   position: absolute;
   left: -4px;
@@ -964,6 +1236,310 @@ select.resume-input {
   text-align: center;
   font-size: 12px;
   margin-bottom: 0;
+}
+
+/* Item 2 revisited — per-device list (was a single connection-count line). */
+.remote-device-list {
+  margin-bottom: 12px;
+}
+
+.remote-device-list-heading {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.remote-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.remote-device-row + .remote-device-row {
+  margin-top: 4px;
+}
+
+.remote-device-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.remote-device-online {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+  flex-shrink: 0;
+}
+
+.remote-device-revoke {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.remote-device-revoke:hover {
+  border-color: var(--danger);
+}
+
+.remote-pair-new {
+  display: block;
+  width: 100%;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+.remote-pair-new:hover {
+  color: var(--text);
+  border-color: var(--foam);
+}
+
+/* DESIGN-BACKLOG.md item 8 — home screen (sessions grouped by project),
+   what the app boots to now instead of straight into the last board. Own
+   `button.primary`/`.card-status-dot` styling here rather than relying on
+   `.modal-actions .primary`/`cards.css`'s scoped versions, since Home's
+   buttons live outside both those contexts. */
+.home {
+  position: absolute;
+  inset: 0;
+  top: var(--titlebar-h);
+  overflow-y: auto;
+  /* Left inset matches `.topbar`'s own `left: 72px` (clears the rail
+     column at `left:12px`/48px wide) — session cards land right next to
+     where the home button/rail sit inside a board, not floated toward
+     the window's center. */
+  padding: 48px 56px 48px 72px;
+  color: var(--text);
+  background: var(--ink);
+}
+
+/* DESIGN-BACKLOG.md item 14 — constellation background: a scattered
+   starfield (several small radial-gradient dots at varying size/opacity)
+   plus two soft nebula-glow gradients in the corners, all low-opacity so
+   it reads as texture behind the session grid, never competes with it.
+   `background-attachment: fixed` keeps the stars still while the list
+   scrolls, like a real sky rather than print scrolling with the page. */
+.home-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* "vidro fume" (item 14 addendum) -- just the 3 color blobs now; the
+   * star field moved out to `.home-stars` (ConstellationBg.tsx) because
+   * this same dimming was crushing the stars along with the blobs,
+   * reported live twice as "no stars visible". 3 blobs (one per
+   * corner-ish region -- top-left, bottom-right, bottom-left) so no
+   * quadrant reads as flat/uncolored, which the original 2-blob version
+   * did in the bottom-left. */
+  opacity: 0.22;
+  background-image:
+    radial-gradient(circle, var(--foam) 0%, transparent 60%),
+    radial-gradient(circle, var(--violet) 0%, transparent 60%),
+    radial-gradient(circle, var(--foam) 0%, transparent 55%);
+  background-size: 140% 140%, 140% 140%, 120% 120%;
+  background-position: -20% -10%, 120% 110%, -15% 120%;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* ConstellationBg.tsx's SVG layer -- independent of `.home-bg`'s smoked-
+ * glass dimming, so the star field and cluster lines actually read as
+ * bright against the dark backdrop instead of disappearing into it. */
+.home-stars {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+.home-star-hero {
+  animation: home-star-twinkle 4s ease-in-out infinite;
+}
+
+.home-star-hero:nth-of-type(2) {
+  animation-delay: -1.3s;
+}
+
+@keyframes home-star-twinkle {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.home-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 32px;
+}
+
+.home-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.home button.primary {
+  background: var(--foam);
+  color: var(--on-accent);
+  border: 1px solid var(--foam);
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.home-empty {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 80px 0;
+  color: var(--muted);
+}
+
+.home-groups {
+  position: relative;
+  z-index: 1;
+}
+
+.home-group {
+  margin-bottom: 28px;
+}
+
+.home-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.home-grid {
+  display: grid;
+  /* Fixed-ish column width (not `1fr`) — a group with only 1-2 sessions
+     used to stretch its card(s) across the whole row, reading as
+     "displaced toward the center" of an otherwise empty screen instead of
+     a compact, left-aligned list. */
+  grid-template-columns: repeat(auto-fill, minmax(200px, 220px));
+  gap: 14px;
+}
+
+.home-session-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease;
+}
+
+.home-session-card:hover {
+  border-color: var(--foam);
+}
+
+.home-session-edit {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  color: var(--muted);
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    top 0.12s ease;
+}
+
+/* The "recente" badge now lives in this same top-right corner (moved off
+ * the title, item 14 addendum) — drop the pencil below it on a card that
+ * has both, so hovering never stacks them. */
+.home-session-edit--below-badge {
+  top: 30px;
+}
+
+.home-session-card:hover .home-session-edit {
+  opacity: 1;
+}
+
+.home-session-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.home-session-counts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* DESIGN-BACKLOG.md item 14 — "recente(ultimo)", the single most
+   recently opened session across every project. */
+.home-session-recent {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: var(--foam);
+  color: var(--on-accent);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.home-session-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.8;
 }
 
 @media (prefers-reduced-motion: no-preference) {

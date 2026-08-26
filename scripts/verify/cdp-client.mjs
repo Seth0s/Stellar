@@ -177,6 +177,100 @@ export async function connectPage(cdpPort) {
   return { ws, send, evalJs, click, onEvent, close: () => ws.close() };
 }
 
+/** DESIGN-BACKLOG.md item 8 — the app now always boots to the Home screen
+ * (no board auto-loaded, so no `.rail`/`.topbar`/auto-seeded terminal yet).
+ * Every smoke script that used to assume "boot lands directly on a board"
+ * needs to actually create one first — this is that one shared step,
+ * exercising Home's own "+ nova sessão" → SessionModal path rather than
+ * reaching around it via IPC, so a regression in that path fails here too
+ * (same reasoning as smoke-session-modal.mjs, just factored out since
+ * every other script now needs a minimal version of it as a precondition,
+ * not as the thing under test). Waits for the board to actually finish
+ * loading (`.topbar-title` present) before returning.
+ *
+ * The "empty" template (SessionModal's default) seeds zero cards now — a
+ * real bug found live: it used to seed one bash terminal anyway, despite
+ * being labeled "Vazio" ("eu escolhi vazio, e veio um bash feito ainda").
+ * Most callers here still want a baseline terminal to interact with, so
+ * `spawnTerminal` (default true) adds one via the rail's own "Novo
+ * terminal" popover after the session loads — same as a user would, not a
+ * shortcut around it. Pass false for a script that wants to verify the
+ * genuinely-empty state itself. */
+export async function bootIntoFreshSession(page, name = "Sessão de Teste", { spawnTerminal = true } = {}) {
+  await delay(300);
+  const btn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.home button.primary');
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+      })()
+    `),
+  );
+  if (!btn) throw new Error("Home '+ nova sessão' button not found");
+  await page.click(btn.x, btn.y);
+  await delay(300);
+  await page.evalJs(`
+    (() => {
+      const inp = document.querySelector('.modal input.resume-input');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(inp, ${JSON.stringify(name)});
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+    })()
+  `);
+  const createBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = [...document.querySelectorAll('.modal-actions button')].find((b) => b.textContent.includes('Criar'));
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+      })()
+    `),
+  );
+  if (!createBtn) throw new Error("SessionModal 'Criar' button not found");
+  await page.click(createBtn.x, createBtn.y);
+  const deadline = Date.now() + 5000;
+  let boardLoaded = false;
+  while (Date.now() < deadline) {
+    if (JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector('.topbar-title'))`))) {
+      boardLoaded = true;
+      break;
+    }
+    await delay(150);
+  }
+  if (!boardLoaded) throw new Error("board never finished loading after creating a fresh session");
+  if (!spawnTerminal) return;
+
+  const terminalBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.rail-btn[title="Novo terminal"]');
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+      })()
+    `),
+  );
+  if (!terminalBtn) throw new Error("rail's 'Novo terminal' button not found");
+  await page.click(terminalBtn.x, terminalBtn.y);
+  await delay(200);
+  const createTerminalBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.popover-actions button.primary');
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+      })()
+    `),
+  );
+  if (!createTerminalBtn) throw new Error("terminal popover's 'criar' button not found");
+  await page.click(createTerminalBtn.x, createTerminalBtn.y);
+  await delay(400);
+}
+
 /** Tiny assertion helper — smoke scripts print PASS/FAIL per check and
  * exit 1 if anything failed, instead of each hand-rolling that. */
 export function makeChecker() {

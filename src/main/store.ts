@@ -41,6 +41,11 @@ export type BoardRow = {
   project: string;
   created_at: number;
   updated_at: number;
+  /** Home's "último acesso" (DESIGN-BACKLOG.md item 14) — set on every
+   * successful open (create or switch), NOT on metadata edits (rename/
+   * project change), which is what `updated_at` already tracks. `null`
+   * for a board created before this column existed. */
+  last_accessed_at: number | null;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -70,6 +75,11 @@ function migrate(db: Database.Database) {
   }
   try {
     db.exec(`ALTER TABLE boards ADD COLUMN project TEXT NOT NULL DEFAULT ''`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN last_accessed_at INTEGER`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -120,17 +130,14 @@ export function openStore(userDataDir: string) {
   // same class of bug would hit boards.project otherwise.
   migrate(db);
 
-  const boardCount = (db.prepare("SELECT COUNT(*) as n FROM boards").get() as { n: number }).n;
-  if (boardCount === 0) {
-    const now = Date.now();
-    db.prepare("INSERT INTO boards (id, name, project, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
-      DEFAULT_BOARD_ID,
-      "Board 1",
-      "",
-      now,
-      now,
-    );
-  }
+  // Used to auto-INSERT a "Board 1" here when none existed — that was
+  // right back when the app always booted straight into a board (there
+  // had to be one to load). DESIGN-BACKLOG.md item 8 changed that: the
+  // app now boots to Home, and zero boards is a legitimate, intentional
+  // first-run state (Home's own empty-state screen), not a gap to paper
+  // over. `DEFAULT_BOARD_ID` itself stays — the cards/connectors schema
+  // migration above still needs it as the fallback `board_id` for rows
+  // that predate multi-board support.
 
   const listStmt = db.prepare(
     "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at FROM cards WHERE board_id = ?",
@@ -173,14 +180,15 @@ export function openStore(userDataDir: string) {
   const deleteConnectorsForBoardStmt = db.prepare("DELETE FROM connectors WHERE board_id = ?");
 
   const listBoardsStmt = db.prepare(
-    "SELECT id, name, project, created_at, updated_at FROM boards ORDER BY created_at ASC",
+    "SELECT id, name, project, created_at, updated_at, last_accessed_at FROM boards ORDER BY created_at ASC",
   );
   const upsertBoardStmt = db.prepare(`
-    INSERT INTO boards (id, name, project, created_at, updated_at)
-    VALUES (@id, @name, @project, @created_at, @updated_at)
+    INSERT INTO boards (id, name, project, created_at, updated_at, last_accessed_at)
+    VALUES (@id, @name, @project, @created_at, @updated_at, @last_accessed_at)
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, updated_at = excluded.updated_at
   `);
   const deleteBoardStmt = db.prepare("DELETE FROM boards WHERE id = ?");
+  const touchBoardStmt = db.prepare("UPDATE boards SET last_accessed_at = ? WHERE id = ?");
 
   // Structural counts for the session-list popover (item 1) — "agents" is
   // every terminal-kind card; "active" is a STATIC proxy (provider != bash,
@@ -220,6 +228,7 @@ export function openStore(userDataDir: string) {
     deleteConnectorsForCard: (cardId: string) => deleteConnectorsForCardStmt.run(cardId, cardId),
     listBoards: (): BoardRow[] => listBoardsStmt.all() as BoardRow[],
     upsertBoard: (board: BoardRow) => upsertBoardStmt.run(board),
+    touchBoard: (id: string, at: number) => touchBoardStmt.run(at, id),
     cardCounts: (): Record<string, BoardCounts> => {
       const rows = cardCountsStmt.all() as { board_id: string; agents: number; active: number }[];
       return Object.fromEntries(rows.map((r) => [r.board_id, { agents: r.agents, active: r.active }]));

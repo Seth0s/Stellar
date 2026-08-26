@@ -6,16 +6,29 @@
 import {
   ArrowLeft,
   ArrowRight,
+  BotMessageSquare,
   BoxSelect,
+  Braces,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Code2,
   Copy,
+  File,
+  FileCode2,
+  FilePlus,
+  FileText,
   Folder,
+  FolderOpen,
+  FolderPlus,
   GitBranch,
   Globe,
   Grid2x2,
   GripHorizontal,
   Group,
+  Home as HomeGlyph,
+  Image,
   LayoutGrid,
   Link2,
   Maximize,
@@ -29,10 +42,12 @@ import {
   QrCode,
   RotateCw,
   Scan,
+  Search,
   Sparkles,
   Square,
   StickyNote,
   TerminalSquare,
+  Trash2,
   Ungroup,
   X,
   ZoomIn,
@@ -57,6 +72,8 @@ export type IconName =
   | "fit"
   | "close"
   | "chevronDown"
+  | "chevronLeft"
+  | "chevronRight"
   | "back"
   | "forward"
   | "reload"
@@ -74,7 +91,22 @@ export type IconName =
   | "remoteWindow"
   | "controlOn"
   | "controlOff"
-  | "remoteControl";
+  | "remoteControl"
+  | "findCard"
+  | "home"
+  | "providerBash"
+  | "providerClaude"
+  | "providerCodex"
+  | "providerCursor"
+  | "folderOpen"
+  | "fileImage"
+  | "fileMarkdown"
+  | "fileCode"
+  | "fileConfig"
+  | "fileGeneric"
+  | "newFile"
+  | "newFolder"
+  | "trash";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -93,6 +125,8 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   fit: Scan,
   close: X,
   chevronDown: ChevronDown,
+  chevronLeft: ChevronLeft,
+  chevronRight: ChevronRight,
   back: ArrowLeft,
   forward: ArrowRight,
   reload: RotateCw,
@@ -111,6 +145,21 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   controlOn: MousePointerClick,
   controlOff: MousePointer2,
   remoteControl: QrCode,
+  findCard: Search,
+  home: HomeGlyph,
+  providerBash: TerminalSquare,
+  providerClaude: BotMessageSquare,
+  providerCodex: Code2,
+  providerCursor: MousePointerClick,
+  folderOpen: FolderOpen,
+  fileImage: Image,
+  fileMarkdown: FileText,
+  fileCode: FileCode2,
+  fileConfig: Braces,
+  fileGeneric: File,
+  newFile: FilePlus,
+  newFolder: FolderPlus,
+  trash: Trash2,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

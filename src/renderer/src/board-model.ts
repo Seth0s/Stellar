@@ -62,8 +62,15 @@ export function hitTest(items: BoardItem[], point: { x: number; y: number }, ord
 // near a standard terminal width and render broken/wrapped box drawing well
 // below that. Confirmed empirically via CDP: 440×380 (the old default)
 // measured out to 47 cols × 15 rows.
-const SPAWN_W = 720;
-const SPAWN_H = 560;
+// DESIGN-BACKLOG.md item 12, achado 3 — bumped up from 720×560 on the
+// user's explicit ask. Registered tension: item 10's selection-tool
+// finding was that 720×560 was ALREADY too big to fully separate two
+// cards on screen at zoom 1 in a 1280×800 window — this makes that worse,
+// not better. Kept anyway (explicit, repeated request beats an
+// unprompted usability finding); the real fix for the separation problem
+// is zooming out, which already works (see smoke-group-select.mjs).
+const SPAWN_W = 860;
+const SPAWN_H = 660;
 
 /**
  * Cascading default position for the n-th item created, anchored at a fixed
@@ -74,8 +81,8 @@ const SPAWN_H = 560;
  */
 export function cascadeSlot(index: number): Rect {
   return {
-    x: 40 + (index % 3) * 740,
-    y: 40 + Math.floor(index / 3) * 580,
+    x: 40 + (index % 3) * (SPAWN_W + 20),
+    y: 40 + Math.floor(index / 3) * (SPAWN_H + 20),
     w: SPAWN_W,
     h: SPAWN_H,
   };
@@ -116,12 +123,10 @@ export function pointSlot(point: Point): Rect {
   return { x: point.x - SPAWN_W / 2, y: point.y - SPAWN_H / 2, w: SPAWN_W, h: SPAWN_H };
 }
 
-/**
- * World-space rect -> window-content pixel rect. A native WebContentsView
- * is positioned in absolute window pixels, outside the DOM/CSS transform
- * that every other card rides for free — this is the math a browser card
- * has to redo by hand whenever its rect, or the world pan/zoom, changes.
- */
+/** World-space rect -> window-content pixel rect. Used by the snapshot
+ * IPC handler (see App.tsx / main/index.ts's handleSnapshotRequest), which
+ * only knows a card's live world-space rect and needs it in real screen
+ * pixels to crop `capturePage()`'s output. */
 export function worldRectToScreen(rect: Rect, world: WorldTransform, viewportOrigin: { x: number; y: number }): Rect {
   return {
     x: viewportOrigin.x + world.panX + rect.x * world.zoom,
@@ -129,38 +134,6 @@ export function worldRectToScreen(rect: Rect, world: WorldTransform, viewportOri
     w: rect.w * world.zoom,
     h: rect.h * world.zoom,
   };
-}
-
-function intersectRects(a: Rect, b: Rect): Rect {
-  const x1 = Math.max(a.x, b.x);
-  const y1 = Math.max(a.y, b.y);
-  const x2 = Math.min(a.x + a.w, b.x + b.w);
-  const y2 = Math.min(a.y + a.h, b.y + b.h);
-  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
-}
-
-/**
- * Clips a browser card's screen-space bounds to the visible viewport, below
- * the floating topbar and to the right of the icon rail. A WebContentsView
- * paints above every DOM element regardless of z-index — without this
- * clamp it would cover that chrome (or spill outside the window) whenever
- * panned/zoomed underneath it. Returns null when nothing visible remains —
- * the caller should hide the view instead of setting a degenerate/
- * negative-size rect.
- */
-export function clampBrowserBounds(
-  screenRect: Rect,
-  viewportScreenRect: Rect,
-  insets: { top: number; left: number },
-): Rect | null {
-  const clipped = intersectRects(screenRect, {
-    x: viewportScreenRect.x + insets.left,
-    y: viewportScreenRect.y + insets.top,
-    w: viewportScreenRect.w - insets.left,
-    h: viewportScreenRect.h - insets.top,
-  });
-  if (clipped.w <= 0 || clipped.h <= 0) return null;
-  return clipped;
 }
 
 export type Point = { x: number; y: number };

@@ -9,6 +9,20 @@ import QRCode from "qrcode";
 
 export type TerminalSummary = { id: string; label: string | null; provider: string; cwd: string };
 
+/** A single paired phone (DESIGN-BACKLOG.md item 2 revisited — per-device
+ * revocation). `token` never leaves `pairNewDevice`'s own return value —
+ * `listDevices()` (polled by the UI) deliberately omits it, so a second
+ * device's QR modal session can't read out a first device's live token. */
+type Device = { id: string; token: string; label: string; pairedAt: number };
+export type RemoteDevice = { id: string; label: string; pairedAt: number; connections: number };
+export type RemoteDevicePairing = RemoteDevice & {
+  token: string;
+  port: number;
+  addresses: string[];
+  url: string | null;
+  qrDataUrl: string | null;
+};
+
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -32,12 +46,16 @@ const MIME: Record<string, string> = {
  * forward, same limitation as `acbridge`'s own live streams — nothing here
  * buffers history servers-side.
  *
- * Auth is a single rotating token (QR-paired, Tailscale/Syncthing-style),
+ * Auth is per-device rotating tokens (QR-paired, Tailscale/Syncthing-style),
  * checked on the WebSocket upgrade only — the static HTML/JS shell itself
  * is not secret (it's just code), but every state a browser can read plus
- * every the write (typing into someone's terminal) is behind the token.
- * `revoke()` drops every connected client immediately, for when the QR
- * code might have been seen by the wrong person.
+ * every write (typing into someone's terminal) is behind a token.
+ *
+ * DESIGN-BACKLOG.md item 2 revisited — was a single shared token for the
+ * whole server; now each pairing (each QR scan) gets its own token and
+ * its own device id, so `revokeDevice(id)` can drop exactly one phone
+ * without booting every other paired device. `revokeAll()` stays as the
+ * blunt "something might have leaked, nuke everything" escape hatch.
  */
 export function createRemoteServer(opts: {
   port: number;
@@ -46,10 +64,21 @@ export function createRemoteServer(opts: {
   onWrite: (id: string, data: string) => void;
   onResize: (id: string, cols: number, rows: number) => void;
 }) {
-  let token = randomBytes(16).toString("hex");
+  const devices = new Map<string, Device>();
   const clients = new Set<WebSocket>();
+  // Which device authenticated each open socket — needed so a per-device
+  // revoke knows which sockets to drop, and so `listDevices()` can report
+  // a live connection count per device (not just a global total).
+  const clientDevice = new Map<WebSocket, string>();
   let httpServer: Server | null = null;
   let wss: WebSocketServer | null = null;
+
+  function deviceByToken(candidate: string): Device | null {
+    for (const device of devices.values()) {
+      if (device.token === candidate) return device;
+    }
+    return null;
+  }
 
   async function serveStatic(pathname: string): Promise<{ body: Buffer; type: string } | null> {
     const rel = pathname === "/" ? "/index.html" : pathname;
@@ -84,11 +113,13 @@ export function createRemoteServer(opts: {
 
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url ?? "", "http://internal");
-    if (url.searchParams.get("token") !== token) {
+    const device = deviceByToken(url.searchParams.get("token") ?? "");
+    if (!device) {
       ws.close(4001, "unauthorized");
       return;
     }
     clients.add(ws);
+    clientDevice.set(ws, device.id);
     ws.send(JSON.stringify({ type: "cards", cards: opts.listTerminals() }));
 
     ws.on("message", (raw) => {
@@ -111,8 +142,14 @@ export function createRemoteServer(opts: {
         ws.send(JSON.stringify({ type: "cards", cards: opts.listTerminals() }));
       }
     });
-    ws.on("close", () => clients.delete(ws));
-    ws.on("error", () => clients.delete(ws));
+    ws.on("close", () => {
+      clients.delete(ws);
+      clientDevice.delete(ws);
+    });
+    ws.on("error", () => {
+      clients.delete(ws);
+      clientDevice.delete(ws);
+    });
   });
 
   httpServer.listen(opts.port, "0.0.0.0");
@@ -139,11 +176,30 @@ export function createRemoteServer(opts: {
     return addrs;
   }
 
-  async function getPairing() {
+  function connectionsFor(deviceId: string): number {
+    let n = 0;
+    for (const id of clientDevice.values()) if (id === deviceId) n++;
+    return n;
+  }
+
+  /** Pairs one new phone: fresh id + token, own QR/URL. The returned
+   * token is the ONLY place it's ever exposed outside this module — the
+   * modal shows it once (as the QR just scanned), `listDevices()` below
+   * never echoes it back. */
+  async function pairNewDevice(label?: string): Promise<RemoteDevicePairing> {
+    const id = randomBytes(4).toString("hex");
+    const token = randomBytes(16).toString("hex");
+    const pairedAt = Date.now();
+    const device: Device = { id, token, label: label?.trim() || `Dispositivo ${devices.size + 1}`, pairedAt };
+    devices.set(id, device);
     const addrs = lanAddresses();
     const primary = addrs[0];
     const url = primary ? `http://${primary}:${opts.port}/?token=${token}` : null;
     return {
+      id,
+      label: device.label,
+      pairedAt,
+      connections: 0,
       token,
       port: opts.port,
       addresses: addrs,
@@ -152,15 +208,39 @@ export function createRemoteServer(opts: {
     };
   }
 
-  function revoke() {
-    token = randomBytes(16).toString("hex");
+  function listDevices(): RemoteDevice[] {
+    return [...devices.values()]
+      .sort((a, b) => a.pairedAt - b.pairedAt)
+      .map((d) => ({ id: d.id, label: d.label, pairedAt: d.pairedAt, connections: connectionsFor(d.id) }));
+  }
+
+  /** Drops exactly one paired phone — its token stops authenticating and
+   * any socket it currently has open closes right away. Every other
+   * paired device is untouched. */
+  function revokeDevice(id: string) {
+    devices.delete(id);
+    for (const [ws, devId] of clientDevice) {
+      if (devId !== id) continue;
+      ws.close(4001, "revoked");
+      clients.delete(ws);
+      clientDevice.delete(ws);
+    }
+  }
+
+  /** The blunt escape hatch — every paired device's token stops working
+   * and every open socket closes, for when it's unclear which QR might
+   * have leaked. */
+  function revokeAll() {
+    devices.clear();
     for (const ws of clients) ws.close(4001, "revoked");
     clients.clear();
+    clientDevice.clear();
   }
 
   function close() {
     for (const ws of clients) ws.close();
     clients.clear();
+    clientDevice.clear();
     wss?.close();
     httpServer?.close();
   }
@@ -179,9 +259,10 @@ export function createRemoteServer(opts: {
     broadcastCards: () => {
       if (clients.size > 0) broadcast({ type: "cards", cards: opts.listTerminals() });
     },
-    getPairing,
-    revoke,
-    connectionCount: () => clients.size,
+    pairNewDevice,
+    listDevices,
+    revokeDevice,
+    revokeAll,
     close,
   };
 }

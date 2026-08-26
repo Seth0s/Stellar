@@ -244,19 +244,70 @@
   overflow: hidden;
 }
 
-.files-tree {
-  width: 200px;
+.files-tree-panel {
+  width: 220px;
   flex: none;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--border);
+}
+
+/* DESIGN-BACKLOG.md item 13 — "explorador de arquivos de verdade": file-
+   type icons, an expandable tree with per-row rename/delete/new-file/new-
+   folder (only visible on hover — a tree this dense doesn't need six
+   icons showing per row all the time), and a root-level create toolbar. */
+.files-tree-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.files-tree-toolbar button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 3px;
+  display: flex;
+}
+
+.files-tree-toolbar button:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.files-create-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.files-create-hint {
+  font-size: 10px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.files-tree {
+  flex: 1;
+  overflow: auto;
   font-size: 13px;
   padding: 4px 0;
 }
 
 .files-node {
-  padding: 2px 8px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
   white-space: nowrap;
-  cursor: pointer;
   color: var(--muted);
 }
 
@@ -267,6 +318,64 @@
 .files-node-active {
   background: var(--panel);
   color: var(--text);
+}
+
+.files-node-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.files-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.files-node-actions {
+  display: flex;
+  gap: 1px;
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.files-node:hover .files-node-actions {
+  opacity: 1;
+}
+
+.files-node-actions button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px;
+  display: flex;
+}
+
+.files-node-actions button:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.files-node-delete-armed {
+  color: var(--danger) !important;
+}
+
+.files-node-rename-input {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--foam);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  width: 100%;
+  min-width: 0;
 }
 
 .files-editor {
@@ -327,7 +436,7 @@
   flex: 1;
   overflow: auto;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   padding: 8px;
   background: var(--ink);
@@ -335,7 +444,9 @@
 
 .files-editor-image img {
   max-width: 100%;
+  max-height: 100%;
   height: auto;
+  object-fit: contain;
 }
 
 .files-editor-preview {
@@ -438,20 +549,42 @@
   padding: 10px;
 }
 
+/* Taller + more spaced than the shared .card-head (32px) — a browser
+   toolbar reads as fussy/cramped at that height, and the extra room between
+   buttons is also just more header left to grab for a drag (CardFrame's
+   onHeaderPointerDown already excludes clicks that land on a button/input,
+   so the gap is free drag surface, not just decoration). */
+.browser-card .card-head {
+  height: 44px;
+  padding: 0 10px;
+  gap: 8px;
+}
+
 .browser-card-address {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   width: 100%;
 }
 
 .browser-card-address button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   background: none;
   border: none;
+  border-radius: 6px;
   color: var(--muted);
   cursor: pointer;
   font-size: 13px;
-  padding: 0 2px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.browser-card-address button:hover {
+  background: var(--border);
+  color: var(--text);
 }
 
 .browser-card-address input {
@@ -460,10 +593,15 @@
   background: var(--ink);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 8px;
+  border-radius: 8px;
+  padding: 7px 12px;
   font-size: 12px;
   font-family: var(--font-mono);
+}
+
+.browser-card-address input:focus {
+  outline: none;
+  border-color: var(--accent-browser);
 }
 
 .browser-card-owner {
@@ -477,6 +615,28 @@
 
 .browser-card-body {
   flex: 1;
+  /* A <canvas> is a replaced element — its width/height ATTRIBUTES (set in
+     BrowserCard.tsx to the real offscreen bitmap size, e.g. 720×560) count
+     as an intrinsic size that a flex child won't shrink below unless told
+     to, regardless of `flex: 1`/height:100%. Without this, the canvas could
+     overflow .card-clip's fixed-height column and push the header (the
+     other flex child, above it) out of the clipped/visible area — this is
+     what read as "the header disappeared" the first time this shipped. */
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #fff;
+  cursor: default;
+  outline: none;
+}
+
+/* Visible cue for the click-to-focus gate above (BrowserCard.tsx's
+   onCanvasWheel) — otherwise there's no way to tell, before scrolling,
+   whether this card or the board underneath it will respond to the wheel. */
+.browser-card-body:focus {
+  box-shadow: inset 0 0 0 2px var(--accent-browser);
 }
 
 .remote-window-body {

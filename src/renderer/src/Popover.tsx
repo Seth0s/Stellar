@@ -13,11 +13,19 @@ export function Popover({
   open,
   onClose,
   children,
+  side = "right",
 }: {
   anchorRef: React.RefObject<HTMLElement | null>;
   open: boolean;
   onClose: () => void;
   children: React.ReactNode;
+  /** DESIGN-BACKLOG.md item 12, achado 6 (zoom-pill) — every caller so far
+   * sat near the left edge, so opening rightward (the default) always
+   * fit. The zoom-pill sits at `.topbar`'s far right instead; "left"
+   * grows the popover leftward off the anchor's left edge via CSS
+   * `right` (not `left`) positioning, so it never needs to measure its
+   * own width to avoid overflowing off-screen. */
+  side?: "left" | "right";
 }) {
   const popRef = useRef<HTMLDivElement>(null);
 
@@ -35,7 +43,15 @@ export function Popover({
 
   if (!open) return null;
   const anchor = anchorRef.current?.getBoundingClientRect();
-  const style: React.CSSProperties = anchor ? { top: anchor.top, left: anchor.right + 8 } : { top: 60, left: 80 };
+  // DESIGN-BACKLOG.md item 12, achado 5 — 8px read as "cola quase direto
+  // na régua" (the rail's own popovers, the most common case). 14px gives
+  // real breathing room without drifting the popover noticeably far from
+  // its anchor.
+  const style: React.CSSProperties = anchor
+    ? side === "left"
+      ? { top: anchor.top, right: window.innerWidth - anchor.left + 14 }
+      : { top: anchor.top, left: anchor.right + 14 }
+    : { top: 60, left: 80 };
 
   // Every caller anchors this from inside a `position: absolute` toolbar
   // (Rail, Topbar) — a plain nested <div> would have that toolbar's own

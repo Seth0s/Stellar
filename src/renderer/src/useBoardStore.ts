@@ -6,6 +6,42 @@ import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
 
 const ACTIVE_BOARD_KEY = "ac.activeBoardId";
 
+/** DESIGN-BACKLOG.md item 7 — "nenhum template de sessão... não há
+ * atalho pra 'sessão com claude+bash+arquivos já arrumados'", the exact
+ * setup the user's own screenshots kept showing. Add cases here (and to
+ * SessionModal.tsx's picker + `seedCards` below) rather than building a
+ * general template editor — one hardcoded extra option is what was asked
+ * for, not a system. */
+export type SessionTemplate = "empty" | "claude-bash-files";
+
+function seedCards(defaultCwd: string, nextId: React.RefObject<number>, template: SessionTemplate): Card[] {
+  const terminal = (provider: string, index: number): Card => ({
+    id: String(nextId.current++),
+    kind: "terminal",
+    provider,
+    cwd: defaultCwd,
+    resumeId: null,
+    continueLast: false,
+    model: null,
+    systemPrompt: null,
+    rect: cascadeSlot(index),
+    groupId: null,
+    label: null,
+  });
+  if (template === "claude-bash-files") {
+    return [
+      terminal("claude", 0),
+      terminal("bash", 1),
+      { id: String(nextId.current++), kind: "files", root: defaultCwd, rect: cascadeSlot(2), groupId: null, label: null },
+    ];
+  }
+  // "Vazio" means vazio — a session reported this seeding a bash terminal
+  // anyway ("eu escolhi vazio, e veio um bash feito ainda") as not working.
+  // Zero cards is the correct, literal reading; the user adds whatever
+  // they want from the rail.
+  return [];
+}
+
 /**
  * Board CRUD + load/switch (item 5 of DESIGN-BACKLOG.md, phase 2 — hook
  * extraction out of `App.tsx`, 4/4). Owns `boards`/`activeBoardId`/
@@ -45,7 +81,7 @@ export function useBoardStore(
    * it's a natural consequence of the id sets no longer overlapping). A
    * board with no rows yet (brand new, or the very first launch) seeds one
    * bash terminal, same as the original single-board bootstrap did. */
-  async function loadBoard(boardId: string) {
+  async function loadBoard(boardId: string, template: SessionTemplate = "empty") {
     const [rows, connectorRows] = await Promise.all([
       window.store.list(boardId),
       window.store.connectors.list(boardId),
@@ -56,72 +92,87 @@ export function useBoardStore(
     // whatever loads next (see App.tsx's liveStatus module comment).
     resetLiveStatus();
     if (rows.length === 0) {
-      const id = String(nextId.current++);
-      const card: Card = {
-        id,
-        kind: "terminal",
-        provider: "bash",
-        cwd: defaultCwd,
-        resumeId: null,
-        continueLast: false,
-        model: null,
-        systemPrompt: null,
-        rect: cascadeSlot(0),
-        groupId: null,
-        label: null,
-      };
-      setCards([card]);
-      setOrder([id]);
-      void window.store.upsert(toRow(card, boardId));
+      const seeded = seedCards(defaultCwd, nextId, template);
+      setCards(seeded);
+      setOrder(seeded.map((c) => c.id));
+      for (const card of seeded) void window.store.upsert(toRow(card, boardId));
     } else {
       const restored = rows.map(fromRow);
       setCards(restored);
       setOrder(restored.map((c) => c.id));
     }
     refreshBoardCounts();
+
+    // DESIGN-BACKLOG.md item 14 — Home's "último acesso": every real open
+    // (not `createBoard`'s own internal switch — harmless if it double-
+    // touches, same timestamp either way) bumps this, separately from
+    // `updated_at` (metadata edits only, see `updateBoard`'s comment).
+    const accessedAt = Date.now();
+    void window.store.boards.touch(boardId, accessedAt);
+    setBoards((prev) => prev.map((b) => (b.id === boardId ? { ...b, last_accessed_at: accessedAt } : b)));
   }
 
+  // DESIGN-BACKLOG.md item 8 — boots to the home screen, always (decided
+  // by the user, not "only when there's no saved session"). No board gets
+  // loaded here — `activeBoardId` stays null until the user actually picks
+  // one from Home, so no PTY spawns before that either. `ACTIVE_BOARD_KEY`
+  // is still written on every switch (below) — kept as a convenience for
+  // a future "continue last session" affordance, just never read to
+  // auto-load on boot anymore.
   useEffect(() => {
     (async () => {
       const [fetchedBoards, seed] = await Promise.all([window.store.boards.list(), window.store.nextIdSeed()]);
       nextId.current = seed + 1;
       setBoards(fetchedBoards);
-      const stored = localStorage.getItem(ACTIVE_BOARD_KEY);
-      const initial = fetchedBoards.find((b) => b.id === stored)?.id ?? fetchedBoards[0]?.id ?? "default";
-      setActiveBoardId(initial);
-      await loadBoard(initial);
       setLoaded(true);
+      refreshBoardCounts();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function switchBoard(id: string) {
+  async function switchBoard(id: string, template: SessionTemplate = "empty") {
     if (id === activeBoardIdRef.current) return;
     setActiveBoardId(id);
     localStorage.setItem(ACTIVE_BOARD_KEY, id);
-    await loadBoard(id);
+    await loadBoard(id, template);
   }
 
-  async function createBoard(name: string, project: string) {
+  /** Topbar's home button — leaves the current board back to the home
+   * screen. Same cleanup `loadBoard` already does when swapping BETWEEN
+   * boards (cards/connectors/live-status cleared, which is what actually
+   * stops the departing board's terminal PTYs — see loadBoard's own doc
+   * comment), just landing on "no board" instead of a different one. */
+  function goHome() {
+    setActiveBoardId(null);
+    setCards([]);
+    setOrder([]);
+    setConnectors([]);
+    resetLiveStatus();
+  }
+
+  async function createBoard(name: string, project: string, template: SessionTemplate = "empty") {
     const id = String(nextId.current++);
     const now = Date.now();
-    const board: BoardRow = { id, name, project, created_at: now, updated_at: now };
+    const board: BoardRow = { id, name, project, created_at: now, updated_at: now, last_accessed_at: now };
     setBoards((prev) => [...prev, board]);
     void window.store.boards.upsert(board);
-    await switchBoard(id);
+    await switchBoard(id, template);
     toast(`sessão "${name}" criada`);
   }
 
-  function renameBoard(id: string, name: string) {
-    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, name, updated_at: Date.now() } : b)));
+  /** Session name + project, saved together — SessionModal's edit form
+   * (DESIGN-BACKLOG.md item 11) always submits both fields at once, and an
+   * earlier two-call version (separate renameBoard/changeBoardProject)
+   * had a real bug: each read `boards` from its own render's closure, so
+   * the second call's DB upsert found the board still carrying the FIRST
+   * call's pre-update value — the in-memory state was fine (via `prev`),
+   * but the persisted row silently reverted whichever field changed
+   * first. One combined update avoids that instead of ordering around it. */
+  function updateBoard(id: string, name: string, project: string) {
+    const now = Date.now();
+    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, name, project, updated_at: now } : b)));
     const board = boards.find((b) => b.id === id);
-    if (board) void window.store.boards.upsert({ ...board, name, updated_at: Date.now() });
-  }
-
-  function changeBoardProject(id: string, project: string) {
-    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, project, updated_at: Date.now() } : b)));
-    const board = boards.find((b) => b.id === id);
-    if (board) void window.store.boards.upsert({ ...board, project, updated_at: Date.now() });
+    if (board) void window.store.boards.upsert({ ...board, name, project, updated_at: now });
   }
 
   async function deleteBoard(id: string) {
@@ -148,9 +199,9 @@ export function useBoardStore(
     refreshBoardCounts,
     loadBoard,
     switchBoard,
+    goHome,
     createBoard,
-    renameBoard,
-    changeBoardProject,
+    updateBoard,
     deleteBoard,
   };
 }

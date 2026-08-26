@@ -50,6 +50,9 @@ export function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
             <div className="shortcuts-row">
               <kbd>Ctrl+C</kbd> interromper terminal (botão ^C do header)
             </div>
+            <div className="shortcuts-row">
+              <kbd>Ctrl+D</kbd> duplicar o card no topo (mesmo provider/cwd/etc)
+            </div>
           </div>
           <div className="shortcuts-group">
             <div className="shortcuts-group-label">Mouse</div>

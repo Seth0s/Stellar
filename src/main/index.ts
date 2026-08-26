@@ -1,16 +1,22 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, session } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session } from "electron";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPtyRegistry } from "./pty-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
 import type { SpawnOpts } from "./providers";
-import { listDir, readFile, readImageDataUrl, writeFile } from "./fs-tools";
+import { createEntry, deletePath, listDir, readFile, readImageDataUrl, renamePath, writeFile } from "./fs-tools";
 import { gitStatus } from "./git-tools";
-import { createBrowserRegistry, type BrowserRect } from "./browser-registry";
+import {
+  createBrowserRegistry,
+  type BrowserMouseEvent,
+  type BrowserWheelEvent,
+  type BrowserKeyEvent,
+} from "./browser-registry";
 import { createMessageBus } from "./message-bus";
 import { runOneShotSummary } from "./ai-action";
 import { createRemoteInputSession } from "./remote-input";
 import { createRemoteServer } from "./remote-server";
+import { registerUpdater } from "./updater";
 
 const isDev = !app.isPackaged;
 
@@ -46,6 +52,21 @@ const isDev = !app.isPackaged;
 // video playback anywhere in agent-canvas).
 app.commandLine.appendSwitch("disable-accelerated-video-decode");
 app.commandLine.appendSwitch("disable-accelerated-video-encode");
+
+// 2026-08-26 — DESIGN-BACKLOG.md item 9: tried forcing the XWayland (X11)
+// ozone backend here (`app.commandLine.appendSwitch("ozone-platform",
+// "x11")`) as a workaround for the browser card's WebContentsView never
+// compositing into the main window (the view demonstrably loads and paints
+// real content internally — confirmed via CDP on its own target — only its
+// background color ever reached the screen). REVERTED: tested live, the
+// main window never appeared at all under x11 ozone on this machine — the
+// process ran (renderer/gpu-process both up, confirmed via `ps`), XWayland
+// itself was confirmed running, but no window ever mapped to the screen.
+// Strictly worse than the original symptom. Do not retry this flag without
+// first understanding why the window failed to map under x11 ozone
+// specifically. Next candidate per item 9's option list: a separate
+// top-level BrowserWindow per browser card instead of a child
+// WebContentsView.
 
 // Without this, Chromium's screen-capture stack on Linux falls back to its
 // old X11-only enumeration path — confirmed the hard way earlier in this
@@ -276,10 +297,11 @@ function createWindow() {
     remoteInput.keysym(keysym, pressed),
   );
 
-  const browserRegistry = createBrowserRegistry(win, {
+  const browserRegistry = createBrowserRegistry({
     onNavigate: (id, url) => safeSend(win, "browser:did-navigate", id, url),
     onTitle: (id, title) => safeSend(win, "browser:title", id, title),
     onLoading: (id, loading) => safeSend(win, "browser:loading", id, loading),
+    onFrame: (id, jpeg, width, height) => safeSend(win, "browser:frame", id, jpeg, width, height),
   });
 
   const messageBus = createMessageBus(sockPath, {
@@ -321,13 +343,35 @@ function createWindow() {
   ipcMain.handle("store:boards:list", () => store.listBoards());
   ipcMain.handle("store:boards:upsert", (_e, board: BoardRow) => store.upsertBoard(board));
   ipcMain.handle("store:boards:delete", (_e, id: string) => store.deleteBoard(id));
+  // DESIGN-BACKLOG.md item 14 — Home's "último acesso".
+  ipcMain.handle("store:boards:touch", (_e, id: string, at: number) => store.touchBoard(id, at));
   ipcMain.handle("store:card-counts", () => store.cardCounts());
   ipcMain.handle("store:next-id-seed", () => store.nextIdSeed());
+
+  // "mudar pasta raiz" (ProjectPicker.tsx) — the real, navigable OS folder
+  // dialog rather than a hand-built in-app tree browser: the user asked
+  // for the workspace root to stop being hardcoded and become something
+  // they can actually navigate to, and the native picker already does
+  // that (double-click into folders, etc.) with no extra UI to build.
+  ipcMain.handle("fs:pick-directory", async (_e, defaultPath: string) => {
+    const result = await dialog.showOpenDialog(win, {
+      properties: ["openDirectory"],
+      defaultPath,
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
 
   ipcMain.handle("fs:list", (_e, root: string, path: string) => listDir(root, path));
   ipcMain.handle("fs:read", (_e, root: string, path: string) => readFile(root, path));
   ipcMain.handle("fs:write", (_e, root: string, path: string, content: string) => writeFile(root, path, content));
   ipcMain.handle("fs:read-image", (_e, root: string, path: string) => readImageDataUrl(root, path));
+  // DESIGN-BACKLOG.md item 13 — FilesCard quick actions.
+  ipcMain.handle("fs:rename", (_e, root: string, path: string, newName: string) => renamePath(root, path, newName));
+  ipcMain.handle("fs:delete", (_e, root: string, path: string) => deletePath(root, path));
+  ipcMain.handle("fs:create", (_e, root: string, parentPath: string, name: string, kind: "file" | "folder") =>
+    createEntry(root, parentPath, name, kind),
+  );
   ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
 
   ipcMain.handle("browser:create", (_e, id: string, url: string) => browserRegistry.create(id, url));
@@ -335,10 +379,12 @@ function createWindow() {
   ipcMain.handle("browser:back", (_e, id: string) => browserRegistry.back(id));
   ipcMain.handle("browser:forward", (_e, id: string) => browserRegistry.forward(id));
   ipcMain.handle("browser:reload", (_e, id: string) => browserRegistry.reload(id));
-  ipcMain.handle("browser:set-bounds", (_e, id: string, rect: BrowserRect) => browserRegistry.setBounds(id, rect));
+  ipcMain.handle("browser:resize", (_e, id: string, w: number, h: number) => browserRegistry.resize(id, w, h));
   ipcMain.handle("browser:set-visible", (_e, id: string, visible: boolean) => browserRegistry.setVisible(id, visible));
-  ipcMain.handle("browser:raise", (_e, id: string) => browserRegistry.raise(id));
   ipcMain.handle("browser:destroy", (_e, id: string) => browserRegistry.destroy(id));
+  ipcMain.on("browser:input-mouse", (_e, id: string, evt: BrowserMouseEvent) => browserRegistry.sendMouseEvent(id, evt));
+  ipcMain.on("browser:input-wheel", (_e, id: string, evt: BrowserWheelEvent) => browserRegistry.sendWheelEvent(id, evt));
+  ipcMain.on("browser:input-key", (_e, id: string, evt: BrowserKeyEvent) => browserRegistry.sendKeyEvent(id, evt));
   ipcMain.handle("browser:ask-resolve", (_e, requestId: string, allowed: boolean) =>
     messageBus.resolveOpen(requestId, allowed),
   );
@@ -362,13 +408,17 @@ function createWindow() {
   win.on("enter-full-screen", () => safeSend(win, "win:fullscreen-change", true));
   win.on("leave-full-screen", () => safeSend(win, "win:fullscreen-change", false));
 
-  // LAN-only mobile control (DESIGN-BACKLOG.md item 2, phase A) — pairing
-  // info (token/QR/LAN addresses) is generated fresh per request rather
-  // than cached, since the QR image itself is cheap to regenerate and this
-  // keeps `getPairing()` the one place that has to be correct.
-  ipcMain.handle("remote:pairing", () => remoteServer!.getPairing());
-  ipcMain.handle("remote:revoke", () => remoteServer!.revoke());
-  ipcMain.handle("remote:connection-count", () => remoteServer!.connectionCount());
+  // LAN-only mobile control (DESIGN-BACKLOG.md item 2) — per-device
+  // pairing (item 2 revisited): each call pairs a NEW phone (fresh id +
+  // token + QR), `remote:devices` lists everyone already paired (no
+  // token in that list — see remote-server.ts), and revoke can target
+  // one device or everyone.
+  ipcMain.handle("remote:pair-new-device", (_e, label?: string) => remoteServer!.pairNewDevice(label));
+  ipcMain.handle("remote:devices", () => remoteServer!.listDevices());
+  ipcMain.handle("remote:revoke-device", (_e, id: string) => remoteServer!.revokeDevice(id));
+  ipcMain.handle("remote:revoke-all", () => remoteServer!.revokeAll());
+
+  registerUpdater(win);
 
   // `browserRegistry.destroyAll()` touches `win.contentView` — needs `win`
   // still alive, so it has to run on "close" (before teardown), not

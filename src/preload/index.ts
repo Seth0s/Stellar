@@ -71,6 +71,7 @@ export type BoardRow = {
   project: string;
   created_at: number;
   updated_at: number;
+  last_accessed_at: number | null;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -91,6 +92,8 @@ const store = {
     list: (): Promise<BoardRow[]> => ipcRenderer.invoke("store:boards:list"),
     upsert: (board: BoardRow): Promise<void> => ipcRenderer.invoke("store:boards:upsert", board),
     delete: (id: string): Promise<void> => ipcRenderer.invoke("store:boards:delete", id),
+    /** DESIGN-BACKLOG.md item 14 — bumps `last_accessed_at` on open. */
+    touch: (id: string, at: number): Promise<void> => ipcRenderer.invoke("store:boards:touch", id, at),
   },
   cardCounts: (): Promise<Record<string, BoardCounts>> => ipcRenderer.invoke("store:card-counts"),
 };
@@ -100,12 +103,22 @@ export type ReadFileResult = { content: string } | { tooLarge: true };
 export type ReadImageResult = { dataUrl: string } | { tooLarge: true } | { notImage: true };
 
 const fs = {
+  /** Native OS folder dialog — ProjectPicker.tsx's "mudar pasta raiz".
+   * `null` when the user cancels. */
+  pickDirectory: (defaultPath: string): Promise<string | null> =>
+    ipcRenderer.invoke("fs:pick-directory", defaultPath),
   list: (root: string, path: string): Promise<DirEntry[]> => ipcRenderer.invoke("fs:list", root, path),
   read: (root: string, path: string): Promise<ReadFileResult> => ipcRenderer.invoke("fs:read", root, path),
   readImage: (root: string, path: string): Promise<ReadImageResult> =>
     ipcRenderer.invoke("fs:read-image", root, path),
   write: (root: string, path: string, content: string): Promise<void> =>
     ipcRenderer.invoke("fs:write", root, path, content),
+  /** DESIGN-BACKLOG.md item 13 — FilesCard quick actions. */
+  rename: (root: string, path: string, newName: string): Promise<void> =>
+    ipcRenderer.invoke("fs:rename", root, path, newName),
+  delete: (root: string, path: string): Promise<void> => ipcRenderer.invoke("fs:delete", root, path),
+  create: (root: string, parentPath: string, name: string, kind: "file" | "folder"): Promise<void> =>
+    ipcRenderer.invoke("fs:create", root, parentPath, name, kind),
 };
 
 export type GitEntry = { path: string; status: string; insertions: number; deletions: number };
@@ -117,7 +130,19 @@ const git = {
   status: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke("git:status", cwd),
 };
 
-export type BrowserRect = { x: number; y: number; w: number; h: number };
+export type BrowserMouseEvent = {
+  type: "mouseDown" | "mouseUp" | "mouseMove";
+  x: number;
+  y: number;
+  button?: "left" | "middle" | "right";
+  clickCount?: number;
+};
+export type BrowserWheelEvent = { x: number; y: number; deltaX: number; deltaY: number };
+export type BrowserKeyEvent = {
+  type: "keyDown" | "keyUp" | "char";
+  keyCode: string;
+  modifiers?: Array<"shift" | "control" | "alt" | "meta">;
+};
 
 const browser = {
   create: (id: string, url: string): Promise<void> => ipcRenderer.invoke("browser:create", id, url),
@@ -125,12 +150,26 @@ const browser = {
   back: (id: string): Promise<void> => ipcRenderer.invoke("browser:back", id),
   forward: (id: string): Promise<void> => ipcRenderer.invoke("browser:forward", id),
   reload: (id: string): Promise<void> => ipcRenderer.invoke("browser:reload", id),
-  setBounds: (id: string, rect: BrowserRect): Promise<void> => ipcRenderer.invoke("browser:set-bounds", id, rect),
+  resize: (id: string, w: number, h: number): Promise<void> => ipcRenderer.invoke("browser:resize", id, w, h),
   setVisible: (id: string, visible: boolean): Promise<void> => ipcRenderer.invoke("browser:set-visible", id, visible),
-  raise: (id: string): Promise<void> => ipcRenderer.invoke("browser:raise", id),
   destroy: (id: string): Promise<void> => ipcRenderer.invoke("browser:destroy", id),
+  // Fire-and-forget (`send`, not `invoke`) — these fire on every pointer
+  // move/frame-adjacent tick; waiting on a reply promise per event would
+  // only add latency nothing here needs.
+  sendMouse: (id: string, evt: BrowserMouseEvent) => ipcRenderer.send("browser:input-mouse", id, evt),
+  sendWheel: (id: string, evt: BrowserWheelEvent) => ipcRenderer.send("browser:input-wheel", id, evt),
+  sendKey: (id: string, evt: BrowserKeyEvent) => ipcRenderer.send("browser:input-key", id, evt),
   resolveAsk: (requestId: string, allowed: boolean): Promise<void> =>
     ipcRenderer.invoke("browser:ask-resolve", requestId, allowed),
+  /** One decoded JPEG frame from the card's offscreen `BrowserWindow` — see
+   * browser-registry.ts. `buffer` arrives as a Uint8Array (structured-clone
+   * of the main-process Buffer). */
+  onFrame: (cb: (id: string, buffer: Uint8Array, width: number, height: number) => void) => {
+    const listener = (_e: unknown, id: string, buffer: Uint8Array, width: number, height: number) =>
+      cb(id, buffer, width, height);
+    ipcRenderer.on("browser:frame", listener);
+    return () => ipcRenderer.removeListener("browser:frame", listener);
+  },
   onNavigate: (cb: (id: string, url: string) => void) => {
     const listener = (_e: unknown, id: string, url: string) => cb(id, url);
     ipcRenderer.on("browser:did-navigate", listener);
@@ -212,7 +251,14 @@ const remoteInput = {
     ipcRenderer.invoke("remote-input:keysym", keysym, pressed),
 };
 
-export type RemotePairing = {
+/** One paired phone as listed by `remote:devices` — deliberately no
+ * token here (main/remote-server.ts never echoes a device's token back
+ * outside its own `pairNewDevice` response). */
+export type RemoteDevice = { id: string; label: string; pairedAt: number; connections: number };
+
+/** What `remote:pair-new-device` returns — a `RemoteDevice` plus the
+ * one-time QR/URL/token for that specific new pairing. */
+export type RemoteDevicePairing = RemoteDevice & {
   token: string;
   port: number;
   addresses: string[];
@@ -220,13 +266,41 @@ export type RemotePairing = {
   qrDataUrl: string | null;
 };
 
-/** LAN-only mobile control (DESIGN-BACKLOG.md item 2, phase A) — pairing
- * info to show as a QR code, and a manual revoke for when the QR might
- * have leaked. See main/remote-server.ts. */
+/** LAN-only mobile control (DESIGN-BACKLOG.md item 2) — per-device pairing
+ * (item 2 revisited): each phone gets its own token/QR and can be revoked
+ * on its own without booting every other paired device. See
+ * main/remote-server.ts. */
 const remote = {
-  pairing: (): Promise<RemotePairing> => ipcRenderer.invoke("remote:pairing"),
-  revoke: (): Promise<void> => ipcRenderer.invoke("remote:revoke"),
-  connectionCount: (): Promise<number> => ipcRenderer.invoke("remote:connection-count"),
+  devices: (): Promise<RemoteDevice[]> => ipcRenderer.invoke("remote:devices"),
+  pairNewDevice: (label?: string): Promise<RemoteDevicePairing> =>
+    ipcRenderer.invoke("remote:pair-new-device", label),
+  revokeDevice: (id: string): Promise<void> => ipcRenderer.invoke("remote:revoke-device", id),
+  revokeAll: (): Promise<void> => ipcRenderer.invoke("remote:revoke-all"),
+};
+
+/** In-app updater (DESIGN-BACKLOG.md item 13 — see main/updater.ts's own
+ * doc comment for the full product-behavior contract). `check()` is a
+ * no-op in dev (`{checked: false}`) — never throws, safe to call
+ * unconditionally at boot. `onAvailable`/`onDownloaded` only ever fire in
+ * a packaged build with a real update actually found. */
+const updater = {
+  check: (): Promise<{ checked: boolean }> => ipcRenderer.invoke("updater:check"),
+  install: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke("updater:install"),
+  onAvailable: (cb: (version: string, releaseNotes: string | null) => void) => {
+    const listener = (_e: unknown, version: string, releaseNotes: string | null) => cb(version, releaseNotes);
+    ipcRenderer.on("updater:available", listener);
+    return () => ipcRenderer.removeListener("updater:available", listener);
+  },
+  onDownloaded: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on("updater:downloaded", listener);
+    return () => ipcRenderer.removeListener("updater:downloaded", listener);
+  },
+  /** Test-only (item 17's E2E coverage) — no-op in a packaged build, see
+   * main/updater.ts's guard. Lets `scripts/verify/smoke-updater.mjs`
+   * exercise the banner/changelog/dot UI without a real publish feed. */
+  testEmitAvailable: (version: string, releaseNotes: string | null): Promise<void> =>
+    ipcRenderer.invoke("updater:test-emit-available", version, releaseNotes),
 };
 
 contextBridge.exposeInMainWorld("pty", pty);
@@ -239,6 +313,7 @@ contextBridge.exposeInMainWorld("winControls", winControls);
 contextBridge.exposeInMainWorld("snapshot", snapshot);
 contextBridge.exposeInMainWorld("remoteInput", remoteInput);
 contextBridge.exposeInMainWorld("remote", remote);
+contextBridge.exposeInMainWorld("updater", updater);
 
 export type PtyApi = typeof pty;
 export type StoreApi = typeof store;
@@ -250,3 +325,4 @@ export type WinControlsApi = typeof winControls;
 export type SnapshotApi = typeof snapshot;
 export type RemoteInputApi = typeof remoteInput;
 export type RemoteApi = typeof remote;
+export type UpdaterApi = typeof updater;

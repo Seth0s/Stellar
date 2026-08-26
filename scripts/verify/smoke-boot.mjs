@@ -2,7 +2,7 @@
 // render its own chrome? Run this first when something feels broken —
 // it fails fast on "the whole UI is dark" class of bugs before spending
 // time on a more specific smoke script.
-import { startApp, stopApp, connectPage, makeChecker } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9401;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-boot", import.meta.url).pathname;
@@ -25,11 +25,18 @@ try {
   });
   await new Promise((r) => setTimeout(r, 1000));
 
+  // DESIGN-BACKLOG.md item 8 — boots to Home now, not straight into a
+  // board (no boards exist yet on a fresh profile, so no rail/topbar/
+  // auto-seeded terminal until a session is actually created).
   check("viewport rendered", await page.evalJs(`!!document.querySelector(".viewport")`), true);
-  check("rail rendered", await page.evalJs(`document.querySelectorAll(".rail-btn").length`), (n) => n >= 6);
-  check("topbar rendered", await page.evalJs(`!!document.querySelector(".topbar")`), true);
+  check("home screen rendered on first boot", await page.evalJs(`!!document.querySelector(".home")`), true);
+  check("home empty state shown (no sessions yet)", await page.evalJs(`!!document.querySelector(".home-empty")`), true);
+
+  await bootIntoFreshSession(page);
+  check("rail rendered once a session exists", await page.evalJs(`document.querySelectorAll(".rail-btn").length`), (n) => n >= 6);
+  check("topbar rendered once a session exists", await page.evalJs(`!!document.querySelector(".topbar")`), true);
   check(
-    "auto-seeded bash terminal card present",
+    "bootIntoFreshSession's spawned bash terminal is present",
     await page.evalJs(`document.querySelectorAll(".terminal-card").length`),
     1,
   );
