@@ -1,23 +1,53 @@
 import { useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
-import { clampBrowserBounds, worldRectToScreen, type Rect, type WorldTransform } from "./board-model";
-import { useChromeOccluded } from "./occlusion";
+import type { Rect } from "./board-model";
 
-// Must match the titlebar + floating topbar's combined height, and the
-// rail's width (app.css) — a WebContentsView paints above every DOM
-// element regardless of z-index, so without this clamp a browser card
-// panned/zoomed underneath any of those would cover it.
-const CHROME_INSETS = { top: 82, left: 72 };
+function keyModifiers(e: React.KeyboardEvent): Array<"shift" | "control" | "alt" | "meta"> {
+  const mods: Array<"shift" | "control" | "alt" | "meta"> = [];
+  if (e.shiftKey) mods.push("shift");
+  if (e.ctrlKey) mods.push("control");
+  if (e.altKey) mods.push("alt");
+  if (e.metaKey) mods.push("meta");
+  return mods;
+}
+
+// Electron's sendInputEvent keyCode is a string in the same vocabulary as
+// Accelerator strings, not a DOM KeyboardEvent.code/keyCode — printable
+// characters pass through as-is (`"a"`, `"A"`, `"1"`, `"!"`), everything
+// else needs an explicit name.
+const SPECIAL_KEYS: Record<string, string> = {
+  Enter: "Return",
+  Escape: "Escape",
+  Backspace: "Backspace",
+  Tab: "Tab",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Delete: "Delete",
+  Home: "Home",
+  End: "End",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+  " ": "Space",
+};
+function toElectronKeyCode(key: string): string | null {
+  if (key.length === 1) return key;
+  return SPECIAL_KEYS[key] ?? null;
+}
+
+function mouseButtonName(button: number): "left" | "middle" | "right" {
+  if (button === 1) return "middle";
+  if (button === 2) return "right";
+  return "left";
+}
 
 export function BrowserCard({
   id,
   rect,
   zoom,
   zIndex,
-  world,
-  viewportOrigin,
-  viewportSize,
   visible,
   url,
   ownerCardId,
@@ -37,19 +67,12 @@ export function BrowserCard({
   rect: Rect;
   zoom: number;
   zIndex: number;
-  world: WorldTransform;
-  viewportOrigin: { x: number; y: number };
-  viewportSize: { width: number; height: number };
   visible: boolean;
   url: string;
   ownerCardId: string | null;
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
-  /** Note: only the DOM chrome fades — a WebContentsView paints above every
-   * DOM element and has no CSS-driven opacity of its own, so the actual
-   * page content just sits there unfaded for the animation's ~160ms before
-   * this card (and the native view under it) are actually removed. */
   closing?: boolean;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
@@ -60,8 +83,9 @@ export function BrowserCard({
   onSelectStart?: (e: React.PointerEvent) => void;
 }) {
   const [bar, setBar] = useState(url);
-  const occluded = useChromeOccluded();
   const createdRef = useRef(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const lastSizeRef = useRef({ w: 0, h: 0 });
 
   useEffect(() => {
     if (!createdRef.current) {
@@ -85,27 +109,126 @@ export function BrowserCard({
     };
   }, [id]);
 
+  // Draws each JPEG frame from the card's offscreen BrowserWindow straight
+  // onto its own canvas (see browser-registry.ts) — plain DOM content, so
+  // it rides the same CSS transform every other card kind already gets for
+  // free and respects real z-order/occlusion without any manual bounds
+  // math or viewport clamping.
   useEffect(() => {
-    const rafId = requestAnimationFrame(() => {
-      if (!visible || occluded) {
-        void window.browser.setVisible(id, false);
-        return;
+    let cancelled = false;
+    const offFrame = window.browser.onFrame(async (frameId, buffer, width, height) => {
+      if (frameId !== id || cancelled) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      try {
+        // IPC always hands us a real ArrayBuffer-backed Uint8Array (cloned
+        // from the main-process Buffer) — the cast just satisfies BlobPart's
+        // stricter-than-necessary type, which also allows SharedArrayBuffer.
+        const bitmap = await createImageBitmap(new Blob([buffer as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
+        if (cancelled) {
+          bitmap.close();
+          return;
+        }
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== height) canvas.height = height;
+        canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+        bitmap.close();
+      } catch {
+        // A frame arriving for a card mid-teardown (destroy raced the next
+        // paint) — drop it, nothing to recover.
       }
-      const screenRect = worldRectToScreen(rect, world, viewportOrigin);
-      const clamped = clampBrowserBounds(
-        screenRect,
-        { x: viewportOrigin.x, y: viewportOrigin.y, w: viewportSize.width, h: viewportSize.height },
-        CHROME_INSETS,
-      );
-      if (!clamped) {
-        void window.browser.setVisible(id, false);
-        return;
-      }
-      void window.browser.setBounds(id, clamped);
-      void window.browser.setVisible(id, true);
     });
-    return () => cancelAnimationFrame(rafId);
-  }, [id, rect, world, viewportOrigin, viewportSize, visible, occluded]);
+    return () => {
+      cancelled = true;
+      offFrame();
+    };
+  }, [id]);
+
+  useEffect(() => {
+    void window.browser.setVisible(id, visible);
+  }, [id, visible]);
+
+  useEffect(() => {
+    const w = Math.round(rect.w);
+    const h = Math.round(rect.h);
+    if (lastSizeRef.current.w === w && lastSizeRef.current.h === h) return;
+    lastSizeRef.current = { w, h };
+    void window.browser.resize(id, w, h);
+  }, [id, rect.w, rect.h]);
+
+  function toCanvasPoint(e: React.PointerEvent<HTMLCanvasElement> | React.WheelEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    if (box.width === 0 || box.height === 0) return null;
+    return {
+      x: ((e.clientX - box.left) / box.width) * canvas.width,
+      y: ((e.clientY - box.top) / box.height) * canvas.height,
+    };
+  }
+
+  function onCanvasPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (interactionMode !== "normal") return;
+    const p = toCanvasPoint(e);
+    if (!p) return;
+    e.currentTarget.focus();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    window.browser.sendMouse(id, { type: "mouseDown", ...p, button: mouseButtonName(e.button), clickCount: 1 });
+  }
+  function onCanvasPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (interactionMode !== "normal") return;
+    const p = toCanvasPoint(e);
+    if (!p) return;
+    window.browser.sendMouse(id, { type: "mouseMove", ...p });
+  }
+  function onCanvasPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (interactionMode !== "normal") return;
+    const p = toCanvasPoint(e);
+    if (!p) return;
+    window.browser.sendMouse(id, { type: "mouseUp", ...p, button: mouseButtonName(e.button), clickCount: 1 });
+  }
+  // Every wheel gesture anywhere on the board zooms it (useWorldTransform's
+  // onWheel) — without gating this, scrolling a loaded page also zoomed the
+  // whole board underneath it (and dragged the card, header included, out
+  // from under the app's own floating chrome). Only forward to the page
+  // (and eat the event) once the card has real DOM focus, i.e. after a
+  // click — matches every other "scroll this, not the page" widget
+  // convention. Unfocused, let it bubble to the board's own zoom as normal.
+  function onCanvasWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+    if (interactionMode !== "normal" || document.activeElement !== e.currentTarget) return;
+    const p = toCanvasPoint(e);
+    if (!p) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Electron's sendInputEvent mouseWheel takes ticks in the opposite sign
+    // convention from the DOM WheelEvent it's built from — sending
+    // e.deltaX/deltaY straight through scrolled the embedded page backwards
+    // (confirmed live). Negate both.
+    window.browser.sendWheel(id, { ...p, deltaX: -e.deltaX, deltaY: -e.deltaY });
+  }
+  function onCanvasKeyDown(e: React.KeyboardEvent<HTMLCanvasElement>) {
+    const keyCode = toElectronKeyCode(e.key);
+    if (!keyCode) return;
+    e.preventDefault();
+    const mods = keyModifiers(e);
+    window.browser.sendKey(id, { type: "keyDown", keyCode, modifiers: mods });
+    // keyDown/keyUp alone only update key-state (what a page's own keydown
+    // listener sees) — they never insert text. Electron's sendInputEvent
+    // has a separate "char" type that's what actually drives typing into a
+    // real <input>/<textarea> (confirmed live: without this, click-to-focus
+    // worked but every keystroke produced an empty field). Skipped for
+    // ctrl/alt/meta combos — those are shortcuts, not text, same as a real
+    // browser never inserting "c" for Ctrl+C.
+    if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      window.browser.sendKey(id, { type: "char", keyCode: e.key });
+    }
+  }
+  function onCanvasKeyUp(e: React.KeyboardEvent<HTMLCanvasElement>) {
+    const keyCode = toElectronKeyCode(e.key);
+    if (!keyCode) return;
+    e.preventDefault();
+    window.browser.sendKey(id, { type: "keyUp", keyCode, modifiers: keyModifiers(e) });
+  }
 
   return (
     <CardFrame
@@ -120,11 +243,8 @@ export function BrowserCard({
       closing={closing}
       onChange={onChange}
       onCommit={onCommit}
+      onRaise={onRaise}
       onCloseAnimationEnd={onCloseAnimationEnd}
-      onRaise={() => {
-        onRaise();
-        void window.browser.raise(id);
-      }}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
       headerContent={
@@ -156,7 +276,17 @@ export function BrowserCard({
         </div>
       }
     >
-      <div className="browser-card-body" />
+      <canvas
+        ref={canvasRef}
+        className="browser-card-body"
+        tabIndex={0}
+        onPointerDown={onCanvasPointerDown}
+        onPointerMove={onCanvasPointerMove}
+        onPointerUp={onCanvasPointerUp}
+        onWheel={onCanvasWheel}
+        onKeyDown={onCanvasKeyDown}
+        onKeyUp={onCanvasKeyUp}
+      />
     </CardFrame>
   );
 }

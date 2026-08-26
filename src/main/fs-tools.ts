@@ -1,5 +1,5 @@
 import { promises as fs, realpathSync } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
 const IGNORE = new Set(["node_modules", ".git", "dist", "target"]);
 export const MAX_FILE_BYTES = 512 * 1024;
@@ -77,6 +77,42 @@ export async function readImageDataUrl(root: string, path: string): Promise<Read
 export async function writeFile(root: string, path: string, content: string): Promise<void> {
   const target = confine(root, path);
   await fs.writeFile(target, content, "utf8");
+}
+
+/**
+ * DESIGN-BACKLOG.md item 13 — FilesCard's "quick actions" (rename/delete/
+ * new file/new folder). All three reuse `confine()` on every path they
+ * touch, both source and destination — same escape guard `listDir`/
+ * `readFile`/`writeFile` already rely on, nothing new to trust here.
+ */
+export async function renamePath(root: string, path: string, newName: string): Promise<void> {
+  if (!newName || newName.includes("/") || newName.includes("\\")) {
+    throw new Error("nome inválido");
+  }
+  const from = confine(root, path);
+  const to = confine(root, join(relative(root, dirname(from)), newName));
+  await fs.rename(from, to);
+}
+
+export async function deletePath(root: string, path: string): Promise<void> {
+  const target = confine(root, path);
+  await fs.rm(target, { recursive: true, force: true });
+}
+
+export async function createEntry(
+  root: string,
+  parentPath: string,
+  name: string,
+  kind: "file" | "folder",
+): Promise<void> {
+  if (!name || name.includes("/") || name.includes("\\")) {
+    throw new Error("nome inválido");
+  }
+  const parent = confine(root, parentPath);
+  const target = confine(root, join(parentPath, name));
+  await fs.mkdir(parent, { recursive: true });
+  if (kind === "folder") await fs.mkdir(target);
+  else await fs.writeFile(target, "", { flag: "wx" });
 }
 
 /** Line count of a file, bounded by the same size guard as readFile — used to approximate insertions for untracked files in git status. */

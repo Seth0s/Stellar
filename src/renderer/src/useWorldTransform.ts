@@ -40,6 +40,23 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
     });
   }
 
+  /** DESIGN-BACKLOG.md item 12, achado 6 — zoom-pill gained direct
+   * editing (type a %) and a slider; both need to set an absolute zoom
+   * level rather than multiply the current one, same viewport-center
+   * anchor `zoomBy` already uses. */
+  function setZoomAbs(zoomRaw: number) {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const vw = vp.clientWidth;
+    const vh = vp.clientHeight;
+    setWorld((prev) => {
+      const newZoom = Math.min(3, Math.max(0.2, zoomRaw));
+      const worldX = (vw / 2 - prev.panX) / prev.zoom;
+      const worldY = (vh / 2 - prev.panY) / prev.zoom;
+      return { zoom: newZoom, panX: vw / 2 - newZoom * worldX, panY: vh / 2 - newZoom * worldY };
+    });
+  }
+
   function fitView() {
     const vp = viewportRef.current;
     const box = bboxOf(cardsRef.current.map((c) => c.rect));
@@ -47,6 +64,28 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
     const vw = vp.clientWidth;
     const vh = vp.clientHeight;
     const PAD = 60;
+    const scale = Math.min((vw - PAD * 2) / box.w, (vh - PAD * 2) / box.h);
+    const zoom = Math.min(3, Math.max(0.2, scale));
+    setWorld({
+      zoom,
+      panX: vw / 2 - (box.x + box.w / 2) * zoom,
+      panY: vh / 2 - (box.y + box.h / 2) * zoom,
+    });
+  }
+
+  /** Jump-to-card (DESIGN-BACKLOG.md item 7) — same centering math as
+   * `fitView`, just for one card's rect instead of the whole board's
+   * bounding box. Lets "find a specific card among many spread out ones"
+   * skip the manual scroll/pan `fitView`'s own doc comment calls out as
+   * the gap. */
+  function focusCard(id: string) {
+    const vp = viewportRef.current;
+    const card = cardsRef.current.find((c) => c.id === id);
+    if (!vp || !card) return;
+    const vw = vp.clientWidth;
+    const vh = vp.clientHeight;
+    const PAD = 80;
+    const box = card.rect;
     const scale = Math.min((vw - PAD * 2) / box.w, (vh - PAD * 2) / box.h);
     const zoom = Math.min(3, Math.max(0.2, scale));
     setWorld({
@@ -115,7 +154,9 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
     visibleRect,
     clientToWorld,
     zoomBy,
+    setZoomAbs,
     fitView,
+    focusCard,
     onWheel,
     startPan,
   };

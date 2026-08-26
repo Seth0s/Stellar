@@ -1,9 +1,17 @@
-import { useRef, useState } from "react";
-import { Icon } from "./icons";
+import { useEffect, useRef, useState } from "react";
+import { Icon, type IconName } from "./icons";
 import { Popover } from "./Popover";
 import { PenPanel } from "./PenPanel";
+import { ProviderPicker } from "./ProviderPicker";
 
 type Tool = "pointer" | "pen" | "connector" | "select";
+type RailCard = { id: string; kind: string; label: string | null };
+
+/** DESIGN-BACKLOG.md item 12, achado 1 — "<"/">" to hide/show the whole
+ * rail, not just its individual buttons. Local + persisted (own concern,
+ * nothing else reacts to it), same `localStorage` convention as the
+ * board/root state elsewhere. */
+const RAIL_COLLAPSED_KEY = "ac.railCollapsed";
 
 export function Rail({
   tool,
@@ -40,6 +48,10 @@ export function Rail({
   summarizeDisabled,
   onReorganize,
   onSummarize,
+  cards,
+  kindIcon,
+  kindLabel,
+  onJumpToCard,
 }: {
   tool: Tool;
   setTool: (t: Tool) => void;
@@ -75,19 +87,44 @@ export function Rail({
   summarizeDisabled: boolean;
   onReorganize: () => void;
   onSummarize: () => void;
+  /** Jump-to-card popover (DESIGN-BACKLOG.md item 7) — every card on the current board. */
+  cards: RailCard[];
+  kindIcon: Record<string, IconName>;
+  kindLabel: Record<string, string>;
+  onJumpToCard: (id: string) => void;
 }) {
-  const [openPopover, setOpenPopover] = useState<"terminal" | "ai" | null>(null);
+  const [openPopover, setOpenPopover] = useState<"terminal" | "ai" | "find" | null>(null);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_COLLAPSED_KEY) === "1");
   const terminalBtnRef = useRef<HTMLButtonElement>(null);
   const aiBtnRef = useRef<HTMLButtonElement>(null);
+  const findBtnRef = useRef<HTMLButtonElement>(null);
   const penBtnRef = useRef<HTMLButtonElement>(null);
   const showAgentFields = newProvider !== "bash";
+
+  useEffect(() => {
+    localStorage.setItem(RAIL_COLLAPSED_KEY, collapsed ? "1" : "0");
+  }, [collapsed]);
 
   function toggleTool(next: Tool) {
     setTool(tool === next ? "pointer" : next);
   }
 
+  if (collapsed) {
+    return (
+      <div className="rail rail-collapsed">
+        <button className="rail-btn" title="Mostrar régua" onClick={() => setCollapsed(false)}>
+          <Icon name="chevronRight" size={16} />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="rail">
+      <button className="rail-btn" title="Ocultar régua" onClick={() => setCollapsed(true)}>
+        <Icon name="chevronLeft" size={16} />
+      </button>
+      <div className="rail-group-gap" />
       <button
         className={`rail-btn${tool === "pointer" ? " active" : ""}`}
         title="Ponteiro"
@@ -174,6 +211,14 @@ export function Rail({
       <div className="rail-group-gap" />
 
       <button
+        ref={findBtnRef}
+        className="rail-btn"
+        title="Localizar card"
+        onClick={() => setOpenPopover((p) => (p === "find" ? null : "find"))}
+      >
+        <Icon name="findCard" />
+      </button>
+      <button
         ref={aiBtnRef}
         className="rail-btn"
         title="Ações de IA"
@@ -185,13 +230,7 @@ export function Rail({
       <Popover anchorRef={terminalBtnRef} open={openPopover === "terminal"} onClose={() => setOpenPopover(null)}>
         <div className="popover-field">
           <label>provider</label>
-          <select value={newProvider} onChange={(e) => setNewProvider(e.target.value)}>
-            {providers.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
+          <ProviderPicker providers={providers} value={newProvider} onChange={setNewProvider} />
         </div>
         {showAgentFields && (
           <>
@@ -243,6 +282,31 @@ export function Rail({
             criar
           </button>
         </div>
+      </Popover>
+
+      <Popover anchorRef={findBtnRef} open={openPopover === "find"} onClose={() => setOpenPopover(null)}>
+        <div className="board-list-heading">CARDS NESTA SESSÃO</div>
+        {cards.length === 0 ? (
+          <div className="popover-empty">nenhum card ainda</div>
+        ) : (
+          <div className="board-list">
+            {cards.map((c) => (
+              <button
+                key={c.id}
+                className="board-row-name find-card-row"
+                onClick={() => {
+                  onJumpToCard(c.id);
+                  setOpenPopover(null);
+                }}
+              >
+                <span className="board-row-name-line">
+                  <Icon name={kindIcon[c.kind] ?? "terminal"} size={14} />
+                  {c.label ?? kindLabel[c.kind] ?? c.kind}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </Popover>
 
       <Popover anchorRef={aiBtnRef} open={openPopover === "ai"} onClose={() => setOpenPopover(null)}>

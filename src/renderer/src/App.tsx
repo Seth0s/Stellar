@@ -12,9 +12,11 @@ import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
 import { Rail } from "./Rail";
+import type { IconName } from "./icons";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
-import { Hint } from "./Hint";
+import { UpdateBanner } from "./UpdateBanner";
+import { Home } from "./Home";
 import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
 import {
@@ -39,22 +41,45 @@ import { useBoardStore } from "./useBoardStore";
 import type { Card, Connector, StickyCardData, Tool } from "./card-types";
 import "./app.css";
 
-const DEFAULT_CWD = "/home/lucas/Workplace/Projects/agent-canvas";
+// DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
+// agent-canvas/ → Stellar/ mid-session (2026-08-26); updated to match.
+const DEFAULT_CWD = "/home/lucas/Workplace/Projects/Stellar";
 /** The multi-repo workspace this app itself lives in (see CLAUDE.md at
  * this path) — its top-level directories are real sibling projects
  * (CentralByte, IdyPlatform, ...), offered as a real picker for "which
  * project is this session for" (item 1 follow-up: the user wants to
- * *select* a workspace, not type one blind). */
-const WORKSPACE_ROOT = "/home/lucas/Workplace/Projects";
+ * *select* a workspace, not type one blind). Just the initial value now —
+ * the user pointed out this was hardcoded with no way to point the app at
+ * a different workspace ("deve ser algo navegável, para ser universal"),
+ * so it's real state below (`workspaceRoot`), changeable via a native
+ * folder dialog from `ProjectPicker` (shared by every modal with a
+ * project field — SessionModal's create and edit modes), and persisted
+ * across launches.
+ */
+const DEFAULT_WORKSPACE_ROOT = "/home/lucas/Workplace/Projects";
+const WORKSPACE_ROOT_KEY = "ac.workspaceRoot";
 
-/** Suggests a project name for a new session (item 1) from the workspace
- * convention this very app lives in — the path segment right after
- * ".../Projects/" (e.g. "agent-canvas", "CentralByte"). Free-text and
- * editable in the UI, never re-derived once a session exists; just a
- * starting point, not a source of truth. */
-function suggestProjectFromCwd(cwd: string): string {
-  const match = cwd.match(/\/Projects\/([^/]+)/);
-  return match ? match[1] : "";
+/** Suggests a project name for a new session (item 1) from whatever the
+ * current workspace root is — the path segment right after
+ * "{root}/" (e.g. "agent-canvas", "CentralByte"). Free-text and editable
+ * in the UI, never re-derived once a session exists; just a starting
+ * point, not a source of truth. */
+function suggestProjectFromCwd(cwd: string, root: string): string {
+  if (!cwd.startsWith(root + "/")) return "";
+  return cwd.slice(root.length + 1).split("/")[0] ?? "";
+}
+
+/** Home/Topbar's "📁 {name}" label — the last path segment of whatever
+ * root is currently chosen, falling back to "Projects" for a root that's
+ * just "/" or empty (shouldn't happen via the picker, but a bad persisted
+ * value should never crash the label). */
+function rootDisplayName(root: string): string {
+  return (
+    root
+      .split("/")
+      .filter(Boolean)
+      .pop() || "Projects"
+  );
 }
 const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor"];
 const MIN_STROKE_POINTS = 2;
@@ -72,6 +97,17 @@ const KIND_LABEL: Record<Card["kind"], string> = {
   browser: "navegador",
   "remote-window": "janela externa",
   stroke: "desenho",
+};
+
+/** Rail's "localizar card" popover (DESIGN-BACKLOG.md item 7, jump-to-card). */
+const KIND_ICON: Record<Card["kind"], IconName> = {
+  terminal: "terminal",
+  files: "files",
+  changes: "changes",
+  sticky: "sticky",
+  browser: "browser",
+  "remote-window": "remoteWindow",
+  stroke: "pen",
 };
 
 /** Canvas background pattern — per-viewer preference (not per-board data,
@@ -287,20 +323,29 @@ export function App() {
    * aren't running at all (switching boards kills them, see AGENTS.md). */
   const [liveStatus, setLiveStatus] = useState<Record<string, "ok" | "error" | "exited">>({});
   const [workspaceProjects, setWorkspaceProjects] = useState<string[]>([]);
+  const [workspaceRoot, setWorkspaceRoot] = useState(
+    () => localStorage.getItem(WORKSPACE_ROOT_KEY) || DEFAULT_WORKSPACE_ROOT,
+  );
   const nextId = useRef(1);
   const cardsRef = useRef<Card[]>([]);
   cardsRef.current = cards;
+  /** Ctrl/Cmd+D duplicate (below) targets the topmost card — needed as a
+   * ref, not the raw `order` state, since it's read from a mount-only
+   * (deps=[]) keydown effect that would otherwise close over a stale
+   * empty array forever. */
+  const orderRef = useRef<string[]>([]);
+  orderRef.current = order;
   const {
     world,
     setWorld,
     worldRef,
     viewportRef,
-    viewportSize,
-    viewportOrigin,
     visibleRect,
     clientToWorld,
     zoomBy,
+    setZoomAbs,
     fitView,
+    focusCard,
     onWheel,
     startPan,
   } = useWorldTransform(cardsRef);
@@ -311,9 +356,9 @@ export function App() {
     activeBoardIdRef,
     boardCounts,
     switchBoard,
+    goHome,
     createBoard,
-    renameBoard,
-    changeBoardProject,
+    updateBoard,
     deleteBoard,
   } = useBoardStore(
     nextId,
@@ -375,10 +420,20 @@ export function App() {
   // the app.
   useEffect(() => {
     window.fs
-      .list(WORKSPACE_ROOT, "")
+      .list(workspaceRoot, "")
       .then((entries) => setWorkspaceProjects(entries.filter((e) => e.isDir).map((e) => e.name)))
-      .catch(() => {});
-  }, []);
+      .catch(() => setWorkspaceProjects([]));
+  }, [workspaceRoot]);
+
+  /** ProjectPicker's "mudar pasta raiz" (reachable from every modal with a
+   * project field — SessionModal create/edit, both via Home and Topbar) —
+   * native OS folder dialog, `null` on cancel. */
+  async function changeWorkspaceRoot() {
+    const picked = await window.fs.pickDirectory(workspaceRoot);
+    if (!picked) return;
+    setWorkspaceRoot(picked);
+    localStorage.setItem(WORKSPACE_ROOT_KEY, picked);
+  }
 
   // Escape exits pen/connector tool mode. Not required for correctness —
   // releasing the pointer already ends any in-progress stroke/connector
@@ -399,12 +454,27 @@ export function App() {
         void window.winControls.toggleFullscreen();
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        const topId = orderRef.current[orderRef.current.length - 1];
+        if (topId) duplicateCard(topId);
+        return;
+      }
       // Single-letter tool shortcuts (documented in the pen panel, item 3) —
       // never fire while the user is typing into a real input (sticky note,
-      // files editor, browser address bar, any popover field).
+      // files editor, browser address bar, any popover field). A focused
+      // browser card's canvas (BrowserCard.tsx) counts too — every
+      // keystroke there is forwarded into the embedded page, so without
+      // this a page search box that happens to contain "v"/"p"/"c"/"s"
+      // would also swap the app's whole tool mid-type, which then silently
+      // cuts off further input/wheel forwarding (both gate on
+      // interactionMode === "normal").
       const target = e.target as HTMLElement | null;
       const typing =
-        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "CANVAS" ||
+        target?.isContentEditable;
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "v" || e.key === "V") setTool("pointer");
       if (e.key === "p" || e.key === "P") setTool("pen");
@@ -428,6 +498,33 @@ export function App() {
     setOrder((prev) => [...prev, card.id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
     toast(`${KIND_LABEL[card.kind]} criado${card.kind === "sticky" ? "a" : ""}`);
+  }
+
+  /** Ctrl/Cmd+D (below) — clones the topmost card's full config (provider/
+   * cwd/model for terminal, root for files/changes, url for browser, etc.)
+   * at a small offset, fresh id, no group/label carried over. Terminal
+   * cards never carry resumeId/continueLast — duplicating "the same
+   * session" would mean two cards driving one real process; the point is a
+   * fresh terminal with the same setup, not a second window onto the same
+   * one (DESIGN-BACKLOG.md item 7). */
+  function duplicateCard(id: string) {
+    const source = cardsRef.current.find((c) => c.id === id);
+    if (!source) return;
+    const rect = { ...source.rect, x: source.rect.x + 32, y: source.rect.y + 32 };
+    const newId = String(nextId.current++);
+    const clone: Card =
+      source.kind === "terminal"
+        ? { ...source, id: newId, rect, groupId: null, label: null, resumeId: null, continueLast: false }
+        : { ...source, id: newId, rect, groupId: null, label: null };
+    addCard(clone);
+  }
+
+  /** Rail's "localizar card" popover (DESIGN-BACKLOG.md item 7) — pans/
+   * zooms to one card and brings it to front, same as clicking it directly
+   * would via CardFrame's onRaise. */
+  function jumpToCard(id: string) {
+    focusCard(id);
+    raise(id);
   }
 
   function addConnector(fromCardId: string, toCardId: string) {
@@ -544,7 +641,7 @@ export function App() {
     addCard({
       id,
       kind: "browser",
-      url: "about:blank",
+      url: "https://google.com",
       ownerCardId: null,
       rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
       groupId: null,
@@ -569,7 +666,6 @@ export function App() {
     if (existing) {
       void window.browser.navigate(existing.id, url);
       raise(existing.id);
-      void window.browser.raise(existing.id);
       return;
     }
     const id = String(nextId.current++);
@@ -885,6 +981,38 @@ export function App() {
     }
     if (tool === "connector") return;
     startPan(e);
+    startRadialHold(e);
+  }
+
+  /** Item 1 revisited — press-and-hold as a second gatilho for the radial
+   * menu, alongside right-click (below). Only wired for the pointer
+   * tool's own branch above: pen/select/connector already do something
+   * meaningful on pointerdown (draw/marquee/nothing), where a competing
+   * hold-timer would misfire mid-gesture (e.g. drawing a single dot with
+   * the pen held briefly still would pop the menu over the stroke).
+   * `startPan` above still runs unconditionally — held still, its delta
+   * is ~0 and it's harmless; this is a second, independent listener
+   * measuring hold duration/movement, not a replacement for panning. */
+  function startRadialHold(e: React.PointerEvent) {
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const worldPoint = clientToWorld(startX, startY);
+    let moved = false;
+    const timer = window.setTimeout(() => {
+      if (moved) return;
+      cleanup();
+      setRadialMenu({ screen: { x: startX, y: startY }, world: worldPoint });
+    }, 450);
+    function onMove(ev: PointerEvent) {
+      if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 6) moved = true;
+    }
+    function cleanup() {
+      window.clearTimeout(timer);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", cleanup);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", cleanup);
   }
 
   /** Right-click on empty canvas opens the radial menu (item 1) instead of
@@ -899,6 +1027,10 @@ export function App() {
   function selectRadialAction(action: RadialAction) {
     const at = radialMenu?.world;
     setRadialMenu(null);
+    if (action === "tool-pointer") return setTool("pointer");
+    if (action === "tool-pen") return setTool("pen");
+    if (action === "tool-connector") return setTool("connector");
+    if (action === "tool-select") return setTool("select");
     if (!at) return;
     if (action === "terminal") addTerminalCard(at);
     else if (action === "files") addFilesCard(at);
@@ -909,6 +1041,30 @@ export function App() {
   }
 
   if (!loaded) return <div className="viewport" />;
+
+  // DESIGN-BACKLOG.md item 8 — boots here always (see useBoardStore's boot
+  // effect); no board is loaded (so no PTYs spawned) until the user picks
+  // one. `Titlebar` stays mounted for window controls even on Home.
+  if (activeBoardId === null) {
+    return (
+      <div className="viewport">
+        <Titlebar />
+        <UpdateBanner />
+        <Home
+          boards={boards}
+          boardCounts={boardCounts}
+          rootName={rootDisplayName(workspaceRoot)}
+          suggestedProject={suggestProjectFromCwd(DEFAULT_CWD, workspaceRoot)}
+          availableProjects={workspaceProjects}
+          onChangeRoot={changeWorkspaceRoot}
+          onOpenBoard={switchBoard}
+          onCreateBoard={createBoard}
+          onUpdateBoard={updateBoard}
+          onDeleteBoard={deleteBoard}
+        />
+      </div>
+    );
+  }
 
   const dotSize = GRID_SPACING * world.zoom;
   const backgroundStyle = backgroundCss(bgStyle, dotSize, world.panX, world.panY);
@@ -1121,9 +1277,6 @@ export function App() {
               rect={c.rect}
               zoom={world.zoom}
               zIndex={zIndex}
-              world={world}
-              viewportOrigin={viewportOrigin}
-              viewportSize={viewportSize}
               visible={isInView(c.rect, visibleRect)}
               url={c.url}
               ownerCardId={c.ownerCardId}
@@ -1270,27 +1423,34 @@ export function App() {
         summarizeDisabled={newProvider === "bash"}
         onReorganize={aiReorganize}
         onSummarize={summarizeBoard}
+        cards={cards.map((c) => ({ id: c.id, kind: c.kind, label: c.label }))}
+        kindIcon={KIND_ICON}
+        kindLabel={KIND_LABEL}
+        onJumpToCard={jumpToCard}
       />
       <Topbar
         boards={boards}
         activeBoardId={activeBoardId!}
         boardCounts={effectiveBoardCounts}
-        suggestedProject={suggestProjectFromCwd(DEFAULT_CWD)}
+        rootName={rootDisplayName(workspaceRoot)}
+        suggestedProject={suggestProjectFromCwd(DEFAULT_CWD, workspaceRoot)}
         availableProjects={workspaceProjects}
+        onChangeRoot={changeWorkspaceRoot}
         zoom={world.zoom}
         onZoomIn={() => zoomBy(ZOOM_STEP)}
         onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
+        onZoomTo={(pct) => setZoomAbs(pct / 100)}
         onFit={fitView}
         bgStyleLabel={BG_STYLE_LABEL[bgStyle]}
         onCycleBgStyle={cycleBgStyle}
         onOpenRemote={() => setShowRemotePairing(true)}
+        onGoHome={goHome}
         onSwitchBoard={switchBoard}
         onCreateBoard={createBoard}
-        onRenameBoard={renameBoard}
-        onChangeProject={changeBoardProject}
+        onUpdateBoard={updateBoard}
         onDeleteBoard={deleteBoard}
       />
-      <Hint />
+      <UpdateBanner />
       <ToastHost />
       {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
       {showRemotePairing && <RemotePairingModal onClose={() => setShowRemotePairing(false)} />}
@@ -1298,6 +1458,7 @@ export function App() {
         <RadialMenu
           x={radialMenu.screen.x}
           y={radialMenu.screen.y}
+          tool={tool}
           onSelect={selectRadialAction}
           onClose={() => setRadialMenu(null)}
         />

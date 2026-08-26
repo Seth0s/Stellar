@@ -1,7 +1,7 @@
 // The connector-drag gesture (useConnectorDrag.ts) — drag from one card's
 // body to another while the connector tool is active should draw and
 // persist a link between them. Not covered by the other smoke scripts.
-import { startApp, stopApp, connectPage, makeChecker } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9404;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-connector", import.meta.url).pathname;
@@ -11,6 +11,9 @@ const { check, finish } = makeChecker();
 try {
   const page = await connectPage(CDP_PORT);
   await new Promise((r) => setTimeout(r, 1000));
+  // DESIGN-BACKLOG.md item 8 — boots to Home now; the connector drag needs
+  // an actual board (rail) to spawn sticky notes onto.
+  await bootIntoFreshSession(page);
 
   async function spawnSticky() {
     const btn = JSON.parse(
@@ -30,10 +33,24 @@ try {
   check("two sticky cards spawned", await page.evalJs(`document.querySelectorAll(".sticky-card").length`), 2);
 
   // The two spawn near-fully overlapping (centeredSlot's 36px stagger is
-  // tiny next to a 720x560 card in a 1280x800 window) — rather than guess
-  // exposed-corner geometry, drag the second one's header (already
-  // pointer-tool-tested gesture, see CardFrame.tsx) well clear of the
-  // first before touching the connector tool at all.
+  // tiny next to an 860x660 card — DESIGN-BACKLOG.md item 12, achado 3 —
+  // in a 1280x800 window, worse now than at the old 720x560). Zoom out
+  // first (same fix smoke-group-select.mjs already uses) so there's real
+  // screen-space margin regardless of card size, THEN drag the second
+  // one's header (already pointer-tool-tested gesture, see CardFrame.tsx)
+  // well clear of the first before touching the connector tool at all.
+  const zoomOutBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = [...document.querySelectorAll("button")].find((x) => x.title === "Diminuir zoom");
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+      })()
+    `),
+  );
+  for (let i = 0; i < 6; i++) await page.click(zoomOutBtn.x, zoomOutBtn.y);
+  await new Promise((r) => setTimeout(r, 200));
+
   const secondHead = JSON.parse(
     await page.evalJs(`
       (() => {

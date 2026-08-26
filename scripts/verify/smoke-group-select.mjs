@@ -16,7 +16,7 @@
 // dragged genuinely clear of each other at all (at zoom 1 there is no
 // on-screen destination that fully separates two 720x560 cards in an
 // 1280x800 window).
-import { startApp, stopApp, connectPage, makeChecker } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9405;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-group-select", import.meta.url).pathname;
@@ -26,6 +26,8 @@ const { check, finish } = makeChecker();
 try {
   const page = await connectPage(CDP_PORT);
   await new Promise((r) => setTimeout(r, 1000));
+  // DESIGN-BACKLOG.md item 8 — boots to Home now; needs a real board first.
+  await bootIntoFreshSession(page);
 
   async function clickSelector(sel) {
     const pt = JSON.parse(

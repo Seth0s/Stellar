@@ -2,8 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
-    <title>agent-canvas</title>
+    <!-- img-src needs data: explicitly — default-src 'self' alone blocks
+         data: URIs for <img>, which is exactly what broke the QR pairing
+         code (RemotePairingModal.tsx renders `qrDataUrl`, a real,
+         correctly-generated data: URL — CSP silently killed the request
+         before it ever reached image decoding, showing a broken-image
+         icon despite the underlying data being fine) and would've hit
+         FilesCard's image previews (`fs.readImage`) the same way. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Stellar</title>
     <style>
       html, body, #root { margin: 0; height: 100%; background: #1e1e1e; }
     </style>

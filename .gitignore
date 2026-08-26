@@ -3,3 +3,6 @@ out/
 dist/
 *.log
 .verify-tmp/
+bundle-stats.html
+AGENTS.md
+DESIGN-BACKLOG.md

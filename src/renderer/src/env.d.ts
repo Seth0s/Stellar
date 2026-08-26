@@ -9,6 +9,7 @@ import type {
   SnapshotApi,
   RemoteInputApi,
   RemoteApi,
+  UpdaterApi,
 } from "../../preload/index";
 
 declare global {
@@ -23,5 +24,6 @@ declare global {
     snapshot: SnapshotApi;
     remoteInput: RemoteInputApi;
     remote: RemoteApi;
+    updater: UpdaterApi;
   }
 }

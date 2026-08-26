@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a1d24" />
+      <stop offset="1" stop-color="#14171d" />
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#45c8ff" stop-opacity="0.55" />
+      <stop offset="1" stop-color="#45c8ff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="200" fill="url(#bg)" />
+
+  <!-- connectors: three orbiting agent-nodes linked to the central star,
+       same visual language as the app's own card connectors -->
+  <g stroke="#39404d" stroke-width="10" stroke-linecap="round">
+    <line x1="512" y1="512" x2="300" y2="360" />
+    <line x1="512" y1="512" x2="724" y2="360" />
+    <line x1="512" y1="512" x2="512" y2="760" />
+  </g>
+
+  <circle cx="512" cy="512" r="230" fill="url(#glow)" />
+
+  <!-- central star (Stellar) -->
+  <path
+    d="M512 300
+       L556 468
+       L724 512
+       L556 556
+       L512 724
+       L468 556
+       L300 512
+       L468 468 Z"
+    fill="#45c8ff"
+  />
+
+  <!-- orbiting agent nodes -->
+  <circle cx="300" cy="360" r="34" fill="#8f7bff" />
+  <circle cx="724" cy="360" r="34" fill="#e8c547" />
+  <circle cx="512" cy="760" r="34" fill="#4ad87a" />
+</svg>
