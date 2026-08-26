@@ -33,7 +33,14 @@
   justify-content: space-between;
   gap: 10px;
   height: 32px;
-  padding: 0 8px 0 12px;
+  /* Both sides need >= --radius (10px) of clearance: .card-clip clips this
+     whole row to the card's rounded corners (overflow:hidden;
+     border-radius:inherit), so a button whose box reaches into the curved
+     corner area gets its own corner visibly chopped off at an angle by
+     that clip — confirmed live, that's what read as "broken header" in a
+     zoomed screenshot after the header padding was tightened below the
+     radius. */
+  padding: 0 10px;
   background: var(--panel);
   font-size: 13px;
   color: var(--muted);

@@ -1318,6 +1318,56 @@ Verificação: `tsc --noEmit`/`electron-vite build` limpos; alinhamento dos
 botões, cor computada do body/foot e o branco real da `WebContentsView`
 confirmados via CDP numa instância isolada, não só lidos no código.
 
+## 2026-08-25 — Header ainda cortando no canto + spawn centralizado na viewport
+
+Dois problemas do feedback anterior sobreviveram ao fix: o header ainda
+"quebrava" visualmente num canto (zoom no screenshot), e vários cards
+brancos (navegador) apareceram sobrepostos direto em cima de outros cards
+existentes.
+
+- **Canto do header cortando o botão de fechar**: o padding direito do
+  `.card-head` tinha caído pra `8px` no fix anterior (foco era altura, não
+  clearance de canto) — menor que `--radius: 10px`. Como `.card-clip`
+  clipa esse header inteiro pro formato arredondado do card
+  (`overflow:hidden; border-radius:inherit`), qualquer botão cujo box
+  invade a área da curva do canto tem o próprio canto cortado num ângulo
+  por esse clip — exatamente o "erro" visível no screenshot ampliado.
+  Fix: padding simétrico `0 10px`, igual ou maior que o radius dos dois
+  lados. Confirmado via CDP: folga de 10px exata entre a borda do botão de
+  fechar e a borda do `.card-clip`.
+- **Cards brancos sobrepostos**: não era bug do navegador em si — era
+  posicionamento de spawn. `cascadeSlot(index)` sempre ancorava em
+  `(40,40)` em coordenadas de **mundo**, fixo, independente de pra onde o
+  usuário tivesse dado pan/zoom. Card novo podia cair empilhado
+  exatamente sobre um card existente (fora ou dentro da área visível) —
+  pra um card de navegador isso é pior que pra qualquer outro tipo, já
+  que `WebContentsView` pinta **acima de tudo** independente de z-index
+  do DOM, então um branco sobreposto engolia visualmente o card por
+  baixo, lendo como bug do navegador quando o problema real era todo tipo
+  de card podendo empilhar no mesmo lugar. Fix: `centeredSlot(visibleRect,
+  index)` (`board-model.ts`) substitui `cascadeSlot` em todos os 6 pontos
+  de spawn via rail/agent (`addTerminalCard`, `addFilesCard`,
+  `addChangesCard`, `addStickyCard`, `addBrowserCard`, `openBrowserFor`) —
+  centra no meio do `visibleRect` atual (o retângulo em espaço-mundo que a
+  viewport mostra agora, já calculado em `App.tsx` via
+  `viewportWorldRect`) em vez da origem fixa, com o mesmo leve stagger por
+  índice de antes (agora ciclando a cada 5 pra nunca derivar pra fora da
+  área visível). `cascadeSlot` continua existindo só pro card bash
+  semeado automaticamente num board novo/vazio (`loadBoard`) — nesse
+  momento o world já foi resetado pra identidade, então origem de mundo e
+  origem de tela coincidem mesmo.
+- **Não implementado, ficou pra depois se o centralizado não for
+  suficiente**: spawn por drag a partir do rail (arrastar o ícone da
+  ferramenta até o ponto exato do canvas) — o usuário sugeriu como
+  alternativa; centralizar na viewport resolve a sobreposição sem exigir
+  um gesto de drag novo, então foi a rota escolhida primeiro.
+
+Verificação: `tsc --noEmit`/`electron-vite build` limpos; testado ao vivo
+via CDP dando pan pra longe da origem (world (40,40) saiu completamente
+da viewport) e criando um card novo — landing centralizado no que estava
+visível, não na origem antiga; screenshot confirma canto do header limpo
+e nenhuma barra de acento.
+
 ## Comandos
 
 ```bash

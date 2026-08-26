@@ -15,6 +15,7 @@ import { toast } from "./useToast";
 import {
   bboxOf,
   cascadeSlot,
+  centeredSlot,
   clipLineToRect,
   hitTest,
   isInView,
@@ -475,30 +476,44 @@ export function App() {
       continueLast: newResumeId.trim() === "" && newContinueLast,
       model: newModel.trim() || null,
       systemPrompt: newSystemPrompt.trim() || null,
-      rect: cascadeSlot(cards.length),
+      rect: centeredSlot(visibleRect, cards.length),
       groupId: null,
     });
   }
 
   function addFilesCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "files", root: DEFAULT_CWD, rect: cascadeSlot(cards.length), groupId: null });
+    addCard({ id, kind: "files", root: DEFAULT_CWD, rect: centeredSlot(visibleRect, cards.length), groupId: null });
   }
 
   function addChangesCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "changes", root: DEFAULT_CWD, rect: cascadeSlot(cards.length), groupId: null });
+    addCard({ id, kind: "changes", root: DEFAULT_CWD, rect: centeredSlot(visibleRect, cards.length), groupId: null });
   }
 
   function addStickyCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "sticky", content: "", color: "yellow", rect: cascadeSlot(cards.length), groupId: null });
+    addCard({
+      id,
+      kind: "sticky",
+      content: "",
+      color: "yellow",
+      rect: centeredSlot(visibleRect, cards.length),
+      groupId: null,
+    });
   }
 
   /** Human path, via the rail button — no owner, no consent gate (see AGENTS.md). */
   function addBrowserCard() {
     const id = String(nextId.current++);
-    addCard({ id, kind: "browser", url: "about:blank", ownerCardId: null, rect: cascadeSlot(cards.length), groupId: null });
+    addCard({
+      id,
+      kind: "browser",
+      url: "about:blank",
+      ownerCardId: null,
+      rect: centeredSlot(visibleRect, cards.length),
+      groupId: null,
+    });
   }
 
   /** Agent-requested (post-Allow) or a seenUrls chip click — both are already-consented. Reuses this owner's existing browser card if one is open, else opens a new one. No toast here — this path isn't the human "I just clicked +browser" moment the toasts above are for. */
@@ -516,7 +531,7 @@ export function App() {
       kind: "browser",
       url,
       ownerCardId,
-      rect: cascadeSlot(cardsRef.current.length),
+      rect: centeredSlot(visibleRect, cardsRef.current.length),
       groupId: null,
     };
     setCards((prev) => [...prev, card]);

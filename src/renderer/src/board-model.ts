@@ -56,21 +56,55 @@ export function hitTest(items: BoardItem[], point: { x: number; y: number }, ord
   return null;
 }
 
+// Sized so a freshly spawned terminal lands close to 80×24 (the PTY's own
+// initial size — DEFAULT_COLS/ROWS in useTerminal.ts) instead of squeezing
+// it to ~47×15: most CLI TUIs (Claude Code, Codex, Cursor) assume something
+// near a standard terminal width and render broken/wrapped box drawing well
+// below that. Confirmed empirically via CDP: 440×380 (the old default)
+// measured out to 47 cols × 15 rows.
+const SPAWN_W = 720;
+const SPAWN_H = 560;
+
 /**
- * Cascading default position for the n-th item created, when it has no saved
- * rect yet. Sized so a freshly spawned terminal lands close to 80×24 (the
- * PTY's own initial size — DEFAULT_COLS/ROWS in useTerminal.ts) instead of
- * squeezing it to ~47×15: most CLI TUIs (Claude Code, Codex, Cursor) assume
- * something near a standard terminal width and render broken/wrapped box
- * drawing well below that. Confirmed empirically via CDP: the prior 440×380
- * measured out to 47 cols × 15 rows.
+ * Cascading default position for the n-th item created, anchored at a fixed
+ * world-space origin. Only used for the very first card of a brand new
+ * board (see App.tsx's loadBoard) — the world transform has just been reset
+ * to identity right before that, so world-space origin and screen origin
+ * coincide anyway. Every other spawn path uses `centeredSlot` below.
  */
 export function cascadeSlot(index: number): Rect {
   return {
     x: 40 + (index % 3) * 740,
     y: 40 + Math.floor(index / 3) * 580,
-    w: 720,
-    h: 560,
+    w: SPAWN_W,
+    h: SPAWN_H,
+  };
+}
+
+/**
+ * Default position for the n-th item created via a rail button, centered on
+ * whatever part of the board the user is actually looking at (`visibleRect`
+ * — the world-space rect the viewport currently shows) instead of a fixed
+ * world-space origin. `cascadeSlot` planted every new card at the same
+ * (40,40)-anchored spot regardless of where the user had panned/zoomed to —
+ * fine the first few times, but once the user had panned away, a new card
+ * (especially a browser card: a native WebContentsView, which paints above
+ * every DOM element regardless of z-index) could land stacked exactly on
+ * top of an existing card far outside the visible area, or directly over
+ * one still in view, visually swallowing it. Small per-index stagger (same
+ * idea as cascadeSlot, just centered) so several quick spawns still fan out
+ * instead of exact-stacking; cycles every 5 so it never drifts off the
+ * visible area after many spawns.
+ */
+export function centeredSlot(visibleRect: Rect, index: number): Rect {
+  const cx = visibleRect.x + visibleRect.w / 2;
+  const cy = visibleRect.y + visibleRect.h / 2;
+  const stagger = (index % 5) * 36;
+  return {
+    x: cx - SPAWN_W / 2 + stagger,
+    y: cy - SPAWN_H / 2 + stagger,
+    w: SPAWN_W,
+    h: SPAWN_H,
   };
 }
 
