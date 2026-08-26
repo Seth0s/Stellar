@@ -6,6 +6,14 @@ import "@fontsource/manrope/latin-600.css";
 import "@fontsource/manrope/latin-700.css";
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-500.css";
+// Required by @xterm/xterm itself, not optional theming: without this,
+// xterm's own internal glyph-width measurement helper
+// (.xterm-char-measure-element — literal "$$$$…"/"vvvv…" strings it uses to
+// measure DOM-renderer character metrics) renders inline and visible instead
+// of hidden (this stylesheet is what applies `visibility:hidden;
+// position:absolute` to it) — confirmed via CDP DOM inspection as the exact
+// cause of the "garbage characters before terminal content" symptom.
+import "@xterm/xterm/css/xterm.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 

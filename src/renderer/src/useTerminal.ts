@@ -39,11 +39,16 @@ export function useTerminal(
   const ptyIdRef = useRef<string | null>(null);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  // Spawn-time-only options, read via ref instead of effect deps below — see
+  // the comment on Effect 1's dependency array for why.
+  const spawnOptsRef = useRef({ resumeId, continueLast, model, systemPrompt });
+  spawnOptsRef.current = { resumeId, continueLast, model, systemPrompt };
 
   // Effect 1: PTY lifecycle. Independent of the container/visible — spawns
   // once per identity and keeps running regardless of on-screen visibility.
   useEffect(() => {
     let disposed = false;
+    const { resumeId, continueLast, model, systemPrompt } = spawnOptsRef.current;
     const spawnOpts = {
       resumeId: resumeId ?? undefined,
       continueLast,
@@ -83,7 +88,21 @@ export function useTerminal(
       ptyIdRef.current = null;
       setPtyId(null);
     };
-  }, [id, providerId, cwd, resumeId, continueLast, model, systemPrompt]);
+    // resumeId/continueLast/model/systemPrompt are deliberately NOT deps.
+    // Confirmed via CDP: App.tsx's resumeIdDiscovered() writes a freshly
+    // *discovered* session id back into this same live card's `resumeId`
+    // prop (so a future app restart can resume it) — with these in the dep
+    // array, that write immediately re-ran this whole effect, killing the
+    // just-spawned, still-starting process and respawning it with
+    // `--resume <id>` on a session barely a few hundred ms old. cursor-agent
+    // in particular exits(0) right away when asked to resume that; other
+    // providers likely tolerate it more quietly, but it's wrong for all of
+    // them — none of these four should ever force a respawn of an already
+    // running session. They're spawn-time-only options (see spawnOptsRef
+    // above), not identity: only id/providerId/cwd changing means "this is
+    // actually a different session, tear down and start over."
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, providerId, cwd]);
 
   // Effect 2: xterm renderer. Only exists while visible — this is the part
   // viewport culling is for. Never touches the PTY.

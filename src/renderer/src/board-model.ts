@@ -56,13 +56,21 @@ export function hitTest(items: BoardItem[], point: { x: number; y: number }, ord
   return null;
 }
 
-/** Cascading default position for the n-th item created, when it has no saved rect yet. */
+/**
+ * Cascading default position for the n-th item created, when it has no saved
+ * rect yet. Sized so a freshly spawned terminal lands close to 80×24 (the
+ * PTY's own initial size — DEFAULT_COLS/ROWS in useTerminal.ts) instead of
+ * squeezing it to ~47×15: most CLI TUIs (Claude Code, Codex, Cursor) assume
+ * something near a standard terminal width and render broken/wrapped box
+ * drawing well below that. Confirmed empirically via CDP: the prior 440×380
+ * measured out to 47 cols × 15 rows.
+ */
 export function cascadeSlot(index: number): Rect {
   return {
-    x: 40 + (index % 3) * 460,
-    y: 40 + Math.floor(index / 3) * 400,
-    w: 440,
-    h: 380,
+    x: 40 + (index % 3) * 740,
+    y: 40 + Math.floor(index / 3) * 580,
+    w: 720,
+    h: 560,
   };
 }
 

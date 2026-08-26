@@ -1171,6 +1171,97 @@ termina só com `ws.close()` (sem `process.exit(0)` explícito) pode travar
 o processo Node por minutos sem razão aparente — sempre terminar scripts
 de verificação com `process.exit(0)` depois do `ws.close()`.
 
+## 2026-08-25 — Picker real de projeto + 4 problemas de terminal/navegador reportados ao vivo
+
+**Rodada seguinte de feedback ao vivo**, dois lotes.
+
+**Lote 1** ("não consigo selecionar o workspace para o projeto"): o campo
+de projeto no popover de sessão era texto livre — usuário queria
+*selecionar*, não digitar às cegas. `Topbar.tsx` ganhou `ProjectPicker`,
+um `<select>` real alimentado pelos diretórios irmãos reais em
+`WORKSPACE_ROOT` (`window.fs.list`) união com os projetos já em uso pelas
+boards existentes, com fallback "+ novo projeto…" pra texto livre quando o
+nome ainda não é um diretório real. O relato de "background ainda encobre
+terminal/navegador" desta mesma mensagem não reproduziu numa instância
+fresca (screenshot direto do target da `WebContentsView` confirmou
+conteúdo renderizando) — mas a rodada seguinte trouxe uma screenshot real
+que provou o navegador com tela preta genuína (abaixo), então essa parte
+do relato original só estava parcialmente errada.
+
+**Lote 2**, screenshot de 4 terminais reais (Claude/Bash/Codex/Cursor), 4
+problemas — todos root-caused e corrigidos com verificação via CDP, não
+só leitura de código:
+
+- **Spam de caracteres antes do conteúdo do terminal**: NÃO era bug de
+  pipeline/duplicação (investigação inicial suspeitou de entrega duplicada
+  main→renderer — descartado depois de instrumentar `pty-registry.ts` com
+  logging de stack trace e confirmar exatamente 1 flush por spawn). Causa
+  real, achada inspecionando o `innerHTML` real do `.terminal-card-body`
+  via CDP: o `$$$$$$$$…`/`vvvvvvvv…` visível é o próprio helper interno de
+  medição de largura de glifo do renderer DOM do xterm.js
+  (`.xterm-char-measure-element`) — literalmente as strings que a lib usa
+  pra medir métricas de caractere. Ele **precisa** de
+  `@xterm/xterm/css/xterm.css` (`visibility:hidden; position:absolute`
+  nessa classe) pra ficar invisível, e esse CSS nunca foi importado em
+  lugar nenhum de `src/`. Fix: `import "@xterm/xterm/css/xterm.css"` em
+  `main.tsx`. Confirmado: o mesmo card que antes renderizava
+  `$$$$…vvvv…\n(base) lucas@...` agora renderiza só o prompt limpo.
+- **Tamanho padrão de spawn dos cards** (proposta do próprio usuário):
+  `cascadeSlot()` (`board-model.ts`) criava cards de 440×380 — medido ao
+  vivo via CDP, isso dava só **47 cols × 15 rows** de terminal útil, bem
+  abaixo do que qualquer TUI de CLI (Claude Code, Codex, Cursor) espera
+  (a maioria assume perto de 80×24 e quebra renderização de caixas/bordas
+  abaixo disso — exatamente o "afeta a interface de cada CLI" que o
+  usuário descreveu). Novo tamanho 720×560 mede ~78×24, perto do
+  `DEFAULT_COLS`/`DEFAULT_ROWS` (80×24) que o PTY já usa como spawn size —
+  cascata ajustada de 460/400 pra 740/580 de step pra manter o espaçamento
+  entre cards.
+- **Navegador nasce com tela preta**: já tinha sido "corrigido" numa
+  rodada anterior (`view.setBackgroundColor(...)`), mas o valor usado
+  (`#1a1d24`, o token `--panel`) é um quase-preto — a correção anterior
+  resolvia só o caso de falha de composição (mostrava o painel escuro em
+  vez do preto absoluto do Electron), não o caso comum de "página em
+  branco" (que também é escura com esse valor). Trocado pra `#ffffff`,
+  convenção padrão de aba/página em branco de navegador — branco não pode
+  ler como "quebrado" independente de qual dos dois cenários está
+  acontecendo.
+- **Cursor mostra "processo encerrado (0)" logo após o spawn** — o mais
+  sério dos 4, achado só depois de instrumentar `useTerminal.ts` com log
+  de mount/cleanup do Effect 1: o processo cursor-agent era **matado pelo
+  próprio app** ~1.5s depois do spawn, não travando sozinho. Causa: o
+  hook de descoberta de sessão (`onSessionFound`/`resumeIdDiscovered` em
+  `App.tsx`) escreve o id de sessão recém-descoberto de volta no campo
+  `resumeId` do **mesmo card ainda rodando** (pensado pra persistir e
+  permitir resume num restart futuro do app) — mas como esse card
+  re-renderiza passando `resumeId` como prop pro `useTerminal`, e
+  `resumeId` estava no array de dependências do Effect 1 (spawn/kill do
+  PTY), a escrita disparava o cleanup do effect **imediatamente**, matando
+  o processo recém-nascido e respawnando com `--resume <id>` numa sessão
+  que mal tinha ~1.5s de vida. `cursor-agent` especificamente sai com
+  código 0 ao ser pedido pra resumir isso; outros providers podem tolerar
+  melhor (silenciosamente) mas o respawn indevido acontecia pra todos.
+  Confirmado ao vivo via CDP (log de mount mostrando `resumeId=null` →
+  cleanup → mount de novo com `resumeId=<uuid>`, ~1.5s depois, mesmo id de
+  card). Fix: `resumeId`/`continueLast`/`model`/`systemPrompt` viram
+  "spawn-time-only" — lidos de um `ref` atualizado a cada render em vez de
+  estarem no array de dependências; só `id`/`providerId`/`cwd` mudando
+  ainda força um respawn real (mudança genuína de identidade da sessão).
+
+**Padrão de bug que se repetiu nesta rodada**: descoberto tarde no
+processo, não cedo — dois dos quatro problemas (spam de caracteres,
+cursor saindo) pareciam a primeira vista sintomas de timing/race
+assíncrono (entrega duplicada, resize concorrente), e só a inspeção direta
+do DOM real (`innerHTML`, não `innerText`) e do array de dependências de
+efeito (não só a lógica dentro dele) revelou as causas reais — nenhuma das
+duas tinha relação com concorrência. Lição: quando a hipótese óbvia de
+"race condition" não se confirma isolando cada peça do pipeline, checar
+primeiro o que está de fato no DOM/nas deps antes de assumir timing.
+
+Verificação: `tsc --noEmit`/`electron-vite build` limpos; cada um dos 4
+fixes confirmado ao vivo via CDP numa instância isolada (nunca a sessão
+`npm run dev` do usuário) — nenhum "resolvido" declarado sem ver
+funcionando de fato, mesma prática já registrada nas rodadas anteriores.
+
 ## Comandos
 
 ```bash

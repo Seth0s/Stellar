@@ -44,10 +44,14 @@ export function createBrowserRegistry(
     // app.disableHardwareAcceleration() (see main/index.ts) this view's own
     // paint can lag/fail on first composite on this machine's
     // software-rendering path, and the black default shows through instead
-    // of the page. Matches --surface so a slow/failed paint at least reads
-    // as "loading", not "broken". (Not a constructor option on
-    // WebContentsView — set via the View method instead.)
-    view.setBackgroundColor("#1a1d24");
+    // of the page. A prior fix here set this to `--surface` (#1a1d24), but
+    // that's a dark near-black itself — a slow/failed paint still reads as
+    // "broken", not "loading" (confirmed live: user still saw a solid black
+    // card on spawn). White matches the browser convention for a blank
+    // tab/page-still-loading and is visually distinct from an actually
+    // broken render. (Not a constructor option on WebContentsView — set via
+    // the View method instead.)
+    view.setBackgroundColor("#ffffff");
     entries.set(id, { view });
     win.contentView.addChildView(view);
 
