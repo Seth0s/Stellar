@@ -386,19 +386,26 @@ Critério de manutenção documentado no próprio arquivo: atualizar quando a
 FORMA do sistema mudar (processo/canal/kind novo), não a cada feature
 pequena.
 
-### Fase 2 — extração de hooks do `App.tsx` — pendente
+### Fase 2 — extração de hooks do `App.tsx` — em andamento (2/4)
 
-**Recomendação de decomposição da fase 2, pra quando for feita**:
-- `useWorldTransform` — pan/zoom/`viewportWorldRect`/`fitView`/`zoomBy`.
-- `useCardSelection` — `selectedIds`/marquee/group/ungroup.
-- `useConnectorDrag` — o gesto de arrastar conector inteiro.
+- ~~`useWorldTransform`~~ — feito (pan/zoom/`viewportWorldRect`/`fitView`/
+  `zoomBy`/`clientToWorld`/`startPan`, recebe `cardsRef` como parâmetro).
+- ~~`useConnectorDrag`~~ — feito (`connectorDraft`/`startConnectorDrag`,
+  recebe `clientToWorld`/`cardsRef`/`order`/`onConnect` como parâmetros).
+  **Achou um bug real, não relacionado ao refactor** — ver `AGENTS.md`:
+  spawn pelo rail de 5 dos 7 tipos de card caía em `(0,0)`/`NaN` por causa
+  de um `SyntheticEvent` do React vazando pro parâmetro opcional `at?:
+  Point` (introduzido na rodada do menu radial, item 1). Achado só porque
+  o smoke script novo do conector finalmente exercitou esse caminho.
+- `useCardSelection` — `selectedIds`/marquee/group/ungroup — pendente.
 - `useBoardStore` — load/switch/create/rename board + cards CRUD contra
-  `window.store`.
-Cada hook já teria fronteira natural (nenhum dependeria de estado interno
-dos outros, só de `cards`/`world` como valores passados). Com o harness
-da fase 1 pronto, essa extração pode ser verificada rodando `npm run
-verify` depois de cada hook extraído, em vez de reinventar a verificação
-CDP na hora.
+  `window.store` — pendente.
+
+Cada hook já tem fronteira natural (nenhum depende de estado interno dos
+outros, só de `cards`/`world` como valores passados). Com o harness da
+fase 1 pronto, cada extração é verificada rodando `npm run verify` depois
+de cada hook extraído, em vez de reinventar a verificação CDP na hora —
+foi exatamente esse hábito que achou o bug do `useConnectorDrag` acima.
 
 ## 4 (deferida). Registro declarativo de tipo de card
 
