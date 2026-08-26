@@ -690,6 +690,12 @@ select.resume-input {
   border-color: var(--foam);
 }
 
+.modal-actions .danger {
+  background: var(--danger);
+  color: var(--on-accent);
+  border-color: var(--danger);
+}
+
 .shortcuts-modal {
   max-width: 560px;
 }
