@@ -505,7 +505,7 @@ projetos além do popover raso do `Topbar`.
   sempre, ou só quando não há sessão salva? Como voltar pra ela a partir
   do canvas (atalho? botão no `Topbar`?).
 
-## 9. Navegador embutido — abordagem a revisar (não só bug pontual)
+## 9. Navegador embutido — GPU religada, aguardando confirmação ao vivo
 
 **Contexto**: histórico longo e não resolvido em `AGENTS.md` (ver
 2026-08-25 "Navegador nasce com tela preta", "navegador preto de novo",
@@ -570,6 +570,46 @@ investigar mais". Só um humano olhando a tela real resolve essa
 pergunta. **Pedido ao usuário**: testar ao vivo — abrir um navegador,
 navegar pra uma URL real (não só deixar em `about:blank`), e descrever
 exatamente o que aparece.
+
+**Testado ao vivo pelo usuário em 2026-08-26: continua não funcionando** —
+tela branca ao invocar, e um erro novo no log ao abrir terminal
+(`Frame latency is negative`, `components/viz/service/display/display.cc`)
+— sintoma do compositor gráfico do Chromium rodando por software sem
+sinal real de vsync de GPU, mesma causa de fundo do navegador, não um bug
+separado.
+
+**Investigação de sistema, 2026-08-26**: usuário pediu investigar o
+conflito NVIDIA/Mesa GBM no nível de sistema (root cause original do
+crash que motivou desabilitar GPU). Achado: a máquina hoje tem driver
+NVIDIA 610.57.04 (compilado 29/jul/2026), mais recente que quando o
+crash original foi diagnosticado (2026-08-25) — config de EGL/GBM
+saudável (`10_nvidia.json` com prioridade certa, `nvidia-drm_gbm.so`
+presente e batendo com a versão do driver, `/dev/dri/renderD128` com
+`DRIVER=nvidia`), zero segfault desde o boot. **Retestado
+empiricamente** (não assumido corrigido): duas rodadas isoladas com GPU
+religada — boot completo, abrir navegador, navegar pra URL real, 6s sob
+carga — zero segfault, zero crash de processo de GPU, `journalctl -k`
+limpo nas duas. **GPU religada em `main/index.ts`** (linha comentada,
+não apagada — fácil reverter se o crash original reaparecer).
+`npm run verify` completo depois: 33 checks, PASS, zero segfault durante
+a suite inteira.
+
+**Efeito colateral achado nessa investigação, resolvido à parte**:
+usuário reportou erro de "assinatura de pacote" tentando atualizar,
+achando que era Secure Boot bloqueando o driver — não era. Diagnosticado:
+módulo do kernel NVIDIA já carregado e assinado corretamente (MOK
+enrolado, sem pendência), driver funcionando. O erro real era
+`/etc/pki/tls/certs/ca-bundle.crt` (symlink agregado de certificados CA)
+faltando no sistema — bloqueava só a validação HTTPS de um repositório
+específico (`nvidia.github.io/libnvidia-container`, container toolkit,
+não o driver de vídeo). Fix indicado ao usuário: `sudo update-ca-trust
+extract` — comando de sistema, fora do escopo deste repo, não aplicado
+por mim.
+
+**Item continua aberto até confirmação ao vivo**: GPU religada e
+verificada sem crash em instância isolada, mas o usuário ainda precisa
+reiniciar a sessão real (`npm run dev`) e confirmar que o navegador
+mostra conteúdo de verdade agora — só isso fecha o item de fato.
 
 ## 10. Terminal — polimento visual + seleção — feito (3/3 achados)
 

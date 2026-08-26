@@ -2164,6 +2164,75 @@ snapshot, item 4).
 `about:blank`) e descrever exatamente o que aparece na tela de verdade.
 Só isso resolve a pergunta que CDP não consegue responder aqui.
 
+## 2026-08-26 — Item 9: GPU religada — driver atualizado, crash original não reproduz mais
+
+Usuário testou ao vivo o navegador: continua com tela branca, mais um
+erro novo (`Frame latency is negative`, `viz/service/display/display.cc`)
+ao abrir terminal — sintoma do compositor gráfico rodando 100% por
+software (sem GPU), não específico do navegador. Pediu pra investigar o
+conflito NVIDIA/Mesa no nível de sistema, mesmo que precisasse mudar
+"toda a infraestrutura".
+
+**Achado antes de tocar em qualquer coisa**: `CentralByte/AGENTS.md`
+(projeto irmão, Tauri, mesma máquina) documenta o **mesmo tipo de
+instabilidade** com o motor WebKitGTK — corrupção de heap real
+(`SIGABRT`, confirmado via `coredumpctl`) sob composição por GPU com
+múltiplos webviews, corrigido lá também desabilitando composição por GPU
+(`WEBKIT_DISABLE_COMPOSITING_MODE=1`, virou padrão de sessão). Ou seja:
+os dois motores de browser disponíveis no Linux (Chromium/Electron,
+WebKitGTK/Tauri) já bateram em problema sério de GPU nesta máquina —
+forte indício de que a causa é a pilha de driver da máquina (NVIDIA +
+Wayland), não escolha de framework. Apresentado ao usuário antes de
+qualquer decisão — ele escolheu investigar a causa raiz de sistema em vez
+de trocar de framework.
+
+**Diagnóstico de sistema**: `lspci -k` confirma NVIDIA RTX 5060 Ti,
+driver 610.57.04 (compilado 29/jul/2026 — mais recente que quando o
+crash original foi diagnosticado em 2026-08-25). `nvidia-smi` mostra a
+GPU ativa. Config EGL/GBM saudável: `/usr/share/glvnd/egl_vendor.d/`
+prioriza nvidia corretamente (`10_nvidia.json` < `50_mesa.json`),
+`/usr/lib64/gbm/nvidia-drm_gbm.so` existe e bate com a versão do driver,
+`/dev/dri/renderD128` reporta `DRIVER=nvidia`. Zero segfault em
+`journalctl -k` desde o boot. Módulo do kernel carregado e assinado
+corretamente (Secure Boot habilitado, MOK enrolado, sem pendência —
+confirmado via `mokutil`).
+
+**Reteste empírico do crash original, não assumido corrigido**: patcheei
+temporariamente `out/main/index.js` (build já compilado, nunca o
+código-fonte commitado) comentando `app.disableHardwareAcceleration()`,
+rodei duas instâncias isoladas via `scripts/verify/cdp-client.mjs`: boot
+completo + abrir navegador (1ª rodada), boot + navegador + navegar pra
+`https://example.com` + 6s sob carga (2ª rodada, cenário mais parecido
+com uso real). **Zero segfault, zero crash de processo de GPU nas duas**
+— `journalctl -k --since <início do teste>` limpo. Arquivo compilado
+restaurado ao original depois do teste (`out/` é gitignored, nunca ficou
+sujo no git).
+
+**Fix aplicado**: `app.disableHardwareAcceleration()` comentada (não
+apagada) em `main/index.ts`, com comentário novo explicando a
+investigação e a condição de reverter (se o crash original voltar a
+reproduzir, é a API certa pra esse problema — descomentar, não trocar por
+outra coisa). `npm run verify` completo depois: 33 checks, PASS, zero
+segfault durante a suite inteira (confirmado via `journalctl -k` no
+período do teste).
+
+**Efeito colateral resolvido à parte, não é bug deste app**: durante a
+investigação o usuário reportou erro de "assinatura de pacote" tentando
+`dnf update`, achando que era bloqueio de Secure Boot no driver. Não era
+— o módulo já carrega assinado e funcionando. Erro real:
+`/etc/pki/tls/certs/ca-bundle.crt` (symlink agregado de certificados CA,
+gerado por `update-ca-trust`, não rastreado por RPM) estava faltando no
+sistema — bloqueava só a validação HTTPS de um repositório específico
+(`nvidia.github.io/libnvidia-container`, ferramenta de container, não o
+driver de vídeo). Indicado ao usuário: `sudo update-ca-trust extract` —
+comando de sistema, fora deste repositório, não executado por mim.
+
+**Item 9 continua aberto**: GPU religada e verificada sem crash em
+instâncias isoladas, mas falta o usuário reiniciar a sessão real
+(`npm run dev`, que caiu em algum momento durante a investigação — não
+por ação minha) e confirmar ao vivo que o navegador finalmente mostra
+conteúdo de verdade. Só isso fecha o item.
+
 ## Comandos
 
 ```bash
