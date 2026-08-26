@@ -330,26 +330,74 @@ retângulo liso em vez do conteúdo real. Documentado no código
 (capturar o target da `WebContentsView` separadamente e compor por cima,
 não feito ainda).
 
-## 5. Organização de código
+## 5. Organização de código — reescopado 2026-08-26, pensando IA-first
 
-**Estado atual**: `App.tsx` está com ~1450 linhas — estado de
-cards/boards/seleção/mundo (pan/zoom)/drag de conector/marquee/toda a
-lógica de IPC de store, tudo num componente só.
+**Pedido**: revisitar organização de código pensando "IA first" — o que
+torna este código mais barato/seguro de um agente (eu mesmo, em sessões
+futuras) editar — mais documentação de estado atual (não só changelog) e
+system design, considerando o padrão real destes backlogs (features
+pequenas e frequentes, cada uma tocando vários arquivos espalhados).
 
-**Por que não entrou nesta rodada**: um refactor de arquivo desse tamanho,
-no meio de uma rodada que já tocou header/close/rename/fundo em quase
-todo componente de card, é o oposto de "aprimoramento aditivo" — é
-exatamente o tipo de mudança que precisa da própria atenção (e dos
-próprios testes de regressão), não cabe como rodapé de outra tarefa.
+**Escopo aprovado pelo usuário nesta rodada**: fases 1 (harness de
+verificação) + 2 (extração de hooks do `App.tsx`) + 3 (`SYSTEM.md`). Fase
+4 (registro declarativo de tipo de card) fica pra rodada própria — maior
+risco de regressão, toca todo card existente.
 
-**Recomendação de decomposição, pra quando for feito**:
+### Fase 1 — harness de verificação reutilizável (`scripts/verify/`) — feito
+
+Achado real desta sessão, não só do backlog original: o mesmo boilerplate
+de "achar o target CDP, abrir WebSocket, request/response por id,
+evalJs" foi escrito à mão do zero umas seis vezes numa sessão só.
+`scripts/verify/cdp-client.mjs` (helper reutilizável — `startApp`/
+`stopApp`/`connectPage`/`evalJs`/`click`/`makeChecker`) +
+`smoke-boot.mjs`/`smoke-card-lifecycle.mjs`/`smoke-remote-control.mjs`
+(scripts reais, não hipotéticos). `npm run verify` builda e roda os três.
+
+**Três bugs reais achados e corrigidos construindo o próprio harness**
+(nenhum no app — todos no harness):
+1. `node_modules/.bin/electron` é ele mesmo um wrapper Node (`cli.js`)
+   que spawna o binário real do Electron como filho — matar o wrapper
+   deixava o Electron de verdade órfão, rodando pra sempre. Fix:
+   `detached: true` no spawn + matar o grupo de processo inteiro
+   (`process.kill(-pid, sinal)`) em vez de só o PID do wrapper.
+2. `stopApp` inicial usava o endpoint CDP `/json/close/<pageId>` pra
+   fechar a janela — **esse endpoint específico trava sem nunca
+   responder**, mesmo com o app fechando de verdade e rápido por conta
+   própria (confirmado comparando: chamar `window.winControls.close()` —
+   o mesmo IPC que o botão real usa — fecha o processo em menos de 1s
+   quando não passa pelo `/json/close`). Não é bug do app, é uma
+   peculiaridade do CDP do Electron nesse endpoint específico — trocado
+   por SIGTERM direto no processo, com SIGKILL de garantia.
+3. `--user-data-dir` não era limpo entre execuções — estado do SQLite
+   (cards de runs anteriores) se acumulava, quebrando suposições tipo
+   "só tem o card bash auto-seedado" de forma silenciosa e intermitente.
+   Fix: `startApp` sempre apaga o dir antes de subir.
+
+### Fase 2 — extração de hooks do `App.tsx` — pendente
+### Fase 3 — `SYSTEM.md` (estado atual, não histórico) — pendente
+
+**Recomendação de decomposição da fase 2, pra quando for feita**:
 - `useWorldTransform` — pan/zoom/`viewportWorldRect`/`fitView`/`zoomBy`.
 - `useCardSelection` — `selectedIds`/marquee/group/ungroup.
 - `useConnectorDrag` — o gesto de arrastar conector inteiro.
 - `useBoardStore` — load/switch/create/rename board + cards CRUD contra
   `window.store`.
-Cada hook already teria fronteira natural (nenhum dependeria de estado
-interno dos outros, só de `cards`/`world` como valores passados).
+Cada hook já teria fronteira natural (nenhum dependeria de estado interno
+dos outros, só de `cards`/`world` como valores passados). Com o harness
+da fase 1 pronto, essa extração pode ser verificada rodando `npm run
+verify` depois de cada hook extraído, em vez de reinventar a verificação
+CDP na hora.
+
+## 4 (deferida). Registro declarativo de tipo de card
+
+Hoje adicionar 1 kind de card toca ~7-8 lugares espalhados no `App.tsx` e
+`icons.tsx` (union type, `KIND_LABEL`, `toRow`, `fromRow`, `addXCard`,
+branch de render, botão do Rail) — fonte real de erro nesta própria
+sessão (build quebrou 3x ao adicionar `remote-window`, cada vez por um
+lugar esquecido, só pego pelo `tsc`). Proposta: `cards/registry.ts`
+central reduzindo isso a 1-2 lugares. Maior risco — mexe em todo card
+existente — fica pra depois das fases 1-3 acima reduzirem o tamanho/risco
+da superfície.
 
 ## 6. Otimização
 
