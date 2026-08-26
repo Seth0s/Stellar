@@ -1967,6 +1967,67 @@ gesto em vez de ser "infinito". Fica registrado como próximo passo
 possível, não decidido ainda — perguntar ao usuário antes de tentar
 qualquer coisa nova aqui.
 
+## 2026-08-26 — 3 crashes reais ao fechar o app, achados durante investigação de outro item
+
+Investigando a "linha fina na direita do terminal" (item 10, achado 1) via
+CDP, rodei alguns scripts ad hoc isolados (não os `smoke-*.mjs` do
+harness) — e nesse meio-tempo o usuário reportou dois crashes reais na
+**sua própria sessão** (`npm run dev`), com screenshot dos diálogos
+nativos de erro do Electron. Investigado, achados 3 bugs reais — só o
+primeiro foi causado por mim, os outros dois já existiam:
+
+1. **Culpa minha — instância de teste colidiu na porta 4488 real**:
+   `remote-server.ts` sempre bindava a porta fixa 4488, igual em toda
+   instância do app, inclusive as isoladas (`--user-data-dir` próprio) que
+   o harness de verificação sobe. Uma delas ficou presa (nunca respondeu
+   ao CDP dentro do timeout) segurando a porta, e a sessão real do usuário
+   bateu em `EADDRINUSE` ao tentar (re)iniciar — exatamente o segundo
+   screenshot que ele mandou. **Fix**: porta agora lida de
+   `process.env.AGENT_CANVAS_REMOTE_PORT` com fallback pra 4488
+   (`main/index.ts`); `scripts/verify/cdp-client.mjs`'s `startApp` sempre
+   passa `AGENT_CANVAS_REMOTE_PORT=cdpPort+30000` pro processo filho — uma
+   instância de teste nunca mais toca a porta real.
+2. **Bug pré-existente — `win.on("closed")` acessando janela já
+   destruída**: `browserRegistry.destroyAll()` rodava no cleanup de
+   `"closed"` (depois da janela destruída de verdade) e fazia
+   `win.contentView.removeChildView(...)` — `win` já é um objeto nativo
+   destruído nesse ponto, lança `TypeError: Object has been destroyed`,
+   não capturado (é um listener de evento, não um handler de IPC), derruba
+   o processo principal inteiro. Mesma classe de bug que `safeSend` (topo
+   do arquivo) já existia especificamente pra evitar em outro lugar, só
+   que faltava aqui. **Fix**: `destroyAll()` movido pra `win.on("close")`
+   (antes da destruição) — o resto do cleanup (`messageBus`, `registry`,
+   `remoteServer`, `store`) continua em `"closed"`, nenhum deles toca
+   `win`.
+3. **Bug pré-existente — PTY saindo depois do banco já fechado**: achado
+   ao *testar* o fix do item 2 ao vivo (fechar com terminal rodando +
+   card de navegador aberto) — `registry.killAll()` não espera os
+   processos realmente morrerem; quando um mata de verdade (depois de
+   `store.close()` já ter rodado no mesmo cleanup), seu `onExit` chama
+   `remoteServer.broadcastCards()` → `listTerminals()` →
+   `store.listAllCards()` num banco já fechado, `TypeError: The database
+   connection is not open`, mesmo padrão de crash não capturado. **Fix**
+   em `remote-server.ts`: `broadcastCards()` só chama `listTerminals()`
+   se `clients.size > 0` — como `remoteServer.close()` sempre roda antes
+   de `store.close()` no cleanup, `clients` já está vazio nesse ponto, o
+   guard evita a chamada por completo (e é uma otimização legítima por si
+   só: sem ninguém remoto conectado, não tem por que consultar o banco).
+
+**Verificado ao vivo, não só lendo o código** (script ad hoc, fora do
+harness): fechar via `window.winControls.close()` (o mesmo caminho de um
+clique real no botão de fechar) com navegador aberto, depois com
+navegador + terminal rodando — `stderr` limpo nos dois casos, processo
+sai com `exitCode: 0`. `npm run verify` completo depois: 24 checks, todos
+PASS, zero processo órfão, porta 4488 real intocada (confirmado via
+`ss -ltnp` mostrando só o PID da sessão do usuário nela).
+
+**Lição pra próxima vez que eu rodar scripts de teste ad hoc (fora dos
+`smoke-*.mjs` já revisados)**: qualquer recurso do processo principal que
+não é isolado por `--user-data-dir`/`--remote-debugging-port` (como uma
+porta de rede fixa) precisa da mesma atenção — não assumir que só esses
+dois parâmetros bastam pra isolar uma instância de teste de uma sessão
+real rodando ao lado.
+
 ## Comandos
 
 ```bash
