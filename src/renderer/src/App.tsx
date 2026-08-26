@@ -34,6 +34,7 @@ import {
 import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
 import { useWorldTransform } from "./useWorldTransform";
 import { useConnectorDrag } from "./useConnectorDrag";
+import { useCardSelection } from "./useCardSelection";
 import type { Card, Connector, StickyCardData, Tool } from "./card-types";
 import "./app.css";
 
@@ -263,7 +264,6 @@ export function App() {
   const [newStrokeWidth, setNewStrokeWidth] = useState<number>(DEFAULT_STROKE_WIDTH);
   const [newStrokeStyle, setNewStrokeStyle] = useState<"solid" | "marker">("solid");
   const [drawingPoints, setDrawingPoints] = useState<Point[] | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   /** Cards mid-close-animation — still rendered (with the .closing class),
    * removed from `cards` only once that finishes (see finalizeCloseCard). */
   const [closingIds, setClosingIds] = useState<Set<string>>(new Set());
@@ -281,7 +281,6 @@ export function App() {
   /** Set only when closeCard needs confirmation first (a terminal card
    * whose process is still live) — see closeCard/confirmCloseCard below. */
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
-  const [marquee, setMarquee] = useState<Rect | null>(null);
   const [reflowing, setReflowing] = useState(false);
   const [boards, setBoards] = useState<BoardRow[]>([]);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
@@ -535,6 +534,8 @@ export function App() {
   }
 
   const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
+  const { selectedIds, setSelectedIds, marquee, startMarqueeSelect, selectCard, groupSelected, ungroupSelected } =
+    useCardSelection(cardsRef, setCards, activeBoardIdRef, nextId, clientToWorld, toRow);
 
   function removeConnector(id: string) {
     setConnectors((prev) => prev.filter((c) => c.id !== id));
@@ -912,26 +913,6 @@ export function App() {
     }
   }
 
-  /** Group/ungroup (item 4) — organizational only, no containment or shared
-   * rect: grouping just stamps a shared `groupId` (reusing the same global
-   * id counter every other id in this app already shares) so a drag on any
-   * member moves the rest together (see changeRect above). */
-  function groupSelected() {
-    if (selectedIds.size < 2) return;
-    const groupId = String(nextId.current++);
-    const next = cardsRef.current.map((c) => (selectedIds.has(c.id) ? { ...c, groupId } : c));
-    setCards(next);
-    for (const c of next) if (selectedIds.has(c.id)) void window.store.upsert(toRow(c, activeBoardIdRef.current!));
-    toast("cards agrupados");
-  }
-
-  function ungroupSelected() {
-    const next = cardsRef.current.map((c) => (selectedIds.has(c.id) ? { ...c, groupId: null } : c));
-    setCards(next);
-    for (const c of next) if (selectedIds.has(c.id)) void window.store.upsert(toRow(c, activeBoardIdRef.current!));
-    toast("grupo desfeito");
-  }
-
   function resumeIdDiscovered(id: string, sessionId: string) {
     setCards((prev) => {
       const next = prev.map((c) => (c.id === id && c.kind === "terminal" ? { ...c, resumeId: sessionId } : c));
@@ -979,56 +960,6 @@ export function App() {
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
-  }
-
-  /** Rubber-band marquee (item 4) — a dedicated tool, deliberately not
-   * reusing the pointer tool's own background-drag (that's pan, already
-   * fixed/validated in an earlier round — see AGENTS.md). A click without a
-   * real drag clears the selection instead of selecting an empty rect. */
-  function startMarqueeSelect(e: React.PointerEvent) {
-    const startPoint = clientToWorld(e.clientX, e.clientY);
-    let currentRect: Rect = { x: startPoint.x, y: startPoint.y, w: 0, h: 0 };
-    setMarquee(currentRect);
-    function onMove(ev: PointerEvent) {
-      const p = clientToWorld(ev.clientX, ev.clientY);
-      currentRect = {
-        x: Math.min(startPoint.x, p.x),
-        y: Math.min(startPoint.y, p.y),
-        w: Math.abs(p.x - startPoint.x),
-        h: Math.abs(p.y - startPoint.y),
-      };
-      setMarquee(currentRect);
-    }
-    function onUp() {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      setMarquee(null);
-      if (currentRect.w < 3 && currentRect.h < 3) {
-        setSelectedIds(new Set());
-        return;
-      }
-      const hits = cardsRef.current.filter((c) => rectsOverlap(currentRect, c.rect)).map((c) => c.id);
-      setSelectedIds(new Set(hits));
-    }
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }
-
-  /** A click (not drag) directly on a card while the select tool is active —
-   * CardFrame routes this here instead of starting its normal drag (see its
-   * `interactionMode === "select"` guard). Shift/ctrl adds to the existing
-   * selection instead of replacing it. */
-  function selectCard(id: string, e: React.PointerEvent) {
-    e.stopPropagation();
-    setSelectedIds((prev) => {
-      if (e.shiftKey || e.ctrlKey || e.metaKey) {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      }
-      return new Set([id]);
-    });
   }
 
   function onBackgroundPointerDown(e: React.PointerEvent) {
