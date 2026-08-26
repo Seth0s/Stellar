@@ -541,7 +541,7 @@ de `WebContentsView` falhando, mas com o `about:blank`/fundo branco
   resolvido — este item já foi "corrigido" 2+ vezes e regrediu, mesmo
   aviso que `AGENTS.md` já registra.
 
-## 10. Terminal — polimento visual + seleção ainda sem uso prático confirmado
+## 10. Terminal — polimento visual + seleção — feito (3/3 achados)
 
 Três achados distintos reportados juntos, tratar cada um separado:
 
@@ -559,16 +559,16 @@ Três achados distintos reportados juntos, tratar cada um separado:
   `!important`, independente de especificidade do seletor). Verificado ao
   vivo via CDP: `getComputedStyle` do slider mostra `rgb(44, 49, 60)`
   (== `--border`) depois do fix.
-- **Botão de interromper (`^C`) no header do terminal** — hoje é texto
-  literal `^C` (`TerminalCard.tsx`, `className="terminal-card-interrupt"`,
-  `title="Ctrl+C"`) em vez de ícone. Usuário quer removido — provavelmente
-  quer dizer "trocado por um ícone", não "funcionalidade removida" (o
-  botão dispara `interrupt()`, mecanismo real, não decorativo). Isso é
-  exatamente o que a migração de ícones pra `lucide-react` (já decidida,
-  dependência já instalada em `package.json` — `"lucide-react": "^1.34.0"`
-  — mas `icons.tsx` ainda não migrado) deveria cobrir: um ícone real (ex.
-  `CircleDashed`/`Ban`/`SquareStop`) no lugar do texto `^C`. Confirmar com
-  o usuário se é troca de ícone ou remoção total antes de implementar.
+- ~~**Botão de interromper (`^C`) no header do terminal**~~ — **feito em
+  2026-08-26**: `icons.tsx` já tinha sido migrado pra `lucide-react` numa
+  rodada anterior (o próprio `IconName` já incluía `"interrupt"` →
+  `Octagon`, não documentado como feito neste arquivo — nota corrigida
+  aqui). Só faltava usar o ícone: `TerminalCard.tsx` trocou o texto `^C`
+  por `<Icon name="interrupt" size={12} />` — funcionalidade (`onClick=
+  {interrupt}`) intocada, só a UI. Regra `.terminal-card-interrupt` em
+  `cards.css` (só `font-size`, agora sem sentido pra um ícone) removida.
+  Verificado ao vivo: SVG presente, texto vazio, clique continua
+  funcionando sem erro. `npm run verify`: 33 checks, PASS.
 - ~~**Ferramenta de seleção sem uso prático confirmado**~~ — **investigado
   e fechado em 2026-08-26**: o mecanismo (`groupSelected`/`ungroupSelected`,
   drag-sync por `groupId`) **funciona corretamente** — verificado ao vivo
@@ -646,9 +646,8 @@ o que o usuário descreve como "não prático".
       de seleção) realmente funciona~~ — feito em 2026-08-26 (item 10,
       achado 3): mecanismo funciona; achado real foi de usabilidade
       (cards grandes demais pra separar em zoom 1), não de código.
-   3. Terminal — trocar o texto `^C` do header por um ícone real (item 10,
-      achado 2) — migração pontual pra `lucide-react`, não o `icons.tsx`
-      inteiro.
+   3. ~~Terminal — trocar o texto `^C` do header por um ícone real~~ —
+      feito em 2026-08-26 (item 10, achado 2).
    4. Navegador — pesquisa de práticas corretas de `WebContentsView`/
       Chromium embutido + fix (item 9) — maior dor citada pelo usuário,
       feito logo enquanto o contexto está fresco, apesar do risco/incerteza
