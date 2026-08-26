@@ -2099,6 +2099,19 @@ cards. Registrado como candidato a item novo em `DESIGN-BACKLOG.md`
 (reduzir tamanho padrão de spawn? auto-zoom-out ao entrar na ferramenta
 `select`? outro affordance?).
 
+## 2026-08-26 — Item 10 fechado (3/3): `^C` do terminal virou ícone real
+
+Último achado do item 10: `icons.tsx` já tinha sido migrado pra
+`lucide-react` numa rodada anterior não documentada aqui — `IconName` já
+incluía `"interrupt"` → `Octagon`. Só faltava usar: `TerminalCard.tsx`
+trocou o texto `^C` por `<Icon name="interrupt" size={12} />`, mesmo
+`onClick={interrupt}`. Regra `.terminal-card-interrupt { font-size:
+11px }` em `cards.css` virou morta (não se aplica a um ícone) — removida
+junto com o comentário que só fazia sentido pra ela. Verificado ao vivo:
+SVG presente, texto vazio, clique sem erro. `npm run verify`: 33 checks,
+PASS, zero processo órfão. Item 10 (`DESIGN-BACKLOG.md`) fechado por
+completo.
+
 ## Comandos
 
 ```bash
