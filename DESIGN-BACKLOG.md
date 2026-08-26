@@ -147,9 +147,82 @@ sintético em DOM próprio é muito mais seguro/simples que replicar
    configurar túnel). Escopo de projeto separado, com conversa própria de
    orçamento/manutenção antes de qualquer código.
 
-**Nada implementado ainda** — esperando decisão do usuário sobre
-arquitetura (A vs B) e até onde ir nas fases antes de escrever qualquer
-linha de código, dado o risco real envolvido.
+**Decidido pelo usuário em 2026-08-26**: arquitetura B (cliente web
+nativo), fases A+B (LAN + já deixar pronto pra túnel externo; fase C
+hospedada segue fora de escopo).
+
+### Fase A + base da fase B — implementado
+
+`src/main/remote-server.ts` (servidor HTTP+WS embutido, `ws`+`qrcode` como
+dependências novas), `resources/mobile-client/` (cliente web estático —
+HTML/JS puro, sem bundler próprio, `xterm.js`+`addon-fit` vendorizados
+direto do `node_modules` pra não precisar de build), `RemotePairingModal.tsx`
+(QR/URL/contagem de conexões/revogar, botão novo no `zoom-pill` do
+Topbar).
+
+- **Auth**: token de 16 bytes, gerado na primeira vez que o servidor sobe,
+  checado só no upgrade do WebSocket — `revoke()` rotaciona o token e
+  derruba todo cliente conectado na hora (usado quando o QR pode ter
+  vazado). Servidor bind em `0.0.0.0` (não só loopback) desde o início —
+  necessário tanto pra LAN quanto pra um túnel externo apontar pra essa
+  mesma porta depois.
+- **Protocolo**: WebSocket, não pixel — o cliente recebe a lista de
+  terminais vivos (`store.listAllCards()` cruzado com
+  `registry.isAlive()`, novo em `pty-registry.ts`) e um stream de
+  `pty:data`/`pty:exit`; manda `pty:write`/`pty:resize`. Mesma forma que
+  `acbridge` já fala com o `pty-registry`, só que pela rede em vez do
+  socket Unix.
+- **Sem scrollback**: quem conecta só vê saída a partir do momento que
+  anexou — nada aqui guarda histórico, mesma limitação que os streams do
+  próprio `acbridge` já têm.
+- **Escopo desta fase, sendo honesto sobre o que ficou de fora**: só
+  cards de terminal são espelhados/controláveis pelo celular — arquivos,
+  changes, sticky, navegador e criar/fechar/renomear card a partir do
+  celular **não** foram feitos, é a próxima extensão natural do mesmo
+  protocolo, não um problema de arquitetura.
+- **Pronto pra túnel (base da fase B), mas o túnel em si não foi
+  configurado nem testado**: `app.js` escolhe `ws://` ou `wss://` a
+  partir do `location.protocol` da própria página (não hardcoded) —
+  necessário porque uma página servida via `https:` (o que um túnel com
+  TLS faz) não consegue abrir `ws://` puro (mixed content, a maioria dos
+  navegadores recusa). O que falta pra fase B de verdade é o usuário
+  apontar Tailscale Funnel/Cloudflare Tunnel (ou equivalente) pra porta
+  4488 — isso é configuração do lado do usuário, não código deste
+  projeto, e não foi testado (exigiria expor a máquina de verdade pra
+  internet, fora do que dá pra verificar aqui sem autorização explícita
+  pra isso).
+- **Empacotamento não testado**: `extraResources` no `package.json` foi
+  atualizado pra copiar `resources/mobile-client` pro build empacotado,
+  mas só foi verificado rodando o binário direto (`electron
+  out/main/index.js`), não um `electron-builder` completo.
+- **Token único, revogação é tudo-ou-nada**: não existe hoje "revogar só
+  este celular" — um token só, compartilhado por quem quer que tenha
+  escaneado o QR. Suficiente pra uso pessoal (o caso de uso pedido), mas
+  vale registrar como limitação real se algum dia importar multi-usuário.
+
+**Verificado de ponta a ponta, ao vivo** (instância isolada,
+`--remote-debugging-port`/`--user-data-dir` próprios):
+- Pareamento: botão novo abre o modal, QR/URL/token gerados corretos.
+- Servidor HTTP real: `GET /`, `/app.js`, `/vendor/xterm.js` respondem
+  200 fora do Electron inteiramente (`fetch` direto, como um celular
+  faria).
+- Auth do WebSocket: token errado fecha com código 4001 sem mandar
+  nenhum dado antes; token certo recebe a lista de cards.
+- **Round-trip real de terminal**: mandei `pty:write` com
+  `echo <marcador aleatório>\n` pelo WebSocket cru — o comando rodou de
+  verdade no bash real e o marcador voltou no stream de `pty:data`.
+- **Cliente real, não só o protocolo cru**: naveguei uma aba Chromium de
+  verdade (reaproveitando a própria instância Electron via CDP, já que
+  não há Chrome/Chromium do sistema disponível pra rodar Playwright
+  aqui) pra `http://127.0.0.1:4488/?token=...` — a lista carregou, abrir
+  um terminal renderizou o xterm de verdade, e digitar através do
+  `<textarea>` do próprio xterm (não um atalho de teste) executou o
+  comando e o resultado apareceu na tela. Zero erros no console.
+- `revoke()`: token muda na hora, o token antigo passa a fechar com 4001.
+- `npx tsc --noEmit` e `npx electron-vite build` limpos.
+
+Fase C (relay hospedado + domínio + Magic Link) segue fora de escopo,
+como já registrado acima.
 
 ## 3. Facilitar visualização de processos do PC/apps, para snapshot
 

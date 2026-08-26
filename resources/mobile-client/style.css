@@ -1,0 +1,153 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #0e1014;
+  color: #e6e6e6;
+  font-family: -apple-system, system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  border-bottom: 1px solid #262a33;
+  background: #14171d;
+  flex: none;
+}
+
+#topbar #title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#back {
+  background: none;
+  border: none;
+  color: #9aa4b2;
+  font-size: 14px;
+  padding: 4px 0;
+}
+
+.status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #262a33;
+}
+
+.status.online {
+  color: #7ee787;
+  border-color: #234d2c;
+}
+
+.status.offline {
+  color: #f0883e;
+  border-color: #4d3423;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#auth-error {
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.muted {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+#list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.card-row {
+  padding: 14px 12px;
+  border-radius: 10px;
+  background: #14171d;
+  border: 1px solid #262a33;
+  margin-bottom: 8px;
+}
+
+.card-row-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card-row-cwd {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  text-align: center;
+  color: #6b7280;
+  padding: 40px 16px;
+  font-size: 13px;
+}
+
+#term-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+#term {
+  flex: 1;
+  min-height: 0;
+  padding: 6px;
+}
+
+#keys {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid #262a33;
+  background: #14171d;
+  overflow-x: auto;
+  flex: none;
+}
+
+#keys button {
+  flex: none;
+  background: #1a1d24;
+  border: 1px solid #262a33;
+  color: #e6e6e6;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: monospace;
+}
+
+#keys button:active {
+  background: #262a33;
+}

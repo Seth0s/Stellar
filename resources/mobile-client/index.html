@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>agent-canvas · remoto</title>
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <span id="status" class="status offline">conectando…</span>
+      <button id="back" class="hidden">← terminais</button>
+      <span id="title"></span>
+    </header>
+
+    <div id="auth-error" class="hidden">
+      <p>Token inválido ou revogado.</p>
+      <p class="muted">Peça um novo QR code no app.</p>
+    </div>
+
+    <ul id="list"></ul>
+
+    <div id="term-view" class="hidden">
+      <div id="term"></div>
+      <div id="keys">
+        <button data-key="Escape">esc</button>
+        <button data-key="Tab">tab</button>
+        <button data-key="ArrowUp">↑</button>
+        <button data-key="ArrowDown">↓</button>
+        <button data-key="ArrowLeft">←</button>
+        <button data-key="ArrowRight">→</button>
+        <button data-key="Control+C">ctrl+c</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

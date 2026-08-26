@@ -162,5 +162,15 @@ export function createPtyRegistry(registryOpts: {
     for (const id of [...entries.keys()]) kill(id);
   }
 
-  return { spawn, write, resize, interrupt, kill, killAll };
+  /** Whether a PTY is actually running right now — the remote-control
+   * mobile mirror (remote-server.ts) uses this instead of duplicating the
+   * renderer's own liveStatus tracking (spawnError/exitCode), since "has a
+   * live entry here" is the same underlying signal, just simpler: no entry
+   * means either never spawned, exited, or a spawn error, and the mobile
+   * client doesn't need to tell those apart the way the desktop UI does. */
+  function isAlive(id: string): boolean {
+    return entries.has(id);
+  }
+
+  return { spawn, write, resize, interrupt, kill, killAll, isAlive };
 }

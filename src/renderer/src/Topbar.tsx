@@ -101,6 +101,7 @@ export function Topbar({
   onFit,
   bgStyleLabel,
   onCycleBgStyle,
+  onOpenRemote,
   onSwitchBoard,
   onCreateBoard,
   onRenameBoard,
@@ -119,6 +120,7 @@ export function Topbar({
   onFit: () => void;
   bgStyleLabel: string;
   onCycleBgStyle: () => void;
+  onOpenRemote: () => void;
   onSwitchBoard: (id: string) => void;
   onCreateBoard: (name: string, project: string) => void;
   onRenameBoard: (id: string, name: string) => void;
@@ -267,6 +269,9 @@ export function Topbar({
         </button>
         <button onClick={onCycleBgStyle} title={`Fundo do canvas: ${bgStyleLabel} (clique para trocar)`}>
           <Icon name="bgStyle" size={16} />
+        </button>
+        <button onClick={onOpenRemote} title="Controle remoto (celular, mesma rede local)">
+          <Icon name="remoteControl" size={16} />
         </button>
       </div>
     </div>

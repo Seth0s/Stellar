@@ -1672,6 +1672,78 @@ falhou. Corrigido escolhendo um ponto genuinamente vazio antes de concluir
 qualquer coisa — mesmo cuidado de sempre confirmar o que a captura de tela
 mostra em vez de assumir que o teste em si estava certo.
 
+## 2026-08-26 — Controle remoto mobile, fase A (item 2 do backlog): servidor LAN + cliente web
+
+Pedido reescopado: interface web (sem app nativo) pro celular controlar o
+Canvas de verdade (não só ver), dentro e fora da rede, com segurança
+séria. Antes de qualquer código, escrevi um plano honesto no
+`DESIGN-BACKLOG.md` comparando duas arquiteturas (espelhar pixels vs
+cliente web nativo falando com o estado real) e deixando claro que
+"domínio próprio + Magic Link" é infraestrutura hospedada de verdade —
+custo/manutenção contínuos, não um item de backlog — antes de perguntar
+ao usuário o que decidir. Usuário escolheu: arquitetura B (cliente web
+nativo), fases A+B (LAN + já deixar pronto pra túnel externo).
+
+**Por que não espelhar pixels**: já é conhecimento validado nesta sessão
+que `capturePage()` não compõe `WebContentsView` nesta máquina — um
+mirror de vídeo herdaria esse bug pro card de navegador também, sem a
+rede ter nada a ver com isso. Mirroring de *estado* (não de pixel)
+sidesteps o bug inteiro pra terminal/arquivos/changes/nota (DOM puro).
+
+**Implementado** (`src/main/remote-server.ts`, `resources/mobile-client/`,
+`RemotePairingModal.tsx`, `pty-registry.ts::isAlive`, novo IPC
+`remote:pairing`/`remote:revoke`/`remote:connection-count`):
+
+- Servidor HTTP+WebSocket embutido no processo main (`ws`+`qrcode` novas
+  dependências), bind em `0.0.0.0` desde o início (necessário tanto pra
+  LAN quanto pra um túnel apontar depois).
+- Cliente mobile é HTML/JS puro servido estaticamente — sem bundler
+  próprio, `xterm.js`+`addon-fit` copiados direto do `node_modules` pra
+  `resources/mobile-client/vendor/` (builds UMD, `<script>` direto,
+  registram `window.Terminal`/`window.FitAddon`).
+- Protocolo fala com o estado real (`store.listAllCards()` cruzado com
+  `registry.isAlive()`, novo accessor no `pty-registry`), não pixel — a
+  mesma forma que `acbridge` já fala com PTYs, só pela rede.
+- Auth: token de 16 bytes checado só no upgrade do WebSocket, QR gerado
+  localmente (`qrcode`, 100% offline), `revoke()` rotaciona o token e
+  derruba todo cliente na hora.
+- **Achado real ao implementar, corrigido antes de qualquer teste**:
+  `app.js` inicialmente hardcodeava `ws://` — quebraria assim que a fase B
+  (túnel com TLS) entrasse em cena, porque uma página `https:` não
+  consegue abrir `ws://` puro (mixed content). Corrigido pra escolher
+  `ws:`/`wss:` a partir do `location.protocol` da própria página — custo
+  zero na LAN, necessário pro túnel funcionar sem um segundo caminho de
+  código.
+
+**Verificado de ponta a ponta ao vivo** (instância isolada,
+`--remote-debugging-port`/`--user-data-dir` próprios — nunca a sessão do
+usuário): servidor HTTP real responde fora do Electron inteiramente
+(`fetch` direto simulando o celular); WebSocket com token errado fecha
+com 4001 sem vazar nenhum dado antes; **round-trip real de terminal** —
+mandei um `echo <marcador>` pelo protocolo cru e o comando rodou de
+verdade no bash, marcador voltou no stream; e, mais importante, **o
+cliente real, não só o protocolo**: sem Chrome/Chromium do sistema pra
+rodar o Playwright disponível nesta máquina, reaproveitei a própria
+instância Electron via CDP pra navegar uma aba de verdade até a URL do
+celular — lista carregou, abrir um terminal renderizou o xterm de
+verdade, digitar pelo `<textarea>` real do xterm executou o comando,
+saída apareceu na tela, zero erros de console. `revoke()` confirmado
+(token muda, o antigo passa a fechar com 4001). `npx tsc --noEmit` e
+`npx electron-vite build` limpos.
+
+**Escopo real desta rodada, sem esconder o que ficou de fora**: só
+terminal é espelhado/controlável — arquivos, changes, sticky, navegador,
+e criar/fechar/renomear card pelo celular ficam pra próxima extensão do
+mesmo protocolo. Fase B em si (apontar Tailscale Funnel/Cloudflare Tunnel
+pra porta 4488) é configuração do lado do usuário — o código já está
+pronto pra isso (bind 0.0.0.0, cliente escolhe `ws`/`wss` sozinho), mas
+não foi configurado nem testado (exigiria expor a máquina de verdade pra
+internet). Empacotamento (`electron-builder` completo, não só o binário
+solto) também não foi testado, só o `extraResources` do
+`resources/mobile-client` foi adicionado ao `package.json`. Token é
+único/tudo-ou-nada (sem "revogar só este celular") — suficiente pro uso
+pessoal pedido, registrado como limitação real caso vire multi-usuário.
+
 ## Comandos
 
 ```bash

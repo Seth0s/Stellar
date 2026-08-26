@@ -10,6 +10,7 @@ import { createBrowserRegistry, type BrowserRect } from "./browser-registry";
 import { createMessageBus } from "./message-bus";
 import { runOneShotSummary } from "./ai-action";
 import { createRemoteInputSession } from "./remote-input";
+import { createRemoteServer } from "./remote-server";
 
 const isDev = !app.isPackaged;
 
@@ -187,16 +188,49 @@ function createWindow() {
     // Missing in this checkout — acbridge calls will just fail with ENOENT.
   }
   const sockPath = join(app.getPath("userData"), "agent-canvas.sock");
+  // Same dev-vs-packaged resolution as binDir above, for the mobile
+  // remote-control client's static files (DESIGN-BACKLOG.md item 2).
+  const mobileClientDir = app.isPackaged
+    ? join(process.resourcesPath, "mobile-client")
+    : join(__dirname, "..", "..", "resources", "mobile-client");
 
   const store = openStore(app.getPath("userData"));
 
+  // Assigned right after `registry` below — declared here (not `const`
+  // there) only so `registry`'s onData/onExit closures can reference it.
+  // Those closures run later, at PTY event time, never during this
+  // synchronous setup, so the forward reference is safe despite the
+  // circular-looking dependency (remoteServer.listTerminals also needs
+  // `registry.isAlive`, the actual reason these two can't be one-line
+  // `const`s in either order).
+  let remoteServer: ReturnType<typeof createRemoteServer> | null = null;
+
   const registry = createPtyRegistry({
-    onData: (id, data) => safeSend(win, "pty:data", id, data),
-    onExit: (id, exitCode) => safeSend(win, "pty:exit", id, exitCode),
+    onData: (id, data) => {
+      safeSend(win, "pty:data", id, data);
+      remoteServer?.broadcastPtyData(id, data);
+    },
+    onExit: (id, exitCode) => {
+      safeSend(win, "pty:exit", id, exitCode);
+      remoteServer?.broadcastPtyExit(id, exitCode);
+      remoteServer?.broadcastCards();
+    },
     onSessionFound: (id, sessionId) => safeSend(win, "pty:session-found", id, sessionId),
     onUrlSeen: (id, url) => safeSend(win, "pty:url-seen", id, url),
     sockPath,
     binDir,
+  });
+
+  remoteServer = createRemoteServer({
+    port: 4488,
+    mobileClientDir,
+    listTerminals: () =>
+      store
+        .listAllCards()
+        .filter((c) => c.kind === "terminal" && registry.isAlive(c.id))
+        .map((c) => ({ id: c.id, label: c.label, provider: c.provider, cwd: c.cwd })),
+    onWrite: (id, data) => registry.write(id, data),
+    onResize: (id, cols, rows) => registry.resize(id, cols, rows),
   });
 
   // With WebRTCPipeWireCapturer enabled above, a single getSources() call
@@ -248,13 +282,19 @@ function createWindow() {
 
   ipcMain.handle(
     "pty:spawn",
-    (_e, id: string, providerId: string, cwd: string, cols: number, rows: number, opts?: SpawnOpts) =>
-      registry.spawn(id, providerId, cwd, cols, rows, opts),
+    (_e, id: string, providerId: string, cwd: string, cols: number, rows: number, opts?: SpawnOpts) => {
+      const result = registry.spawn(id, providerId, cwd, cols, rows, opts);
+      if ("id" in result) remoteServer?.broadcastCards();
+      return result;
+    },
   );
   ipcMain.handle("pty:write", (_e, id: string, data: string) => registry.write(id, data));
   ipcMain.handle("pty:resize", (_e, id: string, cols: number, rows: number) => registry.resize(id, cols, rows));
   ipcMain.handle("pty:interrupt", (_e, id: string) => registry.interrupt(id));
-  ipcMain.handle("pty:kill", (_e, id: string) => registry.kill(id));
+  ipcMain.handle("pty:kill", (_e, id: string) => {
+    registry.kill(id);
+    remoteServer?.broadcastCards();
+  });
 
   ipcMain.handle("store:list", (_e, boardId: string) => store.listCards(boardId));
   ipcMain.handle("store:upsert", (_e, card: CardRow) => store.upsertCard(card));
@@ -309,10 +349,19 @@ function createWindow() {
   win.on("enter-full-screen", () => safeSend(win, "win:fullscreen-change", true));
   win.on("leave-full-screen", () => safeSend(win, "win:fullscreen-change", false));
 
+  // LAN-only mobile control (DESIGN-BACKLOG.md item 2, phase A) — pairing
+  // info (token/QR/LAN addresses) is generated fresh per request rather
+  // than cached, since the QR image itself is cheap to regenerate and this
+  // keeps `getPairing()` the one place that has to be correct.
+  ipcMain.handle("remote:pairing", () => remoteServer!.getPairing());
+  ipcMain.handle("remote:revoke", () => remoteServer!.revoke());
+  ipcMain.handle("remote:connection-count", () => remoteServer!.connectionCount());
+
   win.on("closed", () => {
     browserRegistry.destroyAll();
     messageBus.close();
     registry.killAll();
+    remoteServer?.close();
     store.close();
   });
 

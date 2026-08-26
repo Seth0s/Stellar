@@ -26,6 +26,7 @@ import {
   MousePointerClick,
   Octagon,
   Pen,
+  QrCode,
   RotateCw,
   Scan,
   Sparkles,
@@ -72,7 +73,8 @@ export type IconName =
   | "bgStyle"
   | "remoteWindow"
   | "controlOn"
-  | "controlOff";
+  | "controlOff"
+  | "remoteControl";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -108,6 +110,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   remoteWindow: MonitorSmartphone,
   controlOn: MousePointerClick,
   controlOff: MousePointer2,
+  remoteControl: QrCode,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
