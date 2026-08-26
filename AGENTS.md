@@ -1813,6 +1813,25 @@ corrigida e reverificada antes de seguir pra próxima).
 Fases 2 (extração de hooks do `App.tsx`) e 3 (`SYSTEM.md`) seguem
 pendentes — ver `DESIGN-BACKLOG.md` item 5.
 
+## 2026-08-26 — `SYSTEM.md` (item 5, fase 3, IA-first)
+
+Mapa do estado ATUAL do sistema, na raiz — deliberadamente separado deste
+`AGENTS.md`, que é (e continua sendo) o changelog cronológico/"porquê".
+Motivação real: uma sessão nova pagava o custo de ler quase 1800 linhas
+de história só pra entender a forma atual do sistema; agora tem um lugar
+compacto pra isso. Cobre: mapa dos 3 processos e o que cada um possui,
+tabela completa da superfície IPC (todo canal, extraído direto do código
+via grep — não de memória, pra garantir que bate com a realidade), tabela
+dos 7 tipos de card e como cada um serializa, mecanismos externos
+(`acbridge`, portal D-Bus do `remote-input.ts`, servidor HTTP+WS do
+`remote-server.ts`), e as decisões de plataforma que já foram
+verificadas empiricamente nesta sessão e valem saber sem reler a história
+completa (GPU desabilitada, `capturePage()` não compor `WebContentsView`,
+Wayland sem enumeração de janela pro `desktopCapturer`). Critério de
+manutenção escrito no próprio arquivo: atualizar quando a FORMA do
+sistema mudar, não a cada feature pequena — pra não virar um segundo
+changelog por acidente.
+
 ## Comandos
 
 ```bash

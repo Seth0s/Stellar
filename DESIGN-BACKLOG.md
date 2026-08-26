@@ -373,8 +373,20 @@ evalJs" foi escrito à mão do zero umas seis vezes numa sessão só.
    "só tem o card bash auto-seedado" de forma silenciosa e intermitente.
    Fix: `startApp` sempre apaga o dir antes de subir.
 
+### Fase 3 — `SYSTEM.md` (estado atual, não histórico) — feito
+
+`SYSTEM.md` na raiz: mapa dos 3 processos, tabela completa da superfície
+IPC (todo canal `ipcMain.handle`/preload, extraída direto do código, não
+de memória), tabela dos 7 tipos de card e sua serialização, mecanismos
+externos (`acbridge`, portal D-Bus, servidor remoto) e as decisões de
+plataforma que valem lembrar sem ler a história toda (GPU desabilitada,
+`capturePage()` não compõe `WebContentsView`, Wayland sem enumeração de
+janela). Zero risco de regressão — só documentação, não toca código.
+Critério de manutenção documentado no próprio arquivo: atualizar quando a
+FORMA do sistema mudar (processo/canal/kind novo), não a cada feature
+pequena.
+
 ### Fase 2 — extração de hooks do `App.tsx` — pendente
-### Fase 3 — `SYSTEM.md` (estado atual, não histórico) — pendente
 
 **Recomendação de decomposição da fase 2, pra quando for feita**:
 - `useWorldTransform` — pan/zoom/`viewportWorldRect`/`fitView`/`zoomBy`.
