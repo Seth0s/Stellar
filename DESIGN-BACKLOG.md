@@ -71,18 +71,35 @@ atual sobre uma conexão não-confiável).
 
 ## 3. Facilitar visualização de processos do PC/apps, para snapshot
 
-**Pedido**: ambíguo como está — precisa de uma pergunta de escopo, não
-uma decisão de arquitetura.
+**Escopo escolhido em 2026-08-26**: "seguir uma janela externa num card"
+(não o painel de processos tipo gerenciador de tarefas) — o card mostraria
+uma janela/app já aberto no SO, ao vivo (não snapshot periódico nem
+manual).
 
-- Opção A: um painel dentro do app listando processos/janelas abertas do
-  SO (tipo um mini gerenciador de tarefas), pra escolher uma janela e
-  tirar print dela num card?
-  Opção B: uma forma de escolher, na hora de criar um card de navegador,
-  qual app/janela "seguir" (não existe hoje — hoje é sempre uma
-  `WebContentsView` nova, nunca uma janela nativa externa)?
+**Engavetado, não implementado — limitação real de plataforma achada antes
+de escrever qualquer UI**: testei `desktopCapturer.getSources({types:
+["window","screen"]})` diretamente nesta máquina (Wayland/GNOME) antes de
+montar qualquer seletor. Retornou **1 entrada só**, `name: ""`,
+`thumbnail` com largura 0 — Wayland não expõe metadata de janela
+individual pra um app comum (restrição de segurança da plataforma, não
+bug do Electron). A alternativa mais nova,
+`session.setDisplayMediaRequestHandler({ useSystemPicker: true })` (que
+delegaria a escolha pro picker nativo do sistema sem precisar de
+metadata), **é documentada pelo próprio Electron como "atualmente
+disponível só pra macOS 15+"** — não se aplica aqui (Linux). A única forma
+tecnicamente viável seria delegar a escolha inteira pro diálogo nativo de
+"compartilhar tela" do GNOME (sem seletor customizado com nome/miniatura
+dentro do app) — perguntado ao usuário, que preferiu engavetar em vez de
+seguir com essa versão mais crua do que foi pedido.
 
-**Recomendação**: perguntar ao usuário qual dos dois (ou algo diferente)
-antes de estimar esforço — são features bem diferentes em custo.
+**Se for retomado**: `session.setDisplayMediaRequestHandler` com o
+handler legado (não `useSystemPicker`) chamando `getUserMedia` com o
+único source genérico que `getSources()` devolve nesta plataforma — isso
+provavelmente aciona o portal do GNOME/Wayland (`xdg-desktop-portal`) na
+hora de iniciar o stream, não na hora de listar. Não totalmente verificado
+de ponta a ponta: exige alguém clicando num diálogo nativo do SO, que CDP
+não alcança — precisaria de teste manual do usuário na primeira tentativa
+real.
 
 ## 4. Sistema de snapshot — agente vê o Canvas em coordenadas específicas
 
@@ -193,8 +210,10 @@ jump-to-card, template de sessão) continuam em aberto.
 3. ~~Sistema de snapshot pro agente~~ — feito em 2026-08-26, com a
    limitação real de `capturePage()` não compor `WebContentsView`
    documentada (browser card vira retângulo liso na captura).
-4. Decisão de escopo pra visualização de processos/apps (item 3) —
-   precisa de resposta do usuário antes de qualquer estimativa.
+4. ~~Visualização de processos/apps (seguir janela externa)~~ — escopo
+   decidido em 2026-08-26, mas engavetado: limitação real de plataforma
+   (Wayland não expõe metadata de janela, `useSystemPicker` é só macOS)
+   tornaria a única versão viável mais crua do que o usuário queria.
 5. Gesto radial (item 1, parte de gestos) — depois dos atalhos, que são
    mais baratos e cobrem parte do mesmo objetivo (acesso rápido às
    ferramentas).
