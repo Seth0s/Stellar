@@ -285,8 +285,21 @@ fase 1 é só controle humano; precisão do ponteiro começa **relativa**
   fase 1 ao vivo.
 - **Fase 2 (permissão do agente) — em espera**, não iniciar antes do
   usuário confirmar a fase 1 funcionando de verdade (diálogos nativos).
-  Usuário não pôde testar ainda nesta rodada (2026-08-26) — seguimos pra
-  outro item do backlog em vez de adivinhar/avançar sem essa confirmação.
+
+**Testado ao vivo em 2026-08-26 — funcional em parte, achado perigoso na
+tentativa de correção**: vídeo + diálogo de consentimento do portal
+funcionam. Controle por movimento relativo não funcionava na prática
+(cursor sai da borda do card quase na hora, evento para de chegar).
+Tentativa de corrigir com `requestPointerLock()` **travou o sistema
+operacional inteiro** (não só o app) na máquina de teste do usuário,
+exigindo hard reset — ver `AGENTS.md`, entrada "⚠️ ACHADO PERIGOSO", pra
+detalhe completo e a hipótese de causa (Pointer Lock competindo com a
+sessão RemoteDesktop do portal, já ativa e injetando input em nível de
+sistema, pelo grab do compositor Wayland/GNOME). Revertido, nunca
+commitado. **Item 3 fica bloqueado** até decisão do usuário sobre como
+prosseguir com segurança (alternativa cogitada: `setPointerCapture` num
+gesto de arrastar em vez de captura ambiente — não decidido, não
+implementado).
 
 ## 4. Sistema de snapshot — agente vê o Canvas em coordenadas específicas
 

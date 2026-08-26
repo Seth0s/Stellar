@@ -1917,6 +1917,56 @@ das 4 extrações (`useWorldTransform`, `useConnectorDrag`,
 kind) continua deliberadamente deferida pra rodada própria, como já
 decidido.
 
+## 2026-08-26 — ⚠️ ACHADO PERIGOSO: Pointer Lock + sessão RemoteDesktop ativa travou o sistema inteiro (item 3)
+
+**Contexto**: usuário testou ao vivo a fase 1 do controle de janela remota
+(`RemoteWindowCard.tsx`) pela primeira vez — vídeo e o diálogo de
+consentimento do portal funcionaram. Mas o movimento relativo (estilo
+trackpad, `onVideoPointerMove` usando `e.movementX/Y`) não "pegava": o
+cursor real do SO só gera `pointermove` enquanto fica fisicamente dentro
+do card pequeno, e sai da borda quase instantaneamente (a tela remota
+inteira mapeada num card de poucas centenas de px). Tentei corrigir com
+`videoRef.current.requestPointerLock()` ao ativar o controle — trava o
+cursor local no elemento, evento de movimento continua chegando mesmo
+sem o cursor "andar" de verdade.
+
+**O usuário testou essa versão e travou a máquina inteira, precisando de
+hard reset (desligar no botão) — não só o app, o SO inteiro.**
+
+**Hipótese de causa** (não totalmente confirmada, e propositalmente não
+vou tentar reproduzir isso de novo pra confirmar): a sessão do
+`org.freedesktop.portal.RemoteDesktop` já ativa injeta input no nível do
+**sistema inteiro** (não confinado à janela do app — é assim que o
+mecanismo inteiro funciona, ver `remote-input.ts`). Pedir
+`requestPointerLock()` ao mesmo tempo faz o Chromium (via Wayland
+pointer-constraints) tentar prender o cursor físico *também*. As duas
+coisas competindo pelo grab do ponteiro/foco de input no compositor
+GNOME/Wayland parecem ter deixado o compositor inteiro num estado sem
+saída — nem o mouse nem o teclado (que soltaria o lock via Esc)
+respondiam.
+
+**Ação tomada**: revertido imediatamente (`git checkout` no arquivo, nunca
+chegou a ser commitado) — o mecanismo voltou ao estado original (sem
+Pointer Lock), que é **impraticável** (cursor sai da borda, controle não
+funciona de verdade) mas **não trava o sistema**, confirmado pela sessão
+anterior de testes ao vivo (mouse/teclado normais depois).
+
+**Regra daqui pra frente, pro item 3 inteiro**: **nunca mais testar
+Pointer Lock (ou qualquer mecanismo de captura de cursor do SO) junto com
+uma sessão RemoteDesktop do portal ativa nesta máquina** sem uma
+estratégia de isolamento real primeiro (VM descartável, sessão Wayland
+separada, ou pelo menos confirmar com o usuário que ele está preparado
+pra um hard reset). Não é um bug de UI comum — é uma interação de baixo
+nível entre dois mecanismos de captura de input concorrendo pelo
+compositor. Alternativa mais segura a explorar antes de tentar de novo:
+em vez de Pointer Lock (captura ambiente, sem precisar de clique), usar
+`setPointerCapture` num gesto de **arrastar** (clique segurado + move +
+solta) — mecanismo já usado no resto do app pra drag de card/conector,
+nunca pede o SO pra confinar o cursor de verdade, só limita o alcance por
+gesto em vez de ser "infinito". Fica registrado como próximo passo
+possível, não decidido ainda — perguntar ao usuário antes de tentar
+qualquer coisa nova aqui.
+
 ## Comandos
 
 ```bash
