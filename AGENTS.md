@@ -1883,6 +1883,40 @@ smoke scripts (item 5, fase 1) já pagam o investimento — sem o script do
 conector, esse bug (spawn quebrado pra 5 dos 7 tipos de card) continuaria
 silencioso.
 
+## 2026-08-26 — Fim da fase 2 (item 5): `useCardSelection` + `useBoardStore`, 4/4 hooks extraídos
+
+Completei os 2 hooks restantes da extração (item 5, fase 2), na mesma
+fronteira que `useWorldTransform`/`useConnectorDrag` já tinham
+estabelecido — cada hook recebe estado/setters cross-cutting como
+parâmetro em vez de possuí-los:
+
+- `useCardSelection` (`src/renderer/src/useCardSelection.ts`) —
+  `selectedIds`/`marquee`/`startMarqueeSelect`/`selectCard`/
+  `groupSelected`/`ungroupSelected`, recebe `cardsRef`/`setCards`/
+  `activeBoardIdRef`/`nextId`/`clientToWorld`/`toRow` como parâmetros.
+- `useBoardStore` (`src/renderer/src/useBoardStore.ts`) — `loaded`/
+  `boards`/`activeBoardId`/`activeBoardIdRef`/`boardCounts`/`loadBoard`/
+  `switchBoard`/`createBoard`/`renameBoard`/`changeBoardProject`/
+  `deleteBoard`, recebe `nextId`/`setCards`/`setOrder`/`setConnectors`/
+  `setWorld`/um `resetLiveStatus`/`DEFAULT_CWD`/`toRow`/`fromRow` como
+  parâmetros. `cards`/`order`/`connectors`/`world`/`liveStatus` continuam
+  estado do `App.tsx` (compartilhado por outros hooks); o board-store só
+  possui o que é genuinamente seu (lista de boards, board ativo,
+  contagens, o gate `loaded` do primeiro render).
+
+Cada extração passou por `npx tsc --noEmit` limpo, `electron-vite build`
+limpo, e `npm run verify` completo (24 checks, todos PASS, zero processo
+órfão) antes do commit — mesmo hábito que achou o bug do
+`useConnectorDrag` (ver seção acima), desta vez sem achado novo: as duas
+extrações saíram limpas de primeira.
+
+`App.tsx` foi de ~1470 linhas (início da fase 2) para 1325 linhas depois
+das 4 extrações (`useWorldTransform`, `useConnectorDrag`,
+`useCardSelection`, `useBoardStore`). Fase 2 do item 5
+(`DESIGN-BACKLOG.md`) fechada, 4/4. Fase 4 (registro declarativo de card
+kind) continua deliberadamente deferida pra rodada própria, como já
+decidido.
+
 ## Comandos
 
 ```bash

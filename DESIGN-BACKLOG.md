@@ -386,7 +386,7 @@ Critério de manutenção documentado no próprio arquivo: atualizar quando a
 FORMA do sistema mudar (processo/canal/kind novo), não a cada feature
 pequena.
 
-### Fase 2 — extração de hooks do `App.tsx` — em andamento (2/4)
+### Fase 2 — extração de hooks do `App.tsx` — feita (4/4)
 
 - ~~`useWorldTransform`~~ — feito (pan/zoom/`viewportWorldRect`/`fitView`/
   `zoomBy`/`clientToWorld`/`startPan`, recebe `cardsRef` como parâmetro).
@@ -397,15 +397,27 @@ pequena.
   de um `SyntheticEvent` do React vazando pro parâmetro opcional `at?:
   Point` (introduzido na rodada do menu radial, item 1). Achado só porque
   o smoke script novo do conector finalmente exercitou esse caminho.
-- `useCardSelection` — `selectedIds`/marquee/group/ungroup — pendente.
-- `useBoardStore` — load/switch/create/rename board + cards CRUD contra
-  `window.store` — pendente.
+- ~~`useCardSelection`~~ — feito (`selectedIds`/`marquee`/
+  `startMarqueeSelect`/`selectCard`/`groupSelected`/`ungroupSelected`,
+  recebe `cardsRef`/`setCards`/`activeBoardIdRef`/`nextId`/`clientToWorld`/
+  `toRow` como parâmetros). `npm run verify` limpo (24 checks) depois da
+  extração.
+- ~~`useBoardStore`~~ — feito (`loaded`/`boards`/`activeBoardId`/
+  `boardCounts`/`loadBoard`/`switchBoard`/`createBoard`/`renameBoard`/
+  `changeBoardProject`/`deleteBoard`, recebe `nextId`/`setCards`/
+  `setOrder`/`setConnectors`/`setWorld`/um `resetLiveStatus`/`DEFAULT_CWD`/
+  `toRow`/`fromRow` como parâmetros). `npm run verify` limpo (24 checks)
+  depois da extração.
 
-Cada hook já tem fronteira natural (nenhum depende de estado interno dos
-outros, só de `cards`/`world` como valores passados). Com o harness da
-fase 1 pronto, cada extração é verificada rodando `npm run verify` depois
-de cada hook extraído, em vez de reinventar a verificação CDP na hora —
-foi exatamente esse hábito que achou o bug do `useConnectorDrag` acima.
+Cada hook tem fronteira natural (nenhum depende de estado interno dos
+outros, só de `cards`/`world`/setters como valores passados). Com o
+harness da fase 1 pronto, cada extração foi verificada rodando `npm run
+verify` depois de cada hook extraído, em vez de reinventar a verificação
+CDP na hora — foi exatamente esse hábito que achou o bug do
+`useConnectorDrag` acima. `App.tsx` saiu de ~1470 linhas (início da fase)
+para 1325 depois das 4 extrações — ainda o maior arquivo do renderer, mas
+agora composto de hooks com fronteira testável em vez de um componente
+monolítico.
 
 ## 4 (deferida). Registro declarativo de tipo de card
 
