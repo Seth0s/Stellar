@@ -1460,6 +1460,37 @@ Verificação: `tsc --noEmit`/`electron-vite build` limpos; `?` abrindo o
 modal (13 linhas, batendo com os 4 grupos) e `Esc` fechando, confirmado
 ao vivo via CDP numa instância isolada.
 
+## 2026-08-26 — Confirmação ao fechar terminal ativo (item 2 do backlog)
+
+Segundo item da ordem sugerida — o único dos cinco gaps de fluxo listado
+como risco real de perda de dado, não só conveniência: fechar um card
+matava o processo na hora, sem confirmação nem desfazer.
+
+- **Escopo deliberadamente estreito**: só card `kind === "terminal"` cujo
+  `liveStatus` ainda não é `"error"`/`"exited"` (undefined conta como
+  "vivo" — um card recém-spawnado que ainda não reportou status é
+  presumivelmente ativo, o default mais seguro). Fechar
+  arquivos/changes/nota/navegador continua instantâneo — não têm processo
+  pra perder, exigir confirmação ali seria só fricção sem ganho de
+  segurança.
+- **`ConfirmModal.tsx`** novo — genérico (não específico de fechar
+  terminal), reaproveita o mesmo chrome `.modal-root`/`.modal-backdrop`/
+  `.modal` do `BrowserAskModal`/`ShortcutsOverlay`. Botão de confirmar
+  tem variante `.danger` nova (vermelho, `--danger`) — antes só existiam
+  `.ghost`/`.primary`.
+- **`App.tsx`**: `closeCard` virou um gate — pra terminal vivo, só seta
+  `pendingCloseId` e retorna (não fecha nada ainda); todo outro caso cai
+  direto no que antes era o corpo de `closeCard`, agora extraído pra
+  `beginCloseAnimation` (compartilhado entre o caminho direto e
+  `confirmCloseCard`, pra não duplicar a lógica de `closingIds`+timeout já
+  existente da animação de fechar). `Esc` também cancela o modal pendente,
+  mesmo handler que já fecha o overlay de atalhos.
+
+Verificação ao vivo via CDP: fechar o bash auto-semeado (vivo) abriu o
+modal com card count inalterado enquanto pendente; cancelar manteve o
+card; confirmar removeu; fechar um card de arquivos não abriu modal
+nenhum e sumiu na hora, como antes.
+
 ## Comandos
 
 ```bash

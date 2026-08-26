@@ -171,12 +171,14 @@ similar) — os dois itens acima são hipóteses razoáveis, não medidas.
 **Recomendação**: dos cinco, "fechar sem confirmação" é o único que soa
 como bug de segurança de dados (perda de trabalho por clique acidental),
 não só conveniência — candidato a entrar antes dos outros quatro.
+**Feito em 2026-08-26** (`ConfirmModal.tsx`) — só pra terminal com
+processo vivo, ver `AGENTS.md`. Os outros quatro (duplicar card,
+jump-to-card, template de sessão) continuam em aberto.
 
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
-2. Confirmação ao fechar um terminal card ativo (item 7) — mesma
-   categoria de "baixo risco, resolve perda de dado real".
+2. ~~Confirmação ao fechar um terminal card ativo~~ — feito em 2026-08-26.
 3. Sistema de snapshot pro agente (item 4) — maior valor agregado dos
    itens não triviais, já tem caminho técnico claro.
 4. Decisão de escopo pra visualização de processos/apps (item 3) —

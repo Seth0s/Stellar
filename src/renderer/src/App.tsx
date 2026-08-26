@@ -6,6 +6,7 @@ import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { BrowserAskModal } from "./BrowserAskModal";
+import { ConfirmModal } from "./ConfirmModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { Rail } from "./Rail";
 import { Topbar } from "./Topbar";
@@ -303,6 +304,9 @@ export function App() {
     return (BG_STYLE_ORDER as string[]).includes(saved ?? "") ? (saved as BgStyle) : "dots";
   });
   const [showShortcuts, setShowShortcuts] = useState(false);
+  /** Set only when closeCard needs confirmation first (a terminal card
+   * whose process is still live) — see closeCard/confirmCloseCard below. */
+  const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<Rect | null>(null);
   const [reflowing, setReflowing] = useState(false);
   const [boards, setBoards] = useState<BoardRow[]>([]);
@@ -356,6 +360,7 @@ export function App() {
       if (e.key === "Escape") {
         setTool("pointer");
         setShowShortcuts(false);
+        setPendingCloseId(null);
       }
       if (e.key === "F11") {
         e.preventDefault();
@@ -779,9 +784,37 @@ export function App() {
    * ever fires — without this fallback the card would stay stuck forever
    * for anyone with that preference set. finalizeCloseCard no-ops safely
    * if called twice (whichever path fires first wins). */
-  function closeCard(id: string) {
+  function beginCloseAnimation(id: string) {
     setClosingIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
     setTimeout(() => finalizeCloseCard(id), 180);
+  }
+
+  /** A terminal card whose process hasn't reported "error"/"exited" yet is
+   * assumed live — closing it kills a real running process, with no undo
+   * (DESIGN-BACKLOG.md item 7: closing was instant and irreversible, the
+   * one item flagged as an actual data-loss risk rather than convenience).
+   * Every other card kind, and a terminal that's already dead, closes
+   * immediately same as before — there's nothing to lose there, and
+   * demanding confirmation for a files/sticky/browser card would just be
+   * friction with no safety benefit. */
+  function closeCard(id: string) {
+    const card = cardsRef.current.find((c) => c.id === id);
+    const isLiveTerminal = card?.kind === "terminal" && liveStatus[id] !== "error" && liveStatus[id] !== "exited";
+    if (isLiveTerminal) {
+      setPendingCloseId(id);
+      return;
+    }
+    beginCloseAnimation(id);
+  }
+
+  function confirmCloseCard() {
+    if (!pendingCloseId) return;
+    beginCloseAnimation(pendingCloseId);
+    setPendingCloseId(null);
+  }
+
+  function cancelCloseCard() {
+    setPendingCloseId(null);
   }
 
   function cycleBgStyle() {
@@ -1407,6 +1440,16 @@ export function App() {
       <Hint />
       <ToastHost />
       {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
+      {pendingCloseId && (
+        <ConfirmModal
+          title="Fechar terminal?"
+          message={`${describeCard(pendingCloseId)} ainda está rodando — fechar encerra o processo agora, sem como desfazer.`}
+          confirmLabel="Fechar"
+          danger
+          onConfirm={confirmCloseCard}
+          onCancel={cancelCloseCard}
+        />
+      )}
       {pendingAsk && (
         <BrowserAskModal
           url={pendingAsk.url}
