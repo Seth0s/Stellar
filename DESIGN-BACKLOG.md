@@ -1421,8 +1421,46 @@ ficar bloqueado se outra plataforma falhar).
 caminho real no GitHub Actions (permissões do `GH_TOKEN`, runners
 diferentes) só se prova com o usuário empurrando a tag de verdade.
 Detalhe completo, achados, e o que falta em `docs/packaging.md` §2/§5.
-**Nenhum commit/tag/push feito** — por pedido explícito do usuário
-("depois faça os commits eu crio a tag e faço os push").
+**Commits feitos, `v0.1.0` taggeada e empurrada pelo usuário** — a tag já
+disparou a CI de verdade.
+
+### Achado ao vivo, pós-tag: ícone não aparecia depois de instalar
+
+Usuário instalou o `.rpm` de verdade e reportou (com screenshot) que o
+app aparecia com o ícone genérico do desktop environment, não o da
+marca — apesar de `rpm -qlp` já ter confirmado antes que o arquivo
+estava no caminho certo. Duas causas reais, achadas investigando (não
+assumidas):
+
+1. **Só um tamanho de ícone existia** — `icon: "build/icon.png"`
+   (1024×1024) mandava o `electron-builder` colocar um único arquivo em
+   `hicolor/1024x1024/apps/`, um bucket de tamanho que nenhum
+   `index.theme` de tema de ícone declara (os padrão são 16 até 512,
+   mais `scalable`) — lookup estrito de tema simplesmente pulava esse
+   tamanho. Corrigido: `build/icons/` (novo) com os 11 tamanhos padrão
+   gerados do `build/icon.svg` via ImageMagick, `linux.icon` apontando
+   pra esse diretório em vez do PNG único.
+2. **Nenhum refresh de cache de ícone no pós-instalação** —
+   `rpm -q --scripts` confirmou que o `%post` gerado pelo `fpm` chama
+   `update-desktop-database` mas nunca `gtk-update-icon-cache`/
+   `xdg-icon-resource`; mesmo com o arquivo certo no lugar certo, o
+   cache do tema podia continuar servindo o ícone genérico até um
+   refresh manual/relogin. `build/linux-after-install.sh` (novo, best-
+   effort — nenhum comando ausente é fatal) chamado via
+   `rpm.afterInstall`/`deb.afterInstall`.
+
+**Também nesta passagem, pedido explícito do usuário**: nome/e-mail
+reais trocados por "Seth0s" (handle do GitHub) em `package.json`'s
+`author`, `rpm.vendor`/`deb.vendor`, e o `Copyright` do `LICENSE` — sem
+identidade pessoal nos pacotes distribuídos. E-mail de contato virou um
+placeholder `seth0s@users.noreply.github.com` (não recebe nada de
+verdade, é só metadado).
+
+Verificado via `rpm -qlp`/`rpm -qip` — 11 tamanhos presentes, `Vendor`/
+`Packager` sem nome real. **Não confirmado ainda contra uma instalação
+real** — pedido ao usuário reinstalar o `.rpm` recém-buildado
+(`dist/Stellar-0.1.0-x86_64.rpm`) e checar se o ícone aparece de
+verdade desta vez.
 
 ## Ordem sugerida para a próxima rodada
 
