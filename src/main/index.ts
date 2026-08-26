@@ -222,7 +222,14 @@ function createWindow() {
   });
 
   remoteServer = createRemoteServer({
-    port: 4488,
+    // Overridable only so the verify harness (scripts/verify/) can point
+    // throwaway test instances at a different port — every real launch
+    // (dev or packaged) still uses 4488. Fixed port + no override used to
+    // mean any isolated test instance launched while a real instance (the
+    // user's own `npm run dev`, or another leftover test run) was up
+    // collided on EADDRINUSE, which threw uncaught in main and crashed
+    // that instance — confirmed live, see AGENTS.md.
+    port: Number(process.env.AGENT_CANVAS_REMOTE_PORT) || 4488,
     mobileClientDir,
     listTerminals: () =>
       store
@@ -357,8 +364,19 @@ function createWindow() {
   ipcMain.handle("remote:revoke", () => remoteServer!.revoke());
   ipcMain.handle("remote:connection-count", () => remoteServer!.connectionCount());
 
-  win.on("closed", () => {
+  // `browserRegistry.destroyAll()` touches `win.contentView` — needs `win`
+  // still alive, so it has to run on "close" (before teardown), not
+  // "closed" (after: `win` is already a destroyed native object at that
+  // point, and `win.contentView.removeChildView(...)` throws "Object has
+  // been destroyed", an uncaught exception that crashes the whole main
+  // process — confirmed live). Same failure mode `safeSend` above already
+  // guards against for `win.webContents.send`; this is the same fix,
+  // applied by moving the call to the event where `win` is still valid
+  // instead of adding another isDestroyed() guard.
+  win.on("close", () => {
     browserRegistry.destroyAll();
+  });
+  win.on("closed", () => {
     messageBus.close();
     registry.killAll();
     remoteServer?.close();

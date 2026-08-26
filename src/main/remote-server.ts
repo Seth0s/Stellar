@@ -168,7 +168,17 @@ export function createRemoteServer(opts: {
   return {
     broadcastPtyData: (id: string, data: string) => broadcast({ type: "pty:data", id, data }),
     broadcastPtyExit: (id: string, exitCode: number) => broadcast({ type: "pty:exit", id, exitCode }),
-    broadcastCards: () => broadcast({ type: "cards", cards: opts.listTerminals() }),
+    // `opts.listTerminals()` calls back into the store (main/index.ts) —
+    // only worth paying for when someone's actually listening. Also fixes
+    // a real shutdown-order crash: a PTY can exit (and fire its onExit,
+    // which calls this) after `store.close()` has already run — `close()`
+    // above always runs before `store.close()` in main/index.ts's cleanup,
+    // so by then `clients` is already empty and this guard skips the call
+    // that would otherwise throw "database connection is not open"
+    // (confirmed live — see AGENTS.md).
+    broadcastCards: () => {
+      if (clients.size > 0) broadcast({ type: "cards", cards: opts.listTerminals() });
+    },
     getPairing,
     revoke,
     connectionCount: () => clients.size,

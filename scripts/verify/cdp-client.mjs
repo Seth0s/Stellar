@@ -56,7 +56,18 @@ export async function startApp({ cdpPort, userDataDir, cwd = PROJECT_ROOT, extra
   const proc = spawn(
     ELECTRON_BIN,
     [ELECTRON_MAIN, `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userDataDir}`, ...extraArgs],
-    { cwd, stdio: ["ignore", "pipe", "pipe"], detached: true },
+    {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+      // Never let a throwaway instance bind the app's real remote-control
+      // port (4488, fixed in src/main/index.ts) — it collided with the
+      // user's own running `npm run dev` session (EADDRINUSE, uncaught in
+      // main, crashed their live app) the first time this harness ran
+      // ad hoc while a real session was up. Derived from cdpPort so it's
+      // both unique per test instance and never 4488.
+      env: { ...process.env, AGENT_CANVAS_REMOTE_PORT: String(cdpPort + 30000) },
+    },
   );
   let stderr = "";
   proc.stderr.on("data", (d) => (stderr += d.toString()));
