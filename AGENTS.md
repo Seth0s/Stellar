@@ -1368,6 +1368,80 @@ da viewport) e criando um card novo — landing centralizado no que estava
 visível, não na origem antiga; screenshot confirma canto do header limpo
 e nenhuma barra de acento.
 
+## 2026-08-26 — Avaliação livre de design: retoques aditivos + backlog
+
+Usuário pediu uma avaliação aberta do design atual (comparado ao artifact
+de referência), "retoque de animações, aprimoramento apenas aditivo", com
+uma lista grande de pedidos (gestos, atalhos, organização de código,
+otimização, header de terminal mais útil, fundo do canvas, controle
+remoto mobile, visualização de processos, snapshot pro agente, UI
+minimalista, auditoria de fluxo) e instrução explícita: fazer só o que
+"soar viável" nesta rodada, documentar o resto com uma ordem de
+prioridade. O que não entrou (com porquê, caminho recomendado e ordem
+sugerida) está em `DESIGN-BACKLOG.md`, novo arquivo — não misturado neste
+changelog porque é uma lista de decisões em aberto, não um registro do que
+já foi feito.
+
+**Implementado, tudo verificado ao vivo via CDP**:
+
+- **Renomear cards via duplo-clique no header**: novo componente
+  `CardTag.tsx` substitui o `<span className="card-tag">` estático em
+  terminal/arquivos/changes/nota (navegador e desenho ficaram de fora —
+  navegador já tem identidade própria via barra de endereço, desenho não
+  tem identidade nenhuma pra nomear). Nova coluna genérica `cards.label
+  TEXT` (migração guardada, mesmo padrão de sempre) — deliberadamente uma
+  coluna própria, não mais uma sobrecarga de `provider`/`cwd` (esses dois
+  já servem múltiplos propósitos por tipo de card, ver comentário em
+  `App.tsx`). `CardFrame`'s detecção de início de arraste ganhou
+  `[data-no-drag]` no seletor de exclusão — sem isso, o primeiro
+  pointerdown do duplo-clique iniciava um arraste antes do evento
+  `dblclick` disparar.
+  **Achado de metodologia de teste**: `Input.dispatchMouseEvent` via CDP
+  com `clickCount: 2` não gerou um `dblclick` nativo de forma confiável
+  neste ambiente/versão do Electron — o clique único registra, mas o
+  segundo press/release não compôs um double-click real. Confirmado que
+  o COMPONENTE está correto despachando um `MouseEvent("dblclick", ...)`
+  sintético direto (legítimo pra eventos de mouse — a limitação já
+  documentada de pointerType/isPrimary é especificamente de PointerEvent,
+  não se aplica aqui) — o handler disparou e a edição abriu normalmente.
+  Registrado como gotcha de teste, não bug de produto.
+- **Animação de fechar card**: `closeCard` (App.tsx) parou de remover o
+  card na hora — agora só marca `closingIds`, `CardFrame` ganha a classe
+  `.closing` (`animation: popout 0.16s ease-in forwards`), e a remoção
+  real (`finalizeCloseCard`, o antigo corpo de `closeCard`) só roda no
+  `animationend` — **com um fallback por `setTimeout` de 180ms
+  redundante**, porque `prefers-reduced-motion: reduce` derruba a
+  animação inteira (mesmo padrão já usado por `popin`/`reflow`) e sem o
+  fallback nenhum evento de animation dispararia, deixando o card preso
+  pra sempre pra quem tem essa preferência ativada. Card de navegador tem
+  uma ressalva documentada no código: só o chrome DOM esmaece, a
+  `WebContentsView` (pinta por cima de tudo, sem opacity própria) só
+  desaparece no fim, sem fade.
+- **Fundo do canvas**: `--ink` `#0e1014`→`#14171d` (relatado como "muito
+  preto"), contraste dos pontos de `0.07`→`0.14` opacidade. Novo seletor
+  de estilo (`BgStyle`: pontos/grade/linhas/liso) — botão novo no
+  `zoom-pill` (ícone `Grid2x2`), cicla e persiste em `localStorage`
+  (`ac.bgStyle`) — preferência por visualizador, não dado de board, então
+  não precisa de coluna/migração. "Grade" é o mesmo espaçamento de
+  `GRID_SPACING` cruzado em duas direções; "linhas" usa o dobro do
+  espaçamento (lê como pauta de caderno, não grade de medição).
+- **Retoque de transições**: `.rail-btn` (+ leve `scale(0.9)` no
+  `:active`), `.zoom-pill button`, `.card-head button`, `.card-resize` —
+  nenhum tinha `transition`, hover/active eram instantâneos. Fora do
+  `@media (prefers-reduced-motion)` de propósito, mesmo padrão já usado
+  pelo `box-shadow` de `.card-frame.dragging` — transição de cor não é o
+  tipo de movimento que essa preferência do usuário pede pra evitar.
+- **Header do terminal mais compacto/útil**: renomear (acima) foi a peça
+  que faltava pra "compacto de ser útil" — sem adicionar nenhum botão
+  novo, só tornando a tag existente editável.
+
+Verificação: `tsc --noEmit`/`electron-vite build` limpos; rename
+confirmado persistindo texto novo na tag; ciclo de fundo confirmado via
+`backgroundImage` computado mudando de radial-gradient pra
+linear-gradient; animação de fechar confirmada via classe `.closing`
+capturada no meio da transição e contagem de cards caindo só depois dela
+terminar (não instantaneamente).
+
 ## Comandos
 
 ```bash

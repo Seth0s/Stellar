@@ -1,4 +1,5 @@
 import { CardFrame } from "./CardFrame";
+import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 
@@ -25,10 +26,14 @@ export function StickyCard({
   interactionMode,
   selected,
   reflowing,
+  closing,
+  label,
   onChange,
   onCommit,
   onRaise,
   onClose,
+  onCloseAnimationEnd,
+  onRename,
   onContentChange,
   onContentCommit,
   onColorCommit,
@@ -43,10 +48,14 @@ export function StickyCard({
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
+  closing?: boolean;
+  label: string | null;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onClose: () => void;
+  onCloseAnimationEnd?: () => void;
+  onRename: (label: string) => void;
   onContentChange: (content: string) => void;
   onContentCommit: (content: string) => void;
   onColorCommit: (color: string) => void;
@@ -63,16 +72,18 @@ export function StickyCard({
       selected={selected}
       accent={STICKY_ACCENT[color] ?? STICKY_ACCENT.yellow}
       reflowing={reflowing}
+      closing={closing}
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
+      onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
       headerContent={
         <>
           <span className="card-head-label">
             <Icon name="sticky" size={14} />
-            <span className="card-tag">nota</span>
+            <CardTag label={label ?? "nota"} onRename={onRename} />
             <span className="swatches">
               {STICKY_COLORS.map((c) => (
                 <button

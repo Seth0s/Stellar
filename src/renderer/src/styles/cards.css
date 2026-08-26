@@ -61,6 +61,7 @@
   line-height: 1;
   padding: 4px;
   border-radius: 4px;
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 
 .card-head button:hover {
@@ -119,6 +120,27 @@
   background: color-mix(in srgb, var(--accent, var(--muted)) 22%, transparent);
   color: var(--accent, var(--muted));
   flex: none;
+  cursor: text;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-tag-input {
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: var(--ink);
+  color: var(--text);
+  border: 1px solid var(--accent, var(--border));
+  outline: none;
+  width: 120px;
+  flex: none;
 }
 
 .card-foot {
@@ -145,6 +167,7 @@
   padding: 2px;
   color: var(--muted);
   cursor: nwse-resize;
+  transition: color 0.12s ease;
   /* Lives outside .card-clip on purpose — see CardFrame.tsx — so the
      rounded corner never eats its hit area again. */
 }

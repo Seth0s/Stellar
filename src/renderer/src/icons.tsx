@@ -13,6 +13,7 @@ import {
   Folder,
   GitBranch,
   Globe,
+  Grid2x2,
   GripHorizontal,
   Group,
   LayoutGrid,
@@ -65,7 +66,8 @@ export type IconName =
   | "resizeGrip"
   | "group"
   | "ungroup"
-  | "check";
+  | "check"
+  | "bgStyle";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -97,6 +99,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   group: Group,
   ungroup: Ungroup,
   check: Check,
+  bgStyle: Grid2x2,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
