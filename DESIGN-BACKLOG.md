@@ -18,38 +18,59 @@ lista, em ordem de prioridade sugerida para discussão — não é um changelog
 - Retoque de transição em botões (`rail-btn`, `zoom-pill`, `card-head`,
   alça de resize) — hover/active deixaram de ser instantâneos.
 
-## 1. Sistema de gestos / atalhos — precisa de decisão de interação
+## 1. Sistema de gestos / atalhos — feito (decisão do usuário, 2026-08-26)
 
 **Pedido**: um botão que abre todas as ferramentas do painel lateral "em
 círculo ao redor do mouse" (radial/pie menu), ou atalhos.
 
-**Por que não entrou nesta rodada**: é um padrão de interação novo, não um
-retoque — decisão de produto antes de código (qual gesto abre, o que
-acontece com a régua linear existente, como sub-opções tipo "provider do
-terminal" cabem num menu radial).
-
-**Caminho recomendado, se aprovado**: manter a régua linear como está
-(já discreta, já funciona) e adicionar o radial como **atalho alternativo
-de spawn**, não substituto — clique direito (ou pressionar e segurar) no
-canvas vazio abre um menu radial com as 6 ações de criar card, usando
-`centeredSlot` (já existe) na posição do próprio clique em vez do centro
-da viewport. Menor risco: não mexe em nada que já funciona, só adiciona um
-segundo caminho pro mesmo resultado.
-
 **Atalhos — feito em 2026-08-26**: overlay de ajuda (`?`, `ShortcutsOverlay.tsx`)
 listando ferramentas/janela/card/mouse num modal — ver `AGENTS.md`.
 
-**Radial menu — feito em 2026-08-26**, seguindo exatamente o caminho
-recomendado acima: régua linear intocada, right-click no canvas vazio
-(`onContextMenu` no viewport, mesmo guard `target === currentTarget` que
-`onBackgroundPointerDown` já usa) abre um menu circular
-(`RadialMenu.tsx`) com as 6 ações de criar card, ancorado no ponto do
-clique via `pointSlot` (novo em `board-model.ts`, variante de
-`centeredSlot` sem stagger — só spawna um card por vez). Fecha ao
-escolher uma ação, ao clicar fora (backdrop transparente) ou com `Esc`.
-Verificado ao vivo via CDP: abre no ponto certo, lista as 6 ações,
-seleção fecha e spawna no lugar certo, backdrop/Esc fecham sem spawnar
-nada.
+**Radial menu, 1ª rodada — feito em 2026-08-26**: régua linear intocada,
+right-click no canvas vazio (`onContextMenu` no viewport, mesmo guard
+`target === currentTarget` que `onBackgroundPointerDown` já usa) abre um
+menu circular (`RadialMenu.tsx`) ancorado no ponto do clique via
+`pointSlot` (`board-model.ts`, variante de `centeredSlot` sem stagger).
+Só as 6 ações de criar card nessa rodada.
+
+**Radial menu revisitado — decisão do usuário, feito em 2026-08-26**:
+usuário pediu explicitamente pra decidir o escopo da interação; escolheu
+as duas extensões abaixo (não "deixar como está"):
+
+1. **Cobre também os 4 tool switches** (ponteiro/caneta/conector/seleção)
+   — não só spawn. `RadialAction` (`RadialMenu.tsx`) ganhou
+   `"tool-pointer" | "tool-pen" | "tool-connector" | "tool-select"`; cada
+   item carrega um `group: "tool" | "spawn"`. Os dois clusters (10 itens
+   no mesmo anel, uniforme — sem gap angular, geometria simples de mais
+   valor que separar em arcos) se distinguem visualmente: itens de
+   ferramenta ganham borda `--violet`, e a ferramenta ativa preenche
+   sólido (`.radial-item--tool.active`), mesma linguagem "já selecionado"
+   que o botão `.active` da régua já usa. Find-card e as ações de IA
+   (organizar/resumir) **ficam de fora** — são listas/popovers, não fazem
+   sentido como um único ícone radial. `selectRadialAction` (`App.tsx`)
+   ganhou os 4 ramos `tool-*` chamando `setTool(...)` direto, ignorando o
+   ponto de mundo (não spawna nada).
+2. **Pressionar-e-segurar como gatilho alternativo**, junto do clique
+   direito — `startRadialHold` (`App.tsx`), só na branch do tool
+   `"pointer"` de `onBackgroundPointerDown` (pen/select/connector já
+   fazem algo no próprio pointerdown — um timer competindo ali
+   interromperia o gesto deles, ex.: segurar a caneta parada por 450ms no
+   meio de um traço abriria o menu por cima do desenho). `startPan`
+   continua rodando em paralelo sem alteração — parado, seu delta é ~0,
+   inofensivo; é um segundo listener independente medindo duração/
+   deslocamento, não substitui o pan. 450ms de espera, cancela se mover
+   mais que 6px (vira arraste/pan normal) ou soltar antes.
+
+`tsc`/build limpos. `smoke-card-lifecycle.mjs` atualizado (10 itens, tool
+ativo em destaque, seleção de tool-switch funciona e fecha o menu sem
+spawnar nada — achado real ao escrever o teste: terminal + sticky no
+spawn box padrão 860×660 cobrem quase a janela 1280×800 inteira, não
+sobra um 2º ponto vazio pra reabrir o menu depois de um spawn, then a
+ordem do teste foi ajustada pra checar o tool-switch **antes** do spawn
+de sticky, reusando o mesmo ponto). `smoke-radial-longpress.mjs` (novo):
+segurar parado abre o menu; um arraste de verdade (moveu cedo) não abre.
+Confirmado visualmente via screenshot CDP. `npm run verify` completo (10
+suítes, ~105 checks) PASS. **Item fechado.**
 
 ## 2. Sistema de controle remoto (mobile) via tunnel/reverse proxy
 
@@ -223,6 +244,54 @@ Topbar).
 
 Fase C (relay hospedado + domínio + Magic Link) segue fora de escopo,
 como já registrado acima.
+
+### Revisitado em 2026-08-26 — revogação por dispositivo
+
+Usuário pediu pra decidir o que ficava aberto no item; escolheu revogação
+por dispositivo (o túnel de verdade, fase B, fica registrado à parte —
+depende de rodar fora deste ambiente, com participação direta do usuário).
+
+**Antes**: um token só, compartilhado pelo servidor inteiro — `revoke()`
+trocava esse único token e derrubava todo mundo junto, sem meio-termo.
+
+**Depois**: cada pareamento (cada vez que "parear novo dispositivo" é
+clicado, ou o primeiro QR automático ao abrir o modal sem nenhum
+dispositivo ainda) gera um **id + token próprios**. `remote-server.ts`
+guarda um `Map<id, {token, label, pairedAt}>`; a conexão WS resolve o
+token pro dispositivo dono dele, e cada socket aberto fica associado ao
+`id` do dispositivo que autenticou (`clientDevice`, `WeakMap`-like). Duas
+operações agora:
+- `revokeDevice(id)` — remove só aquele dispositivo do mapa e fecha só os
+  sockets dele. Todo outro dispositivo pareado continua intacto.
+- `revokeAll()` — o escape hatch antigo, mantido: limpa tudo.
+
+`listDevices()` **nunca devolve o token** de volta pro renderer — só
+`id`/`label`/`pairedAt`/`connections` (contagem ao vivo de sockets abertos
+com aquele id). O token de um dispositivo só existe na resposta única de
+`pairNewDevice()`, o momento em que o QR daquele dispositivo é mostrado.
+
+`RemotePairingModal.tsx` reescrito: lista "DISPOSITIVOS PAREADOS" (nome +
+bolinha verde se tem conexão ativa + botão "revogar" por linha), botão
+"+ parear novo dispositivo" (gera um novo QR sob demanda), "Revogar tudo"
+continua existindo como botão separado (vermelho, mesma posição de
+antes). Primeira abertura sem nenhum dispositivo pareado ainda continua
+mostrando um QR na hora (auto-pareia o primeiro), preservando a
+experiência anterior — só pareamentos seguintes exigem o clique explícito.
+
+`tsc`/build limpos. `smoke-remote-control.mjs` reescrito: pareia 2
+dispositivos independentes, confirma que revogar um não derruba o outro
+(round-trip real de WS no dispositivo que ficou, não só checagem de
+código de fechamento), depois `revokeAll()` derruba o que sobrou.
+Confirmado visualmente via screenshot CDP. `npm run verify` completo (10
+suítes, ~108 checks) PASS.
+
+**Teste do túnel de verdade (fase B) — em hold, 2026-08-26**: Tailscale já
+instalado/conectado nesta máquina (`lucas-linux`). `tailscale funnel --bg
+4488` não completou — Funnel **não está habilitado nesta tailnet ainda**,
+exige aprovação única do usuário como admin em
+`https://login.tailscale.com/f/funnel?node=nvtVyqHpYJ11CNTRL`. Nenhum
+serve config ficou ativo (`tailscale funnel status` → "No serve config"),
+nada foi exposto. Retomar quando o usuário aprovar o link.
 
 ## 3. Facilitar visualização de processos do PC/apps, para snapshot
 
@@ -443,20 +512,53 @@ central reduzindo isso a 1-2 lugares. Maior risco — mexe em todo card
 existente — fica pra depois das fases 1-3 acima reduzirem o tamanho/risco
 da superfície.
 
-## 6. Otimização
+## 6. Otimização — feito, medido antes de mexer (2026-08-26)
 
-**Achado observável agora, sem precisar investigar mais**: o bundle do
-renderer já passa de 1.3MB (`electron-vite build` mostra
-`index-*.js  1,376.58 kB`). Candidatos óbvios a lazy-load (nenhum
-implementado ainda):
-- `marked`/`dompurify` (usados só por `FilesCard` ao abrir um `.md`) —
-  `import()` dinâmico só quando o usuário abre um arquivo markdown, não
-  no bundle inicial.
-- `@xterm/addon-webgl` já tem fallback pra canvas2d no catch, mas os dois
-  addons carregam sempre — poderia ser um só import condicional.
+Pedido do usuário: otimizar antes da primeira tag/release. Seguido o
+próprio conselho do item ("medir antes de mexer") — `rollup-plugin-
+visualizer` instalado como devDependency, gated atrás de `VISUALIZE=1`
+em `electron.vite.config.ts` (não roda em todo build normal, só sob
+demanda: `VISUALIZE=1 npm run build` gera `bundle-stats.html`, já no
+`.gitignore`).
 
-**Recomendação**: medir antes de mexer (`vite-bundle-visualizer` ou
-similar) — os dois itens acima são hipóteses razoáveis, não medidas.
+**Medido de verdade** (bundle tinha ido de 1.376MB pra 1.447.78KB desde
+que este item foi escrito, todo o trabalho de items 12-15 somado):
+
+| Dependência | Raw | Gzip | Uso real |
+|---|---|---|---|
+| `react-dom` | 552.9KB | 95.4KB | core, todo componente — fora de escopo |
+| `@xterm/xterm` | 337.6KB | 84.7KB | core, todo terminal — fora de escopo |
+| `dompurify` | 129.1KB | 37.7KB | só `FilesCard`, preview de markdown |
+| `@xterm/addon-webgl` | 113.9KB | 30.5KB | todo terminal, síncrono no boot |
+| `marked` | 43.8KB | 13.2KB | só `FilesCard`, preview de markdown |
+
+**Confirmação da hipótese de `marked`/`dompurify`**: certa — usados só
+dentro de um branch condicional (`view === "preview"`, que nem é o
+padrão — abre em "código"). Convertidos pra `MarkdownPreview` (novo
+componente em `FilesCard.tsx`), que só faz `import("marked")`/
+`import("dompurify")` quando de fato renderiza (dynamic `import()`, Vite
+já separa em chunk próprio automaticamente — nada de config manual de
+chunking precisou).
+
+**Hipótese de `@xterm/addon-webgl` — invalidada pela medição real**: a
+suposição escrita aqui era "os dois addons carregam sempre, poderia ser
+condicional". Falso na prática: toda sessão já boota com um terminal
+bash auto-semeado (`useBoardStore`), então o addon é usado de forma
+síncrona logo no primeiro render de qualquer jeito — adiar o import só
+trocaria "no parse inicial do bundle" por "num round-trip de chunk extra
+bem no boot", sem ganho real pro caminho comum. Deixado como está.
+
+**Resultado**: `index-*.js` (chunk inicial) caiu de **1,447.78KB pra
+1,322.87KB** (~125KB, ~8.6%), com `marked.esm-*.js` (56.06KB) e
+`purify.es-*.js` (67.31KB) virando chunks próprios, só buscados quando o
+usuário de fato clica "preview" num `.md`.
+
+`tsc`/build limpos. `smoke-files-card.mjs` ganhou um check novo: abre
+`notes.md`, clica "preview", confirma que o HTML renderizado de verdade
+aparece (`.files-editor-preview` contém "hello") — prova o `import()`
+dinâmico funcionando ao vivo, não só passando no type-check. `npm run
+verify` completo (10 suítes, ~109 checks) PASS. Renderer-only — hot-
+reload aplicou sem precisar reiniciar o `npm run dev`. **Item fechado.**
 
 ## 7. Fluxo de uso — passos faltando (auditoria rápida, sem código)
 
@@ -479,8 +581,34 @@ similar) — os dois itens acima são hipóteses razoáveis, não medidas.
 como bug de segurança de dados (perda de trabalho por clique acidental),
 não só conveniência — candidato a entrar antes dos outros quatro.
 **Feito em 2026-08-26** (`ConfirmModal.tsx`) — só pra terminal com
-processo vivo, ver `AGENTS.md`. Os outros quatro (duplicar card,
-jump-to-card, template de sessão) continuam em aberto.
+processo vivo, ver `AGENTS.md`.
+
+**Os outros três — feitos em 2026-08-26**:
+
+- **Duplicar card** — `Ctrl`/`Cmd`+`D` clona o card no topo do z-order
+  (mesmo provider/cwd/model/root/url, conforme o tipo) num offset pequeno,
+  id novo, sem grupo/label herdados. Terminal nunca herda
+  `resumeId`/`continueLast` — duplicar "a mesma sessão" seria dois cards
+  disputando um processo real; o pedido era um terminal novo com a mesma
+  configuração, não uma segunda janela pro mesmo. Listado no overlay de
+  atalhos (`?`).
+- **Jump-to-card** — botão novo na régua ("Localizar card", ícone de
+  lupa) abre popover com todos os cards da sessão atual (ícone do tipo +
+  label/nome), clicar centraliza+ajusta zoom nele (`focusCard`, mesma
+  matemática do `fitView` já existente, só que pra um rect em vez do
+  bbox de todos) e traz pro topo do z-order.
+- **Template de sessão** — `SessionModal.tsx` (modo criar) ganhou um
+  seletor de template: "Vazio" (1 terminal bash, comportamento de sempre)
+  ou "Claude + bash + arquivos" (3 cards já arrumados — exatamente o
+  padrão visto nos screenshots do usuário). Implementado como um caso a
+  mais em `useBoardStore.ts`'s `seedCards`, não um sistema de templates
+  genérico — é o que foi pedido, não mais que isso.
+
+`scripts/verify/smoke-card-actions.mjs` (novo, 6 checks: duplicar via
+atalho, popover lista os cards certos, jump traz um card fora da tela de
+volta) + `smoke-session-modal.mjs` ganhou 2 checks novos (template fica
+selecionado, sessão nasce com os 3 cards certos). `npm run verify`
+completo: 59 checks, 7 suítes, PASS.
 
 ## 8. Home — tela inicial sem sessão carregada
 
@@ -504,6 +632,93 @@ projetos além do popover raso do `Topbar`.
 - Precisa de decisão de produto ainda não tomada: home é a tela de boot
   sempre, ou só quando não há sessão salva? Como voltar pra ela a partir
   do canvas (atalho? botão no `Topbar`?).
+
+**Decisões do usuário (2026-08-26)**: home aparece **sempre no boot**
+(não só quando não há sessão salva), e a volta a partir de uma sessão
+aberta é um **botão no Topbar**.
+
+**Feito em 2026-08-26**:
+
+- `useBoardStore.ts` — o effect de boot parou de auto-carregar um board:
+  só busca a lista de `boards` + `boardCounts` (novo `refreshBoardCounts()`
+  chamado aqui também, senão a home mostrava "0 agentes" pra tudo até a
+  primeira troca de sessão) e marca `loaded`; `activeBoardId` fica `null`
+  até o usuário escolher — nenhuma PTY sobe antes disso. Novo `goHome()`
+  (mesma limpeza que `loadBoard` já fazia trocando ENTRE boards — cards/
+  conectores/live-status zerados, o que já era o que de fato encerrava as
+  PTYs do board anterior — só que aterrissando em "nenhum board" em vez de
+  outro).
+- `sessions.tsx` (novo) — `groupByProject`/`StatusDot`/`UNGROUPED_LABEL`/
+  `Board`/`BoardCounts` extraídos de `Topbar.tsx` pra serem reusados por
+  `Home.tsx` também, sem duplicar a lógica de agrupamento.
+- `Home.tsx` (novo) — grid de sessões agrupadas por projeto (reusa
+  `groupByProject`/`StatusDot`), contagem de agentes/ativos por sessão via
+  `boardCounts`, estado vazio com CTA quando não há nenhuma sessão ainda,
+  lápis por card abrindo `SessionModal` em modo edição — mesmo modal que
+  o Topbar já usava (item 11), sem duplicar criar/editar.
+- `Topbar.tsx` — novo botão `.topbar-home` (ícone `home`, lucide) como
+  primeiro filho da barra, chama `onGoHome`.
+- `icons.tsx` — ícone `home` (lucide `Home`, aliado `HomeGlyph` pra não
+  colidir com o componente `Home.tsx`).
+- **Bug real achado corrigindo a suíte de verificação**: `store.ts` tinha
+  um auto-INSERT de um board `"Board 1"` sempre que o banco abria vazio —
+  sobrou de antes do item 8 existir, quando o app *precisava* de pelo
+  menos um board pra carregar no boot. Com a home sempre aparecendo agora,
+  isso fazia a home nunca mostrar o estado vazio de verdade (sempre havia
+  pelo menos "Board 1" já criado). Removido — zero boards é um estado de
+  primeiro-uso legítimo agora, não uma lacuna a disfarçar.
+- `layout.css` — `.home`/`.home-header`/`.home-empty`/`.home-group`/
+  `.home-grid`/`.home-session-card` (grid responsivo, cards com hover
+  revelando o lápis); `.topbar-home` entrou na lista de exceções
+  `pointer-events: auto` do `.topbar` **proativamente** (mesma classe de
+  bug do item 11 — dessa vez evitada antes de acontecer, não corrigida
+  depois).
+- **Efeito colateral em cascata na suíte de verificação**: com o boot não
+  carregando mais um board automaticamente, todo smoke script que assumia
+  "abre direto numa sessão com o terminal auto-semeado" quebrava por
+  design, não por bug — `smoke-boot.mjs`, `smoke-card-lifecycle.mjs`,
+  `smoke-card-actions.mjs`, `smoke-connector.mjs`, `smoke-group-select.mjs`,
+  `smoke-browser.mjs`, `smoke-remote-control.mjs` e `smoke-session-modal.mjs`
+  precisaram criar uma sessão de verdade primeiro. Extraído um helper
+  único (`bootIntoFreshSession`, em `cdp-client.mjs`) que passa pelo
+  próprio fluxo real da home (clica "+ nova sessão", preenche nome, clica
+  "Criar") em vez de contornar via IPC — assim uma regressão nesse
+  caminho falha ali também, não só no teste dedicado da home.
+- `scripts/verify/smoke-home.mjs` (novo, 13 checks): boot cai na home com
+  estado vazio, criar pela home leva pro board, botão do Topbar volta pra
+  home, sessão criada aparece no grid (não mais estado vazio), duas
+  sessões em projetos diferentes agrupam em 2 grupos, clicar num card
+  abre aquele board, lápis de um card abre o modal de edição.
+  `npm run verify` completo (8 suítes, 72 checks) passa. **Item fechado.**
+
+**Ajustes ao vivo em 2026-08-26 (mesmo dia, testando item 8 de verdade)**:
+
+- **Raiz do workspace deixou de ser fixa**: `WORKSPACE_ROOT` era um
+  `const` hardcoded (`/home/lucas/Workplace/Projects`) — o usuário pediu
+  algo navegável, "para ser universal". Virou estado real
+  (`workspaceRoot`, persistido em `localStorage`), trocável via diálogo
+  nativo do SO (`fs:pick-directory`, novo IPC em `main/index.ts` com
+  `dialog.showOpenDialog`). O ponto de troca é o `ProjectPicker.tsx`
+  compartilhado — a única opção "📁 mudar pasta raiz…" ali cobre os dois
+  modos do `SessionModal` (criar/editar) automaticamente, sem repetir a
+  ligação em cada modal que usa o campo de projeto, como pedido ("de forma
+  unificada"). O rótulo "📁 Projects" fixo no `Home.tsx`/`Topbar.tsx`
+  virou "📁 {rootName}" (último segmento do path atual).
+- **Template "Vazio" seedava um terminal bash mesmo assim** — bug real
+  reportado ao vivo ("eu escolhi vazio, e veio um bash feito ainda").
+  `seedCards` retornava `[terminal("bash", 0)]` incondicionalmente pro
+  template `"empty"`; virou `[]` de verdade — vazio agora é literal.
+- **Botão de home desalinhado com a régua**: `.topbar-home` vivia dentro
+  do fluxo flex de `.topbar` (que começa em `left: 72px`, pra abrir espaço
+  pra régua), então nunca alinhava com o centro da régua (`left: 12px`).
+  Virou irmão de `.topbar`, posicionamento absoluto próprio, mesmo
+  `left`/largura da régua — empilha na mesma coluna em vez de ficar
+  solto.
+- **Grid de sessões da home "deslocado no centro"**: `.home-grid` usava
+  `minmax(200px, 1fr)` — com só 1-2 sessões num grupo, o card esticava a
+  linha inteira, lendo como deslocado pro centro da tela em vez de uma
+  lista compacta. Virou `minmax(200px, 220px)`; `.home` também ganhou o
+  mesmo `left` do `.topbar` (72px) em vez de um padding solto de 64px.
 
 ## 9. Navegador embutido — GPU religada, aguardando confirmação ao vivo
 
@@ -606,10 +821,78 @@ não o driver de vídeo). Fix indicado ao usuário: `sudo update-ca-trust
 extract` — comando de sistema, fora do escopo deste repo, não aplicado
 por mim.
 
-**Item continua aberto até confirmação ao vivo**: GPU religada e
-verificada sem crash em instância isolada, mas o usuário ainda precisa
-reiniciar a sessão real (`npm run dev`) e confirmar que o navegador
-mostra conteúdo de verdade agora — só isso fecha o item de fato.
+**GPU religada confirmada estável ao vivo, mas o navegador continuou sem
+mostrar conteúdo** — dois problemas distintos, não um só. Investigação
+final, 2026-08-26:
+
+- Debug direto (`console.log` temporário em `browser-registry.ts`)
+  confirmou `setBounds`/`setVisible` disparando certos, com valores sãos —
+  descartou bug no lado do renderer.
+- Pesquisa achou a causa raiz real, confirmada em issues do próprio
+  Electron: [electron/electron#45367](https://github.com/electron/electron/issues/45367)
+  — `contentView.addChildView(WebContentsView)` renderiza a página na
+  árvore do DevTools mas **não visualmente**, fechada "not planned" pelos
+  mantenedores (aceito como limitação permanente da API, não bug a
+  corrigir). `--ozone-platform=x11` foi tentado como workaround e
+  **revertido** — parou a janela principal de aparecer de vez, pior que o
+  sintoma original.
+
+**Fix real — reescrito para renderização offscreen** (não mais
+`WebContentsView`/`addChildView`): cada card de navegador agora é um
+`BrowserWindow` oculto (`show: false, webPreferences: {offscreen: true}`)
+cujo `webContents` nunca é anexado a nenhuma janela real — o Chromium
+pinta para um buffer em memória, entregue via evento `paint`, e o
+renderer desenha esse buffer num `<canvas>` comum dentro do DOM do card
+(`BrowserCard.tsx`). Isso vira conteúdo DOM normal: acompanha o mesmo
+transform CSS que todo outro card já tem de graça, respeita z-order real
+(resolveu de brinde um bug achado no teste ao vivo — o navegador pintava
+por cima do popover de Sessões), e elimina `CHROME_INSETS`/
+`clampBrowserBounds`/`occlusion.ts` no browser inteiramente.
+
+Verificado por pixel real do canvas (`getImageData`, não CDP screenshot —
+CDP nunca mostra conteúdo de `WebContentsView`/offscreen, limitação
+estrutural já documentada): depois de navegar, ~13% dos pixels não-brancos,
+batendo com texto real de página carregada.
+
+**Três bugs reais achados testando interação ao vivo, todos corrigidos**:
+1. Scroll invertido — `sendInputEvent` do Electron usa convenção de sinal
+   oposta ao `WheelEvent.deltaY` nativo do DOM. Fix: negar `deltaX`/`deltaY`
+   antes de encaminhar.
+2. Clique em `<input>`/`<textarea>` real da página não focava (e por
+   consequência, digitar não funcionava) — uma janela offscreen
+   (`show:false`) nunca fica OS-ativa, e o Chromium checa esse estado antes
+   de aceitar foco de formulário num clique. Fix: `webContents.focus()`
+   explícito em todo `mouseDown`.
+3. Digitar de fato não inseria texto mesmo com foco certo — `keyDown`/
+   `keyUp` sozinhos só atualizam estado de tecla, nunca inserem caractere.
+   Fix: também enviar o tipo `char` do Electron (`sendInputEvent`) pra
+   teclas imprimíveis.
+
+**Dois bugs de UX achados no mesmo teste, também corrigidos**:
+- Scroll dentro do navegador também fazia zoom do board inteiro (todo
+  wheel no viewport zooma, sem exceção) — deslocava o card, header incluso,
+  pra debaixo do chrome fixo (lido como "o header sumiu"). Fix: só
+  encaminha wheel pra página quando o canvas do card está com foco de
+  verdade (1 clique) — sem foco, comportamento de zoom do board continua
+  normal. Contorno azul sutil no canvas quando focado, pra ficar visível
+  em qual modo está.
+- `<canvas>` é elemento substituído — seu `width`/`height` (atributos, não
+  CSS) viram piso mínimo de tamanho que um flex child não encolhe abaixo,
+  mesmo com `flex:1`. Sem `min-width:0; min-height:0`, podia estourar
+  `.card-clip` e empurrar o header pra fora.
+- Header do card também ganhou retrabalho visual pedido junto (mais
+  alto — 32px→44px, botões maiores/arredondados, mais espaçado) — mais
+  fácil de agarrar pra arrastar o card.
+
+**Verificado ao vivo pelo usuário em 2026-08-26 — funcional**: "Completo
+sucesso" após o rewrite offscreen; os bugs de scroll/clique/digitação
+testados e confirmados corrigidos depois do segundo round de fixes.
+`scripts/verify/smoke-browser.mjs` cobre o fluxo inteiro (canvas monta,
+pixels reais depois de navegar, clique real foca um `<input>` real da
+página, digitação chega no campo, direção do scroll correta, header
+sobrevive a atalho de teclado digitado dentro do card, fecha sem
+vazamento) — `npm run verify` roda os 9 checks a cada mudança futura no
+browser card. **Item fechado.**
 
 ## 10. Terminal — polimento visual + seleção — feito (3/3 achados)
 
@@ -690,6 +973,457 @@ o que o usuário descreve como "não prático".
   "gerenciar sessões" levando pra home cheia, em vez de duplicar toda a
   gestão dentro do popover).
 
+**Feito em 2026-08-26**, sem esperar o item 8 (home ainda não existe) —
+usado o fallback que o próprio item já cogitava ("modal de edição
+próprio, simétrico ao de criação"):
+
+- `Topbar.tsx` virou só o switcher: lista agrupada por projeto (igual
+  antes), clique troca de sessão, um ícone de lápis por linha abre edição.
+  Removido do popover: formulário inline de renomear/projeto por linha, e
+  os campos de criar (projeto + nome + botão) no rodapé — sobrou só um
+  botão único "+ nova sessão" full-width.
+- `SessionModal.tsx` (novo) — modal dedicado, mesmo layout pros dois
+  modos (`mode: "create" | "edit"`): campo nome, `ProjectPicker` (extraído
+  pra `ProjectPicker.tsx`, agora reusado por Topbar e o modal), e em modo
+  edição um botão "Excluir" à esquerda (mesmo guard de antes — nunca
+  deixa a última sessão) separado de Cancelar/Salvar à direita.
+- **Bug real achado e corrigido no meio do caminho**: o `updateBoard`
+  combinado substituiu duas chamadas separadas (`renameBoard` +
+  `changeBoardProject`) que existiam antes — cada uma lia `boards` do
+  closure do próprio render; chamadas nas costas uma da outra (exatamente
+  o que "Salvar" do modal sempre faz) faziam o segundo `upsert` gravar a
+  linha ainda com o valor pré-atualização do primeiro campo, revertendo
+  silenciosamente no banco o que acabara de ser salvo (o estado em memória
+  ficava certo, só a persistência que corrompia). `scripts/verify/smoke-session-modal.mjs`
+  checa a linha persistida de verdade (`window.store.boards.list()`), não
+  só o estado React, pra pegar exatamente essa classe de bug se voltar.
+- **Segundo bug real, achado testando o modal ao vivo**: `.topbar` inteiro
+  tem `pointer-events: none` por design (só reabilita pra
+  `.topbar-title`/`.zoom-pill`/`.hint`, pra deixar o board clicável por
+  baixo da barra flutuante) — o `SessionModal`, aninhado dentro de
+  `Topbar.tsx`, herdava isso: existia visualmente, `.modal-root` tinha
+  `z-index:2000`, mas **não recebia clique nenhum** (`elementFromPoint` na
+  posição do botão "Criar" acertava o terminal por baixo, confirmado via
+  CDP). Diferente do `ConfirmModal`, que é renderizado como irmão do
+  `<Topbar>` em `App.tsx`, não aninhado. Fix: `.modal-root` entrou na
+  lista de exceções `pointer-events: auto` (mesmo padrão já usado pros
+  outros elementos clicáveis dentro do `.topbar`).
+- `scripts/verify/smoke-session-modal.mjs` (novo, 9 checks): popover sem
+  formulário inline, "+ nova sessão" abre o modal, criar funciona e troca
+  pra sessão nova automaticamente, editar pré-preenche e persiste nome+
+  projeto juntos corretamente, excluir remove a sessão. `npm run verify`
+  completo (42 checks nas 6 suítes) passa. **Item fechado.**
+
+## 12. Pontos reportados ao vivo em 2026-08-26 — feito (6/6)
+
+Seis pedidos do usuário, registrados pra entrar na fila (anotados numa
+rodada, implementados na seguinte, mesmo dia):
+
+1. **Régua lateral recolhível** — botão simples `<`/`>` pra ocultar/
+   mostrar o painel da régua (`Rail.tsx`), não só os botões individuais.
+2. **Fullscreen de verdade quebrado** — remover o ícone de fullscreen do
+   header/titlebar (`Titlebar.tsx`) e consertar o mecanismo (ícone + atalho
+   `F11`, já existem desde o item 2 da rodada de itens 8-11) pra
+   efetivamente entrar em tela cheia **e** esconder o header nesse estado —
+   hoje aparentemente não funciona de fato (o usuário descreve como
+   quebrado, não só "quero que o header suma", então tratar como bug a
+   investigar, não só o ajuste de esconder header).
+3. **Tamanho padrão dos cards** — aumentar (hoje `SPAWN_W/H = 720×560` em
+   `board-model.ts`) — nota: o achado do item 10 (ferramenta de seleção)
+   já tinha identificado esse tamanho como problemático pro oposto (cards
+   grandes demais pra separar em zoom 1); registrar os dois lados antes de
+   decidir um número.
+4. **QR de pareamento não aparece** (screenshot: ícone de imagem quebrada
+   em vez do QR) no modal de controle remoto (`RemotePairingModal.tsx`,
+   item 2) — **isto lê como bug funcional, não só pedido de design**,
+   diferente dos outros 5 pontos desta lista; o texto/protocolo do
+   pareamento já foi verificado funcionando via
+   `scripts/verify/smoke-remote-control.mjs`, mas a imagem do QR
+   (`qrDataUrl`, gerado por `qrcode` em `remote-server.ts`) especificamente
+   não renderiza. Registrado aqui a pedido do usuário (anotar, não
+   consertar agora), mas vale considerar priorizar antes dos outros 5 já
+   que sem QR visível o recurso inteiro fica inutilizável por QR (só resta
+   copiar a URL manualmente).
+5. **Popover de criar terminal (seletor de provider)** — o `<select>`
+   nativo listando bash/claude/codex/cursor deveria ser um componente
+   genérico reusado por tudo na régua que precisa de um seletor assim (não
+   só terminal), com respiro visual em relação à régua (hoje cola quase
+   direto nela) e botões com ícone por provedor em vez de lista/`<select>`.
+6. **Zoom-pill com edição direta + slider** — poder digitar a porcentagem
+   de zoom diretamente (hoje `<span>{Math.round(zoom*100)}%</span>`,
+   só leitura) e, ao clicar nela, abrir uma barra deslizante horizontal
+   pra ajustar o zoom continuamente em vez de só os botões +/-.
+
+**Feito em 2026-08-26 (6/6)**:
+
+1. **Régua recolhível** — `Rail.tsx` ganhou estado `collapsed` (persistido
+   em `localStorage`), botão `<` no topo da régua expandida oculta pra uma
+   pílula mínima com só um botão `>` pra reabrir, mesma posição
+   (`left: 12px`, centralizada verticalmente).
+2. **Fullscreen — bug real achado**: o mecanismo (`win:toggle-fullscreen`,
+   F11, `Titlebar.tsx`) já entrava em fullscreen de verdade — confirmado
+   ao vivo via CDP (janela redimensiona pra 1920×1080 = tela cheia,
+   `isFullscreen()` vira `true`). O bug era 100% visual: `Titlebar.tsx`
+   nunca reagia a esse estado, então o header customizado (com botões de
+   minimizar/maximizar que nem fazem sentido em fullscreen) continuava
+   sempre visível, lendo como "não funciona". Fix: `Titlebar` retorna
+   `null` quando `fullscreen`, e um effect colapsa `--titlebar-h` pra
+   `0px` nesse estado (é dessa CSS var que régua/topbar leem seu offset
+   do topo — sem isso sobraria um vão em branco onde o header estava).
+   Botão de fullscreen dedicado removido do header (redundante com F11,
+   e era exatamente o que precisava sumir).
+3. **Cards maiores** — `SPAWN_W/H`: 720×560 → 860×660
+   (`board-model.ts`); `cascadeSlot`'s stagger passou a derivar de
+   `SPAWN_W/H + 20` em vez de números fixos, pra não desalinhar de novo
+   numa próxima mudança de tamanho. Tensão do item 10 registrada, não
+   resolvida (pedido explícito do usuário prevalece) — zoom out continua
+   sendo o jeito real de separar dois cards grandes na tela.
+4. **QR do pareamento — bug real, causa raiz achada**: não era o
+   `qrDataUrl` (`remote-server.ts`) — ele sempre foi um data: URL válido,
+   confirmado gerando um fora do Electron. A CSP do `index.html`
+   (`default-src 'self'`, sem `img-src`) bloqueia silenciosamente
+   `data:` em `<img>` — o Chromium não tenta nem decodificar, só mostra o
+   ícone de imagem quebrada. Fix: `img-src 'self' data:` explícito.
+   Mesma causa provavelmente já quebrava os previews de imagem do
+   `FilesCard.tsx` (`fs.readImage`) — corrigida junto, mesmo CSP.
+   `scripts/verify/smoke-remote-control.mjs` ganhou um check que abre o
+   modal de verdade e lê `img.naturalWidth` (não só o `src` — uma imagem
+   bloqueada por CSP ainda tem `src`, só nunca decodifica).
+5. **Seletor de provider** — `ProviderPicker.tsx` (novo), botões com ícone
+   por provedor (bash/claude/codex/cursor, com fallback pra qualquer
+   provider novo não mapeado) substituindo o `<select>` no popover de
+   criar terminal (`Rail.tsx`). "Respiro visual" — `Popover.tsx` ganhou
+   `side` (`"left" | "right"`, default `"right"`, sem quebrar nenhum
+   caller existente) e o gap do anchor subiu de 8px pra 14px em geral.
+6. **Zoom-pill editável + slider** — `useWorldTransform.ts` ganhou
+   `setZoomAbs` (mesma âncora no centro do viewport que `zoomBy` já usa,
+   só que pra um valor absoluto em vez de multiplicar). `Topbar.tsx`: o
+   `<span>` virou um botão que abre um popover (`side="left"` — a
+   zoom-pill fica na ponta direita do `.topbar`, abrir pra direita
+   vazaria da tela) com input numérico + `<input type="range">`.
+- `scripts/verify/smoke-browser.mjs` (720→860), `smoke-card-lifecycle.mjs`
+  (ponto do menu radial recalculado pro card maior E pra não vazar o
+  raio do menu da janela) e `smoke-connector.mjs` (zoom out antes de
+  separar os dois sticky notes, mesmo fix que `smoke-group-select.mjs` já
+  usava) ajustados pros novos tamanhos. `npm run verify` completo: 8
+  suítes, ~75 checks, PASS. **Item fechado.**
+
+## 13. Pontos reportados ao vivo em 2026-08-26 (segunda rodada) — feito (4/4, updater com ressalva)
+
+Mais quatro pedidos do usuário, registrados pra entrar na fila:
+
+1. **Remover a legenda do hint flutuante** — "arraste os cards · caneta e
+   conector na régua · scroll pra zoom · ? pra atalhos" (`Hint.tsx`,
+   `.hint`), some do canvas.
+2. **Explorador de arquivos "de verdade", estilizado** — `FilesCard.tsx`
+   hoje é uma listagem simples; o usuário quer algo mais parecido com um
+   explorador de verdade (ícones por tipo de arquivo, hierarquia mais
+   clara, visual mais trabalhado) — precisa de mais definição de escopo
+   antes de implementar (o que exatamente falta hoje vs. o que "de
+   verdade" significa).
+3. **Nome definitivo pro app + identidade visual** — sugerir um nome
+   criativo (hoje é só "agent-canvas", literal/técnico) e gerar um ícone
+   de marca depois que o nome for aprovado.
+4. **Updater + padronização de empacotamento** — alinhar com o que o
+   `CentralByte` já tem documentado (passo a passo: nome do app, config
+   de build do `electron-builder`, assinatura pro macOS, etc.) — inclui
+   auto-updater, que este projeto ainda não tem. Precisa localizar e ler
+   a documentação do CentralByte antes de portar qualquer coisa.
+
+**Feito em 2026-08-26**:
+
+1. **Legenda removida** — `Hint.tsx` deletado, `<Hint/>` e seu CSS
+   (`.hint`) removidos de `App.tsx`/`layout.css`. Nada mais usava.
+2. **Explorador de arquivos "de verdade"** — `FilesCard.tsx` reescrito:
+   ícone por tipo de arquivo (`ProviderPicker`-style map, novo em
+   `icons.tsx`: pasta aberta/fechada, imagem, markdown, código, config,
+   genérico), ações rápidas por linha visíveis no hover (novo
+   arquivo/nova pasta em diretórios, renomear, excluir — excluir exige
+   dois cliques, "clique de novo pra confirmar", sem modal), toolbar de
+   criação na raiz da árvore, preview de imagem centralizado e usando
+   toda a altura disponível. Backend novo em `fs-tools.ts`
+   (`renamePath`/`deletePath`/`createEntry`, todos reusando o `confine()`
+   já existente — mesma proteção contra escape de path que `list`/`read`/
+   `write` já tinham) + IPC (`fs:rename`/`fs:delete`/`fs:create`) +
+   preload. `scripts/verify/smoke-files-card.mjs` (novo, 12 checks) roda
+   tudo contra um diretório descartável próprio (nunca a árvore real do
+   repo — o botão da régua sempre abre em `DEFAULT_CWD`, o próprio
+   checkout do agent-canvas; o teste insere o card diretamente no banco
+   já apontando pro diretório de teste, em vez de usar esse caminho).
+3. **Nome definitivo: "Stellar"** (escolhido pelo usuário entre 4
+   sugestões) + ícone de marca gerado (`build/icon.svg`/`icon.png`,
+   estrela de quatro pontas + três nós conectados — mesma linguagem
+   visual dos conectores do próprio app). `productName`/`appId`
+   (`com.stellar.app`) trocados em `package.json`; título da janela
+   (`Titlebar.tsx`, `index.html`) trocado. **Deliberadamente não
+   trocado**: `package.json`'s `"name"` interno, `app.setName()` e o
+   diretório do repo — mudar `app.setName()` moveria `userData` pra um
+   caminho novo, "perdendo" os dados reais que a sessão de dev já tinha
+   em `~/.config/agent-canvas` (mesma classe de risco que o `CentralByte`
+   documenta pra `identifier`).
+4. **Updater + empacotamento — feito com uma ressalva real**: código do
+   updater pronto (`src/main/updater.ts`, `UpdateBanner.tsx`, mesmo
+   contrato de produto do CentralByte — silencioso no boot, nunca
+   auto-instala, só um pill quando há atualização de verdade), mas **sem
+   feed funcional** — achado trabalhando nisto: o `git remote` deste repo
+   aponta pro GitHub do `CentralByte`, não um repo próprio confirmado do
+   agent-canvas. Perguntado ao usuário; a resposta não deu uma URL nem
+   resolveu a ambiguidade, então **nenhum comando git foi executado** e o
+   `publish` do `electron-builder` fica de fora do `package.json` até o
+   repo certo estar confirmado — documentado em detalhe, com o
+   procedimento completo de release pendente, em `docs/packaging.md`
+   (novo, espelha a estrutura do `docs/packaging.md` do CentralByte).
+   **Bug real achado e corrigido nesta mesma passagem**: `import {
+   autoUpdater } from "electron-updater"` derrubava o app inteiro no
+   boot (`electron-updater` é CommonJS sem export nomeado estático que o
+   bundle ESM principal consiga enxergar) — chegou a derrubar a própria
+   sessão `npm run dev` do usuário por um instante; corrigido trocando
+   pro import default (`import pkg from "electron-updater"; const {
+   autoUpdater } = pkg`).
+- `tsc`/build limpos, `npm run verify` completo (9 suítes, ~94 checks)
+  PASS. **Item fechado** (updater com a ressalva documentada acima —
+  código pronto, feed pendente do repo certo).
+
+## 14. Home — datas, "recente", fundo de constelações, marca — feito (5/5)
+
+Pedido do usuário (2026-08-26) em cima do item 8: campos de data (criado/
+último acesso) por sessão, destaque pra sessão mais recente, fundo com
+"constelações" e gradiente/opacidade, e um ícone gerado "estilo Stellar" no
+header ao lado do texto — com uma pergunta explícita de onde mais aplicá-lo.
+
+1. **Datas por sessão**: `boards.last_accessed_at INTEGER` (migração
+   guardada, mesmo padrão de `ALTER TABLE ... ADD COLUMN` já usado por
+   todas as outras). `touchBoard(id, at)` — novo statement em `store.ts`,
+   IPC `store:boards:touch`, preload `store.boards.touch`. `useBoardStore`'s
+   `loadBoard()` chama isso a cada carregamento (DB + estado em memória);
+   `createBoard` já semeia `last_accessed_at: now`. `Home.tsx` mostra
+   "criado {data}" (absoluta, `toLocaleDateString`) e "acessado {relativo}"
+   (`agora`/`há Nmin`/`há Nh`/`ontem`/`há N dias`, cai pra data absoluta
+   depois de 30 dias — timestamp cru não lê de relance).
+2. **Badge "recente"**: a sessão de `last_accessed_at` mais recente entre
+   *todas* as sessões (não por projeto) ganha `.home-session-recent`; só
+   calculado com mais de uma sessão existente, e só entre as que já têm
+   `last_accessed_at` (sessão de antes da migração tem `null`, fica de
+   fora sem quebrar). **Ajuste ao vivo**: nascia no canto superior
+   *esquerdo*, exatamente onde o título do card começa — sobrepunha o
+   nome ("Teste" cortado pelo badge). Movido pro canto superior direito;
+   o lápis de editar (mesmo canto, só aparece no hover) desce 20px quando
+   o card também tem o badge, pra nunca empilhar os dois.
+3. **Fundo de constelações**: `.home-bg`, camada absoluta atrás do
+   conteúdo (`z-index:0`, conteúdo em `z-index:1`) — blobs radiais
+   (`--foam`/`--violet`) + pontos fixos simulando estrelas. Opacidade
+   inicial (0.5) lida muito clara/saturada ao ver ao vivo; usuário pediu
+   "vidro fumê" — trocada pra 0.22, blobs e pontos dimming juntos (mesmo
+   `opacity` do container, não canais alfa separados — mais simples e
+   suficiente pro efeito pedido). **1º ajuste ao vivo**: só 2 blobs
+   (topo-esquerda/baixo-direita) deixava o canto inferior esquerdo sem
+   cor nenhuma — 3º blob adicionado nesse canto. **2º ajuste ao vivo**:
+   as estrelas continuavam ilegíveis mesmo depois de mais pontos — causa
+   raiz era estarem dentro do mesmo `opacity: 0.22` do `.home-bg`
+   ("vidro fumê"), pensado só pros blobs. Refeito como camada própria:
+   `ConstellationBg.tsx` (novo) — SVG inline, `opacity: 0.85` independente
+   do dimming dos blobs, com 20 estrelas soltas (campo/textura) **e 4
+   clusters de verdade**: pontos ligados por `<polyline>` (constelação de
+   verdade, não só pontos soltos), 1-2 estrelas "hero" por cluster com
+   `filter="url(#star-glow)"` (glow via `feGaussianBlur`) + animação de
+   brilho (`home-star-twinkle`, opacidade 0.65↔1, 4s, delay escalonado
+   pra não piscar em sincronia).
+4. **Marca gerada**: `StellarMark.tsx` (novo) — o mesmo SVG de
+   `build/icon.svg` recortado pro próprio conteúdo (sem fundo/glow, que só
+   funcionam contra o `--ink` do ícone de app). Colocado exatamente onde o
+   usuário pediu depois da pergunta de esclarecimento: **Titlebar** (antes
+   do texto "Stellar", `.titlebar-title` virou flex com peso/cor de
+   destaque, era texto apagado) e **header da Home** (substituindo o
+   emoji `📁` antes de "Projects"). Não colocado em cada card de sessão
+   nem como ícone de janela/taskbar — opções que o usuário não marcou.
+5. **`BoardRow` mais largo**: `Home.tsx` recebia `Board[]` (sem datas);
+   trocado pra `BoardRow[]` (importado de `preload/index`).
+   `groupByProject` (`sessions.tsx`) virou genérico
+   (`<T extends Board>(boards: T[]): [string, T[]][]`) pra não perder os
+   campos extra no agrupamento.
+
+`tsc`/build limpos. `smoke-home.mjs` ganhou 2 checks novos (datas
+presentes, badge "recente" na sessão certa) — 15/15. `npm run verify`
+completo (9 suítes, ~93 checks) PASS depois do ajuste de opacidade.
+Screenshot real via CDP confirmou visualmente o resultado (marca no
+titlebar e no header, datas nos cards, fundo escurecido). **Item fechado.**
+
+## 15. Nome do repositório GitHub + pasta raiz local — feito (2/2)
+
+Junto ao pedido do item 14, usuário deu a URL definitiva do repo GitHub e
+autorizou repontar o remote: `git@github.com:Seth0s/Stellar.git`. Isso
+resolve o bloqueio documentado no item 13/`docs/packaging.md` §1.
+
+1. **`git remote set-url origin`** — feito em 2026-08-26. Nenhum
+   `push`/tag executado (não pedido). `docs/packaging.md` §1 atualizado
+   pra "resolvido".
+2. **Renomear a pasta raiz local** (`agent-canvas/` → `Stellar/`) — feito
+   em 2026-08-26. **Achado real ao preparar**: a suposição anterior de que
+   isso "toca `app.setName()`/`userData`, mesmo risco do item 13" estava
+   errada — `userData` (`~/.config/agent-canvas`) é derivado do
+   `"name"` do `package.json`, que continua deliberadamente `"agent-canvas"`
+   (decisão do item 13, intocada); o `mv` da pasta não tem relação
+   nenhuma com isso. O risco real, achado ao investigar de verdade, era
+   outro: **caminhos absolutos hardcoded** apontando pra
+   `/home/lucas/Workplace/Projects/agent-canvas` em 6 arquivos —
+   `DEFAULT_CWD` (`App.tsx`, seed de cwd de todo terminal novo + sugestão
+   de projeto) e 5 scripts de verify (`USER_DATA_DIR`/`SCRATCH_DIR` como
+   string literal em vez do padrão `new URL("../../.verify-tmp/...",
+   import.meta.url).pathname` que o resto dos scripts já usa). Corrigidos
+   — `DEFAULT_CWD` atualizado pro caminho novo, os 5 scripts migrados pro
+   padrão relativo (elimina a fragilidade de vez, não só desta vez).
+   **O `mv` em si aconteceu no meio da preparação** — usuário renomeou a
+   pasta enquanto eu ainda estava perguntando como preferia executar,
+   derrubando o `npm run dev` que rodava na sessão antiga (esperado: o
+   processo estava fixado no caminho velho). Diretório git sobreviveu
+   intacto (`git status`/`git log` limpos no novo local). `tsc`/build
+   limpos, `npm run verify` completo (10 suítes) rodado do novo local —
+   1 flake isolado em `smoke-browser.mjs` (canvas não sizado a tempo,
+   sem relação com o rename), PASS ao rodar de novo sozinho; as outras 9
+   suítes PASS de primeira. `npm run dev` reiniciado do novo caminho,
+   porta 4488 confirmada ativa. **Item fechado.**
+
+## 16. Fundo interativo — constelações reagem ao mouse (adiado, complexo)
+
+Pedido do usuário (2026-08-26) em cima do item 14: as estrelas/constelações
+de `ConstellationBg.tsx` reagirem ao mouse — o cursor "empurra" estrelas
+próximas (intensidade proporcional à agressividade do movimento, não só
+posição), e o fundo inteiro deriva lentamente por conta própria, revelando
+mais estrelas/constelações fora do viewport inicial conforme se move.
+**Explicitamente adiado pelo próprio usuário** ("pode anotar, pode deixar
+pra depois") — registrado aqui pra não se perder, não pra ser puxado pra
+frente da fila sem pedir.
+
+Esboço de abordagem, pra quando for retomado (nada disto foi validado
+ainda):
+- **Física de empurrão**: cada estrela ganha uma posição-base (as
+  coordenadas atuais) + um offset elástico que decai de volta ao repouso
+  (`requestAnimationFrame`, sem lib de física — spring simples, tipo
+  `offset += (target - offset) * k`). Velocidade do mouse entre dois
+  `mousemove` (delta de posição / delta de tempo) determina a força do
+  empurrão em estrelas dentro de um raio; mouse parado = sem força.
+- **Deriva lenta autônoma**: um offset global de câmera (`translate` no
+  `<svg>`/`<g>`) avançando devagar em `requestAnimationFrame`, independente
+  do mouse — precisa de um campo de estrelas bem maior que o viewport
+  (gerado proceduralmente, não só os ~44 pontos fixos de hoje) pra ter o
+  que revelar conforme desliza, e um jeito de reciclar/reposicionar
+  estrelas que saem de um lado pro outro (wrap, não recriar do zero).
+- **Custo real**: isso é `requestAnimationFrame` + listener de
+  `mousemove` rodando o tempo todo que a Home está montada — precisa medir
+  impacto de CPU/bateria antes de considerar padrão, não só "funciona".
+  Candidato a `prefers-reduced-motion` respeitando o usuário que desliga
+  animação no SO.
+- Pontos fixos de hoje (`FIELD_STARS`/`CLUSTERS` em `ConstellationBg.tsx`)
+  viram só o estado de repouso — a lógica de reação é uma camada por cima,
+  não uma reescrita do componente.
+
+## 17. Updater — "lembrar depois", changelog, ícone pendente, teste E2E — feito (4/4)
+
+Usuário perguntou diretamente se o updater já tinha essas 3 peças de UI +
+teste E2E — resposta era não pras 4; pedido explícito de implementar.
+
+1. **Estado compartilhado** (`useUpdateStatus.ts`, novo) — mesmo padrão
+   module-level já usado por `useToast.ts` (`useSyncExternalStore`), pra
+   `Titlebar` (ícone) e `UpdateBanner` (pill) lerem o mesmo
+   `version`/`releaseNotes`/`dismissed` sem passar por `App.tsx`, que não
+   sabe nada sobre updater hoje. `window.updater.check()`/`onAvailable`
+   só registram uma vez por app (guard `initialized`), não uma vez por
+   componente montado.
+2. **"Lembrar depois"**: `dismiss()` esconde o banner e agenda um
+   `setTimeout` (4h) que reaparece sozinho; `undismiss()` (clique no
+   ícone da titlebar) traz de volta na hora, sem esperar. Não é "nunca
+   mais" — só adia, o ícone continua visível o tempo todo avisando que
+   ainda tem algo pendente.
+3. **Changelog**: `main/updater.ts` agora repassa `info.releaseNotes`
+   (só a forma string simples — GitHub provider manda o corpo da release
+   como texto; o formato array-por-versão de outros providers não é
+   tratado, vira `null`) via IPC junto da versão. `UpdateBanner` mostra
+   atrás de um toggle ("ver novidades"), como `<pre>` com
+   `white-space: pre-wrap` — texto puro, sem reintroduzir `marked` (item
+   6 já tirou isso do bundle inicial por bom motivo).
+4. **Ícone de update pendente**: `.titlebar-update-dot`, um ponto
+   pequeno em `.titlebar-controls` (fica no `no-drag` da titlebar, sem
+   precisar de override extra) — visível sempre que existe uma versão
+   conhecida, **independente** de `dismissed` (só depende de `version`).
+   Clicar chama `undismiss()`.
+5. **Teste E2E**: como não existe feed de publish real ainda
+   (`docs/packaging.md` §3), não dá pra disparar `update-available` de
+   verdade nem em dev (`app.isPackaged` guard) nem em prod. Adicionado
+   `ipcMain.handle("updater:test-emit-available", ...)` em
+   `main/updater.ts`, **guardado pelo mesmo `app.isPackaged`** que todo
+   outro handler do updater já usa — inofensivo, no-op, em qualquer build
+   real que um usuário rode. Exposto como `window.updater.testEmitAvailable`
+   (nome deixa claro que é só de teste). `scripts/verify/smoke-updater.mjs`
+   (novo, 10 checks): banner some/aparece corretamente, versão certa,
+   notas colapsadas por padrão, toggle revela o texto real, "lembrar
+   depois" esconde mas o ícone da titlebar sobrevive, clique no ícone
+   traz de volta na hora, clique em "instalar e reiniciar" em dev
+   corretamente falha com erro visível (não trava nem finge sucesso).
+
+`tsc`/build limpos (bundle: +2KB, negligível, não desfaz o ganho do item
+6). Confirmado visualmente via screenshot CDP — achado real ao ver: o
+texto da pill quebrava em 3 linhas com `max-width: 420px`; trocado pra
+`90vw` sem limite fixo + `white-space: nowrap` na linha principal, notas
+ficam numa caixa própria abaixo. `npm run verify` completo (11 suítes,
+~119 checks) PASS. Tocou `main/updater.ts` — `npm run dev` reiniciado.
+**Item fechado.**
+
+## 18. Pipeline de release — .rpm obrigatório + mac/deb/Windows — feito (verificado em Linux)
+
+Pedido do usuário antes da 1ª tag: ajustar pra que a tag dispare build
+`.rpm` (Fedora), com ícone/nome de pacote corretos; depois pediu pra
+também cobrir mac/deb/Windows, com **`.rpm` obrigatório** (não pode
+ficar bloqueado se outra plataforma falhar).
+
+1. **Nome/ícone do pacote Linux — achado real**: sem `linux.executableName`/
+   `rpm.packageName`/`deb.packageName` explícitos, o `electron-builder`
+   usa `package.json`'s `"name"` no Linux (não `productName`, ao
+   contrário de mac/Windows) — o primeiro build saiu literalmente como
+   `agent-canvas-0.0.0.x86_64.rpm`. Corrigido: `executableName: "stellar"`
+   + `rpm.packageName`/`deb.packageName: "stellar"`. Segundo achado real:
+   sem `desktopName` (raiz do `package.json`) + `linux.syncDesktopName:
+   true`, o `.desktop` saía sem `StartupWMClass` (electron-builder
+   avisava a cada build) — corrigido, warning sumiu.
+2. **`package.json`**: `author`/`description` adicionados (exigidos pelo
+   `fpm` pro campo maintainer do rpm/deb — build falhava sem isso, achado
+   ao rodar); `version` `0.0.0` → `0.1.0` (primeiro release de verdade,
+   não devia ficar com um placeholder). `publish: {provider: "github",
+   owner: "Seth0s", repo: "Stellar"}` adicionado (item 13/
+   `docs/packaging.md` §3 já apontava isso como pendente, resolvido
+   agora que o remote está certo). `build.linux`/`.rpm`/`.deb`/`.mac`/
+   `.win`/`.nsis` configurados.
+3. **Verificado empiricamente, não só o config**: `npm run package:linux`
+   rodou de ponta a ponta nesta máquina. Achado real no caminho: o `fpm`
+   (Ruby) que o `electron-builder` baixa precisava de `libcrypt.so.1`,
+   ausente neste Fedora (só a ABI `.so.2` mais nova) — resolvido com
+   `libxcrypt-compat`, **instalado só depois de autorização explícita do
+   usuário** (pedi confirmação antes de rodar `sudo dnf install`).
+   `rpm -qip`/`rpm -qlp`/`.desktop` extraído do `.rpm`, `control`
+   extraído do `.deb` — nome do pacote (`stellar`), ícone
+   (`/usr/share/icons/hicolor/1024x1024/apps/stellar.png`), categoria
+   (`Development`), `Exec=/opt/Stellar/stellar`, `StartupWMClass=stellar`
+   todos confirmados corretos nos dois formatos.
+4. **mac/Windows — configurados, não verificados**: sem toolchain macOS/
+   Windows disponível nesta máquina, a config (`dmg`/`zip`/`nsis`/
+   `portable`) segue o padrão documentado do `electron-builder` mas só
+   vai ser validada de verdade rodando a CI.
+5. **CI** (`.github/workflows/release.yml`, novo): dispara em push de tag
+   `v*`. **3 jobs independentes** (`build-linux`/`build-mac`/
+   `build-windows`), deliberadamente não uma matriz com `fail-fast` —
+   isso é o que garante "`.rpm` obrigatório": uma falha em mac/Windows
+   nunca cancela ou bloqueia o job do Linux. Cada job: `npm ci` → (Linux
+   only) `npx tsc --noEmit` como gate rápido → `npm run build` →
+   `electron-builder --publish always`. `npm run verify` completo (suíte
+   CDP) **não roda em CI** — precisaria `xvfb-run` num runner headless,
+   gap real registrado em `docs/packaging.md` §5, não escondido.
+
+**A CI em si nunca rodou** — só o build local de Linux foi validado; o
+caminho real no GitHub Actions (permissões do `GH_TOKEN`, runners
+diferentes) só se prova com o usuário empurrando a tag de verdade.
+Detalhe completo, achados, e o que falta em `docs/packaging.md` §2/§5.
+**Nenhum commit/tag/push feito** — por pedido explícito do usuário
+("depois faça os commits eu crio a tag e faço os push").
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
@@ -702,8 +1436,9 @@ o que o usuário descreve como "não prático".
    (Wayland não expõe metadata de janela, `useSystemPicker` é só macOS)
    tornaria a única versão viável mais crua do que o usuário queria.
 5. ~~Gesto radial (item 1, parte de gestos)~~ — feito em 2026-08-26.
-6. Decisão de escopo pro remote control (item 2) — maior risco/tamanho do
-   lote inteiro, não deveria começar sem a conversa de segurança primeiro.
+6. ~~Decisão de escopo pro remote control (item 2)~~ — decidido e
+   implementado em 2026-08-26 (arquitetura B, fases A + base da B),
+   verificado ao vivo ponta a ponta. Ver item 2.
 7. ~~Organização de código (item 5)~~ — fase 1+2+3 feitas em 2026-08-26
    (harness, 4 hooks extraídos, `SYSTEM.md`); otimização (item 6) e fase 4
    do item 5 seguem sem urgência.
@@ -718,15 +1453,41 @@ o que o usuário descreve como "não prático".
       (cards grandes demais pra separar em zoom 1), não de código.
    3. ~~Terminal — trocar o texto `^C` do header por um ícone real~~ —
       feito em 2026-08-26 (item 10, achado 2).
-   4. Navegador — pesquisa de práticas corretas de `WebContentsView`/
-      Chromium embutido + fix (item 9) — maior dor citada pelo usuário,
-      feito logo enquanto o contexto está fresco, apesar do risco/incerteza
-      maior (2 tentativas anteriores já regrediram, ver `AGENTS.md`).
-   5. Modal de sessões — redesenho (item 11).
-   6. Fluxo de uso — duplicar card, jump-to-card, template de sessão
-      (item 7, os 3 que sobraram).
-   7. Home sem sessão carregada (item 8) — o maior, mais decisões de
-      produto, depende menos dos itens acima do que parece mas fecha melhor
-      depois que o modal de sessões (5) já estiver redesenhado.
+   4. ~~Navegador — pesquisa de práticas corretas de `WebContentsView`/
+      Chromium embutido + fix~~ — feito em 2026-08-26 (item 9): reescrito
+      pra renderização offscreen depois de achar a causa raiz real
+      (electron/electron#45367, limitação permanente de `addChildView`,
+      não bug deste app), mais 3 bugs de interação (scroll invertido,
+      clique não focava, digitar não inseria texto) e 2 de UX (zoom
+      interceptando scroll, header sumindo) achados e corrigidos testando
+      ao vivo. Confirmado funcional pelo usuário.
+   5. ~~Modal de sessões — redesenho~~ — feito em 2026-08-26 (item 11):
+      popover virou só switcher, `SessionModal.tsx` novo cobre criar/editar,
+      achou e corrigiu 2 bugs reais (persistência de nome+projeto
+      revertendo silenciosamente, modal aninhado no `.topbar` herdando
+      `pointer-events:none` e ficando inclicável).
+   6. ~~Fluxo de uso — duplicar card, jump-to-card, template de sessão~~ —
+      feito em 2026-08-26 (item 7): `Ctrl`/`Cmd`+`D` duplica, botão
+      "Localizar card" na régua com popover+jump, `SessionModal.tsx` ganhou
+      um seletor de template na criação.
+   7. ~~Home sem sessão carregada (item 8)~~ — feito em 2026-08-26: home
+      sempre no boot (decisão do usuário), botão no `Topbar` pra voltar,
+      `Home.tsx` novo reusando `sessions.tsx`/`SessionModal` do item 11.
+      Achou e corrigiu 1 bug real (`store.ts` auto-criava um "Board 1" toda
+      vez que o banco abria vazio — sobra de antes do item 8 existir, que
+      mascarava o estado vazio de verdade da home).
    8. Otimização de bundle (item 6) — dívida técnica, sem urgência de
       usuário, fica por último.
+9. ~~Pontos reportados ao vivo (item 12)~~ — feito em 2026-08-26 (6/6):
+   régua recolhível, fullscreen de verdade (bug real: só faltava o header
+   reagir ao estado, o mecanismo já funcionava), cards maiores (720×560 →
+   860×660), QR do pareamento (bug real: CSP bloqueava `data:` em
+   `<img>`, não o gerador do QR), seletor de provider com ícones, zoom-pill
+   editável+slider.
+10. ~~Item 13 (segunda rodada de pontos reportados ao vivo)~~ — feito em
+    2026-08-26 (4/4, updater com ressalva): legenda removida, explorador
+    de arquivos com ícones/ações rápidas, app renomeado "Stellar" +
+    ícone de marca, updater in-app pronto em código mas sem feed
+    funcional (bloqueado por um `git remote` do repo apontando pro
+    CentralByte, achado nesta passagem e ainda não resolvido — ver
+    `docs/packaging.md`).
