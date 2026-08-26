@@ -2,6 +2,7 @@
   "name": "agent-canvas",
   "version": "0.1.0",
   "description": "Stellar — a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
+  "license": "Apache-2.0",
   "author": {
     "name": "Lucas Sabino",
     "email": "lucassabino.rj@gmail.com"
