@@ -1619,6 +1619,59 @@ RemoteDesktop) e confirmar que o controle relativo de fato mexe a janela
 externa. Fase 2 (permissão do agente, exposta via `acbridge`) só começa
 depois dessa confirmação.
 
+## 2026-08-26 — Menu radial de spawn (item 1, parte de gestos) — fase 2 do controle remoto em espera
+
+Usuário não pôde testar os diálogos nativos do controle de janela externa
+ainda (item anterior) — em vez de adivinhar/avançar a fase 2 (permissão do
+agente) sem essa confirmação, segui pro próximo item viável do backlog.
+
+**Right-click no canvas vazio abre um menu radial** (`RadialMenu.tsx`) com
+as mesmas 6 ações de criar card que a régua já tem, ancorado no ponto do
+clique em vez do centro da viewport. Aditivo por design (era a recomendação
+já escrita no `DESIGN-BACKLOG.md` antes desta rodada): a régua linear não
+mudou em nada, isso é só um segundo caminho pro mesmo resultado.
+
+- `board-model.ts::pointSlot(point)` — variante de `centeredSlot` sem
+  stagger (só spawna um card por clique, não precisa espalhar múltiplos).
+- Todos os 6 `addXCard` (`App.tsx`) ganharam um parâmetro opcional `at?:
+  Point` — omitido, comportamento idêntico a antes (rail); passado, usa
+  `pointSlot(at)`. Passar uma função com parâmetro opcional onde um
+  callback `() => void` é esperado (as props do `Rail`) é válido em TS —
+  não precisou tocar `Rail.tsx` nem seus call sites existentes.
+- `onContextMenu` no `.viewport` (`App.tsx::onBackgroundContextMenu`) —
+  mesmo guard `e.target === e.currentTarget` que `onBackgroundPointerDown`
+  já usa, pra não roubar o right-click de um clique em cima de um card ou
+  durante um gesto de outra ferramenta. `preventDefault()` troca o menu de
+  contexto nativo do Electron pelo radial.
+- Fecha em três caminhos: selecionar uma ação (spawna e fecha), clicar no
+  backdrop transparente (fecha sem spawnar), `Esc` (mesmo handler que já
+  fecha o overlay de atalhos e o modal de confirmação).
+- Posicionamento circular via `--tx`/`--ty` custom properties por item
+  (não `transform` direto) — achado real ao implementar: a animação de
+  abertura (`radial-pop`, scale 0.4→1) também anima `transform`, e setar a
+  posição via `transform` inline seria sobrescrito pela keyframe durante os
+  140ms da animação, fazendo cada item "nascer" no centro do menu antes de
+  saltar pro lugar certo. Custom properties resolvem porque tanto a base
+  quanto a keyframe referenciam `var(--tx)`/`var(--ty))` — a posição nunca
+  muda, só a escala anima.
+
+**Verificado ao vivo via CDP** (instância isolada,
+`--remote-debugging-port`/`--user-data-dir` próprios): right-click num
+ponto vazio do canvas abre o menu com as 6 ações certas; clicar "Terminal"
+spawna um novo card de terminal centrado no ponto do clique e fecha o
+menu (contagem de `.terminal-card` foi de 1 pra 2); segundo right-click +
+clique no backdrop fecha sem spawnar nada (contagem ficou em 2); terceiro
+right-click + `Esc` também fecha sem spawnar. `npx tsc --noEmit` e
+`npx electron-vite build` limpos.
+
+**Gotcha de teste, não do produto**: os dois primeiros pontos de clique
+escolhidos pro teste caíram em cima do terminal auto-seedado do board (ou
+fora da janela 1280×800) — o menu "não abriu" nesses casos porque o
+right-click não estava realmente na área vazia, não porque o handler
+falhou. Corrigido escolhendo um ponto genuinamente vazio antes de concluir
+qualquer coisa — mesmo cuidado de sempre confirmar o que a captura de tela
+mostra em vez de assumir que o teste em si estava certo.
+
 ## Comandos
 
 ```bash

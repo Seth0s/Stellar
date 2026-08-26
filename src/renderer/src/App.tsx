@@ -9,6 +9,7 @@ import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { BrowserAskModal } from "./BrowserAskModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
+import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { Rail } from "./Rail";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
@@ -22,6 +23,7 @@ import {
   clipLineToRect,
   hitTest,
   isInView,
+  pointSlot,
   quadraticControlPoint,
   rectCenter,
   rectsOverlap,
@@ -316,6 +318,11 @@ export function App() {
     return (BG_STYLE_ORDER as string[]).includes(saved ?? "") ? (saved as BgStyle) : "dots";
   });
   const [showShortcuts, setShowShortcuts] = useState(false);
+  /** Right-click on empty canvas (item 1's alternate spawn path) — `screen`
+   * positions the menu itself, `world` is where the chosen card lands
+   * (`pointSlot`), captured once at open time so panning/zooming while the
+   * menu is open doesn't retarget the spawn. */
+  const [radialMenu, setRadialMenu] = useState<{ screen: Point; world: Point } | null>(null);
   /** Set only when closeCard needs confirmation first (a terminal card
    * whose process is still live) — see closeCard/confirmCloseCard below. */
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
@@ -404,6 +411,7 @@ export function App() {
         setTool("pointer");
         setShowShortcuts(false);
         setPendingCloseId(null);
+        setRadialMenu(null);
       }
       if (e.key === "F11") {
         e.preventDefault();
@@ -593,7 +601,9 @@ export function App() {
     });
   }
 
-  function addTerminalCard() {
+  /** `at`: world point to spawn at (radial menu, item 1) — omitted for the
+   * rail's own buttons, which keep centering on the visible viewport. */
+  function addTerminalCard(at?: Point) {
     const id = String(nextId.current++);
     addCard({
       id,
@@ -604,52 +614,72 @@ export function App() {
       continueLast: newResumeId.trim() === "" && newContinueLast,
       model: newModel.trim() || null,
       systemPrompt: newSystemPrompt.trim() || null,
-      rect: centeredSlot(visibleRect, cards.length),
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
       groupId: null,
       label: null,
     });
   }
 
-  function addFilesCard() {
+  function addFilesCard(at?: Point) {
     const id = String(nextId.current++);
-    addCard({ id, kind: "files", root: DEFAULT_CWD, rect: centeredSlot(visibleRect, cards.length), groupId: null, label: null });
+    addCard({
+      id,
+      kind: "files",
+      root: DEFAULT_CWD,
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
+      groupId: null,
+      label: null,
+    });
   }
 
-  function addChangesCard() {
+  function addChangesCard(at?: Point) {
     const id = String(nextId.current++);
-    addCard({ id, kind: "changes", root: DEFAULT_CWD, rect: centeredSlot(visibleRect, cards.length), groupId: null, label: null });
+    addCard({
+      id,
+      kind: "changes",
+      root: DEFAULT_CWD,
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
+      groupId: null,
+      label: null,
+    });
   }
 
-  function addStickyCard() {
+  function addStickyCard(at?: Point) {
     const id = String(nextId.current++);
     addCard({
       id,
       kind: "sticky",
       content: "",
       color: "yellow",
-      rect: centeredSlot(visibleRect, cards.length),
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
       groupId: null,
       label: null,
     });
   }
 
-  /** Human path, via the rail button — no owner, no consent gate (see AGENTS.md). */
-  function addBrowserCard() {
+  /** Human path, via the rail button or radial menu — no owner, no consent gate (see AGENTS.md). */
+  function addBrowserCard(at?: Point) {
     const id = String(nextId.current++);
     addCard({
       id,
       kind: "browser",
       url: "about:blank",
       ownerCardId: null,
-      rect: centeredSlot(visibleRect, cards.length),
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
       groupId: null,
       label: null,
     });
   }
 
-  function addRemoteWindowCard() {
+  function addRemoteWindowCard(at?: Point) {
     const id = String(nextId.current++);
-    addCard({ id, kind: "remote-window", rect: centeredSlot(visibleRect, cards.length), groupId: null, label: null });
+    addCard({
+      id,
+      kind: "remote-window",
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
+      groupId: null,
+      label: null,
+    });
   }
 
   /** Agent-requested (post-Allow) or a seenUrls chip click — both are already-consented. Reuses this owner's existing browser card if one is open, else opens a new one. No toast here — this path isn't the human "I just clicked +browser" moment the toasts above are for. */
@@ -1111,6 +1141,27 @@ export function App() {
     window.addEventListener("pointerup", onUp);
   }
 
+  /** Right-click on empty canvas opens the radial menu (item 1) instead of
+   * the OS/Electron context menu — a card only, so a right-click on the
+   * pen/select tools' own drag gestures isn't hijacked mid-drag. */
+  function onBackgroundContextMenu(e: React.MouseEvent) {
+    if (e.target !== e.currentTarget) return;
+    e.preventDefault();
+    setRadialMenu({ screen: { x: e.clientX, y: e.clientY }, world: clientToWorld(e.clientX, e.clientY) });
+  }
+
+  function selectRadialAction(action: RadialAction) {
+    const at = radialMenu?.world;
+    setRadialMenu(null);
+    if (!at) return;
+    if (action === "terminal") addTerminalCard(at);
+    else if (action === "files") addFilesCard(at);
+    else if (action === "changes") addChangesCard(at);
+    else if (action === "sticky") addStickyCard(at);
+    else if (action === "browser") addBrowserCard(at);
+    else addRemoteWindowCard(at);
+  }
+
   function onWheel(e: React.WheelEvent) {
     e.preventDefault();
     const vp = viewportRef.current;
@@ -1175,6 +1226,7 @@ export function App() {
       ref={viewportRef}
       onWheel={onWheel}
       onPointerDown={onBackgroundPointerDown}
+      onContextMenu={onBackgroundContextMenu}
       style={backgroundStyle}
     >
       <Titlebar />
@@ -1514,6 +1566,14 @@ export function App() {
       <Hint />
       <ToastHost />
       {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
+      {radialMenu && (
+        <RadialMenu
+          x={radialMenu.screen.x}
+          y={radialMenu.screen.y}
+          onSelect={selectRadialAction}
+          onClose={() => setRadialMenu(null)}
+        />
+      )}
       {pendingCloseId && (
         <ConfirmModal
           title="Fechar terminal?"

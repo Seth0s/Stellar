@@ -874,3 +874,72 @@ select.resume-input {
   font-size: 10px;
   color: var(--text);
 }
+
+/* --------------------------------------------------------- radial menu */
+/* Right-click-on-empty-canvas alternate spawn path (DESIGN-BACKLOG.md
+   item 1) — same six actions as the rail, anchored at the click instead. */
+
+.radial-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  /* Transparent on purpose — the canvas underneath should still read as
+     "still there", this is a menu, not a modal takeover. */
+  background: transparent;
+}
+
+.radial-menu {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.radial-item {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: var(--shadow-float);
+  transition: background-color 0.12s ease, color 0.12s ease;
+  transform: translate(var(--tx), var(--ty));
+  animation: radial-pop 0.14s ease-out;
+}
+
+.radial-item:hover {
+  background: var(--foam);
+  color: var(--on-accent);
+}
+
+.radial-center {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--foam);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes radial-pop {
+    from {
+      opacity: 0;
+      transform: translate(var(--tx), var(--ty)) scale(0.4);
+    }
+    to {
+      opacity: 1;
+      transform: translate(var(--tx), var(--ty)) scale(1);
+    }
+  }
+}

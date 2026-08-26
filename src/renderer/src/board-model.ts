@@ -108,6 +108,14 @@ export function centeredSlot(visibleRect: Rect, index: number): Rect {
   };
 }
 
+/** Default position for a card spawned at a specific world point — the
+ * radial menu (item 1) opens at the cursor and should plant the new card
+ * right there, not back at the viewport center like `centeredSlot`. No
+ * stagger: this only ever spawns one card per invocation. */
+export function pointSlot(point: Point): Rect {
+  return { x: point.x - SPAWN_W / 2, y: point.y - SPAWN_H / 2, w: SPAWN_W, h: SPAWN_H };
+}
+
 /**
  * World-space rect -> window-content pixel rect. A native WebContentsView
  * is positioned in absolute window pixels, outside the DOM/CSS transform
