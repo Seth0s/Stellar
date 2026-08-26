@@ -28,59 +28,15 @@ import {
   quadraticControlPoint,
   rectCenter,
   rectsOverlap,
-  screenToWorld,
-  viewportWorldRect,
   worldRectToScreen,
   type BoardItem,
   type Point,
   type Rect,
 } from "./board-model";
 import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
+import { useWorldTransform } from "./useWorldTransform";
+import type { Card, Connector, StickyCardData, Tool } from "./card-types";
 import "./app.css";
-
-/** `label` is a user-set display name (header rename) — null means "use the
- * kind-specific default" (provider id for terminals, KIND_LABEL for
- * everything else), never re-derived once set. */
-type BaseCard = { id: string; rect: Rect; groupId: string | null; label: string | null };
-
-type TerminalCardData = BaseCard & {
-  kind: "terminal";
-  provider: string;
-  cwd: string;
-  resumeId: string | null;
-  /** One-shot launch preference, never persisted (see AGENTS.md) — always false for a card restored from the store. */
-  continueLast: boolean;
-  model: string | null;
-  systemPrompt: string | null;
-};
-
-type FilesCardData = BaseCard & { kind: "files"; root: string };
-type ChangesCardData = BaseCard & { kind: "changes"; root: string };
-type StickyCardData = BaseCard & { kind: "sticky"; content: string; color: string };
-type BrowserCardData = BaseCard & { kind: "browser"; url: string; ownerCardId: string | null };
-/** No meaningful state to persist — which window/screen it shows comes
- * from a live OS picker at open time (DESIGN-BACKLOG.md item 3, phase 1),
- * never restored across reloads. Mirrors files/changes' minimal treatment. */
-type RemoteWindowCardData = BaseCard & { kind: "remote-window" };
-type StrokeCardData = BaseCard & {
-  kind: "stroke";
-  points: [number, number][];
-  color: string;
-  width: number;
-  style: "solid" | "marker";
-};
-
-type Card =
-  | TerminalCardData
-  | FilesCardData
-  | ChangesCardData
-  | StickyCardData
-  | BrowserCardData
-  | RemoteWindowCardData
-  | StrokeCardData;
-
-type Connector = { id: string; fromCardId: string; toCardId: string };
-type Tool = "pointer" | "pen" | "connector" | "select";
 
 const DEFAULT_CWD = "/home/lucas/Workplace/Projects/agent-canvas";
 /** The multi-repo workspace this app itself lives in (see CLAUDE.md at
@@ -293,7 +249,6 @@ function fromRow(r: CardRow): Card {
 export function App() {
   const [cards, setCards] = useState<Card[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [world, setWorld] = useState({ panX: 0, panY: 0, zoom: 1 });
   const [order, setOrder] = useState<string[]>([]);
   const [newProvider, setNewProvider] = useState("bash");
   const [newResumeId, setNewResumeId] = useState("");
@@ -341,11 +296,22 @@ export function App() {
   const [liveStatus, setLiveStatus] = useState<Record<string, "ok" | "error" | "exited">>({});
   const [workspaceProjects, setWorkspaceProjects] = useState<string[]>([]);
   const nextId = useRef(1);
-  const viewportRef = useRef<HTMLDivElement>(null);
   const cardsRef = useRef<Card[]>([]);
   cardsRef.current = cards;
-  const worldRef = useRef(world);
-  worldRef.current = world;
+  const {
+    world,
+    setWorld,
+    worldRef,
+    viewportRef,
+    viewportSize,
+    viewportOrigin,
+    visibleRect,
+    clientToWorld,
+    zoomBy,
+    fitView,
+    onWheel,
+    startPan,
+  } = useWorldTransform(cardsRef);
   const activeBoardIdRef = useRef<string | null>(null);
   activeBoardIdRef.current = activeBoardId;
 
@@ -733,35 +699,6 @@ export function App() {
     window.setTimeout(() => setReflowing(false), REFLOW_MS);
   }
 
-  function zoomBy(factor: number) {
-    const vp = viewportRef.current;
-    if (!vp) return;
-    const vw = vp.clientWidth;
-    const vh = vp.clientHeight;
-    setWorld((prev) => {
-      const newZoom = Math.min(3, Math.max(0.2, prev.zoom * factor));
-      const worldX = (vw / 2 - prev.panX) / prev.zoom;
-      const worldY = (vh / 2 - prev.panY) / prev.zoom;
-      return { zoom: newZoom, panX: vw / 2 - newZoom * worldX, panY: vh / 2 - newZoom * worldY };
-    });
-  }
-
-  function fitView() {
-    const vp = viewportRef.current;
-    const box = bboxOf(cardsRef.current.map((c) => c.rect));
-    if (!vp || !box) return;
-    const vw = vp.clientWidth;
-    const vh = vp.clientHeight;
-    const PAD = 60;
-    const scale = Math.min((vw - PAD * 2) / box.w, (vh - PAD * 2) / box.h);
-    const zoom = Math.min(3, Math.max(0.2, scale));
-    setWorld({
-      zoom,
-      panX: vw / 2 - (box.x + box.w / 2) * zoom,
-      panY: vh / 2 - (box.y + box.h / 2) * zoom,
-    });
-  }
-
   /** Read-only snapshot for the AI action below — never mutates a card, never reads terminal scrollback (out of scope, see AGENTS.md). */
   async function buildBoardSnapshot(): Promise<string> {
     const lines: string[] = [];
@@ -1017,12 +954,6 @@ export function App() {
     void window.store.upsert(toRow({ ...card, color }, activeBoardIdRef.current!));
   }
 
-  /** Screen client coords -> world coords, via the viewport's own current bounding rect (matches onWheel's math). */
-  function clientToWorld(clientX: number, clientY: number): Point {
-    const rect = viewportRef.current?.getBoundingClientRect();
-    return screenToWorld({ x: clientX - (rect?.left ?? 0), y: clientY - (rect?.top ?? 0) }, world);
-  }
-
   function startDrawing(e: React.PointerEvent) {
     const points: Point[] = [];
     function addPoint(clientX: number, clientY: number) {
@@ -1130,18 +1061,7 @@ export function App() {
       return;
     }
     if (tool === "connector") return;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const start = world;
-    function onMove(ev: PointerEvent) {
-      setWorld({ ...start, panX: start.panX + (ev.clientX - startX), panY: start.panY + (ev.clientY - startY) });
-    }
-    function onUp() {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    }
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    startPan(e);
   }
 
   /** Right-click on empty canvas opens the radial menu (item 1) instead of
@@ -1165,38 +1085,7 @@ export function App() {
     else addRemoteWindowCard(at);
   }
 
-  function onWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    const vp = viewportRef.current;
-    if (!vp) return;
-    const rect = vp.getBoundingClientRect();
-    const screenX = e.clientX - rect.left;
-    const screenY = e.clientY - rect.top;
-    const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
-    setWorld((prev) => {
-      const newZoom = Math.min(3, Math.max(0.2, prev.zoom * factor));
-      const worldX = (screenX - prev.panX) / prev.zoom;
-      const worldY = (screenY - prev.panY) / prev.zoom;
-      return {
-        zoom: newZoom,
-        panX: screenX - newZoom * worldX,
-        panY: screenY - newZoom * worldY,
-      };
-    });
-  }
-
   if (!loaded) return <div className="viewport" />;
-
-  const viewportSize = viewportRef.current
-    ? { width: viewportRef.current.clientWidth, height: viewportRef.current.clientHeight }
-    : { width: window.innerWidth, height: window.innerHeight };
-  const visibleRect = viewportWorldRect(viewportSize, world);
-  const viewportOrigin = viewportRef.current
-    ? (() => {
-        const r = viewportRef.current!.getBoundingClientRect();
-        return { x: r.x, y: r.y };
-      })()
-    : { x: 0, y: 0 };
 
   const dotSize = GRID_SPACING * world.zoom;
   const backgroundStyle = backgroundCss(bgStyle, dotSize, world.panX, world.panY);
