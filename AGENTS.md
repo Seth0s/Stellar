@@ -2112,6 +2112,58 @@ SVG presente, texto vazio, clique sem erro. `npm run verify`: 33 checks,
 PASS, zero processo órfão. Item 10 (`DESIGN-BACKLOG.md`) fechado por
 completo.
 
+## 2026-08-26 — Item 9 (navegador): pesquisa + investigação empírica, sem fechar o item
+
+Usuário pediu pesquisa das práticas corretas de `WebContentsView`
+embutido em Electron antes de mais um fix pontual (histórico de 2+
+tentativas regredidas já documentado acima). Pesquisa feita, achados:
+
+- **`WebContentsView` é a abordagem certa** — não é questão de mecanismo
+  errado. A própria documentação do Electron recomenda explicitamente
+  contra a tag `<webview>` pra produção ("Electron currently recommends
+  to not use the webview tag and to consider alternatives, like iframe,
+  a WebContentsView"). `BrowserView` está deprecated desde a v30,
+  substituído por `WebContentsView` — já é o que este app usa.
+- **O gotcha real é GPU desabilitada + Wayland + múltiplas views
+  compostas** — uma classe de problema conhecida e sem fix único: issue
+  aberta no Electron desde a v22 (#36633, "Zero GPU Acceleration on
+  Wayland") descreve exatamente esse cenário — o processo de GPU no
+  Wayland não recebe as mesmas flags que um Chromium standalone
+  receberia, cai pra um caminho de composição via software/CPU antes de
+  submeter à GPU. Não achei um fix único e definitivo pra essa combinação
+  específica na pesquisa — é terreno conhecidamente instável do próprio
+  Electron/Chromium, não um erro deste app.
+- Fontes: [electron/electron#36633](https://github.com/electron/electron/issues/36633),
+  [Migrating from BrowserView to WebContentsView](https://www.electronjs.org/blog/migrate-to-webcontentsview),
+  [`<webview>` Tag docs](https://www.electronjs.org/docs/latest/api/webview-tag),
+  [Web Embeds tutorial](https://www.electronjs.org/docs/latest/tutorial/web-embeds/).
+
+**Investigação empírica — achado o teto real da técnica de verificação
+neste projeto**: criei um card de navegador via CDP e naveguei pra uma
+URL real (`https://example.com`, não só `about:blank`). Confirmado que
+funciona de ponta a ponta **dentro da própria `WebContentsView`**:
+`did-navigate` disparou, `document.title`/`innerText` corretos, e um
+screenshot direto no *target* CDP da própria view mostra os pixels reais
+da página (não um placeholder). O pipeline de carregar+renderizar a
+página funciona.
+
+**O que ficou sem resposta**: `Page.captureScreenshot` no target da
+**janela principal** nunca mostrou esse conteúdo — nem no estado vazio
+(`about:blank`, branco por design) nem depois de navegar pra uma página
+real, os dois casos renderizaram o mesmo cinza-escuro sem diferença
+visível. Isso bate com o achado já documentado ("`capturePage()` não
+compõe `WebContentsView` nesta máquina") — mas justamente por isso **não
+dá pra usar CDP pra decidir se a composição está realmente quebrada ou se
+é só a ferramenta de screenshot que é cega pra esse tipo de view**. Não é
+falta de tentar mais — é o limite real desta técnica de verificação neste
+ambiente, já batido antes (ver o achado de `capturePage()` no sistema de
+snapshot, item 4).
+
+**Item 9 continua aberto** — pedido ao usuário pra testar ao vivo
+(navegar um card de navegador pra uma URL real, não deixar em
+`about:blank`) e descrever exatamente o que aparece na tela de verdade.
+Só isso resolve a pergunta que CDP não consegue responder aqui.
+
 ## Comandos
 
 ```bash

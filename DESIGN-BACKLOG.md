@@ -541,6 +541,36 @@ de `WebContentsView` falhando, mas com o `about:blank`/fundo branco
   resolvido — este item já foi "corrigido" 2+ vezes e regrediu, mesmo
   aviso que `AGENTS.md` já registra.
 
+**Pesquisa feita em 2026-08-26** (ver `AGENTS.md` pra detalhe completo e
+fontes): `WebContentsView` **é** a abordagem certa — a própria
+documentação do Electron recomenda explicitamente contra `<webview>` pra
+produção ("consider alternatives, like iframe, a WebContentsView"), então
+não é questão de trocar de mecanismo. O gotcha real é a combinação
+GPU-desabilitada + Wayland + composição de múltiplas views, uma classe de
+bug conhecida e sem fix único documentado (Electron issue #36633,
+"Zero GPU Acceleration on Wayland", aberta desde a versão 22).
+
+**Investigação empírica, honesta sobre o limite encontrado**: com o app
+já rodando, criei um card de navegador e naveguei pra uma URL real
+(`https://example.com`) via CDP — a página carrega de verdade (DOM
+correto, texto certo) e **renderiza pixels reais** quando o `target` CDP
+da própria `WebContentsView` é screenshotado diretamente. Isso confirma
+que o pipeline de carregamento/renderização interno da view funciona.
+**O que não dá pra confirmar por aqui**: se esse conteúdo chega
+composto na janela principal que um humano vê — `Page.captureScreenshot`
+no target da janela principal **nunca mostrou o conteúdo da
+`WebContentsView`**, nem no estado vazio (`about:blank`, branco por
+design) nem depois de navegar pra uma página real (mesmo cinza-escuro
+nos dois casos) — batendo com o achado já documentado (`capturePage()`
+não compõe `WebContentsView` nesta máquina). **Não dá pra distinguir,
+só com CDP, entre "composição realmente quebrada" e "a ferramenta de
+screenshot é cega pra este tipo de view, mas o humano vê certo"** — esse
+é o teto real desta técnica de verificação aqui, não um "não sei
+investigar mais". Só um humano olhando a tela real resolve essa
+pergunta. **Pedido ao usuário**: testar ao vivo — abrir um navegador,
+navegar pra uma URL real (não só deixar em `about:blank`), e descrever
+exatamente o que aparece.
+
 ## 10. Terminal — polimento visual + seleção — feito (3/3 achados)
 
 Três achados distintos reportados juntos, tratar cada um separado:
