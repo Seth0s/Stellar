@@ -14,18 +14,24 @@ import { createRemoteServer } from "./remote-server";
 
 const isDev = !app.isPackaged;
 
-// This machine's GPU stack (Mesa GBM loader + ANGLE's GLESv2, on an NVIDIA
-// system) segfaults the GPU process outright — confirmed via the kernel log
-// (`segfault ... in libGLESv2.so`, always the same instruction pointer,
-// repeating every GPU-process respawn attempt), not just a benign log
-// warning. Forcing ozone to x11 only silenced one cosmetic Vulkan/Wayland
-// warning and did nothing about the actual crash. The correct fix is to
-// never launch a GPU process at all — Electron's own documented API for
-// exactly this class of unstable-driver problem, not a workaround. The
-// renderer still works fully: Chromium falls back to software compositing
-// for its own UI, and `useTerminal.ts` has its own fallback to xterm's
-// canvas2d renderer when the WebGL addon isn't available.
-app.disableHardwareAcceleration();
+// GPU acceleration re-enabled 2026-08-26 — see DESIGN-BACKLOG.md item 9 and
+// AGENTS.md for the full investigation. It was disabled 2026-08-25 because
+// this machine's GPU stack (Mesa GBM loader + ANGLE's GLESv2, on an NVIDIA
+// system) segfaulted the GPU process outright (`segfault ... in
+// libGLESv2.so`, confirmed via the kernel log, looping on every respawn).
+// That was also the reason the browser card's WebContentsView never
+// visually composited into the main window (item 9's real symptom) —
+// software-only compositing of multiple views is comparatively fragile.
+// Retested empirically before re-enabling, not assumed fixed: two isolated
+// runs (boot, open a browser card, navigate to a real URL, 6s+ under load)
+// on the CURRENT NVIDIA driver (610.57.04, newer than whatever was
+// installed during the original crash) — zero segfaults, zero GPU-process
+// crashes, `journalctl -k` clean both times. If a real GPU crash ever
+// reproduces again on this or another machine, `disableHardwareAcceleration()`
+// is the correct, documented Electron API for that class of problem — bring
+// it back rather than reaching for something else, per the same reasoning
+// that justified it the first time.
+// app.disableHardwareAcceleration();
 
 // Separate from the crash above: even with hardware acceleration off,
 // Chromium's GPU process still runs a capability-collection pass on startup
