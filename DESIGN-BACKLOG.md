@@ -111,9 +111,20 @@ desenhar a API agora:
 - Resposta: PNG codificado (base64 no socket, ou salvo em arquivo
   temporário com o path devolvido — mais barato pra recortes grandes).
 
-**Recomendação**: candidato mais forte pra próxima rodada de código depois
-dos atalhos (item 1) — tem API concreta, sem decisão de produto em aberto,
-só implementação + verificação.
+**Feito em 2026-08-26** (`acbridge snapshot`) — ver `AGENTS.md` para a
+implementação completa. **Achado real da verificação empírica, não
+assumido**: `capturePage()` NÃO compõe `WebContentsView` nesta máquina
+(GPU desabilitada/renderização por software) — confirmado comparando o
+mesmo card de navegador capturado via `capturePage()` (cinza escuro,
+`--surface`, a cor do próprio DOM vazio por baixo) contra o screenshot
+direto do target CDP daquela mesma `WebContentsView` no mesmo instante
+(branco, conteúdo real). Terminal/arquivos/changes/nota funcionam
+perfeitamente (são DOM puro, incluindo o texto do xterm — que também é
+DOM, não canvas, nesta configuração). Só card de navegador fica com um
+retângulo liso em vez do conteúdo real. Documentado no código
+(`main/index.ts`), não escondido — ver `AGENTS.md` pro workaround possível
+(capturar o target da `WebContentsView` separadamente e compor por cima,
+não feito ainda).
 
 ## 5. Organização de código
 
@@ -179,8 +190,9 @@ jump-to-card, template de sessão) continuam em aberto.
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
 2. ~~Confirmação ao fechar um terminal card ativo~~ — feito em 2026-08-26.
-3. Sistema de snapshot pro agente (item 4) — maior valor agregado dos
-   itens não triviais, já tem caminho técnico claro.
+3. ~~Sistema de snapshot pro agente~~ — feito em 2026-08-26, com a
+   limitação real de `capturePage()` não compor `WebContentsView`
+   documentada (browser card vira retângulo liso na captura).
 4. Decisão de escopo pra visualização de processos/apps (item 3) —
    precisa de resposta do usuário antes de qualquer estimativa.
 5. Gesto radial (item 1, parte de gestos) — depois dos atalhos, que são

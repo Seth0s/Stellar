@@ -1,4 +1,13 @@
-import type { PtyApi, StoreApi, FsApi, GitApi, BrowserApi, AiApi, WinControlsApi } from "../../preload/index";
+import type {
+  PtyApi,
+  StoreApi,
+  FsApi,
+  GitApi,
+  BrowserApi,
+  AiApi,
+  WinControlsApi,
+  SnapshotApi,
+} from "../../preload/index";
 
 declare global {
   interface Window {
@@ -9,5 +18,6 @@ declare global {
     browser: BrowserApi;
     ai: AiApi;
     winControls: WinControlsApi;
+    snapshot: SnapshotApi;
   }
 }

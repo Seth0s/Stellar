@@ -180,6 +180,21 @@ const winControls = {
   },
 };
 
+/** `acbridge snapshot` support — main asks "what's this on screen right
+ * now" (only the renderer has the live pan/zoom transform), renderer
+ * replies with screen pixels; main does the actual capturePage(). See
+ * main/index.ts's handleSnapshotRequest for the other half. */
+export type SnapshotTarget = { cardId: string } | { rect: { x: number; y: number; w: number; h: number } };
+const snapshot = {
+  onRectRequest: (cb: (requestId: string, target: SnapshotTarget) => void) => {
+    const listener = (_e: unknown, requestId: string, target: SnapshotTarget) => cb(requestId, target);
+    ipcRenderer.on("snapshot:rect-request", listener);
+    return () => ipcRenderer.removeListener("snapshot:rect-request", listener);
+  },
+  replyRect: (requestId: string, screenRect: { x: number; y: number; width: number; height: number } | null) =>
+    ipcRenderer.send("snapshot:rect-reply", requestId, screenRect),
+};
+
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("store", store);
 contextBridge.exposeInMainWorld("fs", fs);
@@ -187,6 +202,7 @@ contextBridge.exposeInMainWorld("git", git);
 contextBridge.exposeInMainWorld("browser", browser);
 contextBridge.exposeInMainWorld("ai", ai);
 contextBridge.exposeInMainWorld("winControls", winControls);
+contextBridge.exposeInMainWorld("snapshot", snapshot);
 
 export type PtyApi = typeof pty;
 export type StoreApi = typeof store;
@@ -195,3 +211,4 @@ export type GitApi = typeof git;
 export type BrowserApi = typeof browser;
 export type AiApi = typeof ai;
 export type WinControlsApi = typeof winControls;
+export type SnapshotApi = typeof snapshot;
