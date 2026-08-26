@@ -7,6 +7,7 @@ import type {
   AiApi,
   WinControlsApi,
   SnapshotApi,
+  RemoteInputApi,
 } from "../../preload/index";
 
 declare global {
@@ -19,5 +20,6 @@ declare global {
     ai: AiApi;
     winControls: WinControlsApi;
     snapshot: SnapshotApi;
+    remoteInput: RemoteInputApi;
   }
 }

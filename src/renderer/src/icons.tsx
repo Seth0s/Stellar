@@ -21,7 +21,9 @@ import {
   Maximize,
   Minimize,
   Minus,
+  MonitorSmartphone,
   MousePointer2,
+  MousePointerClick,
   Octagon,
   Pen,
   RotateCw,
@@ -67,7 +69,10 @@ export type IconName =
   | "group"
   | "ungroup"
   | "check"
-  | "bgStyle";
+  | "bgStyle"
+  | "remoteWindow"
+  | "controlOn"
+  | "controlOff";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -100,6 +105,9 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   ungroup: Ungroup,
   check: Check,
   bgStyle: Grid2x2,
+  remoteWindow: MonitorSmartphone,
+  controlOn: MousePointerClick,
+  controlOff: MousePointer2,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

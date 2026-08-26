@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, session } from "electron";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPtyRegistry } from "./pty-registry";
@@ -9,6 +9,7 @@ import { gitStatus } from "./git-tools";
 import { createBrowserRegistry, type BrowserRect } from "./browser-registry";
 import { createMessageBus } from "./message-bus";
 import { runOneShotSummary } from "./ai-action";
+import { createRemoteInputSession } from "./remote-input";
 
 const isDev = !app.isPackaged;
 
@@ -38,6 +39,19 @@ app.disableHardwareAcceleration();
 // video playback anywhere in agent-canvas).
 app.commandLine.appendSwitch("disable-accelerated-video-decode");
 app.commandLine.appendSwitch("disable-accelerated-video-encode");
+
+// Without this, Chromium's screen-capture stack on Linux falls back to its
+// old X11-only enumeration path — confirmed the hard way earlier in this
+// project (DESIGN-BACKLOG.md item 3): `desktopCapturer.getSources()`
+// returned exactly one source with an empty name and a zero-width
+// thumbnail on this Wayland/GNOME session, no per-window data at all. This
+// flag routes capture through the xdg-desktop-portal ScreenCast interface
+// instead, which is what actually knows how to enumerate/capture on
+// Wayland (and is also what `getDisplayMedia()`'s system picker needs —
+// see remote-input.ts and RemoteWindowCard.tsx). Unverified end-to-end:
+// the picker dialog it triggers is native OS UI, so only a human clicking
+// it can confirm this actually works.
+app.commandLine.appendSwitch("enable-features", "WebRTCPipeWireCapturer");
 
 // Electron only reads package.json's "name" (for app.getPath("userData")
 // etc.) when launched as `electron .`/a directory — launched by pointing
@@ -184,6 +198,36 @@ function createWindow() {
     sockPath,
     binDir,
   });
+
+  // With WebRTCPipeWireCapturer enabled above, a single getSources() call
+  // made lazily (at request time, inside this handler — not at app
+  // startup, where it was empirically confirmed useless) is itself what
+  // triggers the native xdg-desktop-portal picker dialog and returns
+  // whatever the user chose in it. There is deliberately no in-app source
+  // list here — that path was tried and abandoned (DESIGN-BACKLOG.md item
+  // 3): this app can't enumerate real window names/thumbnails on Wayland,
+  // only the portal's own dialog can.
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    desktopCapturer
+      .getSources({ types: ["screen", "window"] })
+      .then((sources) => callback(sources.length > 0 ? { video: sources[0] } : {}))
+      .catch(() => callback({}));
+  });
+
+  // App-level singleton — the RemoteDesktop portal's grant is "let this
+  // app inject input", not "let this app control window X", so one session
+  // shared by every RemoteWindowCard is correct and avoids a consent
+  // dialog per card. See remote-input.ts.
+  const remoteInput = createRemoteInputSession();
+  ipcMain.handle("remote-input:ensure", () => remoteInput.ensureStarted());
+  ipcMain.handle("remote-input:move", (_e, dx: number, dy: number) => remoteInput.moveRelative(dx, dy));
+  ipcMain.handle("remote-input:button", (_e, button: number, pressed: boolean) =>
+    remoteInput.button(button, pressed),
+  );
+  ipcMain.handle("remote-input:scroll", (_e, dx: number, dy: number) => remoteInput.scroll(dx, dy));
+  ipcMain.handle("remote-input:keysym", (_e, keysym: number, pressed: boolean) =>
+    remoteInput.keysym(keysym, pressed),
+  );
 
   const browserRegistry = createBrowserRegistry(win, {
     onNavigate: (id, url) => safeSend(win, "browser:did-navigate", id, url),

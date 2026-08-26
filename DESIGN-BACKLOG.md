@@ -92,14 +92,44 @@ tecnicamente viável seria delegar a escolha inteira pro diálogo nativo de
 dentro do app) — perguntado ao usuário, que preferiu engavetar em vez de
 seguir com essa versão mais crua do que foi pedido.
 
-**Se for retomado**: `session.setDisplayMediaRequestHandler` com o
-handler legado (não `useSystemPicker`) chamando `getUserMedia` com o
-único source genérico que `getSources()` devolve nesta plataforma — isso
-provavelmente aciona o portal do GNOME/Wayland (`xdg-desktop-portal`) na
-hora de iniciar o stream, não na hora de listar. Não totalmente verificado
-de ponta a ponta: exige alguém clicando num diálogo nativo do SO, que CDP
-não alcança — precisaria de teste manual do usuário na primeira tentativa
-real.
+**Retomado em 2026-08-26, reescopado**: usuário pediu upgrade — em vez de
+só vídeo (visualização), controle interativo real (clique/digitação pelo
+app), com uma fase futura para o *agente* também poder pedir permissão de
+controle (deferida, não implementada). Decisões via `AskUserQuestion`:
+fase 1 é só controle humano; precisão do ponteiro começa **relativa**
+(estilo trackpad), com a arquitetura deixando espaço pra um modo absoluto
+(clique exato) depois.
+
+**Fase 1 implementada** (`src/main/remote-input.ts`,
+`src/renderer/src/RemoteWindowCard.tsx`, `src/renderer/src/keysyms.ts`):
+
+- **Input** (mouse/teclado) via `org.freedesktop.portal.RemoteDesktop`
+  (D-Bus/xdg-desktop-portal), testado isoladamente em
+  `/tmp/portal_test/test2.js` antes de escrever qualquer código do
+  projeto: `CreateSession` → `SelectDevices` completam de ponta a ponta
+  via `dbus-next`, sem diálogo (só `Start()` mostra diálogo real do
+  GNOME). Sessão é *singleton* de app (não por card) — o grant do portal é
+  "deixe este app injetar input", não "controle só a janela X", então um
+  diálogo de consentimento serve pra todos os cards.
+  `NotifyPointerMotion`/`NotifyPointerButton`/`NotifyPointerAxis`/
+  `NotifyKeyboardKeysym` — relativo, não absoluto (ver nota de risco
+  abaixo). Verificado até `SelectDevices` via CDP na instância real do
+  app (`window.remoteInput.ensure()` chega em `Start()` sem lançar erro,
+  fica pendente aguardando um humano clicar o diálogo — exatamente o
+  esperado, CDP não alcança diálogo nativo do SO).
+- **Vídeo**: `getDisplayMedia()` + `session.setDisplayMediaRequestHandler`
+  chamando `desktopCapturer.getSources()` *na hora do pedido* (não no
+  boot do app, onde já foi confirmado inútil) — delega a escolha pro
+  picker nativo do portal ScreenCast, com a flag
+  `--enable-features=WebRTCPipeWireCapturer` ligada. **Não verificado de
+  ponta a ponta**: é o mesmo diálogo nativo do SO que CDP não alcança —
+  precisa de teste manual do usuário na primeira tentativa real.
+- **Precisão absoluta (não construída)**: exigiria um consumidor
+  PipeWire próprio pra correlacionar um clique com uma posição real no
+  frame de vídeo — risco/esforço bem maior, fica pra depois de validar a
+  fase 1 ao vivo.
+- **Fase 2 (permissão do agente) — deferida**, não iniciar antes do
+  usuário confirmar a fase 1 funcionando de verdade (diálogos nativos).
 
 ## 4. Sistema de snapshot — agente vê o Canvas em coordenadas específicas
 

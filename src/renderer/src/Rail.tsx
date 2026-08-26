@@ -35,6 +35,7 @@ export function Rail({
   onCreateChanges,
   onCreateSticky,
   onCreateBrowser,
+  onCreateRemoteWindow,
   aiBusy,
   summarizeDisabled,
   onReorganize,
@@ -69,6 +70,7 @@ export function Rail({
   onCreateChanges: () => void;
   onCreateSticky: () => void;
   onCreateBrowser: () => void;
+  onCreateRemoteWindow: () => void;
   aiBusy: boolean;
   summarizeDisabled: boolean;
   onReorganize: () => void;
@@ -164,6 +166,9 @@ export function Rail({
       </button>
       <button className="rail-btn" title="Novo navegador" onClick={onCreateBrowser}>
         <Icon name="browser" />
+      </button>
+      <button className="rail-btn" title="Controlar janela externa" onClick={onCreateRemoteWindow}>
+        <Icon name="remoteWindow" />
       </button>
 
       <div className="rail-group-gap" />

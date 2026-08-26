@@ -195,6 +195,23 @@ const snapshot = {
     ipcRenderer.send("snapshot:rect-reply", requestId, screenRect),
 };
 
+export type RemoteInputEnsureResult = { granted: true } | { granted: false; error: string };
+
+/** Human-driven control of an external OS window (DESIGN-BACKLOG.md item
+ * 3, phase 1 — relative motion, see main/remote-input.ts). `ensure()` is
+ * the one call that can surface a real OS consent dialog; the rest are
+ * fire-and-forget input events sent while a RemoteWindowCard has control
+ * active. */
+const remoteInput = {
+  ensure: (): Promise<RemoteInputEnsureResult> => ipcRenderer.invoke("remote-input:ensure"),
+  move: (dx: number, dy: number): Promise<void> => ipcRenderer.invoke("remote-input:move", dx, dy),
+  button: (button: number, pressed: boolean): Promise<void> =>
+    ipcRenderer.invoke("remote-input:button", button, pressed),
+  scroll: (dx: number, dy: number): Promise<void> => ipcRenderer.invoke("remote-input:scroll", dx, dy),
+  keysym: (keysym: number, pressed: boolean): Promise<void> =>
+    ipcRenderer.invoke("remote-input:keysym", keysym, pressed),
+};
+
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("store", store);
 contextBridge.exposeInMainWorld("fs", fs);
@@ -203,6 +220,7 @@ contextBridge.exposeInMainWorld("browser", browser);
 contextBridge.exposeInMainWorld("ai", ai);
 contextBridge.exposeInMainWorld("winControls", winControls);
 contextBridge.exposeInMainWorld("snapshot", snapshot);
+contextBridge.exposeInMainWorld("remoteInput", remoteInput);
 
 export type PtyApi = typeof pty;
 export type StoreApi = typeof store;
@@ -212,3 +230,4 @@ export type BrowserApi = typeof browser;
 export type AiApi = typeof ai;
 export type WinControlsApi = typeof winControls;
 export type SnapshotApi = typeof snapshot;
+export type RemoteInputApi = typeof remoteInput;
