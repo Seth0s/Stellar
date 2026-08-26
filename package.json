@@ -4,8 +4,8 @@
   "description": "Stellar — a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
   "license": "Apache-2.0",
   "author": {
-    "name": "Lucas Sabino",
-    "email": "lucassabino.rj@gmail.com"
+    "name": "Seth0s",
+    "email": "seth0s@users.noreply.github.com"
   },
   "private": true,
   "type": "module",
@@ -50,15 +50,18 @@
       "category": "Development",
       "synopsis": "Multi-agent spatial canvas",
       "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "icon": "build/icons"
     },
     "rpm": {
       "packageName": "stellar",
-      "vendor": "Lucas Sabino"
+      "vendor": "Seth0s",
+      "afterInstall": "build/linux-after-install.sh"
     },
     "deb": {
       "packageName": "stellar",
-      "vendor": "Lucas Sabino"
+      "vendor": "Seth0s",
+      "afterInstall": "build/linux-after-install.sh"
     },
     "mac": {
       "target": ["dmg", "zip"],
