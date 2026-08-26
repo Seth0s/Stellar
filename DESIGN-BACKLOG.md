@@ -616,10 +616,24 @@ o que o usuário descreve como "não prático".
 7. ~~Organização de código (item 5)~~ — fase 1+2+3 feitas em 2026-08-26
    (harness, 4 hooks extraídos, `SYSTEM.md`); otimização (item 6) e fase 4
    do item 5 seguem sem urgência.
-8. **Itens 8-11 (anotados em 2026-08-26, reportados ao vivo pelo usuário,
-   ainda sem plano fechado nem implementação)**: home sem sessão carregada
-   (item 8), navegador — pesquisa de abordagem correta + redesign visual
-   (item 9, o único item ainda dando problema até hoje segundo o usuário),
-   polimento de terminal + verificação real da ferramenta de seleção (item
-   10), redesenho do modal de sessões (item 11). Precisam de plano
-   detalhado (e, no caso do navegador, pesquisa) antes de qualquer código.
+8. **Itens 8-11, ordem de prioridade/facilidade aprovada pelo usuário em
+   2026-08-26** (item 3 — controle de janela remota — fica de fora, pausado
+   por segurança; item 4 continua deliberadamente adiado):
+   1. Terminal — borda residual fina na direita do card (item 10, achado 1).
+   2. Terminal — verificar ao vivo se agrupar/arrastar em grupo (ferramenta
+      de seleção) realmente funciona (item 10, achado 3).
+   3. Terminal — trocar o texto `^C` do header por um ícone real (item 10,
+      achado 2) — migração pontual pra `lucide-react`, não o `icons.tsx`
+      inteiro.
+   4. Navegador — pesquisa de práticas corretas de `WebContentsView`/
+      Chromium embutido + fix (item 9) — maior dor citada pelo usuário,
+      feito logo enquanto o contexto está fresco, apesar do risco/incerteza
+      maior (2 tentativas anteriores já regrediram, ver `AGENTS.md`).
+   5. Modal de sessões — redesenho (item 11).
+   6. Fluxo de uso — duplicar card, jump-to-card, template de sessão
+      (item 7, os 3 que sobraram).
+   7. Home sem sessão carregada (item 8) — o maior, mais decisões de
+      produto, depende menos dos itens acima do que parece mas fecha melhor
+      depois que o modal de sessões (5) já estiver redesenhado.
+   8. Otimização de bundle (item 6) — dívida técnica, sem urgência de
+      usuário, fica por último.
