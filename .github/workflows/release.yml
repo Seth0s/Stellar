@@ -1,0 +1,94 @@
+name: Release
+
+# DESIGN-BACKLOG.md item 18 — builds packages for Linux (.rpm + .deb),
+# macOS (.dmg + .zip) and Windows (.nsis installer + portable) and
+# publishes them (plus auto-updater metadata) to a GitHub Release
+# whenever a `v*` tag is pushed. `electron-updater`'s feed
+# (registerUpdater, main/updater.ts) reads exactly this: a GitHub
+# Release with the platform artifacts and the per-platform
+# `latest*.yml` electron-builder generates alongside them.
+#
+# `.rpm` (Fedora) is the one platform explicitly required by the user —
+# it's its own job, not one leg of a matrix, so a macOS/Windows failure
+# can never block or cancel it (matrix `fail-fast` would do exactly
+# that; separate jobs don't).
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # electron-builder's rpm/deb targets shell out to `fpm`, which
+      # needs a real `rpmbuild` on PATH for `.rpm` — not present on
+      # ubuntu-latest by default. build-essential/python3 cover
+      # node-gyp for the native deps (better-sqlite3, node-pty) that
+      # `npm ci`'s own postinstall (electron-rebuild) compiles against
+      # the pinned Electron version.
+      - run: sudo apt-get update && sudo apt-get install -y rpm build-essential python3
+
+      - run: npm ci
+
+      - run: npx tsc --noEmit
+
+      # Full `npm run verify` (the CDP/Electron smoke suite) needs a
+      # display and isn't wired for headless CI yet (would need
+      # `xvfb-run` at minimum) — `tsc` above is the only gate here.
+      # Documented as a known gap, not silently skipped.
+      - run: npm run build
+
+      - name: Build + publish .rpm and .deb
+        run: npx electron-builder --linux rpm deb --publish always
+        env:
+          # `secrets.GH_TOKEN` lets the repo owner override with a PAT
+          # if the default token's permissions ever aren't enough;
+          # falls back to the built-in token (this workflow already
+          # grants it `contents: write` above) otherwise.
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+
+  build-mac:
+    runs-on: macos-latest
+    # Never blocks/gets blocked by build-linux — see the note at the top
+    # of this file. No macOS/Windows signing yet (DESIGN-BACKLOG.md item
+    # 13/docs/packaging.md §4, deliberately deferred, same call
+    # CentralByte made) — these artifacts will trigger Gatekeeper on
+    # first launch until that's done.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - name: Build + publish macOS artifacts
+        run: npx electron-builder --mac --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    runs-on: windows-latest
+    # Same independence note as build-mac above; no code signing yet
+    # (SmartScreen will warn on first run until docs/packaging.md §4 is
+    # done).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - name: Build + publish Windows artifacts
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}

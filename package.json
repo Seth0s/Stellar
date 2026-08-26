@@ -1,19 +1,30 @@
 {
   "name": "agent-canvas",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Stellar — a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
+  "author": {
+    "name": "Lucas Sabino",
+    "email": "lucassabino.rj@gmail.com"
+  },
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
+  "desktopName": "stellar.desktop",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "package": "electron-vite build && electron-builder --dir",
+    "package:rpm": "electron-vite build && electron-builder --linux rpm",
+    "package:linux": "electron-vite build && electron-builder --linux",
+    "package:mac": "electron-vite build && electron-builder --mac",
+    "package:win": "electron-vite build && electron-builder --win",
     "postinstall": "electron-rebuild -f -w node-pty -w better-sqlite3",
     "verify": "npm run build && for f in scripts/verify/smoke-*.mjs; do node \"$f\" || exit 1; done"
   },
   "build": {
-    "appId": "com.agentcanvas.app",
-    "productName": "agent-canvas",
+    "appId": "com.stellar.app",
+    "productName": "Stellar",
+    "icon": "build/icon.png",
     "files": [
       "out/**/*"
     ],
@@ -26,7 +37,41 @@
         "from": "resources/mobile-client",
         "to": "mobile-client"
       }
-    ]
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "Seth0s",
+      "repo": "Stellar"
+    },
+    "linux": {
+      "target": ["rpm", "deb"],
+      "executableName": "stellar",
+      "category": "Development",
+      "synopsis": "Multi-agent spatial canvas",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "syncDesktopName": true
+    },
+    "rpm": {
+      "packageName": "stellar",
+      "vendor": "Lucas Sabino"
+    },
+    "deb": {
+      "packageName": "stellar",
+      "vendor": "Lucas Sabino"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": ["nsis", "portable"],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.3.0",
@@ -37,6 +82,7 @@
     "better-sqlite3": "13.0.3",
     "dbus-next": "^0.10.2",
     "dompurify": "^3.4.14",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.34.0",
     "marked": "^18.0.11",
     "node-pty": "1.1.0",
@@ -56,6 +102,7 @@
     "electron-vite": "^4.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "rollup-plugin-visualizer": "^7.1.1",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"
   }
