@@ -37,9 +37,19 @@ da viewport. Menor risco: não mexe em nada que já funciona, só adiciona um
 segundo caminho pro mesmo resultado.
 
 **Atalhos — feito em 2026-08-26**: overlay de ajuda (`?`, `ShortcutsOverlay.tsx`)
-listando ferramentas/janela/card/mouse num modal — ver `AGENTS.md`. O
-radial menu em si (a parte de gestos deste item) continua em aberto,
-depende da decisão de interação acima.
+listando ferramentas/janela/card/mouse num modal — ver `AGENTS.md`.
+
+**Radial menu — feito em 2026-08-26**, seguindo exatamente o caminho
+recomendado acima: régua linear intocada, right-click no canvas vazio
+(`onContextMenu` no viewport, mesmo guard `target === currentTarget` que
+`onBackgroundPointerDown` já usa) abre um menu circular
+(`RadialMenu.tsx`) com as 6 ações de criar card, ancorado no ponto do
+clique via `pointSlot` (novo em `board-model.ts`, variante de
+`centeredSlot` sem stagger — só spawna um card por vez). Fecha ao
+escolher uma ação, ao clicar fora (backdrop transparente) ou com `Esc`.
+Verificado ao vivo via CDP: abre no ponto certo, lista as 6 ações,
+seleção fecha e spawna no lugar certo, backdrop/Esc fecham sem spawnar
+nada.
 
 ## 2. Sistema de controle remoto (mobile) via tunnel/reverse proxy
 
@@ -128,8 +138,10 @@ fase 1 é só controle humano; precisão do ponteiro começa **relativa**
   PipeWire próprio pra correlacionar um clique com uma posição real no
   frame de vídeo — risco/esforço bem maior, fica pra depois de validar a
   fase 1 ao vivo.
-- **Fase 2 (permissão do agente) — deferida**, não iniciar antes do
+- **Fase 2 (permissão do agente) — em espera**, não iniciar antes do
   usuário confirmar a fase 1 funcionando de verdade (diálogos nativos).
+  Usuário não pôde testar ainda nesta rodada (2026-08-26) — seguimos pra
+  outro item do backlog em vez de adivinhar/avançar sem essa confirmação.
 
 ## 4. Sistema de snapshot — agente vê o Canvas em coordenadas específicas
 
@@ -244,9 +256,7 @@ jump-to-card, template de sessão) continuam em aberto.
    decidido em 2026-08-26, mas engavetado: limitação real de plataforma
    (Wayland não expõe metadata de janela, `useSystemPicker` é só macOS)
    tornaria a única versão viável mais crua do que o usuário queria.
-5. Gesto radial (item 1, parte de gestos) — depois dos atalhos, que são
-   mais baratos e cobrem parte do mesmo objetivo (acesso rápido às
-   ferramentas).
+5. ~~Gesto radial (item 1, parte de gestos)~~ — feito em 2026-08-26.
 6. Decisão de escopo pro remote control (item 2) — maior risco/tamanho do
    lote inteiro, não deveria começar sem a conversa de segurança primeiro.
 7. Organização de código (item 5) e otimização (item 6) — dívida técnica
