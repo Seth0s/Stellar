@@ -53,31 +53,103 @@ nada.
 
 ## 2. Sistema de controle remoto (mobile) via tunnel/reverse proxy
 
-**Pedido**: acessar/controlar o app a partir do celular via túnel/reverse
-proxy.
+**Pedido original**: acessar/controlar o app a partir do celular via
+túnel/reverse proxy.
 
-**Por que não entrou**: implica expor uma superfície de controle do app
-pela rede — decisão de segurança real, não só de UI. Perguntas que
-precisam resposta antes de qualquer código:
+**Reescopado em 2026-08-26**: interface web (sem app nativo) pro celular
+compartilhar/controlar o Canvas "como se estivesse no PC", dentro E fora
+da rede local, com segurança séria — inclusive cogitando domínio próprio +
+Magic Link. Plano honesto abaixo, nada implementado ainda — é
+genuinamente a maior peça deste backlog inteiro, não cabe como "próximo
+item", é um sub-projeto.
 
-- **Superfície exposta**: só visualização (mirror read-only do canvas) ou
-  controle completo (criar/fechar/escrever em terminais a partir do
-  celular)? O segundo é bem mais arriscado — um terminal remoto controlado
-  por um túnel público é a definição de superfície de ataque.
-  - **De onde vem o auth**: token gerado localmente e escaneado via QR
-    (padrão usado por ferramentas tipo Tailscale/syncthing)? Sem auth
-    nenhuma, um túnel exposto vira acesso root ao PC do usuário através
-    dos terminais.
-- **Tecnologia do túnel**: `ngrok`/similar (mais simples, mas depende de
-  serviço terceiro) vs Tailscale Funnel (já é rede privada, mais seguro,
-  mas exige o usuário já ter Tailscale) vs relay próprio via `acbridge`
-  (mais trabalho, controle total).
+### Duas arquiteturas possíveis, trade-off real
 
-**Recomendação**: não começar pela infra de túnel — começar por decidir o
-escopo de controle exposto, porque isso muda a arquitetura inteira (um
-mirror read-only pode ser só um servidor HTTP servindo screenshots
-periódicos do canvas; controle completo precisa replicar boa parte do IPC
-atual sobre uma conexão não-confiável).
+**A. Espelhar pixels (screen-share de verdade)** — captura contínua da
+janela (`capturePage()` ou `getDisplayMedia`), transmite como vídeo
+(WebRTC), input do celular volta como eventos sintéticos injetados no DOM
+do renderer. Mais parecido com "literalmente estar no PC" (é a tela
+pixel a pixel), mas carrega **a mesma limitação já provada nesta sessão**
+duas vezes: `capturePage()` não compõe `WebContentsView` nesta máquina
+(GPU desabilitada) — os cards de navegador sairiam em branco também pro
+celular, não é algo que a rede resolve. Custo de CPU real pra captura
+contínua (sem aceleração de GPU, é tudo software).
+
+**B. Cliente web nativo (não espelha pixels, fala com os dados)** —
+expõe o estado real do board (cards, stream de I/O de PTY) por WebSocket
+a partir de um servidor HTTP embutido no processo main, e serve uma UI
+web dedicada pro celular (pode reaproveitar componentes React existentes
+num layout mobile). Terminal/arquivos/changes/nota são DOM puro — dá pra
+espelhar o estado sem nenhum dos problemas de composição de
+`WebContentsView`. **Card de navegador vira um caso à parte**: em vez de
+tentar espelhar pixels de uma página, mais simples e mais honesto é abrir
+a URL direto no navegador do próprio celular quando o usuário tocar
+naquele card — não é mirror, mas evita o bug conhecido de composição em
+vez de herdá-lo.
+
+**Recomendação**: opção B. Mais trabalho de arquitetura (é
+essencialmente construir um segundo front-end, ainda que reaproveitando
+componentes), mas não herda um bug de plataforma já confirmado, e input
+sintético em DOM próprio é muito mais seguro/simples que replicar
+`RemoteDesktop`/`getDisplayMedia` pro item 3.
+
+### Segurança mínima, inegociável antes de qualquer coisa ir pra rede
+
+- **Auth por token, sempre** — mesmo só na rede local. QR code gerado
+  localmente pelo app (padrão Tailscale/Syncthing) é o caminho mais
+  simples e já é um padrão validado, evita reimplementar login.
+- **Terminal é root de fato** — qualquer superfície que permite escrever
+  num terminal card *é* acesso ao shell do usuário. Não existe versão
+  "levemente insegura" disso: ou o token/sessão é forte (rotacionado,
+  expira, revogável na hora pelo PC) ou o recurso não deveria existir
+  voltado pra fora da rede local.
+- **TLS obrigatório fora da LAN** — sem isso o token trafega em claro.
+
+### Rede local vs fora da rede — custo real de cada
+
+- **Só LAN**: servidor HTTP bindado na rede local, token de pareamento.
+  Baixo risco (superfície só alcançável por quem já está na mesma rede),
+  zero infra externa, zero custo recorrente. Dá pra fazer e validar
+  isoladamente do resto.
+- **Fora da rede, via túnel que o próprio usuário já controla**
+  (Tailscale Funnel/Serve, Cloudflare Tunnel com domínio do usuário):
+  agent-canvas só precisa abrir a porta certa e confiar no túnel pra
+  autenticação de transporte — **nós não operamos nada**, o usuário já
+  tem (ou instala) a ferramenta de túnel. Esforço médio, risco
+  moderado (depende da configuração do túnel, mas isso já é
+  responsabilidade de ferramentas maduras, não nossa).
+- **Fora da rede, via relay hospedado por nós + domínio + Magic Link**:
+  isto é **infraestrutura real, não um recurso do app** — significa
+  comprar/manter um domínio, rodar um servidor de relay (VPS, TLS,
+  uptime), integrar um provedor de e-mail transacional pra enviar o
+  Magic Link (custo recorrente, mais uma dependência externa), e
+  construir gestão de sessão/autenticação de verdade. **E significa
+  assumir responsabilidade de segurança por uma peça de infra
+  internet-facing que, se comprometida, dá controle de terminal (shell)
+  no PC de quem usar.** Isso é um projeto à parte — semanas, não um item
+  de backlog — e carrega custo/manutenção contínuos depois de "pronto".
+  Sendo direto: não é algo que eu recomendo começar sem ter certeza de
+  que vale o investimento operacional contínuo, comparado a apontar pro
+  túnel que o usuário já controla.
+
+### Plano faseado recomendado
+
+1. **Fase A — só LAN, arquitetura B (cliente web nativo), token de
+   pareamento via QR**. Valida a experiência de controle mobile inteira
+   dentro de um ambiente de baixo risco, sem nenhuma infra nova além do
+   próprio app.
+2. **Fase B — acesso fora da LAN via túnel que o usuário já controla**
+   (Tailscale Funnel é o candidato mais simples: já é rede privada,
+   usuário provavelmente já confia nele). Sem infra nossa.
+3. **Fase C (opcional, grande) — relay hospedado + domínio + Magic
+   Link**, só se as fases A/B não bastarem pro que o usuário realmente
+   quer (compartilhar link com qualquer pessoa, de qualquer lugar, sem
+   configurar túnel). Escopo de projeto separado, com conversa própria de
+   orçamento/manutenção antes de qualquer código.
+
+**Nada implementado ainda** — esperando decisão do usuário sobre
+arquitetura (A vs B) e até onde ir nas fases antes de escrever qualquer
+linha de código, dado o risco real envolvido.
 
 ## 3. Facilitar visualização de processos do PC/apps, para snapshot
 
