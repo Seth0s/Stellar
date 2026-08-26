@@ -10,6 +10,7 @@ import { BrowserAskModal } from "./BrowserAskModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
+import { RemotePairingModal } from "./RemotePairingModal";
 import { Rail } from "./Rail";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
@@ -323,6 +324,7 @@ export function App() {
    * (`pointSlot`), captured once at open time so panning/zooming while the
    * menu is open doesn't retarget the spawn. */
   const [radialMenu, setRadialMenu] = useState<{ screen: Point; world: Point } | null>(null);
+  const [showRemotePairing, setShowRemotePairing] = useState(false);
   /** Set only when closeCard needs confirmation first (a terminal card
    * whose process is still live) — see closeCard/confirmCloseCard below. */
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
@@ -412,6 +414,7 @@ export function App() {
         setShowShortcuts(false);
         setPendingCloseId(null);
         setRadialMenu(null);
+        setShowRemotePairing(false);
       }
       if (e.key === "F11") {
         e.preventDefault();
@@ -1557,6 +1560,7 @@ export function App() {
         onFit={fitView}
         bgStyleLabel={BG_STYLE_LABEL[bgStyle]}
         onCycleBgStyle={cycleBgStyle}
+        onOpenRemote={() => setShowRemotePairing(true)}
         onSwitchBoard={switchBoard}
         onCreateBoard={createBoard}
         onRenameBoard={renameBoard}
@@ -1566,6 +1570,7 @@ export function App() {
       <Hint />
       <ToastHost />
       {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
+      {showRemotePairing && <RemotePairingModal onClose={() => setShowRemotePairing(false)} />}
       {radialMenu && (
         <RadialMenu
           x={radialMenu.screen.x}

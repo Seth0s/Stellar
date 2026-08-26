@@ -212,6 +212,23 @@ const remoteInput = {
     ipcRenderer.invoke("remote-input:keysym", keysym, pressed),
 };
 
+export type RemotePairing = {
+  token: string;
+  port: number;
+  addresses: string[];
+  url: string | null;
+  qrDataUrl: string | null;
+};
+
+/** LAN-only mobile control (DESIGN-BACKLOG.md item 2, phase A) — pairing
+ * info to show as a QR code, and a manual revoke for when the QR might
+ * have leaked. See main/remote-server.ts. */
+const remote = {
+  pairing: (): Promise<RemotePairing> => ipcRenderer.invoke("remote:pairing"),
+  revoke: (): Promise<void> => ipcRenderer.invoke("remote:revoke"),
+  connectionCount: (): Promise<number> => ipcRenderer.invoke("remote:connection-count"),
+};
+
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("store", store);
 contextBridge.exposeInMainWorld("fs", fs);
@@ -221,6 +238,7 @@ contextBridge.exposeInMainWorld("ai", ai);
 contextBridge.exposeInMainWorld("winControls", winControls);
 contextBridge.exposeInMainWorld("snapshot", snapshot);
 contextBridge.exposeInMainWorld("remoteInput", remoteInput);
+contextBridge.exposeInMainWorld("remote", remote);
 
 export type PtyApi = typeof pty;
 export type StoreApi = typeof store;
@@ -231,3 +249,4 @@ export type AiApi = typeof ai;
 export type WinControlsApi = typeof winControls;
 export type SnapshotApi = typeof snapshot;
 export type RemoteInputApi = typeof remoteInput;
+export type RemoteApi = typeof remote;
