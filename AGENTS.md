@@ -2028,6 +2028,36 @@ porta de rede fixa) precisa da mesma atenção — não assumir que só esses
 dois parâmetros bastam pra isolar uma instância de teste de uma sessão
 real rodando ao lado.
 
+## 2026-08-26 — Item 10, achado 1: "borda fina" no terminal era o scrollbar do xterm sem estilo
+
+Investigado via CDP (`document.querySelectorAll("*")` dentro de
+`.terminal-card-body` + `getBoundingClientRect`/`getComputedStyle` de cada
+elemento) antes de mexer em CSS às cegas. Achado: `.xterm-scrollable-element
+> .invisible.scrollbar.vertical > .slider` — o scrollbar próprio do
+xterm.js (implementação derivada do VS Code, não é o scrollbar nativo do
+navegador). `new Terminal()` (`useTerminal.ts`) não passa `scrollback`,
+então usa o padrão de 1000 linhas — uma sessão de agente real preenche
+isso rápido, então o scrollbar é genuinamente funcional, não decorativo
+morto.
+
+**O que já funcionava**: a classe alterna `visible`/`invisible` com
+`opacity: 1`/`0` (CSS do próprio xterm) e isso já fadeia corretamente
+quando ocioso — confirmado via `getComputedStyle` mostrando
+`opacity: "0"` numa instância parada.
+
+**O que estava errado**: a cor do `.slider` (`rgba(255,255,255,0.2)`,
+setada via `style` inline em JS pelo próprio xterm, não CSS) — quase
+branco opaco, contra uma UI inteira customizada nesta cor de fundo, lia
+como um artefato de renderização, não como "isso é um scrollbar".
+
+**Fix** (`cards.css`): `.terminal-card-body .xterm-scrollable-element >
+.visible .slider, ... > .invisible .slider { background: var(--border)
+!important; border-radius: 3px; }`. `!important` é obrigatório aqui — um
+`style` inline sempre vence uma regra de stylesheet normal, não importa a
+especificidade do seletor. Verificado ao vivo: `getComputedStyle` do
+slider retorna `rgb(44, 49, 60)` (`--border`) depois do fix. `npm run
+verify` completo: 24 checks, PASS.
+
 ## Comandos
 
 ```bash

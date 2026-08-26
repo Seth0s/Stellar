@@ -545,12 +545,20 @@ de `WebContentsView` falhando, mas com o `about:blank`/fundo branco
 
 Três achados distintos reportados juntos, tratar cada um separado:
 
-- **Borda residual fina na direita do card** (screenshot mostra uma linha
-  vertical fina bem na borda direita do terminal, lendo como um artefato,
-  não uma borda intencional) — precisa investigar ao vivo qual elemento
-  está desenhando isso (candidatos: `.xterm-viewport`'s scrollbar,
-  `.card-resize` handle, ou uma borda de 1px sobrando de algum estado
-  hover/focus). Não assumir causa sem inspecionar via CDP.
+- ~~**Borda residual fina na direita do card**~~ — **feito em 2026-08-26**,
+  não era um artefato: é o scrollbar próprio do xterm.js (derivado do VS
+  Code, `.xterm-scrollable-element > .visible/.invisible .slider`),
+  funcional de verdade (`new Terminal()` não passa `scrollback`, então usa
+  o padrão de 1000 linhas — uma sessão movimentada preenche isso). Ele já
+  ficava invisível corretamente quando ocioso (confirmado via
+  `getComputedStyle`, `opacity: 0`); o problema real era só a cor —
+  branco quase opaco (padrão do xterm) contra o resto da UI, toda
+  customizada e discreta, lia como artefato. Fix (`cards.css`): recolore o
+  `.slider` pra `var(--border)` via `!important` (obrigatório — o xterm
+  seta a cor por `style` inline em JS, que vence qualquer regra de CSS sem
+  `!important`, independente de especificidade do seletor). Verificado ao
+  vivo via CDP: `getComputedStyle` do slider mostra `rgb(44, 49, 60)`
+  (== `--border`) depois do fix.
 - **Botão de interromper (`^C`) no header do terminal** — hoje é texto
   literal `^C` (`TerminalCard.tsx`, `className="terminal-card-interrupt"`,
   `title="Ctrl+C"`) em vez de ícone. Usuário quer removido — provavelmente
@@ -619,7 +627,8 @@ o que o usuário descreve como "não prático".
 8. **Itens 8-11, ordem de prioridade/facilidade aprovada pelo usuário em
    2026-08-26** (item 3 — controle de janela remota — fica de fora, pausado
    por segurança; item 4 continua deliberadamente adiado):
-   1. Terminal — borda residual fina na direita do card (item 10, achado 1).
+   1. ~~Terminal — borda residual fina na direita do card~~ — feito em
+      2026-08-26 (item 10, achado 1).
    2. Terminal — verificar ao vivo se agrupar/arrastar em grupo (ferramenta
       de seleção) realmente funciona (item 10, achado 3).
    3. Terminal — trocar o texto `^C` do header por um ícone real (item 10,
