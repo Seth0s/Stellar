@@ -1,0 +1,42 @@
+// Cheapest possible regression catcher: does the app even come up and
+// render its own chrome? Run this first when something feels broken —
+// it fails fast on "the whole UI is dark" class of bugs before spending
+// time on a more specific smoke script.
+import { startApp, stopApp, connectPage, makeChecker } from "./cdp-client.mjs";
+
+const CDP_PORT = 9401;
+const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-boot", import.meta.url).pathname;
+
+const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
+const { check, finish } = makeChecker();
+try {
+  const errors = [];
+  const page = await connectPage(CDP_PORT);
+  page.onEvent((msg) => {
+    if (msg.method !== "Runtime.exceptionThrown") return;
+    const description = msg.params.exceptionDetails.exception?.description ?? "";
+    // Known, already-caught fallback on this GPU-disabled machine —
+    // xterm's WebGL addon throws inside term.open(), useTerminal.ts
+    // catches it and falls back to the canvas2d renderer (see its own
+    // comments). CDP still reports it via Runtime.exceptionThrown even
+    // though the app recovers; not a regression to fail this check on.
+    if (description.includes("WebGL2 not supported")) return;
+    errors.push(description || msg.params.exceptionDetails.text);
+  });
+  await new Promise((r) => setTimeout(r, 1000));
+
+  check("viewport rendered", await page.evalJs(`!!document.querySelector(".viewport")`), true);
+  check("rail rendered", await page.evalJs(`document.querySelectorAll(".rail-btn").length`), (n) => n >= 6);
+  check("topbar rendered", await page.evalJs(`!!document.querySelector(".topbar")`), true);
+  check(
+    "auto-seeded bash terminal card present",
+    await page.evalJs(`document.querySelectorAll(".terminal-card").length`),
+    1,
+  );
+  check("no uncaught exceptions on boot", errors, (arr) => arr.length === 0);
+
+  page.close();
+} finally {
+  await stopApp(app);
+}
+finish();

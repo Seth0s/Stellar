@@ -8,7 +8,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "package": "electron-vite build && electron-builder --dir",
-    "postinstall": "electron-rebuild -f -w node-pty -w better-sqlite3"
+    "postinstall": "electron-rebuild -f -w node-pty -w better-sqlite3",
+    "verify": "npm run build && for f in scripts/verify/smoke-*.mjs; do node \"$f\" || exit 1; done"
   },
   "build": {
     "appId": "com.agentcanvas.app",

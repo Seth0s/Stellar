@@ -1744,6 +1744,75 @@ solto) também não foi testado, só o `extraResources` do
 único/tudo-ou-nada (sem "revogar só este celular") — suficiente pro uso
 pessoal pedido, registrado como limitação real caso vire multi-usuário.
 
+## 2026-08-26 — Harness de verificação reutilizável (item 5 do backlog, fase 1, IA-first)
+
+Pedido reescopado: organização de código pensando "IA first" — o que
+reduz o custo de um agente (esta sessão, ou uma futura) editar este
+código com segurança. Plano em 4 fases (`DESIGN-BACKLOG.md` item 5);
+usuário aprovou 1+2+3 nesta rodada, deixando o registro declarativo de
+card kind (maior risco) pra depois. Esta entrada é a fase 1.
+
+**Problema real que motivou isso**: ao longo desta sessão, o mesmo
+boilerplate de "achar o target CDP, abrir WebSocket, request/response por
+id, `evalJs`" foi escrito à mão do zero repetidas vezes — cada
+verificação ao vivo (item 1 do backlog, item 2, item 3...) reinventava a
+mesma conexão. `scripts/verify/cdp-client.mjs` é esse boilerplate
+extraído uma vez, reutilizável: `startApp`/`stopApp` (lança/derruba uma
+instância isolada, nunca a sessão `npm run dev` do usuário — mesmo
+`--user-data-dir`/`--remote-debugging-port` próprios já usados o tempo
+todo nesta sessão), `connectPage`/`evalJs`/`click` (a conexão CDP em si),
+`makeChecker` (par `check()`/`finish()` — PASS/FAIL por linha, sai com
+código 1 se algo falhar). `smoke-boot.mjs`, `smoke-card-lifecycle.mjs`
+(menu radial + confirmação de fechar terminal), `smoke-remote-control.mjs`
+(pareamento/QR/round-trip real de terminal/revoke) são scripts reais, não
+hipotéticos — cobrem exatamente o que já foi verificado manualmente nas
+últimas três rodadas. `npm run verify` builda e roda os três em sequência.
+
+**Por que não Playwright**: esta máquina não tem Chrome/Chromium de
+sistema pra ele lançar, e o objetivo real é exercitar o app EMPACOTADO de
+verdade (GPU desabilitada, renderização por software) — não um browser
+genérico. CDP direto contra o próprio Electron já é o mecanismo usado a
+sessão inteira, só faltava um lugar único pra ele morar.
+
+**Três bugs reais achados construindo o próprio harness — todos no
+harness, nenhum no app** (confirmado empiricamente antes de "corrigir"
+qualquer um):
+
+1. **`node_modules/.bin/electron` é ele mesmo um wrapper Node** (`cli.js`)
+   que spawna o binário real do Electron como processo filho — matar o
+   wrapper (SIGTERM/SIGKILL) não matava esse filho, deixando instâncias
+   órfãs rodando pra sempre em segundo plano (confirmadas via `ps aux`
+   depois de cada tentativa de "fechar"). Corrigido com `detached: true`
+   no `spawn` (põe o wrapper e tudo que ele lança no próprio grupo de
+   processo) + `process.kill(-pid, sinal)` no `stopApp` (mata o grupo
+   inteiro, não só o PID do wrapper).
+2. **`stopApp` original usava o endpoint CDP `/json/close/<pageId>`** pra
+   fechar a janela graciosamente — esse endpoint específico **trava sem
+   nunca responder** à requisição HTTP, mesmo quando o app fecha rápido e
+   limpo por conta própria. Verificado isolando a variável: chamar
+   `window.winControls.close()` diretamente (o mesmo IPC que o botão real
+   de fechar usa) fez o processo sumir em menos de 1s; passar pelo
+   `/json/close` do CDP travava por minutos. Não é regressão do app — é
+   uma peculiaridade do CDP do Electron nesse endpoint específico.
+   Corrigido trocando por SIGTERM direto no processo (com SIGKILL de
+   garantia depois de 5s), sem depender desse endpoint.
+3. **`--user-data-dir` não era limpo entre execuções** — o SQLite de uma
+   run anterior (cards deixados por um teste incompleto) ficava, quebrando
+   silenciosamente suposições tipo "só existe o card bash auto-seedado"
+   de forma intermitente (passava numa run, falhava na próxima, sem
+   nenhuma mudança de código entre elas — o tipo de flakiness mais caro
+   de diagnosticar). Corrigido: `startApp` sempre apaga o dir antes de
+   subir, todo run começa de um perfil genuinamente limpo.
+
+**Verificado**: `npm run verify` roda os três scripts, 21 checks no
+total, todos PASS, `ps aux` confirma zero processo órfão depois — rodado
+mais de uma vez pra confirmar que não é sorte (as três primeiras
+tentativas falharam exatamente pelos três bugs acima, cada uma
+corrigida e reverificada antes de seguir pra próxima).
+
+Fases 2 (extração de hooks do `App.tsx`) e 3 (`SYSTEM.md`) seguem
+pendentes — ver `DESIGN-BACKLOG.md` item 5.
+
 ## Comandos
 
 ```bash
