@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain } from "electron";
-import { chmodSync } from "node:fs";
+import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPtyRegistry } from "./pty-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
@@ -61,6 +61,80 @@ app.setName("agent-canvas");
 function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
   if (win.isDestroyed()) return;
   win.webContents.send(channel, ...args);
+}
+
+/**
+ * `acbridge snapshot` — an agent asking to *see* a specific part of the
+ * canvas (a card, an explicit world rect, or the whole window), not just
+ * read text (see AGENTS.md/DESIGN-BACKLOG.md item 4). Two facts drive the
+ * design:
+ *
+ * 1. `Page.captureScreenshot` via CDP on one target never shows what a
+ *    DIFFERENT target renders — already confirmed the hard way earlier in
+ *    this project verifying browser/terminal cards live. `capturePage()`
+ *    is different: it's a `BrowserWindow.webContents` method, called from
+ *    main, that composites the window exactly as the user sees it —
+ *    including every `WebContentsView` on top, which is otherwise
+ *    invisible to any DOM-only capture. That's the actual reason this
+ *    works at all for a board with browser cards on it.
+ * 2. `capturePage(rect)`'s rect is in window content-area pixels — the
+ *    same screen space `board-model.ts`'s `worldRectToScreen` already
+ *    computes for browser card bounds. Only the renderer has the live
+ *    world transform (pan/zoom) needed for that conversion, so this asks
+ *    it over IPC instead of duplicating that math here.
+ */
+function handleSnapshotRequest(
+  win: BrowserWindow,
+  messageBus: ReturnType<typeof createMessageBus>,
+  requestId: string,
+  target: { cardId: string } | { rect: { x: number; y: number; w: number; h: number } } | null,
+) {
+  if (win.isDestroyed()) {
+    messageBus.resolveSnapshot(requestId, { ok: false, error: "window not available" });
+    return;
+  }
+
+  function capture(rect?: Electron.Rectangle) {
+    win.webContents
+      .capturePage(rect)
+      .then((image) => {
+        const filePath = join(app.getPath("temp"), `agent-canvas-snapshot-${requestId}.png`);
+        writeFileSync(filePath, image.toPNG());
+        messageBus.resolveSnapshot(requestId, { ok: true, path: filePath });
+      })
+      .catch((err) => {
+        messageBus.resolveSnapshot(requestId, { ok: false, error: String(err) });
+      });
+  }
+
+  if (!target) {
+    // Whole window — no renderer round-trip needed.
+    capture();
+    return;
+  }
+  // Narrowed to non-null here, but a nested function declaration doesn't
+  // inherit that narrowing from TS's control-flow analysis — rebind so
+  // onReply below sees the narrowed type too.
+  const resolvedTarget = target;
+
+  // Ask the renderer to resolve cardId/rect into screen pixels (it owns
+  // the live world transform). One-shot listener, cleaned up on whichever
+  // path fires first — the message-bus's own SNAPSHOT_TIMEOUT_MS is the
+  // backstop if the renderer never replies at all (window unresponsive).
+  let settled = false;
+  function onReply(_e: Electron.IpcMainEvent, replyId: string, screenRect: Electron.Rectangle | null) {
+    if (replyId !== requestId || settled) return;
+    settled = true;
+    ipcMain.removeListener("snapshot:rect-reply", onReply);
+    if (!screenRect) {
+      const desc = "cardId" in resolvedTarget ? `card "${resolvedTarget.cardId}"` : "that rect";
+      messageBus.resolveSnapshot(requestId, { ok: false, error: `nothing visible for ${desc}` });
+      return;
+    }
+    capture(screenRect);
+  }
+  ipcMain.on("snapshot:rect-reply", onReply);
+  safeSend(win, "snapshot:rect-request", requestId, resolvedTarget);
 }
 
 function createWindow() {
@@ -125,6 +199,7 @@ function createWindow() {
         .map((c) => ({ id: c.id, provider: c.provider, cwd: c.cwd })),
     writeToCard: (id, text) => registry.write(id, text),
     onOpenRequest: (requestId, requesterId, url) => safeSend(win, "browser:ask-open", requestId, requesterId, url),
+    onSnapshotRequest: (requestId, target) => handleSnapshotRequest(win, messageBus, requestId, target),
   });
 
   ipcMain.handle(

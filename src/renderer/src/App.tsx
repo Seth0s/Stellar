@@ -26,6 +26,7 @@ import {
   rectsOverlap,
   screenToWorld,
   viewportWorldRect,
+  worldRectToScreen,
   type BoardItem,
   type Point,
   type Rect,
@@ -323,6 +324,8 @@ export function App() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const cardsRef = useRef<Card[]>([]);
   cardsRef.current = cards;
+  const worldRef = useRef(world);
+  worldRef.current = world;
   const activeBoardIdRef = useRef<string | null>(null);
   activeBoardIdRef.current = activeBoardId;
 
@@ -333,9 +336,38 @@ export function App() {
     const offAskOpen = window.browser.onAskOpen((requestId, requesterId, url) => {
       setPendingAsk({ requestId, requesterId, url });
     });
+    // acbridge snapshot (item 4, DESIGN-BACKLOG.md) — main asks "what's on
+    // screen for this target right now", only the renderer has the live
+    // pan/zoom to answer. Reads cardsRef/worldRef (not `cards`/`world`
+    // directly) since this listener is registered once at mount and needs
+    // whatever's current at call time, not what was current when it was
+    // registered.
+    const offSnapshot = window.snapshot.onRectRequest((requestId, target) => {
+      const vp = viewportRef.current?.getBoundingClientRect();
+      const origin = vp ? { x: vp.x, y: vp.y } : { x: 0, y: 0 };
+      let worldRect: Rect | null = null;
+      if ("rect" in target) {
+        worldRect = target.rect;
+      } else {
+        const card = cardsRef.current.find((c) => c.id === target.cardId);
+        worldRect = card?.rect ?? null;
+      }
+      if (!worldRect) {
+        window.snapshot.replyRect(requestId, null);
+        return;
+      }
+      const screen = worldRectToScreen(worldRect, worldRef.current, origin);
+      window.snapshot.replyRect(requestId, {
+        x: Math.round(screen.x),
+        y: Math.round(screen.y),
+        width: Math.round(screen.w),
+        height: Math.round(screen.h),
+      });
+    });
     return () => {
       offUrlSeen();
       offAskOpen();
+      offSnapshot();
     };
   }, []);
 

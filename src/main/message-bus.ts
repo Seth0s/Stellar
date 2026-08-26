@@ -3,8 +3,14 @@ import { existsSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 const OPEN_TIMEOUT_MS = 120_000;
+// Shorter than OPEN_TIMEOUT_MS on purpose — a snapshot needs no human
+// decision, just a renderer round-trip + a capturePage() call. If it's
+// still pending after 10s something's actually wrong (window not
+// responding), not a person thinking it over.
+const SNAPSHOT_TIMEOUT_MS = 10_000;
 
 export type CardSummary = { id: string; provider: string; cwd: string };
+export type SnapshotResult = { ok: true; path: string } | { ok: false; error: string };
 
 /**
  * A local Unix socket bridge letting a spawned provider CLI act on the
@@ -20,6 +26,14 @@ export function createMessageBus(
     listCards: () => CardSummary[];
     writeToCard: (id: string, text: string) => void;
     onOpenRequest: (requestId: string, requesterId: string, url: string) => void;
+    /** cardId set: that card's current on-screen rect. rect set: an
+     * explicit world-space rect. Neither: the whole window. Resolving
+     * either into actual capturePage() screen pixels lives in
+     * main/index.ts — this module only relays the parsed request. */
+    onSnapshotRequest: (
+      requestId: string,
+      target: { cardId: string } | { rect: { x: number; y: number; w: number; h: number } } | null,
+    ) => void;
   },
 ) {
   if (existsSync(sockPath)) {
@@ -31,9 +45,17 @@ export function createMessageBus(
   }
 
   const pendingOpens = new Map<string, { resolve: (allowed: boolean) => void; timer: NodeJS.Timeout }>();
+  const pendingSnapshots = new Map<string, { resolve: (result: SnapshotResult) => void; timer: NodeJS.Timeout }>();
 
   function handleLine(socket: Socket, line: string) {
-    let req: { cmd?: string; target?: string; text?: string; url?: string; requesterId?: string };
+    let req: {
+      cmd?: string;
+      target?: string;
+      text?: string;
+      url?: string;
+      requesterId?: string;
+      rect?: { x: number; y: number; w: number; h: number };
+    };
     try {
       req = JSON.parse(line);
     } catch {
@@ -79,11 +101,34 @@ export function createMessageBus(
       return;
     }
 
+    if (req.cmd === "snapshot") {
+      const requestId = randomUUID();
+      const timer = setTimeout(() => {
+        pendingSnapshots.delete(requestId);
+        socket.end(JSON.stringify({ ok: false, error: "timed out capturing snapshot" }) + "\n");
+      }, SNAPSHOT_TIMEOUT_MS);
+      pendingSnapshots.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          pendingSnapshots.delete(requestId);
+          socket.end(JSON.stringify(result) + "\n");
+        },
+        timer,
+      });
+      const target = req.rect ? { rect: req.rect } : req.target ? { cardId: req.target } : null;
+      callbacks.onSnapshotRequest(requestId, target);
+      return;
+    }
+
     socket.end(JSON.stringify({ ok: false, error: `unknown cmd "${req.cmd}"` }) + "\n");
   }
 
   function resolveOpen(requestId: string, allowed: boolean) {
     pendingOpens.get(requestId)?.resolve(allowed);
+  }
+
+  function resolveSnapshot(requestId: string, result: SnapshotResult) {
+    pendingSnapshots.get(requestId)?.resolve(result);
   }
 
   // allowHalfOpen: true — acbridge writes its request then immediately
@@ -120,6 +165,8 @@ export function createMessageBus(
   function close() {
     for (const { timer } of pendingOpens.values()) clearTimeout(timer);
     pendingOpens.clear();
+    for (const { timer } of pendingSnapshots.values()) clearTimeout(timer);
+    pendingSnapshots.clear();
     server.close();
     try {
       unlinkSync(sockPath);
@@ -128,5 +175,5 @@ export function createMessageBus(
     }
   }
 
-  return { resolveOpen, close };
+  return { resolveOpen, resolveSnapshot, close };
 }

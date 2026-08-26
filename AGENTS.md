@@ -1491,6 +1491,64 @@ modal com card count inalterado enquanto pendente; cancelar manteve o
 card; confirmar removeu; fechar um card de arquivos não abriu modal
 nenhum e sumiu na hora, como antes.
 
+## 2026-08-26 — `acbridge snapshot` (item 3 do backlog) + limitação real achada
+
+Terceiro item da ordem sugerida: o agente (rodando dentro de um card de
+terminal) consegue pedir uma imagem de uma coordenada específica do
+canvas, não só ler texto.
+
+**Protocolo** (`message-bus.ts`/`resources/bin/acbridge`, mesmo padrão do
+`open`/timeout de humano decidindo — aqui o timeout é só 10s, não 120s,
+porque não depende de decisão humana): `acbridge snapshot`, `acbridge
+snapshot <cardId>`, ou `acbridge snapshot <x> <y> <w> <h>` (rect explícito
+em coordenadas de mundo) — devolve só o path do PNG salvo em
+`app.getPath("temp")`, não base64 inline (mais barato pra recortes
+grandes, e o path já é direto pro `Read` do Claude Code renderizar).
+
+**Mecanismo** (`main/index.ts::handleSnapshotRequest`): `capturePage(rect)`
+do `webContents` da janela principal — chamado do processo principal, não
+via CDP (`Page.captureScreenshot` num target nunca mostra o que outro
+target renderiza, limitação já documentada neste projeto). `rect` é
+pixels de área de conteúdo da janela — o mesmo espaço que
+`worldRectToScreen` (`board-model.ts`) já calcula pros bounds do
+`WebContentsView` de navegador — só que só o **renderer** tem o transform
+de mundo (pan/zoom) ao vivo, então o main pede pro renderer resolver
+`cardId`/`rect` em pixels de tela via IPC (`snapshot:rect-request` →
+`snapshot:rect-reply`, um listener de uso único limpo em qualquer um dos
+dois caminhos — resposta recebida ou timeout do lado do message-bus) antes
+de chamar `capturePage`.
+
+**Achado real da verificação empírica** (a razão de eu ter marcado esse
+item como "precisa confirmação antes de fechar como abordagem" no
+backlog): `capturePage()` **não compõe `WebContentsView`** nesta máquina
+(GPU desabilitada, ver `app.disableHardwareAcceleration()` em
+`main/index.ts`). Confirmado comparando o MESMO card de navegador no MESMO
+instante por dois caminhos: `capturePage()` mostrou um retângulo cinza
+liso (a cor `--surface` do `.browser-card` vazio por baixo, sem conteúdo
+nenhum da página) enquanto o screenshot direto do target CDP daquela
+`WebContentsView` mostrou branco de verdade (a página `about:blank`
+carregada, confirmando que a página em si estava certa — só não apareceu
+na captura). Terminal/arquivos/changes/nota funcionam perfeitamente (são
+DOM puro — inclusive o texto do xterm, que roda no renderer DOM nesta
+configuração, não canvas). **Só card de navegador fica sem conteúdo real
+na captura.** Não escondido — devolvido normalmente (o snapshot ainda
+mostra a barra de endereço e o retângulo onde o navegador está, só sem a
+página em si) e documentado no comentário do código e aqui.
+
+**Workaround não implementado, próxima rodada se isso importar**: capturar
+o target CDP da `WebContentsView` separadamente (mecanismo já provado
+funcionar, usado nos próprios testes deste projeto) e compor a imagem por
+cima do resultado do `capturePage()` na posição certa — precisa de alguma
+lib de composição de imagem (nenhuma é dependência hoje) ou fazer via
+`<canvas>` no próprio renderer antes de salvar.
+
+Verificação ao vivo, não só lida: `acbridge snapshot` (janela inteira) com
+um card de navegador e um terminal na tela — terminal e chrome do app
+compuseram certo, navegador saiu cinza liso (achado acima);
+`acbridge snapshot <cardId>` recortou certo pro rect do card;
+`acbridge snapshot 999` (id inexistente) devolveu erro claro em vez de
+travar; `acbridge snapshot <x> <y> <w> <h>` com rect explícito funcionou.
+
 ## Comandos
 
 ```bash

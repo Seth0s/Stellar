@@ -34,8 +34,20 @@ if (cmd === "list") {
   const [url] = rest;
   if (!url) fail("usage: acbridge open <url>");
   request = { cmd: "open", url, requesterId: ownCardId };
+} else if (cmd === "snapshot") {
+  if (rest.length === 0) {
+    request = { cmd: "snapshot" };
+  } else if (rest.length === 1) {
+    request = { cmd: "snapshot", target: rest[0] };
+  } else if (rest.length === 4) {
+    const [x, y, w, h] = rest.map(Number);
+    if ([x, y, w, h].some(Number.isNaN)) fail("snapshot: x/y/w/h must be numbers");
+    request = { cmd: "snapshot", rect: { x, y, w, h } };
+  } else {
+    fail("usage: acbridge snapshot [cardId | x y w h]");
+  }
 } else {
-  fail("usage: acbridge <list | send <cardId> <message...> | open <url>>");
+  fail("usage: acbridge <list | send <cardId> <message...> | open <url> | snapshot [cardId | x y w h]>");
 }
 
 const socket = net.connect({ path: sockPath }, () => {
@@ -68,6 +80,10 @@ socket.on("close", () => {
     console.log(`sent to card ${rest[0]}`);
   } else if (cmd === "open") {
     console.log(`opened: ${rest[0]}`);
+  } else if (cmd === "snapshot") {
+    // Just the path, nothing else — meant to be read directly (Claude
+    // Code's own Read tool renders an image path), not parsed.
+    console.log(res.path);
   }
   process.exit(0);
 });
