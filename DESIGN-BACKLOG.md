@@ -1805,16 +1805,80 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    decoração estática), e volta ao centro reusa o `d` anterior (congela,
    não reseta). 4 checks novos em `smoke-radial-longpress.mjs`. `npm run
    verify` (13 suítes, 137 checks) PASS.
-9. **Varredura de lógica ampla, pedida como auditoria futura** — cobrir:
-   sistema de spawn entre agentes, spawn de ferramentas feito por
-   agentes, caminho de controle otimizado pro agente (acbridge?), snapshot
-   do canvas, visualização do navegador (pro agente, não só pro
-   usuário), e autorizar bash fora do sandbox — este último precisa de um
-   componente genérico novo pro agente PEDIR permissão (modal com
-   título, motivo, comando, etc — algo como um `ConfirmModal` mais
-   estruturado, específico pra pedidos de autorização vindos de um
-   agente). Escopo grande, fica pra uma rodada dedicada de revisão, não
-   pra encaixar de raspão numa sessão de polimento.
+9. **Varredura de lógica ampla, pedida como auditoria futura** —
+   ✅ **investigado em 2026-08-27** (achados abaixo), **nada
+   implementado ainda** — por pedido do próprio usuário, esta rodada foi
+   só investigação (ler o código real, não assumir), a implementação
+   fica pra uma rodada dedicada, como já estava marcado. Escopo grande
+   demais pra uma sessão de polimento continua verdadeiro.
+
+   **1. Sistema de spawn entre agentes** — não existe. `acbridge` só tem
+   4 comandos (`list`/`send`/`open`/`snapshot`, ver achado 3), nenhum
+   deles cria um novo terminal/agente. Criar card de terminal é só
+   humano (`Rail.tsx`/`RadialMenu.tsx` → `App.tsx::addTerminalCard` →
+   `useTerminal.ts` → `window.pty.spawn`), sem caminho de IPC que um
+   agente já rodando possa disparar. Pra construir: seguir o mesmo
+   template do `open` (novo `acbridge spawn`, `pendingSpawns` em
+   `message-bus.ts`, `safeSend` pro renderer, modal de consentimento) —
+   plumbing é médio, mas falta decisão de produto sobre limite de
+   recursão (agente A spawna B spawna C…), sem guarda nenhuma hoje.
+
+   **2. Spawn de ferramentas feito por agentes** — só `browser` é
+   spawnável por agente, e só via `acbridge open &lt;url&gt;` com
+   consentimento humano obrigatório (`BrowserAskModal`, `App.tsx:367,
+   684-696`, `message-bus.ts:82-101`, timeout de 120s). `files`/
+   `changes`/`sticky`/`remote-window` não têm nenhum comando
+   equivalente — só `addFilesCard`/`addChangesCard`/etc, humano-only.
+   O fluxo do `open` já é exatamente o template que o achado 6 pede
+   generalizar (modal com título/motivo/parâmetros) — vale desenhar os
+   dois juntos.
+
+   **3. Caminho de controle otimizado pro agente (acbridge)** —
+   superfície real, hoje: `list` (sem gate), `send &lt;cardId&gt;
+   &lt;msg&gt;` (sem gate, escreve direto na PTY), `open &lt;url&gt;`
+   (gate humano, 120s), `snapshot [cardId | x y w h]` (sem gate, 10s).
+   Achado concreto: `ACBRIDGE_HINT` (`main/providers.ts:13-18`) já está
+   desatualizado — nem menciona `snapshot` — e só é injetado no Claude
+   via `--append-system-prompt`; codex/cursor-agent não têm hook
+   equivalente e nunca ficam sabendo que `acbridge` existe (limitação
+   real desses providers, não bug daqui). Sem card management (fechar/
+   mover/redimensionar) nem leitura de conteúdo de files/changes (só
+   pixel via snapshot) pelo lado do agente.
+
+   **4. Snapshot do canvas** — já resolvido e coberto, nada pendente
+   aqui (ver item 4 e item 21 ponto 1 acima, `smoke-snapshot.mjs`, 8
+   checks, parte das 14 suítes do `npm run verify`).
+
+   **5. Visualização do navegador pro agente (conteúdo, não só pixel)**
+   — não existe. `browser-registry.ts` não tem nenhum método de
+   extração de DOM/texto (`executeJavaScript`, `innerText`, árvore de
+   acessibilidade) — só `dom-ready` pra saber que carregou, nada pra ler
+   o que carregou. Hoje um agente só enxerga o navegador via
+   `acbridge snapshot` (pixel puro), que só serve se o provider aceitar
+   imagem. Pra construir: `webContents.executeJavaScript("document.
+   body.innerText")` já é primitivo nativo do Electron, baixa
+   complexidade técnica — a decisão real é sobre truncamento/ruído de
+   página complexa, não arquitetura.
+
+   **6. Autorizar bash fora do sandbox** — achado mais importante desta
+   varredura: **não existe sandbox nenhum hoje pra autorizar saída
+   dele**. `bash`/`claude`/`codex`/`cursor-agent` rodam com o ambiente
+   completo herdado do processo main (`pty-registry.ts:63-67`), sem
+   restrição de SO, sem namespace/seccomp, PATH cheio, zero
+   sandboxing — confirmado por busca no projeto inteiro por
+   "sandbox"/"permission"/"authorize": os únicos hits são o
+   `sandbox:true` do `WebContentsView` offscreen do navegador
+   (`browser-registry.ts:77`, não relacionado) e o `sandbox:false` da
+   janela principal (`main/index.ts:202`, exigido pelo preload ESM). O
+   componente genérico de permissão citado no pedido original (título/
+   motivo/comando) realmente não existe — `ConfirmModal.tsx` é
+   genérico só pra confirmar/cancelar, sem campos estruturados pra
+   comando/motivo. O template de plumbing (`open`/`BrowserAskModal`) se
+   reaproveita direto pro lado do IPC, isso é a parte fácil; o trabalho
+   real e não-trivial é decidir e construir o sandbox em si (o que fica
+   bloqueado por padrão, escopo de filesystem/rede, granularidade de
+   pedido) — hoje não há nada pra "escapar de dentro", então "autorizar
+   bash fora do sandbox" primeiro precisa de um bash DENTRO de algo.
 10. **Ícone "<" de recolher a régua** — ✅ resolvido em 2026-08-27.
     Saiu de dentro do `.rail` (onde era só mais um `.rail-btn`,
     indistinguível de um botão de ferramenta) pra um botão próprio

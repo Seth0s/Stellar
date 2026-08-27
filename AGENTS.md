@@ -2730,6 +2730,24 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   conteúdo exato em disco. `npm run verify` completo (14 suítes, 152
   checks) PASS. Detalhe em `DESIGN-BACKLOG.md` item 21 (ponto 11
   fechado).
+- **Item 21, ponto 9, mesmo dia — só investigação, nada implementado**
+  (pedido explícito do usuário): varredura dos 6 sub-tópicos (spawn
+  entre agentes, spawn de ferramentas por agentes, superfície do
+  `acbridge`, snapshot do canvas, visualização de navegador pro agente,
+  autorizar bash fora do sandbox), lendo código real em vez de assumir.
+  Achado mais importante: **não existe sandbox nenhum hoje** —
+  `bash`/`claude`/`codex`/`cursor-agent` rodam com ambiente completo
+  herdado (`pty-registry.ts:63-67`), sem nenhuma restrição de SO;
+  "autorizar saída do sandbox" primeiro precisa de um sandbox pra sair
+  de dentro. `acbridge` hoje só tem 4 comandos (`list`/`send`/`open`/
+  `snapshot`) — nenhum spawna agente ou card não-`browser`, e
+  `ACBRIDGE_HINT` está desatualizado (nem menciona `snapshot`) e só
+  chega ao Claude (codex/cursor-agent não têm hook de system-prompt).
+  Navegador não expõe DOM/texto pro agente, só pixel via snapshot.
+  Detalhe completo (achados 1-6, com file:line de cada um) em
+  `DESIGN-BACKLOG.md` item 21 ponto 9 — permanece "investigado, não
+  implementado", como já estava marcado; escopo grande demais pra uma
+  sessão de polimento.
 
 ## Comandos
 
