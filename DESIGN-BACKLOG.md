@@ -2396,6 +2396,19 @@ Nenhuma decisão de design foi fechada aqui de propósito — é
 levantamento de perguntas reais, não um plano pronto pra implementar na
 próxima sessão sem revisitar.
 
+**Decisões tomadas em 2026-08-27, ainda não implementadas**:
+- **Colisão/clamp**: coordenada explícita (absoluta ou âncora) faz
+  clamp pros limites do mundo/board quando pedida fora deles, e
+  desloca pro lado livre mais próximo quando colide com um card
+  existente — nunca falha, sempre spawna em algum lugar razoável.
+  Comportamento padrão (sem coordenada) continua o cascade atual,
+  intocado.
+- **Abrir arquivo em linha**: vira parâmetro (`path`/`line` opcionais)
+  do `spawn_card(kind:"files")` já existente, não uma tool MCP nova —
+  um card já nasce aberto no arquivo/linha certos numa única chamada,
+  em vez de precisar de uma segunda tool pra "apontar" um card já
+  criado.
+
 ## 24. Teste ao vivo do servidor MCP contra a sessão real do usuário — 2026-08-27
 
 Pedido explícito do usuário: "teste os servers mcp para chamar card,
@@ -2555,6 +2568,19 @@ mais cuidado que só "um botão liga/desliga"**:
 
 Nenhuma decisão fechada aqui — perguntas reais levantadas, matching o
 mesmo espírito do item 23 (registrar o raciocínio, não um plano pronto).
+
+**Decisão tomada em 2026-08-27, ainda não implementada**: escopo do
+toggle é **por sessão/board** (não global), com **tiers** de risco —
+granularidade próxima ao design de planning-mode do próprio Claude
+Code, não um dial fino por tipo de ação individual nem um tudo-ou-nada
+único. Exemplo de corte razoável a refinar na implementação: um tier
+auto-aprova o que já é de baixo risco (`spawn_card`-like), outro exige
+manual sempre (`bash`/`write_file`/`spawn_agent`). **Pré-requisito
+identificado, ainda de pé**: a hipótese do `pendingAsk` ser um slot
+único (não fila) — precisa virar `pendingAsks: PendingAsk[]` de
+verdade antes de auto-mode ir pra frente, senão um segundo pedido
+concorrente enquanto auto-mode decide o primeiro tem o mesmo risco de
+sobrescrever silenciosamente que já existe hoje sem auto-mode nenhum.
 
 ## 26. Scroll sobre qualquer card zoomava o canvas por baixo — ✅ feito em 2026-08-27, reportado ao vivo no app oficial buildado
 
