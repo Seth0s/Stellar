@@ -20,7 +20,6 @@ export function Topbar({
   onZoomIn,
   onZoomOut,
   onZoomTo,
-  onFit,
   bgStyleLabel,
   onCycleBgStyle,
   onOpenRemote,
@@ -50,7 +49,6 @@ export function Topbar({
   /** DESIGN-BACKLOG.md item 12, achado 6 — direct entry + slider. `pct` is
    * the target zoom as a whole percentage (e.g. 150 for 150%). */
   onZoomTo: (pct: number) => void;
-  onFit: () => void;
   bgStyleLabel: string;
   onCycleBgStyle: () => void;
   onOpenRemote: () => void;
@@ -74,11 +72,14 @@ export function Topbar({
   // 2026-08-27 revisit — real fullscreen (F11, Titlebar.tsx hides the
   // header for it) already worked, but had NO visible trigger at all
   // (deliberately removed earlier as "redundant with F11") — the user
-  // kept clicking `onFit` (zoom-to-fit, right next to this) expecting
-  // fullscreen from it instead ("ele apenas faz zoom"). This button lives
-  // in Topbar (not Titlebar) specifically because it stays mounted/
-  // reachable even once fullscreen hides the titlebar, giving a visible
-  // way back out too, not just F11.
+  // kept clicking the zoom-pill's old "ajustar à tela" button (zoom-to-
+  // fit, same spot) expecting fullscreen from it instead ("ele apenas faz
+  // zoom"). That button is gone now too (item 21, ponto 2 — moved
+  // per-card, see CardFrame.tsx's `onFocus`), so this is the only
+  // corner-brackets-looking icon left here. Lives in Topbar (not
+  // Titlebar) specifically because it stays mounted/reachable even once
+  // fullscreen hides the titlebar, giving a visible way back out too, not
+  // just F11.
   useEffect(() => {
     window.winControls.isFullscreen().then(setFullscreen);
     const off = window.winControls.onFullscreenChange(setFullscreen);
@@ -249,9 +250,6 @@ export function Topbar({
         </Popover>
         <button onClick={onZoomIn} title="Aumentar zoom">
           <Icon name="zoomIn" size={16} />
-        </button>
-        <button onClick={onFit} title="Ajustar à tela (zoom — não esconde a barra de título, veja o botão ao lado pra isso)">
-          <Icon name="fit" size={16} />
         </button>
         <button
           onClick={() => void window.winControls.toggleFullscreen()}

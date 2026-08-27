@@ -333,7 +333,6 @@ export function App() {
     clientToWorld,
     zoomBy,
     setZoomAbs,
-    fitView,
     focusCard,
     onWheel,
     startPan,
@@ -1134,6 +1133,7 @@ export function App() {
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
+                onFocus={() => jumpToCard(c.id)}
                 onClose={() => closeCard(c.id)}
                 onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
                 onRename={(label) => renameCard(c.id, label)}
@@ -1161,6 +1161,7 @@ export function App() {
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
+                onFocus={() => jumpToCard(c.id)}
                 onClose={() => closeCard(c.id)}
                 onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
                 onRename={(label) => renameCard(c.id, label)}
@@ -1185,6 +1186,7 @@ export function App() {
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
+                onFocus={() => jumpToCard(c.id)}
                 onClose={() => closeCard(c.id)}
                 onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
                 onRename={(label) => renameCard(c.id, label)}
@@ -1210,6 +1212,7 @@ export function App() {
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
+                onFocus={() => jumpToCard(c.id)}
                 onClose={() => closeCard(c.id)}
                 onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
                 onRename={(label) => renameCard(c.id, label)}
@@ -1261,6 +1264,7 @@ export function App() {
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
+                onFocus={() => jumpToCard(c.id)}
                 onClose={() => closeCard(c.id)}
                 onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
                 onRename={(label) => renameCard(c.id, label)}
@@ -1286,6 +1290,7 @@ export function App() {
               onChange={(r) => tryChangeRect(c.id, r)}
               onCommit={(r) => commitRect(c, r)}
               onRaise={() => raise(c.id)}
+              onFocus={() => jumpToCard(c.id)}
               onClose={() => closeCard(c.id)}
               onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
               onConnectorStart={onConnectorStart}
@@ -1441,7 +1446,6 @@ export function App() {
         onZoomIn={() => zoomBy(ZOOM_STEP)}
         onZoomOut={() => zoomBy(1 / ZOOM_STEP)}
         onZoomTo={(pct) => setZoomAbs(pct / 100)}
-        onFit={fitView}
         bgStyleLabel={BG_STYLE_LABEL[bgStyle]}
         onCycleBgStyle={cycleBgStyle}
         onOpenRemote={() => setShowRemotePairing(true)}

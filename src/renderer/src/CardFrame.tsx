@@ -16,6 +16,7 @@ export function CardFrame({
   className,
   headerContent,
   footerContent,
+  onFocus,
   children,
   interactionMode = "normal",
   selected = false,
@@ -44,6 +45,18 @@ export function CardFrame({
    * with nothing meaningful to show there (sticky notes have no
    * comparable single-line metadata). */
   footerContent?: React.ReactNode;
+  /** "Ajustar à tela" (DESIGN-BACKLOG.md item 21, ponto 2) — used to live
+   * as a global "fit every card" button in Topbar's zoom-pill, right next
+   * to the real fullscreen button added in item 19; the user reported
+   * confusing the two ("ícone extra de fullscreen que não remove o
+   * header") and, once told which button it actually was, asked for it
+   * to live per-card instead ("acho válido estar no header do card, não
+   * na topbar") — this is that: focuses/zooms the view onto THIS card
+   * (reuses useWorldTransform's existing `focusCard`, already built for
+   * the rail's jump-to-card popover). Lives here, not in each card's own
+   * `headerContent`, so every kind gets it automatically — same slot
+   * pattern as `footerContent` above. */
+  onFocus?: () => void;
   children: React.ReactNode;
   /** "connector"/"select" both disable the normal drag/resize gestures below
    * so a click anywhere on the card starts a connector drag or a selection
@@ -171,7 +184,23 @@ export function CardFrame({
           lives in, making cards effectively non-resizable in practice. */}
       <div className="card-clip">
         <div className="card-head" onPointerDown={onHeaderPointerDown}>
-          {headerContent}
+          {/* Wrapping div, not headerContent's own two-item space-between
+              row directly — keeps every card kind's own internal layout
+              (label ↔ actions) untouched; the focus button below is
+              appended as a separate, always-last flex item instead of a
+              3rd competitor for that space-between pair. */}
+          <div className="card-head-inner">{headerContent}</div>
+          {onFocus && (
+            <button
+              type="button"
+              className="card-focus-btn"
+              title="Focar nesse card (ajustar zoom pra ele)"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onFocus}
+            >
+              <Icon name="fit" size={12} />
+            </button>
+          )}
         </div>
         {children}
         {footerContent !== undefined && footerContent !== null && (

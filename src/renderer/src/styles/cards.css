@@ -30,8 +30,7 @@
 .card-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 4px;
   height: 32px;
   /* Both sides need >= --radius (10px) of clearance: .card-clip clips this
      whole row to the card's rounded corners (overflow:hidden;
@@ -40,13 +39,51 @@
      that clip — confirmed live, that's what read as "broken header" in a
      zoomed screenshot after the header padding was tightened below the
      radius. */
-  padding: 0 10px;
+  padding: 0 6px 0 10px;
   background: var(--panel);
   font-size: 13px;
   color: var(--muted);
   cursor: grab;
   user-select: none;
   flex: none;
+}
+
+/* Whatever each card kind's own headerContent renders (label ↔ actions,
+   already its own space-between pair) — wrapped so CardFrame.tsx's
+   `.card-focus-btn` can sit as a separate, always-last flex item in
+   `.card-head` without becoming a 3rd competitor for that space-between
+   layout. */
+.card-head-inner {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 100%;
+}
+
+/* DESIGN-BACKLOG.md item 21, ponto 2 — "ajustar à tela" moved from a
+   global Topbar button (confused for the real fullscreen button next to
+   it) to a per-card focus button, always present, same position on every
+   card kind. */
+.card-focus-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.card-focus-btn:hover {
+  background: var(--border);
+  color: var(--text);
 }
 
 .card-head button {
@@ -749,8 +786,16 @@
 .stroke-card .card-head {
   background: transparent;
   height: 18px;
-  justify-content: flex-end;
   padding: 0 4px;
+}
+
+/* StrokeCard doesn't get `.card-focus-btn` (its header is deliberately
+   near-invisible, opacity:0 close button — a permanent focus button
+   would fight that minimal chrome) — `.card-head-inner` is its only
+   flex child, so its own `justify-content` needs to right-align that
+   single close button, same as `.card-head`'s used to before it existed. */
+.stroke-card .card-head-inner {
+  justify-content: flex-end;
 }
 
 .stroke-card-close {

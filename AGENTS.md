@@ -2596,6 +2596,25 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   vazio lia como círculo/cópia em 12px) e adicionando legenda "Ctrl+C"
   visível dentro do botão, não só no hover. Detalhe em
   `DESIGN-BACKLOG.md` item 20 (fechado, 5/5).
+- **Item 21, pontos 2 e 3, mesmo dia**: `onFit` ("ajustar à tela") saiu
+  do `zoom-pill` global (`Topbar.tsx`) e virou botão por-card
+  (`.card-focus-btn`) no header de cada `CardFrame` — usuário confirmou
+  que o *propósito* (ajustar zoom pra um card específico) era válido, só
+  não pertencia à topbar. `CardFrame.tsx` ganhou prop `onFocus?` e um
+  wrapper `.card-head-inner` (pra caber o botão novo sem virar 3º
+  competidor do `justify-content: space-between` do header); `App.tsx`
+  passa `onFocus={() => jumpToCard(c.id)}` (que já chamava `focusCard`,
+  usado pelo "localizar card" da Rail) em 6 dos 7 tipos de card via
+  script mecânico (`StrokeCard` ficou de fora — sem header convencional).
+  Ícone de editar da Home (`.home-session-edit`) ganhou hover próprio
+  (`background: var(--border)`) — só o card inteiro reagia ao mouse
+  antes, o lápis em si não tinha feedback visual isolado. Novo check em
+  `smoke-card-actions.mjs`: pan parcial (não total — clicar num botão
+  100% fora do viewport via CDP é no-op, `Input.dispatchMouseEvent` não
+  hit-testa fora da tela) deixando o card só parcialmente enquadrado,
+  clique no próprio `.card-focus-btn` do card, confirma reenquadramento
+  total. `npm run verify` completo (13 suítes) PASS. Detalhe em
+  `DESIGN-BACKLOG.md` item 21 (pontos 2 e 3 fechados).
 
 ## Comandos
 

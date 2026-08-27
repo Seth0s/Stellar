@@ -18,6 +18,7 @@ export function ChangesCard({
   onChange,
   onCommit,
   onRaise,
+  onFocus,
   onClose,
   onCloseAnimationEnd,
   onRename,
@@ -36,6 +37,7 @@ export function ChangesCard({
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
+  onFocus: () => void;
   onClose: () => void;
   onCloseAnimationEnd?: () => void;
   onRename: (label: string) => void;
@@ -68,6 +70,7 @@ export function ChangesCard({
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
+      onFocus={onFocus}
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
