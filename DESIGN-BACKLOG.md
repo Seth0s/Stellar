@@ -1980,12 +1980,53 @@ pra "9°", sem "8°" — não é erro de digitação meu).
       Artifact: `chatbox-prototype.html` (link enviado ao usuário na
       conversa; publicar de novo/atualizar antes de portar pro
       componente real).
-    - **Fase B — 1 API, chat texto puro**: escolher qual das duas
-      (Anthropic ou OpenAI-compat) primeiro, `ChatCard.tsx` real
-      integrado ao sistema de cards, streaming real, markdown
-      renderizado, SEM tool use ainda. Card registrado como novo `kind`
-      (`board-model.ts`), persistência de histórico (schema novo,
-      mesmo padrão de migração guardada do resto do app).
+    - **Fase B — 1 API, chat texto puro — ✅ feito em 2026-08-27**:
+      Anthropic Messages API escolhida primeiro (recomendação já feita
+      antes do fatiamento). `ChatCard.tsx` (novo) integrado ao sistema de
+      cards como `kind: "chat"` real (`card-types.ts`, `App.tsx`'s
+      toRow/fromRow/render-switch/buildBoardSnapshot, `icons.tsx`,
+      `Rail.tsx`/`RadialMenu.tsx`), streaming token-a-token via
+      `@anthropic-ai/sdk` (novo, primeiro cliente HTTP/SSE de saída do
+      código — tudo antes era servidor inbound ou delegava pro
+      `electron-updater`), markdown renderizado (mesmo par
+      `marked`+`dompurify` já usado por `FilesCard.tsx`), SEM tool use
+      ainda. Histórico de mensagens persistido como JSON no `cwd`
+      genérico (mesmo truque de reuso que `StrokeCardData` já usava, sem
+      migração de schema — ver `card-types.ts`'s doc comment pra o
+      porquê de não virar tabela nova ainda).
+
+      Primeiro credencial do app: `main/secrets.ts` (novo,
+      `electron.safeStorage`, OS keychain-backed) — greenfield, achado
+      pela exploração prévia que nada parecido existia (tokens de
+      pareamento remoto são efêmeros/em memória, nunca persistidos).
+      Fallback documentado pra Linux sem keychain (`encrypted: false`,
+      avisado na própria UI). Card entra num estado "configure sua API
+      key" quando não há key salva — composer só aparece depois.
+
+      IPC mirrando o formato `pty:*` de propósito (`chat:send`/`chat:
+      token`/`chat:done`/`chat:error`, `main/index.ts`), não um formato
+      novo — mesma forma main→renderer que terminal já usa. Deliberadamente
+      NÃO plugado no `spawn_card`/MCP nesta fase (achado 2 do item 21
+      ponto 9 não cobre isso automaticamente) — um agente pedir pra abrir
+      um chat com OUTRO LLM sob a key do usuário é decisão própria, não
+      bundle automático.
+
+      Verificação: `scripts/verify/smoke-chat.mjs` (novo, 12/12) — cria o
+      card real, testa o formulário de key/round-trip via `secrets:has`
+      real, envia mensagem real, e (sem key válida disponível neste
+      ambiente) confirma contra o endpoint REAL `api.anthropic.com` — não
+      um mock local — que retorna um 401 `authentication_error`
+      estruturado, provando handshake TLS/SSE/erro real funcionando
+      ponta a ponta; só falta uma key válida pra um teste de completude
+      real, recomendado ao usuário fazer manualmente uma vez. Persistência
+      confirmada via `Page.reload()` real (não restart de processo —
+      `startApp` do harness sempre limpa `userDataDir`, ver comentário no
+      próprio smoke test). `npm run verify`: suítes rodadas
+      individualmente (18/18 = todas passando, incluindo a nova),
+      1 assertion desatualizada corrigida (`smoke-card-lifecycle.mjs`,
+      contagem do menu radial 10→11 depois do novo item "chat"),
+      `smoke-browser.mjs` confirmado flaky pré-existente (3/3 limpo
+      isolado), não causado por esta mudança.
     - **Fase C — tool use de arquivo + diff, segunda API**: leitura/
       escrita de arquivo real com consentimento (reusa `AgentAskModal`),
       diff renderizado a partir do resultado real da escrita (não

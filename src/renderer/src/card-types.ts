@@ -32,6 +32,24 @@ export type StrokeCardData = BaseCard & {
   style: "solid" | "marker";
 };
 
+/** DESIGN-BACKLOG.md item 12, Fase B — a chat card talking straight to an
+ * API (Anthropic for now), not a PTY. `provider` is the API vendor
+ * ("anthropic" today, "openai" from Fase C), never a CLI binary id the
+ * way `TerminalCardData.provider` is. `messages` is the full turn history
+ * (Anthropic's API is stateless per request — no server-side session to
+ * resume), persisted as JSON in the generic `cwd` column (see App.tsx's
+ * toRow/fromRow, same reuse trick `StrokeCardData` already established
+ * for its own JSON blob) rather than a new sqlite table — no tool-use/
+ * diff data to structure yet at this phase. */
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type ChatCardData = BaseCard & {
+  kind: "chat";
+  provider: "anthropic";
+  model: string;
+  systemPrompt: string | null;
+  messages: ChatMessage[];
+};
+
 export type Card =
   | TerminalCardData
   | FilesCardData
@@ -39,7 +57,8 @@ export type Card =
   | StickyCardData
   | BrowserCardData
   | RemoteWindowCardData
-  | StrokeCardData;
+  | StrokeCardData
+  | ChatCardData;
 
 export type Connector = { id: string; fromCardId: string; toCardId: string };
 export type Tool = "pointer" | "pen" | "connector" | "select";

@@ -88,6 +88,7 @@
     }
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.121.0",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",
