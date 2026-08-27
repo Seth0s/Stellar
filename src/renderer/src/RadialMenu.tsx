@@ -25,6 +25,7 @@ export type RadialAction =
   | "changes"
   | "sticky"
   | "browser"
+  | "chat"
   | "remote-window";
 
 const ACTIONS: { action: RadialAction; icon: IconName; label: string; group: "tool" | "spawn"; tool?: Tool }[] = [
@@ -37,6 +38,7 @@ const ACTIONS: { action: RadialAction; icon: IconName; label: string; group: "to
   { action: "changes", icon: "changes", label: "Changes", group: "spawn" },
   { action: "sticky", icon: "sticky", label: "Nota", group: "spawn" },
   { action: "browser", icon: "browser", label: "Navegador", group: "spawn" },
+  { action: "chat", icon: "chat", label: "Chatbox", group: "spawn" },
   { action: "remote-window", icon: "remoteWindow", label: "Janela externa", group: "spawn" },
 ];
 

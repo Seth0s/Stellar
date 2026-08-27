@@ -11,6 +11,8 @@ import type {
   RemoteInputApi,
   RemoteApi,
   UpdaterApi,
+  SecretsApi,
+  ChatApi,
 } from "../../preload/index";
 
 declare global {
@@ -27,5 +29,7 @@ declare global {
     remoteInput: RemoteInputApi;
     remote: RemoteApi;
     updater: UpdaterApi;
+    secrets: SecretsApi;
+    chat: ChatApi;
   }
 }

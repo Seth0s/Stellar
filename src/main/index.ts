@@ -18,6 +18,8 @@ import { runOneShotSummary } from "./ai-action";
 import { createRemoteInputSession } from "./remote-input";
 import { createRemoteServer } from "./remote-server";
 import { registerUpdater } from "./updater";
+import { createSecretsStore, type SecretProvider } from "./secrets";
+import { createAnthropicClient, type ChatMessage } from "./anthropic-client";
 
 const isDev = !app.isPackaged;
 
@@ -230,6 +232,12 @@ function createWindow() {
     : join(__dirname, "..", "..", "resources", "mobile-client");
 
   const store = openStore(app.getPath("userData"));
+  const secretsStore = createSecretsStore(app.getPath("userData"));
+  const anthropicClient = createAnthropicClient({
+    onToken: (cardId, delta) => safeSend(win, "chat:token", cardId, delta),
+    onDone: (cardId, fullText) => safeSend(win, "chat:done", cardId, fullText),
+    onError: (cardId, message) => safeSend(win, "chat:error", cardId, message),
+  });
 
   // Assigned right after `registry` below — declared here (not `const`
   // there) only so `registry`'s onData/onExit closures can reference it.
@@ -442,6 +450,28 @@ function createWindow() {
   ipcMain.handle("ai:summarize", (_e, providerId: string, cwd: string, prompt: string) =>
     runOneShotSummary(providerId, cwd, prompt),
   );
+
+  // DESIGN-BACKLOG.md item 12, Fase B.
+  ipcMain.handle("secrets:has", (_e, provider: SecretProvider) => secretsStore.has(provider));
+  ipcMain.handle("secrets:set", (_e, provider: SecretProvider, value: string) => secretsStore.set(provider, value));
+  ipcMain.handle("secrets:clear", (_e, provider: SecretProvider) => secretsStore.clear(provider));
+  ipcMain.handle("secrets:encryption-available", () => secretsStore.isEncryptionAvailable());
+
+  ipcMain.handle(
+    "chat:send",
+    (_e, cardId: string, params: { model: string; systemPrompt: string | null; messages: ChatMessage[] }) => {
+      const apiKey = secretsStore.get("anthropic");
+      if (!apiKey) return { ok: false, error: "nenhuma API key configurada" };
+      anthropicClient.send(cardId, {
+        apiKey,
+        model: params.model,
+        system: params.systemPrompt,
+        messages: params.messages,
+      });
+      return { ok: true };
+    },
+  );
+  ipcMain.handle("chat:cancel", (_e, cardId: string) => anthropicClient.cancel(cardId));
 
   ipcMain.handle("win:minimize", () => win.minimize());
   ipcMain.handle("win:toggle-maximize", () => (win.isMaximized() ? win.unmaximize() : win.maximize()));

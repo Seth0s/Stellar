@@ -6,6 +6,7 @@ import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
+import { ChatCard, DEFAULT_CHAT_MODEL } from "./ChatCard";
 import { AgentAskModal } from "./AgentAskModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
@@ -38,7 +39,7 @@ import { useWorldTransform } from "./useWorldTransform";
 import { useConnectorDrag } from "./useConnectorDrag";
 import { useCardSelection } from "./useCardSelection";
 import { useBoardStore } from "./useBoardStore";
-import type { Card, Connector, StickyCardData, Tool } from "./card-types";
+import type { Card, ChatCardData, ChatMessage, Connector, StickyCardData, Tool } from "./card-types";
 import "./app.css";
 
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
@@ -112,6 +113,7 @@ const KIND_LABEL: Record<Card["kind"], string> = {
   browser: "navegador",
   "remote-window": "janela externa",
   stroke: "desenho",
+  chat: "chatbox",
 };
 
 /** Rail's "localizar card" popover (DESIGN-BACKLOG.md item 7, jump-to-card). */
@@ -123,6 +125,7 @@ const KIND_ICON: Record<Card["kind"], IconName> = {
   browser: "browser",
   "remote-window": "remoteWindow",
   stroke: "pen",
+  chat: "chat",
 };
 
 /** Canvas background pattern — per-viewer preference (not per-board data,
@@ -225,7 +228,30 @@ function toRow(card: Card, boardId: string): CardRow {
         model: null,
         system_prompt: null,
       };
+    case "chat":
+      return {
+        ...base,
+        kind: "chat",
+        provider: card.provider,
+        cwd: JSON.stringify({ messages: card.messages }),
+        resume_id: null,
+        model: card.model,
+        system_prompt: card.systemPrompt,
+      };
   }
+}
+
+/** Same defensive-parse posture as `parseStroke` above — a malformed/
+ * legacy row renders as an empty conversation rather than crashing the
+ * whole board on load. */
+function parseChatMessages(raw: string): ChatMessage[] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.messages)) return parsed.messages;
+  } catch {
+    // fall through
+  }
+  return [];
 }
 
 const DEFAULT_STROKE_WIDTH = 3;
@@ -279,6 +305,18 @@ function fromRow(r: CardRow): Card {
         label,
       };
     }
+    case "chat":
+      return {
+        id: r.id,
+        kind: "chat",
+        provider: "anthropic",
+        model: r.model || DEFAULT_CHAT_MODEL,
+        systemPrompt: r.system_prompt,
+        messages: parseChatMessages(r.cwd),
+        rect,
+        groupId,
+        label,
+      };
     default:
       return {
         id: r.id,
@@ -689,6 +727,25 @@ export function App() {
     });
   }
 
+  /** DESIGN-BACKLOG.md item 12, Fase B — human path only this phase (not
+   * wired into spawn_card/MCP yet, deliberately: an agent spawning a
+   * card that talks to a *different* LLM under the user's own API key is
+   * its own decision, not bundled into achado 2's generic spawn). */
+  function addChatCard(at?: Point) {
+    const id = String(nextId.current++);
+    addCard({
+      id,
+      kind: "chat",
+      provider: "anthropic",
+      model: DEFAULT_CHAT_MODEL,
+      systemPrompt: null,
+      messages: [],
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
+      groupId: null,
+      label: null,
+    });
+  }
+
   /** Human path, via the rail button or radial menu — no owner, no consent gate (see AGENTS.md). */
   function addBrowserCard(at?: Point) {
     const id = String(nextId.current++);
@@ -860,6 +917,8 @@ export function App() {
         lines.push(`- [desenho] ${c.points.length} pontos`);
       } else if (c.kind === "remote-window") {
         lines.push(`- [janela externa] controle remoto`);
+      } else if (c.kind === "chat") {
+        lines.push(`- [chatbox ${c.model}] ${c.messages.length} mensagens`);
       } else {
         lines.push(`- [terminal ${c.provider}] cwd: ${c.cwd}`);
       }
@@ -1065,6 +1124,21 @@ export function App() {
     void window.store.upsert(toRow({ ...card, color }, activeBoardIdRef.current!));
   }
 
+  /** DESIGN-BACKLOG.md item 12, Fase B — ChatCard owns its own streaming
+   * state locally (token-by-token, no sqlite write per token — see
+   * ChatCard.tsx) and calls this once per completed turn (or on an
+   * edited/cleared history), same single-commit-at-the-end shape
+   * `commitStickyContent` uses for its own onBlur. */
+  function commitChatMessages(card: ChatCardData, messages: ChatMessage[]) {
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "chat" ? { ...c, messages } : c)));
+    void window.store.upsert(toRow({ ...card, messages }, activeBoardIdRef.current!));
+  }
+
+  function commitChatModel(card: ChatCardData, model: string) {
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "chat" ? { ...c, model } : c)));
+    void window.store.upsert(toRow({ ...card, model }, activeBoardIdRef.current!));
+  }
+
   function startDrawing(e: React.PointerEvent) {
     const points: Point[] = [];
     function addPoint(clientX: number, clientY: number) {
@@ -1160,6 +1234,7 @@ export function App() {
     else if (action === "changes") addChangesCard(at);
     else if (action === "sticky") addStickyCard(at);
     else if (action === "browser") addBrowserCard(at);
+    else if (action === "chat") addChatCard(at);
     else addRemoteWindowCard(at);
   }
 
@@ -1399,6 +1474,36 @@ export function App() {
               />
             );
           }
+          if (c.kind === "chat") {
+            return (
+              <ChatCard
+                key={c.id}
+                id={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                model={c.model}
+                systemPrompt={c.systemPrompt}
+                messages={c.messages}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                label={c.label}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onFocus={() => jumpToCard(c.id)}
+                onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onRename={(label) => renameCard(c.id, label)}
+                onMessagesCommit={(messages) => commitChatMessages(c, messages)}
+                onModelCommit={(model) => commitChatModel(c, model)}
+                onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
+              />
+            );
+          }
           return (
             <BrowserCard
               key={c.id}
@@ -1548,6 +1653,7 @@ export function App() {
         onCreateChanges={() => addChangesCard()}
         onCreateSticky={() => addStickyCard()}
         onCreateBrowser={() => addBrowserCard()}
+        onCreateChat={() => addChatCard()}
         onCreateRemoteWindow={() => addRemoteWindowCard()}
         aiBusy={aiBusy}
         summarizeDisabled={newProvider === "bash"}

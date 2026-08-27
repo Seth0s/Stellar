@@ -2856,6 +2856,43 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   antes de qualquer linha de React real. Nenhum código no repo ainda —
   Fase B é o próximo passo real de implementação.
 
+## 2026-08-27 — Item 12, Fase B fechada: chatbox real (Anthropic, texto puro)
+
+- `ChatCard.tsx` (novo) é o primeiro `kind: "chat"` real, integrado ao
+  sistema de cards inteiro (`card-types.ts`, `App.tsx`'s toRow/fromRow/
+  render-switch/buildBoardSnapshot, `icons.tsx`, `Rail.tsx`/
+  `RadialMenu.tsx`). Histórico de mensagens persistido como JSON no
+  `cwd` genérico, mesmo truque de reuso que `stroke` já usava — sem
+  tabela nova ainda, nada de tool-use/diff pra estruturar nesta fase.
+- Primeiro cliente HTTP/SSE de saída do código (`main/anthropic-client.ts`,
+  `@anthropic-ai/sdk`) — tudo que existia antes era servidor inbound
+  (MCP/remote-control/acbridge) ou delegava pro `electron-updater`.
+  Streaming token-a-token via IPC espelhando o formato `pty:*` de
+  propósito (`chat:send`/`chat:token`/`chat:done`/`chat:error`).
+- Primeira credencial do app: `main/secrets.ts` (novo,
+  `electron.safeStorage`, OS keychain-backed) — achado pela exploração
+  prévia que nada parecido existia (tokens de pareamento remoto são
+  efêmeros, nunca em disco). Fallback documentado pra Linux sem
+  keychain (`encrypted:false`, avisado na própria UI do card).
+- Deliberadamente NÃO plugado no `spawn_card`/MCP nesta fase — um
+  agente pedir pra abrir um chat com outro LLM sob a key do usuário é
+  decisão própria, não bundle automático do achado 2 (item 21 ponto 9).
+- Verificação real, sem key válida disponível neste ambiente:
+  `scripts/verify/smoke-chat.mjs` (novo, 12/12) confirma contra o
+  endpoint REAL `api.anthropic.com` (não um mock local) que uma key
+  fake retorna um 401 `authentication_error` estruturado — prova TLS/
+  SSE/tratamento de erro reais ponta a ponta; só falta uma key válida
+  pra completude real, recomendado ao usuário testar manualmente.
+  Persistência confirmada via `Page.reload()` real (não restart de
+  processo — `startApp` do harness sempre limpa `userDataDir` a cada
+  chamada, por design, pra isolar test runs entre si).
+- Achado de teste: `smoke-card-lifecycle.mjs` tinha a contagem do menu
+  radial hardcoded (10 — corrigida pra 11, o novo item "chat" no grupo
+  de spawn). `smoke-browser.mjs` reconfirmado flaky pré-existente (3/3
+  limpo isolado), não causado por esta mudança. Todas as 18 suítes
+  passando quando rodadas individualmente.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 12.
+
 ## Comandos
 
 ```bash

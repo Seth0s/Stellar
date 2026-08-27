@@ -29,9 +29,11 @@ import {
   Group,
   Home as HomeGlyph,
   Image,
+  KeyRound,
   LayoutGrid,
   Link2,
   Maximize,
+  MessageCircle,
   Minimize,
   Minus,
   MonitorSmartphone,
@@ -65,6 +67,8 @@ export type IconName =
   | "changes"
   | "sticky"
   | "browser"
+  | "chat"
+  | "apiKey"
   | "sparkle"
   | "reorganize"
   | "zoomIn"
@@ -118,6 +122,8 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   changes: GitBranch,
   sticky: StickyNote,
   browser: Globe,
+  chat: MessageCircle,
+  apiKey: KeyRound,
   sparkle: Sparkles,
   reorganize: LayoutGrid,
   zoomIn: ZoomIn,

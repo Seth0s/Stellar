@@ -43,6 +43,7 @@ export function Rail({
   onCreateChanges,
   onCreateSticky,
   onCreateBrowser,
+  onCreateChat,
   onCreateRemoteWindow,
   aiBusy,
   summarizeDisabled,
@@ -82,6 +83,7 @@ export function Rail({
   onCreateChanges: () => void;
   onCreateSticky: () => void;
   onCreateBrowser: () => void;
+  onCreateChat: () => void;
   onCreateRemoteWindow: () => void;
   aiBusy: boolean;
   summarizeDisabled: boolean;
@@ -214,6 +216,9 @@ export function Rail({
       </button>
       <button className="rail-btn" title="Novo navegador" onClick={onCreateBrowser}>
         <Icon name="browser" />
+      </button>
+      <button className="rail-btn" title="Novo chatbox" onClick={onCreateChat}>
+        <Icon name="chat" />
       </button>
       <button className="rail-btn" title="Controlar janela externa" onClick={onCreateRemoteWindow}>
         <Icon name="remoteWindow" />

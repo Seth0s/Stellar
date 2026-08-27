@@ -341,6 +341,47 @@ const updater = {
     ipcRenderer.invoke("updater:test-emit-available", version, releaseNotes),
 };
 
+export type SecretProvider = "anthropic" | "openai";
+
+/** DESIGN-BACKLOG.md item 12, Fase B — the app's first credential of any
+ * kind. See main/secrets.ts for the `safeStorage` design. */
+const secrets = {
+  hasKey: (provider: SecretProvider): Promise<boolean> => ipcRenderer.invoke("secrets:has", provider),
+  setKey: (provider: SecretProvider, value: string): Promise<void> => ipcRenderer.invoke("secrets:set", provider, value),
+  clearKey: (provider: SecretProvider): Promise<void> => ipcRenderer.invoke("secrets:clear", provider),
+  isEncryptionAvailable: (): Promise<boolean> => ipcRenderer.invoke("secrets:encryption-available"),
+};
+
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type ChatSendParams = { model: string; systemPrompt: string | null; messages: ChatMessage[] };
+export type ChatSendResult = { ok: true } | { ok: false; error: string };
+
+/** DESIGN-BACKLOG.md item 12, Fase B — mirrors `pty`'s
+ * spawn/write/onData/onExit shape on purpose (see main/anthropic-client.ts):
+ * `send` kicks off a streamed request and resolves once it either starts
+ * or fails fast (e.g. no API key configured); the actual tokens arrive as
+ * `chat:token` events, terminated by exactly one of `chat:done`/`chat:error`. */
+const chat = {
+  send: (cardId: string, params: ChatSendParams): Promise<ChatSendResult> =>
+    ipcRenderer.invoke("chat:send", cardId, params),
+  cancel: (cardId: string): Promise<void> => ipcRenderer.invoke("chat:cancel", cardId),
+  onToken: (cb: (cardId: string, delta: string) => void) => {
+    const listener = (_e: unknown, cardId: string, delta: string) => cb(cardId, delta);
+    ipcRenderer.on("chat:token", listener);
+    return () => ipcRenderer.removeListener("chat:token", listener);
+  },
+  onDone: (cb: (cardId: string, fullText: string) => void) => {
+    const listener = (_e: unknown, cardId: string, fullText: string) => cb(cardId, fullText);
+    ipcRenderer.on("chat:done", listener);
+    return () => ipcRenderer.removeListener("chat:done", listener);
+  },
+  onError: (cb: (cardId: string, message: string) => void) => {
+    const listener = (_e: unknown, cardId: string, message: string) => cb(cardId, message);
+    ipcRenderer.on("chat:error", listener);
+    return () => ipcRenderer.removeListener("chat:error", listener);
+  },
+};
+
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("store", store);
 contextBridge.exposeInMainWorld("fs", fs);
@@ -353,6 +394,8 @@ contextBridge.exposeInMainWorld("snapshot", snapshot);
 contextBridge.exposeInMainWorld("remoteInput", remoteInput);
 contextBridge.exposeInMainWorld("remote", remote);
 contextBridge.exposeInMainWorld("updater", updater);
+contextBridge.exposeInMainWorld("secrets", secrets);
+contextBridge.exposeInMainWorld("chat", chat);
 
 export type PtyApi = typeof pty;
 export type StoreApi = typeof store;
@@ -366,3 +409,5 @@ export type SnapshotApi = typeof snapshot;
 export type RemoteInputApi = typeof remoteInput;
 export type RemoteApi = typeof remote;
 export type UpdaterApi = typeof updater;
+export type SecretsApi = typeof secrets;
+export type ChatApi = typeof chat;

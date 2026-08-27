@@ -31,10 +31,11 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check("radial menu opened", await page.evalJs(`!!document.querySelector(".radial-menu")`), true);
   check(
-    // 4 tool switches (item 1 revisited) + 6 spawn actions.
-    "radial menu has 10 actions (4 tools + 6 spawn)",
+    // 4 tool switches (item 1 revisited) + 7 spawn actions (item 12, Fase
+    // B added "chat" to the spawn group).
+    "radial menu has 11 actions (4 tools + 7 spawn)",
     await page.evalJs(`document.querySelectorAll(".radial-item").length`),
-    10,
+    11,
   );
   check(
     "pointer tool shows as active (default tool on a fresh board)",

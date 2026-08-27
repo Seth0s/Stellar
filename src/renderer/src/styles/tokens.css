@@ -43,4 +43,6 @@
   --accent-browser: var(--foam);
   --accent-sticky-human: var(--signal);
   --accent-sticky-ai: var(--foam);
+  /* DESIGN-BACKLOG.md item 12, Fase B */
+  --accent-chat: var(--foam);
 }
