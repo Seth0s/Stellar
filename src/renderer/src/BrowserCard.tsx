@@ -200,7 +200,12 @@ export function BrowserCard({
   // from under the app's own floating chrome). Only forward to the page
   // (and eat the event) once the card has real DOM focus, i.e. after a
   // click — matches every other "scroll this, not the page" widget
-  // convention. Unfocused, let it bubble to the board's own zoom as normal.
+  // convention. Unfocused, this returns without stopping propagation —
+  // used to let it bubble all the way to the board's own zoom (the
+  // ORIGINAL behavior here); as of the universal card-level wheel fix
+  // (CardFrame.tsx, 2026-08-27) it now just stops at the card boundary
+  // instead — unfocused scroll over a browser card does nothing (not
+  // zoom-through) until a click focuses it, same as every other card.
   function onCanvasWheel(e: React.WheelEvent<HTMLCanvasElement>) {
     if (interactionMode !== "normal" || document.activeElement !== e.currentTarget) return;
     const p = toCanvasPoint(e);

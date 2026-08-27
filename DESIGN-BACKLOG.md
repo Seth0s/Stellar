@@ -2556,6 +2556,86 @@ mais cuidado que só "um botão liga/desliga"**:
 Nenhuma decisão fechada aqui — perguntas reais levantadas, matching o
 mesmo espírito do item 23 (registrar o raciocínio, não um plano pronto).
 
+## 26. Scroll sobre qualquer card zoomava o canvas por baixo — ✅ feito em 2026-08-27, reportado ao vivo no app oficial buildado
+
+Reportado ao vivo: "o scroll está sendo interceptado pelo app também,
+fazendo dar zoom no app e ao mesmo a janela". Pedido explícito de
+análise cuidadosa antes de mexer — havia uma tentativa anterior nessa
+área que "deu problema" (não documentada em detalhe, mas achada
+indiretamente: `BrowserCard.tsx` já tinha um fix parcial pra isso).
+
+**Causa raiz confirmada no código**: `useWorldTransform.ts`'s `onWheel`
+está anexado ao `.viewport` inteiro e zooma em **qualquer** wheel, sem
+exceção por padrão. O único lugar que já tratava isso era
+`BrowserCard.tsx`, condicional a foco real (clique primeiro) — todo o
+resto (terminal/arquivos/chat/changes/sticky/stroke/remote-window)
+sempre vazava pro zoom, mesmo tendo conteúdo próprio pra rolar.
+
+**Por que um fix ingênuo (stopPropagation incondicional em todo card,
+óbvio à primeira vista) quebraria algo**: `BrowserCard`'s wheel handler
+tinha uma exceção DOCUMENTADA e deliberada — "Unfocused, let it bubble
+to the board's own zoom as normal" — rolar sobre um navegador embutido
+ainda não clicado propositalmente vazava pro zoom do canvas. Um fix
+universal ingênuo faria isso simplesmente não fazer nada, mudança de
+comportamento silenciosa. **Confirmado com o usuário antes de
+implementar**: essa exceção deveria deixar de existir também — o
+navegador passa a ser consistente com todo o resto (nenhuma exceção por
+tipo de card).
+
+**Fix**: um único handler de wheel no `CardFrame.tsx` (wrapper
+compartilhado por TODO tipo de card — confirmado via
+`grep -l CardFrame`: Browser/Changes/Chat/Files/RemoteWindow/Sticky/
+Stroke/Terminal, cobertura de 8/8) que sempre para a propagação. O card
+inteiro vira uma zona onde wheel nunca vaza pro board — scroll dentro
+dele rola o conteúdo que já tem overflow nativo (xterm.js usa
+`.xterm-viewport` com `overflow-y: scroll` de verdade, arquivos/chat/
+changes já usam `overflow: auto` nativo em `cards.css`), zoom do canvas
+só acontece no fundo vazio de verdade, fora de qualquer card — mesmo
+território que o pan (`onBackgroundPointerDown`) já respeita desde a
+fase de fidelidade visual (2026-08-25).
+
+**Teclado, auditado a pedido do usuário, sem bug encontrado**: os
+atalhos globais de ferramenta (`v`/`p`/`c`/`s`) já respeitam foco de DOM
+padrão (`App.tsx`'s guard já ignora INPUT/TEXTAREA/CANVAS/
+contentEditable) — "anexar por clique" já é exatamente como funciona
+hoje, sem necessidade de mudança. **Auditoria adicional pedida
+especificamente**: o sistema de foco-pra-digitar do `BrowserCard`
+(`mouseDown` → `webContents.focus()` no main, forward de `keyDown`/
+`keyUp`/`char` pro processo offscreen) — o MECANISMO é genérico de
+verdade (foca a `webContents` inteira no clique, deixa a própria página
+decidir qual elemento dela recebe o foco — não é hardcoded pra nenhum
+site/seletor específico, deve continuar funcionando pra qualquer
+input/textarea futuro sem mudança nenhuma). O VOCABULÁRIO de teclas tem
+3 gaps reais, conhecidos, não urgentes: `SPECIAL_KEYS`
+(`BrowserCard.tsx`) não cobre teclas de função (F1-F12)/Insert/
+ContextMenu; composição IME (chinês/japonês/coreano) não é tratada;
+colar via Ctrl+V manda só o keydown sintético, não o conteúdo real do
+clipboard (Electron's `sendInputEvent` não dispara paste de verdade
+sozinho). Nenhum desses gaps é o que causaria "problema numa digitação
+comum" — não implementado, só documentado como limite conhecido.
+
+**Verificação**: `scripts/verify/smoke-card-wheel-scope.mjs` (novo,
+6/6). Prova real: scroll sobre terminal com 200 linhas reais de
+scrollback (`seq 1 200`) não muda o zoom do canvas E o conteúdo visual
+do terminal genuinamente mudou (clip de pixels reais via
+`Page.captureScreenshot` antes/depois, bytes diferentes — **achado
+durante a escrita do teste**: `.xterm-viewport`'s `scrollTop` NÃO
+reflete a posição real de scroll nesta versão do xterm.js, que usa um
+overlay de scroll próprio estilo VS Code; confirmado com screenshot
+manual mostrando "200" virando "199" após o wheel, então o teste real
+usa comparação de pixels em vez de uma propriedade DOM que se mostrou
+não confiável). Scroll sobre `.files-tree` também não muda o zoom. Fundo
+vazio genuíno ainda zoom (checagem de não-regressão). Navegador
+embutido SEM foco não zoom mais o canvas (mudança de comportamento
+confirmada). `smoke-browser.mjs` (o teste focado/existente) rerrodado
+3× isolado — 3/3 limpo, incluindo o check crítico de scroll focado na
+página embutida ("scrolling down over the card scrolls the embedded
+page down") — confirma que o caminho de foco existente não regrediu.
+Suite completa: 21 outras suítes pré-existentes + esta nova, 0
+regressões reais (1 falha isolada de `smoke-browser.mjs` na cadeia
+longa, já documentada como flaky pré-existente desde antes desta
+sessão, re-confirmada 3/3 limpa fora da cadeia).
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.

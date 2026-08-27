@@ -173,6 +173,29 @@ export function CardFrame({
         if (interactionMode === "connector") onConnectorStart?.(e);
         if (interactionMode === "select") onSelectStart?.(e);
       }}
+      // Pedido ao vivo (2026-08-27): scroll sobre QUALQUER card zoomava o
+      // canvas inteiro por baixo — `useWorldTransform.ts`'s `onWheel`
+      // está no `.viewport`, sem exceção nenhuma por padrão. O único
+      // lugar que já tratava isso era `BrowserCard.tsx` (condicional a
+      // ter foco real) — todo o resto (terminal/arquivos/chat/changes)
+      // sempre vazava pro zoom, mesmo tendo conteúdo próprio pra rolar.
+      // Fix universal, um lugar só (todo card passa por `CardFrame`): o
+      // card inteiro vira uma zona onde wheel nunca vaza pro board —
+      // scroll dentro dele rola o conteúdo que já tem overflow nativo
+      // (`.xterm-viewport` do xterm.js usa `overflow-y: scroll` de
+      // verdade, não um scroll virtualizado — confirmado no CSS
+      // empacotado da lib), zoom do canvas só acontece no fundo vazio de
+      // verdade, fora de qualquer card — mesmo território que o pan
+      // (`onBackgroundPointerDown`) já respeita hoje.
+      //
+      // Mudança de comportamento deliberada, confirmada com o usuário:
+      // `BrowserCard` sem foco tinha uma exceção documentada própria
+      // ("Unfocused, let it bubble to the board's own zoom as normal")
+      // — deixa de existir. Sem foco, rolar sobre um navegador embutido
+      // agora não faz nada (em vez de zoomar o canvas por baixo) até um
+      // clique focar o card, aí sim rolando a página embutida —
+      // consistente com todo o resto, sem exceção por tipo de card.
+      onWheel={(e) => e.stopPropagation()}
       onAnimationEnd={(e) => {
         if (closing && e.currentTarget === e.target) onCloseAnimationEnd?.();
       }}
