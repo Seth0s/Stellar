@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { toast } from "./useToast";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -149,6 +150,45 @@ export function useTerminal(
       void window.pty.write(ptyId, data);
     });
 
+    // "não consigo mandar foto pelo terminal" (2026-08-27) — xterm.js's
+    // own default paste handler only ever reads `text/plain`; an image on
+    // the clipboard silently produced nothing. Capture-phase listener on
+    // `el` (the container), so this runs BEFORE xterm's own listener on
+    // its internal hidden textarea sees the event — same technique
+    // `correctZoomCoords` below already uses for the same reason. A
+    // plain-text paste (no image/* item present) is left untouched —
+    // `preventDefault`/`stopImmediatePropagation` only fire once an image
+    // is actually found, so xterm's normal text-paste path is unaffected.
+    function onPaste(e: ClipboardEvent) {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const hasImage = Array.from(items).some((item) => item.type.startsWith("image/"));
+      if (!hasImage) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      void window.clipboardImage.save().then((result) => {
+        if (!result.ok) {
+          toast(`falha ao colar imagem: ${result.error}`);
+          return;
+        }
+        // Caminho absoluto, entre aspas (evita quebrar em espaço), com um
+        // espaço à direita pra o usuário continuar digitando — mesma
+        // convenção de um drag-and-drop de arquivo pro terminal. O que
+        // dá pra garantir aqui termina no texto chegando certo no PTY;
+        // se a CLI rodando ali de fato trata isso como anexo de imagem
+        // depende dela (ver main/clipboard-image.ts).
+        // `ptyId!` — TS não propaga a checagem de `!ptyId` acima (linha
+        // 113) pra dentro de uma function declaration hoisted como esta
+        // (diferente de uma arrow function), mas é seguro de verdade: se
+        // `ptyId` mudasse, este efeito inteiro seria desmontado primeiro
+        // (é dependência dele, `[containerRef, visible, ptyId]` no fim do
+        // arquivo) — este listener nunca sobrevive a essa mudança.
+        void window.pty.write(ptyId!, `"${result.path}" `);
+        toast("imagem colada — caminho inserido no terminal");
+      });
+    }
+    el.addEventListener("paste", onPaste, { capture: true });
+
     // xterm measures its own cell size from canvas font metrics (or
     // offsetWidth as a DOM fallback) — both ignore the `.world` ancestor's
     // CSS `transform: scale()` used for optical zoom (App.tsx). The click
@@ -210,6 +250,7 @@ export function useTerminal(
       for (const type of ZOOM_MOUSE_EVENT_TYPES) {
         el!.removeEventListener(type, correctZoomCoords, { capture: true });
       }
+      el!.removeEventListener("paste", onPaste, { capture: true });
       onTermData.dispose();
       term.dispose();
       termRef.current = null;

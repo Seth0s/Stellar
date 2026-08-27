@@ -58,6 +58,20 @@ const pty = {
   },
 };
 
+export type SaveClipboardImageResult = { ok: true; path: string } | { ok: false; error: string };
+
+/** "não consigo mandar foto pelo terminal" (2026-08-27) — ver
+ * main/clipboard-image.ts pro raciocínio completo. Separado de `pty`
+ * (não fala com um PTY específico, só lê o clipboard do SO), mesma
+ * distinção que `secrets` já mantém como um bridge próprio pequeno em
+ * vez de crescer um existente. */
+const clipboardImage = {
+  save: (): Promise<SaveClipboardImageResult> => ipcRenderer.invoke("clipboard:save-pasted-image"),
+  /** Test-only (scripts/verify) — no-op in a packaged build, see
+   * main/index.ts's guard. */
+  testWriteImage: (): Promise<void> => ipcRenderer.invoke("clipboard:test-write-image"),
+};
+
 export type ConnectorRow = {
   id: string;
   board_id: string;
@@ -433,6 +447,7 @@ const chat = {
 };
 
 contextBridge.exposeInMainWorld("pty", pty);
+contextBridge.exposeInMainWorld("clipboardImage", clipboardImage);
 contextBridge.exposeInMainWorld("store", store);
 contextBridge.exposeInMainWorld("fs", fs);
 contextBridge.exposeInMainWorld("git", git);
@@ -448,6 +463,7 @@ contextBridge.exposeInMainWorld("secrets", secrets);
 contextBridge.exposeInMainWorld("chat", chat);
 
 export type PtyApi = typeof pty;
+export type ClipboardImageApi = typeof clipboardImage;
 export type StoreApi = typeof store;
 export type FsApi = typeof fs;
 export type GitApi = typeof git;

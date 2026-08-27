@@ -3018,6 +3018,55 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   quebrou nada.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 19 (nota de regressão).
 
+## 2026-08-27 — App oficial buildado: overlay de links cobrindo o terminal + paste de imagem inexistente (item 22, 2/2)
+
+- **Overlay de links**: `.terminal-card-urls` era `position: absolute`
+  por cima das linhas do terminal, sem limite/expiração
+  (`pty-registry.ts`'s `seenUrls` Set só cresce). Virou um badge
+  (`.terminal-card-url-badge`) dentro do próprio `footerContent` (já
+  aceita `React.ReactNode`) + `Popover` sob demanda — nunca mais
+  sobrepõe `.terminal-card-body`. `side` do popover calculado pela
+  posição real do badge na tela (card pode estar em qualquer lugar do
+  canvas, não só perto de uma régua fixa).
+- Pedido ao vivo, meio da implementação: clique num link agora copia pro
+  clipboard (`navigator.clipboard.writeText`) com feedback visual só
+  DEPOIS que a promise resolveu de verdade — nunca otimista, falha real
+  vira estado de erro visível.
+- Segundo pedido ao vivo: abrir no navegador interno passou a exigir
+  confirmação (`ConfirmModal` genérico, novo estado `pendingOpenUrl` em
+  `App.tsx`, deliberadamente separado de `pendingAsk`/`AgentAskModal` —
+  aquele é o gate de pedido DE AGENTE, este é clique humano direto).
+- **Paste de imagem**: não existia handler nenhum — xterm.js's paste
+  padrão só lê `text/plain`. `main/clipboard-image.ts` (novo) lê a
+  imagem real do clipboard do SO (`electron.clipboard.readImage()`) e
+  grava um PNG real em `app.getPath("temp")/stellar-pastes/`.
+  `useTerminal.ts` ganhou um listener de `paste` em fase de CAPTURA no
+  container (mesma técnica que `correctZoomCoords` já usa), rodando
+  antes do handler interno do xterm — só intercepta quando o evento tem
+  um item `image/*` de verdade, texto puro passa intocado. Caminho
+  inserido no PTY entre aspas (convenção de drag-and-drop de arquivo).
+  **Limite documentado honestamente**: garantimos que o caminho chega
+  certo no PTY — se a CLI rodando ali de fato trata isso como anexo de
+  imagem depende dela, não verificável aqui sem sessão paga real.
+- **Achado real durante a verificação**: o PNG de teste "1×1" digitado à
+  mão base64 parecia bem-formado (assinatura correta) mas o corpo estava
+  corrompido — `nativeImage.createFromBuffer` dava `isEmpty(): true`
+  silenciosamente. Só pego rodando um round-trip real isolado
+  (`electron` standalone) antes de confiar nele. Corrigido gerando o PNG
+  programaticamente (chunks reais com CRC32 via `zlib.deflateSync`) e
+  validando o round-trip completo antes de fixar o base64.
+- Verificação: `scripts/verify/smoke-terminal-links-paste.mjs` (novo,
+  19/19) — tudo real: bash de verdade imprimindo URLs (dedup confirmado),
+  badge nunca cobrindo o terminal, clipboard do SO lido de volta pra
+  confirmar a cópia, fluxo negar/permitir do ConfirmModal com contagem
+  real de cards, `clipboard.save()` falhando/funcionando genuinamente,
+  PNG real confirmado em disco (bytes checados), paste de imagem
+  interceptado vs paste de texto intocado. Achado de teste (não do app):
+  polling do badge parava assim que virava truthy ("1", antes do segundo
+  URL chegar) — corrigido esperando por "2" especificamente. 20 suítes
+  pré-existentes rerrodadas (237 checks) + esta nova — 0 regressões.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 22.
+
 ## Comandos
 
 ```bash

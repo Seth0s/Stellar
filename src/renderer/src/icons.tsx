@@ -91,6 +91,7 @@ export type IconName =
   | "group"
   | "ungroup"
   | "check"
+  | "copy"
   | "bgStyle"
   | "remoteWindow"
   | "controlOn"
@@ -149,6 +150,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   group: Group,
   ungroup: Ungroup,
   check: Check,
+  copy: Copy,
   bgStyle: Grid2x2,
   remoteWindow: MonitorSmartphone,
   controlOn: MousePointerClick,

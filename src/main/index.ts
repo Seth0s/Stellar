@@ -6,6 +6,7 @@ import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./sto
 import type { SpawnOpts } from "./providers";
 import { createEntry, deletePath, listDir, readFile, readImageDataUrl, renamePath, writeFile } from "./fs-tools";
 import { gitStatus } from "./git-tools";
+import { saveClipboardImage, testWriteClipboardImage } from "./clipboard-image";
 import {
   createBrowserRegistry,
   type BrowserMouseEvent,
@@ -468,6 +469,18 @@ function createWindow() {
   ipcMain.handle("pty:kill", (_e, id: string) => {
     registry.kill(id);
     remoteServer?.broadcastCards();
+  });
+  // "não consigo mandar foto pelo terminal" (2026-08-27) — ver
+  // clipboard-image.ts pro raciocínio completo. Não é `pty:*` de
+  // propósito (não fala com nenhum PTY específico, só lê o clipboard do
+  // SO), mas fica perto por ser acionado a partir do mesmo lugar
+  // (useTerminal.ts's paste handler).
+  ipcMain.handle("clipboard:save-pasted-image", () => saveClipboardImage());
+  // Test-only trigger (verify harness) — inerte em build empacotado,
+  // mesmo guard/precedente de `chat:test-simulate-tool`.
+  ipcMain.handle("clipboard:test-write-image", () => {
+    if (app.isPackaged) return;
+    testWriteClipboardImage();
   });
 
   ipcMain.handle("store:list", (_e, boardId: string) => store.listCards(boardId));
