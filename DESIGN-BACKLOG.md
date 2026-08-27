@@ -2464,6 +2464,22 @@ peso que `ConfirmModal` já dá pra esse caso quando um humano fecha na
 mão). Não implementado agora — só anotado, junto do item 23 como
 próxima área de trabalho no MCP.
 
+**Segundo achado real, mesmo dia, perguntado direto pelo usuário**:
+"Você consegue digitar no sticky notes pelo MCP?" — testado ao vivo
+(`send_to_card` contra um card sticky real, id `74`) pra confirmar antes
+de responder, não assumido: `{"ok":false,"error":"no open terminal card
+with id \"74\""}`. `send_to_card` é hardcoded pra cards `kind:
+"terminal"` (`message-bus.ts`'s `listCards` já filtra só terminal antes
+de aceitar um `target`); o conteúdo de um sticky é um `<textarea>`
+controlado só por estado React em `StickyCard.tsx`, sem NENHUM canal de
+escrita externo hoje — nem indireto. Candidato a tool futura:
+`update_card_content` (ou nome parecido) genérico o bastante pra cobrir
+sticky (texto puro) e talvez outros kinds com conteúdo editável no
+futuro — mesma pergunta de gate de consentimento do `close_card` acima
+(editar o conteúdo de algo que já existe é mais parecido com
+`write_file` — merece diff/preview do "antes → depois" do texto, não só
+um "permitir sim/não" cego). Não implementado — só anotado.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
