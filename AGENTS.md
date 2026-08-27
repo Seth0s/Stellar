@@ -2576,6 +2576,24 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   fullscreen.mjs` novo (7 checks, clica o botão de verdade via CDP);
   `smoke-home.mjs` ganhou 2 checks pro ancestor-crumb. `npm run verify`
   completo (13 suítes) PASS.
+- **Item 20 (4/5), mesmo dia**: `CardFrame.tsx` ganhou `footerContent?`
+  (slot de verdade, terminal/files/changes migrados; sticky/browser
+  deliberadamente sem — browser já mostra o endereço no header). `.card-
+  resize` centralizado (era `flex-end` numa caixa -2px além da borda,
+  lia como "grudado no canto"). `CardTag.tsx`'s pill estática perdeu
+  `data-no-drag` — bloqueava começar um drag bem em cima do nome do
+  provider, a parte mais "parece agarrável" do header; novo check em
+  `smoke-card-actions.mjs` cobre exatamente essa regressão. Resolução do
+  navegador: causa raiz real (offscreen paint nunca acompanhava zoom do
+  board nem `devicePixelRatio`), tentei `webContents.
+  enableDeviceEmulation` (mecanismo documentado do Electron pra isso) mas
+  **falsifiquei ao vivo** — log confirmou a chamada chegando com o scale
+  certo, buffer do `paint` não mudou de tamanho nenhuma vez; revertido
+  por completo (não deixo código morto com comentário dizendo que
+  funciona). "Ícone de cópia" nos terminais: não existe no código — só
+  tem o botão de interromper (Ctrl+C, ícone `Octagon`); ficou pendente de
+  confirmação com o usuário antes de remover uma função real por engano.
+  Detalhe em `DESIGN-BACKLOG.md` item 20.
 
 ## Comandos
 

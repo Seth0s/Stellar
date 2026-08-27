@@ -42,8 +42,18 @@ export function CardTag({ label, onRename }: { label: string; onRename: (next: s
       />
     );
   }
+  // Reported live (2026-08-27) — "facilitar área de drag, é difícil fazer
+  // o drag atual no header, parece uma área efetiva muito pequena": this
+  // pill is often the most visually "grabbable" part of the header, but
+  // `data-no-drag` here (CardFrame.tsx's onHeaderPointerDown excludes it)
+  // blocked a drag from ever starting on it at all, only left it started
+  // from the empty strip AROUND the label/buttons. Dropped `data-no-drag`
+  // — starting a drag here now works like the rest of the header; the
+  // double-click still enters rename below (its own single clicks each
+  // just commit a ~0px no-op drag first, imperceptible). Kept only on the
+  // active `<input>` above, which genuinely must not start a drag.
   return (
-    <span className="card-tag" data-no-drag title="clique duas vezes para renomear" onDoubleClick={startEditing}>
+    <span className="card-tag" title="clique duas vezes para renomear" onDoubleClick={startEditing}>
       {label}
     </span>
   );

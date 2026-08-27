@@ -15,6 +15,7 @@ export function CardFrame({
   zIndex,
   className,
   headerContent,
+  footerContent,
   children,
   interactionMode = "normal",
   selected = false,
@@ -34,6 +35,15 @@ export function CardFrame({
   zIndex: number;
   className: string;
   headerContent: React.ReactNode;
+  /** One-line strip at the bottom of the card (cwd, root path, URL, ...) —
+   * reported live (2026-08-27) as inconsistent: each card kind that
+   * wanted one duplicated its own `<div className="card-foot">`, and two
+   * kinds (sticky, browser) had none at all. Owning the slot/styling here
+   * means any future card kind gets the same footer "for free" just by
+   * passing this prop, instead of re-implementing it. Omit for a card
+   * with nothing meaningful to show there (sticky notes have no
+   * comparable single-line metadata). */
+  footerContent?: React.ReactNode;
   children: React.ReactNode;
   /** "connector"/"select" both disable the normal drag/resize gestures below
    * so a click anywhere on the card starts a connector drag or a selection
@@ -164,6 +174,9 @@ export function CardFrame({
           {headerContent}
         </div>
         {children}
+        {footerContent !== undefined && footerContent !== null && (
+          <div className="card-foot">{footerContent}</div>
+        )}
       </div>
       <div className="card-resize" onPointerDown={onResizePointerDown}>
         <Icon name="resizeGrip" size={11} />

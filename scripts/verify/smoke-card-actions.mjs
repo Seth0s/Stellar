@@ -33,6 +33,43 @@ try {
   );
   check("duplicate is also a bash terminal (same provider)", providers.filter((p) => p === "bash").length, 2);
 
+  // 2026-08-27 — "facilitar área de drag, é difícil fazer o drag atual no
+  // header": CardTag.tsx's static (non-editing) label used to carry
+  // `data-no-drag`, which CardFrame.tsx's onHeaderPointerDown excludes —
+  // a drag starting exactly on the "BASH" pill (often the most visually
+  // "grabbable" spot) silently did nothing. Confirms it now actually
+  // moves the card, same down→move→up-in-one-call real-drag pattern used
+  // throughout this suite.
+  const tagBefore = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const tag = document.querySelector('.terminal-card .card-tag');
+        const frame = tag.closest('.card-frame');
+        const t = tag.getBoundingClientRect();
+        const f = frame.getBoundingClientRect();
+        return JSON.stringify({ tagX: t.x + t.width / 2, tagY: t.y + t.height / 2, frameLeft: f.left, frameTop: f.top });
+      })()
+    `),
+  );
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mousePressed", x: tagBefore.tagX, y: tagBefore.tagY, button: "left", clickCount: 1, pointerType: "mouse",
+  });
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved", x: tagBefore.tagX + 60, y: tagBefore.tagY + 40, button: "left", pointerType: "mouse",
+  });
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased", x: tagBefore.tagX + 60, y: tagBefore.tagY + 40, button: "left", clickCount: 1, pointerType: "mouse",
+  });
+  await new Promise((r) => setTimeout(r, 300));
+  const frameAfter = JSON.parse(
+    await page.evalJs(`JSON.stringify(document.querySelector('.terminal-card').closest('.card-frame').getBoundingClientRect())`),
+  );
+  check(
+    "dragging from the card-tag pill itself actually moves the card (used to be blocked)",
+    frameAfter.left > tagBefore.frameLeft && frameAfter.top > tagBefore.frameTop,
+    true,
+  );
+
   // Pan the board far away so both cards land off-screen, then use
   // "localizar card" to jump back to one — same down/move/up-in-one-call
   // pattern the other smoke scripts use for real drags (see AGENTS.md).

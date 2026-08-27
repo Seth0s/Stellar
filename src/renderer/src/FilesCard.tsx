@@ -445,6 +445,7 @@ export function FilesCard({
           </span>
         </>
       }
+      footerContent={root}
     >
       <div className="files-card-body">
         <div className="files-tree-panel">
@@ -531,7 +532,6 @@ export function FilesCard({
             )}
         </div>
       </div>
-      <div className="card-foot">{root}</div>
     </CardFrame>
   );
 }

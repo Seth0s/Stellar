@@ -84,6 +84,7 @@ export function ChangesCard({
           </span>
         </>
       }
+      footerContent={root}
     >
       <div className="changes-card-body">
         {!status && <div className="changes-msg">carregando…</div>}
@@ -112,7 +113,6 @@ export function ChangesCard({
           </>
         )}
       </div>
-      <div className="card-foot">{root}</div>
     </CardFrame>
   );
 }

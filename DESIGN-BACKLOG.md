@@ -1606,6 +1606,83 @@ promover um ancestral não tem caminho de volta pela UI (só o diálogo
 nativo), então nada depois dele pode depender da árvore da raiz
 original. `npm run verify` completo (13 suítes) PASS.
 
+## 20. Cromo dos cards: footer compartilhado, resize centralizado, área de drag, resolução do navegador — 4/5, reportado ao vivo em 2026-08-27
+
+**Pedido**: organizar o footer de todos os cards até o navegador
+(esperando que fosse herdado), centralizar o ícone de resize (estava mal
+posicionado, colado no canto), remover o "ícone de cópia" do header dos
+terminais, facilitar a área de drag do header (difícil de arrastar hoje,
+área efetiva parece pequena), e investigar se vale a pena consertar a
+resolução prejudicada do card do navegador.
+
+1. **Footer virou um slot de verdade em `CardFrame.tsx`** (`footerContent?`)
+   em vez de cada card kind duplicar seu próprio `<div className="card-
+   foot">` — terminal/files/changes passam a usar o prop (mesmo conteúdo
+   de antes); sticky continua sem footer (não tem um metadado de linha
+   única equivalente a cwd/root — nada para mostrar); browser também
+   ficou sem, deliberado: o endereço já é mostrado/editável no próprio
+   header (barra de endereço), duplicar no footer seria só repetir a
+   mesma informação. Qualquer card kind novo herda o footer de graça
+   só passando o prop, em vez de reimplementar.
+2. **`.card-resize` centralizado** — o glifo era `align-items/justify-
+   content: flex-end` dentro de uma caixa 22×22 que também vivia `-2px`
+   fora da borda do card; a combinação empurrava o ícone pro canto
+   externo da caixa, lendo como "grudado no canto" em vez de um grip
+   centralizado. Ícone centralizado na caixa; caixa movida de volta pra
+   `right:0; bottom:0` (dentro do card, não flutuando -2px além dele).
+3. **Área de drag do header** — achado real: `CardTag.tsx`'s pill estática
+   (não-editando) carregava `data-no-drag`, que `CardFrame.tsx`'s
+   `onHeaderPointerDown` exclui — um clique-e-arraste começando bem em
+   cima do "BASH"/nome do provider (a parte mais "parece agarrável"
+   visualmente do header) simplesmente não fazia nada. `data-no-drag`
+   removido da pill estática (mantido só no `<input>` de renomear, que
+   realmente precisa bloquear o drag); duplo-clique pra renomear continua
+   funcionando (cada clique individual só commita um drag de ~0px antes).
+4. **Resolução do navegador — investigado, tentativa revertida (não
+   funcionou)**: causa raiz real confirmada em código — `resize()`
+   (`browser-registry.ts`) só ajusta o tamanho *lógico* (CSS px) da
+   `BrowserWindow` offscreen; nada nunca ajustava a resolução de captura
+   pro zoom atual do board nem pro `devicePixelRatio` do monitor, então
+   qualquer card visto acima de 100% de zoom (ou em qualquer tela HiDPI)
+   sempre mostrava um bitmap esticado/borrado. Tentei o mecanismo
+   documentado do Electron pra isso (`webContents.enableDeviceEmulation`
+   com `deviceScaleFactor`) — implementado ponta a ponta (IPC novo,
+   `BrowserCard.tsx` recalculando `zoom * devicePixelRatio` a cada mudança
+   de zoom), mas **falsificado ao vivo**: confirmei via log que a chamada
+   chega em `applyEmulation` com o `scale` certo (1.5 depois de zoomar o
+   board pra 150%), mas o buffer do `paint` continuou saindo exatamente
+   no mesmo tamanho de antes (860×660, sem nenhum aumento) — essa API não
+   afeta a resolução de captura do offscreen rendering nesta versão do
+   Electron (42.3.0), só (possivelmente) o que a própria página relataria
+   via `devicePixelRatio`/emulação de dispositivo, não o buffer que o
+   `paint` entrega. **Revertido** (não fazia sentido manter código morto
+   com comentário afirmando que funciona). Único ganho real que ficou:
+   `toCanvasPoint` (mapeamento de clique) trocou de `canvas.width/height`
+   pra `rect.w/h` — mais robusto (não presume mais que os dois sempre
+   coincidem), sem mudar comportamento hoje. Próxima tentativa possível,
+   não testada: `webContents.setZoomFactor(scale)` (page zoom de verdade,
+   API diferente) combinado com aumentar `setContentSize` proporcional —
+   tem um trade-off real (a página passa a REPORTAR uma largura de
+   viewport diferente pra media queries/`vw`, o que pode mudar o próprio
+   layout renderizado, não só a nitidez) que precisa de decisão do
+   usuário antes de implementar, não é um fix limpo como o item 2 desta
+   lista foi.
+5. **"Ícone de cópia" no header dos terminais — pendente, achado
+   contraditório**: o único ícone além do X no header de um `TerminalCard`
+   é o botão de interromper (`Icon name="interrupt"`, glifo `Octagon`,
+   title "Ctrl+C") — não existe nenhum ícone de cópia/clipboard ali no
+   código (`grep` confirmou). Ou o usuário está descrevendo esse mesmo
+   botão (o octógono em 12px pode ler como um círculo/anel à primeira
+   vista) e realmente quer removê-lo, ou há um mal-entendido sobre qual
+   ícone é qual — removê-lo sem confirmar tiraria uma função real (Ctrl+C
+   pro processo do terminal), então isso ficou pra confirmar com o usuário
+   antes de tocar.
+
+`tsc`/`electron-vite build` limpos. Novo check em `smoke-card-actions.mjs`
+(arrastar a partir da pill do card-tag de fato move o card, cobrindo
+exatamente a regressão que existia). `npm run verify` completo (13
+suítes, 89 checks) PASS.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
