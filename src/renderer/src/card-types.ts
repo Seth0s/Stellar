@@ -32,20 +32,24 @@ export type StrokeCardData = BaseCard & {
   style: "solid" | "marker";
 };
 
-/** DESIGN-BACKLOG.md item 12, Fase B — a chat card talking straight to an
- * API (Anthropic for now), not a PTY. `provider` is the API vendor
- * ("anthropic" today, "openai" from Fase C), never a CLI binary id the
- * way `TerminalCardData.provider` is. `messages` is the full turn history
- * (Anthropic's API is stateless per request — no server-side session to
- * resume), persisted as JSON in the generic `cwd` column (see App.tsx's
- * toRow/fromRow, same reuse trick `StrokeCardData` already established
- * for its own JSON blob) rather than a new sqlite table — no tool-use/
- * diff data to structure yet at this phase. */
+/** DESIGN-BACKLOG.md item 12 — a chat card talking straight to an API, not
+ * a PTY. `provider` is the API vendor, never a CLI binary id the way
+ * `TerminalCardData.provider` is. `cwd` is the project root file tools
+ * (Fase C) are confined to — same meaning as `FilesCardData.root`, just
+ * named `cwd` for consistency with every other kind's toRow/fromRow.
+ * `messages` is the full turn history (both APIs are stateless per
+ * request — no server-side session to resume), persisted in its own
+ * `messages_json` column (store.ts) as of Fase C — Fase B originally
+ * squeezed this into the generic `cwd` column (stroke's reuse trick),
+ * which stopped fitting once chat needed `cwd` back for its normal
+ * meaning. */
 export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type ChatProvider = "anthropic" | "openai";
 export type ChatCardData = BaseCard & {
   kind: "chat";
-  provider: "anthropic";
+  provider: ChatProvider;
   model: string;
+  cwd: string;
   systemPrompt: string | null;
   messages: ChatMessage[];
 };

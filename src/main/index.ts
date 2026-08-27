@@ -19,7 +19,9 @@ import { createRemoteInputSession } from "./remote-input";
 import { createRemoteServer } from "./remote-server";
 import { registerUpdater } from "./updater";
 import { createSecretsStore, type SecretProvider } from "./secrets";
-import { createAnthropicClient, type ChatMessage } from "./anthropic-client";
+import { createAnthropicClient } from "./anthropic-client";
+import { createOpenAiClient } from "./openai-client";
+import { executeTool, type ChatMessage, type WriteConsentRequest } from "./chat-tools";
 
 const isDev = !app.isPackaged;
 
@@ -233,10 +235,43 @@ function createWindow() {
 
   const store = openStore(app.getPath("userData"));
   const secretsStore = createSecretsStore(app.getPath("userData"));
+
+  // DESIGN-BACKLOG.md item 12, Fase C — a write_file tool call blocks the
+  // provider's own tool loop until the human decides, via the SAME
+  // requestId-keyed pending-map shape message-bus.ts already established
+  // for spawn_agent/spawn_card/open — just chat-specific (this loop lives
+  // in anthropic-client.ts/openai-client.ts, not behind the acbridge
+  // socket, so it doesn't go through message-bus.ts at all). No timeout
+  // here unlike those — a diff needing real review shouldn't auto-deny
+  // just because the human stepped away; the tool loop simply stays
+  // paused until they come back, same as any other open modal in this app.
+  const pendingWriteConsents = new Map<string, (allowed: boolean) => void>();
+  let nextChatRequestId = 1;
+  function askWriteConsent(cardId: string, req: WriteConsentRequest): Promise<boolean> {
+    return new Promise((resolve) => {
+      const requestId = String(nextChatRequestId++);
+      pendingWriteConsents.set(requestId, resolve);
+      safeSend(win, "chat:ask-write", requestId, cardId, req);
+    });
+  }
+
+  const chatToolCallbacks = {
+    onToolStart: (cardId: string, name: string, input: unknown) => safeSend(win, "chat:tool-start", cardId, name, input),
+    onToolResult: (cardId: string, name: string, ok: boolean, summary: string) =>
+      safeSend(win, "chat:tool-result", cardId, name, ok, summary),
+    askWriteConsent,
+  };
   const anthropicClient = createAnthropicClient({
     onToken: (cardId, delta) => safeSend(win, "chat:token", cardId, delta),
     onDone: (cardId, fullText) => safeSend(win, "chat:done", cardId, fullText),
     onError: (cardId, message) => safeSend(win, "chat:error", cardId, message),
+    ...chatToolCallbacks,
+  });
+  const openaiClient = createOpenAiClient({
+    onToken: (cardId, delta) => safeSend(win, "chat:token", cardId, delta),
+    onDone: (cardId, fullText) => safeSend(win, "chat:done", cardId, fullText),
+    onError: (cardId, message) => safeSend(win, "chat:error", cardId, message),
+    ...chatToolCallbacks,
   });
 
   // Assigned right after `registry` below — declared here (not `const`
@@ -451,7 +486,7 @@ function createWindow() {
     runOneShotSummary(providerId, cwd, prompt),
   );
 
-  // DESIGN-BACKLOG.md item 12, Fase B.
+  // DESIGN-BACKLOG.md item 12, Fase B/C.
   ipcMain.handle("secrets:has", (_e, provider: SecretProvider) => secretsStore.has(provider));
   ipcMain.handle("secrets:set", (_e, provider: SecretProvider, value: string) => secretsStore.set(provider, value));
   ipcMain.handle("secrets:clear", (_e, provider: SecretProvider) => secretsStore.clear(provider));
@@ -459,19 +494,51 @@ function createWindow() {
 
   ipcMain.handle(
     "chat:send",
-    (_e, cardId: string, params: { model: string; systemPrompt: string | null; messages: ChatMessage[] }) => {
-      const apiKey = secretsStore.get("anthropic");
-      if (!apiKey) return { ok: false, error: "nenhuma API key configurada" };
-      anthropicClient.send(cardId, {
+    (
+      _e,
+      cardId: string,
+      params: { provider: SecretProvider; model: string; systemPrompt: string | null; messages: ChatMessage[]; cwd: string },
+    ) => {
+      const apiKey = secretsStore.get(params.provider);
+      if (!apiKey) return { ok: false, error: `nenhuma API key configurada pra ${params.provider}` };
+      const client = params.provider === "openai" ? openaiClient : anthropicClient;
+      client.send(cardId, {
         apiKey,
         model: params.model,
         system: params.systemPrompt,
         messages: params.messages,
+        root: params.cwd,
       });
       return { ok: true };
     },
   );
-  ipcMain.handle("chat:cancel", (_e, cardId: string) => anthropicClient.cancel(cardId));
+  ipcMain.handle("chat:cancel", (_e, cardId: string, provider: SecretProvider) =>
+    (provider === "openai" ? openaiClient : anthropicClient).cancel(cardId),
+  );
+  ipcMain.handle("chat:write-resolve", (_e, requestId: string, allowed: boolean) => {
+    const resolve = pendingWriteConsents.get(requestId);
+    if (!resolve) return;
+    pendingWriteConsents.delete(requestId);
+    resolve(allowed);
+  });
+  // Test-only trigger (verify harness — scripts/verify/smoke-chat.mjs),
+  // same reasoning/guard as updater.ts's `updater:test-emit-available`:
+  // there's no way to exercise the real read_file/write_file/consent/diff
+  // pipeline without a real model actually deciding to call a tool, which
+  // needs a real paid API call this harness can't make. This drives the
+  // SAME real `executeTool` (chat-tools.ts) a real tool_use response
+  // would — real fs read/write, real diff, real consent round trip — just
+  // substituting "which tool to call" for a direct trigger. Inert in any
+  // packaged build a user runs.
+  ipcMain.handle("chat:test-simulate-tool", (_e, cardId: string, name: string, input: unknown, root: string) => {
+    if (app.isPackaged) return { ok: false, text: "test-only, dev builds only" };
+    return executeTool(name, input, {
+      root,
+      onToolStart: (n, i) => safeSend(win, "chat:tool-start", cardId, n, i),
+      onToolResult: (n, ok, summary) => safeSend(win, "chat:tool-result", cardId, n, ok, summary),
+      askWriteConsent: (req) => askWriteConsent(cardId, req),
+    });
+  });
 
   ipcMain.handle("win:minimize", () => win.minimize());
   ipcMain.handle("win:toggle-maximize", () => (win.isMaximized() ? win.unmaximize() : win.maximize()));
