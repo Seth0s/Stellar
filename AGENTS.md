@@ -1535,19 +1535,31 @@ na captura.** Não escondido — devolvido normalmente (o snapshot ainda
 mostra a barra de endereço e o retângulo onde o navegador está, só sem a
 página em si) e documentado no comentário do código e aqui.
 
-**Workaround não implementado, próxima rodada se isso importar**: capturar
-o target CDP da `WebContentsView` separadamente (mecanismo já provado
-funcionar, usado nos próprios testes deste projeto) e compor a imagem por
-cima do resultado do `capturePage()` na posição certa — precisa de alguma
-lib de composição de imagem (nenhuma é dependência hoje) ou fazer via
-`<canvas>` no próprio renderer antes de salvar.
+**Achado ficou obsoleto em 2026-08-27 — re-verificado ao investigar
+DESIGN-BACKLOG.md item 21 ponto 1**: este achado é de ANTES do card de
+navegador ser reescrito de `WebContentsView` nativo pra renderização
+offscreen num `<canvas>` (item 9, também 2026-08-26, mas depois deste).
+Um `<canvas>` pintado pela MESMA janela renderer é DOM puro — exatamente
+a categoria que já funcionava (terminal/arquivos/etc, ver acima). Testado
+ao vivo pelo protocolo real (socket unix, mesmo caminho que
+`resources/bin/acbridge` usa, não atalho): navegador navegado pra
+`google.com`, `{cmd:"snapshot", target: cardId}`, PNG resultante mostra a
+página real pixel a pixel. **Nenhum workaround foi necessário** — o
+problema já não existia, só nunca tinha sido reconfirmado depois do
+rewrite do item 9. Guarda de regressão nova: `smoke-snapshot.mjs` (8
+checks) — não existia NENHUMA cobertura automatizada pro protocolo de
+snapshot inteiro antes disso, só verificação manual (linha abaixo,
+histórica).
 
-Verificação ao vivo, não só lida: `acbridge snapshot` (janela inteira) com
-um card de navegador e um terminal na tela — terminal e chrome do app
-compuseram certo, navegador saiu cinza liso (achado acima);
-`acbridge snapshot <cardId>` recortou certo pro rect do card;
-`acbridge snapshot 999` (id inexistente) devolveu erro claro em vez de
-travar; `acbridge snapshot <x> <y> <w> <h>` com rect explícito funcionou.
+Verificação ao vivo original (2026-08-26, não só lida): `acbridge
+snapshot` (janela inteira) com um card de navegador e um terminal na
+tela — terminal e chrome do app compuseram certo, navegador saiu cinza
+liso (achado, hoje obsoleto, acima); `acbridge snapshot <cardId>`
+recortou certo pro rect do card; `acbridge snapshot 999` (id inexistente)
+devolveu erro claro em vez de travar; `acbridge snapshot <x> <y> <w> <h>`
+com rect explícito funcionou. Re-verificação 2026-08-27 via
+`smoke-snapshot.mjs`: mesmos 4 caminhos + o card de navegador com
+conteúdo real confirmado. `npm run verify` (14 suítes, 145 checks) PASS.
 
 ## 2026-08-26 — Controle interativo de janela externa, fase 1 (item 3 do backlog, reescopado)
 
@@ -2674,6 +2686,22 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   4 checks novos em `smoke-radial-longpress.mjs`. `npm run verify`
   completo (13 suítes, 137 checks) PASS. Detalhe em `DESIGN-BACKLOG.md`
   item 21 (ponto 7 fechado).
+- **Item 21, ponto 1, mesmo dia**: investigado antes de implementar
+  qualquer workaround — achado obsoleto, não bug real. O "card do
+  navegador em branco no snapshot" documentado no item 4 é de ANTES do
+  navegador ser reescrito pra `<canvas>` offscreen (item 9, mesmo dia,
+  mas depois); um `<canvas>` da mesma janela renderer sempre foi DOM
+  puro, categoria que `capturePage()` já compunha certo. Testado ao vivo
+  pelo protocolo real (socket, mesmo caminho do `acbridge snapshot`):
+  navegador em `google.com`, capturado por `cardId`, PNG mostra a página
+  real. Nenhuma linha de workaround escrita — o problema não existe
+  mais. `smoke-snapshot.mjs` novo (8 checks): cobertura automatizada que
+  não existia antes pro protocolo de snapshot inteiro (janela cheia,
+  por `cardId`, rect explícito, id inválido, e o card de navegador com
+  conteúdo real). `npm run verify` completo (14 suítes, 145 checks)
+  PASS. Achados históricos em `main/index.ts` e nas seções acima
+  atualizados pra não ficarem lidos como um bug ainda aberto. Detalhe em
+  `DESIGN-BACKLOG.md` item 4 e item 21 (ponto 1 fechado).
 
 ## Comandos
 

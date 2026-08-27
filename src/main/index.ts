@@ -115,10 +115,17 @@ function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
  *    DIFFERENT target renders — already confirmed the hard way earlier in
  *    this project verifying browser/terminal cards live. `capturePage()`
  *    is different: it's a `BrowserWindow.webContents` method, called from
- *    main, that composites the window exactly as the user sees it —
- *    including every `WebContentsView` on top, which is otherwise
- *    invisible to any DOM-only capture. That's the actual reason this
- *    works at all for a board with browser cards on it.
+ *    main, that composites the window exactly as the user sees it — every
+ *    real DOM element in it, xterm's own text included.
+ *    Historical note (2026-08-26→27, DESIGN-BACKLOG.md item 21 ponto 1):
+ *    when the browser card was still a native `WebContentsView` child,
+ *    `capturePage()` genuinely did NOT compose it — confirmed empirically,
+ *    it came back as a flat `--surface` rectangle. Once `browser-
+ *    registry.ts` was rewritten to offscreen rendering into a `<canvas>`
+ *    (same-day, but after that finding), the browser card became plain
+ *    DOM again like every other card kind, and this limitation quietly
+ *    stopped applying — re-verified live 2026-08-27, no workaround was
+ *    ever needed. `smoke-snapshot.mjs` guards against it regressing.
  * 2. `capturePage(rect)`'s rect is in window content-area pixels — the
  *    same screen space `board-model.ts`'s `worldRectToScreen` already
  *    computes for browser card bounds. Only the renderer has the live

@@ -398,19 +398,30 @@ desenhar a API agora:
   temporário com o path devolvido — mais barato pra recortes grandes).
 
 **Feito em 2026-08-26** (`acbridge snapshot`) — ver `AGENTS.md` para a
-implementação completa. **Achado real da verificação empírica, não
-assumido**: `capturePage()` NÃO compõe `WebContentsView` nesta máquina
-(GPU desabilitada/renderização por software) — confirmado comparando o
-mesmo card de navegador capturado via `capturePage()` (cinza escuro,
+implementação completa. **Achado original da verificação empírica**:
+`capturePage()` NÃO compunha `WebContentsView` nesta máquina (GPU
+desabilitada/renderização por software) — confirmado comparando o mesmo
+card de navegador capturado via `capturePage()` (cinza escuro,
 `--surface`, a cor do próprio DOM vazio por baixo) contra o screenshot
 direto do target CDP daquela mesma `WebContentsView` no mesmo instante
-(branco, conteúdo real). Terminal/arquivos/changes/nota funcionam
-perfeitamente (são DOM puro, incluindo o texto do xterm — que também é
-DOM, não canvas, nesta configuração). Só card de navegador fica com um
-retângulo liso em vez do conteúdo real. Documentado no código
-(`main/index.ts`), não escondido — ver `AGENTS.md` pro workaround possível
-(capturar o target da `WebContentsView` separadamente e compor por cima,
-não feito ainda).
+(branco, conteúdo real). Terminal/arquivos/changes/nota funcionavam
+perfeitamente (são DOM puro, incluindo o texto do xterm).
+
+**Achado FICOU OBSOLETO em 2026-08-27, re-verificado ao investigar item
+21 ponto 1** — este achado é de ANTES do navegador ser reescrito de
+`WebContentsView` nativo pra renderização offscreen num `<canvas>`
+(item 9, também 2026-08-26, mas depois deste). Um `<canvas>` pintado
+pela MESMA janela renderer é DOM puro — exatamente a categoria que já
+funcionava (terminal/arquivos/etc). Testado ao vivo pelo protocolo real
+(`acbridge snapshot <cardId>` via socket, não atalho): card de navegador
+navegado pra `google.com`, capturado, PNG resultante mostra a página
+real pixel a pixel, não mais um retângulo liso. **Não precisa de
+workaround nenhum** — o problema já não existe, foi resolvido como
+efeito colateral do rewrite do item 9, só nunca reconfirmado depois.
+Guarda de regressão nova: `smoke-snapshot.mjs` (não existia cobertura
+automatizada nenhuma pro protocolo de snapshot antes disso — só
+verificação manual documentada aqui). Detalhe em `DESIGN-BACKLOG.md`
+item 21 (ponto 1 fechado).
 
 ## 5. Organização de código — reescopado 2026-08-26, pensando IA-first
 
@@ -1688,11 +1699,21 @@ Pedido explícito do usuário foi só anotar, sem mexer em código nesta
 passagem. Numeração preservada como reportada (o usuário pulou de "7°"
 pra "9°", sem "8°" — não é erro de digitação meu).
 
-1. **Card do navegador em branco no snapshot do agente** — mesmo achado
-   já documentado no item 4 (`capturePage()` não compõe `WebContentsView`
-   nesta máquina), ainda sem workaround implementado (capturar o target
-   da `WebContentsView` separadamente e compor por cima, ver `AGENTS.md`).
-   Só reforçando que continua pendente.
+1. **Card do navegador em branco no snapshot do agente** — ✅ na
+   verdade já estava resolvido, achado obsoleto (re-verificado em
+   2026-08-27). O achado original (item 4: `capturePage()` não compõe
+   `WebContentsView`) é de ANTES do navegador ser reescrito pra
+   renderização offscreen num `<canvas>` (item 9, mesmo dia, mas
+   depois) — um `<canvas>` da mesma janela renderer é DOM puro, a
+   categoria que já funcionava certo (terminal/arquivos/etc). Testado
+   ao vivo pelo protocolo real (socket, mesmo caminho do `acbridge
+   snapshot`): navegador em `google.com`, capturado por `cardId`, PNG
+   mostra a página real pixel a pixel — nenhum workaround foi
+   necessário, o problema simplesmente não existe mais. Guarda de
+   regressão nova: `smoke-snapshot.mjs` (8 checks, cobertura
+   automatizada que não existia antes pro protocolo de snapshot
+   inteiro, não só pro navegador). `npm run verify` (14 suítes, 145
+   checks) PASS. Detalhe em `DESIGN-BACKLOG.md` item 4.
 2. **Ícone extra de "fullscreen" no zoom-pill que não esconde a
    header** — ✅ resolvido em 2026-08-27. Esclarecido com o usuário: o
    propósito (`onFit`, "ajustar à tela") é válido, só não pertencia à
@@ -1823,7 +1844,10 @@ pra "9°", sem "8°" — não é erro de digitação meu).
 2. ~~Confirmação ao fechar um terminal card ativo~~ — feito em 2026-08-26.
 3. ~~Sistema de snapshot pro agente~~ — feito em 2026-08-26, com a
    limitação real de `capturePage()` não compor `WebContentsView`
-   documentada (browser card vira retângulo liso na captura).
+   documentada (browser card vira retângulo liso na captura). **Correção
+   2026-08-27**: essa limitação ficou obsoleta com o rewrite do
+   navegador pra `<canvas>` offscreen (item 9, mesmo dia, mas depois) —
+   re-testada e não reproduz mais, ver item 4.
 4. ~~Visualização de processos/apps (seguir janela externa)~~ — escopo
    decidido em 2026-08-26, mas engavetado: limitação real de plataforma
    (Wayland não expõe metadata de janela, `useSystemPicker` é só macOS)
