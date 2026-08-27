@@ -1390,6 +1390,25 @@ select.resume-input {
   pointer-events: none;
 }
 
+/* DESIGN-BACKLOG.md item 21, ponto 7 — the arc that tracks the pointer's
+   angle along the ring (RadialMenu.tsx computes the `<path>`). Below the
+   items (z-index-wise, source order) so it reads as a glow along the
+   ring rather than a mark drawn over the buttons; `pointer-events: none`
+   so it never steals a click meant for the item underneath. */
+.radial-indicator {
+  position: absolute;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.radial-indicator path {
+  fill: none;
+  stroke: var(--foam);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
 /* ---------------------------------------------- remote pairing modal */
 
 .remote-pairing-hint {

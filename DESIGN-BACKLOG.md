@@ -1765,12 +1765,25 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    `getComputedStyle`, não só a classe), modal permanece aberto (submit
    bloqueado). 3 checks novos em `smoke-session-modal.mjs`. `npm run
    verify` (13 suítes, 133 checks) PASS.
-7. **Linha acompanhando o mouse ao redor do raio do menu radial** —
-   estritamente em volta do círculo (raio) do `RadialMenu.tsx`, não uma
-   linha reta até o cursor. Se o mouse sai do raio, a linha fica presa no
-   último botão que estava perto (ou em lugar nenhum, se nunca chegou
-   perto de nenhum) — feedback visual de "pra onde eu vou se soltar
-   agora", tipo um indicador de hover ao longo do anel.
+7. **Linha acompanhando o mouse ao redor do raio do menu radial** — ✅
+   resolvido em 2026-08-27. `RadialMenu.tsx` ganhou um arco SVG (`<path>`,
+   16° de largura) que segue o ângulo do ponteiro ao longo do círculo de
+   raio 88 (o mesmo raio dos itens) — nunca uma linha reta até o cursor.
+   `null` até o ponteiro chegar perto do anel pela primeira vez (banda de
+   ±32px em volta do raio); uma vez que chegou, sair da banda (voltar
+   pro centro ou passar longe demais) simplesmente para de atualizar o
+   ângulo — o arco fica onde estava, "preso no último botão que estava
+   perto". **Achado real construindo**: o listener de `onPointerMove`
+   precisou ir no `.radial-backdrop` (cobre a viewport inteira), não no
+   `.radial-menu` — esse último é `width:0; height:0` (os itens escapam
+   via `position: absolute`/`transform`, mesmo truque que já usavam), só
+   recebe eventos quando o ponteiro cai EXATAMENTE em cima de um filho
+   renderizado; nos vãos entre botões o evento nunca teria chegado até
+   ele. Confirmado ao vivo via CDP: sem indicador antes de tocar o anel,
+   `d` do path muda entre dois ângulos diferentes (rastreamento real, não
+   decoração estática), e volta ao centro reusa o `d` anterior (congela,
+   não reseta). 4 checks novos em `smoke-radial-longpress.mjs`. `npm run
+   verify` (13 suítes, 137 checks) PASS.
 9. **Varredura de lógica ampla, pedida como auditoria futura** — cobrir:
    sistema de spawn entre agentes, spawn de ferramentas feito por
    agentes, caminho de controle otimizado pro agente (acbridge?), snapshot

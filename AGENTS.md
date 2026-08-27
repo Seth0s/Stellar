@@ -2657,6 +2657,23 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   novos em `smoke-session-modal.mjs`. `npm run verify` completo (13
   suítes, 133 checks) PASS. Detalhe em `DESIGN-BACKLOG.md` item 21
   (ponto 6 fechado).
+- **Item 21, ponto 7, mesmo dia**: `RadialMenu.tsx` ganhou um arco SVG
+  que segue o ângulo do ponteiro ao longo do círculo de raio 88 (mesmo
+  raio dos itens) — nunca uma linha reta até o cursor. Só aparece depois
+  que o ponteiro chega perto do anel pela primeira vez (banda de ±32px);
+  sair da banda simplesmente para de atualizar o ângulo, congelando o
+  arco no último ponto próximo. Achado real: o `onPointerMove` precisou
+  ir no `.radial-backdrop`, não no `.radial-menu` — esse é `width:0;
+  height:0` (os itens escapam via `transform`), então só recebe eventos
+  quando o ponteiro cai exatamente sobre um filho renderizado; nos vãos
+  entre botões o evento nunca chegaria até ele (confirmado via CDP com
+  `console.error` de debug antes do fix — só 1 de 2 movimentos de mouse
+  disparava o handler, exatamente o que caía em cima de um botão).
+  Verificado via CDP: sem indicador antes de tocar o anel, `d` do path
+  muda entre ângulos diferentes, volta ao centro reusa o `d` anterior.
+  4 checks novos em `smoke-radial-longpress.mjs`. `npm run verify`
+  completo (13 suítes, 137 checks) PASS. Detalhe em `DESIGN-BACKLOG.md`
+  item 21 (ponto 7 fechado).
 
 ## Comandos
 
