@@ -2632,6 +2632,18 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   real (`scrollHeight > clientHeight`) e barra fina visível no
   screenshot. `npm run verify` completo (13 suítes) PASS. Detalhe em
   `DESIGN-BACKLOG.md` item 21 (pontos 5 e 10 fechados).
+- **Item 21, ponto 4, mesmo dia**: excluir a última sessão não dava
+  nenhum feedback — `disabled` nativo bloqueia `onClick` por completo
+  (clique não fazia literalmente nada), e o botão mantinha a mesma
+  aparência vermelha vívida de sempre. `SessionModal.tsx` trocou
+  `disabled` por `aria-disabled` + classe `is-disabled` (opacity 0.45,
+  mesmo padrão de `.popover-row:disabled`) — clicável, mas o handler
+  checa `canDelete` e mostra `toast(...)` (`useToast.ts`) em vez de
+  excluir quando é a última. Verificado via CDP: clique real na última
+  sessão restante confirma toast + sessão continua existindo no SQLite.
+  Checks novos em `smoke-session-modal.mjs`. `npm run verify` completo
+  (13 suítes, 129 checks) PASS. Detalhe em `DESIGN-BACKLOG.md` item 21
+  (ponto 4 fechado).
 
 ## Comandos
 

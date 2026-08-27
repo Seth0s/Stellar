@@ -166,6 +166,44 @@ try {
   `);
   check("deleting from the edit modal removes the session", JSON.parse(afterDelete), true);
 
+  // DESIGN-BACKLOG.md item 21, ponto 4 — deleting the LAST session used to
+  // do literally nothing visible: `disabled` on the button blocks
+  // `onClick` from ever firing, and the button kept its normal vivid red
+  // look (no dimmed/disabled affordance either). Only "Sessão Inicial" is
+  // left now — its Excluir must look disabled AND explain why via toast
+  // when clicked, without actually deleting it.
+  await page.click(titleCoords.x, titleCoords.y);
+  await new Promise((r) => setTimeout(r, 300));
+  await clickByText(".board-row button[title='Editar sessão']", "");
+  await new Promise((r) => setTimeout(r, 300));
+  const lastDeleteBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.modal-actions .danger');
+        const cs = getComputedStyle(b);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ isDisabledClass: b.classList.contains('is-disabled'), ariaDisabled: b.getAttribute('aria-disabled'), opacity: cs.opacity, x: r.x + r.width/2, y: r.y + r.height/2 });
+      })()
+    `),
+  );
+  check("last session's Excluir carries the disabled look (class)", lastDeleteBtn.isDisabledClass, true);
+  check("last session's Excluir carries aria-disabled", lastDeleteBtn.ariaDisabled, "true");
+  check("last session's Excluir is visibly dimmed (opacity < 1)", Number(lastDeleteBtn.opacity) < 1, true);
+
+  await page.click(lastDeleteBtn.x, lastDeleteBtn.y);
+  await new Promise((r) => setTimeout(r, 300));
+  const guardToastShown = JSON.parse(
+    await page.evalJs(
+      `JSON.stringify([...document.querySelectorAll('.toast')].some((t) => t.textContent.includes('não é possível excluir')))`,
+    ),
+  );
+  check("clicking the disabled-looking Excluir shows an explanatory toast", guardToastShown, true);
+
+  const stillOneBoard = JSON.parse(
+    await page.evalJs(`window.store.boards.list().then((b) => JSON.stringify(b.length === 1))`),
+  );
+  check("the guarded click did NOT delete the last session", stillOneBoard, true);
+
   page.close();
 } finally {
   await stopApp(app);
