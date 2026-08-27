@@ -1894,6 +1894,13 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    bloqueado por padrão, escopo de filesystem/rede, granularidade de
    pedido) — hoje não há nada pra "escapar de dentro", então "autorizar
    bash fora do sandbox" primeiro precisa de um bash DENTRO de algo.
+
+   **Atualização 2026-08-27**: deixa de ser só "fora de escopo" — o
+   usuário decidiu, ao fechar o item 12 (novo provider + chatbox), que
+   bash real no chatbox precisa desse sandbox de verdade primeiro (não
+   só reusar o consentimento por-ação já existente). Vira pré-requisito
+   nomeado da Fase D do item 12, não mais um achado solto — ver item 12
+   pro plano de fases completo.
 10. **Ícone "<" de recolher a régua** — ✅ resolvido em 2026-08-27.
     Saiu de dentro do `.rail` (onde era só mais um `.rail-btn`,
     indistinguível de um botão de ferramenta) pra um botão próprio
@@ -1940,9 +1947,54 @@ pra "9°", sem "8°" — não é erro de digitação meu).
     presentes, conteúdo semeado carrega certo, digitar produz spans de
     highlight reais por token (não texto plano), salvar grava o conteúdo
     exato em disco. `npm run verify` (14 suítes, 152 checks) PASS.
-12. **Novo provider de API + card de chatbox (estilo Codex/ChatGPT) —
-    "muito complexo, apenas anotar"**, palavras do próprio usuário. Sem
-    escopo definido ainda, só registrado pra não perder o pedido.
+12. **Novo provider de API + card de chatbox (estilo Codex/ChatGPT)** —
+    escopo fechado com o usuário em 2026-08-27, ainda não implementado.
+    Decisões:
+    - **Duas APIs desde o início**: Anthropic Messages API e um endpoint
+      OpenAI-compatible (Chat Completions) — abstração de provider
+      precisa cobrir os dois formatos de streaming/tool-call desde a
+      Fase B, não só um.
+    - **Tool use completo**: leitura/escrita de arquivo (com diff +
+      consentimento humano, mesmo padrão do `AgentAskModal`/achado do
+      item 21 ponto 9) e **bash real**. Bash real exigiu resolver a
+      dependência com o achado 6 do item 21 ponto 9 (hoje não existe
+      sandbox nenhum) — decisão do usuário: **construir sandbox de
+      verdade primeiro**, não reusar só o consentimento por-ação. Acha
+      6 deixa de ser "fora de escopo" e vira pré-requisito da Fase D
+      abaixo (referenciado dos dois lados).
+    - **Fidelidade de UI completa desde já**: blocos de raciocínio
+      (thinking) colapsáveis, tool-calls colapsáveis, delegação a
+      subagente (visualmente distinta — cor própria, thread aninhada),
+      diff colorido com aplicar/descartar, markdown completo — nível dos
+      3 clientes de referência (Claude Desktop/Codex/Cursor), não uma
+      versão simplificada.
+
+    **Fases** (mesmo padrão do item 2 — cada uma entrega algo testável
+    sozinho):
+    - **Fase A — protótipo de UI (artifact HTML, sem código no repo)**:
+      feito em 2026-08-27. Protótipo completo do card (thread, thinking,
+      tool-calls, bloco de subagente aninhado, diff com
+      aplicar/descartar, composer com seletor de provider) usando os
+      tokens reais de `tokens.css` (mesma paleta/fontes do app), pra
+      validar a interação antes de qualquer linha de React real.
+      Artifact: `chatbox-prototype.html` (link enviado ao usuário na
+      conversa; publicar de novo/atualizar antes de portar pro
+      componente real).
+    - **Fase B — 1 API, chat texto puro**: escolher qual das duas
+      (Anthropic ou OpenAI-compat) primeiro, `ChatCard.tsx` real
+      integrado ao sistema de cards, streaming real, markdown
+      renderizado, SEM tool use ainda. Card registrado como novo `kind`
+      (`board-model.ts`), persistência de histórico (schema novo,
+      mesmo padrão de migração guardada do resto do app).
+    - **Fase C — tool use de arquivo + diff, segunda API**: leitura/
+      escrita de arquivo real com consentimento (reusa `AgentAskModal`),
+      diff renderizado a partir do resultado real da escrita (não
+      mockado), provider abstraction estendida pra cobrir a segunda API.
+    - **Fase D — sandbox real + bash + subagente**: constrói o sandbox
+      que o achado 6 (item 21 ponto 9) pede — pré-requisito bloqueante
+      pra liberar bash real nesta fase, não opcional. Bloco de subagente
+      vira funcional (delegação de verdade pra um agente MCP existente,
+      não só visual).
 
 ## Ordem sugerida para a próxima rodada
 

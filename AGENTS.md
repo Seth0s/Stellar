@@ -2830,6 +2830,32 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   rodando 3x consecutivas sem falha e via `git stash`/`out/` intocado).
   Detalhe em `DESIGN-BACKLOG.md` item 16.
 
+## 2026-08-27 — Item 12 escopado (4 fases) + protótipo de UI do chatbox (Fase A)
+
+- Item 12 (novo provider de API + card de chatbox) saiu de "muito
+  complexo, apenas anotar" pra escopo fechado com o usuário: duas APIs
+  desde o início (Anthropic Messages + OpenAI-compatible), tool use
+  completo incluindo bash real, fidelidade de UI no nível de Claude
+  Desktop/Codex/Cursor (thinking colapsável, tool-calls, bloco de
+  subagente, diff com consentimento).
+- Bash real puxou o achado 6 do item 21 ponto 9 (sandbox — hoje
+  inexistente) de volta pro escopo: decisão do usuário foi construir
+  sandbox de verdade, não só reusar o consentimento por-ação já
+  existente (`AgentAskModal`). Vira pré-requisito nomeado da Fase D,
+  referenciado dos dois lados em `DESIGN-BACKLOG.md`.
+- 4 fases (mesmo padrão do item 2): A) protótipo de UI (artifact, sem
+  código no repo) → B) 1 API, chat texto puro, `ChatCard.tsx` real → C)
+  tool use de arquivo+diff, segunda API → D) sandbox real + bash +
+  subagente funcional.
+- **Fase A entregue**: `chatbox-prototype.html`, artifact publicado
+  (link na conversa) usando os tokens reais de `tokens.css` (mesma
+  paleta/fontes do app — Manrope/JetBrains Mono, `--foam`/`--violet`/
+  `--good`/`--danger`), não um design genérico — pra validar interação
+  (thread, thinking colapsável, tool-calls, subagente aninhado com cor
+  própria, diff aplicar/descartar, seletor de provider no composer)
+  antes de qualquer linha de React real. Nenhum código no repo ainda —
+  Fase B é o próximo passo real de implementação.
+
 ## Comandos
 
 ```bash
