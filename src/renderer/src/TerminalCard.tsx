@@ -143,11 +143,12 @@ export function TerminalCard({
           <span className="card-head-actions">
             <button
               className="terminal-card-interrupt"
-              title="Ctrl+C"
+              title="Interromper o processo (Ctrl+C)"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={interrupt}
             >
               <Icon name="interrupt" size={12} />
+              <span className="terminal-card-interrupt-label">Ctrl+C</span>
             </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />
