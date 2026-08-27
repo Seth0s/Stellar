@@ -2395,6 +2395,75 @@ Nenhuma decisão de design foi fechada aqui de propósito — é
 levantamento de perguntas reais, não um plano pronto pra implementar na
 próxima sessão sem revisitar.
 
+## 24. Teste ao vivo do servidor MCP contra a sessão real do usuário — 2026-08-27
+
+Pedido explícito do usuário: "teste os servers mcp para chamar card,
+mexer no navegador e etc, spawn tudo que é possível". Diferente de todo
+`scripts/verify/smoke-*.mjs` deste projeto (sempre uma instância isolada,
+`--user-data-dir`/`--remote-debugging-port` próprios) — isto rodou contra
+o app real do usuário, oficialmente buildado (`.rpm`), via `mcp__stellar__*`
+já conectado à sessão. Todo `spawn_agent`/`spawn_card`/`open_url` real
+mostrou o `AgentAskModal` real na tela do usuário, que aprovou cada um ao
+vivo.
+
+**Cobertura, tudo com prova real (não assumida)**:
+- `list_cards` — retornou o card real desta própria sessão Claude (id
+  `70`).
+- `snapshot` sem alvo (janela inteira), com `target` (um card
+  específico) e com `rect` explícito (região arbitrária em coordenadas
+  de board) — os três confirmados com pixels reais batendo com o board
+  real.
+- `spawn_agent(provider:"bash")` — card real criado (`73`), aprovado ao
+  vivo.
+- `send_to_card` — `echo` real digitado no card `73`, confirmado por um
+  snapshot seguinte mostrando o comando E a saída reais no terminal.
+- `send_to_card` contra um id inexistente — erro real e claro (`no open
+  terminal card with id "999999"`), não um crash nem um `ok:true`
+  mentiroso.
+- `spawn_card`, os 5 `kind` possíveis (`sticky`/`files`/`changes`/
+  `remote-window`/`browser`) — todos aprovados, todos cards reais
+  (`74`-`78`).
+- `get_page_text` — texto real extraído do card `78` (Example Domain).
+- `open_url` com o mesmo `callerCardId` do `spawn_card(browser)`
+  anterior — reaproveitou o MESMO card `78` (não criou um segundo),
+  confirmado navegando de verdade pra Wikipédia e lendo o texto de novo
+  (mudou de "Example Domain" pro conteúdo real da Wikipédia).
+- `spawn_agent` com `depth: 3` (no limite `MAX_SPAWN_DEPTH`) — recusado
+  automaticamente pelo servidor, **sem mostrar nenhum modal** — exatamente
+  o comportamento documentado em `message-bus.ts`.
+
+**Não testado, com o motivo real**:
+- Caminho de NEGAR um pedido — tentei duas vezes pedindo explicitamente
+  no `reason` pro usuário clicar "Negar", mas ele aprovou os dois
+  (esperado — ele está testando rápido, não lendo o texto do motivo
+  antes de clicar). O caminho de negação já tinha sido coberto
+  indiretamente no item 12 Fase C/D e no `smoke-mcp.mjs` existente
+  (`open_url`/`spawn_agent`/`spawn_card` negados, cobertura automatizada
+  real), então não é uma lacuna de verificação — só não foi
+  re-confirmado especificamente NESTA sessão ao vivo.
+- `resumeId` de `spawn_agent` — precisaria de um provider real
+  (claude/codex/cursor, não bash) já rodando com uma sessão descoberta,
+  o que gastaria crédito de API de verdade só pra testar o parâmetro;
+  não fazia sentido pro escopo "testar o mecanismo".
+- Timeout de ~2min do `open_url`/`spawn_agent`/`spawn_card` sem decisão
+  — impraticável esperar ao vivo, já coberto por lógica (não por
+  observação em tempo real) no código (`OPEN_TIMEOUT_MS`/
+  `SPAWN_TIMEOUT_MS`, `message-bus.ts`).
+
+**Achado real, não uma limitação de teste**: **não existe nenhuma tool
+MCP pra fechar/deletar um card** — `list_cards`/`get_page_text`/
+`snapshot`/`send_to_card`/`open_url`/`spawn_agent`/`spawn_card` é o
+catálogo inteiro (`mcp-server.ts`); um agente pode criar cards à
+vontade (com consentimento) mas não tem como desfazer. Os 6 cards de
+teste (`73`-`79`) ficaram no board do usuário pra ele fechar
+manualmente. Vale registrar como candidato a tool futura
+(`close_card`/`delete_card`, MCP) — **mas precisa de gate de
+consentimento tão forte quanto `spawn_agent`/`write_file`, senão pior**:
+fechar um terminal ativo mata um processo real sem como desfazer (mesmo
+peso que `ConfirmModal` já dá pra esse caso quando um humano fecha na
+mão). Não implementado agora — só anotado, junto do item 23 como
+próxima área de trabalho no MCP.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
