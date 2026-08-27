@@ -1,81 +1,137 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageStream } from "@anthropic-ai/sdk/lib/MessageStream";
+import {
+  READ_FILE_TOOL_NAME,
+  WRITE_FILE_TOOL_NAME,
+  TOOL_DESCRIPTIONS,
+  TOOL_PARAMETERS,
+  executeTool,
+  type ChatMessage,
+  type ChatToolHooks,
+  type WriteConsentRequest,
+} from "./chat-tools";
 
 /**
- * DESIGN-BACKLOG.md item 12, Fase B — the first outbound HTTP client and
- * first SSE stream in this codebase (confirmed by exploration: `updater.ts`
- * delegates to `electron-updater`, `mcp-server.ts`/`remote-server.ts`/
- * `message-bus.ts` are all inbound servers). `providers.ts`'s `ProviderDef`
- * is structurally CLI-binary-spawn-only (`resolveSpawn` always resolves a
- * `$PATH` binary) — a chat provider that talks to an HTTP API directly
- * doesn't fit that shape at all, so this is a deliberately separate module,
- * not an entry added to `PROVIDERS`.
+ * DESIGN-BACKLOG.md item 12 — Fase B built the plain streamed-text path;
+ * Fase C adds a real agentic tool loop on top of it (read_file/write_file,
+ * chat-tools.ts). Uses `@anthropic-ai/sdk` rather than hand-rolled SSE
+ * parsing or the SDK's own (beta) `BetaToolRunner` — a manual loop over
+ * the STABLE `messages.stream()` + `finalMessage()` API (already
+ * validated in Fase B) keeps this predictable/debuggable and avoids
+ * depending on a beta surface for something this central.
  *
- * Uses `@anthropic-ai/sdk` rather than hand-rolled SSE parsing — the raw
- * `data: {...}` stream has real correctness pitfalls (multi-byte UTF-8
- * split across TCP chunks, event framing) that a maintained client already
- * handles; not worth re-solving for a first version.
- *
- * Mirrors `pty-registry.ts`'s shape on purpose: a registry keyed by card
- * id, `onData`/`onExit`-style callbacks the caller wires to `safeSend`
- * (main/index.ts), so main → renderer streaming looks the same for a chat
- * card as it does for a terminal card.
+ * `providers.ts`'s `ProviderDef` is structurally CLI-binary-spawn-only —
+ * a chat provider that talks to an HTTP API directly doesn't fit that
+ * shape at all, so this stays a deliberately separate module.
  */
 
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+const ANTHROPIC_TOOLS: Anthropic.Tool[] = [READ_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME].map((name) => ({
+  name,
+  description: TOOL_DESCRIPTIONS[name],
+  input_schema: TOOL_PARAMETERS[name] as Anthropic.Tool["input_schema"],
+}));
+
+// A tool call → tool result → re-ask cycle, repeated. Same fork-bomb-guard
+// spirit as MAX_SPAWN_DEPTH (message-bus.ts) — a model stuck calling tools
+// forever (or a buggy prompt loop) must hit a hard, honest stop rather
+// than run up the human's API bill unattended.
+const MAX_TOOL_TURNS = 8;
+
+function toAnthropicMessages(messages: ChatMessage[]): Anthropic.MessageParam[] {
+  return messages.map((m) => ({ role: m.role, content: m.content }));
+}
 
 export function createAnthropicClient(opts: {
   onToken: (cardId: string, delta: string) => void;
   onDone: (cardId: string, fullText: string) => void;
   onError: (cardId: string, message: string) => void;
+  onToolStart: (cardId: string, name: string, input: unknown) => void;
+  onToolResult: (cardId: string, name: string, ok: boolean, summary: string) => void;
+  askWriteConsent: (cardId: string, req: WriteConsentRequest) => Promise<boolean>;
 }) {
   const inFlight = new Map<string, MessageStream>();
-  // Cards whose stream was aborted on purpose (cancel(), or a second send()
-  // superseding it) — the SDK's own "error" event still fires for an
-  // aborted stream, and without this set that would surface as a scary
-  // "erro: request aborted" to the user for something they (or a
-  // superseding send) asked for.
+  // Same reasoning as before — the SDK's own "error" event still fires
+  // for a deliberately aborted stream (cancel(), or a second send()
+  // superseding it); without this set that surfaces as a scary error for
+  // something a human (or a superseding send) actually asked for.
   const intentionalAborts = new Set<string>();
 
-  function send(cardId: string, params: { apiKey: string; model: string; system?: string | null; messages: ChatMessage[]; baseURL?: string }) {
-    inFlight.get(cardId)?.abort();
-    intentionalAborts.delete(cardId);
+  async function runTurn(
+    cardId: string,
+    apiKey: string,
+    model: string,
+    system: string | null | undefined,
+    initialMessages: Anthropic.MessageParam[],
+    hooks: ChatToolHooks,
+  ) {
+    const client = new Anthropic({ apiKey });
+    const messages = [...initialMessages];
 
-    const client = new Anthropic({ apiKey: params.apiKey, baseURL: params.baseURL });
-    const stream = client.messages.stream({
-      model: params.model,
-      max_tokens: 4096,
-      system: params.system || undefined,
-      messages: params.messages.map((m) => ({ role: m.role, content: m.content })),
-    });
-    inFlight.set(cardId, stream);
+    for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      const stream = client.messages.stream({
+        model,
+        max_tokens: 4096,
+        system: system || undefined,
+        tools: ANTHROPIC_TOOLS,
+        messages,
+      });
+      inFlight.set(cardId, stream);
+      stream.on("text", (delta) => opts.onToken(cardId, delta));
 
-    stream.on("text", (delta) => opts.onToken(cardId, delta));
-
-    stream.on("error", (err) => {
-      inFlight.delete(cardId);
-      if (intentionalAborts.delete(cardId)) return;
-      opts.onError(cardId, err instanceof Error ? err.message : String(err));
-    });
-
-    stream
-      .finalMessage()
-      .then((msg) => {
+      let final: Anthropic.Message;
+      try {
+        final = await stream.finalMessage();
+      } catch (err) {
         inFlight.delete(cardId);
-        const text = msg.content
+        if (intentionalAborts.delete(cardId)) return;
+        opts.onError(cardId, err instanceof Error ? err.message : String(err));
+        return;
+      }
+      inFlight.delete(cardId);
+
+      if (final.stop_reason !== "tool_use") {
+        const text = final.content
           .filter((b): b is Anthropic.TextBlock => b.type === "text")
           .map((b) => b.text)
           .join("");
         opts.onDone(cardId, text);
-      })
-      .catch(() => {
-        // Already reported via the "error" event above (or intentionally
-        // swallowed as an abort) — avoid a second error report for the
-        // same failure.
-      });
+        return;
+      }
+
+      messages.push({ role: "assistant", content: final.content });
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      for (const block of final.content) {
+        if (block.type !== "tool_use") continue;
+        const result = await executeTool(block.name, block.input, hooks);
+        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result.text, is_error: !result.ok });
+      }
+      messages.push({ role: "user", content: toolResults });
+      // loop: re-ask with the tool results appended
+    }
+    opts.onError(cardId, `muitas chamadas de tool em sequência (limite de segurança: ${MAX_TOOL_TURNS})`);
+  }
+
+  function send(
+    cardId: string,
+    params: { apiKey: string; model: string; system?: string | null; messages: ChatMessage[]; root: string },
+  ) {
+    inFlight.get(cardId)?.abort();
+    intentionalAborts.delete(cardId);
+
+    const hooks: ChatToolHooks = {
+      root: params.root,
+      onToolStart: (name, input) => opts.onToolStart(cardId, name, input),
+      onToolResult: (name, ok, summary) => opts.onToolResult(cardId, name, ok, summary),
+      askWriteConsent: (req) => opts.askWriteConsent(cardId, req),
+    };
+    void runTurn(cardId, params.apiKey, params.model, params.system, toAnthropicMessages(params.messages), hooks);
   }
 
   function cancel(cardId: string) {
+    // Best-effort: aborts whichever stream is currently in flight for this
+    // card. If a write-consent modal is pending instead (between streams,
+    // mid tool-loop), this doesn't retract it — a real, small limitation,
+    // acceptable since there's no "stop generating" UI button yet either.
     const stream = inFlight.get(cardId);
     if (!stream) return;
     intentionalAborts.add(cardId);

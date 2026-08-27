@@ -16,6 +16,7 @@ export type CardRow = {
   group_id: string | null;
   label: string | null;
   updated_at: number;
+  messages_json: string | null;
 };
 
 type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; systemPrompt?: string };
@@ -353,18 +354,31 @@ const secrets = {
 };
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
-export type ChatSendParams = { model: string; systemPrompt: string | null; messages: ChatMessage[] };
+export type ChatSendParams = { provider: SecretProvider; model: string; systemPrompt: string | null; messages: ChatMessage[]; cwd: string };
 export type ChatSendResult = { ok: true } | { ok: false; error: string };
 
-/** DESIGN-BACKLOG.md item 12, Fase B — mirrors `pty`'s
- * spawn/write/onData/onExit shape on purpose (see main/anthropic-client.ts):
- * `send` kicks off a streamed request and resolves once it either starts
- * or fails fast (e.g. no API key configured); the actual tokens arrive as
- * `chat:token` events, terminated by exactly one of `chat:done`/`chat:error`. */
+/** DESIGN-BACKLOG.md item 12, Fase C — the diff a `write_file` tool call
+ * needs approved before anything touches disk (main/chat-tools.ts's real
+ * `structuredPatch` output — this is NOT re-derived in the renderer,
+ * `hunks` is the exact same data the human approves/denies). */
+export type DiffHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] };
+export type WriteConsentRequest = { path: string; isNewFile: boolean; diffText: string; hunks: DiffHunk[] };
+
+/** DESIGN-BACKLOG.md item 12, Fase B/C — mirrors `pty`'s
+ * spawn/write/onData/onExit shape on purpose (see main/anthropic-client.ts/
+ * openai-client.ts): `send` kicks off a streamed request and resolves once
+ * it either starts or fails fast (e.g. no API key configured); the actual
+ * tokens arrive as `chat:token` events, terminated by exactly one of
+ * `chat:done`/`chat:error`. Fase C adds tool activity (`onToolStart`/
+ * `onToolResult`, transient — not part of the persisted turn, see
+ * ChatCard.tsx) and the write-file consent round trip (`onAskWrite`/
+ * `resolveWrite`, same ask/resolve shape `browser.onAskOpen`/`resolveAsk`
+ * already established, just chat-specific — this loop doesn't go through
+ * message-bus.ts at all). */
 const chat = {
   send: (cardId: string, params: ChatSendParams): Promise<ChatSendResult> =>
     ipcRenderer.invoke("chat:send", cardId, params),
-  cancel: (cardId: string): Promise<void> => ipcRenderer.invoke("chat:cancel", cardId),
+  cancel: (cardId: string, provider: SecretProvider): Promise<void> => ipcRenderer.invoke("chat:cancel", cardId, provider),
   onToken: (cb: (cardId: string, delta: string) => void) => {
     const listener = (_e: unknown, cardId: string, delta: string) => cb(cardId, delta);
     ipcRenderer.on("chat:token", listener);
@@ -380,6 +394,29 @@ const chat = {
     ipcRenderer.on("chat:error", listener);
     return () => ipcRenderer.removeListener("chat:error", listener);
   },
+  onToolStart: (cb: (cardId: string, name: string, input: unknown) => void) => {
+    const listener = (_e: unknown, cardId: string, name: string, input: unknown) => cb(cardId, name, input);
+    ipcRenderer.on("chat:tool-start", listener);
+    return () => ipcRenderer.removeListener("chat:tool-start", listener);
+  },
+  onToolResult: (cb: (cardId: string, name: string, ok: boolean, summary: string) => void) => {
+    const listener = (_e: unknown, cardId: string, name: string, ok: boolean, summary: string) => cb(cardId, name, ok, summary);
+    ipcRenderer.on("chat:tool-result", listener);
+    return () => ipcRenderer.removeListener("chat:tool-result", listener);
+  },
+  onAskWrite: (cb: (requestId: string, cardId: string, req: WriteConsentRequest) => void) => {
+    const listener = (_e: unknown, requestId: string, cardId: string, req: WriteConsentRequest) => cb(requestId, cardId, req);
+    ipcRenderer.on("chat:ask-write", listener);
+    return () => ipcRenderer.removeListener("chat:ask-write", listener);
+  },
+  resolveWrite: (requestId: string, allowed: boolean): Promise<void> =>
+    ipcRenderer.invoke("chat:write-resolve", requestId, allowed),
+  /** Test-only (item 12 Fase C's verify coverage) — no-op in a packaged
+   * build, see main/index.ts's guard. Drives the real read_file/
+   * write_file/consent/diff pipeline without needing a real paid API
+   * call to get a model to request a tool. */
+  testSimulateTool: (cardId: string, name: string, input: unknown, root: string): Promise<{ ok: boolean; text: string }> =>
+    ipcRenderer.invoke("chat:test-simulate-tool", cardId, name, input, root),
 };
 
 contextBridge.exposeInMainWorld("pty", pty);

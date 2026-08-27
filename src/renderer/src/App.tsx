@@ -6,7 +6,7 @@ import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
-import { ChatCard, DEFAULT_CHAT_MODEL } from "./ChatCard";
+import { ChatCard, DEFAULT_CHAT_MODEL, DEFAULT_OPENAI_MODEL } from "./ChatCard";
 import { AgentAskModal } from "./AgentAskModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
@@ -39,7 +39,7 @@ import { useWorldTransform } from "./useWorldTransform";
 import { useConnectorDrag } from "./useConnectorDrag";
 import { useCardSelection } from "./useCardSelection";
 import { useBoardStore } from "./useBoardStore";
-import type { Card, ChatCardData, ChatMessage, Connector, StickyCardData, Tool } from "./card-types";
+import type { Card, ChatCardData, ChatMessage, ChatProvider, Connector, StickyCardData, Tool } from "./card-types";
 import "./app.css";
 
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
@@ -179,6 +179,7 @@ function toRow(card: Card, boardId: string): CardRow {
     group_id: card.groupId,
     label: card.label,
     updated_at: Date.now(),
+    messages_json: null, // only "chat" (below) ever sets this to something real
     ...card.rect,
   };
   switch (card.kind) {
@@ -233,18 +234,23 @@ function toRow(card: Card, boardId: string): CardRow {
         ...base,
         kind: "chat",
         provider: card.provider,
-        cwd: JSON.stringify({ messages: card.messages }),
+        cwd: card.cwd,
         resume_id: null,
         model: card.model,
         system_prompt: card.systemPrompt,
+        messages_json: JSON.stringify({ messages: card.messages }),
       };
   }
 }
 
-/** Same defensive-parse posture as `parseStroke` above — a malformed/
- * legacy row renders as an empty conversation rather than crashing the
- * whole board on load. */
-function parseChatMessages(raw: string): ChatMessage[] {
+/** Same defensive-parse posture as `parseStroke` above — a malformed row
+ * (or, pre-Fase-C, a legacy row with no `messages_json` at all — see
+ * card-types.ts's `ChatCardData` doc comment) renders as an empty
+ * conversation rather than crashing the whole board on load. `legacyCwd`
+ * is Fase B's old row shape: `cwd` itself held `{messages: [...]}` before
+ * `messages_json` existed to hold it properly. */
+function parseChatMessages(messagesJson: string | null, legacyCwd: string): ChatMessage[] {
+  const raw = messagesJson ?? legacyCwd;
   try {
     const parsed = JSON.parse(raw);
     if (parsed && Array.isArray(parsed.messages)) return parsed.messages;
@@ -305,18 +311,23 @@ function fromRow(r: CardRow): Card {
         label,
       };
     }
-    case "chat":
+    case "chat": {
+      // Pre-Fase-C row: no messages_json column value yet means `cwd`
+      // itself is the old JSON blob, not a real path — see card-types.ts.
+      const isLegacyRow = r.messages_json === null;
       return {
         id: r.id,
         kind: "chat",
-        provider: "anthropic",
+        provider: r.provider === "openai" ? "openai" : "anthropic",
         model: r.model || DEFAULT_CHAT_MODEL,
+        cwd: isLegacyRow ? DEFAULT_CWD : r.cwd,
         systemPrompt: r.system_prompt,
-        messages: parseChatMessages(r.cwd),
+        messages: parseChatMessages(r.messages_json, r.cwd),
         rect,
         groupId,
         label,
       };
+    }
     default:
       return {
         id: r.id,
@@ -738,6 +749,7 @@ export function App() {
       kind: "chat",
       provider: "anthropic",
       model: DEFAULT_CHAT_MODEL,
+      cwd: activeBoardCwd,
       systemPrompt: null,
       messages: [],
       rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
@@ -1139,6 +1151,15 @@ export function App() {
     void window.store.upsert(toRow({ ...card, model }, activeBoardIdRef.current!));
   }
 
+  /** DESIGN-BACKLOG.md item 12, Fase C — switching provider also resets to
+   * that provider's own default model (an Anthropic model id sent to
+   * OpenAI's endpoint, or vice versa, is just a guaranteed 404/400). */
+  function commitChatProvider(card: ChatCardData, provider: ChatProvider) {
+    const model = provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CHAT_MODEL;
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "chat" ? { ...c, provider, model } : c)));
+    void window.store.upsert(toRow({ ...card, provider, model }, activeBoardIdRef.current!));
+  }
+
   function startDrawing(e: React.PointerEvent) {
     const points: Point[] = [];
     function addPoint(clientX: number, clientY: number) {
@@ -1483,6 +1504,8 @@ export function App() {
                 zoom={world.zoom}
                 zIndex={zIndex}
                 model={c.model}
+                provider={c.provider}
+                cwd={c.cwd}
                 systemPrompt={c.systemPrompt}
                 messages={c.messages}
                 interactionMode={interactionMode}
@@ -1498,6 +1521,7 @@ export function App() {
                 onRename={(label) => renameCard(c.id, label)}
                 onMessagesCommit={(messages) => commitChatMessages(c, messages)}
                 onModelCommit={(model) => commitChatModel(c, model)}
+                onProviderCommit={(provider) => commitChatProvider(c, provider)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}

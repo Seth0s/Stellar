@@ -22,6 +22,17 @@ export type CardRow = {
    * toRow/fromRow), and every kind needs this one the same way. */
   label: string | null;
   updated_at: number;
+  /** DESIGN-BACKLOG.md item 12, Fase C — chat message history. A real
+   * dedicated column, not another squeeze into `cwd`/`resume_id`: Fase B
+   * put the JSON blob in `cwd` (following stroke's precedent), which
+   * worked while chat had no real project root of its own to store —
+   * Fase C's file tools need `cwd` back for its normal meaning (the
+   * kind's actual root path, same as files/changes/terminal), so the
+   * messages needed a column of their own instead. `fromRow` (App.tsx)
+   * falls back to parsing a legacy Fase-B row's `cwd` as the messages
+   * blob when this column is empty, so an existing chat card from before
+   * this migration doesn't lose its history. */
+  messages_json: string | null;
 };
 
 export type ConnectorRow = {
@@ -68,6 +79,7 @@ function migrate(db: Database.Database) {
     `board_id TEXT NOT NULL DEFAULT '${DEFAULT_BOARD_ID}'`,
     "group_id TEXT",
     "label TEXT",
+    "messages_json TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE cards ADD COLUMN ${col}`);
@@ -153,7 +165,7 @@ export function openStore(userDataDir: string) {
   // that predate multi-board support.
 
   const listStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at FROM cards WHERE board_id = ?",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json FROM cards WHERE board_id = ?",
   );
   // Used only by acbridge's `list` command (main/message-bus.ts) — that
   // protocol has no notion of boards, and restricting it to the caller's
@@ -161,17 +173,17 @@ export function openStore(userDataDir: string) {
   // format that doesn't carry it today. Same "list every terminal card"
   // behavior this already had before boards existed.
   const listAllStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at FROM cards",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json FROM cards",
   );
   const upsertStmt = db.prepare(`
-    INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at)
-    VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @system_prompt, @group_id, @label, @updated_at)
+    INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json)
+    VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @system_prompt, @group_id, @label, @updated_at, @messages_json)
     ON CONFLICT(id) DO UPDATE SET
       board_id = excluded.board_id, kind = excluded.kind, provider = excluded.provider, cwd = excluded.cwd,
       x = excluded.x, y = excluded.y, w = excluded.w, h = excluded.h,
       resume_id = excluded.resume_id, model = excluded.model, system_prompt = excluded.system_prompt,
       group_id = excluded.group_id, label = excluded.label,
-      updated_at = excluded.updated_at
+      updated_at = excluded.updated_at, messages_json = excluded.messages_json
   `);
   const deleteStmt = db.prepare("DELETE FROM cards WHERE id = ?");
   const deleteCardsForBoardStmt = db.prepare("DELETE FROM cards WHERE board_id = ?");
@@ -233,7 +245,15 @@ export function openStore(userDataDir: string) {
   return {
     listCards: (boardId: string): CardRow[] => listStmt.all(boardId) as CardRow[],
     listAllCards: (): CardRow[] => listAllStmt.all() as CardRow[],
-    upsertCard: (card: CardRow) => upsertStmt.run(card),
+    // `messages_json` defaulted defensively — better-sqlite3's named-param
+    // binding throws if a bound `@column` is simply absent as an object
+    // key (not just `undefined`/`null`), and this IPC channel is a public
+    // contract callers besides App.tsx's own `toRow` legitimately use
+    // directly (every non-chat card kind, and every pre-Fase-C caller,
+    // never had a reason to know this key exists at all) — a caller that
+    // doesn't set it shouldn't crash the whole card save over an optional
+    // field only "chat" kind cards ever populate.
+    upsertCard: (card: CardRow) => upsertStmt.run({ ...card, messages_json: card.messages_json ?? null }),
     deleteCard: (id: string) => deleteStmt.run(id),
     listConnectors: (boardId: string): ConnectorRow[] => listConnectorsStmt.all(boardId) as ConnectorRow[],
     upsertConnector: (row: ConnectorRow) => upsertConnectorStmt.run(row),

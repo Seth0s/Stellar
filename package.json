@@ -116,11 +116,13 @@
     "better-sqlite3": "13.0.3",
     "codemirror": "^6.0.2",
     "dbus-next": "^0.10.2",
+    "diff": "^9.0.0",
     "dompurify": "^3.4.14",
     "electron-updater": "^6.8.9",
     "lucide-react": "^1.34.0",
     "marked": "^18.0.11",
     "node-pty": "1.1.0",
+    "openai": "^7.7.0",
     "qrcode": "^1.5.4",
     "ws": "^8.21.3"
   },

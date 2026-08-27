@@ -2893,6 +2893,57 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   passando quando rodadas individualmente.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 12.
 
+## 2026-08-27 — Item 12, Fase C fechada: tool use real (read/write + diff) e segunda API
+
+- Loop agentic real pros dois providers: `read_file` sem gate (mesma
+  classe do `get_page_text`/`snapshot`), `write_file` sempre com
+  consentimento (`main/chat-tools.ts`, novo, compartilhado pelos dois —
+  mesmo raciocínio do `handleRequest` servindo acbridge e MCP).
+- Desvio deliberado do plano original ("reusa `AgentAskModal`"): um diff
+  colorido de várias linhas não cabe no `.agent-ask-command` de uma linha
+  só — a aprovação virou um bloco inline no stream da conversa (mesmo
+  visual do protótipo da Fase A), não um modal popup.
+- `main/openai-client.ts` (novo) é a segunda API (Chat Completions, não a
+  Responses API — o formato que endpoints "OpenAI-compatible" de verdade
+  falam). Loop manual nos dois clientes (não `runTools`/beta
+  `ToolRunner`), por consistência entre providers e um único ponto de
+  injeção do gate de consentimento. Limite de 8 turnos de tool-call em
+  sequência (mesmo espírito do `MAX_SPAWN_DEPTH`).
+- **Achado real de schema, corrigido antes de fechar**: `messages_json`
+  (coluna nova, ver limpeza abaixo) foi adicionada à migração mas as
+  queries SQL de SELECT/INSERT em `store.ts` nunca foram atualizadas pra
+  incluí-la — sintoma real, achado ao vivo: mensagem persistida sumia
+  depois de um reload. Corrigido nas 3 queries. **Segundo achado
+  relacionado** (também ao vivo, quebrou `smoke-files-card.mjs`):
+  `better-sqlite3` com parâmetros nomeados lança exceção se um `@coluna`
+  do SQL simplesmente não existir como chave no objeto — qualquer
+  chamador de `store:upsert` que não conhecesse `messages_json` (todo
+  card não-chat) quebrava a gravação inteira. Corrigido tornando
+  `upsertCard` defensivo, não empurrando a responsabilidade pra cada
+  chamador do canal IPC.
+- Limpeza de schema: Fase B tinha espremido o histórico de mensagens na
+  coluna genérica `cwd` — Fase C precisava de `cwd` de volta com seu
+  significado normal (raiz de arquivo pras tools), então o histórico
+  ganhou coluna própria, `messages_json` (migração guardada). Fallback
+  pra uma linha da Fase B antiga sem essa coluna: `cwd` legado é
+  reaproveitado como o blob JSON (`fromRow`, App.tsx).
+- Modelo do OpenAI é campo de texto livre (não dropdown fixo como o
+  Anthropic) — sem lista confiável do catálogo atual de modelos OpenAI
+  pra não arriscar hardcodar um id errado.
+- Verificação sem key válida disponível: `scripts/verify/smoke-chat-
+  tools.mjs` (novo, 18/18) via um gancho de teste novo,
+  `chat:test-simulate-tool` (inerte em build empacotado, mesmo precedente
+  de `updater:test-emit-available`) — dispara o `executeTool` REAL sem
+  precisar de resposta real de modelo: leitura real, diff real
+  (`structuredPatch`), negar → arquivo intocado, permitir → arquivo
+  realmente alterado no disco (confirmado fora do app), path-escape
+  rejeitado de verdade. Ambos providers provados contra os endpoints
+  REAIS (`api.anthropic.com`/`api.openai.com`) com key fake — 401
+  estruturado real dos dois, não mock. `npm run verify`: 19/19 suítes
+  verdes rodando individualmente (a cadeia para na primeira falha, então
+  rodada suíte a suíte pra não mascarar as demais atrás de um flake).
+- Detalhe completo em `DESIGN-BACKLOG.md` item 12.
+
 ## Comandos
 
 ```bash

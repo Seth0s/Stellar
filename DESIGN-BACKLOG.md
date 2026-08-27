@@ -2027,10 +2027,74 @@ pra "9°", sem "8°" — não é erro de digitação meu).
       contagem do menu radial 10→11 depois do novo item "chat"),
       `smoke-browser.mjs` confirmado flaky pré-existente (3/3 limpo
       isolado), não causado por esta mudança.
-    - **Fase C — tool use de arquivo + diff, segunda API**: leitura/
-      escrita de arquivo real com consentimento (reusa `AgentAskModal`),
-      diff renderizado a partir do resultado real da escrita (não
-      mockado), provider abstraction estendida pra cobrir a segunda API.
+    - **Fase C — tool use de arquivo + diff, segunda API — ✅ feito em
+      2026-08-27**: loop agentic real pros dois providers — `read_file`
+      sem gate (mesma classe do `get_page_text`/`snapshot`, item 21 ponto
+      9 achado 5: observação passiva dentro de uma fronteira já escolhida,
+      o `cwd` do card) e `write_file` sempre com consentimento
+      (`main/chat-tools.ts`, novo, compartilhado pelos dois providers —
+      mesmo raciocínio do `handleRequest` do `message-bus.ts` servindo
+      acbridge e MCP). **Desvio deliberado do texto original** ("reusa
+      `AgentAskModal`"): um diff colorido de várias linhas não cabe no
+      `.agent-ask-command` de uma linha só do `AgentAskModal` — a
+      aprovação virou um bloco inline no próprio stream da conversa
+      (mesmo visual do protótipo da Fase A), não um modal popup.
+      - `main/anthropic-client.ts` e `main/openai-client.ts` (novo) —
+        loop manual (não o `runTools`/beta `ToolRunner` de cada SDK) por
+        consistência entre os dois providers e pra manter o mesmo ponto
+        de injeção do gate de consentimento nos dois. Segunda API é
+        Chat Completions (não a Responses API mais nova — é o formato que
+        endpoints "OpenAI-compatible" de verdade quase sempre falam).
+        Limite de segurança de 8 turnos de tool-call em sequência (mesmo
+        espírito do `MAX_SPAWN_DEPTH`).
+      - `card-types.ts`: `ChatCardData` ganhou `cwd` real (raiz do
+        projeto, escopo das tools de arquivo — mesmo significado do
+        `root` do `FilesCardData`) e `provider: "anthropic" | "openai"`.
+      - **Achado real de schema, achado e corrigido antes de fechar**:
+        `store.ts` ganhou a coluna `messages_json` (ver abaixo) mas as
+        instruções SQL de SELECT/INSERT nunca foram atualizadas pra
+        incluí-la — a migração rodava, a coluna existia, mas nunca era
+        lida nem escrita. Sintoma real, achado ao vivo: mensagem
+        persistida sumia depois de um reload. Corrigido nas 3 queries
+        (`listStmt`/`listAllStmt`/`upsertStmt`). **Segundo achado
+        relacionado**, também ao vivo (`smoke-files-card.mjs` quebrou):
+        `better-sqlite3` com parâmetros nomeados lança exceção se um
+        `@coluna` referenciado no SQL simplesmente não existir como chave
+        no objeto passado — qualquer chamador de `store:upsert` que não
+        conhecesse `messages_json` (todo card não-chat, todo teste que
+        monta a `CardRow` na mão em vez de passar por `toRow`) quebrava a
+        gravação inteira. Corrigido tornando `upsertCard`
+        defensivo (`store.ts`): `messages_json: card.messages_json ??
+        null` sempre aplicado ali, não empurrado pra cada chamador do
+        canal IPC.
+      - **Limpeza de schema**: Fase B tinha espremido o histórico de
+        mensagens na coluna genérica `cwd` (truque do `stroke`) — Fase C
+        precisava de `cwd` de volta com seu significado normal (raiz de
+        arquivo), então o histórico ganhou coluna própria de verdade,
+        `messages_json` (migração guardada, mesmo padrão de sempre).
+        Fallback pra uma linha da Fase B sem essa coluna ainda: `cwd`
+        antigo é reaproveitado como o blob JSON legado (`fromRow`,
+        App.tsx).
+      - Modelo do OpenAI é campo de texto livre, não dropdown fixo (ao
+        contrário do Anthropic) — sem lista confiável do catálogo atual
+        de modelos OpenAI pra não arriscar hardcodar um id errado/
+        desatualizado; o usuário digita o que quiser.
+      - Verificação sem key válida disponível neste ambiente:
+        `scripts/verify/smoke-chat-tools.mjs` (novo, 18/18) — usa um
+        gancho novo, exclusivamente de teste, `chat:test-simulate-tool`
+        (`main/index.ts`, inerte em build empacotado, mesmo precedente já
+        existente de `updater:test-emit-available`) pra disparar o
+        `executeTool` REAL sem precisar de uma resposta real de modelo —
+        leitura real de arquivo, diff real (`structuredPatch` do pacote
+        `diff`), consentimento real (negar → arquivo intocado no disco;
+        permitir → arquivo realmente alterado no disco, confirmado lendo
+        fora do app), rejeição real de path-escape. Prova end-to-end dos
+        dois providers contra os endpoints REAIS (`api.anthropic.com` e
+        `api.openai.com`) com key fake — ambos retornam 401 estruturado
+        de verdade, não mock local. `npm run verify`: 19/19 suítes verdes
+        rodando individualmente (a cadeia para na primeira falha, então
+        rodada suíte a suíte pra não mascarar as demais atrás de um
+        flake).
     - **Fase D — sandbox real + bash + subagente**: constrói o sandbox
       que o achado 6 (item 21 ponto 9) pede — pré-requisito bloqueante
       pra liberar bash real nesta fase, não opcional. Bloco de subagente
