@@ -1045,6 +1045,33 @@ select.resume-input {
   word-break: break-all;
 }
 
+/* DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — AgentAskModal.tsx's
+   "comando"/"motivo" fields. `.agent-ask-command` reuses `.modal p`'s own
+   word-break (a URL or a long cwd path shouldn't force the modal wider). */
+.agent-ask-command {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  word-break: break-all;
+}
+
+.agent-ask-reason {
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.agent-ask-reason-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

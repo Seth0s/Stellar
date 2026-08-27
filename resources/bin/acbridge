@@ -1,8 +1,16 @@
 #!/usr/bin/env node
 // Standalone CLI, no project dependencies — put on PATH for every spawned
 // provider card. Lets a provider's own shell tool talk to the app: list
-// other open terminal cards, type a message into one of them, or ask
-// permission to open a URL in an embedded browser card.
+// other open terminal cards, type a message into one of them, ask
+// permission to open a URL/spawn a card/spawn another agent, snapshot the
+// canvas, or read a browser card's rendered text.
+//
+// DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface
+// is now the MCP server (mcp-server.ts, same backend via message-bus.ts's
+// shared handleRequest) for providers that speak MCP. This CLI stays as
+// the lowest-common-denominator fallback (works for ANY shell-capable
+// process, no MCP client required) and as a human-debuggable way to poke
+// the same backend from a terminal.
 //
 // ESM, not CommonJS: Node resolves a shebang script with no .cjs extension
 // by walking up to the nearest package.json's "type" field, and
@@ -11,6 +19,7 @@ import net from "node:net";
 
 const sockPath = process.env.AGENT_CANVAS_SOCK;
 const ownCardId = process.env.AGENT_CANVAS_CARD_ID || "";
+const ownSpawnDepth = Number(process.env.AGENT_CANVAS_SPAWN_DEPTH || "0");
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -20,6 +29,12 @@ function fail(msg) {
 if (!sockPath) {
   fail("AGENT_CANVAS_SOCK is not set — not running inside agent-canvas?");
 }
+
+const USAGE =
+  "usage: acbridge <list | send <cardId> <message...> | open <url> | " +
+  "snapshot [cardId | x y w h] | page-text <cardId> | " +
+  "spawn-agent <provider> [cwd] [resumeId] | " +
+  "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]>";
 
 const [, , cmd, ...rest] = process.argv;
 
@@ -46,8 +61,23 @@ if (cmd === "list") {
   } else {
     fail("usage: acbridge snapshot [cardId | x y w h]");
   }
+} else if (cmd === "page-text") {
+  const [target] = rest;
+  if (!target) fail("usage: acbridge page-text <cardId>");
+  request = { cmd: "get_page_text", target };
+} else if (cmd === "spawn-agent") {
+  const [provider, cwd, resumeId] = rest;
+  if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
+  request = { cmd: "spawn_agent", provider, cwd, resumeId, requesterId: ownCardId, depth: ownSpawnDepth };
+} else if (cmd === "spawn-card") {
+  const [kind, cwdOrUrl] = rest;
+  if (!kind) fail("usage: acbridge spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]");
+  request =
+    kind === "browser"
+      ? { cmd: "spawn_card", kind, url: cwdOrUrl, requesterId: ownCardId }
+      : { cmd: "spawn_card", kind, cwd: cwdOrUrl, requesterId: ownCardId };
 } else {
-  fail("usage: acbridge <list | send <cardId> <message...> | open <url> | snapshot [cardId | x y w h]>");
+  fail(USAGE);
 }
 
 const socket = net.connect({ path: sockPath }, () => {
@@ -84,6 +114,13 @@ socket.on("close", () => {
     // Just the path, nothing else — meant to be read directly (Claude
     // Code's own Read tool renders an image path), not parsed.
     console.log(res.path);
+  } else if (cmd === "page-text") {
+    console.log(res.text);
+    if (res.truncated) process.stderr.write("acbridge: page text truncated\n");
+  } else if (cmd === "spawn-agent") {
+    console.log(res.cardId);
+  } else if (cmd === "spawn-card") {
+    console.log(res.cardId);
   }
   process.exit(0);
 });

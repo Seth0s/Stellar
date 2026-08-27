@@ -12,7 +12,8 @@ import {
   type BrowserWheelEvent,
   type BrowserKeyEvent,
 } from "./browser-registry";
-import { createMessageBus } from "./message-bus";
+import { createMessageBus, type BusRequest } from "./message-bus";
+import { createMcpServer } from "./mcp-server";
 import { runOneShotSummary } from "./ai-action";
 import { createRemoteInputSession } from "./remote-input";
 import { createRemoteServer } from "./remote-server";
@@ -239,6 +240,22 @@ function createWindow() {
   // `const`s in either order).
   let remoteServer: ReturnType<typeof createRemoteServer> | null = null;
 
+  // Same forward-reference trick as `remoteServer` above, one level
+  // deeper: `mcpServer`'s tool handlers need `messageBus.handleRequest`
+  // (DESIGN-BACKLOG.md item 21, ponto 9 — one shared dispatcher, two
+  // frontends), but `messageBus`'s own callbacks need `registry`/
+  // `browserRegistry`, which in turn need `mcpServer.url` (to inject into
+  // every spawned provider's env — see providers.ts). None of these
+  // closures actually run until real events fire, well after this whole
+  // function returns, so the forward reference is safe.
+  let messageBus: ReturnType<typeof createMessageBus> | null = null;
+  const mcpServer = createMcpServer({
+    // Overridable only for the verify harness's isolated test instances —
+    // same reasoning as AGENT_CANVAS_REMOTE_PORT below.
+    port: Number(process.env.AGENT_CANVAS_MCP_PORT) || 4489,
+    handleRequest: (req: BusRequest) => messageBus!.handleRequest(req),
+  });
+
   const registry = createPtyRegistry({
     onData: (id, data) => {
       safeSend(win, "pty:data", id, data);
@@ -253,6 +270,7 @@ function createWindow() {
     onUrlSeen: (id, url) => safeSend(win, "pty:url-seen", id, url),
     sockPath,
     binDir,
+    mcpUrl: mcpServer.url,
   });
 
   remoteServer = createRemoteServer({
@@ -311,16 +329,41 @@ function createWindow() {
     onFrame: (id, jpeg, width, height) => safeSend(win, "browser:frame", id, jpeg, width, height),
   });
 
-  const messageBus = createMessageBus(sockPath, {
+  messageBus = createMessageBus(sockPath, {
     listCards: () =>
       store
         .listAllCards()
         .filter((c) => c.kind === "terminal")
         .map((c) => ({ id: c.id, provider: c.provider, cwd: c.cwd })),
     writeToCard: (id, text) => registry.write(id, text),
-    onOpenRequest: (requestId, requesterId, url) => safeSend(win, "browser:ask-open", requestId, requesterId, url),
-    onSnapshotRequest: (requestId, target) => handleSnapshotRequest(win, messageBus, requestId, target),
+    onOpenRequest: (requestId, requesterId, url, reason) =>
+      safeSend(win, "browser:ask-open", requestId, requesterId, url, reason),
+    onSnapshotRequest: (requestId, target) => handleSnapshotRequest(win, messageBus!, requestId, target),
+    // DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — no consent needed
+    // (see message-bus.ts's PAGE_TEXT_TIMEOUT_MS comment), so this goes
+    // straight to browserRegistry instead of round-tripping through a
+    // renderer ask/resolve pair like the two below.
+    onPageTextRequest: (requestId, cardId) => {
+      void browserRegistry.getPageText(cardId).then((result) => messageBus!.resolvePageText(requestId, result));
+    },
+    // DESIGN-BACKLOG.md item 21, ponto 9, achados 1 e 2 — same
+    // ask-the-renderer/wait-for-a-human-decision shape as onOpenRequest
+    // above, generalized. The renderer owns all card creation (it's the
+    // only place with the live board/cardsRef state), so these just
+    // relay the request and wait for `spawn:agent-resolve`/`spawn:card-
+    // resolve` (below) to call back into the matching resolve*() here.
+    onSpawnAgentRequest: (requestId, requesterId, params) =>
+      safeSend(win, "spawn:ask-agent", requestId, requesterId, params),
+    onSpawnCardRequest: (requestId, requesterId, params) =>
+      safeSend(win, "spawn:ask-card", requestId, requesterId, params),
   });
+  ipcMain.handle("browser:get-page-text", (_e, id: string) => browserRegistry.getPageText(id));
+  ipcMain.handle("spawn:agent-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>
+    messageBus!.resolveSpawnAgent(requestId, result),
+  );
+  ipcMain.handle("spawn:card-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>
+    messageBus!.resolveSpawnCard(requestId, result),
+  );
 
   ipcMain.handle(
     "pty:spawn",
@@ -440,7 +483,8 @@ function createWindow() {
     browserRegistry.destroyAll();
   });
   win.on("closed", () => {
-    messageBus.close();
+    messageBus?.close();
+    mcpServer.close();
     registry.killAll();
     remoteServer?.close();
     store.close();

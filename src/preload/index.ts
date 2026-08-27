@@ -162,6 +162,12 @@ const browser = {
   sendKey: (id: string, evt: BrowserKeyEvent) => ipcRenderer.send("browser:input-key", id, evt),
   resolveAsk: (requestId: string, allowed: boolean): Promise<void> =>
     ipcRenderer.invoke("browser:ask-resolve", requestId, allowed),
+  /** DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — page content for an
+   * agent, not just pixels (see `snapshot`). Truncated server-side
+   * (browser-registry.ts) — `truncated` tells the caller whether that
+   * happened. */
+  getPageText: (id: string): Promise<{ ok: true; text: string; truncated: boolean } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:get-page-text", id),
   /** One decoded JPEG frame from the card's offscreen `BrowserWindow` — see
    * browser-registry.ts. `buffer` arrives as a Uint8Array (structured-clone
    * of the main-process Buffer). */
@@ -186,12 +192,43 @@ const browser = {
     ipcRenderer.on("browser:loading", listener);
     return () => ipcRenderer.removeListener("browser:loading", listener);
   },
-  onAskOpen: (cb: (requestId: string, requesterId: string, url: string) => void) => {
-    const listener = (_e: unknown, requestId: string, requesterId: string, url: string) =>
-      cb(requestId, requesterId, url);
+  onAskOpen: (cb: (requestId: string, requesterId: string, url: string, reason?: string) => void) => {
+    const listener = (_e: unknown, requestId: string, requesterId: string, url: string, reason?: string) =>
+      cb(requestId, requesterId, url, reason);
     ipcRenderer.on("browser:ask-open", listener);
     return () => ipcRenderer.removeListener("browser:ask-open", listener);
   },
+};
+
+export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
+export type SpawnAgentAskParams = { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string };
+export type SpawnCardAskParams = { kind: SpawnCardKind; cwd?: string; url?: string; reason?: string };
+export type SpawnAgentResolveResult = { ok: true; cardId: string } | { ok: false; error: string };
+export type SpawnCardResolveResult = { ok: true; cardId: string } | { ok: false; error: string };
+
+/** DESIGN-BACKLOG.md item 21, ponto 9, achados 1 e 2 — an agent asking to
+ * spawn another agent card, or a non-terminal tool card. Same
+ * ask/consent/resolve shape as `browser.onAskOpen`/`resolveAsk` above,
+ * generalized (AgentAskModal.tsx renders whichever is pending). Kept as
+ * its own top-level bridge object rather than folded into `browser` —
+ * neither capability is browser-specific. */
+const spawn = {
+  onAskAgent: (cb: (requestId: string, requesterId: string, params: SpawnAgentAskParams) => void) => {
+    const listener = (_e: unknown, requestId: string, requesterId: string, params: SpawnAgentAskParams) =>
+      cb(requestId, requesterId, params);
+    ipcRenderer.on("spawn:ask-agent", listener);
+    return () => ipcRenderer.removeListener("spawn:ask-agent", listener);
+  },
+  onAskCard: (cb: (requestId: string, requesterId: string, params: SpawnCardAskParams) => void) => {
+    const listener = (_e: unknown, requestId: string, requesterId: string, params: SpawnCardAskParams) =>
+      cb(requestId, requesterId, params);
+    ipcRenderer.on("spawn:ask-card", listener);
+    return () => ipcRenderer.removeListener("spawn:ask-card", listener);
+  },
+  resolveAgent: (requestId: string, result: SpawnAgentResolveResult): Promise<void> =>
+    ipcRenderer.invoke("spawn:agent-resolve", requestId, result),
+  resolveCard: (requestId: string, result: SpawnCardResolveResult): Promise<void> =>
+    ipcRenderer.invoke("spawn:card-resolve", requestId, result),
 };
 
 export type OneShotResult = { text: string } | { error: string };
@@ -309,6 +346,7 @@ contextBridge.exposeInMainWorld("store", store);
 contextBridge.exposeInMainWorld("fs", fs);
 contextBridge.exposeInMainWorld("git", git);
 contextBridge.exposeInMainWorld("browser", browser);
+contextBridge.exposeInMainWorld("spawn", spawn);
 contextBridge.exposeInMainWorld("ai", ai);
 contextBridge.exposeInMainWorld("winControls", winControls);
 contextBridge.exposeInMainWorld("snapshot", snapshot);
@@ -321,6 +359,7 @@ export type StoreApi = typeof store;
 export type FsApi = typeof fs;
 export type GitApi = typeof git;
 export type BrowserApi = typeof browser;
+export type SpawnApi = typeof spawn;
 export type AiApi = typeof ai;
 export type WinControlsApi = typeof winControls;
 export type SnapshotApi = typeof snapshot;

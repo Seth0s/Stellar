@@ -1806,59 +1806,53 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    não reseta). 4 checks novos em `smoke-radial-longpress.mjs`. `npm run
    verify` (13 suítes, 137 checks) PASS.
 9. **Varredura de lógica ampla, pedida como auditoria futura** —
-   ✅ **investigado em 2026-08-27** (achados abaixo), **nada
-   implementado ainda** — por pedido do próprio usuário, esta rodada foi
-   só investigação (ler o código real, não assumir), a implementação
-   fica pra uma rodada dedicada, como já estava marcado. Escopo grande
-   demais pra uma sessão de polimento continua verdadeiro.
+   investigada em 2026-08-27 (achados abaixo). **Achados 1, 2, 3 e 5
+   implementados no mesmo dia**, via um servidor MCP novo — ver
+   detalhe completo logo depois da lista. Achado 6 (sandbox) segue
+   deliberadamente fora de escopo, por decisão do usuário — precisa de
+   uma rodada dedicada própria.
 
-   **1. Sistema de spawn entre agentes** — não existe. `acbridge` só tem
-   4 comandos (`list`/`send`/`open`/`snapshot`, ver achado 3), nenhum
-   deles cria um novo terminal/agente. Criar card de terminal é só
-   humano (`Rail.tsx`/`RadialMenu.tsx` → `App.tsx::addTerminalCard` →
-   `useTerminal.ts` → `window.pty.spawn`), sem caminho de IPC que um
-   agente já rodando possa disparar. Pra construir: seguir o mesmo
-   template do `open` (novo `acbridge spawn`, `pendingSpawns` em
-   `message-bus.ts`, `safeSend` pro renderer, modal de consentimento) —
-   plumbing é médio, mas falta decisão de produto sobre limite de
-   recursão (agente A spawna B spawna C…), sem guarda nenhuma hoje.
+   **1. Sistema de spawn entre agentes** — ✅ resolvido. Novo comando
+   `spawn_agent` (tool MCP + `acbridge spawn-agent`), mesmo template de
+   consentimento do `open`. Guarda de recursão real: `AGENT_CANVAS_
+   SPAWN_DEPTH` viaja no env de todo processo spawnado, incrementado a
+   cada spawn agent-iniciado (humano sempre começa em 0);
+   `MAX_SPAWN_DEPTH = 3` em `message-bus.ts` recusa de cara, sem nem
+   mostrar o modal, uma vez atingido o teto.
 
-   **2. Spawn de ferramentas feito por agentes** — só `browser` é
-   spawnável por agente, e só via `acbridge open &lt;url&gt;` com
-   consentimento humano obrigatório (`BrowserAskModal`, `App.tsx:367,
-   684-696`, `message-bus.ts:82-101`, timeout de 120s). `files`/
-   `changes`/`sticky`/`remote-window` não têm nenhum comando
-   equivalente — só `addFilesCard`/`addChangesCard`/etc, humano-only.
-   O fluxo do `open` já é exatamente o template que o achado 6 pede
-   generalizar (modal com título/motivo/parâmetros) — vale desenhar os
-   dois juntos.
+   **2. Spawn de ferramentas feito por agentes** — ✅ resolvido. Novo
+   comando `spawn_card` (tool MCP + `acbridge spawn-card`) generaliza
+   o que só `browser`/`open` tinha — `files`/`changes`/`sticky`/
+   `browser`/`remote-window` agora são todos spawnáveis por agente, com
+   o mesmo consentimento humano. `AgentAskModal.tsx` (novo, substitui
+   `BrowserAskModal.tsx`) é o componente genérico que isso e o achado 6
+   pediam — título/comando/motivo pra qualquer tipo de pedido, não só
+   URL.
 
-   **3. Caminho de controle otimizado pro agente (acbridge)** —
-   superfície real, hoje: `list` (sem gate), `send &lt;cardId&gt;
-   &lt;msg&gt;` (sem gate, escreve direto na PTY), `open &lt;url&gt;`
-   (gate humano, 120s), `snapshot [cardId | x y w h]` (sem gate, 10s).
-   Achado concreto: `ACBRIDGE_HINT` (`main/providers.ts:13-18`) já está
-   desatualizado — nem menciona `snapshot` — e só é injetado no Claude
-   via `--append-system-prompt`; codex/cursor-agent não têm hook
-   equivalente e nunca ficam sabendo que `acbridge` existe (limitação
-   real desses providers, não bug daqui). Sem card management (fechar/
-   mover/redimensionar) nem leitura de conteúdo de files/changes (só
-   pixel via snapshot) pelo lado do agente.
+   **3. Caminho de controle otimizado pro agente (acbridge)** — ✅
+   resolvido, mudança de arquitetura, não só um hint atualizado.
+   Interface primária pro agente agora é um servidor MCP
+   (`mcp-server.ts`) — self-documenting (cada tool descreve a si mesma,
+   não depende de um hint de texto ficar sincronizado) e alcança
+   claude/codex de verdade (registro efêmero por spawn, nunca um
+   arquivo de config escrito no projeto — ver detalhe abaixo).
+   `acbridge` continua existindo como fallback CLI, mesmo backend
+   (`message-bus.ts::handleRequest`, compartilhado pelos dois
+   frontends).
 
    **4. Snapshot do canvas** — já resolvido e coberto, nada pendente
    aqui (ver item 4 e item 21 ponto 1 acima, `smoke-snapshot.mjs`, 8
-   checks, parte das 14 suítes do `npm run verify`).
+   checks). Ganhou um caminho extra: a tool MCP `snapshot` devolve a
+   imagem embutida (`{type:"image", data, mimeType}`), não um path de
+   arquivo — um cliente MCP não compartilha filesystem com este app.
 
    **5. Visualização do navegador pro agente (conteúdo, não só pixel)**
-   — não existe. `browser-registry.ts` não tem nenhum método de
-   extração de DOM/texto (`executeJavaScript`, `innerText`, árvore de
-   acessibilidade) — só `dom-ready` pra saber que carregou, nada pra ler
-   o que carregou. Hoje um agente só enxerga o navegador via
-   `acbridge snapshot` (pixel puro), que só serve se o provider aceitar
-   imagem. Pra construir: `webContents.executeJavaScript("document.
-   body.innerText")` já é primitivo nativo do Electron, baixa
-   complexidade técnica — a decisão real é sobre truncamento/ruído de
-   página complexa, não arquitetura.
+   — ✅ resolvido. Novo `browserRegistry.getPageText(id)`
+   (`browser-registry.ts`) via `webContents.executeJavaScript(
+   "document.body.innerText")`, truncado em 20.000 caracteres. Exposto
+   como tool MCP `get_page_text` e `acbridge page-text <cardId>`. Sem
+   gate de consentimento (mesma classe de risco do snapshot — página já
+   aberta, agente já tem o cardId).
 
    **6. Autorizar bash fora do sandbox** — achado mais importante desta
    varredura: **não existe sandbox nenhum hoje pra autorizar saída

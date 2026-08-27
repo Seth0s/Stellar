@@ -1,6 +1,6 @@
 import { useOccludesChrome } from "./occlusion";
 
-/** Generic yes/no confirmation, same modal chrome as BrowserAskModal — kept
+/** Generic yes/no confirmation, same modal chrome as AgentAskModal — kept
  * separate from it since that one is specifically the agent-navigation
  * consent gate (different copy, different actors), not a general-purpose
  * confirm. First real use: closing a terminal card with a live process
