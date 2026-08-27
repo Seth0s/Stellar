@@ -161,9 +161,14 @@ export function BrowserCard({
     if (!canvas) return null;
     const box = canvas.getBoundingClientRect();
     if (box.width === 0 || box.height === 0) return null;
+    // The embedded page's own coordinate space is `rect.w`×`rect.h`
+    // (logical CSS px — what `resize()` sets the offscreen window's
+    // content size to), not necessarily `canvas.width`/`height` — mapping
+    // through the canvas's own pixel size assumes those always match,
+    // which happened to hold before but isn't guaranteed by anything.
     return {
-      x: ((e.clientX - box.left) / box.width) * canvas.width,
-      y: ((e.clientY - box.top) / box.height) * canvas.height,
+      x: ((e.clientX - box.left) / box.width) * rect.w,
+      y: ((e.clientY - box.top) / box.height) * rect.h,
     };
   }
 

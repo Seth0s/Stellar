@@ -155,9 +155,9 @@ export function TerminalCard({
           </span>
         </>
       }
+      footerContent={footerParts.join(" · ")}
     >
       <div className="terminal-card-body" ref={containerRef} />
-      <div className="card-foot">{footerParts.join(" · ")}</div>
       {seenUrls.length > 0 && (
         <div className="terminal-card-urls">
           <span className="muted">🔗</span>
