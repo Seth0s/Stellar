@@ -2328,6 +2328,73 @@ corrigido esperando especificamente por `"2"`. `tsc --noEmit`/
 pré-existentes rerrodadas (237 checks) + esta nova (19 checks) — 0
 regressões.
 
+## 23. Brainstorm anotado em 2026-08-27 (não implementado) — spawn organizado por coordenada + abrir arquivo em linha exata
+
+Surgiu testando o MCP ao vivo (item 24): os 6 cards de teste
+(`spawn_agent`/`spawn_card`) caíram todos empilhados no mesmo canto,
+sobrepostos — `centeredSlot(visibleRect, cardsRef.current.length)` é a
+única lógica de posicionamento hoje, cega ao que já existe no board além
+da contagem bruta. Pedido explícito do usuário: só anotar e aprofundar o
+raciocínio agora, implementar depois.
+
+**Duas capacidades distintas, mas que compartilham a mesma motivação**
+(um agente organizando o board de propósito, não só "jogando card em
+algum canto"):
+
+1. **Spawn com coordenada explícita.** `spawn_agent`/`spawn_card` (MCP)
+   ganhariam um jeito de pedir posição, não só tipo/provider/cwd. Duas
+   formas que fazem sentido coexistir, não competir:
+   - **Coordenada absoluta** (`x`/`y`, espaço de board — mesmo sistema
+     que `snapshot`'s `rect` já usa, não espaço de tela): útil quando o
+     agente já sabe onde quer (ex.: replicar um layout específico,
+     grid deliberado pra vários agentes paralelos).
+   - **Relativa a um card âncora** (`anchorCardId` + `side: "right" |
+     "left" | "above" | "below"`): mais realista pro caso comum — um
+     agente normalmente não sabe (nem devia precisar calcular) a
+     coordenada absoluta do board, só sabe "quero isso do lado de quem
+     me pediu". `callerCardId` já existe no schema de todo tool de
+     spawn — dá pra ancorar nele por padrão sem exigir um param extra
+     na maioria dos casos.
+   - **Perguntas reais a resolver antes de implementar** (é aqui que o
+     "pensar mais fundo" importa, não é só adicionar um campo x/y): o
+     que acontece quando a coordenada pedida colide com um card já
+     existente — desloca automaticamente (como? em qual direção?) ou
+     simplesmente sobrepõe e deixa o humano reorganizar? Precisa de
+     algum clamp pro card não nascer fora da área visível
+     (`visibleRect`)? Isso deveria mudar o comportamento PADRÃO (sem
+     coordenada) também, ou só quando pedido explicitamente? A resposta
+     provavelmente é: comportamento padrão continua o cascade atual
+     (não quebra nada existente), coordenada explícita é
+     estritamente opt-in — mas o comportamento de colisão quando
+     PEDIDA precisa de uma decisão de produto, não só técnica.
+
+2. **Abrir arquivo numa linha exata.** `spawn_card(kind:"files")` hoje
+   só abre a árvore num `cwd` — não existe um jeito de já abrir um
+   arquivo específico, muito menos rolar pra uma linha. Pra ser útil de
+   verdade (o caso de uso real: um agente aponta "olha o bug na linha
+   42 de `foo.ts`"), precisaria de:
+   - Params novos em `spawn_card` (kind `files`): `path` (relativo ao
+     `cwd`) e `line` (opcional — sem ele, só abre o arquivo, sem rolar).
+   - `FilesCard.tsx` aceitar um "arquivo inicial" pra já carregar
+     selecionado (hoje só abre via clique manual na árvore) — precisa
+     de um novo prop threaded desde a criação do card até o estado
+     interno (`selectedPath`) do componente.
+   - `CodeEditor.tsx` (CodeMirror 6) já tem a API certa pra isso
+     (`EditorView.dispatch` com seleção + scroll pra posição) — a parte
+     "rolar pra linha" é a mais barata das duas de implementar; a parte
+     cara é threading do prop através da cadeia de criação de card.
+   - **Extensão natural, vale registrar mesmo sem implementar agora**:
+     range de linhas (não só uma), pra destacar um trecho inteiro, não
+     um ponto — e uma ligação óbvia com o card `changes` (um agente
+     mostrando um diff podia, no mesmo pedido, oferecer "abrir esse
+     arquivo modificado na linha do diff" — os dois kinds já compartilham
+     `cwd`/root, só falta o vocabulário de "arquivo + linha" ser comum
+     aos dois).
+
+Nenhuma decisão de design foi fechada aqui de propósito — é
+levantamento de perguntas reais, não um plano pronto pra implementar na
+próxima sessão sem revisitar.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
