@@ -1294,39 +1294,60 @@ resolve o bloqueio documentado no item 13/`docs/packaging.md` §1.
    suítes PASS de primeira. `npm run dev` reiniciado do novo caminho,
    porta 4488 confirmada ativa. **Item fechado.**
 
-## 16. Fundo interativo — constelações reagem ao mouse (adiado, complexo)
+## 16. Fundo interativo — constelações reagem ao mouse — ✅ feito em 2026-08-27
 
 Pedido do usuário (2026-08-26) em cima do item 14: as estrelas/constelações
 de `ConstellationBg.tsx` reagirem ao mouse — o cursor "empurra" estrelas
 próximas (intensidade proporcional à agressividade do movimento, não só
 posição), e o fundo inteiro deriva lentamente por conta própria, revelando
 mais estrelas/constelações fora do viewport inicial conforme se move.
-**Explicitamente adiado pelo próprio usuário** ("pode anotar, pode deixar
-pra depois") — registrado aqui pra não se perder, não pra ser puxado pra
-frente da fila sem pedir.
+Implementado seguindo o esboço já registrado aqui, sem reescrever o
+componente — os pontos originais viraram literalmente o estado de repouso.
 
-Esboço de abordagem, pra quando for retomado (nada disto foi validado
-ainda):
-- **Física de empurrão**: cada estrela ganha uma posição-base (as
-  coordenadas atuais) + um offset elástico que decai de volta ao repouso
-  (`requestAnimationFrame`, sem lib de física — spring simples, tipo
-  `offset += (target - offset) * k`). Velocidade do mouse entre dois
-  `mousemove` (delta de posição / delta de tempo) determina a força do
-  empurrão em estrelas dentro de um raio; mouse parado = sem força.
-- **Deriva lenta autônoma**: um offset global de câmera (`translate` no
-  `<svg>`/`<g>`) avançando devagar em `requestAnimationFrame`, independente
-  do mouse — precisa de um campo de estrelas bem maior que o viewport
-  (gerado proceduralmente, não só os ~44 pontos fixos de hoje) pra ter o
-  que revelar conforme desliza, e um jeito de reciclar/reposicionar
-  estrelas que saem de um lado pro outro (wrap, não recriar do zero).
-- **Custo real**: isso é `requestAnimationFrame` + listener de
-  `mousemove` rodando o tempo todo que a Home está montada — precisa medir
-  impacto de CPU/bateria antes de considerar padrão, não só "funciona".
-  Candidato a `prefers-reduced-motion` respeitando o usuário que desliga
-  animação no SO.
-- Pontos fixos de hoje (`FIELD_STARS`/`CLUSTERS` em `ConstellationBg.tsx`)
-  viram só o estado de repouso — a lógica de reação é uma camada por cima,
-  não uma reescrita do componente.
+- **Física de empurrão** — implementada exatamente como esboçado: cada
+  estrela (campo + pontos de cluster) tem posição-base + offset elástico
+  (`offset -= offset * SPRING_K` por frame, sem lib). Velocidade do mouse
+  entre `pointermove`s determina a força dentro de um raio (`PUSH_RADIUS
+  = 12`); parado = decai a zero sozinho. Roda via `requestAnimationFrame`
+  com escrita DIRETA de atributos DOM (`cx`/`cy`/`points` via refs), não
+  `setState` — re-renderizar ~200 elementos SVG via React a 60fps seria
+  custo desnecessário pra um fundo decorativo.
+- **Deriva lenta autônoma** — campo virtual 280×280 (2,8x o viewport
+  100×100), câmera avança devagar (`DRIFT_VX`/`DRIFT_VY`, ciclo completo
+  ~2,5-3,5min por eixo, períodos diferentes pra não repetir como uma
+  diagonal óbvia), com wrap por módulo (`wrap(base - cam, VIRTUAL)`) —
+  SVG já clipa pontos fora do viewBox 0-100, sem precisar podar
+  manualmente. Campo procedural (PRNG seedado — `mulberry32`, semente
+  fixa, then estável entre sessões, não re-sorteado a cada boot) com
+  130 estrelas bônus além das 20 originais; os 4 clusters originais
+  (shapes) são reaproveitados como "moldes" e espalhados em mais 2
+  âncoras pela tela virtual (12 instâncias no total), pra deriva revelar
+  constelações novas, não só as 4 originais confinadas ao quadrado
+  inicial.
+- **Achado real corrigido antes de fechar**: wrap por-ponto independente
+  (cada ponto do cluster cruzando o módulo em momento levemente diferente
+  dos outros, já que têm bases distintas) esticava visivelmente a
+  polyline por segundos a cada ciclo. Fix: wrap rígido por cluster —
+  todos os pontos deslocam pelo MESMO múltiplo de `VIRTUAL_W/H`, derivado
+  do centróide do cluster cruzando a borda, não cada ponto por si.
+- **`prefers-reduced-motion: reduce`** — respeitado, e ao vivo (listener
+  de `change`, não só lido uma vez no mount): a animação nem inicia (câmera/
+  offsets ficam nos valores iniciais {0,0}), e o campo bônus foi gerado
+  com rejection sampling explícito excluindo o quadrado 0-100 original —
+  verificado ao vivo via CDP (`Emulation.setEmulatedMedia` antes do boot):
+  usuário com a preferência já ligada no SO vê exatamente as 20 estrelas
+  + 4 clusters originais, byte-idêntico ao que o item 14 já tinha
+  entregue, não um subconjunto procedural diferente.
+- **Custo real**: não medido em bateria/CPU de verdade (sem tooling pra
+  isso neste ambiente) — mitigado por escopo (só roda com a Home
+  montada, desmonta ao entrar numa sessão) e por escrever atributos DOM
+  direto em vez de passar pelo ciclo de render do React.
+- Verificação: `scripts/verify/smoke-constellation.mjs` (novo, 10/10) —
+  empurrão real via `Input.dispatchMouseEvent` sintético medindo
+  deslocamento real de atributo, decaimento pós-parada, deriva real ao
+  longo do tempo sem input nenhum, forma rígida do cluster estável, e
+  os dois cenários de `prefers-reduced-motion` (ligado antes do boot via
+  CDP + toggle ao vivo). `npm run verify` completo, 184/184 checks, PASS.
 
 ## 17. Updater — "lembrar depois", changelog, ícone pendente, teste E2E — feito (4/4)
 

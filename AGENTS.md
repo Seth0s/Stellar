@@ -2797,6 +2797,39 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   explícita do usuário — precisa de rodada dedicada própria. Detalhe em
   `DESIGN-BACKLOG.md` item 21 ponto 9.
 
+## 2026-08-27 — Item 16 fechado: fundo interativo, constelações reagem ao mouse
+
+- `ConstellationBg.tsx` reescrito (mesmo esboço já registrado no item 16,
+  sem virar projeto à parte): física de empurrão elástica por estrela
+  (spring simples, sem lib), deriva de câmera lenta e autônoma sobre um
+  campo virtual 280×280 (2,8x o viewport 100×100, wrap por módulo — SVG
+  já clipa fora do viewBox), campo procedural com PRNG seedado
+  (`mulberry32`, semente fixa — estável entre boots, não resorteado) e os
+  4 clusters originais reaproveitados como moldes em mais 2 âncoras (12
+  instâncias no total). Tudo via `requestAnimationFrame` escrevendo
+  atributos DOM direto nos refs (`cx`/`cy`/`points`), não `setState` —
+  ~200 elementos SVG a 60fps não passam pelo ciclo de render do React.
+- Achado real corrigido antes de fechar: wrap por-ponto independente
+  esticava a polyline de um cluster por segundos a cada ciclo (pontos com
+  bases levemente diferentes cruzavam o módulo em momentos diferentes).
+  Fix: wrap rígido por cluster, todos os pontos deslocam pelo mesmo
+  múltiplo de `VIRTUAL_W/H`, derivado do centróide.
+- `prefers-reduced-motion: reduce` respeitado ao vivo (`change` listener,
+  não só lido no mount) — campo bônus gerado com rejection sampling
+  explícito excluindo o quadrado 0-100 original, então um usuário com a
+  preferência já ligada no SO vê byte-idêntico ao que o item 14 shippou
+  (verificado via CDP `Emulation.setEmulatedMedia` antes do boot, não só
+  toggle depois).
+- Verificação: `scripts/verify/smoke-constellation.mjs` (novo, 10/10) —
+  empurrão real (`Input.dispatchMouseEvent` sintético medindo
+  deslocamento de atributo), decaimento pós-parada, deriva real ao longo
+  do tempo sem input, forma rígida do cluster, os dois cenários de
+  reduced-motion. `npm run verify` completo, 184/184 checks, PASS
+  (incluindo um FAIL intermitente em `smoke-browser.mjs` isolado como
+  flaky pré-existente, não causado por esta mudança — confirmado
+  rodando 3x consecutivas sem falha e via `git stash`/`out/` intocado).
+  Detalhe em `DESIGN-BACKLOG.md` item 16.
+
 ## Comandos
 
 ```bash
