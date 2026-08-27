@@ -69,6 +69,21 @@
   color: var(--text);
 }
 
+/* 2026-08-27 — the interrupt button used to be icon-only (a plain
+   outlined octagon at 12px, mistaken live for a "copy" icon); paired here
+   with a visible "Ctrl+C" label ("uma legenda interna mais clara", the
+   user's own words) instead of relying on the hover tooltip alone. */
+.terminal-card-interrupt {
+  gap: 4px;
+  padding: 4px 7px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.terminal-card-interrupt-label {
+  line-height: 1;
+}
+
 .card-head button.active {
   background: var(--foam);
   color: var(--on-accent);

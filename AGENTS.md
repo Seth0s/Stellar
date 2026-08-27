@@ -2591,9 +2591,11 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   certo, buffer do `paint` não mudou de tamanho nenhuma vez; revertido
   por completo (não deixo código morto com comentário dizendo que
   funciona). "Ícone de cópia" nos terminais: não existe no código — só
-  tem o botão de interromper (Ctrl+C, ícone `Octagon`); ficou pendente de
-  confirmação com o usuário antes de remover uma função real por engano.
-  Detalhe em `DESIGN-BACKLOG.md` item 20.
+  tem o botão de interromper (Ctrl+C) — confirmado com o usuário: era
+  esse mesmo botão, mantido, só trocando `Octagon`→`OctagonX` (contorno
+  vazio lia como círculo/cópia em 12px) e adicionando legenda "Ctrl+C"
+  visível dentro do botão, não só no hover. Detalhe em
+  `DESIGN-BACKLOG.md` item 20 (fechado, 5/5).
 
 ## Comandos
 

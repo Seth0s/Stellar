@@ -1606,7 +1606,7 @@ promover um ancestral não tem caminho de volta pela UI (só o diálogo
 nativo), então nada depois dele pode depender da árvore da raiz
 original. `npm run verify` completo (13 suítes) PASS.
 
-## 20. Cromo dos cards: footer compartilhado, resize centralizado, área de drag, resolução do navegador — 4/5, reportado ao vivo em 2026-08-27
+## 20. Cromo dos cards: footer compartilhado, resize centralizado, área de drag, resolução do navegador — feito (5/5), reportado ao vivo em 2026-08-27
 
 **Pedido**: organizar o footer de todos os cards até o navegador
 (esperando que fosse herdado), centralizar o ícone de resize (estava mal
@@ -1667,16 +1667,15 @@ resolução prejudicada do card do navegador.
    layout renderizado, não só a nitidez) que precisa de decisão do
    usuário antes de implementar, não é um fix limpo como o item 2 desta
    lista foi.
-5. **"Ícone de cópia" no header dos terminais — pendente, achado
-   contraditório**: o único ícone além do X no header de um `TerminalCard`
-   é o botão de interromper (`Icon name="interrupt"`, glifo `Octagon`,
-   title "Ctrl+C") — não existe nenhum ícone de cópia/clipboard ali no
-   código (`grep` confirmou). Ou o usuário está descrevendo esse mesmo
-   botão (o octógono em 12px pode ler como um círculo/anel à primeira
-   vista) e realmente quer removê-lo, ou há um mal-entendido sobre qual
-   ícone é qual — removê-lo sem confirmar tiraria uma função real (Ctrl+C
-   pro processo do terminal), então isso ficou pra confirmar com o usuário
-   antes de tocar.
+5. **"Ícone de cópia" no header dos terminais — confirmado com o usuário
+   via pergunta direta**: era mesmo o botão de interromper (octógono em
+   12px lido como um círculo/ícone de cópia) — não existe ícone de cópia
+   de verdade no código. Usuário pediu pra manter o botão, só com "um
+   ícone e uma legenda interna mais clara". Ícone trocado de `Octagon`
+   (contorno vazio) pra `OctagonX` (mesma forma de placa de pare, com um
+   X dentro — inequívoco mesmo pequeno); label visível "Ctrl+C" adicionada
+   dentro do botão (`.terminal-card-interrupt-label`), não só no `title`
+   de hover.
 
 `tsc`/`electron-vite build` limpos. Novo check em `smoke-card-actions.mjs`
 (arrastar a partir da pill do card-tag de fato move o card, cobrindo

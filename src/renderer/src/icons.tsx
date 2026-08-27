@@ -37,7 +37,7 @@ import {
   MonitorSmartphone,
   MousePointer2,
   MousePointerClick,
-  Octagon,
+  OctagonX,
   Pen,
   QrCode,
   RotateCw,
@@ -130,7 +130,10 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   back: ArrowLeft,
   forward: ArrowRight,
   reload: RotateCw,
-  interrupt: Octagon,
+  // 2026-08-27 — plain Octagon at 12px read as a blank ring, mistaken
+  // live for a "copy" icon. OctagonX keeps the stop-sign shape but adds
+  // an unambiguous mark inside it.
+  interrupt: OctagonX,
   winMinimize: Minus,
   winMaximize: Square,
   winRestore: Copy,
