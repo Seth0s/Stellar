@@ -102,7 +102,7 @@ export function Home({
           default full-width scrollbar. This is the one thing that
           scrolls now — background/header stay put, and its own thin
           scrollbar (styles/layout.css) sits right against the grid. */}
-      <div className="home-scroll">
+      <div className="home-scroll thin-scroll">
         {boards.length === 0 ? (
           <div className="home-empty">
             <p>nenhuma sessão ainda</p>

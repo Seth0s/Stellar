@@ -55,7 +55,7 @@ export function UpdateBanner() {
         </button>
       </div>
       {error && <span className="update-banner-error">{error}</span>}
-      {showNotes && releaseNotes && <pre className="update-banner-notes">{releaseNotes}</pre>}
+      {showNotes && releaseNotes && <pre className="update-banner-notes thin-scroll">{releaseNotes}</pre>}
     </div>
   );
 }

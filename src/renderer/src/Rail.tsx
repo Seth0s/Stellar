@@ -109,22 +109,33 @@ export function Rail({
     setTool(tool === next ? "pointer" : next);
   }
 
+  // DESIGN-BACKLOG.md item 21, ponto 10 — used to be the rail's own first
+  // button, inside its pill (`.rail-btn`, same solid hover/active
+  // treatment as every tool button). Read as "just another tool" instead
+  // of "the thing that hides the whole rail". Moved outside `.rail`
+  // entirely: a small subtle icon-only toggle (`.rail-toggle`, low
+  // opacity until hovered, no pill background) that floats immediately
+  // beside the rail, vertically centered to it — same toggle whether the
+  // rail is expanded or collapsed, so it's a fixed landmark instead of
+  // moving/disappearing with the rail's own content.
+  const toggle = (
+    <button
+      className="rail-toggle"
+      title={collapsed ? "Mostrar régua" : "Ocultar régua"}
+      onClick={() => setCollapsed((c) => !c)}
+    >
+      <Icon name={collapsed ? "chevronRight" : "chevronLeft"} size={14} />
+    </button>
+  );
+
   if (collapsed) {
-    return (
-      <div className="rail rail-collapsed">
-        <button className="rail-btn" title="Mostrar régua" onClick={() => setCollapsed(false)}>
-          <Icon name="chevronRight" size={16} />
-        </button>
-      </div>
-    );
+    return toggle;
   }
 
   return (
-    <div className="rail">
-      <button className="rail-btn" title="Ocultar régua" onClick={() => setCollapsed(true)}>
-        <Icon name="chevronLeft" size={16} />
-      </button>
-      <div className="rail-group-gap" />
+    <>
+      {toggle}
+      <div className="rail thin-scroll">
       <button
         className={`rail-btn${tool === "pointer" ? " active" : ""}`}
         title="Ponteiro"
@@ -289,7 +300,7 @@ export function Rail({
         {cards.length === 0 ? (
           <div className="popover-empty">nenhum card ainda</div>
         ) : (
-          <div className="board-list">
+          <div className="board-list thin-scroll">
             {cards.map((c) => (
               <button
                 key={c.id}
@@ -344,6 +355,7 @@ export function Rail({
           </span>
         </button>
       </Popover>
-    </div>
+      </div>
+    </>
   );
 }
