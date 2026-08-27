@@ -1660,12 +1660,13 @@ select.resume-input {
   opacity: 0.85;
 }
 
+/* DESIGN-BACKLOG.md item 16 — stagger now comes from each hero circle's
+   own inline `animationDelay` (ConstellationBg.tsx), not this selector:
+   with clusters scattered across a 280x280 virtual field and multiple
+   `<g>` instances of the same shape, `:nth-of-type(2)` no longer reliably
+   picks out "the 2nd hero" the way it did with 2 fixed clusters. */
 .home-star-hero {
   animation: home-star-twinkle 4s ease-in-out infinite;
-}
-
-.home-star-hero:nth-of-type(2) {
-  animation-delay: -1.3s;
 }
 
 @keyframes home-star-twinkle {
