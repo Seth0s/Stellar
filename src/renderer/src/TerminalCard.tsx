@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
+import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
 
 export type { Rect };
@@ -82,6 +83,27 @@ export function TerminalCard({
   onStatusChange?: (status: "ok" | "error" | "exited") => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const urlBadgeRef = useRef<HTMLButtonElement>(null);
+  const [urlPopoverOpen, setUrlPopoverOpen] = useState(false);
+  // Clicking a URL's own text copies it (the primary action pedida ao
+  // vivo) — só reporta "copiado" se `writeText` de fato resolveu, nunca
+  // um feedback otimista. `{url, ok}` em vez de um Set de urls copiadas:
+  // só uma cópia por vez é relevante, e guardar o resultado real (não só
+  // "copiei") deixa o caminho de erro honesto também.
+  const [copyFeedback, setCopyFeedback] = useState<{ url: string; ok: boolean } | null>(null);
+  const copyFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  async function copyUrl(url: string) {
+    let ok = true;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      ok = false;
+    }
+    setCopyFeedback({ url, ok });
+    if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
+    copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
+  }
   const { exitCode, spawnError, discoveredResumeId, fitNow, interrupt } = useTerminal(
     containerRef,
     id,
@@ -103,6 +125,12 @@ export function TerminalCard({
     }
   }, [discoveredResumeId, onResumeIdDiscovered]);
 
+  useEffect(() => {
+    return () => {
+      if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
+    };
+  }, []);
+
   const statusClass = spawnError !== null ? "danger" : exitCode !== null ? "" : "ok";
   useEffect(() => {
     onStatusChange?.(spawnError !== null ? "error" : exitCode !== null ? "exited" : "ok");
@@ -114,6 +142,18 @@ export function TerminalCard({
     !resumeId && continueLast ? "--continue" : null,
     model ? `model:${model}` : null,
   ].filter(Boolean);
+  // Achado ao vivo (2026-08-27): a tira antiga era `position: absolute`
+  // por CIMA das linhas do terminal, sem limite/expiração — qualquer
+  // sessão que imprimisse alguns links (docs, npm, git remote…) acabava
+  // com uma faixa permanente cobrindo conteúdo real. Vira um badge no
+  // próprio footer (nunca sobrepõe o terminal) que abre a lista completa
+  // num popover sob demanda — mesmo componente `Popover` que o resto do
+  // app já usa. `side` calculado a partir da posição real do badge na
+  // tela: um card pode estar em qualquer lugar do canvas, não só perto da
+  // régua (onde os outros usos de `Popover` sempre ficam), então abrir
+  // sempre "right" clipparia off-screen pra um card na metade direita.
+  const urlPopoverSide: "left" | "right" =
+    (urlBadgeRef.current?.getBoundingClientRect().left ?? 0) > window.innerWidth / 2 ? "left" : "right";
 
   return (
     <CardFrame
@@ -159,27 +199,62 @@ export function TerminalCard({
           </span>
         </>
       }
-      footerContent={footerParts.join(" · ")}
+      footerContent={
+        <span className="terminal-card-foot-row">
+          <span className="terminal-card-foot-text">{footerParts.join(" · ")}</span>
+          {seenUrls.length > 0 && (
+            <button
+              ref={urlBadgeRef}
+              className="terminal-card-url-badge"
+              title={`${seenUrls.length} link${seenUrls.length > 1 ? "s" : ""} vistos no output`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setUrlPopoverOpen((v) => !v)}
+            >
+              <Icon name="link" size={11} />
+              {seenUrls.length}
+            </button>
+          )}
+        </span>
+      }
     >
       <div className="terminal-card-body" ref={containerRef} />
-      {seenUrls.length > 0 && (
-        <div className="terminal-card-urls">
-          <span className="muted">🔗</span>
-          {seenUrls.map((url) => (
-            <button
-              key={url}
-              className="terminal-card-url-chip"
-              title={url}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onOpenUrl(url)}
-            >
-              {url.replace(/^https?:\/\//, "").slice(0, 32)}
-            </button>
-          ))}
-        </div>
-      )}
       {spawnError !== null && <div className="terminal-card-exited">{spawnError}</div>}
       {exitCode !== null && <div className="terminal-card-exited">processo encerrado ({exitCode})</div>}
+      <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className="terminal-card-url-popover">
+        {[...seenUrls].reverse().map((url) => {
+          const feedback = copyFeedback?.url === url ? copyFeedback : null;
+          return (
+            <div key={url} className="terminal-card-url-row">
+              <button
+                className={`terminal-card-url-chip${feedback ? (feedback.ok ? " copied" : " copy-error") : ""}`}
+                title={url}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => copyUrl(url)}
+              >
+                {feedback ? (
+                  <>
+                    <Icon name={feedback.ok ? "check" : "close"} size={11} />
+                    {feedback.ok ? "copiado pro clipboard" : "falha ao copiar"}
+                  </>
+                ) : (
+                  <>
+                    <Icon name="copy" size={11} />
+                    {url.replace(/^https?:\/\//, "").slice(0, 44)}
+                  </>
+                )}
+              </button>
+              <button
+                className="terminal-card-url-open"
+                title="Abrir no navegador interno (pede confirmação)"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => onOpenUrl(url)}
+              >
+                <Icon name="browser" size={11} />
+              </button>
+            </div>
+          );
+        })}
+      </Popover>
     </CardFrame>
   );
 }

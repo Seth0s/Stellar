@@ -2199,6 +2199,115 @@ pra "9°", sem "8°" — não é erro de digitação meu).
         indexar. `smoke-chat.mjs`/`smoke-chat-tools.mjs`/
         `smoke-card-lifecycle.mjs` rerrodadas — 0 regressões.
 
+## 22. App oficial buildado: overlay de links cobrindo o terminal + paste de imagem inexistente — ✅ feito em 2026-08-27, 2/2, reportado ao vivo
+
+Usuário testando o pacote `.rpm` oficial (não `npm run dev`) reportou dois
+problemas reais.
+
+1. **Overlay de links "na frente do terminal, logo acima do footer"**:
+   confirmado no código antes de mexer — `.terminal-card-urls`
+   (`TerminalCard.tsx`/`cards.css`) era `position: absolute; bottom:
+   50px` por CIMA das linhas do terminal, e `pty-registry.ts` nunca
+   limitava nem expirava a lista (`entry.seenUrls`, um `Set` que só
+   cresce pela vida do processo) — qualquer sessão que imprimisse alguns
+   links (docs, npm, git remote…) acumulava uma faixa permanente
+   cobrindo conteúdo real.
+   - **Fix estrutural**: os chips saem do overlay e viram um badge
+     (`.terminal-card-url-badge`, "🔗 N") dentro do próprio footer do
+     card (`footerContent`, que já aceita `React.ReactNode`) — nunca
+     mais sobrepõe `.terminal-card-body`. A lista completa mora num
+     `Popover` (mesmo componente já usado em Rail/Topbar) aberto sob
+     demanda pelo badge. `side` (esquerda/direita) calculado pela
+     posição real do badge na tela — um card pode estar em qualquer
+     lugar do canvas, não só perto de uma régua fixa como os outros usos
+     de `Popover`, então sempre abrir "right" clipparia off-screen pra
+     um card na metade direita.
+   - **Pedido ao vivo, meio da implementação**: clicar num link devia
+     copiar pro clipboard com feedback visual real (não abrir direto).
+     Implementado: clique no chip chama `navigator.clipboard.writeText`;
+     o chip só mostra "✓ copiado pro clipboard" DEPOIS que a promise
+     resolveu de verdade (`{url, ok}` guardado em estado, nunca um
+     feedback otimista) — falha real vira "✗ falha ao copiar", não um
+     sucesso mentiroso.
+   - **Segundo pedido ao vivo, logo em seguida**: abrir o link no
+     navegador interno passou a exigir confirmação explícita em vez de
+     abrir direto no clique — botão próprio (`.terminal-card-url-open`,
+     ícone de globo) dispara um `ConfirmModal` genérico (mesmo
+     componente que "fechar terminal ativo" já usa), com o próprio texto
+     do link na mensagem; só chama `openBrowserFor` depois do "Abrir".
+     Novo estado `pendingOpenUrl` em `App.tsx`, deliberadamente separado
+     de `pendingAsk`/`AgentAskModal` — aquele é o gate específico pra
+     pedido DE AGENTE (via MCP/acbridge, com requesterId/reason); este é
+     um clique humano direto, sem requester nem motivo pra mostrar.
+   - Ícone novo em `icons.tsx`: `"copy"` (lucide `Copy`, reaproveitando o
+     import já existente — só um novo nome de mapeamento).
+
+2. **"Não consigo mandar foto pelo terminal"**: confirmado — não existia
+   NENHUM handler de paste de imagem. `useTerminal.ts` nunca interceptava
+   `paste`, e o handler padrão do xterm.js só lê `text/plain`; uma
+   imagem no clipboard não produzia nada.
+   - **`main/clipboard-image.ts`** (novo): lê a imagem real do clipboard
+     do SO via `electron.clipboard.readImage()` (processo main, mesma
+     fonte que um app nativo leria) e grava um PNG real em
+     `app.getPath("temp")/stellar-pastes/`. **Limite documentado
+     honestamente**: escrever o caminho no terminal é tudo que esta app
+     pode garantir/verificar — se a CLI rodando ali (claude/codex/
+     cursor-agent/bash) de fato trata esse caminho como anexo de imagem
+     depende do comportamento dela, não é algo que dá pra confirmar
+     aqui sem uma sessão real paga; não afirmamos isso como verificado,
+     só que o texto do caminho chega certo no PTY.
+   - **`useTerminal.ts`**: novo listener de `paste` em fase de CAPTURA no
+     container (`el`), rodando antes do listener interno do xterm.js na
+     sua própria textarea escondida — mesma técnica que
+     `correctZoomCoords` já usa no mesmo arquivo pelo mesmo motivo. Só
+     intercepta (`preventDefault`/`stopImmediatePropagation`) quando o
+     evento realmente tem um item `image/*`; um paste só de texto passa
+     intocado pro comportamento padrão do xterm. Caminho inserido entre
+     aspas + espaço à direita (convenção de drag-and-drop de arquivo pro
+     terminal), via `window.pty.write` — texto puro, não bytes binários.
+   - Novo bridge dedicado `clipboardImage` (preload), separado de `pty`
+     de propósito (não fala com nenhum PTY específico, só lê o clipboard
+     do SO) — mesma distinção que `secrets` já mantém como bridge
+     próprio em vez de crescer um existente.
+   - Feedback: `toast()` (já existente, singleton global) em vez de
+     estado por-card — sucesso e falha mostram mensagem real.
+   - **Achado real durante a verificação**: o primeiro PNG de teste
+     "1×1 vermelho" usado pro gancho `clipboard:test-write-image` foi
+     digitado à mão (base64) e PARECIA bem-formado (assinatura PNG
+     `89 50 4E 47…` correta) mas o corpo estava corrompido —
+     `nativeImage.createFromBuffer` produzia uma imagem `0×0`
+     (`isEmpty(): true`), silenciosamente. Só foi pego rodando um
+     round-trip REAL isolado (`electron` standalone, fora do harness de
+     verify) antes de confiar no PNG. Corrigido gerando o PNG
+     programaticamente (chunks IHDR/IDAT/IEND com CRC32 real via
+     `zlib.deflateSync`) e validando o round-trip completo
+     (`createFromBuffer` → `writeImage` → `readImage` → `toPNG()`) antes
+     de fixar o base64 em `clipboard-image.ts`.
+   - Gancho de teste `clipboard:test-write-image` (novo, guardado por
+     `app.isPackaged`, mesmo precedente de `chat:test-simulate-tool`) —
+     escreve um PNG real no clipboard do SO de verdade, já que não há
+     screenshot manual disponível no harness.
+
+**Verificação**: `scripts/verify/smoke-terminal-links-paste.mjs` (novo,
+19/19). Tudo real, nada mockado: bash de verdade imprimindo 2 URLs reais
+(dedup confirmado — exatamente 2, não 4, mesmo aparecendo 2x no output —
+uma vez ecoado pelo bash, uma vez pela execução), badge some/aparece no
+footer sem nunca cobrir `.terminal-card-body`, clique-copiar confirmado
+lendo o clipboard do SO de volta (`navigator.clipboard.readText()`), o
+fluxo completo negar→sem card novo / permitir→card de navegador novo de
+verdade, `clipboard.save()` genuinamente falhando sem imagem e genuinamente
+funcionando depois de uma imagem real ser escrita, arquivo PNG real
+confirmado em disco (assinatura de bytes checada, não só a resposta da
+IPC), paste de imagem interceptado (`preventDefault` real) vs paste de
+texto NÃO interceptado (comportamento padrão do xterm intacto,
+confirmado via contagem de PNGs novos = 0). **Achado real de teste**
+(não do app): a primeira versão do polling do badge quebrava no "1"
+(parava assim que o valor virava truthy, antes do segundo URL chegar) —
+corrigido esperando especificamente por `"2"`. `tsc --noEmit`/
+`electron-vite build` limpos. Suite completa: 20 outras suítes
+pré-existentes rerrodadas (237 checks) + esta nova (19 checks) — 0
+regressões.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.

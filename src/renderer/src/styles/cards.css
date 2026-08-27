@@ -754,25 +754,106 @@
   pointer-events: none;
 }
 
-.terminal-card-urls {
-  position: absolute;
-  bottom: 50px;
-  left: 8px;
-  right: 8px;
+/* Achado ao vivo (2026-08-27): a versão antiga desses chips era
+   `position: absolute` por CIMA das linhas do terminal, sem limite nem
+   expiração — qualquer sessão que imprimisse alguns links (docs, npm,
+   git remote…) acumulava uma faixa permanente cobrindo conteúdo real.
+   Vira um badge dentro do próprio footer (nunca sobrepõe o terminal); a
+   lista completa mora num Popover sob demanda. */
+.terminal-card-foot-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
   align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
 }
 
-.terminal-card-url-chip {
+.terminal-card-foot-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-card-url-badge {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
   background: var(--panel);
   color: var(--foam);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 1px 8px;
+  padding: 1px 7px;
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
+}
+
+.terminal-card-url-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  min-width: 220px;
+}
+
+.terminal-card-url-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminal-card-url-chip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--panel);
+  color: var(--foam);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Feedback visual real (não otimista) do clique-pra-copiar — só aparece
+   depois que `navigator.clipboard.writeText` de fato resolveu ou falhou. */
+.terminal-card-url-chip.copied {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.terminal-card-url-chip.copy-error {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.terminal-card-url-open {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.terminal-card-url-open:hover {
+  color: var(--foam);
+  border-color: var(--foam);
 }
 
 .stroke-card {

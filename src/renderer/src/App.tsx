@@ -354,6 +354,14 @@ export function App() {
   const [newModel, setNewModel] = useState("");
   const [newSystemPrompt, setNewSystemPrompt] = useState("");
   const [seenUrls, setSeenUrls] = useState<Record<string, string[]>>({});
+  // Pedido ao vivo (2026-08-27): o clique num link visto no terminal
+  // deixou de abrir o navegador interno direto — agora pede confirmação
+  // (ConfirmModal genérico), mesmo padrão de "closing a live terminal"
+  // já usa. Separado de `pendingAsk`/AgentAskModal de propósito: aquele é
+  // especificamente o gate de consentimento pra pedidos DE AGENTE (via
+  // MCP/acbridge, acompanhado de requesterId/reason); este é um clique
+  // humano direto, sem requester nem motivo pra mostrar.
+  const [pendingOpenUrl, setPendingOpenUrl] = useState<string | null>(null);
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — one union covers every
   // kind of agent ask (open URL, spawn agent, spawn non-terminal card);
   // AgentAskModal.tsx renders whichever is pending, allowAsk/denyAsk below
@@ -783,7 +791,14 @@ export function App() {
     });
   }
 
-  /** Agent-requested (post-Allow) or a seenUrls chip click — both are already-consented. Reuses this owner's existing browser card if one is open, else opens a new one. No toast here — this path isn't the human "I just clicked +browser" moment the toasts above are for. Returns the card id — spawn_card's browser variant (below) and the acbridge/MCP "open" ask flow both need to report which card actually got used back to the caller. */
+  /** Agent-requested (post-Allow) or a seenUrls chip click confirmed via the
+   * `pendingOpenUrl`/ConfirmModal gate below — both are already-consented
+   * by the time this runs. Reuses this owner's existing browser card if
+   * one is open, else opens a new one. No toast here — this path isn't the
+   * human "I just clicked +browser" moment the toasts above are for.
+   * Returns the card id — spawn_card's browser variant (below) and the
+   * acbridge/MCP "open" ask flow both need to report which card actually
+   * got used back to the caller. */
   function openBrowserFor(ownerCardId: string | null, url: string): string {
     const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
     if (existing) {
@@ -1360,7 +1375,7 @@ export function App() {
                 onRename={(label) => renameCard(c.id, label)}
                 onResumeIdDiscovered={(sessionId) => resumeIdDiscovered(c.id, sessionId)}
                 onStatusChange={(status) => handleTerminalStatus(c.id, status)}
-                onOpenUrl={(url) => openBrowserFor(null, url)}
+                onOpenUrl={(url) => setPendingOpenUrl(url)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1740,6 +1755,18 @@ export function App() {
           reason={pendingAsk.reason}
           onAllow={allowAsk}
           onDeny={denyAsk}
+        />
+      )}
+      {pendingOpenUrl && (
+        <ConfirmModal
+          title="Abrir link no navegador"
+          message={`Abrir "${pendingOpenUrl}" no navegador interno deste agente?`}
+          confirmLabel="Abrir"
+          onConfirm={() => {
+            openBrowserFor(null, pendingOpenUrl);
+            setPendingOpenUrl(null);
+          }}
+          onCancel={() => setPendingOpenUrl(null)}
         />
       )}
     </div>

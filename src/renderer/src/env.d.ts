@@ -13,11 +13,13 @@ import type {
   UpdaterApi,
   SecretsApi,
   ChatApi,
+  ClipboardImageApi,
 } from "../../preload/index";
 
 declare global {
   interface Window {
     pty: PtyApi;
+    clipboardImage: ClipboardImageApi;
     store: StoreApi;
     fs: FsApi;
     git: GitApi;
