@@ -3067,6 +3067,36 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   pré-existentes rerrodadas (237 checks) + esta nova — 0 regressões.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 22.
 
+## 2026-08-27 — Scroll sobre qualquer card zoomava o canvas por baixo (item 26)
+
+- Causa raiz: `useWorldTransform.ts`'s `onWheel` no `.viewport` zooma em
+  qualquer wheel sem exceção por padrão. Só `BrowserCard.tsx` já tratava
+  isso, condicional a foco real — todo o resto (terminal/arquivos/chat/
+  changes/sticky/stroke/remote-window) sempre vazava pro zoom.
+- Fix universal, um handler só em `CardFrame.tsx` (wrapper de TODO tipo
+  de card, 8/8 confirmado via grep): sempre para a propagação do wheel —
+  o card inteiro vira zona onde wheel nunca vaza pro board, scroll
+  dentro dele rola o overflow nativo que já existe (xterm.js/arquivos/
+  chat/changes), zoom só no fundo vazio de verdade.
+- Mudança de comportamento deliberada, confirmada com o usuário:
+  `BrowserCard` sem foco tinha uma exceção própria ("deixa vazar pro
+  zoom") — deixa de existir, fica consistente com todo o resto.
+- Teclado auditado a pedido do usuário, sem bug: atalhos globais já
+  respeitam foco de DOM padrão. Mecanismo de foco-pra-digitar do
+  `BrowserCard` (foco em `webContents` inteira no clique) confirmado
+  genérico de verdade — 3 gaps conhecidos no vocabulário de teclas
+  (F1-F12/Insert, IME, paste real via Ctrl+V), documentados, não
+  urgentes, não implementados.
+- Verificação: `scripts/verify/smoke-card-wheel-scope.mjs` (novo, 6/6).
+  **Achado real durante a escrita do teste**: `.xterm-viewport`'s
+  `scrollTop` não reflete a posição real de scroll nesta versão do
+  xterm.js (overlay de scroll próprio, estilo VS Code) — corrigido
+  usando comparação de pixels reais (`Page.captureScreenshot`) em vez de
+  uma propriedade DOM que se mostrou não confiável. `smoke-browser.mjs`
+  rerrodado 3× isolado (3/3 limpo) — a única falha da cadeia longa é o
+  flake pré-existente já documentado, não regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 26.
+
 ## Comandos
 
 ```bash
