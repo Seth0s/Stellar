@@ -1694,24 +1694,32 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    da `WebContentsView` separadamente e compor por cima, ver `AGENTS.md`).
    Só reforçando que continua pendente.
 2. **Ícone extra de "fullscreen" no zoom-pill que não esconde a
-   header** — o usuário pediu pra remover. Achado real, precisa de
-   decisão antes de implementar: o botão em questão é `onFit` ("ajustar à
-   tela"), não um fullscreen fake — é uma feature genuinamente diferente
-   (zoom pra caber todo o conteúdo, não relacionado a esconder a
-   titlebar) que só *parece* fullscreen porque o ícone (colchetes/cantos)
-   é visualmente parecido com o do botão de fullscreen real (adicionado
-   no item 19, ao lado dele). Remover `onFit` de vez perderia essa
-   função; a leitura mais provável é "deixe só um ícone claramente
-   diferente ali", não "apague o zoom-to-fit". **Confirmar com o usuário
-   qual dos dois** antes de tocar.
-3. **"On hover no ícone de editar"** — screenshot mostra um card de
-   sessão da Home com o lápis de editar visível e a borda acesa (cor
-   `--foam`). Frase do usuário ficou incompleta (só descreve a imagem,
-   sem dizer o que está errado) — **precisa de mais detalhe do usuário**
-   antes de virar trabalho: o hover em si já existe
-   (`.home-session-card:hover`/`.home-session-edit:hover`, ver
-   `layout.css`), então o pedido deve ser algo específico sobre como esse
-   estado se comporta/parece, não a existência dele.
+   header** — ✅ resolvido em 2026-08-27. Esclarecido com o usuário: o
+   propósito (`onFit`, "ajustar à tela") é válido, só não pertencia à
+   topbar — "Se esse é o propósito acho válido estár no header (do
+   card), não na top bar". Removido de vez do `zoom-pill`
+   (`Topbar.tsx`) e reimplementado como botão por-card
+   (`.card-focus-btn`) no header de cada `CardFrame`, sempre presente,
+   chamando `focusCard(id)` (não mais o `fitView()` de board inteiro).
+   `App.tsx` passa `onFocus={() => jumpToCard(c.id)}` em 6 dos 7 tipos de
+   card (todos exceto `StrokeCard`, que não tem header de card
+   convencional). Verificado: `tsc`/build limpos, screenshot confirmando
+   posicionamento (botão de foco ao lado do close no card de navegador,
+   sem sobreposição), e novo check em
+   `scripts/verify/smoke-card-actions.mjs` (pan parcial deixando o card
+   só parcialmente enquadrado → clique no botão do próprio card →
+   confirma que ele volta totalmente enquadrado) — `npm run verify`
+   (13 suítes) verde.
+3. **"On hover no ícone de editar"** — ✅ resolvido em 2026-08-27.
+   Detalhe confirmado pelo usuário: o hover já existia no nível do card
+   inteiro (borda `--foam`), mas o ícone de lápis em si não tinha
+   nenhuma mudança de background própria ao passar o mouse por cima dele
+   especificamente. Adicionado `.home-session-edit:hover { background:
+   var(--border); color: var(--text); }` em `layout.css`, com
+   `padding`/`border-radius`/`cursor` de suporte e a posição ajustada
+   (`top`/`right` de 10px→6px) para o alvo de clique ficar mais preciso.
+   Verificado via simulação real de hover por CDP + screenshot recortado
+   mostrando o highlight arredondado atrás do lápis.
 4. **Excluir a última sessão não faz nada, sem feedback** — `SessionModal`
    já bloqueia certo (`canDelete={boards.length > 1}`, botão `disabled`),
    mas o botão "Excluir" continua com a MESMA aparência vermelha vívida

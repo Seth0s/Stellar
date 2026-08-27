@@ -19,6 +19,7 @@ export function RemoteWindowCard({
   onChange,
   onCommit,
   onRaise,
+  onFocus,
   onClose,
   onCloseAnimationEnd,
   onRename,
@@ -36,6 +37,7 @@ export function RemoteWindowCard({
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
+  onFocus: () => void;
   onClose: () => void;
   onCloseAnimationEnd?: () => void;
   onRename: (label: string) => void;
@@ -151,6 +153,7 @@ export function RemoteWindowCard({
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
+      onFocus={onFocus}
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}

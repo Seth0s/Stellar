@@ -1655,25 +1655,42 @@ select.resume-input {
 
 .home-session-edit {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  /* 6px, not 10px — the 4px of padding below eats the difference, so the
+     pencil glyph itself still lands at the same visual spot as before. */
+  top: 6px;
+  right: 6px;
   display: flex;
+  padding: 4px;
+  border-radius: 4px;
   color: var(--muted);
   opacity: 0;
+  cursor: pointer;
   transition:
     opacity 0.12s ease,
-    top 0.12s ease;
+    top 0.12s ease,
+    background-color 0.12s ease,
+    color 0.12s ease;
 }
 
 /* The "recente" badge now lives in this same top-right corner (moved off
  * the title, item 14 addendum) — drop the pencil below it on a card that
  * has both, so hovering never stacks them. */
 .home-session-edit--below-badge {
-  top: 30px;
+  top: 26px;
 }
 
 .home-session-card:hover .home-session-edit {
   opacity: 1;
+}
+
+/* Reported live (2026-08-27) — "não há mudança de background no ícone
+ * editar no onhover": the card-level hover above only ever made the icon
+ * fade in; hovering the icon itself (once visible) gave no further
+ * feedback of its own, unlike every other icon-button in the app
+ * (`.card-head button:hover`, same background/color pair). */
+.home-session-edit:hover {
+  background: var(--border);
+  color: var(--text);
 }
 
 .home-session-name {

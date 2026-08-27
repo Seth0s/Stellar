@@ -58,6 +58,7 @@ export function BrowserCard({
   onChange,
   onCommit,
   onRaise,
+  onFocus,
   onClose,
   onCloseAnimationEnd,
   onConnectorStart,
@@ -77,6 +78,7 @@ export function BrowserCard({
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
+  onFocus: () => void;
   onClose: () => void;
   onCloseAnimationEnd?: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
@@ -249,6 +251,7 @@ export function BrowserCard({
       onChange={onChange}
       onCommit={onCommit}
       onRaise={onRaise}
+      onFocus={onFocus}
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
