@@ -121,7 +121,7 @@ export function Topbar({
           of this cramped space into SessionModal (mode="edit"), same
           fields/layout as create. */}
       <Popover anchorRef={titleBtnRef} open={open} onClose={() => setOpen(false)}>
-        <div className="board-list">
+        <div className="board-list thin-scroll">
           <div className="board-list-heading">SESSÕES</div>
           {groupByProject(boards).map(([project, group]) => (
             <div key={project} className="board-project-group">

@@ -276,7 +276,7 @@ export function PathPicker({
               );
             })}
           </div>
-          <div className="files-tree path-picker-tree">
+          <div className="files-tree path-picker-tree thin-scroll">
             {(kids[""] ?? []).map((entry) => renderNode(entry, "", 0))}
             {kids[""] && kids[""].length === 0 && creating !== "" && (
               <div className="path-picker-empty">nenhuma subpasta</div>

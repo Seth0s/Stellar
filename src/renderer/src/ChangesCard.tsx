@@ -89,7 +89,7 @@ export function ChangesCard({
       }
       footerContent={root}
     >
-      <div className="changes-card-body">
+      <div className="changes-card-body thin-scroll">
         {!status && <div className="changes-msg">carregando…</div>}
         {status && !status.repo && <div className="changes-msg">não é um repositório git</div>}
         {status && status.repo && (

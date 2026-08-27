@@ -161,6 +161,37 @@ body {
   flex: none;
 }
 
+/* DESIGN-BACKLOG.md item 21, ponto 10 — collapse/expand toggle, moved out
+   of `.rail`'s own pill (used to be its first `.rail-btn`, indistinguishable
+   from a tool button). Floats just outside the rail's right edge
+   (`.rail` is `left: 12px`, `width: 48px`), vertically centered to it —
+   same spot whether the rail is expanded or collapsed, so it never moves.
+   Deliberately subtle (low opacity, no pill background) — a landmark to
+   notice once you look for it, not a competing button. */
+.rail-toggle {
+  position: absolute;
+  left: 64px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.35;
+  transition: opacity 0.12s ease, color 0.12s ease;
+  z-index: 500;
+}
+
+.rail-toggle:hover {
+  opacity: 1;
+  color: var(--text);
+}
+
 /* --------------------------------------------------------------- topbar */
 
 .topbar {
@@ -1480,28 +1511,38 @@ select.resume-input {
   padding-bottom: 48px;
 }
 
-/* A thin, themed scrollbar instead of the OS default — Chromium (this is
-   Electron) honors `::-webkit-scrollbar`; `scrollbar-width`/`-color` cover
-   the same intent for any Gecko-based tooling that touches this CSS. */
-.home-scroll {
+/* DESIGN-BACKLOG.md item 21, ponto 5 — reusable SD (sistema de design)
+   utility, born here (first done for `.home-scroll`) then generalized
+   after `.path-picker-tree` shipped with the OS's own thick default
+   scrollbar instead of reusing this. Add `thin-scroll` to the className
+   of ANY element that scrolls (`overflow`/`overflow-y: auto` or
+   `scroll`) instead of reinventing this block per component — every
+   scrollable area in the app (`.home-scroll`, `.files-tree`/
+   `.path-picker-tree`, `.board-list`, `.changes-card-body`,
+   `.update-banner-notes`, `.rail`) composes it this way now. Chromium
+   (this is Electron) honors `::-webkit-scrollbar`; `scrollbar-width`/
+   `-color` cover the same intent for any Gecko-based tooling that
+   touches this CSS. */
+.thin-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-.home-scroll::-webkit-scrollbar {
+.thin-scroll::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
-.home-scroll::-webkit-scrollbar-track {
+.thin-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.home-scroll::-webkit-scrollbar-thumb {
+.thin-scroll::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 999px;
 }
 
-.home-scroll::-webkit-scrollbar-thumb:hover {
+.thin-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
 

@@ -1729,13 +1729,19 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    aparece no hover, que pode passar despercebido). Precisa de: estado
    visual de desabilitado real (opacidade/cursor) e/ou um feedback ativo
    (toast) explicando por que, não só depender do hover no `title`.
-5. **Componente genérico de scrollbar** — reusar o estilo já feito pra
-   Home (`.home-scroll`, item 19: fino, temático, `::-webkit-scrollbar`)
-   em vez de cada área scrollável (ex.: `.path-picker-tree`, que hoje usa
-   a barra padrão grossa do SO, visível no screenshot) reinventar a
-   própria. Extrair como classe utilitária reaproveitável, documentada
-   junto com o resto do sistema de design (SD) do app pra não virar mais
-   um estilo hardcoded isolado.
+5. **Componente genérico de scrollbar** — ✅ resolvido em 2026-08-27.
+   O bloco de `::-webkit-scrollbar`/`scrollbar-width` que só existia em
+   `.home-scroll` virou utilitário `.thin-scroll` (`layout.css`),
+   documentado como parte do SD — qualquer elemento que role
+   (`overflow`/`overflow-y: auto`) ganha a barra fina/temática só
+   adicionando a classe no `className`, sem redefinir o bloco. Aplicado
+   em `.home-scroll`, `.files-tree`/`.path-picker-tree` (o caso
+   reportado — árvore de pastas usava a barra grossa padrão do SO),
+   `.board-list` (popover de sessões, 2 pontos de render), `.changes-
+   card-body`, `.update-banner-notes` e `.rail`. Verificado via CDP:
+   `.path-picker-tree` com `scrollHeight > clientHeight` (overflow real,
+   não um teste vazio) + screenshot confirmando a barra fina no lugar da
+   padrão do SO. `npm run verify` (13 suítes) PASS.
 6. **Sistema de validação de campo, genérico** — screenshot mostra "Nova
    sessão" com o campo "nome" vazio e nenhum indicador de erro. Pedido:
    quando um campo obrigatório fica inválido, destacar a borda do campo
@@ -1758,10 +1764,17 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    estruturado, específico pra pedidos de autorização vindos de um
    agente). Escopo grande, fica pra uma rodada dedicada de revisão, não
    pra encaixar de raspão numa sessão de polimento.
-10. **Ícone "<" de recolher a régua** — hoje é o primeiro item DENTRO da
-    própria coluna da régua (`Rail.tsx`), no topo. Pedido: mover pra fora
-    da régua, logo ao lado dela, centralizado verticalmente, com pouca
-    opacidade (sutil, não um botão chapado).
+10. **Ícone "<" de recolher a régua** — ✅ resolvido em 2026-08-27.
+    Saiu de dentro do `.rail` (onde era só mais um `.rail-btn`,
+    indistinguível de um botão de ferramenta) pra um botão próprio
+    (`.rail-toggle`) fora da pílula, `position: absolute` colado à
+    direita da régua (`left: 64px`, régua termina em `60px`), centralizado
+    verticalmente ao lado dela — mesmo lugar tanto expandido (`‹`) quanto
+    recolhido (`›`), landmark fixo em vez de sumir/mover com o conteúdo.
+    Opacidade 0.35 em repouso, 1 no hover — sutil por padrão, não um
+    botão chapado. Verificado via CDP: screenshot recortado confirmando a
+    posição/opacidade, clique real alternando expandido↔recolhido com o
+    ícone no mesmo lugar nos dois estados.
 11. **`FilesCard`'s modo código precisa ser um editor de verdade** — hoje
     é um `<textarea>` puro (sem números de linha, sem destaque de
     sintaxe, sem guias de indentação) — screenshot mostra HTML sem

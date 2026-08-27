@@ -478,7 +478,7 @@ export function FilesCard({
               />
             </div>
           )}
-          <div className="files-tree">
+          <div className="files-tree thin-scroll">
             {(kids[""] ?? []).map((entry) => (
               <TreeNode
                 key={entry.path}

@@ -2615,6 +2615,23 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   clique no próprio `.card-focus-btn` do card, confirma reenquadramento
   total. `npm run verify` completo (13 suítes) PASS. Detalhe em
   `DESIGN-BACKLOG.md` item 21 (pontos 2 e 3 fechados).
+- **Item 21, pontos 10 e 5, mesmo dia**: `Rail.tsx`'s toggle de
+  recolher/expandir (era o primeiro `.rail-btn` de dentro da própria
+  pílula) virou `.rail-toggle` — botão próprio fora do `.rail`,
+  `position: absolute` grudado à direita da régua, centralizado
+  verticalmente, opacidade baixa até o hover; mesma posição expandido ou
+  recolhido, landmark fixo em vez de mover com o conteúdo. Utilitário de
+  scrollbar fina (nascido só em `.home-scroll`) virou classe reaproveitável
+  `.thin-scroll` (`layout.css`) — qualquer área com `overflow: auto` ganha
+  a barra fina/temática só adicionando a classe no `className`; aplicado
+  em `.home-scroll`, `.files-tree`/`.path-picker-tree` (o caso reportado —
+  árvore de pastas usava a barra grossa padrão do SO), `.board-list` (2
+  pontos de render), `.changes-card-body`, `.update-banner-notes` e
+  `.rail`. Verificado via CDP: screenshots do toggle nos dois estados +
+  clique real alternando; `.path-picker-tree` confirmado com overflow
+  real (`scrollHeight > clientHeight`) e barra fina visível no
+  screenshot. `npm run verify` completo (13 suítes) PASS. Detalhe em
+  `DESIGN-BACKLOG.md` item 21 (pontos 5 e 10 fechados).
 
 ## Comandos
 
