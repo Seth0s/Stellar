@@ -34,6 +34,50 @@ try {
     await page.evalJs(`!!document.querySelector(".radial-menu")`),
     true,
   );
+  // DESIGN-BACKLOG.md item 21, ponto 7 — arc that tracks the pointer's
+  // angle along the ring (not a straight line to the cursor). No
+  // indicator before the pointer ever gets near the ring; moving to a
+  // point exactly on the ring (distance = RADIUS from the anchor) makes
+  // one appear; moving to a DIFFERENT angle on the ring changes its path
+  // (real tracking, not a static decoration); moving back toward the
+  // center (leaving the ring band) freezes it at the last angle instead
+  // of resetting or disappearing.
+  const noIndicatorYet = await page.evalJs(`JSON.stringify(!document.querySelector('.radial-indicator'))`);
+  check("no ring indicator before the pointer nears the ring", JSON.parse(noIndicatorYet), true);
+
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: point.x + 88,
+    y: point.y,
+    button: "left",
+    pointerType: "mouse",
+  });
+  await new Promise((r) => setTimeout(r, 150));
+  const dAtRight = await page.evalJs(`document.querySelector('.radial-indicator path')?.getAttribute('d') ?? null`);
+  check("moving onto the ring shows the indicator", dAtRight !== null, true);
+
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: point.x,
+    y: point.y + 88,
+    button: "left",
+    pointerType: "mouse",
+  });
+  await new Promise((r) => setTimeout(r, 150));
+  const dAtDown = await page.evalJs(`document.querySelector('.radial-indicator path')?.getAttribute('d') ?? null`);
+  check("moving to a different point on the ring updates the arc (real tracking)", dAtDown !== dAtRight, true);
+
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    pointerType: "mouse",
+  });
+  await new Promise((r) => setTimeout(r, 150));
+  const dAtCenter = await page.evalJs(`document.querySelector('.radial-indicator path')?.getAttribute('d') ?? null`);
+  check("leaving the ring (back toward center) freezes the arc at its last angle", dAtCenter, dAtDown);
+
   await page.send("Input.dispatchMouseEvent", {
     type: "mouseReleased",
     x: point.x,

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Tool } from "./card-types";
 import { Icon, type IconName } from "./icons";
 
@@ -41,6 +42,29 @@ const ACTIONS: { action: RadialAction; icon: IconName; label: string; group: "to
 
 const RADIUS = 88;
 
+// DESIGN-BACKLOG.md item 21, ponto 7 — how wide the ring's "hit band" is
+// on either side of RADIUS for tracking the mouse (items are 40px circles
+// centered on the circle, so ±20 is their own footprint; the extra margin
+// makes the indicator track before the cursor is literally over a button).
+const RING_BAND = 32;
+// Half-width of the highlighted arc itself, in radians (~16°).
+const ARC_HALF_ANGLE = 0.28;
+// SVG overlay padding beyond RADIUS, room for the arc's stroke width.
+const OVERLAY_PAD = 12;
+const OVERLAY = RADIUS + OVERLAY_PAD;
+
+function arcPath(radius: number, centerAngle: number) {
+  const start = centerAngle - ARC_HALF_ANGLE;
+  const end = centerAngle + ARC_HALF_ANGLE;
+  const cx = OVERLAY;
+  const cy = OVERLAY;
+  const sx = cx + Math.cos(start) * radius;
+  const sy = cy + Math.sin(start) * radius;
+  const ex = cx + Math.cos(end) * radius;
+  const ey = cy + Math.sin(end) * radius;
+  return `M ${sx} ${sy} A ${radius} ${radius} 0 0 1 ${ex} ${ey}`;
+}
+
 export function RadialMenu({
   x,
   y,
@@ -57,9 +81,53 @@ export function RadialMenu({
   onSelect: (action: RadialAction) => void;
   onClose: () => void;
 }) {
+  // DESIGN-BACKLOG.md item 21, ponto 7 — "uma linha acompanhando o mouse
+  // em volta do raio (estritamente em volta do raio, não uma linha reta
+  // até o cursor)": an arc that tracks the pointer's angle along the
+  // ring, not a straight line to the cursor. `null` means the pointer
+  // has never gotten near the ring since the menu opened — nothing
+  // renders. Once it has, moving away from the ring band (back toward
+  // the center, or out past the items) leaves the angle exactly where it
+  // last was instead of resetting — "fica presa no último botão que
+  // estava perto" — only `onPointerMove` updates it, so there's no
+  // separate leave handler resetting anything.
+  const [indicatorAngle, setIndicatorAngle] = useState<number | null>(null);
+
+  function handlePointerMove(e: React.PointerEvent) {
+    const dx = e.clientX - x;
+    const dy = e.clientY - y;
+    const dist = Math.hypot(dx, dy);
+    if (Math.abs(dist - RADIUS) > RING_BAND) return;
+    setIndicatorAngle(Math.atan2(dy, dx));
+  }
+
   return (
-    <div className="radial-backdrop" onPointerDown={onClose} onContextMenu={(e) => e.preventDefault()}>
+    // `onPointerMove` lives here, not on `.radial-menu` — that div is
+    // `width:0; height:0` (its children escape the box via `position:
+    // absolute`/`transform`, same trick the items themselves use), so
+    // IT only ever receives a pointer event when the cursor happens to
+    // land exactly on a rendered child (a button, or the indicator once
+    // it exists) — everywhere else in the ring's gaps, the event lands
+    // directly on this backdrop instead and never bubbles down into a
+    // sibling. The backdrop covers the full viewport, so it sees every
+    // move regardless of where in the ring the cursor actually is.
+    <div
+      className="radial-backdrop"
+      onPointerDown={onClose}
+      onPointerMove={handlePointerMove}
+      onContextMenu={(e) => e.preventDefault()}
+    >
       <div className="radial-menu" style={{ left: x, top: y }} onPointerDown={(e) => e.stopPropagation()}>
+        {indicatorAngle !== null && (
+          <svg
+            className="radial-indicator"
+            width={OVERLAY * 2}
+            height={OVERLAY * 2}
+            style={{ left: -OVERLAY, top: -OVERLAY }}
+          >
+            <path d={arcPath(RADIUS, indicatorAngle)} />
+          </svg>
+        )}
         {ACTIONS.map(({ action, icon, label, group, tool: itemTool }, i) => {
           const angle = (i / ACTIONS.length) * Math.PI * 2 - Math.PI / 2;
           const dx = Math.cos(angle) * RADIUS;
