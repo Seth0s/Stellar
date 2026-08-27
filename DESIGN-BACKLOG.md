@@ -1682,6 +1682,90 @@ resolução prejudicada do card do navegador.
 exatamente a regressão que existia). `npm run verify` completo (13
 suítes, 89 checks) PASS.
 
+## 21. Anotado em 2026-08-27, não implementado ainda — 12 pontos reportados ao vivo
+
+Pedido explícito do usuário foi só anotar, sem mexer em código nesta
+passagem. Numeração preservada como reportada (o usuário pulou de "7°"
+pra "9°", sem "8°" — não é erro de digitação meu).
+
+1. **Card do navegador em branco no snapshot do agente** — mesmo achado
+   já documentado no item 4 (`capturePage()` não compõe `WebContentsView`
+   nesta máquina), ainda sem workaround implementado (capturar o target
+   da `WebContentsView` separadamente e compor por cima, ver `AGENTS.md`).
+   Só reforçando que continua pendente.
+2. **Ícone extra de "fullscreen" no zoom-pill que não esconde a
+   header** — o usuário pediu pra remover. Achado real, precisa de
+   decisão antes de implementar: o botão em questão é `onFit` ("ajustar à
+   tela"), não um fullscreen fake — é uma feature genuinamente diferente
+   (zoom pra caber todo o conteúdo, não relacionado a esconder a
+   titlebar) que só *parece* fullscreen porque o ícone (colchetes/cantos)
+   é visualmente parecido com o do botão de fullscreen real (adicionado
+   no item 19, ao lado dele). Remover `onFit` de vez perderia essa
+   função; a leitura mais provável é "deixe só um ícone claramente
+   diferente ali", não "apague o zoom-to-fit". **Confirmar com o usuário
+   qual dos dois** antes de tocar.
+3. **"On hover no ícone de editar"** — screenshot mostra um card de
+   sessão da Home com o lápis de editar visível e a borda acesa (cor
+   `--foam`). Frase do usuário ficou incompleta (só descreve a imagem,
+   sem dizer o que está errado) — **precisa de mais detalhe do usuário**
+   antes de virar trabalho: o hover em si já existe
+   (`.home-session-card:hover`/`.home-session-edit:hover`, ver
+   `layout.css`), então o pedido deve ser algo específico sobre como esse
+   estado se comporta/parece, não a existência dele.
+4. **Excluir a última sessão não faz nada, sem feedback** — `SessionModal`
+   já bloqueia certo (`canDelete={boards.length > 1}`, botão `disabled`),
+   mas o botão "Excluir" continua com a MESMA aparência vermelha vívida
+   de sempre (sem estado visual de desabilitado), e um botão `disabled`
+   nunca dispara `onClick`, então clicar nele literalmente não faz nada
+   visível — nem toast, nem tooltip aparece (o `title` explicativo só
+   aparece no hover, que pode passar despercebido). Precisa de: estado
+   visual de desabilitado real (opacidade/cursor) e/ou um feedback ativo
+   (toast) explicando por que, não só depender do hover no `title`.
+5. **Componente genérico de scrollbar** — reusar o estilo já feito pra
+   Home (`.home-scroll`, item 19: fino, temático, `::-webkit-scrollbar`)
+   em vez de cada área scrollável (ex.: `.path-picker-tree`, que hoje usa
+   a barra padrão grossa do SO, visível no screenshot) reinventar a
+   própria. Extrair como classe utilitária reaproveitável, documentada
+   junto com o resto do sistema de design (SD) do app pra não virar mais
+   um estilo hardcoded isolado.
+6. **Sistema de validação de campo, genérico** — screenshot mostra "Nova
+   sessão" com o campo "nome" vazio e nenhum indicador de erro. Pedido:
+   quando um campo obrigatório fica inválido, destacar a borda do campo
+   (vermelho) E mostrar a mensagem do problema embaixo dele — como um
+   sistema/estilo genérico reaproveitável (não só pro campo nome do
+   `SessionModal`), pra qualquer form futuro no app usar do mesmo jeito.
+7. **Linha acompanhando o mouse ao redor do raio do menu radial** —
+   estritamente em volta do círculo (raio) do `RadialMenu.tsx`, não uma
+   linha reta até o cursor. Se o mouse sai do raio, a linha fica presa no
+   último botão que estava perto (ou em lugar nenhum, se nunca chegou
+   perto de nenhum) — feedback visual de "pra onde eu vou se soltar
+   agora", tipo um indicador de hover ao longo do anel.
+9. **Varredura de lógica ampla, pedida como auditoria futura** — cobrir:
+   sistema de spawn entre agentes, spawn de ferramentas feito por
+   agentes, caminho de controle otimizado pro agente (acbridge?), snapshot
+   do canvas, visualização do navegador (pro agente, não só pro
+   usuário), e autorizar bash fora do sandbox — este último precisa de um
+   componente genérico novo pro agente PEDIR permissão (modal com
+   título, motivo, comando, etc — algo como um `ConfirmModal` mais
+   estruturado, específico pra pedidos de autorização vindos de um
+   agente). Escopo grande, fica pra uma rodada dedicada de revisão, não
+   pra encaixar de raspão numa sessão de polimento.
+10. **Ícone "<" de recolher a régua** — hoje é o primeiro item DENTRO da
+    própria coluna da régua (`Rail.tsx`), no topo. Pedido: mover pra fora
+    da régua, logo ao lado dela, centralizado verticalmente, com pouca
+    opacidade (sutil, não um botão chapado).
+11. **`FilesCard`'s modo código precisa ser um editor de verdade** — hoje
+    é um `<textarea>` puro (sem números de linha, sem destaque de
+    sintaxe, sem guias de indentação) — screenshot mostra HTML sem
+    nenhuma cor. Pedido: as mesmas características do VSCode/editores
+    reais (numeração de linha, syntax highlighting, indentação). Implica
+    trocar o `<textarea>` por uma lib de editor de código real (ex.
+    CodeMirror) — mudança de escopo bem maior que os polimentos CSS
+    recentes, não uma troca de classe.
+12. **Novo provider de API + card de chatbox (estilo Codex/ChatGPT) —
+    "muito complexo, apenas anotar"**, palavras do próprio usuário. Sem
+    escopo definido ainda, só registrado pra não perder o pedido.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
