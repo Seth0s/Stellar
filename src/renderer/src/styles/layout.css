@@ -1061,6 +1061,17 @@ select.resume-input {
   border-color: var(--danger);
 }
 
+/* DESIGN-BACKLOG.md item 21, ponto 4 — "excluir a última sessão não faz
+   nada, sem feedback": a native `disabled` button never fires `onClick`,
+   so a click just... did nothing, and the button kept its normal vivid
+   red look (no disabled affordance either). `SessionModal.tsx` now uses
+   `aria-disabled` instead of `disabled` — visually dimmed here, but the
+   click handler still runs and shows a toast explaining why. */
+.modal-actions .danger.is-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* SessionModal's create mode — template picker (DESIGN-BACKLOG.md item 7). */
 .template-picker {
   display: flex;

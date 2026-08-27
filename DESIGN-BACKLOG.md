@@ -1720,15 +1720,20 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    (`top`/`right` de 10px→6px) para o alvo de clique ficar mais preciso.
    Verificado via simulação real de hover por CDP + screenshot recortado
    mostrando o highlight arredondado atrás do lápis.
-4. **Excluir a última sessão não faz nada, sem feedback** — `SessionModal`
-   já bloqueia certo (`canDelete={boards.length > 1}`, botão `disabled`),
-   mas o botão "Excluir" continua com a MESMA aparência vermelha vívida
-   de sempre (sem estado visual de desabilitado), e um botão `disabled`
-   nunca dispara `onClick`, então clicar nele literalmente não faz nada
-   visível — nem toast, nem tooltip aparece (o `title` explicativo só
-   aparece no hover, que pode passar despercebido). Precisa de: estado
-   visual de desabilitado real (opacidade/cursor) e/ou um feedback ativo
-   (toast) explicando por que, não só depender do hover no `title`.
+4. **Excluir a última sessão não faz nada, sem feedback** — ✅ resolvido
+   em 2026-08-27. Usuário confirmou: os dois — visual desabilitado real
+   E toast explicando o motivo. `SessionModal.tsx` trocou o `disabled`
+   nativo (bloqueava `onClick` por completo, então clicar não fazia
+   nada) por `aria-disabled` + classe `is-disabled` (`opacity: 0.45;
+   cursor: default`, mesmo padrão já usado em `.popover-row:disabled`) —
+   o botão continua clicável, e o handler mesmo verifica `canDelete`
+   antes de agir: se falso, chama `toast(...)` (`useToast.ts`, já
+   existia, só não estava sendo usado aqui) e retorna sem excluir; se
+   verdadeiro, segue normal. Verificado via CDP: classe/`aria-
+   disabled`/opacity confirmados, clique real na última sessão restante
+   mostra o toast e NÃO remove a sessão (`window.store.boards.list()`
+   ainda com 1 linha). Checks novos em `smoke-session-modal.mjs`. `npm
+   run verify` (13 suítes, 129 checks) PASS.
 5. **Componente genérico de scrollbar** — ✅ resolvido em 2026-08-27.
    O bloco de `::-webkit-scrollbar`/`scrollbar-width` que só existia em
    `.home-scroll` virou utilitário `.thin-scroll` (`layout.css`),

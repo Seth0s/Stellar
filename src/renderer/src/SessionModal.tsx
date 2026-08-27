@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { PathPicker } from "./PathPicker";
 import { useOccludesChrome } from "./occlusion";
+import { toast } from "./useToast";
 import type { SessionTemplate } from "./useBoardStore";
 
 type Board = { id: string; name: string; cwd: string };
@@ -115,10 +116,19 @@ export function SessionModal(props: SessionModalProps) {
           {props.mode === "edit" && (
             <button
               type="button"
-              className="danger"
-              disabled={!props.canDelete}
+              className={`danger${props.canDelete ? "" : " is-disabled"}`}
+              aria-disabled={!props.canDelete}
               title={props.canDelete ? "Excluir sessão" : "não é possível excluir a última sessão"}
               onClick={() => {
+                // Real `disabled` never fires onClick at all — clicking did
+                // nothing visible, no toast, nothing (DESIGN-BACKLOG.md
+                // item 21, ponto 4). `aria-disabled` keeps the button
+                // clickable so this guard can explain why, instead of a
+                // silent no-op.
+                if (!props.canDelete) {
+                  toast("não é possível excluir a última sessão — precisa haver pelo menos uma");
+                  return;
+                }
                 props.onDelete(props.board.id);
                 props.onClose();
               }}
