@@ -21,7 +21,13 @@ import { registerUpdater } from "./updater";
 import { createSecretsStore, type SecretProvider } from "./secrets";
 import { createAnthropicClient } from "./anthropic-client";
 import { createOpenAiClient } from "./openai-client";
-import { executeTool, type ChatMessage, type WriteConsentRequest } from "./chat-tools";
+import {
+  executeTool,
+  type ChatMessage,
+  type WriteConsentRequest,
+  type BashConsentRequest,
+  type DelegateProvider,
+} from "./chat-tools";
 
 const isDev = !app.isPackaged;
 
@@ -246,6 +252,14 @@ function createWindow() {
   // just because the human stepped away; the tool loop simply stays
   // paused until they come back, same as any other open modal in this app.
   const pendingWriteConsents = new Map<string, (allowed: boolean) => void>();
+  // DESIGN-BACKLOG.md item 12, Fase D — the `bash` tool's consent gate,
+  // same requestId-keyed pending-map shape as `pendingWriteConsents`
+  // above (deliberately a SEPARATE map, not a unified one — this
+  // codebase's own established idiom for a new consent kind, see
+  // message-bus.ts's pendingSnapshots/pendingPageTexts/pendingSpawnAgents/
+  // pendingSpawnCards, four near-identical maps rather than one unified
+  // one). No timeout, same reasoning as write consent.
+  const pendingBashConsents = new Map<string, (allowed: boolean) => void>();
   let nextChatRequestId = 1;
   function askWriteConsent(cardId: string, req: WriteConsentRequest): Promise<boolean> {
     return new Promise((resolve) => {
@@ -254,12 +268,44 @@ function createWindow() {
       safeSend(win, "chat:ask-write", requestId, cardId, req);
     });
   }
+  function askBashConsent(cardId: string, req: BashConsentRequest): Promise<boolean> {
+    return new Promise((resolve) => {
+      const requestId = String(nextChatRequestId++);
+      pendingBashConsents.set(requestId, resolve);
+      safeSend(win, "chat:ask-bash", requestId, cardId, req);
+    });
+  }
+  // Reuses the EXISTING spawn_agent consent+spawn flow end to end
+  // (message-bus.ts's `handleRequest`, the same dispatcher acbridge and
+  // the MCP server already call) rather than building a second one — the
+  // human sees the exact same AgentAskModal a real `spawn_agent` MCP call
+  // already produces. `depth: 0` is correct/honest here (not `undefined`
+  // defaulting to 0 inside handleRequest by accident): a chat-initiated
+  // delegation is a fresh top-level chain, same as any human-initiated
+  // spawn from the rail/radial menu — it isn't itself a spawned PTY
+  // process, so it carries no AGENT_CANVAS_SPAWN_DEPTH to inherit.
+  // `messageBus` is assigned further down (forward reference, same
+  // pattern `mcpServer.handleRequest` below already relies on) — safe
+  // because this closure only runs once a real tool call happens, long
+  // after setup finishes.
+  function delegateToAgent(cardId: string, cwd: string, provider: DelegateProvider, reason: string) {
+    return messageBus!.handleRequest({
+      cmd: "spawn_agent",
+      provider,
+      cwd,
+      requesterId: cardId,
+      depth: 0,
+      reason,
+    }) as Promise<{ ok: true; cardId: string } | { ok: false; error: string }>;
+  }
 
   const chatToolCallbacks = {
     onToolStart: (cardId: string, name: string, input: unknown) => safeSend(win, "chat:tool-start", cardId, name, input),
     onToolResult: (cardId: string, name: string, ok: boolean, summary: string) =>
       safeSend(win, "chat:tool-result", cardId, name, ok, summary),
     askWriteConsent,
+    askBashConsent,
+    delegateToAgent,
   };
   const anthropicClient = createAnthropicClient({
     onToken: (cardId, delta) => safeSend(win, "chat:token", cardId, delta),
@@ -521,6 +567,12 @@ function createWindow() {
     pendingWriteConsents.delete(requestId);
     resolve(allowed);
   });
+  ipcMain.handle("chat:bash-resolve", (_e, requestId: string, allowed: boolean) => {
+    const resolve = pendingBashConsents.get(requestId);
+    if (!resolve) return;
+    pendingBashConsents.delete(requestId);
+    resolve(allowed);
+  });
   // Test-only trigger (verify harness — scripts/verify/smoke-chat.mjs),
   // same reasoning/guard as updater.ts's `updater:test-emit-available`:
   // there's no way to exercise the real read_file/write_file/consent/diff
@@ -537,6 +589,8 @@ function createWindow() {
       onToolStart: (n, i) => safeSend(win, "chat:tool-start", cardId, n, i),
       onToolResult: (n, ok, summary) => safeSend(win, "chat:tool-result", cardId, n, ok, summary),
       askWriteConsent: (req) => askWriteConsent(cardId, req),
+      askBashConsent: (req) => askBashConsent(cardId, req),
+      delegateToAgent: (provider, reason) => delegateToAgent(cardId, root, provider, reason),
     });
   });
 

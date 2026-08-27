@@ -1019,6 +1019,43 @@
   color: var(--danger);
 }
 
+/* bash's consent block — DESIGN-BACKLOG.md item 12, Fase D. Same visual
+   language as .chat-diff-block (border/head/body/actions), but shows the
+   raw command line instead of a diff — there's nothing to diff, only
+   something to run. */
+.chat-bash-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+  margin-bottom: 10px;
+}
+
+.chat-bash-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-bash-command {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding: 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  color: var(--text);
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;

@@ -1898,9 +1898,13 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    **Atualização 2026-08-27**: deixa de ser só "fora de escopo" — o
    usuário decidiu, ao fechar o item 12 (novo provider + chatbox), que
    bash real no chatbox precisa desse sandbox de verdade primeiro (não
-   só reusar o consentimento por-ação já existente). Vira pré-requisito
-   nomeado da Fase D do item 12, não mais um achado solto — ver item 12
-   pro plano de fases completo.
+   só reusar o consentimento por-ação já existente). Virou pré-requisito
+   nomeado da Fase D do item 12.
+
+   **✅ resolvido em 2026-08-27** — item 12 Fase D construiu o sandbox
+   real (`main/sandbox.ts`, bubblewrap) e o `bash` real do chatbox é o
+   primeiro (e único, por ora) consumidor. Ver item 12 Fase D pro
+   detalhamento completo (flags, verificação empírica, testes).
 10. **Ícone "<" de recolher a régua** — ✅ resolvido em 2026-08-27.
     Saiu de dentro do `.rail` (onde era só mais um `.rail-btn`,
     indistinguível de um botão de ferramenta) pra um botão próprio
@@ -1948,8 +1952,7 @@ pra "9°", sem "8°" — não é erro de digitação meu).
     highlight reais por token (não texto plano), salvar grava o conteúdo
     exato em disco. `npm run verify` (14 suítes, 152 checks) PASS.
 12. **Novo provider de API + card de chatbox (estilo Codex/ChatGPT)** —
-    escopo fechado com o usuário em 2026-08-27, ainda não implementado.
-    Decisões:
+    ✅ feito em 2026-08-27 (4/4 fases). Decisões:
     - **Duas APIs desde o início**: Anthropic Messages API e um endpoint
       OpenAI-compatible (Chat Completions) — abstração de provider
       precisa cobrir os dois formatos de streaming/tool-call desde a
@@ -2095,11 +2098,79 @@ pra "9°", sem "8°" — não é erro de digitação meu).
         rodando individualmente (a cadeia para na primeira falha, então
         rodada suíte a suíte pra não mascarar as demais atrás de um
         flake).
-    - **Fase D — sandbox real + bash + subagente**: constrói o sandbox
-      que o achado 6 (item 21 ponto 9) pede — pré-requisito bloqueante
-      pra liberar bash real nesta fase, não opcional. Bloco de subagente
-      vira funcional (delegação de verdade pra um agente MCP existente,
-      não só visual).
+    - **Fase D — sandbox real + bash + subagente — ✅ feito em
+      2026-08-27**: fecha item 12 inteiro (4/4 fases) e resolve o achado
+      6 do item 21 ponto 9 (deixa de ser "fora de escopo").
+      - **Sandbox** (`main/sandbox.ts`, novo): `bubblewrap` (`bwrap`,
+        confirmado instalado, 0.11.0) escolhido sobre `podman`/`docker`
+        (ambos presentes, mas processo demais pra confinar um único
+        comando) — decisão do usuário. Escopo confirmado com o usuário:
+        confinamento de escrita em disco + isolamento de processo/
+        namespace, **não** controle de saída de rede (rede liberada por
+        padrão — `npm install`/`curl`/`git` continuam funcionando, mesmo
+        nível de confiança que `write_file` já tem por consentimento
+        por-comando). Flags: `--ro-bind / /` + `--bind <root> <root>`
+        (só o `cwd` do chat é gravável) + `--tmpfs /tmp` + `--proc /proc
+        --dev /dev` + `--unshare-pid/-ipc/-uts/-cgroup-try` (isolamento
+        de processo) + `--die-with-parent --new-session --chdir <root>`,
+        SEM `--unshare-net`. **Verificado com uma invocação real do
+        `bwrap` na máquina antes de integrar** (não só lido do
+        `--help`): escrita dentro do root funciona, escrita em `/etc`
+        falha com "Sistema de arquivos somente para leitura", `ps aux`
+        de dentro mostra só o próprio bwrap + o comando (não os
+        processos reais do host), `curl` de dentro alcança um host
+        externo real. Timeout de 60s, mata com `SIGKILL`. Sem `bwrap`
+        disponível: tool `bash` recusa de cara, **sem sequer mostrar o
+        prompt de consentimento** (nada seguro pra aprovar sem sandbox —
+        um fallback não-sandboxado nunca é aceitável).
+      - **Tool `bash`** (`main/chat-tools.ts`): consentimento sempre
+        obrigatório (mesmo peso de `write_file`), mas com bloco próprio
+        no stream do chat (`.chat-bash-block`, `ChatCard.tsx`) mostrando
+        o comando puro em vez de um diff — não há o que diffar, só o que
+        rodar. Mesma forma de pending-map/IPC que `write_file` já
+        estabeleceu (`chat:ask-bash`/`chat:bash-resolve`,
+        `askBashConsent`), **deliberadamente um par separado, não
+        unificado** com o de escrita — segue o próprio idioma já
+        estabelecido neste código-base pra um novo tipo de consentimento
+        (`message-bus.ts` já tem 4 mapas quase idênticos —
+        `pendingSnapshots`/`pendingPageTexts`/`pendingSpawnAgents`/
+        `pendingSpawnCards` — em vez de um genérico único).
+      - **Tool `delegate_to_agent`**: reaproveita o fluxo de
+        consentimento+spawn JÁ EXISTENTE do `spawn_agent` (item 21 ponto
+        9 achado 1, `message-bus.ts`'s `handleRequest`) em vez de
+        construir um segundo — a chamada é literalmente
+        `messageBus.handleRequest({cmd:"spawn_agent", provider, cwd,
+        requesterId: cardId, depth: 0, reason})`, o MESMO dispatcher que
+        o MCP server e o `acbridge` já chamam. O humano vê o `AgentAskModal`
+        real, sem nenhuma UI nova construída pra isso. `depth: 0`
+        deliberado (não default acidental) — uma delegação iniciada pelo
+        chat é uma cadeia nova, o chat não é ele mesmo um processo PTY
+        spawnado, não carrega `AGENT_CANVAS_SPAWN_DEPTH` pra herdar.
+        Fire-and-forget do ponto de vista do loop de tool-call — uma
+        sessão CLI spawnada não pode ser esperada de forma síncrona, o
+        resultado da tool é só "spawnado, card #N, rodando
+        independente".
+      - Ambos os providers (`anthropic-client.ts`/`openai-client.ts`)
+        ganharam as duas tools na mesma lista compartilhada
+        (`[READ_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME, BASH_TOOL_NAME,
+        DELEGATE_TOOL_NAME]`) — automático pros dois, sem lógica
+        duplicada.
+      - Verificação: `scripts/verify/smoke-chat-sandbox.mjs` (novo,
+        15/15), mesmo gancho de teste `chat.testSimulateTool` já
+        estabelecido na Fase C. Prova real, não assumida: comando negado
+        nunca roda (sem marcador no disco), comando permitido escreve de
+        verdade dentro do root, escrita fora do root é recusada pelo SO
+        (não só pelo consentimento), `ps aux` de dentro do sandbox
+        mostra uma lista curta (isolamento real de processo, não só
+        alegado), delegação real produz um card novo de verdade no board
+        via o `AgentAskModal` já existente. **Um bug real achado e
+        corrigido no próprio script de verificação** (não no app): o
+        texto de saída do bash termina com uma linha `[exit code: N]`
+        própria do `sandbox.ts`, então pegar "a última linha" pra
+        extrair a contagem de processos pegava essa linha de exit code
+        em vez do número — corrigido filtrando linhas vazias antes de
+        indexar. `smoke-chat.mjs`/`smoke-chat-tools.mjs`/
+        `smoke-card-lifecycle.mjs` rerrodadas — 0 regressões.
 
 ## Ordem sugerida para a próxima rodada
 

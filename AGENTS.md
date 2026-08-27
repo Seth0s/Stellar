@@ -2944,6 +2944,56 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   rodada suíte a suíte pra não mascarar as demais atrás de um flake).
 - Detalhe completo em `DESIGN-BACKLOG.md` item 12.
 
+## 2026-08-27 — Item 12, Fase D fechada: sandbox real (bubblewrap) + bash + subagente funcional — item 12 completo (4/4), achado 6 (item 21 ponto 9) resolvido
+
+- `main/sandbox.ts` (novo): confinamento real via `bwrap` — escrita em
+  disco confinada ao `cwd` do chat (`--ro-bind / /` + `--bind <root>
+  <root>`), processo isolado (`--unshare-pid/-ipc/-uts/-cgroup-try`), rede
+  liberada por padrão (SEM `--unshare-net` — decisão do usuário: `npm
+  install`/`curl`/`git` continuam funcionando, mesmo nível de confiança
+  que `write_file` já tem por consentimento por-comando). **Verificado com
+  uma invocação real do `bwrap` na máquina antes de integrar ao app**, não
+  só lido do `--help`: escrita dentro do root funciona, escrita em `/etc`
+  falha ("Sistema de arquivos somente para leitura"), `ps aux` de dentro
+  mostra só bwrap + o comando (não os processos reais do host), `curl` de
+  dentro alcança um host externo real.
+- Sem `bwrap` disponível na máquina: tool `bash` recusa de cara, **sem
+  sequer mostrar o prompt de consentimento** — nada seguro pra aprovar sem
+  sandbox, um fallback não-sandboxado nunca é aceitável.
+- Tool `bash` (`main/chat-tools.ts`): consentimento sempre obrigatório,
+  bloco próprio no stream (`.chat-bash-block`, `ChatCard.tsx`) mostrando o
+  comando puro (não um diff). Mesmo par pending-map/IPC que `write_file`
+  já tinha (`chat:ask-bash`/`chat:bash-resolve`), deliberadamente
+  SEPARADO — segue o idioma que `message-bus.ts` já usa (4 mapas quase
+  idênticos em vez de um genérico único).
+- Tool `delegate_to_agent`: reaproveita o fluxo de consentimento+spawn JÁ
+  EXISTENTE do `spawn_agent` (item 21 ponto 9 achado 1) — chama
+  `messageBus.handleRequest({cmd:"spawn_agent", ...})` direto, o MESMO
+  dispatcher que o MCP server e o `acbridge` já usam. O humano vê o
+  `AgentAskModal` real; zero UI nova construída pra isso. `depth: 0`
+  deliberado — delegação do chat é uma cadeia nova (o chat não é um
+  processo PTY spawnado, não herda `AGENT_CANVAS_SPAWN_DEPTH`).
+  Fire-and-forget: uma sessão CLI spawnada não pode ser esperada
+  sincronamente, o resultado da tool é só "spawnado, card #N".
+- Ambos providers ganharam as duas tools na mesma lista compartilhada
+  (`[READ_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME, BASH_TOOL_NAME,
+  DELEGATE_TOOL_NAME]`) — automático pros dois.
+- Verificação: `scripts/verify/smoke-chat-sandbox.mjs` (novo, 15/15),
+  mesmo gancho `chat.testSimulateTool` da Fase C. Prova real: comando
+  negado nunca roda (sem marcador no disco), comando permitido escreve de
+  verdade dentro do root, escrita fora do root é recusada pelo SO (não só
+  pelo consentimento), `ps aux` de dentro mostra lista curta (isolamento
+  real, não só alegado), delegação real produz um card novo de verdade no
+  board via o `AgentAskModal` existente. **Bug real achado e corrigido no
+  próprio script de verificação** (não no app): `sandbox.ts` termina a
+  saída com uma linha `[exit code: N]` própria, então "pegar a última
+  linha" pra extrair a contagem de processos pegava essa linha em vez do
+  número — corrigido filtrando linhas vazias antes de indexar.
+  `smoke-chat.mjs`/`smoke-chat-tools.mjs`/`smoke-card-lifecycle.mjs`
+  rerrodadas, 0 regressões.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 12, Fase D e item 21 ponto
+  9 achado 6.
+
 ## Comandos
 
 ```bash

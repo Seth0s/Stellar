@@ -3,12 +3,17 @@ import type { MessageStream } from "@anthropic-ai/sdk/lib/MessageStream";
 import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
+  BASH_TOOL_NAME,
+  DELEGATE_TOOL_NAME,
   TOOL_DESCRIPTIONS,
   TOOL_PARAMETERS,
   executeTool,
   type ChatMessage,
   type ChatToolHooks,
   type WriteConsentRequest,
+  type BashConsentRequest,
+  type DelegateProvider,
+  type DelegateResult,
 } from "./chat-tools";
 
 /**
@@ -25,7 +30,7 @@ import {
  * shape at all, so this stays a deliberately separate module.
  */
 
-const ANTHROPIC_TOOLS: Anthropic.Tool[] = [READ_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME].map((name) => ({
+const ANTHROPIC_TOOLS: Anthropic.Tool[] = [READ_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME, BASH_TOOL_NAME, DELEGATE_TOOL_NAME].map((name) => ({
   name,
   description: TOOL_DESCRIPTIONS[name],
   input_schema: TOOL_PARAMETERS[name] as Anthropic.Tool["input_schema"],
@@ -48,6 +53,8 @@ export function createAnthropicClient(opts: {
   onToolStart: (cardId: string, name: string, input: unknown) => void;
   onToolResult: (cardId: string, name: string, ok: boolean, summary: string) => void;
   askWriteConsent: (cardId: string, req: WriteConsentRequest) => Promise<boolean>;
+  askBashConsent: (cardId: string, req: BashConsentRequest) => Promise<boolean>;
+  delegateToAgent: (cardId: string, cwd: string, provider: DelegateProvider, reason: string) => Promise<DelegateResult>;
 }) {
   const inFlight = new Map<string, MessageStream>();
   // Same reasoning as before — the SDK's own "error" event still fires
@@ -123,6 +130,8 @@ export function createAnthropicClient(opts: {
       onToolStart: (name, input) => opts.onToolStart(cardId, name, input),
       onToolResult: (name, ok, summary) => opts.onToolResult(cardId, name, ok, summary),
       askWriteConsent: (req) => opts.askWriteConsent(cardId, req),
+      askBashConsent: (req) => opts.askBashConsent(cardId, req),
+      delegateToAgent: (provider, reason) => opts.delegateToAgent(cardId, params.root, provider, reason),
     };
     void runTurn(cardId, params.apiKey, params.model, params.system, toAnthropicMessages(params.messages), hooks);
   }
