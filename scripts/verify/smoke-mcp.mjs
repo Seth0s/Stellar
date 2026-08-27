@@ -89,6 +89,7 @@ try {
         if (!modal) return JSON.stringify(null);
         return JSON.stringify({
           title: modal.querySelector('h3')?.textContent,
+          requester: modal.querySelector('p strong')?.textContent,
           command: modal.querySelector('.agent-ask-command')?.textContent,
           reason: modal.querySelector('.agent-ask-reason')?.textContent,
         });
@@ -96,6 +97,12 @@ try {
     `),
   );
   check("open_url shows the generic AgentAskModal with title", modalInfo?.title, "Permissão do navegador");
+  // Achado ao vivo (2026-08-27): o rótulo do requester mostrava o id
+  // bruto do banco local ("bash #<id>") — virou um ordinal por provider
+  // dentro da sessão ("Bash 1°"), sem nenhum número de banco visível.
+  // Este é o primeiro (e único, até aqui) card bash da sessão, então o
+  // ordinal esperado é exatamente 1.
+  check("...and the requester label is human-friendly, not the raw local db id", modalInfo?.requester, "Bash 1°");
   check("...with the command (the URL)", modalInfo?.command, "https://example.com");
   check("...and the agent-provided reason", modalInfo?.reason?.includes("smoke test verification"), true);
   await clickModalButton(page, "Permitir");
@@ -115,8 +122,17 @@ try {
   check("a second real terminal card exists after the allowed spawn_agent", await page.evalJs(`document.querySelectorAll('.terminal-card').length`), 2);
 
   // spawn_card, denied — must NOT create anything and must report the denial.
-  const spawnCardDenyPromise = callTool("spawn_card", { kind: "sticky", callerCardId: bashCardId });
+  // Requester here is the SECOND bash card (spawnAgentPayload.cardId), not
+  // the first — real proof the ordinal actually increments per provider
+  // instead of always reading "1°" by coincidence.
+  const secondBashCardId = spawnAgentPayload.cardId;
+  const spawnCardDenyPromise = callTool("spawn_card", { kind: "sticky", callerCardId: secondBashCardId });
   await new Promise((r) => setTimeout(r, 500));
+  check(
+    "the SECOND bash card's requester label is 'Bash 2°' (ordinal really increments, not hardcoded)",
+    await page.evalJs(`document.querySelector('.modal p strong')?.textContent`),
+    "Bash 2°",
+  );
   await clickModalButton(page, "Negar");
   const spawnCardDenyPayload = JSON.parse((await spawnCardDenyPromise).content[0].text);
   check("spawn_card (denied) reports ok:false", spawnCardDenyPayload.ok, false);
