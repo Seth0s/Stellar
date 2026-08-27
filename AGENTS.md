@@ -2702,6 +2702,34 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   PASS. Achados históricos em `main/index.ts` e nas seções acima
   atualizados pra não ficarem lidos como um bug ainda aberto. Detalhe em
   `DESIGN-BACKLOG.md` item 4 e item 21 (ponto 1 fechado).
+- **Item 21, ponto 11, mesmo dia**: `FilesCard`'s `<textarea>` de código
+  virou `CodeEditor.tsx`, CodeMirror 6 completo (escolha do usuário sobre
+  a versão leve) — linha/coluna, syntax highlight por extensão, dobra de
+  código, guias de indentação (`@replit/codemirror-indentation-markers`).
+  Tema próprio via `EditorView.theme()` + `HighlightStyle` reaproveitando
+  as cores já existentes do app (`--foam`/`--good`/`--signal`/`--violet`/
+  `--warn`/`--muted`) em vez de importar um tema genérico. Linguagem por
+  extensão via pacotes `@codemirror/lang-*` dedicados pros comuns,
+  `@codemirror/legacy-modes` (`StreamLanguage`) pro resto
+  (shell/ruby/go/yaml/toml/ini). **Lazy-loading em dois níveis**:
+  `CodeEditor.tsx` inteiro é `React.lazy` (não import estático) —
+  `FilesCard.tsx` monta sempre, então um import estático colocaria o
+  núcleo do CodeMirror (~680KB) no bundle principal de toda sessão,
+  mesmo uma que nunca abre a visão "código"; confirmado via
+  `VISUALIZE=1 npm run build` que o bundle principal voltou ao baseline
+  e o CodeMirror foi isolado num chunk próprio. Cada linguagem dentro do
+  editor também é `import()` dinâmico (mesmo padrão que `MarkdownPreview`
+  já usava). `content` (estado de `FilesCard.tsx`) virou `string | null`
+  — evita montar o editor com o conteúdo do arquivo anterior enquanto o
+  `window.fs.read` de um arquivo novo ainda está em voo. Verificado via
+  CDP em `smoke-files-card.mjs` (6 checks novos, incluindo um gotcha
+  achado ao vivo: a pasta de teste precisou ser expandida antes do
+  arquivo aninhado existir no DOM — corrigido no próprio script, não no
+  produto): editor monta, gutters presentes, conteúdo semeado carrega
+  certo, digitar produz highlight real por token, salvar grava o
+  conteúdo exato em disco. `npm run verify` completo (14 suítes, 152
+  checks) PASS. Detalhe em `DESIGN-BACKLOG.md` item 21 (ponto 11
+  fechado).
 
 ## Comandos
 

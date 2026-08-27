@@ -1826,14 +1826,41 @@ pra "9°", sem "8°" — não é erro de digitação meu).
     botão chapado. Verificado via CDP: screenshot recortado confirmando a
     posição/opacidade, clique real alternando expandido↔recolhido com o
     ícone no mesmo lugar nos dois estados.
-11. **`FilesCard`'s modo código precisa ser um editor de verdade** — hoje
-    é um `<textarea>` puro (sem números de linha, sem destaque de
-    sintaxe, sem guias de indentação) — screenshot mostra HTML sem
-    nenhuma cor. Pedido: as mesmas características do VSCode/editores
-    reais (numeração de linha, syntax highlighting, indentação). Implica
-    trocar o `<textarea>` por uma lib de editor de código real (ex.
-    CodeMirror) — mudança de escopo bem maior que os polimentos CSS
-    recentes, não uma troca de classe.
+11. **`FilesCard`'s modo código precisa ser um editor de verdade** — ✅
+    resolvido em 2026-08-27. Usuário escolheu CodeMirror 6 completo (não
+    a versão leve tipo Prism) — numeração de linha, syntax highlight,
+    indentação, dobra de código, guias de indentação. Novo
+    `CodeEditor.tsx` substitui o `<textarea>`: tema próprio via
+    `EditorView.theme()` reaproveitando as cores existentes do app
+    (`--foam`/`--good`/`--signal`/`--violet`/`--warn`/`--muted`, mesma
+    paleta que já dá cor a cada provider/tipo de card) em vez de importar
+    um tema genérico — `HighlightStyle` mapeia tags do `@lezer/highlight`
+    pra essas variáveis. Linguagem por extensão: pacotes dedicados
+    (`@codemirror/lang-{javascript,python,json,css,html,markdown,rust,
+    cpp,java,php,sql}`) pros comuns, `@codemirror/legacy-modes` (via
+    `StreamLanguage`) pra shell/ruby/go/yaml/toml/ini — sem grafia
+    específica pra kt/swift (cai pra highlight neutro, ainda com
+    numeração/indentação/dobra, mesmo assim uma melhoria enorme sobre o
+    `<textarea>`). Guias de indentação via
+    `@replit/codemirror-indentation-markers`. **Lazy-loading em dois
+    níveis** — `CodeEditor.tsx` inteiro é `React.lazy` (não import
+    estático) porque `FilesCard.tsx` é montado sempre (um dos tipos base
+    de card), e um import estático teria colocado o núcleo do
+    CodeMirror (~680KB) no bundle principal mesmo pra sessões que nunca
+    abrem a visão "código" — confirmado via `VISUALIZE=1 npm run build`
+    antes/depois: bundle principal caiu de volta ao baseline, CodeMirror
+    isolado num chunk próprio carregado só quando o editor realmente
+    monta. Dentro de `CodeEditor.tsx`, cada linguagem também é um
+    `import()` dinâmico próprio (mesmo padrão que `MarkdownPreview` já
+    usava pra `marked`/`dompurify`). `content` (estado de `FilesCard.tsx`)
+    virou `string | null` — `null` = "ainda carregando", evita que o
+    editor monte com o conteúdo do arquivo ANTERIOR como valor inicial
+    numa troca de arquivo (a promise de `window.fs.read` é assíncrona).
+    Verificado ao vivo via CDP em `smoke-files-card.mjs` (6 checks
+    novos): editor monta pra um `.ts`, gutter de números e de dobra
+    presentes, conteúdo semeado carrega certo, digitar produz spans de
+    highlight reais por token (não texto plano), salvar grava o conteúdo
+    exato em disco. `npm run verify` (14 suítes, 152 checks) PASS.
 12. **Novo provider de API + card de chatbox (estilo Codex/ChatGPT) —
     "muito complexo, apenas anotar"**, palavras do próprio usuário. Sem
     escopo definido ainda, só registrado pra não perder o pedido.

@@ -478,16 +478,20 @@
   color: var(--muted);
 }
 
-.files-editor-textarea {
+/* DESIGN-BACKLOG.md item 21, ponto 11 — real editor (CodeEditor.tsx,
+   CodeMirror 6) replaced the old `.files-editor-textarea`. CodeMirror
+   owns its own internal scrolling (`.cm-scroller`, see CodeEditor.tsx's
+   theme) — this wrapper just needs to actually fill the available space,
+   `min-height: 0` so it can shrink inside the flex column instead of
+   pushing the card taller than its own frame. */
+.code-editor {
   flex: 1;
-  border: none;
-  outline: none;
-  resize: none;
-  background: var(--ink);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding: 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-editor .cm-editor {
+  height: 100%;
 }
 
 .files-editor-image {

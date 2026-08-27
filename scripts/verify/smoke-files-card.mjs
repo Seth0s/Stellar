@@ -9,7 +9,7 @@
 // session (Home → back in) so `loadBoard` picks the row up — same
 // mechanism the app's own board-switch already uses, no shortcut around
 // product code.
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9411;
@@ -129,6 +129,83 @@ try {
     await page.evalJs(`document.querySelector('.files-editor-preview')?.innerHTML.includes('hello')`),
     true,
   );
+
+  // DESIGN-BACKLOG.md item 21, ponto 11 — "código" view used to be a bare
+  // <textarea>: no line numbers, no syntax highlight, no indentation
+  // guides. CodeEditor.tsx (CodeMirror 6, lazy-loaded — see
+  // FilesCard.tsx's `React.lazy`) replaced it. Open sub/script.ts (real
+  // seeded TypeScript content), confirm the real editor mounted (not the
+  // old textarea), type more real code, confirm actual per-token
+  // highlighting spans exist (not flat unstyled text), save, and confirm
+  // the exact typed content landed on disk — the same round-trip the old
+  // textarea test would have covered, now through CodeMirror's own
+  // update-listener → onChange path (CodeEditor.tsx) instead of a plain
+  // DOM `input` event.
+  // "sub" is collapsed by default — script.ts's own node doesn't exist in
+  // the DOM at all until the folder is expanded first.
+  await clickByText(".files-tree > .files-node .files-node-name", "sub");
+  await new Promise((r) => setTimeout(r, 300));
+  await page.evalJs(`
+    [...document.querySelectorAll('.files-tree .files-node-name')]
+      .find((el) => el.textContent === 'script.ts')?.click()
+  `);
+  // Longer wait than the markdown-preview one above — CodeEditor.tsx's
+  // lazy chunk bundles CodeMirror's core (~680KB, measured via
+  // VISUALIZE=1 npm run build), a real fetch+parse+mount that takes
+  // meaningfully longer than marked/dompurify's smaller lazy chunk.
+  await new Promise((r) => setTimeout(r, 2000));
+  check("old <textarea> editor is gone", await page.evalJs(`!document.querySelector('.files-editor-textarea')`), true);
+  check("CodeMirror editor mounted for a .ts file", await page.evalJs(`!!document.querySelector('.code-editor .cm-editor')`), true);
+  check("line-number gutter present", await page.evalJs(`!!document.querySelector('.cm-gutters .cm-lineNumbers')`), true);
+  check("fold gutter present", await page.evalJs(`!!document.querySelector('.cm-foldGutter')`), true);
+  check(
+    "seeded file content actually loaded into the editor",
+    await page.evalJs(`[...document.querySelectorAll('.cm-line')].map((l) => l.textContent).join('\\n')`),
+    "export {};\n",
+  );
+
+  const cmContentCoords = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const el = document.querySelector('.cm-content');
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + 10, y: r.y + 10 });
+      })()
+    `),
+  );
+  await page.click(cmContentCoords.x, cmContentCoords.y);
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "End", code: "End", windowsVirtualKeyCode: 35 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "End", code: "End", windowsVirtualKeyCode: 35 });
+  const addition = '\nconst n = 1; // note';
+  for (const ch of addition) {
+    if (ch === "\n") {
+      await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    } else {
+      await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: ch, text: ch });
+      await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: ch, text: ch });
+    }
+  }
+  await new Promise((r) => setTimeout(r, 300));
+
+  const tokenSpanCount = await page.evalJs(`document.querySelectorAll('.cm-line span[class^="ͼ"]').length`);
+  check("real per-token syntax-highlight spans exist after typing (not flat text)", tokenSpanCount > 0, true);
+
+  await page.evalJs(`
+    [...document.querySelectorAll('.files-editor-head-actions button')].find((b) => b.textContent.trim() === 'salvar')?.click()
+  `);
+  await new Promise((r) => setTimeout(r, 400));
+  check(
+    "typed content actually saved to disk through CodeMirror's onChange",
+    readFileSync(`${SCRATCH_DIR}/sub/script.ts`, "utf8"),
+    "export {};\nconst n = 1; // note\n",
+  );
+
+  // Re-collapse "sub" — every check below counts *visible* tree rows and
+  // was written assuming it starts collapsed (its state from before this
+  // block ran).
+  await clickByText(".files-tree > .files-node .files-node-name", "sub");
+  await new Promise((r) => setTimeout(r, 200));
 
   // 2. Hover actions exist (rename/delete, +new-file/+new-folder on dirs)
   // even before any real hover — CSS opacity gates visibility, not DOM

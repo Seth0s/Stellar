@@ -46,7 +46,10 @@
       "draft": false
     },
     "linux": {
-      "target": ["rpm", "deb"],
+      "target": [
+        "rpm",
+        "deb"
+      ],
       "executableName": "stellar",
       "category": "Development",
       "synopsis": "Multi-agent spatial canvas",
@@ -65,12 +68,18 @@
       "afterInstall": "build/linux-after-install.sh"
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.developer-tools",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
@@ -79,12 +88,31 @@
     }
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-cpp": "^6.0.3",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.12",
+    "@codemirror/lang-java": "^6.0.2",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/lang-php": "^6.0.2",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/lang-rust": "^6.0.2",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.3",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.9",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/manrope": "^5.3.0",
+    "@lezer/highlight": "^1.2.3",
+    "@replit/codemirror-indentation-markers": "^6.5.3",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "13.0.3",
+    "codemirror": "^6.0.2",
     "dbus-next": "^0.10.2",
     "dompurify": "^3.4.14",
     "electron-updater": "^6.8.9",
