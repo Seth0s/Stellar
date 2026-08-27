@@ -42,8 +42,8 @@ export function Home({
   boards,
   boardCounts,
   rootName,
-  suggestedProject,
-  availableProjects,
+  workspaceRoot,
+  defaultCwd,
   onChangeRoot,
   onOpenBoard,
   onCreateBoard,
@@ -55,18 +55,17 @@ export function Home({
   /** Last path segment of the current workspace root — see Topbar.tsx's
    * same prop. */
   rootName: string;
-  suggestedProject: string;
-  availableProjects: string[];
+  /** Workspace root — PathPicker's tree is rooted here. */
+  workspaceRoot: string;
+  /** Starting path for a brand-new session (App.tsx's DEFAULT_CWD). */
+  defaultCwd: string;
   onChangeRoot: () => void;
   onOpenBoard: (id: string) => void;
-  onCreateBoard: (name: string, project: string, template: SessionTemplate) => void;
-  onUpdateBoard: (id: string, name: string, project: string) => void;
+  onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
+  onUpdateBoard: (id: string, name: string, cwd: string) => void;
   onDeleteBoard: (id: string) => void;
 }) {
   const [modal, setModal] = useState<ModalState>(null);
-  const allProjectOptions = Array.from(
-    new Set([...availableProjects, ...boards.map((b) => b.project).filter(Boolean)]),
-  ).sort((a, b) => a.localeCompare(b));
 
   // "Recente" badge (item 14) — the single most recently opened session
   // across every project, not per-group; only meaningful with more than
@@ -94,60 +93,80 @@ export function Home({
           + nova sessão
         </button>
       </div>
-      {boards.length === 0 ? (
-        <div className="home-empty">
-          <p>nenhuma sessão ainda</p>
-          <button className="primary" onClick={() => setModal({ mode: "create" })}>
-            criar a primeira
-          </button>
-        </div>
-      ) : (
-        <div className="home-groups">
-          {groupByProject(boards).map(([project, group]) => (
-            <div key={project} className="home-group">
-              <div className="home-group-label">{project.toUpperCase()}</div>
-              <div className="home-grid">
-                {group.map((b) => {
-                  const counts = boardCounts[b.id];
-                  return (
-                    <button key={b.id} className="home-session-card" onClick={() => onOpenBoard(b.id)}>
-                      {b.id === mostRecentId && <span className="home-session-recent">recente</span>}
-                      <span
-                        className={`home-session-edit${b.id === mostRecentId ? " home-session-edit--below-badge" : ""}`}
-                        title="Editar sessão"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setModal({ mode: "edit", board: b });
-                        }}
+      {/* item 2 (DESIGN-BACKLOG.md) — the session list used to have no
+          scroll container of its own, so a long list scrolled `.home`
+          itself, dragging the fixed background layers above along with
+          it ("quebra o background") and only ever showing the OS's
+          default full-width scrollbar. This is the one thing that
+          scrolls now — background/header stay put, and its own thin
+          scrollbar (styles/layout.css) sits right against the grid. */}
+      <div className="home-scroll">
+        {boards.length === 0 ? (
+          <div className="home-empty">
+            <p>nenhuma sessão ainda</p>
+            <button className="primary" onClick={() => setModal({ mode: "create" })}>
+              criar a primeira
+            </button>
+          </div>
+        ) : (
+          <div className="home-groups">
+            {groupByProject(boards).map(([project, group]) => (
+              <div key={project} className="home-group">
+                <div className="home-group-label">{project.toUpperCase()}</div>
+                <div className="home-grid">
+                  {group.map((b) => {
+                    const counts = boardCounts[b.id];
+                    return (
+                      <button
+                        key={b.id}
+                        className="home-session-card"
+                        title={b.cwd || undefined}
+                        onClick={() => onOpenBoard(b.id)}
                       >
-                        <Icon name="pen" size={13} />
-                      </span>
-                      <span className="home-session-name">{b.name}</span>
-                      <span className="home-session-counts">
-                        <StatusDot counts={counts} />
-                        {counts ? `${counts.agents} agentes · ${counts.active} ativos` : "0 agentes"}
-                      </span>
-                      <span className="home-session-dates">
-                        <span title={new Date(b.created_at).toLocaleString("pt-BR")}>
-                          criado {formatDate(b.created_at)}
+                        {b.id === mostRecentId && <span className="home-session-recent">recente</span>}
+                        <span
+                          className={`home-session-edit${b.id === mostRecentId ? " home-session-edit--below-badge" : ""}`}
+                          title="Editar sessão"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setModal({ mode: "edit", board: b });
+                          }}
+                        >
+                          <Icon name="pen" size={13} />
                         </span>
-                        <span title={b.last_accessed_at ? new Date(b.last_accessed_at).toLocaleString("pt-BR") : undefined}>
+                        <span className="home-session-name">{b.name}</span>
+                        <span className="home-session-counts">
+                          <StatusDot counts={counts} />
+                          {counts ? `${counts.agents} agentes · ${counts.active} ativos` : "0 agentes"}
+                        </span>
+                        {/* item 2 — "tirar as datas pra fora do card": only
+                            the relative "último acesso" stays on the card
+                            face now, one line instead of two; the full
+                            created/accessed timestamps (and "criado em")
+                            are still there, just as a hover tooltip. */}
+                        <span
+                          className="home-session-dates"
+                          title={
+                            `criado ${new Date(b.created_at).toLocaleString("pt-BR")}` +
+                            (b.last_accessed_at ? `\nacessado ${new Date(b.last_accessed_at).toLocaleString("pt-BR")}` : "")
+                          }
+                        >
                           {b.last_accessed_at ? `acessado ${formatRelative(b.last_accessed_at)}` : "nunca acessado"}
                         </span>
-                      </span>
-                    </button>
-                  );
-                })}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
       {modal?.mode === "create" && (
         <SessionModal
           mode="create"
-          suggestedProject={suggestedProject}
-          availableProjects={allProjectOptions}
+          defaultCwd={defaultCwd}
+          workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
           onCreate={onCreateBoard}
           onClose={() => setModal(null)}
@@ -157,7 +176,7 @@ export function Home({
         <SessionModal
           mode="edit"
           board={modal.board}
-          availableProjects={allProjectOptions}
+          workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
           canDelete={boards.length > 1}
           onSave={onUpdateBoard}

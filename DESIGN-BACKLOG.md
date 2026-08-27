@@ -1462,6 +1462,96 @@ real** — pedido ao usuário reinstalar o `.rpm` recém-buildado
 (`dist/Stellar-0.1.0-x86_64.rpm`) e checar se o ícone aparece de
 verdade desta vez.
 
+## 19. Sessão: caminho do projeto de verdade, Home compacto, release publicando — feito (3/3), reportado ao vivo em 2026-08-27
+
+**Pedido 1 — "esse sistema de seleção de projeto não está funcional, além
+de não persistir o caminho correto... quero que fosse igual o explorador
+de arquivos, com árvore estilizada, e header com caminho (selecionável)"**:
+investigação confirmou um bug real, não só de UX — `boards.project` era
+rótulo livre (`useBoardStore.ts`), nunca lido por `seedCards`; toda sessão
+nova, não importa o "projeto" escolhido no picker, sempre spawnava em
+`DEFAULT_CWD` (a pasta do próprio Stellar). E cada card novo adicionado
+depois via régua/radial (`addTerminalCard`/`addFilesCard`/`addChangesCard`,
+`summarizeBoard`) tinha o mesmo hardcode — não só na criação da sessão.
+
+Corrigido:
+- `boards.cwd TEXT NOT NULL DEFAULT ''` (nova coluna, migração guardada
+  igual às outras, `src/main/store.ts`) — o caminho real agora é
+  persistido; `project` virou label derivado (`basename(cwd)`), nunca mais
+  digitado à parte.
+- `ProjectPicker.tsx` (removido) → `PathPicker.tsx` (novo): árvore real
+  enraizada em `workspaceRoot`, reusando as classes/IPC do próprio
+  `FilesCard.tsx` (`.files-tree`/`.files-node*`, `window.fs.list`/
+  `window.fs.create`) — "igual o explorador de arquivos" literal, não só
+  visualmente parecido. Header com breadcrumb do caminho selecionado,
+  cada segmento clicável (volta pra aquele ancestral); "+ nova pasta aqui"
+  por linha (hover) cobre o caso do antigo "+ novo projeto" sem inventar
+  um rótulo que não é pasta de verdade. Popover portalado pro `<body>`
+  (`Popover.tsx`) precisou de `className="popover--modal"` (z-index 2100)
+  pra ficar acima do `.modal-root` (2000) de `SessionModal`.
+- `useBoardStore.ts`: `createBoard`/`updateBoard` recebem `cwd` (não mais
+  `project`); `loadBoard`/`switchBoard` ganharam `seedCwd?` opcional —
+  necessário porque `createBoard` chama `switchBoard` logo após
+  `setBoards()`, e o estado `boards` do hook ainda não reflete o board
+  recém-criado nesse mesmo tick (closure do mesmo render, setState
+  assíncrono); sem o parâmetro explícito o seed caía sempre no fallback
+  `defaultCwd`.
+- `App.tsx`: novo `activeBoardCwd` (`boards.find(...).cwd || DEFAULT_CWD`)
+  substitui o `DEFAULT_CWD` hardcoded nos 4 call sites acima — a segunda
+  metade real do bug, sem isso a sessão só nasceria certa mas todo card
+  adicionado depois voltaria a ir pra pasta do Stellar.
+- Removidos: `suggestProjectFromCwd`, `workspaceProjects` (estado +
+  `useEffect` de fetch) — o picker agora busca sua própria árvore sob
+  demanda, como o `FilesCard`, sem um estado paralelo em `App.tsx`.
+
+Verificado ao vivo via CDP (não só os smokes): criada uma sessão
+escolhendo a pasta real `ai` na árvore, `window.store.boards.list()` +
+`window.store.list(boardId)` confirmaram `board.cwd` e o `cwd` de cada
+card seedado (2 terminais + arquivos) todos apontando pro caminho real
+escolhido, não mais `DEFAULT_CWD`. `smoke-home.mjs` atualizado pro novo
+picker (troca de `<select>`/free-text por abrir o trigger → clicar uma
+pasta existente na árvore → "usar esta pasta"; achado ao escrever o teste:
+o painel do `PathPicker` é portalado pro `<body>`, então os seletores
+`.path-picker-tree`/`.project-picker-links` não podem levar o prefixo
+`.modal` — só o botão-gatilho está de fato dentro do modal no DOM).
+
+**Pedido 2 — "a lista não tem overflow... quero um scroll bem fino e
+moderno... tornar a lista mais enxuta... tirar as datas pra fora do
+card"**: `.home` era o próprio container de scroll (`overflow-y: auto`),
+o que arrastava `.home-bg`/`.home-stars` (fundo/constelações) junto da
+lista ao rolar — "quebra o background" — e só mostrava a barra padrão do
+SO, full-height. Corrigido em `layout.css`: `.home` vira `overflow:
+hidden`, flex-column; novo `.home-scroll` (o único que rola de fato) leva
+header/fundo pra fora do fluxo que rola. Scrollbar fina/temática via
+`::-webkit-scrollbar` (Electron = Chromium, é o alvo real) +
+`scrollbar-width: thin` como fallback. Cada card do Home perdeu a linha
+"criado {data}" (fica só no `title` do card, hover) e ficou com uma linha
+só de data ("acessado há Xmin") em vez de duas — mais enxuto sem perder a
+informação, só tirando ela de sempre-visível pra sob-demanda.
+
+**Pedido 3 — "confere o CI, ele concluiu pro release, mas não apareceu
+o card de atualizar"**: investigado via API pública do GitHub (sem `gh`
+CLI disponível no ambiente) — `build-linux`/`build-mac` da run da tag
+`v0.1.1` **concluíram com sucesso e de fato publicaram** os artefatos;
+`build-windows` falhou, mas por um timeout de rede transitório no upload
+duplicado de um artefato já existente ("Request timed out" no
+`signtool`+upload do `.exe`, log colado pelo usuário), não um bug de
+config. A causa real de "não apareceu" era outra: `GET
+/repos/Seth0s/Stellar/releases` (sem auth) voltava lista **vazia** —
+electron-builder cria a release do GitHub como **draft** por padrão
+quando não configurado, e uma release draft não é visível/detectável pelo
+`electron-updater` nem por uma chamada anônima da API. Corrigido:
+`build.publish.draft: false` em `package.json` — próxima tag publica a
+release direto, sem passo manual. **A release existente de `v0.1.1` ainda
+está draft** (assets de linux/mac já subidos) — pedido ao usuário publicá-
+la manualmente pela UI do GitHub e re-rodar só o job `build-windows`
+(Actions → run → "Re-run failed jobs"), já que o fix de `draft:false` só
+vale a partir da próxima tag.
+
+`tsc`/`electron-vite build` limpos. `npm run verify` completo (12 suítes)
+PASS. **Item fechado, com a ressalva do passo manual pendente do usuário
+na release já publicada (draft) do `v0.1.1`.**
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.

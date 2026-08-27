@@ -6,6 +6,12 @@ import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
 
 const ACTIVE_BOARD_KEY = "ac.activeBoardId";
 
+/** Last path segment of an absolute cwd — the auto-derived `project`
+ * grouping label (see createBoard/updateBoard below). */
+function basename(path: string): string {
+  return path.split("/").filter(Boolean).pop() || "";
+}
+
 /** DESIGN-BACKLOG.md item 7 — "nenhum template de sessão... não há
  * atalho pra 'sessão com claude+bash+arquivos já arrumados'", the exact
  * setup the user's own screenshots kept showing. Add cases here (and to
@@ -81,7 +87,7 @@ export function useBoardStore(
    * it's a natural consequence of the id sets no longer overlapping). A
    * board with no rows yet (brand new, or the very first launch) seeds one
    * bash terminal, same as the original single-board bootstrap did. */
-  async function loadBoard(boardId: string, template: SessionTemplate = "empty") {
+  async function loadBoard(boardId: string, template: SessionTemplate = "empty", seedCwd?: string) {
     const [rows, connectorRows] = await Promise.all([
       window.store.list(boardId),
       window.store.connectors.list(boardId),
@@ -92,7 +98,14 @@ export function useBoardStore(
     // whatever loads next (see App.tsx's liveStatus module comment).
     resetLiveStatus();
     if (rows.length === 0) {
-      const seeded = seedCards(defaultCwd, nextId, template);
+      // `seedCwd` (passed explicitly by createBoard, see below) wins over
+      // a `boards` lookup — createBoard's own setBoards() call hasn't
+      // landed in this hook's `boards` state yet when it awaits
+      // switchBoard right after (same-render closure, async setState), so
+      // looking it up here for a brand-new board would silently find
+      // nothing and fall through to `defaultCwd` every time.
+      const cwd = seedCwd ?? (boards.find((b) => b.id === boardId)?.cwd || defaultCwd);
+      const seeded = seedCards(cwd, nextId, template);
       setCards(seeded);
       setOrder(seeded.map((c) => c.id));
       for (const card of seeded) void window.store.upsert(toRow(card, boardId));
@@ -130,11 +143,11 @@ export function useBoardStore(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function switchBoard(id: string, template: SessionTemplate = "empty") {
+  async function switchBoard(id: string, template: SessionTemplate = "empty", seedCwd?: string) {
     if (id === activeBoardIdRef.current) return;
     setActiveBoardId(id);
     localStorage.setItem(ACTIVE_BOARD_KEY, id);
-    await loadBoard(id, template);
+    await loadBoard(id, template, seedCwd);
   }
 
   /** Topbar's home button — leaves the current board back to the home
@@ -150,17 +163,24 @@ export function useBoardStore(
     resetLiveStatus();
   }
 
-  async function createBoard(name: string, project: string, template: SessionTemplate = "empty") {
+  async function createBoard(name: string, cwd: string, template: SessionTemplate = "empty") {
     const id = String(nextId.current++);
     const now = Date.now();
-    const board: BoardRow = { id, name, project, created_at: now, updated_at: now, last_accessed_at: now };
+    // `project` is purely a derived display/grouping label now (item 1
+    // revisited — "não persiste o caminho correto"): the picker returns a
+    // real absolute path, and the label shown in Home/Topbar's grouping is
+    // just that path's last segment, never independently typed.
+    const project = basename(cwd);
+    const board: BoardRow = { id, name, project, cwd, created_at: now, updated_at: now, last_accessed_at: now };
     setBoards((prev) => [...prev, board]);
     void window.store.boards.upsert(board);
-    await switchBoard(id, template);
+    // `cwd` passed explicitly — see loadBoard's comment on why a `boards`
+    // state lookup can't be trusted for a board this fresh.
+    await switchBoard(id, template, cwd);
     toast(`sessão "${name}" criada`);
   }
 
-  /** Session name + project, saved together — SessionModal's edit form
+  /** Session name + path, saved together — SessionModal's edit form
    * (DESIGN-BACKLOG.md item 11) always submits both fields at once, and an
    * earlier two-call version (separate renameBoard/changeBoardProject)
    * had a real bug: each read `boards` from its own render's closure, so
@@ -168,11 +188,12 @@ export function useBoardStore(
    * call's pre-update value — the in-memory state was fine (via `prev`),
    * but the persisted row silently reverted whichever field changed
    * first. One combined update avoids that instead of ordering around it. */
-  function updateBoard(id: string, name: string, project: string) {
+  function updateBoard(id: string, name: string, cwd: string) {
     const now = Date.now();
-    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, name, project, updated_at: now } : b)));
+    const project = basename(cwd);
+    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, name, project, cwd, updated_at: now } : b)));
     const board = boards.find((b) => b.id === id);
-    if (board) void window.store.boards.upsert({ ...board, name, project, updated_at: now });
+    if (board) void window.store.boards.upsert({ ...board, name, project, cwd, updated_at: now });
   }
 
   async function deleteBoard(id: string) {

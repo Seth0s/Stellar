@@ -2534,6 +2534,32 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   Windows (pedido explícito do usuário: "`.rpm` obrigatório"). mac/
   Windows configurados mas não verificados (sem toolchain aqui). Detalhe
   em `docs/packaging.md` e `DESIGN-BACKLOG.md` item 18.
+- **Item 19 fechado (3/3), reportado ao vivo em 2026-08-27**: (1)
+  "seleção de projeto não funcional" era um bug real, não só de UX —
+  `boards.project` (rótulo livre) nunca era lido por `seedCards`, toda
+  sessão sempre spawnava em `DEFAULT_CWD`, e cada card novo adicionado
+  depois (`addTerminalCard`/`addFilesCard`/`addChangesCard`,
+  `summarizeBoard`) tinha o mesmo hardcode. Corrigido: `boards.cwd` (nova
+  coluna, migração guardada) é o caminho real agora; `project` virou
+  label derivado (`basename(cwd)`); `ProjectPicker.tsx` (removido) →
+  `PathPicker.tsx` (novo, árvore real reusando `.files-tree`/`window.fs.*`
+  do próprio `FilesCard.tsx`); `App.tsx` ganhou `activeBoardCwd`
+  substituindo os 4 usos de `DEFAULT_CWD`. Verificado ao vivo via CDP
+  (não só os smokes): board + cards seedados com o `cwd` real da pasta
+  escolhida na árvore, confirmado direto no SQLite via
+  `window.store.boards.list()`/`window.store.list()`. (2) `.home` era o
+  próprio container de scroll — arrastava o fundo/constelações junto da
+  lista. Novo `.home-scroll` isola o que rola; scrollbar fina/temática via
+  `::-webkit-scrollbar`; datas do card reduzidas a uma linha (a data de
+  criação vira só `title`, hover). (3) Investigado por que o release da
+  tag `v0.1.1` "concluiu no CI mas não apareceu" — linux/mac publicaram
+  de verdade, windows falhou por timeout de rede transitório (não um bug
+  de config), mas a causa real de "não apareceu" era outra: sem
+  `draft: false` em `build.publish`, o electron-builder cria a release do
+  GitHub como draft por padrão — invisível pro `electron-updater` e pra
+  API pública. Corrigido pro próximo tag; a release de `v0.1.1` já
+  publicada ficou pendente de publicação manual pelo usuário. Detalhe em
+  `DESIGN-BACKLOG.md` item 19.
 
 ## Comandos
 

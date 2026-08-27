@@ -35,10 +35,17 @@ export type ConnectorRow = {
 export type BoardRow = {
   id: string;
   name: string;
-  /** Groups sessions under "Projects › {project} › {session}" (item 1) —
-   * "" means ungrouped, rendered as its own bucket in the UI rather than
-   * treated as an error. Free text, not a filesystem path. */
+  /** Display label for "Projects › {project} › {session}" grouping (item
+   * 1) — "" means ungrouped. Derived automatically from `cwd`'s basename
+   * at create/edit time (see useBoardStore.ts), not independently typed. */
   project: string;
+  /** The session's real working directory (item 1 revisited — "não
+   * persiste o caminho correto") — an absolute path under some workspace,
+   * picked via PathPicker.tsx's tree. Seeds every terminal/files/changes
+   * card spawned into this board (see useBoardStore.ts's seedCards and
+   * App.tsx's activeBoardCwd). "" for a board that predates this column;
+   * callers fall back to DEFAULT_CWD. */
+  cwd: string;
   created_at: number;
   updated_at: number;
   /** Home's "último acesso" (DESIGN-BACKLOG.md item 14) — set on every
@@ -83,6 +90,11 @@ function migrate(db: Database.Database) {
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN cwd TEXT NOT NULL DEFAULT ''`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
 }
 
 export function openStore(userDataDir: string) {
@@ -118,6 +130,7 @@ export function openStore(userDataDir: string) {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       project TEXT NOT NULL DEFAULT '',
+      cwd TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -180,12 +193,12 @@ export function openStore(userDataDir: string) {
   const deleteConnectorsForBoardStmt = db.prepare("DELETE FROM connectors WHERE board_id = ?");
 
   const listBoardsStmt = db.prepare(
-    "SELECT id, name, project, created_at, updated_at, last_accessed_at FROM boards ORDER BY created_at ASC",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at FROM boards ORDER BY created_at ASC",
   );
   const upsertBoardStmt = db.prepare(`
-    INSERT INTO boards (id, name, project, created_at, updated_at, last_accessed_at)
-    VALUES (@id, @name, @project, @created_at, @updated_at, @last_accessed_at)
-    ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, updated_at = excluded.updated_at
+    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at)
+    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at)
+    ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, cwd = excluded.cwd, updated_at = excluded.updated_at
   `);
   const deleteBoardStmt = db.prepare("DELETE FROM boards WHERE id = ?");
   const touchBoardStmt = db.prepare("UPDATE boards SET last_accessed_at = ? WHERE id = ?");

@@ -12,8 +12,8 @@ export function Topbar({
   activeBoardId,
   boardCounts,
   rootName,
-  suggestedProject,
-  availableProjects,
+  workspaceRoot,
+  defaultCwd,
   onChangeRoot,
   zoom,
   onZoomIn,
@@ -36,10 +36,11 @@ export function Topbar({
    * the breadcrumb. Was a hardcoded "Projects" until the root itself
    * became changeable (see App.tsx's `workspaceRoot`). */
   rootName: string;
-  suggestedProject: string;
-  /** Real sibling directories under the current workspace root — best-effort, can be empty. */
-  availableProjects: string[];
-  /** ProjectPicker's "mudar pasta raiz" — threaded through to SessionModal. */
+  /** Workspace root — PathPicker's tree is rooted here. */
+  workspaceRoot: string;
+  /** Starting path for a brand-new session (App.tsx's DEFAULT_CWD). */
+  defaultCwd: string;
+  /** PathPicker's "mudar pasta raiz" — threaded through to SessionModal. */
   onChangeRoot: () => void;
   zoom: number;
   onZoomIn: () => void;
@@ -54,8 +55,8 @@ export function Topbar({
   /** DESIGN-BACKLOG.md item 8 — back to the session grid. */
   onGoHome: () => void;
   onSwitchBoard: (id: string) => void;
-  onCreateBoard: (name: string, project: string, template: SessionTemplate) => void;
-  onUpdateBoard: (id: string, name: string, project: string) => void;
+  onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
+  onUpdateBoard: (id: string, name: string, cwd: string) => void;
   onDeleteBoard: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -66,9 +67,6 @@ export function Topbar({
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
   const activeBoard = boards.find((b) => b.id === activeBoardId);
   const activeCounts = boardCounts[activeBoardId];
-  const allProjectOptions = Array.from(
-    new Set([...availableProjects, ...boards.map((b) => b.project).filter(Boolean)]),
-  ).sort((a, b) => a.localeCompare(b));
 
   return (
     <>
@@ -114,6 +112,7 @@ export function Topbar({
                   <div key={b.id} className={`board-row${b.id === activeBoardId ? " active" : ""}`}>
                     <button
                       className="board-row-name"
+                      title={b.cwd || undefined}
                       onClick={() => {
                         onSwitchBoard(b.id);
                         setOpen(false);
@@ -152,8 +151,8 @@ export function Topbar({
       {modal?.mode === "create" && (
         <SessionModal
           mode="create"
-          suggestedProject={suggestedProject}
-          availableProjects={allProjectOptions}
+          defaultCwd={defaultCwd}
+          workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
           onCreate={onCreateBoard}
           onClose={() => setModal(null)}
@@ -163,7 +162,7 @@ export function Topbar({
         <SessionModal
           mode="edit"
           board={modal.board}
-          availableProjects={allProjectOptions}
+          workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
           canDelete={boards.length > 1}
           onSave={onUpdateBoard}

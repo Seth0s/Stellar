@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { ProjectPicker } from "./ProjectPicker";
+import { PathPicker } from "./PathPicker";
 import { useOccludesChrome } from "./occlusion";
 import type { SessionTemplate } from "./useBoardStore";
 
-type Board = { id: string; name: string; project: string };
+type Board = { id: string; name: string; cwd: string };
 
 const TEMPLATES: { value: SessionTemplate; label: string; desc: string }[] = [
   { value: "empty", label: "Vazio", desc: "nenhum card" },
@@ -16,26 +16,30 @@ const TEMPLATES: { value: SessionTemplate; label: string; desc: string }[] = [
  * dedicated modal that create and edit now share (same fields, same
  * layout) — Topbar.tsx's popover is left as a pure switcher: pick a
  * session, or hit the pencil/"+ nova sessão" to land here.
+ *
+ * Item 1 revisited (2026-08-27) — "projeto" was a free-text label with no
+ * real connection to where the session's terminals actually spawned
+ * (always DEFAULT_CWD, see App.tsx). The field is now "caminho do
+ * projeto": a real absolute path, picked via PathPicker's tree, and it
+ * IS the session's cwd — no separate label to keep in sync.
  */
 type SessionModalProps =
   | {
       mode: "create";
-      suggestedProject: string;
-      availableProjects: string[];
-      /** ProjectPicker's "mudar pasta raiz" — same callback in both modes,
-       * so create and edit stay unified (the user's own framing). */
+      defaultCwd: string;
+      workspaceRoot: string;
       onChangeRoot: () => void;
-      onCreate: (name: string, project: string, template: SessionTemplate) => void;
+      onCreate: (name: string, cwd: string, template: SessionTemplate) => void;
       onClose: () => void;
     }
   | {
       mode: "edit";
       board: Board;
-      availableProjects: string[];
+      workspaceRoot: string;
       onChangeRoot: () => void;
       /** Same guard as the old inline delete button — never let the last session go. */
       canDelete: boolean;
-      onSave: (id: string, name: string, project: string) => void;
+      onSave: (id: string, name: string, cwd: string) => void;
       onDelete: (id: string) => void;
       onClose: () => void;
     };
@@ -43,14 +47,16 @@ type SessionModalProps =
 export function SessionModal(props: SessionModalProps) {
   useOccludesChrome();
   const [name, setName] = useState(props.mode === "create" ? "" : props.board.name);
-  const [project, setProject] = useState(props.mode === "create" ? props.suggestedProject : props.board.project);
+  const [cwd, setCwd] = useState(
+    props.mode === "create" ? props.defaultCwd : props.board.cwd || props.workspaceRoot,
+  );
   const [template, setTemplate] = useState<SessionTemplate>("empty");
 
   function submit() {
     const trimmed = name.trim();
     if (!trimmed) return;
-    if (props.mode === "create") props.onCreate(trimmed, project.trim(), template);
-    else props.onSave(props.board.id, trimmed, project.trim());
+    if (props.mode === "create") props.onCreate(trimmed, cwd, template);
+    else props.onSave(props.board.id, trimmed, cwd);
     props.onClose();
   }
 
@@ -75,12 +81,13 @@ export function SessionModal(props: SessionModalProps) {
           />
         </div>
         <div className="popover-field">
-          <label>projeto</label>
-          <ProjectPicker
-            options={props.availableProjects}
-            value={project}
-            onChange={setProject}
+          <label>caminho do projeto</label>
+          <PathPicker
+            root={props.workspaceRoot}
+            value={cwd}
+            onChange={setCwd}
             onChangeRoot={props.onChangeRoot}
+            className="popover--modal"
           />
         </div>
         {props.mode === "create" && (

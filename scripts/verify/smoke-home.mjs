@@ -54,37 +54,20 @@ try {
     `);
   }
 
-  // ProjectPicker (shared with Topbar) renders either a <select> (real
-  // sibling dirs found) or a free-text <input> (customMode) — handle both
-  // rather than assume which one this machine's workspace produces.
-  async function setProject(value) {
-    const tag = JSON.parse(
-      await page.evalJs(`
-        (() => {
-          const el = document.querySelector('.modal .project-picker select, .modal select.resume-input');
-          return JSON.stringify(el ? el.tagName : null);
-        })()
-      `),
-    );
-    if (tag === "SELECT") {
-      await page.evalJs(`
-        (() => {
-          const sel = document.querySelector('.modal select.resume-input');
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-          setter.call(sel, '__custom__');
-          sel.dispatchEvent(new Event('change', { bubbles: true }));
-        })()
-      `);
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    await page.evalJs(`
-      (() => {
-        const inp = document.querySelector('.modal .project-picker input.resume-input');
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(inp, ${JSON.stringify(value)});
-        inp.dispatchEvent(new Event('input', { bubbles: true }));
-      })()
-    `);
+  // PathPicker (item 1 revisited) — a real tree rooted at the workspace,
+  // not a label. Picks an EXISTING sibling directory by name (never "+
+  // nova pasta aqui" here — this test's workspace root is the real
+  // /home/lucas/Workplace/Projects, and creating throwaway folders there
+  // on every run would be a real side effect, not a harmless label).
+  async function setProject(folderName) {
+    await clickSelector(".modal .path-picker-trigger");
+    await new Promise((r) => setTimeout(r, 500));
+    // Popover.tsx portals its floating panel to document.body, not inside
+    // `.modal` — so the tree/footer links live outside the modal's own DOM
+    // subtree even though they visually anchor to it.
+    await clickByText(".path-picker-tree .files-node-name", folderName);
+    await new Promise((r) => setTimeout(r, 150));
+    await clickByText(".project-picker-links button", "usar esta pasta");
   }
 
   // 1. Boots to Home, empty state (fresh profile, no boards yet).
@@ -97,7 +80,7 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check("create modal opens from Home's empty state", await page.evalJs(`!!document.querySelector('.modal-root')`), true);
   await fillName("Alpha");
-  await setProject("projeto-um");
+  await setProject("ai");
   await clickByText(".modal-actions button", "Criar");
   await new Promise((r) => setTimeout(r, 800));
   check("creating a session leaves Home for the board", await page.evalJs(`!document.querySelector('.home')`), true);
@@ -119,7 +102,7 @@ try {
   await clickSelector(".home-header button.primary");
   await new Promise((r) => setTimeout(r, 300));
   await fillName("Beta");
-  await setProject("projeto-dois");
+  await setProject("Stellar");
   await clickByText(".modal-actions button", "Criar");
   await new Promise((r) => setTimeout(r, 800));
 

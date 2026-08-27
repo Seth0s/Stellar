@@ -298,20 +298,100 @@ body {
   margin-top: 1px;
 }
 
-.project-picker {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.project-picker input.resume-input {
+/* PathPicker.tsx (item 1 revisited) — a real directory tree instead of
+   ProjectPicker.tsx's flat `<select>`/free-text, deliberately reusing
+   FilesCard's own `.files-tree`/`.files-node*` classes (styles/cards.css)
+   so it actually reads as "the file explorer", not a themed dropdown. */
+.path-picker {
   width: 100%;
 }
 
-/* Holds both link-style actions (back to the list, change the workspace
-   root) below the free-text input — a row here would fight the input for
-   width in a narrow popover/modal. */
+.path-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.path-picker-trigger-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.path-picker-trigger svg:last-child {
+  flex: none;
+  color: var(--muted);
+}
+
+.path-picker-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 260px;
+}
+
+/* The "header com caminho selecionável" the user asked for — every
+   segment of the currently-picked path, each one a shortcut back to that
+   ancestor (no need to re-drill the tree down to go back up). */
+.path-picker-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px;
+  font-size: 11px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.path-picker-crumb-item {
+  display: flex;
+  align-items: center;
+}
+
+.path-picker-crumb {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 3px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.path-picker-crumb:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.path-picker-crumb-sep {
+  color: var(--muted);
+  opacity: 0.5;
+  padding: 0 1px;
+}
+
+.path-picker-tree {
+  max-height: 240px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.path-picker-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Holds link-style actions (new folder, change the workspace root, close
+   the panel) below the tree — a row here would fight the tree for width
+   in a narrow popover/modal. */
 .project-picker-links {
   display: flex;
   gap: 12px;
@@ -625,6 +705,12 @@ select.resume-input {
   max-width: min(90vw, 320px);
   color: var(--text);
   font-size: 13px;
+}
+
+/* PathPicker.tsx, anchored from inside SessionModal — `.modal-root` is
+   z-index 2000, above this popover's default 800. */
+.popover--modal {
+  z-index: 2100;
 }
 
 .popover-row {
@@ -1323,14 +1409,56 @@ select.resume-input {
   position: absolute;
   inset: 0;
   top: var(--titlebar-h);
-  overflow-y: auto;
+  /* item 2 (DESIGN-BACKLOG.md) — used to be the scroll container itself,
+     which dragged `.home-bg`/`.home-stars` along with the list ("quebra o
+     background") and left the OS's own full-height scrollbar as the only
+     affordance. Neither layer scrolls now; `.home-scroll` below is the
+     one part that does. */
+  overflow: hidden;
   /* Left inset matches `.topbar`'s own `left: 72px` (clears the rail
      column at `left:12px`/48px wide) — session cards land right next to
      where the home button/rail sit inside a board, not floated toward
      the window's center. */
-  padding: 48px 56px 48px 72px;
+  padding: 48px 56px 0 72px;
   color: var(--text);
   background: var(--ink);
+  display: flex;
+  flex-direction: column;
+}
+
+.home-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* `.home`'s own left/right padding already positions this (padding
+     lives on the parent) — just the bottom breathing room the old
+     single-container `.home` used to have, now that it's `0` up there. */
+  padding-bottom: 48px;
+}
+
+/* A thin, themed scrollbar instead of the OS default — Chromium (this is
+   Electron) honors `::-webkit-scrollbar`; `scrollbar-width`/`-color` cover
+   the same intent for any Gecko-based tooling that touches this CSS. */
+.home-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.home-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.home-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.home-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.home-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 
 /* DESIGN-BACKLOG.md item 14 — constellation background: a scattered

@@ -14,6 +14,7 @@ export function Popover({
   onClose,
   children,
   side = "right",
+  className,
 }: {
   anchorRef: React.RefObject<HTMLElement | null>;
   open: boolean;
@@ -26,6 +27,10 @@ export function Popover({
    * `right` (not `left`) positioning, so it never needs to measure its
    * own width to avoid overflowing off-screen. */
   side?: "left" | "right";
+  /** PathPicker.tsx anchored from inside SessionModal — the base
+   * `.popover` z-index (800) sits behind `.modal-root`'s (2000), so that
+   * caller passes a class that bumps it back above. */
+  className?: string;
 }) {
   const popRef = useRef<HTMLDivElement>(null);
 
@@ -63,7 +68,12 @@ export function Popover({
   // Portaling straight to <body> makes the viewport the containing block
   // again, matching what the top/left math already assumed.
   return createPortal(
-    <div className="popover" ref={popRef} style={style} onPointerDown={(e) => e.stopPropagation()}>
+    <div
+      className={`popover${className ? ` ${className}` : ""}`}
+      ref={popRef}
+      style={style}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       {children}
     </div>,
     document.body,
