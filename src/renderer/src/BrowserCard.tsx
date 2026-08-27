@@ -30,7 +30,21 @@ const SPECIAL_KEYS: Record<string, string> = {
   End: "End",
   PageUp: "PageUp",
   PageDown: "PageDown",
+  Insert: "Insert",
+  ContextMenu: "Menu",
   " ": "Space",
+  F1: "F1",
+  F2: "F2",
+  F3: "F3",
+  F4: "F4",
+  F5: "F5",
+  F6: "F6",
+  F7: "F7",
+  F8: "F8",
+  F9: "F9",
+  F10: "F10",
+  F11: "F11",
+  F12: "F12",
 };
 function toElectronKeyCode(key: string): string | null {
   if (key.length === 1) return key;
@@ -219,6 +233,24 @@ export function BrowserCard({
     window.browser.sendWheel(id, { ...p, deltaX: -e.deltaX, deltaY: -e.deltaY });
   }
   function onCanvasKeyDown(e: React.KeyboardEvent<HTMLCanvasElement>) {
+    // While an IME composition is in progress, every intermediate keydown
+    // (including the one that ends up producing the candidate list) must
+    // NOT be forwarded as a normal key/char — the composed text only
+    // exists once, on `compositionend`, and is sent there via `insertText`
+    // instead. Forwarding here too would double-insert or send garbage
+    // half-composed keycodes to the embedded page.
+    if (e.nativeEvent.isComposing) return;
+    // Real OS clipboard round-trip — a synthetic keyDown alone never
+    // inserts/copies real clipboard content (see browser-registry.ts's
+    // insertText/paste/copy/cut doc comment). Still forward the raw keyDown
+    // below too (harmless, matches what a page's own shortcut-handling
+    // keydown listener would see in a real browser), but do the actual
+    // data movement through the dedicated Electron API.
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && (e.key === "v" || e.key === "V")) void window.browser.paste(id);
+    else if (mod && (e.key === "c" || e.key === "C")) void window.browser.copy(id);
+    else if (mod && (e.key === "x" || e.key === "X")) void window.browser.cut(id);
+
     const keyCode = toElectronKeyCode(e.key);
     if (!keyCode) return;
     e.preventDefault();
@@ -236,10 +268,19 @@ export function BrowserCard({
     }
   }
   function onCanvasKeyUp(e: React.KeyboardEvent<HTMLCanvasElement>) {
+    if (e.nativeEvent.isComposing) return;
     const keyCode = toElectronKeyCode(e.key);
     if (!keyCode) return;
     e.preventDefault();
     window.browser.sendKey(id, { type: "keyUp", keyCode, modifiers: keyModifiers(e) });
+  }
+  // IME composition (CJK input methods, etc.) doesn't correspond to
+  // individual physical keys — the intermediate candidate text lives only
+  // in the OS/browser's own composition UI until confirmed. Only the final
+  // string, delivered on `compositionend`, gets forwarded — via
+  // `insertText`, the same real-text-insertion API used for paste.
+  function onCanvasCompositionEnd(e: React.CompositionEvent<HTMLCanvasElement>) {
+    if (e.data) void window.browser.insertText(id, e.data);
   }
 
   return (
@@ -299,6 +340,7 @@ export function BrowserCard({
         onWheel={onCanvasWheel}
         onKeyDown={onCanvasKeyDown}
         onKeyUp={onCanvasKeyUp}
+        onCompositionEnd={onCanvasCompositionEnd}
       />
     </CardFrame>
   );

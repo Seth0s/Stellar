@@ -540,6 +540,20 @@ function createWindow() {
   ipcMain.handle("browser:ask-resolve", (_e, requestId: string, allowed: boolean) =>
     messageBus.resolveOpen(requestId, allowed),
   );
+  // Item 26, teclado — IME e clipboard real (ver browser-registry.ts).
+  ipcMain.handle("browser:insert-text", (_e, id: string, text: string) => browserRegistry.insertText(id, text));
+  ipcMain.handle("browser:paste", (_e, id: string) => browserRegistry.pasteText(id));
+  ipcMain.handle("browser:copy", (_e, id: string) => browserRegistry.copyText(id));
+  ipcMain.handle("browser:cut", (_e, id: string) => browserRegistry.cutText(id));
+  // Test-only, same guard/reasoning as chat:test-simulate-tool above —
+  // there's no editable field to focus on about:blank otherwise, and a
+  // real editable field on a real third-party page would make the
+  // paste/copy/IME smoke test network-dependent and flaky. Inert in any
+  // packaged build a user runs.
+  ipcMain.handle("browser:test-make-editable", (_e, id: string) => {
+    if (app.isPackaged) return;
+    return browserRegistry.testMakeEditable(id);
+  });
 
   ipcMain.handle("ai:summarize", (_e, providerId: string, cwd: string, prompt: string) =>
     runOneShotSummary(providerId, cwd, prompt),

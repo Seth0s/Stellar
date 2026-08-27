@@ -193,6 +193,49 @@ export function createBrowserRegistry(callbacks: {
     });
   }
 
+  // Item 26, teclado — 3 gaps reais que `sendInputEvent`'s keyDown/char
+  // vocabulary não cobre (BrowserCard.tsx). Os três usam métodos reais
+  // do WebContents em vez de tentar sintetizar mais eventos de teclado:
+  // - `insertText`: composição de IME (chinês/japonês/coreano) não
+  //   corresponde a teclas físicas individuais — o texto final composto
+  //   (evento `compositionend` do lado do renderer) precisa ser inserido
+  //   de uma vez, não caractere por caractere via `char`.
+  // - `paste`: um keyDown sintético de Ctrl+V nunca insere o conteúdo
+  //   real do clipboard sozinho (`sendInputEvent` não dispara isso) —
+  //   precisa do método dedicado do Electron.
+  // - `copy`/`cut`: mesma classe de problema, mesma solução.
+  function insertText(id: string, text: string) {
+    void entries.get(id)?.win.webContents.insertText(text);
+  }
+  function pasteText(id: string) {
+    entries.get(id)?.win.webContents.paste();
+  }
+  function copyText(id: string) {
+    entries.get(id)?.win.webContents.copy();
+  }
+  function cutText(id: string) {
+    entries.get(id)?.win.webContents.cut();
+  }
+
+  /** Test-only (see main/index.ts's `app.isPackaged` guard) — about:blank
+   * has no editable field by default, needed to give the paste/copy/IME
+   * smoke test a real target without depending on a real third-party
+   * page's markup. */
+  async function testMakeEditable(id: string) {
+    const wc = entries.get(id)?.win.webContents;
+    if (!wc) return;
+    // Also mirrors every keydown into the page's own title (observable via
+    // the existing onTitle IPC channel) — the only page-level side effect
+    // a named key like "F5" has on a bare offscreen page with no browser
+    // chrome/menu attached (no default reload-on-F5 outside a real
+    // browser shell), so this is the smoke test's way to prove a named
+    // key genuinely reaches the embedded page's own DOM listeners.
+    await wc.executeJavaScript(
+      "document.body.contentEditable = 'true'; document.body.focus();" +
+        "window.addEventListener('keydown', (e) => { document.title = 'key:' + e.key + ':' + e.ctrlKey; });",
+    );
+  }
+
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — an agent could only
   // ever get PIXELS of a browser card (acbridge/MCP `snapshot`), never
   // its actual content; useless for a provider with no image input, and
@@ -238,6 +281,11 @@ export function createBrowserRegistry(callbacks: {
     sendMouseEvent,
     sendWheelEvent,
     sendKeyEvent,
+    insertText,
+    pasteText,
+    copyText,
+    cutText,
+    testMakeEditable,
     getPageText,
     destroy,
     destroyAll,

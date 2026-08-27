@@ -213,6 +213,16 @@ const browser = {
     ipcRenderer.on("browser:ask-open", listener);
     return () => ipcRenderer.removeListener("browser:ask-open", listener);
   },
+  /** Item 26, teclado — texto composto de IME de uma vez (não caractere a
+   * caractere via `sendKey`'s "char"). */
+  insertText: (id: string, text: string): Promise<void> => ipcRenderer.invoke("browser:insert-text", id, text),
+  /** Item 26, teclado — clipboard real do SO, um keyDown sintético de
+   * Ctrl+V/C/X não basta (ver browser-registry.ts). */
+  paste: (id: string): Promise<void> => ipcRenderer.invoke("browser:paste", id),
+  copy: (id: string): Promise<void> => ipcRenderer.invoke("browser:copy", id),
+  cut: (id: string): Promise<void> => ipcRenderer.invoke("browser:cut", id),
+  /** Test-only, dev builds only — see main/index.ts. */
+  testMakeEditable: (id: string): Promise<void> => ipcRenderer.invoke("browser:test-make-editable", id),
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";

@@ -3097,6 +3097,35 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   flake pré-existente já documentado, não regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 26.
 
+## 2026-08-27 — Fechados os 3 gaps de teclado do navegador embutido (item 27)
+
+- Pedido ao vivo logo em seguida ao item 26. Fecha os 3 gaps
+  documentados de lá, sem bug de foco envolvido (mecanismo já genérico).
+- F1-F12/Insert/ContextMenu adicionados a `SPECIAL_KEYS`
+  (`BrowserCard.tsx`), mesma tabela/mecanismo dos nomes já existentes.
+- Clipboard real do SO: `insertText`/`pasteText`/`copyText`/`cutText`
+  novos em `main/browser-registry.ts`, usando os métodos dedicados do
+  `WebContents` (`.insertText`/`.paste`/`.copy`/`.cut`) — um keyDown
+  sintético de Ctrl+V nunca insere conteúdo real do clipboard sozinho.
+  `onCanvasKeyDown` detecta Ctrl/Cmd+V/C/X e chama o método real, além
+  do forward sintético normal.
+- IME: `onCompositionEnd` no `<canvas>` manda o texto final composto via
+  `insertText`, suprime o forward normal de char durante composição
+  ativa (`e.nativeEvent.isComposing`).
+- IPC novo `browser:insert-text`/`browser:paste`/`browser:copy`/
+  `browser:cut` (main/index.ts) + bridge (preload/index.ts), mesmo
+  padrão `browser:*` já usado.
+- Verificação: `scripts/verify/smoke-browser-keyboard-gaps.mjs` (novo,
+  4/4), via IPC test-only `browser:test-make-editable` (guardado por
+  `!app.isPackaged`, mesmo padrão de `chat:test-simulate-tool` — sem
+  ele `about:blank` não tem campo editável pra testar contra). Prova
+  real em cada gap: F5 despachado via CDP chega no próprio listener de
+  `keydown` da página offscreen; round-trip real pelo clipboard do SO
+  pro Ctrl+V/Ctrl+C; `CompositionEvent` real despachado no DOM confirma
+  a inserção via `insertText`. Regressão completa: 23/23 suítes, 0
+  falhas.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 27.
+
 ## Comandos
 
 ```bash

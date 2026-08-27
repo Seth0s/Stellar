@@ -2636,6 +2636,56 @@ regressões reais (1 falha isolada de `smoke-browser.mjs` na cadeia
 longa, já documentada como flaky pré-existente desde antes desta
 sessão, re-confirmada 3/3 limpa fora da cadeia).
 
+## 27. Fechados os 3 gaps de teclado do navegador embutido (item 26) — ✅ feito em 2026-08-27
+
+Pedido ao vivo, logo em seguida ao item 26: "POde corrigir isso no
+teclado agora". Fecha os 3 gaps documentados/não-urgentes do item
+anterior — nenhum é bug de foco (o mecanismo já era genérico, ver item
+26), é vocabulário de tecla incompleto.
+
+- **F1-F12/Insert/ContextMenu** adicionados a `SPECIAL_KEYS`
+  (`BrowserCard.tsx`) — mesma tabela, mesmo mecanismo de tradução pra
+  Accelerator-string que os nomes já existentes (`Enter`/`ArrowUp`/etc)
+  usavam.
+- **Clipboard real do SO** (`main/browser-registry.ts`): `insertText`/
+  `pasteText`/`copyText`/`cutText`, usando os métodos dedicados do
+  `WebContents` (`.insertText(text)`, `.paste()`, `.copy()`, `.cut()`)
+  em vez de tentar sintetizar mais eventos de teclado — um keyDown
+  sintético de Ctrl+V nunca insere o conteúdo real do clipboard sozinho
+  (`sendInputEvent` não dispara isso). `BrowserCard.tsx`'s
+  `onCanvasKeyDown` detecta Ctrl/Cmd+V/C/X e chama o método real, além
+  de continuar mandando o keyDown sintético normal (mesmo efeito que um
+  navegador real: a página ainda vê o evento de teclado, só que agora o
+  clipboard também se move de verdade).
+- **Composição de IME** (chinês/japonês/coreano): `onCompositionEnd` no
+  `<canvas>` manda o texto final composto via `insertText` (a mesma API
+  do ponto acima) em vez de tentar decompor em teclas físicas
+  individuais — durante uma composição ativa (`e.nativeEvent.isComposing`),
+  o forward normal de `keyDown`/`char` é suprimido, evita
+  double-insert/lixo de keycode parcial.
+- Exposto via IPC (`browser:insert-text`/`browser:paste`/`browser:copy`/
+  `browser:cut`, main/index.ts) e bridge (`preload/index.ts`), mesmo
+  padrão de nomenclatura `browser:*` já usado pelos outros.
+
+**Verificação**: `scripts/verify/smoke-browser-keyboard-gaps.mjs`
+(novo, 4/4), prova real sem mock em cada um dos 3 gaps, todos via um
+IPC test-only (`browser:test-make-editable`, guardado por
+`!app.isPackaged`, mesmo padrão de `chat:test-simulate-tool` — sem ele
+`about:blank` não tem campo editável, e depender de markup de uma
+página real de terceiro deixaria o teste dependente de rede/instável):
+F5 (entrada nova de `SPECIAL_KEYS`) despachado via CDP chega de
+verdade no próprio listener de `keydown` da página offscreen (efeito
+observável real — título da página espelha `e.key`, já que F5 não tem
+efeito de "recarregar" automático fora de um browser-chrome real);
+`navigator.clipboard.writeText` real na página principal → Ctrl+V
+sintético no canvas → `getPageText` confirma que o texto chegou na
+página embutida; Ctrl+A + Ctrl+C → clipboard do SO lido de volta
+confirma que copiou o conteúdo real da página (não um no-op); um
+`CompositionEvent("compositionend")` real despachado no DOM do canvas
+(não uma chamada direta à função React) confirma que o texto composto
+foi inserido via `insertText`. Regressão completa: 23/23 suítes, 0
+falhas.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
