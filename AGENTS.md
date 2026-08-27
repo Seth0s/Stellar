@@ -2994,6 +2994,30 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
 - Detalhe completo em `DESIGN-BACKLOG.md` item 12, Fase D e item 21 ponto
   9 achado 6.
 
+## 2026-08-27 — CI de release quebrado: `electron-builder` mais novo rejeita `draft: false`, achado e corrigido no mesmo dia
+
+- Push de tag falhou em `build-mac` com "configuration.publish should be
+  one of these: array | null | string" + "provider must be equal to
+  constant" repetido — mensagem genérica que não aponta o campo real.
+  **Reproduzido localmente** (`npx electron-builder --mac --dir`, mesmo
+  erro fora do CI) antes de investigar mais.
+- Causa raiz: `draft: false` (item 19, 2026-08-26) não existe mais em
+  `GithubOptions` no `electron-builder` instalado (`^26.15.3`, o `^`
+  deixou uma versão mais nova entrar) — `additionalProperties: false` no
+  schema, então uma propriedade desconhecida derruba a validação contra
+  TODOS os providers do `anyOf`, não só GitHub, daí a mensagem confusa e
+  repetida. Campo certo agora: `releaseType: "release"` (default seria
+  `"draft"`, mesmo problema que `draft: false` tentava evitar).
+- Corrigido em `package.json`. **Verificado localmente**: `npx
+  electron-builder --mac --dir` passa da validação e chega em packaging
+  de verdade (baixa Electron, gera `dist/mac`), não só "sem erro de
+  schema". `dist/` de teste removido; `better-sqlite3`/`node-pty`
+  reconstruídos de volta pro ABI local (`npm run postinstall`) depois do
+  rebuild cross-target que o teste local disparou. `tsc --noEmit` limpo,
+  `smoke-chat.mjs` rerrodado (12/12) confirmando que o rebuild nativo não
+  quebrou nada.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 19 (nota de regressão).
+
 ## Comandos
 
 ```bash

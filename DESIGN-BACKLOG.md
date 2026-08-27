@@ -1584,6 +1584,33 @@ vale a partir da próxima tag.
 PASS. **Item fechado, com a ressalva do passo manual pendente do usuário
 na release já publicada (draft) do `v0.1.1`.**
 
+**Regressão achada e corrigida em 2026-08-27 (mesmo dia da Fase D do item
+12)**: nova tag falhou em `build-mac` (CI) com `electron-builder`
+recusando o `package.json` inteiro — "configuration.publish should be one
+of these: array | null | string" + "configuration.publish.provider must
+be equal to constant" repetido, mensagem confusa que não aponta o campo
+real. **Reproduzido localmente** (`npx electron-builder --mac --dir`,
+mesmo erro fora do CI) antes de tentar qualquer fix — não bastava ler o
+erro, ele não aponta a causa direto. Causa raiz: `draft: false` (achado
+2026-08-26 acima) **não é mais uma propriedade válida de `GithubOptions`**
+no `electron-builder` instalado agora (`^26.15.3` no `package.json`, o
+`^` deixou uma versão mais nova entrar desde então) — o schema
+(`node_modules/app-builder-lib/scheme.json`) declara `GithubOptions` com
+`additionalProperties: false` e sem `draft` na lista de propriedades; o
+campo certo pra "publicar como release, não draft" virou `releaseType:
+"release"` (default é `"draft"` se omitido — o mesmo comportamento que
+`draft: false` tentava evitar). Como o publish schema é um `anyOf` de
+vários providers, uma propriedade desconhecida derruba a validação contra
+TODOS eles, não só GitHub — daí a mensagem genérica e repetida.
+Corrigido: `draft: false` → `releaseType: "release"`. **Verificado
+localmente** antes de fechar: `npx electron-builder --mac --dir` passa da
+validação de config e chega em packaging de verdade (baixa o Electron,
+gera `dist/mac`) — não só "sem erro na leitura do schema". `dist/` de
+teste removido, `better-sqlite3`/`node-pty` reconstruídos de volta pro
+ABI local (`npm run postinstall`) depois do rebuild cross-target que o
+teste disparou. `tsc --noEmit` limpo, `smoke-chat.mjs` rerrodado (12/12)
+pra confirmar que o rebuild nativo não quebrou nada.
+
 **Revisitado em 2026-08-27, mesmo dia — 4 ajustes ao `PathPicker`/fullscreen:**
 
 1. **Espaçamento entre modal e popover** — o botão-gatilho (`.path-picker-
