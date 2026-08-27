@@ -1,7 +1,7 @@
 // Ported from CentralByte's src/hooks/useOcclusion.ts (global scope only —
 // agent-canvas has no per-card anchored popover yet, so the per-session
 // variant isn't needed here). A native WebContentsView paints above every
-// DOM element regardless of z-index, so a full-screen modal (BrowserAskModal)
+// DOM element regardless of z-index, so a full-screen modal (AgentAskModal)
 // would otherwise be hidden behind an open browser card. Any such modal calls
 // useOccludesChrome() once in its own body; BrowserCard reads
 // useChromeOccluded() and hides its view while true.

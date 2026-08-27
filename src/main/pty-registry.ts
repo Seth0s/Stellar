@@ -26,6 +26,10 @@ export function createPtyRegistry(registryOpts: {
   /** Path to the acbridge Unix socket, and the dir it lives in — injected into every spawned provider's env/PATH. */
   sockPath: string;
   binDir: string;
+  /** DESIGN-BACKLOG.md item 21, ponto 9 — the MCP server's own base URL
+   * (mcp-server.ts), threaded into `SpawnOpts.mcpUrl` for every spawn so
+   * `providers.ts::buildArgs` can register it per-provider. */
+  mcpUrl: string;
 }) {
   const entries = new Map<string, Entry>();
 
@@ -57,13 +61,20 @@ export function createPtyRegistry(registryOpts: {
     rows: number,
     spawnOpts: SpawnOpts = {},
   ): { id: string } | { error: "binary_not_found" | "spawn_failed"; providerId: string } {
-    const resolved = resolveSpawn(providerId, spawnOpts);
+    const resolved = resolveSpawn(providerId, { ...spawnOpts, mcpUrl: registryOpts.mcpUrl });
     if (!resolved) return { error: "binary_not_found", providerId };
 
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       AGENT_CANVAS_SOCK: registryOpts.sockPath,
       AGENT_CANVAS_CARD_ID: id,
+      // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — fork-bomb guard.
+      // `spawnOpts.spawnDepth` is only ever set for an agent-initiated
+      // spawn (main/index.ts's onSpawnAgentRequest handler); every human-
+      // triggered spawn (rail, radial menu) leaves it undefined, starting
+      // a fresh chain at depth 0. This process reports its OWN depth back
+      // out via acbridge/MCP if IT spawns another agent.
+      AGENT_CANVAS_SPAWN_DEPTH: String(spawnOpts.spawnDepth ?? 0),
       PATH: `${registryOpts.binDir}${delimiter}${process.env.PATH ?? ""}`,
     };
 

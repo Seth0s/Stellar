@@ -8,14 +8,34 @@ export type SpawnOpts = {
   continueLast?: boolean;
   model?: string;
   systemPrompt?: string;
+  /** DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — how many agent-
+   * initiated (not human-initiated) spawns led to this one. `undefined`/
+   * `0` for every human-triggered spawn (rail, radial menu) — a fresh
+   * chain always starts here. Threaded into the process env
+   * (AGENT_CANVAS_SPAWN_DEPTH, see pty-registry.ts) so a NEW spawn
+   * request from THIS agent reports the right depth, and enforced as a
+   * hard cap in message-bus.ts (MAX_SPAWN_DEPTH) before any consent
+   * modal even shows. */
+  spawnDepth?: number;
+  /** Internal only — never set by the renderer/IPC caller. Injected by
+   * `pty-registry.ts::spawn()` from its own closed-over `mcpUrl` so
+   * `buildArgs` below can register the MCP server per-provider without
+   * every call site needing to know the port. */
+  mcpUrl?: string;
 };
 
+// DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface
+// is now the MCP server (mcp-server.ts) for providers that speak MCP;
+// acbridge stays as the CLI fallback (see its own header comment). Kept
+// short — MCP tool descriptions are self-documenting, this is just a
+// nudge to look for them, not a manual.
 const ACBRIDGE_HINT =
-  "You're running inside agent-canvas, a board of cards. A CLI tool " +
-  "`acbridge` is on your PATH: `acbridge list` shows other open terminal " +
-  "cards, `acbridge send <cardId> <message>` types a message into one of " +
-  "them, `acbridge open <url>` asks the human to open a URL in an embedded " +
-  "browser card. Use these only when it genuinely helps the task at hand.";
+  "You're running inside agent-canvas, a board of cards. If an MCP server " +
+  "named `stellar` is connected, prefer its tools (list/send/open/spawn/" +
+  "snapshot/page-text — read each tool's own description). Otherwise a " +
+  "CLI `acbridge` is on your PATH with the same capabilities (`acbridge` " +
+  "with no args prints usage). Use these only when it genuinely helps the " +
+  "task at hand.";
 
 type ProviderDef = {
   id: ProviderId;
@@ -30,7 +50,7 @@ export const PROVIDERS: ProviderDef[] = [
     id: "claude",
     label: "Claude",
     binaryNames: ["claude"],
-    buildArgs: ({ resumeId, continueLast, model, systemPrompt }) => {
+    buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
       else if (continueLast) args.push("--continue");
@@ -38,8 +58,18 @@ export const PROVIDERS: ProviderDef[] = [
       // claude is the only provider with a system-prompt flag, so it's the
       // only one that gets a real (if best-effort) hint about acbridge —
       // codex/cursor have no equivalent hook and stay undocumented to the
-      // agent itself.
+      // agent itself via THIS mechanism (codex gets the MCP server
+      // registered below instead, which is self-documenting).
       args.push("--append-system-prompt", systemPrompt || ACBRIDGE_HINT);
+      // Ephemeral registration (DESIGN-BACKLOG.md item 21, ponto 9) — a
+      // spawn-scoped `--mcp-config` flag, not a written .mcp.json. Never
+      // touches the project's own MCP config, never persists past this
+      // one process. `--strict-mcp-config` is deliberately NOT set here —
+      // this should ADD to whatever the user's own project already
+      // configures, not replace it.
+      if (mcpUrl) {
+        args.push("--mcp-config", JSON.stringify({ mcpServers: { stellar: { type: "http", url: mcpUrl } } }));
+      }
       return args;
     },
   },
@@ -48,12 +78,16 @@ export const PROVIDERS: ProviderDef[] = [
     label: "Codex",
     binaryNames: ["codex"],
     // Codex's resume is a subcommand, must come before any other flag.
-    // No documented system-prompt flag.
-    buildArgs: ({ resumeId, continueLast, model }) => {
+    // No documented system-prompt flag — gets the MCP server registered
+    // instead (codex supports an ephemeral `-c key=value` TOML override,
+    // scoped to this one invocation, same non-persisting spirit as
+    // claude's --mcp-config above).
+    buildArgs: ({ resumeId, continueLast, model, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("resume", resumeId);
       else if (continueLast) args.push("resume", "--last");
       if (model) args.push("-m", model);
+      if (mcpUrl) args.push("-c", `mcp_servers.stellar.url=${mcpUrl}`);
       return args;
     },
   },
@@ -62,7 +96,16 @@ export const PROVIDERS: ProviderDef[] = [
     id: "cursor",
     label: "Cursor",
     binaryNames: ["cursor-agent"],
-    // No documented system-prompt flag.
+    // No documented system-prompt flag, AND (unlike claude/codex above)
+    // no ephemeral per-invocation MCP registration flag either — Cursor
+    // CLI only discovers MCP servers from a written .cursor/mcp.json
+    // (project or global), auto-loaded by file-path precedence. Writing
+    // into a project's own .cursor/mcp.json on every spawn was
+    // deliberately NOT done here — that's a real file-system side effect
+    // in the user's repo, not something to do silently on every terminal
+    // spawn. Left undocumented to the agent itself, same as before; a
+    // human can still register `stellar` manually in .cursor/mcp.json if
+    // they want cursor-agent cards to have it.
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);

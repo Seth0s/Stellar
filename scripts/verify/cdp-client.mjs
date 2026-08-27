@@ -65,8 +65,16 @@ export async function startApp({ cdpPort, userDataDir, cwd = PROJECT_ROOT, extra
       // user's own running `npm run dev` session (EADDRINUSE, uncaught in
       // main, crashed their live app) the first time this harness ran
       // ad hoc while a real session was up. Derived from cdpPort so it's
-      // both unique per test instance and never 4488.
-      env: { ...process.env, AGENT_CANVAS_REMOTE_PORT: String(cdpPort + 30000) },
+      // both unique per test instance and never 4488. Same reasoning for
+      // the MCP server's port (4489, DESIGN-BACKLOG.md item 21 ponto 9) —
+      // a different offset (+40000, not +30000) so the two derived ports
+      // never collide with each other across the cdpPort range this
+      // harness actually uses (9400s-9500s).
+      env: {
+        ...process.env,
+        AGENT_CANVAS_REMOTE_PORT: String(cdpPort + 30000),
+        AGENT_CANVAS_MCP_PORT: String(cdpPort + 40000),
+      },
     },
   );
   let stderr = "";

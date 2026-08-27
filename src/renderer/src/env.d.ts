@@ -4,6 +4,7 @@ import type {
   FsApi,
   GitApi,
   BrowserApi,
+  SpawnApi,
   AiApi,
   WinControlsApi,
   SnapshotApi,
@@ -19,6 +20,7 @@ declare global {
     fs: FsApi;
     git: GitApi;
     browser: BrowserApi;
+    spawn: SpawnApi;
     ai: AiApi;
     winControls: WinControlsApi;
     snapshot: SnapshotApi;

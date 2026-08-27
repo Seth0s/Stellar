@@ -6,7 +6,7 @@ import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
-import { BrowserAskModal } from "./BrowserAskModal";
+import { AgentAskModal } from "./AgentAskModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
@@ -33,7 +33,7 @@ import {
   type Point,
   type Rect,
 } from "./board-model";
-import type { BoardCounts, CardRow } from "../../preload/index";
+import type { BoardCounts, CardRow, SpawnCardKind } from "../../preload/index";
 import { useWorldTransform } from "./useWorldTransform";
 import { useConnectorDrag } from "./useConnectorDrag";
 import { useCardSelection } from "./useCardSelection";
@@ -43,6 +43,31 @@ import "./app.css";
 
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
 // agent-canvas/ → Stellar/ mid-session (2026-08-26); updated to match.
+// DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — every kind of agent ask
+// (AgentAskModal.tsx renders whichever is pending) shares `requestId`/
+// `requesterId`/`reason`; `kind` picks which extra fields apply and drives
+// allowAsk/denyAsk's branching.
+type PendingAsk =
+  | { kind: "open"; requestId: string; requesterId: string; url: string; reason?: string }
+  | {
+      kind: "spawn-agent";
+      requestId: string;
+      requesterId: string;
+      provider: string;
+      cwd?: string;
+      resumeId?: string;
+      reason?: string;
+    }
+  | {
+      kind: "spawn-card";
+      requestId: string;
+      requesterId: string;
+      cardKind: SpawnCardKind;
+      cwd?: string;
+      url?: string;
+      reason?: string;
+    };
+
 const DEFAULT_CWD = "/home/lucas/Workplace/Projects/Stellar";
 /** The multi-repo workspace this app itself lives in (see CLAUDE.md at
  * this path) — its top-level directories are real sibling projects
@@ -280,7 +305,11 @@ export function App() {
   const [newModel, setNewModel] = useState("");
   const [newSystemPrompt, setNewSystemPrompt] = useState("");
   const [seenUrls, setSeenUrls] = useState<Record<string, string[]>>({});
-  const [pendingAsk, setPendingAsk] = useState<{ requestId: string; requesterId: string; url: string } | null>(null);
+  // DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — one union covers every
+  // kind of agent ask (open URL, spawn agent, spawn non-terminal card);
+  // AgentAskModal.tsx renders whichever is pending, allowAsk/denyAsk below
+  // branch on `.kind`.
+  const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [tool, setTool] = useState<Tool>("pointer");
@@ -364,8 +393,33 @@ export function App() {
     const offUrlSeen = window.pty.onUrlSeen((id, url) => {
       setSeenUrls((prev) => (prev[id]?.includes(url) ? prev : { ...prev, [id]: [...(prev[id] ?? []), url] }));
     });
-    const offAskOpen = window.browser.onAskOpen((requestId, requesterId, url) => {
-      setPendingAsk({ requestId, requesterId, url });
+    const offAskOpen = window.browser.onAskOpen((requestId, requesterId, url, reason) => {
+      setPendingAsk({ kind: "open", requestId, requesterId, url, reason });
+    });
+    // DESIGN-BACKLOG.md item 21, ponto 9, achados 1 e 2 — same shape as
+    // onAskOpen above, generalized to spawning an agent or a non-terminal
+    // card. Both funnel into the same `pendingAsk`/AgentAskModal.
+    const offAskSpawnAgent = window.spawn.onAskAgent((requestId, requesterId, params) => {
+      setPendingAsk({
+        kind: "spawn-agent",
+        requestId,
+        requesterId,
+        provider: params.provider,
+        cwd: params.cwd,
+        resumeId: params.resumeId,
+        reason: params.reason,
+      });
+    });
+    const offAskSpawnCard = window.spawn.onAskCard((requestId, requesterId, params) => {
+      setPendingAsk({
+        kind: "spawn-card",
+        requestId,
+        requesterId,
+        cardKind: params.kind,
+        cwd: params.cwd,
+        url: params.url,
+        reason: params.reason,
+      });
     });
     // acbridge snapshot (item 4, DESIGN-BACKLOG.md) — main asks "what's on
     // screen for this target right now", only the renderer has the live
@@ -398,6 +452,8 @@ export function App() {
     return () => {
       offUrlSeen();
       offAskOpen();
+      offAskSpawnAgent();
+      offAskSpawnCard();
       offSnapshot();
     };
   }, []);
@@ -658,13 +714,13 @@ export function App() {
     });
   }
 
-  /** Agent-requested (post-Allow) or a seenUrls chip click — both are already-consented. Reuses this owner's existing browser card if one is open, else opens a new one. No toast here — this path isn't the human "I just clicked +browser" moment the toasts above are for. */
-  function openBrowserFor(ownerCardId: string | null, url: string) {
+  /** Agent-requested (post-Allow) or a seenUrls chip click — both are already-consented. Reuses this owner's existing browser card if one is open, else opens a new one. No toast here — this path isn't the human "I just clicked +browser" moment the toasts above are for. Returns the card id — spawn_card's browser variant (below) and the acbridge/MCP "open" ask flow both need to report which card actually got used back to the caller. */
+  function openBrowserFor(ownerCardId: string | null, url: string): string {
     const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
     if (existing) {
       void window.browser.navigate(existing.id, url);
       raise(existing.id);
-      return;
+      return existing.id;
     }
     const id = String(nextId.current++);
     const card: Card = {
@@ -679,20 +735,89 @@ export function App() {
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
+    return id;
+  }
+
+  // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — a second (or third,
+  // fourth agent...) terminal card, spawned by an already-running agent
+  // rather than a human. Always through `addCard` (unlike openBrowserFor
+  // above) — this IS the "something appeared on the board that a human
+  // didn't click" moment the toast exists for.
+  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string): string {
+    const id = String(nextId.current++);
+    addCard({
+      id,
+      kind: "terminal",
+      provider,
+      cwd: cwd || activeBoardCwd,
+      resumeId: resumeId || null,
+      continueLast: false,
+      model: null,
+      systemPrompt: null,
+      rect: centeredSlot(visibleRect, cardsRef.current.length),
+      groupId: null,
+      label: null,
+    });
+    return id;
+  }
+
+  // DESIGN-BACKLOG.md item 21, ponto 9, achado 2 — generalizes
+  // openBrowserFor above to every non-terminal card kind. `browser`
+  // delegates straight to openBrowserFor for identical owner-reuse
+  // behavior — spawn_card's browser variant and the legacy `open` cmd
+  // both end up at one real implementation, not two.
+  function spawnCardFor(kind: SpawnCardKind, cwd: string | undefined, url: string | undefined, requesterId: string | null): string {
+    if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank");
+    const id = String(nextId.current++);
+    const rect = centeredSlot(visibleRect, cardsRef.current.length);
+    const card: Card =
+      kind === "files" || kind === "changes"
+        ? { id, kind, root: cwd || activeBoardCwd, rect, groupId: null, label: null }
+        : kind === "sticky"
+          ? { id, kind: "sticky", content: "", color: "yellow", rect, groupId: null, label: null }
+          : { id, kind: "remote-window", rect, groupId: null, label: null };
+    addCard(card);
+    return id;
   }
 
   function allowAsk() {
     if (!pendingAsk) return;
-    const { requestId, requesterId, url } = pendingAsk;
+    const ask = pendingAsk;
     setPendingAsk(null);
-    openBrowserFor(requesterId, url);
-    void window.browser.resolveAsk(requestId, true);
+    if (ask.kind === "open") {
+      openBrowserFor(ask.requesterId, ask.url);
+      void window.browser.resolveAsk(ask.requestId, true);
+    } else if (ask.kind === "spawn-agent") {
+      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId);
+      void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
+    } else {
+      const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId);
+      void window.spawn.resolveCard(ask.requestId, { ok: true, cardId });
+    }
   }
 
   function denyAsk() {
     if (!pendingAsk) return;
-    void window.browser.resolveAsk(pendingAsk.requestId, false);
+    const ask = pendingAsk;
     setPendingAsk(null);
+    if (ask.kind === "open") void window.browser.resolveAsk(ask.requestId, false);
+    else if (ask.kind === "spawn-agent") void window.spawn.resolveAgent(ask.requestId, { ok: false, error: "denied by user" });
+    else void window.spawn.resolveCard(ask.requestId, { ok: false, error: "denied by user" });
+  }
+
+  /** title/command text for whichever AgentAskModal is currently pending — kept out of the JSX below for readability. */
+  function describeAsk(ask: PendingAsk): { title: string; command: string } {
+    if (ask.kind === "open") return { title: "Permissão do navegador", command: ask.url };
+    if (ask.kind === "spawn-agent") {
+      return {
+        title: "Permissão: spawnar agente",
+        command: `${ask.provider}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.resumeId ? ` (retomar ${ask.resumeId})` : ""}`,
+      };
+    }
+    return {
+      title: "Permissão: criar card",
+      command: `${ask.cardKind}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.url ? ` (${ask.url})` : ""}`,
+    };
   }
 
   /** Reuses cascadeSlot (already the grid a new card lands on) — reorganize is just re-running that grid over every existing card. */
@@ -1479,9 +1604,10 @@ export function App() {
         />
       )}
       {pendingAsk && (
-        <BrowserAskModal
-          url={pendingAsk.url}
+        <AgentAskModal
+          {...describeAsk(pendingAsk)}
           requesterLabel={describeCard(pendingAsk.requesterId)}
+          reason={pendingAsk.reason}
           onAllow={allowAsk}
           onDeny={denyAsk}
         />

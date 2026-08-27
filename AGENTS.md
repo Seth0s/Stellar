@@ -2749,6 +2749,54 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   implementado", como já estava marcado; escopo grande demais pra uma
   sessão de polimento.
 
+## 2026-08-27 — Servidor MCP (item 21 ponto 9, achados 1/2/3/5 implementados)
+
+- Decisão de arquitetura (pedida pelo usuário: "como mitigar o problema de
+  system prompt do codex/cursor?"): em vez de mais um arquivo de doc pra
+  manter sincronizado, interface primária do agente virou um **servidor
+  MCP** (`src/main/mcp-server.ts`, `@modelcontextprotocol/sdk`) —
+  self-documenting (cada tool descreve a si mesma via Zod schema, não
+  depende de hint de texto), HTTP stateless (`sessionIdGenerator:
+  undefined`, par `McpServer`+`StreamableHTTPServerTransport` novo por
+  request, mesmo padrão do exemplo oficial do SDK). `acbridge` continua
+  existindo como fallback CLI pra providers sem MCP; os dois falam com o
+  mesmo backend — `message-bus.ts::handleRequest` foi extraído de
+  `handleLine` justamente pra isso, consentimento/capacidade escrito uma
+  vez só.
+- Registro efêmero, por spawn, sem escrever config no projeto: `claude`
+  ganha `--mcp-config '{"mcpServers":{"stellar":{...}}}'`
+  (`providers.ts`), `codex` ganha `-c mcp_servers.stellar.url=...`. Cursor
+  CLI não tem flag efêmera equivalente (só `.cursor/mcp.json` em disco) —
+  decisão deliberada de **não** escrever esse arquivo automaticamente no
+  repo do usuário; ficou documentado como limitação real do provider, não
+  bug daqui.
+- 7 tools: `list_cards`, `send_to_card`, `open_url`, `spawn_agent`,
+  `spawn_card`, `snapshot` (devolve imagem embutida — base64 — não path,
+  já que um cliente MCP não compartilha filesystem com o app), e
+  `get_page_text` (novo `browserRegistry.getPageText`, via
+  `webContents.executeJavaScript("document.body.innerText")`, truncado em
+  20k chars — achado 5, DOM real, não só pixel).
+- `spawn_agent`/`spawn_card` (achados 1/2) reusam o template de
+  consentimento do `open`: `AgentAskModal.tsx` (novo, genérico, substitui
+  `BrowserAskModal.tsx`) — título/comando/motivo, qualquer tipo de pedido.
+  Guarda de fork-bomb: `MAX_SPAWN_DEPTH = 3`; CLI usa env ambiente
+  (`AGENT_CANVAS_SPAWN_DEPTH`, automático a cada `pty-registry.ts` spawn);
+  MCP não tem env ambiente através do HTTP, então `depth` é parâmetro
+  Zod explícito que o próprio agente precisa ler e repassar — limitação
+  real, documentada na própria description da tool (achado autocorrigido
+  antes de rodar qualquer teste: primeira versão tinha `depth` fixo em 0,
+  o que teria neutralizado a guarda por completo pra qualquer chamada MCP).
+- Verificação real: `scripts/verify/smoke-mcp.mjs` (novo, 20/20 checks,
+  `fetch()` HTTP puro contra o protocolo Streamable — tools/list, cada
+  tool, consentimento com modal real via CDP, guarda de profundidade
+  recusando sem nem abrir modal) e `scripts/verify/smoke-acbridge.mjs`
+  (novo, 10/10, CLI como child process real via `execFile`, incluindo
+  `spawn-agent`/`spawn-card`/`page-text` novos). `npm run verify`
+  completo, todas as suítes, PASS.
+- Achado 6 (sandbox pra bash/agentes) segue fora de escopo, por decisão
+  explícita do usuário — precisa de rodada dedicada própria. Detalhe em
+  `DESIGN-BACKLOG.md` item 21 ponto 9.
+
 ## Comandos
 
 ```bash

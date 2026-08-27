@@ -9,7 +9,7 @@ const POLL_MS = 4000;
  * (item 2 revisited — was one shared token/one revoke-everything button;
  * each pairing now gets its own device id, so a stale/lost phone can be
  * dropped without booting every other one). Same modal chrome as
- * ConfirmModal/BrowserAskModal.
+ * ConfirmModal/AgentAskModal.
  *
  * First open with no devices paired yet auto-pairs one right away (same
  * "see a QR immediately" feel the single-token version had) — every

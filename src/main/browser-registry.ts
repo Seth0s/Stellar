@@ -193,6 +193,29 @@ export function createBrowserRegistry(callbacks: {
     });
   }
 
+  // DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — an agent could only
+  // ever get PIXELS of a browser card (acbridge/MCP `snapshot`), never
+  // its actual content; useless for a provider with no image input, and
+  // wasteful for one that has it but just needs "what does this page
+  // say". `executeJavaScript` is a plain Electron primitive already
+  // available on every WebContents here — no new architecture. Truncated
+  // rather than returned raw: a complex real page's `innerText` can run
+  // to hundreds of KB of mostly-nav/footer noise, which is worse than
+  // useless stuffed whole into an agent's context.
+  const MAX_PAGE_TEXT_CHARS = 20_000;
+  async function getPageText(id: string): Promise<{ ok: true; text: string; truncated: boolean } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const raw: unknown = await entry.win.webContents.executeJavaScript("document.body ? document.body.innerText : ''");
+      const text = typeof raw === "string" ? raw : "";
+      const truncated = text.length > MAX_PAGE_TEXT_CHARS;
+      return { ok: true, text: truncated ? text.slice(0, MAX_PAGE_TEXT_CHARS) : text, truncated };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
   function destroy(id: string) {
     const entry = entries.get(id);
     if (!entry) return;
@@ -215,6 +238,7 @@ export function createBrowserRegistry(callbacks: {
     sendMouseEvent,
     sendWheelEvent,
     sendKeyEvent,
+    getPageText,
     destroy,
     destroyAll,
   };
