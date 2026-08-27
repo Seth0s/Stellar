@@ -2644,6 +2644,19 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   Checks novos em `smoke-session-modal.mjs`. `npm run verify` completo
   (13 suítes, 129 checks) PASS. Detalhe em `DESIGN-BACKLOG.md` item 21
   (ponto 4 fechado).
+- **Item 21, ponto 6, mesmo dia**: novo `validation.ts` — sistema
+  genérico de validação de campo (`useFieldValidation(value, validate)`
+  + validador `required(label)`), erro só depois de "tocado" (blur ou
+  `touch()` num submit forçado). CSS reaproveitável em `layout.css`:
+  `.invalid` (borda vermelha, `!important` pra vencer qualquer input
+  mais específico) + `.field-error-msg`. Aplicado no "nome" do
+  `SessionModal` (era: submeter vazio não fazia nada visível — sem
+  borda, sem mensagem). Verificado via CDP: sem erro antes de tocar,
+  aparece ao tentar submeter vazio (cor de borda real via
+  `getComputedStyle`), modal não fecha com o campo inválido. 3 checks
+  novos em `smoke-session-modal.mjs`. `npm run verify` completo (13
+  suítes, 133 checks) PASS. Detalhe em `DESIGN-BACKLOG.md` item 21
+  (ponto 6 fechado).
 
 ## Comandos
 

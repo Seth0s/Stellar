@@ -917,6 +917,21 @@ select.resume-input {
   width: 100%;
 }
 
+/* DESIGN-BACKLOG.md item 21, ponto 6 — generic invalid-field look, pairs
+   with `validation.ts`'s `useFieldValidation`. Any input's className gets
+   `invalid` appended once its field is touched and fails validation;
+   `.field-error-msg` renders the message right under it. Reusable across
+   any form in the app, not scoped to one field/modal. */
+.invalid {
+  border-color: var(--danger) !important;
+}
+
+.field-error-msg {
+  color: var(--danger);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
 .continue-last-label {
   display: flex;
   align-items: center;

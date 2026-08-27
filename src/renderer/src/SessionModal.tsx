@@ -2,6 +2,7 @@ import { useState } from "react";
 import { PathPicker } from "./PathPicker";
 import { useOccludesChrome } from "./occlusion";
 import { toast } from "./useToast";
+import { required, useFieldValidation } from "./validation";
 import type { SessionTemplate } from "./useBoardStore";
 
 type Board = { id: string; name: string; cwd: string };
@@ -54,10 +55,18 @@ export function SessionModal(props: SessionModalProps) {
     props.mode === "create" ? props.defaultCwd : props.board.cwd || props.workspaceRoot,
   );
   const [template, setTemplate] = useState<SessionTemplate>("empty");
+  // DESIGN-BACKLOG.md item 21, ponto 6 — generic validation system
+  // (validation.ts). Was: submitting an empty name silently did nothing
+  // — no red border, no message, easy to miss why "Criar"/"Salvar" isn't
+  // doing anything.
+  const nameField = useFieldValidation(name, required("nome"));
 
   function submit() {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      nameField.touch();
+      return;
+    }
     if (props.mode === "create") props.onCreate(trimmed, cwd, template);
     else props.onSave(props.board.id, trimmed, cwd);
     props.onClose();
@@ -72,16 +81,18 @@ export function SessionModal(props: SessionModalProps) {
         <div className="popover-field">
           <label>nome</label>
           <input
-            className="resume-input"
+            className={`resume-input${nameField.invalid ? " invalid" : ""}`}
             autoFocus
             value={name}
             placeholder="nome da sessão"
             onChange={(e) => setName(e.target.value)}
+            onBlur={nameField.onBlur}
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
               if (e.key === "Escape") props.onClose();
             }}
           />
+          {nameField.invalid && <span className="field-error-msg">{nameField.error}</span>}
         </div>
         <div className="popover-field">
           <label>caminho do projeto</label>

@@ -61,6 +61,41 @@ try {
   const createModalOpen = await page.evalJs(`JSON.stringify(!!document.querySelector('.modal-root'))`);
   check("create modal opens", JSON.parse(createModalOpen), true);
 
+  // DESIGN-BACKLOG.md item 21, ponto 6 — generic field validation
+  // (validation.ts). Was: submitting an empty "nome" silently did
+  // nothing, no red border, no message. No error before anything is
+  // touched; clicking "Criar" with an empty field forces it to show even
+  // though the field itself was never blurred, and the modal must stay
+  // open (submit blocked).
+  const beforeTouch = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const inp = document.querySelector('.modal input.resume-input');
+        return JSON.stringify({ invalid: inp.classList.contains('invalid'), errorShown: !!document.querySelector('.field-error-msg') });
+      })()
+    `),
+  );
+  check("name field shows no error before being touched", beforeTouch.invalid || beforeTouch.errorShown, false);
+
+  await clickByText(".modal-actions button", "Criar");
+  await new Promise((r) => setTimeout(r, 200));
+  const afterEmptySubmit = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const inp = document.querySelector('.modal input.resume-input');
+        const err = document.querySelector('.field-error-msg');
+        return JSON.stringify({
+          modalStillOpen: !!document.querySelector('.modal-root'),
+          invalid: inp.classList.contains('invalid'),
+          errorText: err?.textContent ?? null,
+        });
+      })()
+    `),
+  );
+  check("submitting an empty required name is blocked (modal stays open)", afterEmptySubmit.modalStillOpen, true);
+  check("empty required name gets the invalid border after a submit attempt", afterEmptySubmit.invalid, true);
+  check("empty required name shows an inline error message", afterEmptySubmit.errorText, "nome é obrigatório");
+
   // fill it out, pick the "claude+bash+arquivos" template, submit
   await page.evalJs(`
     (() => {

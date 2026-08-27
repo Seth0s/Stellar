@@ -1747,12 +1747,24 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    `.path-picker-tree` com `scrollHeight > clientHeight` (overflow real,
    não um teste vazio) + screenshot confirmando a barra fina no lugar da
    padrão do SO. `npm run verify` (13 suítes) PASS.
-6. **Sistema de validação de campo, genérico** — screenshot mostra "Nova
-   sessão" com o campo "nome" vazio e nenhum indicador de erro. Pedido:
-   quando um campo obrigatório fica inválido, destacar a borda do campo
-   (vermelho) E mostrar a mensagem do problema embaixo dele — como um
-   sistema/estilo genérico reaproveitável (não só pro campo nome do
-   `SessionModal`), pra qualquer form futuro no app usar do mesmo jeito.
+6. **Sistema de validação de campo, genérico** — ✅ resolvido em
+   2026-08-27. Novo `validation.ts`: `useFieldValidation(value,
+   validate)` (hook genérico, `touched`/`error`/`invalid`/`onBlur`/
+   `touch()`) + validador `required(label)`, mais CSS genérico
+   (`.invalid` — borda vermelha, `!important` porque precisa vencer
+   qualquer seletor mais específico do input em questão — e
+   `.field-error-msg`, ambos em `layout.css`, reaproveitáveis por
+   qualquer form). Erro só aparece depois que o campo é "tocado" (blur
+   ou uma tentativa de submit via `touch()`) — nunca na primeira letra
+   digitada num campo obrigatório vazio. Aplicado no campo "nome" do
+   `SessionModal` (o caso reportado): borda vermelha + "nome é
+   obrigatório" embaixo, aparecendo tanto no blur quanto ao tentar
+   clicar "Criar"/"Salvar" com o campo vazio (antes, isso não fazia
+   nada visível). Verificado via CDP: sem erro antes de tocar, erro
+   aparece após tentativa de submit vazio (cor de borda confirmada via
+   `getComputedStyle`, não só a classe), modal permanece aberto (submit
+   bloqueado). 3 checks novos em `smoke-session-modal.mjs`. `npm run
+   verify` (13 suítes, 133 checks) PASS.
 7. **Linha acompanhando o mouse ao redor do raio do menu radial** —
    estritamente em volta do círculo (raio) do `RadialMenu.tsx`, não uma
    linha reta até o cursor. Se o mouse sai do raio, a linha fica presa no
