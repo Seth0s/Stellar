@@ -1853,12 +1853,13 @@ pra "9°", sem "8°" — não é erro de digitação meu).
    decoração estática), e volta ao centro reusa o `d` anterior (congela,
    não reseta). 4 checks novos em `smoke-radial-longpress.mjs`. `npm run
    verify` (13 suítes, 137 checks) PASS.
-9. **Varredura de lógica ampla, pedida como auditoria futura** —
-   investigada em 2026-08-27 (achados abaixo). **Achados 1, 2, 3 e 5
-   implementados no mesmo dia**, via um servidor MCP novo — ver
-   detalhe completo logo depois da lista. Achado 6 (sandbox) segue
-   deliberadamente fora de escopo, por decisão do usuário — precisa de
-   uma rodada dedicada própria.
+9. **Varredura de lógica ampla, pedida como auditoria futura** — ✅
+   investigada e fechada em 2026-08-27 (achados abaixo, 6/6 resolvidos).
+   Achados 1, 2, 3 e 5 implementados no mesmo dia, via um servidor MCP
+   novo — ver detalhe completo logo depois da lista. Achado 6 (sandbox)
+   ficou deliberadamente fora de escopo por um tempo, por decisão do
+   usuário — virou pré-requisito nomeado do item 12 Fase D e foi
+   resolvido junto (bubblewrap real).
 
    **1. Sistema de spawn entre agentes** — ✅ resolvido. Novo comando
    `spawn_agent` (tool MCP + `acbridge spawn-agent`), mesmo template de
@@ -2479,6 +2480,81 @@ futuro — mesma pergunta de gate de consentimento do `close_card` acima
 (editar o conteúdo de algo que já existe é mais parecido com
 `write_file` — merece diff/preview do "antes → depois" do texto, não só
 um "permitir sim/não" cego). Não implementado — só anotado.
+
+## 25. Brainstorm anotado em 2026-08-27 (não implementado) — sistema de notificação unificado + "auto mode" pros pedidos de agente
+
+Pedido do usuário, explicitamente hedged ("caso seja nada de mais o
+pedido"): um fluxo único pros "alerts de agente" (hoje fragmentados em 3
+implementações diferentes) e um modo automático inspirado no próprio
+Claude Code CLI (rodapé do terminal já mostra "auto mode on (shift+tab
+to cycle)" — o usuário quer algo assim pro consentimento de agente
+dentro do Stellar). Só pensar/anotar agora, sem implementar.
+
+**O que existe hoje, de fato fragmentado em 3 formas diferentes pra
+"algo quer acontecer, um humano decide"**:
+1. `AgentAskModal` — popup bloqueante, usado por `spawn_agent`/
+   `spawn_card`/`open_url` (tudo que vem de MCP/`acbridge`).
+2. `ConfirmModal` — popup genérico sim/não, usado por fechar terminal
+   ativo e abrir link do terminal (ambos gestos HUMANOS diretos, não de
+   agente).
+3. Os blocos inline do `ChatCard` (`.chat-diff-block`/`.chat-bash-
+   block`) — DELIBERADAMENTE não-modal (decisão já documentada no item
+   12 Fase C: um diff de várias linhas não cabe no `.agent-ask-command`
+   de uma linha só do modal genérico).
+
+Três implementações reais, cada uma com sua própria lógica de estado
+(`pendingAsk`/`pendingCloseId`/`pendingOpenUrl` em `App.tsx`,
+`pendingWrite`/`pendingBash` em `ChatCard.tsx`) — nenhuma bug, mas
+nenhuma reaproveitando a outra também.
+
+**Achado real (não verificado ao vivo, achado lendo o código —
+registrar como hipótese, não fato confirmado)**: `pendingAsk` em
+`App.tsx` é um único `useState<PendingAsk | null>`, não uma fila. Se um
+SEGUNDO pedido chegar (`spawn:ask-agent`/`spawn:ask-card`/`browser:ask-
+open`) antes do humano decidir o primeiro, `setPendingAsk` simplesmente
+SOBRESCREVE — o primeiro `requestId` fica órfão no `message-bus.ts`
+(nenhum modal nunca mostrado pra ele), só resolvido ~2min depois pelo
+próprio timeout (`OPEN_TIMEOUT_MS`/`SPAWN_TIMEOUT_MS`), como se tivesse
+sido negado, sem o humano nunca saber que existiu. Nesta sessão, 5
+`spawn_card` seguidos (item 24) sempre resolveram bem — mas
+provavelmente porque cada chamada MCP é uma rodada request→resposta
+síncrona (eu só disparo a próxima depois que a anterior já resolveu),
+não uma prova de que dois pedidos CONCORRENTES de verdade (dois agentes
+diferentes pedindo ao mesmo tempo) seriam enfileirados corretamente. Se
+"sistema unificado" vai adiante, isso PRECISA virar uma fila de verdade
+(`pendingAsks: PendingAsk[]`), não só trocar a pele visual de um único
+slot.
+
+**"Auto mode", inspirado no Claude Code CLI — a parte que precisa de
+mais cuidado que só "um botão liga/desliga"**:
+- O CLI já mostra um indicador SEMPRE visível quando auto-mode está
+  ligado (não é um toggle silencioso) — qualquer versão disso no
+  Stellar precisaria do mesmo: um estado que nunca fica esquecido
+  ligado sem o humano perceber (ex.: um badge fixo na topbar, não só
+  uma preferência enterrada num menu).
+- Os pedidos já têm 3 níveis reais de risco, não um só — auto-mode
+  precisa respeitar essa hierarquia já existente, não tratar tudo
+  igual:
+  - **Sem gate nenhum, já hoje** (`read_file`/`get_page_text`/
+    `snapshot`) — observação passiva, nunca precisou de pergunta.
+  - **Gate com timeout, hoje sempre manual** (`spawn_agent`/
+    `spawn_card`/`open_url`/`write_file`/`bash`) — candidatos reais a
+    "auto-aprovar" em algum nível, mas com pesos MUITO diferentes entre
+    si (`spawn_card(sticky)` é quase inofensivo; `bash`/`write_file`
+    mexem em disco/processo de verdade).
+  - **Recusa automática, sem pedir nada** (`MAX_SPAWN_DEPTH`) — já é
+    "modo automático" num sentido, só que sempre nega, nunca aprova.
+  - Pergunta real em aberto: um nível intermediário faz sentido (ex.:
+    auto-aprova `spawn_card`/`read_file`-like, mas `bash`/`write_file`/
+    `spawn_agent` continuam sempre manuais mesmo com auto-mode ligado)?
+    Ou é tudo-ou-nada, como o próprio Claude Code CLI faz (auto-accept-
+    edits é um modo, não um dial fino por tipo de ação)?
+  - Escopo do toggle: por sessão (board)? Por card que pergunta? Global
+    no app inteiro? O CLI de referência é por sessão de terminal — o
+    equivalente mais direto no Stellar seria por BOARD, não global.
+
+Nenhuma decisão fechada aqui — perguntas reais levantadas, matching o
+mesmo espírito do item 23 (registrar o raciocínio, não um plano pronto).
 
 ## Ordem sugerida para a próxima rodada
 

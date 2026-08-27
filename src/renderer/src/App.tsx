@@ -975,10 +975,31 @@ export function App() {
     }
   }
 
+  // Pedido ao vivo (2026-08-27): o card de confirmação mostrava o id
+  // bruto do banco local ("claude #70") — sem significado nenhum pra um
+  // humano, só um número interno de sequência. Prioridade: (1) o `label`
+  // que o humano já deu ao card (CardTag rename) — a fonte mais
+  // confiável de "como isso deveria ser chamado", já existe, só não era
+  // usada aqui; (2) pra terminal sem label, um ordinal por provider
+  // dentro da SESSÃO atual ("Claude 1°", "Bash 2°"), calculado pela
+  // ordem real de criação (ids numéricos crescentes, não a ordem de
+  // z-index/`order`) — não o id bruto do SQLite, que carrega o contador
+  // global do app inteiro, sem relação com "qual card é esse dentro
+  // desta sessão".
   function describeCard(id: string): string {
     const c = cardsRef.current.find((x) => x.id === id);
-    if (c?.kind === "terminal") return `${c.provider} #${id}`;
-    return `card #${id}`;
+    if (!c) return `card #${id}`;
+    if (c.label) return c.label;
+    if (c.kind === "terminal") {
+      const provider = c.provider;
+      const sameProvider = cardsRef.current
+        .filter((x) => x.kind === "terminal" && x.provider === provider)
+        .sort((a, b) => Number(a.id) - Number(b.id));
+      const ordinal = sameProvider.findIndex((x) => x.id === id) + 1;
+      const name = provider.charAt(0).toUpperCase() + provider.slice(1);
+      return `${name} ${ordinal}°`;
+    }
+    return `${KIND_LABEL[c.kind]} #${id}`;
   }
 
   /** The actual removal — cards/order/connectors/selection/liveStatus state
