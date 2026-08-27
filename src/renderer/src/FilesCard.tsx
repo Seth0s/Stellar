@@ -1,9 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
 import type { Rect } from "./board-model";
 import type { DirEntry } from "../../preload/index";
+
+// DESIGN-BACKLOG.md item 21, ponto 11 — `React.lazy`, not a plain static
+// import: CodeEditor.tsx pulls in CodeMirror's core (state/view/commands/
+// language/highlight/indentation-markers) statically at its own top, which
+// measured ~700KB added to the MAIN bundle when this was a regular import
+// (`VISUALIZE=1 npm run build` before/after confirmed it) — FilesCard.tsx
+// itself is always mounted eagerly (files is one of the base card kinds),
+// so a plain import here would make every session pay for CodeMirror even
+// if its code view is never opened. Same reasoning as `MarkdownPreview`'s
+// dynamic `import()` below, just via the component-level API since this
+// one needs to render more than a single effect.
+const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.CodeEditor })));
 
 type MediaKind = "image" | "markdown" | "text";
 
@@ -243,7 +255,12 @@ export function FilesCard({
   const [kids, setKids] = useState<Record<string, DirEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [content, setContent] = useState("");
+  // DESIGN-BACKLOG.md item 21, ponto 11 — `null` means "not loaded yet",
+  // distinct from `""` (a genuinely empty file). CodeEditor only mounts
+  // once this is non-null, so a file switch never hands CodeMirror a
+  // stale previous-file snapshot as its initial doc while the real
+  // content is still in flight over IPC.
+  const [content, setContent] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [view, setView] = useState<"code" | "preview">("code");
   const [dirty, setDirty] = useState(false);
@@ -303,6 +320,7 @@ export function FilesCard({
     setTooLarge(false);
     setError(null);
     setImageDataUrl(null);
+    setContent(null);
     const kind = mediaKind(path);
     if (kind === "image") {
       window.fs.readImage(root, path).then(
@@ -332,7 +350,7 @@ export function FilesCard({
   }
 
   function save() {
-    if (!selectedPath) return;
+    if (!selectedPath || content === null) return;
     window.fs.write(root, selectedPath, content).then(
       () => setDirty(false),
       (e) => setError(String(e)),
@@ -518,21 +536,38 @@ export function FilesCard({
             </div>
           )}
           {selectedPath && !tooLarge && mediaKind(selectedPath) === "markdown" && view === "preview" && (
-            <MarkdownPreview content={content} />
+            content === null ? (
+              <div className="files-editor-msg">carregando…</div>
+            ) : (
+              <MarkdownPreview content={content} />
+            )
           )}
           {selectedPath &&
             !tooLarge &&
             mediaKind(selectedPath) !== "image" &&
-            !(mediaKind(selectedPath) === "markdown" && view === "preview") && (
-              <textarea
-                className="files-editor-textarea"
-                value={content}
-                onChange={(e) => {
-                  setContent(e.target.value);
-                  setDirty(true);
-                }}
-              />
-            )}
+            !(mediaKind(selectedPath) === "markdown" && view === "preview") &&
+            (content === null ? (
+              <div className="files-editor-msg">carregando…</div>
+            ) : (
+              // DESIGN-BACKLOG.md item 21, ponto 11 — real editor
+              // (CodeEditor.tsx, CodeMirror 6) instead of a bare
+              // `<textarea>`: line numbers, syntax highlight per
+              // extension, indentation guides, code folding. Keyed by
+              // `selectedPath` so switching files always mounts a fresh
+              // editor instance (see CodeEditor.tsx's own doc comment on
+              // why `value` is read only once, not kept in sync live).
+              <Suspense fallback={<div className="files-editor-msg">carregando editor…</div>}>
+                <CodeEditor
+                  key={selectedPath}
+                  value={content}
+                  filename={selectedPath}
+                  onChange={(next) => {
+                    setContent(next);
+                    setDirty(true);
+                  }}
+                />
+              </Suspense>
+            ))}
         </div>
       </div>
     </CardFrame>
