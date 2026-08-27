@@ -43,7 +43,7 @@
       "provider": "github",
       "owner": "Seth0s",
       "repo": "Stellar",
-      "draft": false
+      "releaseType": "release"
     },
     "linux": {
       "target": [
