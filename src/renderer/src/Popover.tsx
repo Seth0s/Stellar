@@ -15,6 +15,7 @@ export function Popover({
   children,
   side = "right",
   className,
+  gap = 14,
 }: {
   anchorRef: React.RefObject<HTMLElement | null>;
   open: boolean;
@@ -31,6 +32,13 @@ export function Popover({
    * `.popover` z-index (800) sits behind `.modal-root`'s (2000), so that
    * caller passes a class that bumps it back above. */
   className?: string;
+  /** Distance from the anchor's own edge — the default 14px assumes the
+   * anchor sits flush against whatever visual boundary it's inside (the
+   * rail, the topbar). PathPicker.tsx's anchor is a full-width button
+   * INSIDE a padded `.modal` (20px), so 14px alone lands the popover a
+   * few px inside the modal's own edge, reading as "touching it" — that
+   * caller passes a bigger gap to actually clear the modal first. */
+  gap?: number;
 }) {
   const popRef = useRef<HTMLDivElement>(null);
 
@@ -54,8 +62,8 @@ export function Popover({
   // its anchor.
   const style: React.CSSProperties = anchor
     ? side === "left"
-      ? { top: anchor.top, right: window.innerWidth - anchor.left + 14 }
-      : { top: anchor.top, left: anchor.right + 14 }
+      ? { top: anchor.top, right: window.innerWidth - anchor.left + gap }
+      : { top: anchor.top, left: anchor.right + gap }
     : { top: 60, left: 80 };
 
   // Every caller anchors this from inside a `position: absolute` toolbar

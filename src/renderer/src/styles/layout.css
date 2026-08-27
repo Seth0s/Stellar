@@ -337,7 +337,13 @@ body {
 
 /* The "header com caminho selecionável" the user asked for — every
    segment of the currently-picked path, each one a shortcut back to that
-   ancestor (no need to re-drill the tree down to go back up). */
+   ancestor (no need to re-drill the tree down to go back up). 2026-08-27
+   revisit: also carries up to 2 ancestors ABOVE the workspace root itself
+   (`.path-picker-crumb-muted`, dimmer — they're not "inside" the current
+   root) — clicking one promotes it to root (PathPicker.tsx's
+   `selectAncestor`), replacing the old footer "mudar pasta raiz" text
+   link; a small icon button covers the native-dialog escape hatch for a
+   sideways jump the ancestors can't reach. */
 .path-picker-crumbs {
   display: flex;
   flex-wrap: wrap;
@@ -346,6 +352,23 @@ body {
   font-size: 11px;
   padding: 2px 4px 6px;
   border-bottom: 1px solid var(--border);
+}
+
+.path-picker-root-btn {
+  flex: none;
+  display: flex;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 3px;
+  margin-right: 3px;
+  border-radius: 4px;
+}
+
+.path-picker-root-btn:hover {
+  background: var(--surface);
+  color: var(--foam);
 }
 
 .path-picker-crumb-item {
@@ -369,6 +392,10 @@ body {
   color: var(--text);
 }
 
+.path-picker-crumb-muted {
+  opacity: 0.55;
+}
+
 .path-picker-crumb-sep {
   color: var(--muted);
   opacity: 0.5;
@@ -389,24 +416,41 @@ body {
   color: var(--muted);
 }
 
-/* Holds link-style actions (new folder, change the workspace root, close
-   the panel) below the tree — a row here would fight the tree for width
-   in a narrow popover/modal. */
-.project-picker-links {
+/* Real button chips below the tree (2026-08-27 revisit — were underlined
+   text links, "em vez de texto coloque botões... com legenda interna"):
+   icon + label together inside a bordered chip, not bare text. */
+.path-picker-footer {
   display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.project-picker-back {
-  flex: none;
-  background: none;
-  border: none;
-  color: var(--foam);
-  font-size: 11px;
+.path-picker-footer-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
   cursor: pointer;
-  text-decoration: underline;
-  white-space: nowrap;
+}
+
+.path-picker-footer-btn:hover {
+  border-color: var(--foam);
+}
+
+.path-picker-footer-btn--primary {
+  background: var(--foam);
+  border-color: var(--foam);
+  color: var(--on-accent);
+}
+
+.path-picker-footer-btn--primary:hover {
+  filter: brightness(1.08);
 }
 
 select.resume-input {
