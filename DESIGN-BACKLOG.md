@@ -1741,7 +1741,7 @@ resolução prejudicada do card do navegador.
 exatamente a regressão que existia). `npm run verify` completo (13
 suítes, 89 checks) PASS.
 
-## 21. Anotado em 2026-08-27, não implementado ainda — 12 pontos reportados ao vivo
+## 21. Anotado em 2026-08-27, não implementado ainda — 13 pontos reportados ao vivo
 
 Pedido explícito do usuário foi só anotar, sem mexer em código nesta
 passagem. Numeração preservada como reportada (o usuário pulou de "7°"
@@ -2198,6 +2198,26 @@ pra "9°", sem "8°" — não é erro de digitação meu).
         em vez do número — corrigido filtrando linhas vazias antes de
         indexar. `smoke-chat.mjs`/`smoke-chat-tools.mjs`/
         `smoke-card-lifecycle.mjs` rerrodadas — 0 regressões.
+13. **Scrollbar do `FilesCard` sem estilo, verificar outros lugares** —
+    reportado ao vivo em 2026-08-27, só anotado, nada implementado.
+    Checagem rápida no código antes de anotar (pra não registrar algo
+    impreciso): `.files-tree` (a árvore de arquivos em si) **já** tem
+    `thin-scroll` aplicado (`FilesCard.tsx:499`) — não é aí que está o
+    problema. Os dois painéis de CONTEÚDO do mesmo card não têm:
+    `.files-editor-preview` (preview de markdown/texto) e
+    `.files-editor-image` (visualizador de imagem), ambos `overflow:
+    auto` sem a classe `thin-scroll` no elemento (`FilesCard.tsx`,
+    linhas ~85/534). O modo código (`CodeEditor.tsx`, CodeMirror 6) tem
+    um problema diferente e mais chato: o scroll é interno do
+    `.cm-scroller` do próprio CodeMirror, uma subárvore DOM que o
+    utilitário `.thin-scroll` (`layout.css`) nem alcança — precisaria de
+    uma regra `::-webkit-scrollbar` dedicada mirando `.cm-scroller`, não
+    só adicionar a classe. Outros lugares candidatos a checar quando
+    isso for implementado (não verificados a fundo agora, só
+    localizados por `overflow: auto`/`overflow-y: auto` no grep):
+    pequenos blocos de código dentro de mensagens de markdown do chat
+    (`.chat-msg-md pre`) e o `.terminal-card-url-popover` novo (item
+    22) — ambos de baixa prioridade, cosméticos/pequenos.
 
 ## 22. App oficial buildado: overlay de links cobrindo o terminal + paste de imagem inexistente — ✅ feito em 2026-08-27, 2/2, reportado ao vivo
 
