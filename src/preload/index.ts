@@ -363,6 +363,10 @@ export type ChatSendResult = { ok: true } | { ok: false; error: string };
  * `hunks` is the exact same data the human approves/denies). */
 export type DiffHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] };
 export type WriteConsentRequest = { path: string; isNewFile: boolean; diffText: string; hunks: DiffHunk[] };
+/** DESIGN-BACKLOG.md item 12, Fase D — the `bash` tool's consent request,
+ * same ask/resolve shape as `WriteConsentRequest` above, just a command
+ * line instead of a diff (see main/sandbox.ts). */
+export type BashConsentRequest = { command: string };
 
 /** DESIGN-BACKLOG.md item 12, Fase B/C — mirrors `pty`'s
  * spawn/write/onData/onExit shape on purpose (see main/anthropic-client.ts/
@@ -411,6 +415,15 @@ const chat = {
   },
   resolveWrite: (requestId: string, allowed: boolean): Promise<void> =>
     ipcRenderer.invoke("chat:write-resolve", requestId, allowed),
+  /** DESIGN-BACKLOG.md item 12, Fase D — same ask/resolve shape as
+   * onAskWrite/resolveWrite above, for the `bash` tool. */
+  onAskBash: (cb: (requestId: string, cardId: string, req: BashConsentRequest) => void) => {
+    const listener = (_e: unknown, requestId: string, cardId: string, req: BashConsentRequest) => cb(requestId, cardId, req);
+    ipcRenderer.on("chat:ask-bash", listener);
+    return () => ipcRenderer.removeListener("chat:ask-bash", listener);
+  },
+  resolveBash: (requestId: string, allowed: boolean): Promise<void> =>
+    ipcRenderer.invoke("chat:bash-resolve", requestId, allowed),
   /** Test-only (item 12 Fase C's verify coverage) — no-op in a packaged
    * build, see main/index.ts's guard. Drives the real read_file/
    * write_file/consent/diff pipeline without needing a real paid API

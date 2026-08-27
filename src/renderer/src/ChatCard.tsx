@@ -4,7 +4,7 @@ import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import type { ChatMessage, ChatProvider } from "./card-types";
-import type { WriteConsentRequest } from "../../preload/index";
+import type { WriteConsentRequest, BashConsentRequest } from "../../preload/index";
 
 /**
  * DESIGN-BACKLOG.md item 12 — Fase B built plain streamed-text chat; Fase
@@ -33,6 +33,21 @@ export const DEFAULT_OPENAI_MODEL = "gpt-4.1";
 
 type ToolActivity = { id: string; name: string; input: unknown; status: "running" | "done"; ok?: boolean; summary?: string };
 type WriteDecision = { path: string; allowed: boolean };
+type BashDecision = { command: string; allowed: boolean };
+
+/** Shared label logic for both the generic ToolLine and the "done"
+ * summary lines below — one place that knows how to describe each tool's
+ * input, rather than re-deriving it per render site. */
+function toolLabel(name: string, input: unknown): string {
+  const i = (input ?? {}) as Record<string, unknown>;
+  if (typeof i.path === "string") return `${name}(${i.path})`;
+  if (typeof i.command === "string") {
+    const c = i.command.length > 48 ? i.command.slice(0, 48) + "…" : i.command;
+    return `${name}(${c})`;
+  }
+  if (typeof i.provider === "string") return `${name}(${i.provider})`;
+  return name;
+}
 
 /** Lazy-loaded on first render that actually needs it, same reasoning as
  * FilesCard.tsx's own `MarkdownPreview` (marked+dompurify are ~170KB raw
@@ -56,8 +71,7 @@ function Markdown({ content }: { content: string }) {
 }
 
 function ToolLine({ activity }: { activity: ToolActivity }) {
-  const input = activity.input as { path?: string } | undefined;
-  const label = input?.path ? `${activity.name}(${input.path})` : activity.name;
+  const label = toolLabel(activity.name, activity.input);
   return (
     <div className={`chat-tool-line ${activity.status}${activity.ok === false ? " error" : ""}`}>
       <Icon name="apiKey" size={11} />
@@ -156,6 +170,8 @@ export function ChatCard({
   const [toolActivity, setToolActivity] = useState<ToolActivity[]>([]);
   const [writeDecisions, setWriteDecisions] = useState<WriteDecision[]>([]);
   const [pendingWrite, setPendingWrite] = useState<{ requestId: string } & WriteConsentRequest | null>(null);
+  const [bashDecisions, setBashDecisions] = useState<BashDecision[]>([]);
+  const [pendingBash, setPendingBash] = useState<{ requestId: string } & BashConsentRequest | null>(null);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -210,6 +226,10 @@ export function ChatCard({
       if (cardId !== id) return;
       setPendingWrite({ requestId, ...req });
     });
+    const offAskBash = window.chat.onAskBash((requestId, cardId, req) => {
+      if (cardId !== id) return;
+      setPendingBash({ requestId, ...req });
+    });
     return () => {
       offToken();
       offDone();
@@ -217,13 +237,14 @@ export function ChatCard({
       offToolStart();
       offToolResult();
       offAskWrite();
+      offAskBash();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, streaming, toolActivity, pendingWrite]);
+  }, [messages, streaming, toolActivity, pendingWrite, pendingBash]);
 
   function saveKey() {
     const trimmed = keyInput.trim();
@@ -247,6 +268,7 @@ export function ChatCard({
     setStreaming("");
     setToolActivity([]);
     setWriteDecisions([]);
+    setBashDecisions([]);
     void window.chat.send(id, { provider, model, systemPrompt, messages: next, cwd }).then((result) => {
       if (!result.ok) {
         setError(result.error);
@@ -262,6 +284,13 @@ export function ChatCard({
     setPendingWrite(null);
   }
 
+  function resolveBash(allowed: boolean) {
+    if (!pendingBash) return;
+    void window.chat.resolveBash(pendingBash.requestId, allowed);
+    setBashDecisions((prev) => [...prev, { command: pendingBash.command, allowed }]);
+    setPendingBash(null);
+  }
+
   function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -269,7 +298,12 @@ export function ChatCard({
     }
   }
 
-  const visibleActivity = toolActivity.filter((t) => t.name !== "write_file");
+  // write_file's own diff/decision block already fully represents it, and
+  // bash's own consent block already shows the command while it's
+  // pending — showing the generic "rodando…" line too would just be
+  // duplicate noise. A bash entry DOES still show once done (its stdout
+  // summary is real information the consent block never had).
+  const visibleActivity = toolActivity.filter((t) => t.name !== "write_file" && !(t.name === "bash" && t.status === "running"));
 
   return (
     <CardFrame
@@ -374,7 +408,12 @@ export function ChatCard({
               </div>
             ))}
 
-            {(streaming !== null || visibleActivity.length > 0 || pendingWrite || writeDecisions.length > 0) && (
+            {(streaming !== null ||
+              visibleActivity.length > 0 ||
+              pendingWrite ||
+              writeDecisions.length > 0 ||
+              pendingBash ||
+              bashDecisions.length > 0) && (
               <div className="chat-msg assistant">
                 {visibleActivity.map((t) => (
                   <ToolLine key={t.id} activity={t} />
@@ -400,6 +439,31 @@ export function ChatCard({
                         negar
                       </button>
                       <button className="chat-diff-allow" onClick={() => resolveWrite(true)}>
+                        permitir
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {bashDecisions.map((d, i) => (
+                  <div key={i} className={`chat-tool-line done${d.allowed ? "" : " error"}`}>
+                    <Icon name="apiKey" size={11} />
+                    <span className="chat-tool-line-label">bash({d.command})</span>
+                    <span className="chat-tool-line-status">{d.allowed ? "executado" : "negado"}</span>
+                  </div>
+                ))}
+                {pendingBash && (
+                  <div className="chat-bash-block">
+                    <div className="chat-bash-head">
+                      <Icon name="apiKey" size={12} />
+                      <span>comando sandboxed (bubblewrap)</span>
+                    </div>
+                    <pre className="chat-bash-command">{pendingBash.command}</pre>
+                    <div className="chat-diff-actions">
+                      <span className="chat-diff-hint">pedido de execução — precisa da sua aprovação</span>
+                      <button className="chat-diff-deny" onClick={() => resolveBash(false)}>
+                        negar
+                      </button>
+                      <button className="chat-diff-allow" onClick={() => resolveBash(true)}>
                         permitir
                       </button>
                     </div>

@@ -1,5 +1,6 @@
 import { structuredPatch } from "diff";
 import { readFile, writeFile, confine, MAX_FILE_BYTES } from "./fs-tools";
+import { isSandboxAvailable, runSandboxedBash } from "./sandbox";
 
 /**
  * DESIGN-BACKLOG.md item 12, Fase C — the tool set both chat providers
@@ -20,6 +21,22 @@ import { readFile, writeFile, confine, MAX_FILE_BYTES } from "./fs-tools";
  * just rendered as an inline diff block in the chat stream instead of the
  * small `AgentAskModal` popup (a multi-line colored diff doesn't fit a
  * one-line `.agent-ask-command`).
+ *
+ * Fase D adds two more tools:
+ * - `bash` — real command execution, sandboxed via `sandbox.ts` (bwrap;
+ *   see that file's doc comment for the security model). Always gated,
+ *   rendered as its own inline block (command text, not a diff) — a
+ *   consent gate alone doesn't make an unsandboxed shell safe, so this
+ *   tool REFUSES outright (no consent prompt at all — nothing safe to
+ *   consent to) when bwrap isn't available on the host, rather than
+ *   silently falling back to running the command unsandboxed.
+ * - `delegate_to_agent` — reuses the EXISTING `spawn_agent` consent/spawn
+ *   flow (message-bus.ts's `handleRequest`, DESIGN-BACKLOG.md item 21
+ *   ponto 9 achado 1) rather than building a second one: the human sees
+ *   the SAME `AgentAskModal` a `spawn_agent` MCP call already produces.
+ *   Fire-and-forget from the tool loop's perspective — a spawned CLI
+ *   session can't be synchronously awaited, so the tool result is just
+ *   "spawned, card #N, running independently".
  */
 
 /** Provider-agnostic — both anthropic-client.ts and openai-client.ts
@@ -28,11 +45,17 @@ export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export const READ_FILE_TOOL_NAME = "read_file" as const;
 export const WRITE_FILE_TOOL_NAME = "write_file" as const;
+export const BASH_TOOL_NAME = "bash" as const;
+export const DELEGATE_TOOL_NAME = "delegate_to_agent" as const;
 
 export const TOOL_DESCRIPTIONS = {
   [READ_FILE_TOOL_NAME]: "Read a file's contents. `path` is relative to this chat's project root.",
   [WRITE_FILE_TOOL_NAME]:
     "Create or overwrite a file with new full content. Shows the human a diff and waits for their approval before anything is actually written — if they deny it, the file is untouched and you're told so.",
+  [BASH_TOOL_NAME]:
+    "Run a shell command. Executes sandboxed (bubblewrap): filesystem writes are confined to this chat's project root and /tmp, the process runs in its own PID/IPC/UTS namespace (can't see or signal anything on the host), but network access IS available (npm install, curl, git clone, etc. all work). Always shown to the human for approval before running — if they deny it, nothing executes.",
+  [DELEGATE_TOOL_NAME]:
+    "Delegate a substantial, independent task to a full coding agent (claude or codex) running in its own new terminal card on the board, in this chat's project root. Use this for real, multi-step engineering work, not small lookups. Asynchronous: you get back a card id, not the agent's output — you can't see what it does or wait for it inside this turn; check the board for the reply.",
 } as const;
 
 export const TOOL_PARAMETERS = {
@@ -49,6 +72,19 @@ export const TOOL_PARAMETERS = {
     },
     required: ["path", "content"],
   },
+  [BASH_TOOL_NAME]: {
+    type: "object",
+    properties: { command: { type: "string", description: "The shell command to run (bash -lc)" } },
+    required: ["command"],
+  },
+  [DELEGATE_TOOL_NAME]: {
+    type: "object",
+    properties: {
+      provider: { type: "string", enum: ["claude", "codex"], description: "Which CLI agent to spawn" },
+      reason: { type: "string", description: "Short description of the task being delegated, shown to the human" },
+    },
+    required: ["provider", "reason"],
+  },
 };
 
 const MAX_TOOL_RESULT_CHARS = 20_000; // same cap browser-registry.ts's get_page_text already established
@@ -57,6 +93,10 @@ export type ToolResult = { ok: boolean; text: string };
 
 export type WriteConsentRequest = { path: string; isNewFile: boolean; diffText: string; hunks: DiffHunk[] };
 export type DiffHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] };
+
+export type BashConsentRequest = { command: string };
+export type DelegateProvider = "claude" | "codex";
+export type DelegateResult = { ok: true; cardId: string } | { ok: false; error: string };
 
 export async function runReadFile(root: string, path: string): Promise<ToolResult> {
   try {
@@ -105,6 +145,8 @@ export type ChatToolHooks = {
   onToolStart: (name: string, input: unknown) => void;
   onToolResult: (name: string, ok: boolean, summary: string) => void;
   askWriteConsent: (req: WriteConsentRequest) => Promise<boolean>;
+  askBashConsent: (req: BashConsentRequest) => Promise<boolean>;
+  delegateToAgent: (provider: DelegateProvider, reason: string) => Promise<DelegateResult>;
 };
 
 const SUMMARY_MAX = 200;
@@ -125,6 +167,24 @@ export async function executeTool(name: string, input: unknown, hooks: ChatToolH
     const consentReq = await buildWriteConsent(hooks.root, path, content);
     const allowed = await hooks.askWriteConsent(consentReq);
     result = allowed ? await runWriteFile(hooks.root, path, content) : { ok: false, text: "o usuário negou esta escrita" };
+  } else if (name === BASH_TOOL_NAME) {
+    const command = String(args.command ?? "");
+    if (!isSandboxAvailable()) {
+      // No consent prompt at all here on purpose — there's nothing safe
+      // for the human to approve without a sandbox, so asking would just
+      // be theater. See sandbox.ts's doc comment.
+      result = { ok: false, text: "sandbox indisponível (bubblewrap não encontrado neste sistema) — execução de comandos desabilitada" };
+    } else {
+      const allowed = await hooks.askBashConsent({ command });
+      result = allowed ? await runSandboxedBash(hooks.root, command) : { ok: false, text: "o usuário negou a execução deste comando" };
+    }
+  } else if (name === DELEGATE_TOOL_NAME) {
+    const provider: DelegateProvider = args.provider === "codex" ? "codex" : "claude";
+    const reason = String(args.reason ?? "");
+    const delegated = await hooks.delegateToAgent(provider, reason);
+    result = delegated.ok
+      ? { ok: true, text: `agente ${provider} criado (card ${delegated.cardId}), rodando de forma independente — acompanhe pelo board` }
+      : { ok: false, text: `delegação não realizada: ${delegated.error}` };
   } else {
     result = { ok: false, text: `tool desconhecida: ${name}` };
   }
