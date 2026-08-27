@@ -69,6 +69,7 @@ export type BoardRow = {
   id: string;
   name: string;
   project: string;
+  cwd: string;
   created_at: number;
   updated_at: number;
   last_accessed_at: number | null;

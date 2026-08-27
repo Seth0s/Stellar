@@ -42,7 +42,8 @@
     "publish": {
       "provider": "github",
       "owner": "Seth0s",
-      "repo": "Stellar"
+      "repo": "Stellar",
+      "draft": false
     },
     "linux": {
       "target": ["rpm", "deb"],

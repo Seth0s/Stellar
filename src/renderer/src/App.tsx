@@ -59,16 +59,6 @@ const DEFAULT_CWD = "/home/lucas/Workplace/Projects/Stellar";
 const DEFAULT_WORKSPACE_ROOT = "/home/lucas/Workplace/Projects";
 const WORKSPACE_ROOT_KEY = "ac.workspaceRoot";
 
-/** Suggests a project name for a new session (item 1) from whatever the
- * current workspace root is — the path segment right after
- * "{root}/" (e.g. "agent-canvas", "CentralByte"). Free-text and editable
- * in the UI, never re-derived once a session exists; just a starting
- * point, not a source of truth. */
-function suggestProjectFromCwd(cwd: string, root: string): string {
-  if (!cwd.startsWith(root + "/")) return "";
-  return cwd.slice(root.length + 1).split("/")[0] ?? "";
-}
-
 /** Home/Topbar's "📁 {name}" label — the last path segment of whatever
  * root is currently chosen, falling back to "Projects" for a root that's
  * just "/" or empty (shouldn't happen via the picker, but a bad persisted
@@ -322,7 +312,6 @@ export function App() {
    * `boardCounts` (provider !== "bash"), since a non-loaded board's PTYs
    * aren't running at all (switching boards kills them, see AGENTS.md). */
   const [liveStatus, setLiveStatus] = useState<Record<string, "ok" | "error" | "exited">>({});
-  const [workspaceProjects, setWorkspaceProjects] = useState<string[]>([]);
   const [workspaceRoot, setWorkspaceRoot] = useState(
     () => localStorage.getItem(WORKSPACE_ROOT_KEY) || DEFAULT_WORKSPACE_ROOT,
   );
@@ -414,18 +403,17 @@ export function App() {
     };
   }, []);
 
-  // Real sibling project directories, for the "select a project" picker
-  // (item 1 follow-up) — best-effort: an unreadable/moved workspace root
-  // just leaves the picker with only the free-text fallback, never blocks
-  // the app.
-  useEffect(() => {
-    window.fs
-      .list(workspaceRoot, "")
-      .then((entries) => setWorkspaceProjects(entries.filter((e) => e.isDir).map((e) => e.name)))
-      .catch(() => setWorkspaceProjects([]));
-  }, [workspaceRoot]);
+  /** The active board's real working directory (item 1 revisited — "não
+   * persiste o caminho correto") — every new card added while this board
+   * is open (addTerminalCard/addFilesCard/addChangesCard, summarizeBoard)
+   * defaults here instead of the app's own hardcoded DEFAULT_CWD, and
+   * PathPicker.tsx's tree is what actually sets it now (see SessionModal,
+   * createBoard/updateBoard in useBoardStore.ts). Falls back to
+   * DEFAULT_CWD for a board that predates the `cwd` column (empty string
+   * in the DB) or before any board is loaded at all. */
+  const activeBoardCwd = boards.find((b) => b.id === activeBoardId)?.cwd || DEFAULT_CWD;
 
-  /** ProjectPicker's "mudar pasta raiz" (reachable from every modal with a
+  /** PathPicker's "mudar pasta raiz" (reachable from every modal with a
    * project field — SessionModal create/edit, both via Home and Topbar) —
    * native OS folder dialog, `null` on cancel. */
   async function changeWorkspaceRoot() {
@@ -587,7 +575,7 @@ export function App() {
       id,
       kind: "terminal",
       provider: newProvider,
-      cwd: DEFAULT_CWD,
+      cwd: activeBoardCwd,
       resumeId: newResumeId.trim() || null,
       continueLast: newResumeId.trim() === "" && newContinueLast,
       model: newModel.trim() || null,
@@ -603,7 +591,7 @@ export function App() {
     addCard({
       id,
       kind: "files",
-      root: DEFAULT_CWD,
+      root: activeBoardCwd,
       rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
       groupId: null,
       label: null,
@@ -615,7 +603,7 @@ export function App() {
     addCard({
       id,
       kind: "changes",
-      root: DEFAULT_CWD,
+      root: activeBoardCwd,
       rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
       groupId: null,
       label: null,
@@ -756,7 +744,7 @@ export function App() {
       const prompt =
         `Aqui está o estado atual de um board de cards (canvas de trabalho):\n\n${snapshot}\n\n` +
         "Resuma esse estado em 2-4 frases, em português. Não use nenhuma ferramenta, responda só com o texto do resumo.";
-      const result = await window.ai.summarize(newProvider, DEFAULT_CWD, prompt);
+      const result = await window.ai.summarize(newProvider, activeBoardCwd, prompt);
       const id = String(nextId.current++);
       const content = "text" in result ? result.text : `Erro: ${result.error}`;
       addCard({ id, kind: "sticky", content, color: "blue", rect: cascadeSlot(cardsRef.current.length), groupId: null, label: null });
@@ -1054,8 +1042,8 @@ export function App() {
           boards={boards}
           boardCounts={boardCounts}
           rootName={rootDisplayName(workspaceRoot)}
-          suggestedProject={suggestProjectFromCwd(DEFAULT_CWD, workspaceRoot)}
-          availableProjects={workspaceProjects}
+          workspaceRoot={workspaceRoot}
+          defaultCwd={DEFAULT_CWD}
           onChangeRoot={changeWorkspaceRoot}
           onOpenBoard={switchBoard}
           onCreateBoard={createBoard}
@@ -1433,8 +1421,8 @@ export function App() {
         activeBoardId={activeBoardId!}
         boardCounts={effectiveBoardCounts}
         rootName={rootDisplayName(workspaceRoot)}
-        suggestedProject={suggestProjectFromCwd(DEFAULT_CWD, workspaceRoot)}
-        availableProjects={workspaceProjects}
+        workspaceRoot={workspaceRoot}
+        defaultCwd={DEFAULT_CWD}
         onChangeRoot={changeWorkspaceRoot}
         zoom={world.zoom}
         onZoomIn={() => zoomBy(ZOOM_STEP)}
