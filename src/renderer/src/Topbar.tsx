@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import { SessionModal } from "./SessionModal";
@@ -15,6 +15,7 @@ export function Topbar({
   workspaceRoot,
   defaultCwd,
   onChangeRoot,
+  onNavigateRoot,
   zoom,
   onZoomIn,
   onZoomOut,
@@ -42,6 +43,7 @@ export function Topbar({
   defaultCwd: string;
   /** PathPicker's "mudar pasta raiz" — threaded through to SessionModal. */
   onChangeRoot: () => void;
+  onNavigateRoot: (path: string) => void;
   zoom: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -67,6 +69,23 @@ export function Topbar({
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
   const activeBoard = boards.find((b) => b.id === activeBoardId);
   const activeCounts = boardCounts[activeBoardId];
+  const [fullscreen, setFullscreen] = useState(false);
+
+  // 2026-08-27 revisit — real fullscreen (F11, Titlebar.tsx hides the
+  // header for it) already worked, but had NO visible trigger at all
+  // (deliberately removed earlier as "redundant with F11") — the user
+  // kept clicking `onFit` (zoom-to-fit, right next to this) expecting
+  // fullscreen from it instead ("ele apenas faz zoom"). This button lives
+  // in Topbar (not Titlebar) specifically because it stays mounted/
+  // reachable even once fullscreen hides the titlebar, giving a visible
+  // way back out too, not just F11.
+  useEffect(() => {
+    window.winControls.isFullscreen().then(setFullscreen);
+    const off = window.winControls.onFullscreenChange(setFullscreen);
+    return () => {
+      off();
+    };
+  }, []);
 
   return (
     <>
@@ -154,6 +173,7 @@ export function Topbar({
           defaultCwd={defaultCwd}
           workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
+          onNavigateRoot={onNavigateRoot}
           onCreate={onCreateBoard}
           onClose={() => setModal(null)}
         />
@@ -164,6 +184,7 @@ export function Topbar({
           board={modal.board}
           workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
+          onNavigateRoot={onNavigateRoot}
           canDelete={boards.length > 1}
           onSave={onUpdateBoard}
           onDelete={onDeleteBoard}
@@ -229,8 +250,14 @@ export function Topbar({
         <button onClick={onZoomIn} title="Aumentar zoom">
           <Icon name="zoomIn" size={16} />
         </button>
-        <button onClick={onFit} title="Ajustar à tela (zoom, não é a tela cheia da janela — veja o botão na barra de título)">
+        <button onClick={onFit} title="Ajustar à tela (zoom — não esconde a barra de título, veja o botão ao lado pra isso)">
           <Icon name="fit" size={16} />
+        </button>
+        <button
+          onClick={() => void window.winControls.toggleFullscreen()}
+          title={fullscreen ? "Sair da tela cheia" : "Tela cheia de verdade (esconde a barra de título, F11)"}
+        >
+          <Icon name={fullscreen ? "fullscreenExit" : "fullscreenEnter"} size={16} />
         </button>
         <button onClick={onCycleBgStyle} title={`Fundo do canvas: ${bgStyleLabel} (clique para trocar)`}>
           <Icon name="bgStyle" size={16} />

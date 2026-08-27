@@ -1552,6 +1552,60 @@ vale a partir da próxima tag.
 PASS. **Item fechado, com a ressalva do passo manual pendente do usuário
 na release já publicada (draft) do `v0.1.1`.**
 
+**Revisitado em 2026-08-27, mesmo dia — 4 ajustes ao `PathPicker`/fullscreen:**
+
+1. **Espaçamento entre modal e popover** — o botão-gatilho (`.path-picker-
+   trigger`) fica dentro do padding de 20px do `.modal`; `Popover.tsx`
+   media a partir da borda do BOTÃO, não do modal, então o antigo `+14px`
+   fixo deixava o popover nascendo *dentro* da borda visual do modal
+   (`anchor.right + 14` = `modalRight - 20 + 14` = 6px pra dentro).
+   `Popover` ganhou um `gap` numérico opcional (default 14, preserva todo
+   caller antigo); `PathPicker` passa `gap={44}` (14 + 20 do padding do
+   modal + ~10px de respiro visível).
+2. **Header com até 2 caminhos anteriores, dinâmico, no lugar do botão
+   "mudar pasta raiz"** — `ancestorsOf(root, 2)` (novo, string pura via
+   `dirname`, sem round-trip de `window.fs`) computa até 2 pastas acima
+   de `root`; renderizadas como crumbs "apagados" (`.path-picker-crumb-
+   muted`) antes do crumb do root. Clicar uma promove ela a root
+   (`selectAncestor`, chama tanto `onNavigateRoot` quanto `onChange`) —
+   como são recalculadas a cada render a partir do `root` atual, subir
+   repetidamente revela ancestrais cada vez mais altos sozinho (pedido
+   explícito: "se eu voltei uma pasta, adiciona +1 pasta anterior"). O
+   "mudar pasta raiz" via diálogo nativo continua existindo (cobre um
+   salto lateral que subir não alcança), só virou um ícone pequeno
+   (`.path-picker-root-btn`) antes dos crumbs em vez de um botão de
+   texto no footer. Novo `App.tsx`'s `navigateWorkspaceRoot` (seta
+   `workspaceRoot` direto, sem diálogo) threaded por `Home`/`Topbar`/
+   `SessionModal` como `onNavigateRoot`, paralelo ao `onChangeRoot`
+   existente.
+3. **Footer: botões de verdade, não texto sublinhado** — `.project-
+   picker-links`/`.project-picker-back` (link-style) → `.path-picker-
+   footer`/`.path-picker-footer-btn` (chip com borda, ícone + legenda
+   dentro, `--primary` pro "usar esta pasta").
+4. **Fullscreen "só fazia zoom"** — investigado: fullscreen real (F11,
+   `win:toggle-fullscreen`) já funcionava desde o item 12, achado 2
+   (título some de verdade, `Titlebar.tsx` já reage) — mas o único
+   gatilho era o atalho F11, sem NENHUM botão visível (removido
+   deliberadamente antes como "redundante"). O usuário clicava o `onFit`
+   do zoom-pill (ícone de 4 cantos, ao lado) esperando fullscreen dali.
+   Restaurado um botão dedicado no zoom-pill (`Topbar.tsx`, não
+   `Titlebar.tsx` — assim continua alcançável mesmo depois da titlebar
+   sumir, dando uma saída visível além do F11), ícone
+   `fullscreenEnter`/`fullscreenExit` (já existiam em `icons.tsx`, sobra
+   da implementação anterior) trocando com o estado real via
+   `onFullscreenChange`.
+
+Verificado ao vivo via CDP: screenshot confirmou o gap visível entre
+modal/popover e o header "lucas / Workplace / Projects / Stellar" (2
+ancestrais + root + seleção); `smoke-fullscreen.mjs` (novo, 7 checks)
+clica o botão de verdade (não chama a IPC direto) e confirma
+`isFullscreen()`/titlebar desmontando e remontando; `smoke-home.mjs`
+ganhou 2 checks pro ancestor-crumb (clicar promove o `workspaceRoot`,
+persistido em `localStorage`) — rodando por último no script, já que
+promover um ancestral não tem caminho de volta pela UI (só o diálogo
+nativo), então nada depois dele pode depender da árvore da raiz
+original. `npm run verify` completo (13 suítes) PASS.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.

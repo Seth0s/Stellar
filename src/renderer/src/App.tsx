@@ -413,14 +413,25 @@ export function App() {
    * in the DB) or before any board is loaded at all. */
   const activeBoardCwd = boards.find((b) => b.id === activeBoardId)?.cwd || DEFAULT_CWD;
 
-  /** PathPicker's "mudar pasta raiz" (reachable from every modal with a
-   * project field — SessionModal create/edit, both via Home and Topbar) —
-   * native OS folder dialog, `null` on cancel. */
+  /** Sets the workspace root directly, no dialog — PathPicker's header
+   * breadcrumb (item 1, 2nd revisit) walks UP into `root`'s own ancestors
+   * (up to 2 levels, computed from the path string alone) and clicking
+   * one promotes it to root right away. Shared with `changeWorkspaceRoot`
+   * below so both ways of changing the root stay in sync. */
+  function navigateWorkspaceRoot(path: string) {
+    setWorkspaceRoot(path);
+    localStorage.setItem(WORKSPACE_ROOT_KEY, path);
+  }
+
+  /** PathPicker's "escolher outra pasta raiz" (reachable from every modal
+   * with a project field — SessionModal create/edit, both via Home and
+   * Topbar) — native OS folder dialog, for jumping somewhere the header's
+   * ancestor crumbs can't reach (a sideways path, not just "up"). `null`
+   * on cancel. */
   async function changeWorkspaceRoot() {
     const picked = await window.fs.pickDirectory(workspaceRoot);
     if (!picked) return;
-    setWorkspaceRoot(picked);
-    localStorage.setItem(WORKSPACE_ROOT_KEY, picked);
+    navigateWorkspaceRoot(picked);
   }
 
   // Escape exits pen/connector tool mode. Not required for correctness —
@@ -1045,6 +1056,7 @@ export function App() {
           workspaceRoot={workspaceRoot}
           defaultCwd={DEFAULT_CWD}
           onChangeRoot={changeWorkspaceRoot}
+          onNavigateRoot={navigateWorkspaceRoot}
           onOpenBoard={switchBoard}
           onCreateBoard={createBoard}
           onUpdateBoard={updateBoard}
@@ -1424,6 +1436,7 @@ export function App() {
         workspaceRoot={workspaceRoot}
         defaultCwd={DEFAULT_CWD}
         onChangeRoot={changeWorkspaceRoot}
+        onNavigateRoot={navigateWorkspaceRoot}
         zoom={world.zoom}
         onZoomIn={() => zoomBy(ZOOM_STEP)}
         onZoomOut={() => zoomBy(1 / ZOOM_STEP)}

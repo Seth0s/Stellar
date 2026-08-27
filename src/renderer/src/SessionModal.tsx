@@ -29,6 +29,7 @@ type SessionModalProps =
       defaultCwd: string;
       workspaceRoot: string;
       onChangeRoot: () => void;
+      onNavigateRoot: (path: string) => void;
       onCreate: (name: string, cwd: string, template: SessionTemplate) => void;
       onClose: () => void;
     }
@@ -37,6 +38,7 @@ type SessionModalProps =
       board: Board;
       workspaceRoot: string;
       onChangeRoot: () => void;
+      onNavigateRoot: (path: string) => void;
       /** Same guard as the old inline delete button — never let the last session go. */
       canDelete: boolean;
       onSave: (id: string, name: string, cwd: string) => void;
@@ -87,6 +89,7 @@ export function SessionModal(props: SessionModalProps) {
             value={cwd}
             onChange={setCwd}
             onChangeRoot={props.onChangeRoot}
+            onNavigateRoot={props.onNavigateRoot}
             className="popover--modal"
           />
         </div>

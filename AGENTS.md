@@ -2560,6 +2560,22 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   API pública. Corrigido pro próximo tag; a release de `v0.1.1` já
   publicada ficou pendente de publicação manual pelo usuário. Detalhe em
   `DESIGN-BACKLOG.md` item 19.
+- **Item 19 revisitado, mesmo dia**: gap visível entre modal/popover
+  (`Popover.tsx` ganhou `gap` numérico, `PathPicker` passa 44 — o antigo
+  `+14px` media da borda do botão-gatilho, não do modal, nascendo alguns
+  px pra dentro dele). Header do `PathPicker` ganhou até 2 crumbs
+  "apagados" acima da raiz (`ancestorsOf`, string pura), clicáveis pra
+  promover a raiz sem diálogo (`onNavigateRoot`, novo, threaded igual
+  `onChangeRoot`) — dinâmico, recalcula a cada render; "mudar pasta raiz"
+  virou ícone pequeno antes dos crumbs em vez de botão de texto no
+  footer. Footer trocou link sublinhado por botões de verdade (ícone +
+  legenda). Fullscreen real (já funcionava desde item 12 achado 2) não
+  tinha NENHUM gatilho visível, só F11 — usuário clicava `onFit` (zoom-
+  to-fit) esperando fullscreen dali; restaurado um botão dedicado no
+  zoom-pill (`Topbar.tsx`, sobrevive à titlebar sumir). `smoke-
+  fullscreen.mjs` novo (7 checks, clica o botão de verdade via CDP);
+  `smoke-home.mjs` ganhou 2 checks pro ancestor-crumb. `npm run verify`
+  completo (13 suítes) PASS.
 
 ## Comandos
 

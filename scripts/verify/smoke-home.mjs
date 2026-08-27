@@ -67,7 +67,7 @@ try {
     // subtree even though they visually anchor to it.
     await clickByText(".path-picker-tree .files-node-name", folderName);
     await new Promise((r) => setTimeout(r, 150));
-    await clickByText(".project-picker-links button", "usar esta pasta");
+    await clickByText(".path-picker-footer button", "usar esta pasta");
   }
 
   // 1. Boots to Home, empty state (fresh profile, no boards yet).
@@ -145,6 +145,26 @@ try {
   await clickSelector(".home-session-edit");
   await new Promise((r) => setTimeout(r, 300));
   check("edit modal opens from a Home card's pencil", await page.evalJs(`!!document.querySelector('.modal-root')`), true);
+
+  // 7. Header ancestor crumbs (item 19, 2nd revisit) — "até 2 caminhos
+  // anteriores" above the workspace root, dynamic: clicking one promotes
+  // it to root right away, no dialog. Last step (not restored afterward —
+  // promoting an ancestor to root has no UI path back down to a narrower
+  // one besides the native dialog, so this deliberately runs after every
+  // check that depends on the original root's tree contents).
+  await clickSelector(".modal .path-picker-trigger");
+  await new Promise((r) => setTimeout(r, 400));
+  const rootBefore = await page.evalJs(`localStorage.getItem('ac.workspaceRoot')`);
+  const ancestorCount = await page.evalJs(`document.querySelectorAll('.path-picker-crumb-muted').length`);
+  check("header shows at least 1 ancestor crumb above the workspace root", ancestorCount >= 1, true);
+  const firstAncestorLabel = await page.evalJs(`document.querySelector('.path-picker-crumb-muted')?.textContent`);
+  await clickByText(".path-picker-crumb-muted", firstAncestorLabel);
+  await new Promise((r) => setTimeout(r, 200));
+  check(
+    "clicking an ancestor crumb promotes it to the workspace root",
+    (await page.evalJs(`localStorage.getItem('ac.workspaceRoot')`)) !== rootBefore,
+    true,
+  );
 
   page.close();
 } finally {

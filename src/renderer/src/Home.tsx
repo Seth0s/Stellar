@@ -45,6 +45,7 @@ export function Home({
   workspaceRoot,
   defaultCwd,
   onChangeRoot,
+  onNavigateRoot,
   onOpenBoard,
   onCreateBoard,
   onUpdateBoard,
@@ -60,6 +61,7 @@ export function Home({
   /** Starting path for a brand-new session (App.tsx's DEFAULT_CWD). */
   defaultCwd: string;
   onChangeRoot: () => void;
+  onNavigateRoot: (path: string) => void;
   onOpenBoard: (id: string) => void;
   onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
   onUpdateBoard: (id: string, name: string, cwd: string) => void;
@@ -168,6 +170,7 @@ export function Home({
           defaultCwd={defaultCwd}
           workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
+          onNavigateRoot={onNavigateRoot}
           onCreate={onCreateBoard}
           onClose={() => setModal(null)}
         />
@@ -178,6 +181,7 @@ export function Home({
           board={modal.board}
           workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
+          onNavigateRoot={onNavigateRoot}
           canDelete={boards.length > 1}
           onSave={onUpdateBoard}
           onDelete={onDeleteBoard}

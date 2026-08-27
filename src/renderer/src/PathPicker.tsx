@@ -18,6 +18,27 @@ function absOf(root: string, rel: string): string {
   return rel ? `${root}/${rel}` : root;
 }
 
+/** Parent of an absolute path, or `null` once there's nowhere higher to
+ * go (filesystem root). Pure string math — no `window.fs` round trip
+ * needed just to know an ancestor's own name. */
+function dirName(path: string): string | null {
+  const trimmed = path.replace(/\/+$/, "");
+  const i = trimmed.lastIndexOf("/");
+  if (i <= 0) return trimmed.length > 0 && i === 0 ? "/" : null;
+  return trimmed.slice(0, i);
+}
+
+/** Up to `count` ancestors of `path`, nearest first. */
+function ancestorsOf(path: string, count: number): { path: string; name: string }[] {
+  const out: { path: string; name: string }[] = [];
+  let cur = dirName(path);
+  while (cur && out.length < count) {
+    out.push({ path: cur, name: baseName(cur) });
+    cur = dirName(cur);
+  }
+  return out;
+}
+
 /** Every proper prefix of `rel` (not including `rel` itself) — the dirs
  * that need expanding, in order, to reveal `rel` as a row in the tree. */
 function properAncestors(rel: string): string[] {
@@ -47,12 +68,23 @@ export function PathPicker({
   value,
   onChange,
   onChangeRoot,
+  onNavigateRoot,
   className,
 }: {
   root: string;
   value: string;
   onChange: (absPath: string) => void;
+  /** Native OS folder dialog — for jumping somewhere the header's ancestor
+   * crumbs can't reach (sideways, not just up). Small icon next to the
+   * crumbs now, not a footer button (2026-08-27 revisit — the user asked
+   * for the header to carry root-navigation instead). */
   onChangeRoot: () => void;
+  /** Promotes an ancestor of `root` to be the new root, no dialog — what
+   * clicking one of the header's "até 2 caminhos anteriores" crumbs does.
+   * Recomputed from `root` on every render, so walking up repeatedly keeps
+   * revealing further ancestors on its own (2026-08-27 revisit: "se eu
+   * voltei uma pasta, adiciona no header +1 pasta anterior"). */
+  onNavigateRoot: (path: string) => void;
   /** Raises this popover's z-index above SessionModal's own (see
    * Popover.tsx) — the default 800 sits behind `.modal-root`'s 2000. */
   className?: string;
@@ -102,6 +134,13 @@ export function PathPicker({
     onChange(absOf(root, rel));
   }
 
+  /** An ancestor crumb: promote it to root AND select it (same "you are
+   * now here" semantics as clicking the root crumb itself picks root). */
+  function selectAncestor(path: string) {
+    onNavigateRoot(path);
+    onChange(path);
+  }
+
   function startCreate(parentRel: string) {
     if (!expanded.has(parentRel)) toggle(parentRel);
     setCreating(parentRel);
@@ -126,6 +165,10 @@ export function PathPicker({
 
   const rel = relOf(root, value);
   const crumbSegments = rel ? rel.split("/") : [];
+  // "até 2 caminhos anteriores" (2026-08-27) — nearest-first from
+  // ancestorsOf, reversed here so the render order reads oldest → newest,
+  // ending right before the root crumb.
+  const ancestors = ancestorsOf(root, 2).reverse();
 
   function createRow(parentRel: string, depth: number) {
     if (creating !== parentRel) return null;
@@ -199,9 +242,25 @@ export function PathPicker({
         <span className="path-picker-trigger-text">{rel || baseName(root)}</span>
         <Icon name="chevronDown" size={11} />
       </button>
-      <Popover anchorRef={btnRef} open={open} onClose={() => setOpen(false)} className={className}>
+      <Popover anchorRef={btnRef} open={open} onClose={() => setOpen(false)} className={className} gap={44}>
         <div className="path-picker-panel">
           <div className="path-picker-crumbs">
+            <button
+              type="button"
+              className="path-picker-root-btn"
+              title="Escolher outra pasta raiz…"
+              onClick={onChangeRoot}
+            >
+              <Icon name="folderOpen" size={12} />
+            </button>
+            {ancestors.map((a) => (
+              <span key={a.path} className="path-picker-crumb-item">
+                <button type="button" className="path-picker-crumb path-picker-crumb-muted" onClick={() => selectAncestor(a.path)}>
+                  {a.name}
+                </button>
+                <span className="path-picker-crumb-sep">/</span>
+              </span>
+            ))}
             <button type="button" className="path-picker-crumb" onClick={() => select("")}>
               {baseName(root)}
             </button>
@@ -225,15 +284,14 @@ export function PathPicker({
           </div>
           {createRow("", 0)}
           {error && <div className="path-picker-empty">{error}</div>}
-          <div className="project-picker-links">
-            <button type="button" className="project-picker-back" onClick={() => startCreate("")}>
-              + nova pasta aqui
+          <div className="path-picker-footer">
+            <button type="button" className="path-picker-footer-btn" onClick={() => startCreate("")}>
+              <Icon name="newFolder" size={13} />
+              nova pasta
             </button>
-            <button type="button" className="project-picker-back" onClick={onChangeRoot}>
-              📁 mudar pasta raiz…
-            </button>
-            <button type="button" className="project-picker-back" onClick={() => setOpen(false)}>
-              usar esta pasta ✓
+            <button type="button" className="path-picker-footer-btn path-picker-footer-btn--primary" onClick={() => setOpen(false)}>
+              <Icon name="check" size={13} />
+              usar esta pasta
             </button>
           </div>
         </div>
