@@ -571,7 +571,7 @@ dinâmico funcionando ao vivo, não só passando no type-check. `npm run
 verify` completo (10 suítes, ~109 checks) PASS. Renderer-only — hot-
 reload aplicou sem precisar reiniciar o `npm run dev`. **Item fechado.**
 
-## 7. Fluxo de uso — passos faltando (auditoria rápida, sem código)
+## 7. Fluxo de uso — passos faltando (auditoria rápida, sem código) — ✅ feito em 2026-08-26
 
 - **Fechar um card é imediato e sem confirmação nem desfazer** — pra um
   terminal com um agente rodando, um clique errado no X mata o processo
@@ -621,7 +621,7 @@ volta) + `smoke-session-modal.mjs` ganhou 2 checks novos (template fica
 selecionado, sessão nasce com os 3 cards certos). `npm run verify`
 completo: 59 checks, 7 suítes, PASS.
 
-## 8. Home — tela inicial sem sessão carregada
+## 8. Home — tela inicial sem sessão carregada — ✅ feito em 2026-08-26
 
 **Gap real**: hoje o app sempre abre direto numa sessão (a última salva em
 `localStorage`, ver `ACTIVE_BOARD_KEY`/`useBoardStore`) — não existe estado
@@ -731,7 +731,7 @@ aberta é um **botão no Topbar**.
   lista compacta. Virou `minmax(200px, 220px)`; `.home` também ganhou o
   mesmo `left` do `.topbar` (72px) em vez de um padding solto de 64px.
 
-## 9. Navegador embutido — GPU religada, aguardando confirmação ao vivo
+## 9. Navegador embutido — GPU religada, aguardando confirmação ao vivo — ✅ feito em 2026-08-26 (reescrito pra offscreen rendering)
 
 **Contexto**: histórico longo e não resolvido em `AGENTS.md` (ver
 2026-08-25 "Navegador nasce com tela preta", "navegador preto de novo",
@@ -959,7 +959,7 @@ Três achados distintos reportados juntos, tratar cada um separado:
   quando o usuário tenta selecionar/agrupar em zoom 1 com pouco espaço
   livre (ex.: auto-zoom-out ao entrar na ferramenta `select`, ou um hint).
 
-## 11. Modal/popover de sessões — fluxo pouco prático, redesenhar
+## 11. Modal/popover de sessões — fluxo pouco prático, redesenhar — ✅ feito em 2026-08-26
 
 **Gap real**: o popover atual do `Topbar` (screenshot mostra "SESSÕES" →
 grupo "AGENT-CANVAS" → linha da sessão ativa com editar/excluir inline →
@@ -2409,7 +2409,7 @@ próxima sessão sem revisitar.
   em vez de precisar de uma segunda tool pra "apontar" um card já
   criado.
 
-## 24. Teste ao vivo do servidor MCP contra a sessão real do usuário — 2026-08-27
+## 24. Teste ao vivo do servidor MCP contra a sessão real do usuário — ✅ feito em 2026-08-27 (2 ideias de ferramenta futura registradas, não implementadas: `close_card`/`delete_card`, `update_card_content`)
 
 Pedido explícito do usuário: "teste os servers mcp para chamar card,
 mexer no navegador e etc, spawn tudo que é possível". Diferente de todo
@@ -3676,7 +3676,7 @@ exatamente com `.files-tree` (a referência já estilizada). `tsc --noEmit`
 limpo, `smoke-files-card.mjs` (19/19), `smoke-card-wheel-scope.mjs`
 (6/6).
 
-## 41 (continuação) — Análise: gap vs. VSCode, pedido ao vivo em 2026-08-28
+## 41 (continuação) — Análise: gap vs. VSCode, pedido ao vivo em 2026-08-28 — ✅ feito (análise entregue, virou a fila 46-52)
 
 Usuário instalou CodeMirror 6 pro `FilesCard` (`CodeEditor.tsx`, DESIGN-
 BACKLOG.md item 21 ponto 11) esperando algo "igual VSCode", mas listou
@@ -3703,7 +3703,7 @@ Análise completa entregue fora deste arquivo (ver resposta da sessão de
   é um card SEPARADO que já fala com git, mas não aparece dentro do
   `FilesCard`).
 
-## 46-52. FilesCard vs VSCode — fila aprovada em 2026-08-28, ordem do mais barato ao mais caro
+## 46-52. FilesCard vs VSCode — fila aprovada em 2026-08-28, ordem do mais barato ao mais caro — ✅ feito (7/7 em 2026-08-28)
 
 Usuário aprovou a ordem proposta na análise do item 41/45 e pediu pra
 começar a implementar. Cada um vira seu próprio item conforme é feito
