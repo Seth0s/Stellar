@@ -3701,6 +3701,25 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   genuinamente distinto do container. `smoke-files-card.mjs` (19/19).
 - Detalhe completo em `DESIGN-BACKLOG.md` item 53.
 
+## 2026-08-28 — Warning do Vite virou bug real de produção confirmado: 7 linguagens nunca carregavam highlight numa build empacotada (item 54)
+
+- Reportado ao vivo (log de `npm run dev`). `CodeEditor.tsx`'s
+  `legacyLang` construía o path do dynamic import por concatenação de
+  string (`"@codemirror/legacy-modes/mode/" + mode`) — Vite/Rollup não
+  consegue analisar isso estaticamente.
+- **Confirmado empiricamente que não era só cosmético**: build de
+  produção com o código antigo não continha `"chroot"` (string
+  distintiva do `shell.js` real) em NENHUM arquivo do bundle — o import
+  nunca resolvia numa build de verdade (só no dev server, mais
+  tolerante), silenciosamente sem highlight nenhum pra shell/ruby/go/
+  yaml/toml/ini/env, sem erro visível (`.catch(() => null)` engolindo).
+- Fix: `switch` com `import()` literal por modo, cada um analisável
+  individualmente. Rebuild confirma chunks reais separados
+  (`shell-*.js` etc.) com `"chroot"` presente. Testado ao vivo via CDP:
+  `.sh` real digitado no editor mostra spans de highlight reais.
+  `smoke-files-card.mjs` (19/19), `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 54.
+
 ## Comandos
 
 ```bash

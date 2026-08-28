@@ -3991,6 +3991,44 @@ fundo do container `rgba(0,0,0,0)` (transparente) — agora genuinamente
 distintos (`distinct: true`). Screenshot antes/depois confirma
 visualmente. `tsc --noEmit` limpo, `smoke-files-card.mjs` (19/19).
 
+## 54. Warning do Vite: dynamic import não analisável em CodeEditor.tsx era um bug real de produção — ✅ feito em 2026-08-28
+
+Reportado ao vivo, log de `npm run dev`:
+```
+The above dynamic import cannot be analyzed by Vite.
+```
+apontando pra `import("@codemirror/legacy-modes/mode/" + mode)` em
+`CodeEditor.tsx` (os 6 modos "cauda longa" sem pacote `@codemirror/
+lang-*` dedicado: shell/bash, ruby, go, yaml/yml, toml, ini/env).
+
+**Não é só cosmético — bug real de produção confirmado empiricamente**:
+buildei `electron-vite build` com o código ANTIGO e grepei o bundle
+final por `"chroot"` (string bem distintiva do `shell.js` real do
+`@codemirror/legacy-modes`) — **zero ocorrências em qualquer arquivo do
+bundle**. O import dinâmico construído por concatenação de string nunca
+foi resolvido pelo Vite/Rollup em build de produção (só funciona por
+acaso no dev server, que tolera resolução mais frouxa) — abrir um
+`.sh`/`.rb`/`.go`/`.yaml`/`.toml`/`.ini`/`.env` numa instância
+`electron-vite build`/empacotada real (não `npm run dev`) silenciosamente
+NUNCA carregava highlight nenhum pra essas 7 extensões (o `.catch(()
+=> null)` do `loadLanguage` engolia o erro sem log nenhum — bug 100%
+silencioso, nunca reportado antes).
+
+**Fix**: troquei a concatenação de string por um `switch` com um
+`import()` LITERAL por modo (`import("@codemirror/legacy-modes/mode/
+shell")`, etc.) — cada um analisável individualmente pelo Vite/Rollup.
+
+**Verificado ao vivo, antes E depois**: rebuild com o código ANTIGO
+confirmou "chroot" ausente de todo o bundle (bug real, não hipotético).
+Rebuild com o fix — warning do Vite sumiu do output, `ls out/renderer/
+assets/` agora mostra chunks REAIS separados (`shell-*.js`,
+`ruby-*.js`, `go-*.js`, `yaml-*.js`, `toml-*.js`, `properties-*.js`),
+"chroot" presente em `shell-*.js`. Teste ao vivo via CDP: criado
+`test.sh` real com sintaxe shell real, digitado no editor — spans de
+highlight real aparecem (`has-spans`, não `flat-text`) — antes do fix
+isso silenciosamente nunca teria funcionado numa build empacotada.
+`tsc --noEmit` limpo, `smoke-files-card.mjs` (19/19).
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
