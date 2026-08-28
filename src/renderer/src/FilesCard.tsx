@@ -31,6 +31,10 @@ type MediaKind = "image" | "markdown" | "text";
 // so it's opt-in rather than a silent behavior change for existing users.
 const AUTOSAVE_KEY = "ac.filesAutoSave";
 const AUTOSAVE_DEBOUNCE_MS = 800;
+// DESIGN-BACKLOG.md item 49 — debounced so typing a query doesn't fire a
+// real recursive filesystem walk (`fs-tools.ts`'s `searchFileNames`) on
+// every keystroke.
+const SEARCH_DEBOUNCE_MS = 250;
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"]);
 const CONFIG_EXTS = new Set([".json", ".yaml", ".yml", ".toml", ".ini", ".env"]);
@@ -290,11 +294,21 @@ export function FilesCard({
   // or "not a repo" case, only once a branch name is actually known.
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
 
+  // DESIGN-BACKLOG.md item 49 — filename search. A non-empty `searchQuery`
+  // swaps the tree view for a flat `searchResults` list; `searching`
+  // covers the round-trip so a slow search on a huge tree doesn't read as
+  // "no matches" while still in flight.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<DirEntry[]>([]);
+  const [searching, setSearching] = useState(false);
+
   useEffect(() => {
     setKids({});
     setExpanded(new Set());
     setSelectedPath(null);
     setGitStatus(null);
+    setSearchQuery("");
+    setSearchResults([]);
     window.fs.list(root, "").then(
       (entries) => setKids((prev) => ({ ...prev, "": entries })),
       (e) => setError(String(e)),
@@ -392,6 +406,37 @@ export function FilesCard({
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSave, dirty, content, selectedPath]);
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      window.fs.searchNames(root, q).then(
+        (entries) => {
+          if (!cancelled) {
+            setSearchResults(entries);
+            setSearching(false);
+          }
+        },
+        (e) => {
+          if (!cancelled) {
+            setError(String(e));
+            setSearching(false);
+          }
+        },
+      );
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, root]);
 
   function startRename(path: string, currentName: string) {
     setRenamingPath(path);
@@ -524,6 +569,26 @@ export function FilesCard({
               <Icon name="newFolder" size={13} />
             </button>
           </div>
+          {/* DESIGN-BACKLOG.md item 49 — filename search across the whole
+              tree, not just the currently-expanded directories. A non-empty
+              query swaps the tree below for a flat results list. */}
+          <div className="files-search-row">
+            <Icon name="findCard" size={12} />
+            <input
+              className="files-search-input"
+              placeholder="buscar arquivo…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setSearchQuery("");
+              }}
+            />
+            {searchQuery && (
+              <button className="files-search-clear" title="Limpar busca" onClick={() => setSearchQuery("")}>
+                <Icon name="close" size={11} />
+              </button>
+            )}
+          </div>
           {creating && (
             <div className="files-create-row">
               <span className="files-create-hint">
@@ -542,19 +607,45 @@ export function FilesCard({
               />
             </div>
           )}
-          <div className="files-tree thin-scroll">
-            {(kids[""] ?? []).map((entry) => (
-              <TreeNode
-                key={entry.path}
-                entry={entry}
-                depth={0}
-                kids={kids}
-                expanded={expanded}
-                selectedPath={selectedPath}
-                actions={treeActions}
-              />
-            ))}
-          </div>
+          {searchQuery.trim() ? (
+            <div className="files-tree thin-scroll">
+              {searching && <div className="files-search-msg">buscando…</div>}
+              {!searching && searchResults.length === 0 && <div className="files-search-msg">nenhum arquivo encontrado</div>}
+              {!searching &&
+                searchResults.map((entry) => (
+                  <div
+                    key={entry.path}
+                    className={`files-node files-search-result${selectedPath === entry.path ? " files-node-active" : ""}`}
+                    onClick={() => {
+                      if (!entry.isDir) {
+                        selectFile(entry.path);
+                        setSearchQuery("");
+                      }
+                    }}
+                  >
+                    <span className="files-node-main">
+                      <Icon name={fileIconFor(entry.name, entry.isDir, false)} size={14} />
+                      <span className="files-node-name">{entry.name}</span>
+                      <span className="files-search-result-path">{parentOf(entry.path) || "/"}</span>
+                    </span>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <div className="files-tree thin-scroll">
+              {(kids[""] ?? []).map((entry) => (
+                <TreeNode
+                  key={entry.path}
+                  entry={entry}
+                  depth={0}
+                  kids={kids}
+                  expanded={expanded}
+                  selectedPath={selectedPath}
+                  actions={treeActions}
+                />
+              ))}
+            </div>
+          )}
         </div>
         <div className="files-editor">
           {selectedPath && (

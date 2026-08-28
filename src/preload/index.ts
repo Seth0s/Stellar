@@ -144,6 +144,9 @@ const fs = {
   delete: (root: string, path: string): Promise<void> => ipcRenderer.invoke("fs:delete", root, path),
   create: (root: string, parentPath: string, name: string, kind: "file" | "folder"): Promise<void> =>
     ipcRenderer.invoke("fs:create", root, parentPath, name, kind),
+  /** DESIGN-BACKLOG.md item 49 — filename search across the whole tree. */
+  searchNames: (root: string, query: string): Promise<DirEntry[]> =>
+    ipcRenderer.invoke("fs:search-names", root, query),
 };
 
 export type GitEntry = { path: string; status: string; insertions: number; deletions: number };

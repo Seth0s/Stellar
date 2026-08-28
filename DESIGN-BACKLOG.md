@@ -3771,8 +3771,32 @@ entrada só registra a FILA e a ordem combinada:
    (`AUTOSAVED`, o texto digitado). `tsc --noEmit` limpo,
    `smoke-files-card.mjs` (19/19, sem regressão no fluxo manual — OFF
    por padrão significa o teste nem passa perto do auto-save).
-4. **49 — Busca por nome de arquivo na árvore**: filtro/fuzzy, nenhuma
-   busca existe hoje.
+4. **49 — Busca por nome de arquivo na árvore — ✅ feito em
+   2026-08-28**: filtro/fuzzy, nenhuma busca existia. **Escopo**: `fs.
+   list` só busca um nível por vez (a árvore expande sob demanda) — uma
+   busca precisa de um walk recursivo próprio. `searchFileNames`
+   (`fs-tools.ts`) — mesmo `IGNORE` aplicado em TODO nível (não só na
+   raiz), teto de 20.000 arquivos escaneados e 200 resultados
+   (defensivo contra repo gigante/symlink cíclico), match case-
+   insensitive por substring no path relativo inteiro (não só o nome do
+   arquivo — deixa refinar por pasta também, como o Ctrl+P do VSCode).
+   IPC novo `fs:search-names` (mesmo padrão de `fs:list`/`fs:read` etc.),
+   `window.fs.searchNames(root, query)` no preload. UI: input de busca
+   acima da árvore (debounce 250ms — não dispara um walk real do
+   filesystem por tecla), query não-vazia troca a árvore por uma lista
+   plana de resultados (ícone + nome + pasta-pai à direita); clicar um
+   resultado abre o arquivo no editor e limpa a busca (mesmo padrão do
+   Ctrl+P do VSCode — acha e fecha).
+
+   Verificado ao vivo via CDP: busquei `fs-tools` (arquivo real,
+   aninhado 2 níveis, NUNCA expandido manualmente na árvore) — achou
+   `src/main/fs-tools.ts` (o arquivo que este próprio item editou),
+   clicar abriu o editor real no path certo, query limpou sozinha.
+   Busca sem match mostra "nenhum arquivo encontrado". Busca real no
+   root do repo (node_modules real presente) — 29ms, `node_modules`
+   corretamente ausente dos resultados, teto de 200 resultados
+   confirmado batendo. `tsc --noEmit` limpo, `smoke-files-card.mjs`
+   (19/19).
 5. **50 — Tabs de arquivos abertos**: hoje só 1 arquivo por vez, trocar
    descarta o anterior. Maior item da lista.
 6. **51 — Busca full-text no conteúdo dos arquivos**: grep real dentro

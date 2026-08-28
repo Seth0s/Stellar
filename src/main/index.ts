@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createPtyRegistry } from "./pty-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
 import type { SpawnOpts } from "./providers";
-import { createEntry, deletePath, listDir, readFile, readImageDataUrl, renamePath, writeFile } from "./fs-tools";
+import { createEntry, deletePath, listDir, readFile, readImageDataUrl, renamePath, searchFileNames, writeFile } from "./fs-tools";
 import { gitStatus } from "./git-tools";
 import { saveClipboardImage, testWriteClipboardImage } from "./clipboard-image";
 import {
@@ -561,6 +561,9 @@ function createWindow() {
   ipcMain.handle("fs:read", (_e, root: string, path: string) => readFile(root, path));
   ipcMain.handle("fs:write", (_e, root: string, path: string, content: string) => writeFile(root, path, content));
   ipcMain.handle("fs:read-image", (_e, root: string, path: string) => readImageDataUrl(root, path));
+  // DESIGN-BACKLOG.md item 49 — filename search across the whole tree,
+  // not just the one directory level `fs:list` fetches.
+  ipcMain.handle("fs:search-names", (_e, root: string, query: string) => searchFileNames(root, query));
   // DESIGN-BACKLOG.md item 13 — FilesCard quick actions.
   ipcMain.handle("fs:rename", (_e, root: string, path: string, newName: string) => renamePath(root, path, newName));
   ipcMain.handle("fs:delete", (_e, root: string, path: string) => deletePath(root, path));
