@@ -512,7 +512,7 @@ para 1325 depois das 4 extrações — ainda o maior arquivo do renderer, mas
 agora composto de hooks com fronteira testável em vez de um componente
 monolítico.
 
-## 4 (deferida). Registro declarativo de tipo de card
+## 4 (deferida). Registro declarativo de tipo de card — ✅ feito em 2026-08-28
 
 Hoje adicionar 1 kind de card toca ~7-8 lugares espalhados no `App.tsx` e
 `icons.tsx` (union type, `KIND_LABEL`, `toRow`, `fromRow`, `addXCard`,
@@ -522,6 +522,47 @@ lugar esquecido, só pego pelo `tsc`). Proposta: `cards/registry.ts`
 central reduzindo isso a 1-2 lugares. Maior risco — mexe em todo card
 existente — fica pra depois das fases 1-3 acima reduzirem o tamanho/risco
 da superfície.
+
+**O que foi feito**: novo `src/renderer/src/cards/registry.ts`, central
+pra tudo que é fato mecânico por kind (não elimina 100% do código
+específico — cada componente de card tem props genuinamente diferentes,
+então o branch de render e um criador por kind continuam existindo — mas
+colapsa o que é compartilhado e fecha os 2 pontos que falhavam
+silenciosamente):
+
+- `CARD_LABEL`/`CARD_ICON` (`Record<Card["kind"], ...>`, substituem os
+  antigos `KIND_LABEL`/`KIND_ICON` do `App.tsx`).
+- `RAIL_CREATE_ORDER` + `RAIL_CREATE_TITLE` — os 6 kinds com botão de
+  criação de 1 clique no Rail (terminal fica de fora, tem popover próprio;
+  stroke fica de fora, só nasce terminando um desenho). `Rail.tsx` agora
+  gera os 6 botões num loop sobre essa lista em vez de 6 blocos JSX
+  hardcoded, e recebe 1 prop `onCreate(kind)` em vez de 6
+  (`onCreateFiles`/`onCreateChanges`/.../`onCreateRemoteWindow`).
+- `defaultCardFields(kind, cwd)` — os campos default de cada kind (antes
+  6 funções quase idênticas `addFilesCard`/`addChangesCard`/`addStickyCard`/
+  `addBrowserCard`/`addChatCard`/`addRemoteWindowCard` em `App.tsx`), agora
+  1 função + 1 `addCardOfKind(kind, at?)` genérico. `spawnCardFor` (o path
+  de agente via MCP) também usa essa mesma função em vez do seu próprio
+  ternário aninhado.
+- `assertNeverCardKind(x: never)` — o branch de render do `App.tsx` (que
+  desenhava cada kind com um `if/else if` encadeado, terminando num
+  `return <BrowserCard .../>` incondicional) virou um `switch (c.kind)`
+  real; um kind não tratado agora é erro de compilação, não faz mais
+  fallback silencioso pra renderizar o card errado. `fromRow` ganhou um
+  `case "terminal"` explícito (era o `default` implícito) + um
+  `console.warn` no fallback restante — esse continua sem checagem de
+  tipo forte porque `CardRow.kind` (coluna do banco) é `string` solto, não
+  o union `Card["kind"]`, então um valor desconhecido ali é dado real
+  (linha legada/corrompida), não necessariamente um caso esquecido.
+
+**Verificação ao vivo** (`scripts/verify/investigate-registry-refactor.mjs`,
+novo): clicou os 6 botões novos do Rail um a um, confirmou que cada kind
+realmente renderiza (`.files-card`, `.changes-card`, `.sticky-card`,
+`.browser-card`, `.chat-card`, `.remote-window-card`), terminal via seu
+popover próprio, e o popover de "localizar card" lista as 7 corretamente
+(prova que `CARD_ICON`/`CARD_LABEL` seguem corretos). Regressão:
+`smoke-card-lifecycle.mjs`, `smoke-connector.mjs`, `smoke-group-select.mjs`
+— todos passando. `npx tsc --noEmit` e `npx electron-vite build` limpos.
 
 ## 6. Otimização — feito, medido antes de mexer (2026-08-26)
 
