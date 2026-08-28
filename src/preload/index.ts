@@ -17,6 +17,8 @@ export type CardRow = {
   label: string | null;
   updated_at: number;
   messages_json: string | null;
+  /** DESIGN-BACKLOG.md item 30 — see main/store.ts's own doc comment. */
+  archived_at: number | null;
 };
 
 type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; systemPrompt?: string };
@@ -112,6 +114,13 @@ const store = {
     touch: (id: string, at: number): Promise<void> => ipcRenderer.invoke("store:boards:touch", id, at),
   },
   cardCounts: (): Promise<Record<string, BoardCounts>> => ipcRenderer.invoke("store:card-counts"),
+  /** DESIGN-BACKLOG.md item 30 — sessions sidebar (every chat card, live
+   * or archived, across every board) + archive/unarchive. Closing a
+   * ChatCard archives instead of deleting (App.tsx's closeCard); every
+   * other card kind still hard-deletes exactly as before. */
+  listChatSessions: (): Promise<CardRow[]> => ipcRenderer.invoke("store:list-chat-sessions"),
+  archiveCard: (id: string): Promise<void> => ipcRenderer.invoke("store:archive-card", id),
+  unarchiveCard: (id: string): Promise<void> => ipcRenderer.invoke("store:unarchive-card", id),
 };
 
 export type DirEntry = { name: string; path: string; isDir: boolean };

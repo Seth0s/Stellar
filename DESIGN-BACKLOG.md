@@ -2867,15 +2867,84 @@ central + polish).
   de formato aparece mas não desabilita o botão salvar. Regressão
   completa: 28/28 suítes, 0 falhas.
 
-## 30. Persistência real do chatbox + barra lateral de sessões por API key
+## 30. Persistência real do chatbox + barra lateral de sessões por API key — ✅ feito em 2026-08-28
 
-Pedido ao vivo, 2026-08-28, ainda não investigado. Duas partes: (1)
-persistência de fato do histórico de conversa do `ChatCard` (hoje é
-sessão/card, não fica claro se sobrevive fechar+reabrir — checar);
-(2) uma barra lateral listando sessões de chat, com nome derivado da
-API key usada (não um id cru) — mesmo espírito do `describeCard`
-já feito no item 22 (rótulo humano em vez de id de banco), aplicado
-aqui a sessões de chat.
+Pedido ao vivo, 2026-08-28. Esclarecido em conversa: a preocupação real
+não era "o histórico de mensagens some" (`ChatCard` já persiste
+mensagens em `cwd`/`store.ts` desde antes) — é que a API da Anthropic
+**não tem conceito de `session_id`** server-side; o cache de prompt
+(`cache_control: ephemeral`) só é reaproveitado se o cliente reenvia o
+prefixo de mensagens intacto e com breakpoints estáveis. "Persistência
+de verdade" aqui significa: fechar um chat não pode virar um DELETE
+(perderia o prefixo cacheável de vez), e precisa existir uma forma de
+voltar a uma conversa antiga sem recriar do zero. Duas partes
+implementadas:
+
+**1. Cache breakpoints reais na chamada Anthropic**
+(`main/anthropic-client.ts`): `ANTHROPIC_TOOLS` ganha
+`cache_control: ephemeral` só na ÚLTIMA tool da lista (um breakpoint no
+fim da lista de tools já cobre todas as anteriores — cache é
+prefixo-cumulativo, não por-item); `system` vira bloco de conteúdo com
+`cache_control` em vez de string crua; `withCacheBreakpoint()`
+transforma a última mensagem do histórico enviado em content-block com
+`cache_control` no último bloco (string → array quando necessário).
+Verificado via `smoke-anthropic-caching.mjs` (novo, 6/6) — mock local via
+`ANTHROPIC_BASE_URL` (lido nativamente pelo `@anthropic-ai/sdk`, sem
+tocar código de produção pra testar), inspeciona o shape real do
+request: só a última tool tem `cache_control`, a última mensagem virou
+bloco com `cache_control`, texto sobrevive à conversão.
+
+**2. Fechar chat arquiva, não deleta + barra lateral de sessões**
+(`store.ts`, `main/index.ts`, `preload/index.ts`, `App.tsx`, `Rail.tsx`):
+`cards` ganha coluna `archived_at INTEGER` (migração guardada, padrão já
+usado no schema); fechar um card `kind==="chat"` chama
+`store:archive-card` (UPDATE, não DELETE) em vez de `store:delete`;
+listagens normais (`list`/`listAll`) filtram `archived_at IS NULL`, uma
+listagem nova `store:list-chat-sessions` não filtra (mostra tudo,
+`kind='chat'`, ordenado por `updated_at DESC`). Botão novo na régua
+("Sessões de chat", reusa o ícone `chat`) abre um popover listando toda
+sessão (texto real da última mensagem, provider, tempo relativo, badge
+"arquivada" quando aplicável); clicar reabre — mesmo board: desarquiva e
+reinsere o card direto no estado React (`fromRow`), sem reload de board
+(evitaria resetar pan/zoom à toa); board diferente: desarquiva, troca de
+board (`switchBoard`), e localiza o card depois do board carregar.
+
+**Bugs achados e corrigidos durante a verificação (não assumidos, pegos
+ao rodar de verdade):**
+- `finalizeCloseCard` é chamado duas vezes por design (fallback de
+  `setTimeout` + `onCloseAnimationEnd`, redundância proposital contra
+  timing de animação perdida) — a segunda chamada, com o card já
+  removido de `cardsRef.current` pela primeira, lia `closedKind` como
+  `undefined` e caía no ramo `else` (`store.delete`), desfazendo o
+  arquivamento que a primeira chamada acabara de fazer. Fix: guard
+  `if (closedKind === undefined) return;`.
+- Reabrir no MESMO board não fazia nada visível: `switchBoard` é no-op
+  quando o board alvo já é o atual, e `loadBoard` reseta pan/zoom sem
+  necessidade. Fix: ramo dedicado que insere o card via `fromRow()`
+  direto no estado, sem qualquer reload.
+- **Regressão real introduzida pela régua mais alta** (achada rodando
+  `smoke-group-select.mjs`, não assumida): `.rail` (layout.css) é
+  centralizada na viewport inteira (`top:50%`); `.topbar-home` ocupa uma
+  faixa FIXA (`top: titlebar-h+12px`, mesmo `left`/`width`/`z-index` da
+  régua). O botão novo + o botão dinâmico "Agrupar" deixaram a régua alta
+  o bastante pra sua borda superior, centralizada, invadir a faixa fixa
+  do botão home numa janela de ~800px — `topbar-home` ganhava a ordem de
+  pintura ali e "comia" o clique do primeiro botão da régua
+  ("Ponteiro"), silenciosamente (`elementFromPoint` confirmou:
+  coordenadas corretas do Ponteiro, elemento errado por baixo). Fix:
+  `.rail` passa a centralizar só no espaço ABAIXO de `.topbar-home`
+  (offset + `max-height` recalculados algebricamente pra a borda
+  superior nunca ultrapassar a faixa fixa, não um número mágico
+  chutado).
+
+**Verificação**: `smoke-anthropic-caching.mjs` (6/6, novo),
+`smoke-chat-sessions-sidebar.mjs` (11/11, novo — fechar arquiva não
+deleta, linha sobrevive com `archived_at` setado, texto sobrevive,
+sidebar mostra texto+badge, reabrir mesmo board funciona, reabrir board
+diferente troca de board E traz o card de volta), `smoke-group-select.mjs`
+(10/10, regressão confirmada e corrigida), `smoke-terminal-visibility-
+persist.mjs` (3/3, não afetado — falha anterior era de build desatualizado,
+não regressão real). `npx tsc --noEmit` limpo.
 
 ## 31. Lista de modelos por provider (principal, não todos)
 

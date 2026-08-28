@@ -3276,6 +3276,38 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   falhas.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 37.
 
+## 2026-08-28 — Cache breakpoints reais na Anthropic + sessões de chat arquivadas, não deletadas (item 30)
+
+- Esclarecido em conversa: a API Anthropic não tem `session_id`
+  server-side — "persistência de verdade" é reaproveitar o cache de
+  prompt (`cache_control: ephemeral`) reenviando o prefixo estável, mais
+  uma forma de voltar a uma conversa antiga sem recriar do zero.
+- `anthropic-client.ts`: breakpoint `ephemeral` só na última tool da
+  lista (cache é cumulativo por prefixo), `system` vira bloco com
+  `cache_control`, última mensagem do histórico convertida pra
+  content-block com `cache_control` no último bloco.
+- Fechar um chat agora arquiva (`archived_at`, coluna nova) em vez de
+  deletar — listagens normais filtram arquivado, `store:list-chat-
+  sessions` não filtra. Botão novo na régua abre popover com toda
+  sessão (texto real, provider, tempo relativo, badge "arquivada");
+  clicar reabre — mesmo board sem reload (evita resetar pan/zoom),
+  board diferente troca e localiza o card depois.
+- 3 bugs reais achados e corrigidos rodando de verdade (não assumidos):
+  dupla-invocação de `finalizeCloseCard` desfazia o arquivamento (guard
+  de idempotência); reabrir no mesmo board não fazia nada (`switchBoard`
+  no-op quando já é o board atual — vira inserção direta no estado);
+  régua mais alta (botão novo + "Agrupar" dinâmico) invadia a faixa fixa
+  de `.topbar-home` numa janela ~800px, comendo o clique do primeiro
+  botão da régua — achado rodando `smoke-group-select.mjs`, régua agora
+  centraliza só no espaço abaixo do botão home.
+- Verificação: `smoke-anthropic-caching.mjs` (novo, 6/6),
+  `smoke-chat-sessions-sidebar.mjs` (novo, 11/11 — arquivar/reabrir
+  mesmo board e cross-board), `smoke-group-select.mjs` (10/10, regressão
+  corrigida), `smoke-terminal-visibility-persist.mjs` (3/3). `npx tsc
+  --noEmit` limpo. Por instrução do usuário, regressão rodada só nas
+  suítes afetadas pela mudança, não a suíte completa.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 30.
+
 ## Comandos
 
 ```bash

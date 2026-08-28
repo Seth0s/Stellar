@@ -30,11 +30,46 @@ import {
  * shape at all, so this stays a deliberately separate module.
  */
 
-const ANTHROPIC_TOOLS: Anthropic.Tool[] = [READ_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME, BASH_TOOL_NAME, DELEGATE_TOOL_NAME].map((name) => ({
+const ANTHROPIC_TOOLS: Anthropic.Tool[] = [READ_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME, BASH_TOOL_NAME, DELEGATE_TOOL_NAME].map((name, i, arr) => ({
   name,
   description: TOOL_DESCRIPTIONS[name],
   input_schema: TOOL_PARAMETERS[name] as Anthropic.Tool["input_schema"],
+  // DESIGN-BACKLOG.md item 30 — prompt caching (Anthropic-specific;
+  // OpenAI/Gemini cache automatically with no equivalent marker needed).
+  // A cache breakpoint caches everything UP TO AND INCLUDING the marked
+  // block, so only the LAST tool in the array needs the marker — it
+  // covers the whole tools definition, identical on every single
+  // request this app ever sends (same 4 tools, same schemas), so this
+  // one marker pays for itself starting on the very first follow-up
+  // message of ANY conversation, not just long ones.
+  ...(i === arr.length - 1 ? { cache_control: { type: "ephemeral" as const } } : {}),
 }));
+
+/**
+ * Item 30 — user asked directly ("poupar cache read... é esse tipo de
+ * persistência que digo"): the Messages API has no server-side
+ * session/conversation concept at all (confirmed reading the SDK's own
+ * types — `system`/`messages` are always resent whole, there's no
+ * `session_id` param anywhere) — "resuming" a conversation IS just
+ * resending its full stored history, and prompt caching is the ONLY
+ * mechanism that makes that not cost full price every single turn.
+ * Before this, zero `cache_control` anywhere in this file — every
+ * message, every turn, reprocessed the entire growing transcript at full
+ * price, worse as a conversation (or a reopened/persisted one) got
+ * longer. Marks the trailing edge of whatever's being sent as a
+ * breakpoint — the officially documented simple pattern for a growing
+ * multi-turn conversation: next turn's request shares this exact prefix,
+ * so it reads from cache instead of reprocessing it.
+ */
+function withCacheBreakpoint(msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  if (msgs.length === 0) return msgs;
+  const last = msgs[msgs.length - 1];
+  const content: Anthropic.ContentBlockParam[] =
+    typeof last.content === "string"
+      ? [{ type: "text", text: last.content, cache_control: { type: "ephemeral" } }]
+      : last.content.map((block, i, arr) => (i === arr.length - 1 ? { ...block, cache_control: { type: "ephemeral" } } : block));
+  return [...msgs.slice(0, -1), { ...last, content }];
+}
 
 // A tool call → tool result → re-ask cycle, repeated. Same fork-bomb-guard
 // spirit as MAX_SPAWN_DEPTH (message-bus.ts) — a model stuck calling tools
@@ -78,9 +113,12 @@ export function createAnthropicClient(opts: {
       const stream = client.messages.stream({
         model,
         max_tokens: 4096,
-        system: system || undefined,
+        // Cached too (item 30) — the system prompt is identical across
+        // every turn of a given conversation, same "resend the whole
+        // thing every time" cost otherwise.
+        system: system ? [{ type: "text", text: system, cache_control: { type: "ephemeral" } }] : undefined,
         tools: ANTHROPIC_TOOLS,
-        messages,
+        messages: withCacheBreakpoint(messages),
       });
       inFlight.set(cardId, stream);
       stream.on("text", (delta) => opts.onToken(cardId, delta));
