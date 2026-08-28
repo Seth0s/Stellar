@@ -9,6 +9,47 @@ const DEFAULT_ROWS = 24;
 const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove", "wheel"] as const;
 
 /**
+ * DESIGN-BACKLOG.md item 39 — `new Terminal()` never had a `theme`, so
+ * xterm.js fell back to its own bundled default palette (pure `#000`
+ * background, stock Tango-derived ANSI colors) — confirmed live via pixel
+ * sampling to be an exact, unmodified match to the library default, not a
+ * subtle drift. It read as "estranho" precisely because it clashes with
+ * Stellar's own muted dark tokens (`tokens.css`) everywhere else in the
+ * app's chrome. Mapped here to the same hue family — `--danger`/`--good`/
+ * `--signal`/`--violet`/`--foam` cover 5 of the 8 base ANSI roles
+ * directly; blue and a true cyan/white don't have a dedicated token, so
+ * they're new colors chosen to sit in the same muted-cool-dark family
+ * (checked against `tokens.css`'s existing hues, not picked freestyle).
+ * `cards.css`'s `.terminal-card-body` background must stay in sync with
+ * `background` below (same reasoning as its own comment: the DOM
+ * container's color has to match the canvas's own background color to
+ * hide the fractional-row seam, `theme` alone doesn't reach that div).
+ */
+const TERMINAL_THEME = {
+  background: "#1a1d24", // --panel
+  foreground: "#e6e8ec", // --text
+  cursor: "#45c8ff", // --foam
+  cursorAccent: "#04141c", // --on-accent
+  selectionBackground: "rgba(69, 200, 255, 0.25)", // --foam @ 25%
+  black: "#1a1d24", // --panel
+  red: "#ef6b6b", // --danger
+  green: "#4ad87a", // --good
+  yellow: "#e8c547", // --signal
+  blue: "#5b8dee",
+  magenta: "#8f7bff", // --violet
+  cyan: "#45c8ff", // --foam
+  white: "#b8bfcb",
+  brightBlack: "#8b93a1", // --muted
+  brightRed: "#ff8787",
+  brightGreen: "#6fe89a",
+  brightYellow: "#f3d873",
+  brightBlue: "#7ea6f5",
+  brightMagenta: "#ab9bff",
+  brightCyan: "#6fd8ff",
+  brightWhite: "#e6e8ec", // --text
+};
+
+/**
  * Splits PTY lifecycle from the xterm renderer on purpose: the PTY (a real
  * process, the actual conversation state) must survive a card leaving the
  * viewport.
@@ -148,7 +189,7 @@ export function useTerminal(
   useEffect(() => {
     if (!ptyId) return;
     function buildTerminal(withWebgl: boolean) {
-      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", monospace' });
+      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", monospace', theme: TERMINAL_THEME });
       const f = new FitAddon();
       t.loadAddon(f);
       if (withWebgl) {
@@ -224,7 +265,7 @@ export function useTerminal(
       registerDomListeners(term, fit, el);
     }
     function buildTerminalNoWebgl() {
-      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", monospace' });
+      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", monospace', theme: TERMINAL_THEME });
       const f = new FitAddon();
       t.loadAddon(f);
       return { t, f };

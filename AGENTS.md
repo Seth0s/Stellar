@@ -3350,6 +3350,28 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   afetadas. `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 32.
 
+## 2026-08-28 — Tema de cores real no terminal (item 39)
+
+- Causa raiz confirmada por amostragem de pixel real: nenhum `new
+  Terminal()` (`useTerminal.ts`) jamais passava `theme` — xterm.js caía
+  no default embutido (fundo `#000`, paleta Tango do GNOME-Terminal),
+  10/16 cores testadas bateram exato com os valores hardcoded da lib.
+  Contrastava com a paleta fosca do resto do app.
+- "Qualidade de resolução" investigada e descartada como bug de DPI —
+  `@xterm/xterm`/`addon-webgl` já leem `devicePixelRatio` internamente,
+  medido correto nesta máquina (DPR=1, sem blur). Mais provável descrever
+  o choque de cor, não um problema de DPI real.
+- Fix: `TERMINAL_THEME` novo em `useTerminal.ts`, mapeado pra
+  `--danger`/`--good`/`--signal`/`--violet`/`--foam` de `tokens.css`
+  (5/8 papéis ANSI base direto dos tokens existentes) + fundo `--panel`.
+  `cards.css`'s `.terminal-card-body` trocado de `#000` hardcoded pra
+  `var(--panel)`, mesmo tom.
+- Verificado ao vivo via CDP (pixel real, `bodyBg` = `rgb(26,29,36)` =
+  `--panel`). `smoke-terminal-visibility-persist.mjs` (3/3),
+  `smoke-terminal-links-paste.mjs` (20/20), `smoke-card-wheel-scope.mjs`
+  (6/6) — só as suítes afetadas. `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 39.
+
 ## Comandos
 
 ```bash

@@ -261,13 +261,16 @@
   flex: 1;
   overflow: hidden;
   font-family: var(--font-mono);
-  /* Matches xterm's own default terminal background (no `theme` is passed
-     to `new Terminal()`, so it defaults to #000). The container's pixel
-     height rarely divides evenly by the cell height — xterm only ever
-     paints whole rows — so without this the last fractional row shows
-     this element's own background instead, a visible seam of the wrong
-     color right above .card-foot. */
-  background: #000;
+  /* Matches TERMINAL_THEME.background in useTerminal.ts (item 39 — xterm
+     used to get no `theme` at all and defaulted to pure #000, which this
+     rule matched at the time; now both resolve to --panel — if the
+     theme's background ever changes, update TERMINAL_THEME's comment
+     and this rule together, `theme` doesn't reach this DOM element on
+     its own). The container's pixel height rarely divides evenly by the
+     cell height — xterm only ever paints whole rows — so without this
+     the last fractional row shows this element's own background
+     instead, a visible seam of the wrong color right above .card-foot. */
+  background: var(--panel);
 }
 
 /* xterm.js's own scrollbar (a VS Code-derived overlay scrollbar, not the
