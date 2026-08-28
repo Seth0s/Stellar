@@ -21,7 +21,6 @@ import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
 import { Rail } from "./Rail";
-import type { IconName } from "./icons";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
 import { UpdateBanner } from "./UpdateBanner";
@@ -48,6 +47,7 @@ import { useConnectorDrag } from "./useConnectorDrag";
 import { useCardSelection } from "./useCardSelection";
 import { useBoardStore } from "./useBoardStore";
 import type { Card, ChatCardData, ChatMessage, ChatProvider, Connector, StickyCardData, Tool } from "./card-types";
+import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import "./app.css";
 
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
@@ -112,29 +112,6 @@ const STROKE_PADDING = 8;
 const REFLOW_MS = 320;
 const GRID_SPACING = 28;
 const ZOOM_STEP = 1.15;
-
-const KIND_LABEL: Record<Card["kind"], string> = {
-  terminal: "terminal",
-  files: "arquivos",
-  changes: "changes",
-  sticky: "nota adesiva",
-  browser: "navegador",
-  "remote-window": "janela externa",
-  stroke: "desenho",
-  chat: "chatbox",
-};
-
-/** Rail's "localizar card" popover (DESIGN-BACKLOG.md item 7, jump-to-card). */
-const KIND_ICON: Record<Card["kind"], IconName> = {
-  terminal: "terminal",
-  files: "files",
-  changes: "changes",
-  sticky: "sticky",
-  browser: "browser",
-  "remote-window": "remoteWindow",
-  stroke: "pen",
-  chat: "chat",
-};
 
 /** Canvas background pattern — per-viewer preference (not per-board data,
  * doesn't need to sync/persist to the store), cycled by a topbar button.
@@ -346,7 +323,29 @@ function fromRow(r: CardRow): Card {
         label,
       };
     }
+    case "terminal":
+      return {
+        id: r.id,
+        kind: "terminal",
+        provider: r.provider,
+        cwd: r.cwd,
+        resumeId: r.resume_id,
+        continueLast: false,
+        model: r.model,
+        systemPrompt: r.system_prompt,
+        label,
+        rect,
+        groupId,
+      };
     default:
+      // `CardRow.kind` is a plain `string` (an untyped DB column), not the
+      // literal `Card["kind"]` union — a genuinely unknown value here is a
+      // real possibility (legacy/corrupt row), not just a forgotten case,
+      // so this can't be an `assertNeverCardKind` compile-time check the
+      // way the render switch below is. Warn instead of silently treating
+      // it as a terminal card, so a *forgotten* case during development
+      // (vs. real corrupt data) is at least visible in the console.
+      console.warn(`fromRow: unknown card kind "${r.kind}", rendering as terminal`, r);
       return {
         id: r.id,
         kind: "terminal",
@@ -628,7 +627,7 @@ export function App() {
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, card.id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
-    toast(`${KIND_LABEL[card.kind]} criado${card.kind === "sticky" ? "a" : ""}`);
+    toast(`${CARD_LABEL[card.kind]} criado${card.kind === "sticky" ? "a" : ""}`);
   }
 
   /** Ctrl/Cmd+D (below) — clones the topmost card's full config (provider/
@@ -763,86 +762,24 @@ export function App() {
     });
   }
 
-  function addFilesCard(at?: Point) {
+  /** Replaces the 6 near-identical addXCard functions that used to live
+   * here (files/changes/sticky/chat/browser/remote-window — see
+   * cards/registry.ts's `defaultCardFields`, item "4 (deferida)"). Human
+   * path only — via the Rail's one-click buttons or the radial menu (item
+   * 12's chat card, item 21's browser card: no owner, no consent gate,
+   * see AGENTS.md); the spawn-from-agent path (spawnCardFor below) is
+   * separate and gated. `at`: world point to spawn at (radial menu),
+   * omitted for the rail's own buttons, which keep centering on the
+   * visible viewport. */
+  function addCardOfKind(kind: (typeof RAIL_CREATE_ORDER)[number], at?: Point) {
     const id = String(nextId.current++);
     addCard({
       id,
-      kind: "files",
-      root: activeBoardCwd,
+      ...defaultCardFields(kind, activeBoardCwd),
       rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
       groupId: null,
       label: null,
-    });
-  }
-
-  function addChangesCard(at?: Point) {
-    const id = String(nextId.current++);
-    addCard({
-      id,
-      kind: "changes",
-      root: activeBoardCwd,
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
-      groupId: null,
-      label: null,
-    });
-  }
-
-  function addStickyCard(at?: Point) {
-    const id = String(nextId.current++);
-    addCard({
-      id,
-      kind: "sticky",
-      content: "",
-      color: "yellow",
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
-      groupId: null,
-      label: null,
-    });
-  }
-
-  /** DESIGN-BACKLOG.md item 12, Fase B — human path only this phase (not
-   * wired into spawn_card/MCP yet, deliberately: an agent spawning a
-   * card that talks to a *different* LLM under the user's own API key is
-   * its own decision, not bundled into achado 2's generic spawn). */
-  function addChatCard(at?: Point) {
-    const id = String(nextId.current++);
-    addCard({
-      id,
-      kind: "chat",
-      provider: "anthropic",
-      model: DEFAULT_CHAT_MODEL,
-      cwd: activeBoardCwd,
-      systemPrompt: null,
-      messages: [],
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
-      groupId: null,
-      label: null,
-    });
-  }
-
-  /** Human path, via the rail button or radial menu — no owner, no consent gate (see AGENTS.md). */
-  function addBrowserCard(at?: Point) {
-    const id = String(nextId.current++);
-    addCard({
-      id,
-      kind: "browser",
-      url: "https://google.com",
-      ownerCardId: null,
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
-      groupId: null,
-      label: null,
-    });
-  }
-
-  function addRemoteWindowCard(at?: Point) {
-    const id = String(nextId.current++);
-    addCard({
-      id,
-      kind: "remote-window",
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
-      groupId: null,
-      label: null,
-    });
+    } as Card);
   }
 
   /** Agent-requested (post-Allow) or a seenUrls chip click confirmed via the
@@ -908,12 +845,13 @@ export function App() {
     if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank");
     const id = String(nextId.current++);
     const rect = centeredSlot(visibleRect, cardsRef.current.length);
-    const card: Card =
-      kind === "files" || kind === "changes"
-        ? { id, kind, root: cwd || activeBoardCwd, rect, groupId: null, label: null }
-        : kind === "sticky"
-          ? { id, kind: "sticky", content: "", color: "yellow", rect, groupId: null, label: null }
-          : { id, kind: "remote-window", rect, groupId: null, label: null };
+    const card = {
+      id,
+      ...defaultCardFields(kind, cwd || activeBoardCwd),
+      rect,
+      groupId: null,
+      label: null,
+    } as Card;
     addCard(card);
     return id;
   }
@@ -1053,7 +991,7 @@ export function App() {
       const name = provider.charAt(0).toUpperCase() + provider.slice(1);
       return `${name} ${ordinal}°`;
     }
-    return `${KIND_LABEL[c.kind]} #${id}`;
+    return `${CARD_LABEL[c.kind]} #${id}`;
   }
 
   /** The actual removal — cards/order/connectors/selection/liveStatus state
@@ -1370,12 +1308,7 @@ export function App() {
     if (action === "tool-select") return setTool("select");
     if (!at) return;
     if (action === "terminal") addTerminalCard(at);
-    else if (action === "files") addFilesCard(at);
-    else if (action === "changes") addChangesCard(at);
-    else if (action === "sticky") addStickyCard(at);
-    else if (action === "browser") addBrowserCard(at);
-    else if (action === "chat") addChatCard(at);
-    else addRemoteWindowCard(at);
+    else addCardOfKind(action, at);
   }
 
   if (!loaded) return <div className="viewport" />;
@@ -1453,7 +1386,14 @@ export function App() {
           const onConnectorStart = (e: React.PointerEvent) => startConnectorDrag(c.id, e);
           const onSelectStart = (e: React.PointerEvent) => selectCard(c.id, e);
           const selected = selectedIds.has(c.id);
-          if (c.kind === "terminal") {
+          // A `switch` (not the old if/else-if chain) so a card kind this
+          // doesn't handle is a compile error via `assertNeverCardKind`,
+          // not a silent fall-through into rendering the wrong component —
+          // the old chain's final unconditional `return <BrowserCard .../>`
+          // used to be exactly that trap (DESIGN-BACKLOG.md item
+          // "4 (deferida)").
+          switch (c.kind) {
+          case "terminal": {
             return (
               <TerminalCard
                 key={c.id}
@@ -1489,7 +1429,7 @@ export function App() {
               />
             );
           }
-          if (c.kind === "files") {
+          case "files": {
             return (
               <FilesCard
                 key={c.id}
@@ -1514,7 +1454,7 @@ export function App() {
               />
             );
           }
-          if (c.kind === "changes") {
+          case "changes": {
             return (
               <ChangesCard
                 key={c.id}
@@ -1539,7 +1479,7 @@ export function App() {
               />
             );
           }
-          if (c.kind === "sticky") {
+          case "sticky": {
             return (
               <StickyCard
                 key={c.id}
@@ -1568,7 +1508,7 @@ export function App() {
               />
             );
           }
-          if (c.kind === "stroke") {
+          case "stroke": {
             return (
               <StrokeCard
                 key={c.id}
@@ -1593,7 +1533,7 @@ export function App() {
               />
             );
           }
-          if (c.kind === "remote-window") {
+          case "remote-window": {
             return (
               <RemoteWindowCard
                 key={c.id}
@@ -1617,7 +1557,7 @@ export function App() {
               />
             );
           }
-          if (c.kind === "chat") {
+          case "chat": {
             return (
               <ChatCard
                 key={c.id}
@@ -1651,30 +1591,35 @@ export function App() {
               />
             );
           }
-          return (
-            <BrowserCard
-              key={c.id}
-              id={c.id}
-              rect={c.rect}
-              zoom={world.zoom}
-              zIndex={zIndex}
-              visible={isInView(c.rect, visibleRect)}
-              url={c.url}
-              ownerCardId={c.ownerCardId}
-              interactionMode={interactionMode}
-              reflowing={reflowing}
-              closing={closingIds.has(c.id)}
-              onChange={(r) => tryChangeRect(c.id, r)}
-              onCommit={(r) => commitRect(c, r)}
-              onRaise={() => raise(c.id)}
-              onFocus={() => jumpToCard(c.id)}
-              onClose={() => closeCard(c.id)}
-              onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
-              onConnectorStart={onConnectorStart}
-              onSelectStart={onSelectStart}
-              selected={selected}
-            />
-          );
+          case "browser": {
+            return (
+              <BrowserCard
+                key={c.id}
+                id={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                visible={isInView(c.rect, visibleRect)}
+                url={c.url}
+                ownerCardId={c.ownerCardId}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onFocus={() => jumpToCard(c.id)}
+                onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
+              />
+            );
+          }
+          default:
+            return assertNeverCardKind(c);
+          }
         })}
         <svg className="board-overlay">
           <defs>
@@ -1786,29 +1731,26 @@ export function App() {
         setNewSystemPrompt={setNewSystemPrompt}
         onCreateTerminal={addTerminalCard}
         // Real bug found and fixed while verifying an unrelated refactor
-        // (see AGENTS.md): these five are wired straight to a native
+        // (see AGENTS.md): `addXCard`'s optional `at?: Point` (added for
+        // the radial menu, item 1) was once wired straight to a native
         // `onClick`, which React calls with the SyntheticEvent as the
-        // first argument — `addXCard`'s optional `at?: Point` (added for
-        // the radial menu, item 1) silently received that event object as
-        // `at` (truthy, so the `at ? pointSlot(at) : ...` branch always
-        // won), and `pointSlot(event)` read `event.x`/`.y` — undefined on
-        // a React SyntheticEvent — producing NaN coordinates that render
-        // as (0,0). `onCreateTerminal` above is safe as-is because
-        // Rail.tsx's own popover button already calls it with zero
-        // arguments explicitly; these five call the setter directly.
-        onCreateFiles={() => addFilesCard()}
-        onCreateChanges={() => addChangesCard()}
-        onCreateSticky={() => addStickyCard()}
-        onCreateBrowser={() => addBrowserCard()}
-        onCreateChat={() => addChatCard()}
-        onCreateRemoteWindow={() => addRemoteWindowCard()}
+        // first argument — that event object landed in `at` (truthy, so
+        // the `at ? pointSlot(at) : ...` branch always won), and
+        // `pointSlot(event)` read `event.x`/`.y` — undefined on a React
+        // SyntheticEvent — producing NaN coordinates that render as (0,0).
+        // The explicit `(kind) => addCardOfKind(kind)` wrapper below (not
+        // passing `onCreate={addCardOfKind}` directly) keeps that fix:
+        // Rail's button `onClick` calls `onCreate(kind)` with exactly one
+        // argument, but staying explicit here costs nothing and documents
+        // why it matters.
+        onCreate={(kind) => addCardOfKind(kind)}
         aiBusy={aiBusy}
         summarizeDisabled={newProvider === "bash"}
         onReorganize={aiReorganize}
         onSummarize={summarizeBoard}
         cards={cards.map((c) => ({ id: c.id, kind: c.kind, label: c.label }))}
-        kindIcon={KIND_ICON}
-        kindLabel={KIND_LABEL}
+        kindIcon={CARD_ICON}
+        kindLabel={CARD_LABEL}
         onJumpToCard={jumpToCard}
         onOpenSecretsSettings={() => setShowSecretsSettings(true)}
       />

@@ -3,6 +3,7 @@ import { Icon, type IconName } from "./icons";
 import { Popover } from "./Popover";
 import { PenPanel } from "./PenPanel";
 import { ProviderPicker } from "./ProviderPicker";
+import { CARD_ICON, RAIL_CREATE_ORDER, RAIL_CREATE_TITLE } from "./cards/registry";
 
 type Tool = "pointer" | "pen" | "connector" | "select";
 type RailCard = { id: string; kind: string; label: string | null };
@@ -39,12 +40,7 @@ export function Rail({
   newSystemPrompt,
   setNewSystemPrompt,
   onCreateTerminal,
-  onCreateFiles,
-  onCreateChanges,
-  onCreateSticky,
-  onCreateBrowser,
-  onCreateChat,
-  onCreateRemoteWindow,
+  onCreate,
   aiBusy,
   summarizeDisabled,
   onReorganize,
@@ -80,12 +76,10 @@ export function Rail({
   newSystemPrompt: string;
   setNewSystemPrompt: (v: string) => void;
   onCreateTerminal: () => void;
-  onCreateFiles: () => void;
-  onCreateChanges: () => void;
-  onCreateSticky: () => void;
-  onCreateBrowser: () => void;
-  onCreateChat: () => void;
-  onCreateRemoteWindow: () => void;
+  /** One-click card kinds (files/changes/sticky/browser/chat/remote-window
+   * — see cards/registry.ts's RAIL_CREATE_ORDER, item "4 (deferida)");
+   * terminal keeps its own `onCreateTerminal` above for the popover. */
+  onCreate: (kind: (typeof RAIL_CREATE_ORDER)[number]) => void;
   aiBusy: boolean;
   summarizeDisabled: boolean;
   onReorganize: () => void;
@@ -210,24 +204,11 @@ export function Rail({
       >
         <Icon name="terminal" />
       </button>
-      <button className="rail-btn" title="Nova pasta de arquivos" onClick={onCreateFiles}>
-        <Icon name="files" />
-      </button>
-      <button className="rail-btn" title="Novo card de changes" onClick={onCreateChanges}>
-        <Icon name="changes" />
-      </button>
-      <button className="rail-btn" title="Nova nota adesiva" onClick={onCreateSticky}>
-        <Icon name="sticky" />
-      </button>
-      <button className="rail-btn" title="Novo navegador" onClick={onCreateBrowser}>
-        <Icon name="browser" />
-      </button>
-      <button className="rail-btn" title="Novo chatbox" onClick={onCreateChat}>
-        <Icon name="chat" />
-      </button>
-      <button className="rail-btn" title="Controlar janela externa" onClick={onCreateRemoteWindow}>
-        <Icon name="remoteWindow" />
-      </button>
+      {RAIL_CREATE_ORDER.map((kind) => (
+        <button key={kind} className="rail-btn" title={RAIL_CREATE_TITLE[kind]} onClick={() => onCreate(kind)}>
+          <Icon name={CARD_ICON[kind]} />
+        </button>
+      ))}
 
       <div className="rail-group-gap" />
 

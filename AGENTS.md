@@ -3735,6 +3735,33 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   código.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 55.
 
+## 2026-08-28 — Auditoria do backlog antigo + registro central de tipo de card, item "4 (deferida)"
+
+- Auditados os itens antigos do `DESIGN-BACKLOG.md` sem marcador de
+  conclusão (2, 3, 4, "4 (deferida)", 5, 7, 8, 9, 11, 24, 37, 41-cont,
+  46-52): quase todos já estavam feitos, só faltava o marcador no
+  cabeçalho — retrofit aplicado em 7, 8, 9, 11, 24, 41-cont e 46-52. Só
+  item 3 (controle de janela externa) segue genuinamente bloqueado
+  (achado perigoso já documentado) e "4 (deferida)" seguia pendente de
+  verdade.
+- Item "4 (deferida)" implementado: novo `src/renderer/src/cards/
+  registry.ts` central — `CARD_LABEL`/`CARD_ICON` (substituem os antigos
+  `KIND_LABEL`/`KIND_ICON` do `App.tsx`), `RAIL_CREATE_ORDER`/
+  `RAIL_CREATE_TITLE` (Rail.tsx gera os 6 botões de criação num loop, 1
+  prop `onCreate(kind)` no lugar de 6), `defaultCardFields(kind, cwd)`
+  (substitui 6 addXCard quase idênticas por 1 função + `addCardOfKind`).
+  O branch de render do `App.tsx`, que era um `if/else if` terminando num
+  `return <BrowserCard .../>` incondicional (fallback silencioso pra um
+  kind esquecido), virou `switch (c.kind)` real com `assertNeverCardKind`
+  — um kind não tratado agora é erro de compilação.
+- Verificado ao vivo via CDP (`scripts/verify/investigate-registry-
+  refactor.mjs`, novo): os 6 botões do Rail spawnam o card certo cada um,
+  terminal via seu popover próprio, popover de "localizar card" lista as
+  7 corretamente. Regressão: `smoke-card-lifecycle.mjs`,
+  `smoke-connector.mjs`, `smoke-group-select.mjs` passando. `tsc --noEmit`
+  e `electron-vite build` limpos.
+- Detalhe completo em `DESIGN-BACKLOG.md` item "4 (deferida)".
+
 ## Comandos
 
 ```bash
