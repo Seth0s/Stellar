@@ -115,6 +115,48 @@ export async function createEntry(
   else await fs.writeFile(target, "", { flag: "wx" });
 }
 
+/**
+ * DESIGN-BACKLOG.md item 49 — "busca por nome de arquivo na árvore".
+ * `listDir` only ever fetches one directory level (the UI expands lazily),
+ * so a filename search across the whole tree needs its own real recursive
+ * walk — same `IGNORE` set applied at EVERY depth (not just the root
+ * level), and a hard cap on both files scanned and matches returned so a
+ * huge repo (or a symlink cycle) can't turn "type a few letters" into a
+ * multi-second stall. Case-insensitive substring match against the
+ * relative path (not just the basename) — matches VSCode's own Ctrl+P
+ * behavior of letting a partial directory name narrow results too.
+ */
+const SEARCH_MAX_SCANNED = 20_000;
+const SEARCH_MAX_RESULTS = 200;
+
+export async function searchFileNames(root: string, query: string): Promise<DirEntry[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const rootDir = confine(root, "");
+  const results: DirEntry[] = [];
+  let scanned = 0;
+
+  async function walk(dir: string): Promise<void> {
+    if (results.length >= SEARCH_MAX_RESULTS || scanned >= SEARCH_MAX_SCANNED) return;
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    // (empty on a permission error, a race with a delete, etc. — skip that
+    // directory, don't fail the whole search)
+    for (const e of entries) {
+      if (results.length >= SEARCH_MAX_RESULTS || scanned >= SEARCH_MAX_SCANNED) return;
+      if (IGNORE.has(e.name)) continue;
+      scanned++;
+      const path = relative(root, join(dir, e.name));
+      if (path.toLowerCase().includes(q)) {
+        results.push({ name: e.name, path, isDir: e.isDirectory() });
+      }
+      if (e.isDirectory()) await walk(join(dir, e.name));
+    }
+  }
+
+  await walk(rootDir);
+  return results;
+}
+
 /** Line count of a file, bounded by the same size guard as readFile — used to approximate insertions for untracked files in git status. */
 export async function countLines(root: string, path: string): Promise<number> {
   const target = confine(root, path);

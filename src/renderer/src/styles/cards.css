@@ -360,6 +360,54 @@
   flex: none;
 }
 
+/* DESIGN-BACKLOG.md item 49 */
+.files-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  flex: none;
+}
+
+.files-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.files-search-input::placeholder {
+  color: var(--muted);
+}
+
+.files-search-clear {
+  flex: none;
+  display: flex;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.files-search-msg {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.files-search-result-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+  text-align: right;
+}
+
 .files-tree-toolbar button {
   background: none;
   border: none;

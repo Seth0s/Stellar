@@ -3601,6 +3601,21 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   Conteúdo real confirmado no disco. `smoke-files-card.mjs` (19/19).
 - Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
 
+## 2026-08-28 — Busca por nome de arquivo na árvore do FilesCard (item 49, 4/7)
+
+- `fs.list` só busca um nível por vez — busca precisa de walk recursivo
+  próprio: `searchFileNames` (`fs-tools.ts`, IPC `fs:search-names`),
+  mesmo `IGNORE` aplicado em todo nível, teto de 20k arquivos
+  escaneados/200 resultados, match substring case-insensitive no path
+  relativo inteiro. UI: input acima da árvore (debounce 250ms), query
+  não-vazia troca a árvore por lista plana; clicar abre o arquivo e
+  limpa a busca.
+- Verificado ao vivo via CDP: busca por arquivo real nunca expandido na
+  árvore achou e abriu certo, query limpou sozinha; busca real no
+  repo (node_modules presente) rodou em 29ms sem vazar node_modules nos
+  resultados. `smoke-files-card.mjs` (19/19).
+- Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
+
 ## Comandos
 
 ```bash
