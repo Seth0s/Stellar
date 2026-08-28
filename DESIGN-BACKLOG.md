@@ -3649,6 +3649,60 @@ idênticos antes/depois de abrir (sem vazamento de scrollbar). `tsc
 (10/10), `smoke-session-modal.mjs` (20/20), `smoke-home.mjs` (17/17,
 cobre o `PathPicker`, outro consumidor do mesmo `Popover`).
 
+## 45. Scrollbar do FilesCard sem o estilo `thin-scroll` no editor/preview/imagem — ✅ feito em 2026-08-28
+
+Pedido ao vivo dentro da análise do item 41 (ver abaixo): "não se esqueça
+de verificar se o scrollbar do files está com o componente estilizado".
+
+**Achado real, não assumido**: `.files-tree` (a árvore) já usava o
+utility `.thin-scroll` (`layout.css`), mas as OUTRAS três áreas
+roláveis do `FilesCard` nunca ganharam a mesma classe — `.cm-scroller`
+(scroll interno do CodeMirror, dentro de `.code-editor`), `.files-editor-
+preview` (preview de Markdown) e `.files-editor-image` (viewport de
+imagem) — todas caindo pra scrollbar padrão do Chromium/SO, destoando do
+resto do app. `.cm-scroller` não é um elemento que este app renderiza
+diretamente (é interno ao CodeMirror), então a classe `.thin-scroll` não
+dava pra aplicar via `className` — replicado como CSS-in-JS dentro do
+`editorTheme` já existente em `CodeEditor.tsx` (mesmo lugar que já
+estiliza cursor/seleção/gutters desse editor). As outras duas só
+precisaram da classe `thin-scroll` adicionada ao `className` existente.
+
+**Verificado ao vivo via CDP**: aberto `package-lock.json` real do
+projeto (160KB, força overflow real no `.cm-scroller`) e
+`DESIGN-BACKLOG.md` (preview de markdown, também overflow real) —
+`getComputedStyle` confirma `scrollbarWidth: "thin"` e a mesma
+`scrollbarColor` em `.cm-scroller` e `.files-editor-preview` batendo
+exatamente com `.files-tree` (a referência já estilizada). `tsc --noEmit`
+limpo, `smoke-files-card.mjs` (19/19), `smoke-card-wheel-scope.mjs`
+(6/6).
+
+## 41 (continuação) — Análise: gap vs. VSCode, pedido ao vivo em 2026-08-28
+
+Usuário instalou CodeMirror 6 pro `FilesCard` (`CodeEditor.tsx`, DESIGN-
+BACKLOG.md item 21 ponto 11) esperando algo "igual VSCode", mas listou
+features reais que faltam. Pedido explícito: **análise, não
+implementação** — decisão de quais fazer, em que ordem, fica pra depois.
+Análise completa entregue fora deste arquivo (ver resposta da sessão de
+2026-08-28); resumo do estado atual pra referência futura:
+
+- **Hoje existe**: syntax highlight real (12 linguagens com pacote
+  dedicado + 7 via `legacy-modes`), números de linha, fold de código,
+  guias de indentação (`@replit/codemirror-indentation-markers`), bracket
+  matching, árvore de arquivos com ícone por extensão (item 13), criar/
+  renomear/excluir com confirmação, preview de Markdown.
+- **Não existe hoje, pedido pelo usuário**: aba horizontal de arquivos
+  abertos (hoje só 1 arquivo por vez, trocar de arquivo perde o que
+  estava aberto antes — sem MRU nem "arquivos modificados"), auto-save
+  configurável (hoje só salvar manual via botão, sem debounce/timer),
+  árvore com mais destaque visual (hoje ícones já são coloridos por tipo,
+  mas sem hierarquia visual mais forte por nível), busca "inteligente"
+  (hoje não existe NENHUMA busca — nem por nome de arquivo na árvore, nem
+  full-text dentro de arquivos), contagem de tokens no editor (nenhuma
+  métrica de tamanho/tokens exibida), branch do git do repositório do
+  arquivo aberto (nenhuma integração git no `FilesCard` — `ChangesCard`
+  é um card SEPARADO que já fala com git, mas não aparece dentro do
+  `FilesCard`).
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.

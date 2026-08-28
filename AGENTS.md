@@ -3543,6 +3543,26 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `session-modal`/`home` todos verdes.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 44.
 
+## 2026-08-28 — Scrollbar do FilesCard sem `thin-scroll` no editor/preview/imagem (item 45)
+
+- Pedido ao vivo. `.files-tree` já usava o utility `.thin-scroll`, mas
+  `.cm-scroller` (scroll interno do CodeMirror), `.files-editor-preview`
+  e `.files-editor-image` nunca ganharam a mesma classe — caindo pra
+  scrollbar padrão do SO. `.cm-scroller` é interno ao CodeMirror (não um
+  elemento renderizado por este app), então replicado como CSS-in-JS no
+  `editorTheme` já existente em `CodeEditor.tsx`; os outros dois só
+  precisaram da classe `thin-scroll` no `className`.
+- Verificado ao vivo via CDP: `package-lock.json` real (160KB) e
+  `DESIGN-BACKLOG.md` abertos — `getComputedStyle` confirma
+  `scrollbarWidth`/`scrollbarColor` idênticos entre `.cm-scroller`,
+  `.files-editor-preview` e `.files-tree` (a referência). `tsc --noEmit`
+  limpo, `smoke-files-card.mjs` (19/19), `smoke-card-wheel-scope.mjs`
+  (6/6).
+- Detalhe completo em `DESIGN-BACKLOG.md` item 45. Análise separada de
+  gap vs. VSCode (item 41, tabs/auto-save/busca/tokens/git branch)
+  entregue diretamente na conversa, não implementada ainda — aguardando
+  decisão de escopo/ordem do usuário.
+
 ## Comandos
 
 ```bash
