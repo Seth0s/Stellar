@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
+import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
 import type { DirEntry } from "../../preload/index";
 
@@ -58,32 +59,6 @@ function parentOf(path: string): string {
 function nameOf(path: string): string {
   const i = path.lastIndexOf("/");
   return i === -1 ? path : path.slice(i + 1);
-}
-
-/** DESIGN-BACKLOG.md item 6 — `marked`/`dompurify` together are ~170KB
- * raw (~50KB gzip, measured via `VISUALIZE=1 npm run build`) of the
- * renderer bundle, previously imported statically at the top of this
- * file even though every FilesCard session might never touch markdown
- * at all, and even a session that opens a `.md` file defaults to the
- * "código" (raw text) view, not "preview" — this component only exists
- * for the moment `view === "preview"` actually renders it, so the
- * `import()` below only fires then, not on every FilesCard mount. */
-function MarkdownPreview({ content }: { content: string }) {
-  const [html, setHtml] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([import("marked"), import("dompurify")]).then(([{ marked }, { default: DOMPurify }]) => {
-      if (cancelled) return;
-      setHtml(DOMPurify.sanitize(marked.parse(content, { async: false })));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [content]);
-
-  if (html === null) return <div className="files-editor-preview files-editor-msg">carregando preview…</div>;
-  return <div className="files-editor-preview" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 /** Bundled so `TreeNode` (recursive, one prop object per node instead of a
@@ -539,7 +514,11 @@ export function FilesCard({
             content === null ? (
               <div className="files-editor-msg">carregando…</div>
             ) : (
-              <MarkdownPreview content={content} />
+              <Markdown
+                content={content}
+                className="files-editor-preview"
+                loadingFallback={<div className="files-editor-preview files-editor-msg">carregando preview…</div>}
+              />
             )
           )}
           {selectedPath &&

@@ -3400,6 +3400,24 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `smoke-chat-providers.mjs` (8/8). `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 38.
 
+## 2026-08-28 — Componente único de Markdown, tema completo (item 33)
+
+- ChatCard.tsx e FilesCard.tsx tinham 2 implementações independentes de
+  `marked`+`dompurify`, CSS escopado separado, risco real de drift.
+- Achado medido ao vivo: só `p`/`pre`/`code` tinham CSS de verdade —
+  headings, links, listas, blockquote, tabela, `hr` caíam no default cru
+  do browser (link azul `rgb(0,0,238)`, `h1` em 26px, tabela sem
+  bordas, `hr` cinza inset).
+- Fix: `Markdown.tsx` novo, um componente só, `className`/
+  `loadingFallback` deixam cada consumidor manter seu próprio wrapper.
+  `styles/markdown.css` novo (`.md-content`) cobre todo elemento rico,
+  usando os tokens do app (`--foam` nos links, `--border` na tabela/hr,
+  headings escalados pra caber numa bolha compacta).
+- Verificação: screenshot ao vivo com markdown rico real, harmônico com
+  o tema. `smoke-chat.mjs` (12/12), `smoke-chat-tools.mjs` (18/18),
+  `smoke-files-card.mjs` (19/19). `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 33.
+
 ## Comandos
 
 ```bash

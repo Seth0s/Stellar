@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
+import { Markdown } from "./Markdown";
 import { toast } from "./useToast";
 import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, PROVIDER_MODELS, keyFormatWarning } from "./secretsUi";
 import type { Rect } from "./board-model";
@@ -96,27 +97,6 @@ function toolLabel(name: string, input: unknown): string {
   }
   if (typeof i.provider === "string") return `${name}(${i.provider})`;
   return name;
-}
-
-/** Lazy-loaded on first render that actually needs it, same reasoning as
- * FilesCard.tsx's own `MarkdownPreview` (marked+dompurify are ~170KB raw
- * of the renderer bundle) — except here every chat message needs this, so
- * unlike FilesCard it'll load on effectively every ChatCard's first
- * message rather than staying dormant for the session. */
-function Markdown({ content }: { content: string }) {
-  const [html, setHtml] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([import("marked"), import("dompurify")]).then(([{ marked }, { default: DOMPurify }]) => {
-      if (cancelled) return;
-      setHtml(DOMPurify.sanitize(marked.parse(content, { async: false })));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [content]);
-  if (html === null) return <span className="chat-msg-text">{content}</span>;
-  return <div className="chat-msg-md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function ToolLine({ activity }: { activity: ToolActivity }) {
@@ -591,7 +571,15 @@ export function ChatCard({
             {messages.length === 0 && streaming === null && <div className="chat-empty">peça algo ao chatbox…</div>}
             {messages.map((m, i) => (
               <div key={i} className={`chat-msg ${m.role}`}>
-                {m.role === "assistant" ? <Markdown content={m.content} /> : <span className="chat-msg-text">{m.content}</span>}
+                {m.role === "assistant" ? (
+                  <Markdown
+                    content={m.content}
+                    className="chat-msg-md"
+                    loadingFallback={<span className="chat-msg-text">{m.content}</span>}
+                  />
+                ) : (
+                  <span className="chat-msg-text">{m.content}</span>
+                )}
               </div>
             ))}
 
@@ -664,7 +652,11 @@ export function ChatCard({
                       <span />
                     </span>
                   ) : (
-                    <Markdown content={streaming} />
+                    <Markdown
+                      content={streaming}
+                      className="chat-msg-md"
+                      loadingFallback={<span className="chat-msg-text">{streaming}</span>}
+                    />
                   ))}
               </div>
             )}
