@@ -2985,18 +2985,60 @@ escopo do item ("principais", não o catálogo inteiro), não um bug.
 checagem que esperava openai virar campo livre agora espera o dropdown
 curado com default `gpt-4.1`). `npx tsc --noEmit` limpo.
 
-## 32. Colar imagem ainda não funciona em CLIs de terceiro dentro do terminal
+## 32. Colar imagem ainda não funciona em CLIs de terceiro dentro do terminal — ✅ feito em 2026-08-28
 
 Pedido ao vivo, 2026-08-28. O item 22 já resolveu colar imagem no
 `TerminalCard` (grava um PNG real em `stellar-pastes/`, escreve o path
-no PTY) — mas não cobre o caso de colar DENTRO de uma CLI que já rodou
-dentro do terminal (ex.: `claude` CLI ou outra ferramenta interativa que
-tem seu próprio protocolo de paste de imagem, tipo iTerm2/Kitty inline
-images ou OSC 52). "Veja o padrão aceito" — precisa investigar qual
-protocolo essas CLIs esperam antes de decidir o fix (pode não ser o
-mesmo mecanismo do item 22, que é Stellar escrevendo o path por fora —
-uma CLI dentro do PTY pode esperar bytes inline no próprio stream, não
-um path).
+no PTY) — a dúvida original era se isso bastava pra uma CLI de terceiro
+(ex. `claude`) rodando DENTRO do terminal, que pode ter seu próprio
+protocolo de paste de imagem.
+
+**Pesquisa real (não assumida)**: documentação pública do próprio
+Claude Code confirma que, no Linux, ele lê a área de transferência
+diretamente via `xclip`/`wl-paste` ao detectar Ctrl+V — não depende de
+nenhum protocolo de escape de terminal (iTerm2 inline images/Kitty/OSC
+52 não se aplicam aqui). Ou seja: a convenção de path já implementada
+no item 22 (caminho absoluto entre aspas escrito no PTY) já é
+exatamente o mecanismo de fallback que a própria documentação do Claude
+Code recomenda ("hand Claude the path directly... works on every
+platform, every time") — não precisava de um protocolo novo.
+
+**Bug real achado testando ao vivo (não o que o item original
+descrevia)**: o atalho de colar de verdade num terminal Linux é
+**Ctrl+Shift+V** (Ctrl+V sozinho costuma estar reservado por
+readline/outra coisa — confirmado pelo próprio usuário, correção em
+tempo real). Testado via CDP com um clipboard contendo SÓ uma imagem
+(sem fallback text/plain): Ctrl+Shift+V mapeia, no Chromium, pro
+comando nativo "paste and match style" — que é deliberadamente
+só-texto. O `paste` DOM event que ele dispara chega com
+`clipboardData.types` **vazio**, mesmo com uma imagem real na área de
+transferência (confirmado ao vivo, pixel/byte real, não suposição) —
+`onPaste` (item 22) nunca via a imagem nesse caminho. Ctrl+V sozinho
+(sem shift) nem chegou a disparar um `paste` event no teste sintético.
+
+**Fix** (`useTerminal.ts`): novo listener de `keydown` (capture phase,
+mesmo container), reconhece `Ctrl+(Shift+)V`, chama
+`preventDefault`/`stopImmediatePropagation` de forma SÍNCRONA (chamar
+depois de um `await` não suprime mais nada — não é opcional, é a spec
+de eventos DOM) e assume o atalho por inteiro: `navigator.clipboard.
+read()` (API assíncrona, sem a limitação "só texto" do comando nativo,
+confirmado ao vivo que lê o `image/png` real) decide entre os dois
+casos — imagem encontrada escreve o path no PTY (mesmo fluxo do item
+22, agora compartilhado via `writeImagePathToPty()`); texto usa
+`term.paste(text)` (o mesmo método que o handler nativo do próprio
+xterm.js usaria por baixo dos panos, preserva bracketed-paste-mode e
+qualquer outra normalização). Debounce de 500ms compartilhado entre os
+dois listeners (`paste` do item 22 + `keydown` novo) evita escrever o
+path duas vezes se ambos disparassem pro mesmo evento físico.
+
+**Verificação**: testado ao vivo contra o binário `claude` real instalado
+nesta máquina (não um mock) — chegou até a tela de confiança de pasta e
+o composer real; testes determinísticos via CDP confirmam Ctrl+Shift+V
+E Ctrl+V com clipboard só-imagem agora escrevem o path corretamente no
+PTY (antes: nada chegava). `smoke-terminal-links-paste.mjs` (20/20,
+suíte do item 22, não regrediu) e `smoke-terminal-visibility-persist.mjs`
+(3/3, mesmo arquivo tocado) — só as suítes afetadas, por instrução do
+usuário. `npx tsc --noEmit` limpo.
 
 ## 33. Ajustar cores/fonte/formatação dinâmica em Markdown (renderizador genérico)
 
@@ -3190,6 +3232,42 @@ adivinhados:
   "outra janela" (print/texto do erro), o site/vídeo específico, e
   quantos cards/quanto tempo de sessão já tinha acumulado antes —
   qualquer um desses detalhes muda a próxima tentativa de repro.
+
+## 38. Correção de escopo do item 30 — barra lateral de sessões deve ser DENTRO do chatbox, não na régua do canvas + bugs reais no fluxo atual
+
+Reportado ao vivo, 2026-08-28. **Mal-entendido meu no item 30**: a barra
+lateral que implementei foi um popover na régua do canvas (`Rail.tsx`,
+nível de board inteiro). O pedido original era uma barra lateral
+EXPANSÍVEL **dentro do próprio chatbox** (mesmo padrão do CentralByte —
+outro projeto do usuário, ver histórico de conversas do sidebar de chat
+lá), não um painel de nível canvas. Escopo errado, precisa refazer.
+
+**Além do mal-entendido, 2 bugs reais reportados no fluxo atual**
+(precisam de reprodução ao vivo antes de qualquer fix, como sempre):
+1. O botão de "criar novo chatbox" na régua está mostrando só sessões
+   JÁ EXISTENTES — não dá pra iniciar uma conversa nova a partir dele.
+2. Se já existe um chat aberto em OUTRA sessão (board) do app, tentar
+   criar/abrir um chatbox na sessão atual redireciona pra essa sessão
+   aberta em vez de abrir um chat novo na sessão atual.
+
+Nada disso foi investigado ainda — próximo passo é reproduzir os 2 bugs
+ao vivo via CDP pra confirmar causa raiz antes de decidir o fix, e
+desenhar a barra lateral expansível de dentro do `ChatCard.tsx` (escopo
+novo, substituindo o popover da régua do item 30 — não é aditivo).
+
+## 39. Revisão de qualidade — resolução/cores no terminal e renderização da status line
+
+Reportado ao vivo, 2026-08-28, ainda não investigado. "Algo estranho na
+coloração e renderização da status line" — pedido de revisão geral de
+qualidade de resolução + conjunto de cores no terminal (`useTerminal.ts`,
+tema/paleta passada ao `Terminal` do xterm.js). Item 36 já cobriu
+`fontFamily` (item 34) e apontou a lacuna de glifos Nerd Font (ainda não
+vendorizada) — este item é mais amplo: cores/tema podem estar erradas
+independente da fonte, e "qualidade de resolução" sugere possível
+problema de DPI/escala do canvas WebGL, não só fonte. Precisa de
+screenshot ao vivo contra uma sessão real (mesmo padrão do item 36 —
+`mcp__stellar__snapshot`) pra identificar o que exatamente está "estranho"
+antes de mexer em tema/paleta.
 
 ## Ordem sugerida para a próxima rodada
 
