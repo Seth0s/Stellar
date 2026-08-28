@@ -3634,6 +3634,32 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
 
+## 2026-08-28 — Busca full-text no FilesCard + bug real de esgotamento de scan corrigido (item 51, 6/7)
+
+- **Bug real achado testando ao vivo**: o walk recursivo do item 49/51
+  (só `IGNORE` = node_modules/.git/dist/target excluído) esgotava seu
+  teto de scan dentro de diretórios grandes fora dessa lista
+  (`.verify-tmp/` — 1.5GB de perfis de teste desta sessão — e `out/`)
+  antes de alcançar `src/` — uma busca por string que EXISTE de
+  verdade voltou zero resultados. Fix: `git ls-files --cached --others
+  --exclude-standard` quando o root é repo git (o mesmo conjunto que o
+  `.gitignore` do usuário já cura, igual o que o VSCode usa por
+  padrão), walk manual só como fallback pra root não-git. Aplica pros
+  DOIS itens (49 retroativo e 51 novo).
+- **51 novo**: `searchFileContents` (`fs-tools.ts`, IPC `fs:search-
+  contents`), teto 5k arquivos/100 resultados, pula binários/arquivo
+  não-UTF8, match por linha. UI: toggle "nome"/"conteúdo" na busca já
+  existente. Clicar um resultado abre o arquivo E pula o cursor pra
+  linha certa (`CodeEditor.tsx` ganhou `jumpToLine`, lido uma vez no
+  mount, mesmo contrato do `value`).
+- Verificado ao vivo via CDP: busca por string real (3 ocorrências
+  confirmadas via `grep -n`) achou as 3 nas linhas exatas, clicar abriu
+  o arquivo com cursor na linha certa. Item 49 reverificado com o
+  caminho git-based — resultado idêntico. Fallback não-git verificado
+  à parte com fixture real fora de repo. `smoke-files-card.mjs`
+  (19/19), `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
+
 ## Comandos
 
 ```bash

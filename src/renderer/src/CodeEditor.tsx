@@ -171,6 +171,7 @@ export function CodeEditor({
   value,
   onChange,
   filename,
+  jumpToLine,
 }: {
   /** Initial content only — read once when the editor mounts (or when
    * `filename` changes, forcing a remount). Typing updates CodeMirror's
@@ -181,6 +182,13 @@ export function CodeEditor({
   value: string;
   onChange: (value: string) => void;
   filename: string;
+  /** DESIGN-BACKLOG.md item 51 — set from a content-search match. Same
+   * "read once at mount, never again" contract as `value` above — this
+   * component has no way to re-jump without a remount (a new `filename`/
+   * key), which is exactly what FilesCard.tsx already does for every
+   * genuinely different file. 1-indexed, matching how editors and
+   * `fs-tools.ts`'s `ContentMatch.line` both count lines. */
+  jumpToLine?: number | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -220,6 +228,16 @@ export function CodeEditor({
       parent: containerRef.current,
     });
     viewRef.current = view;
+
+    // DESIGN-BACKLOG.md item 51 — clamp defensively: a stale match (the
+    // file changed on disk since the search ran) could reference a line
+    // number past the actual document's end, which `doc.line()` throws
+    // on rather than clamping itself.
+    if (jumpToLine && jumpToLine >= 1) {
+      const lineNum = Math.min(jumpToLine, view.state.doc.lines);
+      const pos = view.state.doc.line(lineNum).from;
+      view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
+    }
 
     loadLanguage(filename).then((lang) => {
       if (cancelled || !lang) return;

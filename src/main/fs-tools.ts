@@ -1,5 +1,9 @@
+import { execFile } from "node:child_process";
 import { promises as fs, realpathSync } from "node:fs";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
+
+const execFileP = promisify(execFile);
 
 const IGNORE = new Set(["node_modules", ".git", "dist", "target"]);
 export const MAX_FILE_BYTES = 512 * 1024;
@@ -116,15 +120,49 @@ export async function createEntry(
 }
 
 /**
+ * DESIGN-BACKLOG.md items 49/51 — real bug found verifying item 51 live
+ * (not assumed): a raw recursive walk of `root` with only `IGNORE`
+ * (`node_modules`/`.git`/`dist`/`target`) excluded can burn its entire
+ * scan budget inside some OTHER huge, non-ignored directory before ever
+ * reaching real source files — confirmed on this repo itself, whose own
+ * `.gitignore` also excludes `out/` and `.verify-tmp/` (1.5GB of this
+ * project's own throwaway Electron test profiles) neither of which
+ * `IGNORE` knew about; a content search for a string that genuinely
+ * exists came back with zero matches. Whack-a-mole-ing `IGNORE` bigger
+ * doesn't generalize (every repo's own build/output dirs differ) — the
+ * actual fix is deferring to the same file set the user already
+ * curated: `git ls-files` (tracked + untracked-but-not-`.gitignore`-d),
+ * which is also what VSCode's own search does by default. Falls back to
+ * the old manual walk for a root that isn't a git repo at all (or has no
+ * `git` binary available) — every root this app can open, not just
+ * repos, still gets a working search.
+ */
+async function gitTrackedFiles(root: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileP("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
+      cwd: root,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return stdout.split("\n").filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * DESIGN-BACKLOG.md item 49 — "busca por nome de arquivo na árvore".
  * `listDir` only ever fetches one directory level (the UI expands lazily),
- * so a filename search across the whole tree needs its own real recursive
- * walk — same `IGNORE` set applied at EVERY depth (not just the root
- * level), and a hard cap on both files scanned and matches returned so a
- * huge repo (or a symlink cycle) can't turn "type a few letters" into a
- * multi-second stall. Case-insensitive substring match against the
- * relative path (not just the basename) — matches VSCode's own Ctrl+P
- * behavior of letting a partial directory name narrow results too.
+ * so a filename search across the whole tree needs its own enumeration.
+ * `gitTrackedFiles` above is tried first (fast, correct-by-construction);
+ * the manual walk below is the fallback for a non-git root, with the
+ * same `IGNORE` set applied at EVERY depth and a hard cap on both files
+ * scanned and matches returned so a huge repo (or a symlink cycle) can't
+ * turn "type a few letters" into a multi-second stall. Case-insensitive
+ * substring match against the relative path (not just the basename) —
+ * matches VSCode's own Ctrl+P behavior of letting a partial directory
+ * name narrow results too. Git-backed results are files only (`git
+ * ls-files` doesn't enumerate directories) — a minor, acceptable scope
+ * narrowing for a search that's about finding a FILE, not browsing.
  */
 const SEARCH_MAX_SCANNED = 20_000;
 const SEARCH_MAX_RESULTS = 200;
@@ -132,6 +170,19 @@ const SEARCH_MAX_RESULTS = 200;
 export async function searchFileNames(root: string, query: string): Promise<DirEntry[]> {
   const q = query.trim().toLowerCase();
   if (!q) return [];
+
+  const tracked = await gitTrackedFiles(root);
+  if (tracked) {
+    const results: DirEntry[] = [];
+    for (const path of tracked) {
+      if (results.length >= SEARCH_MAX_RESULTS) break;
+      if (path.toLowerCase().includes(q)) {
+        results.push({ name: path.split("/").pop() ?? path, path, isDir: false });
+      }
+    }
+    return results;
+  }
+
   const rootDir = confine(root, "");
   const results: DirEntry[] = [];
   let scanned = 0;
@@ -150,6 +201,84 @@ export async function searchFileNames(root: string, query: string): Promise<DirE
         results.push({ name: e.name, path, isDir: e.isDirectory() });
       }
       if (e.isDirectory()) await walk(join(dir, e.name));
+    }
+  }
+
+  await walk(rootDir);
+  return results;
+}
+
+/**
+ * DESIGN-BACKLOG.md item 51 — "busca full-text no conteúdo dos
+ * arquivos". Same git-first, walk-fallback split as `searchFileNames`
+ * just above (see its doc comment for why) — heavier per file here (a
+ * real read + substring scan instead of a path compare), so the caps
+ * are smaller than the filename search's. Skips anything over
+ * `MAX_FILE_BYTES` (the same size guard `readFile` already enforces —
+ * no point grep-ing a file this app can't even open) and any extension
+ * VSCode's own "binary" heuristic would also skip (images — a genuinely
+ * exhaustive binary-sniff is out of scope; this covers the actual
+ * regression risk, a huge image file bloating scan time for zero useful
+ * matches). Case-insensitive substring per line, not a regex engine —
+ * same "simple and predictable" scope as item 49's filename search, not
+ * a real grep replacement.
+ */
+export type ContentMatch = { path: string; line: number; text: string };
+const CONTENT_SEARCH_MAX_SCANNED = 5_000;
+const CONTENT_SEARCH_MAX_RESULTS = 100;
+const CONTENT_SEARCH_MAX_LINE_LEN = 200;
+const BINARY_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".pdf", ".zip", ".woff", ".woff2", ".ttf", ".otf"]);
+
+async function grepFile(root: string, path: string, q: string, results: ContentMatch[]): Promise<void> {
+  const full = confine(root, path);
+  const stat = await fs.stat(full).catch(() => null);
+  if (!stat || stat.size > MAX_FILE_BYTES) return;
+  const text = await fs.readFile(full, "utf8").catch(() => null);
+  if (text === null) return; // couldn't decode as utf8 — treat as binary, skip
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (results.length >= CONTENT_SEARCH_MAX_RESULTS) return;
+    if (lines[i].toLowerCase().includes(q)) {
+      results.push({ path, line: i + 1, text: lines[i].trim().slice(0, CONTENT_SEARCH_MAX_LINE_LEN) });
+    }
+  }
+}
+
+export async function searchFileContents(root: string, query: string): Promise<ContentMatch[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+
+  const tracked = await gitTrackedFiles(root);
+  if (tracked) {
+    const results: ContentMatch[] = [];
+    let scanned = 0;
+    for (const path of tracked) {
+      if (results.length >= CONTENT_SEARCH_MAX_RESULTS || scanned >= CONTENT_SEARCH_MAX_SCANNED) break;
+      if (BINARY_EXTS.has(extname(path).toLowerCase())) continue;
+      scanned++;
+      await grepFile(root, path, q, results);
+    }
+    return results;
+  }
+
+  const rootDir = confine(root, "");
+  const results: ContentMatch[] = [];
+  let scanned = 0;
+
+  async function walk(dir: string): Promise<void> {
+    if (results.length >= CONTENT_SEARCH_MAX_RESULTS || scanned >= CONTENT_SEARCH_MAX_SCANNED) return;
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (results.length >= CONTENT_SEARCH_MAX_RESULTS || scanned >= CONTENT_SEARCH_MAX_SCANNED) return;
+      if (IGNORE.has(e.name)) continue;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      if (BINARY_EXTS.has(extname(e.name).toLowerCase())) continue;
+      scanned++;
+      await grepFile(root, relative(root, full), q, results);
     }
   }
 
