@@ -9,6 +9,27 @@ const DEFAULT_ROWS = 24;
 const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove", "wheel"] as const;
 
 /**
+ * DESIGN-BACKLOG.md item 36 (2/2) — vendoring the Nerd Font glyphs alone
+ * (`main.tsx`'s `@azurity/pure-nerd-font` CSS import + the `fontFamily`
+ * fallback below) wasn't enough on its own — confirmed live via CDP:
+ * `@xterm/addon-webgl` builds its own glyph texture atlas from canvas
+ * measurements the FIRST time a character is drawn; if that first draw
+ * happens before the browser has actually finished loading the font file,
+ * it rasterizes tofu into the atlas — and never redraws it later even
+ * once the font finishes loading (re-printing the exact same character
+ * confirmed still tofu, `document.fonts.check()` reporting `true` by
+ * then didn't matter — the atlas entry was already cached wrong). Module
+ * level (not per-card) — this is one shared font, requested once for the
+ * whole app's lifetime, not once per terminal. `attach()` below awaits
+ * this before ever calling `term.open()`, so the atlas's first-ever draw
+ * of any glyph always happens after the font is genuinely ready.
+ * `.catch()` — a failed font load must never block a terminal from
+ * opening, worst case is falling back to tofu/monospace-default, not "no
+ * terminal at all".
+ */
+const nerdFontReady: Promise<unknown> = document.fonts.load('16px "PureNerdFont"').catch(() => {});
+
+/**
  * DESIGN-BACKLOG.md item 39 — `new Terminal()` never had a `theme`, so
  * xterm.js fell back to its own bundled default palette (pure `#000`
  * background, stock Tango-derived ANSI colors) — confirmed live via pixel
@@ -189,7 +210,7 @@ export function useTerminal(
   useEffect(() => {
     if (!ptyId) return;
     function buildTerminal(withWebgl: boolean) {
-      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", monospace', theme: TERMINAL_THEME });
+      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
       const f = new FitAddon();
       t.loadAddon(f);
       if (withWebgl) {
@@ -235,12 +256,19 @@ export function useTerminal(
     const el = containerRef.current;
     if (!el || !ptyId) return;
 
-    function attach() {
+    async function attach() {
       if (openedRef.current) return;
       let term = termRef.current;
       let fit = fitRef.current;
       if (!term || !fit || !el) return;
+      // Set synchronously, BEFORE the await below — a second attach()
+      // call racing in during the await must still see this and bail,
+      // same at-most-once guarantee as before this item.
       openedRef.current = true;
+      await nerdFontReady;
+      // Re-check after the await: the containing effect could have been
+      // cleaned up (card closed/identity changed) while we were waiting.
+      if (!containerRef.current || termRef.current !== term) return;
       try {
         term.open(el);
       } catch {
@@ -265,7 +293,7 @@ export function useTerminal(
       registerDomListeners(term, fit, el);
     }
     function buildTerminalNoWebgl() {
-      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", monospace', theme: TERMINAL_THEME });
+      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
       const f = new FitAddon();
       t.loadAddon(f);
       return { t, f };
