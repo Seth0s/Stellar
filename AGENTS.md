@@ -3463,6 +3463,34 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   toca todo o app. `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 35.
 
+## 2026-08-28 — Colisão de porta do servidor MCP (EADDRINUSE 4488/4489) corrigida (item 40)
+
+- Reportado ao vivo no log de dev real do usuário, não teste meu. Causa:
+  `mcp-server.ts` (4489) e `remote-server.ts` (4488) usavam porta fixa
+  hardcoded cada um, e `app.requestSingleInstanceLock()` nunca é chamado
+  — duas instâncias reais (dev + packaged, ou processo sobrando) sempre
+  colidiam nas mesmas duas portas.
+- `mcp-server.ts`: `port: 4489` fixo → `port: 0` (SO escolhe porta livre)
+  — a URL só é lida dentro do próprio processo, nunca externamente, então
+  dinâmica é seguro. `createMcpServer` agora retorna `url` como getter
+  sobre estado atualizado no evento `listening` (a porta real só existe
+  depois disso); `index.ts` passa `mcpUrl` pra `createPtyRegistry`
+  também como getter em vez de copiar a string uma vez — cada spawn de
+  provider lê o valor ao vivo. `AGENT_CANVAS_MCP_PORT` (harness de
+  verify) continua com prioridade quando definida.
+- `remote-server.ts`: porta 4488 continua **fixa** de propósito (usuário
+  configura Tailscale Funnel/Cloudflare Tunnel nela) — fix foi só
+  paridade: adicionado `httpServer.on("error", ...)` que faltava, antes
+  dependia só do catch-all global do item 37.
+- Verificação: duas instâncias Electron reais lançadas em paralelo sem
+  override de porta (repro exata do bug do usuário) — `stderr` de
+  nenhuma contém `EADDRINUSE`/`mcp-server` (antes do fix, reproduzia o
+  erro exato). Override do harness de verify confirmado funcionando
+  (endpoint `/mcp` responde `200` com `tools/list` real).
+  `smoke-mcp.mjs` (21/21), `smoke-remote-control.mjs` (14/14). `tsc
+  --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 40.
+
 ## Comandos
 
 ```bash

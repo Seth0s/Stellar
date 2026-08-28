@@ -368,9 +368,14 @@ function createWindow() {
   // function returns, so the forward reference is safe.
   let messageBus: ReturnType<typeof createMessageBus> | null = null;
   const mcpServer = createMcpServer({
-    // Overridable only for the verify harness's isolated test instances —
-    // same reasoning as AGENT_CANVAS_REMOTE_PORT below.
-    port: Number(process.env.AGENT_CANVAS_MCP_PORT) || 4489,
+    // Default 0 lets the OS assign a free ephemeral port — the URL is only
+    // ever read in-process (registry's `mcpUrl` getter below), never
+    // persisted or exposed externally, so there's nothing a fixed port
+    // buys a real launch and it only invites EADDRINUSE when two instances
+    // run at once. AGENT_CANVAS_MCP_PORT stays for the verify harness's
+    // isolated test instances, which DO need a predictable port to dial
+    // directly from outside the process (see smoke-mcp.mjs).
+    port: Number(process.env.AGENT_CANVAS_MCP_PORT) || 0,
     handleRequest: (req: BusRequest) => messageBus!.handleRequest(req),
   });
 
@@ -388,7 +393,12 @@ function createWindow() {
     onUrlSeen: (id, url) => safeSend(win, "pty:url-seen", id, url),
     sockPath,
     binDir,
-    mcpUrl: mcpServer.url,
+    // Read live (not `mcpServer.url` copied once) — with `port: 0` above,
+    // the real port is only known after the async `listening` event, which
+    // fires well before any provider actually spawns and reads this.
+    get mcpUrl() {
+      return mcpServer.url;
+    },
   });
 
   remoteServer = createRemoteServer({

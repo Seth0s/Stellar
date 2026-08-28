@@ -152,6 +152,17 @@ export function createRemoteServer(opts: {
     });
   });
 
+  // Parity with mcp-server.ts's own bind guard (DESIGN-BACKLOG.md item 40)
+  // — without this, a port collision (a leftover instance, a verify-harness
+  // run) surfaced only via the global uncaughtException catch-all (item
+  // 37): the process survived, but `remoteServer` was left as a live-looking
+  // object wrapping a server that never actually bound, with no signal to
+  // callers. Port stays fixed here (unlike mcp-server.ts) — pairing/QR flow
+  // and any Tailscale Funnel/Cloudflare Tunnel forwarding a user has set up
+  // depend on a stable, predictable port.
+  httpServer.on("error", (err) => {
+    console.error(`remote-server: failed to bind port ${opts.port}, remote pairing will be unavailable:`, err);
+  });
   httpServer.listen(opts.port, "0.0.0.0");
 
   function broadcast(payload: unknown) {
