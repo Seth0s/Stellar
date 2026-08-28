@@ -20,6 +20,18 @@ const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.C
 
 type MediaKind = "image" | "markdown" | "text";
 
+// DESIGN-BACKLOG.md item 48 — same `ac.<name>`/"1"/"0" localStorage
+// convention as `RAIL_COLLAPSED_KEY`/`SESSIONS_PANEL_OPEN_KEY`. A
+// per-viewer app preference (every FilesCard in every session shares
+// it), not per-file state — matches "auto-save" being a global editor
+// habit in VSCode too, not a per-file toggle. Default OFF: manual save
+// is the app's current, established behavior — auto-save changes what
+// "leaving a file dirty" means (crash/close now silently writes instead
+// of losing the edit, but also means a half-finished edit can hit disk),
+// so it's opt-in rather than a silent behavior change for existing users.
+const AUTOSAVE_KEY = "ac.filesAutoSave";
+const AUTOSAVE_DEBOUNCE_MS = 800;
+
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"]);
 const CONFIG_EXTS = new Set([".json", ".yaml", ".yml", ".toml", ".ini", ".env"]);
 const CODE_EXTS = new Set([
@@ -260,6 +272,8 @@ export function FilesCard({
   const [dirty, setDirty] = useState(false);
   const [tooLarge, setTooLarge] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // DESIGN-BACKLOG.md item 48.
+  const [autoSave, setAutoSave] = useState(() => localStorage.getItem(AUTOSAVE_KEY) === "1");
 
   // DESIGN-BACKLOG.md item 13 — quick actions state (rename/delete/create).
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
@@ -359,6 +373,25 @@ export function FilesCard({
       (e) => setError(String(e)),
     );
   }
+
+  useEffect(() => {
+    localStorage.setItem(AUTOSAVE_KEY, autoSave ? "1" : "0");
+  }, [autoSave]);
+
+  // DESIGN-BACKLOG.md item 48 — debounced, not "save on every keystroke":
+  // a save on each of possibly hundreds of keystrokes/sec (fast typing,
+  // paste of a large block) would mean an IPC round-trip + disk write
+  // per keystroke. Waits for AUTOSAVE_DEBOUNCE_MS of no further change
+  // to `content` before writing — same shape as this app's other
+  // debounced-persist effects. `dirty` in the dep array (not just
+  // `content`) so a save that just completed (dirty flips false) doesn't
+  // re-arm a redundant timer for content that's already on disk.
+  useEffect(() => {
+    if (!autoSave || !dirty || !selectedPath || content === null) return;
+    const timer = setTimeout(() => save(), AUTOSAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSave, dirty, content, selectedPath]);
 
   function startRename(path: string, currentName: string) {
     setRenamingPath(path);
@@ -541,8 +574,17 @@ export function FilesCard({
                   </button>
                 )}
                 {mediaKind(selectedPath) !== "image" && (
+                  <label
+                    className="files-editor-autosave-toggle"
+                    title="Salvar automaticamente ~1s depois de parar de digitar"
+                  >
+                    <input type="checkbox" checked={autoSave} onChange={(e) => setAutoSave(e.target.checked)} />
+                    auto-save
+                  </label>
+                )}
+                {mediaKind(selectedPath) !== "image" && (
                   <button disabled={!dirty} onClick={save}>
-                    salvar
+                    {autoSave && dirty ? "salvando…" : "salvar"}
                   </button>
                 )}
               </div>

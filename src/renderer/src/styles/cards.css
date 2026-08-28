@@ -530,7 +530,22 @@
 
 .files-editor-head-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
+}
+
+/* DESIGN-BACKLOG.md item 48 */
+.files-editor-autosave-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.files-editor-autosave-toggle input {
+  cursor: pointer;
 }
 
 .files-editor-msg {

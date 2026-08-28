@@ -3589,6 +3589,18 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   1090+500=1590 tokens, bate exatamente. `smoke-files-card.mjs` (19/19).
 - Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
 
+## 2026-08-28 — Auto-save configurável no FilesCard (item 48, 3/7)
+
+- Toggle opt-in (default OFF — mudar o comportamento existente em
+  silêncio pra quem já usa o app não é aceitável), `ac.filesAutoSave` no
+  localStorage (preferência global, não por arquivo). Debounce de 800ms
+  depois da última mudança, reusa o `save()` já existente.
+- Verificado ao vivo via CDP: dirty imediatamente após digitar, ainda
+  dirty 300ms depois (debounce não disparou), auto-salvo (botão
+  desabilita sozinho) ~1.2s depois — bate com os 800ms configurados.
+  Conteúdo real confirmado no disco. `smoke-files-card.mjs` (19/19).
+- Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
+
 ## Comandos
 
 ```bash

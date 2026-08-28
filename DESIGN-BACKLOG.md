@@ -3747,9 +3747,30 @@ entrada só registra a FILA e a ordem combinada:
    badge foi de "~1.1k" pra "~1.6k" (1090+500=1590 tokens, bate
    exatamente com o cálculo). `tsc --noEmit` limpo,
    `smoke-files-card.mjs` (19/19).
-3. **48 — Auto-save configurável**: hoje só salva manual (botão,
-   desabilitado se `!dirty`). Decisão de produto (ligado/desligado por
-   padrão) tomada na implementação, documentada lá.
+3. **48 — Auto-save configurável — ✅ feito em 2026-08-28**: hoje só
+   salva manual (botão, desabilitado se `!dirty`). **Decisão de
+   produto**: OFF por padrão — auto-save muda o que "deixar um arquivo
+   dirty" significa (fechar/crashar passa a gravar em silêncio em vez de
+   perder a edição, mas também deixa uma edição pela metade chegar no
+   disco), então é opt-in, não uma mudança de comportamento silenciosa
+   pra quem já usa o app. Toggle (`<input type="checkbox">`,
+   `ac.filesAutoSave` no localStorage — mesma convenção de
+   `RAIL_COLLAPSED_KEY`/`SESSIONS_PANEL_OPEN_KEY`) preferência global do
+   app, não por arquivo — reflete o hábito real do VSCode também.
+   Debounce de 800ms depois da última mudança (não salva a cada
+   keystroke — um IPC+write por tecla digitada seria caro), reusa o
+   `save()` já existente. Botão "salvar" também continua funcionando
+   manualmente com auto-save ligado (`dirty` cru controla `disabled`, não
+   uma flag separada).
+   
+   Verificado ao vivo via CDP: ligado o toggle, digitado texto real —
+   botão salvar ficou habilitado (dirty) imediatamente, CONTINUOU
+   habilitado 300ms depois (debounce ainda não disparou), e desabilitou
+   sozinho (auto-salvo) ~1.2s depois — timing bate exatamente com os
+   800ms configurados. Conteúdo real conferido no disco depois
+   (`AUTOSAVED`, o texto digitado). `tsc --noEmit` limpo,
+   `smoke-files-card.mjs` (19/19, sem regressão no fluxo manual — OFF
+   por padrão significa o teste nem passa perto do auto-save).
 4. **49 — Busca por nome de arquivo na árvore**: filtro/fuzzy, nenhuma
    busca existe hoje.
 5. **50 — Tabs de arquivos abertos**: hoje só 1 arquivo por vez, trocar
