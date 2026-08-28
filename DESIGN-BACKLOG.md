@@ -3040,13 +3040,47 @@ suíte do item 22, não regrediu) e `smoke-terminal-visibility-persist.mjs`
 (3/3, mesmo arquivo tocado) — só as suítes afetadas, por instrução do
 usuário. `npx tsc --noEmit` limpo.
 
-## 33. Ajustar cores/fonte/formatação dinâmica em Markdown (renderizador genérico)
+## 33. Ajustar cores/fonte/formatação dinâmica em Markdown (renderizador genérico) — ✅ feito em 2026-08-28
 
-Pedido ao vivo, 2026-08-28, ainda não investigado. Renderizador de `.md`
-usado hoje (`marked`, `ChatCard`/outros consumidores — conferir todos os
-pontos que renderizam md) precisa de acerto de tema (cores/fonte) e
-formatação dinâmica — "genérico" sugere um componente único reutilizável
-em vez de estilos espalhados por card.
+Pedido ao vivo, 2026-08-28. Renderizador `marked`+`dompurify` tinha DUAS
+implementações independentes — `ChatCard.tsx`'s `Markdown` (mensagens de
+assistente) e `FilesCard.tsx`'s `MarkdownPreview` (preview de `.md`) —
+mesmo lazy-load duplicado, CSS escopado separado
+(`.chat-msg-md`/`.files-editor-preview`), risco real de drift (um fix
+num não propagava pro outro).
+
+**Achado real, medido ao vivo (não suposição)**: só `p`/`pre`/`code`
+tinham CSS de verdade; todo o resto (headings, links, listas,
+blockquote, tabela, `hr`) caía no default cru do browser — `computed
+style` confirmou: link `rgb(0, 0, 238)` (azul padrão do Chrome, nada a
+ver com a paleta do app), `h1` em `26px` (quase o dobro da escala base
+de `13px` da UI), tabela com `border: 0px` em tudo (sem grid nenhum,
+ilegível como tabela), `blockquote` só com indent, sem nenhuma marca
+visual, `hr` cinza 3D-inset padrão do browser.
+
+**Fix — componente único, CSS único**: `Markdown.tsx` novo substitui as
+duas implementações (`ChatCard.tsx`/`FilesCard.tsx` importam a mesma
+função agora); `className` deixa cada consumidor manter seu próprio
+wrapper de spacing/fundo (`chat-msg-md`/`files-editor-preview`),
+`loadingFallback` deixa cada um manter seu próprio estado de
+carregamento (texto cru no chat, "carregando preview…" no FilesCard).
+`styles/markdown.css` novo (`.md-content`, importado em `app.css`) cobre
+TODO elemento rico numa página só: headings escalados pra caber numa
+bolha de chat compacta (`h1` 17px, não 26px), links em `--foam`, listas
+com `::marker` em `--muted`, blockquote com borda esquerda em
+`--border`, tabela com bordas reais + header em `--surface`, `hr` em
+`--border` flat (não o inset cinza do browser). `p`/`pre`/`code` também
+migraram pra lá (eram as únicas regras que já existiam, duplicadas entre
+os dois consumidores com pequenas diferenças — unificadas numa só
+versão, a que já estava confirmada boa no chat).
+
+**Verificação**: screenshot ao vivo via CDP com markdown rico de verdade
+(headings, negrito/itálico, link, listas aninhadas, lista numerada,
+blockquote, bloco de código com linguagem, tabela, `hr`, código inline)
+— visualmente harmônico com o tema escuro do app, confirmado. Suítes
+afetadas: `smoke-chat.mjs` (12/12), `smoke-chat-tools.mjs` (18/18),
+`smoke-files-card.mjs` (19/19, preview de `.md` continua funcionando com
+o componente novo). `npx tsc --noEmit` limpo.
 
 ## 34. Bug — CLI/terminal "quebra" ao sair ou perder foco, prints etc. — ✅ feito em 2026-08-28
 
