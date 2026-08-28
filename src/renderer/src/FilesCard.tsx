@@ -4,7 +4,7 @@ import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
-import type { DirEntry } from "../../preload/index";
+import type { DirEntry, GitStatus } from "../../preload/index";
 
 // DESIGN-BACKLOG.md item 21, ponto 11 — `React.lazy`, not a plain static
 // import: CodeEditor.tsx pulls in CodeMirror's core (state/view/commands/
@@ -250,14 +250,23 @@ export function FilesCard({
   const [creating, setCreating] = useState<{ parentPath: string; kind: "file" | "folder" } | null>(null);
   const [createDraft, setCreateDraft] = useState("");
 
+  // DESIGN-BACKLOG.md item 46 — `git-tools.ts`'s `git:status` already
+  // returns `branch`; `ChangesCard` was the only consumer. `null` while
+  // loading, distinct from `{ repo: false }` (a real, confirmed non-repo
+  // root) — this card's header shows nothing in either "still loading"
+  // or "not a repo" case, only once a branch name is actually known.
+  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+
   useEffect(() => {
     setKids({});
     setExpanded(new Set());
     setSelectedPath(null);
+    setGitStatus(null);
     window.fs.list(root, "").then(
       (entries) => setKids((prev) => ({ ...prev, "": entries })),
       (e) => setError(String(e)),
     );
+    window.git.status(root).then(setGitStatus);
   }, [root]);
 
   // Every armed "click again to confirm" delete auto-disarms after a few
@@ -441,7 +450,17 @@ export function FilesCard({
           </span>
         </>
       }
-      footerContent={root}
+      footerContent={
+        <span className="files-card-foot-row">
+          <span className="files-card-foot-text">{root}</span>
+          {gitStatus?.repo && (
+            <span className="files-card-branch" title={`branch: ${gitStatus.branch}`}>
+              <Icon name="changes" size={11} />
+              {gitStatus.branch}
+            </span>
+          )}
+        </span>
+      }
     >
       <div className="files-card-body">
         <div className="files-tree-panel">

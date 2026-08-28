@@ -3710,9 +3710,21 @@ começar a implementar. Cada um vira seu próprio item conforme é feito
 (número final + detalhe de verificação preenchidos na hora), esta
 entrada só registra a FILA e a ordem combinada:
 
-1. **46 — Branch git no header do FilesCard**: `git-tools.ts`'s
-   `git:status` já retorna `branch`, só nunca foi consumido dentro do
-   `FilesCard` (só o `ChangesCard`, card separado, usa hoje).
+1. **46 — Branch git no header do FilesCard — ✅ feito em 2026-08-28**:
+   `git-tools.ts`'s `git:status` já retorna `branch`, só nunca foi
+   consumido dentro do `FilesCard` (só o `ChangesCard`, card separado,
+   usava). Fix: `window.git.status(root)` chamado no mesmo `useEffect`
+   que já recarrega a árvore ao trocar de `root`; badge (`Icon
+   name="changes"` — o mesmo ícone `GitBranch` que o `ChangesCard` já
+   usa — + nome da branch) só renderiza quando `gitStatus?.repo` é
+   `true`, no rodapé do card ao lado do path (`.files-card-foot-row`,
+   mesmo padrão de `.terminal-card-foot-row`: path ellipsiza, badge fica
+   fixo). Verificado ao vivo via CDP: root = repositório real do Stellar
+   → badge mostra `main` (batendo com `git branch --show-current`
+   rodado em paralelo); `window.git.status("/tmp")` direto confirma
+   `{repo:false}` pra path genuinamente fora de um repo, provando que o
+   gate `gitStatus?.repo &&` de fato esconde o badge nesse caso. `tsc
+   --noEmit` limpo, `smoke-files-card.mjs` (19/19).
 2. **47 — Contagem de tokens no editor**: nenhuma métrica de
    tamanho/tokens exibida hoje.
 3. **48 — Auto-save configurável**: hoje só salva manual (botão,

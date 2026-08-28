@@ -3558,10 +3558,22 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `.files-editor-preview` e `.files-tree` (a referência). `tsc --noEmit`
   limpo, `smoke-files-card.mjs` (19/19), `smoke-card-wheel-scope.mjs`
   (6/6).
-- Detalhe completo em `DESIGN-BACKLOG.md` item 45. Análise separada de
-  gap vs. VSCode (item 41, tabs/auto-save/busca/tokens/git branch)
-  entregue diretamente na conversa, não implementada ainda — aguardando
-  decisão de escopo/ordem do usuário.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 45.
+
+## 2026-08-28 — Fila FilesCard vs VSCode aprovada (itens 46-52), começando pelo branch git (item 46)
+
+- Usuário aprovou a ordem da análise do item 45 e pediu pra implementar:
+  46 branch git → 47 tokens → 48 auto-save → 49 busca por nome → 50 tabs
+  → 51 busca full-text → 52 ícones por linguagem. Fila registrada em
+  `DESIGN-BACKLOG.md` itens 46-52.
+- **46 feito**: `window.git.status(root)` (já existia, só o
+  `ChangesCard` consumia) chamado no `useEffect` de troca de `root` do
+  `FilesCard`; badge de branch no rodapé, só quando `gitStatus?.repo` é
+  `true`. Verificado ao vivo: root real do Stellar → badge mostra
+  `main` (bate com `git branch --show-current`); `/tmp` via IPC direto
+  confirma `{repo:false}`, gate escondendo o badge corretamente.
+  `smoke-files-card.mjs` (19/19).
+- Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
 
 ## Comandos
 
