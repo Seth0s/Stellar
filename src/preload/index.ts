@@ -125,6 +125,10 @@ const store = {
 
 export type DirEntry = { name: string; path: string; isDir: boolean };
 export type ReadFileResult = { content: string } | { tooLarge: true };
+/** DESIGN-BACKLOG.md item 51 — mirrors `fs-tools.ts`'s own `ContentMatch`
+ * (preload can't import main-process types directly, same reason
+ * `DirEntry`/`ReadFileResult` above are redeclared here too). */
+export type ContentMatch = { path: string; line: number; text: string };
 export type ReadImageResult = { dataUrl: string } | { tooLarge: true } | { notImage: true };
 
 const fs = {
@@ -147,6 +151,9 @@ const fs = {
   /** DESIGN-BACKLOG.md item 49 — filename search across the whole tree. */
   searchNames: (root: string, query: string): Promise<DirEntry[]> =>
     ipcRenderer.invoke("fs:search-names", root, query),
+  /** DESIGN-BACKLOG.md item 51 — full-text search across file contents. */
+  searchContents: (root: string, query: string): Promise<ContentMatch[]> =>
+    ipcRenderer.invoke("fs:search-contents", root, query),
 };
 
 export type GitEntry = { path: string; status: string; insertions: number; deletions: number };

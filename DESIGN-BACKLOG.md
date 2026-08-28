@@ -3797,6 +3797,14 @@ entrada só registra a FILA e a ordem combinada:
    corretamente ausente dos resultados, teto de 200 resultados
    confirmado batendo. `tsc --noEmit` limpo, `smoke-files-card.mjs`
    (19/19).
+
+   **Amendment, mesmo dia, achado implementando o item 51**: o walk
+   recursivo cru descrito acima tinha um bug real de esgotamento de
+   teto de scan em diretórios grandes fora do `IGNORE` (`.verify-tmp`/
+   `out` — ver detalhe completo no item 51). `searchFileNames` agora
+   tenta `git ls-files` primeiro (mesmo fix), com o walk antigo só como
+   fallback pra root não-git. Reverificado depois do fix — resultado
+   idêntico (`fs-tools.ts` encontrado certo).
 5. **50 — Tabs de arquivos abertos — ✅ feito em 2026-08-28**: hoje só 1
    arquivo por vez, trocar descarta o anterior. Maior item da lista —
    refactor real, não só uma barra visual.
@@ -3836,8 +3844,56 @@ entrada só registra a FILA e a ordem combinada:
    novo nome, continuou sendo 1 aba só (não duplicou), header do editor
    bateu com o novo path. `tsc --noEmit` limpo, `smoke-files-card.mjs`
    (19/19), `smoke-card-wheel-scope.mjs` (6/6).
-6. **51 — Busca full-text no conteúdo dos arquivos**: grep real dentro
-   do `root`, via `fs-tools.ts`.
+6. **51 — Busca full-text no conteúdo dos arquivos — ✅ feito em
+   2026-08-28**: grep real dentro do `root`, via `fs-tools.ts`.
+
+   **Bug real achado testando ao vivo (não assumido)**: a busca de
+   conteúdo (e, retroativamente, a de nome de arquivo do item 49
+   também) usava um walk recursivo cru com só `IGNORE`
+   (`node_modules`/`.git`/`dist`/`target`) excluído — testado contra o
+   próprio repo Stellar, uma busca por uma string que EXISTE de
+   verdade voltou **zero resultados**. Causa: `.verify-tmp/` (1.5GB de
+   perfis Electron descartáveis desta própria sessão de testes) e
+   `out/` não estavam em `IGNORE`, e o walk esgotava o teto de scan
+   inteiro dentro deles antes de alcançar `src/`. **Fix real, não só
+   aumentar o teto**: `git ls-files --cached --others --exclude-
+   standard` quando o root é um repo git — o MESMO conjunto de
+   arquivos que o próprio `.gitignore` do usuário já cura (que aqui já
+   exclui `out/`/`.verify-tmp/`), e é exatamente o que a busca do
+   VSCode também usa por padrão. Fallback pro walk manual antigo
+   (agora compartilhado entre os dois itens via `grepFile`) quando o
+   root não é git ou o binário `git` não existe — todo root que este
+   app consegue abrir continua com busca funcional, não só repos.
+
+   **`searchFileContents`** (`fs-tools.ts`): teto de 5.000 arquivos
+   escaneados / 100 resultados, pula extensões binárias conhecidas
+   (imagens/fontes/zip/pdf) e qualquer arquivo que não decodifica como
+   UTF-8, match case-insensitive por linha (não regex — mesmo escopo
+   "simples e previsível" do item 49, não é grep de verdade). IPC
+   `fs:search-contents`, `window.fs.searchContents`.
+
+   **UI**: toggle "nome"/"conteúdo" na régua de busca já existente do
+   item 49 (`searchMode`), resultado de conteúdo mostra arquivo + `:
+   linha` + trecho (`ContentMatch`). Clicar um resultado abre o
+   arquivo E pula o cursor pra linha certa — `CodeEditor.tsx` ganhou
+   prop `jumpToLine` (mesmo contrato "lido uma vez no mount" que
+   `value` já tinha), aplicado via `EditorView.scrollIntoView` +
+   seleção logo após criar a `EditorView`. Limitação pequena e
+   deliberada (item 50 já cria esse modelo): clicar um match de uma
+   aba JÁ aberta só troca de foco, sem pular de novo pra linha nova
+   (evita remontar o editor e perder edição não salva — mesma troca
+   que o item 50 já fez conscientemente).
+
+   Verificado ao vivo via CDP: busca por `AUTOSAVE_DEBOUNCE_MS` (existe
+   3x em `FilesCard.tsx`, linhas 33/473/480 confirmadas via `grep -n`
+   direto) — achou as 3 ocorrências nas linhas EXATAS; clicar a
+   primeira abriu `FilesCard.tsx` e o cursor pousou exatamente na linha
+   33 (`.cm-activeLine` confere o texto certo). Busca de nome de
+   arquivo (item 49) reverificada com o novo caminho git-based —
+   continua achando `fs-tools.ts` certo. Caminho de fallback (root
+   NÃO-git) verificado à parte com um fixture real fora de qualquer
+   repo — ambas as buscas funcionam igual. `tsc --noEmit` limpo,
+   `smoke-files-card.mjs` (19/19).
 7. **52 — Ícones por linguagem real na árvore**: hoje só 5 buckets de
    categoria (`fileIconFor`) — `.js`/`.py`/`.rs` mostram o mesmo ícone.
 

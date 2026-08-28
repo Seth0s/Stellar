@@ -4,7 +4,7 @@ import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
-import type { DirEntry, GitStatus } from "../../preload/index";
+import type { ContentMatch, DirEntry, GitStatus } from "../../preload/index";
 
 // DESIGN-BACKLOG.md item 21, ponto 11 — `React.lazy`, not a plain static
 // import: CodeEditor.tsx pulls in CodeMirror's core (state/view/commands/
@@ -113,6 +113,11 @@ type OpenTab = {
   view: "code" | "preview";
   dirty: boolean;
   tooLarge: boolean;
+  /** DESIGN-BACKLOG.md item 51 — set only when this tab was opened from
+   * a content-search match; consumed once by `CodeEditor`'s own mount
+   * effect (never re-read after, same "read once" contract as its
+   * `value` prop) to scroll straight to the matching line. */
+  pendingJumpLine: number | null;
 };
 
 /** Bundled so `TreeNode` (recursive, one prop object per node instead of a
@@ -323,12 +328,15 @@ export function FilesCard({
   // or "not a repo" case, only once a branch name is actually known.
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
 
-  // DESIGN-BACKLOG.md item 49 — filename search. A non-empty `searchQuery`
-  // swaps the tree view for a flat `searchResults` list; `searching`
-  // covers the round-trip so a slow search on a huge tree doesn't read as
-  // "no matches" while still in flight.
+  // DESIGN-BACKLOG.md item 49/51 — filename OR full-text search
+  // (`searchMode`). A non-empty `searchQuery` swaps the tree view for a
+  // flat results list of whichever kind is active; `searching` covers
+  // the round-trip so a slow search on a huge tree doesn't read as "no
+  // matches" while still in flight.
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchMode, setSearchMode] = useState<"name" | "content">("name");
   const [searchResults, setSearchResults] = useState<DirEntry[]>([]);
+  const [contentResults, setContentResults] = useState<ContentMatch[]>([]);
   const [searching, setSearching] = useState(false);
 
   useEffect(() => {
@@ -339,6 +347,7 @@ export function FilesCard({
     setGitStatus(null);
     setSearchQuery("");
     setSearchResults([]);
+    setContentResults([]);
     window.fs.list(root, "").then(
       (entries) => setKids((prev) => ({ ...prev, "": entries })),
       (e) => setError(String(e)),
@@ -380,17 +389,28 @@ export function FilesCard({
     setOpenTabs((prev) => prev.map((t) => (t.path === path ? { ...t, ...patch } : t)));
   }
 
-  function selectFile(path: string) {
+  function selectFile(path: string, jumpToLine?: number) {
     setError(null);
     setActivePath(path);
     // DESIGN-BACKLOG.md item 50 — already open: just switch tabs, don't
     // refetch/reset. This is the real behavior change tabs buy beyond a
     // visual bar — reopening a file mid-edit no longer discards it.
+    // (item 51: this also means a content-search click on an
+    // ALREADY-open tab won't re-jump to the new line — a known, small
+    // scope cut, see `pendingJumpLine`'s own doc comment.)
     if (openTabs.some((t) => t.path === path)) return;
     const kind = mediaKind(path);
     setOpenTabs((prev) => [
       ...prev,
-      { path, content: null, imageDataUrl: null, view: kind === "markdown" ? "preview" : "code", dirty: false, tooLarge: false },
+      {
+        path,
+        content: null,
+        imageDataUrl: null,
+        view: kind === "markdown" ? "preview" : "code",
+        dirty: false,
+        tooLarge: false,
+        pendingJumpLine: jumpToLine ?? null,
+      },
     ]);
     if (kind === "image") {
       window.fs.readImage(root, path).then(
@@ -466,18 +486,22 @@ export function FilesCard({
     const q = searchQuery.trim();
     if (!q) {
       setSearchResults([]);
+      setContentResults([]);
       setSearching(false);
       return;
     }
     setSearching(true);
     let cancelled = false;
     const timer = setTimeout(() => {
-      window.fs.searchNames(root, q).then(
+      // DESIGN-BACKLOG.md item 51 — same debounce, whichever mode is
+      // active; the two search kinds never run at once.
+      const search = searchMode === "name" ? window.fs.searchNames(root, q) : window.fs.searchContents(root, q);
+      search.then(
         (entries) => {
-          if (!cancelled) {
-            setSearchResults(entries);
-            setSearching(false);
-          }
+          if (cancelled) return;
+          if (searchMode === "name") setSearchResults(entries as DirEntry[]);
+          else setContentResults(entries as ContentMatch[]);
+          setSearching(false);
         },
         (e) => {
           if (!cancelled) {
@@ -491,7 +515,7 @@ export function FilesCard({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [searchQuery, root]);
+  }, [searchQuery, searchMode, root]);
 
   function startRename(path: string, currentName: string) {
     setRenamingPath(path);
@@ -645,14 +669,15 @@ export function FilesCard({
               <Icon name="newFolder" size={13} />
             </button>
           </div>
-          {/* DESIGN-BACKLOG.md item 49 — filename search across the whole
-              tree, not just the currently-expanded directories. A non-empty
-              query swaps the tree below for a flat results list. */}
+          {/* DESIGN-BACKLOG.md item 49/51 — filename OR full-text search
+              across the whole tree, not just the currently-expanded
+              directories. A non-empty query swaps the tree below for a
+              flat results list of whichever mode is active. */}
           <div className="files-search-row">
             <Icon name="findCard" size={12} />
             <input
               className="files-search-input"
-              placeholder="buscar arquivo…"
+              placeholder={searchMode === "name" ? "buscar arquivo…" : "buscar no conteúdo…"}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -664,6 +689,22 @@ export function FilesCard({
                 <Icon name="close" size={11} />
               </button>
             )}
+          </div>
+          <div className="files-search-mode-toggle">
+            <button
+              className={searchMode === "name" ? "files-search-mode-active" : ""}
+              title="Buscar por nome de arquivo"
+              onClick={() => setSearchMode("name")}
+            >
+              nome
+            </button>
+            <button
+              className={searchMode === "content" ? "files-search-mode-active" : ""}
+              title="Buscar no conteúdo dos arquivos"
+              onClick={() => setSearchMode("content")}
+            >
+              conteúdo
+            </button>
           </div>
           {creating && (
             <div className="files-create-row">
@@ -683,7 +724,32 @@ export function FilesCard({
               />
             </div>
           )}
-          {searchQuery.trim() ? (
+          {searchQuery.trim() && searchMode === "content" ? (
+            <div className="files-tree thin-scroll">
+              {searching && <div className="files-search-msg">buscando…</div>}
+              {!searching && contentResults.length === 0 && <div className="files-search-msg">nenhum trecho encontrado</div>}
+              {!searching &&
+                contentResults.map((match) => (
+                  <div
+                    key={`${match.path}:${match.line}`}
+                    className="files-node files-search-result files-content-result"
+                    onClick={() => {
+                      selectFile(match.path, match.line);
+                      setSearchQuery("");
+                    }}
+                  >
+                    <span className="files-node-main files-content-result-main">
+                      <span className="files-content-result-head">
+                        <Icon name={fileIconFor(nameOf(match.path), false, false)} size={13} />
+                        <span className="files-node-name">{nameOf(match.path)}</span>
+                        <span className="files-content-result-line">:{match.line}</span>
+                      </span>
+                      <span className="files-content-result-snippet">{match.text}</span>
+                    </span>
+                  </div>
+                ))}
+            </div>
+          ) : searchQuery.trim() ? (
             <div className="files-tree thin-scroll">
               {searching && <div className="files-search-msg">buscando…</div>}
               {!searching && searchResults.length === 0 && <div className="files-search-msg">nenhum arquivo encontrado</div>}
@@ -827,6 +893,7 @@ export function FilesCard({
                   key={activePath}
                   value={content}
                   filename={activePath}
+                  jumpToLine={activeTab?.pendingJumpLine}
                   onChange={(next) => {
                     if (activePath) updateTab(activePath, { content: next, dirty: true });
                   }}
