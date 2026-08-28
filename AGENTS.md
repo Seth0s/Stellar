@@ -3523,6 +3523,26 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   o gesto era zoom, não resize de janela.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 42.
 
+## 2026-08-28 — Popover de links do terminal vazava scrollbar x/y do app (item 44)
+
+- Reportado ao vivo: abrir o popover "N links vistos" perto do fim de um
+  terminal renderizava scrollbars reais no app inteiro. Causa: `.popover`
+  portalado pra `document.body` com `position: absolute` — sem ancestral
+  posicionado isso contribui pro overflow scrollável do PRÓPRIO
+  documento, e `body` não tem `overflow: hidden` (só `.viewport` tem).
+  Sem clamp vertical algum, um badge perto do rodapé de um card
+  já-grande + popover de até ~282px sempre estourava a janela pra baixo.
+- Fix: `position: fixed` (nunca contribui pro scroll do documento) +
+  `useLayoutEffect` em `Popover.tsx` que mede a caixa real depois do
+  layout e empurra de volta pra dentro da viewport (top e left/right,
+  respeitando o modo `side="left"` que usa `right`, não `left`).
+- Verificado ao vivo via CDP: card em posição padrão, badge a 93px da
+  borda da janela, 12 URLs no popover — sem o fix estouraria ~189px além
+  da janela (matemática confirmada); com o fix abre 100% dentro da
+  viewport, sem vazamento de scroll. `smoke-boot`/`card-actions`/
+  `session-modal`/`home` todos verdes.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 44.
+
 ## Comandos
 
 ```bash

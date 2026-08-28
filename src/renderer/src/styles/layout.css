@@ -794,7 +794,18 @@ select.resume-input {
 /* ------------------------------------------------------------- popover */
 
 .popover {
-  position: absolute;
+  /* DESIGN-BACKLOG.md item 44 — was `position: absolute`. Portaled
+     straight to <body> (see Popover.tsx), so with `absolute` a popover
+     that renders past the viewport's own bottom/right edge (an anchor
+     near the bottom of the board, e.g. TerminalCard's "links vistos"
+     badge in the card's footer) grows the DOCUMENT's own scrollable
+     area — body has no `overflow: hidden` of its own (only `.viewport`
+     does), so the whole app gained real x/y scrollbars. `fixed` never
+     contributes to document scroll overflow, no matter how far it
+     renders past the window edge — matches what the top/left math
+     already assumed (viewport-relative `getBoundingClientRect()`
+     coordinates), so no positioning values change. */
+  position: fixed;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -53,6 +53,42 @@ export function Popover({
     window.addEventListener("pointerdown", onDocPointerDown, true);
     return () => window.removeEventListener("pointerdown", onDocPointerDown, true);
   }, [open, onClose, anchorRef]);
+
+  // DESIGN-BACKLOG.md item 44 — an anchor near the bottom/right edge of
+  // the viewport (e.g. TerminalCard's "links vistos" badge, in the
+  // card's own footer, for a card that's near the bottom of the board)
+  // let the popover's rendered box run past the window's edge. With the
+  // CSS below now `position: fixed` that no longer leaks into the
+  // document's own scrollable overflow (the actual reported bug — real
+  // app-level x/y scrollbars appearing), but an un-clamped popover would
+  // still render partly off-screen and be unreachable. Content height is
+  // variable (the URL list grows with links seen) and unknown before
+  // paint, so this measures the ACTUAL rendered box after layout and
+  // nudges it back on-screen — imperative style mutation, not state, so
+  // it can't trigger its own re-render loop.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const el = popRef.current;
+    if (!el) return;
+    const margin = 8;
+    const rect = el.getBoundingClientRect();
+    const overflowBottom = rect.bottom - (window.innerHeight - margin);
+    if (overflowBottom > 0) {
+      el.style.top = `${Math.max(margin, rect.top - overflowBottom)}px`;
+    }
+    // `side="left"` mode positions via CSS `right` (not `left`, see the
+    // prop doc below) — nudging the wrong one would set BOTH `left` and
+    // `right` on a box with no explicit width, stretching it instead of
+    // moving it. Adjust whichever one the current mode actually uses.
+    const overflowRight = rect.right - (window.innerWidth - margin);
+    if (overflowRight > 0) {
+      if (el.style.right) {
+        el.style.right = `${Math.max(margin, Number.parseFloat(el.style.right) + overflowRight)}px`;
+      } else {
+        el.style.left = `${Math.max(margin, rect.left - overflowRight)}px`;
+      }
+    }
+  });
 
   if (!open) return null;
   const anchor = anchorRef.current?.getBoundingClientRect();
