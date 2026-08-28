@@ -230,7 +230,7 @@ export function useTerminal(
       return { t, f };
     }
 
-    function registerDomListeners(_term: Terminal, _fit: FitAddon, el: HTMLDivElement) {
+    function registerDomListeners(term: Terminal, _fit: FitAddon, el: HTMLDivElement) {
       // "não consigo mandar foto pelo terminal" (2026-08-27) — xterm.js's
       // own default paste handler only ever reads `text/plain`; an image on
       // the clipboard silently produced nothing. Capture-phase listener on
@@ -240,13 +240,14 @@ export function useTerminal(
       // plain-text paste (no image/* item present) is left untouched —
       // `preventDefault`/`stopImmediatePropagation` only fire once an image
       // is actually found, so xterm's normal text-paste path is unaffected.
-      function onPaste(e: ClipboardEvent) {
-        const items = e.clipboardData?.items;
-        if (!items) return;
-        const hasImage = Array.from(items).some((item) => item.type.startsWith("image/"));
-        if (!hasImage) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
+      // Debounce shared by both paths below so a single physical paste
+      // never writes the path twice into the PTY (item 32 finding: a real
+      // Ctrl+(Shift+)V keystroke can trigger BOTH a `keydown` and a
+      // `paste` DOM event for the same action; without this guard an
+      // image caught by one path could get written again by the other).
+      let lastHandledAt = 0;
+      function writeImagePathToPty() {
+        lastHandledAt = Date.now();
         void window.clipboardImage.save().then((result) => {
           if (!result.ok) {
             toast(`falha ao colar imagem: ${result.error}`);
@@ -266,7 +267,65 @@ export function useTerminal(
           toast("imagem colada — caminho inserido no terminal");
         });
       }
+
+      function onPaste(e: ClipboardEvent) {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        const hasImage = Array.from(items).some((item) => item.type.startsWith("image/"));
+        if (!hasImage) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (Date.now() - lastHandledAt < 500) return;
+        writeImagePathToPty();
+      }
       el.addEventListener("paste", onPaste, { capture: true });
+
+      // item 32 — Ctrl+Shift+V (o atalho de colar de verdade em terminal no
+      // Linux; Ctrl+V sozinho costuma estar reservado por readline/outra
+      // coisa) mapeia, no Chromium, pro comando nativo "paste and match
+      // style" — que é deliberadamente só-texto: com a área de
+      // transferência contendo só uma imagem (sem fallback text/plain), o
+      // `paste` DOM event que ele dispara chega com `clipboardData.types`
+      // VAZIO (confirmado ao vivo via CDP, não assumido) — `onPaste` acima
+      // nunca via a imagem. A Clipboard API assíncrona (`navigator.
+      // clipboard.read()`) não tem essa limitação (lê qualquer MIME real
+      // da área de transferência, confirmado ao vivo também).
+      //
+      // `preventDefault`/`stopImmediatePropagation` chamados DEPOIS de um
+      // `await` não suprimem mais nada — o navegador já processou a ação
+      // padrão da tecla antes da Promise resolver (isso não é opcional,
+      // é a spec de eventos DOM). Por isso os dois são chamados aqui de
+      // forma SÍNCRONA, assim que a combinação é reconhecida, tomando
+      // conta do Ctrl+(Shift+)V por inteiro; o caso de texto (a grande
+      // maioria dos pastes) é replicado chamando `term.paste()` — o mesmo
+      // método que o handler nativo do próprio xterm.js usaria por baixo
+      // dos panos — pra não perder bracketed-paste-mode nem qualquer outra
+      // normalização que ele já faz.
+      function onKeyDown(e: KeyboardEvent) {
+        if (!e.ctrlKey || (e.key !== "v" && e.key !== "V")) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        void (async () => {
+          try {
+            const items = await navigator.clipboard.read();
+            const hasImage = items.some((item) => item.types.some((t) => t.startsWith("image/")));
+            if (hasImage) {
+              if (Date.now() - lastHandledAt < 500) return;
+              writeImagePathToPty();
+              return;
+            }
+          } catch {
+            // sem permissão/API pra `read()` — ainda tenta o fallback de texto abaixo
+          }
+          try {
+            const text = await navigator.clipboard.readText();
+            if (text) term.paste(text);
+          } catch {
+            // clipboard genuinely inacessível aqui — nada mais a fazer
+          }
+        })();
+      }
+      el.addEventListener("keydown", onKeyDown, { capture: true });
 
       // xterm measures its own cell size from canvas font metrics (or
       // offsetWidth as a DOM fallback) — both ignore the `.world` ancestor's
@@ -330,6 +389,7 @@ export function useTerminal(
           el.removeEventListener(type, correctZoomCoords, { capture: true });
         }
         el.removeEventListener("paste", onPaste, { capture: true });
+        el.removeEventListener("keydown", onKeyDown, { capture: true });
       };
     }
 

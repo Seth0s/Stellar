@@ -3325,6 +3325,31 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 31.
 
+## 2026-08-28 — Colar imagem em CLI de terceiro dentro do terminal (item 32)
+
+- Pesquisa pública confirmou: Claude Code no Linux lê a área de
+  transferência direto via `xclip`/`wl-paste` no Ctrl+V — não usa
+  protocolo de escape de terminal. A convenção de path do item 22 já
+  era o fallback certo, não precisava de protocolo novo.
+- Bug real achado testando ao vivo (não o que o item original
+  descrevia): Ctrl+Shift+V (atalho real de colar num terminal Linux,
+  correção do próprio usuário em tempo real) mapeia pro comando nativo
+  "paste and match style" do Chromium — só-texto por design. Com
+  clipboard só-imagem, o `paste` DOM event chega com `clipboardData.
+  types` vazio, confirmado ao vivo — item 22 nunca via a imagem por
+  esse caminho.
+- Fix: `keydown` listener novo em `useTerminal.ts` assume Ctrl+(Shift+)V
+  por inteiro (`preventDefault` síncrono, antes de qualquer `await` —
+  depois não suprime mais nada), decide via `navigator.clipboard.read()`
+  (sem a limitação só-texto do comando nativo) entre escrever o path
+  (imagem) ou `term.paste(text)` (texto, mesmo método que o xterm.js
+  usaria nativamente).
+- Verificado ao vivo contra o binário `claude` real instalado na
+  máquina (não mock). `smoke-terminal-links-paste.mjs` (20/20),
+  `smoke-terminal-visibility-persist.mjs` (3/3) — só as suítes
+  afetadas. `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 32.
+
 ## Comandos
 
 ```bash
