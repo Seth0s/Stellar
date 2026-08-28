@@ -3681,6 +3681,26 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   futura.
 - Fila 46-52 completa. Detalhe completo em `DESIGN-BACKLOG.md`.
 
+## 2026-08-28 — FilesCard: árvore redimensionável + contraste de botão/checkbox (item 53)
+
+- Reportado ao vivo. Três achados confirmados antes de mexer: (1)
+  `.files-tree-panel` era `width: 220px` fixo, sem handle de resize
+  nenhum; (2) botões "salvar"/"preview" JÁ tinham CSS (background/
+  border), mas `background: var(--panel)` era idêntico ao fundo
+  transparente do `.files-editor-head` (que deixa o `--panel` do card
+  por trás aparecer) — ilegível como botão; (3) checkbox do auto-save
+  com `appearance: auto`/`accentColor: auto` — nativo do SO, zero CSS.
+- Fixes: handle real de resize (drag via `pointerdown`/`window`
+  listeners, 140-480px, persistido em `ac.filesTreeWidth`); botão
+  passa a usar `--surface` (mesmo token do `.cm-gutters`) em vez de
+  `--panel`; `accent-color: var(--foam)` no checkbox (mesmo achado e
+  fix aplicado também em `.continue-last-label` do Rail.tsx, mesma
+  causa raiz).
+- Verificado ao vivo via CDP: resize real (202→294px, persiste),
+  `accentColor` computado = `--foam`, background do botão
+  genuinamente distinto do container. `smoke-files-card.mjs` (19/19).
+- Detalhe completo em `DESIGN-BACKLOG.md` item 53.
+
 ## Comandos
 
 ```bash

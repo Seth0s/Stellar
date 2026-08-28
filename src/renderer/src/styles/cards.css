@@ -340,12 +340,39 @@
 }
 
 .files-tree-panel {
+  /* DESIGN-BACKLOG.md item 53 — was a hardcoded 220px with no resize
+     handle at all; width now comes from FilesCard.tsx's own `treeWidth`
+     state as an inline style (persisted in localStorage), this is just
+     the fallback for the brief instant before that first read. The
+     divider border moved to `.files-tree-resize` below, which sits
+     between this panel and `.files-editor`. */
   width: 220px;
   flex: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-right: 1px solid var(--border);
+}
+
+.files-tree-resize {
+  flex: none;
+  width: 5px;
+  cursor: col-resize;
+  background: var(--border);
+  position: relative;
+}
+
+.files-tree-resize::after {
+  /* Wider invisible hit-area than the visible 5px line — same "make the
+     real hit target bigger than the visual affordance" idea as
+     `.card-resize`'s own handle elsewhere in this app. */
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.files-tree-resize:hover,
+.files-tree-resize:active {
+  background: var(--foam);
 }
 
 /* DESIGN-BACKLOG.md item 13 — "explorador de arquivos de verdade": file-
@@ -688,12 +715,26 @@
 }
 
 .files-editor-head button {
-  background: var(--panel);
+  /* DESIGN-BACKLOG.md item 53 — was `background: var(--panel)`, same
+     color `.files-editor-head` itself inherits (transparent, showing
+     the card's own `--panel` background through) — the button's border
+     (`--border`, barely a shade off `--panel`) was the only thing
+     differentiating it, reading as "no button here" at a glance.
+     `--surface` is one step lighter, same token `.cm-gutters`/the code
+     editor's own background already use for "a distinct raised
+     surface" elsewhere in this same card. */
+  background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 11px;
+  padding: 2px 8px;
   cursor: pointer;
+}
+
+.files-editor-head button:hover:not(:disabled) {
+  background: var(--panel);
+  border-color: var(--muted);
 }
 
 .files-editor-head button:disabled {
@@ -718,7 +759,15 @@
 }
 
 .files-editor-autosave-toggle input {
+  /* DESIGN-BACKLOG.md item 53 — plain OS-native checkbox (light square
+     on this Linux/GTK theme) against a dark UI read as broken/unstyled.
+     `accent-color` is the one CSS property that actually recolors a
+     native checkbox/radio without a full custom-checkbox rebuild — same
+     token (`--foam`) `.zoom-slider` already uses for its own native
+     range input, the one other place this app colors a native form
+     control instead of a `<button>`. */
   cursor: pointer;
+  accent-color: var(--foam);
 }
 
 .files-editor-msg {

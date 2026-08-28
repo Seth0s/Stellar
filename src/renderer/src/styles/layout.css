@@ -1001,6 +1001,12 @@ select.resume-input {
   white-space: nowrap;
 }
 
+/* DESIGN-BACKLOG.md item 53 — same unstyled-native-checkbox gap found
+   in FilesCard's auto-save toggle (cards.css), same fix. */
+.continue-last-label input {
+  accent-color: var(--foam);
+}
+
 .popover-actions {
   display: flex;
   justify-content: flex-end;
