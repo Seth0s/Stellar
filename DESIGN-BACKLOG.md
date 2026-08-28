@@ -3011,6 +3011,86 @@ não feito ainda.
 fechar os quadrados coloridos de vez — decisão de escopo maior (asset de
 fonte novo no bundle), fica pra quando este item for revisitado.
 
+## 37. Bug crítico — fullscreen de vídeo no browser embutido "abre outra janela" e crasha o app inteiro ao fechar — investigado, 2 achados corrigidos, causa exata NÃO confirmada
+
+Reportado ao vivo, 2026-08-28, direto na sessão real do usuário: "quando
+no navegador vou pra um vídeo (youtube por exemplo) e coloco em
+fullscreen ele abre outra janela que dá erro (fullscreen error), e ao
+fechar dá crash no app inteiro."
+
+**Investigação honesta**: 3 repros reais via CDP contra instâncias
+isoladas, nenhum reproduziu o crash:
+1. Servidor HTTP local com `<video>`+botão de fullscreen — clique real
+   (via `Input.dispatchMouseEvent` direto no target offscreen, conta
+   como user-activation de verdade pro Chromium) resolveu limpo, sem
+   janela nova, sem crash.
+2. YouTube real (`jNQXAC9IVRw`), botão de fullscreen REAL do player
+   (`.ytp-fullscreen-button`) — vídeo genuinamente tocando (`paused:
+   false`, `currentTime` avançando, `readyState: 4`),
+   `document.fullscreenElement` confirmado `true` — zero incidente.
+3. Mesmo cenário + fechar o card do browser ainda em fullscreen ("ao
+   fechar" da descrição) — offscreen window destruído limpo, app
+   sobreviveu, respondeu normal pelos 10s seguintes de observação.
+
+Gatilho exato não confirmado — pode depender de estado acumulado numa
+sessão real de longa duração (múltiplos cards, contextos WebGL vivos por
+mais tempo desde o fix do item 34), de um vídeo/site específico, ou de
+uma sequência de gestos diferente da testada.
+
+**2 achados reais e independentes, corrigidos mesmo sem confirmar a
+causa exata** — lendo `browser-registry.ts`/`main/index.ts`, não
+adivinhados:
+
+1. **`browser-registry.ts` não tinha `setWindowOpenHandler`** — QUALQUER
+   `window.open()` de dentro de uma página embutida (ad, popup, link)
+   criava uma `BrowserWindow` nativa de verdade, visível, totalmente fora
+   do `entries` map deste registry — fora do ciclo de vida de qualquer
+   card (resize/destroy/paint), literalmente "outra janela" por
+   definição. Corrigido: `wc.setWindowOpenHandler(() => ({action:
+   "deny"}))`.
+2. **Zero handling de `uncaughtException`/`unhandledRejection` em
+   qualquer lugar do main process** — o default do Electron/Node pra
+   qualquer um dos dois é derrubar o processo inteiro, não só a
+   janela/card culpado — bate exatamente com "crash no app inteiro" pra
+   QUALQUER bug em qualquer lugar do main, não só este. Corrigido:
+   `process.on("uncaughtException"/"unhandledRejection", ...)` loga em
+   vez de derrubar.
+3. **Defensivo, sem evidência direta de ser a causa**: `enter-html-full-
+   screen` no `wc` do card (offscreen, `show:false`, nunca mapeado pelo
+   SO) agora chama `win.setFullScreen(false)` explicitamente, desfazendo
+   o comportamento automático padrão do Electron de sincronizar a janela
+   host com o fullscreen HTML5 — uma janela offscreen/escondida não tem
+   por que tentar fullscreen real de SO, e isso remove uma classe inteira
+   de bug de windowing específico de plataforma (Wayland vs. X11,
+   confirmado que esta máquina roda `--ozone-platform=wayland`) de graça,
+   sem custo — a própria API de fullscreen da página continua resolvendo
+   normal (confirmado ao vivo: `document.fullscreenElement` vira `true`
+   igual), o vídeo só passa a preencher o canvas do card em vez de tentar
+   tomar a janela host inteira.
+4. **Achado colateral, não corrigido, sinalizado**: `main/index.ts`
+   desativa `disable-accelerated-video-decode`/`-encode` com um comentário
+   dizendo "no video playback anywhere in agent-canvas" — falso agora que
+   browser cards existem e tocam vídeo real (confirmado ao vivo, YouTube
+   rodou via decode via software o tempo todo). Reverter é uma decisão
+   separada, com histórico de crash de GPU documentado no mesmo arquivo —
+   não mexido aqui.
+- **Verificação**: `scripts/verify/smoke-browser-fullscreen-crash.mjs`
+  (novo, 5/5) — determinístico via servidor HTTP local (não depende do
+  DOM real do YouTube, que é externo e fora do controle do app): prova
+  que `window.open()` de dentro de um card não cria janela nova de
+  verdade (contagem de targets CDP não muda); prova que
+  `requestFullscreen()` da própria página continua resolvendo normal
+  pro código dela; e — a prova mais direta do fix #2 — dispara uma
+  exceção não-tratada REAL no processo main (via IPC test-only
+  `debug:test-trigger-uncaught-exception`, guardado por
+  `!app.isPackaged`) e confirma que o app continua vivo/respondendo
+  depois, não só teoricamente. Regressão completa: 29/29 suítes, 0
+  falhas.
+- **Se o crash acontecer de novo**: capturar o quê exatamente aparece na
+  "outra janela" (print/texto do erro), o site/vídeo específico, e
+  quantos cards/quanto tempo de sessão já tinha acumulado antes —
+  qualquer um desses detalhes muda a próxima tentativa de repro.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.

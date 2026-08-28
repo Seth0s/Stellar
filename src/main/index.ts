@@ -30,6 +30,29 @@ import {
   type DelegateProvider,
 } from "./chat-tools";
 
+// DESIGN-BACKLOG.md item 37 — reported live: fullscreen video in an
+// embedded browser card, then closing something, crashed the ENTIRE app.
+// Investigated hard (3 separate live CDP repros: minimal fullscreen,
+// real YouTube fullscreen entry with the video genuinely playing and
+// `document.fullscreenElement` confirmed true, and closing the card
+// mid-fullscreen) — none reproduced a crash in an isolated instance, so
+// the exact trigger stays unconfirmed. But the underlying architectural
+// gap this exposed is real regardless of the exact trigger: main.ts had
+// ZERO `uncaughtException`/`unhandledRejection` handling anywhere before
+// this — Electron's default for either is to crash the WHOLE app (not
+// just the offending window/card), matching the reported "crash no app
+// inteiro" symptom exactly for literally any bug anywhere in main, not
+// just this one. Logged instead of crashing — a bug in one card's
+// handling (browser, pty, chat, whatever) degrading that ONE card beats
+// taking the entire board down, especially with real unsaved state
+// (terminals, chat drafts) elsewhere on it.
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException] not crashing the app — see DESIGN-BACKLOG.md item 37:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection] not crashing the app — see DESIGN-BACKLOG.md item 37:", reason);
+});
+
 const isDev = !app.isPackaged;
 
 // GPU acceleration re-enabled 2026-08-26 — see DESIGN-BACKLOG.md item 9 and
@@ -563,6 +586,22 @@ function createWindow() {
   ipcMain.handle("ai:summarize", (_e, providerId: string, cwd: string, prompt: string) =>
     runOneShotSummary(providerId, cwd, prompt),
   );
+
+  // Test-only, same guard/reasoning as chat:test-simulate-tool above —
+  // DESIGN-BACKLOG.md item 37's crash-safety net (`process.on
+  // ("uncaughtException", ...)` above) has no other way to prove it
+  // actually works short of throwing a real uncaught exception in main
+  // and confirming the process survives it. `setImmediate` so the throw
+  // happens genuinely async/uncaught (not synchronously inside this
+  // handler, which `ipcMain.handle` would just catch and reject as an
+  // ordinary IPC error — that path was already safe before this item and
+  // proves nothing new).
+  ipcMain.handle("debug:test-trigger-uncaught-exception", () => {
+    if (app.isPackaged) return;
+    setImmediate(() => {
+      throw new Error("test-only uncaught exception — DESIGN-BACKLOG.md item 37 crash-safety-net check");
+    });
+  });
 
   // DESIGN-BACKLOG.md item 12, Fase B/C.
   ipcMain.handle("secrets:has", (_e, provider: SecretProvider) => secretsStore.has(provider));
