@@ -3255,19 +3255,60 @@ ao vivo via CDP pra confirmar causa raiz antes de decidir o fix, e
 desenhar a barra lateral expansível de dentro do `ChatCard.tsx` (escopo
 novo, substituindo o popover da régua do item 30 — não é aditivo).
 
-## 39. Revisão de qualidade — resolução/cores no terminal e renderização da status line
+## 39. Revisão de qualidade — resolução/cores no terminal e renderização da status line — ✅ feito em 2026-08-28
 
-Reportado ao vivo, 2026-08-28, ainda não investigado. "Algo estranho na
-coloração e renderização da status line" — pedido de revisão geral de
-qualidade de resolução + conjunto de cores no terminal (`useTerminal.ts`,
-tema/paleta passada ao `Terminal` do xterm.js). Item 36 já cobriu
-`fontFamily` (item 34) e apontou a lacuna de glifos Nerd Font (ainda não
-vendorizada) — este item é mais amplo: cores/tema podem estar erradas
-independente da fonte, e "qualidade de resolução" sugere possível
-problema de DPI/escala do canvas WebGL, não só fonte. Precisa de
-screenshot ao vivo contra uma sessão real (mesmo padrão do item 36 —
-`mcp__stellar__snapshot`) pra identificar o que exatamente está "estranho"
-antes de mexer em tema/paleta.
+Reportado ao vivo, 2026-08-28. "Algo estranho na coloração e renderização
+da status line."
+
+**Causa raiz confirmada, não ambígua**: nenhum dos dois `new Terminal({...})`
+(`useTerminal.ts`) jamais passou um `theme` — xterm.js caía no próprio
+default embutido (fundo `#000` puro, paleta ANSI Tango-padrão do
+GNOME-Terminal). Confirmado por amostragem de PIXEL real (não suposição):
+10 das 16 cores ANSI testadas batiam EXATO, byte a byte, com os valores
+hardcoded da própria lib (`node_modules/@xterm/xterm`). Isso lia como
+"estranho" porque contrasta com a paleta escura fosca do resto do app
+(`tokens.css`) — o terminal virava um "buraco preto" com cores Tango bem
+saturadas, sem nenhuma relação com os tons de acento do app (`--foam`,
+`--violet`, `--signal`).
+
+**"Qualidade de resolução" investigada e descartada como bug de DPI**:
+sem lógica de `devicePixelRatio` em `useTerminal.ts`, mas isso é
+esperado — `@xterm/xterm` e `@xterm/addon-webgl` já leem DPR
+internamente (a lib é responsável, não o app). Medido ao vivo
+(DPR=1 nesta máquina): canvas bate exato com o tamanho CSS, sem blur.
+Não dá pra descartar 100% um bug específico de tela HiDPI sem uma
+máquina assim, mas não há nenhuma bandeira de código (nenhum
+`deviceScaleFactor`/`zoomFactor` forçado) — o mais provável é que
+"resolução" na fala do usuário estava descrevendo o choque de cor
+acima, não um problema real de DPI.
+
+**Status line**: o "estranho" ali é o mesmo item 36 já documentado
+(glifos Nerd Font ausentes, `fc-list | grep -i nerd` vazio nesta
+máquina) — nenhuma causa nova de cor achada além da paleta não-temada
+acima (qualquer cor que a status line pede passa pela mesma paleta ANSI
+default até este fix).
+
+**Fix** (`useTerminal.ts`): `TERMINAL_THEME` novo, mapeado pra família
+de tons do próprio app — `--danger`/`--good`/`--signal`/`--violet`/
+`--foam` cobrem 5 dos 8 papéis ANSI base direto de `tokens.css`; azul e
+um branco/ciano de verdade não tinham token dedicado, escolhidos pra
+ficar na mesma família fosca-fria (não escolhidos livremente). Fundo
+`--panel` em vez de preto puro. Aplicado nos DOIS `new Terminal({...})`
+(WebGL e fallback sem WebGL). `cards.css`'s `.terminal-card-body`
+(fundo hardcoded `#000`, existia pra esconder a fresta da última linha
+fracionária) trocado pra `var(--panel)`, mesmo tom do tema novo.
+
+**Verificação**: pixel real via CDP — `bodyBg` do container agora
+`rgb(26, 29, 36)` (= `--panel`, batendo exato), screenshot confirma
+paleta harmônica com o resto do app (sem mais "buraco preto"). Suítes
+afetadas (tocam `useTerminal.ts`/`.terminal-card-body`), não a suíte
+inteira: `smoke-terminal-visibility-persist.mjs` (3/3),
+`smoke-terminal-links-paste.mjs` (20/20), `smoke-card-wheel-scope.mjs`
+(6/6). `npx tsc --noEmit` limpo.
+
+**Não incluído neste item** (já era escopo do item 36, maior e separado):
+vendorizar "Symbols Nerd Font Mono" pra fechar os quadrados sem glifo da
+status line de vez.
 
 ## Ordem sugerida para a próxima rodada
 
