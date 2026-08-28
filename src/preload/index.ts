@@ -482,6 +482,13 @@ contextBridge.exposeInMainWorld("updater", updater);
 contextBridge.exposeInMainWorld("secrets", secrets);
 contextBridge.exposeInMainWorld("chat", chat);
 
+/** Test-only, dev builds only — DESIGN-BACKLOG.md item 37's crash-safety
+ * net (main/index.ts's `process.on("uncaughtException", ...)`). */
+const debugBridge = {
+  testTriggerUncaughtException: (): Promise<void> => ipcRenderer.invoke("debug:test-trigger-uncaught-exception"),
+};
+contextBridge.exposeInMainWorld("debugBridge", debugBridge);
+
 export type PtyApi = typeof pty;
 export type ClipboardImageApi = typeof clipboardImage;
 export type StoreApi = typeof store;

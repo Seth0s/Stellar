@@ -3247,6 +3247,35 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   não bloqueia salvar. Regressão completa: 28/28 suítes, 0 falhas.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 29.
 
+## 2026-08-28 — Bug crítico investigado: fullscreen de vídeo "abre outra janela" e crasha o app (item 37)
+
+- Reportado ao vivo na sessão real do usuário. 3 repros reais via CDP
+  (fullscreen local, YouTube real com vídeo genuinamente tocando +
+  `document.fullscreenElement` confirmado, fechar o card em fullscreen)
+  não reproduziram o crash — causa exata não confirmada, dito
+  honestamente no backlog.
+- 2 achados reais e independentes corrigidos mesmo sem confirmar a
+  causa exata: `browser-registry.ts` não tinha `setWindowOpenHandler`
+  (qualquer `window.open()` de dentro de um card criava uma
+  `BrowserWindow` nativa real, fora de qualquer ciclo de vida — "outra
+  janela" por definição) — negado agora; zero handling de
+  `uncaughtException`/`unhandledRejection` no main process inteiro (o
+  default derruba o processo inteiro pra QUALQUER bug em main, não só
+  este) — agora loga em vez de derrubar.
+- Defensivo (sem evidência direta de ser a causa): `enter-html-full-
+  screen` no `wc` do card offscreen agora desfaz explicitamente o
+  fullscreen automático da janela host — API de fullscreen da própria
+  página continua resolvendo normal.
+- Achado colateral sinalizado, não corrigido: comentário em
+  `main/index.ts` sobre "no video playback" desatualizado — browser
+  cards tocam vídeo real agora.
+- Verificação: `scripts/verify/smoke-browser-fullscreen-crash.mjs`
+  (novo, 5/5), determinístico via servidor HTTP local — inclui disparar
+  uma exceção não-tratada REAL no processo main (IPC test-only) e
+  confirmar que o app sobrevive. Regressão completa: 29/29 suítes, 0
+  falhas.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 37.
+
 ## Comandos
 
 ```bash

@@ -104,6 +104,41 @@ export function createBrowserRegistry(callbacks: {
       void wc.insertCSS("html{color-scheme:light;background:#fff;}");
     });
 
+    // DESIGN-BACKLOG.md item 37 — a real crash reported live (fullscreen
+    // video, "opens another window that errors, crashes the app on
+    // close"); not reproduced after real effort (3 separate live CDP
+    // repros, see main/index.ts's crash-safety-net comment for detail),
+    // but this was a genuine, independently-real gap found reading the
+    // code either way: no `setWindowOpenHandler` meant ANY `window.open()`
+    // from inside an embedded page (ads, a video player's own popup,
+    // YouTube's "watch on..." links, anything) spawned a completely
+    // unmanaged, un-offscreen, un-hidden, ACTUALLY VISIBLE native
+    // `BrowserWindow` — outside this registry's `entries` map, outside
+    // every card lifecycle (resize/destroy/paint), a real "outra janela"
+    // by definition. Denied outright: this app has no UI for a second
+    // window per card, and a real one showing up broken/unstyled (no
+    // `webPreferences` matching this card's own, no positioning) is worse
+    // than just not opening it — `navigate()` already exists for a card
+    // that wants to follow a link in place.
+    wc.setWindowOpenHandler(() => ({ action: "deny" }));
+
+    // Same item — HTML5 fullscreen (a video's own fullscreen button) has
+    // no business trying to make the underlying host `BrowserWindow`
+    // (offscreen, `show: false`, never mapped by the OS) go native
+    // fullscreen; Electron's default un-intercepted behavior tries to
+    // sync the two. Explicitly undoing it here every time keeps this
+    // window inert regardless of platform-specific fullscreen/windowing
+    // behavior (Wayland vs. X11) — the page's OWN fullscreen CSS/JS still
+    // resolves normally either way (confirmed live:
+    // `document.fullscreenElement` genuinely became truthy and the video
+    // filled its own frame), so the card's canvas in BrowserCard.tsx
+    // still shows the video "fullscreen" within the card, which is the
+    // only fullscreen that makes sense for an embedded card in the first
+    // place — the host window was never meant to be seen at all.
+    wc.on("enter-html-full-screen", () => {
+      if (win.isFullScreen()) win.setFullScreen(false);
+    });
+
     wc.on("did-navigate", (_e, navUrl) => callbacks.onNavigate(id, navUrl));
     wc.on("did-navigate-in-page", (_e, navUrl) => callbacks.onNavigate(id, navUrl));
     wc.on("page-title-updated", (_e, title) => callbacks.onTitle(id, title));
