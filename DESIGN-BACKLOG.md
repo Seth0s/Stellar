@@ -3606,6 +3606,49 @@ refletem a mesma proxy honesta.
 pré-existente pro contador da topbar, cobertura ampliada como
 salvaguarda já que `App.tsx` foi tocado.
 
+## 44. Popover de links do terminal, perto do fim do canvas, vazava scrollbar x/y do app inteiro — ✅ feito em 2026-08-28
+
+Reportado ao vivo, 2026-08-28: "se eu abrir o modal de links do terminal
+e estiver colado no fim do canvas, o app renderiza as scrollbar x e y do
+app, não deve acontecer isso". O "modal de links" é o popover do badge
+"N links vistos no output" no rodapé do `TerminalCard` (`Popover`,
+âncora `urlBadgeRef`).
+
+**Causa raiz confirmada em CSS/DOM**: `Popover.tsx` é portalado direto
+pra `document.body`, mas `.popover` usava `position: absolute`. Um card
+de terminal em tamanho normal já deixa pouco espaço entre seu rodapé
+(onde o badge fica) e a borda inferior da janela; o conteúdo do popover
+tem `max-height: 260px` + padding/borda (~282px no total) e sempre abria
+crescendo pra BAIXO a partir de `top: anchor.top`, sem nenhum clamp
+vertical. `position: absolute` sem ancestral posicionado contribui pro
+overflow scrollável do PRÓPRIO DOCUMENTO — e `body` não tem `overflow:
+hidden` (só `.viewport` tem) — então esse overflow vazava como
+scrollbars reais do app inteiro, em vez de só ficar visualmente cortado.
+
+**Fix**: `.popover` (`layout.css`) → `position: fixed` (nunca contribui
+pro scroll do documento, não importa o quanto renderize além da borda da
+janela — mesmas coordenadas viewport-relative que o cálculo de
+top/left/right já assumia). Complementado com um clamp real em
+`Popover.tsx`: `useLayoutEffect` mede a caixa renderizada de verdade
+(`getBoundingClientRect()`, depois do layout, antes do paint) e empurra
+`top`/`left`-ou-`right` de volta pra dentro da viewport se estourar —
+mutação imperativa de estilo, não state, então não cria loop de
+re-render. Respeita o modo `side="left"` existente (usa `right`, não
+`left` — ajustar a propriedade errada esticaria a caixa em vez de
+movê-la).
+
+**Verificado ao vivo via CDP**: card de terminal em posição/tamanho
+padrão (rodapé em `y=707`, janela 800px de altura — só ~93px de vão),
+12 URLs distintas gerando 12 linhas no popover. Sem o clamp, `top:707 +
+~282px` de altura terminaria em `~989`, ~189px além da borda da janela
+— confirmado matematicamente. Com o fix: popover abre em `top:532,
+bottom:792`, 100% dentro da viewport, `position: fixed` confirmado via
+`getComputedStyle`, `document.documentElement.scrollHeight/scrollWidth`
+idênticos antes/depois de abrir (sem vazamento de scrollbar). `tsc
+--noEmit` limpo, `smoke-boot.mjs` (7/7), `smoke-card-actions.mjs`
+(10/10), `smoke-session-modal.mjs` (20/20), `smoke-home.mjs` (17/17,
+cobre o `PathPicker`, outro consumidor do mesmo `Popover`).
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
