@@ -527,6 +527,11 @@ function createWindow() {
   ipcMain.handle("store:boards:touch", (_e, id: string, at: number) => store.touchBoard(id, at));
   ipcMain.handle("store:card-counts", () => store.cardCounts());
   ipcMain.handle("store:next-id-seed", () => store.nextIdSeed());
+  // Item 30 — sessions sidebar (every chat card, live or archived) +
+  // archive/unarchive (closing a ChatCard archives instead of deleting).
+  ipcMain.handle("store:list-chat-sessions", () => store.listChatSessions());
+  ipcMain.handle("store:archive-card", (_e, id: string) => store.archiveCard(id, Date.now()));
+  ipcMain.handle("store:unarchive-card", (_e, id: string) => store.unarchiveCard(id));
 
   // "mudar pasta raiz" (ProjectPicker.tsx) — the real, navigable OS folder
   // dialog rather than a hand-built in-app tree browser: the user asked

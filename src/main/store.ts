@@ -33,6 +33,14 @@ export type CardRow = {
    * blob when this column is empty, so an existing chat card from before
    * this migration doesn't lose its history. */
   messages_json: string | null;
+  /** DESIGN-BACKLOG.md item 30 — closing a `chat`-kind card archives it
+   * (this set to a real timestamp) instead of deleting the row, so its
+   * `messages_json` history survives for the sessions sidebar to list
+   * and reopen later. `null` = live, showing on its board — every OTHER
+   * kind (terminal/browser/files/…) never sets this at all, closing them
+   * is still a real `deleteCard` exactly as before; only chat's history
+   * is worth keeping around after the card itself is gone. */
+  archived_at: number | null;
 };
 
 export type ConnectorRow = {
@@ -80,6 +88,7 @@ function migrate(db: Database.Database) {
     "group_id TEXT",
     "label TEXT",
     "messages_json TEXT",
+    "archived_at INTEGER",
   ]) {
     try {
       db.exec(`ALTER TABLE cards ADD COLUMN ${col}`);
@@ -164,29 +173,42 @@ export function openStore(userDataDir: string) {
   // migration above still needs it as the fallback `board_id` for rows
   // that predate multi-board support.
 
+  // Item 30 — `AND archived_at IS NULL`: an archived chat's row stays in
+  // the table (its `messages_json` is the whole point), but must never
+  // reappear as a live card on the board it used to live on.
   const listStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json FROM cards WHERE board_id = ?",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE board_id = ? AND archived_at IS NULL",
   );
   // Used only by acbridge's `list` command (main/message-bus.ts) — that
   // protocol has no notion of boards, and restricting it to the caller's
   // own board would need the caller's board_id threaded through a wire
   // format that doesn't carry it today. Same "list every terminal card"
-  // behavior this already had before boards existed.
+  // behavior this already had before boards existed. Archived chats
+  // excluded here too — acbridge/MCP `list_cards` is about live, real
+  // cards an agent could send/spawn to, not history.
   const listAllStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json FROM cards",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE archived_at IS NULL",
   );
   const upsertStmt = db.prepare(`
-    INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json)
-    VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @system_prompt, @group_id, @label, @updated_at, @messages_json)
+    INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json, archived_at)
+    VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @system_prompt, @group_id, @label, @updated_at, @messages_json, @archived_at)
     ON CONFLICT(id) DO UPDATE SET
       board_id = excluded.board_id, kind = excluded.kind, provider = excluded.provider, cwd = excluded.cwd,
       x = excluded.x, y = excluded.y, w = excluded.w, h = excluded.h,
       resume_id = excluded.resume_id, model = excluded.model, system_prompt = excluded.system_prompt,
       group_id = excluded.group_id, label = excluded.label,
-      updated_at = excluded.updated_at, messages_json = excluded.messages_json
+      updated_at = excluded.updated_at, messages_json = excluded.messages_json, archived_at = excluded.archived_at
   `);
   const deleteStmt = db.prepare("DELETE FROM cards WHERE id = ?");
   const deleteCardsForBoardStmt = db.prepare("DELETE FROM cards WHERE board_id = ?");
+  // Item 30 — the sessions sidebar's data source: every chat-kind row,
+  // archived or not (an open chat is still a legitimate "session" to
+  // jump back to from the sidebar, not just closed ones), newest first.
+  const listChatSessionsStmt = db.prepare(
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE kind = 'chat' ORDER BY updated_at DESC",
+  );
+  const archiveCardStmt = db.prepare("UPDATE cards SET archived_at = ? WHERE id = ?");
+  const unarchiveCardStmt = db.prepare("UPDATE cards SET archived_at = NULL WHERE id = ?");
 
   const listConnectorsStmt = db.prepare(
     "SELECT id, board_id, from_card_id, to_card_id, updated_at FROM connectors WHERE board_id = ?",
@@ -253,8 +275,11 @@ export function openStore(userDataDir: string) {
     // never had a reason to know this key exists at all) — a caller that
     // doesn't set it shouldn't crash the whole card save over an optional
     // field only "chat" kind cards ever populate.
-    upsertCard: (card: CardRow) => upsertStmt.run({ ...card, messages_json: card.messages_json ?? null }),
+    upsertCard: (card: CardRow) => upsertStmt.run({ ...card, messages_json: card.messages_json ?? null, archived_at: card.archived_at ?? null }),
     deleteCard: (id: string) => deleteStmt.run(id),
+    listChatSessions: (): CardRow[] => listChatSessionsStmt.all() as CardRow[],
+    archiveCard: (id: string, at: number) => archiveCardStmt.run(at, id),
+    unarchiveCard: (id: string) => unarchiveCardStmt.run(id),
     listConnectors: (boardId: string): ConnectorRow[] => listConnectorsStmt.all(boardId) as ConnectorRow[],
     upsertConnector: (row: ConnectorRow) => upsertConnectorStmt.run(row),
     deleteConnector: (id: string) => deleteConnectorStmt.run(id),

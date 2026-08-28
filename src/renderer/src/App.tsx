@@ -13,7 +13,7 @@ import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
-import { Rail } from "./Rail";
+import { Rail, type ChatSessionRow } from "./Rail";
 import type { IconName } from "./icons";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
@@ -181,6 +181,11 @@ function toRow(card: Card, boardId: string): CardRow {
     label: card.label,
     updated_at: Date.now(),
     messages_json: null, // only "chat" (below) ever sets this to something real
+    // Item 30 — always null through this generic upsert path; only the
+    // dedicated archiveCard/unarchiveCard IPC ever changes it (App.tsx's
+    // closeCard for chat cards). A normal upsert (drag/resize/rename/
+    // message commit) never touches archive state.
+    archived_at: null,
     ...card.rect,
   };
   switch (card.kind) {
@@ -646,6 +651,40 @@ export function App() {
     raise(id);
   }
 
+  /** DESIGN-BACKLOG.md item 30 — the sessions popover's click handler
+   * (Rail.tsx). Real bug found live via CDP building this: the SAME-board
+   * case can't just call `switchBoard` (its own guard is a no-op when
+   * already on that board id — `useBoardStore.ts`) NOR `loadBoard`
+   * directly (it resets pan/zoom to origin unconditionally, a real,
+   * disruptive side effect for "one card came back", not something this
+   * small should cause). So same-board unarchive inserts the row
+   * straight into `cards`/`order` state via the same `fromRow` every
+   * other load path already uses, no board reload at all. Cross-board
+   * unarchive-then-switch, by contrast, correctly picks the row up for
+   * free — `switchBoard`'s own `loadBoard` fetches fresh from the store,
+   * which by then no longer excludes it. */
+  async function openChatSession(session: ChatSessionRow) {
+    if (session.board_id === activeBoardIdRef.current) {
+      if (session.archived_at !== null) {
+        await window.store.unarchiveCard(session.id);
+        const card = fromRow({ ...session, archived_at: null });
+        setCards((prev) => (prev.some((c) => c.id === card.id) ? prev : [...prev, card]));
+        setOrder((prev) => (prev.includes(card.id) ? prev : [...prev, card.id]));
+      }
+      jumpToCard(session.id);
+      return;
+    }
+    if (session.archived_at !== null) await window.store.unarchiveCard(session.id);
+    await switchBoard(session.board_id);
+    // `focusCard` (inside jumpToCard) reads `cardsRef.current`, populated
+    // by `loadBoard`'s own `setCards` — `await switchBoard()` only
+    // guarantees the store fetch finished, not that React has committed
+    // the resulting state yet. Two `requestAnimationFrame`s defensively
+    // give React real paint cycles to catch up first — cheap insurance
+    // against that race, not a proven-necessary fix.
+    requestAnimationFrame(() => requestAnimationFrame(() => jumpToCard(session.id)));
+  }
+
   function addConnector(fromCardId: string, toCardId: string) {
     const id = String(nextId.current++);
     const connector = { id, fromCardId, toCardId };
@@ -1016,6 +1055,9 @@ export function App() {
    * animation runs, so this only fires once that animation ends, not on
    * the click that requested the close. */
   function finalizeCloseCard(id: string) {
+    // Item 30 — captured before the filter below removes it from `cards`;
+    // `kind` decides delete vs. archive right after.
+    const closedKind = cardsRef.current.find((c) => c.id === id)?.kind;
     setCards((prev) => prev.filter((c) => c.id !== id));
     setOrder((prev) => prev.filter((x) => x !== id));
     setConnectors((prev) => prev.filter((c) => c.fromCardId !== id && c.toCardId !== id));
@@ -1037,7 +1079,26 @@ export function App() {
       next.delete(id);
       return next;
     });
-    void window.store.delete(id);
+    // `onCloseAnimationEnd` AND the setTimeout fallback in
+    // `beginCloseAnimation` below both call this same function — real
+    // double-invocation, not hypothetical (confirmed live via CDP: it
+    // was actually happening every close). The old plain `store.delete`
+    // tolerated that for free (deleting an already-deleted row is a
+    // harmless no-op). Item 30's archive/delete branch does NOT tolerate
+    // it the same way: `closedKind` reads `cardsRef.current`, which the
+    // FIRST call already filtered this card out of — the SECOND call
+    // sees `undefined`, which used to silently fall through to `delete`
+    // and would have UN-archived (deleted) a chat this same function
+    // just archived a moment earlier. Bailing out whenever the card is
+    // already gone from state makes both calls (again) idempotent — only
+    // the true first invocation ever touches the store.
+    if (closedKind === undefined) return;
+    // Item 30 — a chat card's history is worth keeping around for the
+    // sessions sidebar; every other kind still hard-deletes exactly as
+    // before (a terminal's PTY, a browser's page, a file tree — nothing
+    // there is meaningful to "reopen" the way a conversation is).
+    if (closedKind === "chat") void window.store.archiveCard(id);
+    else void window.store.delete(id);
     void window.store.connectors.deleteForCard(id);
   }
 
@@ -1739,6 +1800,7 @@ export function App() {
         kindLabel={KIND_LABEL}
         onJumpToCard={jumpToCard}
         onOpenSecretsSettings={() => setShowSecretsSettings(true)}
+        onOpenChatSession={openChatSession}
       />
       <Topbar
         boards={boards}

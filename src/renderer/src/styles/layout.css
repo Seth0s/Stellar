@@ -103,14 +103,24 @@ body {
 .rail {
   position: absolute;
   left: 12px;
-  top: 50%;
+  /* Centered within the space *below* `.topbar-home` — not the full
+     viewport. `.topbar-home` is a fixed circle at left:12/top:titlebar-h+12,
+     48x48, same x-range and z-index as `.rail`. A rail centered on the
+     whole window can grow tall enough (many buttons + the dynamic
+     Agrupar/Desagrupar entry) for its top edge to intrude into that fixed
+     band on a short window; topbar-home wins the paint order there, so it
+     silently eats clicks meant for the rail's first button (regression
+     found via DESIGN-BACKLOG.md item 30's smoke-group-select.mjs). The
+     offset below is derived so the rail's top edge, even at max-height,
+     exactly touches topbar-home's bottom edge + 12px gap, never past it. */
+  top: calc(50% + (var(--titlebar-h) + 60px) / 2);
   transform: translateY(-50%);
   /* Hugs its content (a short floating pill, like the artifact) instead of
      stretching from the titlebar to the window's bottom edge — a narrow
      rail that still spans the full height reads as "sidebar occupying the
      whole screen" even at 48px wide. max-height + overflow-y stay as a
      safety net for a short window with many buttons. */
-  max-height: calc(100vh - var(--titlebar-h) - 24px);
+  max-height: calc(100vh - var(--titlebar-h) - 84px);
   width: 48px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -840,6 +850,28 @@ select.resume-input {
 
 .find-card-row {
   width: 100%;
+}
+
+/* DESIGN-BACKLOG.md item 30 — sessions sidebar (Rail.tsx). Reuses
+   `.board-row-name`/`.board-row-name-line`/`.find-card-row` for the row
+   shell itself; these two are the only genuinely new pieces. */
+.chat-session-meta {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.chat-session-archived-badge {
+  flex: none;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 9.5px;
+  text-transform: uppercase;
 }
 
 .popover-field {
