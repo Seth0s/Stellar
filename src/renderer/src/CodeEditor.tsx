@@ -146,14 +146,37 @@ const LANG_LOADERS: Record<string, () => Promise<LanguageSupport | null>> = {
   ".env": () => legacyLang("properties"),
 };
 
+// DESIGN-BACKLOG.md item 54 — the previous version built the import
+// path via string concatenation (`"@codemirror/legacy-modes/mode/" +
+// mode`), which Vite/Rollup's dynamic-import-vars analysis can't
+// resolve statically (real warning seen live in `npm run dev`'s
+// output, not just theoretical — see the plugin's own docs linked in
+// that warning). That's not just cosmetic: an import Vite can't
+// analyze isn't guaranteed to be included correctly in a PACKAGED
+// build's bundle the same way `npm run dev`'s dev server tolerates it
+// (confirmed by rebuilding `npm run package` output and inspecting the
+// bundled dist — see AGENTS.md's changelog entry for this item). Every
+// branch here is now a literal, individually-analyzable `import()` —
+// each one is its own real module Vite can see and bundle at build
+// time, not a single dynamic path built from a variable.
 async function legacyLang(mode: "shell" | "ruby" | "go" | "yaml" | "toml" | "properties"): Promise<LanguageSupport | null> {
-  const [{ StreamLanguage }, legacy] = await Promise.all([
-    import("@codemirror/language"),
-    import("@codemirror/legacy-modes/mode/" + mode),
-  ]);
-  // Each legacy-modes entry point exports its mode under a name matching
-  // the mode itself (`shell`, `ruby`, `go`, `yaml`, `toml`, `properties`).
-  const modeExport = (legacy as unknown as Record<string, unknown>)[mode];
+  const { StreamLanguage } = await import("@codemirror/language");
+  const modeExport = await (async () => {
+    switch (mode) {
+      case "shell":
+        return (await import("@codemirror/legacy-modes/mode/shell")).shell;
+      case "ruby":
+        return (await import("@codemirror/legacy-modes/mode/ruby")).ruby;
+      case "go":
+        return (await import("@codemirror/legacy-modes/mode/go")).go;
+      case "yaml":
+        return (await import("@codemirror/legacy-modes/mode/yaml")).yaml;
+      case "toml":
+        return (await import("@codemirror/legacy-modes/mode/toml")).toml;
+      case "properties":
+        return (await import("@codemirror/legacy-modes/mode/properties")).properties;
+    }
+  })();
   // StreamLanguage.define returns a Language, not a LanguageSupport — cast
   // is safe for our purposes here, we only ever pass this into
   // EditorState.create's extensions array, which accepts both.
