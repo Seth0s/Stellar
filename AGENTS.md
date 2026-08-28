@@ -3508,6 +3508,21 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `smoke-session-modal.mjs` (20/20).
 - Detalhe completo em `DESIGN-BACKLOG.md` item 43.
 
+## 2026-08-28 — Perda de nitidez ao redimensionar a janela: investigado, não reproduzido (item 42)
+
+- Reportado ao vivo. Redimensionado o `BrowserWindow` de verdade em
+  nível de SO (1280×800 → 1680×1100, via Node inspector no processo
+  main — CDP não implementa `Browser.setWindowBounds` no target do
+  renderer do Electron), medindo `canvas.width/height` do terminal
+  contra `CSS size * devicePixelRatio` antes/depois. Backing-store bateu
+  em ambos os momentos, mesmo com o `devicePixelRatio` do ambiente
+  mudando no meio (dpr 1 → 1.5, escala do X11, não um bug do app).
+- Hipótese pro que o usuário viu: mecanismo de blur já documentado e
+  aceito, ligado a ZOOM (não resize) — `.world`'s `transform: scale()`
+  ignorado pelo `FitAddon`'s `offsetWidth`. A confirmar com o usuário se
+  o gesto era zoom, não resize de janela.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 42.
+
 ## Comandos
 
 ```bash
