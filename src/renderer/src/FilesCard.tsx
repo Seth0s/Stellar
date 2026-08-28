@@ -506,7 +506,7 @@ export function FilesCard({
           {tooLarge && <div className="files-editor-msg">arquivo maior que 512KB, sem preview</div>}
           {error && <div className="files-editor-msg">{error}</div>}
           {selectedPath && !tooLarge && mediaKind(selectedPath) === "image" && imageDataUrl && (
-            <div className="files-editor-image">
+            <div className="files-editor-image thin-scroll">
               <img src={imageDataUrl} alt={selectedPath} />
             </div>
           )}
@@ -516,7 +516,7 @@ export function FilesCard({
             ) : (
               <Markdown
                 content={content}
-                className="files-editor-preview"
+                className="files-editor-preview thin-scroll"
                 loadingFallback={<div className="files-editor-preview files-editor-msg">carregando preview…</div>}
               />
             )
