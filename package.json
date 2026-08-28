@@ -1,6 +1,6 @@
 {
   "name": "agent-canvas",
-  "version": "0.1.1",
+  "version": "0.1.5",
   "description": "Stellar — a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
   "license": "Apache-2.0",
   "author": {
@@ -89,6 +89,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.121.0",
+    "@azurity/pure-nerd-font": "^3.0.5",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",

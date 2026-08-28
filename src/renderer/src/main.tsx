@@ -14,6 +14,14 @@ import "@fontsource/jetbrains-mono/latin-500.css";
 // position:absolute` to it) — confirmed via CDP DOM inspection as the exact
 // cause of the "garbage characters before terminal content" symptom.
 import "@xterm/xterm/css/xterm.css";
+// DESIGN-BACKLOG.md item 36 — statuslines rodando dentro do terminal
+// (ccstatusline/Starship/etc.) emitem glifos da Private Use Area
+// (ícones estilo Nerd Font/Powerline) que NENHUMA fonte comum cobre —
+// JetBrains Mono incluída. Fonte só-de-símbolos (não substitui
+// JetBrains Mono, entra como fallback DEPOIS dela em `useTerminal.ts`'s
+// `fontFamily` — só cobre o intervalo de glifo que falta, ~950KB,
+// bem mais leve que vendorizar uma fonte mono inteira já com patch).
+import "@azurity/pure-nerd-font/pure-nerd-font.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 

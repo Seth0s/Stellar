@@ -3145,7 +3145,7 @@ já carregados. Pedido é reavaliar se Manrope ainda é a escolha certa
 pro tom de marca "Stellar" (ou trocar), não necessariamente adicionar
 uma fonte nova além da mono já usada pra código.
 
-## 36. Resolução/qualidade de fonte no terminal + statusline com glifos quebrados — parcial, 1/2 feito em 2026-08-28
+## 36. Resolução/qualidade de fonte no terminal + statusline com glifos quebrados — ✅ 2/2 feito em 2026-08-28
 
 Pedido ao vivo, 2026-08-28, direto na própria sessão do usuário
 ("estou usando o stellar agora") — capturado com `mcp__stellar__snapshot`
@@ -3183,9 +3183,44 @@ base, só cobre o intervalo de glifo que falta) — adiciona um asset de
 fonte novo ao bundle, decisão de escopo maior que um fix de uma linha,
 não feito ainda.
 
-**Ainda não implementado**: vendorizar "Symbols Nerd Font Mono" pra
-fechar os quadrados coloridos de vez — decisão de escopo maior (asset de
-fonte novo no bundle), fica pra quando este item for revisitado.
+**Parte 2/2 — vendorizado em 2026-08-28**: `@azurity/pure-nerd-font`
+(npm, MIT, zero deps, ~950KB woff2) — fonte só-de-símbolos de verdade,
+inspecionada com `fontTools` antes de confiar nela (não só lida a
+descrição do pacote): 10.570 codepoints reais no `cmap`, cobrindo toda
+faixa PUA relevante (Powerline `E0Bx`, Font Awesome `F0xx`-`F5xx`,
+Devicons/Octicons/Material Design até `F1AFF`). Instalada via `npm
+install`, CSS do próprio pacote importado em `main.tsx`, `fontFamily`
+das duas instâncias de `Terminal` em `useTerminal.ts` ganhou
+`"PureNerdFont"` como fallback depois de `"JetBrains Mono"`.
+
+**Bug real achado testando ao vivo, não assumido**: só adicionar o
+fallback não bastou — glifos continuavam tofu na primeira renderização.
+Isolado com `fontTools`/`document.fonts` (não suposição): o
+`cmap` da fonte TINHA os glifos certos, `document.fonts.load()`
+confirmava carregada — mas `@xterm/addon-webgl` monta seu próprio atlas
+de textura a partir de medições de canvas na PRIMEIRA vez que desenha
+cada caractere; se esse primeiro desenho acontece antes da fonte
+terminar de carregar, ele rasteriza tofu no atlas e NUNCA redesenha
+depois, mesmo com a fonte pronta (confirmado: reimprimir o mesmo glifo
+depois de `document.fonts.load()` resolver ainda mostrava tofu — só um
+terminal genuinamente NOVO, aberto depois do preload, renderizava
+certo). Fix: `nerdFontReady` (promise a nível de módulo, uma vez por
+vida do app, não por card) que `attach()` (`useTerminal.ts`) espera
+ANTES de chamar `term.open()` — garante que o primeiro desenho de
+qualquer terminal só acontece depois da fonte estar pronta de verdade.
+Guard de "abre no máximo uma vez" (`openedRef`) recolocado pra ficar
+ANTES do `await`, senão uma segunda chamada correndo durante a espera
+passaria pelo guard também.
+
+**Verificação**: fonte inspecionada com `fontTools` (10.570 codepoints
+reais, não assumidos), teste ao vivo via CDP imprimindo glifos Nerd Font
+verdadeiros (Powerline + Font Awesome, `printf` num bash real) — antes
+do fix de timing: tofu mesmo com a fonte carregada; depois: um terminal
+novo, sem nenhum preload manual no próprio teste (só a espera natural do
+boot do app), renderiza os ícones certos na primeira tela. `smoke-
+terminal-visibility-persist.mjs` (3/3), `smoke-terminal-links-paste.mjs`
+(20/20), `smoke-card-wheel-scope.mjs` (6/6) — suítes afetadas pela
+mudança em `attach()`. `npx tsc --noEmit` limpo.
 
 ## 37. Bug crítico — fullscreen de vídeo no browser embutido "abre outra janela" e crasha o app inteiro ao fechar — investigado, 2 achados corrigidos, causa exata NÃO confirmada
 

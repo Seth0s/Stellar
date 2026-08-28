@@ -3418,6 +3418,29 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `smoke-files-card.mjs` (19/19). `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 33.
 
+## 2026-08-28 — Vendorização de Nerd Font (item 36, 2/2)
+
+- `@azurity/pure-nerd-font` (npm, MIT, zero deps, ~950KB woff2) — fonte
+  só-de-símbolos, inspecionada com `fontTools` (10.570 codepoints reais
+  no cmap, não confiado só na descrição do pacote). CSS do pacote em
+  `main.tsx`, `fontFamily` de `useTerminal.ts` ganhou `"PureNerdFont"`
+  como fallback depois de `"JetBrains Mono"`.
+- Bug real achado testando ao vivo: glifos continuavam tofu mesmo com o
+  fallback certo — `@xterm/addon-webgl` rasteriza um atlas de textura na
+  primeira vez que desenha cada caractere, e se isso acontece antes da
+  fonte terminar de carregar, o tofu fica cravado no atlas pra sempre
+  (confirmado: reimprimir o mesmo glifo depois da fonte carregada ainda
+  mostrava tofu).
+- Fix: `nerdFontReady` (promise a nível de módulo) que `attach()` espera
+  ANTES de `term.open()` — guard de abertura única recolocado pra ficar
+  ANTES do await, pra não vazar em corrida.
+- Verificação: fonte inspecionada com `fontTools`, teste ao vivo via CDP
+  com glifos Nerd Font reais — terminal novo (sem preload manual no
+  teste) renderiza certo já na primeira tela. `smoke-terminal-
+  visibility-persist.mjs` (3/3), `smoke-terminal-links-paste.mjs`
+  (20/20), `smoke-card-wheel-scope.mjs` (6/6). `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 36.
+
 ## Comandos
 
 ```bash
