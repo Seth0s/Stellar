@@ -3233,27 +3233,74 @@ adivinhados:
   quantos cards/quanto tempo de sessão já tinha acumulado antes —
   qualquer um desses detalhes muda a próxima tentativa de repro.
 
-## 38. Correção de escopo do item 30 — barra lateral de sessões deve ser DENTRO do chatbox, não na régua do canvas + bugs reais no fluxo atual
+## 38. Correção de escopo do item 30 — barra lateral de sessões deve ser DENTRO do chatbox, não na régua do canvas + bugs reais no fluxo atual — ✅ feito em 2026-08-28
 
 Reportado ao vivo, 2026-08-28. **Mal-entendido meu no item 30**: a barra
 lateral que implementei foi um popover na régua do canvas (`Rail.tsx`,
 nível de board inteiro). O pedido original era uma barra lateral
 EXPANSÍVEL **dentro do próprio chatbox** (mesmo padrão do CentralByte —
-outro projeto do usuário, ver histórico de conversas do sidebar de chat
-lá), não um painel de nível canvas. Escopo errado, precisa refazer.
+outro projeto do usuário), não um painel de nível canvas.
 
-**Além do mal-entendido, 2 bugs reais reportados no fluxo atual**
-(precisam de reprodução ao vivo antes de qualquer fix, como sempre):
-1. O botão de "criar novo chatbox" na régua está mostrando só sessões
-   JÁ EXISTENTES — não dá pra iniciar uma conversa nova a partir dele.
-2. Se já existe um chat aberto em OUTRA sessão (board) do app, tentar
-   criar/abrir um chatbox na sessão atual redireciona pra essa sessão
-   aberta em vez de abrir um chat novo na sessão atual.
+**Investigação real dos 2 bugs reportados, ANTES de qualquer fix**:
+reproduzido ao vivo via CDP, nenhum dos dois é um bug em `onCreateChat`/
+`addChatCard` — esse caminho sempre criou um card novo, vazio, de
+verdade, mesmo clicado 2x seguidas no mesmo board, mesmo trocando de
+board (confirmado, board novo genuinamente não tinha o chat de outro
+board). **A causa raiz real, achada olhando o código depois do repro**:
+"Novo chatbox" (`Rail.tsx`) e "Sessões de chat" (o popover errado do item
+30) usavam o MESMO ícone (`chat`/`MessageCircle`, `icons.tsx`), sem
+nenhum outro diferenciador visual, um do lado do outro numa régua só de
+ícones — o usuário clicou (ou está descrevendo) o popover de sessões
+esperando "começar um chat novo", o que produz exatamente os 2 sintomas
+reportados (lista de sessões existentes em vez de composer vazio;
+clique num board diferente troca de board) como comportamento CORRETO
+do botão ERRADO. Consertar o escopo (abaixo) já resolve a colisão de
+ícone sozinho — não sobrou nenhum bug de verdade em `addChatCard` pra
+corrigir.
 
-Nada disso foi investigado ainda — próximo passo é reproduzir os 2 bugs
-ao vivo via CDP pra confirmar causa raiz antes de decidir o fix, e
-desenhar a barra lateral expansível de dentro do `ChatCard.tsx` (escopo
-novo, substituindo o popover da régua do item 30 — não é aditivo).
+**Fix — painel expansível dentro do `ChatCard.tsx`, não mais popover na
+régua**: pesquisado o padrão real do CentralByte primeiro (outro projeto
+do usuário) antes de desenhar — lá é um push-panel (não overlay/popover,
+não drawer): uma coluna de largura fixa que reparte o espaço disponível
+com a área de conversa, ao lado dela, não por cima. Replicado aqui na
+escala certa pro Stellar (card individual numa tela infinita, não uma
+janela única): `.chat-card-body` (flex row, substitui o antigo corpo
+direto do card) reparte `.chat-sessions-panel` (220px, lista de sessões)
++ `.chat-card-main` (composer/mensagens, exatamente como antes, só um
+nível mais fundo). Botão novo no header do PRÓPRIO chatbox
+(`card-head-actions`, ícone `PanelLeft`/`chatSessionsPanel`) alterna o
+painel; estado aberto/fechado persiste em `localStorage`
+(`ac.chatSessionsPanelOpen`, compartilhado entre chatboxes — mesmo
+espírito do `cc-left-open` do CentralByte: um painel que o usuário acabou
+de abrir não deveria se re-esconder sozinho no próximo card). `Rail.tsx`
+perdeu o botão/popover/estado/fetch de sessões inteiro — nada disso
+pertencia à régua, e a colisão de ícone desaparece porque só sobrou um
+ícone `chat` na régua agora. `ChatSessionRow`/`sessionPreview`/
+`relativeTime` migraram de `Rail.tsx` pra `ChatCard.tsx`, mesmo
+comportamento (fallback pro texto real da primeira mensagem quando não
+há `label`, badge "arquivada", tempo relativo em 3 faixas). Clique numa
+sessão continua chamando o `onOpenChatSession` do `App.tsx` (item 30, já
+correto: mesmo board insere direto no estado, board diferente troca de
+board de verdade) — só passou a vir de dentro do `ChatCard`, não da
+régua.
+
+**Achado testando de verdade**: com o painel compartilhando estado via
+`localStorage`, abrir um SEGUNDO chatbox depois do primeiro já nasce com
+o painel ABERTO (persistência funcionando como desenhada) — um teste que
+assume "clicar sempre abre" quebra nesse caso; corrigido no próprio
+smoke test (checa se já está aberto antes de clicar).
+
+**Verificação**: `smoke-chat-sessions-sidebar.mjs` (reescrito pro novo
+fluxo — fechar arquiva; sem card nenhum sobrando no board, abre um
+chatbox NOVO e usa o painel DELE pra ver/reabrir a sessão arquivada,
+inclusive cross-board — 12/12), `smoke-group-select.mjs` (10/10, régua
+mais curta de novo, sem risco de repetir a sobreposição do item 30),
+`smoke-chat.mjs` (12/12), `smoke-chat-tools.mjs` (18/18, 2 checks
+ajustados: seletor que pegava o primeiro botão de `.card-head-actions`
+por posição agora seleciona por `title="API key"`, já que o botão novo
+do painel entrou antes dele), `smoke-chat-sandbox.mjs` (15/15, mesmo
+ajuste de seletor), `smoke-chat-providers.mjs` (8/8, não afetado, rodado
+por precaução por tocar o mesmo header). `npx tsc --noEmit` limpo.
 
 ## 39. Revisão de qualidade — resolução/cores no terminal e renderização da status line — ✅ feito em 2026-08-28
 

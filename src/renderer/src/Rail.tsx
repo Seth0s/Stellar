@@ -3,11 +3,6 @@ import { Icon, type IconName } from "./icons";
 import { Popover } from "./Popover";
 import { PenPanel } from "./PenPanel";
 import { ProviderPicker } from "./ProviderPicker";
-import type { CardRow } from "../../preload/index";
-
-/** DESIGN-BACKLOG.md item 30 — just `CardRow` (a `kind: "chat"` row),
- * aliased for readability at this component's own call sites. */
-export type ChatSessionRow = CardRow;
 
 type Tool = "pointer" | "pen" | "connector" | "select";
 type RailCard = { id: string; kind: string; label: string | null };
@@ -17,34 +12,6 @@ type RailCard = { id: string; kind: string; label: string | null };
  * nothing else reacts to it), same `localStorage` convention as the
  * board/root state elsewhere. */
 const RAIL_COLLAPSED_KEY = "ac.railCollapsed";
-
-/** DESIGN-BACKLOG.md item 30 — falls back to the first real message's
- * own text when the session has no custom `label` (same "human label
- * over a raw id/generic name" spirit as `describeCard`, item 22, just
- * for a conversation instead of a card). Defensive JSON.parse — an
- * unparseable/legacy `messages_json` degrades to a generic placeholder
- * instead of throwing and breaking the whole popover. */
-function sessionPreview(s: ChatSessionRow): string {
-  try {
-    const parsed = JSON.parse(s.messages_json ?? '{"messages":[]}') as { messages?: { role: string; content: string }[] };
-    const firstUser = parsed.messages?.find((m) => m.role === "user");
-    if (firstUser?.content) return firstUser.content.length > 60 ? firstUser.content.slice(0, 60) + "…" : firstUser.content;
-  } catch {
-    // Malformed/legacy row — fall through to the generic placeholder.
-  }
-  return "conversa vazia";
-}
-
-/** Coarse, matches this app's other relative-time spots (session list) —
- * no need for a real i18n library over three buckets. */
-function relativeTime(ms: number): string {
-  const diffMin = Math.round((Date.now() - ms) / 60_000);
-  if (diffMin < 1) return "agora";
-  if (diffMin < 60) return `${diffMin}min atrás`;
-  const diffH = Math.round(diffMin / 60);
-  if (diffH < 24) return `${diffH}h atrás`;
-  return `${Math.round(diffH / 24)}d atrás`;
-}
 
 export function Rail({
   tool,
@@ -86,7 +53,6 @@ export function Rail({
   kindIcon,
   kindLabel,
   onJumpToCard,
-  onOpenChatSession,
   onOpenSecretsSettings,
 }: {
   tool: Tool;
@@ -132,28 +98,14 @@ export function Rail({
   /** DESIGN-BACKLOG.md item 29 — opens SecretsSettingsModal.tsx, the
    * central API-key panel (not scoped to any one ChatCard). */
   onOpenSecretsSettings: () => void;
-  /** DESIGN-BACKLOG.md item 30 — every chat session (live or archived),
-   * across every board. App.tsx owns switching boards/unarchiving/
-   * focusing, this component only renders the list and reports clicks. */
-  onOpenChatSession: (session: ChatSessionRow) => void;
 }) {
-  const [openPopover, setOpenPopover] = useState<"terminal" | "ai" | "find" | "sessions" | null>(null);
+  const [openPopover, setOpenPopover] = useState<"terminal" | "ai" | "find" | null>(null);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_COLLAPSED_KEY) === "1");
-  const [chatSessions, setChatSessions] = useState<ChatSessionRow[]>([]);
   const terminalBtnRef = useRef<HTMLButtonElement>(null);
   const aiBtnRef = useRef<HTMLButtonElement>(null);
   const findBtnRef = useRef<HTMLButtonElement>(null);
-  const sessionsBtnRef = useRef<HTMLButtonElement>(null);
   const penBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Refetched every time the popover opens — a session's `updated_at`/
-  // `archived_at` can change from elsewhere (sending a message, closing
-  // a ChatCard) while this popover isn't open, a stale snapshot from
-  // mount time would drift.
-  useEffect(() => {
-    if (openPopover !== "sessions") return;
-    void window.store.listChatSessions().then(setChatSessions);
-  }, [openPopover]);
   const showAgentFields = newProvider !== "bash";
 
   useEffect(() => {
@@ -288,14 +240,6 @@ export function Rail({
         <Icon name="findCard" />
       </button>
       <button
-        ref={sessionsBtnRef}
-        className="rail-btn"
-        title="Sessões de chat"
-        onClick={() => setOpenPopover((p) => (p === "sessions" ? null : "sessions"))}
-      >
-        <Icon name="chat" />
-      </button>
-      <button
         ref={aiBtnRef}
         className="rail-btn"
         title="Ações de IA"
@@ -382,39 +326,6 @@ export function Rail({
                 <span className="board-row-name-line">
                   <Icon name={kindIcon[c.kind] ?? "terminal"} size={14} />
                   {c.label ?? kindLabel[c.kind] ?? c.kind}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-      </Popover>
-
-      <Popover anchorRef={sessionsBtnRef} open={openPopover === "sessions"} onClose={() => setOpenPopover(null)}>
-        <div className="board-list-heading">SESSÕES DE CHAT</div>
-        {chatSessions.length === 0 ? (
-          <div className="popover-empty">nenhuma conversa ainda</div>
-        ) : (
-          <div className="board-list thin-scroll">
-            {chatSessions.map((s) => (
-              <button
-                key={s.id}
-                className="board-row-name find-card-row chat-session-row"
-                onClick={() => {
-                  onOpenChatSession(s);
-                  setOpenPopover(null);
-                }}
-              >
-                <span className="board-row-name-line">
-                  <Icon name="chat" size={14} />
-                  {s.label ?? sessionPreview(s)}
-                  {s.archived_at !== null && (
-                    <span className="chat-session-archived-badge" title="conversa fechada — clique pra reabrir">
-                      arquivada
-                    </span>
-                  )}
-                </span>
-                <span className="chat-session-meta">
-                  {s.provider} · {relativeTime(s.updated_at)}
                 </span>
               </button>
             ))}

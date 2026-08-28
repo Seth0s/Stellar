@@ -6,14 +6,21 @@ import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
-import { ChatCard, DEFAULT_CHAT_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_GENERIC_MODEL } from "./ChatCard";
+import {
+  ChatCard,
+  DEFAULT_CHAT_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_GENERIC_MODEL,
+  type ChatSessionRow,
+} from "./ChatCard";
 import { AgentAskModal } from "./AgentAskModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
-import { Rail, type ChatSessionRow } from "./Rail";
+import { Rail } from "./Rail";
 import type { IconName } from "./icons";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
@@ -1636,6 +1643,7 @@ export function App() {
                 onProviderCommit={(provider) => commitChatProvider(c, provider)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
+                onOpenChatSession={openChatSession}
                 selected={selected}
               />
             );
@@ -1800,7 +1808,6 @@ export function App() {
         kindLabel={KIND_LABEL}
         onJumpToCard={jumpToCard}
         onOpenSecretsSettings={() => setShowSecretsSettings(true)}
-        onOpenChatSession={openChatSession}
       />
       <Topbar
         boards={boards}

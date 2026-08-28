@@ -1,13 +1,16 @@
-// DESIGN-BACKLOG.md item 30 (parte 2) — usuário pediu: "a barra lateral
-// seria pra isso, ver todas as sessões e ao clique voltar a conversa".
-// Fechar um ChatCard hoje faz DELETE de verdade no banco (confirmado
-// lendo o código antes deste item) — sem arquivar em vez de deletar, uma
-// barra lateral não teria o que mostrar. Prova real, sem mock de UI:
-// mensagem real commitada, card fechado, confirmado que a LINHA sobrevive
-// no banco (archived_at setado, não DELETE), aparece na sidebar com o
-// texto real da conversa, reabre no board certo (incluindo cross-board)
-// e some da sidebar de novo depois de reaberto+fechado outra vez? não —
-// cobre o ciclo completo: arquivar -> listar -> reabrir -> desarquivar.
+// DESIGN-BACKLOG.md item 30 (parte 2) + item 38 (correção de escopo) —
+// usuário pediu: "a barra lateral seria pra isso, ver todas as sessões e
+// ao clique voltar a conversa" — e depois corrigiu: a barra é DENTRO do
+// chatbox (painel expansível, item 38), não um popover na régua do canvas
+// (implementação original do item 30, errada). Fechar um ChatCard hoje faz
+// DELETE de verdade no banco (confirmado lendo o código antes deste item)
+// — sem arquivar em vez de deletar, uma barra lateral não teria o que
+// mostrar. Prova real, sem mock de UI: mensagem real commitada, card
+// fechado, confirmado que a LINHA sobrevive no banco (archived_at setado,
+// não DELETE), aparece no painel (aberto de OUTRO chatbox, já que o card
+// original some do board) com o texto real da conversa, reabre no board
+// certo (incluindo cross-board) e desarquiva de verdade — cobre o ciclo
+// completo: arquivar -> listar -> reabrir -> desarquivar.
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9457;
@@ -95,19 +98,33 @@ try {
   check("...com archived_at setado de verdade (não null)", typeof parsedRow?.archived_at === "number", true);
   check("...e o texto real da mensagem sobrevive junto", parsedRow?.messages_json?.includes("mensagem única de teste da sidebar"), true);
 
-  // Sidebar lista a sessão arquivada.
-  const sessionsBtn = await centerOf(page, '.rail-btn[title="Sessões de chat"]');
-  await page.click(sessionsBtn.x, sessionsBtn.y);
+  // item 38 — o painel de sessões vive DENTRO de um chatbox agora, não
+  // mais na régua. Com o único chatbox arquivado, o board não tem card
+  // nenhum pra abrir o painel a partir dele — abre um chatbox NOVO
+  // ("Novo chatbox") e usa o painel DELE pra ver/reabrir a sessão
+  // arquivada, exatamente o fluxo real (é assim que dá pra voltar a uma
+  // conversa fechada: por um chatbox qualquer, não necessariamente o
+  // mesmo que foi fechado).
+  await page.click(chatBtn.x, chatBtn.y);
+  await new Promise((r) => setTimeout(r, 500));
+  check("um segundo chatbox (novo, vazio) foi criado", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 1);
+
+  const sessionsToggleBtn = await centerOf(page, '.chat-card .card-head-actions button[title="Sessões de chat"]');
+  await page.click(sessionsToggleBtn.x, sessionsToggleBtn.y);
   await new Promise((r) => setTimeout(r, 400));
-  const popoverText = await page.evalJs(`document.querySelector('.popover')?.textContent`);
-  check("a sidebar mostra o texto real da conversa arquivada", popoverText?.includes("mensagem única de teste da sidebar"), true);
-  check("...e o badge 'arquivada'", popoverText?.includes("arquivada"), true);
+  const panelText = await page.evalJs(`document.querySelector('.chat-sessions-panel')?.textContent`);
+  check("o painel mostra o texto real da conversa arquivada", panelText?.includes("mensagem única de teste da sidebar"), true);
+  check("...e o badge 'arquivada'", panelText?.includes("arquivada"), true);
 
   // Clica na sessão — reabre no board (mesmo board aqui), desarquiva.
   await clickRowContaining(page, ".chat-session-row", "mensagem única de teste da sidebar");
   await new Promise((r) => setTimeout(r, 600));
 
-  check("o card de chat REAPARECE no board depois de clicar na sessão", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 1);
+  check(
+    "o card de chat arquivado REAPARECE no board depois de clicar na sessão (agora 2: o novo + o reaberto)",
+    await page.evalJs(`document.querySelectorAll('.chat-card').length`),
+    2,
+  );
   const rowAfterReopen = await page.evalJs(`
     (async () => {
       const row = await window.store.listChatSessions();
@@ -116,15 +133,27 @@ try {
   `);
   check("...e archived_at volta pra null (desarquivado de verdade, não só visual)", JSON.parse(rowAfterReopen)?.archived_at, null);
 
-  // Cross-board case: close it again, create a SECOND board, confirm the
-  // sidebar still lists it from there (global, not board-scoped) and
-  // clicking switches board AND brings the card back — a genuinely
-  // different code path than same-board (openChatSession, App.tsx: the
-  // same-board branch was found broken during development — reappearing
-  // required inserting the row into React state directly, since neither
-  // `switchBoard` nor `loadBoard` fit that case; this second board
-  // exercises the OTHER branch, which relies on a real `switchBoard`).
-  await page.click(chatCloseBtn.x, chatCloseBtn.y);
+  // Cross-board case: close the REOPENED card (the one with the real
+  // message — not the empty second chatbox), create a SECOND board,
+  // confirm the panel (opened from a fresh chatbox there) still lists it
+  // (global, not board-scoped) and clicking switches board AND brings the
+  // card back — a genuinely different code path than same-board
+  // (openChatSession, App.tsx: the same-board branch was found broken
+  // during development — reappearing required inserting the row into
+  // React state directly, since neither `switchBoard` nor `loadBoard` fit
+  // that case; this second board exercises the OTHER branch, which relies
+  // on a real `switchBoard`).
+  const reopenedCloseBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const card = [...document.querySelectorAll('.chat-card')].find((c) => c.textContent.includes('mensagem única de teste da sidebar'));
+        const b = [...card.querySelectorAll('.card-head-actions button')].pop();
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+      })()
+    `),
+  );
+  await page.click(reopenedCloseBtn.x, reopenedCloseBtn.y);
   await new Promise((r) => setTimeout(r, 400));
 
   const homeBtn = await centerOf(page, ".topbar-home, [title='Home']");
@@ -155,14 +184,29 @@ try {
 
   check("board novo genuinamente não tem o chat card (board diferente)", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 0);
 
-  await page.click(sessionsBtn.x, sessionsBtn.y);
-  await new Promise((r) => setTimeout(r, 400));
-  const popoverTextFromOtherBoard = await page.evalJs(`document.querySelector('.popover')?.textContent`);
-  check("a sidebar lista a sessão de OUTRO board também (global, não por board)", popoverTextFromOtherBoard?.includes("mensagem única de teste da sidebar"), true);
+  // Abre um chatbox NOVO aqui (board 2) e o painel DELE — só assim dá pra
+  // ver a sessão que ficou pra trás no board 1. O estado aberto/fechado do
+  // painel é persistido (mesmo espírito do CentralByte — abrir uma vez
+  // deixa aberto dali em diante) e essa MESMA persistência já foi setada
+  // pra "aberto" pelo primeiro chatbox lá em cima — o painel deste novo
+  // chatbox já nasce aberto, então só clica o toggle se ele NÃO estiver.
+  await page.click(chatBtn.x, chatBtn.y);
+  await new Promise((r) => setTimeout(r, 500));
+  const panelAlreadyOpen = await page.evalJs(`!!document.querySelector('.chat-sessions-panel')`);
+  if (!panelAlreadyOpen) {
+    const sessionsToggleBtn2 = await centerOf(page, '.chat-card .card-head-actions button[title="Sessões de chat"]');
+    await page.click(sessionsToggleBtn2.x, sessionsToggleBtn2.y);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  const panelTextFromOtherBoard = await page.evalJs(`document.querySelector('.chat-sessions-panel')?.textContent`);
+  check("o painel lista a sessão de OUTRO board também (global, não por board)", panelTextFromOtherBoard?.includes("mensagem única de teste da sidebar"), true);
 
   await clickRowContaining(page, ".chat-session-row", "mensagem única de teste da sidebar");
   await new Promise((r) => setTimeout(r, 1000));
-  check("clicar troca de board E traz o card de volta (cross-board, não só same-board)", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 1);
+  // A sessão pertence ao board 1 — clicar troca DE VOLTA pro board 1
+  // (openChatSession's cross-board branch), que ainda tem o chatbox vazio
+  // #2 deixado por lá + o card recém-reaberto = 2.
+  check("clicar troca de board E traz o card de volta (cross-board, não só same-board)", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 2);
 
   page.close();
 } finally {

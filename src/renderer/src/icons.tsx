@@ -42,6 +42,7 @@ import {
   MousePointer2,
   MousePointerClick,
   OctagonX,
+  PanelLeft,
   Pen,
   QrCode,
   RotateCw,
@@ -101,6 +102,7 @@ export type IconName =
   | "controlOff"
   | "remoteControl"
   | "findCard"
+  | "chatSessionsPanel"
   | "home"
   | "providerBash"
   | "providerClaude"
@@ -164,6 +166,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   controlOff: MousePointer2,
   remoteControl: QrCode,
   findCard: Search,
+  chatSessionsPanel: PanelLeft,
   home: HomeGlyph,
   providerBash: TerminalSquare,
   providerClaude: BotMessageSquare,
