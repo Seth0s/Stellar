@@ -3720,6 +3720,21 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `smoke-files-card.mjs` (19/19), `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 54.
 
+## 2026-08-28 — "Database IO error" no log dev investigado: ruído do Chromium, não bug do app (item 55)
+
+- Reportado ao vivo. Investigado de verdade: `grep` confirma zero uso
+  de service worker em todo o código deste app; inspeção (só leitura)
+  do profile real (`~/.config/agent-canvas/Service Worker/`, ~20MB,
+  profile de dias reais de uso) mostra estrutura LevelDB normal, sem
+  corrupção/permissão estranha. Não reproduziu em nenhuma instância
+  isolada fresca testada via CDP.
+- Conclusão: housekeeping interno do próprio subsistema de Service
+  Worker Storage do Chromium/Electron, roda pra qualquer app Electron
+  independente de service worker registrado — não é bug de código
+  deste app, sem API direcionada pra corrigir. Fechado sem mudança de
+  código.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 55.
+
 ## Comandos
 
 ```bash
