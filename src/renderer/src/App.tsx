@@ -6,7 +6,7 @@ import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
-import { ChatCard, DEFAULT_CHAT_MODEL, DEFAULT_OPENAI_MODEL } from "./ChatCard";
+import { ChatCard, DEFAULT_CHAT_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_GENERIC_MODEL } from "./ChatCard";
 import { AgentAskModal } from "./AgentAskModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
@@ -318,7 +318,12 @@ function fromRow(r: CardRow): Card {
       return {
         id: r.id,
         kind: "chat",
-        provider: r.provider === "openai" ? "openai" : "anthropic",
+        // Item 28 — coerce only truly unknown/legacy values to the
+        // original default; gemini/generic rows must round-trip as-is,
+        // not silently collapse back to anthropic.
+        provider: (["anthropic", "openai", "gemini", "generic"] as const).includes(r.provider as ChatProvider)
+          ? (r.provider as ChatProvider)
+          : "anthropic",
         model: r.model || DEFAULT_CHAT_MODEL,
         cwd: isLegacyRow ? DEFAULT_CWD : r.cwd,
         systemPrompt: r.system_prompt,
@@ -1191,7 +1196,14 @@ export function App() {
    * that provider's own default model (an Anthropic model id sent to
    * OpenAI's endpoint, or vice versa, is just a guaranteed 404/400). */
   function commitChatProvider(card: ChatCardData, provider: ChatProvider) {
-    const model = provider === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_CHAT_MODEL;
+    const model =
+      provider === "openai"
+        ? DEFAULT_OPENAI_MODEL
+        : provider === "gemini"
+          ? DEFAULT_GEMINI_MODEL
+          : provider === "generic"
+            ? DEFAULT_GENERIC_MODEL
+            : DEFAULT_CHAT_MODEL;
     setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "chat" ? { ...c, provider, model } : c)));
     void window.store.upsert(toRow({ ...card, provider, model }, activeBoardIdRef.current!));
   }

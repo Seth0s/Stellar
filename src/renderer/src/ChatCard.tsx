@@ -30,6 +30,14 @@ export const DEFAULT_CHAT_MODEL: string = CHAT_MODELS[0];
 // model-input note below for why OpenAI doesn't get a fixed dropdown the
 // way Anthropic does).
 export const DEFAULT_OPENAI_MODEL = "gpt-4.1";
+// Same reasoning as DEFAULT_OPENAI_MODEL above, same free-text treatment
+// (item 28) — a model-id dropdown risks going stale/wrong faster than
+// this file gets revisited; item 31 (backlog) is the real fix for that,
+// scoped separately.
+export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+// "generic" has no meaningful default — any value here would just be
+// wrong for whatever endpoint the user actually configured.
+export const DEFAULT_GENERIC_MODEL = "";
 
 type ToolActivity = { id: string; name: string; input: unknown; status: "running" | "done"; ok?: boolean; summary?: string };
 type WriteDecision = { path: string; allowed: boolean };
@@ -163,6 +171,7 @@ export function ChatCard({
   const [encryptionAvailable, setEncryptionAvailable] = useState(true);
   const [showKeyForm, setShowKeyForm] = useState(false);
   const [keyInput, setKeyInput] = useState("");
+  const [baseUrlInput, setBaseUrlInput] = useState("");
   const [savingKey, setSavingKey] = useState(false);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState<string | null>(null);
@@ -183,6 +192,14 @@ export function ChatCard({
       setShowKeyForm(!v);
     });
     void window.secrets.isEncryptionAvailable().then(setEncryptionAvailable);
+    // Item 28 — prefill the endpoint field with whatever was saved last
+    // time, so reopening the key form to rotate the key doesn't also
+    // blank out the endpoint.
+    if (provider === "generic") {
+      void window.secrets.getBaseURL(provider).then((v) => setBaseUrlInput(v ?? ""));
+    } else {
+      setBaseUrlInput("");
+    }
   }, [provider]);
 
   // Subscribed once (not per-render) — reads live state via refs, not
@@ -249,8 +266,9 @@ export function ChatCard({
   function saveKey() {
     const trimmed = keyInput.trim();
     if (!trimmed) return;
+    if (provider === "generic" && !baseUrlInput.trim()) return;
     setSavingKey(true);
-    void window.secrets.setKey(provider, trimmed).then(() => {
+    void window.secrets.setKey(provider, trimmed, provider === "generic" ? baseUrlInput.trim() : undefined).then(() => {
       setSavingKey(false);
       setKeyInput("");
       setHasKey(true);
@@ -336,6 +354,12 @@ export function ChatCard({
               <button className={provider === "openai" ? "active" : ""} onClick={() => onProviderCommit("openai")}>
                 openai
               </button>
+              <button className={provider === "gemini" ? "active" : ""} onClick={() => onProviderCommit("gemini")}>
+                gemini
+              </button>
+              <button className={provider === "generic" ? "active" : ""} onClick={() => onProviderCommit("generic")}>
+                custom
+              </button>
             </span>
             {provider === "anthropic" ? (
               <select className="chat-model-select" value={model} onChange={(e) => onModelCommit(e.target.value)}>
@@ -350,6 +374,7 @@ export function ChatCard({
                 className="chat-model-input"
                 value={model}
                 onChange={(e) => onModelCommit(e.target.value)}
+                placeholder={provider === "generic" ? "id do modelo do seu endpoint" : undefined}
                 title="Id do modelo — qualquer um que seu endpoint OpenAI-compatible aceite"
               />
             )}
@@ -375,15 +400,36 @@ export function ChatCard({
               este sistema não tem um keychain disponível — a key será salva sem criptografia.
             </p>
           )}
+          {provider === "generic" && (
+            <div className="chat-key-row">
+              <input
+                type="text"
+                placeholder="https://seu-endpoint/v1 (Ollama, vLLM, etc.)"
+                value={baseUrlInput}
+                onChange={(e) => setBaseUrlInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveKey()}
+              />
+            </div>
+          )}
           <div className="chat-key-row">
             <input
               type="password"
-              placeholder={provider === "anthropic" ? "sk-ant-…" : "sk-…"}
+              placeholder={
+                provider === "anthropic"
+                  ? "sk-ant-…"
+                  : provider === "generic"
+                    ? "qualquer valor — mesmo fake, se seu endpoint não exige auth"
+                    : "sk-…"
+              }
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && saveKey()}
             />
-            <button className="primary" disabled={!keyInput.trim() || savingKey} onClick={saveKey}>
+            <button
+              className="primary"
+              disabled={!keyInput.trim() || (provider === "generic" && !baseUrlInput.trim()) || savingKey}
+              onClick={saveKey}
+            >
               salvar
             </button>
           </div>

@@ -27,9 +27,15 @@ import { join } from "node:path";
  * broken one that insists on encryption it structurally cannot provide.
  */
 
-export type SecretProvider = "anthropic" | "openai";
+// DESIGN-BACKLOG.md item 28 — "gemini" talks to Google's own
+// OpenAI-compatible endpoint (fixed baseURL, main/index.ts), so it reuses
+// openai-client.ts wholesale; "generic" is the same reuse but with a
+// USER-supplied baseURL instead of a fixed one — covers any other
+// OpenAI-compatible endpoint (self-hosted, local models like Ollama/
+// llama.cpp/vLLM, or a hosted provider with no dedicated UI here yet).
+export type SecretProvider = "anthropic" | "openai" | "gemini" | "generic";
 
-type SecretsFile = Record<SecretProvider, { value: string; encrypted: boolean } | undefined>;
+type SecretsFile = Record<SecretProvider, { value: string; encrypted: boolean; baseURL?: string } | undefined>;
 
 function secretsPath(userDataDir: string): string {
   return join(userDataDir, "secrets.json");
@@ -71,15 +77,23 @@ export function createSecretsStore(userDataDir: string) {
     }
   }
 
-  function set(provider: SecretProvider, value: string) {
+  function set(provider: SecretProvider, value: string, baseURL?: string) {
     const all = readAll(userDataDir);
     const trimmed = value.trim();
+    const trimmedBaseURL = baseURL?.trim() || undefined;
     if (safeStorage.isEncryptionAvailable()) {
-      all[provider] = { value: safeStorage.encryptString(trimmed).toString("base64"), encrypted: true };
+      all[provider] = { value: safeStorage.encryptString(trimmed).toString("base64"), encrypted: true, baseURL: trimmedBaseURL };
     } else {
-      all[provider] = { value: trimmed, encrypted: false };
+      all[provider] = { value: trimmed, encrypted: false, baseURL: trimmedBaseURL };
     }
     writeAll(userDataDir, all);
+  }
+
+  /** Only "generic" ever has one set (the key form, ChatCard.tsx) — undefined
+   * for every other provider, including "gemini" (its baseURL is a fixed
+   * constant in main/index.ts, not user-configured). */
+  function getBaseURL(provider: SecretProvider): string | null {
+    return readAll(userDataDir)[provider]?.baseURL ?? null;
   }
 
   function clear(provider: SecretProvider) {
@@ -92,5 +106,5 @@ export function createSecretsStore(userDataDir: string) {
     return safeStorage.isEncryptionAvailable();
   }
 
-  return { has, get, set, clear, isEncryptionAvailable };
+  return { has, get, set, clear, isEncryptionAvailable, getBaseURL };
 }
