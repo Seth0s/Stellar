@@ -2946,13 +2946,44 @@ diferente troca de board E traz o card de volta), `smoke-group-select.mjs`
 persist.mjs` (3/3, não afetado — falha anterior era de build desatualizado,
 não regressão real). `npx tsc --noEmit` limpo.
 
-## 31. Lista de modelos por provider (principal, não todos)
+## 31. Lista de modelos por provider (principal, não todos) — ✅ feito em 2026-08-28
 
-Pedido ao vivo, 2026-08-28, ainda não investigado. Hoje o campo de
-modelo é livre/fixo por provider — pedido é uma lista de modelos
-reais disponíveis por provider selecionado (só os principais, não o
-catálogo inteiro de cada API), evita digitar/errar nome de modelo à
-mão.
+Pedido ao vivo, 2026-08-28. Escopo confirmado: só o `ChatCard` (chat via
+API) tem esse gap — o popover de spawn de terminal (`Rail.tsx`) já tinha
+sempre sido um campo livre opcional pra todo `ProviderId`, e isso não
+mudou aqui (fica fora de escopo, CLI aceita qualquer id de modelo que o
+binário reconheça, não vale a pena curar). Antes do fix, só `anthropic`
+tinha dropdown (`CHAT_MODELS`, hardcoded dentro do próprio
+`ChatCard.tsx`); `openai`/`gemini`/`generic` eram todos campo de texto
+livre, com um `DEFAULT_*_MODEL` isolado só de prefill.
+
+**Fix**: `PROVIDER_MODELS: Record<Exclude<ChatProvider,"generic">,
+string[]>` novo em `secretsUi.ts` (mesmo arquivo/padrão do item 29 —
+metadado por provider compartilhado entre `ChatCard.tsx` e
+`SecretsSettingsModal.tsx`, uma fonte só) — lista curada dos modelos
+PRINCIPAIS de cada provider, índice 0 dobrando como default.
+`ChatCard.tsx`'s `CHAT_MODELS`/`DEFAULT_CHAT_MODEL`/`DEFAULT_OPENAI_MODEL`/
+`DEFAULT_GEMINI_MODEL` agora derivam dali em vez de 3 constantes soltas
+duplicando a mesma informação. O componente do campo de modelo trocou de
+`provider === "anthropic" ? <select> : <input>` pra `provider !==
+"generic" ? <select> : <input>` — `openai` e `gemini` ganham dropdown
+igual anthropic já tinha; `generic` continua campo livre de propósito
+(endpoint arbitrário do usuário, nenhuma lista fixa faz sentido ali).
+Default do gemini mantido em `gemini-2.5-flash` (era o default antigo,
+preservado deliberadamente — não uma mudança de comportamento não
+pedida).
+
+**Aceito conscientemente**: uma lista curada hardcoded fica
+desatualizada com o tempo (não busca da API ao vivo) — é o próprio
+escopo do item ("principais", não o catálogo inteiro), não um bug.
+
+**Verificação**: 3 suítes afetadas pela mudança (campo de modelo em
+`ChatCard.tsx`), não a suíte inteira, por instrução do usuário —
+`smoke-chat-providers.mjs` (8/8, ajustado: checagem de gemini agora lê
+`.chat-model-select` em vez de `.chat-model-input`), `smoke-chat.mjs`
+(12/12, não afetado), `smoke-chat-tools.mjs` (18/18, ajustado: a
+checagem que esperava openai virar campo livre agora espera o dropdown
+curado com default `gpt-4.1`). `npx tsc --noEmit` limpo.
 
 ## 32. Colar imagem ainda não funciona em CLIs de terceiro dentro do terminal
 

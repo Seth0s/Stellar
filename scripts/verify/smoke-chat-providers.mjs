@@ -87,7 +87,9 @@ try {
     `[...document.querySelectorAll('.chat-provider-picker button')].find((b) => b.textContent.trim() === 'gemini')?.className`,
   );
   check("gemini fica marcado como provider ativo no picker", geminiActive?.includes("active"), true);
-  const geminiModel = await page.evalJs(`document.querySelector('.chat-model-input')?.value`);
+  // item 31 — gemini agora ganha dropdown curado (não mais campo livre),
+  // mesmo padrão que anthropic já tinha.
+  const geminiModel = await page.evalJs(`document.querySelector('.chat-model-select')?.value`);
   check("trocar pra gemini já preenche um modelo default sensato", geminiModel, "gemini-2.5-flash");
 
   // ---- 2. custom (generic): exige endpoint, salva key+baseURL, e o
