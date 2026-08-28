@@ -305,6 +305,40 @@
   overflow: hidden;
 }
 
+/* DESIGN-BACKLOG.md item 46 — same footer-row pattern as `.terminal-
+   card-foot-row`/`-foot-text` (the URL-badge footer): `root` ellipsizes
+   if long, the branch badge (only rendered when `git:status` confirms a
+   real repo) stays a fixed-width chip that never gets squeezed out. */
+.files-card-foot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.files-card-foot-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-card-branch {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .files-tree-panel {
   width: 220px;
   flex: none;
