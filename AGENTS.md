@@ -3193,6 +3193,40 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   depois. Regressão completa: 26/26 suítes, 0 falhas.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 28.
 
+## 2026-08-28 — Terminal ficava em branco depois de sair/voltar do viewport (item 34) + fontFamily faltando (item 36, 1/2)
+
+- Reportado ao vivo, reproduzido via CDP antes do fix (bar do próprio
+  item). "Sair dela/tirar o foco" na prática = panear o board até o
+  card sair do viewport e voltar (`isInView`, `useTerminal.ts`'s
+  `visible`).
+- Causa raiz real: o Effect que cria o renderer xterm.js era chaveado
+  em `visible` e fazia `dispose()` da instância inteira (buffer de
+  scrollback incluído, não só o DOM) toda vez que o card saía da view.
+  `node-pty` não tem backlog — processo real continuava vivo (comando
+  novo digitado depois do ciclo ecoava normal), mas a combinação
+  produzia um terminal genuinamente vazio.
+- Fix: separar criação da instância (barata, chaveada só em `ptyId` —
+  sobrevive a qualquer ciclo de pan) de anexar ao DOM/carregar o
+  renderer de verdade (caro, é onde o WebGL é criado) — isso passa a
+  acontecer no máximo uma vez por instância (guard `openedRef`),
+  nunca mais desfeito por visibilidade, só numa troca de identidade
+  real. Preserva a economia de recurso original (card nunca visto
+  nunca paga WebGL), só muda o escopo pra "já visto alguma vez".
+- Achado colateral corrigido no mesmo commit: `new Terminal(...)`
+  nunca tinha `fontFamily` — caía no default `courier-new` do xterm.js.
+  Agora usa JetBrains Mono explicitamente (mesma fonte do resto do
+  app). Fecha metade do item 36 (achado ao vivo na sessão real do
+  usuário via `mcp__stellar__snapshot`) — a outra metade (glifos Nerd
+  Font quebrados na statusline) segue em aberto, precisa vendorizar
+  uma fonte de símbolos.
+- Verificação: `scripts/verify/smoke-terminal-visibility-persist.mjs`
+  (novo, 3/3) — prova via pixels reais (xterm.js é canvas, sem
+  `textContent` legível — achado ao escrever o teste): 5 ciclos reais
+  de pan-out/pan-in, conteúdo não colapsa pra uma referência em branco;
+  terminal ainda aceita escrita nova depois; fonte confirmada via
+  `getComputedStyle`. Regressão completa: 27/27 suítes, 0 falhas.
+- Detalhe completo em `DESIGN-BACKLOG.md` itens 34 e 36.
+
 ## Comandos
 
 ```bash
