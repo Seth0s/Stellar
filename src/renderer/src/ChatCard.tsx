@@ -6,9 +6,51 @@ import { toast } from "./useToast";
 import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, PROVIDER_MODELS, keyFormatWarning } from "./secretsUi";
 import type { Rect } from "./board-model";
 import type { ChatMessage, ChatProvider } from "./card-types";
-import type { WriteConsentRequest, BashConsentRequest } from "../../preload/index";
+import type { WriteConsentRequest, BashConsentRequest, CardRow } from "../../preload/index";
 
 const ALL_PROVIDERS: ChatProvider[] = ["anthropic", "openai", "gemini", "generic"];
+
+/** DESIGN-BACKLOG.md item 38 — correção de escopo do item 30: a lista de
+ * sessões vive DENTRO do chatbox (painel expansível, mesmo espírito do
+ * CentralByte — um push-panel que reparte o próprio card, não um popover
+ * na régua do canvas). `CardRow` (uma linha `kind: "chat"`) aliased pra
+ * legibilidade nos call sites deste arquivo. */
+export type ChatSessionRow = CardRow;
+
+/** Falls back to o texto real da primeira mensagem do usuário quando a
+ * sessão não tem `label` próprio (mesmo espírito de "rótulo humano em vez
+ * de id cru" do `describeCard`, item 22, aplicado a uma conversa em vez
+ * de um card). Defensive JSON.parse — uma `messages_json` malformada/
+ * legada degrada pra um placeholder genérico em vez de derrubar o painel
+ * inteiro. */
+function sessionPreview(s: ChatSessionRow): string {
+  try {
+    const parsed = JSON.parse(s.messages_json ?? '{"messages":[]}') as { messages?: { role: string; content: string }[] };
+    const firstUser = parsed.messages?.find((m) => m.role === "user");
+    if (firstUser?.content) return firstUser.content.length > 60 ? firstUser.content.slice(0, 60) + "…" : firstUser.content;
+  } catch {
+    // Malformed/legacy row — fall through to the generic placeholder.
+  }
+  return "conversa vazia";
+}
+
+/** Coarse, matches this app's other relative-time spots — no need for a
+ * real i18n library over three buckets. */
+function relativeTime(ms: number): string {
+  const diffMin = Math.round((Date.now() - ms) / 60_000);
+  if (diffMin < 1) return "agora";
+  if (diffMin < 60) return `${diffMin}min atrás`;
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) return `${diffH}h atrás`;
+  return `${Math.round(diffH / 24)}d atrás`;
+}
+
+/** UI preference, not per-card data — same `localStorage` convention as
+ * Rail.tsx's own collapse toggle (`ac.railCollapsed`). Shared across every
+ * ChatCard on purpose (open one, they open expanded from then on) — mirrors
+ * CentralByte's own `cc-left-open` persistence for the same reason: a
+ * panel a user just opened shouldn't silently re-hide on the next card. */
+const SESSIONS_PANEL_OPEN_KEY = "ac.chatSessionsPanelOpen";
 
 /**
  * DESIGN-BACKLOG.md item 12 — Fase B built plain streamed-text chat; Fase
@@ -138,6 +180,7 @@ export function ChatCard({
   onProviderCommit,
   onConnectorStart,
   onSelectStart,
+  onOpenChatSession,
 }: {
   id: string;
   rect: Rect;
@@ -165,6 +208,11 @@ export function ChatCard({
   onProviderCommit: (provider: ChatProvider) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  /** DESIGN-BACKLOG.md item 30/38 — every chat session (live or
+   * archived), across every board. App.tsx owns switching boards/
+   * unarchiving/focusing, this component only renders the list and
+   * reports clicks. */
+  onOpenChatSession: (session: ChatSessionRow) => void;
 }) {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [encryptionAvailable, setEncryptionAvailable] = useState(true);
@@ -187,6 +235,24 @@ export function ChatCard({
       setKeyStatus(Object.fromEntries(entries));
     });
   }, []);
+
+  // item 38 — painel de sessões expansível, dentro do próprio card (não
+  // mais um popover na régua do canvas — mal-entendido do item 30).
+  const [sessionsOpen, setSessionsOpen] = useState(() => localStorage.getItem(SESSIONS_PANEL_OPEN_KEY) === "1");
+  const [chatSessions, setChatSessions] = useState<ChatSessionRow[]>([]);
+
+  useEffect(() => {
+    localStorage.setItem(SESSIONS_PANEL_OPEN_KEY, sessionsOpen ? "1" : "0");
+  }, [sessionsOpen]);
+
+  // Refetched every time the panel opens — a session's `updated_at`/
+  // `archived_at` can change from elsewhere (sending a message, closing
+  // a ChatCard) while this panel isn't open, a stale snapshot from mount
+  // time would drift.
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    void window.store.listChatSessions().then(setChatSessions);
+  }, [sessionsOpen]);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -405,6 +471,13 @@ export function ChatCard({
             )}
           </span>
           <span className="card-head-actions">
+            <button
+              className={sessionsOpen ? "active" : ""}
+              title="Sessões de chat"
+              onClick={() => setSessionsOpen((v) => !v)}
+            >
+              <Icon name="chatSessionsPanel" size={12} />
+            </button>
             <button title="API key" onClick={() => setShowKeyForm((v) => !v)}>
               <Icon name="apiKey" size={12} />
             </button>
@@ -415,6 +488,37 @@ export function ChatCard({
         </>
       }
     >
+      <div className="chat-card-body">
+        {sessionsOpen && (
+          <div className="chat-sessions-panel thin-scroll">
+            <div className="chat-sessions-panel-heading">SESSÕES DE CHAT</div>
+            {chatSessions.length === 0 ? (
+              <div className="popover-empty">nenhuma conversa ainda</div>
+            ) : (
+              chatSessions.map((s) => (
+                <button
+                  key={s.id}
+                  className={`chat-session-row${s.id === id ? " current" : ""}`}
+                  onClick={() => onOpenChatSession(s)}
+                >
+                  <span className="chat-session-row-line">
+                    <Icon name="chat" size={13} />
+                    {s.label ?? sessionPreview(s)}
+                    {s.archived_at !== null && (
+                      <span className="chat-session-archived-badge" title="conversa fechada — clique pra reabrir">
+                        arquivada
+                      </span>
+                    )}
+                  </span>
+                  <span className="chat-session-meta">
+                    {s.provider} · {relativeTime(s.updated_at)}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+        <div className="chat-card-main">
       {showKeyForm ? (
         <div className="chat-key-form">
           <p>
@@ -580,6 +684,8 @@ export function ChatCard({
           </div>
         </>
       )}
+        </div>
+      </div>
     </CardFrame>
   );
 }

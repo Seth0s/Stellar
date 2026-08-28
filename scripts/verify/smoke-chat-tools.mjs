@@ -64,9 +64,11 @@ try {
   // itself checks) — testSimulateTool bypasses chat:send entirely, so a
   // key needs saving here too, same as a real session would already have.
   await page.evalJs(`window.secrets.setKey("anthropic", "sk-ant-fake-smoke-test-key")`);
+  // item 38 added a "Sessões de chat" toggle BEFORE the API key button in
+  // .card-head-actions — select by title, not position.
   await page.evalJs(`
     (() => {
-      const b = document.querySelector('.chat-card .card-head-actions button');
+      const b = document.querySelector('.chat-card .card-head-actions button[title="API key"]');
       b?.click();
     })()
   `);

@@ -852,9 +852,11 @@ select.resume-input {
   width: 100%;
 }
 
-/* DESIGN-BACKLOG.md item 30 — sessions sidebar (Rail.tsx). Reuses
-   `.board-row-name`/`.board-row-name-line`/`.find-card-row` for the row
-   shell itself; these two are the only genuinely new pieces. */
+/* DESIGN-BACKLOG.md item 38 — sessions panel moved from a Rail.tsx
+   popover (item 30's original, wrong-scope implementation) into
+   ChatCard.tsx itself; the row shell (`.chat-session-row`) lives in
+   cards.css now with the rest of ChatCard's own styles, these two stay
+   here only because nothing depends on moving them. */
 .chat-session-meta {
   font-size: 10.5px;
   color: var(--muted);

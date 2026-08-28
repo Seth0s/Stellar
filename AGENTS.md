@@ -3372,6 +3372,34 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   (6/6) — só as suítes afetadas. `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 39.
 
+## 2026-08-28 — Correção de escopo: painel de sessões dentro do chatbox, não na régua (item 38)
+
+- Mal-entendido meu no item 30: implementei um popover na régua do
+  canvas; o pedido era um painel expansível DENTRO do chatbox (padrão do
+  CentralByte, outro projeto do usuário — investigado antes de desenhar:
+  lá é um push-panel, não overlay).
+- 2 bugs reportados investigados ao vivo primeiro: nenhum era bug em
+  `addChatCard` (sempre criou card novo e vazio, mesmo repetido, mesmo
+  trocando de board). Causa raiz real: "Novo chatbox" e o popover errado
+  de sessões usavam o MESMO ícone (`MessageCircle`) sem diferenciador,
+  lado a lado numa régua só-ícone — o usuário clicava o botão errado
+  esperando outro comportamento. Corrigir o escopo já resolve a colisão.
+- Fix: `.chat-card-body` (flex row) reparte `.chat-sessions-panel`
+  (220px) + `.chat-card-main` (composer/mensagens, inalterado, um nível
+  mais fundo) dentro do próprio `ChatCard.tsx`. Botão novo no header do
+  card (`PanelLeft`), estado persistido em `localStorage`
+  (`ac.chatSessionsPanelOpen`, compartilhado entre chatboxes). Rail.tsx
+  perdeu o botão/popover/estado de sessões inteiro.
+- Achado testando: 2º chatbox já nasce com o painel aberto (persistência
+  funcionando) — corrigido no smoke test que assumia "clicar sempre
+  abre".
+- Verificação: `smoke-chat-sessions-sidebar.mjs` (reescrito, 12/12),
+  `smoke-group-select.mjs` (10/10), `smoke-chat.mjs` (12/12),
+  `smoke-chat-tools.mjs`/`smoke-chat-sandbox.mjs` (18/18, 15/15 — 2
+  seletores por posição corrigidos pra seletor por `title`),
+  `smoke-chat-providers.mjs` (8/8). `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 38.
+
 ## Comandos
 
 ```bash

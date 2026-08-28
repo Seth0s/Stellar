@@ -1162,6 +1162,91 @@
   color: var(--text);
 }
 
+/* DESIGN-BACKLOG.md item 38 — push-panel layout for the sessions sidebar
+   (CentralByte's own pattern: a fixed-width column that shrinks the
+   conversation area, not an overlay/popover). `.chat-card-body` is the
+   flex row filling the space between `.card-head` and `.card-foot`
+   (`min-height:0` — a flex item's default `min-height:auto` would
+   otherwise block it from shrinking inside `.card-clip`'s own column);
+   `.chat-card-main` is what `.chat-messages`/`.chat-composer`/
+   `.chat-key-form` used to sit directly under before this item, now one
+   level deeper but keeping the exact same column layout. */
+.chat-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.chat-card-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-sessions-panel {
+  flex: none;
+  width: 220px;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-sessions-panel-heading {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 4px 6px 6px;
+  flex: none;
+}
+
+.chat-session-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  flex: none;
+  width: 100%;
+}
+
+.chat-session-row:hover {
+  background: var(--surface);
+}
+
+/* The session this SAME card is currently showing — a quiet outline, not
+   a full "active" fill (that's reserved for hover/press feedback). */
+.chat-session-row.current {
+  background: var(--surface);
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
+}
+
+.chat-session-row-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;
