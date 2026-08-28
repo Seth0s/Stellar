@@ -1,9 +1,12 @@
 // Latin-only subsets — Portuguese/English cover this, and pulling the full
 // files would bundle Cyrillic/Greek/Vietnamese glyph sets the app never uses.
-import "@fontsource/manrope/latin-400.css";
-import "@fontsource/manrope/latin-500.css";
-import "@fontsource/manrope/latin-600.css";
-import "@fontsource/manrope/latin-700.css";
+// DESIGN-BACKLOG.md item 35 — Manrope replaced by Space Grotesk (user's
+// pick, comparing both against Stellar's own real dark chrome/components
+// via a published preview, not a bare glyph sample).
+import "@fontsource/space-grotesk/latin-400.css";
+import "@fontsource/space-grotesk/latin-500.css";
+import "@fontsource/space-grotesk/latin-600.css";
+import "@fontsource/space-grotesk/latin-700.css";
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-500.css";
 // Required by @xterm/xterm itself, not optional theming: without this,

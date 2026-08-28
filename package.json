@@ -107,7 +107,7 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.9",
     "@fontsource/jetbrains-mono": "^5.3.0",
-    "@fontsource/manrope": "^5.3.0",
+    "@fontsource/space-grotesk": "^5.3.0",
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@replit/codemirror-indentation-markers": "^6.5.3",

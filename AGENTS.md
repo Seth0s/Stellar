@@ -3441,6 +3441,28 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   (20/20), `smoke-card-wheel-scope.mjs` (6/6). `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 36.
 
+## 2026-08-28 — Fonte de UI trocada pra Space Grotesk (item 35)
+
+- Decisão de marca, não bug — artifact comparando Manrope/Space
+  Grotesk/Inter nos mesmos componentes reais do app; usuário escolheu
+  Space Grotesk. `@fontsource/space-grotesk` instalado (mesmo padrão
+  dos outros pacotes de fonte), `main.tsx`/`tokens.css` atualizados,
+  `@fontsource/manrope` desinstalado. `--font-mono` intocado.
+- Bug real achado testando valor computado ao vivo: NENHUM `<button>`
+  do app jamais usou `--font-ui` de verdade (nem com Manrope) — browsers
+  resetam `font-family` em controles de formulário pro font do SO,
+  ignorando o `body`, sem reset explícito. Confirmado via
+  `getComputedStyle`: `.topbar-title`/`.rail-btn` reportavam "Arial".
+  Fix: `button, input, select, textarea { font: inherit; }` em
+  `layout.css` — a maioria do texto visível do app só passou a usar a
+  fonte escolhida de verdade a partir deste fix.
+- Verificação: `getComputedStyle` real via CDP, screenshot confirma
+  render limpo. `smoke-boot.mjs` (7/7), `smoke-card-actions.mjs`
+  (10/10), `smoke-session-modal.mjs` (18/18), `smoke-secrets-
+  settings.mjs` (8/8) — mais amplo que o padrão porque o fix de botão
+  toca todo o app. `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 35.
+
 ## Comandos
 
 ```bash

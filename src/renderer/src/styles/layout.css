@@ -2,6 +2,21 @@
   box-sizing: border-box;
 }
 
+/* DESIGN-BACKLOG.md item 35 — achado testando o valor computado ao vivo,
+   não assumido: browsers resetam `font-family` (e outras propriedades de
+   fonte) em controles de formulário (`button`/`input`/`select`/
+   `textarea`) pro font de controle do próprio SO, IGNORANDO o que o
+   `body` declara — sem esse reset, NENHUM botão do app (a maioria do
+   texto visível — rail, topbar, popovers, provider picker…) jamais usou
+   `--font-ui` de verdade, nem quando era Manrope. `font: inherit`
+   reresolve família/tamanho/peso a partir do elemento pai normal. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
 body {
   font-family: var(--font-ui);
   color: var(--text);
