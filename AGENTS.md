@@ -3660,6 +3660,27 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   (19/19), `tsc --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
 
+## 2026-08-28 — Ícones coloridos por linguagem na árvore, última da fila (item 52, 7/7)
+
+- Sem nova dependência (lucide-react não tem ícone por linguagem, só
+  outline genérico — trazer uma lib de logos só pra isso é peso de
+  bundle real por upgrade cosmético). Mesmo glifo, cor por extensão
+  usando a paleta do GitHub Linguist (TS azul, JS amarelo, Python azul
+  escuro, Rust laranja, JSON cinza-escuro, etc.) — `Icon` ganhou prop
+  `color?` opcional (repassada pro lucide, `undefined` em toda chamada
+  existente = comportamento idêntico). Aplicado em árvore, aba aberta,
+  busca por nome, busca de conteúdo.
+- Verificado ao vivo via CDP: `getComputedStyle` real confirma
+  `electron.vite.config.ts` (azul TS) e `package.json` (cinza JSON)
+  com cores diferentes e corretas. `smoke-files-card.mjs` (19/19).
+- **Nota à parte**: `smoke-card-actions.mjs` mostrou-se genuinamente
+  instável numa sequência específica (drag + pan extremo + clique) —
+  confirmado via bisect real que NÃO é causado por nenhuma mudança
+  desta sessão, fragilidade pré-existente do harness CDP. Registrado
+  no item 52 do `DESIGN-BACKLOG.md` pra não confundir com regressão
+  futura.
+- Fila 46-52 completa. Detalhe completo em `DESIGN-BACKLOG.md`.
+
 ## Comandos
 
 ```bash

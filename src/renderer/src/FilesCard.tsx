@@ -67,6 +67,57 @@ function fileIconFor(name: string, isDir: boolean, isOpen: boolean): IconName {
   return "fileGeneric";
 }
 
+/** DESIGN-BACKLOG.md item 52 — every `CODE_EXTS`/`CONFIG_EXTS` file
+ * shared the exact same `fileCode`/`fileConfig` glyph AND color, so a
+ * `.ts` row looked identical to a `.py` row at a glance. lucide-react
+ * has no per-LANGUAGE glyph (it's a generic outline icon set, not a
+ * logo/brand set like `simple-icons` or VSCode's own file-icon themes —
+ * pulling one of those in for this alone is real bundle weight for a
+ * cosmetic upgrade, same size-conscious call as item 47's tokenizer).
+ * Same shape, but tinted per-language — colors are the well-known
+ * GitHub Linguist palette (the same association most developers already
+ * have from GitHub's own language bar), not this app's own accent
+ * tokens, since the point here is per-LANGUAGE identity, not this app's
+ * UI theme. Anything unmapped falls back to `undefined` (the icon's own
+ * default `currentColor`) — same honest "no color = no claim" stance as
+ * `fileGeneric` above. */
+const EXT_COLOR: Record<string, string> = {
+  ".ts": "#3178c6",
+  ".tsx": "#3178c6",
+  ".js": "#f1e05a",
+  ".jsx": "#f1e05a",
+  ".mjs": "#f1e05a",
+  ".cjs": "#f1e05a",
+  ".py": "#3572a5",
+  ".rs": "#dea584",
+  ".go": "#00add8",
+  ".c": "#555555",
+  ".h": "#555555",
+  ".cpp": "#f34b7d",
+  ".hpp": "#f34b7d",
+  ".java": "#b07219",
+  ".kt": "#a97bff",
+  ".rb": "#701516",
+  ".php": "#4f5d95",
+  ".sh": "#89e051",
+  ".bash": "#89e051",
+  ".css": "#563d7c",
+  ".scss": "#c6538c",
+  ".html": "#e34c26",
+  ".sql": "#e38c00",
+  ".swift": "#f05138",
+  ".json": "#292929",
+  ".yaml": "#cb171e",
+  ".yml": "#cb171e",
+  ".toml": "#9c4221",
+  ".ini": "#6d8086",
+  ".env": "#6d8086",
+};
+
+function fileColorFor(name: string): string | undefined {
+  return EXT_COLOR[ext(name)];
+}
+
 function parentOf(path: string): string {
   const i = path.lastIndexOf("/");
   return i === -1 ? "" : path.slice(0, i);
@@ -166,7 +217,7 @@ function TreeNode({
           className="files-node-main"
           onClick={() => !isRenaming && (entry.isDir ? actions.onToggle(entry.path) : actions.onSelectFile(entry.path))}
         >
-          <Icon name={fileIconFor(entry.name, entry.isDir, isOpen)} size={14} />
+          <Icon name={fileIconFor(entry.name, entry.isDir, isOpen)} size={14} color={entry.isDir ? undefined : fileColorFor(entry.name)} />
           {isRenaming ? (
             <input
               className="files-node-rename-input"
@@ -740,7 +791,7 @@ export function FilesCard({
                   >
                     <span className="files-node-main files-content-result-main">
                       <span className="files-content-result-head">
-                        <Icon name={fileIconFor(nameOf(match.path), false, false)} size={13} />
+                        <Icon name={fileIconFor(nameOf(match.path), false, false)} size={13} color={fileColorFor(match.path)} />
                         <span className="files-node-name">{nameOf(match.path)}</span>
                         <span className="files-content-result-line">:{match.line}</span>
                       </span>
@@ -766,7 +817,7 @@ export function FilesCard({
                     }}
                   >
                     <span className="files-node-main">
-                      <Icon name={fileIconFor(entry.name, entry.isDir, false)} size={14} />
+                      <Icon name={fileIconFor(entry.name, entry.isDir, false)} size={14} color={entry.isDir ? undefined : fileColorFor(entry.name)} />
                       <span className="files-node-name">{entry.name}</span>
                       <span className="files-search-result-path">{parentOf(entry.path) || "/"}</span>
                     </span>
@@ -805,7 +856,7 @@ export function FilesCard({
                   title={tab.path}
                   onClick={() => setActivePath(tab.path)}
                 >
-                  <Icon name={fileIconFor(nameOf(tab.path), false, false)} size={12} />
+                  <Icon name={fileIconFor(nameOf(tab.path), false, false)} size={12} color={fileColorFor(tab.path)} />
                   <span className="files-tab-name">{nameOf(tab.path)}</span>
                   <button
                     className={`files-tab-close${closeArmedPath === tab.path ? " files-tab-close-armed" : ""}`}

@@ -3894,8 +3894,55 @@ entrada só registra a FILA e a ordem combinada:
    NÃO-git) verificado à parte com um fixture real fora de qualquer
    repo — ambas as buscas funcionam igual. `tsc --noEmit` limpo,
    `smoke-files-card.mjs` (19/19).
-7. **52 — Ícones por linguagem real na árvore**: hoje só 5 buckets de
-   categoria (`fileIconFor`) — `.js`/`.py`/`.rs` mostram o mesmo ícone.
+7. **52 — Ícones por linguagem real na árvore — ✅ feito em
+   2026-08-28, última da fila**: hoje só 5 buckets de categoria
+   (`fileIconFor`) — `.js`/`.py`/`.rs` mostram o mesmo ícone (mesmo
+   glifo E cor).
+
+   **Decisão**: sem nova dependência. `lucide-react` não tem ícone por
+   LINGUAGEM (é um outline set genérico, não um conjunto de logos tipo
+   `simple-icons`/temas de ícone do VSCode) — trazer uma lib de logos só
+   pra isso é peso de bundle real por um upgrade cosmético (mesma
+   lógica de custo/benefício do item 47 descartando `gpt-tokenizer`).
+   Fix: mesmo GLIFO (`fileCode`/`fileConfig`), mas cada extensão ganha
+   sua própria COR — usando a paleta bem conhecida do GitHub Linguist
+   (a mesma associação que a maioria dos devs já tem da barra de
+   linguagem do próprio GitHub: TS azul, JS amarelo, Python azul
+   escuro, Rust laranja, JSON cinza-escuro, etc.), não os tokens de
+   acento deste app — o ponto aqui é identidade por LINGUAGEM, não o
+   tema visual do app. `icons.tsx`'s `Icon` ganhou prop `color?: string`
+   opcional (repassada direto pro componente lucide — `undefined` em
+   toda chamada existente, comportamento idêntico ao de antes).
+   Extensão sem mapeamento cai em `undefined` (cor padrão do ícone) —
+   mesma postura honesta do `fileGeneric` ("sem cor = sem alegação").
+   Aplicado nos 4 lugares que renderizam ícone de arquivo: árvore, aba
+   aberta, resultado de busca por nome, resultado de busca de conteúdo.
+
+   Verificado ao vivo via CDP: `getComputedStyle` do SVG real confirma
+   `electron.vite.config.ts` com stroke `rgb(49,120,198)` (= `#3178c6`,
+   azul do TS) e `package.json`/`package-lock.json` com
+   `rgb(41,41,41)` (= `#292929`, cor do JSON) — cores DIFERENTES e
+   corretas pra tipos diferentes, na raiz real do repo Stellar.
+   Pastas e extensões não mapeadas continuam sem cor (herdam o
+   `--muted` padrão). `tsc --noEmit` limpo, `smoke-files-card.mjs`
+   (19/19).
+
+   **Nota à parte, achada verificando este item**: `smoke-card-
+   actions.mjs` mostrou-se genuinamente instável (falhas em pontos
+   DIFERENTES entre execuções — ora no "localizar card", ora no
+   "focus button" — não um bug determinístico de nenhuma mudança desta
+   sessão) numa sequência específica (drag real + pan até fora da tela
+   com coordenada extrema + clique logo em seguida). Confirmado via
+   bisect real (worktree no commit anterior ao item 44, depois no
+   commit do item 44, depois no HEAD antes das mudanças deste item —
+   todos passaram; só o build com as mudanças deste item às vezes
+   falhava, e reverter só `icons.tsx` "consertou" numa rodada mas o
+   MESMO build com `icons.tsx` restaurado passou 4/4 na rodada
+   seguinte) — não é causado por nenhuma mudança de código desta
+   sessão, é fragilidade pré-existente do harness de input sintético
+   do CDP com essa sequência específica. Fora de escopo consertar
+   agora; registrado aqui só pra não confundir uma falha futura desse
+   mesmo teste com uma regressão real.
 
 ## Ordem sugerida para a próxima rodada
 
