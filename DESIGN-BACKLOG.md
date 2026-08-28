@@ -3536,23 +3536,41 @@ design/escopo de features fica pra uma conversa futura direcionada
 (quais features exatamente, que design). Não fazer nada aqui até o
 usuário trazer o assunto de volta com mais detalhe.
 
-## 42. Qualidade de renderização interna dos cards perde nitidez ao redimensionar a janela
+## 42. Qualidade de renderização interna dos cards perde nitidez ao redimensionar a janela — investigado, NÃO reproduzido, fechado em 2026-08-28
 
 Reportado ao vivo, 2026-08-28. Usuário pergunta se cada tipo de card
 (terminal, etc.) renderiza dinamicamente na resolução atual do monitor,
 e relata perda de qualidade visual especificamente ao REDIMENSIONAR a
 janela do app com um card (terminal citado) já aberto. Distinto da
 pergunta de DPI já investigada no item 39 (lá: sem bug de código achado,
-canvas batia 1:1 com CSS num DPR=1, mas explicitamente sem poder
-descartar 100% um cenário HiDPI real por falta de máquina de teste) —
-aqui o gatilho específico é RESIZE da janela em si, não escala de tela:
-suspeita razoável (não confirmada) é que o canvas/WebGL do terminal (ou
-de outro tipo de card) não recalcula seu backing-store na resolução
-certa depois de um resize real da janela — precisa reproduzir ao vivo
-via CDP (`Browser.setWindowBounds` ou equivalente, redimensionar de
-verdade, comparar backing-store vs CSS size do canvas antes/depois,
-mesma técnica de medição pixel-a-pixel já usada nos itens 36/39) antes
-de decidir causa/fix. Ainda não investigado.
+canvas batia 1:1 com CSS num DPR=1) — aqui o gatilho específico é RESIZE
+da janela em si, não escala de tela.
+
+**Investigação real, não assumida**: janela Electron real redimensionada
+de verdade em nível de SO (`BrowserWindow.setBounds`, via o processo main
+alcançado por um Node inspector — CDP não implementa `Browser.
+setWindowBounds` no target do renderer do Electron), medindo
+`canvas.width/height` (backing-store) contra `getBoundingClientRect() *
+devicePixelRatio` do terminal, antes e depois. Resize real de 1280×800 →
+1680×1100 (+400×+300px) executado. Resultado: backing-store bateu
+`CSS*dpr` tanto ANTES (837×600 canvas vs 837×600 CSS × dpr=1) quanto
+DEPOIS (1209×1500 canvas vs 806×1000 CSS × dpr=1.5) — sem discrepância
+em nenhum dos dois momentos. **Não reproduzido**: o terminal recalcula
+seu backing-store corretamente a cada resize real da janela, inclusive
+quando o `devicePixelRatio` do ambiente muda no meio do processo (o
+ambiente de teste reportou dpr=1 antes e dpr=1.5 depois do resize —
+mudança de fator de escala do X11/fractional-scaling, não um bug deste
+app).
+
+**Hipótese pra explicar o que o usuário viu**: mecanismo já documentado
+e aceito — o `.world` (canvas do board) usa `transform: scale()` em CSS
+pra pan/zoom, e o `FitAddon` do terminal mede célula via `offsetWidth`,
+que ignora esse transform. **Zoom** (não resize de janela) pode borrar
+visualmente o terminal por esse motivo conhecido — se o usuário deu
+zoom out/in (scroll com Ctrl, ou os botões da lupa) com o card já
+renderizado antes de perceber a perda de nitidez, é isso, não um bug de
+resize. Vale confirmar com o usuário se o gesto era zoom ou resize de
+janela de verdade da próxima vez que perceber o problema.
 
 ## 43. Contagem de "agentes ativos" na topbar deveria ser por sessão, não por terminal aberto — ✅ feito em 2026-08-28
 
