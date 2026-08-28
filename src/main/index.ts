@@ -308,6 +308,11 @@ function createWindow() {
     askBashConsent,
     delegateToAgent,
   };
+  // DESIGN-BACKLOG.md item 28 — Google's own OpenAI-compatible endpoint
+  // (announced/stable since 2025), not a Stellar invention. Lets "gemini"
+  // reuse openai-client.ts wholesale instead of a third bespoke SDK/loop.
+  const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
+
   const anthropicClient = createAnthropicClient({
     onToken: (cardId, delta) => safeSend(win, "chat:token", cardId, delta),
     onDone: (cardId, fullText) => safeSend(win, "chat:done", cardId, fullText),
@@ -561,9 +566,14 @@ function createWindow() {
 
   // DESIGN-BACKLOG.md item 12, Fase B/C.
   ipcMain.handle("secrets:has", (_e, provider: SecretProvider) => secretsStore.has(provider));
-  ipcMain.handle("secrets:set", (_e, provider: SecretProvider, value: string) => secretsStore.set(provider, value));
+  ipcMain.handle("secrets:set", (_e, provider: SecretProvider, value: string, baseURL?: string) =>
+    secretsStore.set(provider, value, baseURL),
+  );
   ipcMain.handle("secrets:clear", (_e, provider: SecretProvider) => secretsStore.clear(provider));
   ipcMain.handle("secrets:encryption-available", () => secretsStore.isEncryptionAvailable());
+  // Item 28 — only "generic" ever has one set; used by ChatCard.tsx to
+  // prefill the endpoint field when reopening the key form.
+  ipcMain.handle("secrets:get-base-url", (_e, provider: SecretProvider) => secretsStore.getBaseURL(provider));
 
   ipcMain.handle(
     "chat:send",
@@ -574,19 +584,38 @@ function createWindow() {
     ) => {
       const apiKey = secretsStore.get(params.provider);
       if (!apiKey) return { ok: false, error: `nenhuma API key configurada pra ${params.provider}` };
-      const client = params.provider === "openai" ? openaiClient : anthropicClient;
-      client.send(cardId, {
+      if (params.provider === "anthropic") {
+        anthropicClient.send(cardId, {
+          apiKey,
+          model: params.model,
+          system: params.systemPrompt,
+          messages: params.messages,
+          root: params.cwd,
+        });
+        return { ok: true };
+      }
+      // "openai"/"gemini"/"generic" all speak the same OpenAI-compatible
+      // Chat Completions shape (item 28) — gemini gets a fixed baseURL,
+      // generic gets whatever the user configured in the key form
+      // (secrets.ts), openai stays undefined (SDK's own default).
+      if (params.provider === "generic" && !secretsStore.getBaseURL(params.provider)) {
+        return { ok: false, error: "provider genérico sem endpoint (baseURL) configurado" };
+      }
+      const baseURL =
+        params.provider === "gemini" ? GEMINI_OPENAI_BASE_URL : (secretsStore.getBaseURL(params.provider) ?? undefined);
+      openaiClient.send(cardId, {
         apiKey,
         model: params.model,
         system: params.systemPrompt,
         messages: params.messages,
         root: params.cwd,
+        baseURL,
       });
       return { ok: true };
     },
   );
   ipcMain.handle("chat:cancel", (_e, cardId: string, provider: SecretProvider) =>
-    (provider === "openai" ? openaiClient : anthropicClient).cancel(cardId),
+    (provider === "anthropic" ? anthropicClient : openaiClient).cancel(cardId),
   );
   ipcMain.handle("chat:write-resolve", (_e, requestId: string, allowed: boolean) => {
     const resolve = pendingWriteConsents.get(requestId);

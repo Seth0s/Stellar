@@ -3126,6 +3126,36 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   falhas.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 27.
 
+## 2026-08-28 — Novo provider de chat: Gemini + endpoint genérico (item 28, ChatCard)
+
+- Pedido ao vivo, já pensando em MCP de invocação — investigação achou
+  dois sistemas de "provider" bem diferentes (`SecretProvider`/ChatCard
+  vs `ProviderId`/terminal-spawn com MCP registrado). Escopo confirmado
+  com o usuário: ChatCard primeiro, terminal-spawnable fica pro próximo
+  passo.
+- `SecretProvider`/`ChatProvider` ganham `gemini`/`generic`. Nenhum
+  cliente novo: os dois (mais `openai`) reusam `openai-client.ts`
+  inteiro — mesmo dialeto Chat Completions OpenAI-compatible. Gemini
+  aponta pro endpoint fixo do Google; `generic` aponta pro `baseURL`
+  configurado pelo usuário (cobre local — Ollama/llama.cpp/vLLM — e
+  qualquer outro endpoint compatível).
+- `secrets.ts` ganha `baseURL?` opcional por entrada + `getBaseURL()`.
+  `ChatCard.tsx`: picker novo, modelo vira input livre pros dois (sem
+  dropdown fixo — arriscaria ficar desatualizado), form de key do
+  `custom` ganha campo de endpoint obrigatório.
+- **Achado real**: `App.tsx`'s leitura de linha do banco coagia
+  qualquer `provider` desconhecido pra `anthropic` — sem o fix, uma
+  linha `gemini`/`generic` salva voltaria como `anthropic` ao reabrir a
+  sessão, silenciosamente. Corrigido.
+- Verificação: `scripts/verify/smoke-chat-providers.mjs` (novo, 8/8),
+  com um servidor HTTP real fazendo o papel de modelo local (SSE real —
+  achado escrevendo o teste: a request sempre pede `stream: true`, JSON
+  simples não é um dublê válido). Round-trip completo: mensagem real
+  bate no endpoint configurado, modelo certo no corpo, resposta real
+  aparece na UI. Regressão completa: 24/24 suítes, 0 falhas reais (2
+  flakes de contenção de recursos, reconfirmados limpos isolados).
+- Detalhe completo em `DESIGN-BACKLOG.md` item 28.
+
 ## Comandos
 
 ```bash

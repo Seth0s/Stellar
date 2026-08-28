@@ -2712,17 +2712,66 @@ confirma que copiou o conteúdo real da página (não um no-op); um
 foi inserido via `insertText`. Regressão completa: 23/23 suítes, 0
 falhas.
 
-## 28. Novo provider — Gemini e outros (modelos locais + provider genérico)
+## 28. Novo provider — Gemini e outros (modelos locais + provider genérico) — ✅ ChatCard feito em 2026-08-28
 
-Pedido ao vivo, 2026-08-28, ainda não investigado/implementado. Hoje só
-`openai`/`anthropic` existem como `SecretProvider` (`secrets.ts`,
-`ChatCard.tsx`'s cliente fixo `openaiClient`/`anthropicClient`). Pedido
-cobre duas coisas distintas: (1) Gemini como mais um provider nomeado,
-mesmo padrão dos dois já existentes; (2) um provider **genérico**
-(endpoint OpenAI-compatible custom, cobre modelo local tipo Ollama/
-llama.cpp/vLLM e qualquer serviço compatível) — provavelmente a peça
-mais reutilizável, já que muita coisa (incluindo modelos locais) já fala
-o dialeto OpenAI-compatible.
+Pedido ao vivo, 2026-08-28: "novo provider, gemini e outros (modelos
+locais e provider genéricos)", "já pensando no mcp de invocação e etc".
+Investigação achou **dois sistemas de provider bem diferentes** no
+código antes de implementar — pergunta feita ao usuário pra não
+escolher escopo errado:
+1. `SecretProvider` (`secrets.ts`/`ChatCard.tsx`) — chat direto via API
+   key, hoje só anthropic/openai.
+2. `ProviderId` (`providers.ts`) — CLI de agente de verdade rodando no
+   terminal, já registra o MCP `stellar` nele (claude/codex/cursor).
+
+**Decisão do usuário: os dois, ChatCard primeiro.** Esta rodada fecha o
+ChatCard; um `ProviderId` de verdade pro Gemini CLI (spawnável via
+terminal/MCP, mesmo padrão de `claude`/`codex`) fica registrado como
+próximo passo natural, não feito ainda.
+
+**ChatCard — feito**:
+- `SecretProvider`/`ChatProvider` ganham `"gemini"` e `"generic"`
+  (`secrets.ts`, `card-types.ts`, `preload/index.ts`'s cópia própria do
+  tipo — preload não pode importar módulo de main, mantido em sincronia
+  a mão).
+- Nenhum cliente novo: `"openai"`/`"gemini"`/`"generic"` reusam
+  `openai-client.ts` inteiro — todos falam o mesmo dialeto Chat
+  Completions OpenAI-compatible. `gemini` aponta pro endpoint
+  OpenAI-compatible fixo do Google
+  (`https://generativelanguage.googleapis.com/v1beta/openai/`,
+  constante em `main/index.ts`); `generic` aponta pro `baseURL` que o
+  usuário configurar — cobre modelo local (Ollama/llama.cpp/vLLM) e
+  qualquer outro endpoint compatível sem UI dedicada.
+- `secrets.ts`'s `SecretsFile` ganha `baseURL?` opcional por entrada
+  (só usado por `"generic"` — `gemini`'s baseURL é constante, não
+  configurável); `set()`/novo `getBaseURL()`. IPC novo
+  `secrets:get-base-url` + `secrets:set` aceita `baseURL` opcional.
+- `ChatCard.tsx`: picker de provider ganha `gemini`/`custom`; modelo
+  vira input livre pra ambos (mesmo tratamento que `openai` já tinha —
+  um dropdown fixo arriscaria ficar desatualizado/errado, ver item 31
+  como fix real disso); form de key do provider `custom` ganha um campo
+  de endpoint extra, obrigatório junto da key pra habilitar salvar.
+- **Achado real, não assumido**: `App.tsx`'s leitura de linha do banco
+  (`fromRow`) coagia qualquer `provider` desconhecido pra `"anthropic"`
+  (`r.provider === "openai" ? "openai" : "anthropic"`) — sem o fix, uma
+  linha `gemini`/`generic` salva no SQLite voltaria como `anthropic` ao
+  reabrir a sessão, silenciosamente. Corrigido pra só cair no fallback
+  em valor genuinamente desconhecido.
+- **Verificação**: `scripts/verify/smoke-chat-providers.mjs` (novo,
+  8/8), prova real, sem mock: um servidor HTTP Node de verdade fazendo
+  o papel de modelo local (SSE real no formato Chat Completions — achado
+  ao escrever o teste: a request real sempre pede `stream: true`, um
+  corpo JSON simples não é um dublê válido do endpoint, o SDK só
+  reporta "request ended without sending any chunks"). Cobre: gemini
+  aparece e fica ativo no picker com modelo default preenchido; botão
+  salvar do provider `custom` fica desabilitado sem endpoint+key;
+  `baseURL` persistido de verdade (lido de volta via IPC, não
+  otimista); uma mensagem real bate no endpoint local configurado
+  (não `api.openai.com`) com o modelo certo no corpo; a resposta real
+  do endpoint aparece na UI. Regressão completa: 24/24 suítes, 0
+  falhas reais (2 flakes isolados de contenção de recursos — 24
+  lançamentos de Electron em sequência — reconfirmados limpos fora da
+  cadeia).
 
 ## 29. Melhorar a UI/UX de adição de API keys
 

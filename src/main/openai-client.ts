@@ -60,8 +60,15 @@ export function createOpenAiClient(opts: {
     system: string | null | undefined,
     initialMessages: ChatCompletionMessageParam[],
     hooks: ChatToolHooks,
+    baseURL: string | undefined,
   ) {
-    const client = new OpenAI({ apiKey });
+    // DESIGN-BACKLOG.md item 28 — `baseURL` undefined keeps the SDK's own
+    // default (api.openai.com), same as before this option existed. Set
+    // for "gemini" (fixed, main/index.ts) and "generic" (user-supplied,
+    // secrets.ts) — both speak the same OpenAI-compatible Chat Completions
+    // shape this whole client already targets, so no separate client code
+    // is needed per provider, just a different endpoint to point at.
+    const client = new OpenAI({ apiKey, baseURL });
     const messages: ChatCompletionMessageParam[] = system ? [{ role: "system", content: system }, ...initialMessages] : [...initialMessages];
 
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
@@ -108,7 +115,7 @@ export function createOpenAiClient(opts: {
 
   function send(
     cardId: string,
-    params: { apiKey: string; model: string; system?: string | null; messages: ChatMessage[]; root: string },
+    params: { apiKey: string; model: string; system?: string | null; messages: ChatMessage[]; root: string; baseURL?: string },
   ) {
     inFlight.get(cardId)?.abort();
     intentionalAborts.delete(cardId);
@@ -121,7 +128,7 @@ export function createOpenAiClient(opts: {
       askBashConsent: (req) => opts.askBashConsent(cardId, req),
       delegateToAgent: (provider, reason) => opts.delegateToAgent(cardId, params.root, provider, reason),
     };
-    void runTurn(cardId, params.apiKey, params.model, params.system, toOpenAiMessages(params.messages), hooks);
+    void runTurn(cardId, params.apiKey, params.model, params.system, toOpenAiMessages(params.messages), hooks, params.baseURL);
   }
 
   function cancel(cardId: string) {

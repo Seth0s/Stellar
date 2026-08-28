@@ -44,7 +44,11 @@ export type StrokeCardData = BaseCard & {
  * which stopped fitting once chat needed `cwd` back for its normal
  * meaning. */
 export type ChatMessage = { role: "user" | "assistant"; content: string };
-export type ChatProvider = "anthropic" | "openai";
+// DESIGN-BACKLOG.md item 28 — "gemini" (fixed OpenAI-compatible endpoint)
+// and "generic" (user-supplied OpenAI-compatible endpoint, covers local
+// models — Ollama/llama.cpp/vLLM — and any other hosted provider without
+// dedicated UI here) both reuse the OpenAI Chat Completions client.
+export type ChatProvider = "anthropic" | "openai" | "gemini" | "generic";
 export type ChatCardData = BaseCard & {
   kind: "chat";
   provider: ChatProvider;
