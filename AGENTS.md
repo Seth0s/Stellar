@@ -3575,6 +3575,20 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `smoke-files-card.mjs` (19/19).
 - Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
 
+## 2026-08-28 — Contagem estimada de tokens no editor de arquivos (item 47, 2/7)
+
+- Decisão: nada de tokenizer real (`gpt-tokenizer`, a única lib JS
+  viável, só cobre encodings OpenAI — exato pra 1 dos 4 providers deste
+  app, Anthropic/Google não publicam tokenizer em JS — e pesa ~27MB
+  unpacked pra UMA encoding, checado via `npm pack --dry-run`). Fix:
+  heurística `chars/4`, formatada "~N tokens"/"~N.Nk", ao lado do path
+  no header do editor, recalculada a cada mudança de `content` (já live
+  via `onChange` do CodeMirror). Tooltip deixa claro que é estimativa.
+- Verificado ao vivo via CDP: badge foi de "~1.1k" pra "~1.6k" depois de
+  digitar +2000 chars reais num arquivo real (`package.json`) —
+  1090+500=1590 tokens, bate exatamente. `smoke-files-card.mjs` (19/19).
+- Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
+
 ## Comandos
 
 ```bash
