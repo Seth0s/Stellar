@@ -77,16 +77,29 @@ export function createSecretsStore(userDataDir: string) {
     }
   }
 
-  function set(provider: SecretProvider, value: string, baseURL?: string) {
-    const all = readAll(userDataDir);
-    const trimmed = value.trim();
-    const trimmedBaseURL = baseURL?.trim() || undefined;
-    if (safeStorage.isEncryptionAvailable()) {
-      all[provider] = { value: safeStorage.encryptString(trimmed).toString("base64"), encrypted: true, baseURL: trimmedBaseURL };
-    } else {
-      all[provider] = { value: trimmed, encrypted: false, baseURL: trimmedBaseURL };
+  // Item 29 — `writeFileSync`/`encryptString` can both throw for real
+  // (read-only filesystem, disk full, OS keychain rejecting the request)
+  // and, before this, that just became an unhandled rejection on the
+  // renderer side (`ipcMain.handle` auto-rejects the invoke promise on a
+  // thrown error) — the save button stayed stuck in "salvando…" forever
+  // with zero explanation. Typed result instead of throwing across the
+  // IPC boundary, same shape every other fallible IPC call in this app
+  // already uses.
+  function set(provider: SecretProvider, value: string, baseURL?: string): { ok: true } | { ok: false; error: string } {
+    try {
+      const all = readAll(userDataDir);
+      const trimmed = value.trim();
+      const trimmedBaseURL = baseURL?.trim() || undefined;
+      if (safeStorage.isEncryptionAvailable()) {
+        all[provider] = { value: safeStorage.encryptString(trimmed).toString("base64"), encrypted: true, baseURL: trimmedBaseURL };
+      } else {
+        all[provider] = { value: trimmed, encrypted: false, baseURL: trimmedBaseURL };
+      }
+      writeAll(userDataDir, all);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    writeAll(userDataDir, all);
   }
 
   /** Only "generic" ever has one set (the key form, ChatCard.tsx) — undefined
@@ -96,10 +109,15 @@ export function createSecretsStore(userDataDir: string) {
     return readAll(userDataDir)[provider]?.baseURL ?? null;
   }
 
-  function clear(provider: SecretProvider) {
-    const all = readAll(userDataDir);
-    delete all[provider];
-    writeAll(userDataDir, all);
+  function clear(provider: SecretProvider): { ok: true } | { ok: false; error: string } {
+    try {
+      const all = readAll(userDataDir);
+      delete all[provider];
+      writeAll(userDataDir, all);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   function isEncryptionAvailable(): boolean {

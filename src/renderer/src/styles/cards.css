@@ -942,6 +942,9 @@
 }
 
 .chat-provider-picker button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 500;
@@ -956,6 +959,25 @@
 .chat-provider-picker button.active {
   background: var(--foam);
   color: var(--on-accent);
+}
+
+/* Item 29 — at-a-glance "does this provider already have a key set"
+   without clicking into each one. Neutral outline = no key; filled =
+   configured. `.active`'s own accent background still reads fine with
+   either state layered on top (dot border switches to a lower-contrast
+   tone so it doesn't fight the accent fill). */
+.chat-provider-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.35;
+  flex: none;
+}
+
+.chat-provider-dot.has-key {
+  background: currentColor;
+  opacity: 0.9;
 }
 
 .chat-foot-cwd {
@@ -1322,6 +1344,23 @@
   font-family: var(--font-mono);
   font-size: 12.5px;
   padding: 6px 9px;
+}
+
+.chat-key-reveal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.chat-key-reveal:hover {
+  color: var(--text);
 }
 
 .chat-key-row button.primary {

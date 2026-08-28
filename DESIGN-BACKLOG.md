@@ -2829,12 +2829,43 @@ de verdade em `providers.ts` (`PROVIDERS`), spawnável via terminal
   resolve `ok:true` com um `cardId` real, um novo terminal card existe
   de fato no board depois. Regressão completa: 26/26 suítes, 0 falhas.
 
-## 29. Melhorar a UI/UX de adição de API keys
+## 29. Melhorar a UI/UX de adição de API keys — ✅ feito em 2026-08-28
 
-Pedido ao vivo, 2026-08-28, ainda não investigado. Fluxo atual (Fase B/C
-do item 12 — `secretsStore`/`ChatCard.tsx`) funciona mas não foi
-desenhado com atenção de UX própria; ganha relevância junto do item 28
-(mais providers = mais chaves pra gerenciar de uma vez).
+Pedido ao vivo. Sem bug específico reportado — melhoria aberta; usuário
+escolheu as 3 direções oferecidas de uma vez (indicador visual + painel
+central + polish).
+
+- **Indicador visual**: `.chat-provider-picker` (`ChatCard.tsx`) ganha
+  um dot por provider (`keyStatus`, buscado via `Promise.all` nos 4
+  providers uma vez por mount) — dá pra ver de relance quais já têm key
+  sem clicar em cada um. Vazio = sem key, preenchido = configurada.
+- **Painel central**: `SecretsSettingsModal.tsx` (novo), aberto por um
+  botão novo na rail ("Configurações", ícone gear) — lista os 4
+  providers de uma vez, cada um com status, campo de key (+ endpoint pro
+  `generic`), salvar/remover. Não substitui o form inline do ChatCard —
+  os dois escrevem no mesmo `window.secrets`, só duas entradas pra
+  mesma coisa.
+- **Polish**: botão de mostrar/ocultar (`Eye`/`EyeOff`) no campo de key,
+  nos dois lugares. Validação de formato **suave** — um aviso (`sk-ant-`
+  esperado pra anthropic, `sk-` pra openai) que NUNCA bloqueia o salvar,
+  porque prefixos de key mudam e uma suposição errada não pode impedir
+  salvar uma key genuína.
+- **Achado real, corrigido no mesmo commit**: `secretsStore.set()`/
+  `clear()` (`main/secrets.ts`) podiam lançar de verdade
+  (`writeFileSync`/`encryptString` — disco cheio, keychain recusando) e
+  isso virava uma rejeição de promise não tratada do lado do renderer
+  (`ipcMain.handle` propaga throw como rejeição automática) — o botão
+  "salvar" ficava travado pra sempre, sem explicação nenhuma.
+  `set`/`clear` agora retornam `{ok:true}|{ok:false,error}` tipado
+  (mesmo padrão de toda outra IPC falível do app), erro real vira toast.
+- Compartilhado entre os dois lugares via `secretsUi.ts` novo (labels,
+  placeholders, `keyFormatWarning`) — evita duas cópias divergindo.
+- **Verificação**: `scripts/verify/smoke-secrets-settings.mjs` (novo,
+  8/8) — key real salva pelo painel central, confirmada via
+  `window.secrets.hasKey` (não otimista); dot no ChatCard reflete a key
+  salva pelo painel; mostrar/ocultar revela o valor real digitado; aviso
+  de formato aparece mas não desabilita o botão salvar. Regressão
+  completa: 28/28 suítes, 0 falhas.
 
 ## 30. Persistência real do chatbox + barra lateral de sessões por API key
 

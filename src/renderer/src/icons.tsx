@@ -15,6 +15,8 @@ import {
   ChevronRight,
   Code2,
   Copy,
+  Eye,
+  EyeOff,
   File,
   FileCode2,
   FilePlus,
@@ -45,6 +47,7 @@ import {
   RotateCw,
   Scan,
   Search,
+  Settings,
   Sparkles,
   Square,
   StickyNote,
@@ -112,7 +115,10 @@ export type IconName =
   | "fileGeneric"
   | "newFile"
   | "newFolder"
-  | "trash";
+  | "trash"
+  | "settings"
+  | "eye"
+  | "eyeOff";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -173,6 +179,9 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   newFile: FilePlus,
   newFolder: FolderPlus,
   trash: Trash2,
+  settings: Settings,
+  eye: Eye,
+  eyeOff: EyeOff,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

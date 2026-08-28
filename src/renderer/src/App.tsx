@@ -9,6 +9,7 @@ import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { ChatCard, DEFAULT_CHAT_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_GENERIC_MODEL } from "./ChatCard";
 import { AgentAskModal } from "./AgentAskModal";
 import { ConfirmModal } from "./ConfirmModal";
+import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
@@ -367,6 +368,8 @@ export function App() {
   // MCP/acbridge, acompanhado de requesterId/reason); este é um clique
   // humano direto, sem requester nem motivo pra mostrar.
   const [pendingOpenUrl, setPendingOpenUrl] = useState<string | null>(null);
+  // Item 29 — central API-key management panel, not scoped to any card.
+  const [showSecretsSettings, setShowSecretsSettings] = useState(false);
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — one union covers every
   // kind of agent ask (open URL, spawn agent, spawn non-terminal card);
   // AgentAskModal.tsx renders whichever is pending, allowAsk/denyAsk below
@@ -1735,6 +1738,7 @@ export function App() {
         kindIcon={KIND_ICON}
         kindLabel={KIND_LABEL}
         onJumpToCard={jumpToCard}
+        onOpenSecretsSettings={() => setShowSecretsSettings(true)}
       />
       <Topbar
         boards={boards}
@@ -1802,6 +1806,7 @@ export function App() {
           onCancel={() => setPendingOpenUrl(null)}
         />
       )}
+      {showSecretsSettings && <SecretsSettingsModal onClose={() => setShowSecretsSettings(false)} />}
     </div>
   );
 }
