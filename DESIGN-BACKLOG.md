@@ -4114,6 +4114,46 @@ manualmente `~/.config/agent-canvas/Service Worker/` (o app recria na
 próxima vez que precisar) — não fiz isso unilateralmente por ser dado
 de sessão real do usuário, não um scratch de teste.
 
+## 56. Cores das notas adesivas pouco amigáveis aos olhos — ✅ feito em 2026-08-28
+
+Reportado ao vivo: as 4 cores de `StickyCard.tsx` reusavam tokens
+semânticos do app inteiro na saturação máxima (`--signal` #e8c547,
+`--good` #4ad87a, `--foam` #45c8ff, mais um magenta cru `#e879b8` pro
+pink) — não é só decorativo: `--accent` também vira `color` direto de
+`.card-tag` (o rótulo em maiúsculas, pequeno e em negrito, `cards.css`),
+então um neon saturado ali é texto neon pra ler, não só um ponto de cor.
+
+**Fix**: paleta pastel/dessaturada dedicada, mesma família de matiz mas
+sem doer nos olhos como texto nem como acento — `#d4b876` (amarelo),
+`#82c79a` (verde), `#7ab8dd` (azul), `#d192b3` (rosa). Desacoplada dos
+tokens semânticos do app (que continuam existindo do jeito que estavam
+pra status/perigo em outro lugar). Backgrounds do corpo da nota
+(`STICKY_BG`, já escuros/dessaturados) ficaram como estavam — não eram o
+problema reportado.
+
+**Verificação ao vivo** (`scripts/verify/investigate-sticky-colors.mjs`,
+novo): `getComputedStyle` confirma as 4 swatches e o texto do `.card-tag`
+renderizando exatamente os 4 hex novos (`rgb(212,184,118)`,
+`rgb(130,199,154)`, `rgb(122,184,221)`, `rgb(209,146,179)`), e trocar de
+cor ao vivo (clique no swatch pink) atualiza tag e swatch juntos.
+
+**Achado real durante a própria verificação** (o usuário alertou "acho
+que preto não será visível" antes de eu ter checado o texto do corpo da
+nota — motivou olhar de verdade): `.sticky-textarea` (cards.css) usava
+`color: var(--on-accent)` (`#04141c`, quase preto) — token certo pra
+texto em cima de um preenchimento *sólido* na cor de acento (usado assim
+em botões/pills em outro lugar do app), errado aqui porque o fundo real
+da nota é `STICKY_BG` (sempre escuro), não o acento. `getComputedStyle`
+confirmou ao vivo: texto `rgb(4,20,28)` sobre fundo `rgb(74,69,32)` —
+praticamente ilegível, bug pré-existente, não introduzido por esta
+mudança. Corrigido pra `color: var(--text)` (cor de corpo de texto clara
+do app, `#e6e8ec`) — legível nos 4 tons escuros de `STICKY_BG`.
+Reverificado ao vivo: `rgb(230,232,236)` sobre `rgb(74,69,32)`.
+
+`tsc --noEmit` e `electron-vite build` limpos. Regressão:
+`smoke-card-lifecycle.mjs`, `smoke-connector.mjs`, `smoke-group-select.mjs`
+passando.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.

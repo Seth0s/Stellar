@@ -893,7 +893,15 @@
   border: none;
   outline: none;
   resize: none;
-  color: var(--on-accent);
+  /* Pedido ao vivo (2026-08-28): real pre-existing contrast bug caught
+     live — `--on-accent` (#04141c, near-black) is meant for text on a
+     *solid accent-colored* fill elsewhere in the app; this textarea's
+     own background is `STICKY_BG` (StickyCard.tsx, always dark), not the
+     accent. Near-black text on that dark background computed to
+     rgb(4,20,28) on rgb(74,69,32) — essentially unreadable. `--text`
+     (the app's real light body-text color) is legible against every one
+     of the 4 dark STICKY_BG tints. */
+  color: var(--text);
   font-family: var(--font-ui);
   font-size: 14px;
   padding: 10px;
