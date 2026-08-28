@@ -4029,6 +4029,50 @@ highlight real aparecem (`has-spans`, não `flat-text`) — antes do fix
 isso silenciosamente nunca teria funcionado numa build empacotada.
 `tsc --noEmit` limpo, `smoke-files-card.mjs` (19/19).
 
+## 55. Log dev — "Failed to delete the database: Database IO error" (service_worker_storage) — investigado, NÃO é bug do app, fechado em 2026-08-28
+
+Reportado ao vivo, log de `npm run dev`:
+```
+[...]ERROR:components/services/storage/service_worker/service_worker_storage.cc:1814] Failed to delete the database: Database IO error
+```
+Já tinha sido anotado como ruído possivelmente não relacionado no item
+40; usuário pediu investigação real desta vez.
+
+**Investigação real, não assumida**:
+- `grep` em todo `src/main`/`src/renderer`/`src/preload` por `service
+  worker`/`serviceWorker` — zero ocorrências. Este app não registra,
+  nunca registrou, nenhum service worker; `session.defaultSession` só é
+  tocado uma vez, pra `setDisplayMediaRequestHandler` (permissão de
+  compartilhar tela), nada de storage/service worker.
+- Inspecionado (só leitura) o profile REAL do app
+  (`~/.config/agent-canvas/`, `app.setName("agent-canvas")` —
+  confirmado criado 2026-08-25, ainda em uso 2026-08-28, um profile de
+  verdade com dias de uso real, não um profile de teste isolado): existe
+  um diretório `Service Worker/` de ~20MB (`CacheStorage/`, `Database/`,
+  `ScriptCache/`) — estrutura LevelDB padrão (`CURRENT`/`LOCK`/`LOG`/
+  `MANIFEST-*`), permissões normais (600, dono certo), nada visivelmente
+  corrompido.
+- Tentei reproduzir em instâncias isoladas frescas (`.verify-tmp`, CDP)
+  — **não reproduziu**, nem numa sessão de ~4s nem lançando duas vezes
+  em sequência. Consistente com o erro estar ligado a timing de uma
+  passada de limpeza/quota interna do próprio Chromium num profile já
+  ENVELHECIDO (dias de uso real), não algo determinístico que uma
+  sessão de teste curta consiga disparar.
+
+**Conclusão**: ruído interno do subsistema de Service Worker Storage do
+próprio Chromium/Electron (housekeeping de quota/cleanup que roda pra
+QUALQUER app Electron, seja lá qual for a origem/conteúdo carregado —
+não precisa o app usar service worker pra esse subsistema existir e
+rodar sua limpeza periódica) — não é um bug de código deste app, não
+tem API do Electron exposta pra "consertar" isso de forma direcionada
+(as únicas alavancas seriam flags de baixo nível do Chromium que
+desligam o subsistema inteiro, risco desproporcional pro problema —
+não vale a pena). Fechado sem mudança de código. Se persistir incomodando
+no dia a dia, a única ação real disponível é o próprio usuário limpar
+manualmente `~/.config/agent-canvas/Service Worker/` (o app recria na
+próxima vez que precisar) — não fiz isso unilateralmente por ser dado
+de sessão real do usuário, não um scratch de teste.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
