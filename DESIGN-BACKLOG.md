@@ -2712,6 +2712,81 @@ confirma que copiou o conteúdo real da página (não um no-op); um
 foi inserido via `insertText`. Regressão completa: 23/23 suítes, 0
 falhas.
 
+## 28. Novo provider — Gemini e outros (modelos locais + provider genérico)
+
+Pedido ao vivo, 2026-08-28, ainda não investigado/implementado. Hoje só
+`openai`/`anthropic` existem como `SecretProvider` (`secrets.ts`,
+`ChatCard.tsx`'s cliente fixo `openaiClient`/`anthropicClient`). Pedido
+cobre duas coisas distintas: (1) Gemini como mais um provider nomeado,
+mesmo padrão dos dois já existentes; (2) um provider **genérico**
+(endpoint OpenAI-compatible custom, cobre modelo local tipo Ollama/
+llama.cpp/vLLM e qualquer serviço compatível) — provavelmente a peça
+mais reutilizável, já que muita coisa (incluindo modelos locais) já fala
+o dialeto OpenAI-compatible.
+
+## 29. Melhorar a UI/UX de adição de API keys
+
+Pedido ao vivo, 2026-08-28, ainda não investigado. Fluxo atual (Fase B/C
+do item 12 — `secretsStore`/`ChatCard.tsx`) funciona mas não foi
+desenhado com atenção de UX própria; ganha relevância junto do item 28
+(mais providers = mais chaves pra gerenciar de uma vez).
+
+## 30. Persistência real do chatbox + barra lateral de sessões por API key
+
+Pedido ao vivo, 2026-08-28, ainda não investigado. Duas partes: (1)
+persistência de fato do histórico de conversa do `ChatCard` (hoje é
+sessão/card, não fica claro se sobrevive fechar+reabrir — checar);
+(2) uma barra lateral listando sessões de chat, com nome derivado da
+API key usada (não um id cru) — mesmo espírito do `describeCard`
+já feito no item 22 (rótulo humano em vez de id de banco), aplicado
+aqui a sessões de chat.
+
+## 31. Lista de modelos por provider (principal, não todos)
+
+Pedido ao vivo, 2026-08-28, ainda não investigado. Hoje o campo de
+modelo é livre/fixo por provider — pedido é uma lista de modelos
+reais disponíveis por provider selecionado (só os principais, não o
+catálogo inteiro de cada API), evita digitar/errar nome de modelo à
+mão.
+
+## 32. Colar imagem ainda não funciona em CLIs de terceiro dentro do terminal
+
+Pedido ao vivo, 2026-08-28. O item 22 já resolveu colar imagem no
+`TerminalCard` (grava um PNG real em `stellar-pastes/`, escreve o path
+no PTY) — mas não cobre o caso de colar DENTRO de uma CLI que já rodou
+dentro do terminal (ex.: `claude` CLI ou outra ferramenta interativa que
+tem seu próprio protocolo de paste de imagem, tipo iTerm2/Kitty inline
+images ou OSC 52). "Veja o padrão aceito" — precisa investigar qual
+protocolo essas CLIs esperam antes de decidir o fix (pode não ser o
+mesmo mecanismo do item 22, que é Stellar escrevendo o path por fora —
+uma CLI dentro do PTY pode esperar bytes inline no próprio stream, não
+um path).
+
+## 33. Ajustar cores/fonte/formatação dinâmica em Markdown (renderizador genérico)
+
+Pedido ao vivo, 2026-08-28, ainda não investigado. Renderizador de `.md`
+usado hoje (`marked`, `ChatCard`/outros consumidores — conferir todos os
+pontos que renderizam md) precisa de acerto de tema (cores/fonte) e
+formatação dinâmica — "genérico" sugere um componente único reutilizável
+em vez de estilos espalhados por card.
+
+## 34. Bug — CLI/terminal "quebra" ao sair ou perder foco, prints etc.
+
+Reportado ao vivo, 2026-08-28, ainda não investigado/reproduzido.
+Descrição do usuário: terminal (ou a CLI rodando dentro dele) quebra
+depois de sair dela ou tirar o foco do card — impacto descrito como
+afetando "print e etc do app inteiro" (a impressão é de vazamento pra
+fora do card, não contido nele). Precisa reproduzir ao vivo via CDP
+antes de qualquer fix — sem causa raiz identificada ainda.
+
+## 35. Escolher uma fonte que combine com o tom "Stellar"
+
+Pedido ao vivo, 2026-08-28, ainda não decidido. Hoje o app usa Manrope
+(UI) + JetBrains Mono (terminal/código) — ver `styles/`/assets de fonte
+já carregados. Pedido é reavaliar se Manrope ainda é a escolha certa
+pro tom de marca "Stellar" (ou trocar), não necessariamente adicionar
+uma fonte nova além da mono já usada pra código.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
