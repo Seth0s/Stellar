@@ -528,6 +528,70 @@
   overflow: hidden;
 }
 
+/* DESIGN-BACKLOG.md item 50 */
+.files-tabs-bar {
+  display: flex;
+  flex: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.files-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px 5px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  flex: none;
+  max-width: 160px;
+}
+
+.files-tab-active {
+  color: var(--text);
+  background: var(--panel);
+}
+
+.files-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.files-tab-close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.files-tab-close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.files-tab-close-armed {
+  color: var(--danger) !important;
+  background: transparent !important;
+}
+
+.files-tab-dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
 .files-editor-head {
   display: flex;
   align-items: center;

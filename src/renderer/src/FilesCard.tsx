@@ -96,6 +96,25 @@ function formatTokenCount(n: number): string {
   return `${Math.round(n / 1000)}k`;
 }
 
+/** DESIGN-BACKLOG.md item 50 — one open tab. Everything that used to be
+ * flat card-level state (`content`/`dirty`/`view`/`tooLarge`/
+ * `imageDataUrl`) now lives per-tab, keyed by `path`, so switching tabs
+ * never discards an unsaved edit in another one — a real capability this
+ * refactor buys, not just a visual bar. `openTabs` is plain insertion
+ * order (matches VSCode's own default tab order, not an MRU list — MRU
+ * only drives VSCode's separate Ctrl+Tab switcher, not the tab bar
+ * itself). */
+type OpenTab = {
+  path: string;
+  /** `null` = still loading — same "not `""`" distinction the old flat
+   * `content` state already relied on. */
+  content: string | null;
+  imageDataUrl: string | null;
+  view: "code" | "preview";
+  dirty: boolean;
+  tooLarge: boolean;
+};
+
 /** Bundled so `TreeNode` (recursive, one prop object per node instead of a
  * dozen individual callbacks threaded through every level) stays readable —
  * same shape every level down, just re-passed as-is. */
@@ -264,17 +283,20 @@ export function FilesCard({
 }) {
   const [kids, setKids] = useState<Record<string, DirEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  // DESIGN-BACKLOG.md item 21, ponto 11 — `null` means "not loaded yet",
-  // distinct from `""` (a genuinely empty file). CodeEditor only mounts
-  // once this is non-null, so a file switch never hands CodeMirror a
-  // stale previous-file snapshot as its initial doc while the real
-  // content is still in flight over IPC.
-  const [content, setContent] = useState<string | null>(null);
-  const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
-  const [view, setView] = useState<"code" | "preview">("code");
-  const [dirty, setDirty] = useState(false);
-  const [tooLarge, setTooLarge] = useState(false);
+  // DESIGN-BACKLOG.md item 50 — replaces the old flat `selectedPath` +
+  // `content`/`dirty`/`view`/`tooLarge`/`imageDataUrl` state. `activeTab`/
+  // `content`/etc. below are DERIVED (plain `const`, not `useState`) from
+  // `openTabs`/`activePath` — every other line of this component that
+  // used to read the flat state still reads a same-named local, so the
+  // render body (JSX) barely changed shape.
+  const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
+  const [activePath, setActivePath] = useState<string | null>(null);
+  const activeTab = openTabs.find((t) => t.path === activePath) ?? null;
+  const content = activeTab?.content ?? null;
+  const imageDataUrl = activeTab?.imageDataUrl ?? null;
+  const view = activeTab?.view ?? "code";
+  const dirty = activeTab?.dirty ?? false;
+  const tooLarge = activeTab?.tooLarge ?? false;
   const [error, setError] = useState<string | null>(null);
   // DESIGN-BACKLOG.md item 48.
   const [autoSave, setAutoSave] = useState(() => localStorage.getItem(AUTOSAVE_KEY) === "1");
@@ -286,6 +308,13 @@ export function FilesCard({
   const deleteArmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [creating, setCreating] = useState<{ parentPath: string; kind: "file" | "folder" } | null>(null);
   const [createDraft, setCreateDraft] = useState("");
+  // DESIGN-BACKLOG.md item 50 — same "click again to confirm" pattern as
+  // `deleteArmedPath` just above, reused here for closing a DIRTY tab
+  // (silently discarding an unsaved edit would be a real regression this
+  // feature must not introduce). A clean tab just closes on the first
+  // click — no arming needed, nothing to lose.
+  const [closeArmedPath, setCloseArmedPath] = useState<string | null>(null);
+  const closeArmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // DESIGN-BACKLOG.md item 46 — `git-tools.ts`'s `git:status` already
   // returns `branch`; `ChangesCard` was the only consumer. `null` while
@@ -305,7 +334,8 @@ export function FilesCard({
   useEffect(() => {
     setKids({});
     setExpanded(new Set());
-    setSelectedPath(null);
+    setOpenTabs([]);
+    setActivePath(null);
     setGitStatus(null);
     setSearchQuery("");
     setSearchResults([]);
@@ -316,12 +346,13 @@ export function FilesCard({
     window.git.status(root).then(setGitStatus);
   }, [root]);
 
-  // Every armed "click again to confirm" delete auto-disarms after a few
-  // seconds — an armed trash icon left sitting there is a trap for whoever
-  // clicks the tree next, not a real confirmation.
+  // Every armed "click again to confirm" delete/close-tab auto-disarms
+  // after a few seconds — an armed trash icon or tab left sitting there is
+  // a trap for whoever clicks next, not a real confirmation.
   useEffect(() => {
     return () => {
       if (deleteArmTimer.current) clearTimeout(deleteArmTimer.current);
+      if (closeArmTimer.current) clearTimeout(closeArmTimer.current);
     };
   }, []);
 
@@ -345,45 +376,69 @@ export function FilesCard({
     if (willOpen && !kids[path]) void refreshDir(path);
   }
 
+  function updateTab(path: string, patch: Partial<OpenTab>) {
+    setOpenTabs((prev) => prev.map((t) => (t.path === path ? { ...t, ...patch } : t)));
+  }
+
   function selectFile(path: string) {
-    setSelectedPath(path);
-    setDirty(false);
-    setTooLarge(false);
     setError(null);
-    setImageDataUrl(null);
-    setContent(null);
+    setActivePath(path);
+    // DESIGN-BACKLOG.md item 50 — already open: just switch tabs, don't
+    // refetch/reset. This is the real behavior change tabs buy beyond a
+    // visual bar — reopening a file mid-edit no longer discards it.
+    if (openTabs.some((t) => t.path === path)) return;
     const kind = mediaKind(path);
+    setOpenTabs((prev) => [
+      ...prev,
+      { path, content: null, imageDataUrl: null, view: kind === "markdown" ? "preview" : "code", dirty: false, tooLarge: false },
+    ]);
     if (kind === "image") {
       window.fs.readImage(root, path).then(
         (result) => {
-          if ("tooLarge" in result || "notImage" in result) {
-            setTooLarge(true);
-          } else {
-            setImageDataUrl(result.dataUrl);
-          }
+          if ("tooLarge" in result || "notImage" in result) updateTab(path, { tooLarge: true });
+          else updateTab(path, { imageDataUrl: result.dataUrl });
         },
         (e) => setError(String(e)),
       );
       return;
     }
-    setView(kind === "markdown" ? "preview" : "code");
     window.fs.read(root, path).then(
       (result) => {
-        if ("tooLarge" in result) {
-          setTooLarge(true);
-          setContent("");
-        } else {
-          setContent(result.content);
-        }
+        if ("tooLarge" in result) updateTab(path, { tooLarge: true, content: "" });
+        else updateTab(path, { content: result.content });
       },
       (e) => setError(String(e)),
     );
   }
 
+  /** DESIGN-BACKLOG.md item 50 — closing the ACTIVE tab activates its
+   * left neighbor (same convention as a browser tab strip), computed
+   * from its index BEFORE removal: everything left of that index keeps
+   * the same index after filtering, so `next[idx - 1]` still lands on
+   * the correct neighbor. Falls back to the new first tab, then `null`
+   * if no tabs remain. */
+  function closeTab(path: string) {
+    const tab = openTabs.find((t) => t.path === path);
+    if (tab?.dirty && closeArmedPath !== path) {
+      if (closeArmTimer.current) clearTimeout(closeArmTimer.current);
+      setCloseArmedPath(path);
+      closeArmTimer.current = setTimeout(() => setCloseArmedPath(null), 3000);
+      return;
+    }
+    if (closeArmTimer.current) clearTimeout(closeArmTimer.current);
+    setCloseArmedPath(null);
+    const idx = openTabs.findIndex((t) => t.path === path);
+    const next = openTabs.filter((t) => t.path !== path);
+    setOpenTabs(next);
+    if (activePath === path) {
+      setActivePath(next.length === 0 ? null : (next[Math.max(0, idx - 1)]?.path ?? next[0].path));
+    }
+  }
+
   function save() {
-    if (!selectedPath || content === null) return;
-    window.fs.write(root, selectedPath, content).then(
-      () => setDirty(false),
+    if (!activePath || content === null) return;
+    window.fs.write(root, activePath, content).then(
+      () => updateTab(activePath, { dirty: false }),
       (e) => setError(String(e)),
     );
   }
@@ -401,11 +456,11 @@ export function FilesCard({
   // `content`) so a save that just completed (dirty flips false) doesn't
   // re-arm a redundant timer for content that's already on disk.
   useEffect(() => {
-    if (!autoSave || !dirty || !selectedPath || content === null) return;
+    if (!autoSave || !dirty || !activePath || content === null) return;
     const timer = setTimeout(() => save(), AUTOSAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSave, dirty, content, selectedPath]);
+  }, [autoSave, dirty, content, activePath]);
 
   useEffect(() => {
     const q = searchQuery.trim();
@@ -452,7 +507,16 @@ export function FilesCard({
     try {
       await window.fs.rename(root, path, newName);
       await refreshDir(parentOf(path));
-      if (selectedPath === path) setSelectedPath(null);
+      // DESIGN-BACKLOG.md item 50 — an open tab under the renamed path
+      // keeps its content/dirty state, just relabeled to the new name
+      // (mirrors VSCode: renaming a file open in an editor doesn't close
+      // it). Only the exact-path case, matching this function's own
+      // pre-existing scope — a folder rename rewriting every nested open
+      // tab's path prefix is a separate concern, not touched here.
+      const parent = parentOf(path);
+      const newPath = parent ? `${parent}/${newName}` : newName;
+      setOpenTabs((prev) => prev.map((t) => (t.path === path ? { ...t, path: newPath } : t)));
+      setActivePath((prev) => (prev === path ? newPath : prev));
     } catch (e) {
       setError(String(e));
     }
@@ -470,7 +534,19 @@ export function FilesCard({
         .delete(root, path)
         .then(() => refreshDir(parentOf(path)))
         .then(() => {
-          if (selectedPath === path || selectedPath?.startsWith(path + "/")) setSelectedPath(null);
+          // DESIGN-BACKLOG.md item 50 — close every open tab under the
+          // deleted path (the file itself, or anything nested under a
+          // deleted folder — same prefix check the old single-selection
+          // code already used), not just clear a single selection.
+          setOpenTabs((prev) => {
+            const next = prev.filter((t) => t.path !== path && !t.path.startsWith(path + "/"));
+            setActivePath((prevActive) =>
+              prevActive === path || prevActive?.startsWith(path + "/")
+                ? (next[next.length - 1]?.path ?? null)
+                : prevActive,
+            );
+            return next;
+          });
         })
         .catch((e) => setError(String(e)));
     } else {
@@ -615,7 +691,7 @@ export function FilesCard({
                 searchResults.map((entry) => (
                   <div
                     key={entry.path}
-                    className={`files-node files-search-result${selectedPath === entry.path ? " files-node-active" : ""}`}
+                    className={`files-node files-search-result${activePath === entry.path ? " files-node-active" : ""}`}
                     onClick={() => {
                       if (!entry.isDir) {
                         selectFile(entry.path);
@@ -640,7 +716,7 @@ export function FilesCard({
                   depth={0}
                   kids={kids}
                   expanded={expanded}
-                  selectedPath={selectedPath}
+                  selectedPath={activePath}
                   actions={treeActions}
                 />
               ))}
@@ -648,23 +724,54 @@ export function FilesCard({
           )}
         </div>
         <div className="files-editor">
-          {selectedPath && (
+          {/* DESIGN-BACKLOG.md item 50 — horizontal tab bar, one pill per
+              open file (insertion order). A dirty tab shows a dot instead
+              of its close × until closing is explicitly confirmed
+              (`closeArmedPath`, same "click again" convention as deleting
+              a tree row) — silently discarding an unsaved edit here would
+              be a real regression this feature must not introduce. */}
+          {openTabs.length > 0 && (
+            <div className="files-tabs-bar thin-scroll">
+              {openTabs.map((tab) => (
+                <div
+                  key={tab.path}
+                  className={`files-tab${tab.path === activePath ? " files-tab-active" : ""}`}
+                  title={tab.path}
+                  onClick={() => setActivePath(tab.path)}
+                >
+                  <Icon name={fileIconFor(nameOf(tab.path), false, false)} size={12} />
+                  <span className="files-tab-name">{nameOf(tab.path)}</span>
+                  <button
+                    className={`files-tab-close${closeArmedPath === tab.path ? " files-tab-close-armed" : ""}`}
+                    title={closeArmedPath === tab.path ? "Clique de novo pra descartar e fechar" : tab.dirty ? "Não salvo — fechar mesmo assim" : "Fechar"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeTab(tab.path);
+                    }}
+                  >
+                    {tab.dirty && closeArmedPath !== tab.path ? <span className="files-tab-dirty-dot" /> : <Icon name="close" size={10} />}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {activePath && (
             <div className="files-editor-head">
               <span className="files-editor-head-path">
-                <span className="files-editor-head-path-text">{selectedPath}</span>
-                {mediaKind(selectedPath) !== "image" && content !== null && (
+                <span className="files-editor-head-path-text">{activePath}</span>
+                {mediaKind(activePath) !== "image" && content !== null && (
                   <span className="files-editor-token-count" title="Estimativa de tokens (chars/4) — aproximada, não é o tokenizer real de nenhum provider">
                     ~{formatTokenCount(estimateTokens(content))} tokens
                   </span>
                 )}
               </span>
               <div className="files-editor-head-actions">
-                {mediaKind(selectedPath) === "markdown" && (
-                  <button onClick={() => setView(view === "code" ? "preview" : "code")}>
+                {mediaKind(activePath) === "markdown" && (
+                  <button onClick={() => updateTab(activePath, { view: view === "code" ? "preview" : "code" })}>
                     {view === "code" ? "preview" : "código"}
                   </button>
                 )}
-                {mediaKind(selectedPath) !== "image" && (
+                {mediaKind(activePath) !== "image" && (
                   <label
                     className="files-editor-autosave-toggle"
                     title="Salvar automaticamente ~1s depois de parar de digitar"
@@ -673,7 +780,7 @@ export function FilesCard({
                     auto-save
                   </label>
                 )}
-                {mediaKind(selectedPath) !== "image" && (
+                {mediaKind(activePath) !== "image" && (
                   <button disabled={!dirty} onClick={save}>
                     {autoSave && dirty ? "salvando…" : "salvar"}
                   </button>
@@ -683,12 +790,12 @@ export function FilesCard({
           )}
           {tooLarge && <div className="files-editor-msg">arquivo maior que 512KB, sem preview</div>}
           {error && <div className="files-editor-msg">{error}</div>}
-          {selectedPath && !tooLarge && mediaKind(selectedPath) === "image" && imageDataUrl && (
+          {activePath && !tooLarge && mediaKind(activePath) === "image" && imageDataUrl && (
             <div className="files-editor-image thin-scroll">
-              <img src={imageDataUrl} alt={selectedPath} />
+              <img src={imageDataUrl} alt={activePath} />
             </div>
           )}
-          {selectedPath && !tooLarge && mediaKind(selectedPath) === "markdown" && view === "preview" && (
+          {activePath && !tooLarge && mediaKind(activePath) === "markdown" && view === "preview" && (
             content === null ? (
               <div className="files-editor-msg">carregando…</div>
             ) : (
@@ -699,10 +806,10 @@ export function FilesCard({
               />
             )
           )}
-          {selectedPath &&
+          {activePath &&
             !tooLarge &&
-            mediaKind(selectedPath) !== "image" &&
-            !(mediaKind(selectedPath) === "markdown" && view === "preview") &&
+            mediaKind(activePath) !== "image" &&
+            !(mediaKind(activePath) === "markdown" && view === "preview") &&
             (content === null ? (
               <div className="files-editor-msg">carregando…</div>
             ) : (
@@ -710,17 +817,18 @@ export function FilesCard({
               // (CodeEditor.tsx, CodeMirror 6) instead of a bare
               // `<textarea>`: line numbers, syntax highlight per
               // extension, indentation guides, code folding. Keyed by
-              // `selectedPath` so switching files always mounts a fresh
-              // editor instance (see CodeEditor.tsx's own doc comment on
-              // why `value` is read only once, not kept in sync live).
+              // `activePath` so switching files/tabs always mounts a
+              // fresh editor instance (see CodeEditor.tsx's own doc
+              // comment on why `value` is read only once, not kept in
+              // sync live — item 50: this is exactly what makes each
+              // tab's CodeMirror state independent of the others).
               <Suspense fallback={<div className="files-editor-msg">carregando editor…</div>}>
                 <CodeEditor
-                  key={selectedPath}
+                  key={activePath}
                   value={content}
-                  filename={selectedPath}
+                  filename={activePath}
                   onChange={(next) => {
-                    setContent(next);
-                    setDirty(true);
+                    if (activePath) updateTab(activePath, { content: next, dirty: true });
                   }}
                 />
               </Suspense>

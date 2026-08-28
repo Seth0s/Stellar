@@ -3616,6 +3616,24 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   resultados. `smoke-files-card.mjs` (19/19).
 - Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
 
+## 2026-08-28 — Tabs de arquivos abertos no FilesCard (item 50, 5/7, maior item da fila)
+
+- Refactor real: estado plano (`content`/`dirty`/`view`/`tooLarge`/
+  `imageDataUrl`) virou por-aba (`OpenTab[]`, ordem de inserção),
+  `activePath` aponta o foco. Capacidade nova: reabrir um arquivo já
+  aberto só troca o foco, nunca recarrega — uma edição não salva numa
+  aba sobrevive trocar pra outra e voltar. Fechar aba suja reusa o
+  padrão "clique de novo" já usado pra excluir na árvore
+  (`closeArmedPath`). Renomear/excluir um arquivo aberto relabela/fecha
+  a aba correspondente em vez de só desselecionar.
+- Verificado ao vivo via CDP, sequência completa: 3 abas na ordem certa,
+  edição em duas abas diferentes sobrevive trocar entre elas (sem
+  reload), fechar aba limpa é imediato, fechar aba suja precisa de 2
+  cliques, renomear um arquivo aberto relabela a aba sem duplicar.
+  `smoke-files-card.mjs` (19/19), `smoke-card-wheel-scope.mjs` (6/6),
+  `tsc --noEmit` limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` itens 46-52.
+
 ## Comandos
 
 ```bash
