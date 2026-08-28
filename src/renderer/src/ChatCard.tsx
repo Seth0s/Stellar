@@ -2,9 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
+import { toast } from "./useToast";
+import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, keyFormatWarning } from "./secretsUi";
 import type { Rect } from "./board-model";
 import type { ChatMessage, ChatProvider } from "./card-types";
 import type { WriteConsentRequest, BashConsentRequest } from "../../preload/index";
+
+const ALL_PROVIDERS: ChatProvider[] = ["anthropic", "openai", "gemini", "generic"];
 
 /**
  * DESIGN-BACKLOG.md item 12 — Fase B built plain streamed-text chat; Fase
@@ -173,6 +177,21 @@ export function ChatCard({
   const [keyInput, setKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("");
   const [savingKey, setSavingKey] = useState(false);
+  const [revealKey, setRevealKey] = useState(false);
+  // Item 29 — status dot per provider on the picker, so switching
+  // providers to check "did I already set this one?" isn't necessary.
+  // Fetched once per mount + refreshed after this card's own save/clear;
+  // a key set/removed via the central SecretsSettingsModal while this
+  // card stays open won't update these dots until the card remounts —
+  // a real, minor, accepted gap (no shared reactive secrets store exists
+  // to push that update live).
+  const [keyStatus, setKeyStatus] = useState<Partial<Record<ChatProvider, boolean>>>({});
+
+  useEffect(() => {
+    void Promise.all(ALL_PROVIDERS.map((p) => window.secrets.hasKey(p).then((v) => [p, v] as const))).then((entries) => {
+      setKeyStatus(Object.fromEntries(entries));
+    });
+  }, []);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -187,6 +206,7 @@ export function ChatCard({
 
   useEffect(() => {
     setHasKey(null);
+    setRevealKey(false);
     void window.secrets.hasKey(provider).then((v) => {
       setHasKey(v);
       setShowKeyForm(!v);
@@ -268,10 +288,19 @@ export function ChatCard({
     if (!trimmed) return;
     if (provider === "generic" && !baseUrlInput.trim()) return;
     setSavingKey(true);
-    void window.secrets.setKey(provider, trimmed, provider === "generic" ? baseUrlInput.trim() : undefined).then(() => {
+    void window.secrets.setKey(provider, trimmed, provider === "generic" ? baseUrlInput.trim() : undefined).then((result) => {
       setSavingKey(false);
+      // Item 29 — `setKey` used to be assumed infallible; a real write
+      // failure (disk full, keychain rejection) left the button stuck in
+      // "salvando…" with zero feedback. Now surfaced.
+      if (!result.ok) {
+        toast(`falha ao salvar a key: ${result.error}`);
+        return;
+      }
       setKeyInput("");
+      setRevealKey(false);
       setHasKey(true);
+      setKeyStatus((prev) => ({ ...prev, [provider]: true }));
       setShowKeyForm(false);
     });
   }
@@ -348,18 +377,19 @@ export function ChatCard({
             <Icon name="chat" size={14} />
             <CardTag label={label ?? "chatbox"} onRename={onRename} />
             <span className="chat-provider-picker">
-              <button className={provider === "anthropic" ? "active" : ""} onClick={() => onProviderCommit("anthropic")}>
-                anthropic
-              </button>
-              <button className={provider === "openai" ? "active" : ""} onClick={() => onProviderCommit("openai")}>
-                openai
-              </button>
-              <button className={provider === "gemini" ? "active" : ""} onClick={() => onProviderCommit("gemini")}>
-                gemini
-              </button>
-              <button className={provider === "generic" ? "active" : ""} onClick={() => onProviderCommit("generic")}>
-                custom
-              </button>
+              {ALL_PROVIDERS.map((p) => (
+                <button
+                  key={p}
+                  className={provider === p ? "active" : ""}
+                  title={keyStatus[p] ? `${PROVIDER_LABELS[p]} — key configurada` : `${PROVIDER_LABELS[p]} — sem key`}
+                  onClick={() => onProviderCommit(p)}
+                >
+                  {PROVIDER_LABELS[p]}
+                  {/* Item 29 — indicador de qual provider já tem key salva,
+                      sem precisar clicar em cada um pra descobrir. */}
+                  <span className={`chat-provider-dot${keyStatus[p] ? " has-key" : ""}`} />
+                </button>
+              ))}
             </span>
             {provider === "anthropic" ? (
               <select className="chat-model-select" value={model} onChange={(e) => onModelCommit(e.target.value)}>
@@ -393,7 +423,9 @@ export function ChatCard({
       {showKeyForm ? (
         <div className="chat-key-form">
           <p>
-            {hasKey ? `Trocar a API key da ${provider}:` : `Configure sua API key da ${provider} pra usar o chatbox:`}
+            {hasKey
+              ? `Trocar a API key da ${PROVIDER_LABELS[provider]}:`
+              : `Configure sua API key da ${PROVIDER_LABELS[provider]} pra usar o chatbox:`}
           </p>
           {!encryptionAvailable && (
             <p className="chat-key-warn">
@@ -413,18 +445,20 @@ export function ChatCard({
           )}
           <div className="chat-key-row">
             <input
-              type="password"
-              placeholder={
-                provider === "anthropic"
-                  ? "sk-ant-…"
-                  : provider === "generic"
-                    ? "qualquer valor — mesmo fake, se seu endpoint não exige auth"
-                    : "sk-…"
-              }
+              type={revealKey ? "text" : "password"}
+              placeholder={PROVIDER_KEY_PLACEHOLDER[provider]}
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && saveKey()}
             />
+            <button
+              type="button"
+              className="chat-key-reveal"
+              title={revealKey ? "ocultar" : "mostrar"}
+              onClick={() => setRevealKey((v) => !v)}
+            >
+              <Icon name={revealKey ? "eyeOff" : "eye"} size={14} />
+            </button>
             <button
               className="primary"
               disabled={!keyInput.trim() || (provider === "generic" && !baseUrlInput.trim()) || savingKey}
@@ -433,11 +467,19 @@ export function ChatCard({
               salvar
             </button>
           </div>
+          {keyFormatWarning(provider, keyInput) && <p className="chat-key-warn">{keyFormatWarning(provider, keyInput)}</p>}
           {hasKey && (
             <button
               className="chat-key-clear"
               onClick={() => {
-                void window.secrets.clearKey(provider).then(() => setHasKey(false));
+                void window.secrets.clearKey(provider).then((result) => {
+                  if (!result.ok) {
+                    toast(`falha ao remover a key: ${result.error}`);
+                    return;
+                  }
+                  setHasKey(false);
+                  setKeyStatus((prev) => ({ ...prev, [provider]: false }));
+                });
               }}
             >
               remover key salva

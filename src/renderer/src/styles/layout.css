@@ -1061,6 +1061,59 @@ select.resume-input {
   word-break: break-all;
 }
 
+/* DESIGN-BACKLOG.md item 29 — central API-key management panel
+   (SecretsSettingsModal.tsx). Reuses `.chat-key-row`/`.chat-key-warn`/
+   `.chat-key-reveal`/`.chat-provider-dot` from cards.css (ChatCard.tsx's
+   own inline key form) — both write to the exact same `window.secrets`
+   store, so the same visual language for "a key field" makes sense in
+   both places rather than inventing a second one. */
+.secrets-settings-modal {
+  max-width: 560px;
+  width: 90vw;
+}
+
+.secrets-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.secrets-provider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.secrets-provider-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secrets-provider-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.secrets-provider-status {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.secrets-remove-btn:hover {
+  color: var(--danger);
+}
+
 .agent-ask-reason {
   margin: 0 0 16px;
   font-size: 12px;

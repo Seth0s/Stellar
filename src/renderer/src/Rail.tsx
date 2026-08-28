@@ -53,6 +53,7 @@ export function Rail({
   kindIcon,
   kindLabel,
   onJumpToCard,
+  onOpenSecretsSettings,
 }: {
   tool: Tool;
   setTool: (t: Tool) => void;
@@ -94,6 +95,9 @@ export function Rail({
   kindIcon: Record<string, IconName>;
   kindLabel: Record<string, string>;
   onJumpToCard: (id: string) => void;
+  /** DESIGN-BACKLOG.md item 29 — opens SecretsSettingsModal.tsx, the
+   * central API-key panel (not scoped to any one ChatCard). */
+  onOpenSecretsSettings: () => void;
 }) {
   const [openPopover, setOpenPopover] = useState<"terminal" | "ai" | "find" | null>(null);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_COLLAPSED_KEY) === "1");
@@ -241,6 +245,9 @@ export function Rail({
         onClick={() => setOpenPopover((p) => (p === "ai" ? null : "ai"))}
       >
         <Icon name="sparkle" />
+      </button>
+      <button className="rail-btn" title="Configurações" onClick={onOpenSecretsSettings}>
+        <Icon name="settings" />
       </button>
 
       <Popover anchorRef={terminalBtnRef} open={openPopover === "terminal"} onClose={() => setOpenPopover(null)}>

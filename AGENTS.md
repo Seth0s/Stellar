@@ -3227,6 +3227,26 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `getComputedStyle`. Regressão completa: 27/27 suítes, 0 falhas.
 - Detalhe completo em `DESIGN-BACKLOG.md` itens 34 e 36.
 
+## 2026-08-28 — UI/UX de API keys: indicador visual + painel central + polish (item 29)
+
+- Usuário escolheu as 3 direções oferecidas de uma vez: dot de status
+  por provider no `ChatCard.tsx` (`keyStatus`, sem precisar clicar em
+  cada um pra ver quem já tem key); painel central novo
+  (`SecretsSettingsModal.tsx`, aberto por um botão novo na rail) listando
+  os 4 providers de uma vez; polish (mostrar/ocultar valor da key,
+  aviso de formato suave — nunca bloqueia salvar).
+- Achado real corrigido no mesmo commit: `secretsStore.set()`/`clear()`
+  podiam lançar de verdade e isso virava rejeição de promise não
+  tratada no renderer — botão "salvar" travava pra sempre sem
+  explicação. Agora retornam `{ok,error}` tipado, erro vira toast.
+- `secretsUi.ts` novo compartilha labels/placeholders/validação entre
+  o form inline do ChatCard e o painel central — uma fonte só.
+- Verificação: `scripts/verify/smoke-secrets-settings.mjs` (novo, 8/8)
+  — key real salva pelo painel, confirmada via `hasKey` (não otimista);
+  dot reflete a key salva; mostrar/ocultar funciona; aviso de formato
+  não bloqueia salvar. Regressão completa: 28/28 suítes, 0 falhas.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 29.
+
 ## Comandos
 
 ```bash

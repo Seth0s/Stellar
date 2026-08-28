@@ -369,16 +369,20 @@ const updater = {
 // Kept in sync with main/secrets.ts's own SecretProvider by hand (preload
 // can't import main-process modules) — item 28 added "gemini"/"generic".
 export type SecretProvider = "anthropic" | "openai" | "gemini" | "generic";
+export type SecretsResult = { ok: true } | { ok: false; error: string };
 
 /** DESIGN-BACKLOG.md item 12, Fase B — the app's first credential of any
  * kind. See main/secrets.ts for the `safeStorage` design. */
 const secrets = {
   hasKey: (provider: SecretProvider): Promise<boolean> => ipcRenderer.invoke("secrets:has", provider),
   /** `baseURL` only meaningful for `provider === "generic"` (item 28) —
-   * ignored/unused by every other provider. */
-  setKey: (provider: SecretProvider, value: string, baseURL?: string): Promise<void> =>
+   * ignored/unused by every other provider. Item 29 — typed result
+   * instead of throwing across IPC, so a real write failure (disk
+   * full, keychain rejection) surfaces instead of an unhandled
+   * rejection. */
+  setKey: (provider: SecretProvider, value: string, baseURL?: string): Promise<SecretsResult> =>
     ipcRenderer.invoke("secrets:set", provider, value, baseURL),
-  clearKey: (provider: SecretProvider): Promise<void> => ipcRenderer.invoke("secrets:clear", provider),
+  clearKey: (provider: SecretProvider): Promise<SecretsResult> => ipcRenderer.invoke("secrets:clear", provider),
   isEncryptionAvailable: (): Promise<boolean> => ipcRenderer.invoke("secrets:encryption-available"),
   getBaseURL: (provider: SecretProvider): Promise<string | null> => ipcRenderer.invoke("secrets:get-base-url", provider),
 };
