@@ -3762,6 +3762,26 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   e `electron-vite build` limpos.
 - Detalhe completo em `DESIGN-BACKLOG.md` item "4 (deferida)".
 
+## 2026-08-28 — Cores das notas adesivas: paleta pastel + bug real de contraste no texto do corpo (item 56)
+
+- Reportado ao vivo. `StickyCard.tsx`'s 4 cores reusavam tokens
+  semânticos do app em saturação máxima (`--signal`/`--good`/`--foam` +
+  um magenta cru) — inclusive como `color` do `.card-tag` (texto do
+  rótulo). Trocado por paleta pastel dedicada: `#d4b876`/`#82c79a`/
+  `#7ab8dd`/`#d192b3`.
+- O usuário avisou em seguida "acho que preto não será visível" — checagem
+  real revelou um bug pré-existente (não introduzido por esta mudança):
+  `.sticky-textarea` usava `color: var(--on-accent)` (quase preto),
+  certo só quando o fundo É o acento sólido; o fundo real da nota é
+  `STICKY_BG` (sempre escuro) — texto `rgb(4,20,28)` sobre
+  `rgb(74,69,32)`, praticamente ilegível. Corrigido pra
+  `color: var(--text)`, reverificado ao vivo: `rgb(230,232,236)`.
+- Verificação: `scripts/verify/investigate-sticky-colors.mjs` e
+  `investigate-sticky-text-color.mjs` (novos), `tsc --noEmit`,
+  `electron-vite build`, regressão `smoke-card-lifecycle/connector/
+  group-select` — tudo passando.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 56.
+
 ## Comandos
 
 ```bash

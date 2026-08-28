@@ -10,11 +10,22 @@ const STICKY_BG: Record<string, string> = {
   blue: "#20304a",
   pink: "#4a2038",
 };
+// Pedido ao vivo (2026-08-28): "cores das notes" pouco amigáveis aos
+// olhos. Antes reusava tokens semânticos do app inteiro em saturação
+// máxima (--signal #e8c547, --good #4ad87a, --foam #45c8ff, mais um
+// magenta cru #e879b8) — não é só o swatch em si: `--accent` também vira
+// `color` direto de `.card-tag` (o texto do rótulo, em maiúsculas,
+// pequeno e em negrito — CSS cards.css), então um neon saturado ali é
+// literalmente texto neon pra ler, não só um ponto decorativo. Paleta
+// nova: mesma família de matiz, dessaturada pra tom pastel/empoeirado —
+// ainda distinguível entre si, mas sem doer nos olhos como texto nem
+// como acento de card, e desacoplada dos tokens semânticos (que
+// continuam existindo pra status/perigo em outro lugar do app).
 const STICKY_ACCENT: Record<string, string> = {
-  yellow: "var(--signal)",
-  green: "var(--good)",
-  blue: "var(--foam)",
-  pink: "#e879b8",
+  yellow: "#d4b876",
+  green: "#82c79a",
+  blue: "#7ab8dd",
+  pink: "#d192b3",
 };
 
 export function StickyCard({
