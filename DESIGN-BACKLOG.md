@@ -2875,14 +2875,60 @@ pontos que renderizam md) precisa de acerto de tema (cores/fonte) e
 formatação dinâmica — "genérico" sugere um componente único reutilizável
 em vez de estilos espalhados por card.
 
-## 34. Bug — CLI/terminal "quebra" ao sair ou perder foco, prints etc.
+## 34. Bug — CLI/terminal "quebra" ao sair ou perder foco, prints etc. — ✅ feito em 2026-08-28
 
-Reportado ao vivo, 2026-08-28, ainda não investigado/reproduzido.
-Descrição do usuário: terminal (ou a CLI rodando dentro dele) quebra
-depois de sair dela ou tirar o foco do card — impacto descrito como
-afetando "print e etc do app inteiro" (a impressão é de vazamento pra
-fora do card, não contido nele). Precisa reproduzir ao vivo via CDP
-antes de qualquer fix — sem causa raiz identificada ainda.
+Reportado ao vivo: terminal (ou a CLI rodando dentro dele) quebra depois
+de sair dela ou tirar o foco do card. Reproduzido ao vivo via CDP antes
+de qualquer fix, como pedido pelo próprio item.
+
+**Causa raiz confirmada, não assumida**: "sair dela"/"tirar o foco" na
+prática corresponde a panear o board de forma que o card saia do
+viewport e volte (`isInView`, `useTerminal.ts`'s `visible` prop). O
+Effect antigo que cria o renderer xterm.js era chaveado em `visible` e
+fazia `dispose()` da instância inteira do `Terminal` — **buffer de
+scrollback incluído, não só o DOM** — toda vez que o card saía da view,
+reconstruindo do zero na volta. `node-pty` não mantém backlog nenhum, e
+o processo real continua vivo o tempo todo (confirmado: um comando novo
+digitado depois do ciclo ecoava normalmente) — a combinação produzia um
+terminal genuinamente vazio (tela preta), não um glitch visual passageiro.
+Repro mínimo real: `seq 1 30` num terminal bash, um ciclo de pan pra
+fora do viewport e de volta (drag real via CDP), screenshot antes/depois
+— conteúdo sumiu por completo, sem nenhum erro de console.
+
+**Fix**: separar "criar a instância do `Terminal`" (barato — sem DOM/GPU
+envolvido ainda, só aloca buffer/estado dos addons) de "anexar ao DOM e
+carregar o renderer de verdade" (caro — é onde o contexto WebGL
+realmente é criado, dentro de `.open()`, não de `loadAddon()`).
+Criação passa a ser chaveada só na identidade real do PTY (`ptyId`), não
+mais em `visible` — sobrevive a qualquer ciclo de pan. Anexar ao DOM
+passa a acontecer **no máximo uma vez** por instância (guard
+`openedRef`), disparado assim que o card se torna visível pela primeira
+vez, e nunca mais desfeito por causa de visibilidade — só numa troca de
+identidade real (id/providerId/cwd mudando, ou o card sendo fechado).
+Preserva a intenção original de economia de recurso (um card nunca
+visto de verdade nunca paga o custo de um contexto WebGL), só muda o
+escopo de "visível agora" pra "já foi visto alguma vez".
+
+**Achado colateral, corrigido no mesmo commit (ligado ao item 36)**: o
+`new Terminal(...)` nunca tinha `fontFamily` definido — caía no default
+do próprio xterm.js (`courier-new`), nem usava a JetBrains Mono que o
+resto do app já carrega. Agora define `fontFamily: '"JetBrains Mono",
+monospace'` explicitamente nas duas instâncias criadas (principal e o
+fallback sem WebGL).
+
+**Verificação**: `scripts/verify/smoke-terminal-visibility-persist.mjs`
+(novo, 3/3) — prova real via pixels (xterm.js renderiza em canvas, sem
+texto legível no DOM; `textContent` tentado primeiro, achado real ao
+escrever o teste: sempre vazio, não serve pra provar conteúdo de
+canvas): 5 ciclos reais de pan-out/pan-in, screenshot final comparado
+contra uma referência genuinamente em branco (capturada antes de
+qualquer escrita) — depois do fix, os pixels NÃO batem com o branco
+(conteúdo real sobrevive); terminal ainda aceita escrita nova depois do
+ciclo (pixels mudam de novo, não travou); fonte configurada realmente
+chega no xterm (`getComputedStyle(...).fontFamily` inclui "JetBrains
+Mono"). Regressão completa: 27/27 suítes, 0 falhas (inclui
+`smoke-terminal-links-paste.mjs`, que exercita paste/zoom-correction —
+os listeners de DOM movidos pro novo Effect 3 continuam funcionando).
 
 ## 35. Escolher uma fonte que combine com o tom "Stellar"
 
@@ -2892,7 +2938,7 @@ já carregados. Pedido é reavaliar se Manrope ainda é a escolha certa
 pro tom de marca "Stellar" (ou trocar), não necessariamente adicionar
 uma fonte nova além da mono já usada pra código.
 
-## 36. Resolução/qualidade de fonte no terminal + statusline com glifos quebrados
+## 36. Resolução/qualidade de fonte no terminal + statusline com glifos quebrados — parcial, 1/2 feito em 2026-08-28
 
 Pedido ao vivo, 2026-08-28, direto na própria sessão do usuário
 ("estou usando o stellar agora") — capturado com `mcp__stellar__snapshot`
@@ -2903,14 +2949,19 @@ vários quadrados coloridos sem glifo (cyan, roxo, amarelo) no lugar de
 ícones — o padrão clássico de "tofu" (glifo ausente) de fontes Nerd
 Font/Powerline, não um bug de layout.
 
-**Causa raiz encontrada lendo o código, ainda não corrigida**:
+**Causa raiz encontrada lendo o código — ✅ corrigida em 2026-08-28,
+junto do item 34** (mesma área de código tocada pelo fix daquele item):
 `useTerminal.ts`'s `new Terminal({ fontSize: 15, cursorBlink: true })`
-**nunca define `fontFamily`** — xterm.js cai no próprio default
-(`courier-new, courier, monospace`), nem sequer usa a JetBrains Mono que
-o resto do app já carrega via `@fontsource/jetbrains-mono`
-(`main.tsx`/`--font-mono` em `tokens.css`). Isso sozinho já explica parte
-de "resolução renderizada" abaixo do esperado (fonte errada, sem hinting
-nem métrica pensada pra terminal).
+**nunca definia `fontFamily`** — xterm.js caía no próprio default
+(`courier-new, courier, monospace`), nem sequer usava a JetBrains Mono
+que o resto do app já carrega via `@fontsource/jetbrains-mono`
+(`main.tsx`/`--font-mono` em `tokens.css`). Isso sozinho já explicava
+parte de "resolução renderizada" abaixo do esperado (fonte errada, sem
+hinting nem métrica pensada pra terminal). Fix: `fontFamily: '"JetBrains
+Mono", monospace'` explícito nas duas instâncias (`buildTerminal` e o
+fallback sem WebGL). Verificado ao vivo via
+`getComputedStyle(...).fontFamily` (`smoke-terminal-visibility-
+persist.mjs`).
 
 **Mas os quadrados coloridos são um problema à parte**: mesmo corrigindo
 pra JetBrains Mono, ela não é uma variante "Nerd Font" (sem os glifos de
@@ -2925,9 +2976,9 @@ base, só cobre o intervalo de glifo que falta) — adiciona um asset de
 fonte novo ao bundle, decisão de escopo maior que um fix de uma linha,
 não feito ainda.
 
-**Não implementado ainda** — registrado com prova ao vivo, fix real
-(`fontFamily` no `new Terminal(...)`, e a decisão sobre vendorizar
-Nerd Font symbols) fica pra quando este item for trabalhado.
+**Ainda não implementado**: vendorizar "Symbols Nerd Font Mono" pra
+fechar os quadrados coloridos de vez — decisão de escopo maior (asset de
+fonte novo no bundle), fica pra quando este item for revisitado.
 
 ## Ordem sugerida para a próxima rodada
 
