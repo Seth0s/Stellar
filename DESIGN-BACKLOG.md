@@ -3797,8 +3797,45 @@ entrada só registra a FILA e a ordem combinada:
    corretamente ausente dos resultados, teto de 200 resultados
    confirmado batendo. `tsc --noEmit` limpo, `smoke-files-card.mjs`
    (19/19).
-5. **50 — Tabs de arquivos abertos**: hoje só 1 arquivo por vez, trocar
-   descarta o anterior. Maior item da lista.
+5. **50 — Tabs de arquivos abertos — ✅ feito em 2026-08-28**: hoje só 1
+   arquivo por vez, trocar descarta o anterior. Maior item da lista —
+   refactor real, não só uma barra visual.
+
+   **Modelo novo**: todo estado que era plano (`content`/`dirty`/`view`/
+   `tooLarge`/`imageDataUrl`) virou por-aba (`OpenTab[]`, ordem de
+   inserção — mesma ordem padrão do VSCode, MRU só rege o Ctrl+Tab dele,
+   não a barra em si). `activePath` aponta qual aba está em foco;
+   `content`/`dirty`/etc. na função viraram `const` DERIVADOS da aba
+   ativa, não mais `useState` próprio — o resto do corpo do componente
+   quase não mudou de forma. **Capacidade real nova, não só visual**:
+   reabrir um arquivo que já está numa aba só troca o foco, NUNCA
+   recarrega/reseta — uma edição não salva numa aba sobrevive trocar
+   pra outra aba e voltar.
+
+   **Fechar aba com edição não salva**: reusa o mesmo padrão "clique de
+   novo pra confirmar" que excluir na árvore já usava (`closeArmedPath`)
+   — descartar uma edição em silêncio seria uma regressão real que essa
+   feature não pode introduzir. Aba limpa fecha no primeiro clique.
+   Fechar a aba ATIVA ativa a vizinha à esquerda (convenção de aba de
+   browser); sem abas restantes, editor fica vazio.
+
+   **Renomear/excluir e abas abertas**: renomear um arquivo que está
+   aberto numa aba agora RELABELA a aba (mantém conteúdo/dirty, só troca
+   o path) — antes só desselecionava. Excluir fecha toda aba sob o path
+   excluído (arquivo exato ou aninhado sob uma pasta excluída, mesmo
+   prefixo já usado antes pra limpar a seleção única).
+
+   Verificado ao vivo via CDP, sequência completa: abriu 3 arquivos
+   reais (alpha/beta/gamma) — 3 abas na ordem certa, gamma (última)
+   ativa; digitou em gamma (dot de "não salvo" aparece), trocou pra
+   alpha e digitou lá também (conteúdo real mudou), **voltou pra gamma
+   — a edição CONTINUAVA lá, sem reload** (a capacidade central deste
+   item); fechou beta (limpa) — fechou na hora; tentou fechar gamma
+   (suja) — PRIMEIRO clique só armou (não fechou), SEGUNDO clique
+   fechou de verdade. Renomear um arquivo aberto — aba relabelou pro
+   novo nome, continuou sendo 1 aba só (não duplicou), header do editor
+   bateu com o novo path. `tsc --noEmit` limpo, `smoke-files-card.mjs`
+   (19/19), `smoke-card-wheel-scope.mjs` (6/6).
 6. **51 — Busca full-text no conteúdo dos arquivos**: grep real dentro
    do `root`, via `fs-tools.ts`.
 7. **52 — Ícones por linguagem real na árvore**: hoje só 5 buckets de
