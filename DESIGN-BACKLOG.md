@@ -3137,13 +3137,45 @@ Mono"). Regressão completa: 27/27 suítes, 0 falhas (inclui
 `smoke-terminal-links-paste.mjs`, que exercita paste/zoom-correction —
 os listeners de DOM movidos pro novo Effect 3 continuam funcionando).
 
-## 35. Escolher uma fonte que combine com o tom "Stellar"
+## 35. Escolher uma fonte que combine com o tom "Stellar" — ✅ feito em 2026-08-28
 
-Pedido ao vivo, 2026-08-28, ainda não decidido. Hoje o app usa Manrope
-(UI) + JetBrains Mono (terminal/código) — ver `styles/`/assets de fonte
-já carregados. Pedido é reavaliar se Manrope ainda é a escolha certa
-pro tom de marca "Stellar" (ou trocar), não necessariamente adicionar
-uma fonte nova além da mono já usada pra código.
+Pedido ao vivo, 2026-08-28. Decisão de marca/gosto, não bug — publicado
+um artifact comparando Manrope (atual) contra Space Grotesk e Inter, os
+3 renderizados nos MESMOS componentes reais do app (topbar, card, bolha
+de chat, sticky note) contra a paleta escura real (`tokens.css`), não
+amostras soltas de "Aa". Usuário escolheu **Space Grotesk**.
+
+**Implementado**: `@fontsource/space-grotesk` (mesmo padrão dos outros
+pacotes de fonte já usados — pesos 400/500/600/700, subset latin-only),
+`main.tsx` trocou os imports de `@fontsource/manrope` pelos de
+`space-grotesk`, `tokens.css`'s `--font-ui` atualizado, `@fontsource/
+manrope` desinstalado (sem mais nenhuma referência a "Manrope" no
+código). `--font-mono` (JetBrains Mono) intocado — só a fonte de UI
+mudou, como pedido.
+
+**Bug real achado testando o valor computado ao vivo, não assumido**:
+NENHUM `<button>` do app jamais usou `--font-ui` de verdade, nem quando
+era Manrope — browsers resetam `font-family` (e as outras propriedades
+de fonte) em controles de formulário (`button`/`input`/`select`/
+`textarea`) pro font de controle do próprio SO, IGNORANDO o que o
+`body` declara, a menos que o CSS reset isso explicitamente. Confirmado
+via `getComputedStyle`: `.topbar-title`, `.rail-btn` e qualquer texto
+dentro deles reportavam `"Arial"`, não a fonte do app. Fix: reset
+padrão `button, input, select, textarea { font: inherit; }` em
+`layout.css` — a maioria do texto VISÍVEL do app (rail, topbar,
+popovers, provider picker) só passou a usar a fonte escolhida de
+verdade a partir deste fix, não só a partir da troca pra Space Grotesk.
+
+**Verificação**: `getComputedStyle` real via CDP confirma `body`,
+`.topbar-title`, `.rail-btn` e texto aninhado todos resolvendo pra
+`"Space Grotesk", system-ui, sans-serif` agora (antes do fix do botão:
+só `body` batia, todo o resto ficava em Arial). Screenshot ao vivo
+confirma render limpo sem quebra de layout (chatbox, sticky note,
+toasts). Suítes rodadas por cobrirem áreas diferentes de botão/UI (não
+a suíte inteira, mas mais ampla que o padrão porque o fix de `font:
+inherit` toca TODO botão do app): `smoke-boot.mjs` (7/7),
+`smoke-card-actions.mjs` (10/10), `smoke-session-modal.mjs` (18/18),
+`smoke-secrets-settings.mjs` (8/8). `npx tsc --noEmit` limpo.
 
 ## 36. Resolução/qualidade de fonte no terminal + statusline com glifos quebrados — ✅ 2/2 feito em 2026-08-28
 
