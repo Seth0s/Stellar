@@ -143,8 +143,11 @@ try {
   );
   await page.click(openaiBtnCoords.x, openaiBtnCoords.y);
   await new Promise((r) => setTimeout(r, 200));
-  check("switching provider swaps the model field to free text (no fixed OpenAI model list to guess)", await page.evalJs(`!!document.querySelector('.chat-model-input')`), true);
-  check("...and resets to the openai default model id", await page.evalJs(`document.querySelector('.chat-model-input')?.value`), "gpt-4.1");
+  // item 31 — openai now gets a curated dropdown too, same as anthropic
+  // (only "generic" stays free text — arbitrary user endpoint, no fixed
+  // list makes sense there).
+  check("switching provider swaps the model field to a curated openai dropdown", await page.evalJs(`!!document.querySelector('.chat-model-select')`), true);
+  check("...and resets to the openai default model id", await page.evalJs(`document.querySelector('.chat-model-select')?.value`), "gpt-4.1");
   check("switching provider re-shows the key form (no openai key saved yet)", await page.evalJs(`!!document.querySelector('.chat-key-form')`), true);
 
   await page.evalJs(`

@@ -3,7 +3,7 @@ import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import { toast } from "./useToast";
-import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, keyFormatWarning } from "./secretsUi";
+import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, PROVIDER_MODELS, keyFormatWarning } from "./secretsUi";
 import type { Rect } from "./board-model";
 import type { ChatMessage, ChatProvider } from "./card-types";
 import type { WriteConsentRequest, BashConsentRequest } from "../../preload/index";
@@ -27,18 +27,13 @@ const ALL_PROVIDERS: ChatProvider[] = ["anthropic", "openai", "gemini", "generic
  * still transient, just outliving the rest of that turn's activity.
  */
 
-export const CHAT_MODELS = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"] as const;
+// item 31 — CHAT_MODELS/DEFAULT_* derive from the curated PROVIDER_MODELS
+// list in secretsUi.ts (shared with SecretsSettingsModal), one source of
+// truth instead of three separate hardcoded singletons.
+export const CHAT_MODELS = PROVIDER_MODELS.anthropic;
 export const DEFAULT_CHAT_MODEL: string = CHAT_MODELS[0];
-// Not a claim about "the current latest OpenAI model" — just a
-// long-stable, well-known id to prefill a free-text field with (see the
-// model-input note below for why OpenAI doesn't get a fixed dropdown the
-// way Anthropic does).
-export const DEFAULT_OPENAI_MODEL = "gpt-4.1";
-// Same reasoning as DEFAULT_OPENAI_MODEL above, same free-text treatment
-// (item 28) — a model-id dropdown risks going stale/wrong faster than
-// this file gets revisited; item 31 (backlog) is the real fix for that,
-// scoped separately.
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const DEFAULT_OPENAI_MODEL: string = PROVIDER_MODELS.openai[0];
+export const DEFAULT_GEMINI_MODEL: string = PROVIDER_MODELS.gemini[0];
 // "generic" has no meaningful default — any value here would just be
 // wrong for whatever endpoint the user actually configured.
 export const DEFAULT_GENERIC_MODEL = "";
@@ -391,9 +386,9 @@ export function ChatCard({
                 </button>
               ))}
             </span>
-            {provider === "anthropic" ? (
+            {provider !== "generic" ? (
               <select className="chat-model-select" value={model} onChange={(e) => onModelCommit(e.target.value)}>
-                {CHAT_MODELS.map((m) => (
+                {PROVIDER_MODELS[provider].map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
@@ -404,7 +399,7 @@ export function ChatCard({
                 className="chat-model-input"
                 value={model}
                 onChange={(e) => onModelCommit(e.target.value)}
-                placeholder={provider === "generic" ? "id do modelo do seu endpoint" : undefined}
+                placeholder="id do modelo do seu endpoint"
                 title="Id do modelo — qualquer um que seu endpoint OpenAI-compatible aceite"
               />
             )}

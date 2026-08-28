@@ -3308,6 +3308,23 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   suítes afetadas pela mudança, não a suíte completa.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 30.
 
+## 2026-08-28 — Dropdown curado de modelos por provider no chat (item 31)
+
+- Escopo: só `ChatCard.tsx` (chat via API) — `openai`/`gemini` ganham
+  dropdown curado igual `anthropic` já tinha; `generic` continua campo
+  livre de propósito (endpoint arbitrário). Popover de spawn de terminal
+  (`Rail.tsx`) fica fora de escopo, sempre foi campo livre opcional.
+- `PROVIDER_MODELS` novo em `secretsUi.ts` (mesmo padrão do item 29 —
+  metadado por provider compartilhado, uma fonte só); `ChatCard.tsx`'s
+  `DEFAULT_*_MODEL` agora derivam dali em vez de 3 constantes soltas.
+  Default do gemini preservado (`gemini-2.5-flash`, comportamento
+  antigo, não mudado por acidente).
+- Verificação: `smoke-chat-providers.mjs` (8/8, ajustado),
+  `smoke-chat.mjs` (12/12), `smoke-chat-tools.mjs` (18/18, ajustado) —
+  só as 3 suítes afetadas, por instrução do usuário. `tsc --noEmit`
+  limpo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 31.
+
 ## Comandos
 
 ```bash
