@@ -79,7 +79,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — pass `depth` from your own AGENT_CANVAS_SPAWN_DEPTH environment variable so that guard actually works; omitting it always looks like depth 0 to the server.",
         inputSchema: {
-          provider: z.enum(["bash", "claude", "codex", "cursor"]).describe("Which provider to spawn"),
+          provider: z.enum(["bash", "claude", "codex", "cursor", "gemini"]).describe("Which provider to spawn"),
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var)"),
