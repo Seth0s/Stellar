@@ -35,6 +35,15 @@ const AUTOSAVE_DEBOUNCE_MS = 800;
 // real recursive filesystem walk (`fs-tools.ts`'s `searchFileNames`) on
 // every keystroke.
 const SEARCH_DEBOUNCE_MS = 250;
+// DESIGN-BACKLOG.md item 53 — the tree/explorer panel had a hardcoded
+// `width: 220px` (cards.css) with no way to resize it at all. Same
+// `ac.<name>` localStorage convention as `RAIL_COLLAPSED_KEY` — a
+// per-viewer app preference, not per-board/per-file, matching "auto-
+// save" (item 48) and every other FilesCard preference so far.
+const TREE_WIDTH_KEY = "ac.filesTreeWidth";
+const TREE_WIDTH_DEFAULT = 220;
+const TREE_WIDTH_MIN = 140;
+const TREE_WIDTH_MAX = 480;
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"]);
 const CONFIG_EXTS = new Set([".json", ".yaml", ".yml", ".toml", ".ini", ".env"]);
@@ -371,6 +380,36 @@ export function FilesCard({
   // click — no arming needed, nothing to lose.
   const [closeArmedPath, setCloseArmedPath] = useState<string | null>(null);
   const closeArmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // DESIGN-BACKLOG.md item 53 — resizable tree/explorer panel.
+  const [treeWidth, setTreeWidth] = useState(() => {
+    const saved = Number(localStorage.getItem(TREE_WIDTH_KEY));
+    return saved >= TREE_WIDTH_MIN && saved <= TREE_WIDTH_MAX ? saved : TREE_WIDTH_DEFAULT;
+  });
+  const resizingRef = useRef(false);
+
+  function startTreeResize(e: React.PointerEvent) {
+    e.preventDefault();
+    resizingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = treeWidth;
+    function onMove(ev: PointerEvent) {
+      if (!resizingRef.current) return;
+      const next = Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, startWidth + (ev.clientX - startX)));
+      setTreeWidth(next);
+    }
+    function onUp() {
+      resizingRef.current = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  useEffect(() => {
+    localStorage.setItem(TREE_WIDTH_KEY, String(treeWidth));
+  }, [treeWidth]);
 
   // DESIGN-BACKLOG.md item 46 — `git-tools.ts`'s `git:status` already
   // returns `branch`; `ChangesCard` was the only consumer. `null` while
@@ -711,7 +750,7 @@ export function FilesCard({
       }
     >
       <div className="files-card-body">
-        <div className="files-tree-panel">
+        <div className="files-tree-panel" style={{ width: treeWidth }}>
           <div className="files-tree-toolbar">
             <button title="Novo arquivo na raiz" onClick={() => startCreate("", "file")}>
               <Icon name="newFile" size={13} />
@@ -840,6 +879,10 @@ export function FilesCard({
             </div>
           )}
         </div>
+        {/* DESIGN-BACKLOG.md item 53 — drag handle to resize the tree
+            panel; `.files-tree-panel`'s width used to be a hardcoded
+            220px with no way to widen/narrow it at all. */}
+        <div className="files-tree-resize" onPointerDown={startTreeResize} />
         <div className="files-editor">
           {/* DESIGN-BACKLOG.md item 50 — horizontal tab bar, one pill per
               open file (insertion order). A dirty tab shows a dot instead

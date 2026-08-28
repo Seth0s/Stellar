@@ -3944,6 +3944,53 @@ entrada só registra a FILA e a ordem combinada:
    agora; registrado aqui só pra não confundir uma falha futura desse
    mesmo teste com uma regressão real.
 
+## 53. FilesCard — árvore não redimensionável, botões e checkbox sem contraste — ✅ feito em 2026-08-28
+
+Reportado ao vivo, 2026-08-28: "não está sendo possível redimensionar o
+tamanho do explorador, e tem botões sem estilo e checkbox no
+auto-salvar sem estilo também".
+
+**Três achados reais, confirmados ao vivo antes de mexer**:
+1. **Árvore não redimensionável**: `.files-tree-panel` tinha
+   `width: 220px` fixo, sem handle nenhum — confirmado, não existia
+   forma de redimensionar.
+2. **Botões "salvar"/"preview" sem contraste**: `getComputedStyle`
+   confirmou que `.files-editor-head button` JÁ tinha `background`/
+   `border` definidos — não era "zero CSS", era `background: var(--
+   panel)` idêntico ao fundo do `.files-editor-head` (transparente,
+   deixando o `--panel` do card por trás aparecer) — botão e fundo com
+   a MESMA cor, só a borda (`--border`, quase idêntica a `--panel`)
+   diferenciando, ilegível como botão a olho.
+3. **Checkbox sem estilo**: confirmado via `getComputedStyle` —
+   `appearance: auto`, `accentColor: auto` — checkbox nativo do SO/GTK
+   sem NENHUM CSS aplicado, aparecendo como quadrado claro contra o
+   tema escuro.
+
+**Fixes**:
+- Handle de resize real (`.files-tree-resize`, novo elemento entre a
+  árvore e o editor) — arrasta via `pointerdown`/`pointermove`/
+  `pointerup` em `window` (mesmo padrão de outros drags do app),
+  largura clampada 140-480px, persistida em `localStorage`
+  (`ac.filesTreeWidth`, mesma convenção de `RAIL_COLLAPSED_KEY`).
+- `.files-editor-head button`: `background: var(--panel)` → `var(--
+  surface)` (um tom mais claro, o mesmo que `.cm-gutters`/o editor de
+  código já usam como "superfície elevada" nesse mesmo card) + padding
+  real + hover state próprio.
+- `.files-editor-autosave-toggle input` e `.continue-last-label input`
+  (Rail.tsx — MESMO gap achado de passagem, checkbox nativo sem
+  nenhuma cor, mesma causa raiz): `accent-color: var(--foam)` — o
+  mesmo token que `.zoom-slider` já usa pro seu próprio `<input
+  type="range">` nativo, a outra única cor de form control neste app.
+
+**Verificado ao vivo via CDP**: arrastar o handle +100px na tela
+aumentou a largura real da árvore de 202→294px (bate com o zoom do
+board aplicado), persistido em `localStorage` corretamente. Checkbox:
+`accentColor` computado = `rgb(69, 200, 255)` (= `--foam`). Botão
+"salvar": background computado `rgb(32, 36, 44)` (= `--surface`) vs.
+fundo do container `rgba(0,0,0,0)` (transparente) — agora genuinamente
+distintos (`distinct: true`). Screenshot antes/depois confirma
+visualmente. `tsc --noEmit` limpo, `smoke-files-card.mjs` (19/19).
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
