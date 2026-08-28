@@ -61,6 +61,25 @@ function nameOf(path: string): string {
   return i === -1 ? path : path.slice(i + 1);
 }
 
+/** DESIGN-BACKLOG.md item 47 — a real tokenizer (`gpt-tokenizer` et al.)
+ * only implements OpenAI's own encodings and would only be accurate for
+ * one of the four providers this app spawns (claude/codex/cursor/gemini)
+ * anyway — Anthropic and Google don't publish a JS tokenizer at all — and
+ * pulls in several MB of BPE rank tables for that one encoding alone.
+ * chars/4 is the same rough heuristic used industry-wide as a provider-
+ * agnostic estimate; labeled with "~" in the UI so it never reads as
+ * exact. Good enough to answer "is this file cheap or expensive to hand
+ * an agent as context", which is the actual question in this app. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n / 1000)}k`;
+}
+
 /** Bundled so `TreeNode` (recursive, one prop object per node instead of a
  * dozen individual callbacks threaded through every level) stays readable —
  * same shape every level down, just re-passed as-is. */
@@ -507,7 +526,14 @@ export function FilesCard({
         <div className="files-editor">
           {selectedPath && (
             <div className="files-editor-head">
-              <span>{selectedPath}</span>
+              <span className="files-editor-head-path">
+                <span className="files-editor-head-path-text">{selectedPath}</span>
+                {mediaKind(selectedPath) !== "image" && content !== null && (
+                  <span className="files-editor-token-count" title="Estimativa de tokens (chars/4) — aproximada, não é o tokenizer real de nenhum provider">
+                    ~{formatTokenCount(estimateTokens(content))} tokens
+                  </span>
+                )}
+              </span>
               <div className="files-editor-head-actions">
                 {mediaKind(selectedPath) === "markdown" && (
                   <button onClick={() => setView(view === "code" ? "preview" : "code")}>

@@ -3725,8 +3725,28 @@ entrada só registra a FILA e a ordem combinada:
    `{repo:false}` pra path genuinamente fora de um repo, provando que o
    gate `gitStatus?.repo &&` de fato esconde o badge nesse caso. `tsc
    --noEmit` limpo, `smoke-files-card.mjs` (19/19).
-2. **47 — Contagem de tokens no editor**: nenhuma métrica de
-   tamanho/tokens exibida hoje.
+2. **47 — Contagem de tokens no editor — ✅ feito em 2026-08-28**:
+   nenhuma métrica de tamanho/tokens existia. **Decisão**: nada de
+   tokenizer real — `gpt-tokenizer` (única lib JS viável) só implementa
+   encodings da OpenAI, seria "exato" pra só 1 dos 4 providers que este
+   app spawna (claude/codex/cursor/gemini — Anthropic/Google não
+   publicam tokenizer em JS) e pesa ~27MB unpacked (checado via `npm
+   view`/`npm pack --dry-run`) só pra uma encoding. Fix: heurística
+   `chars/4` (mesmo padrão usado na indústria como estimativa
+   provider-agnostic), formatada "~N tokens"/"~N.Nk tokens", ao lado do
+   path no `.files-editor-head`, recalculada a cada mudança de `content`
+   (que já é live via `onChange` do CodeMirror). Tooltip deixa claro que
+   é estimativa, não tokenizer real de nenhum provider específico.
+   Verificado ao vivo via CDP: `package.json` real (1194 chars
+   RENDERIZADOS — CodeMirror virtualiza, não é o arquivo inteiro; ✕4 ≈
+   badge inicial "~1.1k" bate), digitado +2000 chars reais (não char
+   events soltos — precisou do par `keyDown`/`keyUp` com `key`+`text`,
+   mesma técnica já usada em `smoke-files-card.mjs`, e clicar perto do
+   topo de `.cm-content`, não no centro geométrico do elemento, que em
+   arquivo virtualizado pode cair fora da área realmente renderizada) —
+   badge foi de "~1.1k" pra "~1.6k" (1090+500=1590 tokens, bate
+   exatamente com o cálculo). `tsc --noEmit` limpo,
+   `smoke-files-card.mjs` (19/19).
 3. **48 — Auto-save configurável**: hoje só salva manual (botão,
    desabilitado se `!dirty`). Decisão de produto (ligado/desligado por
    padrão) tomada na implementação, documentada lá.
