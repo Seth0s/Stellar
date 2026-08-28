@@ -1418,7 +1418,10 @@ export function App() {
 
   // Live override for the active board only (see liveStatus's comment) —
   // every other board keeps the structural proxy fetched over IPC.
-  const activeTerminalCards = cards.filter((c) => c.kind === "terminal");
+  // Excludes provider === "bash" (DESIGN-BACKLOG.md item 43) — the topbar
+  // reads this as "N agente(s)", and a plain shell isn't an agent; without
+  // this a board full of bash terminals inflated the agent count.
+  const activeTerminalCards = cards.filter((c) => c.kind === "terminal" && c.provider !== "bash");
   const effectiveBoardCounts: Record<string, BoardCounts> = activeBoardId
     ? {
         ...boardCounts,
