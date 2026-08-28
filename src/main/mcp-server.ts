@@ -202,11 +202,33 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
   httpServer.on("error", (err) => {
     console.error("mcp-server: failed to bind, MCP tools will be unavailable:", err);
   });
+
+  // `opts.port` is 0 by default (index.ts) — the OS assigns a free ephemeral
+  // port, sidestepping EADDRINUSE entirely for the common case of two live
+  // instances (e.g. a packaged app + `npm run dev`) both wanting an MCP
+  // server. The real port is only known once `listening` fires, so `url`
+  // starts as a placeholder (matches this port, in case `opts.port` was
+  // explicitly pinned — the verify harness does this, see cdp-client.mjs)
+  // and is updated in place once bound. Every consumer reads `.url` lazily
+  // (pty-registry.ts's `registryOpts.mcpUrl` getter, see index.ts) rather
+  // than copying the string at construction time, so this update is seen.
+  const state = { url: `http://127.0.0.1:${opts.port}/mcp` };
+  httpServer.on("listening", () => {
+    const addr = httpServer.address();
+    if (addr && typeof addr === "object") {
+      state.url = `http://127.0.0.1:${addr.port}/mcp`;
+    }
+  });
   httpServer.listen(opts.port);
 
   function close() {
     httpServer.close();
   }
 
-  return { url: `http://127.0.0.1:${opts.port}/mcp`, close };
+  return {
+    get url() {
+      return state.url;
+    },
+    close,
+  };
 }

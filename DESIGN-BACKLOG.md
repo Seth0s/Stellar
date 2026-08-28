@@ -3458,6 +3458,117 @@ inteira: `smoke-terminal-visibility-persist.mjs` (3/3),
 vendorizar "Symbols Nerd Font Mono" pra fechar os quadrados sem glifo da
 status line de vez.
 
+## 40. Bug — servidor MCP falha ao dar bind (EADDRINUSE portas 4488/4489), MCP tools indisponíveis — ✅ feito em 2026-08-28
+
+Reportado ao vivo, 2026-08-28, achado no log de dev do usuário (não uma
+sessão de teste minha). Duas ocorrências: `mcp-server: failed to bind,
+MCP tools will be unavailable: Error: listen EADDRINUSE ... :::4489` e
+logo depois `[uncaughtException] not crashing the app — ver item 37:
+Error: listen EADDRINUSE ... 0.0.0.0:4488` (esse segundo, ao menos, não
+derruba o app — item 37 cumprindo o papel).
+
+**Causa raiz**: são dois servidores HTTP diferentes, cada um com sua
+porta fixa hardcoded — `mcp-server.ts` (4489, o servidor MCP real, ponte
+pra ferramentas de agente) e `remote-server.ts` (4488, pareamento/QR pra
+dispositivo remoto). Nenhum dos dois detectava "instância duplicada" —
+`app.requestSingleInstanceLock()` nunca é chamado neste código, então
+duas instâncias reais (dev + packaged, ou uma sobra de processo anterior)
+sempre colidem nas mesmas duas portas fixas. `mcp-server.ts` já tinha um
+`httpServer.on("error", ...)` que só logava (não derrubava o processo);
+`remote-server.ts` não tinha handler nenhum — dependia só do catch-all
+global do item 37 pra não crashar, deixando `remoteServer` como um objeto
+"vivo" cujo servidor nunca de fato bindou, sem sinal nenhum pro resto do
+código.
+
+**Fix — tratamento assimétrico, porque as duas portas têm papéis
+diferentes**:
+- `mcp-server.ts` (porta 4489): a URL só é lida **dentro do próprio
+  processo** (injetada como env var em cada provider spawnado, ver
+  `providers.ts`) — nunca persistida nem exposta externamente. Trocado
+  `port: 4489` fixo por **`port: 0`** (padrão) — o SO escolhe uma porta
+  livre, eliminando essa classe de colisão por completo. O problema:
+  `mcpUrl: mcpServer.url` (`index.ts`) era lido **sincronamente** logo
+  após `createMcpServer(...)` retornar, mas com `port: 0` a porta real só
+  é conhecida depois do evento `listening` (assíncrono). Como a
+  construção de `registry`/`mcpServer`/`remoteServer` em `index.ts` é
+  toda setup síncrono sem nenhum closure rodando antes do boot terminar
+  (comentário já existente no código confirma isso), a correção ficou
+  simples sem precisar tornar `createWindow` assíncrona: `createMcpServer`
+  agora retorna `{ get url() {...}, close }` (getter sobre um estado
+  mutável interno, atualizado no handler de `listening`), e `index.ts`
+  passa `mcpUrl` pra `createPtyRegistry` também como getter
+  (`get mcpUrl() { return mcpServer.url; }`) em vez de copiar a string uma
+  vez — cada spawn de provider lê o valor ao vivo, que por essa altura já
+  reflete a porta real. `AGENT_CANVAS_MCP_PORT` (usado pelo harness de
+  verify pra portas previsíveis, ver `smoke-mcp.mjs`) continua tendo
+  prioridade quando definida.
+- `remote-server.ts` (porta 4488): fica **fixa** de propósito — é a porta
+  que o usuário configura em Tailscale Funnel/Cloudflare Tunnel pra
+  pareamento remoto (ver AGENTS.md), então trocar por porta dinâmica
+  quebraria esse uso real. Fix aqui foi só paridade com `mcp-server.ts`:
+  adicionado o `httpServer.on("error", ...)` que faltava, logando a
+  falha de bind de forma explícita em vez de depender só do catch-all
+  global do item 37.
+
+**Verificado ao vivo via CDP**: duas instâncias reais lançadas em
+paralelo (sem override de porta, simulando exatamente o cenário do bug —
+duas janelas Electron completas, cada uma com seu `--user-data-dir`),
+`stderr` de nenhuma das duas contém `EADDRINUSE`/`mcp-server` (antes do
+fix, ambas reproduziam o erro exato do log do usuário). Confirmado
+também que o path de override (`AGENT_CANVAS_MCP_PORT`, usado pelo
+harness de verify) continua funcionando — endpoint `/mcp` responde
+`200` com `tools/list` real. Suítes `smoke-mcp.mjs` (21/21) e
+`smoke-remote-control.mjs` (14/14) passando.
+
+Logs relacionados, possivelmente ruído separado (anotados, não
+priorizados, fora do escopo deste item): aviso `--ozone-platform=wayland'
+is not compatible with Vulkan` (comum em setups Wayland+Vulkan, pode ser
+benigno) e `Failed to delete the database: Database IO error` (service
+worker storage do Chromium/Electron) — nenhum dos dois confirmado como
+relacionado ao bug de porta, precisam de triagem própria se persistirem.
+
+## 41. Card de arquivos (FilesCard) incompleto — anotado, não priorizado ainda
+
+Reportado ao vivo, 2026-08-28: usuário percebeu que o card de arquivos
+"ainda está incompleto, precisa de mais detalhes" — pedido explícito é
+só ANOTAR por agora, sem investigar/implementar nada; decisão de
+design/escopo de features fica pra uma conversa futura direcionada
+(quais features exatamente, que design). Não fazer nada aqui até o
+usuário trazer o assunto de volta com mais detalhe.
+
+## 42. Qualidade de renderização interna dos cards perde nitidez ao redimensionar a janela
+
+Reportado ao vivo, 2026-08-28. Usuário pergunta se cada tipo de card
+(terminal, etc.) renderiza dinamicamente na resolução atual do monitor,
+e relata perda de qualidade visual especificamente ao REDIMENSIONAR a
+janela do app com um card (terminal citado) já aberto. Distinto da
+pergunta de DPI já investigada no item 39 (lá: sem bug de código achado,
+canvas batia 1:1 com CSS num DPR=1, mas explicitamente sem poder
+descartar 100% um cenário HiDPI real por falta de máquina de teste) —
+aqui o gatilho específico é RESIZE da janela em si, não escala de tela:
+suspeita razoável (não confirmada) é que o canvas/WebGL do terminal (ou
+de outro tipo de card) não recalcula seu backing-store na resolução
+certa depois de um resize real da janela — precisa reproduzir ao vivo
+via CDP (`Browser.setWindowBounds` ou equivalente, redimensionar de
+verdade, comparar backing-store vs CSS size do canvas antes/depois,
+mesma técnica de medição pixel-a-pixel já usada nos itens 36/39) antes
+de decidir causa/fix. Ainda não investigado.
+
+## 43. Contagem de "agentes ativos" na topbar deveria ser por sessão, não por terminal aberto
+
+Reportado ao vivo, 2026-08-28. Breadcrumb da topbar mostra "N agentes ·
+M ativos" (`Topbar.tsx`, achado no item 1 do histórico deste arquivo) —
+usuário reporta que a contagem inclui terminal SEM agente nenhum rodando
+(ex. um terminal `bash` puro), quando deveria contar por identidade de
+sessão real (algo como `session_id`/processo vivo de verdade), não só
+"quantos cards de terminal existem abertos". Precisa achar exatamente
+onde `agentes`/`ativos` são calculados (`App.tsx`/`Topbar.tsx`, provável
+`card-counts` do item 1 do histórico) e entender a semântica atual antes
+de mudar — pode ser um bug real de contagem (conta bash como agente) ou
+uma limitação já documentada (ver `AGENTS.md`: "sem processo vivo para
+sessão não carregada" já é uma limitação assumida do item 1 antigo) que
+só precisa de ajuste de critério. Ainda não investigado.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
