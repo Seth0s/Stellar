@@ -3554,20 +3554,39 @@ verdade, comparar backing-store vs CSS size do canvas antes/depois,
 mesma técnica de medição pixel-a-pixel já usada nos itens 36/39) antes
 de decidir causa/fix. Ainda não investigado.
 
-## 43. Contagem de "agentes ativos" na topbar deveria ser por sessão, não por terminal aberto
+## 43. Contagem de "agentes ativos" na topbar deveria ser por sessão, não por terminal aberto — ✅ feito em 2026-08-28
 
 Reportado ao vivo, 2026-08-28. Breadcrumb da topbar mostra "N agentes ·
 M ativos" (`Topbar.tsx`, achado no item 1 do histórico deste arquivo) —
-usuário reporta que a contagem inclui terminal SEM agente nenhum rodando
-(ex. um terminal `bash` puro), quando deveria contar por identidade de
-sessão real (algo como `session_id`/processo vivo de verdade), não só
-"quantos cards de terminal existem abertos". Precisa achar exatamente
-onde `agentes`/`ativos` são calculados (`App.tsx`/`Topbar.tsx`, provável
-`card-counts` do item 1 do histórico) e entender a semântica atual antes
-de mudar — pode ser um bug real de contagem (conta bash como agente) ou
-uma limitação já documentada (ver `AGENTS.md`: "sem processo vivo para
-sessão não carregada" já é uma limitação assumida do item 1 antigo) que
-só precisa de ajuste de critério. Ainda não investigado.
+usuário reportou que a contagem inclui terminal SEM agente nenhum rodando
+(ex. um terminal `bash` puro).
+
+**Causa raiz confirmada**: bug real, não limitação já assumida.
+`App.tsx`'s `activeTerminalCards` (usado como override ao vivo pro board
+carregado) contava `cards.filter((c) => c.kind === "terminal")` — TODO
+card de terminal, `bash` incluído — e a mesma coisa acontecia na proxy
+estrutural de `store.ts`'s `cardCountsStmt` (`COUNT(*) as agents` sem
+filtro de provider). O label da topbar é literalmente "N agente(s)" —
+um shell puro não é um agente.
+
+**Fix**: ambos os cálculos passam a excluir `provider === "bash"`.
+`App.tsx`: `cards.filter((c) => c.kind === "terminal" && c.provider !==
+"bash")`. `store.ts`: `COUNT(*) as agents` → `SUM(CASE WHEN provider !=
+'bash' THEN 1 ELSE 0 END) as agents` (mesma expressão que `active` já
+usava). Efeito colateral aceito conscientemente: pra um board NÃO
+carregado (sem PTY viva, ver limitação já documentada de "sem processo
+vivo pra sessão não carregada"), `agents` e `active` agora computam o
+mesmo valor — não há sinal ao vivo disponível estruturalmente pra
+diferenciá-los além de "é um card de agente real", então os dois
+refletem a mesma proxy honesta.
+
+**Verificado ao vivo via CDP**: sessão nova com 3 terminais `bash` + 1
+`codex` (4 cards de terminal no total) — topbar mostrou corretamente
+"1 agente · 1 ativo" (antes do fix, teria mostrado "4 agentes"). `tsc
+--noEmit` limpo, `smoke-boot.mjs` (7/7), `smoke-card-actions.mjs`
+(10/10), `smoke-session-modal.mjs` (20/20) — sem teste dedicado
+pré-existente pro contador da topbar, cobertura ampliada como
+salvaguarda já que `App.tsx` foi tocado.
 
 ## Ordem sugerida para a próxima rodada
 

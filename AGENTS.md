@@ -3491,6 +3491,23 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   --noEmit` limpo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 40.
 
+## 2026-08-28 — Contagem de agentes na topbar contava terminal bash como agente (item 43)
+
+- Reportado ao vivo. Topbar mostra "N agente(s) · M ativo(s)", mas
+  `App.tsx`'s `activeTerminalCards` e `store.ts`'s `cardCountsStmt`
+  contavam TODO card de terminal, `bash` puro incluído — um shell não é
+  um agente. Fix: ambos passam a excluir `provider === "bash"`
+  (`&& c.provider !== "bash"` no filtro do renderer, `SUM(CASE WHEN
+  provider != 'bash'...)` no SQL, substituindo o `COUNT(*)` anterior).
+- Efeito colateral aceito: pra um board não carregado, `agents` e
+  `active` agora computam o mesmo valor (não há sinal de PTY viva
+  estrutural pra diferenciá-los além de "é card de agente real").
+- Verificado ao vivo via CDP: 3 terminais bash + 1 codex → topbar mostra
+  "1 agente · 1 ativo" (seria "4 agentes" antes do fix). `tsc --noEmit`
+  limpo, `smoke-boot.mjs` (7/7), `smoke-card-actions.mjs` (10/10),
+  `smoke-session-modal.mjs` (20/20).
+- Detalhe completo em `DESIGN-BACKLOG.md` item 43.
+
 ## Comandos
 
 ```bash

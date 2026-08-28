@@ -237,17 +237,20 @@ export function openStore(userDataDir: string) {
   const deleteBoardStmt = db.prepare("DELETE FROM boards WHERE id = ?");
   const touchBoardStmt = db.prepare("UPDATE boards SET last_accessed_at = ? WHERE id = ?");
 
-  // Structural counts for the session-list popover (item 1) — "agents" is
-  // every terminal-kind card; "active" is a STATIC proxy (provider != bash,
-  // i.e. an actually-configured agent vs. a plain shell), not a live PTY
-  // signal: a non-loaded board's processes aren't running at all (switching
-  // boards kills them, see AGENTS.md), so there's no live state to report
-  // for anything but the currently-open board. The renderer overrides this
-  // with real spawnError/exitCode-derived status for whichever board is
-  // actually loaded (App.tsx's liveStatus).
+  // Structural counts for the session-list popover (item 1). Both
+  // "agents" and "active" exclude plain bash terminals (provider = 'bash')
+  // — DESIGN-BACKLOG.md item 43: the topbar's own label is "N agente(s)",
+  // and a bash card isn't an agent, so it must never inflate that count.
+  // "active" is a STATIC proxy, not a live PTY signal: a non-loaded
+  // board's processes aren't running at all (switching boards kills them,
+  // see AGENTS.md), so there's no live state to report for anything but
+  // the currently-open board — the best honest signal here is "structurally
+  // a real agent card", identical to "agents" for a non-loaded board. The
+  // renderer overrides this with real spawnError/exitCode-derived status
+  // for whichever board is actually loaded (App.tsx's liveStatus).
   const cardCountsStmt = db.prepare(`
     SELECT board_id,
-      COUNT(*) as agents,
+      SUM(CASE WHEN provider != 'bash' THEN 1 ELSE 0 END) as agents,
       SUM(CASE WHEN provider != 'bash' THEN 1 ELSE 0 END) as active
     FROM cards WHERE kind = 'terminal' GROUP BY board_id
   `);
