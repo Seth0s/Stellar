@@ -3703,6 +3703,30 @@ Análise completa entregue fora deste arquivo (ver resposta da sessão de
   é um card SEPARADO que já fala com git, mas não aparece dentro do
   `FilesCard`).
 
+## 46-52. FilesCard vs VSCode — fila aprovada em 2026-08-28, ordem do mais barato ao mais caro
+
+Usuário aprovou a ordem proposta na análise do item 41/45 e pediu pra
+começar a implementar. Cada um vira seu próprio item conforme é feito
+(número final + detalhe de verificação preenchidos na hora), esta
+entrada só registra a FILA e a ordem combinada:
+
+1. **46 — Branch git no header do FilesCard**: `git-tools.ts`'s
+   `git:status` já retorna `branch`, só nunca foi consumido dentro do
+   `FilesCard` (só o `ChangesCard`, card separado, usa hoje).
+2. **47 — Contagem de tokens no editor**: nenhuma métrica de
+   tamanho/tokens exibida hoje.
+3. **48 — Auto-save configurável**: hoje só salva manual (botão,
+   desabilitado se `!dirty`). Decisão de produto (ligado/desligado por
+   padrão) tomada na implementação, documentada lá.
+4. **49 — Busca por nome de arquivo na árvore**: filtro/fuzzy, nenhuma
+   busca existe hoje.
+5. **50 — Tabs de arquivos abertos**: hoje só 1 arquivo por vez, trocar
+   descarta o anterior. Maior item da lista.
+6. **51 — Busca full-text no conteúdo dos arquivos**: grep real dentro
+   do `root`, via `fs-tools.ts`.
+7. **52 — Ícones por linguagem real na árvore**: hoje só 5 buckets de
+   categoria (`fileIconFor`) — `.js`/`.py`/`.rs` mostram o mesmo ícone.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
