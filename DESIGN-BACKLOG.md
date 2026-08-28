@@ -2892,6 +2892,43 @@ já carregados. Pedido é reavaliar se Manrope ainda é a escolha certa
 pro tom de marca "Stellar" (ou trocar), não necessariamente adicionar
 uma fonte nova além da mono já usada pra código.
 
+## 36. Resolução/qualidade de fonte no terminal + statusline com glifos quebrados
+
+Pedido ao vivo, 2026-08-28, direto na própria sessão do usuário
+("estou usando o stellar agora") — capturado com `mcp__stellar__snapshot`
+contra o card real (`82`, terminal claude) enquanto o bug acontecia, não
+reproduzido depois. Screenshot mostra a barra de status (statusline
+customizada, provavelmente `ccstatusline` ou script equivalente) com
+vários quadrados coloridos sem glifo (cyan, roxo, amarelo) no lugar de
+ícones — o padrão clássico de "tofu" (glifo ausente) de fontes Nerd
+Font/Powerline, não um bug de layout.
+
+**Causa raiz encontrada lendo o código, ainda não corrigida**:
+`useTerminal.ts`'s `new Terminal({ fontSize: 15, cursorBlink: true })`
+**nunca define `fontFamily`** — xterm.js cai no próprio default
+(`courier-new, courier, monospace`), nem sequer usa a JetBrains Mono que
+o resto do app já carrega via `@fontsource/jetbrains-mono`
+(`main.tsx`/`--font-mono` em `tokens.css`). Isso sozinho já explica parte
+de "resolução renderizada" abaixo do esperado (fonte errada, sem hinting
+nem métrica pensada pra terminal).
+
+**Mas os quadrados coloridos são um problema à parte**: mesmo corrigindo
+pra JetBrains Mono, ela não é uma variante "Nerd Font" (sem os glifos de
+ícone da Private Use Area que statuslines tipo `ccstatusline`/Starship
+emitem) — confirmado que esta máquina não tem nenhuma Nerd Font instalada
+(`fc-list | grep -i nerd` → vazio), então nem um fallback de família
+CSS resolveria sozinho. Fix completo provavelmente precisa vender um
+"Symbols Nerd Font Mono" (fonte só-de-símbolos do projeto
+`ryanoasis/nerd-fonts`, cobre só a faixa de ícones, usada como
+`font-family` fallback DEPOIS de JetBrains Mono — não substitui a fonte
+base, só cobre o intervalo de glifo que falta) — adiciona um asset de
+fonte novo ao bundle, decisão de escopo maior que um fix de uma linha,
+não feito ainda.
+
+**Não implementado ainda** — registrado com prova ao vivo, fix real
+(`fontFamily` no `new Terminal(...)`, e a decisão sobre vendorizar
+Nerd Font symbols) fica pra quando este item for trabalhado.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
