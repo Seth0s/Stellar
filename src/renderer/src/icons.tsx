@@ -187,7 +187,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   eyeOff: EyeOff,
 };
 
-export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+export function Icon({ name, size = 18, color }: { name: IconName; size?: number; color?: string }) {
   const Component = COMPONENTS[name];
-  return <Component size={size} strokeWidth={1.75} />;
+  return <Component size={size} strokeWidth={1.75} color={color} />;
 }
