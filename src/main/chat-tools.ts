@@ -55,7 +55,7 @@ export const TOOL_DESCRIPTIONS = {
   [BASH_TOOL_NAME]:
     "Run a shell command. Executes sandboxed (bubblewrap): filesystem writes are confined to this chat's project root and /tmp, the process runs in its own PID/IPC/UTS namespace (can't see or signal anything on the host), but network access IS available (npm install, curl, git clone, etc. all work). Always shown to the human for approval before running — if they deny it, nothing executes.",
   [DELEGATE_TOOL_NAME]:
-    "Delegate a substantial, independent task to a full coding agent (claude or codex) running in its own new terminal card on the board, in this chat's project root. Use this for real, multi-step engineering work, not small lookups. Asynchronous: you get back a card id, not the agent's output — you can't see what it does or wait for it inside this turn; check the board for the reply.",
+    "Delegate a substantial, independent task to a full coding agent (claude, codex, or gemini) running in its own new terminal card on the board, in this chat's project root. Use this for real, multi-step engineering work, not small lookups. Asynchronous: you get back a card id, not the agent's output — you can't see what it does or wait for it inside this turn; check the board for the reply.",
 } as const;
 
 export const TOOL_PARAMETERS = {
@@ -80,7 +80,7 @@ export const TOOL_PARAMETERS = {
   [DELEGATE_TOOL_NAME]: {
     type: "object",
     properties: {
-      provider: { type: "string", enum: ["claude", "codex"], description: "Which CLI agent to spawn" },
+      provider: { type: "string", enum: ["claude", "codex", "gemini"], description: "Which CLI agent to spawn" },
       reason: { type: "string", description: "Short description of the task being delegated, shown to the human" },
     },
     required: ["provider", "reason"],
@@ -95,7 +95,7 @@ export type WriteConsentRequest = { path: string; isNewFile: boolean; diffText: 
 export type DiffHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] };
 
 export type BashConsentRequest = { command: string };
-export type DelegateProvider = "claude" | "codex";
+export type DelegateProvider = "claude" | "codex" | "gemini";
 export type DelegateResult = { ok: true; cardId: string } | { ok: false; error: string };
 
 export async function runReadFile(root: string, path: string): Promise<ToolResult> {
@@ -179,7 +179,7 @@ export async function executeTool(name: string, input: unknown, hooks: ChatToolH
       result = allowed ? await runSandboxedBash(hooks.root, command) : { ok: false, text: "o usuário negou a execução deste comando" };
     }
   } else if (name === DELEGATE_TOOL_NAME) {
-    const provider: DelegateProvider = args.provider === "codex" ? "codex" : "claude";
+    const provider: DelegateProvider = args.provider === "codex" ? "codex" : args.provider === "gemini" ? "gemini" : "claude";
     const reason = String(args.reason ?? "");
     const delegated = await hooks.delegateToAgent(provider, reason);
     result = delegated.ok

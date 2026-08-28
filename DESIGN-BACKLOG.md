@@ -2712,7 +2712,7 @@ confirma que copiou o conteúdo real da página (não um no-op); um
 foi inserido via `insertText`. Regressão completa: 23/23 suítes, 0
 falhas.
 
-## 28. Novo provider — Gemini e outros (modelos locais + provider genérico) — ✅ ChatCard feito em 2026-08-28
+## 28. Novo provider — Gemini e outros (modelos locais + provider genérico) — ✅ ChatCard + terminal/MCP feitos em 2026-08-28
 
 Pedido ao vivo, 2026-08-28: "novo provider, gemini e outros (modelos
 locais e provider genéricos)", "já pensando no mcp de invocação e etc".
@@ -2772,6 +2772,62 @@ próximo passo natural, não feito ainda.
   falhas reais (2 flakes isolados de contenção de recursos — 24
   lançamentos de Electron em sequência — reconfirmados limpos fora da
   cadeia).
+
+**Terminal/MCP — feito, mesmo dia**: pedido original já incluía "já
+pensando no mcp de invocação e etc" — segunda metade do escopo
+decidido ("os dois, ChatCard primeiro"). `gemini` vira um `ProviderId`
+de verdade em `providers.ts` (`PROVIDERS`), spawnável via terminal
+(rail/popover) e via MCP `spawn_agent`, mesmo padrão de
+`claude`/`codex`/`cursor`.
+
+- **Flags verificadas contra a documentação real do
+  `google-gemini/gemini-cli`** (`gemini` não estava instalado nesta
+  máquina pra testar ao vivo — WebFetch em `docs/cli/cli-reference.md`,
+  `docs/cli/headless.md`, `docs/tools/mcp-server.md`, não adivinhadas):
+  `--resume`/`-r` (aceita `"latest"`, índice, ou UUID completo — mapeado
+  igual a `resumeId`/`continueLast`), `--model`/`-m`. Sem flag de system
+  prompt (nenhum ramo novo precisa lidar com isso). **Sem flag de
+  registro efêmero de MCP** — confirmado que o único mecanismo é
+  `gemini mcp add`/`~/.gemini/settings.json`, ambos persistentes —
+  mesma não-escolha deliberada já aplicada ao `cursor`: não escrever no
+  config do usuário silenciosamente a cada spawn.
+- **`ai-action.ts`** (ação de IA "organizar"/"resumir"): gemini
+  compartilha o mesmo ramo `-p`/`--output-format json` de
+  `claude`/`cursor-agent`, mas o campo JSON da resposta é `response`,
+  não `result` (também verificado via docs) — `extractJsonResult`
+  passou a checar os dois campos, com o mesmo fallback defensivo pra
+  texto cru que já existia.
+- **`mcp-server.ts`**: `spawn_agent`'s enum de `provider` ganha
+  `"gemini"` — é literalmente o "MCP de invocação" pedido.
+  **`chat-tools.ts`**: `delegate_to_agent` (ferramenta do ChatCard)
+  também ganha gemini como alvo de delegação.
+- **Achado real, decisão deliberada de NÃO implementar agora**:
+  `session-watch.ts`'s descoberta automática de sessão (resume
+  automático depois de spawnar) é reverse-engineered contra o
+  layout real em disco de cada CLI — só possível tendo o binário
+  instalado pra inspecionar de verdade (ver AGENTS.md). Sem `gemini`
+  instalado nesta máquina, adivinhar o formato de arquivo de sessão
+  arriscaria apontar pro lugar errado silenciosamente pra sempre — pior
+  que o gap honesto (`--resume` continua funcionando se o humano passar
+  o id manualmente; só a descoberta automática fica de fora). Registrado
+  em código pra revisitar quando `gemini` puder ser instalado e
+  inspecionado de verdade.
+- **UI**: `ProviderPicker`/`icons.tsx` ganham `providerGemini`
+  (`Sparkles`, reaproveitado — sem novo import), `App.tsx`'s
+  `PROVIDER_OPTIONS` inclui gemini. Nenhuma mudança no mecanismo de
+  resume/model/system-prompt do popover — já era genérico o bastante
+  (`showAgentFields`), só o campo de system prompt continua exclusivo
+  do claude (correto — gemini não tem essa flag).
+- **Verificação**: `scripts/verify/smoke-provider-gemini.mjs` (novo,
+  4/4). Como `gemini` não está instalado nesta máquina, a prova real
+  possível é o caminho inteiro até o ponto onde falta de binário já
+  falha hoje pra qualquer provider: gemini aparece no picker de
+  terminal; criar um terminal com provider gemini falha de forma
+  honesta (`spawnError` visível, sem crash) — mesmo comportamento que
+  claude/codex/cursor teriam sem o binário no PATH; `spawn_agent(gemini)`
+  via MCP passa pelo fluxo de consentimento real (`AgentAskModal`) e
+  resolve `ok:true` com um `cardId` real, um novo terminal card existe
+  de fato no board depois. Regressão completa: 26/26 suítes, 0 falhas.
 
 ## 29. Melhorar a UI/UX de adição de API keys
 

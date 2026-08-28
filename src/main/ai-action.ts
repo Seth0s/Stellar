@@ -33,14 +33,17 @@ export type OneShotResult = { text: string } | { error: string };
 
 /**
  * claude/cursor-agent's `-p --output-format json` prints a JSON object with
- * the final text under some field (commonly "result") — falls back to the
- * raw stdout if that shape doesn't hold, so a vendor format change degrades
- * to plain text instead of breaking.
+ * the final text under some field (commonly "result"); gemini's own
+ * `-p --output-format json` (verified against docs/cli/headless.md, not
+ * installed on this machine to test live) uses "response" instead —
+ * checks both, falls back to the raw stdout if neither shape holds, so a
+ * vendor format change degrades to plain text instead of breaking.
  */
 function extractJsonResult(stdout: string): string {
   try {
     const parsed = JSON.parse(stdout);
     if (typeof parsed.result === "string") return parsed.result;
+    if (typeof parsed.response === "string") return parsed.response;
   } catch {
     // Not JSON, or not the expected shape — use the raw text below.
   }
@@ -74,7 +77,8 @@ export async function runOneShotSummary(providerId: string, cwd: string, prompt:
       }
     }
 
-    // claude and cursor-agent share the same -p/--output-format flags.
+    // claude, cursor-agent, and gemini all share the same -p/--output-format
+    // flags (verified against docs for gemini — see extractJsonResult).
     const { stdout } = await execFileNoStdin(binary, ["-p", prompt, "--output-format", "json"], {
       cwd,
       timeout: TIMEOUT_MS,

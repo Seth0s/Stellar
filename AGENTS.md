@@ -3156,6 +3156,43 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   flakes de contenção de recursos, reconfirmados limpos isolados).
 - Detalhe completo em `DESIGN-BACKLOG.md` item 28.
 
+## 2026-08-28 — Gemini vira provider terminal-spawnável + MCP `spawn_agent` (item 28, segunda metade)
+
+- Escopo original já incluía "já pensando no mcp de invocação" —
+  segunda metade do que foi confirmado com o usuário ("os dois,
+  ChatCard primeiro"). `gemini` vira `ProviderId` real
+  (`providers.ts`), spawnável via terminal e via MCP `spawn_agent`,
+  mesmo padrão de claude/codex/cursor.
+- Flags verificadas contra a documentação real do
+  `google-gemini/gemini-cli` (não instalado nesta máquina — WebFetch
+  nos docs oficiais, não adivinhadas): `--resume`/`-r`, `--model`/`-m`.
+  Sem flag de system prompt. Sem flag de registro efêmero de MCP
+  (confirmado: só `gemini mcp add`/`settings.json`, ambos
+  persistentes) — mesma não-escolha do `cursor`, não escreve no config
+  do usuário silenciosamente.
+- `ai-action.ts`: gemini compartilha o ramo `-p`/`--output-format
+  json` de claude/cursor-agent, mas o campo JSON é `response`, não
+  `result` (também verificado via docs) — `extractJsonResult` checa os
+  dois agora.
+- `mcp-server.ts`'s `spawn_agent` e `chat-tools.ts`'s
+  `delegate_to_agent` ganham gemini no enum de provider.
+- **Decisão deliberada de não implementar**: `session-watch.ts`'s
+  descoberta automática de sessão pós-spawn é reverse-engineered
+  contra o layout real em disco de cada CLI — sem `gemini` instalado
+  pra inspecionar de verdade, adivinhar arriscaria apontar pro lugar
+  errado silenciosamente. `--resume` manual continua funcionando; só a
+  descoberta automática fica de fora, registrado pra revisitar.
+- UI: `ProviderPicker`/`icons.tsx` ganham `providerGemini` (`Sparkles`
+  reaproveitado), `App.tsx`'s `PROVIDER_OPTIONS` inclui gemini.
+- Verificação: `scripts/verify/smoke-provider-gemini.mjs` (novo, 4/4).
+  Sem o binário instalado, a prova real possível é o caminho inteiro
+  até onde falta de binário já falha hoje pra qualquer provider: gemini
+  aparece no picker; criar terminal com gemini falha honesto
+  (`spawnError`, sem crash); `spawn_agent(gemini)` via MCP passa pelo
+  consentimento real e resolve `ok:true` com cardId, card real existe
+  depois. Regressão completa: 26/26 suítes, 0 falhas.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 28.
+
 ## Comandos
 
 ```bash

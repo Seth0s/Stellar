@@ -103,6 +103,7 @@ export type IconName =
   | "providerClaude"
   | "providerCodex"
   | "providerCursor"
+  | "providerGemini"
   | "folderOpen"
   | "fileImage"
   | "fileMarkdown"
@@ -162,6 +163,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   providerClaude: BotMessageSquare,
   providerCodex: Code2,
   providerCursor: MousePointerClick,
+  providerGemini: Sparkles,
   folderOpen: FolderOpen,
   fileImage: Image,
   fileMarkdown: FileText,
