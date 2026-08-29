@@ -3782,6 +3782,25 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   group-select` — tudo passando.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 56.
 
+## 2026-08-29 — 13 pontos reportados ao vivo, anotados sem implementar (item 57)
+
+- Pedido explícito do usuário foi só registrar, sem tocar em código.
+  Cobre: scrollbar do terminal se confundindo com borda, chatbox sem
+  botão de nova sessão + sessões deveriam ser por-provider, modelos do
+  chatbox desatualizados, bolhas de chat sem fundo colorido, bug real de
+  múltiplos terminais Claude abrindo a mesma sessão, status-line do
+  chatbox (contexto/duração), export de área do canvas, colar
+  imagem/PDF no canvas vazio, fonte dinâmica no terminal por zoom, botão
+  "x" sem estilo + legenda de tooltip a trocar, popover de links com URL
+  corrompida (escape ANSI vazando) + badge mal posicionado + scrollbar
+  não padronizado, observer de provider não instalado por provider.
+- Uma pergunta do usuário foi respondida na hora (não só anotada):
+  `delegate_to_agent` (chat-tools.ts) já existe — chatbox → agente CLI
+  funciona (fire-and-forget, sem canal de volta) — mas o caminho inverso
+  (CLI → chatbox) e qualquer comunicação real entre agentes já rodando
+  não existem ainda.
+- Detalhe completo (13 pontos) em `DESIGN-BACKLOG.md` item 57.
+
 ## Comandos
 
 ```bash
