@@ -4154,6 +4154,105 @@ Reverificado ao vivo: `rgb(230,232,236)` sobre `rgb(74,69,32)`.
 `smoke-card-lifecycle.mjs`, `smoke-connector.mjs`, `smoke-group-select.mjs`
 passando.
 
+## 57. Anotado em 2026-08-29, não implementado ainda — 13 pontos reportados ao vivo
+
+Pedido explícito do usuário foi só anotar, sem mexer em código nesta
+passagem. Numeração preservada como reportada.
+
+1. **Terminal — linha vertical não é borda, é o scrollbar se mesclando
+   com o DOM** (print anexado ao pedido). O trilho do scrollbar do
+   xterm.js está visualmente idêntico a uma borda de card, lido como se
+   fosse estrutura em vez de controle de rolagem. Pedido: remover a
+   affordance visual do scrollbar sem perder a rolagem em si (equivalente
+   ao `thin-scroll`/scrollbar invisível-mas-funcional já usado em outros
+   lugares do app — `FilesCard`, editor, etc. — aplicar o mesmo tratamento
+   ao xterm).
+2. **Chatbox: falta botão de nova sessão + sessões deveriam ser
+   por-provider** (print anexado). A barra lateral "SESSÕES DE CHAT" só
+   lista sessões existentes, sem um botão pra criar uma nova diretamente
+   ali. Além disso, hoje a lista de sessões parece ser cross-provider —
+   trocar entre anthropic/openai/gemini/custom (pills do topo) deveria
+   trocar TAMBÉM a lista de sessões exibida pra só as daquele provider
+   (cada provider guarda suas próprias sessões, não uma lista global
+   compartilhada).
+3. **Modelos do chatbox desatualizados**. Lista que o usuário passou:
+   Gemini → "Antigravity" e "Gemini 3.7 Flash"; OpenAI → pesquisar os
+   modelos mais recentes listados na própria API antes de atualizar
+   (não copiar de memória). Atualizar `DEFAULT_GEMINI_MODEL`/dropdown
+   curado (item 31) pra refletir isso quando for implementado.
+4. **Bolhas de chat sem fundo colorido** — o usuário quer formato de
+   bolha (contorno/silhueta de bolha), mas SEM fundo preenchido de cor;
+   só um destaque leve (ex.: borda sutil ou tom de fundo quase neutro)
+   diferenciando mensagem do usuário da mensagem do modelo, sem as duas
+   virarem blocos de cor sólida.
+5. **Bug real: múltiplos terminais Claude com sessões diferentes abrem
+   sempre a MESMA sessão.** Reportado como bug ativo, não só polimento —
+   se há 2+ cards de terminal Claude com `resumeId`s diferentes, todos
+   parecem abrir/mostrar a mesma sessão em vez de cada um manter a sua.
+   Precisa de investigação real (CDP, não suposição) antes de mexer —
+   candidato a causa: alguma chave de cache/estado do provider Claude
+   compartilhada entre cards em vez de escopada por `cardId`/`resumeId`.
+6. **Pergunta do usuário, respondida na hora (não é só anotação)**: "já
+   foi criado MCP pra spawn de agentes do CLI pro chatbox e vice-versa,
+   com comunicação entre agentes?" — Parcialmente. `delegate_to_agent`
+   (`chat-tools.ts`) já existe e funciona: uma chatbox PODE delegar uma
+   tarefa a um agente CLI real (claude/codex/gemini) rodando num novo
+   terminal card — mas é unidirecional (só chatbox → CLI) e
+   fire-and-forget (retorna só o `cardId`, sem canal de volta; a chatbox
+   não vê o output do agente nem pode aguardá-lo). O caminho inverso (um
+   agente CLI, via MCP/acbridge, criar/falar com uma chatbox) **não
+   existe** — `addChatCard` em `App.tsx` diz explicitamente "not wired
+   into spawn_card/MCP yet, deliberately". Também não existe nenhum canal
+   de comunicação real entre dois agentes já rodando (troca de
+   mensagens/eventos) — só esse spawn unidirecional. Registrado aqui como
+   gap real pra uma rodada futura: spawn_card aceitar `chat` como kind, e
+   possivelmente algum canal de mensagens entre cards.
+7. **Chatbox sem status-line em tempo real** — falta linha de status
+   mostrando tamanho de contexto do agente na sessão atual, duração do
+   turno em andamento, e outras informações básicas (equivalente ao que
+   `TerminalCard` já expõe via `card-status-dot`/liveStatus, mas
+   específico do chat: tokens usados, tempo decorrido).
+8. **Sistema de export do canvas com seleção de área** — hoje só existe
+   o snapshot orientado a agente (`acbridge snapshot`, item 4 —
+   coordenadas de um card específico, sem UI). Pedido é diferente: UI
+   pro humano selecionar uma ÁREA arbitrária do canvas (não só um card) e
+   exportar como PDF/PNG/JPEG etc.
+9. **Colar imagens/documentos/PDF pra visualização no canvas** — hoje só
+   colar em cima de um card específico funciona (ex.: paste de imagem no
+   terminal, item 32); não está confirmado se colar direto no canvas
+   vazio cria um card novo de visualização. Precisa de investigação antes
+   de virar item de implementação — pode já funcionar parcialmente.
+10. **Fonte dinâmica em terminais com agente ativo, escalando levemente
+    com o zoom do canvas** — ideia de polish pra legibilidade, não bug.
+    Só nos terminais com agente ativo (não bash puro), mudança sutil de
+    tamanho de fonte acompanhando o nível de zoom.
+11. **Dois achados de UI, prints anexados**:
+    - Botão "x" de fechar aba (ex.: `package-lock.json` no FilesCard)
+      aparece como uma caixa vazia sem estilo, em vez do ícone "x" padrão
+      já usado em todo o resto do app.
+    - Tooltip do botão do Rail que cria um card de arquivos hoje é "Nova
+      pasta de arquivos" — usuário sugere trocar pra algo como
+      "Explorador" (mais alinhado com o termo que VSCode usa pro mesmo
+      conceito).
+12. **Três achados no popover de links vistos do terminal (print
+    anexado)**:
+    - Entradas de URL aparecem corrompidas/com lixo visual (ex.:
+      `claude.ai/cod[54G/a[57Gtifact/...`) — parece sequência de escape
+      ANSI (posicionamento de cursor, tipo `ESC[54G`) vazando pro texto
+      capturado em vez de ser filtrada antes de virar uma "URL vista".
+    - O badge "🔗 N" (contagem de conectores) está mal posicionado,
+      quase encostando/sobrepondo o eixo do canvas.
+    - A lista de URLs dentro do popover não usa o scrollbar padrão
+      `thin-scroll` do resto do app (aparece como scrollbar nativo do
+      SO/Chromium).
+13. **Observer de provider não instalado, por provider** (print anexado
+    do popover de criação de terminal — bash/claude/codex/cursor/gemini).
+    Pedido: pra cada provider da lista, o app deveria detectar se o
+    binário correspondente não está instalado/no PATH e avisar o
+    usuário, sugerindo abrir um terminal com o comando de instalação já
+    preenchido (não obrigar o usuário a descobrir sozinho por que um
+    provider falhou ao spawnar).
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
