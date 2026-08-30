@@ -141,16 +141,19 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "update_task",
       {
-        description: "Update a task's status/card/result — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were.",
+        description:
+          "Update a task's status/card/result — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. incrementRetry/attemptedProvider are bookkeeping for your own retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — this app doesn't retry or reassign anything itself.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
           status: z.string().optional().describe("New status — e.g. 'running', 'done', 'failed'"),
           cardId: z.string().nullable().optional().describe("New card working on it, or null to detach once its own card closed — omit to leave unchanged"),
           result: z.unknown().optional().describe("Any JSON value — the task's outcome"),
+          incrementRetry: z.boolean().optional().describe("Bump the task's retry counter by 1 — e.g. after deciding to retry a task whose agent exited without reporting"),
+          attemptedProvider: z.string().optional().describe("Append a provider to the task's attempted-providers list — e.g. when reassigning to a different provider after a failure"),
         },
       },
-      async ({ taskId, status, cardId, result }) => {
-        const res = await opts.handleRequest({ cmd: "update_task", taskId, status, cardId, result });
+      async ({ taskId, status, cardId, result, incrementRetry, attemptedProvider }) => {
+        const res = await opts.handleRequest({ cmd: "update_task", taskId, status, cardId, result, incrementRetry, attemptedProvider });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -158,7 +161,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "list_tasks",
       {
-        description: "List every recorded task — id, prompt, provider, status, current card (if any), result, deps. Survives card closes and app restarts.",
+        description: "List every recorded task — id, prompt, provider, status, current card (if any), result, deps, retryCount, attemptedProviders. Survives card closes and app restarts.",
         inputSchema: {},
       },
       async () => {
