@@ -4375,9 +4375,44 @@ passagem. Numeração preservada como reportada.
    vazio cria um card novo de visualização. Precisa de investigação antes
    de virar item de implementação — pode já funcionar parcialmente.
 10. **Fonte dinâmica em terminais com agente ativo, escalando levemente
-    com o zoom do canvas** — ideia de polish pra legibilidade, não bug.
-    Só nos terminais com agente ativo (não bash puro), mudança sutil de
-    tamanho de fonte acompanhando o nível de zoom.
+    com o zoom do canvas — ✅ feito em 2026-08-29.** O card inteiro já
+    escala opticamente via `transform: scale()` (App.tsx) — isso sozinho
+    deixa o glifo pequeno-renderizado-e-esticado borrado em zooms altos,
+    já que o canvas WebGL do xterm.js continua rasterizando no mesmo
+    tamanho de fonte físico independente do zoom. Fix (`useTerminal.ts`):
+    `fontSizeForZoom(zoom)` recalcula o `fontSize` REAL (não só o quanto
+    ele aparece esticado) com influência deliberadamente PARCIAL do zoom
+    (`FONT_ZOOM_INFLUENCE = 0.15` — só 15% do delta afeta o tamanho real,
+    o resto continua vindo da escala óptica de sempre; em zoom=1 dá
+    exatamente `BASE_FONT_SIZE=15`, sem regressão no caso comum), clampado
+    entre 11 e 22. Aplicado só quando `providerId !== "bash"` (terminal
+    com agente, não shell puro) — um novo effect (`useTerminal.ts`)
+    reage a mudanças de zoom, mas só refaz o trabalho caro (mutar
+    `fontSize`, rodar `fit()` de novo, `pty.resize`) quando o zoom
+    arredondado pra passos de 0.1 realmente mudou desde a última vez —
+    toda mudança de zoom MENOR que isso é só uma comparação de ref, não
+    um recálculo.
+    **Verificado ao vivo** (`smoke-terminal-font-zoom.mjs`, novo,
+    permanente) — sem `window.pty.resize` no meio (confirmado ao vivo que
+    `window.pty` vem CONGELADO pelo `contextBridge`: uma reatribuição
+    vira no-op silencioso, `Object.isFrozen(window.pty)` → `true`,
+    tentativa de monkey-patch descartada). Sinal usado em vez disso:
+    xterm.js mantém um canvas interno de MEDIÇÃO de célula (sem
+    `style.width`/`style.height` — os dois canvases de render de verdade
+    sempre ganham esses estilos) cujo `.width`/`.height` cru reflete o
+    tamanho real da célula calculado a partir do fontSize ativo, e não é
+    afetado pelo `transform: scale()` do ancestral (transform CSS não
+    muda o layout box, só a pintura). Um card `claude` de verdade
+    (instalado nesta máquina) tem essa célula MEDIDA crescendo depois de
+    zoom in real (via o botão da topbar); o card `bash` de controle
+    (mesmo zoom) fica com a célula EXATAMENTE do mesmo tamanho — prova
+    real de ambos os lados (agente reage, bash não). Achado de mecânica
+    construindo o teste: esse canvas de medição nasce ATRASADO (alguns
+    segundos depois dos outros dois canvases) — precisou de poll curto em
+    vez de assumir presença imediata. `tsc --noEmit`/`electron-vite
+    build` limpos; `smoke-terminal-visibility-persist.mjs`,
+    `smoke-terminal-links-paste.mjs`, `smoke-terminal-install-hint.mjs`,
+    `smoke-provider-gemini.mjs` sem regressão.
 11. **Dois achados de UI, prints anexados — ✅ feito em 2026-08-29**:
     - Botão "x" de fechar aba (ex.: `package-lock.json` no FilesCard)
       aparece como uma caixa vazia sem estilo, em vez do ícone "x" padrão

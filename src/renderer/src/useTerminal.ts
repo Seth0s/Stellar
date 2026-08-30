@@ -8,6 +8,26 @@ const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove", "wheel"] as const;
 
+const BASE_FONT_SIZE = 15;
+// DESIGN-BACKLOG.md item 57 ponto 10 — pedido ao vivo: fonte que acompanha
+// levemente o zoom do canvas, só pra terminais com um agente ativo (não
+// bash puro). O card inteiro já escala opticamente via `transform:
+// scale()` (App.tsx) — isso sozinho deixa o glifo pequeno-renderizado-e-
+// esticado borrado em zooms altos, já que o canvas WebGL do xterm.js
+// continua rasterizando no mesmo tamanho de fonte físico independente do
+// zoom. Recalcular o fontSize REAL (não só o quanto ele aparece esticado)
+// deixa o texto mais nítido nos extremos, sem competir com a escala
+// óptica — por isso "levemente": só 15% do delta de zoom afeta o tamanho
+// real, o resto continua vindo do `transform: scale()` de sempre. Em
+// zoom=1 dá exatamente `BASE_FONT_SIZE` (sem regressão no caso comum).
+const FONT_ZOOM_INFLUENCE = 0.15;
+const FONT_SIZE_MIN = 11;
+const FONT_SIZE_MAX = 22;
+function fontSizeForZoom(zoom: number): number {
+  const raw = BASE_FONT_SIZE * (1 - FONT_ZOOM_INFLUENCE + zoom * FONT_ZOOM_INFLUENCE);
+  return Math.round(Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, raw)));
+}
+
 /**
  * DESIGN-BACKLOG.md item 36 (2/2) — vendoring the Nerd Font glyphs alone
  * (`main.tsx`'s `@azurity/pure-nerd-font` CSS import + the `fontFamily`
@@ -223,7 +243,7 @@ export function useTerminal(
   useEffect(() => {
     if (!ptyId) return;
     function buildTerminal(withWebgl: boolean) {
-      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
+      const t = new Terminal({ fontSize: BASE_FONT_SIZE, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
       const f = new FitAddon();
       t.loadAddon(f);
       if (withWebgl) {
@@ -306,7 +326,7 @@ export function useTerminal(
       registerDomListeners(term, fit, el);
     }
     function buildTerminalNoWebgl() {
-      const t = new Terminal({ fontSize: 15, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
+      const t = new Terminal({ fontSize: BASE_FONT_SIZE, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
       const f = new FitAddon();
       t.loadAddon(f);
       return { t, f };
@@ -494,6 +514,29 @@ export function useTerminal(
   useEffect(() => {
     if (visible) attachRef.current?.();
   }, [visible]);
+
+  // Effect 5 (item 57 ponto 10) — only for an "agent" terminal (not plain
+  // bash, see `fontSizeForZoom`'s own comment above). Reruns on every zoom
+  // tick during a drag-zoom gesture, but the expensive part (mutating
+  // `fontSize` — reallocates xterm's WebGL glyph atlas — plus a real
+  // `fit()`/PTY resize) only happens when the ROUNDED-to-0.1 zoom step
+  // actually changed since the last time this fired, via
+  // `lastFontZoomStepRef`; every other rerun is a single ref comparison.
+  const lastFontZoomStepRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (providerId === "bash") return;
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    const step = Math.round(zoom * 10) / 10;
+    if (lastFontZoomStepRef.current === step) return;
+    lastFontZoomStepRef.current = step;
+    const newSize = fontSizeForZoom(step);
+    if (term.options.fontSize === newSize) return;
+    term.options.fontSize = newSize;
+    fit.fit();
+    if (ptyIdRef.current) void window.pty.resize(ptyIdRef.current, term.cols, term.rows);
+  }, [zoom, providerId]);
 
   function fitNow() {
     const fit = fitRef.current;
