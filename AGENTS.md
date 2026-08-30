@@ -3801,6 +3801,26 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   não existem ainda.
 - Detalhe completo (13 pontos) em `DESIGN-BACKLOG.md` item 57.
 
+## 2026-08-29 — item 57 ponto 5: causa raiz real de sessões Claude colidindo, corrigida
+
+- Não era `resumeId` manual — era a descoberta automática de sessão nova
+  (`session-watch.ts`): `findClaudeSession`/`findCursorSession`/
+  `findCodexSession` retornavam o candidato mais recente no
+  diretório/log COMPARTILHADO inteiro, sem escopo por watcher — a sessão
+  de um card ainda ativa podia superar a sessão nova de outro, os dois
+  convergindo pro mesmo id.
+- Confirmado contra a função REAL (`node --experimental-strip-types`,
+  sem mock): reproduziu a colisão exatamente como descrita.
+- Fix: `claimedSessionIds` (Set module-level) — um id já atribuído nunca
+  é reatribuído; cada `find*Session` pula ids já reivindicados,
+  reivindicação acontece no instante da descoberta. Residual conhecido
+  (dois watchers no MESMO tick de leitura, nenhum reivindicou ainda)
+  documentado no código, muito mais raro que o bug original.
+- Regressão nova: `scripts/verify/smoke-session-watch-collision.mjs`.
+  `tsc --noEmit`/`electron-vite build` limpos, `smoke-boot`/
+  `smoke-card-lifecycle` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 5.
+
 ## Comandos
 
 ```bash
