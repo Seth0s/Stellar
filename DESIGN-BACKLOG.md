@@ -4797,7 +4797,7 @@ resto contra o que ele revelar.
    `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` (lista
    de tools) e `smoke-acbridge.mjs` sem regressão.
 2. **Ciclo de vida com três estados, não dois — prioridade máxima, junto
-   com a peça 1.** `running`/`exited` não basta: falta `waiting`
+   com a peça 1. ✅ feito em 2026-08-30.** `running`/`exited` não basta: falta `waiting`
    (bloqueado num gate de permissão). Um agente parado esperando
    aprovação é visualmente idêntico a um agente trabalhando — causa nº 1
    de orquestração que trava sem ninguém perceber. **Já existe**:
@@ -4807,6 +4807,26 @@ resto contra o que ele revelar.
    estados de verdade — um smoke test que abre um gate de consentimento
    (write/bash) e confirma que o status reportado é `waiting`, não
    `running` nem um "sem output há N segundos" ambíguo.
+   **Fix aplicado**: acabou não sendo `pty-registry`/`liveStatus` — o
+   sinal real de "esperando aprovação" já existia era nos próprios
+   mapas `pendingOpens`/`pendingSpawnAgents`/`pendingSpawnCards` de
+   `message-bus.ts` (os três únicos cmds que gatilham o `AgentAskModal`).
+   Novo `waitingOnConsent: Map<requesterId, count>` (ref-contado, não
+   `Set`, pro caso raro de dois gates simultâneos do mesmo card) —
+   marcado quando qualquer um dos três branches começa a esperar,
+   desmarcado no resolve real OU no próprio timeout do gate (nunca fica
+   preso além de um dos dois). `card_status` checa `waitingOnConsent`
+   ANTES de `isAlive`: um card bloqueado no próprio modal ainda tem
+   processo vivo, mas reportar "running" aí é exatamente a ambiguidade
+   que este estado existe pra eliminar.
+- **Verificado ao vivo sem mock**: novo
+  `smoke-mcp-card-status-waiting.mjs` — abre um gate de consentimento
+  REAL (`open_url`) e deixa pendurado de propósito, confirma
+  `card_status` == `waiting` enquanto ninguém decidiu; aprova o modal,
+  confirma que volta a `running`; mata o processo, confirma `exited`
+  ainda funciona (M4 sem regressão). Passou na primeira tentativa.
+  `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`,
+  `smoke-mcp-card-status.mjs` e `smoke-acbridge.mjs` sem regressão.
 3. **Identidade da tarefa separada da identidade do card — prioridade
    alta, fecha o corte mínimo de orquestração sequencial.** Hoje a
    unidade é `cardId` — efêmero, some quando o usuário fecha o card.

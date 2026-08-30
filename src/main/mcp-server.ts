@@ -76,7 +76,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "card_status",
       {
-        description: "Check whether a terminal card's process is still running or has already exited — a cheap alternative to polling snapshot/read_card in a loop.",
+        description:
+          "Check whether a terminal card's process is running, exited, or blocked waiting on a consent decision (e.g. an open_url/spawn_agent/spawn_card call it made that a human hasn't approved or denied yet) — a cheap alternative to polling snapshot/read_card in a loop.",
         inputSchema: {
           target: z.string().describe("The target card's id (see list_cards)"),
         },

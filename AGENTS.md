@@ -4155,6 +4155,26 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
 - Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
   orquestração peça 1.
 
+## 2026-08-30 — item 58, roteiro de orquestração peça 2: `card_status` ganha `waiting`
+
+- O sinal real de "bloqueado esperando aprovação" já existia nos três
+  mapas de pendência do `AgentAskModal` (`pendingOpens`/
+  `pendingSpawnAgents`/`pendingSpawnCards`, `message-bus.ts`) — não
+  precisou de `pty-registry`/`liveStatus` como o item previa. Novo
+  `waitingOnConsent: Map<requesterId, count>` (ref-contado), marcado ao
+  abrir qualquer um dos três gates, desmarcado no resolve real ou no
+  timeout do próprio gate. `card_status` checa isso ANTES de `isAlive`:
+  um card preso no próprio modal continua com processo vivo, mas
+  reportar "running" é exatamente a ambiguidade que este estado remove.
+- Verificado ao vivo sem mock: `smoke-mcp-card-status-waiting.mjs` — abre
+  um `open_url` real e deixa pendurado, `card_status` reporta `waiting`;
+  aprova, volta a `running`; mata o processo, `exited` continua
+  funcionando (M4 sem regressão). Passou na primeira tentativa. `tsc
+  --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`,
+  `smoke-mcp-card-status.mjs` e `smoke-acbridge.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
+  orquestração peça 2.
+
 ## Comandos
 
 ```bash
