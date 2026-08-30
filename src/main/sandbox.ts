@@ -35,15 +35,35 @@ const BWRAP_PATHS = ["/usr/bin/bwrap", "/bin/bwrap"];
 const BASH_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_CHARS = 20_000;
 
-export function isSandboxAvailable(): boolean {
-  return BWRAP_PATHS.some((p) => {
+/**
+ * Pre-release audit S6 — this used to answer a plain `true`/`false` after
+ * probing `BWRAP_PATHS` by absolute path, while `runSandboxedBash` below
+ * spawned a bare `"bwrap"` and let the OS resolve it through `PATH`. Two
+ * different lookups answering one question: the binary this function
+ * proved is executable was not necessarily the binary that would actually
+ * run, and anything earlier in `PATH` (a shim, a wrapper, a stale
+ * user-local build) would silently take over the confinement that is the
+ * ONLY thing standing between the chat's `bash` tool and the real
+ * filesystem. Returning the path that was actually probed — and spawning
+ * exactly that — collapses the two lookups into one.
+ */
+export function findSandboxBinary(): string | null {
+  for (const p of BWRAP_PATHS) {
     try {
       accessSync(p, constants.X_OK);
-      return true;
+      return p;
     } catch {
-      return false;
+      // not here — try the next one
     }
-  });
+  }
+  return null;
+}
+
+/** Kept as the boolean-shaped question chat-tools.ts asks before offering
+ * the tool at all; `findSandboxBinary` is the same probe when the caller
+ * needs the path itself. */
+export function isSandboxAvailable(): boolean {
+  return findSandboxBinary() !== null;
 }
 
 export type SandboxResult = { ok: boolean; text: string };
@@ -80,9 +100,19 @@ export function runSandboxedBash(root: string, command: string): Promise<Sandbox
       command,
     ];
 
+    // Audit S6 — the absolute path that was actually probed as executable,
+    // never a bare name resolved through PATH. Re-probed per call rather
+    // than cached: bwrap can be uninstalled while the app is running, and
+    // this is one `access()` against a 60s-budget subprocess.
+    const bwrap = findSandboxBinary();
+    if (!bwrap) {
+      resolve({ ok: false, text: "sandbox indisponível (bubblewrap não encontrado neste sistema)" });
+      return;
+    }
+
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn("bwrap", args, { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(bwrap, args, { stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       resolve({ ok: false, text: `falha iniciando o sandbox: ${String(err)}` });
       return;
