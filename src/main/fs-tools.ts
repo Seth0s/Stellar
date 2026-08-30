@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promises as fs, realpathSync } from "node:fs";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const execFileP = promisify(execFile);
@@ -25,14 +25,69 @@ export type ReadImageResult = { dataUrl: string } | { tooLarge: true } | { notIm
 export class PathEscapeError extends Error {}
 
 /**
+ * Canonicalizes `target` as far as the filesystem actually goes: the
+ * deepest existing ancestor is resolved with `realpathSync` (so every
+ * symlink in it is followed) and the not-yet-existing tail is appended
+ * back lexically.
+ *
+ * The tail matters because several callers legitimately confine a path
+ * that does not exist yet — `writeFile` creating a file, `createEntry`
+ * confining BOTH the new entry and a parent it is about to `mkdir -p`
+ * (so the missing part can be several levels deep, not just the last
+ * one). A plain `realpathSync(target)` would throw ENOENT for all of
+ * them, and canonicalizing only `dirname(target)` still throws when the
+ * dirname is itself missing.
+ *
+ * `realpathSync` failing for any other reason (EACCES on a directory the
+ * user cannot traverse) degrades to the same lexical treatment — the
+ * operation the caller is about to attempt would fail on that component
+ * anyway.
+ */
+function canonicalize(target: string): string {
+  const tail: string[] = [];
+  let cur = target;
+  for (;;) {
+    try {
+      const real = realpathSync(cur);
+      return tail.length === 0 ? real : join(real, ...tail);
+    } catch {
+      const parent = dirname(cur);
+      // Filesystem root reached without resolving anything — nothing left
+      // to canonicalize, hand back what we were given (the caller's
+      // startsWith check still runs against it).
+      if (parent === cur) return target;
+      tail.unshift(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/**
  * Resolves `path` (relative to `root`) and rejects anything that escapes
  * `root` (e.g. via `..`) — mirrors CentralByte's canonicalize + starts_with
  * confinement so a card can never be tricked into reading/writing outside
  * the root it was opened with.
+ *
+ * Pre-release audit S1 — the root was canonicalized but the TARGET never
+ * was, so the `startsWith` compared a real path against a merely lexical
+ * one. Any symlink sitting inside the root (a checked-out repo can ship
+ * one; so can npm, or an agent running in a terminal card) pointed
+ * wherever it liked and still read as `<root>/link.txt` to this check:
+ * confirmed empirically before the fix — `confine(root, "link.txt")`
+ * returned the path and `readFile` handed back the contents of a file
+ * outside the root. That leaked into everything downstream of this one
+ * function: `fs:read`/`fs:write` for FilesCard, the chat's
+ * `read_file`/`write_file` tools, and both the filename and full-text
+ * searches. Canonicalizing the target first is the whole fix — a symlink
+ * pointing back INSIDE the root still resolves and still passes, which is
+ * why the check has to canonicalize rather than reject symlinks outright.
+ *
+ * Verified by `scripts/verify/smoke-fs-confine.mjs` (which fails on the
+ * pre-fix version of this function).
  */
 export function confine(root: string, path: string): string {
   const rootReal = realpathSync(resolve(root));
-  const target = resolve(rootReal, path.replace(/^[/\\]+/, ""));
+  const target = canonicalize(resolve(rootReal, path.replace(/^[/\\]+/, "")));
   if (target !== rootReal && !target.startsWith(rootReal + sep)) {
     throw new PathEscapeError(`path escapes root: ${path}`);
   }
