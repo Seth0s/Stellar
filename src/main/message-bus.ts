@@ -50,7 +50,7 @@ export type CardSummary = { id: string; provider: string; cwd: string };
 export type SnapshotResult = { ok: true; path: string } | { ok: false; error: string };
 export type PageTextResult = { ok: true; text: string; truncated: boolean } | { ok: false; error: string };
 export type ReadCardResult = { ok: true; text: string } | { ok: false; error: string };
-export type CardStatusResult = { ok: true; status: "running" | "exited" } | { ok: false; error: string };
+export type CardStatusResult = { ok: true; status: "running" | "waiting" | "exited" } | { ok: false; error: string };
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
 export type SpawnAgentResult =
   | { ok: true; cardId: string; exited?: boolean; exitCode?: number }
@@ -165,6 +165,23 @@ export function createMessageBus(
   const pendingReportWaiters = new Map<string, Array<(report: unknown) => void>>();
   const pendingSpawnAgents = new Map<string, { resolve: (result: SpawnAgentResult) => void; timer: NodeJS.Timeout }>();
   const pendingSpawnCards = new Map<string, { resolve: (result: SpawnCardResult) => void; timer: NodeJS.Timeout }>();
+  // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 2 — a card
+  // blocked on a consent modal (open/spawn_agent/spawn_card) looks
+  // identical to one still working, from the outside. Ref-counted (not a
+  // Set) since the same requester could in principle have more than one
+  // consent gate open at once. Cleared on resolve AND on the request's own
+  // timeout — never left stuck past whichever comes first.
+  const waitingOnConsent = new Map<string, number>();
+  function markWaiting(requesterId: string) {
+    if (!requesterId) return;
+    waitingOnConsent.set(requesterId, (waitingOnConsent.get(requesterId) ?? 0) + 1);
+  }
+  function unmarkWaiting(requesterId: string) {
+    if (!requesterId) return;
+    const n = (waitingOnConsent.get(requesterId) ?? 1) - 1;
+    if (n <= 0) waitingOnConsent.delete(requesterId);
+    else waitingOnConsent.set(requesterId, n);
+  }
 
   /** Shared by both frontends — see the module doc comment. Never throws;
    * every branch resolves to a `BusResponse`, including "unknown cmd". */
@@ -187,20 +204,24 @@ export function createMessageBus(
     if (req.cmd === "open") {
       if (!req.url) return { ok: false, error: "missing url" };
       const requestId = randomUUID();
+      const requesterId = req.requesterId ?? "";
+      markWaiting(requesterId);
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
           pendingOpens.delete(requestId);
+          unmarkWaiting(requesterId);
           resolve({ ok: false, error: "timed out waiting for a decision" });
         }, OPEN_TIMEOUT_MS);
         pendingOpens.set(requestId, {
           resolve: (allowed) => {
             clearTimeout(timer);
             pendingOpens.delete(requestId);
+            unmarkWaiting(requesterId);
             resolve(allowed ? { ok: true } : { ok: false, error: "denied by user" });
           },
           timer,
         });
-        callbacks.onOpenRequest(requestId, req.requesterId ?? "", req.url as string, req.reason);
+        callbacks.onOpenRequest(requestId, requesterId, req.url as string, req.reason);
       });
     }
 
@@ -268,6 +289,11 @@ export function createMessageBus(
       if (!req.target) return { ok: false, error: "missing target cardId" };
       const cards = callbacks.listCards();
       if (!cards.some((c) => c.id === req.target)) return { ok: false, error: `no open terminal card with id "${req.target}"` };
+      // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 2 —
+      // checked BEFORE isAlive: a card blocked on its own consent modal is
+      // still a live process (isAlive true), but reporting "running" here
+      // is exactly the ambiguity this state exists to remove.
+      if (waitingOnConsent.has(req.target)) return { ok: true, status: "waiting" };
       return { ok: true, status: callbacks.isCardAlive(req.target) ? "running" : "exited" };
     }
 
@@ -315,20 +341,24 @@ export function createMessageBus(
         return { ok: false, error: `spawn depth limit reached (max ${MAX_SPAWN_DEPTH}) — refusing to spawn another agent` };
       }
       const requestId = randomUUID();
+      const requesterId = req.requesterId ?? "";
+      markWaiting(requesterId);
       const spawnResult = await new Promise<SpawnAgentResult>((resolve) => {
         const timer = setTimeout(() => {
           pendingSpawnAgents.delete(requestId);
+          unmarkWaiting(requesterId);
           resolve({ ok: false, error: "timed out waiting for a decision" });
         }, SPAWN_TIMEOUT_MS);
         pendingSpawnAgents.set(requestId, {
           resolve: (result) => {
             clearTimeout(timer);
             pendingSpawnAgents.delete(requestId);
+            unmarkWaiting(requesterId);
             resolve(result);
           },
           timer,
         });
-        callbacks.onSpawnAgentRequest(requestId, req.requesterId ?? "", {
+        callbacks.onSpawnAgentRequest(requestId, requesterId, {
           provider: req.provider as string,
           cwd: req.cwd,
           resumeId: req.resumeId,
@@ -372,20 +402,24 @@ export function createMessageBus(
         return { ok: false, error: `kind must be one of ${validKinds.join(", ")}` };
       }
       const requestId = randomUUID();
+      const requesterId = req.requesterId ?? "";
+      markWaiting(requesterId);
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
           pendingSpawnCards.delete(requestId);
+          unmarkWaiting(requesterId);
           resolve({ ok: false, error: "timed out waiting for a decision" });
         }, SPAWN_TIMEOUT_MS);
         pendingSpawnCards.set(requestId, {
           resolve: (result) => {
             clearTimeout(timer);
             pendingSpawnCards.delete(requestId);
+            unmarkWaiting(requesterId);
             resolve(result);
           },
           timer,
         });
-        callbacks.onSpawnCardRequest(requestId, req.requesterId ?? "", {
+        callbacks.onSpawnCardRequest(requestId, requesterId, {
           kind: req.kind as SpawnCardKind,
           cwd: req.cwd,
           url: req.url,
@@ -479,6 +513,7 @@ export function createMessageBus(
     for (const { timer } of pendingReadCards.values()) clearTimeout(timer);
     pendingReadCards.clear();
     pendingCardExits.clear();
+    waitingOnConsent.clear();
     cardReports.clear();
     pendingReportWaiters.clear();
     for (const { timer } of pendingSpawnAgents.values()) clearTimeout(timer);
