@@ -4312,11 +4312,58 @@ passagem. Numeração preservada como reportada.
    mensagens/eventos) — só esse spawn unidirecional. Registrado aqui como
    gap real pra uma rodada futura: spawn_card aceitar `chat` como kind, e
    possivelmente algum canal de mensagens entre cards.
-7. **Chatbox sem status-line em tempo real** — falta linha de status
-   mostrando tamanho de contexto do agente na sessão atual, duração do
-   turno em andamento, e outras informações básicas (equivalente ao que
-   `TerminalCard` já expõe via `card-status-dot`/liveStatus, mas
-   específico do chat: tokens usados, tempo decorrido).
+7. **Chatbox sem status-line em tempo real — ✅ feito em 2026-08-29.**
+   Confirmado o gap: nenhum dado de uso existia em lugar nenhum do pipeline
+   — `onDone` (anthropic-client.ts/openai-client.ts) só carregava o texto
+   final, sem tokens/duração.
+   **Dados reais, nunca estimados**: `final.usage` (Anthropic
+   `Message.usage` — `input_tokens`/`output_tokens`/
+   `cache_creation_input_tokens`/`cache_read_input_tokens`) e
+   `completion.usage` (OpenAI `ChatCompletion.usage` —
+   `prompt_tokens`/`completion_tokens`) já vêm no próprio objeto de
+   resposta final de cada SDK — só precisavam ser lidos e propagados, não
+   inventados. Acumulados através de TODAS as rodadas de um turno com tool
+   calls (cada rodada reenvia o array `messages` inteiro que cresce, então
+   somar dá o custo real do turno inteiro, não só a última rodada) — novo
+   tipo `ChatUsage`/`ChatTurnUsage` (`chat-tools.ts`/`preload/index.ts`),
+   `onDone(cardId, fullText, usage)` em ambos os clients, `chat:done` IPC
+   carrega o 3º argumento, `ChatCard.tsx` guarda `lastTurn` (setState no
+   handler) e mede a duração de verdade (`Date.now()` no envio até o
+   `chat:done` chegar — nunca um número chutado).
+   Achado construindo o fix: streaming da OpenAI **não inclui usage
+   nenhum** sem `stream_options: {include_usage: true}` explícito na
+   request (confirmado nos tipos do próprio SDK) — adicionado no
+   `client.chat.completions.stream({...})`.
+   Status-line nova no footer do card (`.chat-foot-status`): enquanto uma
+   resposta está em voo, mostra o tempo decorrido AO VIVO (tick a cada
+   200ms via `setInterval`); ao terminar, congela numa linha final
+   `Ns.s · X in / Y out` (tooltip com os números por extenso). Nada
+   aparece antes do primeiro turno — sem placeholder fabricado.
+   **Verificado ao vivo** (dois testes novos, permanentes):
+   `smoke-chat-status-line.mjs` — servidor HTTP local real (mesmo papel de
+   "modelo local" que smoke-chat-providers.mjs já usa) responde com um
+   chunk de usage real no formato de streaming genuíno da OpenAI
+   (`choices: []` + `usage` no chunk final); confirma que a request real
+   pediu `stream_options.include_usage`, que a status-line ao vivo mostra
+   tempo decorrido enquanto em voo, e que a linha final mostra os NÚMEROS
+   EXATOS que o servidor mandou (não estimados). `smoke-anthropic-usage-
+   accumulation.mjs` — não há key real da Anthropic neste ambiente pra um
+   round-trip de rede de verdade, então este vai direto na função real
+   exportada `createAnthropicClient` (mesmo espírito dos testes diretos de
+   `session-watch.ts` desta sessão), fazendo monkey-patch só do limite de
+   rede (`Messages.prototype.stream` do SDK real, localizado via uma
+   instância descartável — não um subpath chutado, que se mostrou ser uma
+   cópia de módulo DIFERENTE na prática) pra devolver duas rodadas
+   canned (`tool_use` → `end_turn`) com usage conhecido, confirmando que o
+   total acumulado passado a `onDone` é a soma real das duas — não só a
+   última rodada. Novo utilitário permanente
+   `ts-relative-import-loader.mjs` (resolve `.ts` sem extensão pra
+   scripts `node` puros importarem `src/main/*.ts` direto — Node exige
+   extensão explícita em specifiers relativos, tsc/electron-vite não).
+   `tsc --noEmit`/`electron-vite build` limpos; suite completa de chat
+   (`smoke-chat.mjs`, `smoke-chat-providers.mjs`, `smoke-chat-tools.mjs`,
+   `smoke-chat-sandbox.mjs`, `smoke-chat-sessions-sidebar.mjs`,
+   `smoke-chat-new-session-per-provider.mjs`) sem regressão.
 8. **Sistema de export do canvas com seleção de área** — hoje só existe
    o snapshot orientado a agente (`acbridge snapshot`, item 4 —
    coordenadas de um card específico, sem UI). Pedido é diferente: UI

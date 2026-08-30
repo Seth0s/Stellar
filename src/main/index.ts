@@ -413,13 +413,13 @@ function createWindow() {
 
   const anthropicClient = createAnthropicClient({
     onToken: (cardId, delta) => safeSend(win, "chat:token", cardId, delta),
-    onDone: (cardId, fullText) => safeSend(win, "chat:done", cardId, fullText),
+    onDone: (cardId, fullText, usage) => safeSend(win, "chat:done", cardId, fullText, usage),
     onError: (cardId, message) => safeSend(win, "chat:error", cardId, message),
     ...chatToolCallbacks,
   });
   const openaiClient = createOpenAiClient({
     onToken: (cardId, delta) => safeSend(win, "chat:token", cardId, delta),
-    onDone: (cardId, fullText) => safeSend(win, "chat:done", cardId, fullText),
+    onDone: (cardId, fullText, usage) => safeSend(win, "chat:done", cardId, fullText, usage),
     onError: (cardId, message) => safeSend(win, "chat:error", cardId, message),
     ...chatToolCallbacks,
   });

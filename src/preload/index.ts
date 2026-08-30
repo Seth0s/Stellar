@@ -409,6 +409,9 @@ const secrets = {
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export type ChatSendParams = { provider: SecretProvider; model: string; systemPrompt: string | null; messages: ChatMessage[]; cwd: string };
 export type ChatSendResult = { ok: true } | { ok: false; error: string };
+/** DESIGN-BACKLOG.md item 57 ponto 7 — real token counts from the
+ * provider's own final response, see main/chat-tools.ts's `ChatUsage`. */
+export type ChatTurnUsage = { inputTokens: number; outputTokens: number };
 
 /** DESIGN-BACKLOG.md item 12, Fase C — the diff a `write_file` tool call
  * needs approved before anything touches disk (main/chat-tools.ts's real
@@ -441,8 +444,8 @@ const chat = {
     ipcRenderer.on("chat:token", listener);
     return () => ipcRenderer.removeListener("chat:token", listener);
   },
-  onDone: (cb: (cardId: string, fullText: string) => void) => {
-    const listener = (_e: unknown, cardId: string, fullText: string) => cb(cardId, fullText);
+  onDone: (cb: (cardId: string, fullText: string, usage: ChatTurnUsage) => void) => {
+    const listener = (_e: unknown, cardId: string, fullText: string, usage: ChatTurnUsage) => cb(cardId, fullText, usage);
     ipcRenderer.on("chat:done", listener);
     return () => ipcRenderer.removeListener("chat:done", listener);
   },

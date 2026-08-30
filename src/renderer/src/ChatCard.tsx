@@ -46,6 +46,14 @@ function relativeTime(ms: number): string {
   return `${Math.round(diffH / 24)}d atrás`;
 }
 
+function formatTokenCount(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n);
+}
+
+function formatDuration(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 /** UI preference, not per-card data — same `localStorage` convention as
  * Rail.tsx's own collapse toggle (`ac.railCollapsed`). Shared across every
  * ChatCard on purpose (open one, they open expanded from then on) — mirrors
@@ -251,6 +259,22 @@ export function ChatCard({
   messagesRef.current = messages;
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Pedido ao vivo (2026-08-29, item 57 ponto 7) — status-line com contexto/
+  // duração real, nunca estimado: `usage` vem do próprio objeto de resposta
+  // final do provider (Anthropic `Message.usage`, OpenAI/Gemini
+  // `ChatCompletion.usage` — ver main/chat-tools.ts `ChatUsage`), e a
+  // duração é medida de verdade (`Date.now()` no envio até o `chat:done`).
+  const turnStartRef = useRef<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [lastTurn, setLastTurn] = useState<{ durationMs: number; inputTokens: number; outputTokens: number } | null>(null);
+  useEffect(() => {
+    if (streaming === null) return;
+    const timer = setInterval(() => {
+      if (turnStartRef.current !== null) setElapsedMs(Date.now() - turnStartRef.current);
+    }, 200);
+    return () => clearInterval(timer);
+  }, [streaming]);
+
   useEffect(() => {
     setHasKey(null);
     setRevealKey(false);
@@ -278,10 +302,15 @@ export function ChatCard({
       if (cardId !== id) return;
       setStreaming((prev) => (prev ?? "") + delta);
     });
-    const offDone = window.chat.onDone((cardId, fullText) => {
+    const offDone = window.chat.onDone((cardId, fullText, usage) => {
       if (cardId !== id) return;
       onMessagesCommit([...messagesRef.current, { role: "assistant", content: fullText }]);
       setStreaming(null);
+      setLastTurn({
+        durationMs: turnStartRef.current !== null ? Date.now() - turnStartRef.current : 0,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+      });
     });
     const offError = window.chat.onError((cardId, message) => {
       if (cardId !== id) return;
@@ -363,6 +392,8 @@ export function ChatCard({
     setToolActivity([]);
     setWriteDecisions([]);
     setBashDecisions([]);
+    turnStartRef.current = Date.now();
+    setElapsedMs(0);
     void window.chat.send(id, { provider, model, systemPrompt, messages: next, cwd }).then((result) => {
       if (!result.ok) {
         setError(result.error);
@@ -417,7 +448,25 @@ export function ChatCard({
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
-      footerContent={<span className="chat-foot-cwd">{cwd}</span>}
+      footerContent={
+        <span className="chat-foot-row">
+          <span className="chat-foot-cwd">{cwd}</span>
+          {streaming !== null ? (
+            <span className="chat-foot-status" title="tempo decorrido nesta resposta">
+              {formatDuration(elapsedMs)}
+            </span>
+          ) : (
+            lastTurn && (
+              <span
+                className="chat-foot-status"
+                title={`última resposta: ${formatDuration(lastTurn.durationMs)} · ${lastTurn.inputTokens} tokens de contexto enviados · ${lastTurn.outputTokens} tokens de resposta`}
+              >
+                {formatDuration(lastTurn.durationMs)} · {formatTokenCount(lastTurn.inputTokens)} in / {formatTokenCount(lastTurn.outputTokens)} out
+              </span>
+            )
+          )}
+        </span>
+      }
       headerContent={
         <>
           <span className="card-head-label">

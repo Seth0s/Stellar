@@ -3933,6 +3933,32 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `electron-vite build` limpos, suite de chat completa sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 3.
 
+## 2026-08-29 — item 57 ponto 7: status-line real do chatbox (contexto/duração, dados reais dos SDKs)
+
+- Nenhum dado de uso existia no pipeline — `onDone` só carregava o texto
+  final. `final.usage` (Anthropic) e `completion.usage` (OpenAI) já vêm no
+  próprio objeto de resposta de cada SDK — lidos e propagados, não
+  inventados. Acumulados através de TODAS as rodadas de um turno com tool
+  calls (soma real do custo do turno inteiro). Novo tipo
+  `ChatUsage`/`ChatTurnUsage`, `onDone(cardId, fullText, usage)` em ambos
+  os clients, `chat:done` IPC com o 3º argumento, `ChatCard.tsx` mede
+  duração real (`Date.now()`) e guarda `lastTurn`.
+- Achado: streaming da OpenAI não inclui usage sem `stream_options:
+  {include_usage: true}` explícito — adicionado.
+- Status-line nova no footer (`.chat-foot-status`): tempo decorrido AO
+  VIVO enquanto em voo, congela em `Ns.s · X in / Y out` ao terminar; nada
+  antes do primeiro turno.
+- Verificado ao vivo com dois testes novos permanentes:
+  `smoke-chat-status-line.mjs` (servidor HTTP local real, formato de
+  streaming genuíno da OpenAI com usage real no chunk final) e
+  `smoke-anthropic-usage-accumulation.mjs` (sem key real da Anthropic
+  neste ambiente — vai direto na função real `createAnthropicClient`,
+  monkey-patch só do limite de rede via uma instância descartável do SDK,
+  não um subpath chutado). Novo utilitário permanente
+  `ts-relative-import-loader.mjs`. `tsc --noEmit`/`electron-vite build`
+  limpos, suite completa de chat sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 7.
+
 ## Comandos
 
 ```bash

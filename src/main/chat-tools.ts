@@ -98,6 +98,19 @@ export type BashConsentRequest = { command: string };
 export type DelegateProvider = "claude" | "codex" | "gemini";
 export type DelegateResult = { ok: true; cardId: string } | { ok: false; error: string };
 
+/** DESIGN-BACKLOG.md item 57 ponto 7 — real usage from the provider's own
+ * final response object (Anthropic's `Message.usage`, OpenAI/Gemini's
+ * `ChatCompletion.usage`), never estimated/guessed. `inputTokens` sums
+ * across every tool-loop round of a single user turn (each round resends
+ * the whole growing `messages` array, so the LAST round's own input count
+ * already doubles as "current context size" — summing just means a turn
+ * with tool calls reports its true total cost, not only the final round's
+ * slice of it). Anthropic's cache fields count as real input tokens too
+ * (a cache hit still means the model saw that many tokens) — folded into
+ * `inputTokens` at the call site, not left as a separate anthropic-only
+ * field, so this type stays provider-agnostic. */
+export type ChatUsage = { inputTokens: number; outputTokens: number };
+
 export async function runReadFile(root: string, path: string): Promise<ToolResult> {
   try {
     const res = await readFile(root, path);

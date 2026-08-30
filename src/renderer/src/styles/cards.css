@@ -1296,13 +1296,31 @@
   opacity: 0.9;
 }
 
+.chat-foot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
 .chat-foot-cwd {
+  flex: 1;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-foot-status {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Transient tool-activity line (read_file, and write_file's own decision

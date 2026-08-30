@@ -15,6 +15,7 @@ import {
   type BashConsentRequest,
   type DelegateProvider,
   type DelegateResult,
+  type ChatUsage,
 } from "./chat-tools";
 
 /**
@@ -42,7 +43,7 @@ function toOpenAiMessages(messages: ChatMessage[]): ChatCompletionMessageParam[]
 
 export function createOpenAiClient(opts: {
   onToken: (cardId: string, delta: string) => void;
-  onDone: (cardId: string, fullText: string) => void;
+  onDone: (cardId: string, fullText: string, usage: ChatUsage) => void;
   onError: (cardId: string, message: string) => void;
   onToolStart: (cardId: string, name: string, input: unknown) => void;
   onToolResult: (cardId: string, name: string, ok: boolean, summary: string) => void;
@@ -70,9 +71,14 @@ export function createOpenAiClient(opts: {
     // is needed per provider, just a different endpoint to point at.
     const client = new OpenAI({ apiKey, baseURL });
     const messages: ChatCompletionMessageParam[] = system ? [{ role: "system", content: system }, ...initialMessages] : [...initialMessages];
+    let inputTokens = 0;
+    let outputTokens = 0;
 
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
-      const runner = client.chat.completions.stream({ model, messages, tools: OPENAI_TOOLS });
+      // `stream_options.include_usage` — without it, a streamed response
+      // never carries a `usage` field at all (confirmed in the SDK's own
+      // types), silently leaving `completion.usage` undefined below.
+      const runner = client.chat.completions.stream({ model, messages, tools: OPENAI_TOOLS, stream_options: { include_usage: true } });
       inFlight.set(cardId, runner);
       runner.on("content", (delta) => opts.onToken(cardId, delta));
 
@@ -86,11 +92,13 @@ export function createOpenAiClient(opts: {
         return;
       }
       inFlight.delete(cardId);
+      inputTokens += completion.usage?.prompt_tokens ?? 0;
+      outputTokens += completion.usage?.completion_tokens ?? 0;
 
       const choice = completion.choices[0];
       const toolCalls = choice?.message.tool_calls;
       if (choice?.finish_reason !== "tool_calls" || !toolCalls || toolCalls.length === 0) {
-        opts.onDone(cardId, choice?.message.content ?? "");
+        opts.onDone(cardId, choice?.message.content ?? "", { inputTokens, outputTokens });
         return;
       }
 
