@@ -4529,6 +4529,214 @@ passagem. Numeração preservada como reportada.
     gemini.mjs`, `smoke-terminal-links-paste.mjs`,
     `smoke-terminal-visibility-persist.mjs` sem regressão.
 
+## 58. Auditoria pré-release (card externo) — superfície MCP/`acbridge` e roteiro de orquestração, anotado em 2026-08-29, não implementado ainda
+
+**Fonte**: auditoria completa dos ~18.900 LOC de `src/`, publicada como
+artifact em outro card desta mesma sessão
+(`https://claude.ai/code/artifact/026d13c8-79cc-4520-8fc0-9ddb932e9306`,
+commit `8fd6420`, 37 achados). Cobre segurança (S1–S9), bugs de lógica
+(B1–B9), performance (P1–P5), design/a11y (D1–D8), organização/CI/docs, e
+duas seções de prosa — posicionamento multi-provider e "o que falta para
+ser orquestrador".
+
+**Escopo deste item**: só a superfície MCP/`acbridge` (M1–M4) e o roteiro
+de orquestração + posicionamento multi-provider. As correções de
+segurança (S1–S9) estão sendo implementadas por outro agente (card 96) na
+mesma auditoria — não duplicadas aqui. B1–B9/P1–P5/D1–D8/CI/docs também
+ficam de fora deste item por pedido explícito (fora do escopo desta
+passagem, não avaliados quanto a duplicação).
+
+Os quatro achados de MCP (M1–M4) vieram de uso real, não leitura de
+código: um agente foi spawnado de verdade através do próprio MCP do app
+(`list_cards` → `spawn_agent` → `send_to_card` → `snapshot`) para executar
+os passos 1–2 da própria auditoria, e os atritos abaixo apareceram só por
+ter usado a superfície.
+
+### M1 — Não existe `read_card`: um agente escreve em qualquer card mas não lê nenhum
+
+- **Prioridade**: Alta. A auditoria chama de "a lacuna mais cara da
+  superfície inteira" — orquestração hoje é de mão única (escreve via
+  `send_to_card`, nunca lê de volta). Junto com M4, é o que separa
+  "spawnar cards" de "orquestrar agentes" (ver seção de posicionamento
+  abaixo). Sequenciamento sugerido pela própria auditoria: depois de M2/M3
+  (que já atrapalham hoje), antes do refactor de performance do renderer
+  e antes de fechar o modelo de permissões.
+- **Onde**: `src/main/mcp-server.ts` (só existe `get_page_text`, exclusivo
+  de cards de navegador) · `src/main/message-bus.ts` (`handleRequest`) ·
+  o buffer de scrollback já vive no renderer (`useTerminal.ts`).
+- **Problema**: a única forma de acompanhar um agente spawnado é
+  `snapshot` — uma imagem PNG do card. Isso significa OCR visual em vez
+  de texto, ordens de magnitude mais tokens, perda de tudo que rolou fora
+  da viewport, e dependência de `capturePage()` (documentado no
+  `AGENTS.md` como quebrado para conteúdo de navegador nesta máquina — o
+  caminho de terminal não foi confirmado quebrado, mas herda o mesmo
+  mecanismo).
+- **Correção sugerida**: um tool novo `read_card(target, lines?)`
+  devolvendo o scrollback do xterm como texto puro. Mesma mecânica que
+  `snapshot:rect-request`/`-reply` já implementa (request/reply
+  main↔renderer) — troca só `capturePage()` por uma serialização do
+  `Terminal.buffer` do xterm.js (renderer já tem a instância viva).
+- **Critério de verificação**: novo `smoke-mcp-read-card.mjs` — spawna um
+  terminal `bash` real, escreve conteúdo determinístico via
+  `window.pty.write` (incluindo linhas que saem da viewport atual, para
+  provar leitura de scrollback e não só da tela visível), chama a tool
+  MCP `read_card`, confirma que o texto devolvido contém literalmente o
+  conteúdo escrito — sem depender de imagem/OCR.
+- **Desbloqueia**: scrollback no cliente móvel ao conectar (hoje ausente
+  — só vê o que chega dali em diante) e a peça 4 do roteiro de
+  orquestração abaixo (dependência entre tarefas via conectores).
+
+### M2 — `send_to_card` não submete texto longo (fica preso como paste, sem Enter)
+
+- **Prioridade**: Alta/imediata — já custou um round-trip real nesta
+  própria sessão de auditoria (relatado no artifact) e na minha própria
+  experiência rodando um subagente via MCP durante o item 57.
+- **Onde**: `src/main/message-bus.ts:129` (o `\r` é anexado ao payload
+  no `cmd: "send"`) · `src/renderer/src/useTerminal.ts` (bracketed
+  paste do xterm/CLI alvo).
+- **Problema**: acima do limiar de paste, o CLI alvo entra em bracketed
+  paste e trata o `\r` anexado como parte do conteúdo colado, não como
+  submit — a mensagem fica visível no composer (`[Pasted text #1 +1
+  lines]` no caso do Claude Code) mas nunca é enviada. A tool promete
+  "same as typing it yourself into that card", que é exatamente o que
+  deixa de valer no caso em que ela é mais útil (briefings longos). Sem
+  `read_card` (M1) pra conferir, quem chama a tool não tem como saber que
+  a mensagem não foi entregue — o bus responde `{"ok":true}` de qualquer
+  forma.
+- **Correção sugerida**: mandar o `\r` num `write` separado, depois de um
+  pequeno atraso — ou envolver o payload explicitamente em
+  `ESC[200~ … ESC[201~` e mandar o Enter fora dos marcadores.
+- **Critério de verificação**: novo smoke script com um payload
+  multi-linha longo (acima do limiar de bracketed-paste do CLI alvo) via
+  `send_to_card`, confirmando — via `read_card` (M1) uma vez que exista,
+  ou via `window.pty.onData` capturando um prompt novo depois do
+  conteúdo enquanto M1 não existe — que o conteúdo foi genuinamente
+  submetido, não só colado. Nenhum dos smoke scripts atuais cobre esse
+  caminho.
+
+### M3 — `spawn_agent` não aceita `model` nem `effort`
+
+- **Prioridade**: Média/imediata — a capacidade já existe internamente,
+  só falta expor na borda MCP.
+- **Onde**: `src/main/mcp-server.ts` (schema do tool `spawn_agent`,
+  `inputSchema` em torno da linha 81) · `providers.ts` (`buildArgs` já
+  recebe `model` e monta `--model`).
+- **Problema**: o card nasce com o provider default e só depois dá para
+  configurar via dois `send_to_card` (`/model`, `/effort`) — existe uma
+  janela real em que o agente já está vivo com o modelo errado, e se ele
+  receber a tarefa antes dos comandos chegarem, ela roda inteira no
+  modelo errado.
+- **Correção sugerida**: adicionar `model` (e `systemPrompt`) ao schema
+  de `spawn_agent`, encaminhando para o `SpawnOpts` que `pty:spawn` já
+  monta — sem nenhuma mudança em `providers.ts`.
+- **Critério de verificação**: smoke test MCP chamando `spawn_agent` com
+  `model` explícito e confirmando (via `store.list`) que o card nasce
+  com esse model desde o início, sem round-trip de `/model` depois.
+
+### M4 — Nenhum sinal de conclusão: quem spawna não sabe quando o agente terminou
+
+- **Prioridade**: Alta — junto com M1, "a fronteira entre launcher e o
+  produto que justifica existir" segundo a auditoria; demonstrado ao
+  vivo na própria sessão da auditoria (precisou reconstruir o resultado
+  lendo o transcript da sessão em `~/.claude/projects/`, por fora do
+  MCP) e na minha própria experiência: sem `read_card` nem sinal de
+  conclusão, a única forma de saber se um agente spawnado terminou é
+  fazer polling visual de `snapshot` em loop.
+- **Onde**: `src/main/message-bus.ts` (`SpawnAgentResult` só devolve
+  `{ok, cardId}`) · `pty-registry.ts` já emite `onExit` · `App.tsx:419`
+  já rastreia `liveStatus` por card — o dado existe, só não chega à
+  borda MCP.
+- **Correção sugerida**: um `card_status(target)` devolvendo
+  `running`/`idle`/`exited`, e — melhor ainda — `spawn_agent` aceitando
+  `wait: true` pra resolver só no exit, reusando o mesmo padrão de
+  pendência-com-timeout que os cinco mapas de `message-bus.ts` já
+  implementam.
+- **Critério de verificação**: smoke test que spawna um agente real via
+  MCP com `wait: true` (ou faz polling de `card_status`), encerra o
+  processo, e confirma que a chamada resolve com o status final — sem
+  nenhum polling visual de `snapshot` no caminho do teste.
+
+### Roteiro de orquestração — 6 peças (mais posicionamento multi-provider em `AGENTS.md`)
+
+A auditoria: "falta o laço fechado. Hoje existe só a metade de ida:
+dispara e perde o fio. Orquestrar é despachar → observar → decidir →
+despachar de novo." Peças 1–3 já entregam orquestração sequencial real
+(despachar, saber que terminou, ler o resultado, decidir o próximo);
+peças 4–6 são o que separa isso de um *pipeline confiável*. A auditoria
+recomenda não tentar as seis de uma vez — começar pelo item 1 e medir o
+resto contra o que ele revelar.
+
+1. **Um canal de resultado, não de scrollback — prioridade máxima,
+   comece por aqui.** Ler o buffer do terminal (`read_card`/M1) entrega
+   ANSI, spinner e log de tool pra alguém adivinhar qual pedaço é a
+   resposta — frágil e diferente por provider. A inversão certa é
+   *push*: um `acbridge report '<json>'` que o agente chama ao terminar,
+   entregando conclusão + resultado estruturado + status de sucesso/falha
+   numa coisa só, sem parsing. `read_card` continua valendo — pro humano
+   olhar, não pra máquina decidir. **Já existe**: `message-bus` já tem o
+   formato request/reply; `ACBRIDGE_HINT` (`providers.ts:32`) já é
+   injetado em todo agente via `--append-system-prompt` — é uma frase a
+   mais na hint.
+   **Critério de verificação**: um agente real spawnado via MCP chama
+   `acbridge report` ao terminar sua tarefa; quem spawnou recebe o
+   resultado estruturado (sem parsear ANSI/scrollback) através do mesmo
+   mecanismo de pendência-com-timeout que `message-bus.ts` já usa.
+2. **Ciclo de vida com três estados, não dois — prioridade máxima, junto
+   com a peça 1.** `running`/`exited` não basta: falta `waiting`
+   (bloqueado num gate de permissão). Um agente parado esperando
+   aprovação é visualmente idêntico a um agente trabalhando — causa nº 1
+   de orquestração que trava sem ninguém perceber. **Já existe**:
+   `pty-registry` emite `onExit` e `App.tsx:419` já rastreia
+   `liveStatus` por card.
+   **Critério de verificação**: `card_status` (M4) distingue os três
+   estados de verdade — um smoke test que abre um gate de consentimento
+   (write/bash) e confirma que o status reportado é `waiting`, não
+   `running` nem um "sem output há N segundos" ambíguo.
+3. **Identidade da tarefa separada da identidade do card — prioridade
+   alta, fecha o corte mínimo de orquestração sequencial.** Hoje a
+   unidade é `cardId` — efêmero, some quando o usuário fecha o card.
+   Falta uma tabela `tasks` (id, prompt, provider, status, card_id,
+   result_json, deps) que sobreviva a restart e a fechamento de card —
+   é o que permite *retomar* uma orquestração interrompida em vez de
+   recomeçar. **Já existe**: o padrão de migração aditiva do `store.ts`
+   torna a tabela barata.
+   **Critério de verificação**: fechar o card de um agente cujo `task`
+   ainda está em andamento não perde o registro da tarefa; reabrir o app
+   depois de um restart ainda lista essa tarefa com seu status real.
+4. **Dependência entre tarefas (DAG executável) — prioridade média,
+   início do "pipeline confiável".** Sem isso é lançamento paralelo, não
+   orquestração. A UI já existe e está desenhada: uma coluna `kind`
+   (`'context' | 'depends'`) na tabela `connectors` transforma o grafo
+   que já está na tela num DAG executável — mesma ideia da seção
+   "Ideias" da auditoria ("dar semântica aos conectores": uma seta
+   passaria a significar "a saída deste card entra como contexto
+   naquele", virando composição de agentes em vez de canvas decorativo).
+   **Já existe**: a tabela `connectors` já persiste from/to e o board já
+   renderiza o grafo.
+   **Critério de verificação**: uma tarefa B com `depends` numa tarefa A
+   só é despachada depois que A reporta conclusão (via peça 1); uma
+   tarefa `context` recebe o resultado de A como parte do seu prompt
+   inicial.
+5. **Política de falha — prioridade média.** O que acontece quando um
+   agente morre, trava ou recusa? Hoje: nada, o card fica lá. Falta
+   retry, timeout por tarefa e — o ponto em que a tese cross-provider se
+   paga — reatribuir para outro provider (falhou no Codex, tenta no
+   Claude; impossível dentro de um fornecedor só).
+   **Critério de verificação**: uma tarefa cujo agente encerra sem
+   `acbridge report` (peça 1) dispara retry até um limite configurável,
+   depois reatribuição a um provider diferente do que falhou, ambos
+   visíveis no status da tarefa (peça 3).
+6. **Orçamento e concorrência limitada — prioridade média/baixa.** Teto
+   de agentes simultâneos (3 é um default sensato), timeout por tarefa e
+   limite de custo — fan-out sem teto é gasto sem fundo. Liga na ideia
+   (seção separada da auditoria) de um HUD de custo/tokens por card de
+   agente, extraível da statusline do Claude Code pelo mesmo mecanismo
+   que `session-watch.ts` já usa para descobrir o `resumeId`.
+   **Critério de verificação**: disparar mais tarefas que o teto
+   configurado enfileira as excedentes em vez de spawná-las todas; uma
+   tarefa que ultrapassa seu timeout é encerrada e marcada como tal, não
+   fica pendurada indefinidamente.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
