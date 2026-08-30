@@ -4529,7 +4529,7 @@ passagem. Numeração preservada como reportada.
     gemini.mjs`, `smoke-terminal-links-paste.mjs`,
     `smoke-terminal-visibility-persist.mjs` sem regressão.
 
-## 58. Auditoria pré-release (card externo) — superfície MCP/`acbridge` e roteiro de orquestração, anotado em 2026-08-29, não implementado ainda
+## 58. Auditoria pré-release (card externo) — superfície MCP/`acbridge` e roteiro de orquestração, anotado em 2026-08-29, implantação em andamento a partir de 2026-08-30
 
 **Fonte**: auditoria completa dos ~18.900 LOC de `src/`, publicada como
 artifact em outro card desta mesma sessão
@@ -4586,7 +4586,7 @@ ter usado a superfície.
   — só vê o que chega dali em diante) e a peça 4 do roteiro de
   orquestração abaixo (dependência entre tarefas via conectores).
 
-### M2 — `send_to_card` não submete texto longo (fica preso como paste, sem Enter)
+### M2 — `send_to_card` não submete texto longo (fica preso como paste, sem Enter) — ✅ feito em 2026-08-30
 
 - **Prioridade**: Alta/imediata — já custou um round-trip real nesta
   própria sessão de auditoria (relatado no artifact) e na minha própria
@@ -4613,6 +4613,22 @@ ter usado a superfície.
   conteúdo enquanto M1 não existe — que o conteúdo foi genuinamente
   submetido, não só colado. Nenhum dos smoke scripts atuais cobre esse
   caminho.
+- **Fix aplicado**: `message-bus.ts` (handler `send`) agora escreve o
+  texto e o `\r` em duas chamadas de `writeToCard` separadas, com
+  `SEND_ENTER_DELAY_MS = 80` entre elas — dá tempo do composer do CLI
+  alvo processar o conteúdo como digitação antes do Enter chegar, em vez
+  de receber tudo num único write que o composer heurística como paste.
+- **Verificado ao vivo sem mock**: novo `smoke-mcp-send-submit.mjs` —
+  spawna um card `claude` real, chama `send_to_card` via MCP de verdade
+  (protocolo Streamable HTTP real, `fetch()`, mesmo caminho que um
+  provider usaria) com um payload multi-linha acima do limiar de paste
+  observado na própria auditoria, e confirma via `window.pty.onData`
+  (scrollback real, sem `read_card`/M1 ainda) que o agente recebeu,
+  processou e respondeu com um marker determinístico — prova de
+  submissão genuína, não só de paste visível no composer. Passou na
+  primeira tentativa. `tsc --noEmit`/`electron-vite build` limpos;
+  `smoke-mcp.mjs` (cobertura existente de `send_to_card` e do resto da
+  superfície MCP) sem regressão.
 
 ### M3 — `spawn_agent` não aceita `model` nem `effort`
 
