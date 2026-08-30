@@ -14,6 +14,12 @@ const SPAWN_TIMEOUT_MS = 120_000;
 // already-open page an agent already has a card reference to) — no human
 // decision needed, same short backstop-only timeout as snapshot.
 const PAGE_TEXT_TIMEOUT_MS = 10_000;
+// DESIGN-BACKLOG.md item 58, M2 — above a CLI's bracketed-paste threshold,
+// a `\r` appended to the same write as the text is swallowed as part of
+// the pasted content instead of submitting it. Sending it as a separate
+// write, after the target's readline has had a beat to settle, submits
+// reliably the same way a human pressing Enter after a paste does.
+const SEND_ENTER_DELAY_MS = 80;
 
 // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — an agent spawning another
 // agent, which spawns another... with zero guard, is an unbounded fork
@@ -126,7 +132,9 @@ export function createMessageBus(
       if (!req.target || !cards.some((c) => c.id === req.target)) {
         return { ok: false, error: `no open terminal card with id "${req.target}"` };
       }
-      callbacks.writeToCard(req.target, (req.text ?? "") + "\r");
+      const target = req.target;
+      callbacks.writeToCard(target, req.text ?? "");
+      setTimeout(() => callbacks.writeToCard(target, "\r"), SEND_ENTER_DELAY_MS);
       return { ok: true };
     }
 

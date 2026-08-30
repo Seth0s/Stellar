@@ -4044,6 +4044,23 @@ orquestração (canal de resultado estruturado, ciclo de vida de três
 estados) são a prioridade máxima do item 58 — sem elas, multi-provider
 é só "vários CLIs abertos ao mesmo tempo", não orquestração.
 
+## 2026-08-30 — item 58, M2: `send_to_card` some `\r` num write separado, com atraso
+
+- `\r` deixou de ser concatenado ao texto no mesmo `writeToCard` — vira um
+  segundo write, `SEND_ENTER_DELAY_MS = 80` depois do primeiro
+  (`message-bus.ts`, handler `send`). Acima do limiar de bracketed-paste
+  do CLI alvo, o `\r` embutido no mesmo write era engolido como parte do
+  conteúdo colado; a mensagem ficava visível no composer mas nunca era
+  enviada.
+- Verificado ao vivo sem mock: novo `smoke-mcp-send-submit.mjs` — spawna
+  um card `claude` real, manda um payload multi-linha via MCP de verdade
+  (`fetch()`/Streamable HTTP, não atalho interno) e confirma via
+  `window.pty.onData` que o agente respondeu com um marker determinístico
+  (prova de submissão real, não só paste visível). Passou na primeira
+  tentativa. `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`
+  sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, M2.
+
 ## Comandos
 
 ```bash
