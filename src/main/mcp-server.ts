@@ -121,6 +121,67 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "create_task",
+      {
+        description:
+          "Record a task's identity, separate from any card's — it survives that card closing and the app restarting, so an interrupted orchestration can resume instead of starting over. No consent needed, this is bookkeeping only, it doesn't spawn or touch anything on the board.",
+        inputSchema: {
+          prompt: z.string().optional().describe("What the task is — free text"),
+          provider: z.string().optional().describe("Which provider is meant to run it"),
+          cardId: z.string().optional().describe("The card currently working on it, if one already exists — status starts 'running' when given, 'pending' otherwise"),
+          deps: z.array(z.string()).optional().describe("Ids of other tasks this one depends on"),
+        },
+      },
+      async ({ prompt, provider, cardId, deps }) => {
+        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, deps });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "update_task",
+      {
+        description: "Update a task's status/card/result — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were.",
+        inputSchema: {
+          taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
+          status: z.string().optional().describe("New status — e.g. 'running', 'done', 'failed'"),
+          cardId: z.string().nullable().optional().describe("New card working on it, or null to detach once its own card closed — omit to leave unchanged"),
+          result: z.unknown().optional().describe("Any JSON value — the task's outcome"),
+        },
+      },
+      async ({ taskId, status, cardId, result }) => {
+        const res = await opts.handleRequest({ cmd: "update_task", taskId, status, cardId, result });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "list_tasks",
+      {
+        description: "List every recorded task — id, prompt, provider, status, current card (if any), result, deps. Survives card closes and app restarts.",
+        inputSchema: {},
+      },
+      async () => {
+        const res = await opts.handleRequest({ cmd: "list_tasks" });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "get_task",
+      {
+        description: "Read one task's current record by id.",
+        inputSchema: {
+          taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
+        },
+      },
+      async ({ taskId }) => {
+        const res = await opts.handleRequest({ cmd: "get_task", taskId });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "open_url",
       {
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass).",

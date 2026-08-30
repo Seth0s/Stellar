@@ -544,6 +544,9 @@ function createWindow() {
         .map((c) => ({ id: c.id, provider: c.provider, cwd: c.cwd })),
     writeToCard: (id, text) => registry.write(id, text),
     isCardAlive: (id) => registry.isAlive(id),
+    listTasks: () => store.listTasks(),
+    getTask: (id) => store.getTask(id),
+    upsertTask: (task) => store.upsertTask(task),
     onOpenRequest: (requestId, requesterId, url, reason) =>
       safeSend(win, "browser:ask-open", requestId, requesterId, url, reason),
     onSnapshotRequest: (requestId, target) => handleSnapshotRequest(win, messageBus!, requestId, target),

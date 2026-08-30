@@ -4828,7 +4828,8 @@ resto contra o que ele revelar.
   `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`,
   `smoke-mcp-card-status.mjs` e `smoke-acbridge.mjs` sem regressão.
 3. **Identidade da tarefa separada da identidade do card — prioridade
-   alta, fecha o corte mínimo de orquestração sequencial.** Hoje a
+   alta, fecha o corte mínimo de orquestração sequencial. ✅ feito em
+   2026-08-30.** Hoje a
    unidade é `cardId` — efêmero, some quando o usuário fecha o card.
    Falta uma tabela `tasks` (id, prompt, provider, status, card_id,
    result_json, deps) que sobreviva a restart e a fechamento de card —
@@ -4838,6 +4839,32 @@ resto contra o que ele revelar.
    **Critério de verificação**: fechar o card de um agente cujo `task`
    ainda está em andamento não perde o registro da tarefa; reabrir o app
    depois de um restart ainda lista essa tarefa com seu status real.
+   **Fix aplicado**: tabela `tasks` nova em `store.ts` (`id` — `randomUUID`
+   próprio, não o contador numérico de cards/boards/connectors — de
+   propósito: identidade de tarefa nunca deveria compartilhar espaço de
+   id com card — `prompt`, `provider`, `status`, `card_id`, `result_json`,
+   `deps_json`, `created_at`/`updated_at`). Quatro tools MCP novas:
+   `create_task` (sem gate de consentimento — bookkeeping puro, não
+   spawna nem toca nada no board), `update_task` (atualização parcial —
+   só os campos passados mudam, `cardId: null` explícito desanexa o
+   card), `list_tasks`, `get_task`. Quatro subcomandos `acbridge`
+   espelhando (`create-task`/`update-task <id>`/`list-tasks`/`get-task`,
+   payload de campos como JSON). `card_id`/`result_json` continuam
+   apontando pro que já não existe depois do card fechar — de propósito,
+   é exatamente o que permite reconstruir o que aconteceu depois.
+   `ACBRIDGE_HINT` deliberadamente NÃO ganhou menção a tasks: é
+   bookkeeping do lado do orquestrador, não algo que todo agente
+   spawnado precisa saber usar em si mesmo.
+- **Verificado ao vivo sem mock**: novo `smoke-mcp-tasks.mjs` —
+  `create_task` com `cardId` real (nasce "running"), fecha o card de
+  verdade (`window.store.delete`), confirma que a task sobrevive intacta
+  (`get_task`/`list_tasks`); depois — mais rigoroso que só ler o arquivo
+  sqlite por fora — encerra a instância Electron inteira e sobe uma
+  SEGUNDA instância real, mesmo `--user-data-dir`, e confirma que
+  `get_task`/`list_tasks` ainda acham a tarefa com o status certo através
+  do MCP server real do processo novo. Passou na primeira tentativa.
+  `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` (lista de
+  tools) e `smoke-acbridge.mjs` sem regressão.
 4. **Dependência entre tarefas (DAG executável) — prioridade média,
    início do "pipeline confiável".** Sem isso é lançamento paralelo, não
    orquestração. A UI já existe e está desenhada: uma coluna `kind`

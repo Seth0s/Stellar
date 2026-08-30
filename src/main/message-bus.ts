@@ -1,6 +1,7 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { existsSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import type { TaskRow } from "./store";
 
 const OPEN_TIMEOUT_MS = 120_000;
 // Shorter than OPEN_TIMEOUT_MS on purpose — a snapshot needs no human
@@ -71,6 +72,10 @@ export type BusRequest =
   | { cmd: "card_status"; target?: string }
   | { cmd: "report"; requesterId?: string; report?: unknown }
   | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number }
+  | { cmd: "create_task"; prompt?: string; provider?: string; cardId?: string; deps?: string[] }
+  | { cmd: "update_task"; taskId?: string; status?: string; cardId?: string | null; result?: unknown }
+  | { cmd: "list_tasks" }
+  | { cmd: "get_task"; taskId?: string }
   | {
       cmd: "spawn_agent";
       provider?: string;
@@ -127,6 +132,12 @@ export function createMessageBus(
     /** DESIGN-BACKLOG.md item 58, M4 — pty-registry.ts's own `isAlive`,
      * threaded straight through: no round trip needed, main already knows. */
     isCardAlive: (cardId: string) => boolean;
+    /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 3 — direct
+     * pass-through to store.ts (better-sqlite3 is synchronous, no round
+     * trip needed here either). */
+    listTasks: () => TaskRow[];
+    getTask: (id: string) => TaskRow | undefined;
+    upsertTask: (task: TaskRow) => void;
     onSpawnAgentRequest: (
       requestId: string,
       requesterId: string,
@@ -181,6 +192,24 @@ export function createMessageBus(
     const n = (waitingOnConsent.get(requesterId) ?? 1) - 1;
     if (n <= 0) waitingOnConsent.delete(requesterId);
     else waitingOnConsent.set(requesterId, n);
+  }
+
+  // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 3 — the
+  // stored row keeps deps/result as opaque JSON text (same convention as
+  // cards.messages_json); this is the one place that turns it back into
+  // real values for a caller.
+  function serializeTask(row: TaskRow) {
+    return {
+      id: row.id,
+      prompt: row.prompt,
+      provider: row.provider,
+      status: row.status,
+      cardId: row.card_id,
+      result: row.result_json ? JSON.parse(row.result_json) : null,
+      deps: row.deps_json ? JSON.parse(row.deps_json) : [],
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
   /** Shared by both frontends — see the module doc comment. Never throws;
@@ -332,6 +361,48 @@ export function createMessageBus(
         waiters.push(onReport);
         pendingReportWaiters.set(target, waiters);
       });
+    }
+
+    if (req.cmd === "create_task") {
+      const now = Date.now();
+      const id = randomUUID();
+      callbacks.upsertTask({
+        id,
+        prompt: req.prompt ?? null,
+        provider: req.provider ?? null,
+        status: req.cardId ? "running" : "pending",
+        card_id: req.cardId ?? null,
+        result_json: null,
+        deps_json: req.deps ? JSON.stringify(req.deps) : null,
+        created_at: now,
+        updated_at: now,
+      });
+      return { ok: true, taskId: id };
+    }
+
+    if (req.cmd === "update_task") {
+      if (!req.taskId) return { ok: false, error: "missing taskId" };
+      const existing = callbacks.getTask(req.taskId);
+      if (!existing) return { ok: false, error: `no such task "${req.taskId}"` };
+      callbacks.upsertTask({
+        ...existing,
+        status: req.status ?? existing.status,
+        card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
+        result_json: req.result !== undefined ? JSON.stringify(req.result) : existing.result_json,
+        updated_at: Date.now(),
+      });
+      return { ok: true };
+    }
+
+    if (req.cmd === "list_tasks") {
+      return { ok: true, tasks: callbacks.listTasks().map(serializeTask) };
+    }
+
+    if (req.cmd === "get_task") {
+      if (!req.taskId) return { ok: false, error: "missing taskId" };
+      const task = callbacks.getTask(req.taskId);
+      if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
+      return { ok: true, task: serializeTask(task) };
     }
 
     if (req.cmd === "spawn_agent") {

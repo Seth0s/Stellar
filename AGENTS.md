@@ -4175,6 +4175,30 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
 - Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
   orquestração peça 2.
 
+## 2026-08-30 — item 58, roteiro de orquestração peça 3: tabela `tasks`, identidade separada do card
+
+- Nova tabela `tasks` em `store.ts` (`id` — `randomUUID` próprio, espaço
+  de id separado do contador numérico que cards/boards/connectors
+  compartilham, de propósito — identidade de tarefa nunca deveria
+  colidir com identidade de card). Quatro tools MCP
+  (`create_task`/`update_task`/`list_tasks`/`get_task`) e quatro
+  subcomandos `acbridge` espelhando. `create_task` não pede
+  consentimento — é bookkeeping puro, não spawna nem toca o board.
+  `card_id`/`result_json` continuam apontando pro que já não existe
+  depois do card fechar, de propósito: é o que permite reconstruir o que
+  aconteceu. `ACBRIDGE_HINT` NÃO ganhou menção — é ferramenta de
+  orquestrador, não algo todo agente spawnado precisa saber usar em si.
+- Verificado ao vivo sem mock: `smoke-mcp-tasks.mjs` — cria task com
+  cardId real, fecha o card de verdade, confirma que a task sobrevive
+  intacta; depois encerra o processo Electron inteiro e sobe uma
+  SEGUNDA instância real no mesmo `--user-data-dir`, confirmando que
+  `get_task`/`list_tasks` ainda acham a tarefa através do MCP server do
+  processo novo — restart real, não leitura de arquivo por fora. Passou
+  na primeira tentativa. `tsc --noEmit`/`electron-vite build` limpos;
+  `smoke-mcp.mjs`/`smoke-acbridge.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
+  orquestração peça 3.
+
 ## Comandos
 
 ```bash

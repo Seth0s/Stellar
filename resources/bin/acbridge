@@ -34,6 +34,7 @@ const USAGE =
   "usage: acbridge <list | send <cardId> <message...> | open <url> | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
+  "create-task <json> | update-task <taskId> <json> | list-tasks | get-task <taskId> | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]>";
 
@@ -93,6 +94,33 @@ if (cmd === "list") {
   const timeoutMs = waitTimeoutMsStr === undefined ? undefined : Number(waitTimeoutMsStr);
   if (timeoutMs !== undefined && Number.isNaN(timeoutMs)) fail("read-report: waitTimeoutMs must be a number");
   request = { cmd: "get_report", target, wait: timeoutMs !== undefined, timeoutMs };
+} else if (cmd === "create-task") {
+  const [json] = rest;
+  let fields = {};
+  if (json) {
+    try {
+      fields = JSON.parse(json);
+    } catch {
+      fail("create-task: argument must be valid JSON");
+    }
+  }
+  request = { cmd: "create_task", ...fields };
+} else if (cmd === "update-task") {
+  const [taskId, json] = rest;
+  if (!taskId || !json) fail("usage: acbridge update-task <taskId> <json>");
+  let fields;
+  try {
+    fields = JSON.parse(json);
+  } catch {
+    fail("update-task: argument must be valid JSON");
+  }
+  request = { cmd: "update_task", taskId, ...fields };
+} else if (cmd === "list-tasks") {
+  request = { cmd: "list_tasks" };
+} else if (cmd === "get-task") {
+  const [taskId] = rest;
+  if (!taskId) fail("usage: acbridge get-task <taskId>");
+  request = { cmd: "get_task", taskId };
 } else if (cmd === "spawn-agent") {
   const [provider, cwd, resumeId] = rest;
   if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
@@ -153,6 +181,14 @@ socket.on("close", () => {
     console.log("reported");
   } else if (cmd === "read-report") {
     console.log(JSON.stringify(res.report));
+  } else if (cmd === "create-task") {
+    console.log(res.taskId);
+  } else if (cmd === "update-task") {
+    console.log("updated");
+  } else if (cmd === "list-tasks") {
+    console.log(JSON.stringify(res.tasks));
+  } else if (cmd === "get-task") {
+    console.log(JSON.stringify(res.task));
   } else if (cmd === "spawn-agent") {
     console.log(res.cardId);
   } else if (cmd === "spawn-card") {
