@@ -90,7 +90,16 @@ export async function writeFile(root: string, path: string, content: string): Pr
  * `readFile`/`writeFile` already rely on, nothing new to trust here.
  */
 export async function renamePath(root: string, path: string, newName: string): Promise<void> {
-  if (!newName || newName.includes("/") || newName.includes("\\")) {
+  // Pre-release audit B8 — the separator check alone let "." and ".."
+  // through: `join(<parent>, "..")` collapses to the parent's OWN parent
+  // (and "." to the parent itself), so `fs.rename` was handed a
+  // destination that is a directory the entry already lives under. It
+  // fails with a raw errno today rather than doing damage, but "a rename
+  // whose destination isn't the name the user typed" is exactly the class
+  // of input this guard exists to reject, not something to leave to the
+  // kernel's mood. Neither is a legal filename on any filesystem here, so
+  // rejecting them costs nothing.
+  if (!newName || newName === "." || newName === ".." || newName.includes("/") || newName.includes("\\")) {
     throw new Error("nome inválido");
   }
   const from = confine(root, path);
@@ -109,7 +118,10 @@ export async function createEntry(
   name: string,
   kind: "file" | "folder",
 ): Promise<void> {
-  if (!name || name.includes("/") || name.includes("\\")) {
+  // Same hole as renamePath's guard just above (audit B8) — identical
+  // check, identical reason; "." / ".." resolve the new entry onto a
+  // directory that already exists instead of creating anything.
+  if (!name || name === "." || name === ".." || name.includes("/") || name.includes("\\")) {
     throw new Error("nome inválido");
   }
   const parent = confine(root, parentPath);
