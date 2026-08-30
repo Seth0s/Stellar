@@ -56,6 +56,7 @@ export type BusRequest =
       requesterId?: string;
       depth?: number;
       reason?: string;
+      model?: string;
     }
   | { cmd: "spawn_card"; kind?: string; cwd?: string; url?: string; requesterId?: string; reason?: string };
 
@@ -97,7 +98,7 @@ export function createMessageBus(
     onSpawnAgentRequest: (
       requestId: string,
       requesterId: string,
-      params: { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string },
+      params: { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string; model?: string },
     ) => void;
     onSpawnCardRequest: (
       requestId: string,
@@ -224,6 +225,7 @@ export function createMessageBus(
           resumeId: req.resumeId,
           depth: depth + 1,
           reason: req.reason,
+          model: req.model,
         });
       });
     }

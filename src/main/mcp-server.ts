@@ -82,6 +82,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           provider: z.enum(["bash", "claude", "codex", "cursor", "gemini"]).describe("Which provider to spawn"),
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
+          model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default"),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var)"),
           depth: z
             .number()
@@ -90,7 +91,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
         },
       },
-      async ({ provider, cwd, resumeId, callerCardId, depth, reason }) => {
+      async ({ provider, cwd, resumeId, model, callerCardId, depth, reason }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
           provider,
@@ -99,6 +100,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           requesterId: callerCardId,
           reason,
           depth: depth ?? 0,
+          model,
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },

@@ -4061,6 +4061,28 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
   sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 58, M2.
 
+## 2026-08-30 — item 58, M3: `spawn_agent` aceita `model` (não `effort`)
+
+- `model` percorre o caminho inteiro até a criação do card: schema MCP
+  (`mcp-server.ts`) → `BusRequest`/`onSpawnAgentRequest`
+  (`message-bus.ts`) → IPC `spawn:ask-agent` → `SpawnAgentAskParams`
+  (`preload/index.ts`) → `spawnAgentFor` (`App.tsx`) grava `model` desde
+  a criação, em vez do `null` fixo de antes. Sem mudança em
+  `providers.ts` — `buildArgs` já sabia usar `model`.
+- **`systemPrompt` deliberadamente fora**: `providers.ts:71` usa
+  `systemPrompt || ACBRIDGE_HINT` — SUBSTITUI, não concatena. Aceitar
+  `systemPrompt` via MCP sem mais nada quebraria silenciosamente a única
+  forma do agente spawnado falar de volta com o board (`acbridge`).
+  Fica pra uma passagem futura, junto de um jeito de compor os dois em
+  vez de um sobrescrever o outro.
+- Verificado ao vivo sem mock: novo `smoke-mcp-spawn-model.mjs` — spawna
+  um card `claude` real via MCP com `model: "sonnet"`, aprova o consent
+  modal, confirma via `store.list` que o `model` já está persistido
+  desde a criação, sem `/model` enviado depois. Passou na primeira
+  tentativa. `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`
+  sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, M3.
+
 ## Comandos
 
 ```bash

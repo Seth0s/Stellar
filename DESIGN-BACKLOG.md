@@ -4630,7 +4630,7 @@ ter usado a superfície.
   `smoke-mcp.mjs` (cobertura existente de `send_to_card` e do resto da
   superfície MCP) sem regressão.
 
-### M3 — `spawn_agent` não aceita `model` nem `effort`
+### M3 — `spawn_agent` não aceita `model` nem `effort` — ✅ parcial (model) em 2026-08-30
 
 - **Prioridade**: Média/imediata — a capacidade já existe internamente,
   só falta expor na borda MCP.
@@ -4648,6 +4648,26 @@ ter usado a superfície.
 - **Critério de verificação**: smoke test MCP chamando `spawn_agent` com
   `model` explícito e confirmando (via `store.list`) que o card nasce
   com esse model desde o início, sem round-trip de `/model` depois.
+- **Fix aplicado**: só `model` — `systemPrompt` ficou de fora de
+  propósito. `providers.ts:71` já usa `systemPrompt || ACBRIDGE_HINT`: um
+  `systemPrompt` vindo de fora via MCP SUBSTITUIRIA inteiro o hint que
+  ensina o agente spawnado a falar com `acbridge`, não complementaria —
+  expor isso sem mais nada quebraria silenciosamente a única forma que
+  esse agente teria de voltar a se comunicar com o board. Fica anotado
+  pra ser resolvido junto (ex.: concatenar em vez de substituir) numa
+  passagem futura, não implementado às pressas aqui.
+  `model` percorreu o caminho inteiro: schema MCP
+  (`mcp-server.ts`) → `BusRequest`/`onSpawnAgentRequest`
+  (`message-bus.ts`) → IPC `spawn:ask-agent` → `SpawnAgentAskParams`
+  (`preload/index.ts`) → `spawnAgentFor` (`App.tsx`), que hoje grava
+  `model: model || null` em vez do `null` fixo de antes.
+- **Verificado ao vivo sem mock**: novo `smoke-mcp-spawn-model.mjs` —
+  chama `spawn_agent` via MCP real com `model: "sonnet"` num provider
+  `claude` real, aprova o modal de consentimento, e confirma via
+  `store.list` que o card já nasce com `model: "sonnet"` persistido —
+  sem nenhum `/model` enviado depois. Passou na primeira tentativa.
+  `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` sem
+  regressão.
 
 ### M4 — Nenhum sinal de conclusão: quem spawna não sabe quando o agente terminou
 
