@@ -36,6 +36,7 @@ const USAGE =
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "create-task <json> | update-task <taskId> <json> | list-tasks | get-task <taskId> | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
+  "concurrency-status [cap] | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]>";
 
@@ -128,6 +129,11 @@ if (cmd === "list") {
   const [connectorId, kindStr] = rest;
   if (!connectorId || !kindStr) fail("usage: acbridge set-connector-kind <connectorId> <context|depends|null>");
   request = { cmd: "set_connector_kind", connectorId, kind: kindStr === "null" ? null : kindStr };
+} else if (cmd === "concurrency-status") {
+  const [capStr] = rest;
+  const cap = capStr === undefined ? undefined : Number(capStr);
+  if (cap !== undefined && Number.isNaN(cap)) fail("concurrency-status: cap must be a number");
+  request = { cmd: "concurrency_status", cap };
 } else if (cmd === "spawn-agent") {
   const [provider, cwd, resumeId] = rest;
   if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
@@ -200,6 +206,8 @@ socket.on("close", () => {
     console.log(JSON.stringify(res.connectors));
   } else if (cmd === "set-connector-kind") {
     console.log("updated");
+  } else if (cmd === "concurrency-status") {
+    console.log(JSON.stringify({ running: res.running, cap: res.cap, atCap: res.atCap }));
   } else if (cmd === "spawn-agent") {
     console.log(res.cardId);
   } else if (cmd === "spawn-card") {

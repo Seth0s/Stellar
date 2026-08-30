@@ -4256,6 +4256,29 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
 - Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
   orquestração peça 5.
 
+## 2026-08-30 — item 58, roteiro de orquestração peça 6: `concurrency_status` consultivo
+
+- Mesmo limite de arquitetura das peças 4/5, reconfirmado explicitamente
+  pelo usuário (esta peça acrescentava uma categoria nova em relação às
+  anteriores: matar processo sozinho, não só decidir/despachar) —
+  escolhida a opção sem fila e sem auto-kill. Nova tool
+  `concurrency_status(cap?)`: conta cards não-bash com processo
+  realmente vivo, compara contra um `cap` (default 3) passado pelo
+  chamador a cada chamada, sem estado persistido. Puramente informativo
+  — nada muda no comportamento real de `spawn_agent`. Timeout de tarefa
+  continua sendo `waitTimeoutMs` per-call (M4); HUD de custo/tokens
+  (ideia separada da auditoria) fica de fora inteiramente.
+- Verificado ao vivo sem mock: `smoke-mcp-concurrency.mjs` — spawna 3
+  cards `claude` reais, confirma `running` subindo 1→2→3 e `atCap`
+  virando `true` só ao bater o cap default; mata um processo real,
+  confirma que o número reflete isso de verdade; cap customizado muda
+  `atCap` sem efeito colateral. Passou na primeira tentativa. `tsc
+  --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`/
+  `smoke-acbridge.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
+  orquestração peça 6 — **com isto, o item 58 inteiro (M1–M4 +
+  roteiro de orquestração 1–6) está implantado**.
+
 ## Comandos
 
 ```bash

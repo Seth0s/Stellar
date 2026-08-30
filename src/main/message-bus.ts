@@ -36,6 +36,11 @@ const SEND_ENTER_DELAY_MS = 80;
 // reasoning as DEFAULT_WAIT_EXIT_TIMEOUT_MS: waiting for a real agent's
 // real result is not a bug-detection backstop, it's the actual point.
 const DEFAULT_REPORT_TIMEOUT_MS = 600_000;
+// DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 6 — the
+// audit's own "corte mínimo honesto" default, used only when a caller
+// doesn't pass its own `cap`. Purely advisory (see `concurrency_status`
+// below) — nothing here queues or refuses a spawn.
+const DEFAULT_CONCURRENCY_CAP = 3;
 
 // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — an agent spawning another
 // agent, which spawns another... with zero guard, is an unbounded fork
@@ -86,6 +91,7 @@ export type BusRequest =
   | { cmd: "get_task"; taskId?: string }
   | { cmd: "list_connectors" }
   | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null }
+  | { cmd: "concurrency_status"; cap?: number }
   | {
       cmd: "spawn_agent";
       provider?: string;
@@ -458,6 +464,18 @@ export function createMessageBus(
       const found = callbacks.setConnectorKind(req.connectorId, req.kind ?? null);
       if (!found) return { ok: false, error: `no such connector "${req.connectorId}"` };
       return { ok: true };
+    }
+
+    if (req.cmd === "concurrency_status") {
+      // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 6 — a
+      // real count (`isCardAlive`, not just "has a card row"), same
+      // "bash isn't an agent" convention `store.ts`'s cardCounts already
+      // uses. Purely advisory — this app doesn't queue or refuse a spawn
+      // over this. Deciding what to do with the number is up to whoever
+      // calls it.
+      const running = callbacks.listCards().filter((c) => c.provider !== "bash" && callbacks.isCardAlive(c.id)).length;
+      const cap = req.cap ?? DEFAULT_CONCURRENCY_CAP;
+      return { ok: true, running, cap, atCap: running >= cap };
     }
 
     if (req.cmd === "spawn_agent") {
