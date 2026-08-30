@@ -4233,6 +4233,29 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
 - Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
   orquestração peça 4.
 
+## 2026-08-30 — item 58, roteiro de orquestração peça 5: bookkeeping de retry/reatribuição em `tasks`
+
+- Mesmo limite de arquitetura da peça 4, aplicado sem perguntar de novo
+  (é a mesma pergunta): "disparar retry" e "reatribuir pra outro
+  provider" são ações — decidir e agir (chamar `spawn_agent` de novo)
+  fica com um orquestrador externo, não com um engine autônomo dentro do
+  Stellar. `tasks` ganhou `retry_count`/`attempted_providers_json`
+  (aditivo, nunca sobrescreve por inteiro) só pra esse orquestrador não
+  ter que rastrear isso sozinho. Timeout de tarefa não ganhou campo
+  novo — já é per-call via `spawn_agent`'s `waitTimeoutMs` (M4), um
+  campo dedicado seria redundante.
+- Verificado ao vivo sem mock: `smoke-mcp-tasks-failure.mjs` — o próprio
+  script faz de orquestrador externo: spawna um `bash` real, mata sem
+  nunca chamar `report`, confirma a falha genuína via `card_status`/
+  `read_report` reais (não simulados), incrementa retry, reatribui pra
+  `claude` (provider genuinamente diferente) na segunda falha — confirma
+  `retryCount: 2`, `attemptedProviders: ["bash","claude"]` visível em
+  `get_task`/`list_tasks`. Passou na primeira tentativa. `tsc --noEmit`/
+  `electron-vite build` limpos; `smoke-mcp.mjs`, `smoke-mcp-tasks.mjs`
+  e `smoke-acbridge.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
+  orquestração peça 5.
+
 ## Comandos
 
 ```bash

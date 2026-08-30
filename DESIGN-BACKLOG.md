@@ -4925,7 +4925,9 @@ resto contra o que ele revelar.
   `electron-vite build` limpos; `smoke-mcp.mjs` (lista de tools),
   `smoke-acbridge.mjs` e `smoke-connector.mjs` (o gesto de UI original,
   intocado pela migração) sem regressão.
-5. **Política de falha — prioridade média.** O que acontece quando um
+5. **Política de falha — prioridade média. ✅ bookkeeping feito em
+   2026-08-30 (mesmo limite de escopo da peça 4 — decisão do usuário,
+   ver nota abaixo).** O que acontece quando um
    agente morre, trava ou recusa? Hoje: nada, o card fica lá. Falta
    retry, timeout por tarefa e — o ponto em que a tese cross-provider se
    paga — reatribuir para outro provider (falhou no Codex, tenta no
@@ -4934,6 +4936,40 @@ resto contra o que ele revelar.
    `acbridge report` (peça 1) dispara retry até um limite configurável,
    depois reatribuição a um provider diferente do que falhou, ambos
    visíveis no status da tarefa (peça 3).
+   **Mesma decisão do usuário da peça 4, aplicada aqui de propósito, sem
+   perguntar de novo (é a mesma pergunta)**: "dispara retry" e
+   "reatribuição" são ações — decidir quando reagir a uma falha e agir
+   (chamar `spawn_agent` de novo) fica com um orquestrador externo, não
+   com um engine autônomo dentro do Stellar. O que foi construído é o
+   bookkeeping que esse orquestrador precisa pra não reimplementar
+   contagem de tentativas e histórico de providers tentados sozinho —
+   igual à peça 4, isso NÃO inclui um timeout de tarefa configurável
+   dentro do Stellar: o timeout já é per-call via `spawn_agent`'s
+   `waitTimeoutMs` (M4) — outro campo pra isso seria redundante.
+   **Fix aplicado**: `tasks` ganhou `retry_count INTEGER NOT NULL
+   DEFAULT 0` e `attempted_providers_json TEXT` (`store.ts`, migração
+   aditiva — `CREATE TABLE` novo já nasce com as colunas, bancos
+   existentes da peça 3 recebem via `ALTER TABLE`). `create_task` já
+   semeia `attempted_providers_json` com o provider inicial (se
+   informado) — a lista sempre reflete todo provider já tentado desde o
+   início, não só desde a primeira falha. `update_task` ganhou
+   `incrementRetry`/`attemptedProvider`, ambos aditivos (nunca sobrescrevem
+   o valor anterior por inteiro, ao contrário de `status`/`result`).
+   `list_tasks`/`get_task` expõem `retryCount`/`attemptedProviders`.
+   Nenhum subcomando `acbridge` novo precisou — `update-task` já repassa
+   qualquer campo JSON como está.
+- **Verificado ao vivo sem mock**: novo `smoke-mcp-tasks-failure.mjs` —
+  o próprio script faz o papel do orquestrador externo: cria uma task,
+  spawna um agente `bash` real, mata o processo SEM nunca chamar
+  `report`, confirma via `card_status` (`exited`) e `read_report`
+  (`ok:false`) que a falha é genuína, não simulada; incrementa
+  `retryCount` e desanexa o `cardId`; repete uma segunda vez; na segunda
+  falha reatribui pra um provider genuinamente diferente (`claude`, real
+  nesta máquina) via `attemptedProvider`; confirma que `retryCount`
+  chega a 2 e `attemptedProviders` vira `["bash", "claude"]`, visível em
+  `get_task` e `list_tasks`. Passou na primeira tentativa. `tsc
+  --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`,
+  `smoke-mcp-tasks.mjs` (peça 3) e `smoke-acbridge.mjs` sem regressão.
 6. **Orçamento e concorrência limitada — prioridade média/baixa.** Teto
    de agentes simultâneos (3 é um default sensato), timeout por tarefa e
    limite de custo — fan-out sem teto é gasto sem fundo. Liga na ideia

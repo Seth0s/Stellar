@@ -73,7 +73,15 @@ export type BusRequest =
   | { cmd: "report"; requesterId?: string; report?: unknown }
   | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number }
   | { cmd: "create_task"; prompt?: string; provider?: string; cardId?: string; deps?: string[] }
-  | { cmd: "update_task"; taskId?: string; status?: string; cardId?: string | null; result?: unknown }
+  | {
+      cmd: "update_task";
+      taskId?: string;
+      status?: string;
+      cardId?: string | null;
+      result?: unknown;
+      incrementRetry?: boolean;
+      attemptedProvider?: string;
+    }
   | { cmd: "list_tasks" }
   | { cmd: "get_task"; taskId?: string }
   | { cmd: "list_connectors" }
@@ -218,6 +226,8 @@ export function createMessageBus(
       cardId: row.card_id,
       result: row.result_json ? JSON.parse(row.result_json) : null,
       deps: row.deps_json ? JSON.parse(row.deps_json) : [],
+      retryCount: row.retry_count,
+      attemptedProviders: row.attempted_providers_json ? JSON.parse(row.attempted_providers_json) : [],
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -385,6 +395,8 @@ export function createMessageBus(
         card_id: req.cardId ?? null,
         result_json: null,
         deps_json: req.deps ? JSON.stringify(req.deps) : null,
+        retry_count: 0,
+        attempted_providers_json: req.provider ? JSON.stringify([req.provider]) : null,
         created_at: now,
         updated_at: now,
       });
@@ -395,11 +407,20 @@ export function createMessageBus(
       if (!req.taskId) return { ok: false, error: "missing taskId" };
       const existing = callbacks.getTask(req.taskId);
       if (!existing) return { ok: false, error: `no such task "${req.taskId}"` };
+      // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 — pure
+      // bookkeeping an external orchestrator's own retry/reassignment loop
+      // can lean on instead of tracking this itself: `incrementRetry`
+      // bumps the counter, `attemptedProvider` appends to the list (both
+      // additive, never overwritten wholesale like the other fields).
+      const attemptedProviders: string[] = existing.attempted_providers_json ? JSON.parse(existing.attempted_providers_json) : [];
+      if (req.attemptedProvider) attemptedProviders.push(req.attemptedProvider);
       callbacks.upsertTask({
         ...existing,
         status: req.status ?? existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
         result_json: req.result !== undefined ? JSON.stringify(req.result) : existing.result_json,
+        retry_count: existing.retry_count + (req.incrementRetry ? 1 : 0),
+        attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
         updated_at: Date.now(),
       });
       return { ok: true };

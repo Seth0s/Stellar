@@ -97,6 +97,14 @@ export type TaskRow = {
   card_id: string | null;
   result_json: string | null;
   deps_json: string | null;
+  /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 — bare
+   * bookkeeping only, same "data model, not an engine" boundary as peça
+   * 4: nothing in this app decides to retry or reassign anything.
+   * `retry_count` and `attempted_providers_json` (JSON array, in order
+   * tried) exist so an external orchestrator doesn't have to keep that
+   * state itself while implementing its own retry/reassignment loop. */
+  retry_count: number;
+  attempted_providers_json: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -130,6 +138,13 @@ function migrate(db: Database.Database) {
     db.exec(`ALTER TABLE connectors ADD COLUMN kind TEXT`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
+  }
+  for (const col of ["retry_count INTEGER NOT NULL DEFAULT 0", "attempted_providers_json TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
   }
   try {
     db.exec(`ALTER TABLE boards ADD COLUMN project TEXT NOT NULL DEFAULT ''`);
@@ -197,6 +212,8 @@ export function openStore(userDataDir: string) {
       card_id TEXT,
       result_json TEXT,
       deps_json TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      attempted_providers_json TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -318,17 +335,18 @@ export function openStore(userDataDir: string) {
   `);
 
   const listTasksStmt = db.prepare(
-    "SELECT id, prompt, provider, status, card_id, result_json, deps_json, created_at, updated_at FROM tasks ORDER BY created_at ASC",
+    "SELECT id, prompt, provider, status, card_id, result_json, deps_json, retry_count, attempted_providers_json, created_at, updated_at FROM tasks ORDER BY created_at ASC",
   );
   const getTaskStmt = db.prepare(
-    "SELECT id, prompt, provider, status, card_id, result_json, deps_json, created_at, updated_at FROM tasks WHERE id = ?",
+    "SELECT id, prompt, provider, status, card_id, result_json, deps_json, retry_count, attempted_providers_json, created_at, updated_at FROM tasks WHERE id = ?",
   );
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, result_json, deps_json, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @result_json, @deps_json, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, result_json, deps_json, retry_count, attempted_providers_json, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @result_json, @deps_json, @retry_count, @attempted_providers_json, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, result_json = excluded.result_json, deps_json = excluded.deps_json,
+      retry_count = excluded.retry_count, attempted_providers_json = excluded.attempted_providers_json,
       updated_at = excluded.updated_at
   `);
 
