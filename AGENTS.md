@@ -3916,6 +3916,23 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
 - Detalhe completo (inclusive duas mecânicas de teste não óbvias
   descobertas construindo o script) em `DESIGN-BACKLOG.md` item 57 ponto 2.
 
+## 2026-08-29 — item 57 ponto 3: modelos do chatbox atualizados (pesquisado ao vivo, não de memória)
+
+- `PROVIDER_MODELS` (`secretsUi.ts`) estava em `gpt-4.1`/`o3` (OpenAI) e
+  `2.5`/`2.0` (Gemini) — desatualizado. Pesquisado via
+  `developers.openai.com/api/docs/models` e `ai.google.dev`: OpenAI virou
+  `["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"]` (terra default,
+  equilibrado — mesmo papel do sonnet na lista da anthropic); Gemini ganhou
+  `gemini-3.7-flash` como novo default, mantendo `2.5-flash`/`2.5-pro`/
+  `2.5-flash-lite` como fallback.
+- "Antigravity" (citado pelo usuário) **não entrou** — é um agente exposto
+  só pela Interactions/Agents API do Gemini, incompatível com a Chat
+  Completions que este app fala; teria quebrado se adicionado.
+- Dois testes tinham o id antigo hardcoded, corrigidos junto:
+  `smoke-chat-providers.mjs`, `smoke-chat-tools.mjs`. `tsc --noEmit`/
+  `electron-vite build` limpos, suite de chat completa sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 3.
+
 ## Comandos
 
 ```bash
