@@ -26,6 +26,7 @@ export function TerminalCard({
   continueLast,
   model,
   systemPrompt,
+  initialInput,
   visible,
   seenUrls,
   interactionMode,
@@ -45,6 +46,7 @@ export function TerminalCard({
   onConnectorStart,
   onSelectStart,
   onStatusChange,
+  onSuggestInstall,
 }: {
   /** The card's own persisted id — also the PTY id and AGENT_CANVAS_CARD_ID, so acbridge/store/registry all speak the same id. */
   id: string;
@@ -58,6 +60,10 @@ export function TerminalCard({
   continueLast: boolean;
   model: string | null;
   systemPrompt: string | null;
+  /** One-shot text typed into a fresh PTY right after spawn (see
+   * useTerminal.ts) — never persisted, only ever set by
+   * `openInstallTerminal` (App.tsx, item 57 ponto 13). */
+  initialInput: string | null;
   visible: boolean;
   /** URLs this card's own output has printed — never opened on its own, only offered (see AGENTS.md). */
   seenUrls: string[];
@@ -81,6 +87,9 @@ export function TerminalCard({
   /** Bubbles live status up for the session breadcrumb/list (item 1) — the
    * only place this app has real (not structural-proxy) agent status. */
   onStatusChange?: (status: "ok" | "error" | "exited") => void;
+  /** Item 57 ponto 13 — "binary not found" offers a pre-filled (never
+   * auto-run) install terminal instead of just a dead-end error string. */
+  onSuggestInstall?: (providerId: string, cwd: string, command: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const urlBadgeRef = useRef<HTMLButtonElement>(null);
@@ -104,7 +113,7 @@ export function TerminalCard({
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
     copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
   }
-  const { exitCode, spawnError, discoveredResumeId, fitNow, interrupt } = useTerminal(
+  const { exitCode, spawnError, installHint, discoveredResumeId, fitNow, interrupt } = useTerminal(
     containerRef,
     id,
     providerId,
@@ -113,6 +122,7 @@ export function TerminalCard({
     continueLast,
     model,
     systemPrompt,
+    initialInput,
     visible,
     zoom,
   );
@@ -218,7 +228,21 @@ export function TerminalCard({
       }
     >
       <div className="terminal-card-body" ref={containerRef} />
-      {spawnError !== null && <div className="terminal-card-exited">{spawnError}</div>}
+      {spawnError !== null && (
+        <div className="terminal-card-exited">
+          {spawnError}
+          {installHint && onSuggestInstall && (
+            <button
+              className="terminal-card-install-btn"
+              title={`Abre um terminal bash com o comando pré-preenchido — nada é executado sozinho, você confirma com Enter: ${installHint.command}`}
+              onClick={() => onSuggestInstall(installHint.providerId, cwd, installHint.command)}
+            >
+              <Icon name="terminal" size={12} />
+              instalar {installHint.providerId}
+            </button>
+          )}
+        </div>
+      )}
       {exitCode !== null && <div className="terminal-card-exited">processo encerrado ({exitCode})</div>}
       <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className="terminal-card-url-popover thin-scroll">
         {[...seenUrls].reverse().map((url) => {

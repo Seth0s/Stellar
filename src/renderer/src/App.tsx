@@ -333,6 +333,7 @@ function fromRow(r: CardRow): Card {
         continueLast: false,
         model: r.model,
         systemPrompt: r.system_prompt,
+        initialInput: null,
         label,
         rect,
         groupId,
@@ -355,6 +356,7 @@ function fromRow(r: CardRow): Card {
         continueLast: false,
         model: r.model,
         systemPrompt: r.system_prompt,
+        initialInput: null,
         label,
         rect,
         groupId,
@@ -644,7 +646,7 @@ export function App() {
     const newId = String(nextId.current++);
     const clone: Card =
       source.kind === "terminal"
-        ? { ...source, id: newId, rect, groupId: null, label: null, resumeId: null, continueLast: false }
+        ? { ...source, id: newId, rect, groupId: null, label: null, resumeId: null, continueLast: false, initialInput: null }
         : { ...source, id: newId, rect, groupId: null, label: null };
     addCard(clone);
   }
@@ -756,6 +758,7 @@ export function App() {
       continueLast: newResumeId.trim() === "" && newContinueLast,
       model: newModel.trim() || null,
       systemPrompt: newSystemPrompt.trim() || null,
+      initialInput: null,
       rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
       groupId: null,
       label: null,
@@ -829,11 +832,36 @@ export function App() {
       continueLast: false,
       model: null,
       systemPrompt: null,
+      initialInput: null,
       rect: centeredSlot(visibleRect, cardsRef.current.length),
       groupId: null,
       label: null,
     });
     return id;
+  }
+
+  /** DESIGN-BACKLOG.md item 57 ponto 13 — the "instalar {provider}" button
+   * on a terminal card's "binário não encontrado" error (TerminalCard.tsx).
+   * A plain `bash` card at the same cwd, with `command` typed into its PTY
+   * right after spawn (useTerminal.ts's `initialInput`) — never executed
+   * on its own, the human still presses Enter, same spirit as every other
+   * consent-gated action in this app (never auto-run an install). */
+  function openInstallTerminal(providerId: string, cwd: string, command: string) {
+    const id = String(nextId.current++);
+    addCard({
+      id,
+      kind: "terminal",
+      provider: "bash",
+      cwd,
+      resumeId: null,
+      continueLast: false,
+      model: null,
+      systemPrompt: null,
+      initialInput: command,
+      rect: centeredSlot(visibleRect, cardsRef.current.length),
+      groupId: null,
+      label: `instalar ${providerId}`,
+    });
   }
 
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 2 — generalizes
@@ -1433,6 +1461,7 @@ export function App() {
                 continueLast={c.continueLast}
                 model={c.model}
                 systemPrompt={c.systemPrompt}
+                initialInput={c.initialInput}
                 visible={isInView(c.rect, visibleRect)}
                 seenUrls={seenUrls[c.id] ?? []}
                 interactionMode={interactionMode}
@@ -1452,6 +1481,7 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
+                onSuggestInstall={openInstallTerminal}
               />
             );
           }

@@ -22,7 +22,10 @@ export type CardRow = {
 };
 
 type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; systemPrompt?: string };
-type SpawnResult = { id: string } | { error: "binary_not_found" | "spawn_failed"; providerId: string };
+type SpawnResult =
+  | { id: string }
+  | { error: "binary_not_found"; providerId: string; installCommand: string | null }
+  | { error: "spawn_failed"; providerId: string };
 
 const pty = {
   spawn: (

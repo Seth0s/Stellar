@@ -4451,13 +4451,48 @@ passagem. Numeração preservada como reportada.
       `scrollbar-color` deixa de ser `auto` (nativo) e passa a usar os
       tokens do `thin-scroll`. `tsc --noEmit`/`electron-vite build`
       limpos.
-13. **Observer de provider não instalado, por provider** (print anexado
-    do popover de criação de terminal — bash/claude/codex/cursor/gemini).
-    Pedido: pra cada provider da lista, o app deveria detectar se o
-    binário correspondente não está instalado/no PATH e avisar o
-    usuário, sugerindo abrir um terminal com o comando de instalação já
-    preenchido (não obrigar o usuário a descobrir sozinho por que um
-    provider falhou ao spawnar).
+13. **Observer de provider não instalado, por provider — ✅ feito em
+    2026-08-29.** A detecção em si (`resolveSpawn` retornando
+    `binary_not_found`) já existia; faltava sugerir o que fazer a
+    respeito — o card só mostrava um texto de erro morto.
+    **Comandos reais, pesquisados ao vivo (não de memória)** contra a
+    documentação/npm oficial de cada provider em 2026-08-29:
+    `claude` → `npm install -g @anthropic-ai/claude-code`; `codex` →
+    `npm install -g @openai/codex`; `cursor` → `curl
+    https://cursor.com/install -fsS | bash`; `gemini` → `npm install -g
+    @google/gemini-cli`. **Achado real construindo isto**: o binário do
+    Cursor CLI foi renomeado — `providers.ts` ainda listava só
+    `cursor-agent`, mas a documentação oficial (`cursor.com/docs/cli/
+    installation`) confirma que o nome atual é `agent` ("older articles
+    still use the longer name"). Corrigido pra tentar `["agent",
+    "cursor-agent"]` — o nome novo primeiro, o antigo como fallback pra
+    quem instalou antes do rename (mesma semântica de `which()` que os
+    outros providers já usam pra múltiplos nomes).
+    Novo campo `installCommand` em cada `ProviderDef` (`providers.ts`,
+    `null` só pro `bash`), propagado no retorno de `binary_not_found`
+    (`pty-registry.ts` → preload → `useTerminal.ts`). Botão novo
+    "instalar {provider}" no card com erro (`TerminalCard.tsx`) abre um
+    SEGUNDO terminal — `bash`, no MESMO cwd — com o comando real digitado
+    no PTY assim que ele nasce (`initialInput`, novo campo one-shot em
+    `TerminalCardData`, mesmo espírito nunca-persistido de
+    `continueLast`) via `openInstallTerminal` (App.tsx). **Nunca
+    executado sozinho** — sem `\r` depois do comando, o humano ainda
+    aperta Enter, mesma filosofia de consentimento de toda ação
+    potencialmente destrutiva deste app.
+    **Verificado ao vivo** (`smoke-terminal-install-hint.mjs`, novo,
+    permanente) — sem mock nenhum: "gemini" genuinamente não está
+    instalado NESTA máquina (mesma situação real que
+    `smoke-provider-gemini.mjs` já explora), então o teste cria um
+    terminal gemini de verdade, confirma o botão de instalação aparece
+    com o comando real no tooltip, clica nele, confirma um SEGUNDO
+    terminal bash nasce no mesmo cwd, e — como xterm.js renderiza em
+    canvas/WebGL sem texto de DOM confiável — captura o texto real via
+    `window.pty.onData` (a mesma camada de dados crus que a detecção de
+    URL do item 12 já usa) pra provar que o comando chegou no PTY SEM
+    nenhum `\r`/`\n` junto (digitado, genuinamente não executado).
+    `tsc --noEmit`/`electron-vite build` limpos; `smoke-provider-
+    gemini.mjs`, `smoke-terminal-links-paste.mjs`,
+    `smoke-terminal-visibility-persist.mjs` sem regressão.
 
 ## Ordem sugerida para a próxima rodada
 

@@ -302,8 +302,29 @@
   bottom: 50px;
   left: 8px;
   right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
   color: var(--danger);
+}
+
+.terminal-card-install-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.terminal-card-install-btn:hover {
+  background: var(--surface);
 }
 
 .files-card-body {
