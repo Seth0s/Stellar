@@ -4253,14 +4253,28 @@ passagem. Numeração preservada como reportada.
     com o zoom do canvas** — ideia de polish pra legibilidade, não bug.
     Só nos terminais com agente ativo (não bash puro), mudança sutil de
     tamanho de fonte acompanhando o nível de zoom.
-11. **Dois achados de UI, prints anexados**:
+11. **Dois achados de UI, prints anexados — ✅ feito em 2026-08-29**:
     - Botão "x" de fechar aba (ex.: `package-lock.json` no FilesCard)
       aparece como uma caixa vazia sem estilo, em vez do ícone "x" padrão
-      já usado em todo o resto do app.
+      já usado em todo o resto do app. **Bug real confirmado**:
+      `.files-tab-close` (cards.css) era o ÚNICO botão do arquivo sem o
+      reset `background: none; border: none;` que todo botão irmão
+      (`.files-node-actions button` etc.) já tinha — renderizava com o
+      chrome nativo real do SO (`getComputedStyle` confirmou
+      `rgb(239,239,239)` de fundo + borda `2px outset` preta), e essa
+      borda+padding nativos, dentro de uma caixa fixa de 14×14px,
+      espremiam o ícone "x" de 10px pra **0px de largura** (confirmado:
+      `svg.getBoundingClientRect().width === 0` antes do fix, `10`
+      depois). Não era só falta de cor — o ícone estava genuinamente
+      invisível por colapso de layout. Corrigido com o mesmo reset dos
+      irmãos.
     - Tooltip do botão do Rail que cria um card de arquivos hoje é "Nova
-      pasta de arquivos" — usuário sugere trocar pra algo como
-      "Explorador" (mais alinhado com o termo que VSCode usa pro mesmo
-      conceito).
+      pasta de arquivos" — trocado pra "Explorador" em
+      `cards/registry.ts`'s `RAIL_CREATE_TITLE` (só a legenda deste
+      botão — o rótulo do card em si, usado em toasts/popover de
+      localizar card, continua "arquivos").
+      Verificação ao vivo de ambos: `tsc --noEmit`/`electron-vite build`
+      limpos, `smoke-files-card.mjs` sem regressão.
 12. **Três achados no popover de links vistos do terminal (print
     anexado)**:
     - Entradas de URL aparecem corrompidas/com lixo visual (ex.:

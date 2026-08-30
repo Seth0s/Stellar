@@ -58,7 +58,14 @@ export const RAIL_CREATE_ORDER: Exclude<Card["kind"], "terminal" | "stroke">[] =
 ];
 
 export const RAIL_CREATE_TITLE: Record<(typeof RAIL_CREATE_ORDER)[number], string> = {
-  files: "Nova pasta de arquivos",
+  // Pedido ao vivo (2026-08-29, item 57 ponto 11) — "Nova pasta de
+  // arquivos" como legenda do botão do Rail lia estranho/impreciso;
+  // "Explorador" é o termo que o próprio VSCode usa pro mesmo conceito
+  // (árvore de arquivos do projeto). Só a legenda deste botão — o
+  // rótulo do card em si (CARD_LABEL, acima) continua "arquivos" (toast
+  // de criação, popover de localizar card, etc. — não era o que foi
+  // reportado).
+  files: "Explorador",
   changes: "Novo card de changes",
   sticky: "Nova nota adesiva",
   browser: "Novo navegador",

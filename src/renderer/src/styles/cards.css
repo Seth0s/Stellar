@@ -659,6 +659,19 @@
 }
 
 .files-tab-close {
+  /* Pedido ao vivo (2026-08-29, item 57 ponto 11) — real bug found:
+     unlike every sibling button rule in this file (e.g.
+     `.files-node-actions button`, above), this one never reset the
+     native `<button>` chrome. Confirmed live via getComputedStyle: it
+     rendered with the browser's real default background
+     (`rgb(239,239,239)`) and a `2px outset` border — which, inside a
+     fixed 14×14 box, left the 10px "x" icon literally zero pixels wide
+     (squeezed out by the native border+padding), i.e. an invisible icon
+     in a visible unstyled gray box — exactly "aparece como uma caixa
+     vazia sem estilo". */
+  background: none;
+  border: none;
+  padding: 0;
   flex: none;
   display: flex;
   align-items: center;

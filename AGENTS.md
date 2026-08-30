@@ -3852,6 +3852,22 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   ainda passando). `tsc --noEmit`/`electron-vite build` limpos.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 1.
 
+## 2026-08-29 — item 57 ponto 11: botão "x" de fechar aba sem estilo + tooltip renomeado
+
+- `.files-tab-close` (cards.css) era o único botão do arquivo sem
+  `background: none; border: none;` — renderizava com chrome nativo real
+  do SO (`rgb(239,239,239)` + borda `2px outset`), que espremia o ícone
+  "x" de 10px pra 0px de largura dentro da caixa fixa 14×14. Confirmado
+  ao vivo via `getBoundingClientRect` antes/depois (0 → 10). Fix: mesmo
+  reset que todo botão irmão (`.files-node-actions button` etc.) já
+  tinha.
+- Tooltip do botão do Rail "Nova pasta de arquivos" → "Explorador"
+  (`cards/registry.ts`'s `RAIL_CREATE_TITLE`), só a legenda — rótulo do
+  card em toasts/popover continua "arquivos".
+- `tsc --noEmit`/`electron-vite build` limpos, `smoke-files-card.mjs`
+  sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 11.
+
 ## Comandos
 
 ```bash
