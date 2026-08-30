@@ -161,6 +161,7 @@ export function ChatCard({
   onConnectorStart,
   onSelectStart,
   onOpenChatSession,
+  onNewSession,
 }: {
   id: string;
   rect: Rect;
@@ -193,6 +194,10 @@ export function ChatCard({
    * unarchiving/focusing, this component only renders the list and
    * reports clicks. */
   onOpenChatSession: (session: ChatSessionRow) => void;
+  /** Pedido ao vivo (2026-08-29, item 57 ponto 2) — cria um card de chat
+   * novo (mesmo provider desta sessão), separado da conversa atual em
+   * vez de sobrescrevê-la. */
+  onNewSession: (provider: ChatProvider) => void;
 }) {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [encryptionAvailable, setEncryptionAvailable] = useState(true);
@@ -233,6 +238,7 @@ export function ChatCard({
     if (!sessionsOpen) return;
     void window.store.listChatSessions().then(setChatSessions);
   }, [sessionsOpen]);
+  const sessionsForProvider = chatSessions.filter((s) => s.provider === provider);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -471,11 +477,26 @@ export function ChatCard({
       <div className="chat-card-body">
         {sessionsOpen && (
           <div className="chat-sessions-panel thin-scroll">
-            <div className="chat-sessions-panel-heading">SESSÕES DE CHAT</div>
-            {chatSessions.length === 0 ? (
-              <div className="popover-empty">nenhuma conversa ainda</div>
+            <div className="chat-sessions-panel-heading">
+              SESSÕES DE CHAT
+              <button
+                className="chat-sessions-new-btn"
+                title={`Nova sessão (${provider})`}
+                onClick={() => onNewSession(provider)}
+              >
+                <Icon name="plus" size={12} />
+              </button>
+            </div>
+            {/* Pedido ao vivo (2026-08-29, item 57 ponto 2) — sessões
+                deveriam respeitar o provider, cada um com sua lista;
+                trocar de provider (pills do header) muda a lista aqui
+                junto, em vez de mostrar todas cruzadas. `chatSessions`
+                guarda TODAS (buscadas uma vez ao abrir o painel) — o
+                filtro é só na renderização, sem round-trip extra. */}
+            {sessionsForProvider.length === 0 ? (
+              <div className="popover-empty">nenhuma conversa ainda com {provider}</div>
             ) : (
-              chatSessions.map((s) => (
+              sessionsForProvider.map((s) => (
                 <button
                   key={s.id}
                   className={`chat-session-row${s.id === id ? " current" : ""}`}

@@ -1217,6 +1217,32 @@ export function App() {
     void window.store.upsert(toRow({ ...card, provider, model }, activeBoardIdRef.current!));
   }
 
+  /** Pedido ao vivo (2026-08-29, item 57 ponto 2) — o botão de "nova
+   * sessão" do painel de sessões do ChatCard. Mesmo `defaultCardFields`
+   * de `addCardOfKind`, mas com provider/model do card de origem (não
+   * sempre "anthropic") — o mesmo mapeamento de default-model-por-provider
+   * de `commitChatProvider`. */
+  function newChatSession(provider: ChatProvider) {
+    const model =
+      provider === "openai"
+        ? DEFAULT_OPENAI_MODEL
+        : provider === "gemini"
+          ? DEFAULT_GEMINI_MODEL
+          : provider === "generic"
+            ? DEFAULT_GENERIC_MODEL
+            : DEFAULT_CHAT_MODEL;
+    const id = String(nextId.current++);
+    addCard({
+      id,
+      ...defaultCardFields("chat", activeBoardCwd),
+      provider,
+      model,
+      rect: centeredSlot(visibleRect, cards.length),
+      groupId: null,
+      label: null,
+    } as Card);
+  }
+
   function startDrawing(e: React.PointerEvent) {
     const points: Point[] = [];
     function addPoint(clientX: number, clientY: number) {
@@ -1584,6 +1610,7 @@ export function App() {
                 onMessagesCommit={(messages) => commitChatMessages(c, messages)}
                 onModelCommit={(model) => commitChatModel(c, model)}
                 onProviderCommit={(provider) => commitChatProvider(c, provider)}
+                onNewSession={newChatSession}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 onOpenChatSession={openChatSession}

@@ -1514,11 +1514,31 @@
 }
 
 .chat-sessions-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 10px;
   letter-spacing: 0.04em;
   color: var(--muted);
   padding: 4px 6px 6px;
   flex: none;
+}
+
+.chat-sessions-new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 2px;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-sessions-new-btn:hover {
+  background: var(--surface);
+  color: var(--text);
 }
 
 .chat-session-row {

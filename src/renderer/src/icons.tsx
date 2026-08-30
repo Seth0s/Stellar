@@ -44,6 +44,7 @@ import {
   OctagonX,
   PanelLeft,
   Pen,
+  Plus,
   QrCode,
   RotateCw,
   Scan,
@@ -103,6 +104,7 @@ export type IconName =
   | "remoteControl"
   | "findCard"
   | "chatSessionsPanel"
+  | "plus"
   | "home"
   | "providerBash"
   | "providerClaude"
@@ -167,6 +169,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   remoteControl: QrCode,
   findCard: Search,
   chatSessionsPanel: PanelLeft,
+  plus: Plus,
   home: HomeGlyph,
   providerBash: TerminalSquare,
   providerClaude: BotMessageSquare,

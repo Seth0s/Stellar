@@ -3896,6 +3896,26 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 4.
 
+## 2026-08-29 — item 57 ponto 2: botão de nova sessão + sessões por-provider no chatbox
+
+- Painel "SESSÕES DE CHAT" listava TODAS as sessões cross-provider (sem
+  filtro nenhum) e não tinha botão de criar sessão nova. Fix:
+  `chatSessions.filter((s) => s.provider === provider)` na renderização
+  (`ChatCard.tsx`), recalculado a cada troca de provider; botão novo
+  `.chat-sessions-new-btn` (ícone `plus`, lucide `Plus` — novo em
+  `icons.tsx`/`IconName`) chama `onNewSession(provider)`, prop nova
+  implementada em `App.tsx::newChatSession` (mesmo `defaultCardFields`
+  de `addCardOfKind`, mas sobrescrevendo provider/model — sem isso o
+  botão sempre criaria um chat anthropic, já que `defaultCardFields`
+  hardcoda esse provider).
+- Verificado ao vivo (`smoke-chat-new-session-per-provider.mjs`, novo):
+  painel do card openai só mostra a própria sessão, nunca a do anthropic;
+  botão de nova sessão cria um terceiro card com provider/model corretos
+  e conversa vazia. `tsc --noEmit`/`electron-vite build` limpos, suite de
+  chat existente sem regressão.
+- Detalhe completo (inclusive duas mecânicas de teste não óbvias
+  descobertas construindo o script) em `DESIGN-BACKLOG.md` item 57 ponto 2.
+
 ## Comandos
 
 ```bash

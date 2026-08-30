@@ -88,7 +88,11 @@ try {
   check("...and the terminal's own scrollback genuinely moved (real pixels changed, not a no-op)", pixelsAfter !== pixelsBefore, true);
 
   // ---- files card: mesma garantia, sem exceção por tipo ----
-  const filesBtn = await centerOf(page, '.rail-btn[title="Nova pasta de arquivos"]');
+  // Título vem de RAIL_CREATE_TITLE em src/renderer/src/cards/registry.ts —
+  // era "Nova pasta de arquivos" e virou "Explorador" no 32c0db5, o que
+  // quebrou este seletor sem quebrar o build (centerOf devolvia null e o
+  // script morria com TypeError). Se mudar de novo, é lá que está a verdade.
+  const filesBtn = await centerOf(page, '.rail-btn[title="Explorador"]');
   await page.click(filesBtn.x, filesBtn.y);
   await new Promise((r) => setTimeout(r, 500));
   const filesTreeCoords = await centerOf(page, ".files-tree");
