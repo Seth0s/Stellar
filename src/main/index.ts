@@ -463,6 +463,10 @@ function createWindow() {
       safeSend(win, "pty:exit", id, exitCode);
       remoteServer?.broadcastPtyExit(id, exitCode);
       remoteServer?.broadcastCards();
+      // DESIGN-BACKLOG.md item 58, M4 — resolves any spawn_agent(wait:true)
+      // MCP call still holding open on this card. No-op when nothing's
+      // waiting on it.
+      messageBus?.resolveCardExit(id, exitCode);
     },
     onSessionFound: (id, sessionId) => safeSend(win, "pty:session-found", id, sessionId),
     onUrlSeen: (id, url) => safeSend(win, "pty:url-seen", id, url),
@@ -539,6 +543,7 @@ function createWindow() {
         .filter((c) => c.kind === "terminal")
         .map((c) => ({ id: c.id, provider: c.provider, cwd: c.cwd })),
     writeToCard: (id, text) => registry.write(id, text),
+    isCardAlive: (id) => registry.isAlive(id),
     onOpenRequest: (requestId, requesterId, url, reason) =>
       safeSend(win, "browser:ask-open", requestId, requesterId, url, reason),
     onSnapshotRequest: (requestId, target) => handleSnapshotRequest(win, messageBus!, requestId, target),

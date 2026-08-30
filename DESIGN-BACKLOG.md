@@ -4696,7 +4696,7 @@ ter usado a superfície.
   `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` sem
   regressão.
 
-### M4 — Nenhum sinal de conclusão: quem spawna não sabe quando o agente terminou
+### M4 — Nenhum sinal de conclusão: quem spawna não sabe quando o agente terminou — ✅ feito em 2026-08-30
 
 - **Prioridade**: Alta — junto com M1, "a fronteira entre launcher e o
   produto que justifica existir" segundo a auditoria; demonstrado ao
@@ -4718,6 +4718,33 @@ ter usado a superfície.
   MCP com `wait: true` (ou faz polling de `card_status`), encerra o
   processo, e confirma que a chamada resolve com o status final — sem
   nenhum polling visual de `snapshot` no caminho do teste.
+- **Fix aplicado**: só `running`/`exited` — `idle` ficou de fora (é a
+  distinção "vivo mas esperando aprovação" da peça 2 do roteiro abaixo,
+  que exige um sinal que não existe ainda; card_status não inventa um
+  terceiro estado sem sinal real por trás). `card_status` usa
+  `registry.isAlive` (`pty-registry.ts`) direto — já existia, sem round
+  trip nenhum pro renderer, mais simples que M1/`read_card`. Card
+  inexistente (nunca existiu) e card existente-mas-morto (`isAlive` ==
+  false) são distinguidos checando `callbacks.listCards()` primeiro — a
+  linha do card continua no board depois do processo morrer, só o
+  `registry` esquece dele.
+  `spawn_agent` ganhou `wait`/`waitTimeoutMs` (default 10min): depois do
+  humano aprovar e o card nascer, a chamada MCP fica pendurada num novo
+  `pendingCardExits` (mesmo padrão de mapa-com-timeout dos outros cinco
+  em `message-bus.ts`) até `pty-registry`'s `onExit` real disparar —
+  resolve com `{ok:true, cardId, exited:true, exitCode}`, ou sem
+  `exited` se o wait window expirar primeiro (não é erro, o spawn em si
+  funcionou, só ainda não terminou).
+- **Verificado ao vivo sem mock**: novo `smoke-mcp-card-status.mjs` —
+  `card_status` num card bash vivo ("running"), num id inexistente
+  (`ok:false`), e depois de matar o processo real via `window.pty.kill`
+  ("exited"); `spawn_agent` com `wait:true`+`waitTimeoutMs:15000` num
+  segundo bash real, morto no meio do teste — a chamada resolve com
+  `exited:true` e um `exitCode` real em bem menos que os 15s do window
+  (prova de que resolveu pelo sinal de exit real, não por timeout). Zero
+  `snapshot` no caminho. Passou na primeira tentativa. `tsc --noEmit`/
+  `electron-vite build` limpos; `smoke-mcp.mjs` (lista de tools) e
+  `smoke-acbridge.mjs` sem regressão.
 
 ### Roteiro de orquestração — 6 peças (mais posicionamento multi-provider em `AGENTS.md`)
 

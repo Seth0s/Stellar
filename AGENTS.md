@@ -4104,6 +4104,32 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
   `smoke-terminal-font-zoom.mjs` sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 58, M1.
 
+## 2026-08-30 — item 58, M4: `card_status` + `spawn_agent(wait:true)` — sinal de conclusão real
+
+- `card_status(target)` devolve `running`/`exited` via `registry.isAlive`
+  (`pty-registry.ts`), já existente — sem round trip pro renderer, mais
+  simples que M1. Card inexistente vs. card morto distinguidos checando
+  `listCards()` primeiro (a linha do card sobrevive ao processo morrer).
+  `idle` (terceiro estado, "vivo mas esperando aprovação") ficou de fora
+  de propósito — não há sinal real por trás dele ainda; é a peça 2 do
+  roteiro de orquestração, não deste item.
+- `spawn_agent` ganhou `wait`/`waitTimeoutMs` (default 10min): a chamada
+  MCP fica pendurada num novo `pendingCardExits` (mesmo padrão de mapa-
+  com-timeout dos outros cinco em `message-bus.ts`) até o `onExit` real
+  do `pty-registry` disparar, resolvendo com `exited:true` + `exitCode`
+  real — ou sem eles se o window expirar primeiro (spawn continua
+  `ok:true`, só ainda não terminou).
+- Verificado ao vivo sem mock: `smoke-mcp-card-status.mjs` —
+  `card_status` running/exited/inexistente contra um card bash real
+  morto via `window.pty.kill`; `spawn_agent(wait:true,
+  waitTimeoutMs:15000)` resolve com `exited:true` bem antes do window
+  expirar, prova de sinal de exit real, não timeout. Zero `snapshot` no
+  caminho. Passou na primeira tentativa. `tsc --noEmit`/`electron-vite
+  build` limpos; `smoke-mcp.mjs`/`smoke-acbridge.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, M4. Com isto, os
+  quatro achados MCP (M1–M4) do item 58 estão fechados; resta o roteiro
+  de orquestração de 6 peças.
+
 ## Comandos
 
 ```bash
