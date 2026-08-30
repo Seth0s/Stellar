@@ -4866,7 +4866,9 @@ resto contra o que ele revelar.
   `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` (lista de
   tools) e `smoke-acbridge.mjs` sem regressão.
 4. **Dependência entre tarefas (DAG executável) — prioridade média,
-   início do "pipeline confiável".** Sem isso é lançamento paralelo, não
+   início do "pipeline confiável". ✅ modelo de dados feito em 2026-08-30
+   (execução fica com o orquestrador externo — decisão explícita do
+   usuário, ver nota abaixo).** Sem isso é lançamento paralelo, não
    orquestração. A UI já existe e está desenhada: uma coluna `kind`
    (`'context' | 'depends'`) na tabela `connectors` transforma o grafo
    que já está na tela num DAG executável — mesma ideia da seção
@@ -4879,6 +4881,50 @@ resto contra o que ele revelar.
    só é despachada depois que A reporta conclusão (via peça 1); uma
    tarefa `context` recebe o resultado de A como parte do seu prompt
    inicial.
+   **Decisão explícita do usuário (2026-08-30)**: dado a escolha entre
+   (a) só o modelo de dados, execução decidida por um agente
+   orquestrador externo usando `spawn_agent` (que já pede consentimento
+   humano, como sempre), ou (b) um dispatcher autônomo dentro do próprio
+   Stellar que auto-spawna a tarefa dependente assim que a dependência
+   reporta — mudando a arquitetura pra deixar de exigir humano no loop
+   nesse ponto — o usuário escolheu (a). Por isso o critério de
+   verificação acima ("é despachada depois que...") não é literalmente
+   testável nesta implementação: não existe dispatcher, então "quando
+   uma tarefa é despachada" é uma decisão de quem orquestra por fora, não
+   deste app. O que foi feito é exatamente a base que essa decisão
+   externa precisa pra funcionar: coluna `kind` em `connectors` e as duas
+   tools (`list_connectors`/`set_connector_kind`) pra ler e marcar essa
+   semântica — combinado com peças 1–3 (report/read_report, card_status,
+   tasks), um orquestrador externo já tem tudo que precisa pra implementar
+   o DAG sozinho.
+   **Fix aplicado**: coluna `kind TEXT` nova em `connectors`
+   (`store.ts`, migração aditiva de sempre) — `null` por padrão, inclusive
+   pra todo conector já desenhado hoje (nunca reinterpretado
+   silenciosamente como gate de execução). `upsertConnector` defende
+   contra o call site existente do desenho de conector
+   (`App.tsx::addConnector`, que nunca soube de `kind` e não precisou
+   mudar) com o mesmo padrão defensivo que `messages_json`/`archived_at`
+   já usam. Duas tools MCP novas: `list_connectors` (escopo global, mesma
+   convenção de `list_cards`) e `set_connector_kind` (`'context'`/
+   `'depends'`/`null`, validado — MCP barra valor inválido no próprio
+   schema Zod, `message-bus.ts` barra de novo pro caminho `acbridge`, que
+   não passa por Zod). Dois subcomandos `acbridge` espelhando. Nenhuma
+   mudança na UI/renderer além da correção defensiva acima — sem
+   affordance visual pra marcar `kind` a partir de um clique humano nesta
+   passagem, de propósito (fora do escopo decidido).
+- **Verificado ao vivo sem mock**: novo `smoke-mcp-connectors.mjs` —
+  desenha um conector REAL via o gesto de UI de verdade (mesma técnica
+  de `smoke-connector.mjs`: tool de conector via atalho `C`, drag real
+  entre duas stickies), confirma que a migração não quebrou esse
+  caminho e que o conector nasce com `kind: null`; `set_connector_kind`
+  marca `depends`, `list_connectors` reflete; volta a `null`; um
+  `connectorId` inexistente falha honesto; um `kind` inválido é barrado
+  tanto pelo schema Zod (MCP) quanto pela validação real em
+  `message-bus.ts` (exercitada via o binário `acbridge` de verdade, que
+  não tem Zod na frente). Passou na primeira tentativa. `tsc --noEmit`/
+  `electron-vite build` limpos; `smoke-mcp.mjs` (lista de tools),
+  `smoke-acbridge.mjs` e `smoke-connector.mjs` (o gesto de UI original,
+  intocado pela migração) sem regressão.
 5. **Política de falha — prioridade média.** O que acontece quando um
    agente morre, trava ou recusa? Hoje: nada, o card fica lá. Falta
    retry, timeout por tarefa e — o ponto em que a tese cross-provider se

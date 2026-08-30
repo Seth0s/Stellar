@@ -49,6 +49,12 @@ export type ConnectorRow = {
   from_card_id: string;
   to_card_id: string;
   updated_at: number;
+  /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 4 — `null`
+   * (every connector before this, and any the human draws via the UI
+   * today) means purely decorative, no semantic — never silently
+   * reinterpreted as a hard gate. `'depends'`/`'context'` is meaning an
+   * orchestrating agent attaches on purpose via `set_connector_kind`. */
+  kind: string | null;
 };
 
 export type BoardRow = {
@@ -121,6 +127,11 @@ function migrate(db: Database.Database) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
   try {
+    db.exec(`ALTER TABLE connectors ADD COLUMN kind TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
     db.exec(`ALTER TABLE boards ADD COLUMN project TEXT NOT NULL DEFAULT ''`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
@@ -161,7 +172,8 @@ export function openStore(userDataDir: string) {
       board_id TEXT NOT NULL DEFAULT '${DEFAULT_BOARD_ID}',
       from_card_id TEXT NOT NULL,
       to_card_id TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      kind TEXT
     );
   `);
 
@@ -244,20 +256,25 @@ export function openStore(userDataDir: string) {
   const unarchiveCardStmt = db.prepare("UPDATE cards SET archived_at = NULL WHERE id = ?");
 
   const listConnectorsStmt = db.prepare(
-    "SELECT id, board_id, from_card_id, to_card_id, updated_at FROM connectors WHERE board_id = ?",
+    "SELECT id, board_id, from_card_id, to_card_id, updated_at, kind FROM connectors WHERE board_id = ?",
   );
+  // Item 58, roteiro peça 4 — same "no board scoping" convention as
+  // `listAllStmt`/acbridge's `list`: an orchestrating agent reading the
+  // DAG has no reason to know which board a connector lives on.
+  const listAllConnectorsStmt = db.prepare("SELECT id, board_id, from_card_id, to_card_id, updated_at, kind FROM connectors");
   const upsertConnectorStmt = db.prepare(`
-    INSERT INTO connectors (id, board_id, from_card_id, to_card_id, updated_at)
-    VALUES (@id, @board_id, @from_card_id, @to_card_id, @updated_at)
+    INSERT INTO connectors (id, board_id, from_card_id, to_card_id, updated_at, kind)
+    VALUES (@id, @board_id, @from_card_id, @to_card_id, @updated_at, @kind)
     ON CONFLICT(id) DO UPDATE SET
       board_id = excluded.board_id, from_card_id = excluded.from_card_id, to_card_id = excluded.to_card_id,
-      updated_at = excluded.updated_at
+      updated_at = excluded.updated_at, kind = excluded.kind
   `);
   const deleteConnectorStmt = db.prepare("DELETE FROM connectors WHERE id = ?");
   const deleteConnectorsForCardStmt = db.prepare(
     "DELETE FROM connectors WHERE from_card_id = ? OR to_card_id = ?",
   );
   const deleteConnectorsForBoardStmt = db.prepare("DELETE FROM connectors WHERE board_id = ?");
+  const setConnectorKindStmt = db.prepare("UPDATE connectors SET kind = ?, updated_at = ? WHERE id = ?");
 
   const listBoardsStmt = db.prepare(
     "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at FROM boards ORDER BY created_at ASC",
@@ -332,8 +349,11 @@ export function openStore(userDataDir: string) {
     archiveCard: (id: string, at: number) => archiveCardStmt.run(at, id),
     unarchiveCard: (id: string) => unarchiveCardStmt.run(id),
     listConnectors: (boardId: string): ConnectorRow[] => listConnectorsStmt.all(boardId) as ConnectorRow[],
-    upsertConnector: (row: ConnectorRow) => upsertConnectorStmt.run(row),
+    listAllConnectors: (): ConnectorRow[] => listAllConnectorsStmt.all() as ConnectorRow[],
+    upsertConnector: (row: ConnectorRow) => upsertConnectorStmt.run({ ...row, kind: row.kind ?? null }),
     deleteConnector: (id: string) => deleteConnectorStmt.run(id),
+    /** Returns whether a row actually existed to update. */
+    setConnectorKind: (id: string, kind: string | null): boolean => setConnectorKindStmt.run(kind, Date.now(), id).changes > 0,
     deleteConnectorsForCard: (cardId: string) => deleteConnectorsForCardStmt.run(cardId, cardId),
     listBoards: (): BoardRow[] => listBoardsStmt.all() as BoardRow[],
     upsertBoard: (board: BoardRow) => upsertBoardStmt.run(board),

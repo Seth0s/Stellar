@@ -547,6 +547,8 @@ function createWindow() {
     listTasks: () => store.listTasks(),
     getTask: (id) => store.getTask(id),
     upsertTask: (task) => store.upsertTask(task),
+    listAllConnectors: () => store.listAllConnectors(),
+    setConnectorKind: (id, kind) => store.setConnectorKind(id, kind),
     onOpenRequest: (requestId, requesterId, url, reason) =>
       safeSend(win, "browser:ask-open", requestId, requesterId, url, reason),
     onSnapshotRequest: (requestId, target) => handleSnapshotRequest(win, messageBus!, requestId, target),
