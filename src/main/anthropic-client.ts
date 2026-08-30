@@ -14,6 +14,7 @@ import {
   type BashConsentRequest,
   type DelegateProvider,
   type DelegateResult,
+  type ChatUsage,
 } from "./chat-tools";
 
 /**
@@ -83,7 +84,7 @@ function toAnthropicMessages(messages: ChatMessage[]): Anthropic.MessageParam[] 
 
 export function createAnthropicClient(opts: {
   onToken: (cardId: string, delta: string) => void;
-  onDone: (cardId: string, fullText: string) => void;
+  onDone: (cardId: string, fullText: string, usage: ChatUsage) => void;
   onError: (cardId: string, message: string) => void;
   onToolStart: (cardId: string, name: string, input: unknown) => void;
   onToolResult: (cardId: string, name: string, ok: boolean, summary: string) => void;
@@ -108,6 +109,8 @@ export function createAnthropicClient(opts: {
   ) {
     const client = new Anthropic({ apiKey });
     const messages = [...initialMessages];
+    let inputTokens = 0;
+    let outputTokens = 0;
 
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
       const stream = client.messages.stream({
@@ -133,13 +136,15 @@ export function createAnthropicClient(opts: {
         return;
       }
       inFlight.delete(cardId);
+      inputTokens += final.usage.input_tokens + (final.usage.cache_creation_input_tokens ?? 0) + (final.usage.cache_read_input_tokens ?? 0);
+      outputTokens += final.usage.output_tokens;
 
       if (final.stop_reason !== "tool_use") {
         const text = final.content
           .filter((b): b is Anthropic.TextBlock => b.type === "text")
           .map((b) => b.text)
           .join("");
-        opts.onDone(cardId, text);
+        opts.onDone(cardId, text, { inputTokens, outputTokens });
         return;
       }
 
