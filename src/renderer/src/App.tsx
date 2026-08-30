@@ -48,6 +48,7 @@ import { useCardSelection } from "./useCardSelection";
 import { useBoardStore } from "./useBoardStore";
 import type { Card, ChatCardData, ChatMessage, ChatProvider, Connector, StickyCardData, Tool } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
+import { getTerminalText } from "./terminal-registry";
 import "./app.css";
 
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
@@ -529,12 +530,20 @@ export function App() {
         height: Math.round(screen.h),
       });
     });
+    // DESIGN-BACKLOG.md item 58, M1 — main asks "what does this terminal's
+    // scrollback say", only the renderer holds the live xterm.js Terminal
+    // instance (terminal-registry.ts). Replies null when there's no such
+    // card, or it's not a terminal (nothing registered under that id).
+    const offReadCard = window.readCard.onRequest((requestId, cardId, lines) => {
+      window.readCard.reply(requestId, getTerminalText(cardId, lines));
+    });
     return () => {
       offUrlSeen();
       offAskOpen();
       offAskSpawnAgent();
       offAskSpawnCard();
       offSnapshot();
+      offReadCard();
     };
   }, []);
 

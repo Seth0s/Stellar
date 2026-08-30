@@ -4083,6 +4083,27 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
   sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 58, M3.
 
+## 2026-08-30 — item 58, M1: `read_card` — scrollback real de um terminal via MCP/acbridge
+
+- Antes, a única forma de checar um agente spawnado era `snapshot`
+  (screenshot, OCR-only). Novo `read_card(target, lines?)` devolve o
+  scrollback real do xterm.js como texto puro.
+- Mesma mecânica de `snapshot:rect-request`/`-reply` (request/reply
+  main↔renderer): novo `terminal-registry.ts` guarda um
+  `Map<cardId, Terminal>`, registrado no mesmo effect que já cria a
+  instância do xterm.js (`useTerminal.ts`). Novo IPC
+  `readcard:request`/`-reply`, novo cmd `read_card` em
+  `message-bus.ts`, nova tool MCP e novo subcomando `acbridge read-card`
+  — os dois frontends do dispatcher, não só o MCP.
+- Verificado ao vivo sem mock: `smoke-mcp-read-card.mjs` — marker
+  empurrado pra fora da viewport (40 linhas de enchimento) ainda vem no
+  `read_card`, prova de scrollback real, não da tela pintada agora;
+  `lines: 5` recorta certo; `target` inexistente reporta `ok:false`.
+  Passou na primeira tentativa. `tsc --noEmit`/`electron-vite build`
+  limpos; `smoke-mcp.mjs`, `smoke-acbridge.mjs` e
+  `smoke-terminal-font-zoom.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, M1.
+
 ## Comandos
 
 ```bash

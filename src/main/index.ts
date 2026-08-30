@@ -549,6 +549,19 @@ function createWindow() {
     onPageTextRequest: (requestId, cardId) => {
       void browserRegistry.getPageText(cardId).then((result) => messageBus!.resolvePageText(requestId, result));
     },
+    // DESIGN-BACKLOG.md item 58, M1 — same request/reply shape as
+    // snapshot:rect-request/-reply below: only the renderer holds the
+    // live xterm.js buffer for a terminal card, main can't read it
+    // directly.
+    onReadCardRequest: (requestId, cardId, lines) => {
+      function onReply(_e: Electron.IpcMainEvent, replyId: string, text: string | null) {
+        if (replyId !== requestId) return;
+        ipcMain.removeListener("readcard:reply", onReply);
+        messageBus!.resolveReadCard(requestId, text === null ? { ok: false, error: `no open terminal card with id "${cardId}"` } : { ok: true, text });
+      }
+      ipcMain.on("readcard:reply", onReply);
+      safeSend(win, "readcard:request", requestId, cardId, lines);
+    },
     // DESIGN-BACKLOG.md item 21, ponto 9, achados 1 e 2 — same
     // ask-the-renderer/wait-for-a-human-decision shape as onOpenRequest
     // above, generalized. The renderer owns all card creation (it's the

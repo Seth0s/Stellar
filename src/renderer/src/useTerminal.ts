@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { toast } from "./useToast";
+import { registerTerminal, unregisterTerminal } from "./terminal-registry";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -260,10 +261,12 @@ export function useTerminal(
     const { t: term, f: fit } = buildTerminal(true);
     termRef.current = term;
     fitRef.current = fit;
+    registerTerminal(id, term);
     const onTermData = term.onData((data) => {
       if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, data);
     });
     return () => {
+      unregisterTerminal(id);
       onTermData.dispose();
       term.dispose();
       termRef.current = null;

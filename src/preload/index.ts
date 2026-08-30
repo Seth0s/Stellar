@@ -319,6 +319,20 @@ const snapshot = {
     ipcRenderer.send("snapshot:rect-reply", requestId, screenRect),
 };
 
+/** `read_card` MCP tool support (DESIGN-BACKLOG.md item 58, M1) — same
+ * request/reply shape as `snapshot` above: main asks "what does this
+ * terminal card's scrollback say right now" (only the renderer holds the
+ * live xterm.js buffer), renderer replies with plain text (or null if no
+ * such card). */
+const readCard = {
+  onRequest: (cb: (requestId: string, cardId: string, lines?: number) => void) => {
+    const listener = (_e: unknown, requestId: string, cardId: string, lines?: number) => cb(requestId, cardId, lines);
+    ipcRenderer.on("readcard:request", listener);
+    return () => ipcRenderer.removeListener("readcard:request", listener);
+  },
+  reply: (requestId: string, text: string | null) => ipcRenderer.send("readcard:reply", requestId, text),
+};
+
 export type RemoteInputEnsureResult = { granted: true } | { granted: false; error: string };
 
 /** Human-driven control of an external OS window (DESIGN-BACKLOG.md item
@@ -501,6 +515,7 @@ contextBridge.exposeInMainWorld("spawn", spawn);
 contextBridge.exposeInMainWorld("ai", ai);
 contextBridge.exposeInMainWorld("winControls", winControls);
 contextBridge.exposeInMainWorld("snapshot", snapshot);
+contextBridge.exposeInMainWorld("readCard", readCard);
 contextBridge.exposeInMainWorld("remoteInput", remoteInput);
 contextBridge.exposeInMainWorld("remote", remote);
 contextBridge.exposeInMainWorld("updater", updater);
@@ -524,6 +539,7 @@ export type SpawnApi = typeof spawn;
 export type AiApi = typeof ai;
 export type WinControlsApi = typeof winControls;
 export type SnapshotApi = typeof snapshot;
+export type ReadCardApi = typeof readCard;
 export type RemoteInputApi = typeof remoteInput;
 export type RemoteApi = typeof remote;
 export type UpdaterApi = typeof updater;

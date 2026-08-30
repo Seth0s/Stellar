@@ -8,6 +8,7 @@ import type {
   AiApi,
   WinControlsApi,
   SnapshotApi,
+  ReadCardApi,
   RemoteInputApi,
   RemoteApi,
   UpdaterApi,
@@ -28,6 +29,7 @@ declare global {
     ai: AiApi;
     winControls: WinControlsApi;
     snapshot: SnapshotApi;
+    readCard: ReadCardApi;
     remoteInput: RemoteInputApi;
     remote: RemoteApi;
     updater: UpdaterApi;

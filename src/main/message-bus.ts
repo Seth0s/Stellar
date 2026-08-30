@@ -14,6 +14,11 @@ const SPAWN_TIMEOUT_MS = 120_000;
 // already-open page an agent already has a card reference to) — no human
 // decision needed, same short backstop-only timeout as snapshot.
 const PAGE_TEXT_TIMEOUT_MS = 10_000;
+// DESIGN-BACKLOG.md item 58, M1 — same risk class as snapshot/get_page_text
+// (an already-open terminal card an agent already has a reference to): no
+// human decision needed, just a renderer round-trip to read the live
+// xterm.js buffer. Short backstop-only timeout.
+const READ_CARD_TIMEOUT_MS = 10_000;
 // DESIGN-BACKLOG.md item 58, M2 — above a CLI's bracketed-paste threshold,
 // a `\r` appended to the same write as the text is swallowed as part of
 // the pasted content instead of submitting it. Sending it as a separate
@@ -34,6 +39,7 @@ export const MAX_SPAWN_DEPTH = 3;
 export type CardSummary = { id: string; provider: string; cwd: string };
 export type SnapshotResult = { ok: true; path: string } | { ok: false; error: string };
 export type PageTextResult = { ok: true; text: string; truncated: boolean } | { ok: false; error: string };
+export type ReadCardResult = { ok: true; text: string } | { ok: false; error: string };
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
 export type SpawnAgentResult = { ok: true; cardId: string } | { ok: false; error: string };
 export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error: string };
@@ -48,6 +54,7 @@ export type BusRequest =
       rect?: { x: number; y: number; w: number; h: number };
     }
   | { cmd: "get_page_text"; target?: string }
+  | { cmd: "read_card"; target?: string; lines?: number }
   | {
       cmd: "spawn_agent";
       provider?: string;
@@ -95,6 +102,10 @@ export function createMessageBus(
     /** No consent gate (see PAGE_TEXT_TIMEOUT_MS) — reads an already-open
      * browser card's rendered text, same risk class as `snapshot`. */
     onPageTextRequest: (requestId: string, cardId: string) => void;
+    /** DESIGN-BACKLOG.md item 58, M1 — only the renderer holds the live
+     * xterm.js Terminal instance for a terminal card (main never sees
+     * terminal content, only raw pty bytes flowing through). */
+    onReadCardRequest: (requestId: string, cardId: string, lines?: number) => void;
     onSpawnAgentRequest: (
       requestId: string,
       requesterId: string,
@@ -118,6 +129,7 @@ export function createMessageBus(
   const pendingOpens = new Map<string, { resolve: (allowed: boolean) => void; timer: NodeJS.Timeout }>();
   const pendingSnapshots = new Map<string, { resolve: (result: SnapshotResult) => void; timer: NodeJS.Timeout }>();
   const pendingPageTexts = new Map<string, { resolve: (result: PageTextResult) => void; timer: NodeJS.Timeout }>();
+  const pendingReadCards = new Map<string, { resolve: (result: ReadCardResult) => void; timer: NodeJS.Timeout }>();
   const pendingSpawnAgents = new Map<string, { resolve: (result: SpawnAgentResult) => void; timer: NodeJS.Timeout }>();
   const pendingSpawnCards = new Map<string, { resolve: (result: SpawnCardResult) => void; timer: NodeJS.Timeout }>();
 
@@ -199,6 +211,26 @@ export function createMessageBus(
       });
     }
 
+    if (req.cmd === "read_card") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      const requestId = randomUUID();
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingReadCards.delete(requestId);
+          resolve({ ok: false, error: "timed out reading card" });
+        }, READ_CARD_TIMEOUT_MS);
+        pendingReadCards.set(requestId, {
+          resolve: (result) => {
+            clearTimeout(timer);
+            pendingReadCards.delete(requestId);
+            resolve(result);
+          },
+          timer,
+        });
+        callbacks.onReadCardRequest(requestId, req.target as string, req.lines);
+      });
+    }
+
     if (req.cmd === "spawn_agent") {
       if (!req.provider) return { ok: false, error: "missing provider" };
       const depth = req.depth ?? 0;
@@ -273,6 +305,10 @@ export function createMessageBus(
     pendingPageTexts.get(requestId)?.resolve(result);
   }
 
+  function resolveReadCard(requestId: string, result: ReadCardResult) {
+    pendingReadCards.get(requestId)?.resolve(result);
+  }
+
   function resolveSpawnAgent(requestId: string, result: SpawnAgentResult) {
     pendingSpawnAgents.get(requestId)?.resolve(result);
   }
@@ -326,6 +362,8 @@ export function createMessageBus(
     pendingSnapshots.clear();
     for (const { timer } of pendingPageTexts.values()) clearTimeout(timer);
     pendingPageTexts.clear();
+    for (const { timer } of pendingReadCards.values()) clearTimeout(timer);
+    pendingReadCards.clear();
     for (const { timer } of pendingSpawnAgents.values()) clearTimeout(timer);
     pendingSpawnAgents.clear();
     for (const { timer } of pendingSpawnCards.values()) clearTimeout(timer);
@@ -338,5 +376,5 @@ export function createMessageBus(
     }
   }
 
-  return { handleRequest, resolveOpen, resolveSnapshot, resolvePageText, resolveSpawnAgent, resolveSpawnCard, close };
+  return { handleRequest, resolveOpen, resolveSnapshot, resolvePageText, resolveReadCard, resolveSpawnAgent, resolveSpawnCard, close };
 }
