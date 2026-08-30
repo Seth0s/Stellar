@@ -4001,6 +4001,49 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   terminal sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 10.
 
+## 2026-08-29 — decisão de arquitetura: por que multi-provider (não decisão de execução)
+
+Registrado a partir da auditoria pré-release (artifact
+`026d13c8-79cc-4520-8fc0-9ddb932e9306`, commit `8fd6420`), seção de
+posicionamento. Itens acionáveis correspondentes em `DESIGN-BACKLOG.md`
+item 58 (superfície MCP M1–M4 e roteiro de orquestração de 6 peças).
+
+**Tese**: suportar múltiplos providers (Claude Code, Codex, Cursor
+CLI, Gemini) no mesmo card/board não é feature de conveniência
+("cada um usa o CLI que preferir") — é a base de três capacidades que só
+existem *porque* há mais de um provider no mesmo board, em ordem
+decrescente de força de argumento:
+
+1. **Verificação adversarial** — um provider revisa a saída de outro.
+   Só funciona entre fornecedores diferentes: um agente não é um crítico
+   confiável do próprio trabalho (mesmo viés, mesmo modelo, mesmas
+   lacunas de treinamento tendem a coincidir).
+2. **Arbitragem de quota** — quando um provider satura rate-limit ou
+   fica indisponível, o board continua produtivo usando outro, sem
+   esperar reset de cota.
+3. **Roteamento por acesso** — providers diferentes têm acesso a
+   ferramentas/contextos diferentes (ex.: um MCP específico só
+   configurado num deles); rotear a tarefa certa pro provider certo em
+   vez de replicar toda integração em todos.
+
+**O ativo que não estava óbvio antes da auditoria**: o verdadeiro moat
+não é o roteamento em si — é que consentimento cross-provider e
+isolamento de sandbox (cada provider já roda no seu próprio processo/PTY,
+sem estado compartilhado por padrão) são o que torna a verificação
+adversarial (caso 1) segura de fazer. Um orquestrador single-provider
+não tem essa propriedade de graça — precisaria simular isolamento que o
+multi-provider já dá de graça pela própria arquitetura de cards.
+
+**Caveat que baliza a prioridade em `DESIGN-BACKLOG.md` item 58**:
+nenhum dos três casos acima funciona sem M1 (`read_card` — ler o
+resultado de um agente) e M4 (sinal de conclusão) resolvidos primeiro.
+Sem eles, "verificação adversarial" não tem como o segundo provider ler
+o que o primeiro produziu, e "arbitragem de quota" não tem como saber
+quando reatribuir. Por isso M1/M4 e as peças 1–2 do roteiro de
+orquestração (canal de resultado estruturado, ciclo de vida de três
+estados) são a prioridade máxima do item 58 — sem elas, multi-provider
+é só "vários CLIs abertos ao mesmo tempo", não orquestração.
+
 ## Comandos
 
 ```bash
