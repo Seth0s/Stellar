@@ -36,7 +36,7 @@ const USAGE =
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "create-task <json> | update-task <taskId> <json> | list-tasks | get-task <taskId> | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
-  "concurrency-status [cap] | " +
+  "concurrency-status [cap] | board-mode <cardId> | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]>";
 
@@ -134,6 +134,10 @@ if (cmd === "list") {
   const cap = capStr === undefined ? undefined : Number(capStr);
   if (cap !== undefined && Number.isNaN(cap)) fail("concurrency-status: cap must be a number");
   request = { cmd: "concurrency_status", cap };
+} else if (cmd === "board-mode") {
+  const [target] = rest;
+  if (!target) fail("usage: acbridge board-mode <cardId>");
+  request = { cmd: "board_mode", target };
 } else if (cmd === "spawn-agent") {
   const [provider, cwd, resumeId] = rest;
   if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
@@ -208,6 +212,8 @@ socket.on("close", () => {
     console.log("updated");
   } else if (cmd === "concurrency-status") {
     console.log(JSON.stringify({ running: res.running, cap: res.cap, atCap: res.atCap }));
+  } else if (cmd === "board-mode") {
+    console.log(String(res.autonomous));
   } else if (cmd === "spawn-agent") {
     console.log(res.cardId);
   } else if (cmd === "spawn-card") {

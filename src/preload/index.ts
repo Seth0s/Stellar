@@ -93,6 +93,12 @@ export type BoardRow = {
   created_at: number;
   updated_at: number;
   last_accessed_at: number | null;
+  /** DESIGN-BACKLOG.md item 59 — opt-in, per-board, never inherited.
+   * Only ever set via `store.boards.setAutonomous` (the session UI's
+   * toggle) — never as a side effect of the general `upsert` a rename/
+   * cwd edit already goes through, though `upsert` does persist whatever
+   * value the row already carries. */
+  autonomous: boolean;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -115,6 +121,10 @@ const store = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke("store:boards:delete", id),
     /** DESIGN-BACKLOG.md item 14 — bumps `last_accessed_at` on open. */
     touch: (id: string, at: number): Promise<void> => ipcRenderer.invoke("store:boards:touch", id, at),
+    /** DESIGN-BACKLOG.md item 59 — the ONE write path for the autonomous
+     * toggle, called only from the session UI's own checkbox/switch. */
+    setAutonomous: (id: string, autonomous: boolean): Promise<void> =>
+      ipcRenderer.invoke("store:boards:set-autonomous", id, autonomous),
   },
   cardCounts: (): Promise<Record<string, BoardCounts>> => ipcRenderer.invoke("store:card-counts"),
   /** DESIGN-BACKLOG.md item 30 — sessions sidebar (every chat card, live
@@ -248,7 +258,18 @@ const browser = {
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
-export type SpawnAgentAskParams = { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string; model?: string };
+export type SpawnAgentAskParams = {
+  provider: string;
+  cwd?: string;
+  resumeId?: string;
+  depth: number;
+  reason?: string;
+  model?: string;
+  /** DESIGN-BACKLOG.md item 59 — the requester's own board is in
+   * autonomous mode and under its cap; App.tsx's `onAskAgent` handler
+   * creates the card and resolves immediately, no `AgentAskModal`. */
+  autoApprove?: boolean;
+};
 export type SpawnCardAskParams = { kind: SpawnCardKind; cwd?: string; url?: string; reason?: string };
 export type SpawnAgentResolveResult = { ok: true; cardId: string } | { ok: false; error: string };
 export type SpawnCardResolveResult = { ok: true; cardId: string } | { ok: false; error: string };

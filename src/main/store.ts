@@ -78,6 +78,17 @@ export type BoardRow = {
    * project change), which is what `updated_at` already tracks. `null`
    * for a board created before this column existed. */
   last_accessed_at: number | null;
+  /** DESIGN-BACKLOG.md item 59 — opt-in, per-board, never inherited by
+   * duplicating a board or creating one from a template (every creation
+   * path explicitly sets this `false`, it's never copied from another
+   * board's row). Only a human flips this via the session UI — no
+   * MCP/acbridge command ever touches it, on purpose: an agent must never
+   * be able to grant itself the ability to spawn other agents without
+   * asking. When `true`, `spawn_agent` requests from a card ON THIS BOARD
+   * auto-approve instead of showing `AgentAskModal` (see message-bus.ts's
+   * `spawn_agent` handler) — every other board, and every other
+   * consent-gated action (open_url, spawn_card), is unaffected. */
+  autonomous: boolean;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -158,6 +169,11 @@ function migrate(db: Database.Database) {
   }
   try {
     db.exec(`ALTER TABLE boards ADD COLUMN cwd TEXT NOT NULL DEFAULT ''`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN autonomous INTEGER NOT NULL DEFAULT 0`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -251,6 +267,12 @@ export function openStore(userDataDir: string) {
   const listAllStmt = db.prepare(
     "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE archived_at IS NULL",
   );
+  // DESIGN-BACKLOG.md item 59 — a single card lookup, needed to find
+  // which board a `spawn_agent` requester's card belongs to (so the
+  // autonomous-mode check can be board-scoped, not global).
+  const getCardStmt = db.prepare(
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE id = ?",
+  );
   const upsertStmt = db.prepare(`
     INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json, archived_at)
     VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @system_prompt, @group_id, @label, @updated_at, @messages_json, @archived_at)
@@ -294,15 +316,25 @@ export function openStore(userDataDir: string) {
   const setConnectorKindStmt = db.prepare("UPDATE connectors SET kind = ?, updated_at = ? WHERE id = ?");
 
   const listBoardsStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at FROM boards ORDER BY created_at ASC",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous FROM boards ORDER BY created_at ASC",
+  );
+  const getBoardStmt = db.prepare(
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous FROM boards WHERE id = ?",
   );
   const upsertBoardStmt = db.prepare(`
-    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at)
-    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at)
-    ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, cwd = excluded.cwd, updated_at = excluded.updated_at
+    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous)
+    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous)
+    ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, cwd = excluded.cwd,
+      updated_at = excluded.updated_at, autonomous = excluded.autonomous
   `);
   const deleteBoardStmt = db.prepare("DELETE FROM boards WHERE id = ?");
   const touchBoardStmt = db.prepare("UPDATE boards SET last_accessed_at = ? WHERE id = ?");
+  // DESIGN-BACKLOG.md item 59 — a dedicated single-purpose statement,
+  // deliberately separate from the general `upsertBoard` a rename/cwd
+  // edit already goes through: this is the one write path a human's
+  // explicit toggle click uses, and only that path (see AGENTS.md's
+  // architecture entry — no MCP/acbridge cmd ever calls it).
+  const setBoardAutonomousStmt = db.prepare("UPDATE boards SET autonomous = ?, updated_at = ? WHERE id = ?");
 
   // Structural counts for the session-list popover (item 1). Both
   // "agents" and "active" exclude plain bash terminals (provider = 'bash')
@@ -373,9 +405,18 @@ export function openStore(userDataDir: string) {
     /** Returns whether a row actually existed to update. */
     setConnectorKind: (id: string, kind: string | null): boolean => setConnectorKindStmt.run(kind, Date.now(), id).changes > 0,
     deleteConnectorsForCard: (cardId: string) => deleteConnectorsForCardStmt.run(cardId, cardId),
-    listBoards: (): BoardRow[] => listBoardsStmt.all() as BoardRow[],
-    upsertBoard: (board: BoardRow) => upsertBoardStmt.run(board),
+    // `autonomous` is stored as SQLite's usual 0/1 INTEGER (no native
+    // boolean type) — converted to/from a real `boolean` here so nothing
+    // downstream (MCP JSON responses included) ever sees a raw 0/1.
+    listBoards: (): BoardRow[] => (listBoardsStmt.all() as Array<Omit<BoardRow, "autonomous"> & { autonomous: number }>).map((b) => ({ ...b, autonomous: !!b.autonomous })),
+    getBoard: (id: string): BoardRow | undefined => {
+      const row = getBoardStmt.get(id) as (Omit<BoardRow, "autonomous"> & { autonomous: number }) | undefined;
+      return row ? { ...row, autonomous: !!row.autonomous } : undefined;
+    },
+    upsertBoard: (board: BoardRow) => upsertBoardStmt.run({ ...board, autonomous: board.autonomous ? 1 : 0 }),
     touchBoard: (id: string, at: number) => touchBoardStmt.run(at, id),
+    setBoardAutonomous: (id: string, autonomous: boolean) => setBoardAutonomousStmt.run(autonomous ? 1 : 0, Date.now(), id),
+    getCard: (id: string): CardRow | undefined => getCardStmt.get(id) as CardRow | undefined,
     cardCounts: (): Record<string, BoardCounts> => {
       const rows = cardCountsStmt.all() as { board_id: string; agents: number; active: number }[];
       return Object.fromEntries(rows.map((r) => [r.board_id, { agents: r.agents, active: r.active }]));

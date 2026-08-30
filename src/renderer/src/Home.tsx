@@ -50,6 +50,7 @@ export function Home({
   onCreateBoard,
   onUpdateBoard,
   onDeleteBoard,
+  onToggleAutonomous,
 }: {
   boards: BoardRow[];
   boardCounts: Record<string, BoardCounts>;
@@ -66,6 +67,9 @@ export function Home({
   onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
   onUpdateBoard: (id: string, name: string, cwd: string) => void;
   onDeleteBoard: (id: string) => void;
+  /** DESIGN-BACKLOG.md item 59 — separate from onUpdateBoard, fires
+   * immediately (see Topbar.tsx's same prop). */
+  onToggleAutonomous: (id: string, autonomous: boolean) => void;
 }) {
   const [modal, setModal] = useState<ModalState>(null);
 
@@ -178,13 +182,16 @@ export function Home({
       {modal?.mode === "edit" && (
         <SessionModal
           mode="edit"
-          board={modal.board}
+          // Fresh lookup, not the stale snapshot from when the pencil was
+          // clicked — see Topbar.tsx's identical comment (item 59).
+          board={boards.find((b) => b.id === modal.board.id) ?? modal.board}
           workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
           onNavigateRoot={onNavigateRoot}
           canDelete={boards.length > 1}
           onSave={onUpdateBoard}
           onDelete={onDeleteBoard}
+          onToggleAutonomous={onToggleAutonomous}
           onClose={() => setModal(null)}
         />
       )}

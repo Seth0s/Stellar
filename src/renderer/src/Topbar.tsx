@@ -28,6 +28,7 @@ export function Topbar({
   onCreateBoard,
   onUpdateBoard,
   onDeleteBoard,
+  onToggleAutonomous,
 }: {
   boards: Board[];
   activeBoardId: string;
@@ -58,6 +59,9 @@ export function Topbar({
   onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
   onUpdateBoard: (id: string, name: string, cwd: string) => void;
   onDeleteBoard: (id: string) => void;
+  /** DESIGN-BACKLOG.md item 59 — separate from onUpdateBoard on purpose:
+   * fires immediately, not staged behind the modal's "Salvar". */
+  onToggleAutonomous: (id: string, autonomous: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
@@ -107,6 +111,11 @@ export function Topbar({
           {activeBoard?.project || UNGROUPED_LABEL}
           <span className="topbar-crumb-sep">›</span>
           <strong>{activeBoard?.name ?? "sessão"}</strong>
+          {activeBoard?.autonomous && (
+            <span className="topbar-autonomous-badge" title="Modo autônomo ativo — agentes deste board podem spawnar outros sem pedir permissão">
+              autônomo
+            </span>
+          )}
           {activeCounts && (
             <span className="topbar-counts">
               <StatusDot counts={activeCounts} />
@@ -182,13 +191,18 @@ export function Topbar({
       {modal?.mode === "edit" && (
         <SessionModal
           mode="edit"
-          board={modal.board}
+          // Looked up fresh from the live `boards` array, not the stale
+          // snapshot captured when the pencil was clicked — otherwise
+          // toggling `autonomous` while the modal is still open would
+          // visually revert on the next re-render (item 59).
+          board={boards.find((b) => b.id === modal.board.id) ?? modal.board}
           workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
           onNavigateRoot={onNavigateRoot}
           canDelete={boards.length > 1}
           onSave={onUpdateBoard}
           onDelete={onDeleteBoard}
+          onToggleAutonomous={onToggleAutonomous}
           onClose={() => setModal(null)}
         />
       )}

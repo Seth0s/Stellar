@@ -92,6 +92,7 @@ export type BusRequest =
   | { cmd: "list_connectors" }
   | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null }
   | { cmd: "concurrency_status"; cap?: number }
+  | { cmd: "board_mode"; target?: string }
   | {
       cmd: "spawn_agent";
       provider?: string;
@@ -148,6 +149,18 @@ export function createMessageBus(
     /** DESIGN-BACKLOG.md item 58, M4 — pty-registry.ts's own `isAlive`,
      * threaded straight through: no round trip needed, main already knows. */
     isCardAlive: (cardId: string) => boolean;
+    /** DESIGN-BACKLOG.md item 59 — which board a card lives on, and
+     * whether that board's opt-in autonomous mode is on. Only ever read
+     * here, never written — the only write path is a human's toggle in
+     * the UI (App.tsx's session UI → `setBoardAutonomous`), never an
+     * MCP/acbridge cmd (see AGENTS.md's architecture entry). */
+    getCardBoardId: (cardId: string) => string | undefined;
+    isBoardAutonomous: (boardId: string) => boolean;
+    /** Live (isCardAlive-backed) count of non-bash terminal cards on one
+     * board — the same "bash isn't an agent" convention as M4/peça 6's
+     * concurrency_status, but board-scoped instead of global, since
+     * autonomous mode's cap is enforced per board. */
+    countRunningAgentsOnBoard: (boardId: string) => number;
     /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 3 — direct
      * pass-through to store.ts (better-sqlite3 is synchronous, no round
      * trip needed here either). */
@@ -166,7 +179,19 @@ export function createMessageBus(
     onSpawnAgentRequest: (
       requestId: string,
       requesterId: string,
-      params: { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string; model?: string },
+      params: {
+        provider: string;
+        cwd?: string;
+        resumeId?: string;
+        depth: number;
+        reason?: string;
+        model?: string;
+        /** DESIGN-BACKLOG.md item 59 — set only when the requester's own
+         * board is in autonomous mode and under its concurrency cap; the
+         * renderer creates the card and resolves immediately, with no
+         * `AgentAskModal` shown at all. */
+        autoApprove?: boolean;
+      },
     ) => void;
     onSpawnCardRequest: (
       requestId: string,
@@ -478,6 +503,13 @@ export function createMessageBus(
       return { ok: true, running, cap, atCap: running >= cap };
     }
 
+    if (req.cmd === "board_mode") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      const boardId = callbacks.getCardBoardId(req.target);
+      if (!boardId) return { ok: false, error: `no such card "${req.target}"` };
+      return { ok: true, autonomous: callbacks.isBoardAutonomous(boardId) };
+    }
+
     if (req.cmd === "spawn_agent") {
       if (!req.provider) return { ok: false, error: "missing provider" };
       const depth = req.depth ?? 0;
@@ -486,6 +518,23 @@ export function createMessageBus(
       }
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
+      // DESIGN-BACKLOG.md item 59 — the ONE place `autoApprove` can ever
+      // become true: the requester's own board opted in via the human-
+      // only UI toggle. No MCP/acbridge cmd reaches this flag. Structural
+      // refusal (no modal shown at all) once the board's cap is hit —
+      // same "refuse before asking" shape as the MAX_SPAWN_DEPTH check
+      // above, not a queue (same "no queue" decision as peça 6).
+      const requesterBoardId = callbacks.getCardBoardId(requesterId);
+      const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
+      if (autonomous && requesterBoardId) {
+        const running = callbacks.countRunningAgentsOnBoard(requesterBoardId);
+        if (running >= DEFAULT_CONCURRENCY_CAP) {
+          return {
+            ok: false,
+            error: `autonomous board concurrency cap reached (${DEFAULT_CONCURRENCY_CAP} agents already running) — refusing to spawn another agent`,
+          };
+        }
+      }
       markWaiting(requesterId);
       const spawnResult = await new Promise<SpawnAgentResult>((resolve) => {
         const timer = setTimeout(() => {
@@ -509,6 +558,7 @@ export function createMessageBus(
           depth: depth + 1,
           reason: req.reason,
           model: req.model,
+          autoApprove: autonomous,
         });
       });
       // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open

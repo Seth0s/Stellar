@@ -228,6 +228,21 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "board_mode",
+      {
+        description:
+          "Check whether a card's board has opt-in autonomous mode on — when it does, your own spawn_agent calls from a card on that board auto-approve instead of showing a consent dialog. Read-only: there's no tool to change this, only a human can via the app's own UI.",
+        inputSchema: {
+          target: z.string().describe("A card id on the board you want to check (see list_cards) — typically your own"),
+        },
+      },
+      async ({ target }) => {
+        const res = await opts.handleRequest({ cmd: "board_mode", target });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "open_url",
       {
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass).",

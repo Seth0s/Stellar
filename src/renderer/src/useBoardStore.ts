@@ -172,7 +172,11 @@ export function useBoardStore(
     // real absolute path, and the label shown in Home/Topbar's grouping is
     // just that path's last segment, never independently typed.
     const project = basename(cwd);
-    const board: BoardRow = { id, name, project, cwd, created_at: now, updated_at: now, last_accessed_at: now };
+    // DESIGN-BACKLOG.md item 59 — always false at creation, never
+    // inherited from anywhere (there's nowhere to inherit it from here —
+    // a brand-new board has no prior row). Duplicating a board isn't a
+    // feature this app has, so that inheritance path doesn't exist either.
+    const board: BoardRow = { id, name, project, cwd, created_at: now, updated_at: now, last_accessed_at: now, autonomous: false };
     setBoards((prev) => [...prev, board]);
     void window.store.boards.upsert(board);
     // `cwd` passed explicitly — see loadBoard's comment on why a `boards`
@@ -195,6 +199,20 @@ export function useBoardStore(
     setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, name, project, cwd, updated_at: now } : b)));
     const board = boards.find((b) => b.id === id);
     if (board) void window.store.boards.upsert({ ...board, name, project, cwd, updated_at: now });
+  }
+
+  /** DESIGN-BACKLOG.md item 59 — the ONE place this app flips
+   * `autonomous`, called only from SessionModal's toggle (via
+   * Topbar.tsx/Home.tsx). Deliberately its own function, not folded into
+   * `updateBoard`: a safety-relevant setting should apply the instant a
+   * human clicks it, not wait behind "Salvar". Uses the dedicated
+   * `setAutonomous` IPC (not the general `upsert`) for the same reason
+   * message-bus.ts never touches this column — one narrow write path,
+   * not the general board-edit one. */
+  function setBoardAutonomous(id: string, autonomous: boolean) {
+    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, autonomous } : b)));
+    void window.store.boards.setAutonomous(id, autonomous);
+    toast(autonomous ? "modo autônomo ativado" : "modo autônomo desativado");
   }
 
   async function deleteBoard(id: string) {
@@ -225,5 +243,6 @@ export function useBoardStore(
     createBoard,
     updateBoard,
     deleteBoard,
+    setBoardAutonomous,
   };
 }

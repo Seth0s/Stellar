@@ -5014,7 +5014,7 @@ resto contra o que ele revelar.
   build` limpos; `smoke-mcp.mjs` (lista de tools) e `smoke-acbridge.mjs`
   sem regressão.
 
-## 59. Modo autônomo por board — opt-in pra orquestração completa sem humano no loop a cada spawn, anotado em 2026-08-30, não implementado ainda
+## 59. Modo autônomo por board — opt-in pra orquestração completa sem humano no loop a cada spawn, anotado em 2026-08-30, ✅ feito em 2026-08-30
 
 **Origem**: pedido direto do usuário depois de fechar o item 58 — "acho
 válido ter os 2 caminhos para orquestração, o human in loop e apenas
@@ -5138,6 +5138,68 @@ Quando `true`:
   `BusRequest` que mude `boards.autonomous`.
 - Um indicador visual real aparece no `Topbar` quando o board ativo está
   em modo autônomo, e desaparece ao desligar.
+
+### Fix aplicado
+
+`boards.autonomous INTEGER NOT NULL DEFAULT 0` (`store.ts`, migração
+aditiva, convertido pra `boolean` real na fronteira store↔resto — SQLite
+não tem tipo boolean nativo). Novo `getCard(id)`/`getBoard(id)` (lookup
+único, não a versão "lista tudo" que já existia) e
+`setBoardAutonomous(id, bool)` — uma statement dedicada, separada do
+`upsertBoard` geral que um rename/cwd já usa, porque este é o ÚNICO write
+path que um clique humano real usa (`SessionModal`'s checkbox, via IPC
+`store:boards:set-autonomous` — nenhum `BusRequest`/MCP chega nele).
+
+`message-bus.ts`'s `spawn_agent`: antes de pedir consentimento, resolve o
+board do `requesterId` (`getCardBoardId`) e checa `isBoardAutonomous`. Se
+autônomo, checa o teto (`countRunningAgentsOnBoard`, mesma convenção
+"bash não conta" de M4/peça 6) — acima do teto, recusa estrutural (mesma
+forma do `MAX_SPAWN_DEPTH`, checado ANTES e sempre, mesmo em modo
+autônomo); abaixo do teto, `onSpawnAgentRequest` ganha `autoApprove:
+true`. No renderer, `App.tsx`'s `onAskAgent` — ao ver `autoApprove`, pula
+`setPendingAsk`/modal inteiramente e chama `spawnAgentFor` +
+`resolveAgent` direto, o MESMO código que `allowAsk()` já usava pro
+caminho humano, só disparado automaticamente.
+
+Nova tool MCP `board_mode(target)` — só leitura, devolve `{autonomous}`
+do board do card dado. `open_url`/`spawn_card` não foram tocados (seus
+branches em `message-bus.ts` continuam exatamente como antes) — o
+auto-approve é estruturalmente impossível de vazar pra eles, não é uma
+checagem que poderia ter sido esquecida.
+
+UI: `SessionModal` (modo `edit`) ganha um checkbox que chama
+`onToggleAutonomous` — dispara na hora, não fica preso atrás de
+"Salvar" (uma configuração de segurança não deveria depender de alguém
+lembrar de clicar salvar). `Topbar`/`Home` (os dois lugares que montam
+`SessionModal` em modo edit) buscam o board fresco de `boards` por id em
+vez de confiar no snapshot capturado quando o lápis foi clicado — sem
+isso, o checkbox visualmente "voltaria atrás" no próximo render. Badge
+`--warn` no breadcrumb do `Topbar` quando o board ativo está autônomo.
+`createBoard` sempre grava `autonomous: false` — não há como um board
+novo nascer autônomo, nem por template, nem duplicando (esse app não tem
+duplicar board).
+
+### Verificado ao vivo sem mock
+
+Novo `smoke-mcp-autonomous-mode.mjs` (18 checks) — liga o modo via
+clique real na UI (topbar → editar sessão → checkbox → fechar), confirma
+`board_mode` e o badge visual reais; spawna 3 agentes `claude` reais em
+modo autônomo confirmando ausência real de `.modal` no DOM depois de
+cada um (não só o retorno da tool); o 4º é recusado ao bater o teto,
+`MAX_SPAWN_DEPTH` ainda recusa por cima disso tudo; `open_url`/
+`spawn_card` continuam mostrando o modal mesmo em modo autônomo; a única
+tool MCP com "board"/"autonomous" no nome é `board_mode` (via
+`tools/list` real); um segundo board criado de verdade nasce
+`autonomous:false` e um card dele ainda pede consentimento, mesmo com o
+primeiro board autônomo — sem vazamento entre boards. Passou depois de
+2 iterações de depuração num único ponto do próprio script de teste (o
+template "Vazio" nasce com zero cards de propósito — achado real
+documentado em `seedCards`, não um bug — faltava o clique explícito em
+"Novo terminal" que `bootIntoFreshSession` já faz para o board inicial;
+nada no código de produção mudou por causa disso). `tsc --noEmit`/
+`electron-vite build` limpos; `smoke-mcp.mjs` (lista de tools),
+`smoke-acbridge.mjs`, `smoke-session-modal.mjs` e `smoke-home.mjs` sem
+regressão.
 
 ## Ordem sugerida para a próxima rodada
 
