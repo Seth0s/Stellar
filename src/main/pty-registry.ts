@@ -1,6 +1,6 @@
 import { delimiter } from "node:path";
 import * as pty from "node-pty";
-import { resolveSpawn, type SpawnOpts } from "./providers";
+import { resolveSpawn, providerInstallCommand, type SpawnOpts } from "./providers";
 import { watchForSession } from "./session-watch";
 
 const COALESCE_MS = 16;
@@ -77,9 +77,12 @@ export function createPtyRegistry(registryOpts: {
     cols: number,
     rows: number,
     spawnOpts: SpawnOpts = {},
-  ): { id: string } | { error: "binary_not_found" | "spawn_failed"; providerId: string } {
+  ):
+    | { id: string }
+    | { error: "binary_not_found"; providerId: string; installCommand: string | null }
+    | { error: "spawn_failed"; providerId: string } {
     const resolved = resolveSpawn(providerId, { ...spawnOpts, mcpUrl: registryOpts.mcpUrl });
-    if (!resolved) return { error: "binary_not_found", providerId };
+    if (!resolved) return { error: "binary_not_found", providerId, installCommand: providerInstallCommand(providerId) };
 
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),

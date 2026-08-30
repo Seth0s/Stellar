@@ -3959,6 +3959,28 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   limpos, suite completa de chat sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 7.
 
+## 2026-08-29 — item 57 ponto 13: observer de provider não instalado, sugestão de terminal pré-preenchido
+
+- `binary_not_found` já existia; faltava sugerir o quê fazer. Comandos de
+  install reais pesquisados ao vivo por provider (claude/codex/cursor/
+  gemini), novo campo `installCommand` em `ProviderDef` (`providers.ts`),
+  propagado até `TerminalCard.tsx`.
+- **Achado real**: o binário do Cursor CLI foi renomeado pra `agent`
+  (confirmado em cursor.com/docs/cli/installation) — `providers.ts` ainda
+  só listava `cursor-agent`. Corrigido pra `["agent", "cursor-agent"]`
+  (novo nome primeiro, antigo como fallback).
+- Botão "instalar {provider}" abre um SEGUNDO terminal bash no mesmo cwd,
+  com o comando real digitado no PTY assim que nasce (`initialInput`,
+  campo one-shot novo em `TerminalCardData`, nunca persistido — mesmo
+  espírito de `continueLast`) — nunca executado sozinho, sem `\r`, o
+  humano ainda aperta Enter.
+- Verificado ao vivo sem mock (`smoke-terminal-install-hint.mjs`, novo):
+  "gemini" genuinamente ausente nesta máquina; captura o texto real via
+  `window.pty.onData` (xterm.js não expõe texto de DOM confiável) pra
+  provar que o comando chegou sem `\r`/`\n`. `tsc --noEmit`/`electron-vite
+  build` limpos, suite de terminal/provider sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 13.
+
 ## Comandos
 
 ```bash

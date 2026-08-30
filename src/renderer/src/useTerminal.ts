@@ -110,12 +110,21 @@ export function useTerminal(
   continueLast: boolean,
   model: string | null,
   systemPrompt: string | null,
+  /** DESIGN-BACKLOG.md item 57 ponto 13 — one-shot text typed into the PTY
+   * right after a successful spawn, never executed on its own (no `\r`
+   * appended here) — the human still presses Enter. Same "one-shot,
+   * never persisted" spirit as `continueLast` (see card-types.ts):
+   * created once by `openInstallTerminal` (App.tsx) for a pre-filled
+   * install-command terminal, always null for a card restored from the
+   * store. */
+  initialInput: string | null,
   visible: boolean,
   zoom: number,
 ) {
   const [ptyId, setPtyId] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [spawnError, setSpawnError] = useState<string | null>(null);
+  const [installHint, setInstallHint] = useState<{ providerId: string; command: string } | null>(null);
   const [discoveredResumeId, setDiscoveredResumeId] = useState<string | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -135,14 +144,14 @@ export function useTerminal(
   zoomRef.current = zoom;
   // Spawn-time-only options, read via ref instead of effect deps below — see
   // the comment on Effect 1's dependency array for why.
-  const spawnOptsRef = useRef({ resumeId, continueLast, model, systemPrompt });
-  spawnOptsRef.current = { resumeId, continueLast, model, systemPrompt };
+  const spawnOptsRef = useRef({ resumeId, continueLast, model, systemPrompt, initialInput });
+  spawnOptsRef.current = { resumeId, continueLast, model, systemPrompt, initialInput };
 
   // Effect 1: PTY lifecycle. Independent of the container/visible — spawns
   // once per identity and keeps running regardless of on-screen visibility.
   useEffect(() => {
     let disposed = false;
-    const { resumeId, continueLast, model, systemPrompt } = spawnOptsRef.current;
+    const { resumeId, continueLast, model, systemPrompt, initialInput } = spawnOptsRef.current;
     const spawnOpts = {
       resumeId: resumeId ?? undefined,
       continueLast,
@@ -157,9 +166,13 @@ export function useTerminal(
             ? `"${providerId}" não encontrado no PATH`
             : `falha ao iniciar "${providerId}"`,
         );
+        if (result.error === "binary_not_found" && result.installCommand) {
+          setInstallHint({ providerId, command: result.installCommand });
+        }
         return;
       }
       ptyIdRef.current = result.id;
+      if (initialInput) void window.pty.write(id, initialInput);
       setPtyId(result.id);
     });
 
@@ -495,5 +508,5 @@ export function useTerminal(
     if (ptyIdRef.current) void window.pty.interrupt(ptyIdRef.current);
   }
 
-  return { ptyId, exitCode, spawnError, discoveredResumeId, fitNow, interrupt };
+  return { ptyId, exitCode, spawnError, installHint, discoveredResumeId, fitNow, interrupt };
 }

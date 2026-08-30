@@ -14,6 +14,10 @@ export type TerminalCardData = BaseCard & {
   continueLast: boolean;
   model: string | null;
   systemPrompt: string | null;
+  /** One-shot text typed into the PTY right after spawn (item 57 ponto
+   * 13) — same never-persisted spirit as `continueLast`, always null for
+   * a card restored from the store. */
+  initialInput: string | null;
 };
 
 export type FilesCardData = BaseCard & { kind: "files"; root: string };

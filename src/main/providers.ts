@@ -42,14 +42,22 @@ type ProviderDef = {
   label: string;
   binaryNames: string[];
   buildArgs: (opts: SpawnOpts) => string[];
+  /** DESIGN-BACKLOG.md item 57 ponto 13 — real, current install command
+   * per provider (confirmed live against each provider's own docs/npm
+   * package on 2026-08-29, not guessed): `binary_not_found` surfaces this
+   * to the renderer so it can offer a pre-filled (never auto-run)
+   * terminal. `null` for `bash` — always resolves via $SHELL, never
+   * "not installed". */
+  installCommand: string | null;
 };
 
 export const PROVIDERS: ProviderDef[] = [
-  { id: "bash", label: "Bash", binaryNames: [], buildArgs: () => [] },
+  { id: "bash", label: "Bash", binaryNames: [], buildArgs: () => [], installCommand: null },
   {
     id: "claude",
     label: "Claude",
     binaryNames: ["claude"],
+    installCommand: "npm install -g @anthropic-ai/claude-code",
     buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
@@ -77,6 +85,7 @@ export const PROVIDERS: ProviderDef[] = [
     id: "codex",
     label: "Codex",
     binaryNames: ["codex"],
+    installCommand: "npm install -g @openai/codex",
     // Codex's resume is a subcommand, must come before any other flag.
     // No documented system-prompt flag — gets the MCP server registered
     // instead (codex supports an ephemeral `-c key=value` TOML override,
@@ -91,11 +100,20 @@ export const PROVIDERS: ProviderDef[] = [
       return args;
     },
   },
-  // `cursor` on PATH is usually the IDE launcher; the agent CLI is cursor-agent.
+  // `cursor` on PATH is usually the IDE launcher; the agent CLI is a
+  // separate binary. DESIGN-BACKLOG.md item 57 ponto 13 — confirmed live
+  // against cursor.com/docs/cli/installation (2026-08-29) that the
+  // installed binary is now named `agent`, not `cursor-agent` — Cursor
+  // renamed it at some point after this list was first written ("older
+  // articles still use the longer name," per their own docs). Tries the
+  // current name first, falls back to the legacy one for an install that
+  // predates the rename — same `which()` semantics as every other
+  // multi-name lookup already in this file.
   {
     id: "cursor",
     label: "Cursor",
-    binaryNames: ["cursor-agent"],
+    binaryNames: ["agent", "cursor-agent"],
+    installCommand: "curl https://cursor.com/install -fsS | bash",
     // No documented system-prompt flag, AND (unlike claude/codex above)
     // no ephemeral per-invocation MCP registration flag either — Cursor
     // CLI only discovers MCP servers from a written .cursor/mcp.json
@@ -125,6 +143,7 @@ export const PROVIDERS: ProviderDef[] = [
     id: "gemini",
     label: "Gemini",
     binaryNames: ["gemini"],
+    installCommand: "npm install -g @google/gemini-cli",
     // No documented system-prompt flag, AND (like cursor-agent above) no
     // ephemeral per-invocation MCP registration flag — confirmed against
     // docs/tools/mcp-server.md: the only mechanisms are `gemini mcp add`
@@ -145,6 +164,10 @@ export const PROVIDERS: ProviderDef[] = [
 
 export function providerById(id: string): ProviderDef | undefined {
   return PROVIDERS.find((p) => p.id === id);
+}
+
+export function providerInstallCommand(id: string): string | null {
+  return providerById(id)?.installCommand ?? null;
 }
 
 export function which(names: string[]): string | null {
