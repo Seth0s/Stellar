@@ -19,6 +19,12 @@ const PAGE_TEXT_TIMEOUT_MS = 10_000;
 // human decision needed, just a renderer round-trip to read the live
 // xterm.js buffer. Short backstop-only timeout.
 const READ_CARD_TIMEOUT_MS = 10_000;
+// DESIGN-BACKLOG.md item 58, M4 — default backstop for spawn_agent's
+// `wait: true`, when the caller doesn't pass its own `waitTimeoutMs`.
+// Unlike every other timeout in this file, waiting for a real agent to
+// finish a real task is not a "something's wrong" case — 10 minutes is a
+// reasonable default for that, not a bug-detection backstop.
+const DEFAULT_WAIT_EXIT_TIMEOUT_MS = 600_000;
 // DESIGN-BACKLOG.md item 58, M2 — above a CLI's bracketed-paste threshold,
 // a `\r` appended to the same write as the text is swallowed as part of
 // the pasted content instead of submitting it. Sending it as a separate
@@ -40,8 +46,11 @@ export type CardSummary = { id: string; provider: string; cwd: string };
 export type SnapshotResult = { ok: true; path: string } | { ok: false; error: string };
 export type PageTextResult = { ok: true; text: string; truncated: boolean } | { ok: false; error: string };
 export type ReadCardResult = { ok: true; text: string } | { ok: false; error: string };
+export type CardStatusResult = { ok: true; status: "running" | "exited" } | { ok: false; error: string };
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
-export type SpawnAgentResult = { ok: true; cardId: string } | { ok: false; error: string };
+export type SpawnAgentResult =
+  | { ok: true; cardId: string; exited?: boolean; exitCode?: number }
+  | { ok: false; error: string };
 export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error: string };
 
 export type BusRequest =
@@ -55,6 +64,7 @@ export type BusRequest =
     }
   | { cmd: "get_page_text"; target?: string }
   | { cmd: "read_card"; target?: string; lines?: number }
+  | { cmd: "card_status"; target?: string }
   | {
       cmd: "spawn_agent";
       provider?: string;
@@ -64,6 +74,8 @@ export type BusRequest =
       depth?: number;
       reason?: string;
       model?: string;
+      wait?: boolean;
+      waitTimeoutMs?: number;
     }
   | { cmd: "spawn_card"; kind?: string; cwd?: string; url?: string; requesterId?: string; reason?: string };
 
@@ -106,6 +118,9 @@ export function createMessageBus(
      * xterm.js Terminal instance for a terminal card (main never sees
      * terminal content, only raw pty bytes flowing through). */
     onReadCardRequest: (requestId: string, cardId: string, lines?: number) => void;
+    /** DESIGN-BACKLOG.md item 58, M4 — pty-registry.ts's own `isAlive`,
+     * threaded straight through: no round trip needed, main already knows. */
+    isCardAlive: (cardId: string) => boolean;
     onSpawnAgentRequest: (
       requestId: string,
       requesterId: string,
@@ -130,6 +145,11 @@ export function createMessageBus(
   const pendingSnapshots = new Map<string, { resolve: (result: SnapshotResult) => void; timer: NodeJS.Timeout }>();
   const pendingPageTexts = new Map<string, { resolve: (result: PageTextResult) => void; timer: NodeJS.Timeout }>();
   const pendingReadCards = new Map<string, { resolve: (result: ReadCardResult) => void; timer: NodeJS.Timeout }>();
+  // DESIGN-BACKLOG.md item 58, M4 — waiters for `spawn_agent`'s
+  // `wait: true`, keyed by the spawned card's id. Several waiters could in
+  // principle exist for the same card (two callers both waiting on it),
+  // so each entry is a list, not a single resolver.
+  const pendingCardExits = new Map<string, Array<(exitCode: number) => void>>();
   const pendingSpawnAgents = new Map<string, { resolve: (result: SpawnAgentResult) => void; timer: NodeJS.Timeout }>();
   const pendingSpawnCards = new Map<string, { resolve: (result: SpawnCardResult) => void; timer: NodeJS.Timeout }>();
 
@@ -231,6 +251,13 @@ export function createMessageBus(
       });
     }
 
+    if (req.cmd === "card_status") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      const cards = callbacks.listCards();
+      if (!cards.some((c) => c.id === req.target)) return { ok: false, error: `no open terminal card with id "${req.target}"` };
+      return { ok: true, status: callbacks.isCardAlive(req.target) ? "running" : "exited" };
+    }
+
     if (req.cmd === "spawn_agent") {
       if (!req.provider) return { ok: false, error: "missing provider" };
       const depth = req.depth ?? 0;
@@ -238,7 +265,7 @@ export function createMessageBus(
         return { ok: false, error: `spawn depth limit reached (max ${MAX_SPAWN_DEPTH}) — refusing to spawn another agent` };
       }
       const requestId = randomUUID();
-      return new Promise((resolve) => {
+      const spawnResult = await new Promise<SpawnAgentResult>((resolve) => {
         const timer = setTimeout(() => {
           pendingSpawnAgents.delete(requestId);
           resolve({ ok: false, error: "timed out waiting for a decision" });
@@ -260,6 +287,33 @@ export function createMessageBus(
           model: req.model,
         });
       });
+      // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open
+      // past "the human approved and the card exists" (spawnResult above)
+      // until the process actually exits, so the caller gets a real
+      // completion signal instead of having to poll card_status/snapshot
+      // in a loop. Not an error if the wait window runs out first — the
+      // spawn itself still succeeded, it's just still running.
+      if (!req.wait || !spawnResult.ok) return spawnResult;
+      const cardId = spawnResult.cardId;
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const timer = setTimeout(() => {
+          const waiters = pendingCardExits.get(cardId);
+          if (waiters) {
+            const idx = waiters.indexOf(onExit);
+            if (idx !== -1) waiters.splice(idx, 1);
+            if (waiters.length === 0) pendingCardExits.delete(cardId);
+          }
+          resolve(null);
+        }, req.waitTimeoutMs ?? DEFAULT_WAIT_EXIT_TIMEOUT_MS);
+        const onExit = (code: number) => {
+          clearTimeout(timer);
+          resolve(code);
+        };
+        const waiters = pendingCardExits.get(cardId) ?? [];
+        waiters.push(onExit);
+        pendingCardExits.set(cardId, waiters);
+      });
+      return exitCode === null ? spawnResult : { ...spawnResult, exited: true, exitCode };
     }
 
     if (req.cmd === "spawn_card") {
@@ -313,6 +367,16 @@ export function createMessageBus(
     pendingSpawnAgents.get(requestId)?.resolve(result);
   }
 
+  /** DESIGN-BACKLOG.md item 58, M4 — called from pty-registry's own
+   * `onExit`, unconditionally, for every card that exits (not just ones
+   * with a waiter — cheap Map lookup, no-op when nothing's waiting). */
+  function resolveCardExit(cardId: string, exitCode: number) {
+    const waiters = pendingCardExits.get(cardId);
+    if (!waiters) return;
+    pendingCardExits.delete(cardId);
+    for (const resolve of waiters) resolve(exitCode);
+  }
+
   function resolveSpawnCard(requestId: string, result: SpawnCardResult) {
     pendingSpawnCards.get(requestId)?.resolve(result);
   }
@@ -364,6 +428,7 @@ export function createMessageBus(
     pendingPageTexts.clear();
     for (const { timer } of pendingReadCards.values()) clearTimeout(timer);
     pendingReadCards.clear();
+    pendingCardExits.clear();
     for (const { timer } of pendingSpawnAgents.values()) clearTimeout(timer);
     pendingSpawnAgents.clear();
     for (const { timer } of pendingSpawnCards.values()) clearTimeout(timer);
@@ -376,5 +441,5 @@ export function createMessageBus(
     }
   }
 
-  return { handleRequest, resolveOpen, resolveSnapshot, resolvePageText, resolveReadCard, resolveSpawnAgent, resolveSpawnCard, close };
+  return { handleRequest, resolveOpen, resolveSnapshot, resolvePageText, resolveReadCard, resolveSpawnAgent, resolveSpawnCard, resolveCardExit, close };
 }

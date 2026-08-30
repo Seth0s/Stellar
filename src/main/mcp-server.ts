@@ -74,6 +74,20 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "card_status",
+      {
+        description: "Check whether a terminal card's process is still running or has already exited — a cheap alternative to polling snapshot/read_card in a loop.",
+        inputSchema: {
+          target: z.string().describe("The target card's id (see list_cards)"),
+        },
+      },
+      async ({ target }) => {
+        const res = await opts.handleRequest({ cmd: "card_status", target });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "open_url",
       {
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass).",
@@ -105,9 +119,14 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .optional()
             .describe("Your own AGENT_CANVAS_SPAWN_DEPTH env var, as a number — omit only if you're not sure, in which case this is treated as a fresh chain (0)"),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
+          wait: z
+            .boolean()
+            .optional()
+            .describe("Hold this call open until the spawned card's process exits, instead of returning as soon as it starts (default 10 minutes, see waitTimeoutMs)"),
+          waitTimeoutMs: z.number().optional().describe("Override the default wait window (10 minutes) when wait is true"),
         },
       },
-      async ({ provider, cwd, resumeId, model, callerCardId, depth, reason }) => {
+      async ({ provider, cwd, resumeId, model, callerCardId, depth, reason, wait, waitTimeoutMs }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
           provider,
@@ -117,6 +136,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           reason,
           depth: depth ?? 0,
           model,
+          wait,
+          waitTimeoutMs,
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
