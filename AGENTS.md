@@ -3883,6 +3883,19 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   que pode não ser um bug de código.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 12.
 
+## 2026-08-29 — item 57 ponto 4: bolha de chat do usuário perde o preenchimento sólido
+
+- `.chat-msg.user .chat-msg-text` tinha `background: var(--foam)`
+  sólido + `color: var(--on-accent)`. Trocado por
+  `color-mix(in srgb, var(--foam) 16%, transparent)` + borda sutil
+  (30%) + `color: var(--text)` — mantém o formato de bolha, perde o
+  bloco de cor sólida. Mensagem do modelo já não tinha fundo, sem
+  mudança ali.
+- Verificado ao vivo (`getComputedStyle` confirma o tom translúcido).
+  `tsc --noEmit`/`electron-vite build` limpos, `smoke-chat.mjs` sem
+  regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 4.
+
 ## Comandos
 
 ```bash

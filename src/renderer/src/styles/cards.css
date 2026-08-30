@@ -1586,9 +1586,17 @@
   align-self: flex-end;
 }
 
+/* Pedido ao vivo (2026-08-29, item 57 ponto 4) — "bolhas, mas sem fundo
+   colorido, só um destaque leve". Mantém o formato de bolha (cantos
+   arredondados, cauda no canto inferior-direito), troca o preenchimento
+   sólido `--foam` por um tingimento translúcido bem leve — mesmo padrão
+   `color-mix` já usado pro destaque de `.card-tag`. `color` volta a ser
+   o texto normal do app (`--on-accent`, quase preto, só fazia sentido
+   em cima do preenchimento sólido anterior). */
 .chat-msg.user .chat-msg-text {
-  background: var(--foam);
-  color: var(--on-accent);
+  background: color-mix(in srgb, var(--foam) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--foam) 30%, transparent);
+  color: var(--text);
   padding: 8px 12px;
   border-radius: 12px 12px 3px 12px;
   font-weight: 500;
