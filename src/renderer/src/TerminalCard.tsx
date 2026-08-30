@@ -220,7 +220,7 @@ export function TerminalCard({
       <div className="terminal-card-body" ref={containerRef} />
       {spawnError !== null && <div className="terminal-card-exited">{spawnError}</div>}
       {exitCode !== null && <div className="terminal-card-exited">processo encerrado ({exitCode})</div>}
-      <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className="terminal-card-url-popover">
+      <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className="terminal-card-url-popover thin-scroll">
         {[...seenUrls].reverse().map((url) => {
           const feedback = copyFeedback?.url === url ? copyFeedback : null;
           return (
