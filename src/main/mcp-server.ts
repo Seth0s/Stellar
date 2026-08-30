@@ -213,6 +213,21 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "concurrency_status",
+      {
+        description:
+          "Check how many non-bash agent cards are currently running against a cap — purely advisory, this app doesn't queue or refuse a spawn on its own account. Use this yourself before calling spawn_agent if you're fanning out several tasks and want to stay under a budget.",
+        inputSchema: {
+          cap: z.number().optional().describe("Your own concurrency budget — defaults to 3 if omitted"),
+        },
+      },
+      async ({ cap }) => {
+        const res = await opts.handleRequest({ cmd: "concurrency_status", cap });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "open_url",
       {
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass).",

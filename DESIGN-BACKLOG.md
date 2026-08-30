@@ -4529,7 +4529,7 @@ passagem. Numeração preservada como reportada.
     gemini.mjs`, `smoke-terminal-links-paste.mjs`,
     `smoke-terminal-visibility-persist.mjs` sem regressão.
 
-## 58. Auditoria pré-release (card externo) — superfície MCP/`acbridge` e roteiro de orquestração, anotado em 2026-08-29, implantação em andamento a partir de 2026-08-30
+## 58. Auditoria pré-release (card externo) — superfície MCP/`acbridge` e roteiro de orquestração, anotado em 2026-08-29, ✅ implantado em 2026-08-30 (peças 4–6 escopadas pra bookkeeping/status consultivo por decisão explícita do usuário — sem dispatcher/fila/auto-kill autônomo dentro do Stellar; ver notas em cada peça)
 
 **Fonte**: auditoria completa dos ~18.900 LOC de `src/`, publicada como
 artifact em outro card desta mesma sessão
@@ -4970,7 +4970,9 @@ resto contra o que ele revelar.
   `get_task` e `list_tasks`. Passou na primeira tentativa. `tsc
   --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`,
   `smoke-mcp-tasks.mjs` (peça 3) e `smoke-acbridge.mjs` sem regressão.
-6. **Orçamento e concorrência limitada — prioridade média/baixa.** Teto
+6. **Orçamento e concorrência limitada — prioridade média/baixa. ✅ status
+   consultivo feito em 2026-08-30 (mesmo limite de escopo das peças 4/5 —
+   decisão explícita do usuário, ver nota abaixo).** Teto
    de agentes simultâneos (3 é um default sensato), timeout por tarefa e
    limite de custo — fan-out sem teto é gasto sem fundo. Liga na ideia
    (seção separada da auditoria) de um HUD de custo/tokens por card de
@@ -4980,6 +4982,37 @@ resto contra o que ele revelar.
    configurado enfileira as excedentes em vez de spawná-las todas; uma
    tarefa que ultrapassa seu timeout é encerrada e marcada como tal, não
    fica pendurada indefinidamente.
+   **Decisão explícita do usuário (2026-08-30), pergunta feita de novo
+   porque esta peça acrescenta uma categoria nova (matar processo
+   sozinho, não só decidir/despachar)**: das três opções — (a) só
+   status consultivo via MCP, sem fila nem auto-kill; (b) `spawn_agent`
+   recusando de cara ao bater o teto (mesmo padrão já existente do
+   `MAX_SPAWN_DEPTH`, sem fila); (c) fila real + auto-kill por timeout,
+   como a auditoria descreveu literalmente — o usuário escolheu (a). Por
+   isso o critério de verificação acima ("enfileira as excedentes...",
+   "é encerrada e marcada") não é literalmente testável nesta
+   implementação: não existe fila nem kill automático. Timeout por
+   tarefa continua sendo o `waitTimeoutMs` per-call de `spawn_agent`
+   (M4) — nenhum campo de timeout novo, seria redundante. HUD de custo/
+   tokens por card fica de fora inteiramente (ideia separada da
+   auditoria, não faz parte do critério desta peça).
+   **Fix aplicado**: nova tool MCP `concurrency_status(cap?)` —
+   conta cards não-bash com processo realmente vivo (`isCardAlive`,
+   mesma convenção de "bash não é agente" que `store.ts`'s `cardCounts`
+   já usa), compara contra um `cap` (default 3, o mesmo sugerido pela
+   auditoria) passado pelo chamador a cada chamada — sem estado
+   persistido, sem configuração salva. Retorna `{running, cap, atCap}`.
+   Novo subcomando `acbridge concurrency-status [cap]`. Puramente
+   informativo: nada aqui muda o comportamento real de `spawn_agent`.
+- **Verificado ao vivo sem mock**: novo `smoke-mcp-concurrency.mjs` —
+  spawna 3 cards `claude` reais um de cada vez, confirma que `running`
+  sobe 1→2→3 e `atCap` vira `true` só ao bater o cap default (3); mata
+  um processo real de verdade e confirma que `running` volta a refletir
+  a realidade (não fica travado no pico); um `cap` customizado passado
+  pelo chamador muda `atCap` de acordo, sem afetar nada além da própria
+  resposta. Passou na primeira tentativa. `tsc --noEmit`/`electron-vite
+  build` limpos; `smoke-mcp.mjs` (lista de tools) e `smoke-acbridge.mjs`
+  sem regressão.
 
 ## Ordem sugerida para a próxima rodada
 

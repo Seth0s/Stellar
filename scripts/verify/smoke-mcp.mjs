@@ -70,6 +70,7 @@ try {
     JSON.stringify(toolNames),
     JSON.stringify([
       "card_status",
+      "concurrency_status",
       "create_task",
       "get_page_text",
       "get_task",
