@@ -70,8 +70,11 @@ try {
     JSON.stringify(toolNames),
     JSON.stringify([
       "card_status",
+      "create_task",
       "get_page_text",
+      "get_task",
       "list_cards",
+      "list_tasks",
       "open_url",
       "read_card",
       "read_report",
@@ -80,6 +83,7 @@ try {
       "snapshot",
       "spawn_agent",
       "spawn_card",
+      "update_task",
     ]),
   );
 

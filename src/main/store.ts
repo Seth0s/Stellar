@@ -76,6 +76,25 @@ export type BoardRow = {
 
 export type BoardCounts = { agents: number; active: number };
 
+/** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 3 — a task's
+ * identity is deliberately its own id, not a card's: `card_id` is
+ * nullable/stale-able on purpose (closing the card, or the app
+ * restarting, must never lose the task's record — only the live process
+ * behind it). `deps_json`/`result_json` are opaque JSON blobs, same
+ * convention as `cards.messages_json` — parsed at the message-bus/MCP
+ * boundary, not here. */
+export type TaskRow = {
+  id: string;
+  prompt: string | null;
+  provider: string | null;
+  status: string;
+  card_id: string | null;
+  result_json: string | null;
+  deps_json: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
 const DEFAULT_BOARD_ID = "default";
 
 function migrate(db: Database.Database) {
@@ -152,6 +171,20 @@ export function openStore(userDataDir: string) {
       name TEXT NOT NULL,
       project TEXT NOT NULL DEFAULT '',
       cwd TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      prompt TEXT,
+      provider TEXT,
+      status TEXT NOT NULL,
+      card_id TEXT,
+      result_json TEXT,
+      deps_json TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -267,6 +300,21 @@ export function openStore(userDataDir: string) {
     )
   `);
 
+  const listTasksStmt = db.prepare(
+    "SELECT id, prompt, provider, status, card_id, result_json, deps_json, created_at, updated_at FROM tasks ORDER BY created_at ASC",
+  );
+  const getTaskStmt = db.prepare(
+    "SELECT id, prompt, provider, status, card_id, result_json, deps_json, created_at, updated_at FROM tasks WHERE id = ?",
+  );
+  const upsertTaskStmt = db.prepare(`
+    INSERT INTO tasks (id, prompt, provider, status, card_id, result_json, deps_json, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @result_json, @deps_json, @created_at, @updated_at)
+    ON CONFLICT(id) DO UPDATE SET
+      prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
+      card_id = excluded.card_id, result_json = excluded.result_json, deps_json = excluded.deps_json,
+      updated_at = excluded.updated_at
+  `);
+
   return {
     listCards: (boardId: string): CardRow[] => listStmt.all(boardId) as CardRow[],
     listAllCards: (): CardRow[] => listAllStmt.all() as CardRow[],
@@ -300,6 +348,9 @@ export function openStore(userDataDir: string) {
       deleteBoardStmt.run(id);
     },
     nextIdSeed: (): number => (maxIdStmt.get() as { m: number | null }).m ?? 0,
+    listTasks: (): TaskRow[] => listTasksStmt.all() as TaskRow[],
+    getTask: (id: string): TaskRow | undefined => getTaskStmt.get(id) as TaskRow | undefined,
+    upsertTask: (task: TaskRow) => upsertTaskStmt.run(task),
     close: () => db.close(),
   };
 }
