@@ -149,7 +149,7 @@ try {
   // (only "generic" stays free text — arbitrary user endpoint, no fixed
   // list makes sense there).
   check("switching provider swaps the model field to a curated openai dropdown", await page.evalJs(`!!document.querySelector('.chat-model-select')`), true);
-  check("...and resets to the openai default model id", await page.evalJs(`document.querySelector('.chat-model-select')?.value`), "gpt-4.1");
+  check("...and resets to the openai default model id", await page.evalJs(`document.querySelector('.chat-model-select')?.value`), "gpt-5.6-terra");
   check("switching provider re-shows the key form (no openai key saved yet)", await page.evalJs(`!!document.querySelector('.chat-key-form')`), true);
 
   await page.evalJs(`

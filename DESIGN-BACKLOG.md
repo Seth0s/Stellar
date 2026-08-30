@@ -4220,11 +4220,42 @@ passagem. Numeração preservada como reportada.
    existir). `tsc --noEmit`/`electron-vite build` limpos,
    `smoke-chat.mjs`/`smoke-chat-providers.mjs`/`smoke-chat-sessions-sidebar.mjs`
    sem regressão.
-3. **Modelos do chatbox desatualizados**. Lista que o usuário passou:
-   Gemini → "Antigravity" e "Gemini 3.7 Flash"; OpenAI → pesquisar os
-   modelos mais recentes listados na própria API antes de atualizar
-   (não copiar de memória). Atualizar `DEFAULT_GEMINI_MODEL`/dropdown
-   curado (item 31) pra refletir isso quando for implementado.
+3. **Modelos do chatbox desatualizados — ✅ feito em 2026-08-29.** Lista
+   antiga (`PROVIDER_MODELS` em `secretsUi.ts`) tinha OpenAI em `gpt-4.1`/
+   `o3` (gerações de 2025) e Gemini em `2.5`/`2.0` — desatualizado de fato.
+   Pesquisado ao vivo (não copiado de memória, como pedido):
+   - **OpenAI**: `developers.openai.com/api/docs/models` confirma a família
+     atual `gpt-5.6` com três variantes de verdade — `gpt-5.6-sol`
+     (flagship), `gpt-5.6-terra` (equilibrado), `gpt-5.6-luna`
+     (custo-otimizado). Lista virou `["gpt-5.6-terra", "gpt-5.6-sol",
+     "gpt-5.6-luna"]` — terra como default (índice 0), mesmo papel que
+     `claude-sonnet-5` já tem na lista da anthropic (nem o topo de linha
+     mais caro, nem o mais barato).
+   - **Gemini**: o usuário citou "Antigravity" e "Gemini 3.7 Flash".
+     Confirmado via `ai.google.dev`: `gemini-3.7-flash` é um id de model
+     real, mesmo shape de API (`generateContent`) que este app já fala via
+     seu shim OpenAI-compatible (`GEMINI_OPENAI_BASE_URL` em
+     `main/index.ts`) — adicionado como novo default (índice 0). Já
+     "Antigravity" **não é um chat model** — é um agente
+     (`antigravity-preview-05-2026`) exposto só pela Interactions/Agents
+     API do Gemini, uma forma de chamada incompatível com a Chat
+     Completions que este app usa (adicioná-lo quebraria com 404/erro de
+     shape na hora de mandar mensagem). Deixado de fora de propósito, e
+     sinalizado aqui em vez de adicionado às cegas — provavelmente o
+     usuário viu "Antigravity" como o produto/IDE que usa Gemini 3.7 Flash
+     por padrão, não como um model id em si.
+   - Lista final: `openai: ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"]`,
+     `gemini: ["gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.5-pro",
+     "gemini-2.5-flash-lite"]` (mantidos os 2.5 como fallback pra quem
+     ainda depende deles, só removido o 2.0 já bem atrás). `anthropic`
+     intocado (já estava correto).
+   - Dois testes existentes tinham o id antigo hardcoded como valor
+     esperado, corrigidos junto: `smoke-chat-providers.mjs` (default do
+     gemini) e `smoke-chat-tools.mjs` (default do openai). `tsc --noEmit`/
+     `electron-vite build` limpos; suite completa de chat
+     (`smoke-chat.mjs`, `smoke-chat-providers.mjs`, `smoke-chat-tools.mjs`,
+     `smoke-chat-sessions-sidebar.mjs`, `smoke-chat-sandbox.mjs`,
+     `smoke-chat-new-session-per-provider.mjs`) sem regressão.
 4. **Bolhas de chat sem fundo colorido — ✅ feito em 2026-08-29.** Antes:
    `.chat-msg.user .chat-msg-text` tinha `background: var(--foam)`
    sólido (preenchimento cheio, cor de destaque do app inteiro) +

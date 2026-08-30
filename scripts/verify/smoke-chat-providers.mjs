@@ -90,7 +90,7 @@ try {
   // item 31 — gemini agora ganha dropdown curado (não mais campo livre),
   // mesmo padrão que anthropic já tinha.
   const geminiModel = await page.evalJs(`document.querySelector('.chat-model-select')?.value`);
-  check("trocar pra gemini já preenche um modelo default sensato", geminiModel, "gemini-2.5-flash");
+  check("trocar pra gemini já preenche um modelo default sensato", geminiModel, "gemini-3.7-flash");
 
   // ---- 2. custom (generic): exige endpoint, salva key+baseURL, e o
   // round-trip real de chat bate no endpoint configurado ----
