@@ -457,6 +457,7 @@ export function App() {
     createBoard,
     updateBoard,
     deleteBoard,
+    setBoardAutonomous,
   } = useBoardStore(
     nextId,
     setCards,
@@ -480,6 +481,17 @@ export function App() {
     // onAskOpen above, generalized to spawning an agent or a non-terminal
     // card. Both funnel into the same `pendingAsk`/AgentAskModal.
     const offAskSpawnAgent = window.spawn.onAskAgent((requestId, requesterId, params) => {
+      // DESIGN-BACKLOG.md item 59 — `autoApprove` only ever comes from
+      // message-bus.ts having already confirmed the requester's own board
+      // is in autonomous mode and under its concurrency cap. No modal at
+      // all in that case — same card-creation call `allowAsk()` uses for
+      // a human-approved spawn, just triggered immediately instead of by
+      // a button click.
+      if (params.autoApprove) {
+        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model);
+        void window.spawn.resolveAgent(requestId, { ok: true, cardId });
+        return;
+      }
       setPendingAsk({
         kind: "spawn-agent",
         requestId,
@@ -1398,6 +1410,7 @@ export function App() {
           onCreateBoard={createBoard}
           onUpdateBoard={updateBoard}
           onDeleteBoard={deleteBoard}
+          onToggleAutonomous={setBoardAutonomous}
         />
       </div>
     );
@@ -1843,6 +1856,7 @@ export function App() {
         onCreateBoard={createBoard}
         onUpdateBoard={updateBoard}
         onDeleteBoard={deleteBoard}
+        onToggleAutonomous={setBoardAutonomous}
       />
       <UpdateBanner />
       <ToastHost />

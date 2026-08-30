@@ -5,7 +5,7 @@ import { toast } from "./useToast";
 import { required, useFieldValidation } from "./validation";
 import type { SessionTemplate } from "./useBoardStore";
 
-type Board = { id: string; name: string; cwd: string };
+type Board = { id: string; name: string; cwd: string; autonomous: boolean };
 
 const TEMPLATES: { value: SessionTemplate; label: string; desc: string }[] = [
   { value: "empty", label: "Vazio", desc: "nenhum card" },
@@ -45,6 +45,10 @@ type SessionModalProps =
       canDelete: boolean;
       onSave: (id: string, name: string, cwd: string) => void;
       onDelete: (id: string) => void;
+      /** DESIGN-BACKLOG.md item 59 — fires immediately on toggle, not
+       * staged behind "Salvar": a safety-relevant setting shouldn't
+       * depend on the user remembering to also click save. */
+      onToggleAutonomous: (id: string, autonomous: boolean) => void;
       onClose: () => void;
     };
 
@@ -121,6 +125,24 @@ export function SessionModal(props: SessionModalProps) {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+        {props.mode === "edit" && (
+          <div className="popover-field">
+            <label className="autonomous-toggle-label">
+              <input
+                type="checkbox"
+                checked={props.board.autonomous}
+                onChange={(e) => props.onToggleAutonomous(props.board.id, e.target.checked)}
+              />
+              modo autônomo — agentes deste board podem spawnar outros
+              agentes sem pedir permissão
+            </label>
+            {props.board.autonomous && (
+              <span className="field-error-msg">
+                ⚠ ativo: qualquer agente aqui pode criar outros agentes sem confirmação, até o teto de concorrência
+              </span>
+            )}
           </div>
         )}
         <div className={props.mode === "edit" ? "modal-actions modal-actions-split" : "modal-actions"}>

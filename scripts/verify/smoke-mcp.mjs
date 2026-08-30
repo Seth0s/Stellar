@@ -69,6 +69,7 @@ try {
     "MCP server exposes the full expected tool set",
     JSON.stringify(toolNames),
     JSON.stringify([
+      "board_mode",
       "card_status",
       "concurrency_status",
       "create_task",

@@ -2,7 +2,7 @@
 // BACKLOG.md item 8) — both render the same "sessions grouped by project"
 // list + status dot, just at different scales/density.
 
-export type Board = { id: string; name: string; project: string; cwd: string };
+export type Board = { id: string; name: string; project: string; cwd: string; autonomous: boolean };
 export type BoardCounts = { agents: number; active: number };
 
 export const UNGROUPED_LABEL = "sem projeto";

@@ -544,6 +544,12 @@ function createWindow() {
         .map((c) => ({ id: c.id, provider: c.provider, cwd: c.cwd })),
     writeToCard: (id, text) => registry.write(id, text),
     isCardAlive: (id) => registry.isAlive(id),
+    getCardBoardId: (id) => store.getCard(id)?.board_id,
+    isBoardAutonomous: (boardId) => store.getBoard(boardId)?.autonomous ?? false,
+    countRunningAgentsOnBoard: (boardId) =>
+      store
+        .listCards(boardId)
+        .filter((c) => c.kind === "terminal" && c.provider !== "bash" && registry.isAlive(c.id)).length,
     listTasks: () => store.listTasks(),
     getTask: (id) => store.getTask(id),
     upsertTask: (task) => store.upsertTask(task),
@@ -633,6 +639,11 @@ function createWindow() {
   ipcMain.handle("store:boards:delete", (_e, id: string) => store.deleteBoard(id));
   // DESIGN-BACKLOG.md item 14 — Home's "último acesso".
   ipcMain.handle("store:boards:touch", (_e, id: string, at: number) => store.touchBoard(id, at));
+  // DESIGN-BACKLOG.md item 59 — the only IPC channel that can flip
+  // `boards.autonomous`. Reachable only from real renderer UI code
+  // (App.tsx's session UI), never from message-bus.ts/mcp-server.ts —
+  // there is no `BusRequest` cmd that touches this at all, on purpose.
+  ipcMain.handle("store:boards:set-autonomous", (_e, id: string, autonomous: boolean) => store.setBoardAutonomous(id, autonomous));
   ipcMain.handle("store:card-counts", () => store.cardCounts());
   ipcMain.handle("store:next-id-seed", () => store.nextIdSeed());
   // Item 30 — sessions sidebar (every chat card, live or archived) +

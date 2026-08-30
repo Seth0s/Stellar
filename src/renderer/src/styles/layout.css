@@ -292,6 +292,20 @@ body {
   color: var(--muted);
 }
 
+/* DESIGN-BACKLOG.md item 59 — must never be ambiguous, glancing at the
+   screen, whether a board is running unattended. Same --warn pill shape
+   as .chat-diff-new (cards.css). */
+.topbar-autonomous-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
 .topbar-counts {
   display: flex;
   align-items: center;
@@ -920,6 +934,21 @@ select.resume-input {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 12px;
+}
+
+/* DESIGN-BACKLOG.md item 59 — SessionModal's autonomous-mode toggle.
+   Text wraps (unlike files-editor-autosave-toggle's short "auto-save"),
+   so no nowrap here. */
+.autonomous-toggle-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.autonomous-toggle-label input {
+  margin-top: 2px;
+  accent-color: var(--foam);
 }
 
 /* DESIGN-BACKLOG.md item 12, achado 5 — icon buttons instead of the

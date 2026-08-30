@@ -4279,13 +4279,12 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
   orquestração peça 6 — **com isto, o item 58 inteiro (M1–M4 +
   roteiro de orquestração 1–6) está implantado**.
 
-## 2026-08-30 — decisão de arquitetura: dois caminhos de orquestração coexistindo (human-in-the-loop + modo autônomo opt-in)
+## 2026-08-30 — decisão de arquitetura: dois caminhos de orquestração coexistindo (human-in-the-loop + modo autônomo opt-in) — ✅ implementado
 
 Registrado a partir de pedido direto do usuário depois de fechar o item
 58 inteiro ("acho válido ter os 2 caminhos para orquestração, o human in
 loop e apenas agentes"). Item acionável correspondente:
-`DESIGN-BACKLOG.md` item 59 (design + critérios, não implementado
-ainda).
+`DESIGN-BACKLOG.md` item 59.
 
 **Tese**: as peças 4–6 do item 58 escolheram, de propósito e por decisão
 explícita repetida do usuário, nunca dar a um agente o poder de spawnar
@@ -4318,6 +4317,32 @@ concorrência (item 58 peça 6, hoje consultivo) vira imposto de verdade
 só dentro do modo autônomo, mesmo padrão de recusa estrutural que
 `MAX_SPAWN_DEPTH` já usa — sem fila, sem auto-kill, mesma linha das
 decisões já tomadas no item 58.
+
+## 2026-08-30 — item 59: modo autônomo por board implementado
+
+- `boards.autonomous` (novo, migração aditiva, `boolean` convertido na
+  fronteira do SQLite). Único write path: `store:boards:set-autonomous`
+  IPC, chamado só pelo checkbox real de `SessionModal` (modo edit) — sem
+  nenhum `BusRequest`/tool MCP que chegue nele.
+- `spawn_agent` (`message-bus.ts`) checa o board do requester antes de
+  pedir consentimento: se autônomo e abaixo do teto
+  (`countRunningAgentsOnBoard`, "bash não conta"), manda
+  `autoApprove: true` pro renderer, que pula o modal e chama
+  `spawnAgentFor` direto — mesmo código que o caminho humano já usava.
+  Acima do teto, recusa estrutural (mesma forma do `MAX_SPAWN_DEPTH`,
+  que continua valendo por cima disso tudo). `open_url`/`spawn_card`
+  intocados — auto-approve não alcança esses branches.
+- Nova tool MCP `board_mode(target)`, só leitura.
+- Verificado ao vivo sem mock: `smoke-mcp-autonomous-mode.mjs` (18
+  checks) — liga o modo via clique real na UI, spawna 3 agentes
+  `claude` reais confirmando ausência real de `.modal` no DOM, teto e
+  `MAX_SPAWN_DEPTH` recusando, `open_url`/`spawn_card` ainda pedindo
+  consentimento, nenhuma outra tool MCP tocando o campo, e um segundo
+  board real nascendo `autonomous:false` sem vazamento do primeiro board
+  autônomo. `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`,
+  `smoke-acbridge.mjs`, `smoke-session-modal.mjs` e `smoke-home.mjs` sem
+  regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 59.
 
 ## Comandos
 
