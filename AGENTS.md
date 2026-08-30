@@ -3839,6 +3839,19 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   escopo.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 12.
 
+## 2026-08-29 — item 57 ponto 1: scrollbar do terminal parava de parecer scroll e virava uma segunda borda
+
+- Item 10 já tinha recolorido o slider do scrollbar de xterm pra
+  `var(--border)` (parar de parecer branco quase-opaco solto), mas essa
+  é a MESMA cor da borda real do card — o slider, encostado nela, virou
+  uma segunda "borda" confusa.
+- Fix: `.slider { background: transparent !important; }` — invisível de
+  vez, CSS puro, elemento continua arrastável/funcional.
+- Verificado ao vivo (`getComputedStyle` confirma `rgba(0,0,0,0)`) e
+  regressão de rolagem via `smoke-card-wheel-scope.mjs` (já existente,
+  ainda passando). `tsc --noEmit`/`electron-vite build` limpos.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 1.
+
 ## Comandos
 
 ```bash
