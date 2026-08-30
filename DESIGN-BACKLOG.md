@@ -4186,11 +4186,19 @@ passagem. Numeração preservada como reportada.
    modelos mais recentes listados na própria API antes de atualizar
    (não copiar de memória). Atualizar `DEFAULT_GEMINI_MODEL`/dropdown
    curado (item 31) pra refletir isso quando for implementado.
-4. **Bolhas de chat sem fundo colorido** — o usuário quer formato de
-   bolha (contorno/silhueta de bolha), mas SEM fundo preenchido de cor;
-   só um destaque leve (ex.: borda sutil ou tom de fundo quase neutro)
-   diferenciando mensagem do usuário da mensagem do modelo, sem as duas
-   virarem blocos de cor sólida.
+4. **Bolhas de chat sem fundo colorido — ✅ feito em 2026-08-29.** Antes:
+   `.chat-msg.user .chat-msg-text` tinha `background: var(--foam)`
+   sólido (preenchimento cheio, cor de destaque do app inteiro) +
+   `color: var(--on-accent)` (quase preto, só fazia sentido em cima
+   daquele preenchimento sólido). Trocado por um tingimento translúcido
+   (`color-mix(in srgb, var(--foam) 16%, transparent)`) + borda sutil no
+   mesmo tom (30%) + texto normal do app (`--text`) — mantém o formato de
+   bolha (cantos arredondados, cauda no canto inferior-direito), perde o
+   bloco de cor sólida. Mensagem do modelo já não tinha fundo nenhum
+   (`.chat-msg.assistant`, sem mudança necessária ali). Verificado ao
+   vivo: `getComputedStyle` confirma o novo tom translúcido (16%/30%
+   alpha, não mais opaco). `tsc --noEmit`/`electron-vite build` limpos,
+   `smoke-chat.mjs` sem regressão.
 5. **Bug real: múltiplos terminais Claude com sessões diferentes abrem
    sempre a MESMA sessão — ✅ causa raiz confirmada e corrigida em
    2026-08-29.** Não era resumeId manual colidindo — era a DESCOBERTA
