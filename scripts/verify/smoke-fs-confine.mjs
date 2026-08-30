@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeChecker } from "./cdp-client.mjs";
-import { confine, PathEscapeError, readFile } from "../../src/main/fs-tools.ts";
+import { confine, PathEscapeError, readFile, searchFileContents } from "../../src/main/fs-tools.ts";
 
 const { check, finish } = makeChecker();
 
@@ -29,9 +29,9 @@ const outside = join(base, "outside");
 try {
   mkdirSync(join(root, "sub"), { recursive: true });
   mkdirSync(outside, { recursive: true });
-  writeFileSync(join(root, "inside.txt"), "in");
+  writeFileSync(join(root, "inside.txt"), "in needle");
   writeFileSync(join(root, "sub", "nested.txt"), "nested");
-  writeFileSync(join(outside, "secret.txt"), "SECRET");
+  writeFileSync(join(outside, "secret.txt"), "SECRET needle");
 
   // The bug itself: a symlink CREATED INSIDE the root (by anything at all —
   // a checked-out repo, an agent running in a terminal card, npm) whose
@@ -96,6 +96,16 @@ try {
     (err) => (err instanceof PathEscapeError ? "PathEscapeError" : `other: ${err.message}`),
   );
   check("fs readFile through the symlink is refused", leaked, "PathEscapeError");
+
+  // The full-text search walks whatever is in the tree and greps it, so
+  // it hits the same symlink — and it must SKIP that file, not blow the
+  // whole search up (and, of course, not return the outside content,
+  // which is what it did before the fix).
+  const hits = await searchFileContents(root, "needle").then(
+    (r) => r.map((m) => `${m.path}:${m.text}`).sort(),
+    (err) => [`THREW: ${err.message}`],
+  );
+  check("content search skips the escaping symlink and keeps going", hits, (h) => h.length === 1 && h[0] === "inside.txt:in needle");
 } finally {
   rmSync(base, { recursive: true, force: true });
 }
