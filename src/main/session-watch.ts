@@ -5,6 +5,31 @@ import { join } from "node:path";
 const POLL_MS = 1500;
 const TIMEOUT_MS = 30_000;
 
+/**
+ * DESIGN-BACKLOG.md item 57, ponto 5 — real bug, confirmed live: two
+ * fresh (no resumeId) terminal cards for the same provider+cwd each run
+ * their own `watchForSession` poller, but every `find*Session` below used
+ * to just return the single most-recently-modified session file across
+ * the WHOLE shared directory/log — with no notion of which watcher a
+ * candidate "belongs" to. A session file that's still being actively
+ * appended to (a real, ongoing conversation in ANOTHER card) could
+ * out-rank a different card's own, quieter, brand-new session, so two
+ * cards converged on the exact same discovered session id. Module-level
+ * (not per-watcher) because the whole point is cross-watcher visibility:
+ * once a session id is attributed to one card, no other still-polling
+ * watcher may claim it, no matter whose poll tick sees it next. Lives for
+ * the app's lifetime, deliberately never cleared — a claimed id should
+ * never be handed to a second card later either.
+ *
+ * Still a narrow residual race if two watchers' own filesystem reads
+ * interleave (both compute the same "best" candidate before either has
+ * claimed it) — accepted as much rarer than the original bug (which
+ * reproduced on effectively every overlapping spawn), not eliminated by
+ * construction. A real per-candidate lock would close that gap but isn't
+ * proportionate here.
+ */
+const claimedSessionIds = new Set<string>();
+
 function encodeCwdForClaude(cwd: string): string {
   return cwd.replace(/\//g, "-");
 }
@@ -20,11 +45,13 @@ async function findClaudeSession(cwd: string, spawnedAtMs: number): Promise<stri
   let best: { id: string; mtimeMs: number } | null = null;
   for (const name of entries) {
     if (!name.endsWith(".jsonl")) continue;
+    const id = name.slice(0, -".jsonl".length);
+    if (claimedSessionIds.has(id)) continue;
     const full = join(dir, name);
     const st = await stat(full).catch(() => null);
     if (!st || st.mtimeMs <= spawnedAtMs) continue;
     if (!best || st.mtimeMs > best.mtimeMs) {
-      best = { id: name.slice(0, -".jsonl".length), mtimeMs: st.mtimeMs };
+      best = { id, mtimeMs: st.mtimeMs };
     }
   }
   return best?.id ?? null;
@@ -48,7 +75,7 @@ async function findCodexSession(sinceOffset: number): Promise<{ id: string | nul
   for (const line of lines) {
     try {
       const parsed = JSON.parse(line);
-      if (typeof parsed.id === "string") id = parsed.id;
+      if (typeof parsed.id === "string" && !claimedSessionIds.has(parsed.id)) id = parsed.id;
     } catch {
       // partial line (file mid-write) — ignore, next poll will re-read it whole.
     }
@@ -74,6 +101,7 @@ async function findCursorSession(cwd: string, spawnedAtMs: number): Promise<stri
       continue;
     }
     for (const sessionId of sessionDirs) {
+      if (claimedSessionIds.has(sessionId)) continue;
       const metaPath = join(hashPath, sessionId, "meta.json");
       let meta: { cwd?: string; createdAtMs?: number };
       try {
@@ -147,6 +175,12 @@ export function watchForSession(
         found = await findCursorSession(cwd, spawnedAtMs);
       }
       if (found) {
+        // Claim synchronously, before anything else runs — the narrow
+        // remaining race is two watchers' own filesystem reads
+        // interleaving (see claimedSessionIds' doc comment); this at
+        // least closes the much wider window of "already claimed, but a
+        // later watcher hasn't polled again yet to see that."
+        claimedSessionIds.add(found);
         stopped = true;
         clearInterval(timer);
         clearTimeout(timeout);

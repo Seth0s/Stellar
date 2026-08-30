@@ -4186,12 +4186,33 @@ passagem. Numeração preservada como reportada.
    diferenciando mensagem do usuário da mensagem do modelo, sem as duas
    virarem blocos de cor sólida.
 5. **Bug real: múltiplos terminais Claude com sessões diferentes abrem
-   sempre a MESMA sessão.** Reportado como bug ativo, não só polimento —
-   se há 2+ cards de terminal Claude com `resumeId`s diferentes, todos
-   parecem abrir/mostrar a mesma sessão em vez de cada um manter a sua.
-   Precisa de investigação real (CDP, não suposição) antes de mexer —
-   candidato a causa: alguma chave de cache/estado do provider Claude
-   compartilhada entre cards em vez de escopada por `cardId`/`resumeId`.
+   sempre a MESMA sessão — ✅ causa raiz confirmada e corrigida em
+   2026-08-29.** Não era resumeId manual colidindo — era a DESCOBERTA
+   automática de sessão nova (`session-watch.ts::watchForSession`, sem
+   `resumeId` passado): `findClaudeSession`/`findCursorSession`/
+   `findCodexSession` cada um retornava só o candidato mais
+   recentemente-tocado no diretório/log COMPARTILHADO inteiro, sem
+   nenhuma noção de "a qual watcher esse candidato pertence" — a sessão
+   de um card ainda sendo ativamente escrita (conversa real em
+   andamento) conseguia superar a sessão nova e quieta de OUTRO card,
+   então os dois watchers convergiam pro mesmo id.
+   **Confirmado de verdade** (não suposição): teste direto contra a
+   função REAL (`node --experimental-strip-types`, sem mock) com um
+   diretório `~/.claude/projects/<cwd>/` controlado reproduziu a colisão
+   exatamente como descrita — os dois watchers retornavam o mesmo id.
+   **Fix**: `claimedSessionIds` (Set módulo-level em `session-watch.ts`)
+   — um id já atribuído a um card nunca pode ser reatribuído a outro;
+   cada `find*Session` agora pula candidatos já reivindicados, e o id é
+   reivindicado no instante em que é encontrado, antes de notificar o
+   card. Residual conhecido e documentado no próprio código: se dois
+   watchers literalmente interlaçam a mesma leitura de disco no mesmo
+   tick (nenhum reivindicou ainda), ainda podem colidir — bem mais raro
+   que o bug original (que colidia em qualquer spawn sobreposto).
+   Reverificado com o mesmo teste real: watchers com start realisticamente
+   escalonado (~1.6s, como o app de verdade faz) agora resolvem pra ids
+   DIFERENTES. Regressão nova: `smoke-session-watch-collision.mjs`.
+   `tsc --noEmit`/`electron-vite build` limpos, `smoke-boot`/
+   `smoke-card-lifecycle` sem regressão.
 6. **Pergunta do usuário, respondida na hora (não é só anotação)**: "já
    foi criado MCP pra spawn de agentes do CLI pro chatbox e vice-versa,
    com comunicação entre agentes?" — Parcialmente. `delegate_to_agent`
