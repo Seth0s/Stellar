@@ -1,6 +1,7 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell } from "electron";
 import { chmodSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
 import type { SpawnOpts } from "./providers";
@@ -231,6 +232,59 @@ function handleSnapshotRequest(
   safeSend(win, "snapshot:rect-request", requestId, resolvedTarget);
 }
 
+/**
+ * Pre-release audit S3 — the main window had no navigation guard at all.
+ * `Markdown.tsx` renders agent/file-provided markdown with
+ * `dangerouslySetInnerHTML`, so any `[x](https://…)` in a chat answer, a
+ * sticky note or a previewed README was a one-click way to navigate the
+ * ENTIRE app window off its own document: this window has `frame: false`
+ * and no chrome, so there is no back button and no address bar — the app
+ * is simply gone until it is killed and restarted.
+ *
+ * Both escape hatches are closed here: `will-navigate` (a plain link
+ * click / `location.href =`) and `setWindowOpenHandler` (`window.open`,
+ * `target="_blank"`, which would otherwise spawn an unmanaged native
+ * BrowserWindow — the same hole `browser-registry.ts` already closes for
+ * embedded browser cards, with the same reasoning). Neither fires for
+ * `loadURL`/`loadFile` (Electron does not emit `will-navigate` for
+ * programmatic navigation), but the dev renderer is allowed through by
+ * origin anyway so a vite HMR full reload can never be mistaken for an
+ * escape.
+ */
+function isAppUrl(target: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(target);
+  } catch {
+    return false;
+  }
+  // Dev: the vite dev server's own origin (ELECTRON_RENDERER_URL).
+  const rendererUrl = isDev ? process.env.ELECTRON_RENDERER_URL : undefined;
+  if (rendererUrl) {
+    try {
+      return u.origin === new URL(rendererUrl).origin;
+    } catch {
+      return false;
+    }
+  }
+  // Packaged: `file:` has an opaque origin ("null"), so origin comparison
+  // would wave through every local file. Compare the real path against the
+  // one bundle entry this window is ever supposed to show instead.
+  if (u.protocol !== "file:") return false;
+  try {
+    return resolve(fileURLToPath(u)) === resolve(join(__dirname, "../renderer/index.html"));
+  } catch {
+    return false;
+  }
+}
+
+/** Only web/mail schemes get handed to the OS — `shell.openExternal` will
+ * happily launch a registered handler for anything else, and the strings
+ * reaching here come from rendered markdown, i.e. from agent output. */
+function openExternally(target: string): void {
+  if (/^(https?|mailto):/i.test(target)) void shell.openExternal(target);
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -246,6 +300,17 @@ function createWindow() {
       // understands CommonJS ("Cannot use import statement outside a module").
       sandbox: false,
     },
+  });
+
+  // Audit S3 — see isAppUrl above.
+  win.webContents.on("will-navigate", (event, url) => {
+    if (isAppUrl(url)) return;
+    event.preventDefault();
+    openExternally(url);
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternally(url);
+    return { action: "deny" };
   });
 
   // Packaged: electron-builder's extraResources copies resources/bin next to
