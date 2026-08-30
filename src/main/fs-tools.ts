@@ -297,7 +297,19 @@ const CONTENT_SEARCH_MAX_LINE_LEN = 200;
 const BINARY_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".pdf", ".zip", ".woff", ".woff2", ".ttf", ".otf"]);
 
 async function grepFile(root: string, path: string, q: string, results: ContentMatch[]): Promise<void> {
-  const full = confine(root, path);
+  // Skipped, not fatal — same tolerance the `.catch(() => null)`s just
+  // below already apply to a stat/read failure. This became reachable
+  // with the audit S1 fix: `git ls-files` happily lists a tracked symlink
+  // whose target is outside the root, and confining it now (correctly)
+  // throws instead of quietly grepping outside. Letting that escape would
+  // turn ONE such file in a repo into "the whole content search fails",
+  // which is a worse answer than "that one file isn't searched".
+  let full: string;
+  try {
+    full = confine(root, path);
+  } catch {
+    return;
+  }
   const stat = await fs.stat(full).catch(() => null);
   if (!stat || stat.size > MAX_FILE_BYTES) return;
   const text = await fs.readFile(full, "utf8").catch(() => null);
