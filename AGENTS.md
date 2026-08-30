@@ -4279,6 +4279,46 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
   orquestração peça 6 — **com isto, o item 58 inteiro (M1–M4 +
   roteiro de orquestração 1–6) está implantado**.
 
+## 2026-08-30 — decisão de arquitetura: dois caminhos de orquestração coexistindo (human-in-the-loop + modo autônomo opt-in)
+
+Registrado a partir de pedido direto do usuário depois de fechar o item
+58 inteiro ("acho válido ter os 2 caminhos para orquestração, o human in
+loop e apenas agentes"). Item acionável correspondente:
+`DESIGN-BACKLOG.md` item 59 (design + critérios, não implementado
+ainda).
+
+**Tese**: as peças 4–6 do item 58 escolheram, de propósito e por decisão
+explícita repetida do usuário, nunca dar a um agente o poder de spawnar
+outro sem um humano aprovar — cada `spawn_agent`, mesmo vindo de outro
+agente, sempre passa pelo `AgentAskModal`. Isso continua sendo o
+comportamento padrão e não muda. O que o usuário pediu depois foi um
+SEGUNDO caminho, opt-in, coexistindo com o primeiro: um board pode ligar
+um modo autônomo que auto-aprova `spawn_agent` só dentro daquele board,
+mantendo o resto do app (todo outro board, `open_url`, `spawn_card`)
+exatamente como sempre foi.
+
+**Por que os dois caminhos, não substituir um pelo outro**: um DAG
+noturno sem supervisão (o caso de uso que motivou o pedido) é impossível
+com um humano precisando clicar "Permitir" em cada nó — mas a maioria do
+uso deste app continua sendo um humano trabalhando ao lado dos agentes
+em tempo real, onde o clique de aprovação é barato e o controle vale
+mais que a velocidade. Os dois regimes servem casos de uso genuinamente
+diferentes; não é uma migração de um pra outro.
+
+**O que preserva a garantia de segurança que já existia**: o toggle em
+si é o consentimento — dado uma vez, antecipadamente, por um humano, via
+UI real, nunca por uma tool MCP/acbridge (um agente nunca pode se
+autoconceder autonomia), nunca herdado ao duplicar/criar board a partir
+de template, e escopado por board (não vaza pra outro board nem é
+global). `MAX_SPAWN_DEPTH` continua valendo do mesmo jeito. `open_url` e
+`spawn_card` (`remote-window` em especial) continuam pedindo
+consentimento mesmo em modo autônomo — o escopo do auto-approve é
+deliberadamente só `spawn_agent`, o mínimo pro DAG rodar. O cap de
+concorrência (item 58 peça 6, hoje consultivo) vira imposto de verdade
+só dentro do modo autônomo, mesmo padrão de recusa estrutural que
+`MAX_SPAWN_DEPTH` já usa — sem fila, sem auto-kill, mesma linha das
+decisões já tomadas no item 58.
+
 ## Comandos
 
 ```bash

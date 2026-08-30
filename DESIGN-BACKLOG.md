@@ -5014,6 +5014,131 @@ resto contra o que ele revelar.
   build` limpos; `smoke-mcp.mjs` (lista de tools) e `smoke-acbridge.mjs`
   sem regressão.
 
+## 59. Modo autônomo por board — opt-in pra orquestração completa sem humano no loop a cada spawn, anotado em 2026-08-30, não implementado ainda
+
+**Origem**: pedido direto do usuário depois de fechar o item 58 — "acho
+válido ter os 2 caminhos para orquestração, o human in loop e apenas
+agentes conforme o plano" seguido de "faça ter uma opção opt-in para
+começar a orquestação completa". As peças 4–6 do item 58 deliberadamente
+NÃO deram a nenhum agente o poder de spawnar outro sem um humano clicar
+"Permitir" no `AgentAskModal" — item 58 só construiu os dados/sinais
+(tasks, connectors.kind, report/read_report, card_status, concurrency
+consultivo) que um orquestrador PRECISA pra funcionar; nada ali executa o
+DAG sozinho. Este item é o oposto complementar: um jeito explícito de
+ligar a execução autônoma, sem apagar o caminho humano-no-loop que já
+existe — os dois caminhos coexistem, o usuário escolhe por board.
+
+**Escopo desta passagem**: só design + critérios de verificação,
+seguindo o próprio pedido do usuário de tratar isso como item de backlog
+antes de tocar em código (a resposta "sim" foi ao meu oferecimento
+explícito de "transformar isso num item de backlog... antes de tocar em
+código"). Várias decisões de escopo abaixo são propostas, não
+implementadas — o texto sinaliza onde uma confirmação faz sentido antes
+da implementação de verdade, dado o histórico desta mesma sessão de
+perguntar antes de decidir sozinho em decisões de arquitetura de
+consentimento (peças 4 e 6 do item 58).
+
+- **Prioridade**: Alta — é o que torna o item 58 inteiro utilizável de
+  ponta a ponta pra um caso de uso real (orquestração noturna/sem
+  supervisão), não só os primitivos.
+- **Onde**: `store.ts` (nova coluna `boards.autonomous INTEGER NOT NULL
+  DEFAULT 0`, migração aditiva de sempre) · `message-bus.ts` (o branch
+  `spawn_agent` ganha uma checagem antes de pedir consentimento) ·
+  `SessionModal`/popover de sessão (`Topbar.tsx`) — novo toggle · nova
+  tool MCP só de leitura, sem tool de escrita (ver "Onde NÃO mexer"
+  abaixo).
+- **Onde NÃO mexer, de propósito**: nenhuma tool MCP nem subcomando
+  `acbridge` liga o modo autônomo. Só um humano, através da UI real do
+  app, pode ativar isso pra um board — um agente nunca deveria poder se
+  autoconceder autonomia. Isso não é um detalhe de implementação, é o
+  ponto central da proposta: o toggle É o consentimento, dado uma vez,
+  antecipado, por um humano — não uma permissão que se auto-propaga.
+
+### Descrição
+
+Hoje, com o item 58 completo, um orquestrador (humano ou agente) já
+consegue ler tudo que precisa (`list_tasks`, `read_report`,
+`card_status`, `list_connectors`) mas **toda** chamada de `spawn_agent`
+—mesmo vinda de outro agente, não só de um MCP client externo— ainda
+pausa esperando um clique humano no `AgentAskModal`. Isso é o
+comportamento certo por padrão, e não muda pra nenhum board que não
+opte explicitamente por sair dele. Mas significa que "rodar o DAG da
+peça 4 durante a noite" é hoje impossível sem alguém acordado clicando
+"Permitir" a cada nó do grafo — o que anula boa parte do valor de ter
+um DAG.
+
+**Proposta**: um board ganha um campo `autonomous: boolean` (default
+`false`, nunca herdado — duplicar/criar um board a partir de um template
+sempre nasce com `false`, precisa ser ligado de novo a cada board).
+Quando `true`:
+
+1. Um `spawn_agent` cujo `requesterId` é um card **do mesmo board** é
+   auto-aprovado — cria o card sem mostrar `AgentAskModal` — **desde que**
+   o board ainda esteja abaixo do seu teto de concorrência (ver ponto 2).
+   Um `spawn_agent` vindo de um card de OUTRO board, ou sem
+   `requesterId`/de um MCP client externo sem card associado, continua
+   pedindo consentimento normalmente — o modo autônomo é uma propriedade
+   do board, não do app inteiro, e não deveria valer pra pedidos que não
+   se sabe de onde vieram.
+2. O cap de concorrência (peça 6 do item 58, hoje 100% consultivo) passa
+   a ser **imposto de verdade, só neste board, só neste modo**: um
+   `spawn_agent` autônomo que estouraria o cap é recusado de cara — ok:
+   false, sem mostrar modal, mesmo padrão já existente do
+   `MAX_SPAWN_DEPTH` (recusa estrutural, sem pedir aprovação pra algo já
+   descartado) — não enfileira (mesma decisão de não implementar fila
+   que a peça 6 já tomou). Fora do modo autônomo, o cap continua
+   puramente consultivo como está hoje.
+3. `MAX_SPAWN_DEPTH` continua valendo exatamente como hoje — modo
+   autônomo não desliga esse guard.
+4. `open_url` e `spawn_card` (a variante `remote-window` em especial —
+   controle de outra janela do SO sem supervisão é uma classe de risco
+   diferente de só abrir mais um terminal) **continuam pedindo
+   consentimento mesmo em modo autônomo**. Escopo deliberadamente
+   estreito: autônomo cobre só `spawn_agent`, o mínimo pra o DAG rodar
+   sozinho. Alargar pra `open_url`/`spawn_card` seria uma decisão
+   separada, não incluída aqui.
+5. Um indicador visual no `Topbar` (perto do breadcrumb de sessão) quando
+   o board ativo está em modo autônomo — pra nunca ficar ambíguo, olhando
+   pra tela, se aquele board está rodando sem supervisão.
+6. Nova tool MCP `board_mode` (só leitura: `{autonomous: boolean}` pro
+   board de um card dado) — pra um agente orquestrador saber em que
+   regime está rodando, sem poder mudar isso.
+7. Desligar o modo autônomo (sempre via UI, humano) só para de
+   auto-aprovar SPAWNS NOVOS — não mata nenhum agente já rodando (mesma
+   decisão de "nunca auto-kill" das peças 5/6). Parar agentes já vivos
+   continua sendo uma ação manual (fechar o card), como sempre foi.
+
+### Critério de verificação
+
+- Um board novo nasce com `autonomous: false`; duplicar um board ou criar
+  a partir de um template também nasce `false` — nunca herdado.
+- Com o modo desligado (padrão de hoje), `spawn_agent` de um card real
+  ainda mostra o `AgentAskModal` exatamente como antes — zero regressão
+  no fluxo human-in-the-loop existente (toda a suíte `smoke-mcp*.mjs`
+  atual precisa continuar passando sem mudança).
+- Com o modo ligado nesse board, um `spawn_agent` real cujo
+  `requesterId` é um card desse board resolve na hora com `ok:true` e um
+  `cardId`, sem NENHUM modal aparecer — verificado via ausência de
+  `.modal` no DOM, não só via timing.
+- Um `spawn_agent` com `requesterId` de um card de OUTRO board (modo
+  autônomo desligado nesse outro board) continua pedindo consentimento
+  — prova que o modo é por board, não global, e não vaza.
+- Em modo autônomo, ao bater o teto de concorrência, um `spawn_agent`
+  novo é recusado (`ok:false`) sem mostrar modal — e isso NÃO acontece
+  fora do modo autônomo (lá o teto continua só consultivo, sem recusar
+  nada).
+- `MAX_SPAWN_DEPTH` ainda recusa normalmente em modo autônomo (sem
+  regressão do guard existente).
+- Em modo autônomo, `open_url` e `spawn_card` (kind `remote-window`
+  incluído) ainda mostram o modal de consentimento — prova de que o
+  escopo do auto-approve é mesmo só `spawn_agent`.
+- Nenhuma tool MCP nem subcomando `acbridge` liga/desliga o modo — só
+  alcançável via um clique humano real na UI (`SessionModal`/popover de
+  sessão), verificado tentando (e falhando) achar qualquer `cmd` no
+  `BusRequest` que mude `boards.autonomous`.
+- Um indicador visual real aparece no `Topbar` quando o board ativo está
+  em modo autônomo, e desaparece ao desligar.
+
 ## Ordem sugerida para a próxima rodada
 
 1. ~~Overlay de atalhos (`?`)~~ — feito em 2026-08-26.
