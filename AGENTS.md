@@ -3868,6 +3868,21 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 11.
 
+## 2026-08-29 — item 57 ponto 12 (3/3): scrollbar padrão no popover de links do terminal
+
+- `TerminalCard.tsx`'s `Popover` (a lista de URLs vistas) ganhou a
+  classe `thin-scroll`, mesmo elemento que já tinha `overflow-y: auto`.
+  Verificado ao vivo: `scrollbar-color` deixa de ser `auto` (nativo).
+- O 3º achado do ponto 12 (badge "🔗 N" mal posicionado) fica investigado
+  mas NÃO corrigido — rastreei o único "grip" de 6 pontos do app
+  (`resizeGrip`, `CardFrame.tsx`) e ele só existe no canto
+  inferior-direito de cada card, nunca perto de onde o badge de URL
+  vive; hipótese mais provável é colisão visual com o resize de um card
+  ADJACENTE (layout daquele board específico), não bug sistemático —
+  mas fica pendente confirmação do usuário antes de "consertar" algo
+  que pode não ser um bug de código.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 12.
+
 ## Comandos
 
 ```bash

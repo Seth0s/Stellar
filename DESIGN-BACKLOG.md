@@ -4302,11 +4302,30 @@ passagem. Numeração preservada como reportada.
       Reconstituição perfeita de uma linha reescrita via
       cursor-overwrite (não só remoção de bytes) fica fora de escopo —
       exigiria emulação real de terminal, não somente strip de regex.
-    - O badge "🔗 N" (contagem de conectores) está mal posicionado,
-      quase encostando/sobrepondo o eixo do canvas.
+    - O badge "🔗 N" (na verdade `.terminal-card-url-badge` — mostra a
+      contagem de URLs vistas, não de conectores; correção da minha
+      própria descrição inicial) está mal posicionado, quase
+      encostando/sobrepondo o eixo do canvas. **Investigado, não
+      corrigido ainda — precisa de confirmação do usuário.** Rastreado
+      no código: o único elemento "grip"/6-pontos do app é
+      `resizeGrip` (`CardFrame.tsx`), sempre no canto inferior-direito
+      de CADA card (`right:0; bottom:0`) — não existe em lugar nenhum
+      perto do topo/rodapé onde o badge de URL vive. A hipótese mais
+      provável, dada essa estrutura: o "grip" visto ao lado do badge no
+      print é o canto de resize de um card DIFERENTE e ADJACENTE,
+      coincidindo visualmente por causa do layout específico daquele
+      board (dois cards próximos), não um bug sistemático de
+      posicionamento do badge em si. Fica pendente até o usuário
+      confirmar se é isso ou se há mesmo um problema de posicionamento
+      do badge/popover que eu não enxerguei.
     - A lista de URLs dentro do popover não usa o scrollbar padrão
       `thin-scroll` do resto do app (aparece como scrollbar nativo do
-      SO/Chromium).
+      SO/Chromium). **✅ feito em 2026-08-29** — `className` do
+      `Popover` em `TerminalCard.tsx` ganhou `thin-scroll` (o mesmo
+      elemento já tem `overflow-y: auto`). Verificado ao vivo:
+      `scrollbar-color` deixa de ser `auto` (nativo) e passa a usar os
+      tokens do `thin-scroll`. `tsc --noEmit`/`electron-vite build`
+      limpos.
 13. **Observer de provider não instalado, por provider** (print anexado
     do popover de criação de terminal — bash/claude/codex/cursor/gemini).
     Pedido: pra cada provider da lista, o app deveria detectar se o
