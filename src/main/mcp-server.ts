@@ -182,6 +182,34 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "list_connectors",
+      {
+        description:
+          "List every connector (arrow) on the board — id, fromCardId, toCardId, kind. `kind` is null for a purely decorative connector (everything drawn via the UI today); 'depends'/'context' is meaning an orchestrating agent attached on purpose with set_connector_kind. Nothing in this app dispatches off this graph — reading and acting on it is up to whoever calls this.",
+        inputSchema: {},
+      },
+      async () => {
+        const res = await opts.handleRequest({ cmd: "list_connectors" });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "set_connector_kind",
+      {
+        description: "Tag an existing connector's semantic meaning: 'depends' (the target task shouldn't start before the source one reports done), 'context' (the source's result should feed the target's prompt), or null to clear it back to purely decorative.",
+        inputSchema: {
+          connectorId: z.string().describe("The connector's id (see list_connectors)"),
+          kind: z.enum(["context", "depends"]).nullable().describe("The semantic to attach, or null to clear it"),
+        },
+      },
+      async ({ connectorId, kind }) => {
+        const res = await opts.handleRequest({ cmd: "set_connector_kind", connectorId, kind });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "open_url",
       {
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass).",

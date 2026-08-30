@@ -35,6 +35,7 @@ const USAGE =
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "create-task <json> | update-task <taskId> <json> | list-tasks | get-task <taskId> | " +
+  "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]>";
 
@@ -121,6 +122,12 @@ if (cmd === "list") {
   const [taskId] = rest;
   if (!taskId) fail("usage: acbridge get-task <taskId>");
   request = { cmd: "get_task", taskId };
+} else if (cmd === "list-connectors") {
+  request = { cmd: "list_connectors" };
+} else if (cmd === "set-connector-kind") {
+  const [connectorId, kindStr] = rest;
+  if (!connectorId || !kindStr) fail("usage: acbridge set-connector-kind <connectorId> <context|depends|null>");
+  request = { cmd: "set_connector_kind", connectorId, kind: kindStr === "null" ? null : kindStr };
 } else if (cmd === "spawn-agent") {
   const [provider, cwd, resumeId] = rest;
   if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
@@ -189,6 +196,10 @@ socket.on("close", () => {
     console.log(JSON.stringify(res.tasks));
   } else if (cmd === "get-task") {
     console.log(JSON.stringify(res.task));
+  } else if (cmd === "list-connectors") {
+    console.log(JSON.stringify(res.connectors));
+  } else if (cmd === "set-connector-kind") {
+    console.log("updated");
   } else if (cmd === "spawn-agent") {
     console.log(res.cardId);
   } else if (cmd === "spawn-card") {

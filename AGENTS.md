@@ -4199,6 +4199,40 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
 - Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
   orquestração peça 3.
 
+## 2026-08-30 — item 58, roteiro de orquestração peça 4: `connectors.kind`, só o modelo de dados
+
+- **Decisão de arquitetura, explicitamente escolhida pelo usuário quando
+  perguntado**: entre (a) só o modelo de dados — coluna `kind` +
+  tools MCP pra lê-la/marcá-la, execução do DAG decidida por um agente
+  orquestrador externo via `spawn_agent` (que continua pedindo
+  consentimento humano, como todo spawn neste app sempre pediu) — e (b)
+  um dispatcher autônomo dentro do próprio Stellar que auto-spawnaria a
+  tarefa dependente assim que a dependência reportasse, tirando humano
+  do loop nesse ponto específico — o usuário escolheu (a). Nenhum
+  código deste app decide "quando despachar" nada; só guarda e expõe o
+  grafo. Ver a entrada "2026-08-29 — decisão de arquitetura: por que
+  multi-provider" acima — a mesma razão pela qual isolamento por
+  processo é o que torna verificação adversarial segura é a razão pela
+  qual um dispatcher autônomo mudaria a postura de consentimento do app
+  de um jeito que merece sua própria decisão explícita, não uma
+  inferência de escopo.
+- Coluna `kind TEXT` nova em `connectors` (`store.ts`), `null` por
+  padrão — inclusive pra todo conector já desenhado hoje, nunca
+  reinterpretado como gate de execução sem alguém marcar isso de
+  propósito. `list_connectors`/`set_connector_kind` via MCP e acbridge.
+  `App.tsx::addConnector` (desenho de conector pela UI) não precisou
+  mudar — `upsertConnector` defende com o mesmo padrão de
+  `messages_json`/`archived_at`.
+- Verificado ao vivo sem mock: `smoke-mcp-connectors.mjs` — desenha um
+  conector real via o gesto de UI de verdade, confirma `kind: null` por
+  padrão, marca/lê/limpa `depends` via MCP, kind inválido barrado tanto
+  no schema MCP quanto na validação real de `message-bus.ts` (via
+  acbridge de verdade). Passou na primeira tentativa. `tsc --noEmit`/
+  `electron-vite build` limpos; `smoke-mcp.mjs`, `smoke-acbridge.mjs` e
+  `smoke-connector.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
+  orquestração peça 4.
+
 ## Comandos
 
 ```bash

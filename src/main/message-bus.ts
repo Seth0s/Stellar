@@ -1,7 +1,7 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { existsSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { TaskRow } from "./store";
+import type { TaskRow, ConnectorRow } from "./store";
 
 const OPEN_TIMEOUT_MS = 120_000;
 // Shorter than OPEN_TIMEOUT_MS on purpose — a snapshot needs no human
@@ -76,6 +76,8 @@ export type BusRequest =
   | { cmd: "update_task"; taskId?: string; status?: string; cardId?: string | null; result?: unknown }
   | { cmd: "list_tasks" }
   | { cmd: "get_task"; taskId?: string }
+  | { cmd: "list_connectors" }
+  | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null }
   | {
       cmd: "spawn_agent";
       provider?: string;
@@ -138,6 +140,15 @@ export function createMessageBus(
     listTasks: () => TaskRow[];
     getTask: (id: string) => TaskRow | undefined;
     upsertTask: (task: TaskRow) => void;
+    /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 4 — data
+     * model only: this exposes the connector graph and lets kind be
+     * tagged on an existing connector, but nothing in this app dispatches
+     * off it. Deciding WHEN a `depends` edge means "go" is left to an
+     * external orchestrating agent, driving spawn_agent itself (which
+     * still goes through its own human consent gate, same as ever) —
+     * see AGENTS.md's positioning entry on this. */
+    listAllConnectors: () => ConnectorRow[];
+    setConnectorKind: (id: string, kind: string | null) => boolean;
     onSpawnAgentRequest: (
       requestId: string,
       requesterId: string,
@@ -403,6 +414,29 @@ export function createMessageBus(
       const task = callbacks.getTask(req.taskId);
       if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
       return { ok: true, task: serializeTask(task) };
+    }
+
+    if (req.cmd === "list_connectors") {
+      return {
+        ok: true,
+        connectors: callbacks.listAllConnectors().map((c) => ({
+          id: c.id,
+          fromCardId: c.from_card_id,
+          toCardId: c.to_card_id,
+          kind: c.kind,
+        })),
+      };
+    }
+
+    if (req.cmd === "set_connector_kind") {
+      if (!req.connectorId) return { ok: false, error: "missing connectorId" };
+      const validKinds = ["context", "depends", null];
+      if (req.kind !== undefined && !validKinds.includes(req.kind)) {
+        return { ok: false, error: `kind must be one of context, depends, or null` };
+      }
+      const found = callbacks.setConnectorKind(req.connectorId, req.kind ?? null);
+      if (!found) return { ok: false, error: `no such connector "${req.connectorId}"` };
+      return { ok: true };
     }
 
     if (req.cmd === "spawn_agent") {
