@@ -58,6 +58,22 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "read_card",
+      {
+        description:
+          "Read a terminal card's live scrollback as plain text — what's actually on screen (and above it), not a screenshot. Use this to check on a card you spawned or sent a message to.",
+        inputSchema: {
+          target: z.string().describe("The target card's id (see list_cards)"),
+          lines: z.number().optional().describe("Only the last N lines of scrollback — omit for the full buffer"),
+        },
+      },
+      async ({ target, lines }) => {
+        const res = await opts.handleRequest({ cmd: "read_card", target, lines });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "open_url",
       {
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass).",

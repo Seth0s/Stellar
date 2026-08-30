@@ -32,7 +32,7 @@ if (!sockPath) {
 
 const USAGE =
   "usage: acbridge <list | send <cardId> <message...> | open <url> | " +
-  "snapshot [cardId | x y w h] | page-text <cardId> | " +
+  "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]>";
 
@@ -65,6 +65,12 @@ if (cmd === "list") {
   const [target] = rest;
   if (!target) fail("usage: acbridge page-text <cardId>");
   request = { cmd: "get_page_text", target };
+} else if (cmd === "read-card") {
+  const [target, linesStr] = rest;
+  if (!target) fail("usage: acbridge read-card <cardId> [lines]");
+  const lines = linesStr === undefined ? undefined : Number(linesStr);
+  if (lines !== undefined && Number.isNaN(lines)) fail("read-card: lines must be a number");
+  request = { cmd: "read_card", target, lines };
 } else if (cmd === "spawn-agent") {
   const [provider, cwd, resumeId] = rest;
   if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
@@ -117,6 +123,8 @@ socket.on("close", () => {
   } else if (cmd === "page-text") {
     console.log(res.text);
     if (res.truncated) process.stderr.write("acbridge: page text truncated\n");
+  } else if (cmd === "read-card") {
+    console.log(res.text);
   } else if (cmd === "spawn-agent") {
     console.log(res.cardId);
   } else if (cmd === "spawn-card") {

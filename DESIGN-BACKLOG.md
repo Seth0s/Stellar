@@ -4552,7 +4552,7 @@ código: um agente foi spawnado de verdade através do próprio MCP do app
 os passos 1–2 da própria auditoria, e os atritos abaixo apareceram só por
 ter usado a superfície.
 
-### M1 — Não existe `read_card`: um agente escreve em qualquer card mas não lê nenhum
+### M1 — Não existe `read_card`: um agente escreve em qualquer card mas não lê nenhum — ✅ feito em 2026-08-30
 
 - **Prioridade**: Alta. A auditoria chama de "a lacuna mais cara da
   superfície inteira" — orquestração hoje é de mão única (escreve via
@@ -4585,6 +4585,33 @@ ter usado a superfície.
 - **Desbloqueia**: scrollback no cliente móvel ao conectar (hoje ausente
   — só vê o que chega dali em diante) e a peça 4 do roteiro de
   orquestração abaixo (dependência entre tarefas via conectores).
+- **Fix aplicado**: exatamente a mecânica prevista, request/reply
+  main↔renderer igual `snapshot:rect-request`/`-reply`. Novo
+  `terminal-registry.ts` (renderer) mantém um `Map<cardId, Terminal>`,
+  registrado/desregistrado no mesmo effect que já cria/destrói a
+  instância real do xterm.js (`useTerminal.ts`, Effect 2) — sem efeito
+  novo, só duas chamadas a mais no que já existia. `getTerminalText`
+  lê `term.buffer.active` linha a linha (`lines` opcional recorta só as
+  últimas N), trimando linhas em branco no fim. Novo canal IPC
+  `readcard:request`/`readcard:reply` (`main/index.ts`), novo cmd
+  `read_card` no `BusRequest` (`message-bus.ts`, mesmo padrão de
+  pendência-com-timeout dos outros quatro), nova tool MCP `read_card`
+  (`mcp-server.ts`) e novo subcomando `acbridge read-card <cardId>
+  [lines]` (`resources/bin/acbridge`) — os dois frontends do mesmo
+  dispatcher, não só o MCP. `ACBRIDGE_HINT` (`providers.ts`) atualizado
+  pra listar a tool nova.
+- **Verificado ao vivo sem mock**: novo `smoke-mcp-read-card.mjs` —
+  escreve um marker no topo do scrollback de um card bash real (empurrado
+  pra fora da viewport por 40 linhas de enchimento) e outro no fim, chama
+  `read_card` via MCP real, confirma que o texto devolvido é string pura
+  (não imagem) contendo os dois markers — inclusive o que já saiu da
+  viewport, prova de scrollback real e não de "o que está pintado na
+  tela agora". Testa também `lines: 5` (recorte só do fim, sem o marker
+  do topo) e um `target` inexistente (erro honesto, `ok:false`). Passou
+  na primeira tentativa. `tsc --noEmit`/`electron-vite build` limpos;
+  `smoke-mcp.mjs` (lista de tools atualizada com `read_card`),
+  `smoke-acbridge.mjs` e `smoke-terminal-font-zoom.mjs` (cobertura direta
+  de `useTerminal.ts`, que este fix também tocou) sem regressão.
 
 ### M2 — `send_to_card` não submete texto longo (fica preso como paste, sem Enter) — ✅ feito em 2026-08-30
 
