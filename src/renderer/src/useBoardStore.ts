@@ -176,7 +176,7 @@ export function useBoardStore(
     // inherited from anywhere (there's nowhere to inherit it from here —
     // a brand-new board has no prior row). Duplicating a board isn't a
     // feature this app has, so that inheritance path doesn't exist either.
-    const board: BoardRow = { id, name, project, cwd, created_at: now, updated_at: now, last_accessed_at: now, autonomous: false };
+    const board: BoardRow = { id, name, project, cwd, created_at: now, updated_at: now, last_accessed_at: now, autonomous: false, concurrency_cap: null };
     setBoards((prev) => [...prev, board]);
     void window.store.boards.upsert(board);
     // `cwd` passed explicitly — see loadBoard's comment on why a `boards`
@@ -215,6 +215,15 @@ export function useBoardStore(
     toast(autonomous ? "modo autônomo ativado" : "modo autônomo desativado");
   }
 
+  /** DESIGN-BACKLOG.md item 60, peça 2 — same immediate-fire pattern as
+   * setBoardAutonomous, own dedicated IPC. `cap: null` resets to the
+   * app-wide default. */
+  function setBoardConcurrencyCap(id: string, cap: number | null) {
+    setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, concurrency_cap: cap } : b)));
+    void window.store.boards.setConcurrencyCap(id, cap);
+    toast(cap === null ? "limite de agentes simultâneos: padrão" : `limite de agentes simultâneos: ${cap}`);
+  }
+
   async function deleteBoard(id: string) {
     if (boards.length <= 1) return;
     const remaining = boards.filter((b) => b.id !== id);
@@ -244,5 +253,6 @@ export function useBoardStore(
     updateBoard,
     deleteBoard,
     setBoardAutonomous,
+    setBoardConcurrencyCap,
   };
 }

@@ -1638,6 +1638,18 @@
 
 .chat-msg {
   display: flex;
+  /* Achado ao vivo (2026-08-30) depurando um smoke test — sem
+     `flex-direction: column`, o default (`row`) faz `.chat-msg.assistant`
+     tratar seus vários filhos (`.chat-tool-line` por decisão,
+     `.chat-diff-block`, `.chat-bash-block`) como itens de uma linha
+     horizontal em vez da lista vertical que são. Invisível no uso normal
+     (um humano resolve cada consentimento antes do próximo aparecer, tem
+     poucos itens acumulados por vez); confirmado com vários bash já
+     resolvidos acumulados: o `.chat-tool-line-label` mais longo
+     (`white-space: nowrap`, sem `min-width: 0`) consome a largura
+     intrínseca da linha toda, espremendo o `.chat-bash-block` seguinte a
+     ~2px de largura, posicionado bem fora do viewport. */
+  flex-direction: column;
   max-width: 90%;
 }
 

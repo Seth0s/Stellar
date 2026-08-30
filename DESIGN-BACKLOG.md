@@ -4657,6 +4657,39 @@ ter usado a superfície.
   `smoke-mcp.mjs` (cobertura existente de `send_to_card` e do resto da
   superfície MCP) sem regressão.
 
+**Follow-up ao vivo, 2026-08-30 — o delay fixo era uma aposta, não uma
+garantia.** Usuário reportou diretamente: mandei uma mensagem longa (uma
+linha só, sem quebra, ~380 caracteres) via `send_to_card` pro card 95 e o
+Enter não submeteu — precisou apertar manualmente. Tentei reproduzir em
+instância isolada 3 vezes (variando texto ASCII/UTF-8 e com/sem
+"aquecimento" de contexto prévio no card) e NÃO reproduzi — mas isso não
+invalida o relato: `SEND_ENTER_DELAY_MS=80` fixo é uma aposta de que o
+buffer de paste do CLI alvo já assentou depois de 80ms, e sob carga real
+(sessão longa, muitos processos) essa aposta pode perder mesmo quando
+suficiente na maioria das vezes — exatamente por que o próprio smoke
+test original (`smoke-mcp-send-submit.mjs`) já tinha uma malha de retry
+de 3 tentativas embutida, sinal de que o autor já desconfiava de alguma
+flakiness residual.
+- **Fix aplicado**: `send` deixou de ser "dispara o Enter depois do
+  delay e reza" — virou auto-verificável. Depois de escrever o `\r`,
+  lê o card de volta (reaproveitando o mesmo round-trip do `read_card`/
+  M1, fatorado numa função `readCardText` compartilhada) e confere se o
+  composer ainda mostra o placeholder de paste não-submetido
+  (`/pasted text/i`); se sim, reenvia só o `\r` (nunca o texto de novo,
+  isso duplicaria a mensagem) — até `SEND_ENTER_MAX_ATTEMPTS=4` vezes,
+  com `SEND_ENTER_CONFIRM_DELAY_MS=250` entre tentativas. Uma falha de
+  leitura (timeout, card sumiu) para o loop em vez de adivinhar.
+- **Verificado ao vivo sem mock**: novo
+  `smoke-mcp-send-submit-longline.mjs` — réplica da mensagem real
+  (linha única, ~380 caracteres, acentuação real), com um "aquecimento"
+  prévio no card (o card 95 real já tinha contexto, não era um terminal
+  recém-criado vazio) — confirma que o marker chega e que o composer
+  NÃO fica preso como paste. Passou na primeira tentativa depois do
+  fix. `tsc --noEmit`/`electron-vite build` limpos;
+  `smoke-mcp-send-submit.mjs` (payload multi-linha original) e
+  `smoke-mcp-read-card.mjs` (reaproveita a mesma função fatorada) sem
+  regressão.
+
 ### M3 — `spawn_agent` não aceita `model` nem `effort` — ✅ parcial (model) em 2026-08-30
 
 - **Prioridade**: Média/imediata — a capacidade já existe internamente,
@@ -5200,6 +5233,971 @@ nada no código de produção mudou por causa disso). `tsc --noEmit`/
 `electron-vite build` limpos; `smoke-mcp.mjs` (lista de tools),
 `smoke-acbridge.mjs`, `smoke-session-modal.mjs` e `smoke-home.mjs` sem
 regressão.
+
+## 60. Motor de orquestração completo — reversão explícita das decisões dos itens 25/58/59, anotado em 2026-08-30, ✅ 5/5 peças feitas em 2026-08-30
+
+**Contexto da reversão**: itens 25, 58 (peças 4–6) e 59 estabeleceram e
+reconfirmaram três vezes (via `AskUserQuestion`, usuário escolhendo a
+opção mais conservadora nas três) um limite arquitetural: Stellar expõe
+PRIMITIVAS de orquestração (relatório estruturado, identidade de task,
+semântica de conector, visibilidade de concorrência) mas não roda um
+motor interno autônomo que enfileira, auto-retenta, auto-reatribui ou
+auto-mata processo — essas decisões ficavam sempre com um humano ou com
+um agente orquestrador externo dirigindo `spawn_agent`. Pedido do usuário
+em 2026-08-30 reverte esse limite explicitamente: quer o motor de
+verdade, dentro do Stellar, com UI própria. Registrado aqui como reversão
+consciente, não como contradição não notada.
+
+**Pedido do usuário (verbatim)**: "eu quero fila para excesso de agente
+com ui indicando, e podendo alterar limite de agente simultâneo, motor
+para task, auto disparo, auto-retry, e modo autonomo completo".
+
+### Escopo — 5 sub-itens
+
+1. **Fila real para excesso de spawn, com UI. ✅ feito em 2026-08-30.** Hoje
+   (peça 6 do item 58 e item 59) bater o teto de concorrência é uma
+   recusa estrutural — o `spawn_agent` retorna `ok:false` na hora, nada é
+   guardado. Passa a existir uma fila de verdade: um pedido de spawn que
+   excede o teto entra numa lista (`pendingSpawnQueue`, por board), com
+   um card/painel visual mostrando posição na fila, board, provider
+   solicitado e o `requesterId`. Ao um slot vagar (agente sai/termina), o
+   próximo da fila é despachado automaticamente.
+   **Fix aplicado**: `message-bus.ts` ganhou `spawnQueue: Map<boardId,
+   SpawnQueueEntry[]>` (FIFO em memória, sem persistência — reinicia
+   vazio a cada boot do app, mesmo espírito efêmero de `liveStatus`).
+   `spawn_agent` refatorado: o dispatch de verdade virou
+   `dispatchSpawnAgentRequest` (compartilhado entre o caminho direto e o
+   de fila); ao bater o teto num board autônomo, `enqueueSpawn` empurra
+   a entrada e a chamada MCP fica pendurada (mesmo padrão de espera
+   longa de `read_report`/M4, timeout de 10min contra fila
+   travada) até `tryDispatchQueued` despachar de verdade — disparado de
+   `resolveCardExit` (M4), que já roda pra TODO exit de card, então
+   qualquer slot que libere tenta drenar a fila do board na hora.
+   Política de cancelamento resolvida pela decisão de escopo já tomada:
+   a fila só existe DENTRO de board autônomo (nunca fora), então nunca
+   pede `AgentAskModal` — o consentimento já foi dado uma vez, ao ligar
+   o modo, igual a todo spawn direto ali. Novo evento push
+   `spawn-queue:changed` (main→renderer, mesmo padrão de
+   `win:maximized-change`) alimenta um painel novo (`SpawnQueuePanel.tsx`,
+   flutuante, só renderiza quando a fila do board ativo não está vazia) —
+   mostra posição, provider e o rótulo humano do requester (reaproveita
+   `describeCard`, o mesmo "Bash 2°" do `AgentAskModal`). `board_mode`
+   ganhou `queueLength` pra introspecção sem tool nova dedicada.
+   **Verificado ao vivo sem mock**: novo `smoke-mcp-spawn-queue.mjs` — cap
+   customizado (1) via UI, primeiro spawn preenche o slot, segundo
+   dispara SEM esperar (fica pendurado na fila de verdade, não recusado),
+   confirma o painel real no DOM com o item certo, `board_mode.
+   queueLength===1`, mata o processo do primeiro via `window.pty.kill`,
+   confirma o da fila resolve sozinho (sem nova chamada MCP) e o painel
+   esvazia. Passou na primeira tentativa. `smoke-mcp-autonomous-mode.mjs`
+   precisou de ajuste real (não regressão de produto): o teste antigo
+   esperava recusa no teto — teve que ser reescrito pra esperar
+   enfileiramento, e um bug NO PRÓPRIO SCRIPT de teste apareceu no
+   processo (um card extra da fila não estava sendo excluído da busca
+   pelo card do segundo board, achando o card errado) — corrigido no
+   teste, nada no código de produção mudou por causa disso. `tsc
+   --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` (lista de
+   tools) sem regressão.
+2. **Limite de agentes simultâneos configurável. ✅ feito em 2026-08-30.**
+   Hoje `DEFAULT_CONCURRENCY_CAP = 3` é uma constante fixa em
+   `message-bus.ts`. Vira um valor por board (nova coluna
+   `boards.concurrency_cap INTEGER`, mesma migração guardada das outras),
+   editável na mesma UI do checkbox `autonomous` (`SessionModal.tsx`) —
+   um input numérico ao lado do toggle. `spawn_agent`/`board_mode` passam
+   a ler o cap do board em vez da constante global.
+   **Fix aplicado**: `BoardRow.concurrency_cap: number | null` (`null` =
+   "use o default", nunca zero) em `store.ts`/preload/`sessions.tsx`, com
+   `setBoardConcurrencyCapStmt` dedicado (mesmo padrão de
+   `setBoardAutonomousStmt`) e IPC próprio `store:boards:set-concurrency-
+   cap` — nunca alcançável por MCP/`acbridge`, mesma garantia do item 59.
+   `message-bus.ts`'s checagem de teto em `spawn_agent` agora lê
+   `callbacks.getBoardConcurrencyCap(boardId) ?? DEFAULT_CONCURRENCY_CAP`;
+   `board_mode` passou a devolver `concurrencyCap` (o valor EFETIVO, nunca
+   null) ao lado de `autonomous`. `SessionModal.tsx` mostra o input só
+   quando `autonomous` está ligado (o cap só é aplicado ali hoje), mesmo
+   padrão de disparo imediato (sem "Salvar") do toggle.
+   **Verificado ao vivo sem mock**: novo `smoke-mcp-concurrency-cap.mjs`
+   — liga o modo autônomo via clique real, confirma o input aparecer no
+   DOM só depois, digita "1" via setter nativo + evento `input` real,
+   confirma `board_mode.concurrencyCap === 1` (não o default 3), spawna
+   um agente real (passa, dentro do cap customizado) e um segundo (é
+   recusado citando "1 agents", não "3") — sem modal. Passou na primeira
+   tentativa. `tsc --noEmit`/`electron-vite build` limpos;
+   `smoke-mcp-autonomous-mode.mjs` (`board_mode`'s novo shape) e
+   `smoke-session-modal.mjs` sem regressão.
+3. **Motor de task com auto-disparo — ✅ feito em 2026-08-30 (lê `tasks.deps_json`, não
+   `connectors` — correção: `connectors` liga CARDS entre si, é uma
+   anotação visual/DAG de card, nunca teve nenhuma relação com tasks; o
+   DAG real de dependência entre tasks sempre foi `deps_json`, um array
+   de ids de outras tasks, já gravado por `create_task`/lido por
+   `serializeTask` desde o item 58 peça 3 — só nunca lido por nada além
+   de um orquestrador externo).** Hoje `tasks`/`deps_json` são só dado —
+   nada lê a lista de deps pra decidir spawnar o próximo passo. Precisa
+   de um processo (main process, não renderer — sobrevive a troca de
+   board, mesma razão de `tasks` ter identidade própria) que observa
+   `task.status` mudar pra `done` e, se outra task tem uma
+   task dependente com TODOS os deps em `done`, despacha automaticamente
+   (reaproveitando o mesmo caminho de `spawn_agent` autônomo da peça 1 —
+   fila/cap incluídos, sem bypass). **Gap de schema descoberto ao
+   implementar**: `tasks` não tinha `board_id` nenhum (só `card_id`,
+   nullable/stale-able de propósito) — sem isso não dá pra saber se uma
+   task PENDENTE (sem card ainda) pertence a um board autônomo ou não.
+   Resolvido com `tasks.board_id TEXT` (nullable — null quando nem
+   `boardId` nem `cardId` foram passados em `create_task`, e aí a task
+   nunca é candidata a auto-disparo, só bookkeeping externo como antes),
+   mesmo padrão de coluna guardada. Escopo confirmado com o usuário: o
+   motor roda SÓ dentro de board autônomo — restrição aditiva/opt-in,
+   nunca dispara em board que não pediu.
+   **Fix aplicado**: `create_task` ganhou `boardId` opcional (schema
+   `tasks.board_id`, migração aditiva) — usa `boardId` se dado, senão
+   infere do `cardId`, senão `null` (nunca candidata a auto-disparo).
+   Novo `autonomousSpawn(boardId, requestId, requesterId, params)` em
+   `message-bus.ts` — o MESMO ponto de entrada que `spawn_agent`'s
+   branch autônomo já usa (cap check → dispatch direto ou
+   `enqueueSpawn`, peça 1), refatorado pra ser compartilhado, sem bypass
+   de fila/cap pro caminho do motor. `onTaskDone(taskId)` roda dentro de
+   `update_task` só quando o `status` novo é `"done"` (nunca `"failed"`
+   — um dependente não deveria começar em cima de um pré-requisito
+   falho; peça 4 auto-retry é o que eventualmente devolveria isso pra
+   `"done"`): varre todas as tasks `pending` com `board_id` setado, acha
+   as que dependem da que acabou de terminar, confirma que TODOS os deps
+   delas estão `done`, e despacha via `autonomousSpawn` só se
+   `isBoardAutonomous(task.board_id)`. Marca a task `running` ANTES do
+   spawn resolver (evita despacho duplo se dois deps-irmãos terminarem
+   quase juntos). Depth não é rastreado aqui de propósito — não é um
+   agente pedindo pra spawnar outro, é o motor despachando; quem limita
+   isso é o tamanho do próprio DAG, não `MAX_SPAWN_DEPTH`.
+   **Verificado ao vivo sem mock**: novo `smoke-mcp-task-engine.mjs` (9
+   checks) — board NÃO autônomo primeiro: marcar um dep `done` não cria
+   nenhum card novo (sem regressão do bookkeeping puro de antes);
+   depois, board autônomo via UI real: task Y (`pending`, sem `cardId`,
+   `boardId` explícito) depende de task X (já rodando); marca X `done`
+   via `update_task`; confirma Y sai de `pending` pra `running` sozinha,
+   ganha um `cardId` real que bate com um card novo de verdade no board
+   (`list_cards` cresce em 1), sem nenhum modal (auto-approve). Passou
+   na primeira tentativa. `tsc --noEmit`/`electron-vite build` limpos;
+   `smoke-mcp-tasks.mjs`, `smoke-mcp-tasks-failure.mjs`,
+   `smoke-mcp-connectors.mjs` e `smoke-mcp.mjs` sem regressão.
+4. **Auto-retry — ✅ feito em 2026-08-30.** Hoje `retry_count`/
+   `attempted_providers_json` são só bookkeeping que um orquestrador
+   EXTERNO poderia ler pra decidir retentar manualmente. Vira automático,
+   só dentro de board autônomo: quando uma task chega marcada `failed`
+   (explícito via `update_task`, ou o card do agente sai sem nunca ter
+   chamado `report`), incrementa `retry_count` e redespacha a mesma task
+   (mesmo provider) até um teto de tentativas (`tasks.max_retries`,
+   default 2) — pra não virar loop infinito silencioso.
+   **Achado ao vivo, corrigindo a premissa do rascunho original**: "sai
+   com código de erro" presumia que matar um processo (`window.pty.kill`)
+   produziria um `exitCode` diferente de zero — verificado que NÃO é
+   verdade neste ambiente (node-pty reporta `exitCode: 0` mesmo pra um
+   processo morto por sinal). O gate real não é o código de saída — é
+   simplesmente "task ainda `running`, ligada a este card, que nunca
+   recebeu nenhum `report`" — mais robusto de qualquer forma, já que o
+   código de saída nunca foi um sinal confiável aqui.
+   **Fix aplicado**: `tasks.max_retries INTEGER` (nullable, migração
+   aditiva; `null` = usa `DEFAULT_MAX_RETRIES=2`), `create_task` ganhou
+   `maxRetries` opcional. `markTaskFailed(task, error)` — choke point
+   único: marca `failed` e chama `retryOrFail`, usado tanto por
+   `update_task` (status novo `"failed"`) quanto por `resolveCardExit`
+   (saída silenciosa) quanto pelo próprio `onTaskDone`/`retryOrFail` se um
+   despacho falhar. `retryOrFail(task)` sai cedo se `!task.board_id ||
+   !isBoardAutonomous(...)` (bookkeeping puro fora de board autônomo,
+   sem regressão) ou se `retry_count >= max_retries` (teto batido, fica
+   `failed` de vez); senão incrementa `retry_count`, marca `running` e
+   redespacha via `autonomousSpawn` (mesmo cap/fila da peça 1) — uma
+   falha NESSE despacho recursa de volta em `markTaskFailed`, sempre
+   limitado pelo mesmo teto (cada recursão incrementa `retry_count`, não
+   há como virar loop infinito).
+   **Verificado ao vivo sem mock**: novo `smoke-mcp-task-auto-retry.mjs`
+   (13 checks) — board não autônomo: falha explícita NÃO auto-retenta
+   (sem regressão do bookkeeping puro); board autônomo: falha explícita
+   auto-retenta (retryCount 1, novo card real, sem modal); processo
+   morto sem nunca chamar `report` (`window.pty.kill`) é detectado
+   sozinho e também auto-retenta; força até bater `max_retries:2` e
+   confirma que PARA (fica `failed` de vez, retryCount não passa do
+   teto). Precisou de 1 rodada de depuração ao vivo (a premissa do
+   código de erro, achado acima) antes de passar limpo. `tsc --noEmit`/
+   `electron-vite build` limpos; `smoke-mcp-tasks.mjs`,
+   `smoke-mcp-tasks-failure.mjs` (mesmo cenário de kill-sem-report, board
+   NÃO autônomo — confirma que a nova detecção automática fica inerte
+   ali), `smoke-mcp-task-engine.mjs`, `smoke-mcp-connectors.mjs` e
+   `smoke-mcp.mjs` sem regressão.
+
+**Follow-up ao vivo, 2026-08-30 — reassignment real de provider (a tese
+que a auditoria realmente defendia).** Flagrado por um segundo agente
+(card 95) revisando o item 60: auto-retry redespachava SEMPRE no mesmo
+provider — `attempted_providers_json` só registrava, nunca influenciava
+a escolha. O argumento mais forte da auditoria pra multi-provider era
+justamente reatribuir pra um provider diferente quando um falha; sem
+isso o motor não pagava essa tese, só existia no bookkeeping manual
+(como o próprio `smoke-mcp-tasks-failure.mjs` já demonstrava, retentando
+manualmente com um provider diferente via `attemptedProvider`).
+- **Fix aplicado**: `tasks.fallback_providers_json TEXT` (nullable,
+  migração aditiva) — `create_task` ganhou `fallbackProviders` opcional
+  (array ordenado). `retryOrFail` passa a escolher
+  `fallbackProviders.find(p => !attempted.includes(p)) ?? task.provider`
+  — tenta o próximo provider ainda não tentado da lista; esgotada (ou
+  nunca passada, comportamento antigo intacto), volta a retentar o
+  provider original.
+- **Verificado ao vivo sem mock**: novo
+  `smoke-mcp-task-retry-reassign.mjs` (7 checks) — task com provider
+  original `bash` (nunca reporta sozinho) e `fallbackProviders:
+  ["claude"]`; 1º retry reassigna de verdade pra `claude` (card novo
+  real é `claude`, `attemptedProviders` vira `["bash","claude"]`); 2º
+  retry, com o fallback já esgotado, volta a repetir `bash` (não trava,
+  não inventa provider). Precisou de 1 correção no próprio script de
+  teste (comparação de array com `===` em vez de `JSON.stringify` — bug
+  do teste, não do produto). `tsc --noEmit`/`electron-vite build`
+  limpos; `smoke-mcp-tasks.mjs`, `smoke-mcp-tasks-failure.mjs`,
+  `smoke-mcp-task-auto-retry.mjs` e `smoke-mcp.mjs` sem regressão.
+
+**Follow-up ao vivo, 2026-08-30 — ambiguidade `connectors.kind` vs.
+`tasks.deps_json` esclarecida.** Mesmo agente revisor apontou: a peça 3
+lê `deps_json`, mas `connectors.kind='depends'` (item 58 peça 4) ficou
+sem nenhum consumidor — duas fontes de verdade sobre dependência
+coexistindo sem se falar, ambíguo pra quem lê o código depois. Decisão:
+`connectors.kind` fica OFICIALMENTE decorativo/consultivo — nunca será
+lido pelo motor interno, por design, não por descuido (as duas
+granularidades são diferentes: conector liga CARDS que já existem;
+`deps_json` referencia tasks que podem nem ter card ainda — fundir os
+dois criaria um grafo frágil de fonte dupla). Comentários em
+`store.ts` (`ConnectorRow.kind`) e as descrições das tools MCP
+`list_connectors`/`set_connector_kind` (que chegavam a sugerir
+efeito real — "the target task shouldn't start before the source
+reports done" — texto corrigido) agora cross-referenciam essa decisão
+explicitamente. Documentação apenas, nenhuma mudança de comportamento.
+5. **Modo autônomo completo (parte spawn_card/open_url) — ✅ feito em
+   2026-08-30.** Hoje (item 59) `autonomous` só afetava auto-aprovação de
+   `spawn_agent` do mesmo board, com teto de concorrência. Passa a também
+   auto-aprovar `spawn_card`/`open_url` de agentes daquele board (mudança
+   explícita de comportamento em cima do item 59 — antes ainda pediam
+   modal mesmo em board autônomo). A parte de ligar o motor de
+   auto-disparo/auto-retry (peças 3–4) pra esse board só acontece quando
+   essas peças forem implementadas — sem elas ainda não há nada a ligar.
+   **Fix aplicado**: `onOpenRequest`/`onSpawnCardRequest` ganharam
+   `autoApprove?: boolean`, calculado da mesma forma que o de
+   `spawn_agent` (`getCardBoardId` + `isBoardAutonomous` do requester) —
+   sem teto de concorrência envolvido aqui, ele só vale pra
+   `spawn_agent`. `App.tsx`'s `offAskOpen`/`offAskSpawnCard` ganharam o
+   mesmo branch de resolução imediata que `offAskSpawnAgent` já tinha:
+   quando `autoApprove`, cria o card de verdade (`openBrowserFor`/
+   `spawnCardFor`) e resolve na hora, sem nunca passar por
+   `setPendingAsk`/`AgentAskModal`.
+   **Verificado ao vivo sem mock**: `smoke-mcp-autonomous-mode.mjs`
+   atualizado — dentro do mesmo board autônomo já usado pras peças 1/2,
+   `open_url` e `spawn_card` agora resolvem `ok:true` na hora, confirmado
+   por `hasModal(page) === false` depois de cada um (checagem real de
+   DOM, não só o retorno da tool). Passou na primeira tentativa.
+   `smoke-mcp.mjs` (board default, sem autonomous) sem regressão — o
+   modal continua aparecendo normalmente fora de board autônomo — e
+   `smoke-mcp-spawn-queue.mjs` também sem regressão.
+
+### Item relacionado, mas separado (não bloqueia este)
+
+`pendingAsk` em `App.tsx` continua um único `useState`, não uma fila —
+achado original do item 25, ainda verdadeiro. A fila da peça 1 acima é
+para `spawn_agent` além do teto; uma fila para PEDIDOS DE CONSENTIMENTO
+concorrentes (dois `AgentAskModal` ao mesmo tempo) é um problema
+relacionado mas distinto, ainda não escopado aqui.
+
+### Critério de verificação (por sub-item, antes de marcar feito)
+
+- Peça 1: smoke test que satura o teto de concorrência, confirma um 4º
+  spawn entra na fila (não é recusado), UI real mostra o item na fila
+  (via CDP, elemento real no DOM), mata um agente rodando, confirma
+  despacho automático do enfileirado.
+- Peça 2: smoke test que muda o cap via UI real (input, não IPC direto),
+  confirma `board_mode`/o teto de concorrência respeitam o novo valor.
+- Peça 3: smoke test com duas tasks reais ligadas por `connector`
+  `depends`, marca a primeira `done` via `update_task`, confirma que a
+  segunda é despachada sozinha (novo card real aparece), sem intervenção
+  MCP manual.
+- Peça 4: smoke test que força uma task a falhar (report com
+  `ok:false`), confirma `retry_count` incrementa e um novo agente é
+  despachado pra mesma task, até o teto de `max_retries` — depois disso,
+  confirma que PARA de retentar (task fica `failed` definitivo, sem loop
+  infinito).
+- Peça 5: `smoke-mcp-autonomous-mode.mjs` precisa ser reescrito — os
+  dois checks atuais ("`open_url`/`spawn_card` AINDA mostram modal mesmo
+  em modo autônomo") passam a testar o oposto.
+
+**Decisão confirmada pelo usuário em 2026-08-30**: é aditivo — os dois
+caminhos (humano-no-loop default, e o motor completo) coexistem, opt-in
+por board, um ou outro. O motor de auto-disparo (peça 3) e auto-retry
+(peça 4) rodam SÓ dentro de board autônomo — nunca globalmente, nunca
+afetando um board que não optou. Implementando na ordem 2 → 1 → 5 → 3 →
+4 (do mais isolado/barato pro que mais depende dos outros).
+
+## 61. MCP/`acbridge` não identifica o agente remetente na mensagem entregue — anotado em 2026-08-30, ✅ feito em 2026-08-30
+
+**Achado ao vivo, reportado pelo usuário**: uma pergunta que chegou nesta
+conversa (sobre fila/mensagem/status de orquestração) na verdade tinha
+sido escrita por OUTRO agente, não pelo usuário — e nada na entrega
+deixava isso claro, causando confusão real sobre quem estava "falando".
+
+**Gap real no código**: `send_to_card` (`message-bus.ts`, cmd `"send"`)
+escreve texto bruto no terminal alvo, sem nenhum prefixo/tag indicando
+qual card/agente originou o envio — quem lê o terminal (humano ou outro
+agente) não tem como distinguir "isso veio de um humano digitando" de
+"isso veio do card X via `send_to_card`" só olhando o scrollback.
+`report`/`get_report` guardam o relato indexado pelo `requesterId` (M1
+peça 1), mas o payload devolvido por `get_report`/`read_report` também
+não inclui explicitamente de qual card veio, exceto porque o chamador já
+sabia o `target` que pediu — não ajuda um humano que recebe o conteúdo
+de segunda mão (ex.: colado por outro agente numa conversa separada,
+como aconteceu aqui).
+
+**Fix proposto**: `send_to_card` passa a prefixar o texto entregue com um
+rótulo de origem legível (mesmo padrão já usado no `AgentAskModal` —
+"Bash 2°", ordinal por provider dentro da sessão, não o id bruto do
+banco) antes de escrever no terminal alvo, algo como `[de: Bash 2°] ` +
+texto original. `report`/`get_report`/`read_report` passam a incluir um
+campo `from`/`sourceLabel` no envelope JSON devolvido (ao lado do
+`report` em si), não só no `card_status`/modal.
+
+**Critério de verificação**: smoke test que faz um card A chamar
+`send_to_card` num card B, confirma via `read_card`/DOM real que o texto
+entregue em B carrega o rótulo de origem de A; e que `get_report`
+devolve um `from` reconhecível (rótulo, não id bruto) além do `report`
+em si.
+
+**Escopo reduzido na implementação**: `report`/`get_report` NÃO
+ganharam o campo `from`/`sourceLabel` — o chamador de `get_report`
+sempre já sabe o `target` que pediu (é o mesmo card que ele já
+nomeou), então um campo `from` ali só ecoaria de volta informação que o
+chamador já tinha, sem resolver ambiguidade real nenhuma. O gap
+concreto reportado ao vivo ("uma mensagem chegou sem saber de quem
+era") só existe pra `send_to_card` — mensagem entregue de segunda mão,
+sem o destinatário ter pedido nada — então o fix se concentrou ali.
+
+**Fix aplicado**: `send`'s `BusRequest` ganhou `requesterId?: string`
+(igual ao `open`/`spawn_agent`/`spawn_card`, que já tinham essa
+identidade — `send_to_card` era a ÚNICA tool sem nenhum jeito de se
+identificar). Novo callback `describeCardLabel(cardId)` em
+`message-bus.ts`, implementado em `main/index.ts` direto contra
+`store.ts` (mesma convenção "Bash 2°" do `describeCard` do App.tsx,
+reimplementada pro processo main — sem `cardsRef` de renderer aqui).
+Quando `requesterId` é passado, o texto entregue vira `[de: <rótulo>]
+<texto>`; sem ele, entrega exatamente como antes (aditivo, nenhum
+caller existente muda de comportamento). **Nunca aplicado a um alvo
+`bash`** — um prefixo ali seria interpretado como início do comando e
+quebraria a execução, não lido como cabeçalho (só cards de prosa
+recebem). MCP: `send_to_card` ganhou `callerCardId` opcional.
+`acbridge`: `send` preenche `requesterId` sozinho a partir de
+`AGENT_CANVAS_CARD_ID` quando disponível (mesmo padrão de `report`),
+sem flag nova — omitido (não falha) fora de um card real.
+**Verificado ao vivo sem mock**: novo
+`smoke-mcp-send-sender-label.mjs` (7 checks) — alvo bash com
+`callerCardId` real NUNCA recebe prefixo e o comando ainda executa;
+alvo claude SEM `callerCardId` entrega sem prefixo (comportamento
+antigo intacto); alvo claude COM `callerCardId` entrega `[de: Bash
+2°]` de verdade (rótulo real, não id bruto). Precisou de 1 rodada de
+correção no próprio script de teste (esqueceu de clicar "Permitir" nos
+dois `spawn_agent` — board não é autônomo nesse teste — causando dois
+`ok:false` por timeout que pareciam bug de produto e não eram). `tsc
+--noEmit`/`electron-vite build` limpos; `smoke-mcp-send-submit.mjs` e
+`smoke-mcp.mjs` sem regressão.
+
+## 62. `spawn_agent` sem rename e `connectors.kind` ambíguo — anotado em 2026-08-30, ✅ feito em 2026-08-30
+
+**Contexto**: item 60 fechou com uma nota do agente 95 apontando
+`connectors.kind='depends'` sem consumidor real (peça abaixo já
+respondida — o motor de auto-disparo lê só `deps_json`, de propósito,
+ver item 60). O usuário então trouxe dois pontos próprios antes de
+seguir pra próxima rodada:
+
+1. **`spawn_agent` não permite nomear o agente novo** — hoje um card
+   nasce sempre com o rótulo ordinal-por-provider padrão ("Bash 2°"), e
+   só pode ser renomeado depois, manualmente, via o tag do card
+   (`CardTag`). Não existe jeito de já nascer nomeado — um orquestrador
+   externo que sabe o papel do agente ("Pesquisador Fiscal", "Revisor
+   de Contrato") não tem como comunicar isso no momento do spawn.
+2. **A ambiguidade de `connectors.kind` é intencional, não um bug a
+   fechar por documentação** — o usuário esclareceu que quer os dois
+   comportamentos ao mesmo tempo: continuar cosmético/decorativo por
+   padrão (conector manual não vira gate de dependência), **e também**
+   funcionar como indicador real de linhagem — se o agente X invocou o
+   agente Y via `spawn_agent`, os dois devem ficar conectados
+   automaticamente, sem que ninguém precise desenhar isso à mão.
+
+**Fix aplicado**:
+
+- **Rename no spawn**: `spawn_agent` (MCP) ganhou `label?: string`
+  opcional — mesmo campo livre que um humano já preenche ao renomear um
+  card via tag, então `describeCardLabel` (main) e `describeCard`
+  (renderer) já preferem esse rótulo sobre o ordinal automaticamente,
+  sem nenhuma mudança extra nesses dois. `label` percorre
+  `BusRequest`/`onSpawnAgentRequest`/`SpawnQueueEntry["params"]` (fila
+  de item 60 peça 1 também respeita, já que reusa o mesmo dispatch) até
+  `spawnAgentFor` (`App.tsx`), que grava o rótulo já na criação (`label:
+  label || null`). Omitido, comportamento idêntico a antes (ordinal
+  padrão). **`acbridge`'s `spawn-agent` continua só posicional
+  (`<provider> [cwd] [resumeId]`)** — decisão de escopo deliberada, ele
+  já não suportava `model` (item 58 M3) por essa mesma razão: o CLI
+  local é usado por um humano/script já dentro de um card, que consegue
+  renomear via UI depois; o campo importa mais pra um orquestrador MCP
+  remoto decidindo o papel do agente antes de ele existir.
+- **Modal de aprovação mostra o label pedido**: `describeAsk` (`App.tsx`)
+  passou a incluir `ask.label` (entre aspas) na string `command` do
+  `AgentAskModal`, quando presente — o humano vê o nome que será
+  atribuído ANTES de aprovar, não só depois de já ter acontecido.
+- **Conector `'spawned'`, novo terceiro valor de `kind`**: além de
+  `null` (decorativo) e `'depends'`/`'context'` (anotação só do
+  orquestrador externo, nunca consumida pelo motor — decisão do item 60
+  reafirmada), agora existe `'spawned'` — setado automaticamente pelo
+  próprio app, não por uma tool MCP separada, toda vez que um
+  `spawn_agent` real cria um card com `callerCardId`/`requesterId`
+  presente. É um FATO estrutural (quem de fato invocou quem), não uma
+  anotação subjetiva. Implementado em `App.tsx`: `addConnector` ganhou
+  um terceiro parâmetro opcional `kind?: string`; as duas ramificações
+  de resolução de spawn (`offAskSpawnAgent`'s caminho `autoApprove` e
+  `allowAsk`'s caminho aprovado-por-modal) chamam
+  `addConnector(requesterId, cardId, "spawned")` — guardado por `if
+  (requesterId)`, então um spawn sem requester (ex.: o primeiro card
+  seed de um board novo) não cria conector nenhum, coerente com "não há
+  ninguém que invocou". **Continua não sendo consumido pelo motor de
+  auto-disparo** — `deps_json` continua sendo a única fonte real de
+  dependência (reafirma a resposta já dada no item 60 à nota do agente
+  95); `'spawned'` é read-only informativo, list_connectors/
+  set_connector_kind apenas o expõem/permitem anotar manualmente
+  também, sem que isso mude nenhum comportamento de dispatch.
+- Migração de schema: nenhuma — `connectors.kind` já existia como
+  coluna livre (`TEXT`) desde o item 60; só o `validKinds` de
+  `set_connector_kind` (`message-bus.ts`) e o enum do MCP
+  (`mcp-server.ts`) precisaram aceitar o novo valor.
+
+**Verificado ao vivo sem mock**: novo
+`smoke-mcp-spawn-label-connector.mjs` (7 checks) — `spawn_agent` com
+`label` mostra o nome pedido no modal antes de aprovar, resolve
+`ok:true`, e o card nasce com o `label` persistido no banco
+(`store.list`, sem nenhum rename manual depois); `list_connectors`
+mostra um conector `requesterId → cardId` com `kind:"spawned"` logo
+depois, tanto pro spawn com `label` quanto pro spawn seguinte sem
+`label` (confirma que o conector nasce independente do rename ser
+usado ou não). `tsc --noEmit`/`electron-vite build` limpos.
+Regressão sem quebra: `smoke-mcp.mjs` (20/21 — a 1 falha é a captura de
+screenshot WebGL já documentada como não-confiável neste ambiente,
+nada relacionado a esta mudança), `smoke-mcp-spawn-model.mjs` (3/3),
+`smoke-mcp-connectors.mjs` (9/9).
+
+## 63. Auditoria pré-release — os 24 achados restantes (segurança, bugs, performance, design, organização/CI/docs), anotado em 2026-08-30, toda a Segurança (S2/S4/S5/S7/S9) ✅ feita em 2026-08-30
+
+**Fonte**: mesma auditoria do item 58
+(`https://claude.ai/code/artifact/026d13c8-79cc-4520-8fc0-9ddb932e9306`,
+commit `8fd6420`, 37 achados). O item 58 tratou só M1–M4 e o roteiro de
+orquestração; o card 96 (mesma sessão) implementou 5 dos achados de
+segurança/lógica/design como correções diretas, sem passar por aqui:
+S1 (`confine()` canonicaliza o alvo), S3 (guarda de navegação da janela
+principal), S6 (`bwrap` pelo caminho absoluto), B8 (`.`/`..` rejeitados
+em rename/create) e D4 (anel de `:focus-visible` global). Este item
+registra os **24 que sobraram**, nenhum implementado — a nota de escopo
+do item 58 já os deixava de fora "por pedido explícito, não avaliados
+quanto a duplicação"; este item existe pra não ficarem soltos sem
+registro nenhum.
+
+**Localizações reconferidas contra o código atual antes de registrar**
+(várias linhas mudaram com os commits do card 96 e dos itens 58-62 —
+`message-bus.ts` e `store.ts` em particular cresceram bastante).
+
+### Segurança (S2, S4, S5, S7, S9)
+
+- **S2 — BrowserCard aprova captura de tela e mídia sem gate nenhum.**
+  `src/main/index.ts:510`, `setDisplayMediaRequestHandler` aprova a
+  primeira fonte (`sources[0]`, tela inteira) sem perguntar; não existe
+  `setPermissionRequestHandler` em lugar nenhum do processo main, então
+  câmera/microfone/geolocalização/notificações também caem no default
+  permissivo do Electron pra qualquer página que um BrowserCard navegue.
+  **Correção sugerida**: `setPermissionRequestHandler` negando por
+  padrão, e um seletor de fonte com confirmação (reusar
+  `AgentAskModal`) antes de aprovar `getDisplayMedia`.
+  **Critério de verificação**: smoke test que navega um BrowserCard pra
+  uma página de teste que chama `getDisplayMedia`/pede permissão de
+  câmera, confirma que nada é aprovado sem um gate explícito no caminho.
+  **✅ Feito em 2026-08-30.** `setPermissionRequestHandler` adicionado
+  (`src/main/index.ts`): allowlist restrita a `fullscreen`/`pointerLock`
+  (sem implicação de privacidade), tudo mais negado por padrão exceto
+  `"media"` — achado ao vivo corrigindo a premissa original: nesta
+  versão do Electron (42), `getDisplayMedia()` chega em
+  `setPermissionRequestHandler` como um `"media"` genérico, idêntico ao
+  de `getUserMedia()` (câmera/mic) — não há campo que distinga os dois
+  nessa camada. Por isso uma tela de confirmação genérica cobre ambos
+  ali, e uma tela de captura ainda aprovada nesse primeiro portão
+  recebe uma SEGUNDA confirmação, mais específica (nomeia a URL da
+  página), do próprio `setDisplayMediaRequestHandler` logo depois — dois
+  fatores pra capacidade mais sensível das duas, não uma redundância.
+  `setPermissionCheckHandler` (o caminho síncrono de
+  `navigator.permissions.query`) só reporta a allowlist benigna como
+  concedida, sem prompt (não dá pra suspender uma checagem síncrona
+  esperando humano). Um só canal IPC (`browser:ask-permission` /
+  `browser:resolve-permission-ask`) atende as duas confirmações, com a
+  `message` decidida por main conforme o call site; preload/App.tsx
+  (renderer) consomem via `onAskPermission`/`resolvePermissionAsk` e um
+  único `ConfirmModal` genérico ("Permissão do navegador").
+  **Verificado ao vivo sem mock**: novo
+  `smoke-browser-display-media-gate.mjs` (10 checks) — navega um
+  BrowserCard real pra `https://example.com`, confirma que
+  `getUserMedia({video:true})` é negado sem modal nenhum (ambiente sem
+  câmera real cai antes até de chegar no handler); que
+  `getDisplayMedia()` mostra primeiro o modal genérico, negar ali
+  rejeita a promise da própria página sem nunca mostrar o modal
+  específico; aprovar o genérico revela o modal específico nomeando
+  `example.com`, negar esse também rejeita a promise; aprovar os dois
+  deixa o fluxo prosseguir (checado como "resolve, não trava pra
+  sempre" — o resultado final depende de fontes de captura reais
+  existirem no ambiente de display, fora do controle deste harness).
+  `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` sem
+  regressão.
+
+- **S4 — profundidade de spawn é auto-declarada pelo chamador, não
+  imposta pelo servidor.** `message-bus.ts:692-693` compara `req.depth`,
+  que vem do JSON do cliente; os call sites de `spawn_agent`/
+  `autonomousSpawn` passam `depth: 0` fixo — uma cadeia de delegações
+  nunca incrementa de verdade, e nada impede falar direto no socket com
+  `depth: 0`.
+  **Correção sugerida**: manter a profundidade do lado do main — um
+  `Map<cardId, depth>` derivando a do filho a partir da do
+  `requesterId` real (que por sua vez precisa ser validado contra os
+  cards vivos, não só confiado).
+  **Critério de verificação**: um agente spawnado que tenta se
+  auto-declarar `depth: 0` numa nova chamada de `spawn_agent` é barrado
+  pela profundidade real que o servidor já sabe pra aquele card, não
+  pela que ele reportou.
+  **✅ Feito em 2026-08-30.** `req.depth` do cliente passou a ser
+  ignorado por completo (`message-bus.ts`): um novo `cardSpawnDepth:
+  Map<cardId, number>`, do lado do servidor, guarda a profundidade real
+  de cada card — escrita só quando UM SPAWN PRÓPRIO deste processo
+  resolve com sucesso (`cardSpawnDepth.set(spawnResult.cardId, depth)`),
+  nunca lida do cliente. A profundidade de quem está pedindo vem de
+  `cardSpawnDepth.get(requesterId) ?? 0` — um `requesterId` forjado ou
+  inexistente cai no mesmo default 0 de um card real nunca-spawnado, sem
+  caminho pra reivindicar profundidade que não é sua. `MAX_SPAWN_DEPTH =
+  3` barra ANTES de qualquer modal de consentimento aparecer (linha do
+  fork-bomb guard vem antes do `dispatchSpawnAgentRequest`/
+  `autonomousSpawn`). `AGENT_CANVAS_SPAWN_DEPTH` (env var, `pty-
+  registry.ts`) continua existindo só como informação pro processo
+  filho — não é mais de onde a checagem real lê nada.
+  **Verificado ao vivo sem mock**: seção nova em `smoke-mcp.mjs` — uma
+  cadeia REAL de spawns (depth 1 → 2 → 3, cada um encadeado a partir do
+  `cardId` do anterior) confirma que profundidade 4 é recusada sem
+  sequer mostrar modal; um card de profundidade real 1 que se declara
+  `depth: 3` na chamada NÃO é barrado estruturalmente (mostra o modal de
+  consentimento normal, prova que o valor do cliente é ignorado, não
+  usado como atalho pra negar de propósito). `tsc --noEmit`/
+  `electron-vite build` limpos.
+
+- **S5 — sandbox do bash lê `~/.ssh` e a própria `secrets.json`; rede
+  fica aberta.** `sandbox.ts:24` (`--tmpfs /tmp`) e `:28`
+  (`--unshare-net` deliberadamente ausente) — o `--ro-bind / /` deixa
+  todo o `$HOME` legível por um comando aprovado. Falta de controle de
+  egress é decisão consciente (documentada); leitura irrestrita do
+  `$HOME` não parece ter sido.
+  **Correção sugerida**: `--tmpfs $HOME` antes do `--bind root root`,
+  religando só o necessário.
+  **Critério de verificação**: um comando aprovado rodando `cat
+  ~/.ssh/id_rsa` (ou qualquer arquivo fora do root do card) dentro do
+  sandbox falha, não lê o conteúdo.
+  **✅ Feito em 2026-08-30.** Escopo confirmado (leitura de `$HOME`, não
+  egress de rede — decisão consciente já documentada, mantida como
+  está). `sandbox.ts` ganhou `--tmpfs $HOME` logo ANTES do `--bind root
+  root`: bwrap aplica os binds na ordem dos argumentos, então o tmpfs
+  vazio ocupa `$HOME` primeiro e o bind do root project (quando `root`
+  vive sob `$HOME`, o caso comum) remonta só o diretório do projeto de
+  volta, gravável — tudo mais sob `$HOME` (`~/.ssh`, `secrets.json`
+  deste próprio app, qualquer dotfile) fica como diretório vazio dentro
+  do sandbox.
+  **Verificado ao vivo sem mock**: novo
+  `smoke-sandbox-home-occlusion.mjs` (5 checks). Confirma contra o
+  `~/.ssh` REAL desta máquina (existência checada antes, pra não passar
+  por motivo errado): `grep -rl 'PRIVATE KEY' ~/.ssh` dentro do sandbox
+  aprovado por um consentimento real do `chat.testSimulateTool` retorna
+  zero arquivos, mesmo esta máquina tendo chaves privadas de verdade em
+  `~/.ssh` fora do sandbox. Também replicado manualmente com uma
+  invocação `bwrap` direta (mesmos flags de `sandbox.ts`) fora do app,
+  mesmo resultado. `tsc --noEmit`/`electron-vite build` limpos;
+  `smoke-chat-sandbox.mjs`/`smoke-chat-tools.mjs` sem regressão.
+
+  **Bug real encontrado ao vivo escrevendo esse teste (não do harness —
+  investigado até a causa raiz depois de uma suspeita inicial errada de
+  que fosse só timing do teste)**: encadear esse consentimento logo
+  depois de um bash anterior JÁ resolvido (com um comando longo, "ps aux"
+  neste caso) fazia o botão real de consentimento ficar posicionado bem
+  fora do viewport — confirmado ao vivo via `elementFromPoint` nas
+  coordenadas calculadas retornando nada, depois via um "walk" pela
+  cadeia de ancestrais medindo cada `getBoundingClientRect()`: o
+  ancestral `.chat-msg.assistant` media normal (761px), mas seu filho
+  direto `.chat-bash-block` (o novo bloco de consentimento) media ~2px
+  de largura e x > 2000px. Causa raiz: `.chat-msg` (`cards.css`) é
+  `display: flex` sem `flex-direction` — cai no default (`row`). Os
+  filhos de `.chat-msg.assistant` (um `.chat-tool-line` por decisão já
+  resolvida, `.chat-diff-block`, `.chat-bash-block`) deveriam ser uma
+  LISTA VERTICAL, mas viravam itens de uma linha horizontal; o
+  `.chat-tool-line-label` do "ps aux" (comando longo, `white-space:
+  nowrap`, sem `min-width: 0`) consumia a largura intrínseca da linha
+  inteira, espremendo o `.chat-bash-block` seguinte quase a zero e
+  chutando-o pra fora do viewport. Invisível no uso normal (um humano
+  resolve cada consentimento antes do próximo aparecer, então poucos
+  itens longos se acumulam na mesma mensagem) — só apareceu ao
+  automatizar vários bashes em sequência sem intervenção humana entre
+  eles. **Fix**: `flex-direction: column` adicionado a `.chat-msg`.
+  **Verificado ao vivo sem mock**: nova checagem em
+  `smoke-chat-sandbox.mjs` — um TERCEIRO `bash` encadeado logo depois do
+  "ps aux" já resolvido (sem nenhuma outra interação de UI entre os
+  dois) precisa renderizar um bloco de consentimento genuinamente na
+  tela (`x` dentro do viewport, largura real) e ser clicável nas
+  coordenadas calculadas, resolvendo de verdade. `tsc --noEmit`/
+  `electron-vite build` limpos; `smoke-chat-tools.mjs` (outro consumidor
+  de `.chat-msg`) sem regressão.
+
+- **S7 — servidor remoto sobe em `0.0.0.0` no boot, token na query
+  string, sem checar `Origin`.** A porta fica exposta na LAN desde o
+  start mesmo sem device pareado; o upgrade do WebSocket não confere
+  `Origin`; devices vivem só em memória — todo restart derruba todos os
+  pareamentos.
+  **Correção sugerida**: bind sob demanda (no primeiro
+  `pairNewDevice`), checar `Origin` no upgrade, mover o token pra
+  primeira mensagem do socket em vez da URL, persistir devices via
+  `safeStorage` (infra já existe em `secrets.ts`).
+  **Critério de verificação**: o servidor não abre a porta antes do
+  primeiro pareamento; uma página de outra origem tentando conectar no
+  WebSocket é recusada; reiniciar o app mantém os devices já pareados.
+  **✅ Feito em 2026-08-30.** Os três pontos, juntos: (1) `listen()` não
+  roda mais no boot — `ensureListening()` (memoizado/idempotente) só é
+  chamado dentro de `pairNewDevice`, no primeiro pareamento; (2) upgrade
+  do WebSocket confere `Origin` contra o `Host` da própria requisição
+  (`isAllowedOrigin`), não uma allowlist fixa de IP de LAN — funciona
+  tanto pra LAN quanto pro túnel externo da fase B sem precisar saber o
+  hostname de antemão; `Origin` ausente (cliente não-browser) passa
+  direto, o token continua sendo o gate real; (3) o token saiu da URL do
+  upgrade e virou a primeira mensagem do socket
+  (`resources/mobile-client/app.js`'s `connect()` manda
+  `{type:"auth",token}` assim que abre) — tudo antes dessa mensagem é
+  inerte, e um socket que nunca autentica em `AUTH_TIMEOUT_MS` (5s) é
+  derrubado. `devices` passou a sobreviver a um restart — persistido via
+  `safeStorage` em `remote-devices.json` (mesma postura de
+  `secrets.ts`: cifra se disponível, cai pra texto claro se não, e
+  escrita atômica tmp+rename igual à correção do S9).
+  **Verificado ao vivo sem mock**: `smoke-remote-control.mjs` (19
+  checks, já reescrito nesta sessão para o protocolo novo) — porta
+  genuinamente fechada antes do primeiro pareamento, aberta logo depois;
+  `Origin` incompatível recusado mesmo com token válido, e sem receber
+  nada primeiro; token errado (mandado como primeira mensagem, `Origin`
+  batendo) fecha com 4001; fluxo completo funciona (lista cards reais,
+  escreve no PTY de verdade, marker real volta); revogar um device
+  derruba só ele, `revokeAll` derruba todos; um device pareado ANTES de
+  reiniciar o app de verdade continua autenticando depois (persistência
+  real, não só em memória). `tsc --noEmit`/`electron-vite build`
+  limpos.
+
+- **S9 — `secrets.json` sem escrita atômica; `mode: 0o600` só vale na
+  criação.** `secrets.ts:58`, `writeFileSync` direto — um crash no meio
+  da escrita deixa JSON truncado (`readAll` trata como vazio, a API key
+  some silenciosamente) e o `mode` é ignorado quando o arquivo já
+  existe.
+  **Correção sugerida**: escrever em `secrets.json.tmp` + `renameSync`,
+  `chmodSync` explícito depois.
+  **Critério de verificação**: matar o processo no meio de um
+  `secrets:set` (ou simular a falha) nunca deixa `secrets.json` num
+  estado que `readAll` interpreta como "sem chave configurada" quando
+  havia uma antes.
+  **✅ Feito em 2026-08-30.** `writeAll` (`secrets.ts`) escreve em
+  `secrets.json.tmp`, `chmodSync(tmpPath, 0o600)` explícito (roda
+  incondicionalmente, mesmo se o `.tmp` for um leftover de um crash
+  anterior — não depende do `mode` do `writeFileSync`, que só vale pra
+  arquivo recém-criado), depois `renameSync` sobre o caminho real —
+  atômico no mesmo filesystem, garantido por `userDataDir`. Mesmo padrão
+  aplicado a `remote-devices.json` (S7 acima).
+  **Verificado ao vivo sem mock**: novo `smoke-secrets-atomic-write.mjs`
+  (15 checks) — dirigido pelo `window.secrets.setKey` real (IPC de
+  verdade, não mock), inspecionando o arquivo real em disco de fora.
+  Prova as três garantias observáveis sem precisar de fato matar o
+  processo no meio de uma syscall de microssegundos: (1) escrita normal
+  deixa `secrets.json` em mode 0600, sem `.tmp` sobrando; (2) um arquivo
+  já existente com mode ERRADO (forçado via `chmodSync` pra 0644,
+  simulando um arquivo legado de antes desta correção) tem o mode
+  corrigido pela PRÓXIMA escrita, não fica do jeito errado pra sempre —
+  e as chaves gravadas antes sobrevivem, nada foi sobrescrito à toa; (3)
+  um `.tmp` já presente e corrompido (simulando um leftover de crash de
+  uma execução anterior) não quebra a escrita seguinte — é sobrescrito e
+  renomeado por cima sem deixar rastro, `secrets.json` continua JSON
+  válido, mode 0600, e as três chaves de providers diferentes gravadas
+  ao longo da sequência inteira sobrevivem todas. `tsc --noEmit`/
+  `electron-vite build` limpos; `smoke-secrets-settings.mjs` sem
+  regressão.
+
+### Bugs de lógica (B1–B7, B9)
+
+- **B1 — o diff de consentimento mente quando o arquivo existente passa
+  de 512KB.** `chat-tools.ts:117,128` — `buildWriteConsent` não trata
+  `{tooLarge: true}`; `oldContent` fica `""`, o diff mostra o conteúdo
+  inteiro como adição (parece arquivo novo), o humano aprova, e
+  `runWriteFile` sobrescreve sem limite de tamanho.
+  **Critério de verificação**: pedir escrita num arquivo real >512KB via
+  chat mostra um diff/aviso honesto (não "arquivo novo") ou recusa a
+  escrita — nunca aprova algo baseado num diff incorreto.
+
+- **B2 — consentimento pendente sem timeout trava o loop de tools pra
+  sempre.** `index.ts:353,361` (`pendingWriteConsents`/
+  `pendingBashConsents`) — sem timer, ao contrário de todo outro mapa de
+  pendência do app.
+  **Critério de verificação**: fechar o card ou recarregar a janela com
+  um gate de escrita/bash pendente não deixa a chamada do provider
+  pendurada indefinidamente — resolve como negado depois de um timeout.
+
+- **B3 — parser do socket do `acbridge` descarta o que vem depois do
+  primeiro `\n` do chunk.** `message-bus.ts:1068,1074` — `buf = ""` em
+  vez de `buf = buf.slice(nl + 1)`.
+  **Critério de verificação**: dois comandos JSON-line entregues no
+  mesmo chunk TCP são ambos processados, não só o primeiro.
+
+- **B4 — `runSandboxedBash` acumula toda a saída em memória antes de
+  truncar.** `sandbox.ts:129-130` (`out +=`) — o corte em
+  `MAX_OUTPUT_CHARS` só acontece no `close`.
+  **Critério de verificação**: um comando que imprime dezenas de MB
+  dentro do sandbox não faz o processo main crescer proporcionalmente
+  em memória — o corte acontece durante a captura, não depois.
+
+- **B5 — detecção de URL roda no chunk cru do PTY, não no buffer já
+  montado.** `pty-registry.ts:151` — o `ANSI_PATTERN` já foi adicionado
+  desde a auditoria original (item 57 ponto 12, limpa sequências ANSI
+  antes do match), mas o match continua rodando dentro do `onData`,
+  sobre `data` (um chunk), não sobre o texto já coalescido no `flush` —
+  uma URL partida entre dois chunks do PTY ainda é perdida ou emitida
+  cortada.
+  **Correção sugerida**: mover o match pro `flush`, guardando a cauda
+  parcial entre flushes.
+  **Critério de verificação**: uma URL longa (>tamanho típico de chunk
+  do PTY) impressa por um comando real ainda aparece inteira no chip de
+  "abrir URL" do card, não cortada.
+
+- **B6 — listener de `snapshot:rect-reply` vaza quando o renderer não
+  responde.** `index.ts:223,231` — só removido dentro do próprio
+  `onReply`; o timeout de 10s vive no `message-bus` e resolve a
+  Promise, mas não avisa o main pra fazer o `removeListener`. (Mesmo
+  padrão de risco existe agora também em `readcard:reply`,
+  `index.ts:591` — vale corrigir os dois juntos.)
+  **Critério de verificação**: um snapshot/read-card que nunca recebe
+  resposta do renderer (timeout) não deixa um listener registrado a
+  mais em `ipcMain` — contagem de listeners volta ao nível anterior
+  depois do timeout.
+
+- **B7 — `seenUrls` cresce sem limite por terminal.**
+  `pty-registry.ts:35,122` — um agente de longa duração que imprime
+  muitas URLs acumula um `Set` sem teto, só liberado no exit do card.
+  **Critério de verificação**: um terminal de longa duração imprimindo
+  milhares de URLs distintas não faz a memória do processo main crescer
+  sem limite atribuível a esse `Set`.
+
+- **B9 — `listChatSessions` é a única query de `store.ts` que não
+  filtra `archived_at`.** `store.ts:320,330` (as outras duas) vs.
+  `:353` (`listChatSessionsStmt`, sem o filtro). Pode ser intencional
+  (histórico deveria incluir arquivados) — hoje lê como omissão, sem
+  comentário explicando.
+  **Critério de verificação**: nenhum — este item é decidir e
+  documentar a intenção (filtrar ou não), não corrigir um bug per se.
+
+### Performance (P1–P5)
+
+- **P1 — zero memoização no renderer.** Confirmado de novo nesta
+  passagem: `grep -rc 'React.memo\|useMemo\|useCallback'
+  src/renderer/src/*.tsx` continua sem nenhuma ocorrência. `App.tsx`
+  (agora ainda maior, com o painel de fila e os hooks de board
+  autônomo) segue passando ~15 arrow functions inline por card
+  renderizado. É o item de arquitetura de maior impacto percebido —
+  cada `pointermove` de pan/draw/resize reconcilia a árvore inteira.
+  **Correção sugerida**: (1) mover pan/draw/resize pra `useRef` +
+  escrita direta de `transform`, tirando do estado do React; (2)
+  estabilizar handlers com `useCallback` tomando `cardId` como
+  argumento; (3) só então `React.memo` nos componentes de card.
+  **Critério de verificação**: instrumentar (React DevTools Profiler ou
+  contagem manual de render) um `pointermove` de pan/resize e confirmar
+  que só o card afetado (ou nenhum) re-renderiza, não todos.
+
+- **P2 — cada BrowserCard codifica JPEG a 30fps no processo main.**
+  `browser-registry.ts` (`setFrameRate(30)` + `toJPEG(70)` por frame) —
+  `stopPainting()` quando invisível já existe e ajuda, mas dois cards de
+  navegador visíveis competem por CPU do mesmo processo que serve todos
+  os PTYs, o SQLite e agora o motor de orquestração.
+  **Correção sugerida**: frame rate menor pra cards não focados
+  (5-10fps).
+  **Critério de verificação**: medir uso de CPU do processo main com
+  dois BrowserCards visíveis e não focados antes/depois da mudança.
+
+- **P3 — SQLite sem WAL e sem índice.** `store.ts` — nenhum `PRAGMA
+  journal_mode = WAL`; `cards.board_id`, `connectors.board_id`,
+  `connectors.from_card_id`/`to_card_id` sem índice, e agora também
+  `tasks.board_id`/`tasks.deps_json` (novos desde o item 60) entram na
+  mesma categoria.
+  **Correção sugerida**: um `PRAGMA` e `CREATE INDEX IF NOT EXISTS` pras
+  colunas de filtro mais comuns, incluindo as novas de `tasks`.
+  **Critério de verificação**: nenhum funcional — é otimização, não bug;
+  verificação seria um `EXPLAIN QUERY PLAN` confirmando uso do índice.
+
+- **P4 — `secrets.json` é lido e parseado a cada consulta.**
+  `secrets.ts:70-96` — `has`/`get`/`getBaseURL` chamam `readAll` cada
+  um; `chat:send` dispara 2-3 por mensagem.
+  **Correção sugerida**: cache em memória invalidado no `set`/`clear`.
+  **Critério de verificação**: nenhum funcional — otimização de I/O
+  síncrono no main, sem mudança de comportamento observável.
+
+- **P5 — histórico de chat reescrito como blob a cada turno.**
+  `store.ts` (`messages_json`) — decisão de commitar uma vez por turno
+  está certa; o que escala mal é a forma (reescreve o JSON inteiro).
+  Só vale mexer se sessões longas virarem caso de uso real.
+  **Critério de verificação**: nenhum ainda — fica registrado, não
+  priorizado.
+
+### Design e acessibilidade (D1–D3, D5–D8)
+
+- **D1 — corrigindo o diagnóstico da auditoria original**: não é que a
+  rail não tenha fundo (`.rail { background: var(--panel) }` já existe
+  em `layout.css:139` e não foi tocado recentemente — a auditoria errou
+  nesse ponto). O problema real, reconfirmado com um snapshot novo
+  desta sessão: cards são desenhados a partir de `x:0` do canvas sem
+  nenhuma calha reservada, e a rail (posição fixa, `z-index: 500`,
+  opaca) fica por cima dessa mesma faixa — cobrindo, não deixando
+  passar, o conteúdo do card que cair sob seu retângulo (composer,
+  cabeçalho, texto de resposta). É corte de conteúdo por sobreposição
+  de z-index, não transparência.
+  **Correção sugerida**: reservar uma calha no viewport do canvas (o
+  mundo começa depois da rail em vez de atrás dela) — a alternativa de
+  dar backdrop à rail não resolve, porque o card ainda perderia aquela
+  faixa de conteúdo, só deixaria de mostrar o vazamento visualmente.
+  **Critério de verificação**: um card criado colado à borda esquerda
+  do canvas não tem nenhum pixel de conteúdo próprio coberto pela rail.
+
+- **D2 — fronteira de card quase invisível em zoom reduzido.**
+  `cards.css:257` (`box-shadow: var(--shadow-card)`, `0 4px 16px
+  rgba(0,0,0,.4)`) desaparece contra `--ink` a zoom baixo, e o zoom
+  óptico encolhe a borda junto com o conteúdo — dois cards empilhados
+  leem como um só.
+  **Correção sugerida**: borda de 1px em `--border` que NÃO escala com
+  o zoom (compensada por `1/zoom`), sombra com contraste maior conforme
+  o zoom cai.
+  **Critério de verificação**: dois cards adjacentes a 50% de zoom têm
+  uma linha de separação visível, não só a faixa de header.
+
+- **D3 — cards saem da borda da janela sem clamp nem indicador.**
+  `App.tsx` usa `isInView`/`occlusion.ts` só pra decidir visibilidade de
+  render (`visible={isInView(...)}`), não pra mostrar indicador nenhum
+  de "há um card fora da tela nessa direção".
+  **Correção sugerida**: setas/pips nas bordas do viewport para cards
+  fora de vista — `occlusion.ts` já calcula boa parte do necessário.
+  **Critério de verificação**: criar um card fora do viewport atual
+  mostra algum indicador na borda correspondente do canvas.
+
+- **D5 — modais sem `aria-modal`, sem foco preso, Escape inconsistente.**
+  6 modais com `role="dialog"` (`AgentAskModal`, `ConfirmModal`,
+  `RemotePairingModal`, `SecretsSettingsModal`, `SessionModal`,
+  `ShortcutsOverlay`) — nenhum com `aria-modal="true"` nem trap de
+  foco; só `SessionModal.tsx` trata Escape, e num campo específico.
+  `ConfirmModal` (destrutivo) e `AgentAskModal` (gate de consentimento
+  do agente) não fecham com Escape.
+  **Correção sugerida**: hook `useModal` compartilhado — Escape =
+  cancelar, foco inicial no botão seguro, trap com sentinelas,
+  `aria-modal`.
+  **Critério de verificação**: `Tab` dentro de qualquer um dos 6 modais
+  nunca sai pro board atrás; `Escape` fecha os 6, não só um.
+
+- **D6 — rail sem agrupamento visual nem `aria-label` nos botões
+  só-ícone.** `Rail.tsx` — ferramentas, criação de card e
+  configuração/busca formam grupos semânticos renderizados como tira
+  contínua; poucos atributos `aria-*` no componente.
+  **Correção sugerida**: divisores de 1px entre os grupos,
+  `aria-label` em cada botão só-ícone.
+  **Critério de verificação**: um leitor de tela anuncia um rótulo
+  compreensível pra cada botão da rail, não só o ícone visual.
+
+- **D7 — só existe tema escuro, decisão não registrada.** `tokens.css`
+  não tem `prefers-color-scheme`; defensável pra dev tool, mas não está
+  escrito como decisão.
+  **Correção sugerida**: uma linha de comentário em `tokens.css`
+  assumindo a decisão.
+  **Critério de verificação**: nenhum funcional — é documentação.
+
+- **D8 — estado codificado só por matiz, sem forma.**
+  `TerminalCard.tsx:12-13` (cor por provider) e
+  `cards.css:158,162,166` (`.card-status-dot.ok/.warn/.danger`) — sem
+  segunda pista visual, `--good` e `--danger` colapsam pra daltonismo
+  vermelho-verde.
+  **Correção sugerida**: somar forma ao dot (cheio/anel/traço).
+  **Critério de verificação**: com um simulador de daltonismo
+  vermelho-verde, os três estados de `card-status-dot` continuam
+  distinguíveis sem depender só da cor.
+
+### Organização, CI e documentação
+
+- **CI real, já drafted nesta sessão, ainda não commitado.**
+  `.github/workflows/ci.yml` foi escrito e verificado localmente (YAML
+  válido, lógica do loop testada, nenhum smoke exige credencial real)
+  em resposta a um pedido anterior desta mesma sessão de auditoria —
+  dois jobs (`typecheck` barato, `smoke` com `xvfb-run`), `push`
+  qualquer branch + `pull_request`, falha acumulando todos os smokes
+  quebrados em vez de parar no primeiro. Não commitado ainda porque a
+  árvore tinha trabalho em voo de outra sessão no momento. Falta:
+  revisar e commitar; a primeira execução real no GitHub Actions ainda
+  não aconteceu (dependências de sistema do Chromium — `libgtk-3-0`,
+  `libasound2t64` etc. — são o ponto clássico de ajuste na primeira
+  tentativa).
+
+- **`smoke-card-wheel-scope.mjs` corrigido nesta sessão, mesma situação
+  de commit pendente.** Seletor desatualizado (`title="Nova pasta de
+  arquivos"` → `"Explorador"`, item 57 ponto 11) corrigido e verificado
+  passando 6/6 localmente; não commitado pelo mesmo motivo do CI acima.
+
+- **A suíte inteira seleciona botão de rail por string em português,
+  não por atributo estável.** 30+ ocorrências em 15 scripts de
+  `scripts/verify/` (`.rail-btn[title="..."]`) — qualquer ajuste de
+  copy (como o que quebrou o wheel-scope acima) quebra teste sem
+  quebrar build. **Correção sugerida**: um `data-kind` estável em
+  `Rail.tsx`, migrando os seletores — não feito ainda porque toca
+  `Rail.tsx`, que outra sessão estava editando durante a auditoria.
+
+- **A suíte de verify não tolera duas sessões rodando ao mesmo tempo**
+  — descoberto rodando dois agentes no mesmo repo, o caso de uso central
+  do produto. `out/` compartilhado e portas CDP fixas por script: um
+  `npm run build` de outra sessão no meio do launch de uma instância
+  deixa Electron órfão segurando a porta, envenenando execuções
+  seguintes. **Correção sugerida**: porta CDP efêmera por execução,
+  diretório de build isolado, limpeza que rode mesmo em kill.
+
+- **Sem ESLint nem Prettier.** ~19k linhas de TypeScript sem linter nem
+  formatter — `tsconfig` estrito pega bastante, mas não pega hooks do
+  React (onde estão P1 e B2).
+
+- **Módulos puros sem teste unitário.** `board-model`, `occlusion`,
+  `validation`, `normalizeUrl`, `confine` (este já ganhou um em
+  `smoke-fs-confine.mjs` pelo card 96), `keysyms` — lógica
+  determinística, trivial de testar sem CDP.
+
+- **`AGENTS.md` (agora ~4000 linhas) e `DESIGN-BACKLOG.md` (agora
+  ~5750 linhas) crescendo sem separar contrato de histórico.**
+  `AGENTS.md` entra no contexto de toda sessão de agente. **Correção
+  sugerida**: `AGENTS.md` vira contrato curto + `SYSTEM.md`; log
+  cronológico migra pra `docs/HISTORY.md`, lido sob demanda.
+
+- **`SYSTEM.md` desatualizado na seção do card de navegador.** Descreve
+  `WebContentsView`/canais `browser:set-bounds`/`raise`; o código atual
+  usa `BrowserWindow` offscreen com frames JPEG e os canais
+  `browser:resize`/`set-visible`. Falta também o kind `chat` na tabela
+  de cards e os domínios `secrets`/`chat`/as tools MCP novas (`report`,
+  `tasks`, etc.) na tabela de IPC/superfície.
+
+- **README promete um `verify` que não existe.** Diz "tsc + build + a
+  suíte completa"; `package.json`'s `verify` é só `build` + os smokes,
+  sem `tsc --noEmit`. Corrigir o script (adicionar `tsc --noEmit`) é
+  mais simples que editar a promessa do README.
+
+- **`App.tsx` ainda concentra ~8 blocos de render quase idênticos.**
+  `cards/registry.ts` já colapsou label/ícone/defaults, mas o switch de
+  render e as ~15 props compartilhadas por card continuam repetidos.
+  Montar um `commonCardProps` por card e espalhá-lo corta a repetição
+  e elimina a classe de bug que o próprio `registry.ts` documenta.
+
+- **~3800 linhas de CSS em dois arquivos planos.** `layout.css` e
+  `cards.css` (ambos cresceram desde a auditoria original — novo
+  `focus.css` já foi extraído pelo card 96, precedente pra continuar).
+  Os tokens estão exemplares; falta colocalização — um `.css` por
+  componente ao lado do `.tsx`.
 
 ## Ordem sugerida para a próxima rodada
 

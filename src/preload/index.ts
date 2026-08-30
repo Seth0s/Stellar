@@ -83,6 +83,13 @@ export type ConnectorRow = {
   from_card_id: string;
   to_card_id: string;
   updated_at: number;
+  /** DESIGN-BACKLOG.md item 58 peça 4 / item 62 — advisory only, never
+   * rendered differently by this app. `null` (or omitted at the DB
+   * level pre-migration) is purely decorative; `'spawned'` is set
+   * automatically by a real spawn_agent lineage (item 62), `'depends'`/
+   * `'context'` only ever by an external orchestrator's own
+   * `set_connector_kind` call. */
+  kind?: string | null;
 };
 
 export type BoardRow = {
@@ -99,6 +106,9 @@ export type BoardRow = {
    * cwd edit already goes through, though `upsert` does persist whatever
    * value the row already carries. */
   autonomous: boolean;
+  /** DESIGN-BACKLOG.md item 60, peça 2 — per-board override of the
+   * concurrency cap. `null` means "use the app-wide default". */
+  concurrency_cap: number | null;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -125,6 +135,10 @@ const store = {
      * toggle, called only from the session UI's own checkbox/switch. */
     setAutonomous: (id: string, autonomous: boolean): Promise<void> =>
       ipcRenderer.invoke("store:boards:set-autonomous", id, autonomous),
+    /** DESIGN-BACKLOG.md item 60, peça 2 — same shape as setAutonomous;
+     * `cap: null` resets to the app-wide default. */
+    setConcurrencyCap: (id: string, cap: number | null): Promise<void> =>
+      ipcRenderer.invoke("store:boards:set-concurrency-cap", id, cap),
   },
   cardCounts: (): Promise<Record<string, BoardCounts>> => ipcRenderer.invoke("store:card-counts"),
   /** DESIGN-BACKLOG.md item 30 — sessions sidebar (every chat card, live
@@ -239,12 +253,25 @@ const browser = {
     ipcRenderer.on("browser:loading", listener);
     return () => ipcRenderer.removeListener("browser:loading", listener);
   },
-  onAskOpen: (cb: (requestId: string, requesterId: string, url: string, reason?: string) => void) => {
-    const listener = (_e: unknown, requestId: string, requesterId: string, url: string, reason?: string) =>
-      cb(requestId, requesterId, url, reason);
+  onAskOpen: (cb: (requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) => void) => {
+    const listener = (_e: unknown, requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) =>
+      cb(requestId, requesterId, url, reason, autoApprove);
     ipcRenderer.on("browser:ask-open", listener);
     return () => ipcRenderer.removeListener("browser:ask-open", listener);
   },
+  /** Pre-release audit S2 — a page inside a BrowserCard requested a
+   * camera/mic/`getDisplayMedia()` permission; main/index.ts no longer
+   * auto-approves any of these. Covers both the generic media-permission
+   * prompt and `setDisplayMediaRequestHandler`'s own, more specific
+   * source-selection prompt — same IPC channel, main/index.ts decides
+   * the `message` text per call site. */
+  onAskPermission: (cb: (requestId: string, message: string) => void) => {
+    const listener = (_e: unknown, requestId: string, message: string) => cb(requestId, message);
+    ipcRenderer.on("browser:ask-permission", listener);
+    return () => ipcRenderer.removeListener("browser:ask-permission", listener);
+  },
+  resolvePermissionAsk: (requestId: string, allowed: boolean): void =>
+    ipcRenderer.send("browser:resolve-permission-ask", requestId, allowed),
   /** Item 26, teclado — texto composto de IME de uma vez (não caractere a
    * caractere via `sendKey`'s "char"). */
   insertText: (id: string, text: string): Promise<void> => ipcRenderer.invoke("browser:insert-text", id, text),
@@ -265,12 +292,25 @@ export type SpawnAgentAskParams = {
   depth: number;
   reason?: string;
   model?: string;
+  /** DESIGN-BACKLOG.md item 62 — names the new card, same free-text
+   * field CardTag rename sets. */
+  label?: string;
   /** DESIGN-BACKLOG.md item 59 — the requester's own board is in
    * autonomous mode and under its cap; App.tsx's `onAskAgent` handler
    * creates the card and resolves immediately, no `AgentAskModal`. */
   autoApprove?: boolean;
 };
-export type SpawnCardAskParams = { kind: SpawnCardKind; cwd?: string; url?: string; reason?: string };
+export type SpawnCardAskParams = {
+  kind: SpawnCardKind;
+  cwd?: string;
+  url?: string;
+  reason?: string;
+  /** DESIGN-BACKLOG.md item 60, peça 5 — same meaning as
+   * SpawnAgentAskParams.autoApprove above. */
+  autoApprove?: boolean;
+};
+/** DESIGN-BACKLOG.md item 60, peça 1 — one queued spawn_agent request. */
+export type SpawnQueueEntry = { id: string; requesterId: string; provider: string; reason?: string; requestedAt: number };
 export type SpawnAgentResolveResult = { ok: true; cardId: string } | { ok: false; error: string };
 export type SpawnCardResolveResult = { ok: true; cardId: string } | { ok: false; error: string };
 
@@ -297,6 +337,13 @@ const spawn = {
     ipcRenderer.invoke("spawn:agent-resolve", requestId, result),
   resolveCard: (requestId: string, result: SpawnCardResolveResult): Promise<void> =>
     ipcRenderer.invoke("spawn:card-resolve", requestId, result),
+  /** DESIGN-BACKLOG.md item 60, peça 1 — pushed whenever a board's spawn
+   * queue changes; `queue` is already FIFO-ordered (index is position). */
+  onQueueChanged: (cb: (boardId: string, queue: SpawnQueueEntry[]) => void) => {
+    const listener = (_e: unknown, boardId: string, queue: SpawnQueueEntry[]) => cb(boardId, queue);
+    ipcRenderer.on("spawn-queue:changed", listener);
+    return () => ipcRenderer.removeListener("spawn-queue:changed", listener);
+  },
 };
 
 export type OneShotResult = { text: string } | { error: string };

@@ -193,11 +193,43 @@ try {
   check("...with a real, non-trivial amount of image data", block.data?.length > 5000, true);
 
   // Spawn depth guard — DESIGN-BACKLOG.md item 21 ponto 9 achado 1's
-  // fork-bomb guard. A caller explicitly reporting the cap depth must be
-  // refused outright — no consent modal even shown, asking a human to
-  // approve something structurally disallowed is just noise.
-  const depthGuardPayload = await toolJson("spawn_agent", { provider: "bash", callerCardId: bashCardId, depth: 3 });
-  check("spawn_agent at the depth cap is refused without asking", depthGuardPayload.ok, false);
+  // fork-bomb guard, closed for real by pre-release audit S4: depth is no
+  // longer a number the CALLER can just declare (`secondBashCardId` above
+  // is already real depth 1, tracked server-side from bashCardId's own
+  // depth 0) — the only way to actually reach the cap is a real chain of
+  // spawns, so build one: depth1 (secondBashCardId) → depth2 → depth3,
+  // each approved via the modal same as every other spawn_agent above,
+  // THEN attempt one more from the depth3 card, which must be refused
+  // outright with no modal at all.
+  // The actual S4 fix: a client claiming `depth: 3` from a card whose REAL
+  // server-tracked depth is only 1 must NOT be structurally refused — the
+  // field is dead/ignored now, not just harder to hit. Proof is that the
+  // NORMAL consent modal still shows (a structural refusal never asks);
+  // denies it right after, so this doesn't also create a real card.
+  const fakeDepthPromise = callTool("spawn_agent", { provider: "bash", callerCardId: secondBashCardId, depth: 3, reason: "claims depth 3, really 1" });
+  await new Promise((r) => setTimeout(r, 500));
+  check(
+    "a caller-declared depth:3 from a real depth-1 card is NOT trusted (normal consent modal still shows, not refused outright)",
+    await page.evalJs(`document.querySelector('.modal h3')?.textContent`),
+    "Permissão: spawnar agente",
+  );
+  await clickModalButton(page, "Negar");
+  await fakeDepthPromise;
+
+  const depth2Promise = callTool("spawn_agent", { provider: "bash", callerCardId: secondBashCardId, reason: "depth chain 2" });
+  await new Promise((r) => setTimeout(r, 500));
+  await clickModalButton(page, "Permitir");
+  const depth2Payload = JSON.parse((await depth2Promise).content[0].text);
+  check("real depth-2 spawn (chained from depth-1) resolves ok", depth2Payload.ok && typeof depth2Payload.cardId === "string", true);
+
+  const depth3Promise = callTool("spawn_agent", { provider: "bash", callerCardId: depth2Payload.cardId, reason: "depth chain 3" });
+  await new Promise((r) => setTimeout(r, 500));
+  await clickModalButton(page, "Permitir");
+  const depth3Payload = JSON.parse((await depth3Promise).content[0].text);
+  check("real depth-3 spawn (chained from depth-2) resolves ok", depth3Payload.ok && typeof depth3Payload.cardId === "string", true);
+
+  const depthGuardPayload = await toolJson("spawn_agent", { provider: "bash", callerCardId: depth3Payload.cardId, reason: "depth chain 4, should be refused" });
+  check("spawn_agent past the real depth cap is refused without asking", depthGuardPayload.ok, false);
   check("...and shows no consent modal at all", await page.evalJs(`!document.querySelector('.modal')`), true);
 
   page.close();

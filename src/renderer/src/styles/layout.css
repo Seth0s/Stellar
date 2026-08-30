@@ -306,6 +306,70 @@ body {
   padding: 1px 5px;
 }
 
+/* DESIGN-BACKLOG.md item 60, peça 1 — floating panel, only rendered while
+   the active board's queue is non-empty (SpawnQueuePanel.tsx returns null
+   otherwise). Anchored top-right, under the topbar, same surface/border
+   tokens as other floating chrome (popovers/modals). */
+.spawn-queue-panel {
+  position: fixed;
+  top: calc(var(--titlebar-h) + 52px);
+  right: 12px;
+  z-index: 40;
+  max-width: 280px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.spawn-queue-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warn);
+  margin-bottom: 6px;
+}
+
+.spawn-queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.spawn-queue-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.spawn-queue-position {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  min-width: 14px;
+}
+
+.spawn-queue-provider {
+  font-weight: 600;
+}
+
+.spawn-queue-requester,
+.spawn-queue-reason {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .topbar-counts {
   display: flex;
   align-items: center;
@@ -949,6 +1013,20 @@ select.resume-input {
 .autonomous-toggle-label input {
   margin-top: 2px;
   accent-color: var(--foam);
+}
+
+/* DESIGN-BACKLOG.md item 60, peça 2 — concurrency cap input, shown next
+   to the autonomous toggle only while it's on. */
+.concurrency-cap-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.concurrency-cap-input {
+  width: 70px;
+  text-align: right;
 }
 
 /* DESIGN-BACKLOG.md item 12, achado 5 — icon buttons instead of the

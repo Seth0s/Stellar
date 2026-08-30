@@ -30,8 +30,22 @@ const DEFAULT_WAIT_EXIT_TIMEOUT_MS = 600_000;
 // a `\r` appended to the same write as the text is swallowed as part of
 // the pasted content instead of submitting it. Sending it as a separate
 // write, after the target's readline has had a beat to settle, submits
-// reliably the same way a human pressing Enter after a paste does.
+// reliably MOST of the time — but not always. Achado ao vivo (2026-08-30,
+// reportado diretamente pelo usuário): under real system load this fixed
+// delay is a bet, not a guarantee — it can still fire before the paste
+// buffer has actually settled, leaving the Enter swallowed same as
+// before the M2 fix. SEND_ENTER_MAX_ATTEMPTS/SEND_ENTER_CONFIRM_DELAY_MS
+// below turn this from "hope the delay was enough" into "check, and
+// retry the Enter (never the text) if it wasn't".
 const SEND_ENTER_DELAY_MS = 80;
+// DESIGN-BACKLOG.md item 60-adjacent (send_to_card follow-up) — how long
+// to wait after writing `\r` before reading back the card's own text to
+// confirm it actually submitted, and how many times to retry just the
+// `\r` (never the original text again — resending that would duplicate
+// it) if it didn't. Bounded so a card that's genuinely just slow to
+// render never gets stuck retrying forever.
+const SEND_ENTER_CONFIRM_DELAY_MS = 250;
+const SEND_ENTER_MAX_ATTEMPTS = 4;
 // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 1 — same
 // reasoning as DEFAULT_WAIT_EXIT_TIMEOUT_MS: waiting for a real agent's
 // real result is not a bug-detection backstop, it's the actual point.
@@ -41,15 +55,29 @@ const DEFAULT_REPORT_TIMEOUT_MS = 600_000;
 // doesn't pass its own `cap`. Purely advisory (see `concurrency_status`
 // below) — nothing here queues or refuses a spawn.
 const DEFAULT_CONCURRENCY_CAP = 3;
+// DESIGN-BACKLOG.md item 60, peça 1 — reversal of peça 6's "no queue"
+// decision, scoped to autonomous boards only: a spawn_agent that hits the
+// board's cap now waits here instead of being refused outright. Long
+// default on purpose — the same "waiting for a real result is the actual
+// point" reasoning as DEFAULT_REPORT_TIMEOUT_MS above, not a bug backstop.
+const DEFAULT_QUEUE_TIMEOUT_MS = 600_000;
+// DESIGN-BACKLOG.md item 60, peça 4 — small on purpose: an unattended
+// auto-retry loop that never gives up is worse than one that stops and
+// leaves a clearly `failed` task for a human/orchestrator to look at.
+const DEFAULT_MAX_RETRIES = 2;
 
 // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — an agent spawning another
 // agent, which spawns another... with zero guard, is an unbounded fork
 // bomb. `depth` travels with every spawned process's env
-// (AGENT_CANVAS_SPAWN_DEPTH, see pty-registry.ts) and increments by 1 on
-// every agent-initiated (not human-initiated) spawn; a human spawning
-// from the rail/radial menu always starts a fresh chain at depth 0. This
-// is a hard cap enforced BEFORE any consent modal even shows — asking a
-// human to approve something structurally disallowed is just noise.
+// (AGENT_CANVAS_SPAWN_DEPTH, see pty-registry.ts) purely for that
+// process's own introspection/display — it increments by 1 on every
+// agent-initiated (not human-initiated) spawn, and a human spawning from
+// the rail/radial menu always starts a fresh chain at depth 0. Pre-release
+// audit S4 — the guard itself no longer trusts a caller-supplied depth
+// back; see `cardSpawnDepth` further down for the server-side record it
+// actually checks against. This is a hard cap enforced BEFORE any consent
+// modal even shows — asking a human to approve something structurally
+// disallowed is just noise.
 export const MAX_SPAWN_DEPTH = 3;
 
 export type CardSummary = { id: string; provider: string; cwd: string };
@@ -65,7 +93,7 @@ export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error:
 
 export type BusRequest =
   | { cmd: "list" }
-  | { cmd: "send"; target?: string; text?: string }
+  | { cmd: "send"; target?: string; text?: string; requesterId?: string }
   | { cmd: "open"; url?: string; requesterId?: string; reason?: string }
   | {
       cmd: "snapshot";
@@ -77,7 +105,16 @@ export type BusRequest =
   | { cmd: "card_status"; target?: string }
   | { cmd: "report"; requesterId?: string; report?: unknown }
   | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number }
-  | { cmd: "create_task"; prompt?: string; provider?: string; cardId?: string; deps?: string[] }
+  | {
+      cmd: "create_task";
+      prompt?: string;
+      provider?: string;
+      cardId?: string;
+      boardId?: string;
+      deps?: string[];
+      maxRetries?: number;
+      fallbackProviders?: string[];
+    }
   | {
       cmd: "update_task";
       taskId?: string;
@@ -99,9 +136,12 @@ export type BusRequest =
       cwd?: string;
       resumeId?: string;
       requesterId?: string;
-      depth?: number;
       reason?: string;
       model?: string;
+      /** DESIGN-BACKLOG.md item 62 — same free-text label a human sets via
+       * CardTag rename; `describeCardLabel`/the renderer's `describeCard`
+       * already prefer it over the "Bash 2°" ordinal when present. */
+      label?: string;
       wait?: boolean;
       waitTimeoutMs?: number;
     }
@@ -125,12 +165,22 @@ export function createMessageBus(
   callbacks: {
     listCards: () => CardSummary[];
     writeToCard: (id: string, text: string) => void;
+    /** DESIGN-BACKLOG.md item 61 — same "Bash 2°" ordinal-per-provider
+     * convention App.tsx's `describeCard` already uses for
+     * `AgentAskModal`'s requester label, reimplemented here against
+     * `store.ts` directly (this is main-process code, no renderer
+     * `cardsRef` to read) so `send_to_card` can prefix delivered text
+     * with who sent it — no MCP tool had a caller-identity param at all
+     * before this (unlike open_url/spawn_agent/spawn_card, which always
+     * did). Falls back to a human-set `label` when the card has one,
+     * same priority order as the renderer's version. */
+    describeCardLabel: (cardId: string) => string;
     /** `reason` — DESIGN-BACKLOG.md item 21, ponto 9, "motivo" in the
      * generic ask-permission component: only ever set by an MCP tool call
      * (a real, typed, optional param there); acbridge's CLI never sets it
      * (would need an awkward extra positional arg) — the consent modal
      * just shows nothing for that line when absent. */
-    onOpenRequest: (requestId: string, requesterId: string, url: string, reason?: string) => void;
+    onOpenRequest: (requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) => void;
     /** cardId set: that card's current on-screen rect. rect set: an
      * explicit world-space rect. Neither: the whole window. Resolving
      * either into actual capturePage() screen pixels lives in
@@ -156,6 +206,18 @@ export function createMessageBus(
      * MCP/acbridge cmd (see AGENTS.md's architecture entry). */
     getCardBoardId: (cardId: string) => string | undefined;
     isBoardAutonomous: (boardId: string) => boolean;
+    /** DESIGN-BACKLOG.md item 60, peça 2 — per-board override of
+     * DEFAULT_CONCURRENCY_CAP below. `null`/`undefined` means "use the
+     * default", never "zero". */
+    getBoardConcurrencyCap: (boardId: string) => number | null | undefined;
+    /** DESIGN-BACKLOG.md item 60, peça 1 — pushed to the renderer every
+     * time a board's spawn queue changes (enqueue, dequeue, dispatch,
+     * timeout) so a live panel can render position/board/provider without
+     * polling. `queue` is already in FIFO order — index is position. */
+    onQueueChanged: (
+      boardId: string,
+      queue: Array<{ id: string; requesterId: string; provider: string; reason?: string; requestedAt: number }>,
+    ) => void;
     /** Live (isCardAlive-backed) count of non-bash terminal cards on one
      * board — the same "bash isn't an agent" convention as M4/peça 6's
      * concurrency_status, but board-scoped instead of global, since
@@ -186,6 +248,11 @@ export function createMessageBus(
         depth: number;
         reason?: string;
         model?: string;
+        /** DESIGN-BACKLOG.md item 62 — same free-text label CardTag
+         * rename sets; `undefined` leaves the new card unlabeled (the
+         * ordinal "Bash 2°" convention applies), same as before this
+         * item existed. */
+        label?: string;
         /** DESIGN-BACKLOG.md item 59 — set only when the requester's own
          * board is in autonomous mode and under its concurrency cap; the
          * renderer creates the card and resolves immediately, with no
@@ -196,7 +263,18 @@ export function createMessageBus(
     onSpawnCardRequest: (
       requestId: string,
       requesterId: string,
-      params: { kind: SpawnCardKind; cwd?: string; url?: string; reason?: string },
+      params: {
+        kind: SpawnCardKind;
+        cwd?: string;
+        url?: string;
+        reason?: string;
+        /** DESIGN-BACKLOG.md item 60, peça 5 — same meaning as
+         * spawn_agent's `autoApprove` above, extended to non-terminal
+         * cards. Still only ever true for the requester's own autonomous
+         * board — no concurrency cap applies here (only spawn_agent
+         * counts against it). */
+        autoApprove?: boolean;
+      },
     ) => void;
   },
 ) {
@@ -217,6 +295,16 @@ export function createMessageBus(
   // principle exist for the same card (two callers both waiting on it),
   // so each entry is a list, not a single resolver.
   const pendingCardExits = new Map<string, Array<(exitCode: number) => void>>();
+  // Pre-release audit S4 — `req.depth` used to be trusted straight from
+  // the CLIENT (an MCP/acbridge caller could just re-declare `depth: 0`
+  // on every call and the fork-bomb guard below would never fire). The
+  // main process already knows each card's real depth — it's the one
+  // that set AGENT_CANVAS_SPAWN_DEPTH in that card's own env when IT was
+  // spawned (pty-registry.ts) — so this map is the server-side record,
+  // keyed by cardId, that the client can no longer talk its way around.
+  // A card absent from this map (human-initiated, or the task engine's
+  // own internal dispatch — see onTaskDone/retryOrFail) is depth 0.
+  const cardSpawnDepth = new Map<string, number>();
   // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 1 — a
   // dedicated result channel, decoupled from process exit (an agent might
   // report a result and keep running, e.g. an interactive session): the
@@ -226,6 +314,20 @@ export function createMessageBus(
   const pendingReportWaiters = new Map<string, Array<(report: unknown) => void>>();
   const pendingSpawnAgents = new Map<string, { resolve: (result: SpawnAgentResult) => void; timer: NodeJS.Timeout }>();
   const pendingSpawnCards = new Map<string, { resolve: (result: SpawnCardResult) => void; timer: NodeJS.Timeout }>();
+  // DESIGN-BACKLOG.md item 60, peça 1 — one FIFO queue per autonomous
+  // board. `params` is exactly what `onSpawnAgentRequest` needs, captured
+  // here so the entry can be dispatched later with no information lost.
+  type SpawnQueueEntry = {
+    id: string;
+    requesterId: string;
+    provider: string;
+    reason?: string;
+    requestedAt: number;
+    timer: NodeJS.Timeout;
+    resolve: (result: SpawnAgentResult) => void;
+    params: { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string; model?: string; label?: string };
+  };
+  const spawnQueue = new Map<string, SpawnQueueEntry[]>();
   // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 2 — a card
   // blocked on a consent modal (open/spawn_agent/spawn_card) looks
   // identical to one still working, from the outside. Ref-counted (not a
@@ -255,13 +357,45 @@ export function createMessageBus(
       provider: row.provider,
       status: row.status,
       cardId: row.card_id,
+      boardId: row.board_id,
       result: row.result_json ? JSON.parse(row.result_json) : null,
       deps: row.deps_json ? JSON.parse(row.deps_json) : [],
       retryCount: row.retry_count,
       attemptedProviders: row.attempted_providers_json ? JSON.parse(row.attempted_providers_json) : [],
+      // DESIGN-BACKLOG.md item 60, peça 4 — EFFECTIVE value, same
+      // "never null, resolve the fallback here" convention as
+      // board_mode's concurrencyCap.
+      maxRetries: row.max_retries ?? DEFAULT_MAX_RETRIES,
+      fallbackProviders: row.fallback_providers_json ? JSON.parse(row.fallback_providers_json) : [],
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  function delay(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+
+  /** DESIGN-BACKLOG.md item 58, M1 — factored out of the `read_card` cmd
+   * handler so `send`'s self-verifying submit (below) can reuse the exact
+   * same round-trip instead of a second, divergent implementation. */
+  function readCardText(target: string, lines?: number): Promise<ReadCardResult> {
+    const requestId = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingReadCards.delete(requestId);
+        resolve({ ok: false, error: "timed out reading card" });
+      }, READ_CARD_TIMEOUT_MS);
+      pendingReadCards.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          pendingReadCards.delete(requestId);
+          resolve(result);
+        },
+        timer,
+      });
+      callbacks.onReadCardRequest(requestId, target, lines);
+    });
   }
 
   /** Shared by both frontends — see the module doc comment. Never throws;
@@ -277,8 +411,35 @@ export function createMessageBus(
         return { ok: false, error: `no open terminal card with id "${req.target}"` };
       }
       const target = req.target;
-      callbacks.writeToCard(target, req.text ?? "");
-      setTimeout(() => callbacks.writeToCard(target, "\r"), SEND_ENTER_DELAY_MS);
+      // DESIGN-BACKLOG.md item 61 — prefix with a human-friendly sender
+      // label whenever the caller identifies itself. Optional and
+      // additive: a caller that doesn't pass `requesterId` still delivers
+      // exactly as before this item, unprefixed. Never for a `bash`
+      // target: `send_to_card` doubles as "run this shell command" there
+      // (the far more common use, see M2/M4's own examples) — a prefix
+      // would be interpreted as the start of the command itself and
+      // break it, not read as a header the way it does in a chat/agent
+      // CLI's prose input.
+      const targetProvider = cards.find((c) => c.id === target)?.provider;
+      const senderLabel = req.requesterId && targetProvider !== "bash" ? callbacks.describeCardLabel(req.requesterId) : null;
+      const text = senderLabel ? `[de: ${senderLabel}] ${req.text ?? ""}` : (req.text ?? "");
+      callbacks.writeToCard(target, text);
+      // DESIGN-BACKLOG.md item 58, M2 follow-up — self-verifying submit:
+      // write the Enter, then read the card back (same round-trip as
+      // read_card) and check whether the composer still shows an
+      // un-submitted paste placeholder. If it does, retry ONLY the
+      // Enter (never the text again, that would duplicate it) — bounded
+      // by SEND_ENTER_MAX_ATTEMPTS so a card that's genuinely just slow
+      // to render can't loop forever.
+      for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
+        await delay(SEND_ENTER_DELAY_MS);
+        callbacks.writeToCard(target, "\r");
+        await delay(SEND_ENTER_CONFIRM_DELAY_MS);
+        const check = await readCardText(target, 8);
+        // A read failure (timed out, card gone) isn't evidence the
+        // submit failed — stop retrying rather than guess.
+        if (!check.ok || !/pasted text/i.test(check.text)) break;
+      }
       return { ok: true };
     }
 
@@ -286,6 +447,12 @@ export function createMessageBus(
       if (!req.url) return { ok: false, error: "missing url" };
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
+      // DESIGN-BACKLOG.md item 60, peça 5 — modo autônomo completo:
+      // auto-approve extended here too, same board-scoped opt-in as
+      // spawn_agent (item 59). No concurrency cap involved — that only
+      // ever gates spawn_agent.
+      const requesterBoardId = callbacks.getCardBoardId(requesterId);
+      const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
       markWaiting(requesterId);
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
@@ -302,7 +469,7 @@ export function createMessageBus(
           },
           timer,
         });
-        callbacks.onOpenRequest(requestId, requesterId, req.url as string, req.reason);
+        callbacks.onOpenRequest(requestId, requesterId, req.url as string, req.reason, autonomous);
       });
     }
 
@@ -348,22 +515,7 @@ export function createMessageBus(
 
     if (req.cmd === "read_card") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      const requestId = randomUUID();
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          pendingReadCards.delete(requestId);
-          resolve({ ok: false, error: "timed out reading card" });
-        }, READ_CARD_TIMEOUT_MS);
-        pendingReadCards.set(requestId, {
-          resolve: (result) => {
-            clearTimeout(timer);
-            pendingReadCards.delete(requestId);
-            resolve(result);
-          },
-          timer,
-        });
-        callbacks.onReadCardRequest(requestId, req.target as string, req.lines);
-      });
+      return readCardText(req.target, req.lines);
     }
 
     if (req.cmd === "card_status") {
@@ -418,16 +570,27 @@ export function createMessageBus(
     if (req.cmd === "create_task") {
       const now = Date.now();
       const id = randomUUID();
+      // DESIGN-BACKLOG.md item 60, peça 3 — explicit `boardId` wins (the
+      // only way to scope a task that has no `cardId` yet, e.g. one
+      // meant to sit `pending` until its deps finish); falls back to the
+      // `cardId`'s own board when only that's given. `null` when
+      // neither is passed — that task is never a candidate for
+      // auto-dispatch, pure external-orchestrator bookkeeping as before
+      // this column existed.
+      const boardId = req.boardId ?? (req.cardId ? (callbacks.getCardBoardId(req.cardId) ?? null) : null);
       callbacks.upsertTask({
         id,
         prompt: req.prompt ?? null,
         provider: req.provider ?? null,
         status: req.cardId ? "running" : "pending",
         card_id: req.cardId ?? null,
+        board_id: boardId,
         result_json: null,
         deps_json: req.deps ? JSON.stringify(req.deps) : null,
         retry_count: 0,
         attempted_providers_json: req.provider ? JSON.stringify([req.provider]) : null,
+        max_retries: req.maxRetries ?? null,
+        fallback_providers_json: req.fallbackProviders ? JSON.stringify(req.fallbackProviders) : null,
         created_at: now,
         updated_at: now,
       });
@@ -445,7 +608,7 @@ export function createMessageBus(
       // additive, never overwritten wholesale like the other fields).
       const attemptedProviders: string[] = existing.attempted_providers_json ? JSON.parse(existing.attempted_providers_json) : [];
       if (req.attemptedProvider) attemptedProviders.push(req.attemptedProvider);
-      callbacks.upsertTask({
+      const updated: TaskRow = {
         ...existing,
         status: req.status ?? existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
@@ -453,7 +616,17 @@ export function createMessageBus(
         retry_count: existing.retry_count + (req.incrementRetry ? 1 : 0),
         attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
         updated_at: Date.now(),
-      });
+      };
+      callbacks.upsertTask(updated);
+      // DESIGN-BACKLOG.md item 60, peça 3 — a task reaching `done` may
+      // unblock dependents; check right after persisting, using the NEW
+      // status (existing.status is stale by now). Never on `failed` — a
+      // dependent shouldn't start on top of a failed prerequisite.
+      if (req.status === "done" && existing.status !== "done") onTaskDone(req.taskId);
+      // DESIGN-BACKLOG.md item 60, peça 4 — a task reaching `failed` may
+      // be eligible for auto-retry (bookkeeping-only outside an
+      // autonomous board — retryOrFail itself checks that).
+      if (req.status === "failed" && existing.status !== "failed") retryOrFail(updated);
       return { ok: true };
     }
 
@@ -482,9 +655,13 @@ export function createMessageBus(
 
     if (req.cmd === "set_connector_kind") {
       if (!req.connectorId) return { ok: false, error: "missing connectorId" };
-      const validKinds = ["context", "depends", null];
+      // DESIGN-BACKLOG.md item 62 — "spawned" included here so an
+      // orchestrator/human can also manually apply or clear it, even
+      // though the app itself only ever sets it automatically (see
+      // `addConnector` in App.tsx) — this cmd never sets it on its own.
+      const validKinds = ["context", "depends", "spawned", null];
       if (req.kind !== undefined && !validKinds.includes(req.kind)) {
-        return { ok: false, error: `kind must be one of context, depends, or null` };
+        return { ok: false, error: `kind must be one of context, depends, spawned, or null` };
       }
       const found = callbacks.setConnectorKind(req.connectorId, req.kind ?? null);
       if (!found) return { ok: false, error: `no such connector "${req.connectorId}"` };
@@ -507,60 +684,51 @@ export function createMessageBus(
       if (!req.target) return { ok: false, error: "missing target cardId" };
       const boardId = callbacks.getCardBoardId(req.target);
       if (!boardId) return { ok: false, error: `no such card "${req.target}"` };
-      return { ok: true, autonomous: callbacks.isBoardAutonomous(boardId) };
+      // DESIGN-BACKLOG.md item 60, peça 2 — `concurrencyCap` always
+      // reports the EFFECTIVE cap (board override, else the global
+      // default), never null, so a caller never has to know the fallback
+      // constant itself.
+      return {
+        ok: true,
+        autonomous: callbacks.isBoardAutonomous(boardId),
+        concurrencyCap: callbacks.getBoardConcurrencyCap(boardId) ?? DEFAULT_CONCURRENCY_CAP,
+        // DESIGN-BACKLOG.md item 60, peça 1 — lets a caller introspect
+        // queue depth without a dedicated tool; 0 for every board that
+        // isn't autonomous (the queue only ever applies there).
+        queueLength: (spawnQueue.get(boardId) ?? []).length,
+      };
     }
 
     if (req.cmd === "spawn_agent") {
       if (!req.provider) return { ok: false, error: "missing provider" };
-      const depth = req.depth ?? 0;
-      if (depth >= MAX_SPAWN_DEPTH) {
-        return { ok: false, error: `spawn depth limit reached (max ${MAX_SPAWN_DEPTH}) — refusing to spawn another agent` };
-      }
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
+      // Pre-release audit S4 — ignores `req.depth` entirely; see
+      // `cardSpawnDepth`'s own comment above for why.
+      const requesterDepth = requesterId ? (cardSpawnDepth.get(requesterId) ?? 0) : 0;
+      if (requesterDepth >= MAX_SPAWN_DEPTH) {
+        return { ok: false, error: `spawn depth limit reached (max ${MAX_SPAWN_DEPTH}) — refusing to spawn another agent` };
+      }
+      const depth = requesterDepth + 1;
       // DESIGN-BACKLOG.md item 59 — the ONE place `autoApprove` can ever
       // become true: the requester's own board opted in via the human-
-      // only UI toggle. No MCP/acbridge cmd reaches this flag. Structural
-      // refusal (no modal shown at all) once the board's cap is hit —
-      // same "refuse before asking" shape as the MAX_SPAWN_DEPTH check
-      // above, not a queue (same "no queue" decision as peça 6).
+      // only UI toggle. No MCP/acbridge cmd reaches this flag.
       const requesterBoardId = callbacks.getCardBoardId(requesterId);
       const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
-      if (autonomous && requesterBoardId) {
-        const running = callbacks.countRunningAgentsOnBoard(requesterBoardId);
-        if (running >= DEFAULT_CONCURRENCY_CAP) {
-          return {
-            ok: false,
-            error: `autonomous board concurrency cap reached (${DEFAULT_CONCURRENCY_CAP} agents already running) — refusing to spawn another agent`,
-          };
-        }
-      }
-      markWaiting(requesterId);
-      const spawnResult = await new Promise<SpawnAgentResult>((resolve) => {
-        const timer = setTimeout(() => {
-          pendingSpawnAgents.delete(requestId);
-          unmarkWaiting(requesterId);
-          resolve({ ok: false, error: "timed out waiting for a decision" });
-        }, SPAWN_TIMEOUT_MS);
-        pendingSpawnAgents.set(requestId, {
-          resolve: (result) => {
-            clearTimeout(timer);
-            pendingSpawnAgents.delete(requestId);
-            unmarkWaiting(requesterId);
-            resolve(result);
-          },
-          timer,
-        });
-        callbacks.onSpawnAgentRequest(requestId, requesterId, {
-          provider: req.provider as string,
-          cwd: req.cwd,
-          resumeId: req.resumeId,
-          depth: depth + 1,
-          reason: req.reason,
-          model: req.model,
-          autoApprove: autonomous,
-        });
-      });
+      const spawnParams = {
+        provider: req.provider as string,
+        cwd: req.cwd,
+        resumeId: req.resumeId,
+        depth,
+        reason: req.reason,
+        model: req.model,
+        label: req.label,
+      };
+      const spawnResult: SpawnAgentResult =
+        autonomous && requesterBoardId
+          ? await autonomousSpawn(requesterBoardId, requestId, requesterId, spawnParams)
+          : await dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
+      if (spawnResult.ok) cardSpawnDepth.set(spawnResult.cardId, depth);
       // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open
       // past "the human approved and the card exists" (spawnResult above)
       // until the process actually exits, so the caller gets a real
@@ -597,6 +765,10 @@ export function createMessageBus(
       }
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
+      // DESIGN-BACKLOG.md item 60, peça 5 — same board-scoped auto-approve
+      // as `open` above.
+      const requesterBoardId = callbacks.getCardBoardId(requesterId);
+      const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
       markWaiting(requesterId);
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
@@ -618,6 +790,7 @@ export function createMessageBus(
           cwd: req.cwd,
           url: req.url,
           reason: req.reason,
+          autoApprove: autonomous,
         });
       });
     }
@@ -650,9 +823,252 @@ export function createMessageBus(
    * with a waiter — cheap Map lookup, no-op when nothing's waiting). */
   function resolveCardExit(cardId: string, exitCode: number) {
     const waiters = pendingCardExits.get(cardId);
-    if (!waiters) return;
-    pendingCardExits.delete(cardId);
-    for (const resolve of waiters) resolve(exitCode);
+    if (waiters) {
+      pendingCardExits.delete(cardId);
+      for (const resolve of waiters) resolve(exitCode);
+    }
+    // DESIGN-BACKLOG.md item 60, peça 1 — a concurrency slot may have just
+    // freed on this card's board; drain its queue if so. The card's row
+    // (and board_id) still exists in store at this point — a process
+    // exiting doesn't delete the card, only closing it does.
+    const boardId = callbacks.getCardBoardId(cardId);
+    if (boardId) tryDispatchQueued(boardId);
+    // DESIGN-BACKLOG.md item 60, peça 4 — the OTHER failure path besides
+    // an explicit `update_task({status:"failed"})`: an agent's process
+    // exits having never called `report` at all. Achado ao vivo: killing
+    // a card's process (`window.pty.kill`, node-pty on this platform)
+    // reports `exitCode: 0` even for a signal-killed process — the exit
+    // CODE isn't a reliable "it failed" signal at all, so this doesn't
+    // gate on it (the doc draft assumed it would; verified live that it
+    // doesn't). The real signal is simpler and more robust anyway: a task
+    // still `running`, tied to exactly this card, that never got a
+    // report — no report ever arriving IS the anomaly, regardless of
+    // what exit code accompanied it. A report that DID arrive is not this
+    // case — whatever it said is the real outcome, for whoever reads it
+    // to call update_task, not this engine to guess.
+    if (!cardReports.has(cardId)) {
+      const task = callbacks.listTasks().find((t) => t.card_id === cardId && t.status === "running");
+      if (task) markTaskFailed(task, `process exited (code ${exitCode}) without ever calling report`);
+    }
+  }
+
+  function notifyQueueChanged(boardId: string) {
+    const list = spawnQueue.get(boardId) ?? [];
+    callbacks.onQueueChanged(
+      boardId,
+      list.map((e) => ({ id: e.id, requesterId: e.requesterId, provider: e.provider, reason: e.reason, requestedAt: e.requestedAt })),
+    );
+  }
+
+  function removeFromQueue(boardId: string, requestId: string) {
+    const list = spawnQueue.get(boardId);
+    if (!list) return;
+    const idx = list.findIndex((e) => e.id === requestId);
+    if (idx !== -1) list.splice(idx, 1);
+  }
+
+  /** DESIGN-BACKLOG.md item 60, peça 1 — the actual dispatch, factored out
+   * so both the direct-autonomous path and the queue-drain path share it
+   * (previously inlined only in the direct path). */
+  function dispatchSpawnAgentRequest(
+    requestId: string,
+    requesterId: string,
+    params: SpawnQueueEntry["params"],
+    autoApprove: boolean,
+  ) {
+    return new Promise<SpawnAgentResult>((resolve) => {
+      markWaiting(requesterId);
+      const timer = setTimeout(() => {
+        pendingSpawnAgents.delete(requestId);
+        unmarkWaiting(requesterId);
+        resolve({ ok: false, error: "timed out waiting for a decision" });
+      }, SPAWN_TIMEOUT_MS);
+      pendingSpawnAgents.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          pendingSpawnAgents.delete(requestId);
+          unmarkWaiting(requesterId);
+          resolve(result);
+        },
+        timer,
+      });
+      callbacks.onSpawnAgentRequest(requestId, requesterId, { ...params, autoApprove });
+    });
+  }
+
+  /** DESIGN-BACKLOG.md item 60, peça 1 — enqueues instead of refusing when
+   * an autonomous board is at its cap; the returned promise settles either
+   * when `tryDispatchQueued` later dispatches it for real, or on its own
+   * timeout (queue starvation — never left stuck forever). */
+  function enqueueSpawn(
+    boardId: string,
+    requestId: string,
+    requesterId: string,
+    params: SpawnQueueEntry["params"],
+  ) {
+    return new Promise<SpawnAgentResult>((resolveOuter) => {
+      const timer = setTimeout(() => {
+        removeFromQueue(boardId, requestId);
+        notifyQueueChanged(boardId);
+        resolveOuter({ ok: false, error: "queued spawn timed out waiting for a free slot" });
+      }, DEFAULT_QUEUE_TIMEOUT_MS);
+      const entry: SpawnQueueEntry = {
+        id: requestId,
+        requesterId,
+        provider: params.provider,
+        reason: params.reason,
+        requestedAt: Date.now(),
+        timer,
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolveOuter(result);
+        },
+        params,
+      };
+      const list = spawnQueue.get(boardId) ?? [];
+      list.push(entry);
+      spawnQueue.set(boardId, list);
+      notifyQueueChanged(boardId);
+    });
+  }
+
+  /** DESIGN-BACKLOG.md item 60, peça 1 — called whenever a slot might have
+   * freed (currently only from resolveCardExit above). No-op if the
+   * queue's empty or the board's still at/over cap. FIFO: always the
+   * oldest entry next. */
+  function tryDispatchQueued(boardId: string) {
+    const list = spawnQueue.get(boardId);
+    if (!list || list.length === 0) return;
+    const cap = callbacks.getBoardConcurrencyCap(boardId) ?? DEFAULT_CONCURRENCY_CAP;
+    const running = callbacks.countRunningAgentsOnBoard(boardId);
+    if (running >= cap) return;
+    const entry = list.shift()!;
+    notifyQueueChanged(boardId);
+    dispatchSpawnAgentRequest(entry.id, entry.requesterId, entry.params, true).then(entry.resolve);
+  }
+
+  /** DESIGN-BACKLOG.md item 60, peça 3 — the one entry point BOTH
+   * `spawn_agent`'s autonomous branch and the task-dispatch engine below
+   * use: cap check, then either straight dispatch or `enqueueSpawn`.
+   * Nothing bypasses the cap/queue, whichever path asked for the spawn. */
+  function autonomousSpawn(
+    boardId: string,
+    requestId: string,
+    requesterId: string,
+    params: SpawnQueueEntry["params"],
+  ) {
+    const running = callbacks.countRunningAgentsOnBoard(boardId);
+    const cap = callbacks.getBoardConcurrencyCap(boardId) ?? DEFAULT_CONCURRENCY_CAP;
+    if (running >= cap) return enqueueSpawn(boardId, requestId, requesterId, params);
+    return dispatchSpawnAgentRequest(requestId, requesterId, params, true);
+  }
+
+  /** DESIGN-BACKLOG.md item 60, peça 3 — called whenever a task reaches
+   * `done` (never `failed` — a dependent shouldn't start on top of a
+   * failed prerequisite; peça 4's auto-retry is what would eventually
+   * flip it back to `done`). Finds every OTHER pending task whose
+   * `deps_json` names this one, and for each whose OWN deps are now all
+   * satisfied, auto-dispatches it — but only if that task's OWN board
+   * opted into autonomous mode; every other task is left untouched,
+   * exactly as before this engine existed (pure bookkeeping, an external
+   * orchestrator's problem). Depth is NOT tracked here — this is engine-
+   * initiated dispatch, never an agent asking to spawn another, so
+   * MAX_SPAWN_DEPTH's fork-bomb guard doesn't apply; the task DAG's own
+   * size is what bounds this. */
+  function onTaskDone(taskId: string) {
+    const allTasks = callbacks.listTasks();
+    for (const task of allTasks) {
+      if (task.status !== "pending" || !task.board_id) continue;
+      const deps: string[] = task.deps_json ? JSON.parse(task.deps_json) : [];
+      if (!deps.includes(taskId)) continue;
+      if (!callbacks.isBoardAutonomous(task.board_id)) continue;
+      const allDone = deps.every((depId) => allTasks.find((t) => t.id === depId)?.status === "done");
+      if (!allDone) continue;
+      const requestId = randomUUID();
+      const params = {
+        provider: task.provider ?? "claude",
+        cwd: undefined,
+        resumeId: undefined,
+        depth: 0,
+        reason: `auto-dispatch: task ${task.id} (deps satisfied)`,
+        model: undefined,
+      };
+      // Mark `running` right away (not after the promise settles) so a
+      // second, near-simultaneous `onTaskDone` call for a sibling dep
+      // can't also see this task as still `pending` and dispatch it
+      // twice — same race this guards against as `markWaiting`'s ref-
+      // count elsewhere in this file.
+      callbacks.upsertTask({ ...task, status: "running", updated_at: Date.now() });
+      autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
+        if (result.ok) {
+          callbacks.upsertTask({ ...task, status: "running", card_id: result.cardId, updated_at: Date.now() });
+        } else {
+          markTaskFailed(task, result.error);
+        }
+      });
+    }
+  }
+
+  /** DESIGN-BACKLOG.md item 60, peça 4 — marks a task `failed` and,
+   * unless bookkeeping-only (no board, or board not autonomous),
+   * immediately tries `retryOrFail` on it. Single choke point so every
+   * path that can fail a task (explicit `update_task`, onTaskDone's own
+   * spawn failure, a card exiting silently below) gets the same
+   * auto-retry treatment. */
+  function markTaskFailed(task: TaskRow, error: string) {
+    const failed: TaskRow = { ...task, status: "failed", result_json: JSON.stringify({ error }), updated_at: Date.now() };
+    callbacks.upsertTask(failed);
+    retryOrFail(failed);
+  }
+
+  /** DESIGN-BACKLOG.md item 60, peça 4 — called on a task that just
+   * became `failed`. Bookkeeping-only outside an autonomous board (same
+   * boundary as peça 3's onTaskDone) — an external orchestrator's own
+   * retry loop is untouched there. Inside one: reassigns to the next
+   * untried provider in `fallback_providers_json` (the multi-provider
+   * thesis the audit actually argued for — flagged live by a reviewing
+   * agent that the first pass only ever retried the SAME provider,
+   * which didn't really deliver on that thesis), falling back to
+   * retrying the original provider when no fallback list was given
+   * (unchanged old behavior) or once the list is exhausted. Reuses
+   * `autonomousSpawn` (same cap/queue as every other spawn) up to
+   * `max_retries` (default DEFAULT_MAX_RETRIES) — past that, the task
+   * stays `failed` for good, no infinite loop. A retry that itself fails
+   * to spawn recurses back into `markTaskFailed`, bounded by the same
+   * `retry_count` check — each recursion increments it, so this always
+   * terminates. */
+  function retryOrFail(task: TaskRow) {
+    if (!task.board_id || !callbacks.isBoardAutonomous(task.board_id)) return;
+    const maxRetries = task.max_retries ?? DEFAULT_MAX_RETRIES;
+    if (task.retry_count >= maxRetries) return;
+    const attempted: string[] = task.attempted_providers_json ? JSON.parse(task.attempted_providers_json) : [];
+    const fallbackProviders: string[] = task.fallback_providers_json ? JSON.parse(task.fallback_providers_json) : [];
+    const provider = fallbackProviders.find((p) => !attempted.includes(p)) ?? task.provider ?? "claude";
+    attempted.push(provider);
+    const requestId = randomUUID();
+    const params = {
+      provider,
+      cwd: undefined,
+      resumeId: undefined,
+      depth: 0,
+      reason: `auto-retry: task ${task.id} (tentativa ${task.retry_count + 1} de ${maxRetries})`,
+      model: undefined,
+    };
+    const retrying: TaskRow = {
+      ...task,
+      status: "running",
+      retry_count: task.retry_count + 1,
+      attempted_providers_json: JSON.stringify(attempted),
+      updated_at: Date.now(),
+    };
+    callbacks.upsertTask(retrying);
+    autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
+      if (result.ok) {
+        callbacks.upsertTask({ ...retrying, card_id: result.cardId, updated_at: Date.now() });
+      } else {
+        markTaskFailed(retrying, result.error);
+      }
+    });
   }
 
   function resolveSpawnCard(requestId: string, result: SpawnCardResult) {
@@ -714,6 +1130,8 @@ export function createMessageBus(
     pendingSpawnAgents.clear();
     for (const { timer } of pendingSpawnCards.values()) clearTimeout(timer);
     pendingSpawnCards.clear();
+    for (const list of spawnQueue.values()) for (const { timer } of list) clearTimeout(timer);
+    spawnQueue.clear();
     server.close();
     try {
       unlinkSync(sockPath);

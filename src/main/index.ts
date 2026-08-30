@@ -1,6 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell } from "electron";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
@@ -378,11 +379,11 @@ function createWindow() {
   // (message-bus.ts's `handleRequest`, the same dispatcher acbridge and
   // the MCP server already call) rather than building a second one — the
   // human sees the exact same AgentAskModal a real `spawn_agent` MCP call
-  // already produces. `depth: 0` is correct/honest here (not `undefined`
-  // defaulting to 0 inside handleRequest by accident): a chat-initiated
-  // delegation is a fresh top-level chain, same as any human-initiated
-  // spawn from the rail/radial menu — it isn't itself a spawned PTY
-  // process, so it carries no AGENT_CANVAS_SPAWN_DEPTH to inherit.
+  // already produces. No `depth` to pass here (pre-release audit S4
+  // removed the caller-supplied field) — `cardId` isn't itself a spawned
+  // PTY process, so it has no server-tracked depth of its own, and
+  // `handleRequest` treats that as a fresh top-level chain (depth 0),
+  // same as any human-initiated spawn from the rail/radial menu.
   // `messageBus` is assigned further down (forward reference, same
   // pattern `mcpServer.handleRequest` below already relies on) — safe
   // because this closure only runs once a real tool call happens, long
@@ -393,7 +394,6 @@ function createWindow() {
       provider,
       cwd,
       requesterId: cardId,
-      depth: 0,
       reason,
     }) as Promise<{ ok: true; cardId: string } | { ok: false; error: string }>;
   }
@@ -490,6 +490,7 @@ function createWindow() {
     // that instance — confirmed live, see AGENTS.md.
     port: Number(process.env.AGENT_CANVAS_REMOTE_PORT) || 4488,
     mobileClientDir,
+    userDataDir: app.getPath("userData"),
     listTerminals: () =>
       store
         .listAllCards()
@@ -499,15 +500,130 @@ function createWindow() {
     onResize: (id, cols, rows) => registry.resize(id, cols, rows),
   });
 
-  // With WebRTCPipeWireCapturer enabled above, a single getSources() call
-  // made lazily (at request time, inside this handler — not at app
-  // startup, where it was empirically confirmed useless) is itself what
-  // triggers the native xdg-desktop-portal picker dialog and returns
-  // whatever the user chose in it. There is deliberately no in-app source
-  // list here — that path was tried and abandoned (DESIGN-BACKLOG.md item
-  // 3): this app can't enumerate real window names/thumbnails on Wayland,
-  // only the portal's own dialog can.
-  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+  // Pre-release audit S2 — neither of Electron's two permission gates
+  // (`setPermissionRequestHandler`, the async prompt path; `setPermission-
+  // CheckHandler`, the synchronous one `navigator.permissions.query` and
+  // similar immediate checks use) had ever been set for this session —
+  // every page a BrowserCard navigates to fell through to Electron's
+  // default, which is to auto-grant. `BENIGN_PERMISSIONS` auto-allows
+  // pure UI capability with no privacy/data-access implications —
+  // blanket-denying `fullscreen`/`pointerLock` would visibly break
+  // ordinary video/game browsing over something that was never the
+  // actual concern. Everything else not explicitly handled below is
+  // denied outright ("negando por padrão", the audit's own words).
+  //
+  // Achado ao vivo, corrigindo a premissa original: `display-capture`
+  // does NOT appear as its own permission name in this Electron version
+  // (42) — confirmed by logging the real value live — `getDisplayMedia()`
+  // arrives at `setPermissionRequestHandler` as a plain `"media"`
+  // permission, IDENTICAL to a `getUserMedia()` (camera/mic) request;
+  // `details.mediaTypes` is `['video']` for both too, so there's no field
+  // that tells them apart at this layer either. A screen-share request
+  // that's denied HERE never even reaches `setDisplayMediaRequestHandler`
+  // below (confirmed live: a bare `callback(false)` for `"media"` — the
+  // original design here — left the modal never shown at all and the
+  // page's own promise rejecting immediately). So `"media"` gets its own
+  // human confirmation right here, generic enough to cover either case
+  // ("quer acessar câmera/microfone, ou compartilhar sua tela") — a real
+  // getDisplayMedia call still gets asked a SECOND, more specific time by
+  // `setDisplayMediaRequestHandler`'s own gate right after (which source,
+  // not just "media, yes/no") — two-factor for the more sensitive of the
+  // two capabilities, not a redundancy bug.
+  const BENIGN_PERMISSIONS = new Set(["fullscreen", "pointerLock"]);
+  const PROMPT_PERMISSIONS = new Set(["media"]);
+  // Real regression found live running the full smoke suite after this
+  // handler first shipped: `session.defaultSession` covers EVERY
+  // webContents in the process, including this app's own main window
+  // (`win` below) — not just a BrowserCard's navigated page. Denying
+  // everything outside `BENIGN_PERMISSIONS`/`PROMPT_PERMISSIONS` by
+  // default silently broke this app's OWN first-party clipboard
+  // features (the terminal footer's "copiar link", paste). Confirmed
+  // live (logging the real denied value) that `writeText`/`readText`
+  // arrive here as `clipboard-sanitized-write`/`clipboard-read` — every
+  // Electron permission name, same discovery method already used above
+  // for `display-capture`/`"media"`. Scoped to `win.webContents` only
+  // (checked below, not added to `BENIGN_PERMISSIONS` outright): a
+  // BrowserCard's page is a DIFFERENT webContents (browser-registry.ts's
+  // own offscreen `BrowserWindow`, same default session, no partition),
+  // so an arbitrary site loaded there still can't silently read or
+  // overwrite the user's OS clipboard — a real hijack vector this
+  // handler's whole point was to close off, not reopen broadly.
+  const MAIN_WINDOW_ONLY_PERMISSIONS = new Set(["clipboard-sanitized-write", "clipboard-read"]);
+
+  // Shared "ask the renderer, wait for a human decision" primitive — used
+  // both for the generic media-permission prompt right below and for
+  // `setDisplayMediaRequestHandler`'s own, more specific source-selection
+  // prompt further down. Not the agent-facing `AgentAskModal`/`pendingAsk`
+  // machinery in message-bus.ts on purpose: this is a WEBPAGE inside a
+  // BrowserCard asking, not one of this app's own agent cards, so that
+  // modal's "an agent is asking" framing would be wrong here.
+  const pendingBrowserPermissionAsks = new Map<string, (allowed: boolean) => void>();
+  ipcMain.on("browser:resolve-permission-ask", (_e, requestId: string, allowed: boolean) => {
+    pendingBrowserPermissionAsks.get(requestId)?.(allowed);
+    pendingBrowserPermissionAsks.delete(requestId);
+  });
+  const BROWSER_PERMISSION_ASK_TIMEOUT_MS = 30_000;
+  function askHumanForBrowserPermission(message: string): Promise<boolean> {
+    const requestId = randomUUID();
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingBrowserPermissionAsks.delete(requestId);
+        resolve(false);
+      }, BROWSER_PERMISSION_ASK_TIMEOUT_MS);
+      pendingBrowserPermissionAsks.set(requestId, (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      });
+      safeSend(win, "browser:ask-permission", requestId, message);
+    });
+  }
+
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (MAIN_WINDOW_ONLY_PERMISSIONS.has(permission) && webContents.id === win.webContents.id) {
+      callback(true);
+      return;
+    }
+    if (BENIGN_PERMISSIONS.has(permission)) {
+      callback(true);
+      return;
+    }
+    if (!PROMPT_PERMISSIONS.has(permission)) {
+      callback(false);
+      return;
+    }
+    askHumanForBrowserPermission(
+      "Uma página aberta num card de navegador quer acessar câmera/microfone, ou compartilhar sua tela. Permitir?",
+    ).then(callback);
+  });
+  // Synchronous by API contract (`navigator.permissions.query` and
+  // similar immediate checks) — can't defer to a human here, so this only
+  // ever reports the benign allowlist as granted; the real prompt for
+  // anything else happens in `setPermissionRequestHandler` above, when a
+  // page actually calls the API itself (not just checks its own state).
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    if (MAIN_WINDOW_ONLY_PERMISSIONS.has(permission) && webContents?.id === win.webContents.id) return true;
+    return BENIGN_PERMISSIONS.has(permission);
+  });
+
+  // Pre-release audit S2 — used to call back with `sources[0]` (the whole
+  // screen) unconditionally, no human ever asked. Now shows its own,
+  // more specific confirmation, naming the page's own URL, reusing
+  // `askHumanForBrowserPermission` above. Only on an explicit "Permitir"
+  // does `desktopCapturer.getSources()` even run — on Wayland with
+  // WebRTCPipeWireCapturer enabled, THAT call is what triggers the native
+  // xdg-desktop-portal picker dialog for the actual source; there's
+  // deliberately no in-app source list (DESIGN-BACKLOG.md item 3 — this
+  // app can't enumerate real window names/thumbnails on Wayland, only the
+  // portal's own dialog can), so a human effectively gets THREE layered
+  // confirmations for screen-share on that platform: the generic media
+  // prompt above, this specific one, and the OS's own portal dialog.
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    const sourceUrl = request.frame?.url || "página desconhecida";
+    const allowed = await askHumanForBrowserPermission(`A página "${sourceUrl}" quer capturar sua tela. Permitir?`);
+    if (!allowed) {
+      callback({});
+      return;
+    }
     desktopCapturer
       .getSources({ types: ["screen", "window"] })
       .then((sources) => callback(sources.length > 0 ? { video: sources[0] } : {}))
@@ -544,8 +660,24 @@ function createWindow() {
         .map((c) => ({ id: c.id, provider: c.provider, cwd: c.cwd })),
     writeToCard: (id, text) => registry.write(id, text),
     isCardAlive: (id) => registry.isAlive(id),
+    // DESIGN-BACKLOG.md item 61 — same "Bash 2°" convention as App.tsx's
+    // `describeCard` (AgentAskModal's requester label), reimplemented
+    // against store.ts directly since this is main-process code.
+    describeCardLabel: (cardId) => {
+      const card = store.getCard(cardId);
+      if (!card) return `card #${cardId}`;
+      if (card.label) return card.label;
+      const sameProvider = store
+        .listCards(card.board_id)
+        .filter((c) => c.kind === "terminal" && c.provider === card.provider)
+        .sort((a, b) => Number(a.id) - Number(b.id));
+      const ordinal = sameProvider.findIndex((c) => c.id === cardId) + 1;
+      const name = card.provider.charAt(0).toUpperCase() + card.provider.slice(1);
+      return `${name} ${ordinal}°`;
+    },
     getCardBoardId: (id) => store.getCard(id)?.board_id,
     isBoardAutonomous: (boardId) => store.getBoard(boardId)?.autonomous ?? false,
+    getBoardConcurrencyCap: (boardId) => store.getBoard(boardId)?.concurrency_cap ?? null,
     countRunningAgentsOnBoard: (boardId) =>
       store
         .listCards(boardId)
@@ -555,8 +687,8 @@ function createWindow() {
     upsertTask: (task) => store.upsertTask(task),
     listAllConnectors: () => store.listAllConnectors(),
     setConnectorKind: (id, kind) => store.setConnectorKind(id, kind),
-    onOpenRequest: (requestId, requesterId, url, reason) =>
-      safeSend(win, "browser:ask-open", requestId, requesterId, url, reason),
+    onOpenRequest: (requestId, requesterId, url, reason, autoApprove) =>
+      safeSend(win, "browser:ask-open", requestId, requesterId, url, reason, autoApprove),
     onSnapshotRequest: (requestId, target) => handleSnapshotRequest(win, messageBus!, requestId, target),
     // DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — no consent needed
     // (see message-bus.ts's PAGE_TEXT_TIMEOUT_MS comment), so this goes
@@ -588,6 +720,9 @@ function createWindow() {
       safeSend(win, "spawn:ask-agent", requestId, requesterId, params),
     onSpawnCardRequest: (requestId, requesterId, params) =>
       safeSend(win, "spawn:ask-card", requestId, requesterId, params),
+    // DESIGN-BACKLOG.md item 60, peça 1 — live push so a queue panel never
+    // has to poll; same safeSend guard as every other main→renderer event.
+    onQueueChanged: (boardId, queue) => safeSend(win, "spawn-queue:changed", boardId, queue),
   });
   ipcMain.handle("browser:get-page-text", (_e, id: string) => browserRegistry.getPageText(id));
   ipcMain.handle("spawn:agent-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>
@@ -644,6 +779,10 @@ function createWindow() {
   // (App.tsx's session UI), never from message-bus.ts/mcp-server.ts —
   // there is no `BusRequest` cmd that touches this at all, on purpose.
   ipcMain.handle("store:boards:set-autonomous", (_e, id: string, autonomous: boolean) => store.setBoardAutonomous(id, autonomous));
+  // DESIGN-BACKLOG.md item 60, peça 2 — same shape/guarantee as
+  // set-autonomous above: only real renderer UI reaches this, `cap: null`
+  // means "back to the global default", never zero.
+  ipcMain.handle("store:boards:set-concurrency-cap", (_e, id: string, cap: number | null) => store.setBoardConcurrencyCap(id, cap));
   ipcMain.handle("store:card-counts", () => store.cardCounts());
   ipcMain.handle("store:next-id-seed", () => store.nextIdSeed());
   // Item 30 — sessions sidebar (every chat card, live or archived) +

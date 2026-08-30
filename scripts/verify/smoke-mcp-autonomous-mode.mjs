@@ -20,7 +20,13 @@ async function mcpCall(method, params) {
     body: JSON.stringify({ jsonrpc: "2.0", id: nextRpcId++, method, params }),
   });
   const text = await res.text();
-  const jsonLine = text.startsWith("event:") ? text.split("\n").find((l) => l.startsWith("data:"))?.slice(5).trim() : text;
+  // DESIGN-BACKLOG.md item 60, peça 1 — a call that waits in the spawn
+  // queue can hold the HTTP request open long enough for the SSE
+  // transport to interleave a ": keepalive" comment line before the real
+  // "data:" frame (achado ao vivo: `JSON.parse` crashava nesse caso).
+  // Always search for the data line by content, never gate on the FIRST
+  // line's prefix.
+  const jsonLine = text.split("\n").find((l) => l.startsWith("data:"))?.slice(5).trim() ?? text;
   return JSON.parse(jsonLine);
 }
 async function callTool(name, args) {
@@ -69,7 +75,11 @@ try {
   const board1BashId = board1Cards.cards[0].id;
 
   const modeBefore = await toolJson("board_mode", { target: board1BashId });
-  check("board novo nasce com autonomous:false, nunca herdado", JSON.stringify(modeBefore), JSON.stringify({ ok: true, autonomous: false }));
+  check(
+    "board novo nasce com autonomous:false, nunca herdado, cap efetivo é o default (3), fila vazia",
+    JSON.stringify(modeBefore),
+    JSON.stringify({ ok: true, autonomous: false, concurrencyCap: 3, queueLength: 0 }),
+  );
 
   // Baseline: com o modo desligado (padrão), spawn_agent ainda mostra o
   // modal — sem regressão no fluxo human-in-the-loop.
@@ -126,30 +136,73 @@ try {
     await new Promise((r) => setTimeout(r, 700));
   }
 
-  // Teto batido — recusa estrutural (sem modal, sem fila), só em modo autônomo.
-  const overCap = await toolJson("spawn_agent", { provider: "claude", callerCardId: board1BashId, reason: "excede o teto" });
-  check("ao bater o teto de concorrência em modo autônomo, o 4º spawn é recusado", overCap.ok, false);
+  // Teto batido — DESIGN-BACKLOG.md item 60, peça 1 reverteu a recusa
+  // estrutural antiga: agora entra numa fila real em vez de ser recusado.
+  // Disparado SEM await (a chamada MCP fica pendurada até um slot liberar
+  // — testado a fundo em smoke-mcp-spawn-queue.mjs; aqui só confirma que
+  // o fluxo autônomo completo integra com a fila, sem regressão pro
+  // comportamento antigo).
+  const overCapPromise = callTool("spawn_agent", { provider: "claude", callerCardId: board1BashId, reason: "excede o teto, deveria entrar na fila" });
+  await new Promise((r) => setTimeout(r, 800));
+  check("ao bater o teto em modo autônomo, o 4º spawn ENTRA NA FILA (não é mais recusado)", (await toolJson("board_mode", { target: board1BashId })).queueLength, 1);
   check("...sem mostrar modal", await hasModal(page), false);
+  // Libera um slot matando um dos 3 rodando — o da fila deve disparar sozinho.
+  await page.evalJs(`window.pty.kill(${JSON.stringify(autoSpawnedIds[0])})`);
+  await new Promise((r) => setTimeout(r, 1500));
+  const overCap = JSON.parse((await overCapPromise).content[0].text);
+  check("...e resolve ok:true sozinho assim que um slot libera", overCap.ok && typeof overCap.cardId === "string", true);
+  check("a fila volta a ficar vazia depois do despacho", (await toolJson("board_mode", { target: board1BashId })).queueLength, 0);
+  // Precisa entrar na exclusão do board2BashId lá embaixo — é mais um
+  // card real do board1, senão o `find` que procura "o card do board2"
+  // acha este por engano (mesmo card, board errado).
+  if (overCap.ok) autoSpawnedIds.push(overCap.cardId);
 
-  // MAX_SPAWN_DEPTH continua valendo, mesmo em modo autônomo.
-  const depthGuard = await toolJson("spawn_agent", { provider: "bash", callerCardId: board1BashId, depth: 3 });
+  // MAX_SPAWN_DEPTH continua valendo, mesmo em modo autônomo. Pre-release
+  // audit S4 fechou a confiança cega em `depth` client-declarado — um
+  // `depth: 3` autodeclarado por um card cuja profundidade real (rastreada
+  // no servidor) é 0 não é mais levado a sério, então a única forma real
+  // de bater o teto agora é uma cadeia de verdade: `provider: "bash"` pra
+  // não competir com o teto de concorrência (só agentes não-bash contam),
+  // auto-aprovado por já estar em board autônomo (sem modal).
+  // Libera o teto de concorrência antes da cadeia de profundidade abaixo —
+  // achado ao vivo: o gate de `autonomousSpawn` compara `running` (agentes
+  // não-bash vivos) contra o teto pra QUALQUER novo spawn, mesmo um de
+  // provider bash — bash só fica de fora da CONTAGEM, não do próprio gate.
+  // Sem isso, os spawns bash abaixo entrariam na fila atrás dos 3 agentes
+  // claude ainda vivos da rodada de teto acima, e só resolveriam quando o
+  // timeout da fila (10 minutos) vencesse.
+  for (const id of autoSpawnedIds) {
+    await page.evalJs(`window.pty.kill(${JSON.stringify(id)}).catch(() => {})`);
+  }
+  await new Promise((r) => setTimeout(r, 1000));
+  check("teto de concorrência livre antes da cadeia de profundidade", (await toolJson("board_mode", { target: board1BashId })).queueLength, 0);
+
+  const fakeDepthGuard = await toolJson("spawn_agent", { provider: "bash", callerCardId: board1BashId, depth: 3, reason: "declara depth 3, real é 0" });
+  check("um depth:3 autodeclarado por um card de profundidade real 0 NÃO é confiado — resolve ok normalmente", fakeDepthGuard.ok, true);
+  // Precisa entrar na exclusão do board2BashId lá embaixo, mesmo motivo do
+  // `autoSpawnedIds.push` acima — são mais cards reais do board1.
+  if (fakeDepthGuard.ok) autoSpawnedIds.push(fakeDepthGuard.cardId);
+
+  let chainCardId = board1BashId;
+  for (let i = 1; i <= 3; i++) {
+    const hop = await toolJson("spawn_agent", { provider: "bash", callerCardId: chainCardId, reason: `cadeia real de profundidade ${i}` });
+    check(`cadeia real de profundidade ${i} resolve ok`, hop.ok && typeof hop.cardId === "string", true);
+    chainCardId = hop.cardId;
+    autoSpawnedIds.push(hop.cardId);
+  }
+  const depthGuard = await toolJson("spawn_agent", { provider: "bash", callerCardId: chainCardId, reason: "profundidade 4, deveria recusar" });
   check("MAX_SPAWN_DEPTH ainda recusa em modo autônomo (razão distinta do teto de concorrência)", depthGuard.error?.includes("depth"), true);
 
-  // open_url e spawn_card continuam pedindo consentimento em modo autônomo
-  // — o auto-approve é só pra spawn_agent.
-  const openPromise = callTool("open_url", { url: "https://example.com", callerCardId: board1BashId, reason: "smoke item 59" });
-  await new Promise((r) => setTimeout(r, 500));
-  check("open_url AINDA mostra o modal mesmo em modo autônomo", await hasModal(page), true);
-  await clickModalButton(page, "Permitir");
-  await openPromise;
-  await new Promise((r) => setTimeout(r, 500));
+  // DESIGN-BACKLOG.md item 60, peça 5 — modo autônomo completo: reverte o
+  // limite antigo do item 59 (auto-approve só pra spawn_agent).
+  // open_url/spawn_card agora TAMBÉM resolvem na hora, sem modal.
+  const openResult = await toolJson("open_url", { url: "https://example.com", callerCardId: board1BashId, reason: "smoke item 60 peça 5" });
+  check("open_url resolve ok:true SEM modal em modo autônomo (peça 5)", openResult.ok, true);
+  check("...de fato sem nenhum modal no DOM", await hasModal(page), false);
 
-  const spawnCardPromise = callTool("spawn_card", { kind: "sticky", callerCardId: board1BashId });
-  await new Promise((r) => setTimeout(r, 500));
-  check("spawn_card AINDA mostra o modal mesmo em modo autônomo", await hasModal(page), true);
-  await clickModalButton(page, "Permitir");
-  await spawnCardPromise;
-  await new Promise((r) => setTimeout(r, 300));
+  const spawnCardResult = await toolJson("spawn_card", { kind: "sticky", callerCardId: board1BashId });
+  check("spawn_card resolve ok:true SEM modal em modo autônomo (peça 5)", spawnCardResult.ok && typeof spawnCardResult.cardId === "string", true);
+  check("...de fato sem nenhum modal no DOM", await hasModal(page), false);
 
   // Nenhuma tool MCP liga/desliga o modo — só board_mode existe, e é
   // read-only (confirmado pela ausência de qualquer outra tool com

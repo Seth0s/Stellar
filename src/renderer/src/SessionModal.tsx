@@ -5,7 +5,7 @@ import { toast } from "./useToast";
 import { required, useFieldValidation } from "./validation";
 import type { SessionTemplate } from "./useBoardStore";
 
-type Board = { id: string; name: string; cwd: string; autonomous: boolean };
+type Board = { id: string; name: string; cwd: string; autonomous: boolean; concurrency_cap: number | null };
 
 const TEMPLATES: { value: SessionTemplate; label: string; desc: string }[] = [
   { value: "empty", label: "Vazio", desc: "nenhum card" },
@@ -49,6 +49,9 @@ type SessionModalProps =
        * staged behind "Salvar": a safety-relevant setting shouldn't
        * depend on the user remembering to also click save. */
       onToggleAutonomous: (id: string, autonomous: boolean) => void;
+      /** DESIGN-BACKLOG.md item 60, peça 2 — same immediate-fire pattern
+       * as onToggleAutonomous. `null` resets to the app-wide default. */
+      onSetConcurrencyCap: (id: string, cap: number | null) => void;
       onClose: () => void;
     };
 
@@ -143,6 +146,25 @@ export function SessionModal(props: SessionModalProps) {
                 ⚠ ativo: qualquer agente aqui pode criar outros agentes sem confirmação, até o teto de concorrência
               </span>
             )}
+          </div>
+        )}
+        {props.mode === "edit" && props.board.autonomous && (
+          <div className="popover-field">
+            <label className="concurrency-cap-label">
+              limite de agentes simultâneos
+              <input
+                className="resume-input concurrency-cap-input"
+                type="number"
+                min={1}
+                max={50}
+                placeholder="3 (padrão)"
+                value={props.board.concurrency_cap ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  props.onSetConcurrencyCap(props.board.id, raw === "" ? null : Math.max(1, Number(raw)));
+                }}
+              />
+            </label>
           </div>
         )}
         <div className={props.mode === "edit" ? "modal-actions modal-actions-split" : "modal-actions"}>

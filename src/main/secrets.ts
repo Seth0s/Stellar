@@ -1,5 +1,5 @@
 import { safeStorage } from "electron";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -54,8 +54,23 @@ function readAll(userDataDir: string): SecretsFile {
   }
 }
 
+// Pre-release audit S9 — a crash mid-`writeFileSync` used to leave
+// `secrets.json` truncated (`readAll` treats invalid JSON as empty, so a
+// configured key would silently vanish), and `{ mode: 0o600 }` only ever
+// applies to a FILE THE CALL ITSELF CREATES — once `secrets.json` already
+// exists, every subsequent write leaves whatever mode it already had
+// untouched. Write to a sibling `.tmp` path and `renameSync` over the real
+// path instead (rename is atomic on the same filesystem, and `userDataDir`
+// guarantees that): a crash mid-write leaves at worst a stray `.tmp` file,
+// never a half-written `secrets.json`. `chmodSync` runs explicitly on the
+// tmp file regardless, since it may itself be a leftover from a prior
+// crash (already existing, so `writeFileSync`'s own `mode` wouldn't apply).
 function writeAll(userDataDir: string, data: SecretsFile) {
-  writeFileSync(secretsPath(userDataDir), JSON.stringify(data), { mode: 0o600 });
+  const path = secretsPath(userDataDir);
+  const tmpPath = `${path}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(data), { mode: 0o600 });
+  chmodSync(tmpPath, 0o600);
+  renameSync(tmpPath, path);
 }
 
 export function createSecretsStore(userDataDir: string) {
