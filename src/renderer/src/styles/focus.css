@@ -1,0 +1,22 @@
+/* Pre-release audit D4 — nenhuma regra `:focus-visible` existia em todo o
+   renderer (113 botões), então navegar por Tab não pintava absolutamente
+   nada: o foco existia, só era invisível. Regra global, com os tokens que
+   já existem em tokens.css — mesmo anel (`2px var(--foam)`, offset 2px)
+   que `.card-frame.selected` já usa pra "isto está selecionado", que é a
+   mesma ideia visual.
+
+   `:focus-visible` (e não `:focus`) de propósito: o anel aparece pra
+   teclado e some pro clique de mouse, que é o comportamento que o
+   navegador já sabe decidir sozinho.
+
+   Importado logo depois de tokens.css e ANTES de layout/cards, não
+   depois: em empate de especificidade a última regra vence, e os poucos
+   `outline: none` que já existem (`.sticky-textarea`, o input de endereço
+   do card de navegador, o textarea do chat, o <video> do card de janela
+   remota) são deliberados e têm feedback de foco próprio — ficando antes,
+   esta regra cobre tudo que não tem regra nenhuma sem sobrescrever o que
+   foi escolhido a dedo. */
+:focus-visible {
+  outline: 2px solid var(--foam);
+  outline-offset: 2px;
+}
