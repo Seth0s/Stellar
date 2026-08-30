@@ -6,6 +6,23 @@ import { watchForSession } from "./session-watch";
 const COALESCE_MS = 16;
 const COALESCE_MAX = 64 * 1024;
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/g;
+// DESIGN-BACKLOG.md item 57, ponto 12 — real bug reported live: seen-url
+// chips showed garbage like "claude.ai/cod[54G/a[57Gtifact/..." — raw
+// ANSI escapes (cursor repositioning, e.g. terminal line-wrap redraws on
+// a long URL) landing INSIDE the matched string, since `URL_PATTERN`'s
+// excluded-character class (whitespace/quotes/angle-brackets) never
+// excluded control characters. Stripped from a local copy used only for
+// URL matching below — never from `data` itself, which still needs its
+// real escape codes intact for xterm to render color/cursor movement
+// correctly. Same CSI/OSC-stripping pattern as the well-known `ansi-regex`
+// npm package (not added as a dependency for one regex) — not
+// exhaustive of every obscure escape form, but covers the CSI class
+// (cursor movement, colors) actually seen in practice here.
+const ANSI_PATTERN = new RegExp(
+  "[\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\\u0007)" +
+    "|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~]))",
+  "g",
+);
 
 type Entry = {
   proc: pty.IPty;
@@ -127,7 +144,8 @@ export function createPtyRegistry(registryOpts: {
       // with no system-prompt hook (codex/cursor): never opens anything on
       // its own, just surfaces what the agent already printed as a chip a
       // human can click.
-      for (const url of data.match(URL_PATTERN) ?? []) {
+      const cleaned = data.replace(ANSI_PATTERN, "");
+      for (const url of cleaned.match(URL_PATTERN) ?? []) {
         if (!entry.seenUrls.has(url)) {
           entry.seenUrls.add(url);
           registryOpts.onUrlSeen(id, url);

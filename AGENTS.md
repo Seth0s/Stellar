@@ -3821,6 +3821,24 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   `smoke-card-lifecycle` sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 5.
 
+## 2026-08-29 — item 57 ponto 12 (1/3): escape ANSI vazando nas URLs capturadas do terminal
+
+- `pty-registry.ts`'s `URL_PATTERN` rodava direto sobre o `data` bruto do
+  PTY; a classe de exclusão nunca cobria bytes de controle, então uma
+  sequência CSI embutida (`\x1b[54G`, reposicionamento de cursor) virava
+  literalmente parte do texto capturado como "URL vista" — exatamente o
+  lixo visual reportado (`claude.ai/cod[54G/a...`).
+- Fix: `ANSI_PATTERN` limpa uma cópia local só usada pro match de URL —
+  nunca o `data` real que o xterm precisa intacto.
+- Verificado: regex direto contra a sequência real confirma a limpeza;
+  teste ao vivo (bash real) confirma nenhum lixo visível no chip
+  capturado. Limitação documentada: teste ao vivo via eco de tty não
+  replica bytes ESC reais perfeitamente (echoctl traduz pra `^[`
+  literal) — o teste direto do regex é a prova mais precisa pro caso
+  real. Reconstituição perfeita via cursor-overwrite fica fora de
+  escopo.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 12.
+
 ## Comandos
 
 ```bash

@@ -4261,6 +4261,27 @@ passagem. Numeração preservada como reportada.
       `claude.ai/cod[54G/a[57Gtifact/...`) — parece sequência de escape
       ANSI (posicionamento de cursor, tipo `ESC[54G`) vazando pro texto
       capturado em vez de ser filtrada antes de virar uma "URL vista".
+      **✅ feito em 2026-08-29** — `pty-registry.ts`'s `URL_PATTERN`
+      rodava direto em cima do `data` bruto do PTY; a classe de
+      caracteres excluídos (espaço/aspas/`<>`) nunca excluía bytes de
+      controle, então uma sequência CSI embutida (`\x1b[54G`) virava
+      parte literal do "match". Fix: `ANSI_PATTERN` (mesmo padrão
+      CSI/OSC do pacote `ansi-regex`, não adicionado como dependência
+      por 1 regex) limpa uma CÓPIA local usada só pro match de URL —
+      nunca o `data` real, que ainda precisa das sequências intactas pro
+      xterm renderizar cor/cursor certo. Verificado: teste direto do
+      regex contra a sequência real (`\x1b[54G` embutido no meio de uma
+      URL) confirma a string limpa corretamente; teste ao vivo (escrita
+      raw numa sessão bash real) confirma nenhum "lixo" `[54G`-como
+      visível no chip capturado, com o texto real da URL preservado —
+      limitação conhecida: o teste ao vivo via eco de tty não replica
+      bytes ESC reais perfeitamente (o próprio `echoctl` do tty traduz
+      ESC pra `^[` literal antes de chegar no código), então o teste
+      direto do regex contra os bytes reais é a prova mais precisa pro
+      caso real (uma CLI emitindo ESC de verdade no próprio stdout).
+      Reconstituição perfeita de uma linha reescrita via
+      cursor-overwrite (não só remoção de bytes) fica fora de escopo —
+      exigiria emulação real de terminal, não somente strip de regex.
     - O badge "🔗 N" (contagem de conectores) está mal posicionado,
       quase encostando/sobrepondo o eixo do canvas.
     - A lista de URLs dentro do popover não usa o scrollbar padrão
