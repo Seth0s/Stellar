@@ -4160,13 +4160,19 @@ Pedido explícito do usuário foi só anotar, sem mexer em código nesta
 passagem. Numeração preservada como reportada.
 
 1. **Terminal — linha vertical não é borda, é o scrollbar se mesclando
-   com o DOM** (print anexado ao pedido). O trilho do scrollbar do
-   xterm.js está visualmente idêntico a uma borda de card, lido como se
-   fosse estrutura em vez de controle de rolagem. Pedido: remover a
-   affordance visual do scrollbar sem perder a rolagem em si (equivalente
-   ao `thin-scroll`/scrollbar invisível-mas-funcional já usado em outros
-   lugares do app — `FilesCard`, editor, etc. — aplicar o mesmo tratamento
-   ao xterm).
+   com o DOM — ✅ feito em 2026-08-29.** Causa raiz: item 10 (achado 1)
+   já tinha recolorido o slider do scrollbar de xterm pra `var(--border)`
+   pra parar de parecer um branco quase-opaco solto — mas `--border` é
+   EXATAMENTE a cor da borda real do card, e o slider fica encostado
+   nessa mesma borda (altura cheia, lado direito), então virou uma
+   segunda "borda" confusa em vez de ficar discreto. Fix: `.slider` vira
+   `background: transparent !important` (não mais recolorido, invisível
+   de vez) — CSS puro, elemento continua existindo/arrastável, scroll
+   por wheel do xterm nem depende dessa cor. Verificado ao vivo:
+   `getComputedStyle` confirma `rgba(0,0,0,0)`; `smoke-card-wheel-scope.mjs`
+   (já existente, reroda depois desta mudança) confirma a rolagem em si
+   continua funcional (pixels reais do scrollback mudam). `tsc --noEmit`/
+   `electron-vite build` limpos.
 2. **Chatbox: falta botão de nova sessão + sessões deveriam ser
    por-provider** (print anexado). A barra lateral "SESSÕES DE CHAT" só
    lista sessões existentes, sem um botão pra criar uma nova diretamente

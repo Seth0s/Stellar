@@ -276,18 +276,25 @@
 /* xterm.js's own scrollbar (a VS Code-derived overlay scrollbar, not the
    browser's native one — real, functional: `new Terminal()` gets no
    explicit `scrollback`, so it defaults to 1000 lines, and a busy session
-   genuinely fills that). It fades to invisible correctly when idle (xterm's
-   own CSS, opacity-based) — the bug (item 10, achado 1, DESIGN-BACKLOG.md)
-   was never that it stayed visible, it's that its *color* while active is
-   xterm's stock near-opaque white, which reads as a stray rendering
-   artifact against this app's own muted, fully custom chrome (nothing else
-   in the app looks like this). `!important` is required: xterm sets the
-   slider's background via inline `style`, which beats a plain stylesheet
-   rule regardless of selector specificity. */
+   genuinely fills that). Its track (`.visible`/`.invisible`) is already
+   transparent via xterm's own stock CSS; only the slider (thumb) itself
+   ever painted a real color.
+   Pedido ao vivo (2026-08-29, item 57 ponto 1) — recoloring the slider
+   to `var(--border)` (item 10, achado 1) fixed the original complaint
+   (xterm's stock near-opaque white reading as a rendering artifact) but
+   created a new one: `--border` is the SAME color this app's own card
+   frame uses for its real edge, and the slider sits flush against that
+   exact edge (full-height, right side) — it now reads as a second,
+   confusing card border rather than a scroll affordance. Made fully
+   transparent instead of recolored: the slider element is still there,
+   still draggable (this is a CSS-only change — `opacity`/`pointer-events`
+   and xterm's own scroll-wheel handling are untouched), it's just no
+   longer painted. `!important` still required: xterm sets the slider's
+   background via inline `style`, which beats a plain stylesheet rule
+   regardless of selector specificity. */
 .terminal-card-body .xterm-scrollable-element > .visible .slider,
 .terminal-card-body .xterm-scrollable-element > .invisible .slider {
-  background: var(--border) !important;
-  border-radius: 3px;
+  background: transparent !important;
 }
 
 .terminal-card-exited {
