@@ -3981,6 +3981,26 @@ boot** (não só quando não há sessão salva); volta a partir do canvas é um
   build` limpos, suite de terminal/provider sem regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 13.
 
+## 2026-08-29 — item 57 ponto 10: fonte dinâmica em terminais com agente ativo, seguindo o zoom
+
+- O card inteiro já escala opticamente via `transform: scale()` — texto
+  fica borrado em zooms altos porque xterm.js continua rasterizando no
+  mesmo fontSize físico. `fontSizeForZoom(zoom)` (`useTerminal.ts`)
+  recalcula o fontSize real com influência PARCIAL do zoom
+  (`FONT_ZOOM_INFLUENCE = 0.15`, clamp 11–22, `BASE_FONT_SIZE=15` em
+  zoom=1 — sem regressão no caso comum). Só pra `providerId !== "bash"`.
+  Novo effect throttlado a passos de zoom de 0.1 (comparação de ref
+  barata na maioria dos re-renders, só o passo raro faz o trabalho caro).
+- Verificado ao vivo sem mock: `window.pty` vem CONGELADO pelo
+  `contextBridge` (confirmado tentando monkey-patch — vira no-op
+  silencioso), então o teste novo (`smoke-terminal-font-zoom.mjs`) usa o
+  canvas interno de MEDIÇÃO de célula do próprio xterm.js (não afetado
+  pelo `transform` do ancestral) como sinal real: cresce num card
+  `claude` de verdade depois de zoom in, fica idêntico num card `bash` de
+  controle. `tsc --noEmit`/`electron-vite build` limpos, suite de
+  terminal sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 57 ponto 10.
+
 ## Comandos
 
 ```bash
