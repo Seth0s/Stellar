@@ -133,6 +133,37 @@ try {
     // A tool-line for the completed bash call should render (post-hoc,
     // unlike "running" which is deliberately suppressed — see ChatCard.tsx).
     check("a done tool-line renders for the completed bash call", await page.evalJs(`!!document.querySelector('.chat-tool-line.done:not(.error)')`), true);
+
+    // Real bug found live while writing pre-release audit S5's own smoke
+    // test (`smoke-sandbox-home-occlusion.mjs`): `.chat-msg` (cards.css)
+    // was `display: flex` with no `flex-direction`, defaulting to `row`.
+    // With a done bash decision already sitting in `.chat-msg.assistant`
+    // (the "ps aux" one above — its `.chat-tool-line-label` is long and
+    // `white-space: nowrap`, no `min-width: 0`), a THIRD bash consent
+    // block rendered as a flex-ROW sibling gets squeezed to ~2px wide,
+    // positioned thousands of pixels outside the viewport — confirmed
+    // live via `elementFromPoint` at its own computed click coordinates
+    // returning nothing. Fixed with `flex-direction: column`. This is
+    // the regression check: a THIRD bash call, chained right after the
+    // "ps aux" one above with no other UI interaction in between, must
+    // render a real, on-screen, clickable consent block.
+    const thirdBashPromise = page.evalJs(`
+      window.chat.testSimulateTool(${JSON.stringify(realCardId)}, "bash", { command: "echo third-bash-ok" }, ${JSON.stringify(SCRATCH_ROOT)})
+        .then(JSON.stringify)
+    `);
+    await new Promise((r) => setTimeout(r, 500));
+    const thirdBashRect = JSON.parse(
+      await page.evalJs(`(() => { const b = document.querySelector('.chat-diff-allow'); if (!b) return "null"; const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x, y: r.y, w: r.width, h: r.height}); })()`),
+    );
+    check(
+      "a third chained bash consent block renders on-screen, not squeezed off to the side by a prior sibling's long label",
+      thirdBashRect && thirdBashRect.w > 20 && thirdBashRect.x >= 0 && thirdBashRect.x < 1280,
+      true,
+    );
+    const thirdBashCoords = { x: thirdBashRect.x + thirdBashRect.w / 2, y: thirdBashRect.y + thirdBashRect.h / 2 };
+    await page.click(thirdBashCoords.x, thirdBashCoords.y);
+    const thirdBashResult = JSON.parse(await thirdBashPromise);
+    check("...and clicking it at those real coordinates actually resolves the consent (ok:true)", thirdBashResult.ok, true);
   }
 
   // ---- delegate_to_agent — reuses the EXISTING spawn_agent consent

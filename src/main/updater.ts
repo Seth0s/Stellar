@@ -24,12 +24,15 @@ const { autoUpdater } = electronUpdaterPkg;
  * - Any failure (network, signature, no feed) surfaces to the renderer as
  *   a plain error string instead of installing anything.
  *
- * PENDENTE (see docs/packaging.md): no `publish` block in package.json
- * yet — this repo's real GitHub remote is still unresolved (see
- * DESIGN-BACKLOG.md item 13's write-up), so `checkForUpdates()` will
- * reliably fail with "no publish configured" until that's filled in.
- * That's expected, not a bug in this file — the code is ready the same
- * way CentralByte's was before its own GitHub secret landed.
+ * The feed itself comes from `.github/workflows/release.yml`: pushing a
+ * `v*` tag builds+publishes to a GitHub Release via `electron-builder
+ * --publish always`, which generates the per-platform `latest*.yml`
+ * `checkForUpdates()` reads. Nothing in THIS file needs to change to
+ * cut a release — the one thing that has to happen every time is
+ * bumping `version` in `package.json` before tagging (electron-updater
+ * compares the running app's own `package.json` version against the
+ * feed's; forgetting the bump means the feed's version never looks
+ * newer, so the update silently never surfaces).
  */
 export function registerUpdater(win: BrowserWindow) {
   autoUpdater.autoDownload = false;

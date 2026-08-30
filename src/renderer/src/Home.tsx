@@ -51,6 +51,7 @@ export function Home({
   onUpdateBoard,
   onDeleteBoard,
   onToggleAutonomous,
+  onSetConcurrencyCap,
 }: {
   boards: BoardRow[];
   boardCounts: Record<string, BoardCounts>;
@@ -70,6 +71,8 @@ export function Home({
   /** DESIGN-BACKLOG.md item 59 — separate from onUpdateBoard, fires
    * immediately (see Topbar.tsx's same prop). */
   onToggleAutonomous: (id: string, autonomous: boolean) => void;
+  /** DESIGN-BACKLOG.md item 60, peça 2. */
+  onSetConcurrencyCap: (id: string, cap: number | null) => void;
 }) {
   const [modal, setModal] = useState<ModalState>(null);
 
@@ -192,6 +195,7 @@ export function Home({
           onSave={onUpdateBoard}
           onDelete={onDeleteBoard}
           onToggleAutonomous={onToggleAutonomous}
+          onSetConcurrencyCap={onSetConcurrencyCap}
           onClose={() => setModal(null)}
         />
       )}

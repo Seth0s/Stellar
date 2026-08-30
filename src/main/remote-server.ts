@@ -1,9 +1,10 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, extname } from "node:path";
 import { networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
+import { safeStorage } from "electron";
 import { WebSocketServer, type WebSocket } from "ws";
 import QRCode from "qrcode";
 
@@ -22,6 +23,10 @@ export type RemoteDevicePairing = RemoteDevice & {
   url: string | null;
   qrDataUrl: string | null;
 };
+
+// Pre-release audit S7 — how long a freshly-opened socket gets to send
+// its `{type:"auth", token}` first message before being dropped.
+const AUTH_TIMEOUT_MS = 5_000;
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -56,15 +61,75 @@ const MIME: Record<string, string> = {
  * its own device id, so `revokeDevice(id)` can drop exactly one phone
  * without booting every other paired device. `revokeAll()` stays as the
  * blunt "something might have leaked, nuke everything" escape hatch.
+ *
+ * Pre-release audit S7 — three things fixed together, same reasoning as
+ * `secrets.ts`'s own posture on this exact tradeoff:
+ * (1) the LAN port used to open at app boot, exposed to anyone on the
+ *     network before a single phone was ever paired — now it only binds
+ *     inside `pairNewDevice`, on first use;
+ * (2) the WebSocket upgrade didn't check `Origin` at all — a malicious
+ *     page open in a browser on the same LAN could open a WS to this
+ *     server itself (the token isn't secret to that page if it can guess
+ *     or brute-force it, and CSRF-style browser-mediated connection was
+ *     wide open regardless). Checked against the request's own `Host`
+ *     header rather than a fixed LAN-address allowlist — this still
+ *     works transparently through the Phase B tunnel case (Tailscale
+ *     Funnel/Cloudflare Tunnel), where the real Origin is the tunnel's own
+ *     hostname, never a LAN IP the server could hardcode in advance;
+ * (3) the token traveled in the WS upgrade URL — logged by any reverse
+ *     proxy/tunnel sitting in front, kept in browser history. Moved to the
+ *     first message sent after the socket opens instead (see
+ *     `resources/mobile-client/app.js`).
+ * `devices` now also survives a restart — persisted via `safeStorage`
+ * (same encrypt-if-available, cleartext-fallback posture as
+ * `secrets.ts`, and the same tmp+rename atomic write S9 gave that file),
+ * since an in-memory-only pairing list meant every app restart silently
+ * revoked every phone with zero indication why.
  */
+function devicesPath(userDataDir: string): string {
+  return join(userDataDir, "remote-devices.json");
+}
+
+type PersistedDevice = { value: string; encrypted: boolean };
+
+function loadDevices(userDataDir: string): Map<string, Device> {
+  const path = devicesPath(userDataDir);
+  const devices = new Map<string, Device>();
+  if (!existsSync(path)) return devices;
+  try {
+    const stored: PersistedDevice = JSON.parse(readFileSync(path, "utf-8"));
+    const json = stored.encrypted ? safeStorage.decryptString(Buffer.from(stored.value, "base64")) : stored.value;
+    const list: Device[] = JSON.parse(json);
+    for (const d of list) devices.set(d.id, d);
+  } catch {
+    // Corrupt file, or encrypted under a different OS-keychain identity
+    // (e.g. copied to another machine) — same defensive posture as
+    // `secrets.ts`'s own `readAll`: treat as "no devices", never crash.
+  }
+  return devices;
+}
+
+function saveDevices(userDataDir: string, devices: Map<string, Device>) {
+  const path = devicesPath(userDataDir);
+  const tmpPath = `${path}.tmp`;
+  const json = JSON.stringify([...devices.values()]);
+  const stored: PersistedDevice = safeStorage.isEncryptionAvailable()
+    ? { value: safeStorage.encryptString(json).toString("base64"), encrypted: true }
+    : { value: json, encrypted: false };
+  writeFileSync(tmpPath, JSON.stringify(stored), { mode: 0o600 });
+  chmodSync(tmpPath, 0o600);
+  renameSync(tmpPath, path);
+}
+
 export function createRemoteServer(opts: {
   port: number;
   mobileClientDir: string;
+  userDataDir: string;
   listTerminals: () => TerminalSummary[];
   onWrite: (id: string, data: string) => void;
   onResize: (id: string, cols: number, rows: number) => void;
 }) {
-  const devices = new Map<string, Device>();
+  const devices = loadDevices(opts.userDataDir);
   const clients = new Set<WebSocket>();
   // Which device authenticated each open socket — needed so a per-device
   // revoke knows which sockets to drop, and so `listDevices()` can report
@@ -111,22 +176,61 @@ export function createRemoteServer(opts: {
 
   wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
+  // Pre-release audit S7 — same-origin check against the request's OWN
+  // `Host` header, not a fixed LAN-address allowlist: a real browser
+  // always sends `Origin` for a WS handshake initiated from a page, and a
+  // page served by THIS server has an Origin that always matches the Host
+  // it was loaded from — true whether that's a bare LAN IP or a tunnel's
+  // public hostname (Phase B), so this needs no advance knowledge of
+  // either. Missing `Origin` (a non-browser client — `wscat`, a native
+  // shell, this file's own test harness) is allowed through: the token
+  // check right after is what actually gates access for those.
+  function isAllowedOrigin(origin: string | undefined, hostHeader: string | undefined): boolean {
+    if (!origin) return true;
+    try {
+      return new URL(origin).host === hostHeader;
+    } catch {
+      return false;
+    }
+  }
+
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
-    const url = new URL(req.url ?? "", "http://internal");
-    const device = deviceByToken(url.searchParams.get("token") ?? "");
-    if (!device) {
-      ws.close(4001, "unauthorized");
+    if (!isAllowedOrigin(req.headers.origin, req.headers.host)) {
+      ws.close(4003, "origin not allowed");
       return;
     }
-    clients.add(ws);
-    clientDevice.set(ws, device.id);
-    ws.send(JSON.stringify({ type: "cards", cards: opts.listTerminals() }));
+    // Pre-release audit S7 — the token no longer travels in the upgrade
+    // URL (logged by any proxy/tunnel in front, kept in browser history);
+    // the client now sends it as the first WS message instead (see
+    // `resources/mobile-client/app.js`'s own `connect()`). Everything
+    // before that first, auth-carrying message is otherwise inert — no
+    // `pty:write`/`list`/etc is honored, and a socket that never sends a
+    // valid one within AUTH_TIMEOUT_MS is dropped rather than left open
+    // forever consuming a connection slot.
+    let deviceId: string | null = null;
+    const authTimer = setTimeout(() => {
+      if (!deviceId) ws.close(4001, "auth timeout");
+    }, AUTH_TIMEOUT_MS);
 
     ws.on("message", (raw) => {
       let msg: Record<string, unknown>;
       try {
         msg = JSON.parse(String(raw));
       } catch {
+        return;
+      }
+      if (!deviceId) {
+        const device = msg.type === "auth" && typeof msg.token === "string" ? deviceByToken(msg.token) : null;
+        if (!device) {
+          clearTimeout(authTimer);
+          ws.close(4001, "unauthorized");
+          return;
+        }
+        clearTimeout(authTimer);
+        deviceId = device.id;
+        clients.add(ws);
+        clientDevice.set(ws, device.id);
+        ws.send(JSON.stringify({ type: "cards", cards: opts.listTerminals() }));
         return;
       }
       if (msg.type === "pty:write" && typeof msg.id === "string" && typeof msg.data === "string") {
@@ -143,10 +247,12 @@ export function createRemoteServer(opts: {
       }
     });
     ws.on("close", () => {
+      clearTimeout(authTimer);
       clients.delete(ws);
       clientDevice.delete(ws);
     });
     ws.on("error", () => {
+      clearTimeout(authTimer);
       clients.delete(ws);
       clientDevice.delete(ws);
     });
@@ -160,10 +266,35 @@ export function createRemoteServer(opts: {
   // callers. Port stays fixed here (unlike mcp-server.ts) — pairing/QR flow
   // and any Tailscale Funnel/Cloudflare Tunnel forwarding a user has set up
   // depend on a stable, predictable port.
+  //
+  // Pre-release audit S7 — `listen()` itself is no longer called here: the
+  // port used to open at app boot, reachable by anyone on the LAN before a
+  // single phone was ever paired. `ensureListening()` below is called the
+  // first time `pairNewDevice` runs instead, and is idempotent/memoized —
+  // every later pairing after the first is a no-op here.
   httpServer.on("error", (err) => {
     console.error(`remote-server: failed to bind port ${opts.port}, remote pairing will be unavailable:`, err);
   });
-  httpServer.listen(opts.port, "0.0.0.0");
+  let listenPromise: Promise<void> | null = null;
+  function ensureListening(): Promise<void> {
+    if (!listenPromise) {
+      listenPromise = new Promise((resolve, reject) => {
+        const onListening = () => {
+          httpServer!.off("error", onError);
+          resolve();
+        };
+        const onError = (err: Error) => {
+          httpServer!.off("listening", onListening);
+          listenPromise = null; // a failed bind isn't cached — a later retry (e.g. the colliding process exited) should get another real attempt
+          reject(err);
+        };
+        httpServer!.once("listening", onListening);
+        httpServer!.once("error", onError);
+        httpServer!.listen(opts.port, "0.0.0.0");
+      });
+    }
+    return listenPromise;
+  }
 
   function broadcast(payload: unknown) {
     const data = JSON.stringify(payload);
@@ -196,13 +327,18 @@ export function createRemoteServer(opts: {
   /** Pairs one new phone: fresh id + token, own QR/URL. The returned
    * token is the ONLY place it's ever exposed outside this module — the
    * modal shows it once (as the QR just scanned), `listDevices()` below
-   * never echoes it back. */
+   * never echoes it back. Pre-release audit S7 — this is the ONE place
+   * that ever binds the LAN port (`ensureListening()`), and the new
+   * device is persisted to disk immediately, so it survives an app
+   * restart instead of silently vanishing. */
   async function pairNewDevice(label?: string): Promise<RemoteDevicePairing> {
+    await ensureListening();
     const id = randomBytes(4).toString("hex");
     const token = randomBytes(16).toString("hex");
     const pairedAt = Date.now();
     const device: Device = { id, token, label: label?.trim() || `Dispositivo ${devices.size + 1}`, pairedAt };
     devices.set(id, device);
+    saveDevices(opts.userDataDir, devices);
     const addrs = lanAddresses();
     const primary = addrs[0];
     const url = primary ? `http://${primary}:${opts.port}/?token=${token}` : null;
@@ -230,6 +366,7 @@ export function createRemoteServer(opts: {
    * paired device is untouched. */
   function revokeDevice(id: string) {
     devices.delete(id);
+    saveDevices(opts.userDataDir, devices);
     for (const [ws, devId] of clientDevice) {
       if (devId !== id) continue;
       ws.close(4001, "revoked");
@@ -243,6 +380,7 @@ export function createRemoteServer(opts: {
    * have leaked. */
   function revokeAll() {
     devices.clear();
+    saveDevices(opts.userDataDir, devices);
     for (const ws of clients) ws.close(4001, "revoked");
     clients.clear();
     clientDevice.clear();

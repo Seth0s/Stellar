@@ -4344,6 +4344,206 @@ decisões já tomadas no item 58.
   regressão.
 - Detalhe completo em `DESIGN-BACKLOG.md` item 59.
 
+## 2026-08-30 — item 60 (reversão explícita de 25/58/59): motor de orquestração completo, aditivo e opt-in por board — 5/5 peças feitas
+
+Pedido do usuário reverte o limite arquitetural dos itens 25/58/59
+("Stellar só expõe primitivas, nunca roda motor autônomo") — confirmado
+como aditivo: os dois caminhos (humano-no-loop default, motor completo
+opt-in por board) coexistem, nunca um substituindo o outro. Escopo
+completo (5 peças: fila+UI, cap configurável, motor de task com
+auto-disparo, auto-retry, modo autônomo completo) documentado em
+`DESIGN-BACKLOG.md` item 60.
+
+- Peça 2 (limite de agentes simultâneos configurável) feita: nova coluna
+  `boards.concurrency_cap INTEGER` (`null` = default), input numérico no
+  `SessionModal.tsx` ao lado do toggle `autonomous`, IPC dedicado
+  (`store:boards:set-concurrency-cap`) nunca alcançável por MCP/
+  `acbridge` — mesma garantia de "só um humano liga isso" do item 59.
+  `board_mode` agora devolve `concurrencyCap` (valor efetivo) ao lado de
+  `autonomous`.
+- Verificado ao vivo sem mock: novo `smoke-mcp-concurrency-cap.mjs` (6
+  checks) — cap customizado (1) via UI real é lido e enforced,
+  distinguindo do default (3). `tsc --noEmit`/`electron-vite build`
+  limpos; `smoke-mcp-autonomous-mode.mjs` e `smoke-session-modal.mjs` sem
+  regressão.
+- Peça 1 (fila real de spawn, com UI) feita: `message-bus.ts` ganhou
+  `spawnQueue` (FIFO por board, em memória) — um spawn que bate o teto
+  num board autônomo não é mais recusado, fica pendurado na fila até um
+  slot liberar (`tryDispatchQueued`, disparado de todo exit de card via
+  `resolveCardExit`, M4). Painel novo `SpawnQueuePanel.tsx` (push via
+  `spawn-queue:changed`) mostra posição/provider/requester ao vivo;
+  `board_mode` ganhou `queueLength`. A fila só existe dentro de board
+  autônomo — nunca pede consentimento (já foi dado ao ligar o modo).
+- Verificado ao vivo sem mock: novo `smoke-mcp-spawn-queue.mjs` (7
+  checks) — segundo spawn além do cap fica pendurado (não recusado),
+  painel real no DOM, mata o processo do primeiro via `window.pty.kill`,
+  confirma o da fila despachar sozinho. `smoke-mcp-autonomous-mode.mjs`
+  reescrito pro novo comportamento (bug real achado e corrigido no
+  PRÓPRIO script de teste, não no produto — um card da fila não estava
+  excluído da busca do segundo board). `tsc --noEmit`/`electron-vite
+  build` limpos; `smoke-mcp.mjs` sem regressão.
+- Peça 5 (modo autônomo completo, parte spawn_card/open_url) feita:
+  `onOpenRequest`/`onSpawnCardRequest` ganharam `autoApprove` calculado
+  igual ao de `spawn_agent` (sem teto de concorrência envolvido, só vale
+  pra `spawn_agent`). `App.tsx` resolve na hora (`openBrowserFor`/
+  `spawnCardFor`) quando `autoApprove`, sem nunca mostrar
+  `AgentAskModal` — mesmo padrão do item 59. Verificado ao vivo:
+  `smoke-mcp-autonomous-mode.mjs` atualizado (open_url/spawn_card
+  resolvem `ok:true` sem modal, confirmado no DOM), `smoke-mcp.mjs`
+  (board default, sem autonomous) e `smoke-mcp-spawn-queue.mjs` sem
+  regressão.
+- Peça 3 (motor de task com auto-disparo) feita — CORREÇÃO importante:
+  o DAG real de dependência entre tasks é `tasks.deps_json` (array de
+  ids de outras tasks), NUNCA `connectors` (isso liga CARDS entre si,
+  puramente visual/decorativo, sem relação nenhuma com tasks — o
+  rascunho original do item 60 citava `connectors` por engano). Gap de
+  schema achado ao implementar: `tasks` não tinha `board_id` — impossível
+  saber se uma task pendente (sem card ainda) pertence a um board
+  autônomo. Resolvido com `tasks.board_id TEXT` (nullable, migração
+  aditiva); `create_task` ganhou `boardId` opcional. Novo
+  `autonomousSpawn` compartilhado entre `spawn_agent`'s branch autônomo
+  e o motor (mesmo cap/fila da peça 1, sem bypass); `onTaskDone` roda
+  dentro de `update_task` quando o status novo é `"done"` (nunca
+  `"failed"`), despacha dependentes com todos os deps satisfeitos, só se
+  o board da task dependente é autônomo. Verificado ao vivo: novo
+  `smoke-mcp-task-engine.mjs` (9 checks) — board não autônomo não
+  dispara nada (sem regressão do bookkeeping puro); board autônomo
+  despacha a dependente sozinha, card real criado, sem modal.
+  `smoke-mcp-tasks.mjs`, `smoke-mcp-tasks-failure.mjs`,
+  `smoke-mcp-connectors.mjs` e `smoke-mcp.mjs` sem regressão.
+- Peça 4 (auto-retry) feita — CORREÇÃO importante: a premissa do
+  rascunho original ("card sai com código de erro") não se confirmou ao
+  vivo — matar um processo via `window.pty.kill` reporta `exitCode: 0`
+  neste ambiente mesmo (node-pty), então o código de saída nunca foi um
+  sinal confiável. O gate real virou "task ainda `running` ligada a este
+  card que nunca recebeu `report`", independente do código. `tasks`
+  ganhou `max_retries` (nullable, default 2). `markTaskFailed`/
+  `retryOrFail`, só dentro de board autônomo (bookkeeping puro fora
+  dele), redespacham via o mesmo `autonomousSpawn` compartilhado da
+  peça 3 até bater o teto. Verificado ao vivo: novo
+  `smoke-mcp-task-auto-retry.mjs` (13 checks) — falha explícita e saída
+  silenciosa ambas auto-retentam dentro de board autônomo, param no teto
+  de tentativas, ficam inertes fora dele. `smoke-mcp-tasks.mjs`,
+  `smoke-mcp-tasks-failure.mjs`, `smoke-mcp-task-engine.mjs`,
+  `smoke-mcp-connectors.mjs` e `smoke-mcp.mjs` sem regressão.
+- **Item 60 completo — as 5 peças do motor de orquestração (fila+UI,
+  cap configurável, motor de task com auto-disparo, auto-retry, modo
+  autônomo completo) estão feitas e verificadas ao vivo.** Ver
+  DESIGN-BACKLOG.md item 60 pro detalhe de cada peça.
+
+## 2026-08-30 — M2 (item 58) follow-up ao vivo: `send_to_card` vira auto-verificável
+
+Usuário reportou diretamente: uma mensagem longa (linha única, sem
+quebra) mandada via `send_to_card` pro card 95 ficou presa como paste
+não-submetido, mesmo com o fix de M2 (delay fixo de 80ms antes do
+`\r`) já aplicado. Não reproduzido em instância isolada depois de 3
+tentativas — mas o delay fixo sempre foi uma APOSTA de que o buffer de
+paste do CLI alvo já assentou, não uma garantia; sob carga real essa
+aposta pode perder.
+
+- `send`'s handler (`message-bus.ts`) deixou de disparar o Enter e
+  confiar cegamente — agora lê o card de volta depois (mesmo round-trip
+  do `read_card`/M1, fatorado numa função `readCardText` compartilhada)
+  e, se o composer ainda mostra o placeholder de paste, reenvia só o
+  `\r` (nunca o texto de novo) até `SEND_ENTER_MAX_ATTEMPTS=4` vezes.
+- Verificado ao vivo: novo `smoke-mcp-send-submit-longline.mjs` —
+  réplica da mensagem real (linha única, ~380 caracteres, acentuação
+  real) com aquecimento de contexto prévio no card, confirma que
+  submete de verdade. `tsc --noEmit`/`electron-vite build` limpos;
+  `smoke-mcp-send-submit.mjs` e `smoke-mcp-read-card.mjs` sem
+  regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md`, follow-up dentro do M2.
+
+## 2026-08-30 — item 61: `send_to_card` ganha identidade de remetente
+
+Achado ao vivo por um segundo agente (card 95, revisando o item 60):
+`send_to_card` era a ÚNICA tool de consentimento sem nenhum jeito de se
+identificar (`open`/`spawn_agent`/`spawn_card` sempre tiveram
+`requesterId`) — uma mensagem entregue de segunda mão chegava sem
+nenhum rótulo de origem.
+
+- `send`'s `BusRequest` ganhou `requesterId?: string` opcional. Novo
+  `describeCardLabel(cardId)` em `message-bus.ts`/`main/index.ts` —
+  mesma convenção "Bash 2°" do `describeCard` do App.tsx, reimplementada
+  contra `store.ts` (processo main, sem `cardsRef` de renderer). Texto
+  entregue vira `[de: <rótulo>] <texto>` quando `requesterId` é
+  passado; sem ele, exatamente como antes (aditivo). Nunca aplicado a
+  alvo `bash` — quebraria o comando.
+- MCP `send_to_card` ganhou `callerCardId` opcional; `acbridge send`
+  preenche sozinho via `AGENT_CANVAS_CARD_ID`, sem flag nova.
+- **Escopo reduzido**: `report`/`get_report` NÃO ganharam campo `from`
+  — o chamador de `get_report` já sabe o `target` que pediu, um `from`
+  ali só ecoaria informação que ele já tinha. O gap real era só
+  `send_to_card` (mensagem não-solicitada, de segunda mão).
+- Verificado ao vivo: novo `smoke-mcp-send-sender-label.mjs` (7 checks).
+  `smoke-mcp-send-submit.mjs` e `smoke-mcp.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 61.
+
+## 2026-08-30 — item 60 follow-up: revisão por segundo agente (card 95) achou 2 gaps reais
+
+Card 95 revisou o item 60 ao vivo (leu o DESIGN-BACKLOG.md, rodou os
+smoke tests de verdade) e achou dois gaps genuínos além do item 61
+acima:
+
+- **Auto-retry reassigna provider de verdade agora.** Antes sempre
+  retentava o MESMO provider (`attempted_providers_json` só registrava,
+  nunca influenciava a escolha) — não pagava a tese cross-provider que
+  motivou a reversão dos itens 25/58/59. Novo `tasks.fallback_providers_json`
+  (nullable, `create_task` ganhou `fallbackProviders` opcional);
+  `retryOrFail` tenta o próximo provider não tentado da lista, esgotada
+  volta a repetir o original (comportamento antigo intacto quando
+  omitido). Verificado ao vivo: novo
+  `smoke-mcp-task-retry-reassign.mjs` (7 checks) — `bash` (falha
+  sempre) com fallback `["claude"]` reassigna de verdade, card novo é
+  `claude`; fallback esgotado volta a `bash` sem travar.
+- **`connectors.kind='depends'` esclarecido como decorativo por
+  design.** A peça 3 lê `tasks.deps_json`, nunca `connectors` — as duas
+  granularidades coexistiam sem nenhuma nota cruzada, ambíguo pra quem
+  lê depois. Comentários em `store.ts` e as descrições MCP
+  `list_connectors`/`set_connector_kind` (que chegavam a sugerir efeito
+  real, texto corrigido) agora deixam explícito: `connectors.kind` é
+  só pra leitura de um orquestrador externo, nunca consumido
+  internamente, por design. Documentação apenas.
+- `tsc --noEmit`/`electron-vite build` limpos em ambos;
+  `smoke-mcp-tasks.mjs`, `smoke-mcp-tasks-failure.mjs`,
+  `smoke-mcp-task-auto-retry.mjs`, `smoke-mcp-task-engine.mjs`,
+  `smoke-mcp-connectors.mjs` e `smoke-mcp.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 60, follow-ups dentro da
+  peça 4.
+
+## 2026-08-30 — item 62: `spawn_agent` ganha rename, conector `'spawned'` vira linhagem real
+
+Dois pontos trazidos pelo usuário depois da revisão do card 95 (item 60
+follow-up acima):
+
+- **`spawn_agent` (MCP) ganhou `label?: string` opcional** — nomeia o
+  card já na criação, mesmo campo livre que um rename manual via tag já
+  usa, então `describeCard`/`describeCardLabel` já preferem esse rótulo
+  ao ordinal automaticamente, sem mudança extra. Percorre
+  `BusRequest`/fila de spawn (item 60 peça 1)/`spawnAgentFor`. O modal
+  de aprovação (`AgentAskModal`) mostra o nome pedido antes do humano
+  aprovar. `acbridge`'s `spawn-agent` continua só posicional, de
+  propósito (mesma razão que já excluía `model`, item 58 M3).
+- **`connectors.kind` ganhou um terceiro valor real: `'spawned'`** —
+  setado automaticamente pelo app (não por uma tool) toda vez que
+  `spawn_agent` cria um card com requester conhecido: `addConnector`
+  (`App.tsx`) agora aceita um `kind` opcional, e as duas ramificações de
+  resolução de spawn (autoApprove e aprovado-por-modal) chamam
+  `addConnector(requesterId, cardId, "spawned")`. Isso não contradiz o
+  follow-up anterior ("`connectors.kind` é decorativo/nunca consumido
+  internamente") — continua verdade pro motor de dispatch, que só lê
+  `deps_json`; `'spawned'` é só um FATO de linhagem que passa a existir
+  sozinho, não uma reinterpretação de `'depends'`/`'context'`
+  (permanecem anotação exclusiva de orquestrador externo).
+- Verificado ao vivo: novo `smoke-mcp-spawn-label-connector.mjs` (7
+  checks) — label pedido aparece no modal, persiste no card, e o
+  conector `'spawned'` nasce sozinho tanto com quanto sem `label`.
+  `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` (falha
+  isolada é a captura de screenshot WebGL já documentada como não-
+  confiável, sem relação), `smoke-mcp-spawn-model.mjs`,
+  `smoke-mcp-connectors.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 62.
+
 ## Comandos
 
 ```bash

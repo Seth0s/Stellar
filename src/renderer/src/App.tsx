@@ -15,6 +15,7 @@ import {
   type ChatSessionRow,
 } from "./ChatCard";
 import { AgentAskModal } from "./AgentAskModal";
+import { SpawnQueuePanel } from "./SpawnQueuePanel";
 import { ConfirmModal } from "./ConfirmModal";
 import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
@@ -41,7 +42,7 @@ import {
   type Point,
   type Rect,
 } from "./board-model";
-import type { BoardCounts, CardRow, SpawnCardKind } from "../../preload/index";
+import type { BoardCounts, CardRow, SpawnCardKind, SpawnQueueEntry } from "../../preload/index";
 import { useWorldTransform } from "./useWorldTransform";
 import { useConnectorDrag } from "./useConnectorDrag";
 import { useCardSelection } from "./useCardSelection";
@@ -68,6 +69,7 @@ type PendingAsk =
       resumeId?: string;
       reason?: string;
       model?: string;
+      label?: string;
     }
   | {
       kind: "spawn-card";
@@ -383,6 +385,10 @@ export function App() {
   // MCP/acbridge, acompanhado de requesterId/reason); este é um clique
   // humano direto, sem requester nem motivo pra mostrar.
   const [pendingOpenUrl, setPendingOpenUrl] = useState<string | null>(null);
+  // Pre-release audit S2 — a page inside SOME BrowserCard (not this app's
+  // own agent flow) called `getDisplayMedia()`; main/index.ts holds the
+  // request open until this resolves.
+  const [pendingBrowserPermission, setPendingBrowserPermission] = useState<{ requestId: string; message: string } | null>(null);
   // Item 29 — central API-key management panel, not scoped to any card.
   const [showSecretsSettings, setShowSecretsSettings] = useState(false);
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — one union covers every
@@ -390,6 +396,10 @@ export function App() {
   // AgentAskModal.tsx renders whichever is pending, allowAsk/denyAsk below
   // branch on `.kind`.
   const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
+  // DESIGN-BACKLOG.md item 60, peça 1 — per-board spawn queue, kept live
+  // via the `onQueueChanged` push (never polled). Keyed by boardId so a
+  // board switch never loses another board's queue state.
+  const [spawnQueues, setSpawnQueues] = useState<Record<string, SpawnQueueEntry[]>>({});
   const [aiBusy, setAiBusy] = useState(false);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [tool, setTool] = useState<Tool>("pointer");
@@ -458,6 +468,7 @@ export function App() {
     updateBoard,
     deleteBoard,
     setBoardAutonomous,
+    setBoardConcurrencyCap,
   } = useBoardStore(
     nextId,
     setCards,
@@ -474,8 +485,24 @@ export function App() {
     const offUrlSeen = window.pty.onUrlSeen((id, url) => {
       setSeenUrls((prev) => (prev[id]?.includes(url) ? prev : { ...prev, [id]: [...(prev[id] ?? []), url] }));
     });
-    const offAskOpen = window.browser.onAskOpen((requestId, requesterId, url, reason) => {
+    const offAskOpen = window.browser.onAskOpen((requestId, requesterId, url, reason, autoApprove) => {
+      // DESIGN-BACKLOG.md item 60, peça 5 — modo autônomo completo:
+      // same immediate-resolve shape as spawn_agent's autoApprove below,
+      // extended to open_url.
+      if (autoApprove) {
+        openBrowserFor(requesterId, url);
+        void window.browser.resolveAsk(requestId, true);
+        return;
+      }
       setPendingAsk({ kind: "open", requestId, requesterId, url, reason });
+    });
+    // Pre-release audit S2 — same shape, its own state/modal (not
+    // `pendingAsk`/`AgentAskModal` — no agent card is asking here, a
+    // webpage inside a BrowserCard is). Covers both the generic media
+    // permission prompt and the more specific screen-share one — main/
+    // index.ts decides which `message` text to send per call.
+    const offAskBrowserPermission = window.browser.onAskPermission((requestId, message) => {
+      setPendingBrowserPermission({ requestId, message });
     });
     // DESIGN-BACKLOG.md item 21, ponto 9, achados 1 e 2 — same shape as
     // onAskOpen above, generalized to spawning an agent or a non-terminal
@@ -488,7 +515,12 @@ export function App() {
       // a human-approved spawn, just triggered immediately instead of by
       // a button click.
       if (params.autoApprove) {
-        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model);
+        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model, params.label);
+        // DESIGN-BACKLOG.md item 62 — records real spawn lineage
+        // automatically; `requesterId` is "" for the task engine's own
+        // dispatches (item 60 peça 3), which have no real requester
+        // card to connect from.
+        if (requesterId) addConnector(requesterId, cardId, "spawned");
         void window.spawn.resolveAgent(requestId, { ok: true, cardId });
         return;
       }
@@ -501,9 +533,17 @@ export function App() {
         resumeId: params.resumeId,
         reason: params.reason,
         model: params.model,
+        label: params.label,
       });
     });
     const offAskSpawnCard = window.spawn.onAskCard((requestId, requesterId, params) => {
+      // DESIGN-BACKLOG.md item 60, peça 5 — same shape as spawn_agent's
+      // autoApprove above, extended to non-terminal cards.
+      if (params.autoApprove) {
+        const cardId = spawnCardFor(params.kind, params.cwd, params.url, requesterId);
+        void window.spawn.resolveCard(requestId, { ok: true, cardId });
+        return;
+      }
       setPendingAsk({
         kind: "spawn-card",
         requestId,
@@ -549,13 +589,21 @@ export function App() {
     const offReadCard = window.readCard.onRequest((requestId, cardId, lines) => {
       window.readCard.reply(requestId, getTerminalText(cardId, lines));
     });
+    // DESIGN-BACKLOG.md item 60, peça 1 — one push per board whose queue
+    // changed; replaces just that board's entry, leaves every other board
+    // untouched.
+    const offQueueChanged = window.spawn.onQueueChanged((boardId, queue) => {
+      setSpawnQueues((prev) => ({ ...prev, [boardId]: queue }));
+    });
     return () => {
       offUrlSeen();
       offAskOpen();
+      offAskBrowserPermission();
       offAskSpawnAgent();
       offAskSpawnCard();
       offSnapshot();
       offReadCard();
+      offQueueChanged();
     };
   }, []);
 
@@ -716,7 +764,14 @@ export function App() {
     requestAnimationFrame(() => requestAnimationFrame(() => jumpToCard(session.id)));
   }
 
-  function addConnector(fromCardId: string, toCardId: string) {
+  /** `kind` — DESIGN-BACKLOG.md item 58 peça 4's field, invisible to this
+   * component's own `Connector` state (never rendered differently by
+   * kind, on purpose — see item 60/62's notes on why it stays advisory).
+   * Item 62 — a real spawn (`spawnAgentFor`'s callers) passes
+   * `kind: "spawned"` here to record actual lineage automatically;
+   * a human hand-drawing a connector never passes one, staying `null`
+   * (purely decorative), exactly as before this item. */
+  function addConnector(fromCardId: string, toCardId: string, kind?: string) {
     const id = String(nextId.current++);
     const connector = { id, fromCardId, toCardId };
     setConnectors((prev) => [...prev, connector]);
@@ -726,8 +781,9 @@ export function App() {
       from_card_id: fromCardId,
       to_card_id: toCardId,
       updated_at: Date.now(),
+      kind: kind ?? null,
     });
-    toast("conector criado");
+    if (!kind) toast("conector criado");
   }
 
   const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
@@ -844,7 +900,7 @@ export function App() {
   // rather than a human. Always through `addCard` (unlike openBrowserFor
   // above) — this IS the "something appeared on the board that a human
   // didn't click" moment the toast exists for.
-  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string): string {
+  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string): string {
     const id = String(nextId.current++);
     addCard({
       id,
@@ -858,7 +914,11 @@ export function App() {
       initialInput: null,
       rect: centeredSlot(visibleRect, cardsRef.current.length),
       groupId: null,
-      label: null,
+      // DESIGN-BACKLOG.md item 62 — an MCP-driven spawn can name its own
+      // child agent, same free-text field CardTag rename already sets;
+      // `describeCard`/`describeCardLabel` already prefer it over the
+      // ordinal convention whenever it's non-null.
+      label: label || null,
     });
     return id;
   }
@@ -915,7 +975,10 @@ export function App() {
       openBrowserFor(ask.requesterId, ask.url);
       void window.browser.resolveAsk(ask.requestId, true);
     } else if (ask.kind === "spawn-agent") {
-      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model);
+      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label);
+      // DESIGN-BACKLOG.md item 62 — same lineage record as the
+      // autonomous auto-approve path above, for a human-approved spawn.
+      if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned");
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
     } else {
       const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId);
@@ -938,7 +1001,9 @@ export function App() {
     if (ask.kind === "spawn-agent") {
       return {
         title: "Permissão: spawnar agente",
-        command: `${ask.provider}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.resumeId ? ` (retomar ${ask.resumeId})` : ""}`,
+        // DESIGN-BACKLOG.md item 62 — mostra o nome pedido pro agente
+        // novo, se algum, antes do humano aprovar.
+        command: `${ask.provider}${ask.label ? ` "${ask.label}"` : ""}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.resumeId ? ` (retomar ${ask.resumeId})` : ""}`,
       };
     }
     return {
@@ -1411,6 +1476,7 @@ export function App() {
           onUpdateBoard={updateBoard}
           onDeleteBoard={deleteBoard}
           onToggleAutonomous={setBoardAutonomous}
+          onSetConcurrencyCap={setBoardConcurrencyCap}
         />
       </div>
     );
@@ -1857,6 +1923,7 @@ export function App() {
         onUpdateBoard={updateBoard}
         onDeleteBoard={deleteBoard}
         onToggleAutonomous={setBoardAutonomous}
+        onSetConcurrencyCap={setBoardConcurrencyCap}
       />
       <UpdateBanner />
       <ToastHost />
@@ -1871,6 +1938,7 @@ export function App() {
           onClose={() => setRadialMenu(null)}
         />
       )}
+      <SpawnQueuePanel queue={spawnQueues[activeBoardId] ?? []} describeRequester={describeCard} />
       {pendingCloseId && (
         <ConfirmModal
           title="Fechar terminal?"
@@ -1900,6 +1968,21 @@ export function App() {
             setPendingOpenUrl(null);
           }}
           onCancel={() => setPendingOpenUrl(null)}
+        />
+      )}
+      {pendingBrowserPermission && (
+        <ConfirmModal
+          title="Permissão do navegador"
+          message={pendingBrowserPermission.message}
+          confirmLabel="Permitir"
+          onConfirm={() => {
+            window.browser.resolvePermissionAsk(pendingBrowserPermission.requestId, true);
+            setPendingBrowserPermission(null);
+          }}
+          onCancel={() => {
+            window.browser.resolvePermissionAsk(pendingBrowserPermission.requestId, false);
+            setPendingBrowserPermission(null);
+          }}
         />
       )}
       {showSecretsSettings && <SecretsSettingsModal onClose={() => setShowSecretsSettings(false)} />}

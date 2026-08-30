@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Code2,
   Copy,
   Eye,
@@ -122,7 +123,8 @@ export type IconName =
   | "trash"
   | "settings"
   | "eye"
-  | "eyeOff";
+  | "eyeOff"
+  | "clock";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -188,6 +190,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   settings: Settings,
   eye: Eye,
   eyeOff: EyeOff,
+  clock: Clock,
 };
 
 export function Icon({ name, size = 18, color }: { name: IconName; size?: number; color?: string }) {

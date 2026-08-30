@@ -29,6 +29,7 @@ export function Topbar({
   onUpdateBoard,
   onDeleteBoard,
   onToggleAutonomous,
+  onSetConcurrencyCap,
 }: {
   boards: Board[];
   activeBoardId: string;
@@ -62,6 +63,8 @@ export function Topbar({
   /** DESIGN-BACKLOG.md item 59 — separate from onUpdateBoard on purpose:
    * fires immediately, not staged behind the modal's "Salvar". */
   onToggleAutonomous: (id: string, autonomous: boolean) => void;
+  /** DESIGN-BACKLOG.md item 60, peça 2. */
+  onSetConcurrencyCap: (id: string, cap: number | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
@@ -203,6 +206,7 @@ export function Topbar({
           onSave={onUpdateBoard}
           onDelete={onDeleteBoard}
           onToggleAutonomous={onToggleAutonomous}
+          onSetConcurrencyCap={onSetConcurrencyCap}
           onClose={() => setModal(null)}
         />
       )}

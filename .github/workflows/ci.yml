@@ -1,0 +1,126 @@
+name: CI
+
+# Auditoria pré-release — até aqui o único workflow do repo era
+# `release.yml`, disparado só por tag `v*`. Ou seja: `tsc --noEmit` nunca
+# rodava num commit normal (só depois de você já ter decidido lançar), e
+# os smoke scripts CDP — o ativo mais valioso deste repo — nunca rodavam
+# fora da máquina do autor. O custo real disso já apareceu: `32c0db5`
+# renomeou um tooltip do rail e quebrou o seletor de
+# `smoke-card-wheel-scope.mjs`; o build continuou verde e o script ficou
+# quebrado no `main` sem ninguém notar.
+#
+# `release.yml` continua dono do empacotamento e da publicação; este
+# arquivo só responde a pergunta "esse commit está são?".
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Um push em cima de outro no mesmo branch cancela a execução anterior —
+# o que importa é o estado atual do branch, não a fila inteira.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Portão barato: sem dependências nativas, sem display, ~1 min. Se o
+  # typecheck ou o build quebram, não há razão pra pagar a suíte CDP.
+  typecheck:
+    name: typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` roda o postinstall (electron-rebuild), que compila
+      # better-sqlite3 e node-pty contra a versão pinada do Electron —
+      # node-gyp precisa de build-essential/python3, mesma razão
+      # documentada em release.yml.
+      - run: sudo apt-get update && sudo apt-get install -y build-essential python3
+
+      - run: npm ci
+
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+
+      - run: npm run build
+
+  # A suíte CDP de verdade. `xvfb-run` é exatamente a lacuna que
+  # release.yml documentava como conhecida e não resolvida ("would need
+  # xvfb-run at minimum") — Electron precisa de um display, e um X
+  # virtual serve.
+  smoke:
+    name: smoke suite (xvfb)
+    runs-on: ubuntu-latest
+    needs: typecheck
+    # A suíte inteira sobe uma instância Electron por script. O teto
+    # existe pra um script travado não segurar o runner por horas.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # xvfb: display virtual. libnss3/libatk*/libgtk*/libasound2t64: as
+      # libs de sistema que o Chromium do Electron carrega em runtime e
+      # que a imagem do runner não traz completas — sem elas o processo
+      # morre no launch com erro de símbolo, não com algo legível.
+      - name: dependências de sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential python3 \
+            xvfb libnss3 libatk1.0-0 libatk-bridge2.0-0 libgtk-3-0 \
+            libgbm1 libasound2t64 libxshmfence1 libdrm2
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # `npm run verify` faria o build de novo; aqui ele já foi feito no
+      # passo acima, então o loop dos smoke scripts é chamado direto.
+      # `--auto-servernum` dá um display próprio a cada invocação, e o
+      # `-a` evita colisão se algo mais já estiver usando :99.
+      #
+      # Falha no primeiro script que falhar (`exit 1`), igual ao script
+      # `verify` do package.json — mas imprimindo qual foi, porque no CI
+      # ninguém está olhando o terminal ao vivo.
+      - name: smoke scripts
+        run: |
+          set -o pipefail
+          failed=""
+          for f in scripts/verify/smoke-*.mjs; do
+            echo "::group::$f"
+            if xvfb-run -a --auto-servernum node "$f"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error file=$f::smoke script falhou"
+              failed="$failed $f"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "scripts com falha:$failed"
+            exit 1
+          fi
+
+      # Um smoke que falha costuma falhar por pixel/layout, e o output de
+      # texto raramente basta pra entender. Se a instância deixou
+      # screenshot ou log, eles sobem como artefato.
+      - name: artefatos de diagnóstico
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-diagnostics
+          path: |
+            .verify-tmp/**/*.png
+            .verify-tmp/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7

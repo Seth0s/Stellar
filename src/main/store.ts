@@ -53,7 +53,17 @@ export type ConnectorRow = {
    * (every connector before this, and any the human draws via the UI
    * today) means purely decorative, no semantic — never silently
    * reinterpreted as a hard gate. `'depends'`/`'context'` is meaning an
-   * orchestrating agent attaches on purpose via `set_connector_kind`. */
+   * orchestrating agent attaches on purpose via `set_connector_kind`.
+   * DELIBERATELY not consumed by item 60 peça 3's task-auto-dispatch
+   * engine, and never will be by design, not oversight (flagged live by
+   * a reviewing agent as a potential ambiguity, resolved by this note):
+   * this links CARDS, which may or may not have a task at all; a task's
+   * real dependency graph is `tasks.deps_json` (task ids), which exists
+   * and is meaningful even for a task with no card yet. Two different
+   * granularities, kept deliberately separate rather than merged into
+   * one fragile dual-source-of-truth graph — `kind` here stays whatever
+   * an orchestrator wants it to mean for ITS OWN reading, nothing in
+   * this app ever dispatches off it. */
   kind: string | null;
 };
 
@@ -89,6 +99,11 @@ export type BoardRow = {
    * `spawn_agent` handler) — every other board, and every other
    * consent-gated action (open_url, spawn_card), is unaffected. */
   autonomous: boolean;
+  /** DESIGN-BACKLOG.md item 60, peça 2 — per-board override of
+   * message-bus.ts's DEFAULT_CONCURRENCY_CAP. `null` means "use the
+   * default", not "zero" — a board that predates this column, or that
+   * never had the cap touched, must not suddenly refuse every spawn. */
+  concurrency_cap: number | null;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -106,16 +121,43 @@ export type TaskRow = {
   provider: string | null;
   status: string;
   card_id: string | null;
+  /** DESIGN-BACKLOG.md item 60, peça 3 — set once at `create_task` (from
+   * an explicit `boardId`, else inferred from `cardId`'s board), never
+   * re-derived afterward — unlike `card_id`, this outlives the card
+   * closing. `null` means the task was created with neither, and is
+   * therefore never a candidate for auto-dispatch (the engine has no
+   * board to check for autonomous mode) — pure external-orchestrator
+   * bookkeeping only, same as before this column existed. */
+  board_id: string | null;
   result_json: string | null;
   deps_json: string | null;
-  /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 — bare
-   * bookkeeping only, same "data model, not an engine" boundary as peça
-   * 4: nothing in this app decides to retry or reassign anything.
-   * `retry_count` and `attempted_providers_json` (JSON array, in order
-   * tried) exist so an external orchestrator doesn't have to keep that
-   * state itself while implementing its own retry/reassignment loop. */
+  /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 — started
+   * as bare bookkeeping for an external orchestrator's own retry loop;
+   * item 60 peça 4 added a REAL internal auto-retry on top, but only
+   * inside an autonomous board (`board_id` set + `isBoardAutonomous`) —
+   * outside that, still pure bookkeeping, unchanged. `retry_count` and
+   * `attempted_providers_json` (JSON array, in order tried) exist either
+   * way, so an external orchestrator that doesn't opt into autonomous
+   * mode keeps working exactly as before. */
   retry_count: number;
   attempted_providers_json: string | null;
+  /** DESIGN-BACKLOG.md item 60, peça 4 — set once at `create_task`,
+   * never changed after. `null` means "use the app-wide default"
+   * (`DEFAULT_MAX_RETRIES` in message-bus.ts), same convention as
+   * `boards.concurrency_cap`. Auto-retry (peça 4) stops once
+   * `retry_count` reaches this — the task stays `failed` for good,
+   * no infinite retry loop. */
+  max_retries: number | null;
+  /** DESIGN-BACKLOG.md item 60, peça 4 follow-up — reassignment on
+   * retry, the multi-provider thesis the audit actually argued for
+   * (item 60's first pass only retried the SAME provider every time,
+   * flagged live by a reviewing agent as not really delivering on that
+   * thesis). Set once at `create_task`, in the order to try — never
+   * guessed by the app itself, since "what's an acceptable substitute
+   * provider" is domain-specific, not something to hardcode. `null`/
+   * empty means "keep retrying the original provider", the old
+   * behavior, unchanged when this is omitted. */
+  fallback_providers_json: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -174,6 +216,26 @@ function migrate(db: Database.Database) {
   }
   try {
     db.exec(`ALTER TABLE boards ADD COLUMN autonomous INTEGER NOT NULL DEFAULT 0`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN concurrency_cap INTEGER`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN board_id TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN max_retries INTEGER`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN fallback_providers_json TEXT`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -316,16 +378,16 @@ export function openStore(userDataDir: string) {
   const setConnectorKindStmt = db.prepare("UPDATE connectors SET kind = ?, updated_at = ? WHERE id = ?");
 
   const listBoardsStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous FROM boards ORDER BY created_at ASC",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap FROM boards ORDER BY created_at ASC",
   );
   const getBoardStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous FROM boards WHERE id = ?",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap FROM boards WHERE id = ?",
   );
   const upsertBoardStmt = db.prepare(`
-    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous)
-    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous)
+    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap)
+    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous, @concurrency_cap)
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, cwd = excluded.cwd,
-      updated_at = excluded.updated_at, autonomous = excluded.autonomous
+      updated_at = excluded.updated_at, autonomous = excluded.autonomous, concurrency_cap = excluded.concurrency_cap
   `);
   const deleteBoardStmt = db.prepare("DELETE FROM boards WHERE id = ?");
   const touchBoardStmt = db.prepare("UPDATE boards SET last_accessed_at = ? WHERE id = ?");
@@ -335,6 +397,10 @@ export function openStore(userDataDir: string) {
   // explicit toggle click uses, and only that path (see AGENTS.md's
   // architecture entry — no MCP/acbridge cmd ever calls it).
   const setBoardAutonomousStmt = db.prepare("UPDATE boards SET autonomous = ?, updated_at = ? WHERE id = ?");
+  // DESIGN-BACKLOG.md item 60, peça 2 — same dedicated-statement pattern:
+  // the input field next to the autonomous checkbox fires this directly,
+  // not routed through the general board-edit save.
+  const setBoardConcurrencyCapStmt = db.prepare("UPDATE boards SET concurrency_cap = ?, updated_at = ? WHERE id = ?");
 
   // Structural counts for the session-list popover (item 1). Both
   // "agents" and "active" exclude plain bash terminals (provider = 'bash')
@@ -367,19 +433,19 @@ export function openStore(userDataDir: string) {
   `);
 
   const listTasksStmt = db.prepare(
-    "SELECT id, prompt, provider, status, card_id, result_json, deps_json, retry_count, attempted_providers_json, created_at, updated_at FROM tasks ORDER BY created_at ASC",
+    "SELECT id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, created_at, updated_at FROM tasks ORDER BY created_at ASC",
   );
   const getTaskStmt = db.prepare(
-    "SELECT id, prompt, provider, status, card_id, result_json, deps_json, retry_count, attempted_providers_json, created_at, updated_at FROM tasks WHERE id = ?",
+    "SELECT id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, created_at, updated_at FROM tasks WHERE id = ?",
   );
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, result_json, deps_json, retry_count, attempted_providers_json, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @result_json, @deps_json, @retry_count, @attempted_providers_json, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
-      card_id = excluded.card_id, result_json = excluded.result_json, deps_json = excluded.deps_json,
+      card_id = excluded.card_id, board_id = excluded.board_id, result_json = excluded.result_json, deps_json = excluded.deps_json,
       retry_count = excluded.retry_count, attempted_providers_json = excluded.attempted_providers_json,
-      updated_at = excluded.updated_at
+      max_retries = excluded.max_retries, fallback_providers_json = excluded.fallback_providers_json, updated_at = excluded.updated_at
   `);
 
   return {
@@ -413,9 +479,10 @@ export function openStore(userDataDir: string) {
       const row = getBoardStmt.get(id) as (Omit<BoardRow, "autonomous"> & { autonomous: number }) | undefined;
       return row ? { ...row, autonomous: !!row.autonomous } : undefined;
     },
-    upsertBoard: (board: BoardRow) => upsertBoardStmt.run({ ...board, autonomous: board.autonomous ? 1 : 0 }),
+    upsertBoard: (board: BoardRow) => upsertBoardStmt.run({ ...board, autonomous: board.autonomous ? 1 : 0, concurrency_cap: board.concurrency_cap ?? null }),
     touchBoard: (id: string, at: number) => touchBoardStmt.run(at, id),
     setBoardAutonomous: (id: string, autonomous: boolean) => setBoardAutonomousStmt.run(autonomous ? 1 : 0, Date.now(), id),
+    setBoardConcurrencyCap: (id: string, cap: number | null) => setBoardConcurrencyCapStmt.run(cap, Date.now(), id),
     getCard: (id: string): CardRow | undefined => getCardStmt.get(id) as CardRow | undefined,
     cardCounts: (): Record<string, BoardCounts> => {
       const rows = cardCountsStmt.all() as { board_id: string; agents: number; active: number }[];

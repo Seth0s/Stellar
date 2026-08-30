@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
+import { homedir } from "node:os";
 
 /**
  * DESIGN-BACKLOG.md item 12, Fase D — real OS-level confinement for the
@@ -73,6 +74,7 @@ export type SandboxResult = { ok: boolean; text: string };
  * `ok:false` like any other tool error, same as the rest of chat-tools.ts. */
 export function runSandboxedBash(root: string, command: string): Promise<SandboxResult> {
   return new Promise((resolve) => {
+    const home = homedir();
     const args = [
       "--ro-bind",
       "/",
@@ -83,6 +85,17 @@ export function runSandboxedBash(root: string, command: string): Promise<Sandbox
       "/proc",
       "--tmpfs",
       "/tmp",
+      // Pre-release audit S5 — `--ro-bind / /` above makes the WHOLE host
+      // filesystem readable inside the sandbox, `$HOME` included: `~/.ssh`,
+      // `secrets.json` (this app's own API keys), any other dotfile. The
+      // `--bind root root` below only ever intended to grant WRITE access
+      // to the project root, never READ access to the rest of `$HOME` —
+      // that was collateral, not a decision. `--tmpfs $HOME` occludes it
+      // with empty scratch space before the root bind below re-mounts the
+      // real project directory back (writable) when `root` lives under
+      // `$HOME`, which is the common case for this app's projects.
+      "--tmpfs",
+      home,
       "--bind",
       root,
       root,

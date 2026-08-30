@@ -19,7 +19,6 @@ import net from "node:net";
 
 const sockPath = process.env.AGENT_CANVAS_SOCK;
 const ownCardId = process.env.AGENT_CANVAS_CARD_ID || "";
-const ownSpawnDepth = Number(process.env.AGENT_CANVAS_SPAWN_DEPTH || "0");
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -48,7 +47,12 @@ if (cmd === "list") {
 } else if (cmd === "send") {
   const [target, ...msgParts] = rest;
   if (!target || msgParts.length === 0) fail("usage: acbridge send <cardId> <message...>");
-  request = { cmd: "send", target, text: msgParts.join(" ") };
+  // DESIGN-BACKLOG.md item 61 — same auto-fill as `report`'s ownCardId
+  // above, no new flag needed: whenever this runs inside a real card
+  // (AGENT_CANVAS_CARD_ID set), the delivered text gets a sender label
+  // automatically. Omitted (not failed) when unset — unlike `report`,
+  // `send` still works from outside a card context, just unprefixed.
+  request = { cmd: "send", target, text: msgParts.join(" "), ...(ownCardId ? { requesterId: ownCardId } : {}) };
 } else if (cmd === "open") {
   const [url] = rest;
   if (!url) fail("usage: acbridge open <url>");
@@ -141,7 +145,7 @@ if (cmd === "list") {
 } else if (cmd === "spawn-agent") {
   const [provider, cwd, resumeId] = rest;
   if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
-  request = { cmd: "spawn_agent", provider, cwd, resumeId, requesterId: ownCardId, depth: ownSpawnDepth };
+  request = { cmd: "spawn_agent", provider, cwd, resumeId, requesterId: ownCardId };
 } else if (cmd === "spawn-card") {
   const [kind, cwdOrUrl] = rest;
   if (!kind) fail("usage: acbridge spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]");

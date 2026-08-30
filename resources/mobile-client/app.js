@@ -90,10 +90,18 @@ function connect() {
   // nothing on LAN (still ws://) and is what makes the tunnel case work
   // at all without a second code path.
   const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${wsProto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+  // Pre-release audit S7 — the token used to travel right here, in the
+  // upgrade URL itself (logged by any proxy/tunnel in front, kept in
+  // browser history alongside the page's own URL). The connection now
+  // opens bare; the token goes out as the very first WS message instead,
+  // right after `open` (server-side: remote-server.ts's own connection
+  // handler treats anything before a valid `{type:"auth"}` message as
+  // unauthenticated and honors nothing else from it).
+  ws = new WebSocket(`${wsProto}//${location.host}/ws`);
 
   ws.addEventListener("open", () => {
     reconnectDelay = 1000;
+    ws.send(JSON.stringify({ type: "auth", token }));
     setStatus("conectado", "online");
     els.authError.classList.add("hidden");
   });

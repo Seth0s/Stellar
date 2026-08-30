@@ -38,13 +38,26 @@ const ELECTRON_MAIN = "out/main/index.js";
  * Calling the binary directly means `proc` IS the Electron process, so a
  * normal SIGTERM actually reaches it.
  */
-export async function startApp({ cdpPort, userDataDir, cwd = PROJECT_ROOT, extraArgs = [], timeoutMs = 15000 }) {
+export async function startApp({
+  cdpPort,
+  userDataDir,
+  cwd = PROJECT_ROOT,
+  extraArgs = [],
+  timeoutMs = 15000,
+  preserveUserData = false,
+}) {
   // Every run starts from a clean profile — `userDataDir` isn't wiped
   // between invocations otherwise, so board/card state (SQLite) piles up
   // across runs and checks that assume "just the auto-seeded card" start
   // silently failing once a second run reuses the same directory. Real
   // failure mode hit while building this harness, not a hypothetical.
-  rmSync(userDataDir, { recursive: true, force: true });
+  // `preserveUserData: true` is the one deliberate exception — a test that
+  // needs to verify state actually SURVIVES a real app restart (pre-
+  // release audit S7's persisted remote-devices.json) has to call
+  // `startApp` a second time against the SAME directory without this
+  // wiping away what the first launch wrote. Defaults to the old
+  // always-wipe behavior for every other caller.
+  if (!preserveUserData) rmSync(userDataDir, { recursive: true, force: true });
   // `node_modules/.bin/electron` is itself a small Node wrapper (cli.js)
   // that spawns the REAL Electron binary as ITS OWN child and waits on
   // it — confirmed the hard way: killing that wrapper process left the

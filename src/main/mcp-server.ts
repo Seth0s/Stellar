@@ -49,10 +49,16 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         inputSchema: {
           target: z.string().describe("The target card's id (see list_cards)"),
           text: z.string().describe("The text to type"),
+          callerCardId: z
+            .string()
+            .optional()
+            .describe(
+              "Your own card id (AGENT_CANVAS_CARD_ID env var) — when given, the delivered text is prefixed with a human-friendly sender label so the reader knows who it's from (DESIGN-BACKLOG.md item 61). Ignored for a bash target (would break the command).",
+            ),
         },
       },
-      async ({ target, text }) => {
-        const res = await opts.handleRequest({ cmd: "send", target, text });
+      async ({ target, text, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "send", target, text, requesterId: callerCardId });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -124,16 +130,24 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "create_task",
       {
         description:
-          "Record a task's identity, separate from any card's — it survives that card closing and the app restarting, so an interrupted orchestration can resume instead of starting over. No consent needed, this is bookkeeping only, it doesn't spawn or touch anything on the board.",
+          "Record a task's identity, separate from any card's — it survives that card closing and the app restarting, so an interrupted orchestration can resume instead of starting over. No consent needed, this is bookkeeping only, it doesn't spawn or touch anything on the board — UNLESS boardId (or cardId's board) is autonomous AND this task has deps: then a later update_task marking a dep 'done' can auto-dispatch this one (DESIGN-BACKLOG.md item 60 peça 3).",
         inputSchema: {
           prompt: z.string().optional().describe("What the task is — free text"),
           provider: z.string().optional().describe("Which provider is meant to run it"),
           cardId: z.string().optional().describe("The card currently working on it, if one already exists — status starts 'running' when given, 'pending' otherwise"),
-          deps: z.array(z.string()).optional().describe("Ids of other tasks this one depends on"),
+          boardId: z.string().optional().describe("Which board this task belongs to — required for auto-dispatch (peça 3) if the task has no cardId yet; inferred from cardId's board when omitted"),
+          deps: z.array(z.string()).optional().describe("Ids of other tasks this one depends on — auto-dispatched once all are 'done', but only if this task's board is autonomous"),
+          maxRetries: z.number().optional().describe("Auto-retry budget (DESIGN-BACKLOG.md item 60 peça 4) — only applies inside an autonomous board; default 2 when omitted"),
+          fallbackProviders: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Providers to reassign to, in order, on auto-retry — tries the next untried one each failure, falling back to retrying the original provider once exhausted or if omitted. Only applies inside an autonomous board.",
+            ),
         },
       },
-      async ({ prompt, provider, cardId, deps }) => {
-        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, deps });
+      async ({ prompt, provider, cardId, boardId, deps, maxRetries, fallbackProviders }) => {
+        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, boardId, deps, maxRetries, fallbackProviders });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -188,7 +202,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_connectors",
       {
         description:
-          "List every connector (arrow) on the board — id, fromCardId, toCardId, kind. `kind` is null for a purely decorative connector (everything drawn via the UI today); 'depends'/'context' is meaning an orchestrating agent attached on purpose with set_connector_kind. Nothing in this app dispatches off this graph — reading and acting on it is up to whoever calls this.",
+          "List every connector (arrow) on the board — id, fromCardId, toCardId, kind. `kind` is null for a purely decorative connector (hand-drawn via the UI); 'spawned' is set automatically whenever spawn_agent creates a new card — a real record of who spawned whom, not a guess; 'depends'/'context' is meaning an orchestrating agent attached on purpose with set_connector_kind, for THAT ORCHESTRATOR'S OWN reading. Nothing in this app ever dispatches off this graph, including the internal task-auto-dispatch engine (DESIGN-BACKLOG.md item 60 peça 3) — that reads create_task's own `deps` (task ids), a separate mechanism, since a task can exist with no card at all. Connectors link cards, not tasks; the two are deliberately never merged.",
         inputSchema: {},
       },
       async () => {
@@ -200,10 +214,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "set_connector_kind",
       {
-        description: "Tag an existing connector's semantic meaning: 'depends' (the target task shouldn't start before the source one reports done), 'context' (the source's result should feed the target's prompt), or null to clear it back to purely decorative.",
+        description:
+          "Tag an existing connector's semantic meaning, for YOUR OWN reading as an external orchestrator — advisory only, nothing in this app acts on it: 'depends' (you've decided the target shouldn't start before the source reports done), 'context' (you've decided the source's result should feed the target's prompt), 'spawned' (a real spawn_agent lineage — usually set automatically, you'd only touch this to annotate one by hand), or null to clear it back to purely decorative. To actually make the app auto-dispatch a dependent task, use create_task's `deps` (task ids) instead — that's the real mechanism (DESIGN-BACKLOG.md item 60 peça 3), separate from this one on purpose.",
         inputSchema: {
           connectorId: z.string().describe("The connector's id (see list_connectors)"),
-          kind: z.enum(["context", "depends"]).nullable().describe("The semantic to attach, or null to clear it"),
+          kind: z.enum(["context", "depends", "spawned"]).nullable().describe("The semantic to attach, or null to clear it"),
         },
       },
       async ({ connectorId, kind }) => {
@@ -262,17 +277,14 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "spawn_agent",
       {
         description:
-          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — pass `depth` from your own AGENT_CANVAS_SPAWN_DEPTH environment variable so that guard actually works; omitting it always looks like depth 0 to the server.",
+          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call).",
         inputSchema: {
           provider: z.enum(["bash", "claude", "codex", "cursor", "gemini"]).describe("Which provider to spawn"),
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
           model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default"),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var)"),
-          depth: z
-            .number()
-            .optional()
-            .describe("Your own AGENT_CANVAS_SPAWN_DEPTH env var, as a number — omit only if you're not sure, in which case this is treated as a fresh chain (0)"),
+          label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — also how the server looks up YOUR real spawn depth server-side, to compute the new card's depth. Omit only if you're not sure, in which case this call is treated as a fresh chain (depth 0)."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
           wait: z
             .boolean()
@@ -281,7 +293,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           waitTimeoutMs: z.number().optional().describe("Override the default wait window (10 minutes) when wait is true"),
         },
       },
-      async ({ provider, cwd, resumeId, model, callerCardId, depth, reason, wait, waitTimeoutMs }) => {
+      async ({ provider, cwd, resumeId, model, label, callerCardId, reason, wait, waitTimeoutMs }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
           provider,
@@ -289,8 +301,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           resumeId,
           requesterId: callerCardId,
           reason,
-          depth: depth ?? 0,
           model,
+          label,
           wait,
           waitTimeoutMs,
         });

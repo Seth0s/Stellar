@@ -5,10 +5,31 @@
 // built; keeping it means the next change to remote-server.ts/
 // pty-registry.ts gets checked the same way without hand-writing
 // throwaway CDP scripts again.
+//
+// Pre-release audit S7 (2026-08-30) rewrote three things this file has to
+// verify differently now: the token no longer travels in the WS upgrade
+// URL (it's the first message instead — `openAuthedWs` below matches
+// that), the port doesn't bind until the first real pairing, and a
+// same-origin check now gates the upgrade (checked against `ws`'s own
+// client, which — unlike a real browser — lets a test set an arbitrary
+// `Origin` header to prove the rejection path, not just the happy path).
+import { WebSocket as NodeWebSocket } from "ws";
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9403;
+const REMOTE_PORT = CDP_PORT + 30000; // matches cdp-client.mjs's own AGENT_CANVAS_REMOTE_PORT derivation
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-remote-control", import.meta.url).pathname;
+
+/** Opens a WS connection the way the real mobile client does post-S7:
+ * bare URL, token sent as the first message right after `open`. Resolves
+ * with the parsed `{type:"cards",...}` reply, or rejects/never-resolves
+ * on an auth failure (caller races this against the socket's own `close`
+ * event where that matters). */
+function openAuthedWs(port, token, extraHeaders = {}) {
+  const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/ws`, { headers: extraHeaders });
+  ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "auth", token })));
+  return ws;
+}
 
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 const { check, finish } = makeChecker();
@@ -19,12 +40,23 @@ try {
   // the remote WS until a session actually exists.
   await bootIntoFreshSession(page);
 
+  // Pre-release audit S7 — the port must NOT be reachable at all before
+  // the first real pairing. A refused TCP connect is the only honest
+  // proof of "not listening" here (a 404 would mean it WAS listening).
+  const preFetchRefused = await fetch(`http://127.0.0.1:${REMOTE_PORT}/`)
+    .then(() => false)
+    .catch(() => true);
+  check("remote port is NOT bound before any device is ever paired", preFetchRefused, true);
+
   // Item 2 revisited — each pairing call mints a NEW device (own id +
   // token), not one shared server-wide token.
   const pairing = JSON.parse(await page.evalJs(`window.remote.pairNewDevice().then(JSON.stringify)`));
   check("pairing returns a port", pairing.port, (p) => typeof p === "number");
   check("pairing returns a token", pairing.token, (t) => typeof t === "string" && t.length > 0);
   check("pairing returns a device id", pairing.id, (id) => typeof id === "string" && id.length > 0);
+
+  const postFetch = await fetch(`http://127.0.0.1:${REMOTE_PORT}/`);
+  check("...and the port IS bound right after the first pairing", postFetch.status, 200);
 
   // DESIGN-BACKLOG.md item 12, achado 4 — the QR itself was a real, valid
   // data: URL all along; the CSP's `default-src 'self'` (no `img-src`)
@@ -81,16 +113,30 @@ try {
   const xtermRes = await fetch(base + "/vendor/xterm.js");
   check("GET /vendor/xterm.js status", xtermRes.status, 200);
 
-  const badWs = new WebSocket(`ws://127.0.0.1:${pairing.port}/ws?token=wrong`);
+  // Same-origin check: an Origin that doesn't match the request's own
+  // Host must be refused outright — this is what actually stops a
+  // malicious page open in some OTHER tab on the same LAN from opening a
+  // WS to this server, token or not.
+  const sameOrigin = `http://127.0.0.1:${pairing.port}`;
+  const badOriginWs = openAuthedWs(pairing.port, pairing.token, { origin: "http://evil.example" });
+  const badOriginResult = await new Promise((resolve) => {
+    let gotMessage = false;
+    badOriginWs.addEventListener("message", () => (gotMessage = true));
+    badOriginWs.addEventListener("close", (ev) => resolve({ code: ev.code, gotMessage }));
+  });
+  check("a mismatched Origin is refused outright, even with a VALID token", badOriginResult.code, 4003);
+  check("...and never gets a chance to receive anything first", badOriginResult.gotMessage, false);
+
+  const goodOriginNoAuthWs = openAuthedWs(pairing.port, "wrong", { origin: sameOrigin });
   const badResult = await new Promise((resolve) => {
     let gotMessage = false;
-    badWs.addEventListener("message", () => (gotMessage = true));
-    badWs.addEventListener("close", (ev) => resolve({ code: ev.code, gotMessage }));
+    goodOriginNoAuthWs.addEventListener("message", () => (gotMessage = true));
+    goodOriginNoAuthWs.addEventListener("close", (ev) => resolve({ code: ev.code, gotMessage }));
   });
-  check("wrong token closes with 4001", badResult.code, 4001);
+  check("wrong token (matching origin, sent as the first message) closes with 4001", badResult.code, 4001);
   check("wrong token never receives data first", badResult.gotMessage, false);
 
-  const ws = new WebSocket(`ws://127.0.0.1:${pairing.port}/ws?token=${pairing.token}`);
+  const ws = openAuthedWs(pairing.port, pairing.token, { origin: sameOrigin });
   const cardsMsg = await new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error("timeout waiting for cards")), 4000);
     ws.addEventListener("message", (ev) => {
@@ -120,14 +166,14 @@ try {
   await page.evalJs(`window.remote.revokeDevice(${JSON.stringify(pairing.id)})`);
   await new Promise((r) => setTimeout(r, 200));
   const revokedResult = await new Promise((resolve) => {
-    const ws1 = new WebSocket(`ws://127.0.0.1:${pairing.port}/ws?token=${pairing.token}`);
+    const ws1 = openAuthedWs(pairing.port, pairing.token, { origin: sameOrigin });
     ws1.addEventListener("close", (ev) => resolve(ev.code));
   });
   check("revoked device's token rejected", revokedResult, 4001);
 
   const otherResult = await new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error("timeout waiting for cards on the untouched device")), 4000);
-    const ws2 = new WebSocket(`ws://127.0.0.1:${pairing.port}/ws?token=${pairing2.token}`);
+    const ws2 = openAuthedWs(pairing.port, pairing2.token, { origin: sameOrigin });
     ws2.addEventListener("message", (ev) => {
       clearTimeout(t);
       ws2.close();
@@ -146,13 +192,48 @@ try {
   await page.evalJs(`window.remote.revokeAll()`);
   await new Promise((r) => setTimeout(r, 200));
   const revokedAllResult = await new Promise((resolve) => {
-    const ws3 = new WebSocket(`ws://127.0.0.1:${pairing.port}/ws?token=${pairing2.token}`);
+    const ws3 = openAuthedWs(pairing.port, pairing2.token, { origin: sameOrigin });
     ws3.addEventListener("close", (ev) => resolve(ev.code));
   });
   check("revokeAll rejects every remaining device's token too", revokedAllResult, 4001);
 
+  // Pre-release audit S7 — pair one more device, THEN restart the whole
+  // app (same userDataDir), and confirm its token still authenticates —
+  // proof devices survive a real restart, not just an in-process object.
+  const survivorPairing = JSON.parse(await page.evalJs(`window.remote.pairNewDevice().then(JSON.stringify)`));
   page.close();
-} finally {
   await stopApp(app);
+
+  const app2 = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR, preserveUserData: true });
+  try {
+    const page2 = await connectPage(CDP_PORT);
+    await new Promise((r) => setTimeout(r, 1000));
+    // Pairing again (any device) is what triggers `ensureListening()` on
+    // this fresh process — ports don't survive a restart, pairings do.
+    await page2.evalJs(`window.remote.pairNewDevice()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const survivorResult = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("timeout waiting for cards on the survivor device")), 4000);
+      const ws4 = openAuthedWs(survivorPairing.port, survivorPairing.token, { origin: `http://127.0.0.1:${survivorPairing.port}` });
+      ws4.addEventListener("message", (ev) => {
+        clearTimeout(t);
+        ws4.close();
+        resolve(JSON.parse(ev.data));
+      });
+      ws4.addEventListener("close", (ev) => {
+        if (ev.code !== 1000) reject(new Error("survivor device's socket closed unexpectedly: " + ev.code));
+      });
+    });
+    check(
+      "a device paired before an app restart still authenticates after it (persisted, not in-memory-only)",
+      survivorResult.cards.length,
+      (n) => n >= 0,
+    );
+    page2.close();
+  } finally {
+    await stopApp(app2);
+  }
+} finally {
+  await stopApp(app).catch(() => {});
 }
 finish();
