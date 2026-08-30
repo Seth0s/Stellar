@@ -4174,13 +4174,52 @@ passagem. Numeração preservada como reportada.
    continua funcional (pixels reais do scrollback mudam). `tsc --noEmit`/
    `electron-vite build` limpos.
 2. **Chatbox: falta botão de nova sessão + sessões deveriam ser
-   por-provider** (print anexado). A barra lateral "SESSÕES DE CHAT" só
-   lista sessões existentes, sem um botão pra criar uma nova diretamente
-   ali. Além disso, hoje a lista de sessões parece ser cross-provider —
-   trocar entre anthropic/openai/gemini/custom (pills do topo) deveria
-   trocar TAMBÉM a lista de sessões exibida pra só as daquele provider
-   (cada provider guarda suas próprias sessões, não uma lista global
-   compartilhada).
+   por-provider — ✅ feito em 2026-08-29.** Confirmado o gap: `chatSessions`
+   (ChatCard.tsx) era buscado via `window.store.listChatSessions()` sem
+   NENHUM filtro de provider — o painel "SESSÕES DE CHAT" listava TODAS as
+   sessões de qualquer provider misturadas, e não existia botão nenhum de
+   criar uma nova sessão ali, só o cabeçalho de texto estático.
+   Fix: `sessionsForProvider = chatSessions.filter((s) => s.provider ===
+   provider)` — filtro client-side na renderização (sem round-trip extra,
+   `chatSessions` já guarda todas), recalculado toda vez que o card muda de
+   provider (pills do header). Botão "nova sessão" novo
+   (`.chat-sessions-new-btn`, ícone `plus` — lucide `Plus` adicionado ao
+   `IconName`/`icons.tsx`, não existia nenhum ícone de "+" no app até
+   agora) ao lado do cabeçalho do painel, `onClick={() =>
+   onNewSession(provider)}`. `onNewSession` é uma prop nova do `ChatCard`,
+   implementada em `App.tsx::newChatSession(provider)` — mesmo
+   `defaultCardFields("chat", cwd)` que `addCardOfKind` usa, mas
+   sobrescrevendo `provider`/`model` com o provider de origem e o
+   respectivo default (mesmo mapeamento ternário que `commitChatProvider`
+   já usava pra troca de provider in-place — `defaultCardFields` sempre
+   hardcodava `provider: "anthropic"`, então o botão sempre criaria um chat
+   anthropic independente do provider de onde foi clicado, se não fosse
+   por essa sobrescrita).
+   **Verificado ao vivo** (`smoke-chat-new-session-per-provider.mjs`, novo,
+   permanente): dois chat cards, um anthropic e um openai (cada um com uma
+   mensagem própria commitada) — o painel do card openai mostra só a
+   própria sessão, nunca a do anthropic (prova a exclusão cross-provider); o
+   botão "nova sessão" clicado no card openai cria um TERCEIRO card com
+   `provider: "openai"` e o model default de openai (não o de anthropic),
+   conversa vazia (sessão nova de verdade, não clone). Duas mecânicas de
+   teste não óbvias descobertas construindo esse script, documentadas no
+   próprio arquivo: (a) dois chat cards recém-criados nascem quase
+   totalmente sobrepostos (`centeredSlot` cascateia por só ~36px) — clicar
+   em qualquer botão do card 1 depois que o card 2 existe o traz de volta
+   pra frente (`CardFrame`'s header pointerdown raises unconditionalmente),
+   cobrindo o card 2 inteiro e quebrando cliques sintéticos nele; (b)
+   `SESSIONS_PANEL_OPEN_KEY` (item 38) é uma chave de localStorage GLOBAL
+   compartilhada por toda instância de `ChatCard` — abrir o painel do card
+   1 já deixa o card 2 (montado depois) nascer com o painel JÁ aberto, e
+   como o fetch de `chatSessions` só roda no efeito ligado à transição
+   false→true de `sessionsOpen`, um card que nasce com o painel já aberto
+   nunca refaz esse fetch sozinho — comportamento pré-existente do item 38,
+   não algo introduzido aqui, mas que exigiu forçar um fechar→abrir real no
+   teste pra exercitar o filtro por provider depois do commit da mensagem
+   (do contrário o teste checaria uma lista stale de antes da mensagem
+   existir). `tsc --noEmit`/`electron-vite build` limpos,
+   `smoke-chat.mjs`/`smoke-chat-providers.mjs`/`smoke-chat-sessions-sidebar.mjs`
+   sem regressão.
 3. **Modelos do chatbox desatualizados**. Lista que o usuário passou:
    Gemini → "Antigravity" e "Gemini 3.7 Flash"; OpenAI → pesquisar os
    modelos mais recentes listados na própria API antes de atualizar
