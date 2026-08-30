@@ -248,7 +248,7 @@ const browser = {
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
-export type SpawnAgentAskParams = { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string };
+export type SpawnAgentAskParams = { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string; model?: string };
 export type SpawnCardAskParams = { kind: SpawnCardKind; cwd?: string; url?: string; reason?: string };
 export type SpawnAgentResolveResult = { ok: true; cardId: string } | { ok: false; error: string };
 export type SpawnCardResolveResult = { ok: true; cardId: string } | { ok: false; error: string };

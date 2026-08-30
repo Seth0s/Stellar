@@ -66,6 +66,7 @@ type PendingAsk =
       cwd?: string;
       resumeId?: string;
       reason?: string;
+      model?: string;
     }
   | {
       kind: "spawn-card";
@@ -486,6 +487,7 @@ export function App() {
         cwd: params.cwd,
         resumeId: params.resumeId,
         reason: params.reason,
+        model: params.model,
       });
     });
     const offAskSpawnCard = window.spawn.onAskCard((requestId, requesterId, params) => {
@@ -821,7 +823,7 @@ export function App() {
   // rather than a human. Always through `addCard` (unlike openBrowserFor
   // above) — this IS the "something appeared on the board that a human
   // didn't click" moment the toast exists for.
-  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string): string {
+  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string): string {
     const id = String(nextId.current++);
     addCard({
       id,
@@ -830,7 +832,7 @@ export function App() {
       cwd: cwd || activeBoardCwd,
       resumeId: resumeId || null,
       continueLast: false,
-      model: null,
+      model: model || null,
       systemPrompt: null,
       initialInput: null,
       rect: centeredSlot(visibleRect, cardsRef.current.length),
@@ -892,7 +894,7 @@ export function App() {
       openBrowserFor(ask.requesterId, ask.url);
       void window.browser.resolveAsk(ask.requestId, true);
     } else if (ask.kind === "spawn-agent") {
-      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId);
+      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model);
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
     } else {
       const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId);
