@@ -4757,7 +4757,7 @@ recomenda não tentar as seis de uma vez — começar pelo item 1 e medir o
 resto contra o que ele revelar.
 
 1. **Um canal de resultado, não de scrollback — prioridade máxima,
-   comece por aqui.** Ler o buffer do terminal (`read_card`/M1) entrega
+   comece por aqui. ✅ feito em 2026-08-30.** Ler o buffer do terminal (`read_card`/M1) entrega
    ANSI, spinner e log de tool pra alguém adivinhar qual pedaço é a
    resposta — frágil e diferente por provider. A inversão certa é
    *push*: um `acbridge report '<json>'` que o agente chama ao terminar,
@@ -4771,6 +4771,31 @@ resto contra o que ele revelar.
    `acbridge report` ao terminar sua tarefa; quem spawnou recebe o
    resultado estruturado (sem parsear ANSI/scrollback) através do mesmo
    mecanismo de pendência-com-timeout que `message-bus.ts` já usa.
+   **Fix aplicado**: dois cmds novos em `message-bus.ts` — `report`
+   (`requesterId` + `report: unknown` — o card se auto-reporta, guarda em
+   `cardReports` e resolve qualquer waiter pendente em
+   `pendingReportWaiters`, mesmo formato de mapa-com-timeout de M4) e
+   `get_report` (`target`, `wait?`, `timeoutMs?` — devolve na hora se já
+   tem report guardado, ou espera de verdade se `wait:true`, timeout
+   default 10min). Duas tools MCP novas (`report`/`read_report`) e dois
+   subcomandos `acbridge` novos (`report <json>` — o card só chama isso
+   com o próprio `AGENT_CANVAS_CARD_ID`, sem `target`, é auto-relato — e
+   `read-report <cardId> [waitTimeoutMs]`). `ACBRIDGE_HINT`
+   (`providers.ts`) ganhou a frase prevista, instruindo todo agente
+   spawnado a chamar `report` ao terminar uma tarefa delegada. `read_card`
+   continua existindo, intocado — pro humano olhar o scrollback bruto
+   quando quiser, não é o canal que a máquina deveria decidir em cima.
+   **Verificado ao vivo sem mock**: novo `smoke-mcp-report.mjs` —
+   `read_report` antes de qualquer report (ok:false, sem travar);
+   spawna um segundo bash real via MCP, chama `read_report(wait:true,
+   timeoutMs:15000)` ANTES do worker reportar (prova de wait real, não
+   coincidência), e só então o worker chama `acbridge report '{"ok":
+   true,"result":"..."}'` como comando de shell genuíno (não atalho
+   interno) — a chamada resolve com o JSON exato reportado, bem antes
+   dos 15s do timeout. Um `read_report` sem `wait` depois do fato ainda
+   devolve o último report guardado. Passou na primeira tentativa.
+   `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs` (lista
+   de tools) e `smoke-acbridge.mjs` sem regressão.
 2. **Ciclo de vida com três estados, não dois — prioridade máxima, junto
    com a peça 1.** `running`/`exited` não basta: falta `waiting`
    (bloqueado num gate de permissão). Um agente parado esperando

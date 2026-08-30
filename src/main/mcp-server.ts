@@ -88,6 +88,38 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "report",
+      {
+        description:
+          "Report a structured result back to whoever spawned you, decoupled from process exit — call this when you finish a delegated task, even if you keep running afterward. The caller reads it with read_report, no ANSI/scrollback parsing needed. Requires your own card id.",
+        inputSchema: {
+          callerCardId: z.string().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — required, this IS the report's identity"),
+          report: z.unknown().describe("Any JSON value — e.g. {ok: true, result: '...'} or {ok: false, error: '...'}"),
+        },
+      },
+      async ({ callerCardId, report }) => {
+        const res = await opts.handleRequest({ cmd: "report", requesterId: callerCardId, report });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "read_report",
+      {
+        description: "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet.",
+        inputSchema: {
+          target: z.string().describe("The reporting card's id (see list_cards)"),
+          wait: z.boolean().optional().describe("Block until a report arrives instead of returning ok:false immediately"),
+          timeoutMs: z.number().optional().describe("Override the default wait window (10 minutes) when wait is true"),
+        },
+      },
+      async ({ target, wait, timeoutMs }) => {
+        const res = await opts.handleRequest({ cmd: "get_report", target, wait, timeoutMs });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "open_url",
       {
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass).",

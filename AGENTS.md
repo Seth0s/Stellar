@@ -4130,6 +4130,31 @@ estados) são a prioridade máxima do item 58 — sem elas, multi-provider
   quatro achados MCP (M1–M4) do item 58 estão fechados; resta o roteiro
   de orquestração de 6 peças.
 
+## 2026-08-30 — item 58, roteiro de orquestração peça 1: `report`/`read_report`
+
+- Canal de resultado dedicado, desacoplado de exit de processo (um
+  agente pode reportar e continuar rodando). Dois cmds novos em
+  `message-bus.ts`: `report` (auto-relato — `requesterId` é o próprio
+  `AGENT_CANVAS_CARD_ID`, sem `target`) guarda em `cardReports` e resolve
+  qualquer waiter pendente; `get_report` devolve na hora se já existe, ou
+  espera de verdade com `wait:true` (timeout default 10min) — mesmo
+  padrão de mapa-com-timeout que M4 introduziu. Duas tools MCP
+  (`report`/`read_report`) e dois subcomandos acbridge (`report <json>`,
+  `read-report <cardId> [waitTimeoutMs]`). `ACBRIDGE_HINT` ganhou a frase
+  instruindo todo agente spawnado a chamar `report` ao terminar uma
+  tarefa delegada. `read_card` (M1) segue existindo, intocado — é pro
+  humano olhar o scrollback bruto, não o canal que a máquina deveria
+  decidir em cima.
+- Verificado ao vivo sem mock: `smoke-mcp-report.mjs` — `read_report`
+  antes de qualquer report (ok:false); `read_report(wait:true)` chamado
+  ANTES de um segundo bash real reportar (prova de wait real), que só
+  então roda `acbridge report '...'` como shell command genuíno — resolve
+  com o JSON exato, bem antes do timeout. Passou na primeira tentativa.
+  `tsc --noEmit`/`electron-vite build` limpos; `smoke-mcp.mjs`/
+  `smoke-acbridge.mjs` sem regressão.
+- Detalhe completo em `DESIGN-BACKLOG.md` item 58, roteiro de
+  orquestração peça 1.
+
 ## Comandos
 
 ```bash
