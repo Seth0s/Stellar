@@ -31,6 +31,10 @@ const DEFAULT_WAIT_EXIT_TIMEOUT_MS = 600_000;
 // write, after the target's readline has had a beat to settle, submits
 // reliably the same way a human pressing Enter after a paste does.
 const SEND_ENTER_DELAY_MS = 80;
+// DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 1 — same
+// reasoning as DEFAULT_WAIT_EXIT_TIMEOUT_MS: waiting for a real agent's
+// real result is not a bug-detection backstop, it's the actual point.
+const DEFAULT_REPORT_TIMEOUT_MS = 600_000;
 
 // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — an agent spawning another
 // agent, which spawns another... with zero guard, is an unbounded fork
@@ -65,6 +69,8 @@ export type BusRequest =
   | { cmd: "get_page_text"; target?: string }
   | { cmd: "read_card"; target?: string; lines?: number }
   | { cmd: "card_status"; target?: string }
+  | { cmd: "report"; requesterId?: string; report?: unknown }
+  | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number }
   | {
       cmd: "spawn_agent";
       provider?: string;
@@ -150,6 +156,13 @@ export function createMessageBus(
   // principle exist for the same card (two callers both waiting on it),
   // so each entry is a list, not a single resolver.
   const pendingCardExits = new Map<string, Array<(exitCode: number) => void>>();
+  // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 1 — a
+  // dedicated result channel, decoupled from process exit (an agent might
+  // report a result and keep running, e.g. an interactive session): the
+  // last report a card sent (for a caller polling after the fact) plus
+  // waiters for one still pending (same shape as pendingCardExits above).
+  const cardReports = new Map<string, unknown>();
+  const pendingReportWaiters = new Map<string, Array<(report: unknown) => void>>();
   const pendingSpawnAgents = new Map<string, { resolve: (result: SpawnAgentResult) => void; timer: NodeJS.Timeout }>();
   const pendingSpawnCards = new Map<string, { resolve: (result: SpawnCardResult) => void; timer: NodeJS.Timeout }>();
 
@@ -256,6 +269,43 @@ export function createMessageBus(
       const cards = callbacks.listCards();
       if (!cards.some((c) => c.id === req.target)) return { ok: false, error: `no open terminal card with id "${req.target}"` };
       return { ok: true, status: callbacks.isCardAlive(req.target) ? "running" : "exited" };
+    }
+
+    if (req.cmd === "report") {
+      if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
+      cardReports.set(req.requesterId, req.report);
+      const waiters = pendingReportWaiters.get(req.requesterId);
+      if (waiters) {
+        pendingReportWaiters.delete(req.requesterId);
+        for (const resolve of waiters) resolve(req.report);
+      }
+      return { ok: true };
+    }
+
+    if (req.cmd === "get_report") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (cardReports.has(req.target)) return { ok: true, report: cardReports.get(req.target) };
+      if (!req.wait) return { ok: false, error: "no report yet" };
+      const target = req.target;
+      const timeoutMs = req.timeoutMs ?? DEFAULT_REPORT_TIMEOUT_MS;
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          const waiters = pendingReportWaiters.get(target);
+          if (waiters) {
+            const idx = waiters.indexOf(onReport);
+            if (idx !== -1) waiters.splice(idx, 1);
+            if (waiters.length === 0) pendingReportWaiters.delete(target);
+          }
+          resolve({ ok: false, error: "timed out waiting for report" });
+        }, timeoutMs);
+        const onReport = (report: unknown) => {
+          clearTimeout(timer);
+          resolve({ ok: true, report });
+        };
+        const waiters = pendingReportWaiters.get(target) ?? [];
+        waiters.push(onReport);
+        pendingReportWaiters.set(target, waiters);
+      });
     }
 
     if (req.cmd === "spawn_agent") {
@@ -429,6 +479,8 @@ export function createMessageBus(
     for (const { timer } of pendingReadCards.values()) clearTimeout(timer);
     pendingReadCards.clear();
     pendingCardExits.clear();
+    cardReports.clear();
+    pendingReportWaiters.clear();
     for (const { timer } of pendingSpawnAgents.values()) clearTimeout(timer);
     pendingSpawnAgents.clear();
     for (const { timer } of pendingSpawnCards.values()) clearTimeout(timer);

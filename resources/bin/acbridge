@@ -33,7 +33,7 @@ if (!sockPath) {
 const USAGE =
   "usage: acbridge <list | send <cardId> <message...> | open <url> | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
-  "card-status <cardId> | " +
+  "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]>";
 
@@ -76,6 +76,23 @@ if (cmd === "list") {
   const [target] = rest;
   if (!target) fail("usage: acbridge card-status <cardId>");
   request = { cmd: "card_status", target };
+} else if (cmd === "report") {
+  const [json] = rest;
+  if (!json) fail("usage: acbridge report <json>");
+  if (!ownCardId) fail("report: AGENT_CANVAS_CARD_ID is not set — not running inside agent-canvas?");
+  let report;
+  try {
+    report = JSON.parse(json);
+  } catch {
+    fail("report: argument must be valid JSON");
+  }
+  request = { cmd: "report", requesterId: ownCardId, report };
+} else if (cmd === "read-report") {
+  const [target, waitTimeoutMsStr] = rest;
+  if (!target) fail("usage: acbridge read-report <cardId> [waitTimeoutMs]");
+  const timeoutMs = waitTimeoutMsStr === undefined ? undefined : Number(waitTimeoutMsStr);
+  if (timeoutMs !== undefined && Number.isNaN(timeoutMs)) fail("read-report: waitTimeoutMs must be a number");
+  request = { cmd: "get_report", target, wait: timeoutMs !== undefined, timeoutMs };
 } else if (cmd === "spawn-agent") {
   const [provider, cwd, resumeId] = rest;
   if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
@@ -132,6 +149,10 @@ socket.on("close", () => {
     console.log(res.text);
   } else if (cmd === "card-status") {
     console.log(res.status);
+  } else if (cmd === "report") {
+    console.log("reported");
+  } else if (cmd === "read-report") {
+    console.log(JSON.stringify(res.report));
   } else if (cmd === "spawn-agent") {
     console.log(res.cardId);
   } else if (cmd === "spawn-card") {

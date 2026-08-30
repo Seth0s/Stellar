@@ -32,11 +32,13 @@ export type SpawnOpts = {
 const ACBRIDGE_HINT =
   "You're running inside agent-canvas, a board of cards. If an MCP server " +
   "named `stellar` is connected, prefer its tools (list/send/open/spawn/" +
-  "snapshot/page-text/read_card/card_status — read each tool's own " +
-  "description). " +
-  "Otherwise a CLI `acbridge` is on your PATH with the same capabilities " +
-  "(`acbridge` with no args prints usage). Use these only when it genuinely " +
-  "helps the task at hand.";
+  "snapshot/page-text/read_card/card_status/report/read_report — read " +
+  "each tool's own description). Otherwise a CLI `acbridge` is on your " +
+  "PATH with the same capabilities (`acbridge` with no args prints " +
+  "usage). If another card spawned you to do a task, call `report` (or " +
+  "`acbridge report '<json>'`) with a structured result when you finish " +
+  "it, even if you keep running afterward. Use these only when it " +
+  "genuinely helps the task at hand.";
 
 type ProviderDef = {
   id: ProviderId;

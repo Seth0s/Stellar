@@ -68,7 +68,19 @@ try {
   check(
     "MCP server exposes the full expected tool set",
     JSON.stringify(toolNames),
-    JSON.stringify(["card_status", "get_page_text", "list_cards", "open_url", "read_card", "send_to_card", "snapshot", "spawn_agent", "spawn_card"]),
+    JSON.stringify([
+      "card_status",
+      "get_page_text",
+      "list_cards",
+      "open_url",
+      "read_card",
+      "read_report",
+      "report",
+      "send_to_card",
+      "snapshot",
+      "spawn_agent",
+      "spawn_card",
+    ]),
   );
 
   const listPayload = await toolJson("list_cards", {});
