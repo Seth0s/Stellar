@@ -1,25 +1,23 @@
-// DESIGN-BACKLOG.md item 57 ponto 10 — pedido ao vivo: fonte do terminal
-// deveria acompanhar levemente o zoom do canvas, só pra terminais com um
-// agente ativo (não bash puro). xterm.js renderiza em canvas/WebGL, sem
-// texto de DOM confiável, e `window.pty` é congelado pelo próprio
-// `contextBridge` (confirmado ao vivo tentando monkey-patch
-// `window.pty.resize` — reatribuição vira um no-op silencioso, `Object.
-// isFrozen(window.pty)` retorna `true`) — não dá pra observar a chamada
-// de resize interceptando o IPC do jeito que outros testes fazem pro
-// SDK da Anthropic.
+// DESIGN-BACKLOG.md item 57 ponto 10, revisado (SCREEN_SPACE_PROJECTION_
+// PLAN.md, Trilha A) — a fonte do terminal agora acompanha o zoom do
+// canvas 1:1 (`FONT_ZOOM_INFLUENCE = 1.0`), pra TODO provider, `bash`
+// incluído — antes só 15% do delta afetava o tamanho real e só terminais
+// com agente reagiam, o resto do blur em zoom continuava vindo do
+// `transform: scale()` puramente óptico.
 //
-// Sinal real usado em vez disso: xterm.js mantém um canvas interno de
-// medição de célula (sem `style.width`/`style.height` — os únicos dois
-// canvases "reais" de render sempre ganham esses estilos explícitos) cujo
-// `.width`/`.height` (atributos HTML crus, não `getBoundingClientRect`)
-// refletem o tamanho real da célula de caractere em pixels — um valor
-// calculado pelo próprio xterm.js a partir do `fontSize` ativo, e que
-// **não** é afetado pelo `transform: scale()` que o card-frame aplica por
-// fora (transform CSS não muda o layout box de um elemento, só a pintura).
-// Confirmado ao vivo antes de escrever isto: esse canvas mede 56×38 num
-// card "claude" recém-criado e vira 64×41 depois de 5 cliques de zoom-in
-// (~2×); o mesmo canvas num card "bash" fica em 56×26 antes E depois —
-// prova real de que só o card com agente reagiu.
+// Sinal usado: `terminal-registry.ts`'s `getTerminalFontSize(cardId)`,
+// exposto em `window.__getTerminalFontSize` — lê `term.options.fontSize`
+// direto da instância viva do xterm.js, o mesmo valor que
+// `fontSizeForZoom` escreve. Substitui uma primeira versão deste teste
+// que tentava inferir o fontSize por introspecção de canvas (contar
+// canvases sem `style` explícito, comparar resolução crua vs. CSS) —
+// achado ao vivo construindo isto: o canvas de medição de célula do
+// xterm é recriado sob demanda e não fica estável logo após uma mutação
+// de `fontSize`, e a razão resolução-crua/CSS do canvas de render
+// principal reflete `devicePixelRatio` (constante nesta máquina), não o
+// fontSize — nenhum dos dois é um sinal confiável. Ler o valor real
+// direto da instância é preciso e não depende de nenhum desses detalhes
+// de implementação do renderer.
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9468;
@@ -69,35 +67,12 @@ async function centerOf(page, selector) {
   return res;
 }
 
-// Cada `.terminal-card` tem 3 canvases: link-layer e o de render principal
-// (ambos com `style.width/height` explícitos) e o de medição de célula
-// (sem nenhum dos dois) — o único cujo `.width`/`.height` cru muda com o
-// fontSize real. Achado ao vivo: esse 3º canvas nasce ATRASADO (alguns
-// segundos depois do card aparecer, não junto com os outros dois) — um
-// card recém-criado pode legitimamente não ter ele ainda; poll curto em
-// vez de assumir presença imediata.
-async function cellCanvasDimsFor(page, cardId, { timeoutMs = 4000 } = {}) {
+async function fontSizeFor(page, cardId, { timeoutMs = 5000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const result = JSON.parse(
-      await page.evalJs(`
-        (async () => {
-          const boards = await window.store.boards.list();
-          const cards = await window.store.list(boards[0].id);
-          const domCards = [...document.querySelectorAll('.terminal-card')];
-          // A ordem do DOM não é garantida ser a mesma da lista do store
-          // (z-order pode reordenar) — encontra o card certo pelo texto do
-          // header (provider/label) em vez de por índice.
-          const card = domCards.find((el) => el.textContent.includes(cards.find((c) => c.id === ${JSON.stringify(cardId)}).provider));
-          if (!card) return JSON.stringify(null);
-          const canvas = [...card.querySelectorAll('canvas')].find((c) => !c.style.width && !c.style.height);
-          if (!canvas) return JSON.stringify(null);
-          return JSON.stringify({ w: canvas.width, h: canvas.height });
-        })()
-      `),
-    );
+    const result = await page.evalJs(`window.__getTerminalFontSize(${JSON.stringify(cardId)})`);
     if (result !== null || Date.now() > deadline) return result;
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 150));
   }
 }
 
@@ -109,9 +84,10 @@ try {
   await bootIntoFreshSession(page, "Terminal Font Zoom Teste");
   await new Promise((r) => setTimeout(r, 800));
 
-  // O bash padrão semeado por bootIntoFreshSession já serve de card de
-  // controle (provider "bash"). Cria um segundo terminal, provider
-  // "claude" (instalado de verdade nesta máquina).
+  // O bash padrão semeado por bootIntoFreshSession já serve de segundo
+  // card sob teste (Trilha A cobre TODO provider agora, bash incluído).
+  // Cria um segundo terminal, provider "claude" (instalado de verdade
+  // nesta máquina), como comparação.
   const terminalBtn = await centerOf(page, '.rail-btn[title="Novo terminal"]');
   await page.click(terminalBtn.x, terminalBtn.y);
   await new Promise((r) => setTimeout(r, 300));
@@ -135,37 +111,55 @@ try {
       })()
     `),
   );
-  check("card bash (controle) e card claude (agente) ambos existem", ids.bashId !== undefined && ids.claudeId !== undefined, true);
+  check("card bash e card claude ambos existem", ids.bashId !== undefined && ids.claudeId !== undefined, true);
 
-  const bashBefore = await cellCanvasDimsFor(page, ids.bashId);
-  const claudeBefore = await cellCanvasDimsFor(page, ids.claudeId);
-  check("consegue medir o canvas de célula do card bash antes do zoom", bashBefore !== null, true);
-  check("consegue medir o canvas de célula do card claude antes do zoom", claudeBefore !== null, true);
+  const bashBefore = await fontSizeFor(page, ids.bashId);
+  const claudeBefore = await fontSizeFor(page, ids.claudeId);
+  check("consegue ler fontSize do card bash", bashBefore !== null, true);
+  check("consegue ler fontSize do card claude", claudeBefore !== null, true);
+  check(`em zoom=1, fontSize de ambos começa em BASE_FONT_SIZE=15 (bash=${bashBefore}, claude=${claudeBefore})`, bashBefore, 15);
+  check(`...claude também`, claudeBefore, 15);
 
-  // Zoom in real via o botão da topbar — mesmo mecanismo que um usuário usaria.
+  // Zoom in real via o botão da topbar (5 cliques, step 1.15 — App.tsx's
+  // ZOOM_STEP — chega em ~2x) — mesmo mecanismo que um usuário usaria.
   const zoomInBtn = await centerOf(page, '.zoom-pill button[title="Aumentar zoom"]');
   for (let i = 0; i < 5; i++) {
     await page.click(zoomInBtn.x, zoomInBtn.y);
     await new Promise((r) => setTimeout(r, 150));
   }
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 400));
 
-  const bashAfter = await cellCanvasDimsFor(page, ids.bashId);
-  const claudeAfter = await cellCanvasDimsFor(page, ids.claudeId);
-
+  const bashAfter = await fontSizeFor(page, ids.bashId);
+  const claudeAfter = await fontSizeFor(page, ids.claudeId);
   check(
-    "depois do zoom, a célula do card claude (agente) MUDOU de tamanho real (fontSize acompanhou o zoom)",
-    claudeAfter.w !== claudeBefore.w || claudeAfter.h !== claudeBefore.h,
+    `claude: fontSize cresceu com o zoom-in (antes ${claudeBefore}, depois ${claudeAfter})`,
+    claudeAfter > claudeBefore,
     true,
   );
+  // Trilha A — antes deste fix, `providerId === "bash"` era excluído do
+  // efeito: seu fontSize continuava travado em BASE_FONT_SIZE mesmo
+  // depois de zoom-in (só o `scale()` esticava visualmente, borrando).
+  // Agora reage igual a um terminal de agente.
   check(
-    "...e cresceu (zoom in → fonte maior), não diminuiu",
-    claudeAfter.w >= claudeBefore.w && claudeAfter.h >= claudeBefore.h,
+    `bash: fontSize TAMBÉM cresceu com o mesmo zoom-in (antes ${bashBefore}, depois ${bashAfter}) — Trilha A`,
+    bashAfter > bashBefore,
     true,
   );
+  check(`bash e claude chegam no MESMO fontSize (mesma fórmula, mesmo zoom): bash=${bashAfter}, claude=${claudeAfter}`, bashAfter, claudeAfter);
+  check(`fontSize respeita o teto do clamp (FONT_SIZE_MAX=22)`, bashAfter <= 22, true);
+
+  // Zoom-out abaixo do ponto de partida, confirma que o piso do clamp
+  // (FONT_SIZE_MIN=11) segura a fonte legível em vez de encolher sem limite.
+  const zoomOutBtn = await centerOf(page, '.zoom-pill button[title="Diminuir zoom"]');
+  for (let i = 0; i < 12; i++) {
+    await page.click(zoomOutBtn.x, zoomOutBtn.y);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  await new Promise((r) => setTimeout(r, 400));
+  const claudeZoomedOut = await fontSizeFor(page, ids.claudeId);
   check(
-    "o card bash (controle) NÃO mudou de tamanho de célula com o mesmo zoom (fonte fixa pra bash puro)",
-    bashAfter.w === bashBefore.w && bashAfter.h === bashBefore.h,
+    `zoom-out reduz o fontSize (era ${claudeAfter}, agora ${claudeZoomedOut}) e respeita o piso do clamp (FONT_SIZE_MIN=11)`,
+    claudeZoomedOut < claudeAfter && claudeZoomedOut >= 11,
     true,
   );
 
