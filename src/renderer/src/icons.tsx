@@ -127,7 +127,8 @@ export type IconName =
   | "settings"
   | "eye"
   | "eyeOff"
-  | "clock";
+  | "clock"
+  | "rotate";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -195,6 +196,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   eye: Eye,
   eyeOff: EyeOff,
   clock: Clock,
+  rotate: RotateCw,
 };
 
 export function Icon({ name, size = 18, color }: { name: IconName; size?: number; color?: string }) {

@@ -3,24 +3,13 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, extname, join, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 
-/**
- * DESIGN-BACKLOG.md item 57.9 — "Mídias no Canvas com Manipulação
- * Completa". Colar/arrastar uma imagem ou PDF no canvas vazio cria um
- * card de visualização (`media`, `card-types.ts`) que é conteúdo do
- * board de LONGA duração, não contexto de conversa efêmero — por isso
- * este módulo é deliberadamente diferente de `clipboard-image.ts`
- * (`stellar-pastes`, sob `app.getPath("temp")`, que o SO pode limpar a
- * qualquer momento): a pasta de assets vive sob `app.getPath("userData")`
- * (o mesmo diretório onde o SQLite do app já mora — nunca limpo pelo
- * SO), uma sub-pasta POR BOARD.
- *
- * Trade-off aceito conscientemente (documentado, não escondido): nada
- * aqui limpa os arquivos de um board deletado ou de um card de mídia
- * individual removido — mesmo espírito de "arquivo temporário não é
- * limpo automaticamente" que `clipboard-image.ts` já aceita pro seu
- * próprio diretório. Revisitar só se acumular como problema real.
- */
-
+/** Item 57.9 — pasta de assets PERSISTENTE do board, separada de
+ * qualquer diretório temporário do SO (ver clipboard-image.ts, que usa
+ * um diretório efêmero de propósito pra anexos de chat/terminal). Mídia
+ * colada/arrastada no canvas vazio é conteúdo de board de longa duração
+ * — não pode sumir numa limpeza de temp. Sem limpeza automática ao
+ * deletar um board/card, mesmo trade-off já aceito por clipboard-
+ * image.ts pro seu próprio diretório. */
 const EXT_BY_MEDIA_TYPE: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -48,8 +37,8 @@ function writeUniqueFile(dir: string, ext: string, write: (path: string) => void
   }
 }
 
-/** Paste de imagem no canvas vazio — só temos bytes em memória (base64),
- * sem um path real de SO pra copiar diretamente. */
+/** Paste de imagem — só temos os bytes em memória (clipboard/FileReader),
+ * nunca um path real de SO pra copiar direto. */
 export function saveBoardAssetBytes(boardId: string, base64: string, mediaType: string): SaveBoardAssetResult {
   const ext = EXT_BY_MEDIA_TYPE[mediaType];
   if (!ext) return { ok: false, error: `tipo de mídia não suportado: ${mediaType}` };
@@ -57,26 +46,20 @@ export function saveBoardAssetBytes(boardId: string, base64: string, mediaType: 
   return writeUniqueFile(dir, ext, (path) => writeFileSync(path, Buffer.from(base64, "base64")));
 }
 
-/** Drop de um arquivo real do SO — o renderer já resolveu o path real via
- * `webUtils.getPathForFile` (Electron 32+), então uma cópia direta em
- * disco evita o round-trip de base64 que `saveBoardAssetBytes` precisa
- * (importa pra PDFs grandes, que `saveBytes` nunca lida de qualquer
- * forma — PDF só nasce de drop, ver App.tsx). */
+/** Drop de um arquivo real do SO (path via `webUtils.getPathForFile`) —
+ * copia direto, sem round-trip de base64 pela IPC (importa pra PDFs
+ * grandes). */
 export function copyBoardAssetFromPath(boardId: string, sourcePath: string): SaveBoardAssetResult {
   const dir = boardAssetsDir(boardId);
   const ext = extname(sourcePath);
   return writeUniqueFile(dir, ext, (path) => copyFileSync(sourcePath, path));
 }
 
-/** Resolve `stellar-asset://<boardId>/<filename>` pro path real em disco —
- * usado pelo protocolo customizado (main/index.ts). Mesma preocupação de
- * boundary que `readAttachmentImage` (clipboard-image.ts) já tem: o
- * filename nunca pode escapar da pasta do próprio board (ex.: um
- * `../../etc/passwd` embutido), mesmo vindo de uma URL renderer-supplied
- * — `basename()` descarta qualquer separador de diretório antes de
- * juntar, então não há como o resultado apontar pra fora de `dir` nem
- * escapar via `..` (`basename("../../etc/passwd")` vira só
- * `"passwd"`). */
+/** `stellar-asset://<boardId>/<filename>`'s handler — `basename()` do
+ * filename recebido descarta qualquer `..`/separador embutido antes de
+ * juntar ao dir real, e o `resolved.startsWith(dir + sep)` confirma que o
+ * resultado ainda cai dentro da pasta daquele board (mesma defesa de
+ * path-traversal que `fs-tools.ts` já usa pros roots de projeto). */
 export function resolveBoardAsset(boardId: string, filename: string): string | null {
   const dir = boardAssetsDir(boardId);
   const safeName = basename(filename);
