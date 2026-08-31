@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
@@ -431,6 +431,71 @@ function FilesCardInner({
   const [contentResults, setContentResults] = useState<ContentMatch[]>([]);
   const [searching, setSearching] = useState(false);
 
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const openTabsRef = useRef(openTabs);
+  openTabsRef.current = openTabs;
+
+  function updateTab(path: string, patch: Partial<OpenTab>) {
+    setOpenTabs((prev) => prev.map((t) => (t.path === path ? { ...t, ...patch } : t)));
+  }
+
+  const reloadAll = useCallback(async () => {
+    try {
+      const rootEntries = await window.fs.list(root, "");
+      const newKids: Record<string, DirEntry[]> = { "": rootEntries };
+
+      const currentExpanded = Array.from(expandedRef.current);
+      await Promise.all(
+        currentExpanded.map(async (dirPath) => {
+          try {
+            const dirEntries = await window.fs.list(root, dirPath);
+            newKids[dirPath] = dirEntries;
+          } catch {
+            // Directory might have been removed
+          }
+        }),
+      );
+      setKids(newKids);
+    } catch (e) {
+      setError(String(e));
+    }
+
+    try {
+      const git = await window.git.status(root);
+      setGitStatus(git);
+    } catch {
+      // Ignore git status errors
+    }
+
+    // Refresh non-dirty open tabs if their content changed on disk
+    const tabs = openTabsRef.current;
+    for (const tab of tabs) {
+      if (!tab.dirty) {
+        const kind = mediaKind(tab.path);
+        if (kind === "image") {
+          window.fs
+            .readImage(root, tab.path)
+            .then((result) => {
+              if ("dataUrl" in result && result.dataUrl !== tab.imageDataUrl) {
+                updateTab(tab.path, { imageDataUrl: result.dataUrl });
+              }
+            })
+            .catch(() => {});
+        } else {
+          window.fs
+            .read(root, tab.path)
+            .then((result) => {
+              if ("content" in result && result.content !== tab.content) {
+                updateTab(tab.path, { content: result.content });
+              }
+            })
+            .catch(() => {});
+        }
+      }
+    }
+  }, [root]);
+
   useEffect(() => {
     setKids({});
     setExpanded(new Set());
@@ -444,8 +509,21 @@ function FilesCardInner({
       (entries) => setKids((prev) => ({ ...prev, "": entries })),
       (e) => setError(String(e)),
     );
-    window.git.status(root).then(setGitStatus);
-  }, [root]);
+    window.git.status(root).then(setGitStatus).catch(() => {});
+
+    // DESIGN-BACKLOG.md item 67 — Live file watching
+    void window.fs.watch(root);
+    const unlisten = window.fs.onChanged((changedRoot) => {
+      if (changedRoot === root) {
+        void reloadAll();
+      }
+    });
+
+    return () => {
+      unlisten();
+      void window.fs.unwatch(root);
+    };
+  }, [root, reloadAll]);
 
   // Every armed "click again to confirm" delete/close-tab auto-disarms
   // after a few seconds — an armed trash icon or tab left sitting there is
@@ -475,10 +553,6 @@ function FilesCardInner({
       return next;
     });
     if (willOpen && !kids[path]) void refreshDir(path);
-  }
-
-  function updateTab(path: string, patch: Partial<OpenTab>) {
-    setOpenTabs((prev) => prev.map((t) => (t.path === path ? { ...t, ...patch } : t)));
   }
 
   function selectFile(path: string, jumpToLine?: number) {

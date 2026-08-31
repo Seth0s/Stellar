@@ -16,7 +16,7 @@
 // ultimately resolves depends on real capturable sources existing in
 // whatever display environment this runs under, which this harness
 // doesn't control and shouldn't assert on).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 
 const CDP_PORT = 9410;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-display-media-gate", import.meta.url).pathname;
@@ -65,16 +65,13 @@ try {
   await new Promise((r) => setTimeout(r, 1500));
   await bootIntoFreshSession(page);
 
-  const btn = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const b = [...document.querySelectorAll('.rail-btn')].find(x => x.title && x.title.toLowerCase().includes("navegador"));
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-      })()
-    `),
-  );
-  await page.click(btn.x, btn.y);
+  // Rail reorg (2.2's "menu único de Ferramentas/Cards") moved card
+  // creation behind an "Adicionar card" popover for every kind but
+  // terminal — a flat `.rail-btn` query for "navegador" no longer finds
+  // anything live in the DOM until that popover is open. `spawnCard`
+  // (cdp-client.mjs) already handles both the direct-button and
+  // grouped-popover shapes.
+  await spawnCard(page, "browser");
   await new Promise((r) => setTimeout(r, 1000));
 
   const barCoords = JSON.parse(

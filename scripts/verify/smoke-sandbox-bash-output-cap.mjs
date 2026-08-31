@@ -31,7 +31,7 @@ async function clickByTitle(page, title) {
   let coords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.rail-btn[title=${JSON.stringify(title)}]') || document.querySelector(\`button[title="\${JSON.stringify(title)}"]\`);
+        const b = document.querySelector('.rail-btn[title=${JSON.stringify(title)}]') || document.querySelector(\`button[title=${JSON.stringify(title)}]\`);
         if (!b) return JSON.stringify(null);
         const r = b.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
@@ -55,7 +55,7 @@ async function clickByTitle(page, title) {
       coords = JSON.parse(
         await page.evalJs(`
           (() => {
-            const b = document.querySelector(\`.popover-row[title="\${JSON.stringify(title)}"]\`);
+            const b = document.querySelector(\`.popover-row[title=${JSON.stringify(title)}]\`);
             if (!b) return JSON.stringify(null);
             const r = b.getBoundingClientRect();
             return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});

@@ -210,6 +210,14 @@ const fs = {
   /** DESIGN-BACKLOG.md item 51 — full-text search across file contents. */
   searchContents: (root: string, query: string): Promise<ContentMatch[]> =>
     ipcRenderer.invoke("fs:search-contents", root, query),
+  /** DESIGN-BACKLOG.md item 67 — Live file watching for FilesCard. */
+  watch: (root: string): Promise<void> => ipcRenderer.invoke("fs:watch-start", root),
+  unwatch: (root: string): Promise<void> => ipcRenderer.invoke("fs:watch-stop", root),
+  onChanged: (cb: (root: string, eventPath?: string) => void) => {
+    const listener = (_e: unknown, data: { root: string; path?: string }) => cb(data.root, data.path);
+    ipcRenderer.on("fs:changed", listener);
+    return () => ipcRenderer.removeListener("fs:changed", listener);
+  },
 };
 
 export type GitEntry = { path: string; status: string; insertions: number; deletions: number };

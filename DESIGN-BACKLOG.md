@@ -46,16 +46,16 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
 ### 2.1 Funcionalidades & Gaps de Produto
 
 * **FilesCard — Sincronização em Tempo Real (File Watching):**
-  * [ ] Implementar watcher de sistema de arquivos (`fs.watch` no processo main com debouncing/throttling) para atualizar a árvore de diretórios e arquivos abertos dinamicamente em tempo real quando alterados por agentes ou processos externos (evitando a sensação de "snapshot estático" na criação).
+  * [x] Implementar watcher de sistema de arquivos (`fs.watch` no processo main com debouncing/throttling) para atualizar a árvore de diretórios e arquivos abertos dinamicamente em tempo real quando alterados por agentes ou processos externos (evitando a sensação de "snapshot estático" na criação).
 
 ### 2.2 Design & Acessibilidade (D1–D8)
 
 * **Simplificação e Limpeza da Barra Lateral (Rail):**
-  * [ ] Reestruturar a Rail para reduzir a poluição visual: agrupar as opções de criação de cards (Navegador, Terminal, Changes, Files, Chatbox, Sticky) em um menu/botão único de "Ferramentas/Cards" que abre um popover/modal limpo para seleção do card desejado.
+  * [x] Reestruturar a Rail para reduzir a poluição visual: agrupar as opções de criação de cards (Navegador, Terminal, Changes, Files, Chatbox, Sticky) em um menu/botão único de "Ferramentas/Cards" que abre um popover/modal limpo para seleção do card desejado.
 * **Botão de Ocultar/Expandir a Barra Lateral (Rail Toggle) & Animação Fluida:**
-  * [ ] Substituir o ícone quase invisível por um botão/toggle com contraste adequado e boa visibilidade.
-  * [ ] Alternar dinamicamente a posição e o sentido do ícone conforme a barra esteja recolhida ou expandida.
-  * [ ] Implementar transição/animação CSS fluida e suave de slide-in / slide-out para a entrada e saída da barra lateral.
+  * [x] Substituir o ícone quase invisível por um botão/toggle com contraste adequado e boa visibilidade.
+  * [x] Alternar dinamicamente a posição e o sentido do ícone conforme a barra esteja recolhida ou expandida.
+  * [x] Implementar transição/animação CSS fluida e suave de slide-in / slide-out para a entrada e saída da barra lateral.
 * **D1 — Calha de Proteção contra Sobreposição da Rail:**
   * [ ] Reservar margem/calha no viewport do canvas para que cards posicionados na extremidade esquerda não tenham conteúdo cortado ou sobreposto pela régua lateral fixa.
 * **D2 — Contraste e Bordas em Zoom Reduzido:**

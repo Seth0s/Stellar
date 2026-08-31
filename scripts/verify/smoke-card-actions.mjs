@@ -77,9 +77,18 @@ try {
   // duplicate) only cover roughly (40,40)-(792,632) at boot zoom/pan —
   // this corner is clear of both, so the drag grabs the board background,
   // not a card.
+  // The mouseReleased used to land at (-1500,-1500) — outside the
+  // viewport. Found live: `Input.dispatchMouseEvent` at coordinates
+  // outside the viewport is a no-op (same finding documented below at the
+  // focus-button check), so that pointerup never actually reached the
+  // page — leaving the pan's window-level pointer-capture stuck "still
+  // down" and swallowing the next real click (the "Localizar card" rail
+  // button just below). Same delta (1200,750), but the release now lands
+  // at (0,0) — still inside the viewport, still far enough to push both
+  // cards fully off-screen — so the pointerup actually fires.
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: 1200, y: 750, button: "left", clickCount: 1, pointerType: "mouse" });
-  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: -1500, y: -1500, button: "left", pointerType: "mouse" });
-  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: -1500, y: -1500, button: "left", clickCount: 1, pointerType: "mouse" });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 0, y: 0, button: "left", pointerType: "mouse" });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 0, y: 0, button: "left", clickCount: 1, pointerType: "mouse" });
   await new Promise((r) => setTimeout(r, 300));
   const offScreenAfterPan = JSON.parse(
     await page.evalJs(`
