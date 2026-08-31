@@ -23,6 +23,7 @@ import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
 import { Rail } from "./Rail";
+import { OffscreenPips } from "./OffscreenPips";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
 import { UpdateBanner } from "./UpdateBanner";
@@ -563,6 +564,7 @@ export function App() {
     setWorld,
     worldRef,
     viewportRef,
+    viewportSize,
     visibleRect,
     clientToWorld,
     zoomBy,
@@ -2341,6 +2343,15 @@ export function App() {
         onDeleteBoard={deleteBoard}
         onToggleAutonomous={setBoardAutonomous}
         onSetConcurrencyCap={setBoardConcurrencyCap}
+      />
+      <OffscreenPips
+        cards={cards}
+        visibleRect={visibleRect}
+        world={world}
+        viewportSize={viewportSize}
+        kindIcon={CARD_ICON}
+        kindLabel={CARD_LABEL}
+        onFocusCard={jumpToCard}
       />
       <UpdateBanner />
       <ToastHost />

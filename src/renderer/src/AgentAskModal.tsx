@@ -1,4 +1,4 @@
-import { useOccludesChrome } from "./occlusion";
+import { useModal } from "./useModal";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — the generic permission-
@@ -32,7 +32,7 @@ export function AgentAskModal({
   onDeny: () => void;
   onAllow: () => void;
 }) {
-  useOccludesChrome();
+  const { modalProps } = useModal({ onClose: onDeny });
   return (
     <div
       className="modal-root"
@@ -41,7 +41,7 @@ export function AgentAskModal({
       onContextMenu={(e) => e.stopPropagation()}
     >
       <div className="modal-backdrop" onClick={onDeny} />
-      <div className="modal" role="dialog" aria-labelledby="agent-ask-title">
+      <div className="modal" {...modalProps} aria-labelledby="agent-ask-title">
         <h3 id="agent-ask-title">{title}</h3>
         <p>
           <strong>{requesterLabel}</strong> pede:

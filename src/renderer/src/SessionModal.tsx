@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { PathPicker } from "./PathPicker";
-import { useOccludesChrome } from "./occlusion";
+import { useModal } from "./useModal";
 import { toast } from "./useToast";
 import { required, useFieldValidation } from "./validation";
 import type { SessionTemplate } from "./useBoardStore";
@@ -56,7 +56,7 @@ type SessionModalProps =
     };
 
 export function SessionModal(props: SessionModalProps) {
-  useOccludesChrome();
+  const { modalProps } = useModal({ onClose: props.onClose });
   const [name, setName] = useState(props.mode === "create" ? "" : props.board.name);
   const [cwd, setCwd] = useState(
     props.mode === "create" ? props.defaultCwd : props.board.cwd || props.workspaceRoot,
@@ -88,7 +88,7 @@ export function SessionModal(props: SessionModalProps) {
       onContextMenu={(e) => e.stopPropagation()}
     >
       <div className="modal-backdrop" onClick={props.onClose} />
-      <div className="modal" role="dialog" aria-labelledby={titleId}>
+      <div className="modal" {...modalProps} aria-labelledby={titleId}>
         <h3 id={titleId}>{props.mode === "create" ? "Nova sessão" : "Editar sessão"}</h3>
         <div className="popover-field">
           <label>nome</label>
