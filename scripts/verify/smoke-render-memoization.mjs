@@ -29,7 +29,7 @@
 // empty background) causes ZERO extra renders for ANY of the four cards
 // — none of their own props actually changed, so memo should skip all
 // of them.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 
 const CDP_PORT = 9452;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-render-memoization", import.meta.url).pathname;
@@ -124,18 +124,11 @@ try {
 
   // ---- Add a chat card and a browser card — the other two instrumented
   // kinds (see TerminalCard.tsx/ChatCard.tsx/BrowserCard.tsx) ----
-  async function clickRailButton(title) {
-    const coords = JSON.parse(
-      await page.evalJs(`
-        (() => {
-          const b = document.querySelector('.rail-btn[title=${JSON.stringify(title)}]');
-          const r = b.getBoundingClientRect();
-          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-        })()
-      `),
-    );
-    await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: coords.x, y: coords.y, button: "left", clickCount: 1, pointerType: "mouse" });
-    await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: coords.x, y: coords.y, button: "left", clickCount: 1, pointerType: "mouse" });
+  // Rail reorg (2.2's "menu único de Ferramentas/Cards") moved card
+  // creation behind an "Adicionar card" popover for every kind but
+  // terminal — `spawnCard` (cdp-client.mjs) handles both shapes.
+  async function clickRailButton(kind) {
+    await spawnCard(page, kind);
     await new Promise((r) => setTimeout(r, 500));
   }
   // Chat card FIRST, browser card SECOND — deliberately, and dragged
@@ -149,7 +142,7 @@ try {
   // silently no-op the whole drag, which would look identical to a
   // memoization bug but isn't one — so the browser card is added only
   // after this drag is done.
-  await clickRailButton("Novo chatbox");
+  await clickRailButton("chat");
   await new Promise((r) => setTimeout(r, 500));
 
   const cardsAfterChat = JSON.parse(
@@ -186,7 +179,7 @@ try {
   check("...and does NOT re-render terminal card B", afterChatDrag[idB], afterDrag[idB]);
 
   // ---- Now add the browser card, after the chat drag is done ----
-  await clickRailButton("Novo navegador");
+  await clickRailButton("browser");
   await new Promise((r) => setTimeout(r, 500));
   const cardsNow = JSON.parse(
     await page.evalJs(`

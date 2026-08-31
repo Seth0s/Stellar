@@ -172,8 +172,17 @@ try {
     const match = pageSizeLine?.match(/([\d.]+) x ([\d.]+)/);
     const pdfW = match ? Math.round(Number(match[1])) : null;
     const pdfH = match ? Math.round(Number(match[2])) : null;
-    check("...com a largura da página batendo com o recorte", pdfW, rect.width);
-    check("...e a altura também", pdfH, rect.height);
+    // `capturePage`'s NativeImage (and `wrapJpegAsPdf`'s page size, a raw
+    // 1-pixel-= 1-point wrap with no DPI conversion) comes back in
+    // PHYSICAL/device pixels — `devicePixelRatio` on this machine is
+    // 1.5, not 1, so the PDF's real page size is CSS `rect` scaled by
+    // that ratio, not `rect` itself. Achado ao vivo: this check
+    // originally compared against raw `rect.width/height` and failed on
+    // any HiDPI display for that reason alone — the PDF itself was
+    // always correct (page size == embedded image size, no distortion).
+    const dpr = await page.evalJs(`window.devicePixelRatio`);
+    check("...com a largura da página batendo com o recorte (em pixels físicos)", pdfW, Math.round(rect.width * dpr));
+    check("...e a altura também", pdfH, Math.round(rect.height * dpr));
 
     const ppmOut = `${OUT_DIR}/recorte-rasterizado`;
     execFileSync("pdftoppm", ["-png", "-r", "72", results.pdf.outPath, ppmOut]);

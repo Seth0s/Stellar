@@ -17,7 +17,7 @@
 // capturePage() now shows the real page (confirmed visually, a live Google
 // homepage came through pixel-for-pixel). No workaround code needed; this
 // test is the regression guard against it silently breaking again.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
@@ -83,16 +83,10 @@ try {
   // saved PNG has real (non-blank) content in the browser card's own
   // area — not the flat `--surface` rectangle the old WebContentsView-
   // based implementation produced.
-  const railBtnCoords = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const b = [...document.querySelectorAll('.rail-btn')].find((x) => x.title === 'Novo navegador');
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({ x: r.x + r.width/2, y: r.y + r.height/2 });
-      })()
-    `),
-  );
-  await page.click(railBtnCoords.x, railBtnCoords.y);
+  // Rail reorg (2.2's "menu único de Ferramentas/Cards") moved card
+  // creation behind an "Adicionar card" popover for every kind but
+  // terminal — `spawnCard` (cdp-client.mjs) handles both shapes.
+  await spawnCard(page, "browser");
   await new Promise((r) => setTimeout(r, 500));
   await page.evalJs(`
     (() => {
