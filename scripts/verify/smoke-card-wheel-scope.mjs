@@ -9,10 +9,12 @@
 // BrowserCard sem foco tinha uma exceção própria ("deixa vazar pro zoom
 // do board") — deixa de existir. Sem foco, wheel sobre um navegador
 // embutido agora não faz nada até um clique focar o card.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import fs from "node:fs";
 
-const CDP_PORT = 9444;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-card-wheel-scope", import.meta.url).pathname;
+const CDP_PORT = 9500 + Math.floor(Math.random() * 400);
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-card-wheel-scope-${Date.now()}-${Math.random()}`, import.meta.url).pathname;
+fs.mkdirSync(USER_DATA_DIR, { recursive: true });
 
 async function wheelAt(page, x, y, deltaY) {
   await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY });
@@ -23,17 +25,47 @@ async function readZoom(page) {
 }
 
 async function centerOf(page, selector) {
-  const coords = JSON.parse(
+  let res = JSON.parse(
     await page.evalJs(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return JSON.stringify(null);
         const r = el.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()
     `),
   );
-  return coords;
+  if (!res && selector.includes(".rail-btn[title=")) {
+    const titleMatch = selector.match(/title=["']([^"']+)["']/);
+    if (titleMatch) {
+      const title = titleMatch[1];
+      const addBtn = JSON.parse(
+        await page.evalJs(`
+          (() => {
+            const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+            if (!b) return JSON.stringify(null);
+            const r = b.getBoundingClientRect();
+            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+          })()
+        `),
+      );
+      if (addBtn) {
+        await page.click(addBtn.x, addBtn.y);
+        await new Promise((r) => setTimeout(r, 250));
+        res = JSON.parse(
+          await page.evalJs(`
+            (() => {
+              const el = document.querySelector(\`.popover-row[title="${title}"]\`);
+              if (!el) return JSON.stringify(null);
+              const r = el.getBoundingClientRect();
+              return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+            })()
+          `),
+        );
+      }
+    }
+  }
+  return res;
 }
 
 const { check, finish } = makeChecker();
@@ -88,14 +120,10 @@ try {
   check("...and the terminal's own scrollback genuinely moved (real pixels changed, not a no-op)", pixelsAfter !== pixelsBefore, true);
 
   // ---- files card: mesma garantia, sem exceção por tipo ----
-  // Título vem de RAIL_CREATE_TITLE em src/renderer/src/cards/registry.ts —
-  // era "Nova pasta de arquivos" e virou "Explorador" no 32c0db5, o que
-  // quebrou este seletor sem quebrar o build (centerOf devolvia null e o
-  // script morria com TypeError). Se mudar de novo, é lá que está a verdade.
-  const filesBtn = await centerOf(page, '.rail-btn[title="Explorador"]');
-  await page.click(filesBtn.x, filesBtn.y);
-  await new Promise((r) => setTimeout(r, 500));
-  const filesTreeCoords = await centerOf(page, ".files-tree");
+  await spawnCard(page, "files");
+  await new Promise((r) => setTimeout(r, 600));
+  const filesTreeCoords = await centerOf(page, ".files-card");
+  check("files card coords found", !!filesTreeCoords, true);
   const zoomBeforeFiles = await readZoom(page);
   await wheelAt(page, filesTreeCoords.x, filesTreeCoords.y, -200);
   await new Promise((r) => setTimeout(r, 300));
@@ -114,10 +142,10 @@ try {
   check("scrolling over genuine empty background STILL zooms the canvas (not a regression)", await readZoom(page) !== zoomBeforeBg, true);
 
   // ---- browser card, sem foco: wheel não faz mais zoom-through, nem rola a página ----
-  const browserBtn = await centerOf(page, '.rail-btn[title="Novo navegador"]');
-  await page.click(browserBtn.x, browserBtn.y);
+  await spawnCard(page, "browser");
   await new Promise((r) => setTimeout(r, 1200)); // deixa a página carregar
-  const browserCoords = await centerOf(page, ".browser-card-body");
+  const browserCoords = await centerOf(page, ".browser-card");
+  check("browser card coords found", !!browserCoords, true);
   const zoomBeforeBrowser = await readZoom(page);
   await wheelAt(page, browserCoords.x, browserCoords.y, -400);
   await new Promise((r) => setTimeout(r, 400));

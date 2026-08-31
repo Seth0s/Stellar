@@ -39,9 +39,22 @@ import { isSandboxAvailable, runSandboxedBash } from "./sandbox";
  *   "spawned, card #N, running independently".
  */
 
+/** Item 66 — mesma forma que `card-types.ts` (renderer) define pro mesmo
+ * conceito; duplicado, não importado, pela mesma razão de sempre nesta
+ * base (main/renderer são bundles TS separados). `path` aponta pro mesmo
+ * diretório `stellar-pastes` que `clipboard-image.ts` já usa — nunca
+ * base64 persistido, só lido do disco na hora de montar a request. */
+export type ChatImageBlock = {
+  type: "image";
+  path: string;
+  mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+};
+export type ChatTextBlock = { type: "text"; text: string };
+export type ChatContentBlock = ChatTextBlock | ChatImageBlock;
+
 /** Provider-agnostic — both anthropic-client.ts and openai-client.ts
  * accept/return this shape and translate to their own wire format. */
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type ChatMessage = { role: "user" | "assistant"; content: string | ChatContentBlock[] };
 
 export const READ_FILE_TOOL_NAME = "read_file" as const;
 export const WRITE_FILE_TOOL_NAME = "write_file" as const;
@@ -55,7 +68,7 @@ export const TOOL_DESCRIPTIONS = {
   [BASH_TOOL_NAME]:
     "Run a shell command. Executes sandboxed (bubblewrap): filesystem writes are confined to this chat's project root and /tmp, the process runs in its own PID/IPC/UTS namespace (can't see or signal anything on the host), but network access IS available (npm install, curl, git clone, etc. all work). Always shown to the human for approval before running — if they deny it, nothing executes.",
   [DELEGATE_TOOL_NAME]:
-    "Delegate a substantial, independent task to a full coding agent (claude, codex, or gemini) running in its own new terminal card on the board, in this chat's project root. Use this for real, multi-step engineering work, not small lookups. Asynchronous: you get back a card id, not the agent's output — you can't see what it does or wait for it inside this turn; check the board for the reply.",
+    "Delegate a substantial, independent task to a full coding agent (claude, codex, or antigravity) running in its own new terminal card on the board, in this chat's project root. Use this for real, multi-step engineering work, not small lookups. Asynchronous: you get back a card id, not the agent's output — you can't see what it does or wait for it inside this turn; check the board for the reply.",
 } as const;
 
 export const TOOL_PARAMETERS = {
@@ -80,7 +93,7 @@ export const TOOL_PARAMETERS = {
   [DELEGATE_TOOL_NAME]: {
     type: "object",
     properties: {
-      provider: { type: "string", enum: ["claude", "codex", "gemini"], description: "Which CLI agent to spawn" },
+      provider: { type: "string", enum: ["claude", "codex", "antigravity"], description: "Which CLI agent to spawn" },
       reason: { type: "string", description: "Short description of the task being delegated, shown to the human" },
     },
     required: ["provider", "reason"],
@@ -91,11 +104,11 @@ const MAX_TOOL_RESULT_CHARS = 20_000; // same cap browser-registry.ts's get_page
 
 export type ToolResult = { ok: boolean; text: string };
 
-export type WriteConsentRequest = { path: string; isNewFile: boolean; diffText: string; hunks: DiffHunk[] };
+export type WriteConsentRequest = { path: string; isNewFile: boolean; diffText: string; hunks: DiffHunk[]; oldFileTooLarge?: boolean };
 export type DiffHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] };
 
 export type BashConsentRequest = { command: string };
-export type DelegateProvider = "claude" | "codex" | "gemini";
+export type DelegateProvider = "claude" | "codex" | "antigravity";
 export type DelegateResult = { ok: true; cardId: string } | { ok: false; error: string };
 
 /** DESIGN-BACKLOG.md item 57 ponto 7 — real usage from the provider's own
@@ -131,6 +144,15 @@ export async function buildWriteConsent(root: string, path: string, newContent: 
   try {
     const res = await readFile(root, path);
     if ("content" in res) oldContent = res.content;
+    // Pre-release audit B1 — `res` being `{ tooLarge: true }` (an
+    // EXISTING file over `MAX_FILE_BYTES`) used to fall through here with
+    // `oldContent` left at its initial `""`, same as a genuinely new
+    // file — the diff below would then show the entire new content as
+    // pure addition, and a human approving "looks like a new file" would
+    // actually be blessing a silent overwrite of a real, unread file.
+    // `runWriteFile` never even gets a size check of its own, so this is
+    // the only place that can catch it before the write happens.
+    else if ("tooLarge" in res) return { path, isNewFile: false, diffText: "", hunks: [], oldFileTooLarge: true };
   } catch {
     isNewFile = true;
   }
@@ -178,8 +200,19 @@ export async function executeTool(name: string, input: unknown, hooks: ChatToolH
     const path = String(args.path ?? "");
     const content = String(args.content ?? "");
     const consentReq = await buildWriteConsent(hooks.root, path, content);
-    const allowed = await hooks.askWriteConsent(consentReq);
-    result = allowed ? await runWriteFile(hooks.root, path, content) : { ok: false, text: "o usuário negou esta escrita" };
+    // Pre-release audit B1 — refuses outright, no consent modal at all:
+    // an honest diff isn't possible without reading the existing file
+    // (which is exactly what `MAX_FILE_BYTES` exists to bound), and
+    // asking a human to approve a diff that would misrepresent a real
+    // overwrite as "new file" is worse than just refusing. Same "no
+    // prompt when there's nothing safe to approve" posture as the bash
+    // tool's own sandbox-unavailable branch below.
+    if (consentReq.oldFileTooLarge) {
+      result = { ok: false, text: `${path}: arquivo existente maior que ${MAX_FILE_BYTES / 1024}KB — recusando escrever sem poder mostrar um diff honesto` };
+    } else {
+      const allowed = await hooks.askWriteConsent(consentReq);
+      result = allowed ? await runWriteFile(hooks.root, path, content) : { ok: false, text: "o usuário negou esta escrita" };
+    }
   } else if (name === BASH_TOOL_NAME) {
     const command = String(args.command ?? "");
     if (!isSandboxAvailable()) {
@@ -192,7 +225,7 @@ export async function executeTool(name: string, input: unknown, hooks: ChatToolH
       result = allowed ? await runSandboxedBash(hooks.root, command) : { ok: false, text: "o usuário negou a execução deste comando" };
     }
   } else if (name === DELEGATE_TOOL_NAME) {
-    const provider: DelegateProvider = args.provider === "codex" ? "codex" : args.provider === "gemini" ? "gemini" : "claude";
+    const provider: DelegateProvider = args.provider === "codex" ? "codex" : args.provider === "antigravity" ? "antigravity" : "claude";
     const reason = String(args.reason ?? "");
     const delegated = await hooks.delegateToAgent(provider, reason);
     result = delegated.ok

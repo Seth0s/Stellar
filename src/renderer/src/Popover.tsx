@@ -117,6 +117,7 @@ export function Popover({
       ref={popRef}
       style={style}
       onPointerDown={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
     >
       {children}
     </div>,

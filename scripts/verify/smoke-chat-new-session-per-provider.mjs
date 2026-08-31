@@ -6,9 +6,11 @@
 // dele mesmo, nunca a do primeiro (prova a exclusão cross-provider — a
 // direção simétrica, primeiro excluindo o segundo, é a MESMA expressão de
 // filtro rodando pro outro card, não vale checar via UI de novo); e o botão
-// "nova sessão" deve criar um terceiro card de chat com o provider/model
-// corretos (não sempre "anthropic" — a lacuna real que existia em
-// `defaultCardFields`).
+// "nova sessão" deve RESETAR o próprio card (não abrir um terceiro — pedido
+// ao vivo 2026-08-31: "+" abrindo outro card em vez de resetar o atual era
+// confuso), preservando provider/model corretos (não sempre "anthropic" —
+// a lacuna real que existia em `defaultCardFields`) e arquivando a conversa
+// antiga em vez de descartá-la (mesmo mecanismo de fechar um chat card).
 //
 // Duas mecânicas de teste não óbvias:
 // - Dois chat cards recém-criados nascem quase totalmente sobrepostos
@@ -31,11 +33,47 @@ const CDP_PORT = 9461;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-new-session-per-provider", import.meta.url).pathname;
 
 async function centerOf(page, selector) {
-  return JSON.parse(
+  let res = JSON.parse(
     await page.evalJs(`
-      (() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return JSON.stringify(null); const r = el.getBoundingClientRect(); return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2}); })()
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return JSON.stringify(null);
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
     `),
   );
+  if (!res && selector.includes(".rail-btn[title=")) {
+    const titleMatch = selector.match(/title=["']([^"']+)["']/);
+    if (titleMatch) {
+      const title = titleMatch[1];
+      const addBtn = JSON.parse(
+        await page.evalJs(`
+          (() => {
+            const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+            if (!b) return JSON.stringify(null);
+            const r = b.getBoundingClientRect();
+            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+          })()
+        `),
+      );
+      if (addBtn) {
+        await page.click(addBtn.x, addBtn.y);
+        await new Promise((r) => setTimeout(r, 250));
+        res = JSON.parse(
+          await page.evalJs(`
+            (() => {
+              const el = document.querySelector(\`.popover-row[title="${title}"]\`);
+              if (!el) return JSON.stringify(null);
+              const r = el.getBoundingClientRect();
+              return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+            })()
+          `),
+        );
+      }
+    }
+  }
+  return res;
 }
 
 const { check, finish } = makeChecker();
@@ -171,9 +209,23 @@ try {
   check("painel do card openai mostra a própria sessão", panel2Text?.includes("mensagem-do-card-openai"), true);
   check("...e NÃO mostra a sessão do card anthropic (filtro por provider)", panel2Text?.includes("mensagem-do-card-anthropic"), false);
 
-  // Botão "nova sessão" do card openai — deve criar um TERCEIRO card de
-  // chat, com provider "openai" (não sempre "anthropic", a lacuna real de
-  // `defaultCardFields`) e o model default correto pra esse provider.
+  // Id real do card openai ANTES do reset — pra provar que "nova sessão"
+  // reseta ESTE card (mesma posição no board, id de linha novo por baixo),
+  // não que ele simplesmente ficou intacto.
+  const openaiCardIdBefore = JSON.parse(
+    await page.evalJs(`
+      (async () => {
+        const boards = await window.store.boards.list();
+        const cards = await window.store.list(boards[0].id);
+        return JSON.stringify(cards.find((c) => c.kind === 'chat' && c.provider === 'openai').id);
+      })()
+    `),
+  );
+
+  // Botão "nova sessão" do card openai — reseta ESTE card em vez de abrir
+  // um terceiro (pedido ao vivo 2026-08-31): provider preservado, model
+  // default correto pra esse provider (não sempre "anthropic", a lacuna
+  // real de `defaultCardFields`), conversa vazia, sem card novo no board.
   const newSessionBtn2 = JSON.parse(
     await page.evalJs(`
       (() => {
@@ -187,22 +239,38 @@ try {
   await page.click(newSessionBtn2.x, newSessionBtn2.y);
   await new Promise((r) => setTimeout(r, 500));
 
-  check("um terceiro chat card foi criado pelo botão de nova sessão", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 3);
+  check("nenhum card novo foi criado — continuam só 2 chat cards no board", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 2);
 
-  const thirdCard = JSON.parse(
+  const resetCard = JSON.parse(
     await page.evalJs(`
       (async () => {
         const boards = await window.store.boards.list();
         const cards = await window.store.list(boards[0].id);
-        const chatCards = cards.filter((c) => c.kind === 'chat');
-        const third = chatCards.sort((a, b) => Number(a.id) - Number(b.id))[2];
-        return JSON.stringify({ id: third.id, provider: third.provider, model: third.model, messages_json: third.messages_json });
+        const openai = cards.find((c) => c.kind === 'chat' && c.provider === 'openai');
+        return JSON.stringify({ id: openai.id, provider: openai.provider, model: openai.model, messages_json: openai.messages_json });
       })()
     `),
   );
-  check("o novo card nasce com o provider do card de origem (openai)", thirdCard.provider, "openai");
-  check("...com o model default de openai (não o de anthropic)", thirdCard.model, openaiDefaultModel);
-  check("...e uma conversa vazia (sessão nova de verdade, não clone)", JSON.parse(thirdCard.messages_json).messages.length, 0);
+  check("o card resetado ganhou um id de linha novo (sessão nova de verdade, não editada in-place)", resetCard.id !== openaiCardIdBefore, true);
+  check("...mantendo o provider (openai)", resetCard.provider, "openai");
+  check("...com o model default de openai (não o de anthropic)", resetCard.model, openaiDefaultModel);
+  check("...e uma conversa vazia (sessão nova de verdade, não clone)", JSON.parse(resetCard.messages_json).messages.length, 0);
+
+  // A conversa antiga (id de antes do reset) não foi perdida — continua no
+  // banco, arquivada, navegável no painel de sessões (mesmo mecanismo de
+  // fechar um chat card, DESIGN-BACKLOG.md item 30).
+  const oldSession = JSON.parse(
+    await page.evalJs(`
+      (async () => {
+        const sessions = await window.store.listChatSessions();
+        const old = sessions.find((s) => s.id === ${JSON.stringify(openaiCardIdBefore)});
+        return JSON.stringify(old ? { archived: old.archived_at !== null, hasOldMessage: JSON.parse(old.messages_json).messages.some((m) => m.content === 'mensagem-do-card-openai') } : null);
+      })()
+    `),
+  );
+  check("a sessão antiga (openai) sobreviveu no banco, não foi apagada", oldSession !== null, true);
+  check("...arquivada (mesmo mecanismo de fechar um chat card)", oldSession?.archived, true);
+  check("...com a mensagem antiga intacta", oldSession?.hasOldMessage, true);
 
   page.close();
 } finally {

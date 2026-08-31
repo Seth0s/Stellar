@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import type { GitStatus } from "../../preload/index";
 
-export function ChangesCard({
+/** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
+ * wrapped in `React.memo` below. */
+function ChangesCardInner({
   rect,
   zoom,
   zIndex,
@@ -119,3 +121,5 @@ export function ChangesCard({
     </CardFrame>
   );
 }
+
+export const ChangesCard = memo(ChangesCardInner);

@@ -1,10 +1,13 @@
+import { memo } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 
 export const STROKE_COLORS = ["#f5f5f5", "#ff6b6b", "#6bc5ff", "#6bff9d"] as const;
 
-export function StrokeCard({
+/** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
+ * wrapped in `React.memo` below. */
+function StrokeCardInner({
   rect,
   zoom,
   zIndex,
@@ -81,3 +84,5 @@ export function StrokeCard({
     </CardFrame>
   );
 }
+
+export const StrokeCard = memo(StrokeCardInner);

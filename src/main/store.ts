@@ -243,6 +243,13 @@ function migrate(db: Database.Database) {
 
 export function openStore(userDataDir: string) {
   const db = new Database(join(userDataDir, "agent-canvas.db"));
+  // Pre-release audit P3 — no journal mode was ever set (SQLite's
+  // rollback-journal default), meaning every writer briefly locks
+  // readers out. WAL lets the renderer's frequent reads (board/card
+  // lists, chat history) proceed concurrently with the frequent small
+  // writes (card position drags, chat message appends) this app does
+  // constantly. Set once, up front, before anything reads/writes.
+  db.pragma("journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS cards (
       id TEXT PRIMARY KEY,
@@ -304,6 +311,19 @@ export function openStore(userDataDir: string) {
   // same class of bug would hit boards.project otherwise.
   migrate(db);
 
+  // Pre-release audit P3 — the columns every hot query filters by
+  // (board-scoped lists, connector lookups by either endpoint, task
+  // scheduling) had no index at all, forcing a full table scan as either
+  // table grows. `IF NOT EXISTS` — safe to run on every `openStore`, same
+  // idempotent posture as the `CREATE TABLE IF NOT EXISTS` calls above.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_cards_board_id ON cards(board_id);
+    CREATE INDEX IF NOT EXISTS idx_connectors_board_id ON connectors(board_id);
+    CREATE INDEX IF NOT EXISTS idx_connectors_from_card_id ON connectors(from_card_id);
+    CREATE INDEX IF NOT EXISTS idx_connectors_to_card_id ON connectors(to_card_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_board_id ON tasks(board_id);
+  `);
+
   // Used to auto-INSERT a "Board 1" here when none existed — that was
   // right back when the app always booted straight into a board (there
   // had to be one to load). DESIGN-BACKLOG.md item 8 changed that: the
@@ -350,6 +370,13 @@ export function openStore(userDataDir: string) {
   // Item 30 — the sessions sidebar's data source: every chat-kind row,
   // archived or not (an open chat is still a legitimate "session" to
   // jump back to from the sidebar, not just closed ones), newest first.
+  // Pre-release audit B9 — flagged as a possible omission because this
+  // is the only one of the three `cards` queries here without an
+  // `archived_at IS NULL` filter. Confirmed intentional, not a bug: the
+  // sidebar's whole point is browsing history INCLUDING archived
+  // sessions (ChatCard.tsx renders an "arquivada" badge and lets a click
+  // re-open one via `unarchiveCard` right below) — filtering them out
+  // here would make that feature unreachable.
   const listChatSessionsStmt = db.prepare(
     "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE kind = 'chat' ORDER BY updated_at DESC",
   );

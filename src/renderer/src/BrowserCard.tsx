@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
@@ -57,12 +57,15 @@ function mouseButtonName(button: number): "left" | "middle" | "right" {
   return "left";
 }
 
-export function BrowserCard({
+/** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
+ * wrapped in `React.memo` below. */
+function BrowserCardInner({
   id,
   rect,
   zoom,
   zIndex,
   visible,
+  isFocused,
   url,
   ownerCardId,
   interactionMode,
@@ -83,6 +86,7 @@ export function BrowserCard({
   zoom: number;
   zIndex: number;
   visible: boolean;
+  isFocused: boolean;
   url: string;
   ownerCardId: string | null;
   interactionMode?: "normal" | "connector" | "select";
@@ -98,6 +102,13 @@ export function BrowserCard({
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
 }) {
+  // Pre-release audit P1 — same render-count counter as TerminalCard.tsx
+  // (see its doc comment) — lets the verify harness prove `React.memo`
+  // below actually skips this card when nothing about it changed.
+  const renderCounts = (window as unknown as { __cardRenderCounts?: Record<string, number> }).__cardRenderCounts ??=
+    {};
+  renderCounts[id] = (renderCounts[id] ?? 0) + 1;
+
   const [bar, setBar] = useState(url);
   const createdRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -163,6 +174,12 @@ export function BrowserCard({
   useEffect(() => {
     void window.browser.setVisible(id, visible);
   }, [id, visible]);
+
+  // Pre-release audit P2 — lowers paint rate for a visible-but-not-
+  // topmost card instead of always painting at full 30fps.
+  useEffect(() => {
+    void window.browser.setFocused(id, isFocused);
+  }, [id, isFocused]);
 
   useEffect(() => {
     const w = Math.round(rect.w);
@@ -345,3 +362,5 @@ export function BrowserCard({
     </CardFrame>
   );
 }
+
+export const BrowserCard = memo(BrowserCardInner);

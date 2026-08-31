@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageStream } from "@anthropic-ai/sdk/lib/MessageStream";
+import { readFileSync } from "node:fs";
 import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
@@ -78,8 +79,27 @@ function withCacheBreakpoint(msgs: Anthropic.MessageParam[]): Anthropic.MessageP
 // than run up the human's API bill unattended.
 const MAX_TOOL_TURNS = 8;
 
+/** Item 66 — um bloco de imagem só guarda o PATH (ver ChatImageBlock's
+ * doc comment, chat-tools.ts) — lido do disco e virado base64 só aqui,
+ * na hora de montar a request de verdade, nunca persistido assim. Um
+ * arquivo que sumiu (limpeza de temp do SO, path malformado) degrada pra
+ * um bloco de texto avisando em vez de derrubar o turno inteiro — mesmo
+ * espírito defensivo do resto da mensageria deste app.
+ */
 function toAnthropicMessages(messages: ChatMessage[]): Anthropic.MessageParam[] {
-  return messages.map((m) => ({ role: m.role, content: m.content }));
+  return messages.map((m) => {
+    if (typeof m.content === "string") return { role: m.role, content: m.content };
+    const content: Anthropic.ContentBlockParam[] = m.content.map((block) => {
+      if (block.type === "text") return { type: "text", text: block.text };
+      try {
+        const data = readFileSync(block.path).toString("base64");
+        return { type: "image", source: { type: "base64", media_type: block.mediaType, data } };
+      } catch (err) {
+        return { type: "text", text: `[imagem anexada não pôde ser lida: ${err instanceof Error ? err.message : String(err)}]` };
+      }
+    });
+    return { role: m.role, content };
+  });
 }
 
 export function createAnthropicClient(opts: {

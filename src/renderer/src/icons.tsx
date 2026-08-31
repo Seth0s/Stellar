@@ -16,6 +16,7 @@ import {
   Clock,
   Code2,
   Copy,
+  Crop,
   Eye,
   EyeOff,
   File,
@@ -47,6 +48,7 @@ import {
   Pen,
   Plus,
   QrCode,
+  Rocket,
   RotateCw,
   Scan,
   Search,
@@ -66,6 +68,7 @@ import {
 export type IconName =
   | "pointer"
   | "select"
+  | "exportCrop"
   | "pen"
   | "link"
   | "terminal"
@@ -111,7 +114,7 @@ export type IconName =
   | "providerClaude"
   | "providerCodex"
   | "providerCursor"
-  | "providerGemini"
+  | "providerAntigravity"
   | "folderOpen"
   | "fileImage"
   | "fileMarkdown"
@@ -129,6 +132,7 @@ export type IconName =
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
   select: BoxSelect,
+  exportCrop: Crop,
   pen: Pen,
   link: Link2,
   terminal: TerminalSquare,
@@ -177,7 +181,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   providerClaude: BotMessageSquare,
   providerCodex: Code2,
   providerCursor: MousePointerClick,
-  providerGemini: Sparkles,
+  providerAntigravity: Rocket,
   folderOpen: FolderOpen,
   fileImage: Image,
   fileMarkdown: FileText,

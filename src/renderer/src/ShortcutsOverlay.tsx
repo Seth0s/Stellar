@@ -10,7 +10,12 @@ import { useOccludesChrome } from "./occlusion";
 export function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
   useOccludesChrome();
   return (
-    <div className="modal-root">
+    <div
+      className="modal-root"
+      onWheel={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
       <div className="modal-backdrop" onClick={onClose} />
       <div className="modal shortcuts-modal" role="dialog" aria-labelledby="shortcuts-title">
         <h3 id="shortcuts-title">Atalhos</h3>

@@ -42,11 +42,47 @@ const port = server.address().port;
 process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`;
 
 async function centerOf(page, selector) {
-  return JSON.parse(
+  let res = JSON.parse(
     await page.evalJs(`
-      (() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return JSON.stringify(null); const r = el.getBoundingClientRect(); return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2}); })()
+      (() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return JSON.stringify(null);
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
     `),
   );
+  if (!res && selector.includes(".rail-btn[title=")) {
+    const titleMatch = selector.match(/title=["']([^"']+)["']/);
+    if (titleMatch) {
+      const title = titleMatch[1];
+      const addBtn = JSON.parse(
+        await page.evalJs(`
+          (() => {
+            const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+            if (!b) return JSON.stringify(null);
+            const r = b.getBoundingClientRect();
+            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+          })()
+        `),
+      );
+      if (addBtn) {
+        await page.click(addBtn.x, addBtn.y);
+        await new Promise((r) => setTimeout(r, 250));
+        res = JSON.parse(
+          await page.evalJs(`
+            (() => {
+              const el = document.querySelector(\`.popover-row[title="${title}"]\`);
+              if (!el) return JSON.stringify(null);
+              const r = el.getBoundingClientRect();
+              return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+            })()
+          `),
+        );
+      }
+    }
+  }
+  return res;
 }
 async function typeInto(page, selector, value) {
   const coords = await centerOf(page, selector);

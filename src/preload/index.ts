@@ -75,6 +75,49 @@ const clipboardImage = {
   /** Test-only (scripts/verify) — no-op in a packaged build, see
    * main/index.ts's guard. */
   testWriteImage: (): Promise<void> => ipcRenderer.invoke("clipboard:test-write-image"),
+  /** Item 66 — bytes de uma imagem colada/arrastada no composer do
+   * chatbox (não do clipboard do SO, ver clipboard-image.ts). */
+  saveBytes: (base64: string, mediaType: string): Promise<SaveClipboardImageResult> =>
+    ipcRenderer.invoke("chat:save-attachment-image", base64, mediaType),
+  /** Item 66 — re-lê um anexo salvo pra renderizar a miniatura (mensagem
+   * recém-enviada ou uma sessão restaurada). */
+  readAttachment: (path: string): Promise<{ ok: true; base64: string } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("chat:read-attachment-image", path),
+};
+
+export type ExportCaptureResult = { ok: true; path: string } | { ok: false; error: string };
+
+/** Item 57.8 — "exportação do canvas com seleção de área". `rect` em
+ * pixels da área de conteúdo da janela (client coords cru, sem conversão
+ * de mundo/zoom — ver App.tsx's ferramenta "export"). */
+const canvasExport = {
+  captureRect: (
+    rect: { x: number; y: number; width: number; height: number },
+    format: "png" | "jpeg" | "pdf",
+    defaultName: string,
+  ): Promise<ExportCaptureResult> => ipcRenderer.invoke("export:capture-rect", rect, format, defaultName),
+  /** Test-only (scripts/verify) — no-op in a packaged build, see
+   * main/index.ts's guard. Bypasses the native save dialog (can't be
+   * driven by CDP), writes straight to `filePath`. */
+  captureRectTest: (
+    rect: { x: number; y: number; width: number; height: number },
+    format: "png" | "jpeg" | "pdf",
+    filePath: string,
+  ): Promise<ExportCaptureResult> => ipcRenderer.invoke("export:capture-rect-test", rect, format, filePath),
+};
+
+export type SaveBoardAssetResult = { ok: true; path: string } | { ok: false; error: string };
+
+/** Item 57.9 — armazenamento persistente pro card de mídia (paste/drop no
+ * canvas vazio), ver main/board-assets.ts. Diferente de `clipboardImage`
+ * (diretório temporário `stellar-pastes`, pode ser limpo pelo SO) — este
+ * conteúdo é pra durar. Leitura acontece via o protocolo customizado
+ * `stellar-asset://<boardId>/<filename>` direto num `src`, sem IPC. */
+const boardAssets = {
+  saveBytes: (boardId: string, base64: string, mediaType: string): Promise<SaveBoardAssetResult> =>
+    ipcRenderer.invoke("board-assets:save-bytes", boardId, base64, mediaType),
+  copyFromPath: (boardId: string, sourcePath: string): Promise<SaveBoardAssetResult> =>
+    ipcRenderer.invoke("board-assets:copy-from-path", boardId, sourcePath),
 };
 
 export type ConnectorRow = {
@@ -214,6 +257,10 @@ const browser = {
   reload: (id: string): Promise<void> => ipcRenderer.invoke("browser:reload", id),
   resize: (id: string, w: number, h: number): Promise<void> => ipcRenderer.invoke("browser:resize", id, w, h),
   setVisible: (id: string, visible: boolean): Promise<void> => ipcRenderer.invoke("browser:set-visible", id, visible),
+  /** Pre-release audit P2 — lowers the offscreen paint rate for a
+   * visible-but-not-topmost browser card instead of always painting at
+   * full rate regardless of whether anyone's looking at it move. */
+  setFocused: (id: string, focused: boolean): Promise<void> => ipcRenderer.invoke("browser:set-focused", id, focused),
   destroy: (id: string): Promise<void> => ipcRenderer.invoke("browser:destroy", id),
   // Fire-and-forget (`send`, not `invoke`) — these fire on every pointer
   // move/frame-adjacent tick; waiting on a reply promise per event would
@@ -491,7 +538,18 @@ const secrets = {
   getBaseURL: (provider: SecretProvider): Promise<string | null> => ipcRenderer.invoke("secrets:get-base-url", provider),
 };
 
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+/** Item 66 — mesma forma que `card-types.ts` (renderer) e `chat-tools.ts`
+ * (main) definem pro mesmo conceito; duplicado, não importado, mesma
+ * razão de sempre nesta base (preload/renderer/main são bundles TS
+ * separados). */
+export type ChatImageBlock = {
+  type: "image";
+  path: string;
+  mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+};
+export type ChatTextBlock = { type: "text"; text: string };
+export type ChatContentBlock = ChatTextBlock | ChatImageBlock;
+export type ChatMessage = { role: "user" | "assistant"; content: string | ChatContentBlock[] };
 export type ChatSendParams = { provider: SecretProvider; model: string; systemPrompt: string | null; messages: ChatMessage[]; cwd: string };
 export type ChatSendResult = { ok: true } | { ok: false; error: string };
 /** DESIGN-BACKLOG.md item 57 ponto 7 — real token counts from the
@@ -565,6 +623,10 @@ const chat = {
   },
   resolveBash: (requestId: string, allowed: boolean): Promise<void> =>
     ipcRenderer.invoke("chat:bash-resolve", requestId, allowed),
+  /** Pre-release audit B2 — fire-and-forget notice that a chat card was
+   * actually removed, so main/index.ts can deny (not leave hanging
+   * forever) any write/bash consent still pending for it. */
+  notifyCardClosed: (cardId: string): void => ipcRenderer.send("chat:card-closed", cardId),
   /** Test-only (item 12 Fase C's verify coverage) — no-op in a packaged
    * build, see main/index.ts's guard. Drives the real read_file/
    * write_file/consent/diff pipeline without needing a real paid API
@@ -589,16 +651,29 @@ contextBridge.exposeInMainWorld("remote", remote);
 contextBridge.exposeInMainWorld("updater", updater);
 contextBridge.exposeInMainWorld("secrets", secrets);
 contextBridge.exposeInMainWorld("chat", chat);
+contextBridge.exposeInMainWorld("canvasExport", canvasExport);
+contextBridge.exposeInMainWorld("boardAssets", boardAssets);
 
 /** Test-only, dev builds only — DESIGN-BACKLOG.md item 37's crash-safety
  * net (main/index.ts's `process.on("uncaughtException", ...)`). */
 const debugBridge = {
   testTriggerUncaughtException: (): Promise<void> => ipcRenderer.invoke("debug:test-trigger-uncaught-exception"),
+  /** Test-only (pre-release audit B6's verify coverage) — -1 in a
+   * packaged build, see main/index.ts's guard. */
+  listenerCount: (channel: string): Promise<number> => ipcRenderer.invoke("debug:listener-count", channel),
+  /** Test-only (pre-release audit B4's verify coverage) — -1 in a
+   * packaged build, see main/index.ts's guard. */
+  heapUsedMb: (): Promise<number> => ipcRenderer.invoke("debug:heap-used-mb"),
+  /** Test-only (pre-release audit B7's verify coverage) — -1 in a
+   * packaged build, see main/index.ts's guard. */
+  seenUrlsCount: (cardId: string): Promise<number> => ipcRenderer.invoke("debug:seen-urls-count", cardId),
 };
 contextBridge.exposeInMainWorld("debugBridge", debugBridge);
 
 export type PtyApi = typeof pty;
 export type ClipboardImageApi = typeof clipboardImage;
+export type CanvasExportApi = typeof canvasExport;
+export type BoardAssetsApi = typeof boardAssets;
 export type StoreApi = typeof store;
 export type FsApi = typeof fs;
 export type GitApi = typeof git;

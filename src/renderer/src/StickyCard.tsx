@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
@@ -28,7 +29,9 @@ const STICKY_ACCENT: Record<string, string> = {
   pink: "#d192b3",
 };
 
-export function StickyCard({
+/** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
+ * wrapped in `React.memo` below. */
+function StickyCardInner({
   rect,
   zoom,
   zIndex,
@@ -125,3 +128,5 @@ export function StickyCard({
     </CardFrame>
   );
 }
+
+export const StickyCard = memo(StickyCardInner);

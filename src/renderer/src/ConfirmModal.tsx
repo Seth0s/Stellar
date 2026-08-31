@@ -23,7 +23,12 @@ export function ConfirmModal({
 }) {
   useOccludesChrome();
   return (
-    <div className="modal-root">
+    <div
+      className="modal-root"
+      onWheel={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
       <div className="modal-backdrop" onClick={onCancel} />
       <div className="modal" role="dialog" aria-labelledby="confirm-title">
         <h3 id="confirm-title">{title}</h3>

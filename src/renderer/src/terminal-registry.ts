@@ -36,3 +36,31 @@ export function getTerminalText(cardId: string, lines?: number): string | null {
   while (out.length > 0 && out[out.length - 1] === "") out.pop();
   return out.join("\n");
 }
+
+/**
+ * Test-only hook (harmless, always on — same spirit as `App.tsx`'s
+ * `window.__cardRenderCounts`, pre-release audit P1): selects the first
+ * occurrence of `needle` in the visible scrollback via xterm.js's own
+ * `term.select(col, row, length)`, the same primitive its own mouse-drag
+ * selection uses internally. Exists so a CDP smoke test can exercise a
+ * REAL selection (and the Ctrl+Shift+C copy handler in useTerminal.ts
+ * that reads it) without needing pixel-perfect drag coordinates over a
+ * canvas-rendered terminal. Returns whether a match was found.
+ */
+export function selectTextForTest(cardId: string, needle: string): boolean {
+  const term = terminals.get(cardId);
+  if (!term) return false;
+  const buf = term.buffer.active;
+  for (let row = 0; row < buf.length; row++) {
+    const line = buf.getLine(row)?.translateToString(true) ?? "";
+    const col = line.indexOf(needle);
+    if (col !== -1) {
+      term.select(col, row, needle.length);
+      return true;
+    }
+  }
+  return false;
+}
+
+(window as unknown as { __selectTerminalTextForTest?: typeof selectTextForTest }).__selectTerminalTextForTest =
+  selectTextForTest;

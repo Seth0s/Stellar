@@ -74,12 +74,26 @@ function writeAll(userDataDir: string, data: SecretsFile) {
 }
 
 export function createSecretsStore(userDataDir: string) {
+  // Pre-release audit P4 — `has`/`get`/`getBaseURL` each re-read and
+  // re-parsed `secrets.json` from disk on every single call (`chat:send`
+  // alone triggers 2-3 per message). This process is the only writer of
+  // this file (no other process/instance shares a `userDataDir`), so an
+  // in-memory cache is always correct as long as every write here goes
+  // through it too — `set`/`clear` below update `cache` directly with
+  // the just-written state instead of invalidating and forcing a
+  // re-read next time.
+  let cache: SecretsFile | null = null;
+  function loadCached(): SecretsFile {
+    if (!cache) cache = readAll(userDataDir);
+    return cache;
+  }
+
   function has(provider: SecretProvider): boolean {
-    return readAll(userDataDir)[provider] !== undefined;
+    return loadCached()[provider] !== undefined;
   }
 
   function get(provider: SecretProvider): string | null {
-    const entry = readAll(userDataDir)[provider];
+    const entry = loadCached()[provider];
     if (!entry) return null;
     if (!entry.encrypted) return entry.value;
     try {
@@ -102,7 +116,7 @@ export function createSecretsStore(userDataDir: string) {
   // already uses.
   function set(provider: SecretProvider, value: string, baseURL?: string): { ok: true } | { ok: false; error: string } {
     try {
-      const all = readAll(userDataDir);
+      const all = loadCached();
       const trimmed = value.trim();
       const trimmedBaseURL = baseURL?.trim() || undefined;
       if (safeStorage.isEncryptionAvailable()) {
@@ -111,6 +125,7 @@ export function createSecretsStore(userDataDir: string) {
         all[provider] = { value: trimmed, encrypted: false, baseURL: trimmedBaseURL };
       }
       writeAll(userDataDir, all);
+      cache = all;
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -121,14 +136,15 @@ export function createSecretsStore(userDataDir: string) {
    * for every other provider, including "gemini" (its baseURL is a fixed
    * constant in main/index.ts, not user-configured). */
   function getBaseURL(provider: SecretProvider): string | null {
-    return readAll(userDataDir)[provider]?.baseURL ?? null;
+    return loadCached()[provider]?.baseURL ?? null;
   }
 
   function clear(provider: SecretProvider): { ok: true } | { ok: false; error: string } {
     try {
-      const all = readAll(userDataDir);
+      const all = loadCached();
       delete all[provider];
       writeAll(userDataDir, all);
+      cache = all;
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
