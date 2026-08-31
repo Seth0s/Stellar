@@ -12,6 +12,24 @@ name: Release
 # it's its own job, not one leg of a matrix, so a macOS/Windows failure
 # can never block or cancel it (matrix `fail-fast` would do exactly
 # that; separate jobs don't).
+#
+# Achado ao vivo (2026-08-31, releases v0.1.5/v0.1.6/v0.2.0 todas com o
+# mesmo sintoma): os 3 jobs de build rodavam em paralelo e cada um
+# chamava `electron-builder --publish always`, que checa "a release da
+# tag já existe?" e cria se não — sem NENHUMA sincronização entre eles,
+# dois ou três jobs viam "não existe" ao mesmo tempo e cada um criava a
+# SUA própria release pra mesma tag, resultando em duas releases
+# "gêmeas" com os assets espalhados entre elas (o .rpm, por exemplo,
+# ficava só na release que `gh release view` não resolve por padrão —
+# parecia ter sumido, mas só estava na gêmea). Corrigido separando build
+# (paralelo, sem tocar a Release — só sobe pra artifact storage do
+# Actions) de publish (um job só, depois que os builds terminam,
+# consolida tudo numa única `gh release create/upload`, sem race
+# possível por ter só um chamador). Efeito colateral bom: o build não
+# faz mais upload de rede pra API de Releases (só electron-builder local
+# + upload-artifact, que já tem retry robusto embutido) — elimina
+# também o "Request timed out" que travou o Windows na v0.2.0, sem
+# precisar reduzir a superfície de asset nenhuma.
 on:
   push:
     tags:
@@ -48,14 +66,23 @@ jobs:
       # Documented as a known gap, not silently skipped.
       - run: npm run build
 
-      - name: Build + publish .rpm and .deb
-        run: npx electron-builder --linux rpm deb --publish always
-        env:
-          # `secrets.GH_TOKEN` lets the repo owner override with a PAT
-          # if the default token's permissions ever aren't enough;
-          # falls back to the built-in token (this workflow already
-          # grants it `contents: write` above) otherwise.
-          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+      # `--publish never` — build only, no network call to the Releases
+      # API here (see the file-level comment on why). The `latest*.yml`
+      # auto-update feed files are still generated locally regardless of
+      # `--publish`, so they ship in the artifact too.
+      - name: Build .rpm and .deb
+        run: npx electron-builder --linux rpm deb --publish never
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-artifacts
+          path: |
+            dist/*.rpm
+            dist/*.deb
+            dist/*.blockmap
+            dist/latest-linux.yml
+          if-no-files-found: ignore
 
   build-mac:
     runs-on: macos-latest
@@ -71,10 +98,18 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: npm run build
-      - name: Build + publish macOS artifacts
-        run: npx electron-builder --mac --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Build macOS artifacts
+        run: npx electron-builder --mac --publish never
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-artifacts
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+            dist/latest-mac.yml
+          if-no-files-found: ignore
 
   build-windows:
     runs-on: windows-latest
@@ -88,7 +123,44 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: npm run build
-      - name: Build + publish Windows artifacts
-        run: npx electron-builder --win --publish always
+      - name: Build Windows artifacts
+        run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-artifacts
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest.yml
+          if-no-files-found: ignore
+
+  publish:
+    name: publica a Release consolidada
+    needs: [build-linux, build-mac, build-windows]
+    # Roda mesmo se um dos 3 builds falhar — mesma filosofia de
+    # independência do resto do arquivo: uma plataforma quebrada não
+    # deve segurar a publicação das outras duas que deram certo. Só
+    # publica o que de fato existe como artifact.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: cria ou atualiza a Release da tag, um chamador só (sem race)
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          FILES=$(find dist-artifacts -type f)
+          if [ -z "$FILES" ]; then
+            echo "::error::nenhum artifact de build sobreviveu — os 3 jobs de build falharam"
+            exit 1
+          fi
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" $FILES --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" $FILES --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
