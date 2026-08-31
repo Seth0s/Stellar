@@ -138,6 +138,14 @@ function BrowserCardInner({
   // (no reading UI for that yet, just the "something needs attention"
   // signal CentralByte's own console badge gives).
   const [consoleCounts, setConsoleCounts] = useState({ error: 0, warning: 0 });
+  // Próxima rodada §3 — favoritos GLOBAIS (decisão explícita do usuário,
+  // não por board). `pageTitle` finalmente consome `window.browser.onTitle`
+  // (exposto no preload desde sempre, nunca lido por nada até agora) —
+  // precisa de um título de verdade pra salvar, não só a URL crua.
+  const [pageTitle, setPageTitle] = useState(url);
+  const [favorites, setFavorites] = useState<{ url: string; title: string; created_at: number }[]>([]);
+  const [favMenuOpen, setFavMenuOpen] = useState(false);
+  const favBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const off = window.browser.onConsoleMessage((msgId, level) => {
@@ -149,6 +157,37 @@ function BrowserCardInner({
       off();
     };
   }, [id]);
+
+  useEffect(() => {
+    const off = window.browser.onTitle((msgId, title) => {
+      if (msgId === id) setPageTitle(title);
+    });
+    return () => {
+      off();
+    };
+  }, [id]);
+
+  async function refreshFavorites() {
+    setFavorites(await window.store.favorites.list());
+  }
+  useEffect(() => {
+    if (favMenuOpen) void refreshFavorites();
+  }, [favMenuOpen]);
+  const isFavorited = favorites.some((f) => f.url === bar);
+  async function toggleFavorite() {
+    if (isFavorited) await window.store.favorites.remove(bar);
+    else await window.store.favorites.add(bar, pageTitle || bar);
+    await refreshFavorites();
+  }
+  async function removeFavoriteRow(favUrl: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    await window.store.favorites.remove(favUrl);
+    await refreshFavorites();
+  }
+  function goToFavorite(favUrl: string) {
+    void window.browser.navigate(id, favUrl);
+    setFavMenuOpen(false);
+  }
 
   useEffect(() => {
     if (!createdRef.current) {
@@ -454,6 +493,16 @@ function BrowserCardInner({
             </span>
           )}
           <button
+            ref={favBtnRef}
+            className="browser-card-favorite-btn"
+            data-active={isFavorited}
+            title={isFavorited ? "Remover dos favoritos" : "Favoritar esta página"}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => setFavMenuOpen((v) => !v)}
+          >
+            <Icon name="favorite" size={12} />
+          </button>
+          <button
             ref={menuBtnRef}
             title="Mais opções"
             onPointerDown={(e) => e.stopPropagation()}
@@ -481,6 +530,27 @@ function BrowserCardInner({
         onCompositionEnd={onCanvasCompositionEnd}
       />
       <Popover anchorRef={menuBtnRef} open={menuOpen} onClose={() => setMenuOpen(false)} className="browser-card-menu">
+        {/* Header responsivo (§2.1) — sempre presentes aqui, não só
+         * quando a linha principal esconde os badges (< 380px de
+         * largura via @container em cards.css): nenhuma informação fica
+         * inacessível, só sai da barra principal em telas estreitas. */}
+        {ownerCardId && (
+          <button
+            onClick={() => {
+              onFocusOwner?.();
+              setMenuOpen(false);
+            }}
+          >
+            <Icon name="link" size={14} />
+            Aberto por card #{ownerCardId}
+          </button>
+        )}
+        {consoleBadgeCount > 0 && (
+          <div className="browser-card-menu-info" data-severity={consoleCounts.error > 0 ? "error" : "warning"}>
+            {consoleCounts.error} erro(s), {consoleCounts.warning} aviso(s) no console
+          </div>
+        )}
+        {(ownerCardId || consoleBadgeCount > 0) && <div className="browser-card-fav-divider" />}
         <button
           onClick={() => {
             void window.browser.openDevTools(id);
@@ -502,6 +572,29 @@ function BrowserCardInner({
             {preset.label}
           </button>
         ))}
+      </Popover>
+      <Popover anchorRef={favBtnRef} open={favMenuOpen} onClose={() => setFavMenuOpen(false)} className="browser-card-menu browser-card-favorites-menu">
+        <button onClick={toggleFavorite}>
+          <Icon name="favorite" size={14} />
+          {isFavorited ? "Remover dos favoritos" : "Favoritar esta página"}
+        </button>
+        {favorites.length > 0 && (
+          <>
+            <div className="browser-card-fav-divider" />
+            <div className="browser-card-fav-list">
+              {favorites.map((fav) => (
+                <div key={fav.url} className="browser-card-fav-row" onClick={() => goToFavorite(fav.url)}>
+                  <span className="browser-card-fav-title" title={fav.url}>
+                    {fav.title || fav.url}
+                  </span>
+                  <button className="browser-card-fav-remove" title="Remover" onClick={(e) => void removeFavoriteRow(fav.url, e)}>
+                    <Icon name="close" size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </Popover>
     </CardFrame>
   );

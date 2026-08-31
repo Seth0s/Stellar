@@ -141,6 +141,26 @@ function TerminalCardInner({
     zoom,
   );
 
+  // Achado ao vivo (resize "quebra e volta") — `fitNow()` (real
+  // cols/rows + resize de PTY) só roda uma vez, em `onResizeSettled`
+  // (soltar o mouse); durante o arraste inteiro o xterm ficava no raster
+  // ANTIGO enquanto a caixa ao redor (CardFrame, já sem flicker desde o
+  // item 2.1) crescia/encolhia ao vivo — nada acompanhava visualmente até
+  // o reflow abrupto no soltar. Mesma doutrina "óptico ao vivo, relayout
+  // real no settle" da Trilha A (browser-registry.ts), aplicada por-card:
+  // um transform CSS barato estica o raster antigo pro tamanho atual a
+  // cada tick de `rect`, sem nenhum custo de fit()/PTY. `onResizeSettled`
+  // abaixo zera o transform depois do fit real.
+  const lastFittedRectRef = useRef({ w: rect.w, h: rect.h });
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const { w: fw, h: fh } = lastFittedRectRef.current;
+    if (rect.w === fw && rect.h === fh) return;
+    el.style.transform = `scale(${rect.w / fw}, ${rect.h / fh})`;
+    el.style.transformOrigin = "top left";
+  }, [rect.w, rect.h]);
+
   const reportedRef = useRef(false);
   useEffect(() => {
     if (discoveredResumeId && !reportedRef.current) {
@@ -200,7 +220,13 @@ function TerminalCardInner({
       // The last onChange's state update lands in the DOM asynchronously
       // (React commit + layout) — measuring in fitNow() synchronously here
       // can read the pre-resize container size. Defer one frame.
-      onResizeSettled={() => requestAnimationFrame(() => fitNow())}
+      onResizeSettled={() =>
+        requestAnimationFrame(() => {
+          fitNow();
+          lastFittedRectRef.current = { w: rect.w, h: rect.h };
+          if (containerRef.current) containerRef.current.style.transform = "";
+        })
+      }
       headerContent={
         <>
           <span className="card-head-label">

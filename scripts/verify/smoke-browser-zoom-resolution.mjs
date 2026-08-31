@@ -84,7 +84,7 @@ try {
   const initialSize = await contentSize();
   check(
     "resolução inicial do BrowserWindow offscreen bate com o rect no zoom 1:1",
-    JSON.stringify(initialSize),
+    JSON.stringify({ w: initialSize.w, h: initialSize.h }),
     JSON.stringify({ w: rectW, h: rectH }),
   );
 

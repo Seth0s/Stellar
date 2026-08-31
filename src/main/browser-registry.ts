@@ -20,7 +20,7 @@ export type BrowserKeyEvent = {
   modifiers?: Array<"shift" | "control" | "alt" | "meta">;
 };
 
-type Entry = { win: BrowserWindow; visible: boolean };
+type Entry = { win: BrowserWindow; visible: boolean; scaleFactor: number };
 
 // Pre-release audit P2 — every visible browser card painted at the same
 // rate regardless of whether it's the one the user is actually
@@ -93,15 +93,30 @@ export function createBrowserRegistry(callbacks: {
    * `console-message` is a plain built-in `webContents` event, same
    * primitive class as `did-navigate`/`page-title-updated` right below. */
   onConsoleMessage: (id: string, level: "info" | "warning" | "error" | "debug", message: string) => void;
+  /** Achado ao vivo ("navegador parece 360p") — `webPreferences.offscreen`
+   * defaults to `deviceScaleFactor: 1` regardless of the real monitor,
+   * confirmed direto no `electron.d.ts` da versão instalada. Toda página
+   * embutida rasterizava em densidade 1x mesmo numa tela HiDPI (2x
+   * comum) — texto/imagem saíam nativamente moles antes de qualquer
+   * JPEG/zoom. `screen.getDisplayMatching(win.getBounds())` (main/
+   * index.ts) usa o display onde a janela do app REALMENTE está, correto
+   * em multi-monitor com DPIs diferentes, não só "primary display". */
+  getScaleFactor: () => number;
 }) {
   const entries = new Map<string, Entry>();
 
   function create(id: string, url: string) {
+    const scaleFactor = callbacks.getScaleFactor();
     const win = new BrowserWindow({
       show: false,
       width: 720,
       height: 560,
-      webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false },
+      webPreferences: {
+        offscreen: { deviceScaleFactor: scaleFactor },
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
     });
     const wc = win.webContents;
     // Caps the max paint rate across every open browser card — Chromium
@@ -175,7 +190,7 @@ export function createBrowserRegistry(callbacks: {
     wc.on("did-stop-loading", () => callbacks.onLoading(id, false));
     wc.on("console-message", (details) => callbacks.onConsoleMessage(id, details.level, details.message));
 
-    entries.set(id, { win, visible: true });
+    entries.set(id, { win, visible: true, scaleFactor });
     void wc.loadURL(normalizeUrl(url));
   }
 
@@ -237,11 +252,11 @@ export function createBrowserRegistry(callbacks: {
    * Electron itself. Used to prove `resize`'s zoom scaling actually
    * happened, the same "read the real instance, don't infer it" spirit
    * as `terminal-registry.ts`'s `getTerminalFontSize`. */
-  function getContentSize(id: string): { w: number; h: number } | null {
+  function getContentSize(id: string): { w: number; h: number; scaleFactor: number } | null {
     const entry = entries.get(id);
     if (!entry) return null;
     const [w, h] = entry.win.getContentSize();
-    return { w, h };
+    return { w, h, scaleFactor: entry.scaleFactor };
   }
 
   /** Pauses/resumes actual compositing (`stopPainting`/`startPainting`),

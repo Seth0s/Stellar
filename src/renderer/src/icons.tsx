@@ -59,6 +59,7 @@ import {
   Smartphone,
   Sparkles,
   Square,
+  Star,
   StickyNote,
   Tablet,
   TerminalSquare,
@@ -138,7 +139,8 @@ export type IconName =
   | "devTools"
   | "viewportFluid"
   | "viewportMobile"
-  | "viewportTablet";
+  | "viewportTablet"
+  | "favorite";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -209,6 +211,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   rotate: RotateCw,
   moreVertical: MoreVertical,
   devTools: Bug,
+  favorite: Star,
   viewportFluid: Monitor,
   viewportMobile: Smartphone,
   viewportTablet: Tablet,

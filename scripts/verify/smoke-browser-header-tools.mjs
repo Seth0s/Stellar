@@ -224,6 +224,21 @@ try {
   );
   check("pan tira o card dono (terminal) de quadro completo (sanity check)", ownerNotFullyVisibleBefore, true);
 
+  // Sob carga pesada de máquina, o próprio pointerdown do pan acima pode
+  // disparar o timer de press-and-hold do menu radial (item 1, 450ms em
+  // `startRadialHold`, App.tsx) antes do listener de `pointermove`
+  // registrar o deslocamento real que cancelaria o timer — o gesto de
+  // pan em si continua correto (o `.world` não muda), mas o backdrop do
+  // menu radial cobre a tela inteira e intercepta o clique seguinte no
+  // badge. Não é o alvo deste teste; descarta defensivamente via Escape
+  // (App.tsx já trata Escape -> `setRadialMenu(null)`) antes de clicar.
+  const radialOpenAfterPan = await page.evalJs(`!!document.querySelector('.radial-backdrop')`);
+  if (radialOpenAfterPan) {
+    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" });
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
   const ownerBadge = await centerOf(page, ".browser-card-owner");
   await page.click(ownerBadge.x, ownerBadge.y);
   await new Promise((r) => setTimeout(r, 500));
