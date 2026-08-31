@@ -10,18 +10,23 @@ const DEFAULT_ROWS = 24;
 const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove", "wheel"] as const;
 
 const BASE_FONT_SIZE = 15;
-// DESIGN-BACKLOG.md item 57 ponto 10 — pedido ao vivo: fonte que acompanha
-// levemente o zoom do canvas, só pra terminais com um agente ativo (não
-// bash puro). O card inteiro já escala opticamente via `transform:
-// scale()` (App.tsx) — isso sozinho deixa o glifo pequeno-renderizado-e-
-// esticado borrado em zooms altos, já que o canvas WebGL do xterm.js
-// continua rasterizando no mesmo tamanho de fonte físico independente do
-// zoom. Recalcular o fontSize REAL (não só o quanto ele aparece esticado)
-// deixa o texto mais nítido nos extremos, sem competir com a escala
-// óptica — por isso "levemente": só 15% do delta de zoom afeta o tamanho
-// real, o resto continua vindo do `transform: scale()` de sempre. Em
-// zoom=1 dá exatamente `BASE_FONT_SIZE` (sem regressão no caso comum).
-const FONT_ZOOM_INFLUENCE = 0.15;
+// DESIGN-BACKLOG.md item 57 ponto 10, revisado (SCREEN_SPACE_PROJECTION_
+// PLAN.md, Trilha A) — "fonte que acompanha o zoom" começou com influência
+// PARCIAL (15%, só pra terminais com agente) porque a motivação original
+// era "levemente mais nítido nos extremos", não uma correção completa. O
+// blur real foi confirmado ao vivo depois (2026-08-31): o card inteiro já
+// escala opticamente via `transform: scale()` (App.tsx) — isso sozinho
+// deixa o glifo pequeno-renderizado-e-esticado borrado em zooms altos, já
+// que o canvas WebGL do xterm.js continua rasterizando no mesmo tamanho de
+// fonte físico independente do zoom, e só 15% do delta de zoom estava
+// sendo compensado; os outros 85% continuavam vindo do `scale()` que
+// borra. Influência = 1.0 fecha o gap inteiro (fontSize real acompanha o
+// zoom 1:1, dentro do clamp abaixo) em vez de só atenuá-lo, sem precisar
+// do rewrite completo de screen-space projection — mesmo princípio da
+// Fase 3.1 daquele plano, só que já em produção. Em zoom=1 continua dando
+// exatamente `BASE_FONT_SIZE` (sem regressão no caso comum, influência
+// não muda esse ponto de ancoragem).
+const FONT_ZOOM_INFLUENCE = 1.0;
 const FONT_SIZE_MIN = 11;
 const FONT_SIZE_MAX = 22;
 function fontSizeForZoom(zoom: number): number {
@@ -518,16 +523,19 @@ export function useTerminal(
     if (visible) attachRef.current?.();
   }, [visible]);
 
-  // Effect 5 (item 57 ponto 10) — only for an "agent" terminal (not plain
-  // bash, see `fontSizeForZoom`'s own comment above). Reruns on every zoom
-  // tick during a drag-zoom gesture, but the expensive part (mutating
-  // `fontSize` — reallocates xterm's WebGL glyph atlas — plus a real
-  // `fit()`/PTY resize) only happens when the ROUNDED-to-0.1 zoom step
-  // actually changed since the last time this fired, via
-  // `lastFontZoomStepRef`; every other rerun is a single ref comparison.
+  // Effect 5 (item 57 ponto 10, Trilha A) — every terminal now, `bash`
+  // included (see `FONT_ZOOM_INFLUENCE`'s own comment — the exclusion
+  // existed only because the fix used to be a small "levemente mais
+  // nítido" nudge, not a real anti-blur fix; now that it closes the whole
+  // gap, there's no reason a plain shell should stay blurry while an
+  // agent terminal doesn't). Reruns on every zoom tick during a drag-zoom
+  // gesture, but the expensive part (mutating `fontSize` — reallocates
+  // xterm's WebGL glyph atlas — plus a real `fit()`/PTY resize) only
+  // happens when the ROUNDED-to-0.1 zoom step actually changed since the
+  // last time this fired, via `lastFontZoomStepRef`; every other rerun is
+  // a single ref comparison.
   const lastFontZoomStepRef = useRef<number | null>(null);
   useEffect(() => {
-    if (providerId === "bash") return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -539,7 +547,7 @@ export function useTerminal(
     term.options.fontSize = newSize;
     fit.fit();
     if (ptyIdRef.current) void window.pty.resize(ptyIdRef.current, term.cols, term.rows);
-  }, [zoom, providerId]);
+  }, [zoom]);
 
   function fitNow() {
     const fit = fitRef.current;

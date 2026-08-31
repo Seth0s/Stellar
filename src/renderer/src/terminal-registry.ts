@@ -17,6 +17,27 @@ export function unregisterTerminal(cardId: string) {
   terminals.delete(cardId);
 }
 
+/** Test-only (SCREEN_SPACE_PROJECTION_PLAN.md, Trilha A's verify
+ * harness — `smoke-terminal-font-zoom.mjs`) — the real `fontSize`
+ * `useTerminal.ts` set on this terminal via `fontSizeForZoom`. Reading it
+ * directly here is far more reliable than the canvas-introspection
+ * heuristics the earlier version of that test used (xterm's internal
+ * measurement canvas is recreated on demand and isn't stably present
+ * right after a `fontSize` mutation — confirmed live building this).
+ * Attached to `window` below, unconditionally — a CDP `Runtime.evaluate`
+ * call already runs inside this same renderer JS context, so no preload/
+ * IPC round-trip is needed the way `clipboardImage.testWriteImage`/
+ * `debugBridge` need one (those touch MAIN-process state, gated there via
+ * `app.isPackaged`; this is a pure read with no side effect, same
+ * negligible-risk profile as the rest of this file's exports already on
+ * `window` indirectly through React state — nothing sensitive exposed). */
+export function getTerminalFontSize(cardId: string): number | null {
+  return terminals.get(cardId)?.options.fontSize ?? null;
+}
+
+(window as unknown as { __getTerminalFontSize: typeof getTerminalFontSize }).__getTerminalFontSize =
+  getTerminalFontSize;
+
 /**
  * Full scrollback (or just the last `lines`, if given) as plain text —
  * xterm.js keeps every row, printable or not, in `buffer.active`; blank
