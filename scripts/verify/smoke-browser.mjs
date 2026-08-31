@@ -8,7 +8,7 @@
 // never shows native/offscreen-composited content), so this reads the
 // canvas's own pixel data directly via `getImageData`, a plain DOM API with
 // no such blind spot.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 
 const CDP_PORT = 9406;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser", import.meta.url).pathname;
@@ -22,16 +22,11 @@ try {
   // before the browser-card button exists to click.
   await bootIntoFreshSession(page);
 
-  const btn = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const b = [...document.querySelectorAll('.rail-btn')].find(x => x.title && x.title.toLowerCase().includes("navegador"));
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-      })()
-    `),
-  );
-  await page.click(btn.x, btn.y);
+  // Rail reorg (2.2's "menu único de Ferramentas/Cards") moved card
+  // creation behind an "Adicionar card" popover for every kind but
+  // terminal — `spawnCard` (cdp-client.mjs) handles both the direct-
+  // button and grouped-popover shapes.
+  await spawnCard(page, "browser");
   await new Promise((r) => setTimeout(r, 1000));
 
   const initial = JSON.parse(

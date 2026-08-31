@@ -1,7 +1,7 @@
 // The connector-drag gesture (useConnectorDrag.ts) — drag from one card's
 // body to another while the connector tool is active should draw and
 // persist a link between them. Not covered by the other smoke scripts.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 
 const CDP_PORT = 9404;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-connector", import.meta.url).pathname;
@@ -15,18 +15,11 @@ try {
   // an actual board (rail) to spawn sticky notes onto.
   await bootIntoFreshSession(page);
 
+  // Rail reorg (2.2's "menu único de Ferramentas/Cards") moved card
+  // creation behind an "Adicionar card" popover for every kind but
+  // terminal — `spawnCard` (cdp-client.mjs) handles both shapes.
   async function spawnSticky() {
-    const btn = JSON.parse(
-      await page.evalJs(`
-        (() => {
-          const b = document.querySelector('.rail-btn[title="Nova nota adesiva"]');
-          const r = b.getBoundingClientRect();
-          return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-        })()
-      `),
-    );
-    await page.click(btn.x, btn.y);
-    await new Promise((r) => setTimeout(r, 400));
+    await spawnCard(page, "sticky");
   }
   await spawnSticky();
   await spawnSticky();
