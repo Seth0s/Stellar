@@ -63,13 +63,20 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
     if (!vp || !box) return;
     const vw = vp.clientWidth;
     const vh = vp.clientHeight;
-    const PAD = 60;
-    const scale = Math.min((vw - PAD * 2) / box.w, (vh - PAD * 2) / box.h);
+    // D1 — Calha de proteção contra sobreposição da Rail (48px + 12px margin + margem de respiro)
+    const PAD_LEFT = 96;
+    const PAD_RIGHT = 60;
+    const PAD_Y = 60;
+    const availW = Math.max(100, vw - PAD_LEFT - PAD_RIGHT);
+    const availH = Math.max(100, vh - PAD_Y * 2);
+    const scale = Math.min(availW / box.w, availH / box.h);
     const zoom = Math.min(3, Math.max(0.2, scale));
+    const centerX = PAD_LEFT + availW / 2;
+    const centerY = PAD_Y + availH / 2;
     setWorld({
       zoom,
-      panX: vw / 2 - (box.x + box.w / 2) * zoom,
-      panY: vh / 2 - (box.y + box.h / 2) * zoom,
+      panX: centerX - (box.x + box.w / 2) * zoom,
+      panY: centerY - (box.y + box.h / 2) * zoom,
     });
   }
 
@@ -84,14 +91,21 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
     if (!vp || !card) return;
     const vw = vp.clientWidth;
     const vh = vp.clientHeight;
-    const PAD = 80;
+    // D1 — Calha de proteção contra sobreposição da Rail
+    const PAD_LEFT = 96;
+    const PAD_RIGHT = 60;
+    const PAD_Y = 60;
     const box = card.rect;
-    const scale = Math.min((vw - PAD * 2) / box.w, (vh - PAD * 2) / box.h);
+    const availW = Math.max(100, vw - PAD_LEFT - PAD_RIGHT);
+    const availH = Math.max(100, vh - PAD_Y * 2);
+    const scale = Math.min(availW / box.w, availH / box.h);
     const zoom = Math.min(3, Math.max(0.2, scale));
+    const centerX = PAD_LEFT + availW / 2;
+    const centerY = PAD_Y + availH / 2;
     setWorld({
       zoom,
-      panX: vw / 2 - (box.x + box.w / 2) * zoom,
-      panY: vh / 2 - (box.y + box.h / 2) * zoom,
+      panX: centerX - (box.x + box.w / 2) * zoom,
+      panY: centerY - (box.y + box.h / 2) * zoom,
     });
   }
 

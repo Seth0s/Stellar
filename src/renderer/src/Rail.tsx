@@ -131,7 +131,8 @@ export function Rail({
         {/* Grupo 1: Ferramentas de manipulação do canvas */}
         <button
           className={`rail-btn${tool === "pointer" ? " active" : ""}`}
-          title="Ponteiro"
+          title="Ponteiro (V)"
+          aria-label="Ponteiro (V)"
           onClick={() => setTool("pointer")}
         >
           <Icon name="pointer" />
@@ -139,21 +140,24 @@ export function Rail({
         <button
           ref={penBtnRef}
           className={`rail-btn${tool === "pen" ? " active" : ""}`}
-          title="Caneta"
+          title="Caneta (P)"
+          aria-label="Caneta (P)"
           onClick={() => toggleTool("pen")}
         >
           <Icon name="pen" />
         </button>
         <button
           className={`rail-btn${tool === "connector" ? " active" : ""}`}
-          title="Conector"
+          title="Conector (C)"
+          aria-label="Conector (C)"
           onClick={() => toggleTool("connector")}
         >
           <Icon name="link" />
         </button>
         <button
           className={`rail-btn${tool === "select" ? " active" : ""}`}
-          title="Selecionar"
+          title="Selecionar (S)"
+          aria-label="Selecionar (S)"
           onClick={() => toggleTool("select")}
         >
           <Icon name="select" />
@@ -161,6 +165,7 @@ export function Rail({
         <button
           className={`rail-btn${tool === "export" ? " active" : ""}`}
           title="Exportar recorte do canvas"
+          aria-label="Exportar recorte do canvas"
           onClick={() => toggleTool("export")}
         >
           <Icon name="exportCrop" />
@@ -169,12 +174,12 @@ export function Rail({
         {tool === "select" && (canGroup || canUngroup) && (
           <>
             {canGroup && (
-              <button className="rail-btn" title="Agrupar" onClick={onGroup}>
+              <button className="rail-btn" title="Agrupar" aria-label="Agrupar cards selecionados" onClick={onGroup}>
                 <Icon name="group" size={16} />
               </button>
             )}
             {canUngroup && (
-              <button className="rail-btn" title="Desagrupar" onClick={onUngroup}>
+              <button className="rail-btn" title="Desagrupar" aria-label="Desagrupar cards selecionados" onClick={onUngroup}>
                 <Icon name="ungroup" size={16} />
               </button>
             )}
@@ -201,6 +206,7 @@ export function Rail({
           ref={addCardBtnRef}
           className={`rail-btn${isAddCardOpen ? " active" : ""}`}
           title="Adicionar card"
+          aria-label="Adicionar card"
           onClick={() => setOpenPopover((p) => (p === "cards" || p === "terminal-config" ? null : "cards"))}
         >
           <Icon name="plus" />
@@ -213,6 +219,7 @@ export function Rail({
           ref={findBtnRef}
           className={`rail-btn${openPopover === "find" ? " active" : ""}`}
           title="Localizar card"
+          aria-label="Localizar card"
           onClick={() => setOpenPopover((p) => (p === "find" ? null : "find"))}
         >
           <Icon name="findCard" />
@@ -221,11 +228,12 @@ export function Rail({
           ref={aiBtnRef}
           className={`rail-btn${openPopover === "ai" ? " active" : ""}`}
           title="Ações de IA"
+          aria-label="Ações de IA"
           onClick={() => setOpenPopover((p) => (p === "ai" ? null : "ai"))}
         >
           <Icon name="sparkle" />
         </button>
-        <button className="rail-btn" title="Configurações" onClick={onOpenSecretsSettings}>
+        <button className="rail-btn" title="Configurações" aria-label="Configurações de chaves e segredos" onClick={onOpenSecretsSettings}>
           <Icon name="settings" />
         </button>
 

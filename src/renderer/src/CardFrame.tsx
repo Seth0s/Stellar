@@ -214,6 +214,13 @@ export function CardFrame({
     .filter(Boolean)
     .join(" ");
 
+  // D2 — Compensação de espessura de borda (1/zoom) e sombra de alto contraste em zoom reduzido
+  const borderW = zoom < 0.9 ? `${Math.min(3, Math.max(1, 1 / zoom)).toFixed(2)}px` : undefined;
+  const cardShadow =
+    zoom < 0.6
+      ? `0 0 0 ${borderW ?? "1px"} var(--border), 0 ${Math.round(8 / zoom)}px ${Math.round(28 / zoom)}px rgba(0, 0, 0, 0.7)`
+      : undefined;
+
   return (
     <div
       className={frameClass}
@@ -225,6 +232,8 @@ export function CardFrame({
         height: rect.h,
         zIndex,
         ...(accent ? ({ "--accent": accent } as React.CSSProperties) : {}),
+        ...(borderW ? ({ "--card-border-w": borderW } as React.CSSProperties) : {}),
+        ...(cardShadow ? ({ "--card-shadow": cardShadow } as React.CSSProperties) : {}),
       }}
       onPointerDown={(e) => {
         if (closing) return;

@@ -27,5 +27,18 @@ export function groupByProject<T extends Board>(boards: T[]): [string, T[]][] {
 
 export function StatusDot({ counts }: { counts?: BoardCounts }) {
   const cls = !counts || counts.agents === 0 ? "" : counts.active > 0 ? "ok" : "";
-  return <span className={`card-status-dot${cls ? ` ${cls}` : ""}`} />;
+  const label =
+    !counts || counts.agents === 0
+      ? "Sem agentes ativos"
+      : counts.active > 0
+      ? `${counts.active} agente(s) em execução`
+      : "Agentes inativos";
+  return (
+    <span
+      className={`card-status-dot${cls ? ` ${cls}` : ""}`}
+      role="status"
+      title={label}
+      aria-label={label}
+    />
+  );
 }

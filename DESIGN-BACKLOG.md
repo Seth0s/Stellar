@@ -67,19 +67,19 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
   * [x] Alternar dinamicamente a posição e o sentido do ícone conforme a barra esteja recolhida ou expandida.
   * [x] Implementar transição/animação CSS fluida e suave de slide-in / slide-out para a entrada e saída da barra lateral.
 * **D1 — Calha de Proteção contra Sobreposição da Rail:**
-  * [ ] Reservar margem/calha no viewport do canvas para que cards posicionados na extremidade esquerda não tenham conteúdo cortado ou sobreposto pela régua lateral fixa.
+  * [x] Reservar margem/calha no viewport do canvas para que cards posicionados na extremidade esquerda não tenham conteúdo cortado ou sobreposto pela régua lateral fixa.
 * **D2 — Contraste e Bordas em Zoom Reduzido:**
-  * [ ] Compensar largura da borda (`1/zoom`) e aumentar contraste da sombra em níveis baixos de zoom para evitar que cards adjacentes pareçam fundidos.
+  * [x] Compensar largura da borda (`1/zoom`) e aumentar contraste da sombra em níveis baixos de zoom para evitar que cards adjacentes pareçam fundidos.
 * **D3 — Indicadores de Cards Fora da Tela (Offscreen Pips):**
-  * [ ] Exibir setas ou indicadores discretos nas bordas da tela apontando para a posição de cards localizados fora da visão atual.
+  * [x] Exibir setas ou indicadores discretos nas bordas da tela apontando para a posição de cards localizados fora da visão atual.
 * **D5 — Acessibilidade Padronizada em Modais:**
-  * [ ] Implementar hook compartilhado `useModal` com `aria-modal="true"`, aprisionamento de foco (*focus trap*) e fechamento unificado via tecla `Escape` em todos os modais.
+  * [x] Implementar hook compartilhado `useModal` com `aria-modal="true"`, aprisionamento de foco (*focus trap*) e fechamento unificado via tecla `Escape` em todos os modais.
 * **D6 — Divisores Visuais e Rótulos na Rail:**
-  * [ ] Adicionar divisores de 1px entre grupos semânticos de botões e incluir `aria-label` descritivo em todos os botões apenas com ícone.
+  * [x] Adicionar divisores de 1px entre grupos semânticos de botões e incluir `aria-label` descritivo em todos os botões apenas com ícone.
 * **D7 — Registro Explícito do Tema Dark:**
-  * [ ] Documentar formalmente em `tokens.css` a decisão de suporte exclusivo ao tema escuro para ferramentas voltadas a desenvolvedores.
+  * [x] Documentar formalmente em `tokens.css` a decisão de suporte exclusivo ao tema escuro para ferramentas voltadas a desenvolvedores.
 * **D8 — Indicadores de Status Acessíveis para Daltonismo:**
-  * [ ] Adicionar formas geométricas distintas (círculo cheio, anel, traço) aos pontos de status além da cor (evitando colapso vermelho-verde).
+  * [x] Adicionar formas geométricas distintas (círculo cheio, diamante, triângulo, anel oco) aos pontos de status além da cor (evitando colapso vermelho-verde).
 
 ### 2.3 Qualidade de Código, CI & Testes
 
@@ -127,6 +127,7 @@ Conceitos arquiteturais e melhorias futuras registradas para avaliação:
 * **Menu Radial & Atalhos:** Menu contextual circular via botão direito e long-press (segurar), suportando criação de cards e seleção de ferramentas (`pointer`, `pen`, `connector`, `select`). Modal de atalhos completo (`?`).
 * **Tela Home & Sessões:** Tela inicial com agrupamento por projetos, ordenação recente, contadores de agentes ativos, criação baseada em templates e seleção nativa de diretório raiz.
 * **Navegação no Canvas:** Controles de zoom e pan, foco direto em cards (`focusCard`), duplicação instantânea (`Ctrl+D`) e fundo interativo com constelações sensíveis ao cursor.
+* **Design System, Acessibilidade & Viewport (D1–D8):** Calha assimétrica de proteção para a Rail (D1); compensação dinâmica de bordas `1/zoom` e sombras em baixo zoom (D2); camada de Offscreen Pips direcionais com clique-para-focar (D3); auditoria e padronização global de `:focus-visible` (D4); hook unificado `useModal` com focus trap, `aria-modal="true"`, `role="dialog"` e suporte a tecla `Escape` em todos os modais (D5); divisores e rótulos acessíveis `aria-label` na Rail e Topbar (D6); documentação arquitetural Dark-first com garantias WCAG em `tokens.css` (D7); e pontos de status com diferenciação geométrica para acessibilidade de daltonismo (D8).
 * **Design System & Estilização:** Sistema unificado de classes de rolagem fina (`.thin-scroll`), validação genérica de formulários (`useFieldValidation`) e fechamento de cards com animações suaves.
 
 ### 4.2 Cards & Ferramentas
