@@ -47,6 +47,16 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
 
 * **FilesCard — Sincronização em Tempo Real (File Watching):**
   * [x] Implementar watcher de sistema de arquivos (`fs.watch` no processo main com debouncing/throttling) para atualizar a árvore de diretórios e arquivos abertos dinamicamente em tempo real quando alterados por agentes ou processos externos (evitando a sensação de "snapshot estático" na criação).
+* **MCP do Navegador — Orquestração Completa pro Agente (não só leitura):**
+  * *Estado atual* (pedido ao vivo, 2026-08-31, uso da v0.2.0): a superfície MCP do card de navegador hoje é só `open_url` (abrir/navegar, com gate humano) e `get_page_text` (extrair texto) — o agente não tem NENHUMA ferramenta de execução: sem clicar, digitar, rolar, esperar por seletor ou rodar JS na página. Toda interação real (`browser:input-mouse`/`input-key`/`input-wheel` em `browser-registry.ts`) só é acionável pela UI humana hoje, nunca por um agente via MCP.
+  * [ ] Expor ferramentas MCP de controle real sobre um card de navegador existente: `browser_click(cardId, x, y)` / `browser_type(cardId, text)` / `browser_scroll(cardId, dx, dy)` / `browser_eval(cardId, js)` (ou equivalente por seletor CSS, mais robusto que coordenada crua) — mesmo padrão de gate humano que `open_url` já usa pra ações sensíveis, reusando a infraestrutura de input que já existe no `browser-registry.ts`, só sem porta de entrada MCP ainda.
+* **Navegador Embutido — Infraestrutura Chromium/Electron Madura:**
+  * *Estado atual* (mesmo pedido ao vivo): o `BrowserCard` hoje é renderização offscreen básica — sem DevTools acopláveis, navbar mínima, resolução/responsividade do frame capturado imprecisas, e sem menu de contexto nativo do Chromium (botão direito).
+  * [ ] DevTools acoplável ao card (equivalente a `webContents.openDevTools({ mode: "detach" })` ou um painel dentro do próprio card).
+  * [ ] Navbar melhorada (histórico, favoritos, indicador de carregamento mais rico — não só voltar/avançar/recarregar/endereço).
+  * [ ] Resolução/responsividade do frame offscreen mais precisa (revisitar `browser-registry.ts`'s `resize` — mesma classe de problema de blur em zoom já identificada e corrigida no terminal via Trilha A, `SCREEN_SPACE_PROJECTION_PLAN.md`; ver a nota "Trilha A do navegador" já registrada lá).
+  * [ ] Menu de contexto nativo do Chromium (botão direito — inspecionar, copiar link, abrir em nova aba, etc.), hoje ausente no card offscreen.
+  * [ ] Header do card no mesmo padrão visual/funcional do navegador do CentralByte, incluindo "design mode" (edição inline da página renderizada).
 
 ### 2.2 Design & Acessibilidade (D1–D8)
 
