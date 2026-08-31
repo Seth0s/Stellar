@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TerminalCard } from "./TerminalCard";
 import { FilesCard } from "./FilesCard";
 import { ChangesCard } from "./ChangesCard";
@@ -47,6 +47,7 @@ import { useWorldTransform } from "./useWorldTransform";
 import { useConnectorDrag } from "./useConnectorDrag";
 import { useCardSelection } from "./useCardSelection";
 import { useBoardStore } from "./useBoardStore";
+import { useStableCardHandler, useStableCardIdHandler } from "./useStableCardHandler";
 import type { Card, ChatCardData, ChatMessage, ChatProvider, Connector, StickyCardData, Tool } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
@@ -109,13 +110,20 @@ function rootDisplayName(root: string): string {
       .pop() || "Projects"
   );
 }
-const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor", "gemini"];
+const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor", "antigravity"];
 const MIN_STROKE_POINTS = 2;
 const MIN_STROKE_DISTANCE = 2;
 const STROKE_PADDING = 8;
 const REFLOW_MS = 320;
 const GRID_SPACING = 28;
 const ZOOM_STEP = 1.15;
+// Pre-release audit P1 — `seenUrls[c.id] ?? []` used to create a brand
+// new empty array every render for any card with no seen URLs yet,
+// which `React.memo`'s shallow prop comparison would always see as
+// "changed" even though nothing meaningful did. One shared, truly
+// immutable reference instead — module-level, outside the component, so
+// it's the exact same array for the app's entire lifetime.
+const EMPTY_URLS: string[] = [];
 
 /** Canvas background pattern — per-viewer preference (not per-board data,
  * doesn't need to sync/persist to the store), cycled by a topbar button.
@@ -420,6 +428,14 @@ export function App() {
    * (`pointSlot`), captured once at open time so panning/zooming while the
    * menu is open doesn't retarget the spawn. */
   const [radialMenu, setRadialMenu] = useState<{ screen: Point; world: Point } | null>(null);
+  /** Item 57.8 — ferramenta "export": recorte livre em coordenadas de
+   * TELA (client, não mundo — é exatamente o espaço que
+   * `capturePage(rect)` espera, sem nenhuma conversão de zoom/pan
+   * necessária). `dragging` só controla se a barrinha de formato
+   * (PNG/JPEG/PDF) aparece — o retângulo em si já é visível durante o
+   * arraste. */
+  const [exportSelection, setExportSelection] = useState<{ x: number; y: number; w: number; h: number; dragging: boolean } | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
   const [showRemotePairing, setShowRemotePairing] = useState(false);
   /** Set only when closeCard needs confirmation first (a terminal card
    * whose process is still live) — see closeCard/confirmCloseCard below. */
@@ -443,6 +459,50 @@ export function App() {
    * empty array forever. */
   const orderRef = useRef<string[]>([]);
   orderRef.current = order;
+
+  // Pre-release audit P1 — stable per-card handler references, the
+  // prerequisite for `React.memo` on the card components below to
+  // actually skip re-rendering a card nothing changed about (see
+  // useStableCardHandler.ts's doc comment for the full reasoning). Every
+  // one of these function NAMES is declared further down in this same
+  // component body — safe to reference here because `function` (not
+  // `const`) declarations are hoisted with their full body, and each
+  // hook's own `fnRef` is refreshed on every render regardless of where
+  // it's called from. Placed here, before `!loaded`'s early return below,
+  // because hooks can never be called conditionally.
+  const getChangeHandler = useStableCardIdHandler(tryChangeRect);
+  const getCommitHandler = useStableCardHandler(commitRect);
+  const getRaiseHandler = useStableCardIdHandler(raise);
+  const getFocusHandler = useStableCardIdHandler(jumpToCard);
+  const getCloseHandler = useStableCardIdHandler(closeCard);
+  const getCloseAnimationEndHandler = useStableCardIdHandler(finalizeCloseCard);
+  const getRenameHandler = useStableCardIdHandler(renameCard);
+  const getResumeIdDiscoveredHandler = useStableCardIdHandler(resumeIdDiscovered);
+  const getStatusChangeHandler = useStableCardIdHandler(handleTerminalStatus);
+  const getContentChangeHandler = useStableCardIdHandler(changeStickyContent);
+  const getContentCommitHandler = useStableCardHandler(commitStickyContent);
+  const getColorCommitHandler = useStableCardHandler(commitStickyColor);
+  const getMessagesCommitHandler = useStableCardHandler(commitChatMessages);
+  const getModelCommitHandler = useStableCardHandler(commitChatModel);
+  const getProviderCommitHandler = useStableCardHandler(commitChatProvider);
+  const openInstallTerminalRef = useRef(openInstallTerminal);
+  openInstallTerminalRef.current = openInstallTerminal;
+  const stableSuggestInstall = useCallback(
+    (providerId: string, cwd: string, command: string) => openInstallTerminalRef.current(providerId, cwd, command),
+    [],
+  );
+  // Not per-card (no card identity involved — creating/opening a
+  // session, not touching "this" card), so a single ref-stabilized
+  // wrapper is enough, same shape as `stableSuggestInstall` above.
+  const newChatSessionRef = useRef(newChatSession);
+  newChatSessionRef.current = newChatSession;
+  const stableNewChatSession = useCallback(
+    (cardId: string, provider: ChatProvider) => newChatSessionRef.current(cardId, provider),
+    [],
+  );
+  const openChatSessionRef = useRef(openChatSession);
+  openChatSessionRef.current = openChatSession;
+  const stableOpenChatSession = useCallback((session: ChatSessionRow) => openChatSessionRef.current(session), []);
   const {
     world,
     setWorld,
@@ -789,6 +849,14 @@ export function App() {
   const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
   const { selectedIds, setSelectedIds, marquee, startMarqueeSelect, selectCard, groupSelected, ungroupSelected } =
     useCardSelection(cardsRef, setCards, activeBoardIdRef, nextId, clientToWorld, toRow);
+  // Pre-release audit P1 — same stable-handler reasoning as the block
+  // near cardsRef/orderRef above; these two specifically can only be
+  // declared here, AFTER `startConnectorDrag`/`selectCard` exist (both
+  // come from `const` destructuring above, not hoisted `function`
+  // declarations like the rest, so referencing them any earlier would be
+  // a real TDZ error, not just a style choice).
+  const getConnectorStartHandler = useStableCardIdHandler(startConnectorDrag);
+  const getSelectStartHandler = useStableCardIdHandler(selectCard);
 
   function removeConnector(id: string) {
     setConnectors((prev) => prev.filter((c) => c.id !== id));
@@ -1158,8 +1226,14 @@ export function App() {
     // sessions sidebar; every other kind still hard-deletes exactly as
     // before (a terminal's PTY, a browser's page, a file tree — nothing
     // there is meaningful to "reopen" the way a conversation is).
-    if (closedKind === "chat") void window.store.archiveCard(id);
-    else void window.store.delete(id);
+    if (closedKind === "chat") {
+      void window.store.archiveCard(id);
+      // Pre-release audit B2 — a write/bash consent still pending for
+      // THIS card has no UI left to ever resolve it (its ChatCard is
+      // gone); tell main so it denies rather than wedging that
+      // provider's tool loop forever.
+      window.chat.notifyCardClosed(id);
+    } else void window.store.delete(id);
     void window.store.connectors.deleteForCard(id);
   }
 
@@ -1333,12 +1407,19 @@ export function App() {
     void window.store.upsert(toRow({ ...card, provider, model }, activeBoardIdRef.current!));
   }
 
-  /** Pedido ao vivo (2026-08-29, item 57 ponto 2) — o botão de "nova
-   * sessão" do painel de sessões do ChatCard. Mesmo `defaultCardFields`
-   * de `addCardOfKind`, mas com provider/model do card de origem (não
-   * sempre "anthropic") — o mesmo mapeamento de default-model-por-provider
-   * de `commitChatProvider`. */
-  function newChatSession(provider: ChatProvider) {
+  /** Pedido ao vivo (2026-08-29, item 57 ponto 2; revisado ao vivo em
+   * 2026-08-31 — "+" abria um CARD NOVO solto no board em vez de resetar
+   * o próprio ChatCard, confuso pra quem esperava um "new chat" no
+   * mesmo lugar). Reseta o card ATUAL em vez de criar um segundo: a
+   * conversa antiga é ARQUIVADA sob o id antigo (mesmo mecanismo de
+   * `finalizeCloseCard`'s branch "chat" — continua navegável no painel
+   * de sessões depois), e um card NOVO (id novo, mesmo `rect`/`groupId`,
+   * mesmo provider) nasce na mesma posição no `order` — visualmente é o
+   * "mesmo" card, sem clutter novo no board; só o id/linha no banco
+   * mudou por baixo, do mesmo jeito que fechar+reabrir já faria. */
+  function newChatSession(cardId: string, provider: ChatProvider) {
+    const old = cardsRef.current.find((c) => c.id === cardId);
+    if (!old || old.kind !== "chat") return;
     const model =
       provider === "openai"
         ? DEFAULT_OPENAI_MODEL
@@ -1347,16 +1428,23 @@ export function App() {
           : provider === "generic"
             ? DEFAULT_GENERIC_MODEL
             : DEFAULT_CHAT_MODEL;
-    const id = String(nextId.current++);
-    addCard({
-      id,
+    const newId = String(nextId.current++);
+    const newCard = {
+      id: newId,
       ...defaultCardFields("chat", activeBoardCwd),
       provider,
       model,
-      rect: centeredSlot(visibleRect, cards.length),
-      groupId: null,
+      rect: old.rect,
+      groupId: old.groupId,
       label: null,
-    } as Card);
+    } as Card;
+    setCards((prev) => [...prev.filter((c) => c.id !== cardId), newCard]);
+    setOrder((prev) => prev.map((x) => (x === cardId ? newId : x)));
+    setConnectors((prev) => prev.filter((c) => c.fromCardId !== cardId && c.toCardId !== cardId));
+    void window.store.archiveCard(cardId);
+    window.chat.notifyCardClosed(cardId);
+    void window.store.connectors.deleteForCard(cardId);
+    void window.store.upsert(toRow(newCard, activeBoardIdRef.current!));
   }
 
   function startDrawing(e: React.PointerEvent) {
@@ -1386,6 +1474,59 @@ export function App() {
     window.addEventListener("pointerup", onUp);
   }
 
+  /** Item 57.8 — arraste livre em coordenadas de tela (não de mundo — ver
+   * `exportSelection`'s doc comment). Descarta silenciosamente um
+   * arraste minúsculo (< 8px, mesmo espírito de `MIN_STROKE_DISTANCE` —
+   * um clique acidental sem intenção de recortar nada). */
+  function startExportSelect(e: React.PointerEvent) {
+    const startX = e.clientX;
+    const startY = e.clientY;
+    function rectFrom(clientX: number, clientY: number) {
+      return { x: Math.min(startX, clientX), y: Math.min(startY, clientY), w: Math.abs(clientX - startX), h: Math.abs(clientY - startY) };
+    }
+    setExportSelection({ ...rectFrom(startX, startY), dragging: true });
+    function onMove(ev: PointerEvent) {
+      setExportSelection({ ...rectFrom(ev.clientX, ev.clientY), dragging: true });
+    }
+    function onUp(ev: PointerEvent) {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const final = rectFrom(ev.clientX, ev.clientY);
+      if (final.w < 8 || final.h < 8) {
+        setExportSelection(null);
+        return;
+      }
+      setExportSelection({ ...final, dragging: false });
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  async function runExportSelection(format: "png" | "jpeg" | "pdf") {
+    if (!exportSelection || exportBusy) return;
+    const { x, y, w, h } = exportSelection;
+    setExportBusy(true);
+    // Esconde o retângulo/barra de formato ANTES de capturar — senão a
+    // própria UI de seleção aparece dentro do recorte exportado. Duplo
+    // rAF: garante que o DOM já repintou sem o overlay antes do
+    // screenshot real (um commit de estado do React não é síncrono com
+    // o próximo paint do browser).
+    setExportSelection(null);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const defaultName = `stellar-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    const result = await window.canvasExport.captureRect(
+      { x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h) },
+      format,
+      defaultName,
+    );
+    setExportBusy(false);
+    if (!result.ok) {
+      if (result.error !== "cancelled") toast(`falha ao exportar: ${result.error}`);
+      return;
+    }
+    toast(`exportado: ${result.path}`);
+  }
+
   function onBackgroundPointerDown(e: React.PointerEvent) {
     if (e.target !== e.currentTarget) return;
     if (tool === "pen") {
@@ -1394,6 +1535,10 @@ export function App() {
     }
     if (tool === "select") {
       startMarqueeSelect(e);
+      return;
+    }
+    if (tool === "export") {
+      startExportSelect(e);
       return;
     }
     if (tool === "connector") return;
@@ -1527,8 +1672,8 @@ export function App() {
         {cards.map((c) => {
           const zIndex = order.indexOf(c.id);
           const interactionMode = tool === "connector" ? "connector" : tool === "select" ? "select" : "normal";
-          const onConnectorStart = (e: React.PointerEvent) => startConnectorDrag(c.id, e);
-          const onSelectStart = (e: React.PointerEvent) => selectCard(c.id, e);
+          const onConnectorStart = getConnectorStartHandler(c);
+          const onSelectStart = getSelectStartHandler(c);
           const selected = selectedIds.has(c.id);
           // A `switch` (not the old if/else-if chain) so a card kind this
           // doesn't handle is a compile error via `assertNeverCardKind`,
@@ -1553,25 +1698,25 @@ export function App() {
                 systemPrompt={c.systemPrompt}
                 initialInput={c.initialInput}
                 visible={isInView(c.rect, visibleRect)}
-                seenUrls={seenUrls[c.id] ?? []}
+                seenUrls={seenUrls[c.id] ?? EMPTY_URLS}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
                 label={c.label}
-                onChange={(r) => tryChangeRect(c.id, r)}
-                onCommit={(r) => commitRect(c, r)}
-                onRaise={() => raise(c.id)}
-                onFocus={() => jumpToCard(c.id)}
-                onClose={() => closeCard(c.id)}
-                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
-                onRename={(label) => renameCard(c.id, label)}
-                onResumeIdDiscovered={(sessionId) => resumeIdDiscovered(c.id, sessionId)}
-                onStatusChange={(status) => handleTerminalStatus(c.id, status)}
-                onOpenUrl={(url) => setPendingOpenUrl(url)}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
+                onResumeIdDiscovered={getResumeIdDiscoveredHandler(c)}
+                onStatusChange={getStatusChangeHandler(c)}
+                onOpenUrl={setPendingOpenUrl}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-                onSuggestInstall={openInstallTerminal}
+                onSuggestInstall={stableSuggestInstall}
               />
             );
           }
@@ -1587,13 +1732,13 @@ export function App() {
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
                 label={c.label}
-                onChange={(r) => tryChangeRect(c.id, r)}
-                onCommit={(r) => commitRect(c, r)}
-                onRaise={() => raise(c.id)}
-                onFocus={() => jumpToCard(c.id)}
-                onClose={() => closeCard(c.id)}
-                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
-                onRename={(label) => renameCard(c.id, label)}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1612,13 +1757,13 @@ export function App() {
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
                 label={c.label}
-                onChange={(r) => tryChangeRect(c.id, r)}
-                onCommit={(r) => commitRect(c, r)}
-                onRaise={() => raise(c.id)}
-                onFocus={() => jumpToCard(c.id)}
-                onClose={() => closeCard(c.id)}
-                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
-                onRename={(label) => renameCard(c.id, label)}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1638,16 +1783,16 @@ export function App() {
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
                 label={c.label}
-                onChange={(r) => tryChangeRect(c.id, r)}
-                onCommit={(r) => commitRect(c, r)}
-                onRaise={() => raise(c.id)}
-                onFocus={() => jumpToCard(c.id)}
-                onClose={() => closeCard(c.id)}
-                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
-                onRename={(label) => renameCard(c.id, label)}
-                onContentChange={(content) => changeStickyContent(c.id, content)}
-                onContentCommit={(content) => commitStickyContent(c, content)}
-                onColorCommit={(color) => commitStickyColor(c, color)}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
+                onContentChange={getContentChangeHandler(c)}
+                onContentCommit={getContentCommitHandler(c)}
+                onColorCommit={getColorCommitHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1668,11 +1813,11 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                onChange={(r) => tryChangeRect(c.id, r)}
-                onCommit={(r) => commitRect(c, r)}
-                onRaise={() => raise(c.id)}
-                onClose={() => closeCard(c.id)}
-                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1690,13 +1835,13 @@ export function App() {
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
                 label={c.label}
-                onChange={(r) => tryChangeRect(c.id, r)}
-                onCommit={(r) => commitRect(c, r)}
-                onRaise={() => raise(c.id)}
-                onFocus={() => jumpToCard(c.id)}
-                onClose={() => closeCard(c.id)}
-                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
-                onRename={(label) => renameCard(c.id, label)}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1720,20 +1865,20 @@ export function App() {
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
                 label={c.label}
-                onChange={(r) => tryChangeRect(c.id, r)}
-                onCommit={(r) => commitRect(c, r)}
-                onRaise={() => raise(c.id)}
-                onFocus={() => jumpToCard(c.id)}
-                onClose={() => closeCard(c.id)}
-                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
-                onRename={(label) => renameCard(c.id, label)}
-                onMessagesCommit={(messages) => commitChatMessages(c, messages)}
-                onModelCommit={(model) => commitChatModel(c, model)}
-                onProviderCommit={(provider) => commitChatProvider(c, provider)}
-                onNewSession={newChatSession}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
+                onMessagesCommit={getMessagesCommitHandler(c)}
+                onModelCommit={getModelCommitHandler(c)}
+                onProviderCommit={getProviderCommitHandler(c)}
+                onNewSession={stableNewChatSession}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
-                onOpenChatSession={openChatSession}
+                onOpenChatSession={stableOpenChatSession}
                 selected={selected}
               />
             );
@@ -1747,17 +1892,18 @@ export function App() {
                 zoom={world.zoom}
                 zIndex={zIndex}
                 visible={isInView(c.rect, visibleRect)}
+                isFocused={zIndex === order.length - 1}
                 url={c.url}
                 ownerCardId={c.ownerCardId}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                onChange={(r) => tryChangeRect(c.id, r)}
-                onCommit={(r) => commitRect(c, r)}
-                onRaise={() => raise(c.id)}
-                onFocus={() => jumpToCard(c.id)}
-                onClose={() => closeCard(c.id)}
-                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -1937,6 +2083,23 @@ export function App() {
           onSelect={selectRadialAction}
           onClose={() => setRadialMenu(null)}
         />
+      )}
+      {exportSelection && (
+        <div
+          className="export-selection-box"
+          style={{ left: exportSelection.x, top: exportSelection.y, width: exportSelection.w, height: exportSelection.h }}
+        >
+          {!exportSelection.dragging && (
+            <div className="export-selection-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+              <button onClick={() => runExportSelection("png")}>PNG</button>
+              <button onClick={() => runExportSelection("jpeg")}>JPEG</button>
+              <button onClick={() => runExportSelection("pdf")}>PDF</button>
+              <button className="export-selection-cancel" onClick={() => setExportSelection(null)} title="Cancelar">
+                ×
+              </button>
+            </div>
+          )}
+        </div>
       )}
       <SpawnQueuePanel queue={spawnQueues[activeBoardId] ?? []} describeRequester={describeCard} />
       {pendingCloseId && (

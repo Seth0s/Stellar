@@ -18,16 +18,42 @@ const CDP_PORT = 9438;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat", import.meta.url).pathname;
 
 async function clickByTitle(page, title) {
-  const coords = JSON.parse(
+  let coords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.rail-btn[title=${JSON.stringify(title)}]');
+        const b = document.querySelector('.rail-btn[title=${JSON.stringify(title)}]') || document.querySelector(\`button[title="\${${JSON.stringify(title)}}"]\`);
         if (!b) return JSON.stringify(null);
         const r = b.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
       })()
     `),
   );
+  if (!coords) {
+    const addBtn = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+          if (!b) return JSON.stringify(null);
+          const r = b.getBoundingClientRect();
+          return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+        })()
+      `),
+    );
+    if (addBtn) {
+      await page.click(addBtn.x, addBtn.y);
+      await new Promise((r) => setTimeout(r, 250));
+      coords = JSON.parse(
+        await page.evalJs(`
+          (() => {
+            const b = document.querySelector(\`.popover-row[title="\${${JSON.stringify(title)}}"]\`);
+            if (!b) return JSON.stringify(null);
+            const r = b.getBoundingClientRect();
+            return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+          })()
+        `),
+      );
+    }
+  }
   if (!coords) throw new Error(`no button titled "${title}"`);
   await page.click(coords.x, coords.y);
 }

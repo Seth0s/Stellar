@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
@@ -6,10 +6,57 @@ import { Markdown } from "./Markdown";
 import { toast } from "./useToast";
 import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, PROVIDER_MODELS, keyFormatWarning } from "./secretsUi";
 import type { Rect } from "./board-model";
-import type { ChatMessage, ChatProvider } from "./card-types";
+import type { ChatContentBlock, ChatImageBlock, ChatMessage, ChatProvider } from "./card-types";
 import type { WriteConsentRequest, BashConsentRequest, CardRow } from "../../preload/index";
 
 const ALL_PROVIDERS: ChatProvider[] = ["anthropic", "openai", "gemini", "generic"];
+
+const ALLOWED_IMAGE_TYPES: ChatImageBlock["mediaType"][] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const MAX_ATTACHMENTS_PER_MESSAGE = 4;
+
+/** Item 66 — extrai só o TEXTO de um `content` que agora também pode ser
+ * um array de blocos (imagem colada) — usado onde só o texto plano
+ * importa (preview de sessão, fallback de markdown ainda carregando). */
+function textOf(content: ChatMessage["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((b): b is Extract<ChatContentBlock, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join(" ");
+}
+
+/** Item 66 — só o `path` sobrevive em `messages_json` (nunca base64, ver
+ * ChatImageBlock's doc comment em card-types.ts); a miniatura é
+ * re-lida sob demanda via IPC e cacheada em memória pela vida da sessão
+ * do app (module-level, não por-instância — a mesma imagem reaparece em
+ * toda re-renderização da lista de mensagens). */
+const imageDataUrlCache = new Map<string, string>();
+
+function ChatImageThumb({ block }: { block: ChatImageBlock }) {
+  const [dataUrl, setDataUrl] = useState<string | null>(imageDataUrlCache.get(block.path) ?? null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (dataUrl) return;
+    let cancelled = false;
+    void window.clipboardImage.readAttachment(block.path).then((result) => {
+      if (cancelled) return;
+      if (!result.ok) {
+        setFailed(true);
+        return;
+      }
+      const url = `data:${block.mediaType};base64,${result.base64}`;
+      imageDataUrlCache.set(block.path, url);
+      setDataUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [block.path]);
+  if (failed) return <span className="chat-msg-image-failed">[imagem não pôde ser carregada]</span>;
+  if (!dataUrl) return <span className="chat-msg-image-loading" />;
+  return <img className="chat-msg-image" src={dataUrl} alt="imagem anexada" />;
+}
 
 /** DESIGN-BACKLOG.md item 38 — correção de escopo do item 30: a lista de
  * sessões vive DENTRO do chatbox (painel expansível, mesmo espírito do
@@ -26,9 +73,17 @@ export type ChatSessionRow = CardRow;
  * inteiro. */
 function sessionPreview(s: ChatSessionRow): string {
   try {
-    const parsed = JSON.parse(s.messages_json ?? '{"messages":[]}') as { messages?: { role: string; content: string }[] };
+    const parsed = JSON.parse(s.messages_json ?? '{"messages":[]}') as { messages?: ChatMessage[] };
     const firstUser = parsed.messages?.find((m) => m.role === "user");
-    if (firstUser?.content) return firstUser.content.length > 60 ? firstUser.content.slice(0, 60) + "…" : firstUser.content;
+    if (firstUser) {
+      const text = textOf(firstUser.content).trim();
+      const hasImage = typeof firstUser.content !== "string" && firstUser.content.some((b) => b.type === "image");
+      const label = text || (hasImage ? "📎 imagem" : "");
+      if (label) {
+        const prefix = hasImage && text ? "📎 " : "";
+        return prefix + (label.length > 60 ? label.slice(0, 60) + "…" : label);
+      }
+    }
   } catch {
     // Malformed/legacy row — fall through to the generic placeholder.
   }
@@ -141,7 +196,9 @@ function DiffView({ hunks }: { hunks: WriteConsentRequest["hunks"] }) {
   );
 }
 
-export function ChatCard({
+/** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
+ * wrapped in `React.memo` below. */
+function ChatCardInner({
   id,
   rect,
   zoom,
@@ -202,11 +259,17 @@ export function ChatCard({
    * unarchiving/focusing, this component only renders the list and
    * reports clicks. */
   onOpenChatSession: (session: ChatSessionRow) => void;
-  /** Pedido ao vivo (2026-08-29, item 57 ponto 2) — cria um card de chat
-   * novo (mesmo provider desta sessão), separado da conversa atual em
-   * vez de sobrescrevê-la. */
-  onNewSession: (provider: ChatProvider) => void;
+  /** Pedido ao vivo (2026-08-29, item 57 ponto 2; revisado 2026-08-31) —
+   * reseta ESTE card pra uma sessão nova vazia (mesmo provider), sem
+   * abrir um segundo card no board. */
+  onNewSession: (cardId: string, provider: ChatProvider) => void;
 }) {
+  // Pre-release audit P1 — same render-count counter as TerminalCard.tsx
+  // (see its doc comment) — lets the verify harness prove `React.memo`
+  // below actually skips this card when nothing about it changed.
+  const renderCounts = (window as unknown as { __cardRenderCounts?: Record<string, number> }).__cardRenderCounts ??= {};
+  renderCounts[id] = (renderCounts[id] ?? 0) + 1;
+
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [encryptionAvailable, setEncryptionAvailable] = useState(true);
   const [showKeyForm, setShowKeyForm] = useState(false);
@@ -248,6 +311,11 @@ export function ChatCard({
   }, [sessionsOpen]);
   const sessionsForProvider = chatSessions.filter((s) => s.provider === provider);
   const [draft, setDraft] = useState("");
+  // Item 66 — anexos pendentes do composer (ainda não enviados). `previewUrl`
+  // é o data URL cheio, gerado localmente por `FileReader` no momento do
+  // paste/drop — evita um round-trip de IPC só pra mostrar a própria
+  // miniatura que o usuário acabou de colar.
+  const [attachments, setAttachments] = useState<{ id: string; path: string; mediaType: ChatImageBlock["mediaType"]; previewUrl: string }[]>([]);
   const [streaming, setStreaming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toolActivity, setToolActivity] = useState<ToolActivity[]>([]);
@@ -381,12 +449,80 @@ export function ChatCard({
     });
   }
 
+  // Item 66 — path já real em disco (window.clipboardImage.saveBytes já
+  // resolveu, ver clipboard-image.ts); só falta ler os bytes localmente
+  // (pro preview instantâneo) e checar os limites (tipo suportado,
+  // contagem por mensagem — a API ainda vai rejeitar algo grande demais
+  // sozinha, esse limite aqui é só sobre "quantas imagens numa mensagem
+  // faz sentido pedir pra CLI/modelo olhar de uma vez").
+  async function addImageFile(file: File) {
+    if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      toast(`máximo de ${MAX_ATTACHMENTS_PER_MESSAGE} imagens por mensagem`);
+      return;
+    }
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type as ChatImageBlock["mediaType"])) {
+      toast(`tipo de imagem não suportado: ${file.type || "desconhecido"}`);
+      return;
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    const result = await window.clipboardImage.saveBytes(base64, file.type);
+    if (!result.ok) {
+      toast(`falha ao anexar imagem: ${result.error}`);
+      return;
+    }
+    setAttachments((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random()}`, path: result.path, mediaType: file.type as ChatImageBlock["mediaType"], previewUrl: dataUrl },
+    ]);
+  }
+
+  function removeAttachment(attachmentId: string) {
+    setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+  }
+
+  /** Só intercepta quando há de fato um item de imagem — um paste de
+   * texto comum continua caindo no comportamento padrão da textarea. */
+  function onComposerPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const imageItems = Array.from(e.clipboardData.items).filter((it) => it.kind === "file" && it.type.startsWith("image/"));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (file) void addImageFile(file);
+    }
+  }
+
+  function onComposerDragOver(e: React.DragEvent<HTMLTextAreaElement>) {
+    if (Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
+  }
+
+  function onComposerDrop(e: React.DragEvent<HTMLTextAreaElement>) {
+    const imageFiles = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+    if (imageFiles.length === 0) return;
+    e.preventDefault();
+    for (const file of imageFiles) void addImageFile(file);
+  }
+
   function send() {
     const text = draft.trim();
-    if (!text || streaming !== null) return;
-    const next = [...messages, { role: "user" as const, content: text }];
+    if ((!text && attachments.length === 0) || streaming !== null) return;
+    const content: ChatMessage["content"] =
+      attachments.length === 0
+        ? text
+        : [
+            ...(text ? [{ type: "text" as const, text }] : []),
+            ...attachments.map((a): ChatImageBlock => ({ type: "image", path: a.path, mediaType: a.mediaType })),
+          ];
+    const next = [...messages, { role: "user" as const, content }];
     onMessagesCommit(next);
     setDraft("");
+    setAttachments([]);
     setError(null);
     setStreaming("");
     setToolActivity([]);
@@ -400,6 +536,22 @@ export function ChatCard({
         setStreaming(null);
       }
     });
+  }
+
+  // Pedido ao vivo (2026-08-31) — o botão de enviar antes só desabilitava
+  // durante a inferência, sem nenhum jeito de parar. `window.chat.cancel`
+  // (main/anthropic-client.ts, main/openai-client.ts) já existia — best-
+  // effort, aborta o stream em voo — mas nunca tinha UI. Nenhum
+  // onDone/onError chega depois de um cancel intencional (ver comentário
+  // de `intentionalAborts` nos dois clients), então o texto parcial já
+  // gerado é commitado aqui mesmo, localmente — como parar um "stop" de
+  // verdade em outros chats, guarda o que já foi gerado em vez de descartar.
+  function stop() {
+    void window.chat.cancel(id, provider);
+    if (streaming) {
+      onMessagesCommit([...messagesRef.current, { role: "assistant", content: streaming }]);
+    }
+    setStreaming(null);
   }
 
   function resolveWrite(allowed: boolean) {
@@ -531,7 +683,7 @@ export function ChatCard({
               <button
                 className="chat-sessions-new-btn"
                 title={`Nova sessão (${provider})`}
-                onClick={() => onNewSession(provider)}
+                onClick={() => onNewSession(id, provider)}
               >
                 <Icon name="plus" size={12} />
               </button>
@@ -643,12 +795,22 @@ export function ChatCard({
               <div key={i} className={`chat-msg ${m.role}`}>
                 {m.role === "assistant" ? (
                   <Markdown
-                    content={m.content}
+                    content={textOf(m.content)}
                     className="chat-msg-md"
-                    loadingFallback={<span className="chat-msg-text">{m.content}</span>}
+                    loadingFallback={<span className="chat-msg-text">{textOf(m.content)}</span>}
                   />
-                ) : (
+                ) : typeof m.content === "string" ? (
                   <span className="chat-msg-text">{m.content}</span>
+                ) : (
+                  <div className="chat-msg-blocks">
+                    {m.content.map((block, bi) =>
+                      block.type === "text" ? (
+                        <span key={bi} className="chat-msg-text">{block.text}</span>
+                      ) : (
+                        <ChatImageThumb key={bi} block={block} />
+                      ),
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -732,17 +894,44 @@ export function ChatCard({
             )}
             {error && <div className="chat-error">erro: {error}</div>}
           </div>
-          <div className="chat-composer">
-            <textarea
-              rows={1}
-              placeholder="Peça algo ao chatbox…"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onComposerKeyDown}
-            />
-            <button className="chat-send-btn" disabled={!draft.trim() || streaming !== null} onClick={send}>
-              <Icon name="chevronRight" size={16} />
-            </button>
+          <div className="chat-composer-wrap">
+            {attachments.length > 0 && (
+              <div className="chat-attachments-strip">
+                {attachments.map((a) => (
+                  <div key={a.id} className="chat-attachment-thumb">
+                    <img src={a.previewUrl} alt="anexo pendente" />
+                    <button
+                      className="chat-attachment-remove"
+                      title="Remover anexo"
+                      onClick={() => removeAttachment(a.id)}
+                    >
+                      <Icon name="close" size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="chat-composer">
+              <textarea
+                rows={1}
+                placeholder="Peça algo ao chatbox… (cole ou arraste uma imagem)"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={onComposerKeyDown}
+                onPaste={onComposerPaste}
+                onDragOver={onComposerDragOver}
+                onDrop={onComposerDrop}
+              />
+              {streaming !== null ? (
+                <button className="chat-send-btn chat-stop-btn" title="Parar" onClick={stop}>
+                  <Icon name="interrupt" size={16} />
+                </button>
+              ) : (
+                <button className="chat-send-btn" disabled={!draft.trim() && attachments.length === 0} onClick={send}>
+                  <Icon name="chevronRight" size={16} />
+                </button>
+              )}
+            </div>
           </div>
         </>
       )}
@@ -751,3 +940,5 @@ export function ChatCard({
     </CardFrame>
   );
 }
+
+export const ChatCard = memo(ChatCardInner);

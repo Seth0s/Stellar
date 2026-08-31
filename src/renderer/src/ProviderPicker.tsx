@@ -5,7 +5,7 @@ const PROVIDER_ICON: Record<string, IconName> = {
   claude: "providerClaude",
   codex: "providerCodex",
   cursor: "providerCursor",
-  gemini: "providerGemini",
+  antigravity: "providerAntigravity",
 };
 
 /**

@@ -202,7 +202,13 @@
 
 .card-foot {
   flex: none;
-  padding: 5px 12px;
+  /* Reportado ao vivo (2026-08-31) — o badge de fim de linha (contagem de
+     links do terminal, branch do files-card) encostava no `.card-resize`
+     (22x22px, `right:0;bottom:0`, fora de `.card-clip` — CardFrame.tsx —
+     então sempre por CIMA do footer nesse canto). Padding direito de
+     28px (22px do grip + ~6px de respiro) garante que nenhum conteúdo do
+     footer nunca renderiza sob a área de acerto do resize. */
+  padding: 5px 28px 5px 12px;
   font-size: 11px;
   color: var(--muted);
   border-top: 1px solid var(--border);
@@ -261,39 +267,53 @@
   flex: 1;
   overflow: hidden;
   font-family: var(--font-mono);
-  /* Matches TERMINAL_THEME.background in useTerminal.ts (item 39 — xterm
-     used to get no `theme` at all and defaulted to pure #000, which this
-     rule matched at the time; now both resolve to --panel — if the
-     theme's background ever changes, update TERMINAL_THEME's comment
-     and this rule together, `theme` doesn't reach this DOM element on
-     its own). The container's pixel height rarely divides evenly by the
-     cell height — xterm only ever paints whole rows — so without this
-     the last fractional row shows this element's own background
-     instead, a visible seam of the wrong color right above .card-foot. */
   background: var(--panel);
+}
+
+.terminal-card-body .terminal.xterm {
+  padding: 0;
+  margin: 0;
 }
 
 /* xterm.js's own scrollbar (a VS Code-derived overlay scrollbar, not the
    browser's native one — real, functional: `new Terminal()` gets no
    explicit `scrollback`, so it defaults to 1000 lines, and a busy session
-   genuinely fills that). Its track (`.visible`/`.invisible`) is already
-   transparent via xterm's own stock CSS; only the slider (thumb) itself
-   ever painted a real color.
-   Pedido ao vivo (2026-08-29, item 57 ponto 1) — recoloring the slider
-   to `var(--border)` (item 10, achado 1) fixed the original complaint
-   (xterm's stock near-opaque white reading as a rendering artifact) but
-   created a new one: `--border` is the SAME color this app's own card
-   frame uses for its real edge, and the slider sits flush against that
-   exact edge (full-height, right side) — it now reads as a second,
-   confusing card border rather than a scroll affordance. Made fully
-   transparent instead of recolored: the slider element is still there,
-   still draggable (this is a CSS-only change — `opacity`/`pointer-events`
-   and xterm's own scroll-wheel handling are untouched), it's just no
-   longer painted. `!important` still required: xterm sets the slider's
-   background via inline `style`, which beats a plain stylesheet rule
-   regardless of selector specificity. */
+   genuinely fills that).
+   Pedido ao vivo (2026-08-30) — a transparent-slider fix (below, kept for
+   history) wasn't enough; the human wants the scrollbar gone entirely,
+   not just unpainted. `visibility: hidden` on the two scrollbar container
+   divs themselves (`.invisible.scrollbar.horizontal`/`.vertical` — real
+   xterm 6 class names, confirmed live via DOM dump; NOT
+   `.xterm-scrollable-element` itself, which is an ANCESTOR of
+   `.xterm-screen`, the actual rendered terminal — hiding that would hide
+   the terminal's own content). `visibility` (not `display: none`):
+   removes it from hit-testing/painting same as `display: none` would,
+   but — unlike `display: none` — never collapses the box these
+   `position: absolute` elements sit in, so it can't perturb VS Code's own
+   internal layout math for them. Wheel-scroll keeps working: xterm's own
+   wheel listener lives on `.xterm-scrollable-element` (an ancestor,
+   untouched here), never on the scrollbar sub-elements being hidden. */
+.terminal-card-body .xterm-viewport {
+  overflow-y: auto !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.terminal-card-body .xterm-viewport::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.terminal-card-body .xterm-scrollable-element > .scrollbar {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+}
+
 .terminal-card-body .xterm-scrollable-element > .visible .slider,
 .terminal-card-body .xterm-scrollable-element > .invisible .slider {
+  display: none !important;
   background: transparent !important;
 }
 
@@ -1727,10 +1747,85 @@
   font-family: var(--font-mono);
 }
 
-.chat-composer {
+/* Item 66 — o wrapper carrega o que era do `.chat-composer` antigo
+   (borda/fundo do rodapé), pra caber a tira de anexos pendentes ACIMA da
+   textarea, dentro da mesma área visualmente delimitada, em vez de
+   flutuar solta por cima do resto do card. */
+.chat-composer-wrap {
   flex: none;
   border-top: 1px solid var(--border);
   background: var(--surface);
+}
+
+.chat-attachments-strip {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 0;
+  flex-wrap: wrap;
+}
+
+.chat-attachment-thumb {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  flex: none;
+}
+
+.chat-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.chat-attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.chat-msg-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.chat-msg-image,
+.chat-msg-image-loading {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+.chat-msg-image-loading {
+  width: 120px;
+  height: 90px;
+  background: var(--panel);
+}
+
+.chat-msg-image-failed {
+  font-size: 12px;
+  color: var(--danger);
+  font-family: var(--font-mono);
+}
+
+.chat-composer {
   padding: 8px 10px;
   display: flex;
   align-items: flex-end;
@@ -1773,6 +1868,10 @@
 .chat-send-btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.chat-stop-btn {
+  background: var(--danger);
 }
 
 .chat-key-form {

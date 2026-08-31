@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
@@ -7,7 +7,9 @@ import { keyEventToKeysym } from "./keysyms";
 
 type Phase = "idle" | "requesting" | "live" | "error";
 
-export function RemoteWindowCard({
+/** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
+ * wrapped in `React.memo` below. */
+function RemoteWindowCardInner({
   rect,
   zoom,
   zIndex,
@@ -213,3 +215,5 @@ export function RemoteWindowCard({
     </CardFrame>
   );
 }
+
+export const RemoteWindowCard = memo(RemoteWindowCardInner);

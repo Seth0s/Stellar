@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
@@ -15,7 +15,12 @@ const PROVIDER_ACCENT: Record<string, string> = {
   cursor: "var(--accent-cursor)",
 };
 
-export function TerminalCard({
+/** Pre-release audit P1 — wrapped in `React.memo` below (see
+ * useStableCardHandler.ts's doc comment): App.tsx's card-rendering switch
+ * now passes stable handler references per card, so this only re-renders
+ * when something about THIS card actually changed, not on every
+ * pointermove of some OTHER card's drag/pan/zoom. */
+function TerminalCardInner({
   id,
   rect,
   zoom,
@@ -91,6 +96,15 @@ export function TerminalCard({
    * auto-run) install terminal instead of just a dead-end error string. */
   onSuggestInstall?: (providerId: string, cwd: string, command: string) => void;
 }) {
+  // Pre-release audit P1 — a render-count counter, not gated behind any
+  // dev-only flag (this renderer has none to gate on), but as cheap as a
+  // `console.count` call and exposed only as a plain `window` property no
+  // production code ever reads. Lets the verify harness (real CDP, no
+  // mock) prove `React.memo` above actually skips re-rendering a card
+  // nothing changed about, not just that behavior still looks right.
+  const renderCounts = (window as unknown as { __cardRenderCounts?: Record<string, number> }).__cardRenderCounts ??= {};
+  renderCounts[id] = (renderCounts[id] ?? 0) + 1;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const urlBadgeRef = useRef<HTMLButtonElement>(null);
   const [urlPopoverOpen, setUrlPopoverOpen] = useState(false);
@@ -282,3 +296,5 @@ export function TerminalCard({
     </CardFrame>
   );
 }
+
+export const TerminalCard = memo(TerminalCardInner);

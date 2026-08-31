@@ -68,7 +68,12 @@ export function RemotePairingModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="modal-root">
+    <div
+      className="modal-root"
+      onWheel={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
       <div className="modal-backdrop" onClick={onClose} />
       <div className="modal remote-pairing-modal" role="dialog" aria-labelledby="remote-title">
         <h3 id="remote-title">Controle remoto (celular)</h3>

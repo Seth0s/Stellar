@@ -33,11 +33,11 @@ export type OneShotResult = { text: string } | { error: string };
 
 /**
  * claude/cursor-agent's `-p --output-format json` prints a JSON object with
- * the final text under some field (commonly "result"); gemini's own
- * `-p --output-format json` (verified against docs/cli/headless.md, not
- * installed on this machine to test live) uses "response" instead —
- * checks both, falls back to the raw stdout if neither shape holds, so a
- * vendor format change degrades to plain text instead of breaking.
+ * the final text under some field (commonly "result"); `antigravity`/`agy`
+ * uses "response" instead (confirmed live, 2026-08-31: `agy -p "..."
+ * --output-format json` → `{"response": "...", ...}`) — checks both, falls
+ * back to the raw stdout if neither shape holds, so a future vendor format
+ * change degrades to plain text instead of breaking.
  */
 function extractJsonResult(stdout: string): string {
   try {
@@ -77,8 +77,8 @@ export async function runOneShotSummary(providerId: string, cwd: string, prompt:
       }
     }
 
-    // claude, cursor-agent, and gemini all share the same -p/--output-format
-    // flags (verified against docs for gemini — see extractJsonResult).
+    // claude, cursor-agent, and antigravity (agy) all share the same
+    // -p/--output-format flags (see extractJsonResult's doc comment).
     const { stdout } = await execFileNoStdin(binary, ["-p", prompt, "--output-format", "json"], {
       cwd,
       timeout: TIMEOUT_MS,

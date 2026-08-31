@@ -47,7 +47,26 @@ export type StrokeCardData = BaseCard & {
  * squeezed this into the generic `cwd` column (stroke's reuse trick),
  * which stopped fitting once chat needed `cwd` back for its normal
  * meaning. */
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+/** Item 66 — anexo de imagem numa mensagem do usuário. Guarda uma
+ * REFERÊNCIA (`path` em disco, mesmo diretório `stellar-pastes` que
+ * `useTerminal.ts` já usa pra colar imagem no terminal), nunca o base64
+ * cru — `messages_json` (store.ts) é uma coluna TEXT só, e manter cada
+ * imagem colada como base64 ali infla o banco e o JSON reparseado a cada
+ * render por um fator ~1.33x, pra sempre, mesmo depois que a imagem some
+ * do composer. O main process (anthropic-client.ts/openai-client.ts) lê
+ * o arquivo e converte pra base64 só na hora de montar a request —
+ * nunca persistido em base64. `mediaType` restrito aos 4 formatos que a
+ * Anthropic aceita nativamente (`Base64ImageSource`) — interseção segura
+ * com o que a OpenAI/Gemini também aceitam via `image_url` com data URI.
+ */
+export type ChatImageBlock = {
+  type: "image";
+  path: string;
+  mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+};
+export type ChatTextBlock = { type: "text"; text: string };
+export type ChatContentBlock = ChatTextBlock | ChatImageBlock;
+export type ChatMessage = { role: "user" | "assistant"; content: string | ChatContentBlock[] };
 // DESIGN-BACKLOG.md item 28 — "gemini" (fixed OpenAI-compatible endpoint)
 // and "generic" (user-supplied OpenAI-compatible endpoint, covers local
 // models — Ollama/llama.cpp/vLLM — and any other hosted provider without
@@ -62,6 +81,17 @@ export type ChatCardData = BaseCard & {
   messages: ChatMessage[];
 };
 
+/** Item 57.9 — colar/arrastar uma imagem ou PDF no canvas VAZIO (não em
+ * cima de um card) cria isto — um card de visualização com resize
+ * proporcional, rotação e zoom interno, ao contrário de um attachment de
+ * chat (item 66, `ChatImageBlock`) que é conteúdo de conversa efêmero.
+ * `assetPath` aponta pra dentro da pasta de assets PERSISTENTE do board
+ * (`main/board-assets.ts`, `app.getPath("userData")/board-assets/
+ * <boardId>/`), nunca o diretório temporário `stellar-pastes` que chat/
+ * terminal usam — este conteúdo é pra durar, não pra sumir com uma
+ * limpeza de temp do SO. `view` é o pan+zoom interno da mídia dentro dos
+ * limites fixos do card (mini-viewport/crop), independente do zoom do
+ * canvas inteiro. */
 export type Card =
   | TerminalCardData
   | FilesCardData
@@ -73,4 +103,7 @@ export type Card =
   | ChatCardData;
 
 export type Connector = { id: string; fromCardId: string; toCardId: string };
-export type Tool = "pointer" | "pen" | "connector" | "select";
+// Item 57.8 — "export" desenha um recorte retangular livre (não snapado a
+// cards, ver App.tsx's onBackgroundPointerDown) e exporta os pixels reais
+// daquela área da janela pra um arquivo (PNG/JPEG/PDF).
+export type Tool = "pointer" | "pen" | "connector" | "select" | "export";

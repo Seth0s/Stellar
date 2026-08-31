@@ -219,16 +219,26 @@ export async function connectPage(cdpPort) {
  * genuinely-empty state itself. */
 export async function bootIntoFreshSession(page, name = "Sessão de Teste", { spawnTerminal = true } = {}) {
   await delay(300);
-  const btn = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const b = document.querySelector('.home button.primary');
-        if (!b) return JSON.stringify(null);
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-      })()
-    `),
-  );
+  const isHome = await page.evalJs(`!!document.querySelector('.home')`);
+  if (!isHome) {
+    // Already inside an active session/board
+    return;
+  }
+  let btn = null;
+  for (let i = 0; i < 20; i++) {
+    btn = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const b = document.querySelector('.home button.primary');
+          if (!b) return JSON.stringify(null);
+          const r = b.getBoundingClientRect();
+          return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+        })()
+      `),
+    );
+    if (btn) break;
+    await delay(150);
+  }
   if (!btn) throw new Error("Home '+ nova sessão' button not found");
   await page.click(btn.x, btn.y);
   await delay(300);
@@ -264,19 +274,47 @@ export async function bootIntoFreshSession(page, name = "Sessão de Teste", { sp
   if (!boardLoaded) throw new Error("board never finished loading after creating a fresh session");
   if (!spawnTerminal) return;
 
+  // Spawns terminal via direct button or grouped 'Adicionar card' popover
   const terminalBtn = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.rail-btn[title="Novo terminal"]');
-        if (!b) return JSON.stringify(null);
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+        const direct = document.querySelector('.rail-btn[title="Novo terminal"]');
+        if (direct) {
+          const r = direct.getBoundingClientRect();
+          return JSON.stringify({ type: 'direct', x: r.x + r.width/2, y: r.y + r.height/2 });
+        }
+        const addBtn = document.querySelector('.rail-btn[title="Adicionar card"]');
+        if (addBtn) {
+          const r = addBtn.getBoundingClientRect();
+          return JSON.stringify({ type: 'grouped', x: r.x + r.width/2, y: r.y + r.height/2 });
+        }
+        return JSON.stringify(null);
       })()
     `),
   );
-  if (!terminalBtn) throw new Error("rail's 'Novo terminal' button not found");
-  await page.click(terminalBtn.x, terminalBtn.y);
-  await delay(200);
+  if (!terminalBtn) throw new Error("rail's 'Novo terminal' or 'Adicionar card' button not found");
+
+  if (terminalBtn.type === 'direct') {
+    await page.click(terminalBtn.x, terminalBtn.y);
+    await delay(200);
+  } else {
+    await page.click(terminalBtn.x, terminalBtn.y);
+    await delay(250);
+    const terminalOption = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const opt = document.querySelector('.popover-row[data-kind="terminal"]');
+          if (!opt) return JSON.stringify(null);
+          const r = opt.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width/2, y: r.y + r.height/2 });
+        })()
+      `),
+    );
+    if (!terminalOption) throw new Error("terminal option not found in 'Adicionar card' popover");
+    await page.click(terminalOption.x, terminalOption.y);
+    await delay(250);
+  }
+
   const createTerminalBtn = JSON.parse(
     await page.evalJs(`
       (() => {
@@ -289,6 +327,50 @@ export async function bootIntoFreshSession(page, name = "Sessão de Teste", { sp
   );
   if (!createTerminalBtn) throw new Error("terminal popover's 'criar' button not found");
   await page.click(createTerminalBtn.x, createTerminalBtn.y);
+  await delay(400);
+}
+
+/** Spawns a card of the given kind via direct button or grouped 'Adicionar card' popover. */
+export async function spawnCard(page, kind) {
+  const direct = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.rail-btn[data-kind="${kind}"]');
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  if (direct) {
+    await page.click(direct.x, direct.y);
+    await delay(350);
+    return;
+  }
+
+  const addBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  if (!addBtn) throw new Error("rail's 'Adicionar card' button not found");
+  await page.click(addBtn.x, addBtn.y);
+  await delay(250);
+
+  const clicked = await page.evalJs(`
+    (() => {
+      const b = document.querySelector('.popover-row[data-kind="${kind}"]');
+      if (!b) return false;
+      b.click();
+      return true;
+    })()
+  `);
+  if (!clicked) throw new Error(`option for kind '${kind}' not found in popover`);
   await delay(400);
 }
 

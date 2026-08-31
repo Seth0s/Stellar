@@ -6,6 +6,14 @@ import { watchForSession } from "./session-watch";
 const COALESCE_MS = 16;
 const COALESCE_MAX = 64 * 1024;
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/g;
+// Pre-release audit B5 — bounds how much of a flush's tail gets carried
+// forward as a possibly-unterminated URL (see `flush`'s doc comment
+// below). Generous for any realistic URL, but never unbounded.
+const MAX_URL_CARRY = 2048;
+const URL_DELIM_PATTERN = /[\s"'<>]/;
+// Pre-release audit B7 — caps `seenUrls` per terminal so a long-running
+// agent printing thousands of distinct URLs can't grow it forever.
+const MAX_SEEN_URLS = 500;
 // DESIGN-BACKLOG.md item 57, ponto 12 — real bug reported live: seen-url
 // chips showed garbage like "claude.ai/cod[54G/a[57Gtifact/..." — raw
 // ANSI escapes (cursor repositioning, e.g. terminal line-wrap redraws on
@@ -33,6 +41,11 @@ type Entry = {
   flushTimer: NodeJS.Timeout | null;
   stopWatch: (() => void) | null;
   seenUrls: Set<string>;
+  /** Pre-release audit B5 — the tail of the last flush's ANSI-stripped
+   * text that might still be an in-progress (unterminated) URL, carried
+   * into the next flush's match so a URL split right at a flush boundary
+   * is still recognized whole. */
+  urlCarry: string;
 };
 
 export function createPtyRegistry(registryOpts: {
@@ -50,6 +63,14 @@ export function createPtyRegistry(registryOpts: {
 }) {
   const entries = new Map<string, Entry>();
 
+  /** Pre-release audit B5 — URL sighting used to run on each raw `onData`
+   * chunk from node-pty, not on this coalesced buffer. A URL longer than
+   * one chunk (a real, reported bug: `pty.onData` splits on arbitrary
+   * byte boundaries, not on any text-shaped boundary) was silently
+   * missed or emitted truncated. Matching here instead — the same joined
+   * text this function already emits to the renderer — fixes chunk
+   * splits; `urlCarry` below additionally covers a split at the (rarer)
+   * flush boundary itself. */
   function flush(id: string) {
     const e = entries.get(id);
     if (!e || e.chunks.length === 0) return;
@@ -61,6 +82,32 @@ export function createPtyRegistry(registryOpts: {
       e.flushTimer = null;
     }
     registryOpts.onData(id, data);
+
+    // Passive URL sighting — the only discoverability path for providers
+    // with no system-prompt hook (codex/cursor): never opens anything on
+    // its own, just surfaces what the agent already printed as a chip a
+    // human can click.
+    const cleaned = e.urlCarry + data.replace(ANSI_PATTERN, "");
+    for (const url of cleaned.match(URL_PATTERN) ?? []) {
+      if (!e.seenUrls.has(url)) {
+        e.seenUrls.add(url);
+        registryOpts.onUrlSeen(id, url);
+        // Oldest-first eviction — `Set` iterates in insertion order, so
+        // its first value really is the oldest sighting.
+        if (e.seenUrls.size > MAX_SEEN_URLS) {
+          const oldest = e.seenUrls.values().next().value;
+          if (oldest !== undefined) e.seenUrls.delete(oldest);
+        }
+      }
+    }
+    let lastDelimIdx = -1;
+    for (let i = cleaned.length - 1; i >= 0; i--) {
+      if (URL_DELIM_PATTERN.test(cleaned[i])) {
+        lastDelimIdx = i;
+        break;
+      }
+    }
+    e.urlCarry = cleaned.slice(lastDelimIdx + 1).slice(-MAX_URL_CARRY);
   }
 
   // `id` is the caller's own card id, not a fresh one generated here — the
@@ -120,6 +167,7 @@ export function createPtyRegistry(registryOpts: {
       flushTimer: null,
       stopWatch: null,
       seenUrls: new Set(),
+      urlCarry: "",
     };
     entries.set(id, entry);
 
@@ -142,17 +190,6 @@ export function createPtyRegistry(registryOpts: {
       }
       if (!entry.flushTimer) {
         entry.flushTimer = setTimeout(() => flush(id), COALESCE_MS);
-      }
-      // Passive URL sighting — the only discoverability path for providers
-      // with no system-prompt hook (codex/cursor): never opens anything on
-      // its own, just surfaces what the agent already printed as a chip a
-      // human can click.
-      const cleaned = data.replace(ANSI_PATTERN, "");
-      for (const url of cleaned.match(URL_PATTERN) ?? []) {
-        if (!entry.seenUrls.has(url)) {
-          entry.seenUrls.add(url);
-          registryOpts.onUrlSeen(id, url);
-        }
       }
     });
 
@@ -204,5 +241,12 @@ export function createPtyRegistry(registryOpts: {
     return entries.has(id);
   }
 
-  return { spawn, write, resize, interrupt, kill, killAll, isAlive };
+  /** Test-only accessor (pre-release audit B7's verify coverage) — the
+   * live harness has no other way to observe that `seenUrls` actually
+   * stays capped at `MAX_SEEN_URLS` rather than growing forever. */
+  function seenUrlsCount(id: string): number {
+    return entries.get(id)?.seenUrls.size ?? 0;
+  }
+
+  return { spawn, write, resize, interrupt, kill, killAll, isAlive, seenUrlsCount };
 }

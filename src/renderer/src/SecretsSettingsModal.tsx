@@ -83,7 +83,12 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
 
   const titleId = "secrets-settings-title";
   return (
-    <div className="modal-root">
+    <div
+      className="modal-root"
+      onWheel={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
       <div className="modal-backdrop" onClick={onClose} />
       <div className="modal secrets-settings-modal" role="dialog" aria-labelledby={titleId}>
         <h3 id={titleId}>API keys</h3>

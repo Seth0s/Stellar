@@ -124,15 +124,16 @@ async function findCursorSession(cwd: string, spawnedAtMs: number): Promise<stri
  * created after `spawnedAtMs`. Stops after finding one or after ~30s.
  * `bash` has no session concept — callers should never call this for it.
  *
- * DESIGN-BACKLOG.md item 28 — `gemini` deliberately does NOT get a branch
- * here yet: the other three were reverse-engineered against a real,
- * locally-installed CLI (see AGENTS.md), and `gemini` wasn't installed on
- * this machine to do the same. Guessing its on-disk session-file layout
- * from docs alone risks silently pointing at the wrong path forever —
- * worse than the honest gap this falls through to (no auto-resume
- * discovery for gemini cards; `--resume`/`-r` itself still works fine if
- * the human passes a session id manually). Revisit once `gemini` can be
- * installed and its real session storage inspected.
+ * DESIGN-BACKLOG.md item 28 — `antigravity` (formerly `gemini`, swapped
+ * 2026-08-31 after Google retired the Gemini CLI) deliberately does NOT
+ * get a branch here yet: the other three were reverse-engineered against
+ * a real, locally-installed CLI (see AGENTS.md), and antigravity's own
+ * on-disk session-file layout hasn't been inspected the same way.
+ * Guessing it from docs alone risks silently pointing at the wrong path
+ * forever — worse than the honest gap this falls through to (no
+ * auto-resume discovery for antigravity cards; `--conversation <id>`
+ * itself still works fine if the human passes a session id manually).
+ * Revisit once antigravity's real session storage can be inspected.
  */
 export function watchForSession(
   providerId: string,

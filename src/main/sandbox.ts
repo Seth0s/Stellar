@@ -132,6 +132,22 @@ export function runSandboxedBash(root: string, command: string): Promise<Sandbox
     }
 
     let out = "";
+    // Pre-release audit B4 — this used to append every chunk unbounded
+    // and only slice at `close`, so a command printing tens of MB made
+    // main's own heap grow proportionally for the entire 60s budget
+    // before the truncation even applied. Capping `out` as data arrives
+    // (and ignoring every chunk after) bounds main's memory to
+    // `MAX_OUTPUT_CHARS` regardless of how much the sandboxed command
+    // actually produces.
+    let truncated = false;
+    function appendChunk(d: Buffer) {
+      if (truncated) return;
+      out += d.toString();
+      if (out.length > MAX_OUTPUT_CHARS) {
+        out = out.slice(0, MAX_OUTPUT_CHARS);
+        truncated = true;
+      }
+    }
     let timedOut = false;
     let settled = false;
     const timer = setTimeout(() => {
@@ -139,8 +155,8 @@ export function runSandboxedBash(root: string, command: string): Promise<Sandbox
       child.kill("SIGKILL");
     }, BASH_TIMEOUT_MS);
 
-    child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
-    child.stderr?.on("data", (d: Buffer) => (out += d.toString()));
+    child.stdout?.on("data", appendChunk);
+    child.stderr?.on("data", appendChunk);
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
@@ -151,8 +167,7 @@ export function runSandboxedBash(root: string, command: string): Promise<Sandbox
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const truncated = out.length > MAX_OUTPUT_CHARS;
-      const body = truncated ? out.slice(0, MAX_OUTPUT_CHARS) + "\n…[truncado]" : out;
+      const body = truncated ? out + "\n…[truncado]" : out;
       const tail = timedOut ? `\n[comando interrompido — limite de ${BASH_TIMEOUT_MS / 1000}s]` : `\n[exit code: ${code}]`;
       resolve({ ok: !timedOut && code === 0, text: body + tail });
     });

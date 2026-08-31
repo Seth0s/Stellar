@@ -81,7 +81,12 @@ export function SessionModal(props: SessionModalProps) {
 
   const titleId = "session-modal-title";
   return (
-    <div className="modal-root">
+    <div
+      className="modal-root"
+      onWheel={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
       <div className="modal-backdrop" onClick={props.onClose} />
       <div className="modal" role="dialog" aria-labelledby={titleId}>
         <h3 id={titleId}>{props.mode === "create" ? "Nova sessão" : "Editar sessão"}</h3>

@@ -4,15 +4,21 @@ import { Popover } from "./Popover";
 import { PenPanel } from "./PenPanel";
 import { ProviderPicker } from "./ProviderPicker";
 import { CARD_ICON, RAIL_CREATE_ORDER, RAIL_CREATE_TITLE } from "./cards/registry";
+import type { Tool } from "./card-types";
 
-type Tool = "pointer" | "pen" | "connector" | "select";
 type RailCard = { id: string; kind: string; label: string | null };
 
-/** DESIGN-BACKLOG.md item 12, achado 1 — "<"/">" to hide/show the whole
- * rail, not just its individual buttons. Local + persisted (own concern,
- * nothing else reacts to it), same `localStorage` convention as the
- * board/root state elsewhere. */
 const RAIL_COLLAPSED_KEY = "ac.railCollapsed";
+
+const CARD_DESCRIPTIONS: Record<string, string> = {
+  terminal: "Shell local ou agente CLI autônomo",
+  files: "Navegação na árvore do projeto e edição de código",
+  changes: "Status do repositório git, branch e diffs",
+  sticky: "Anotações rápidas, lembretes e notas",
+  browser: "Navegador web embutido com snapshots",
+  chat: "Assistente conversacional com ferramentas integradas",
+  "remote-window": "Espelhamento e controle de janela externa",
+};
 
 export function Rail({
   tool,
@@ -76,26 +82,20 @@ export function Rail({
   newSystemPrompt: string;
   setNewSystemPrompt: (v: string) => void;
   onCreateTerminal: () => void;
-  /** One-click card kinds (files/changes/sticky/browser/chat/remote-window
-   * — see cards/registry.ts's RAIL_CREATE_ORDER, item "4 (deferida)");
-   * terminal keeps its own `onCreateTerminal` above for the popover. */
   onCreate: (kind: (typeof RAIL_CREATE_ORDER)[number]) => void;
   aiBusy: boolean;
   summarizeDisabled: boolean;
   onReorganize: () => void;
   onSummarize: () => void;
-  /** Jump-to-card popover (DESIGN-BACKLOG.md item 7) — every card on the current board. */
   cards: RailCard[];
   kindIcon: Record<string, IconName>;
   kindLabel: Record<string, string>;
   onJumpToCard: (id: string) => void;
-  /** DESIGN-BACKLOG.md item 29 — opens SecretsSettingsModal.tsx, the
-   * central API-key panel (not scoped to any one ChatCard). */
   onOpenSecretsSettings: () => void;
 }) {
-  const [openPopover, setOpenPopover] = useState<"terminal" | "ai" | "find" | null>(null);
+  const [openPopover, setOpenPopover] = useState<"cards" | "terminal-config" | "ai" | "find" | null>(null);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_COLLAPSED_KEY) === "1");
-  const terminalBtnRef = useRef<HTMLButtonElement>(null);
+  const addCardBtnRef = useRef<HTMLButtonElement>(null);
   const aiBtnRef = useRef<HTMLButtonElement>(null);
   const findBtnRef = useRef<HTMLButtonElement>(null);
   const penBtnRef = useRef<HTMLButtonElement>(null);
@@ -110,246 +110,331 @@ export function Rail({
     setTool(tool === next ? "pointer" : next);
   }
 
-  // DESIGN-BACKLOG.md item 21, ponto 10 — used to be the rail's own first
-  // button, inside its pill (`.rail-btn`, same solid hover/active
-  // treatment as every tool button). Read as "just another tool" instead
-  // of "the thing that hides the whole rail". Moved outside `.rail`
-  // entirely: a small subtle icon-only toggle (`.rail-toggle`, low
-  // opacity until hovered, no pill background) that floats immediately
-  // beside the rail, vertically centered to it — same toggle whether the
-  // rail is expanded or collapsed, so it's a fixed landmark instead of
-  // moving/disappearing with the rail's own content.
-  const toggle = (
-    <button
-      className="rail-toggle"
-      title={collapsed ? "Mostrar régua" : "Ocultar régua"}
-      onClick={() => setCollapsed((c) => !c)}
-    >
-      <Icon name={collapsed ? "chevronRight" : "chevronLeft"} size={14} />
-    </button>
-  );
-
-  if (collapsed) {
-    return toggle;
-  }
+  const isAddCardOpen = openPopover === "cards" || openPopover === "terminal-config";
 
   return (
-    <>
-      {toggle}
-      <div className="rail thin-scroll">
+    <div
+      className={`rail-container${collapsed ? " is-collapsed" : ""}`}
+      onWheel={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
       <button
-        className={`rail-btn${tool === "pointer" ? " active" : ""}`}
-        title="Ponteiro"
-        onClick={() => setTool("pointer")}
+        className={`rail-toggle${collapsed ? " is-collapsed" : ""}`}
+        title={collapsed ? "Mostrar barra lateral" : "Ocultar barra lateral"}
+        aria-label={collapsed ? "Mostrar barra lateral" : "Ocultar barra lateral"}
+        onClick={() => setCollapsed((c) => !c)}
       >
-        <Icon name="pointer" />
+        <Icon name={collapsed ? "chevronRight" : "chevronLeft"} size={14} />
       </button>
-      <button
-        ref={penBtnRef}
-        className={`rail-btn${tool === "pen" ? " active" : ""}`}
-        title="Caneta"
-        onClick={() => toggleTool("pen")}
-      >
-        <Icon name="pen" />
-      </button>
-      <button
-        className={`rail-btn${tool === "connector" ? " active" : ""}`}
-        title="Conector"
-        onClick={() => toggleTool("connector")}
-      >
-        <Icon name="link" />
-      </button>
-      <button
-        className={`rail-btn${tool === "select" ? " active" : ""}`}
-        title="Selecionar"
-        onClick={() => toggleTool("select")}
-      >
-        <Icon name="select" />
-      </button>
-      {tool === "select" && (canGroup || canUngroup) && (
-        <>
-          {canGroup && (
-            <button className="rail-btn" title="Agrupar" onClick={onGroup}>
-              <Icon name="group" size={16} />
-            </button>
-          )}
-          {canUngroup && (
-            <button className="rail-btn" title="Desagrupar" onClick={onUngroup}>
-              <Icon name="ungroup" size={16} />
-            </button>
-          )}
-        </>
-      )}
 
-      <PenPanel
-        anchorRef={penBtnRef}
-        open={tool === "pen"}
-        onClose={() => {}}
-        colors={strokeColors}
-        color={strokeColor}
-        setColor={setStrokeColor}
-        width={strokeWidth}
-        setWidth={setStrokeWidth}
-        style={strokeStyle}
-        setStyle={setStrokeStyle}
-      />
-
-      <div className="rail-group-gap" />
-
-      <button
-        ref={terminalBtnRef}
-        className="rail-btn"
-        title="Novo terminal"
-        onClick={() => setOpenPopover((p) => (p === "terminal" ? null : "terminal"))}
-      >
-        <Icon name="terminal" />
-      </button>
-      {RAIL_CREATE_ORDER.map((kind) => (
-        <button key={kind} className="rail-btn" title={RAIL_CREATE_TITLE[kind]} onClick={() => onCreate(kind)}>
-          <Icon name={CARD_ICON[kind]} />
+      <div className="rail thin-scroll" aria-label="Barra de ferramentas">
+        {/* Grupo 1: Ferramentas de manipulação do canvas */}
+        <button
+          className={`rail-btn${tool === "pointer" ? " active" : ""}`}
+          title="Ponteiro"
+          onClick={() => setTool("pointer")}
+        >
+          <Icon name="pointer" />
         </button>
-      ))}
+        <button
+          ref={penBtnRef}
+          className={`rail-btn${tool === "pen" ? " active" : ""}`}
+          title="Caneta"
+          onClick={() => toggleTool("pen")}
+        >
+          <Icon name="pen" />
+        </button>
+        <button
+          className={`rail-btn${tool === "connector" ? " active" : ""}`}
+          title="Conector"
+          onClick={() => toggleTool("connector")}
+        >
+          <Icon name="link" />
+        </button>
+        <button
+          className={`rail-btn${tool === "select" ? " active" : ""}`}
+          title="Selecionar"
+          onClick={() => toggleTool("select")}
+        >
+          <Icon name="select" />
+        </button>
+        <button
+          className={`rail-btn${tool === "export" ? " active" : ""}`}
+          title="Exportar recorte do canvas"
+          onClick={() => toggleTool("export")}
+        >
+          <Icon name="exportCrop" />
+        </button>
 
-      <div className="rail-group-gap" />
-
-      <button
-        ref={findBtnRef}
-        className="rail-btn"
-        title="Localizar card"
-        onClick={() => setOpenPopover((p) => (p === "find" ? null : "find"))}
-      >
-        <Icon name="findCard" />
-      </button>
-      <button
-        ref={aiBtnRef}
-        className="rail-btn"
-        title="Ações de IA"
-        onClick={() => setOpenPopover((p) => (p === "ai" ? null : "ai"))}
-      >
-        <Icon name="sparkle" />
-      </button>
-      <button className="rail-btn" title="Configurações" onClick={onOpenSecretsSettings}>
-        <Icon name="settings" />
-      </button>
-
-      <Popover anchorRef={terminalBtnRef} open={openPopover === "terminal"} onClose={() => setOpenPopover(null)}>
-        <div className="popover-field">
-          <label>provider</label>
-          <ProviderPicker providers={providers} value={newProvider} onChange={setNewProvider} />
-        </div>
-        {showAgentFields && (
+        {tool === "select" && (canGroup || canUngroup) && (
           <>
-            <div className="popover-field">
-              <label>resume id (opcional)</label>
-              <input
-                className="resume-input"
-                value={newResumeId}
-                disabled={newContinueLast}
-                onChange={(e) => {
-                  setNewResumeId(e.target.value);
-                  if (e.target.value.trim()) setNewContinueLast(false);
-                }}
-              />
-            </div>
-            <label className="continue-last-label">
-              <input
-                type="checkbox"
-                checked={newContinueLast}
-                disabled={newResumeId.trim() !== ""}
-                onChange={(e) => setNewContinueLast(e.target.checked)}
-              />
-              continuar última
-            </label>
-            <div className="popover-field">
-              <label>model (opcional)</label>
-              <input className="resume-input" value={newModel} onChange={(e) => setNewModel(e.target.value)} />
-            </div>
-            {newProvider === "claude" && (
-              <div className="popover-field">
-                <label>system prompt (opcional)</label>
-                <input
-                  className="resume-input"
-                  value={newSystemPrompt}
-                  onChange={(e) => setNewSystemPrompt(e.target.value)}
-                />
-              </div>
+            {canGroup && (
+              <button className="rail-btn" title="Agrupar" onClick={onGroup}>
+                <Icon name="group" size={16} />
+              </button>
+            )}
+            {canUngroup && (
+              <button className="rail-btn" title="Desagrupar" onClick={onUngroup}>
+                <Icon name="ungroup" size={16} />
+              </button>
             )}
           </>
         )}
-        <div className="popover-actions">
+
+        <PenPanel
+          anchorRef={penBtnRef}
+          open={tool === "pen"}
+          onClose={() => {}}
+          colors={strokeColors}
+          color={strokeColor}
+          setColor={setStrokeColor}
+          width={strokeWidth}
+          setWidth={setStrokeWidth}
+          style={strokeStyle}
+          setStyle={setStrokeStyle}
+        />
+
+        <div className="rail-divider" />
+
+        {/* Grupo 2: Botão único para Adicionar Cards / Ferramentas */}
+        <button
+          ref={addCardBtnRef}
+          className={`rail-btn${isAddCardOpen ? " active" : ""}`}
+          title="Adicionar card"
+          onClick={() => setOpenPopover((p) => (p === "cards" || p === "terminal-config" ? null : "cards"))}
+        >
+          <Icon name="plus" />
+        </button>
+
+        <div className="rail-divider" />
+
+        {/* Grupo 3: Ações e utilitários do board */}
+        <button
+          ref={findBtnRef}
+          className={`rail-btn${openPopover === "find" ? " active" : ""}`}
+          title="Localizar card"
+          onClick={() => setOpenPopover((p) => (p === "find" ? null : "find"))}
+        >
+          <Icon name="findCard" />
+        </button>
+        <button
+          ref={aiBtnRef}
+          className={`rail-btn${openPopover === "ai" ? " active" : ""}`}
+          title="Ações de IA"
+          onClick={() => setOpenPopover((p) => (p === "ai" ? null : "ai"))}
+        >
+          <Icon name="sparkle" />
+        </button>
+        <button className="rail-btn" title="Configurações" onClick={onOpenSecretsSettings}>
+          <Icon name="settings" />
+        </button>
+
+        {/* Popover agrupado: Adicionar Cards / Ferramentas */}
+        <Popover
+          anchorRef={addCardBtnRef}
+          open={isAddCardOpen}
+          onClose={() => setOpenPopover(null)}
+        >
+          {openPopover === "cards" && (
+            <>
+              <div className="board-list-heading">ADICIONAR AO CANVAS</div>
+              <div className="board-list thin-scroll" style={{ maxHeight: "min(60vh, 380px)" }}>
+                {/* Terminal */}
+                <button
+                  className="popover-row"
+                  data-kind="terminal"
+                  title="Novo terminal"
+                  onClick={() => setOpenPopover("terminal-config")}
+                >
+                  <span className="popover-row-icon">
+                    <Icon name="terminal" size={18} />
+                  </span>
+                  <span>
+                    <span className="popover-row-title">Terminal</span>
+                    <span className="popover-row-desc">{CARD_DESCRIPTIONS.terminal}</span>
+                  </span>
+                </button>
+
+                {/* Cards adicionais ordenados */}
+                {RAIL_CREATE_ORDER.map((kind) => {
+                  const title =
+                    kind === "files"
+                      ? "Explorador de Arquivos"
+                      : kind === "chat"
+                      ? "Chatbox IA"
+                      : kind === "browser"
+                      ? "Navegador Web"
+                      : kind === "changes"
+                      ? "Git / Mudanças"
+                      : kind === "sticky"
+                      ? "Nota Adesiva"
+                      : kind === "remote-window"
+                      ? "Janela Externa"
+                      : kind;
+                  return (
+                    <button
+                      key={kind}
+                      className="popover-row"
+                      data-kind={kind}
+                      title={RAIL_CREATE_TITLE[kind]}
+                      onClick={() => {
+                        onCreate(kind);
+                        setOpenPopover(null);
+                      }}
+                    >
+                      <span className="popover-row-icon">
+                        <Icon name={CARD_ICON[kind]} size={18} />
+                      </span>
+                      <span>
+                        <span className="popover-row-title">{title}</span>
+                        <span className="popover-row-desc">{CARD_DESCRIPTIONS[kind]}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {openPopover === "terminal-config" && (
+            <>
+              <div className="popover-header-with-back">
+                <button
+                  className="popover-back-btn"
+                  onClick={() => setOpenPopover("cards")}
+                  title="Voltar para lista de cards"
+                >
+                  <Icon name="back" size={14} />
+                </button>
+                <div className="board-list-heading" style={{ margin: 0 }}>
+                  NOVO TERMINAL
+                </div>
+              </div>
+
+              <div className="popover-field">
+                <label>provider</label>
+                <ProviderPicker providers={providers} value={newProvider} onChange={setNewProvider} />
+              </div>
+
+              {showAgentFields && (
+                <>
+                  <div className="popover-field">
+                    <label>resume id (opcional)</label>
+                    <input
+                      className="resume-input"
+                      value={newResumeId}
+                      disabled={newContinueLast}
+                      onChange={(e) => {
+                        setNewResumeId(e.target.value);
+                        if (e.target.value.trim()) setNewContinueLast(false);
+                      }}
+                    />
+                  </div>
+                  <label className="continue-last-label">
+                    <input
+                      type="checkbox"
+                      checked={newContinueLast}
+                      disabled={newResumeId.trim() !== ""}
+                      onChange={(e) => setNewContinueLast(e.target.checked)}
+                    />
+                    continuar última
+                  </label>
+                  <div className="popover-field">
+                    <label>model (opcional)</label>
+                    <input className="resume-input" value={newModel} onChange={(e) => setNewModel(e.target.value)} />
+                  </div>
+                  {newProvider === "claude" && (
+                    <div className="popover-field">
+                      <label>system prompt (opcional)</label>
+                      <input
+                        className="resume-input"
+                        value={newSystemPrompt}
+                        onChange={(e) => setNewSystemPrompt(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="popover-actions">
+                <button
+                  className="primary"
+                  onClick={() => {
+                    onCreateTerminal();
+                    setOpenPopover(null);
+                  }}
+                >
+                  Criar terminal
+                </button>
+              </div>
+            </>
+          )}
+        </Popover>
+
+        {/* Popover: Localizar card */}
+        <Popover anchorRef={findBtnRef} open={openPopover === "find"} onClose={() => setOpenPopover(null)}>
+          <div className="board-list-heading">CARDS NESTA SESSÃO</div>
+          {cards.length === 0 ? (
+            <div className="popover-empty">nenhum card ainda</div>
+          ) : (
+            <div className="board-list thin-scroll">
+              {cards.map((c) => (
+                <button
+                  key={c.id}
+                  className="board-row-name find-card-row"
+                  onClick={() => {
+                    onJumpToCard(c.id);
+                    setOpenPopover(null);
+                  }}
+                >
+                  <span className="board-row-name-line">
+                    <Icon name={kindIcon[c.kind] ?? "terminal"} size={14} />
+                    {c.label ?? kindLabel[c.kind] ?? c.kind}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Popover>
+
+        {/* Popover: Ações de IA */}
+        <Popover anchorRef={aiBtnRef} open={openPopover === "ai"} onClose={() => setOpenPopover(null)}>
           <button
-            className="primary"
+            className="popover-row"
             onClick={() => {
-              onCreateTerminal();
+              onReorganize();
               setOpenPopover(null);
             }}
           >
-            criar
-          </button>
-        </div>
-      </Popover>
-
-      <Popover anchorRef={findBtnRef} open={openPopover === "find"} onClose={() => setOpenPopover(null)}>
-        <div className="board-list-heading">CARDS NESTA SESSÃO</div>
-        {cards.length === 0 ? (
-          <div className="popover-empty">nenhum card ainda</div>
-        ) : (
-          <div className="board-list thin-scroll">
-            {cards.map((c) => (
-              <button
-                key={c.id}
-                className="board-row-name find-card-row"
-                onClick={() => {
-                  onJumpToCard(c.id);
-                  setOpenPopover(null);
-                }}
-              >
-                <span className="board-row-name-line">
-                  <Icon name={kindIcon[c.kind] ?? "terminal"} size={14} />
-                  {c.label ?? kindLabel[c.kind] ?? c.kind}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-      </Popover>
-
-      <Popover anchorRef={aiBtnRef} open={openPopover === "ai"} onClose={() => setOpenPopover(null)}>
-        <button
-          className="popover-row"
-          onClick={() => {
-            onReorganize();
-            setOpenPopover(null);
-          }}
-        >
-          <span className="popover-row-icon">
-            <Icon name="reorganize" size={18} />
-          </span>
-          <span>
-            <span className="popover-row-title">Organizar automaticamente</span>
-            <span className="popover-row-desc">Arruma os cards soltos numa grade limpa</span>
-          </span>
-        </button>
-        <button
-          className="popover-row"
-          disabled={summarizeDisabled || aiBusy}
-          onClick={() => {
-            onSummarize();
-            setOpenPopover(null);
-          }}
-        >
-          <span className="popover-row-icon">
-            <Icon name="sparkle" size={18} />
-          </span>
-          <span>
-            <span className="popover-row-title">{aiBusy ? "Resumindo…" : "Resumir sessão numa nota"}</span>
-            <span className="popover-row-desc">
-              {summarizeDisabled ? "Escolha um provider de agente (não bash)" : "Cria uma nota com o estado do board"}
+            <span className="popover-row-icon">
+              <Icon name="reorganize" size={18} />
             </span>
-          </span>
-        </button>
-      </Popover>
+            <span>
+              <span className="popover-row-title">Organizar automaticamente</span>
+              <span className="popover-row-desc">Arruma os cards soltos numa grade limpa</span>
+            </span>
+          </button>
+          <button
+            className="popover-row"
+            disabled={summarizeDisabled || aiBusy}
+            onClick={() => {
+              onSummarize();
+              setOpenPopover(null);
+            }}
+          >
+            <span className="popover-row-icon">
+              <Icon name="sparkle" size={18} />
+            </span>
+            <span>
+              <span className="popover-row-title">{aiBusy ? "Resumindo…" : "Resumir sessão numa nota"}</span>
+              <span className="popover-row-desc">
+                {summarizeDisabled ? "Escolha um provider de agente (não bash)" : "Cria uma nota com o estado do board"}
+              </span>
+            </span>
+          </button>
+        </Popover>
       </div>
-    </>
+    </div>
   );
 }
+

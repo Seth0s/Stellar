@@ -189,6 +189,15 @@ export function createMessageBus(
       requestId: string,
       target: { cardId: string } | { rect: { x: number; y: number; w: number; h: number } } | null,
     ) => void;
+    /** Pre-release audit B6 — `onSnapshotRequest`/`onReadCardRequest`
+     * below each register their own one-shot `ipcMain` reply listener in
+     * main/index.ts, cleaned up when the renderer actually replies. If it
+     * never does (unresponsive window), this module's own timeout below
+     * resolves the caller anyway — but nothing told main/index.ts to give
+     * up too, so its listener stayed registered forever. Called right
+     * before resolving on timeout so index.ts can remove its listener for
+     * this exact `requestId`. */
+    onSnapshotTimeout: (requestId: string) => void;
     /** No consent gate (see PAGE_TEXT_TIMEOUT_MS) — reads an already-open
      * browser card's rendered text, same risk class as `snapshot`. */
     onPageTextRequest: (requestId: string, cardId: string) => void;
@@ -196,6 +205,9 @@ export function createMessageBus(
      * xterm.js Terminal instance for a terminal card (main never sees
      * terminal content, only raw pty bytes flowing through). */
     onReadCardRequest: (requestId: string, cardId: string, lines?: number) => void;
+    /** Pre-release audit B6 — same listener-leak-on-timeout fix as
+     * `onSnapshotTimeout` above, for `readcard:reply`. */
+    onReadCardTimeout: (requestId: string) => void;
     /** DESIGN-BACKLOG.md item 58, M4 — pty-registry.ts's own `isAlive`,
      * threaded straight through: no round trip needed, main already knows. */
     isCardAlive: (cardId: string) => boolean;
@@ -384,6 +396,7 @@ export function createMessageBus(
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         pendingReadCards.delete(requestId);
+        callbacks.onReadCardTimeout(requestId);
         resolve({ ok: false, error: "timed out reading card" });
       }, READ_CARD_TIMEOUT_MS);
       pendingReadCards.set(requestId, {
@@ -478,6 +491,7 @@ export function createMessageBus(
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
           pendingSnapshots.delete(requestId);
+          callbacks.onSnapshotTimeout(requestId);
           resolve({ ok: false, error: "timed out capturing snapshot" });
         }, SNAPSHOT_TIMEOUT_MS);
         pendingSnapshots.set(requestId, {
@@ -1085,18 +1099,35 @@ export function createMessageBus(
     let buf = "";
     socket.on("data", (chunk) => {
       buf += chunk.toString("utf8");
-      const nl = buf.indexOf("\n");
-      if (nl === -1) return;
-      const line = buf.slice(0, nl);
-      buf = "";
-      let req: BusRequest;
-      try {
-        req = JSON.parse(line);
-      } catch {
-        socket.end(JSON.stringify({ ok: false, error: "invalid json" }) + "\n");
-        return;
+      // Pre-release audit B3 — used to be `buf = ""` after taking just the
+      // FIRST line, silently discarding any bytes past the first `\n` in
+      // this same chunk. `acbridge` only ever writes one line per
+      // connection today, so this was unreachable in practice, but it's a
+      // real correctness bug in the parser itself — collect every
+      // complete line actually present in the chunk (`buf.slice(nl + 1)`
+      // keeps the remainder instead of dropping it), dispatch all of
+      // them, and reply with one JSON-line response per request, in
+      // order, before closing.
+      const lines: string[] = [];
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        lines.push(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
       }
-      handleRequest(req).then((res) => socket.end(JSON.stringify(res) + "\n"));
+      if (lines.length === 0) return;
+      Promise.all(
+        lines.map((line): Promise<unknown> => {
+          let req: BusRequest;
+          try {
+            req = JSON.parse(line);
+          } catch {
+            return Promise.resolve({ ok: false, error: "invalid json" });
+          }
+          return handleRequest(req);
+        }),
+      ).then((results) => {
+        socket.end(results.map((r) => JSON.stringify(r)).join("\n") + "\n");
+      });
     });
   });
   // Without this, a bind failure (stale non-socket file at sockPath, a

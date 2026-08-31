@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionStreamingRunner } from "openai/lib/ChatCompletionStreamingRunner";
-import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import type { ChatCompletionContentPart, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import { readFileSync } from "node:fs";
 import {
   READ_FILE_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
@@ -37,8 +38,26 @@ const OPENAI_TOOLS: ChatCompletionTool[] = [READ_FILE_TOOL_NAME, WRITE_FILE_TOOL
 
 const MAX_TOOL_TURNS = 8; // same cap/reasoning as anthropic-client.ts
 
+/** Item 66 — mesmo raciocínio de `toAnthropicMessages` (anthropic-client.ts):
+ * `path` só é lido/convertido pra base64 aqui, na hora de montar a request
+ * de verdade. Só `role: "user"` carrega array de verdade nesta app (nunca
+ * geramos bloco de imagem numa resposta do assistente) — a asserção de tipo
+ * reflete esse invariante, o SDK não modela isso por role sozinho.
+ */
 function toOpenAiMessages(messages: ChatMessage[]): ChatCompletionMessageParam[] {
-  return messages.map((m) => ({ role: m.role, content: m.content }));
+  return messages.map((m) => {
+    if (typeof m.content === "string") return { role: m.role, content: m.content } as ChatCompletionMessageParam;
+    const content: ChatCompletionContentPart[] = m.content.map((block) => {
+      if (block.type === "text") return { type: "text", text: block.text };
+      try {
+        const data = readFileSync(block.path).toString("base64");
+        return { type: "image_url", image_url: { url: `data:${block.mediaType};base64,${data}` } };
+      } catch (err) {
+        return { type: "text", text: `[imagem anexada não pôde ser lida: ${err instanceof Error ? err.message : String(err)}]` };
+      }
+    });
+    return { role: m.role, content } as ChatCompletionMessageParam;
+  });
 }
 
 export function createOpenAiClient(opts: {
@@ -88,8 +107,31 @@ export function createOpenAiClient(opts: {
       } catch (err) {
         inFlight.delete(cardId);
         if (intentionalAborts.delete(cardId)) return;
-        opts.onError(cardId, err instanceof Error ? err.message : String(err));
-        return;
+        // Achado ao vivo (2026-08-31, gemini via este shim OpenAI-
+        // compatible): alguns endpoints "compatíveis" não mandam o campo
+        // `index` em `delta.tool_calls[]` quando só existe UMA tool call
+        // no turno (o spec real da OpenAI exige, mas nem todo servidor
+        // implementa à risca) — o helper de streaming do SDK reconstrói
+        // tool_calls por esse índice e joga um erro seco quando ele falta
+        // (`ChatCompletionStream.ts`'s `invalid tool call index`), mesmo
+        // com a resposta real já tendo chegado e sido cobrada no servidor
+        // (usage real, confirmado ao vivo). Sem stream pra reconstruir
+        // (`stream: false`), a MESMA requisição chega como um objeto
+        // pronto — sem esse parsing incremental, então imune a esse gap
+        // específico. Só entra nesse fallback pra esse erro exato; toda
+        // resposta normal continua via streaming token-a-token.
+        if (err instanceof Error && err.message.includes("invalid tool call index")) {
+          try {
+            completion = await client.chat.completions.create({ model, messages, tools: OPENAI_TOOLS });
+            opts.onToken(cardId, completion.choices[0]?.message.content ?? "");
+          } catch (fallbackErr) {
+            opts.onError(cardId, fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr));
+            return;
+          }
+        } else {
+          opts.onError(cardId, err instanceof Error ? err.message : String(err));
+          return;
+        }
       }
       inFlight.delete(cardId);
       inputTokens += completion.usage?.prompt_tokens ?? 0;

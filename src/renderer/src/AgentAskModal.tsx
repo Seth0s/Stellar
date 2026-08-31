@@ -34,7 +34,12 @@ export function AgentAskModal({
 }) {
   useOccludesChrome();
   return (
-    <div className="modal-root">
+    <div
+      className="modal-root"
+      onWheel={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
       <div className="modal-backdrop" onClick={onDeny} />
       <div className="modal" role="dialog" aria-labelledby="agent-ask-title">
         <h3 id="agent-ask-title">{title}</h3>

@@ -30,6 +30,7 @@ export function CardFrame({
   onConnectorStart,
   onSelectStart,
   onCloseAnimationEnd,
+  aspectRatio,
 }: {
   rect: Rect;
   zoom: number;
@@ -79,10 +80,51 @@ export function CardFrame({
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
   onCloseAnimationEnd?: () => void;
+  /** Item 57.9 — quando presente (`w / h`), o resize pelo canto deriva a
+   * altura a partir do delta de largura em vez de redimensionar os dois
+   * eixos livremente — "redimensionamento livre COM preservação de
+   * proporção" (MediaCard.tsx), não um resize travado num tamanho fixo.
+   * Aditivo: nenhum outro tipo de card passa isso, então o resize livre
+   * de sempre continua idêntico pra todos os outros. */
+  aspectRatio?: number;
 }) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
   const [dragging, setDragging] = useState(false);
+
+  // Item 2.1 pendente — "piscar durante o drag", reportado ao vivo: raw
+  // `pointermove` pode disparar bem mais rápido que a taxa de atualização
+  // real da tela (não é limitado pelo browser), e cada evento aqui virava
+  // seu próprio `onChange` → `setCards` → mutação de `left`/`top` (são
+  // propriedades de LAYOUT, não só composição) — ou seja, um layout+paint
+  // forçado por evento, sem nenhum coalescing. Conteúdo DOM comum
+  // (CodeMirror, markdown) absorve isso sem sintoma visível; o canvas
+  // WebGL do xterm.js é exatamente o tipo de camada onde esse
+  // paint/composite redundante e não-sincronizado com o refresh real
+  // aparece como piscar. `rafThrottleRect` junta múltiplos eventos crus no
+  // mesmo frame num único `onChange`, sem mudar a lógica de arraste em si
+  // nem a precisão do resultado — só a cadência de quando ele é aplicado.
+  function rafThrottleRect(apply: (rect: Rect) => void): {
+    schedule: (rect: Rect) => void;
+    flushAndCancel: (rect: Rect) => void;
+  } {
+    let rafId: number | null = null;
+    return {
+      schedule(rect) {
+        if (rafId === null) {
+          rafId = requestAnimationFrame(() => {
+            rafId = null;
+            apply(rect);
+          });
+        }
+      },
+      flushAndCancel(rect) {
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        rafId = null;
+        apply(rect);
+      },
+    };
+  }
 
   function onHeaderPointerDown(e: React.PointerEvent) {
     if (interactionMode !== "normal") return;
@@ -97,16 +139,18 @@ export function CardFrame({
     const startY = e.clientY;
     const startRect = rectRef.current;
     let finalRect = startRect;
+    const throttle = rafThrottleRect(onChange);
     function onMove(ev: PointerEvent) {
       const dx = (ev.clientX - startX) / zoom;
       const dy = (ev.clientY - startY) / zoom;
       finalRect = { ...startRect, x: startRect.x + dx, y: startRect.y + dy };
-      onChange(finalRect);
+      throttle.schedule(finalRect);
     }
     function onUp() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       setDragging(false);
+      throttle.flushAndCancel(finalRect);
       onCommit(finalRect);
     }
     window.addEventListener("pointermove", onMove);
@@ -122,20 +166,35 @@ export function CardFrame({
     const startY = e.clientY;
     const startRect = rectRef.current;
     let finalRect = startRect;
+    const throttle = rafThrottleRect(onChange);
     function onMove(ev: PointerEvent) {
       const dx = (ev.clientX - startX) / zoom;
       const dy = (ev.clientY - startY) / zoom;
-      finalRect = {
-        ...startRect,
-        w: Math.max(160, startRect.w + dx),
-        h: Math.max(120, startRect.h + dy),
-      };
-      onChange(finalRect);
+      if (aspectRatio) {
+        // Move pelo maior delta (horizontal ou vertical) dita o tamanho —
+        // deixa arrastar em qualquer direção do canto se sentir "natural",
+        // não só quando o mouse anda mais rápido no eixo X.
+        let w = Math.max(160, startRect.w + (Math.abs(dx) >= Math.abs(dy) ? dx : dy * aspectRatio));
+        let h = w / aspectRatio;
+        if (h < 120) {
+          h = 120;
+          w = h * aspectRatio;
+        }
+        finalRect = { ...startRect, w, h };
+      } else {
+        finalRect = {
+          ...startRect,
+          w: Math.max(160, startRect.w + dx),
+          h: Math.max(120, startRect.h + dy),
+        };
+      }
+      throttle.schedule(finalRect);
     }
     function onUp() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       setDragging(false);
+      throttle.flushAndCancel(finalRect);
       onCommit(finalRect);
       onResizeSettled?.();
     }

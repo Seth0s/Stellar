@@ -39,16 +39,17 @@ export const PROVIDER_MODELS: Record<Exclude<ChatProvider, "generic">, string[]>
   // default, mesmo papel que `claude-sonnet-5` tem na lista da anthropic
   // (nem o topo de linha mais caro, nem o mais barato).
   openai: ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"],
-  // Pedido ao vivo do usuário citou "Antigravity" e "Gemini 3.7 Flash".
-  // Confirmado via ai.google.dev: `gemini-3.7-flash` é um id de model real
-  // (endpoint generateContent, o mesmo shape que este app já usa via seu
-  // shim OpenAI-compatible — ver GEMINI_OPENAI_BASE_URL em main/index.ts).
-  // "Antigravity", por outro lado, NÃO é um chat model — é um agente
+  // Pedido ao vivo do usuário (2026-08-31, item 63 follow-up): painel de
+  // uso real da conta do usuário mostra só duas categorias de quota —
+  // "Gemini 3.7 Flash" (modelos de saída de texto) e "Antigravity"
+  // (agentes) — confirmando que a família 2.5 (flash/pro/flash-lite) saiu
+  // de linha nesta conta; removida da lista. "Antigravity", apesar de
+  // aparecer no mesmo painel, NÃO é um chat model — é um agente
   // (`antigravity-preview-05-2026`) exposto só pela Interactions/Agents API
   // do Gemini, uma forma de chamada totalmente diferente da Chat Completions
   // que este app fala; incluí-lo aqui quebraria (404/erro de shape), então
   // ficou de fora — sinalizado ao usuário em vez de adicionado às cegas.
-  gemini: ["gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+  gemini: ["gemini-3.7-flash"],
 };
 
 /**

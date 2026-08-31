@@ -16,6 +16,14 @@ export type BrowserKeyEvent = {
 
 type Entry = { win: BrowserWindow; visible: boolean };
 
+// Pre-release audit P2 — every visible browser card painted at the same
+// 30fps regardless of whether it's the one the user is actually
+// interacting with. Two visible-but-unfocused cards (the common
+// multi-browser-card layout) competed for main-process CPU/IPC at full
+// rate for content nobody's actively watching move.
+const FOCUSED_FRAME_RATE = 30;
+const UNFOCUSED_FRAME_RATE = 8;
+
 /**
  * Ported from CentralByte's browser.rs::normalize_url — rejects schemes that
  * would let a "navigate to a URL" request turn into local code execution or
@@ -81,8 +89,10 @@ export function createBrowserRegistry(callbacks: {
     // only actually emits `paint` on real change (scroll, animation, load),
     // so a mostly-static page costs nothing between those; this just bounds
     // the worst case (video, fast scrolling) instead of firing at whatever
-    // the compositor would otherwise allow.
-    wc.setFrameRate(30);
+    // the compositor would otherwise allow. A newly created card is the one
+    // the user just asked for — starts at the focused rate; `setFocused`
+    // below lowers it once something else gets raised on top.
+    wc.setFrameRate(FOCUSED_FRAME_RATE);
 
     wc.on("paint", (_event, _dirty, image) => {
       const entry = entries.get(id);
@@ -186,6 +196,13 @@ export function createBrowserRegistry(callbacks: {
     const wc = entry.win.webContents;
     if (visible && !wc.isPainting()) wc.startPainting();
     else if (!visible && wc.isPainting()) wc.stopPainting();
+  }
+
+  /** Pre-release audit P2 — a visible-but-not-topmost card still needs
+   * to paint (it's genuinely on screen), just not at full rate: nobody's
+   * watching it move right now the way they are the one they raised. */
+  function setFocused(id: string, focused: boolean) {
+    entries.get(id)?.win.webContents.setFrameRate(focused ? FOCUSED_FRAME_RATE : UNFOCUSED_FRAME_RATE);
   }
 
   function sendMouseEvent(id: string, evt: BrowserMouseEvent) {
@@ -313,6 +330,7 @@ export function createBrowserRegistry(callbacks: {
     reload,
     resize,
     setVisible,
+    setFocused,
     sendMouseEvent,
     sendWheelEvent,
     sendKeyEvent,

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
-export type ProviderId = "bash" | "claude" | "codex" | "cursor" | "gemini";
+export type ProviderId = "bash" | "claude" | "codex" | "cursor" | "antigravity";
 
 export type SpawnOpts = {
   resumeId?: string;
@@ -135,30 +135,31 @@ export const PROVIDERS: ProviderDef[] = [
       return args;
     },
   },
-  // DESIGN-BACKLOG.md item 28 — flags verified against the real upstream
-  // docs (google-gemini/gemini-cli), not guessed: `gemini` wasn't
-  // installed on this machine to test live against, so `--resume`/`-r`
-  // (accepts "latest", an index, or a full session UUID) and `--model`/
-  // `-m` are confirmed from docs/cli/cli-reference.md rather than
-  // reverse-engineered like the other three providers' session-discovery
-  // in session-watch.ts.
+  // Pedido ao vivo (2026-08-31) — usuário pediu pra trocar o provider
+  // "gemini" por "antigravity": achado ao vivo pesquisando (`gemini`
+  // deixou de resolver como CLI própria — a Google aposentou o Gemini
+  // CLI e o substituiu pelo Antigravity CLI, um agente de terminal
+  // escrito em Go que compartilha motor com o app desktop Antigravity
+  // 2.0). Flags confirmadas via busca na documentação real (não
+  // adivinhadas): binário `agy`, `--conversation <id>` retoma uma
+  // conversa específica por id, `--continue`/`-c` retoma a mais
+  // recente, `--model` seleciona o modelo. Sem flag efêmera de
+  // registro de MCP por-invocação — confirmado que a única forma é
+  // `agy mcp add` (persistente, arquivo `~/.gemini/config/
+  // mcp_config.json` ou `.agents/mcp_config.json` por workspace) —
+  // mesma não-escolha deliberada de cursor/gemini antes: não escrever
+  // silenciosamente na config do usuário a cada spawn de terminal. Um
+  // humano ainda pode registrar `stellar` manualmente se quiser que
+  // cards antigravity tenham acesso.
   {
-    id: "gemini",
-    label: "Gemini",
-    binaryNames: ["gemini"],
-    installCommand: "npm install -g @google/gemini-cli",
-    // No documented system-prompt flag, AND (like cursor-agent above) no
-    // ephemeral per-invocation MCP registration flag — confirmed against
-    // docs/tools/mcp-server.md: the only mechanisms are `gemini mcp add`
-    // and hand-editing `~/.gemini/settings.json`, both persistent, not
-    // scoped to one spawn. Same deliberate non-choice as cursor: don't
-    // silently write into the user's own Gemini config on every terminal
-    // spawn. A human can still register `stellar` manually if they want
-    // gemini cards to have it.
+    id: "antigravity",
+    label: "Antigravity",
+    binaryNames: ["agy"],
+    installCommand: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
-      if (resumeId) args.push("--resume", resumeId);
-      else if (continueLast) args.push("--resume", "latest");
+      if (resumeId) args.push("--conversation", resumeId);
+      else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
       return args;
     },

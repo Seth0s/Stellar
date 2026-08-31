@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
@@ -139,7 +139,7 @@ function nameOf(path: string): string {
 
 /** DESIGN-BACKLOG.md item 47 — a real tokenizer (`gpt-tokenizer` et al.)
  * only implements OpenAI's own encodings and would only be accurate for
- * one of the four providers this app spawns (claude/codex/cursor/gemini)
+ * one of the four providers this app spawns (claude/codex/cursor/antigravity)
  * anyway — Anthropic and Google don't publish a JS tokenizer at all — and
  * pulls in several MB of BPE rank tables for that one encoding alone.
  * chars/4 is the same rough heuristic used industry-wide as a provider-
@@ -307,7 +307,9 @@ function TreeNode({
   );
 }
 
-export function FilesCard({
+/** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
+ * wrapped in `React.memo` below. */
+function FilesCardInner({
   rect,
   zoom,
   zIndex,
@@ -999,3 +1001,5 @@ export function FilesCard({
     </CardFrame>
   );
 }
+
+export const FilesCard = memo(FilesCardInner);

@@ -15,6 +15,8 @@ import type {
   SecretsApi,
   ChatApi,
   ClipboardImageApi,
+  CanvasExportApi,
+  BoardAssetsApi,
 } from "../../preload/index";
 
 declare global {
@@ -35,5 +37,7 @@ declare global {
     updater: UpdaterApi;
     secrets: SecretsApi;
     chat: ChatApi;
+    canvasExport: CanvasExportApi;
+    boardAssets: BoardAssetsApi;
   }
 }

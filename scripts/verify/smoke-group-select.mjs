@@ -30,7 +30,7 @@ try {
   await bootIntoFreshSession(page);
 
   async function clickSelector(sel) {
-    const pt = JSON.parse(
+    let pt = JSON.parse(
       await page.evalJs(`
         (() => {
           const b = document.querySelector('${sel}');
@@ -40,6 +40,36 @@ try {
         })()
       `),
     );
+    if (!pt && sel.includes(".rail-btn[title=")) {
+      const titleMatch = sel.match(/title=["\x27]([^"\x27]+)["\x27]/);
+      if (titleMatch) {
+        const title = titleMatch[1];
+        const addBtn = JSON.parse(
+          await page.evalJs(`
+            (() => {
+              const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+              if (!b) return null;
+              const r = b.getBoundingClientRect();
+              return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+            })()
+          `),
+        );
+        if (addBtn) {
+          await page.click(addBtn.x, addBtn.y);
+          await new Promise((r) => setTimeout(r, 250));
+          pt = JSON.parse(
+            await page.evalJs(`
+              (() => {
+                const el = document.querySelector('.popover-row[title="${title}"]');
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+              })()
+            `),
+          );
+        }
+      }
+    }
     if (!pt) throw new Error(`selector not found: ${sel}`);
     await page.click(pt.x, pt.y);
     return pt;

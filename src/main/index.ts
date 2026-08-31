@@ -1,8 +1,8 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, net, protocol, session, shell } from "electron";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
 import type { SpawnOpts } from "./providers";
@@ -18,7 +18,9 @@ import {
   writeFile,
 } from "./fs-tools";
 import { gitStatus } from "./git-tools";
-import { saveClipboardImage, testWriteClipboardImage } from "./clipboard-image";
+import { saveClipboardImage, saveImageBytes, readAttachmentImage, testWriteClipboardImage } from "./clipboard-image";
+import { wrapJpegAsPdf } from "./pdf-export";
+import { saveBoardAssetBytes, copyBoardAssetFromPath, resolveBoardAsset } from "./board-assets";
 import {
   createBrowserRegistry,
   type BrowserMouseEvent,
@@ -65,7 +67,31 @@ process.on("unhandledRejection", (reason) => {
   console.error("[unhandledRejection] not crashing the app — see DESIGN-BACKLOG.md item 37:", reason);
 });
 
+// DESIGN-BACKLOG.md item 57.9 — protocolo customizado pra servir os
+// assets persistentes de um card de mídia (`board-assets.ts`) direto pra
+// `<img>`/pdf.js via fetch/streaming real, sem empurrar um base64 gigante
+// pela IPC a cada render (importa pra PDFs grandes — o "visualizador
+// robusto" pedido). `registerSchemesAsPrivileged` PRECISA rodar antes do
+// evento 'ready' do app (exigência documentada do Electron) — por isso
+// aqui, no nível de módulo, não dentro de `createWindow`. `standard:true`
+// + `supportFetchAPI` deixam `fetch()`/`<img src>` tratarem
+// `stellar-asset://` como uma origem normal (necessário pro
+// `pdfjsLib.getDocument(url)` funcionar via streaming real de verdade).
+protocol.registerSchemesAsPrivileged([
+  { scheme: "stellar-asset", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+]);
+
 const isDev = !app.isPackaged;
+
+// Pre-release audit B6 — `handleSnapshotRequest`/`onReadCardRequest`
+// below each register a one-shot `ipcMain` reply listener while waiting
+// for the renderer, removed once it actually replies. If the renderer
+// never replies, message-bus.ts's own timeout still resolves the caller,
+// but nothing removed the now-pointless listener — these two maps let
+// that timeout (via `onSnapshotTimeout`/`onReadCardTimeout`) reach back
+// and clean up the exact listener for that `requestId`.
+const pendingSnapshotReplyCleanup = new Map<string, () => void>();
+const pendingReadCardReplyCleanup = new Map<string, () => void>();
 
 // GPU acceleration re-enabled 2026-08-26 — see DESIGN-BACKLOG.md item 9 and
 // AGENTS.md for the full investigation. It was disabled 2026-08-25 because
@@ -218,10 +244,15 @@ function handleSnapshotRequest(
   // path fires first — the message-bus's own SNAPSHOT_TIMEOUT_MS is the
   // backstop if the renderer never replies at all (window unresponsive).
   let settled = false;
+  function cleanup() {
+    if (settled) return;
+    settled = true;
+    pendingSnapshotReplyCleanup.delete(requestId);
+    ipcMain.removeListener("snapshot:rect-reply", onReply);
+  }
   function onReply(_e: Electron.IpcMainEvent, replyId: string, screenRect: Electron.Rectangle | null) {
     if (replyId !== requestId || settled) return;
-    settled = true;
-    ipcMain.removeListener("snapshot:rect-reply", onReply);
+    cleanup();
     if (!screenRect) {
       const desc = "cardId" in resolvedTarget ? `card "${resolvedTarget.cardId}"` : "that rect";
       messageBus.resolveSnapshot(requestId, { ok: false, error: `nothing visible for ${desc}` });
@@ -229,6 +260,7 @@ function handleSnapshotRequest(
     }
     capture(screenRect);
   }
+  pendingSnapshotReplyCleanup.set(requestId, cleanup);
   ipcMain.on("snapshot:rect-reply", onReply);
   safeSend(win, "snapshot:rect-request", requestId, resolvedTarget);
 }
@@ -313,6 +345,16 @@ function createWindow() {
     openExternally(url);
     return { action: "deny" };
   });
+  // Pre-release audit B2 — a reload (F5/Ctrl+R, or `did-start-navigation`
+  // more generally) discards every renderer-side listener that could
+  // ever call `chat:write-resolve`/`chat:bash-resolve` for a request
+  // already in flight — flush all of them (deny) rather than leave a
+  // provider's tool loop wedged forever with nothing left that could
+  // ever unblock it. `resolveConsentsForCard` is a hoisted function
+  // declaration further down, so it's already callable here.
+  win.webContents.on("did-start-navigation", (_e, _url, _isInPlace, isMainFrame) => {
+    if (isMainFrame) resolveConsentsForCard(null);
+  });
 
   // Packaged: electron-builder's extraResources copies resources/bin next to
   // the app (outside app.asar, where a script can still be spawned as a real
@@ -347,33 +389,62 @@ function createWindow() {
   // requestId-keyed pending-map shape message-bus.ts already established
   // for spawn_agent/spawn_card/open — just chat-specific (this loop lives
   // in anthropic-client.ts/openai-client.ts, not behind the acbridge
-  // socket, so it doesn't go through message-bus.ts at all). No timeout
-  // here unlike those — a diff needing real review shouldn't auto-deny
-  // just because the human stepped away; the tool loop simply stays
-  // paused until they come back, same as any other open modal in this app.
-  const pendingWriteConsents = new Map<string, (allowed: boolean) => void>();
+  // socket, so it doesn't go through message-bus.ts at all). No PER-
+  // REQUEST timeout — a diff needing real review shouldn't auto-deny just
+  // because the human stepped away; the tool loop simply stays paused
+  // until they come back, same as any other open modal in this app.
+  //
+  // Pre-release audit B2 — that's still right for "the human is slow",
+  // but the promise had NO exit at all for the two cases where nothing
+  // could ever answer it again: the card asking got closed (its own
+  // ChatCard/AgentAskModal-equivalent UI is gone, `chat:write-resolve`/
+  // `chat:bash-resolve` will never fire for that requestId), or the whole
+  // window reloaded (every renderer-side listener that could ever call
+  // those IPC handlers is gone too). Both leak the pending Promise
+  // forever, wedging that provider's tool loop permanently — `cardId` is
+  // now stored alongside `resolve` so `resolveConsentsForCard`/the reload
+  // handler below can find and deny the right ones without a timeout ever
+  // punishing a human who's just taking their time.
+  const pendingWriteConsents = new Map<string, { cardId: string; resolve: (allowed: boolean) => void }>();
   // DESIGN-BACKLOG.md item 12, Fase D — the `bash` tool's consent gate,
   // same requestId-keyed pending-map shape as `pendingWriteConsents`
   // above (deliberately a SEPARATE map, not a unified one — this
   // codebase's own established idiom for a new consent kind, see
   // message-bus.ts's pendingSnapshots/pendingPageTexts/pendingSpawnAgents/
   // pendingSpawnCards, four near-identical maps rather than one unified
-  // one). No timeout, same reasoning as write consent.
-  const pendingBashConsents = new Map<string, (allowed: boolean) => void>();
+  // one).
+  const pendingBashConsents = new Map<string, { cardId: string; resolve: (allowed: boolean) => void }>();
   let nextChatRequestId = 1;
   function askWriteConsent(cardId: string, req: WriteConsentRequest): Promise<boolean> {
     return new Promise((resolve) => {
       const requestId = String(nextChatRequestId++);
-      pendingWriteConsents.set(requestId, resolve);
+      pendingWriteConsents.set(requestId, { cardId, resolve });
       safeSend(win, "chat:ask-write", requestId, cardId, req);
     });
   }
   function askBashConsent(cardId: string, req: BashConsentRequest): Promise<boolean> {
     return new Promise((resolve) => {
       const requestId = String(nextChatRequestId++);
-      pendingBashConsents.set(requestId, resolve);
+      pendingBashConsents.set(requestId, { cardId, resolve });
       safeSend(win, "chat:ask-bash", requestId, cardId, req);
     });
+  }
+  // Pre-release audit B2 — called when a chat card actually closes
+  // (`App.tsx`'s `finalizeCloseCard`, the one idempotent choke-point for
+  // real removal) and on every main-frame navigation of `win` itself
+  // (below) — the latter with no `cardId` filter, since a reload discards
+  // every card's listeners at once.
+  function resolveConsentsForCard(cardId: string | null) {
+    for (const [requestId, entry] of pendingWriteConsents) {
+      if (cardId !== null && entry.cardId !== cardId) continue;
+      pendingWriteConsents.delete(requestId);
+      entry.resolve(false);
+    }
+    for (const [requestId, entry] of pendingBashConsents) {
+      if (cardId !== null && entry.cardId !== cardId) continue;
+      pendingBashConsents.delete(requestId);
+      entry.resolve(false);
+    }
   }
   // Reuses the EXISTING spawn_agent consent+spawn flow end to end
   // (message-bus.ts's `handleRequest`, the same dispatcher acbridge and
@@ -702,14 +773,26 @@ function createWindow() {
     // live xterm.js buffer for a terminal card, main can't read it
     // directly.
     onReadCardRequest: (requestId, cardId, lines) => {
-      function onReply(_e: Electron.IpcMainEvent, replyId: string, text: string | null) {
-        if (replyId !== requestId) return;
+      let settled = false;
+      function cleanup() {
+        if (settled) return;
+        settled = true;
+        pendingReadCardReplyCleanup.delete(requestId);
         ipcMain.removeListener("readcard:reply", onReply);
+      }
+      function onReply(_e: Electron.IpcMainEvent, replyId: string, text: string | null) {
+        if (replyId !== requestId || settled) return;
+        cleanup();
         messageBus!.resolveReadCard(requestId, text === null ? { ok: false, error: `no open terminal card with id "${cardId}"` } : { ok: true, text });
       }
+      pendingReadCardReplyCleanup.set(requestId, cleanup);
       ipcMain.on("readcard:reply", onReply);
       safeSend(win, "readcard:request", requestId, cardId, lines);
     },
+    // Pre-release audit B6 — see the two `pendingXReplyCleanup` maps'
+    // doc comment near the top of this file.
+    onSnapshotTimeout: (requestId) => pendingSnapshotReplyCleanup.get(requestId)?.(),
+    onReadCardTimeout: (requestId) => pendingReadCardReplyCleanup.get(requestId)?.(),
     // DESIGN-BACKLOG.md item 21, ponto 9, achados 1 e 2 — same
     // ask-the-renderer/wait-for-a-human-decision shape as onOpenRequest
     // above, generalized. The renderer owns all card creation (it's the
@@ -759,6 +842,21 @@ function createWindow() {
     if (app.isPackaged) return;
     testWriteClipboardImage();
   });
+  // Item 66 — anexo de imagem no composer do chatbox (paste/drop na
+  // própria textarea, `ChatCard.tsx`). Diferente do clipboard acima: o
+  // renderer já tem um `File` real (`clipboardData.items`/
+  // `dataTransfer.files`), então manda os bytes prontos em base64 em vez
+  // de pedir pro main ler o clipboard do SO de novo. Limite de tamanho
+  // aqui, não no renderer — o mesmo main process que vai montar a
+  // request da API é quem sabe o custo real de anexar algo grande demais.
+  const MAX_CHAT_ATTACHMENT_BASE64_CHARS = 10 * 1024 * 1024 * 1.4; // ~10MB de bytes reais
+  ipcMain.handle("chat:save-attachment-image", (_e, base64: string, mediaType: string) => {
+    if (base64.length > MAX_CHAT_ATTACHMENT_BASE64_CHARS) {
+      return { ok: false, error: "imagem grande demais (limite ~10MB)" };
+    }
+    return saveImageBytes(base64, mediaType);
+  });
+  ipcMain.handle("chat:read-attachment-image", (_e, path: string) => readAttachmentImage(path));
 
   ipcMain.handle("store:list", (_e, boardId: string) => store.listCards(boardId));
   ipcMain.handle("store:upsert", (_e, card: CardRow) => store.upsertCard(card));
@@ -805,6 +903,75 @@ function createWindow() {
     return result.filePaths[0];
   });
 
+  // Item 57.8 — "exportação do canvas com seleção de área". `rect` já vem
+  // em pixels da área de conteúdo da janela (o mesmo espaço que
+  // `capturePage` espera — a ferramenta "export", App.tsx, desenha o
+  // recorte direto em client coords, sem nenhuma conversão de mundo/zoom
+  // necessária). Reusa a MESMA API (`webContents.capturePage`) que o
+  // `snapshot` MCP já usa pra cardId/rect — uma captura real de janela,
+  // não um DOM-to-canvas de biblioteca (que não renderiza WebGL/views
+  // nativas corretamente); PNG/JPEG via `nativeImage`, PDF embrulha o
+  // JPEG num wrapper mínimo (pdf-export.ts).
+  async function performExport(rect: Electron.Rectangle, format: "png" | "jpeg" | "pdf", filePath: string) {
+    const image = await win.webContents.capturePage(rect);
+    const { width, height } = image.getSize();
+    if (width === 0 || height === 0) return { ok: false, error: "área vazia (nada capturado)" };
+    try {
+      const bytes =
+        format === "png" ? image.toPNG() : format === "jpeg" ? image.toJPEG(92) : wrapJpegAsPdf(image.toJPEG(92), width, height);
+      writeFileSync(filePath, bytes);
+      return { ok: true, path: filePath };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+  ipcMain.handle(
+    "export:capture-rect",
+    async (_e, rect: Electron.Rectangle, format: "png" | "jpeg" | "pdf", defaultName: string) => {
+      const ext = format === "jpeg" ? "jpg" : format;
+      const saveResult = await dialog.showSaveDialog(win, {
+        defaultPath: `${defaultName}.${ext}`,
+        filters: [{ name: format.toUpperCase(), extensions: [ext] }],
+      });
+      if (saveResult.canceled || !saveResult.filePath) return { ok: false, error: "cancelled" };
+      return performExport(rect, format, saveResult.filePath);
+    },
+  );
+  // Test-only (scripts/verify) — a native save dialog can't be driven by
+  // CDP (it's not part of the web content), same limitation `fs:pick-
+  // directory` already has. Bypasses ONLY the dialog step, writing
+  // straight to a given path — everything else (capturePage, PNG/JPEG
+  // encode, PDF wrapping) is the exact same code the real handler runs.
+  // Inert in a packaged build, same guard/precedent as
+  // `clipboard:test-write-image`.
+  ipcMain.handle(
+    "export:capture-rect-test",
+    (_e, rect: Electron.Rectangle, format: "png" | "jpeg" | "pdf", filePath: string) => {
+      if (app.isPackaged) return { ok: false, error: "test-only" };
+      return performExport(rect, format, filePath);
+    },
+  );
+
+  // Item 57.9 — armazenamento persistente pro card de mídia (board-assets.ts).
+  ipcMain.handle("board-assets:save-bytes", (_e, boardId: string, base64: string, mediaType: string) =>
+    saveBoardAssetBytes(boardId, base64, mediaType),
+  );
+  ipcMain.handle("board-assets:copy-from-path", (_e, boardId: string, sourcePath: string) =>
+    copyBoardAssetFromPath(boardId, sourcePath),
+  );
+  // `stellar-asset://<boardId>/<filename>` → o arquivo real dentro da
+  // pasta de assets DAQUELE board (`resolveBoardAsset` já valida o
+  // boundary). `net.fetch` sobre um `file://` real dá streaming de
+  // verdade (importa pro pdf.js) em vez de carregar tudo em memória.
+  protocol.handle("stellar-asset", (request) => {
+    const url = new URL(request.url);
+    const boardId = url.hostname;
+    const filename = decodeURIComponent(url.pathname.replace(/^\//, ""));
+    const realPath = resolveBoardAsset(boardId, filename);
+    if (!realPath) return new Response("not found", { status: 404 });
+    return net.fetch(pathToFileURL(realPath).toString());
+  });
+
   ipcMain.handle("fs:list", (_e, root: string, path: string) => listDir(root, path));
   ipcMain.handle("fs:read", (_e, root: string, path: string) => readFile(root, path));
   ipcMain.handle("fs:write", (_e, root: string, path: string, content: string) => writeFile(root, path, content));
@@ -829,6 +996,7 @@ function createWindow() {
   ipcMain.handle("browser:reload", (_e, id: string) => browserRegistry.reload(id));
   ipcMain.handle("browser:resize", (_e, id: string, w: number, h: number) => browserRegistry.resize(id, w, h));
   ipcMain.handle("browser:set-visible", (_e, id: string, visible: boolean) => browserRegistry.setVisible(id, visible));
+  ipcMain.handle("browser:set-focused", (_e, id: string, focused: boolean) => browserRegistry.setFocused(id, focused));
   ipcMain.handle("browser:destroy", (_e, id: string) => browserRegistry.destroy(id));
   ipcMain.on("browser:input-mouse", (_e, id: string, evt: BrowserMouseEvent) => browserRegistry.sendMouseEvent(id, evt));
   ipcMain.on("browser:input-wheel", (_e, id: string, evt: BrowserWheelEvent) => browserRegistry.sendWheelEvent(id, evt));
@@ -869,6 +1037,30 @@ function createWindow() {
     setImmediate(() => {
       throw new Error("test-only uncaught exception — DESIGN-BACKLOG.md item 37 crash-safety-net check");
     });
+  });
+
+  // Test-only, same guard/reasoning as above — pre-release audit B6's
+  // verify harness has no other way to observe whether main's own
+  // `ipcMain` listener for a reply channel actually got cleaned up (vs.
+  // leaking) after a renderer-never-replies timeout.
+  ipcMain.handle("debug:listener-count", (_e, channel: string) => {
+    if (app.isPackaged) return -1;
+    return ipcMain.listenerCount(channel);
+  });
+
+  // Test-only, same guard — pre-release audit B4's verify harness needs
+  // main's REAL heap size to prove a large sandboxed-bash output doesn't
+  // balloon it, not just that the returned text is short.
+  ipcMain.handle("debug:heap-used-mb", () => {
+    if (app.isPackaged) return -1;
+    if (global.gc) global.gc();
+    return process.memoryUsage().heapUsed / (1024 * 1024);
+  });
+
+  // Test-only, same guard — pre-release audit B7's verify harness.
+  ipcMain.handle("debug:seen-urls-count", (_e, cardId: string) => {
+    if (app.isPackaged) return -1;
+    return registry.seenUrlsCount(cardId);
   });
 
   // DESIGN-BACKLOG.md item 12, Fase B/C.
@@ -925,17 +1117,20 @@ function createWindow() {
     (provider === "anthropic" ? anthropicClient : openaiClient).cancel(cardId),
   );
   ipcMain.handle("chat:write-resolve", (_e, requestId: string, allowed: boolean) => {
-    const resolve = pendingWriteConsents.get(requestId);
-    if (!resolve) return;
+    const entry = pendingWriteConsents.get(requestId);
+    if (!entry) return;
     pendingWriteConsents.delete(requestId);
-    resolve(allowed);
+    entry.resolve(allowed);
   });
   ipcMain.handle("chat:bash-resolve", (_e, requestId: string, allowed: boolean) => {
-    const resolve = pendingBashConsents.get(requestId);
-    if (!resolve) return;
+    const entry = pendingBashConsents.get(requestId);
+    if (!entry) return;
     pendingBashConsents.delete(requestId);
-    resolve(allowed);
+    entry.resolve(allowed);
   });
+  // Pre-release audit B2 — fire-and-forget, sent from `App.tsx`'s
+  // `finalizeCloseCard` right when a chat card is actually removed.
+  ipcMain.on("chat:card-closed", (_e, cardId: string) => resolveConsentsForCard(cardId));
   // Test-only trigger (verify harness — scripts/verify/smoke-chat.mjs),
   // same reasoning/guard as updater.ts's `updater:test-emit-available`:
   // there's no way to exercise the real read_file/write_file/consent/diff
