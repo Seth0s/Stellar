@@ -48,23 +48,7 @@ try {
   const termBodyPos = await centerOf(page, ".terminal-card-body");
   check("terminal body found", !!termBodyPos, true);
 
-  // Type a test prompt prefix to observe whether wheel inserts arrow history
-  await page.send("Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x: termBodyPos.x,
-    y: termBodyPos.y,
-    button: "left",
-    clickCount: 1,
-    pointerType: "mouse"
-  });
-  await page.send("Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x: termBodyPos.x,
-    y: termBodyPos.y,
-    button: "left",
-    clickCount: 1,
-    pointerType: "mouse"
-  });
+  await page.click(termBodyPos.x, termBodyPos.y);
   await delay(200);
 
   // Dispatch mouse wheel UP and DOWN multiple times
