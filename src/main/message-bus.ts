@@ -101,6 +101,11 @@ export type BusRequest =
       rect?: { x: number; y: number; w: number; h: number };
     }
   | { cmd: "get_page_text"; target?: string }
+  | { cmd: "browser_click"; target?: string; x?: number; y?: number; selector?: string }
+  | { cmd: "browser_type"; target?: string; text?: string; selector?: string }
+  | { cmd: "browser_scroll"; target?: string; dx?: number; dy?: number; selector?: string }
+  | { cmd: "browser_query"; target?: string; selector?: string }
+  | { cmd: "browser_eval"; target?: string; js?: string }
   | { cmd: "read_card"; target?: string; lines?: number }
   | { cmd: "card_status"; target?: string }
   | { cmd: "report"; requesterId?: string; report?: unknown }
@@ -201,6 +206,23 @@ export function createMessageBus(
     /** No consent gate (see PAGE_TEXT_TIMEOUT_MS) — reads an already-open
      * browser card's rendered text, same risk class as `snapshot`. */
     onPageTextRequest: (requestId: string, cardId: string) => void;
+    /** DESIGN-BACKLOG.md §2.1 "MCP do Navegador — Orquestração Completa"
+     * — the 5 browser control tools, all resolving synchronously (well,
+     * async, but 100% local to this process — see the doc comment on
+     * `browser_click`'s handler below for why these don't need the
+     * pending-map+timeout ceremony `onSnapshotRequest`/`onPageTextRequest`
+     * use). Same no-consent-gate reasoning as `onPageTextRequest` — these
+     * only act inside a browser card the human already approved creating
+     * (`open_url`), never create/navigate anything new themselves.
+     * `browserEval` is the one exception worth calling out: it runs
+     * arbitrary agent-supplied JS in the page's real context (cookies/
+     * session/localStorage reachable) — accepted risk, documented in the
+     * MCP tool's own `description` (mcp-server.ts), not hidden here. */
+    browserClick: (cardId: string, x?: number, y?: number, selector?: string) => Promise<BusResponse>;
+    browserType: (cardId: string, text: string, selector?: string) => Promise<BusResponse>;
+    browserScroll: (cardId: string, dx: number, dy: number, selector?: string) => Promise<BusResponse>;
+    browserQuery: (cardId: string, selector: string) => Promise<BusResponse>;
+    browserEval: (cardId: string, js: string) => Promise<BusResponse>;
     /** DESIGN-BACKLOG.md item 58, M1 — only the renderer holds the live
      * xterm.js Terminal instance for a terminal card (main never sees
      * terminal content, only raw pty bytes flowing through). */
@@ -530,6 +552,43 @@ export function createMessageBus(
     if (req.cmd === "read_card") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
       return readCardText(req.target, req.lines);
+    }
+
+    // DESIGN-BACKLOG.md §2.1 — the 5 browser control cmds. Unlike
+    // `snapshot`/`get_page_text` above, resolution here is 100% local to
+    // THIS process (`browser-registry.ts`'s methods, called straight
+    // from index.ts's callbacks, no round trip to the renderer) — no
+    // pending-map/timeout ceremony needed, same shape as `card_status`/
+    // `board_mode` below: call the callback, return what it resolves to.
+    if (req.cmd === "browser_click") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (!req.selector && (req.x === undefined || req.y === undefined)) {
+        return { ok: false, error: "need either a selector or both x and y" };
+      }
+      return callbacks.browserClick(req.target, req.x, req.y, req.selector);
+    }
+
+    if (req.cmd === "browser_type") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (req.text === undefined) return { ok: false, error: "missing text" };
+      return callbacks.browserType(req.target, req.text, req.selector);
+    }
+
+    if (req.cmd === "browser_scroll") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserScroll(req.target, req.dx ?? 0, req.dy ?? 0, req.selector);
+    }
+
+    if (req.cmd === "browser_query") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (!req.selector) return { ok: false, error: "missing selector" };
+      return callbacks.browserQuery(req.target, req.selector);
+    }
+
+    if (req.cmd === "browser_eval") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (!req.js) return { ok: false, error: "missing js" };
+      return callbacks.browserEval(req.target, req.js);
     }
 
     if (req.cmd === "card_status") {

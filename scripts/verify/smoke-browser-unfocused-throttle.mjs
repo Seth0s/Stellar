@@ -1,11 +1,16 @@
 // Pre-release audit P2 — every visible BrowserCard painted at a flat
-// 30fps (`browser-registry.ts`'s `wc.setFrameRate(30)`) regardless of
+// rate (`browser-registry.ts`'s `wc.setFrameRate(...)`) regardless of
 // whether it was the one the user is actually looking at — two visible
 // browser cards competed for main-process CPU/IPC at the same full rate,
 // even though only one is ever the topmost/interacted-with one. Fixed
 // with `setFocused(id, focused)`: the topmost card (by z-order, the same
-// `order` array App.tsx already tracks for raising) stays at 30fps,
-// every other visible-but-not-topmost one drops to 8fps.
+// `order` array App.tsx already tracks for raising) stays at
+// `FOCUSED_FRAME_RATE` (60 as of DESIGN-BACKLOG.md §2.1's "60fps em
+// foco" — was 30), every other visible-but-not-topmost one drops to
+// 8fps. This test's own checks below only assert a bounded ceiling for
+// the unfocused rate and a RELATIVE gap between the two, never the
+// focused rate's exact value — the 60fps bump needed no assertion
+// change, only these comments.
 //
 // Verifies live against two REAL browser cards, both navigated to a
 // local page that repaints constantly via `requestAnimationFrame`
@@ -153,13 +158,13 @@ try {
   const counts = JSON.parse(await page.evalJs(`JSON.stringify(window.__frameCounts)`));
 
   const countA = counts[cardA] ?? 0; // unfocused (8fps expected)
-  const countB = counts[cardB] ?? 0; // focused (30fps expected)
+  const countB = counts[cardB] ?? 0; // focused (60fps expected)
 
   check(`unfocused card A still paints (${countA} frames in ${MEASURE_MS}ms, not stalled outright)`, countA > 0, true);
   check(`focused card B paints noticeably faster than unfocused card A (${countB} vs ${countA} frames)`, countB > countA * 1.5, true);
   // ~8fps over 2.5s ≈ 20 frames; generous upper bound (still well under
-  // the ~75 a 30fps card would show) so real timer jitter never flakes it.
-  check(`unfocused card A's rate looks like the throttled ~8fps, not the full 30fps (${countA} frames)`, countA < 45, true);
+  // the ~150 a 60fps card would show) so real timer jitter never flakes it.
+  check(`unfocused card A's rate looks like the throttled ~8fps, not the full focused rate (${countA} frames)`, countA < 45, true);
 
   page.close();
 } finally {

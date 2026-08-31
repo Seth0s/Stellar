@@ -37,7 +37,10 @@ const USAGE =
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "concurrency-status [cap] | board-mode <cardId> | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
-  "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]>";
+  "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] | " +
+  "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
+  "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
+  "browser-eval <cardId> <js...>>";
 
 const [, , cmd, ...rest] = process.argv;
 
@@ -153,6 +156,34 @@ if (cmd === "list") {
     kind === "browser"
       ? { cmd: "spawn_card", kind, url: cwdOrUrl, requesterId: ownCardId }
       : { cmd: "spawn_card", kind, cwd: cwdOrUrl, requesterId: ownCardId };
+} else if (cmd === "browser-click") {
+  // Selector-only via the CLI (unlike the MCP `browser_click` tool,
+  // which also takes raw x/y) — a human/script typing this by hand has
+  // a CSS selector far more often than a computed pixel coordinate, and
+  // this file has no precedent for optional-flag parsing to disambiguate
+  // "selector" from "x y" cleanly.
+  const [target, selector] = rest;
+  if (!target || !selector) fail("usage: acbridge browser-click <cardId> <selector>");
+  request = { cmd: "browser_click", target, selector };
+} else if (cmd === "browser-type") {
+  const [target, selector, ...textParts] = rest;
+  if (!target || !selector || textParts.length === 0) fail("usage: acbridge browser-type <cardId> <selector> <text...>");
+  request = { cmd: "browser_type", target, selector, text: textParts.join(" ") };
+} else if (cmd === "browser-scroll") {
+  const [target, dxStr, dyStr, selector] = rest;
+  if (!target) fail("usage: acbridge browser-scroll <cardId> <dx> <dy> [selector]");
+  const dx = Number(dxStr ?? 0);
+  const dy = Number(dyStr ?? 0);
+  if (Number.isNaN(dx) || Number.isNaN(dy)) fail("browser-scroll: dx/dy must be numbers");
+  request = { cmd: "browser_scroll", target, dx, dy, selector };
+} else if (cmd === "browser-query") {
+  const [target, selector] = rest;
+  if (!target || !selector) fail("usage: acbridge browser-query <cardId> <selector>");
+  request = { cmd: "browser_query", target, selector };
+} else if (cmd === "browser-eval") {
+  const [target, ...jsParts] = rest;
+  if (!target || jsParts.length === 0) fail("usage: acbridge browser-eval <cardId> <js...>");
+  request = { cmd: "browser_eval", target, js: jsParts.join(" ") };
 } else {
   fail(USAGE);
 }
@@ -222,6 +253,18 @@ socket.on("close", () => {
     console.log(res.cardId);
   } else if (cmd === "spawn-card") {
     console.log(res.cardId);
+  } else if (cmd === "browser-click") {
+    console.log("clicked");
+  } else if (cmd === "browser-type") {
+    console.log("typed");
+  } else if (cmd === "browser-scroll") {
+    console.log("scrolled");
+  } else if (cmd === "browser-query") {
+    const { ok, ...rest } = res;
+    console.log(JSON.stringify(rest));
+  } else if (cmd === "browser-eval") {
+    console.log(res.result);
+    if (res.truncated) process.stderr.write("acbridge: eval result truncated\n");
   }
   process.exit(0);
 });

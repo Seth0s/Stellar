@@ -722,6 +722,7 @@ function createWindow() {
     onTitle: (id, title) => safeSend(win, "browser:title", id, title),
     onLoading: (id, loading) => safeSend(win, "browser:loading", id, loading),
     onFrame: (id, jpeg, width, height) => safeSend(win, "browser:frame", id, jpeg, width, height),
+    onConsoleMessage: (id, level, message) => safeSend(win, "browser:console-message", id, level, message),
   });
 
   messageBus = createMessageBus(sockPath, {
@@ -769,6 +770,15 @@ function createWindow() {
     onPageTextRequest: (requestId, cardId) => {
       void browserRegistry.getPageText(cardId).then((result) => messageBus!.resolvePageText(requestId, result));
     },
+    // DESIGN-BACKLOG.md §2.1 — same "no round trip needed" reasoning as
+    // onPageTextRequest above: browserRegistry already owns the real
+    // webContents, so these resolve straight from here.
+    browserClick: (cardId, x, y, selector) =>
+      selector ? browserRegistry.clickSelector(cardId, selector) : Promise.resolve(browserRegistry.clickAtPoint(cardId, x!, y!)),
+    browserType: (cardId, text, selector) => browserRegistry.typeText(cardId, text, selector),
+    browserScroll: (cardId, dx, dy, selector) => browserRegistry.scroll(cardId, dx, dy, selector),
+    browserQuery: (cardId, selector) => browserRegistry.query(cardId, selector),
+    browserEval: (cardId, js) => browserRegistry.evalJs(cardId, js),
     // DESIGN-BACKLOG.md item 58, M1 — same request/reply shape as
     // snapshot:rect-request/-reply below: only the renderer holds the
     // live xterm.js buffer for a terminal card, main can't read it
@@ -1004,7 +1014,8 @@ function createWindow() {
   ipcMain.handle("browser:back", (_e, id: string) => browserRegistry.back(id));
   ipcMain.handle("browser:forward", (_e, id: string) => browserRegistry.forward(id));
   ipcMain.handle("browser:reload", (_e, id: string) => browserRegistry.reload(id));
-  ipcMain.handle("browser:resize", (_e, id: string, w: number, h: number) => browserRegistry.resize(id, w, h));
+  ipcMain.handle("browser:open-devtools", (_e, id: string) => browserRegistry.openDevTools(id));
+  ipcMain.handle("browser:resize", (_e, id: string, w: number, h: number, zoom?: number) => browserRegistry.resize(id, w, h, zoom));
   ipcMain.handle("browser:set-visible", (_e, id: string, visible: boolean) => browserRegistry.setVisible(id, visible));
   ipcMain.handle("browser:set-focused", (_e, id: string, focused: boolean) => browserRegistry.setFocused(id, focused));
   ipcMain.handle("browser:destroy", (_e, id: string) => browserRegistry.destroy(id));
@@ -1071,6 +1082,14 @@ function createWindow() {
   ipcMain.handle("debug:seen-urls-count", (_e, cardId: string) => {
     if (app.isPackaged) return -1;
     return registry.seenUrlsCount(cardId);
+  });
+
+  // Test-only, same guard — Trilha A do navegador's verify harness needs
+  // the offscreen BrowserWindow's REAL content-pixel size, straight from
+  // Electron, to prove `resize`'s zoom scaling actually happened.
+  ipcMain.handle("debug:browser-content-size", (_e, cardId: string) => {
+    if (app.isPackaged) return null;
+    return browserRegistry.getContentSize(cardId);
   });
 
   // DESIGN-BACKLOG.md item 12, Fase B/C.

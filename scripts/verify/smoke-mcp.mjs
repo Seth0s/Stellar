@@ -70,6 +70,11 @@ try {
     JSON.stringify(toolNames),
     JSON.stringify([
       "board_mode",
+      "browser_click",
+      "browser_eval",
+      "browser_query",
+      "browser_scroll",
+      "browser_type",
       "card_status",
       "concurrency_status",
       "create_task",

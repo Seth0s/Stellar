@@ -364,6 +364,97 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
     );
 
+    // DESIGN-BACKLOG.md §2.1 "MCP do Navegador — Orquestração Completa"
+    // — the 5 tools below act inside a browser card that already exists
+    // (created via `open_url`/`spawn_card`, both human-gated) — no new
+    // consent gate here, same "only reads/acts on what a human already
+    // approved" reasoning as `get_page_text` right above. `browser_eval`
+    // is the one that genuinely needs its own warning, spelled out in
+    // its own `description` below rather than assumed obvious.
+    server.registerTool(
+      "browser_click",
+      {
+        description:
+          "Click inside an already-open browser card. Prefer `selector` (a CSS selector — robust to scroll/zoom/resize, resolved against the live page) over raw `x`/`y` (the page's own logical pixel coordinates, only reliable right after a `browser_query` on that exact spot).",
+        inputSchema: {
+          target: z.string().describe("The browser card's id"),
+          selector: z.string().optional().describe("CSS selector of the element to click — takes precedence over x/y if both given"),
+          x: z.number().optional().describe("X coordinate in the page's own logical pixels, only used if selector is omitted"),
+          y: z.number().optional().describe("Y coordinate in the page's own logical pixels, only used if selector is omitted"),
+        },
+      },
+      async ({ target, selector, x, y }) => {
+        const res = await opts.handleRequest({ cmd: "browser_click", target, selector, x, y });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_type",
+      {
+        description:
+          "Type text into an already-open browser card, IME-safe (inserted as a whole string, not synthesized key by key). Give `selector` to focus that field first — omit only if you already know the right element is focused.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id"),
+          text: z.string().describe("The text to type"),
+          selector: z.string().optional().describe("CSS selector of the input/textarea/editable element to focus before typing"),
+        },
+      },
+      async ({ target, text, selector }) => {
+        const res = await opts.handleRequest({ cmd: "browser_type", target, text, selector });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_scroll",
+      {
+        description: "Scroll an already-open browser card. Give `selector` to scroll a specific nested scrollable container instead of the whole page.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id"),
+          dx: z.number().optional().describe("Horizontal scroll delta in pixels (default 0)"),
+          dy: z.number().optional().describe("Vertical scroll delta in pixels (default 0)"),
+          selector: z.string().optional().describe("CSS selector of the container to scroll — omit to scroll the whole page"),
+        },
+      },
+      async ({ target, dx, dy, selector }) => {
+        const res = await opts.handleRequest({ cmd: "browser_scroll", target, dx, dy, selector });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_query",
+      {
+        description:
+          "Inspect one element on an already-open browser card's page — existence, visible text, form value, link href, checked/disabled state, and real on-screen rect — without a screenshot.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id"),
+          selector: z.string().describe("CSS selector of the element to inspect"),
+        },
+      },
+      async ({ target, selector }) => {
+        const res = await opts.handleRequest({ cmd: "browser_query", target, selector });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_eval",
+      {
+        description:
+          "Run arbitrary JavaScript in an already-open browser card's real page context and return the (JSON-stringified) result. Unlike the other browser_* tools, this has DevTools-console-level power — the script can read cookies, session storage, and anything else the logged-in page's own JS could read. Only use it against pages/data you'd be comfortable a human collaborator reading.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id"),
+          js: z.string().describe("JavaScript to evaluate in the page's context — the expression's value becomes the result"),
+        },
+      },
+      async ({ target, js }) => {
+        const res = await opts.handleRequest({ cmd: "browser_eval", target, js });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
     return server;
   }
 

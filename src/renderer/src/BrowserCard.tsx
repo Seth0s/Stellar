@@ -1,7 +1,18 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
+import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
+
+// DESIGN-BACKLOG.md §2.1 Item E — Mobile/Tablet mirroring the real
+// devices CentralByte's own presets target. "Fluido" (free resize) has
+// no distinct action here — every card in this app already resizes
+// freely by default, unlike CentralByte's panes which can be locked to
+// a fixed size; there's nothing for a "go back to fluid" preset to undo.
+const VIEWPORT_PRESETS: { label: string; icon: "viewportMobile" | "viewportTablet"; w: number; h: number }[] = [
+  { label: "Mobile (390×844)", icon: "viewportMobile", w: 390, h: 844 },
+  { label: "Tablet (768×1024)", icon: "viewportTablet", w: 768, h: 1024 },
+];
 
 function keyModifiers(e: React.KeyboardEvent): Array<"shift" | "control" | "alt" | "meta"> {
   const mods: Array<"shift" | "control" | "alt" | "meta"> = [];
@@ -76,6 +87,7 @@ function BrowserCardInner({
   onCommit,
   onRaise,
   onFocus,
+  onFocusOwner,
   onClose,
   onCloseAnimationEnd,
   onConnectorStart,
@@ -97,6 +109,11 @@ function BrowserCardInner({
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
   onFocus: () => void;
+  /** DESIGN-BACKLOG.md §2.1 Item E — pans/raises to the card THAT OWNS
+   * this one (the badge's `#{ownerCardId}`), not this card itself
+   * (that's `onFocus`, "ajustar à tela"). Omitted (no click handler) when
+   * `ownerCardId` is null — nothing to jump to. */
+  onFocusOwner?: () => void;
   onClose: () => void;
   onCloseAnimationEnd?: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
@@ -113,6 +130,25 @@ function BrowserCardInner({
   const createdRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastSizeRef = useRef({ w: 0, h: 0 });
+  const lastZoomStepRef = useRef<number | null>(null);
+  const zoomResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+  // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
+  // (no reading UI for that yet, just the "something needs attention"
+  // signal CentralByte's own console badge gives).
+  const [consoleCounts, setConsoleCounts] = useState({ error: 0, warning: 0 });
+
+  useEffect(() => {
+    const off = window.browser.onConsoleMessage((msgId, level) => {
+      if (msgId !== id) return;
+      if (level === "error") setConsoleCounts((c) => ({ ...c, error: c.error + 1 }));
+      else if (level === "warning") setConsoleCounts((c) => ({ ...c, warning: c.warning + 1 }));
+    });
+    return () => {
+      off();
+    };
+  }, [id]);
 
   useEffect(() => {
     if (!createdRef.current) {
@@ -129,7 +165,11 @@ function BrowserCardInner({
 
   useEffect(() => {
     const offNav = window.browser.onNavigate((navId, navUrl) => {
-      if (navId === id) setBar(navUrl);
+      if (navId !== id) return;
+      setBar(navUrl);
+      // Same "console clears on navigate" convention real DevTools uses —
+      // counts from the previous page aren't meaningful for this one.
+      setConsoleCounts({ error: 0, warning: 0 });
     });
     return () => {
       offNav();
@@ -181,13 +221,47 @@ function BrowserCardInner({
     void window.browser.setFocused(id, isFocused);
   }, [id, isFocused]);
 
+  // Trilha A do navegador (browser-registry.ts's `resize` doc comment) —
+  // a resolução real do conteúdo offscreen agora acompanha o zoom do
+  // board, não só o tamanho de mundo do card. Um resize genuíno de rect
+  // (arraste da alça, já throttled por rAF no CardFrame) dispara na
+  // hora, sempre com o zoom atual; um zoom PURO (rect igual, só o board
+  // deu zoom) é mais caro que mudar um fontSize — re-renderiza a página
+  // real e recodifica um JPEG maior — então arredonda pro passo de 0.25
+  // mais próximo e espera ~150ms de zoom "assentado" antes de disparar,
+  // mesma disciplina do aviso em SCREEN_SPACE_PROJECTION_PLAN.md §0.3.
   useEffect(() => {
     const w = Math.round(rect.w);
     const h = Math.round(rect.h);
-    if (lastSizeRef.current.w === w && lastSizeRef.current.h === h) return;
-    lastSizeRef.current = { w, h };
-    void window.browser.resize(id, w, h);
-  }, [id, rect.w, rect.h]);
+    const zoomStep = Math.round(zoom * 4) / 4;
+    const sizeChanged = lastSizeRef.current.w !== w || lastSizeRef.current.h !== h;
+    const zoomChanged = lastZoomStepRef.current !== zoomStep;
+    if (!sizeChanged && !zoomChanged) return;
+
+    if (zoomResizeTimerRef.current) {
+      clearTimeout(zoomResizeTimerRef.current);
+      zoomResizeTimerRef.current = null;
+    }
+
+    if (sizeChanged) {
+      lastSizeRef.current = { w, h };
+      lastZoomStepRef.current = zoomStep;
+      void window.browser.resize(id, w, h, zoom);
+      return;
+    }
+
+    zoomResizeTimerRef.current = setTimeout(() => {
+      zoomResizeTimerRef.current = null;
+      lastZoomStepRef.current = zoomStep;
+      void window.browser.resize(id, w, h, zoom);
+    }, 150);
+  }, [id, rect.w, rect.h, zoom]);
+
+  useEffect(() => {
+    return () => {
+      if (zoomResizeTimerRef.current) clearTimeout(zoomResizeTimerRef.current);
+    };
+  }, []);
 
   function toCanvasPoint(e: React.PointerEvent<HTMLCanvasElement> | React.WheelEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
@@ -224,6 +298,14 @@ function BrowserCardInner({
     const p = toCanvasPoint(e);
     if (!p) return;
     window.browser.sendMouse(id, { type: "mouseUp", ...p, button: mouseButtonName(e.button), clickCount: 1 });
+  }
+  // Achado ao vivo (2026-08-31) — sem isso, qualquer `:hover`/tooltip/
+  // dropdown que a página embutida abriu ao passar o mouse nunca fecha
+  // quando o cursor sai do canvas (nada aqui nunca disparava um sinal
+  // de "saiu"). x/y não importam pro tipo `mouseLeave` em si.
+  function onCanvasPointerLeave() {
+    if (interactionMode !== "normal") return;
+    window.browser.sendMouse(id, { type: "mouseLeave", x: 0, y: 0 });
   }
   // Every wheel gesture anywhere on the board zooms it (useWorldTransform's
   // onWheel) — without gating this, scrolling a loaded page also zoomed the
@@ -300,6 +382,19 @@ function BrowserCardInner({
     if (e.data) void window.browser.insertText(id, e.data);
   }
 
+  // Presets de viewport (DESIGN-BACKLOG.md §2.1 Item E) — mesmo par
+  // onChange+onCommit que um drag de resize concluído produz, só que
+  // numa chamada só em vez de vários ticks; onChange (App.tsx's
+  // tryChangeRect) já cobre a checagem de colisão que um card de
+  // navegador precisa (nunca sobrepor outro card).
+  function applyPresetSize(w: number, h: number) {
+    const next = { ...rect, w, h };
+    onChange(next);
+    onCommit(next);
+  }
+
+  const consoleBadgeCount = consoleCounts.error + consoleCounts.warning;
+
   return (
     <CardFrame
       className="browser-card"
@@ -337,10 +432,35 @@ function BrowserCardInner({
             }}
           />
           {ownerCardId && (
-            <span className="browser-card-owner" title={`aberto por card #${ownerCardId}`}>
+            // DESIGN-BACKLOG.md §2.1 Item E — clicável agora: pan/raise
+            // até o card que abriu este navegador (`jumpToCard` via
+            // `onFocusOwner`), não só uma etiqueta informativa.
+            <button
+              className="browser-card-owner"
+              title={`aberto por card #${ownerCardId} — clique pra ir até lá`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onFocusOwner}
+            >
               #{ownerCardId}
+            </button>
+          )}
+          {consoleBadgeCount > 0 && (
+            <span
+              className="browser-card-console-badge"
+              data-severity={consoleCounts.error > 0 ? "error" : "warning"}
+              title={`${consoleCounts.error} erro(s), ${consoleCounts.warning} aviso(s) no console`}
+            >
+              {consoleBadgeCount}
             </span>
           )}
+          <button
+            ref={menuBtnRef}
+            title="Mais opções"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            <Icon name="moreVertical" size={12} />
+          </button>
           <button onClick={onClose}>
             <Icon name="close" size={12} />
           </button>
@@ -354,11 +474,35 @@ function BrowserCardInner({
         onPointerDown={onCanvasPointerDown}
         onPointerMove={onCanvasPointerMove}
         onPointerUp={onCanvasPointerUp}
+        onPointerLeave={onCanvasPointerLeave}
         onWheel={onCanvasWheel}
         onKeyDown={onCanvasKeyDown}
         onKeyUp={onCanvasKeyUp}
         onCompositionEnd={onCanvasCompositionEnd}
       />
+      <Popover anchorRef={menuBtnRef} open={menuOpen} onClose={() => setMenuOpen(false)} className="browser-card-menu">
+        <button
+          onClick={() => {
+            void window.browser.openDevTools(id);
+            setMenuOpen(false);
+          }}
+        >
+          <Icon name="devTools" size={14} />
+          Abrir DevTools
+        </button>
+        {VIEWPORT_PRESETS.map((preset) => (
+          <button
+            key={preset.label}
+            onClick={() => {
+              applyPresetSize(preset.w, preset.h);
+              setMenuOpen(false);
+            }}
+          >
+            <Icon name={preset.icon} size={14} />
+            {preset.label}
+          </button>
+        ))}
+      </Popover>
     </CardFrame>
   );
 }

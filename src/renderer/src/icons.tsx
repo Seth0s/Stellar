@@ -9,6 +9,7 @@ import {
   BotMessageSquare,
   BoxSelect,
   Braces,
+  Bug,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -40,7 +41,9 @@ import {
   MessageCircle,
   Minimize,
   Minus,
+  Monitor,
   MonitorSmartphone,
+  MoreVertical,
   MousePointer2,
   MousePointerClick,
   OctagonX,
@@ -53,9 +56,11 @@ import {
   Scan,
   Search,
   Settings,
+  Smartphone,
   Sparkles,
   Square,
   StickyNote,
+  Tablet,
   TerminalSquare,
   Trash2,
   Ungroup,
@@ -128,7 +133,12 @@ export type IconName =
   | "eye"
   | "eyeOff"
   | "clock"
-  | "rotate";
+  | "rotate"
+  | "moreVertical"
+  | "devTools"
+  | "viewportFluid"
+  | "viewportMobile"
+  | "viewportTablet";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -197,6 +207,11 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   eyeOff: EyeOff,
   clock: Clock,
   rotate: RotateCw,
+  moreVertical: MoreVertical,
+  devTools: Bug,
+  viewportFluid: Monitor,
+  viewportMobile: Smartphone,
+  viewportTablet: Tablet,
 };
 
 export function Icon({ name, size = 18, color }: { name: IconName; size?: number; color?: string }) {
