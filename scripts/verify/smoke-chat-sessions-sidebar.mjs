@@ -82,8 +82,18 @@ try {
   await bootIntoFreshSession(page, "Sessions Sidebar Teste");
   await new Promise((r) => setTimeout(r, 800));
 
-  const chatBtn = await centerOf(page, '.rail-btn[title="Novo chatbox"]');
-  await page.click(chatBtn.x, chatBtn.y);
+  // Rail reorg (2.2's "menu único de Ferramentas/Cards") moved "Novo
+  // chatbox" behind the "Adicionar card" popover — `centerOf`'s fallback
+  // (above) resolves it by opening that popover fresh each time, so its
+  // returned coords are only valid for THAT click, not reusable for a
+  // later click (the popover isn't open anymore by then). Always
+  // re-resolve right before clicking, never cache.
+  async function clickNewChatButton() {
+    const btn = await centerOf(page, '.rail-btn[title="Novo chatbox"]');
+    await page.click(btn.x, btn.y);
+  }
+
+  await clickNewChatButton();
   await new Promise((r) => setTimeout(r, 500));
 
   const chatCardId = JSON.parse(
@@ -141,7 +151,7 @@ try {
   // arquivada, exatamente o fluxo real (é assim que dá pra voltar a uma
   // conversa fechada: por um chatbox qualquer, não necessariamente o
   // mesmo que foi fechado).
-  await page.click(chatBtn.x, chatBtn.y);
+  await clickNewChatButton();
   await new Promise((r) => setTimeout(r, 500));
   check("um segundo chatbox (novo, vazio) foi criado", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 1);
 
@@ -226,7 +236,7 @@ try {
   // deixa aberto dali em diante) e essa MESMA persistência já foi setada
   // pra "aberto" pelo primeiro chatbox lá em cima — o painel deste novo
   // chatbox já nasce aberto, então só clica o toggle se ele NÃO estiver.
-  await page.click(chatBtn.x, chatBtn.y);
+  await clickNewChatButton();
   await new Promise((r) => setTimeout(r, 500));
   const panelAlreadyOpen = await page.evalJs(`!!document.querySelector('.chat-sessions-panel')`);
   if (!panelAlreadyOpen) {

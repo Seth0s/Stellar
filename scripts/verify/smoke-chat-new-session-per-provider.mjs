@@ -84,11 +84,20 @@ try {
   await bootIntoFreshSession(page, "Chat New Session Teste");
   await new Promise((r) => setTimeout(r, 800));
 
-  const chatBtn = await centerOf(page, '.rail-btn[title="Novo chatbox"]');
+  // Rail reorg (2.2's "menu único de Ferramentas/Cards") moved "Novo
+  // chatbox" behind the "Adicionar card" popover — `centerOf`'s fallback
+  // (above) resolves it by opening that popover fresh each time, so its
+  // returned coords are only valid for THAT click, not reusable for a
+  // later second click (the popover isn't open anymore by then). Always
+  // re-resolve right before clicking, never cache.
+  async function clickNewChatButton() {
+    const btn = await centerOf(page, '.rail-btn[title="Novo chatbox"]');
+    await page.click(btn.x, btn.y);
+  }
 
   // Card 1 — fica no provider default (anthropic), commita uma mensagem
   // própria pra virar uma sessão real e identificável.
-  await page.click(chatBtn.x, chatBtn.y);
+  await clickNewChatButton();
   await new Promise((r) => setTimeout(r, 500));
   await page.evalJs(`
     (async () => {
@@ -114,7 +123,7 @@ try {
   // Card 2 — criado por cima do card 1 (quase totalmente sobreposto), mas
   // é o último clicado a partir daqui em diante, então fica no topo pro
   // resto do teste.
-  await page.click(chatBtn.x, chatBtn.y);
+  await clickNewChatButton();
   await new Promise((r) => setTimeout(r, 500));
 
   const openaiPill = JSON.parse(

@@ -12,7 +12,7 @@
 // gate) and (2) the migration didn't break the existing UI path at all.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 
 const execFileAsync = promisify(execFile);
 const CDP_PORT = 9523;
@@ -61,18 +61,11 @@ try {
   await bootIntoFreshSession(page);
   await new Promise((r) => setTimeout(r, 500));
 
+  // Rail reorg (2.2's "menu único de Ferramentas/Cards") moved card
+  // creation behind an "Adicionar card" popover for every kind but
+  // terminal — `spawnCard` (cdp-client.mjs) handles both shapes.
   async function spawnSticky() {
-    const btn = JSON.parse(
-      await page.evalJs(`
-        (() => {
-          const b = document.querySelector('.rail-btn[title="Nova nota adesiva"]');
-          const r = b.getBoundingClientRect();
-          return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-        })()
-      `),
-    );
-    await page.click(btn.x, btn.y);
-    await new Promise((r) => setTimeout(r, 400));
+    await spawnCard(page, "sticky");
   }
   await spawnSticky();
   await spawnSticky();
