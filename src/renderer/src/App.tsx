@@ -51,6 +51,7 @@ import { useCardSelection } from "./useCardSelection";
 import { useBoardStore } from "./useBoardStore";
 import { useStableCardHandler, useStableCardIdHandler } from "./useStableCardHandler";
 import type {
+  BrowserCardData,
   Card,
   ChatCardData,
   ChatMessage,
@@ -529,6 +530,13 @@ export function App() {
   const getCommitHandler = useStableCardHandler(commitRect);
   const getRaiseHandler = useStableCardIdHandler(raise);
   const getFocusHandler = useStableCardIdHandler(jumpToCard);
+  // DESIGN-BACKLOG.md §2.1 Item E — o badge `#{ownerCardId}` do
+  // BrowserCard já mostrava QUEM abriu aquele navegador; faltava um
+  // jeito de ir até lá. `useStableCardHandler` (não a variante -Id) por
+  // precisar do card inteiro pra ler `ownerCardId`, não só o próprio id.
+  const getFocusOwnerHandler = useStableCardHandler((card: BrowserCardData) => {
+    if (card.ownerCardId) jumpToCard(card.ownerCardId);
+  });
   const getCloseHandler = useStableCardIdHandler(closeCard);
   const getCloseAnimationEndHandler = useStableCardIdHandler(finalizeCloseCard);
   const getRenameHandler = useStableCardIdHandler(renameCard);
@@ -2173,6 +2181,7 @@ export function App() {
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
                 onFocus={getFocusHandler(c)}
+                onFocusOwner={getFocusOwnerHandler(c)}
                 onClose={getCloseHandler(c)}
                 onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
                 onConnectorStart={onConnectorStart}

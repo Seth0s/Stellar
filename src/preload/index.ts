@@ -230,7 +230,10 @@ const git = {
 };
 
 export type BrowserMouseEvent = {
-  type: "mouseDown" | "mouseUp" | "mouseMove";
+  /** `mouseLeave` — closes any `:hover`/tooltip/dropdown the embedded
+   * page had open when the real cursor leaves the card's canvas (see
+   * main/browser-registry.ts's own copy of this doc comment). */
+  type: "mouseDown" | "mouseUp" | "mouseMove" | "mouseLeave";
   x: number;
   y: number;
   button?: "left" | "middle" | "right";
@@ -249,7 +252,16 @@ const browser = {
   back: (id: string): Promise<void> => ipcRenderer.invoke("browser:back", id),
   forward: (id: string): Promise<void> => ipcRenderer.invoke("browser:forward", id),
   reload: (id: string): Promise<void> => ipcRenderer.invoke("browser:reload", id),
-  resize: (id: string, w: number, h: number): Promise<void> => ipcRenderer.invoke("browser:resize", id, w, h),
+  /** DESIGN-BACKLOG.md §2.1 Item E — opens the offscreen webContents' real
+   * DevTools as a normal, separate, on-screen window (`mode: "detach"`
+   * — see browser-registry.ts's own doc comment for why detach is the
+   * only option here). */
+  openDevTools: (id: string): Promise<void> => ipcRenderer.invoke("browser:open-devtools", id),
+  /** `zoom` — Trilha A do navegador (browser-registry.ts's `resize`
+   * doc comment): resolução real do conteúdo offscreen acompanha o zoom
+   * do board, não só o tamanho de mundo do card. */
+  resize: (id: string, w: number, h: number, zoom?: number): Promise<void> =>
+    ipcRenderer.invoke("browser:resize", id, w, h, zoom),
   setVisible: (id: string, visible: boolean): Promise<void> => ipcRenderer.invoke("browser:set-visible", id, visible),
   /** Pre-release audit P2 — lowers the offscreen paint rate for a
    * visible-but-not-topmost browser card instead of always painting at
@@ -293,6 +305,14 @@ const browser = {
     const listener = (_e: unknown, id: string, loading: boolean) => cb(id, loading);
     ipcRenderer.on("browser:loading", listener);
     return () => ipcRenderer.removeListener("browser:loading", listener);
+  },
+  /** DESIGN-BACKLOG.md §2.1 Item E — `level` is Electron's own current
+   * console-message string scale. */
+  onConsoleMessage: (cb: (id: string, level: "info" | "warning" | "error" | "debug", message: string) => void) => {
+    const listener = (_e: unknown, id: string, level: "info" | "warning" | "error" | "debug", message: string) =>
+      cb(id, level, message);
+    ipcRenderer.on("browser:console-message", listener);
+    return () => ipcRenderer.removeListener("browser:console-message", listener);
   },
   onAskOpen: (cb: (requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) => void) => {
     const listener = (_e: unknown, requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) =>
@@ -681,6 +701,10 @@ const debugBridge = {
   /** Test-only (pre-release audit B7's verify coverage) — -1 in a
    * packaged build, see main/index.ts's guard. */
   seenUrlsCount: (cardId: string): Promise<number> => ipcRenderer.invoke("debug:seen-urls-count", cardId),
+  /** Test-only (Trilha A do navegador's verify coverage) — null in a
+   * packaged build, see main/index.ts's guard. */
+  browserContentSize: (cardId: string): Promise<{ w: number; h: number } | null> =>
+    ipcRenderer.invoke("debug:browser-content-size", cardId),
 };
 contextBridge.exposeInMainWorld("debugBridge", debugBridge);
 

@@ -1024,13 +1024,69 @@
   border-color: var(--accent-browser);
 }
 
-.browser-card-owner {
+/* Item E — o badge de origem virou um <button> clicável (pan até o card
+   que abriu este navegador); a regra genérica `.browser-card-address
+   button` acima tem especificidade maior (elemento+classe) que uma
+   `.browser-card-owner` sozinha, então essa qualifica o seletor pra
+   sobrescrever de verdade, em vez de brigar por ordem de declaração. */
+.browser-card-address button.browser-card-owner {
+  width: auto;
+  height: auto;
   font-size: 10px;
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 4px;
   white-space: nowrap;
+}
+
+.browser-card-address button.browser-card-owner:hover {
+  color: var(--text);
+  border-color: var(--accent-browser);
+}
+
+.browser-card-console-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: var(--danger, #d9534f);
+}
+
+.browser-card-console-badge[data-severity="warning"] {
+  background: var(--warning, #c98a1f);
+}
+
+.browser-card-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+}
+
+.browser-card-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-card-menu button:hover {
+  background: var(--border);
 }
 
 .browser-card-body {

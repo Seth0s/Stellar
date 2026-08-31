@@ -1,7 +1,13 @@
 import { BrowserWindow } from "electron";
 
 export type BrowserMouseEvent = {
-  type: "mouseDown" | "mouseUp" | "mouseMove";
+  /** `mouseLeave` — achado ao vivo (2026-08-31): sem sinal explícito de
+   * "o cursor saiu do card", qualquer `:hover`/tooltip/dropdown que a
+   * página embutida abriu ao passar o mouse nunca fecha quando o cursor
+   * sai do canvas (nada nele nunca dispara um `mouseleave`/`mouseout`
+   * real). Electron's `sendInputEvent` aceita esse tipo nativamente pra
+   * eventos de mouse — não é um hack de coordenada fora-de-bounds. */
+  type: "mouseDown" | "mouseUp" | "mouseMove" | "mouseLeave";
   x: number;
   y: number;
   button?: "left" | "middle" | "right";
@@ -17,11 +23,17 @@ export type BrowserKeyEvent = {
 type Entry = { win: BrowserWindow; visible: boolean };
 
 // Pre-release audit P2 — every visible browser card painted at the same
-// 30fps regardless of whether it's the one the user is actually
+// rate regardless of whether it's the one the user is actually
 // interacting with. Two visible-but-unfocused cards (the common
 // multi-browser-card layout) competed for main-process CPU/IPC at full
 // rate for content nobody's actively watching move.
-const FOCUSED_FRAME_RATE = 30;
+//
+// Pedido ao vivo (2026-08-31, uso da v0.2.0) — 30fps focado sentia
+// travado; subiu pra 60. `UNFOCUSED_FRAME_RATE` ficou parado em 8 por
+// decisão explícita: sem custo extra pra cards fora de foco, só o card
+// que a pessoa está de fato olhando fica mais caro em encode/transfer
+// JPEG por frame.
+const FOCUSED_FRAME_RATE = 60;
 const UNFOCUSED_FRAME_RATE = 8;
 
 /**
@@ -74,6 +86,13 @@ export function createBrowserRegistry(callbacks: {
   onTitle: (id: string, title: string) => void;
   onLoading: (id: string, loading: boolean) => void;
   onFrame: (id: string, jpeg: Buffer, width: number, height: number) => void;
+  /** DESIGN-BACKLOG.md §2.1 Item E — `level` is Electron's own current
+   * (non-deprecated) string scale, forwarded raw rather than pre-
+   * filtered here so the renderer decides what counts toward its error/
+   * warning badge (see BrowserCard.tsx). Zero new architecture —
+   * `console-message` is a plain built-in `webContents` event, same
+   * primitive class as `did-navigate`/`page-title-updated` right below. */
+  onConsoleMessage: (id: string, level: "info" | "warning" | "error" | "debug", message: string) => void;
 }) {
   const entries = new Map<string, Entry>();
 
@@ -154,6 +173,7 @@ export function createBrowserRegistry(callbacks: {
     wc.on("page-title-updated", (_e, title) => callbacks.onTitle(id, title));
     wc.on("did-start-loading", () => callbacks.onLoading(id, true));
     wc.on("did-stop-loading", () => callbacks.onLoading(id, false));
+    wc.on("console-message", (details) => callbacks.onConsoleMessage(id, details.level, details.message));
 
     entries.set(id, { win, visible: true });
     void wc.loadURL(normalizeUrl(url));
@@ -177,13 +197,51 @@ export function createBrowserRegistry(callbacks: {
     entries.get(id)?.win.webContents.reload();
   }
 
+  /** DESIGN-BACKLOG.md §2.1 Item E — `openDevTools` works on an offscreen
+   * `webContents` same as a real one; `mode: "detach"` opens it as its
+   * OWN normal (on-screen) window rather than trying to render DevTools
+   * itself offscreen, which Electron doesn't support. */
+  function openDevTools(id: string) {
+    entries.get(id)?.win.webContents.openDevTools({ mode: "detach" });
+  }
+
+  // Trilha A do navegador (SCREEN_SPACE_PROJECTION_PLAN.md §0.3's "Trilha
+  // A do navegador" note, executada 2026-08-31) — mesmo mecanismo de bug
+  // que o terminal tinha antes da própria Trilha A: a `BrowserWindow`
+  // offscreen rasterizava sempre no tamanho de MUNDO (pré-zoom), e o
+  // `scale(zoom)` do `.world` só esticava o JPEG capturado, borrando.
+  // Clampado (não `zoom` cru) pela mesma razão do `FONT_SIZE_MIN/MAX` do
+  // terminal: sem teto, zoom extremo faria a página re-renderizar e
+  // codificar JPEG num tamanho de pixel correndo solto (mais caro que o
+  // fontSize do terminal — ver o aviso do próprio plano); sem piso, zoom
+  // extremo pra fora encolheria o conteúdo real a quase nada.
+  const BROWSER_ZOOM_MIN = 0.5;
+  const BROWSER_ZOOM_MAX = 3;
+
   /** Resizes the offscreen viewport itself — the renderer calls this when
-   * the card's own (world-space, pre-zoom) rect w/h changes, matching how
-   * every other card kind sizes its content. */
-  function resize(id: string, w: number, h: number) {
+   * the card's own (world-space, pre-zoom) rect w/h changes OR the board
+   * zoom settles on a new step, matching how the terminal's real
+   * `fontSize` tracks zoom (Trilha A). `zoom` defaults to 1 for callers
+   * that only care about a plain rect resize (kept content resolution
+   * unscaled) — every real caller in this app always passes the current
+   * board zoom. */
+  function resize(id: string, w: number, h: number, zoom = 1) {
     const entry = entries.get(id);
     if (!entry) return;
-    entry.win.setContentSize(Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+    const effectiveZoom = Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, zoom));
+    entry.win.setContentSize(Math.max(1, Math.round(w * effectiveZoom)), Math.max(1, Math.round(h * effectiveZoom)));
+  }
+
+  /** Test-only (scripts/verify) — the real content-pixel size the
+   * offscreen `BrowserWindow` is currently rasterizing at, straight from
+   * Electron itself. Used to prove `resize`'s zoom scaling actually
+   * happened, the same "read the real instance, don't infer it" spirit
+   * as `terminal-registry.ts`'s `getTerminalFontSize`. */
+  function getContentSize(id: string): { w: number; h: number } | null {
+    const entry = entries.get(id);
+    if (!entry) return null;
+    const [w, h] = entry.win.getContentSize();
+    return { w, h };
   }
 
   /** Pauses/resumes actual compositing (`stopPainting`/`startPainting`),
@@ -311,6 +369,179 @@ export function createBrowserRegistry(callbacks: {
     }
   }
 
+  // DESIGN-BACKLOG.md §2.1 "MCP do Navegador — Orquestração Completa" —
+  // até aqui um agente só conseguia ABRIR (`open_url`) e LER
+  // (`getPageText`) um card de navegador, nunca agir dentro dele. Os 6
+  // métodos abaixo (mais `clickSelector`/`query`/`evalJs` usando
+  // `executeJavaScript`, mesmo primitivo já usado por `getPageText`) dão
+  // controle real, sem depender do humano estar olhando pra clicar.
+
+  /** Um clique de verdade é down+up, não só um dos dois — e um `mouseMove`
+   * antes garante que a página viu o cursor "chegar" no elemento (hover)
+   * antes do clique, igual uma interação humana real. */
+  function clickAtPoint(id: string, x: number, y: number): { ok: true } | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    sendMouseEvent(id, { type: "mouseMove", x, y });
+    sendMouseEvent(id, { type: "mouseDown", x, y, button: "left", clickCount: 1 });
+    sendMouseEvent(id, { type: "mouseUp", x, y, button: "left", clickCount: 1 });
+    return { ok: true };
+  }
+
+  /** Resolve o centro real do elemento via `executeJavaScript`
+   * (`querySelector` + `scrollIntoView` + `getBoundingClientRect`) antes
+   * de clicar — muito mais preciso que pedir pro agente adivinhar x/y a
+   * partir de um screenshot, e resiliente a scroll/zoom/resize desde a
+   * última vez que a página foi vista. */
+  async function clickSelector(
+    id: string,
+    selector: string,
+  ): Promise<{ ok: true; x: number; y: number } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const raw: unknown = await entry.win.webContents.executeJavaScript(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return null;
+          el.scrollIntoView({ block: "center", inline: "center" });
+          const r = el.getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        })()
+      `);
+      if (!raw || typeof raw !== "object") return { ok: false, error: `no element matches selector "${selector}"` };
+      const { x, y } = raw as { x: number; y: number };
+      clickAtPoint(id, x, y);
+      return { ok: true, x, y };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** `selector` given: focus that field first (via `clickSelector`) so
+   * the typed text lands where the caller actually meant, instead of
+   * whatever happened to be focused already. Uses `insertText` — same
+   * IME-safe, "whole string at once" method item 26 already established
+   * (see its own doc comment above), never synthesized char by char. */
+  async function typeText(id: string, text: string, selector?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    if (selector) {
+      const clicked = await clickSelector(id, selector);
+      if (!clicked.ok) return clicked;
+    }
+    insertText(id, text);
+    return { ok: true };
+  }
+
+  /** `selector` given: scrolls that element's own container (a nested
+   * scrollable div, not necessarily the whole page) by resolving its
+   * center point first, same mechanism as `clickSelector`. */
+  async function scroll(
+    id: string,
+    dx: number,
+    dy: number,
+    selector?: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    let x = 0;
+    let y = 0;
+    if (selector) {
+      try {
+        const raw: unknown = await entry.win.webContents.executeJavaScript(`
+          (() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+          })()
+        `);
+        if (!raw || typeof raw !== "object") return { ok: false, error: `no element matches selector "${selector}"` };
+        ({ x, y } = raw as { x: number; y: number });
+      } catch (err) {
+        return { ok: false, error: String(err) };
+      }
+    }
+    // Same sign inversion BrowserCard.tsx's onCanvasWheel already applies
+    // before calling sendWheel — Electron's sendInputEvent mouseWheel
+    // takes ticks in the opposite convention from a normal DOM
+    // WheelEvent (confirmed live there: unnegated deltas scrolled
+    // backwards). `dx`/`dy` here are the tool's own natural "positive
+    // scrolls down/right" contract (what an MCP/acbridge caller expects
+    // from a scroll tool); the Electron quirk stays encapsulated here
+    // rather than leaking into the tool's contract.
+    sendWheelEvent(id, { x, y, deltaX: -dx, deltaY: -dy });
+    return { ok: true };
+  }
+
+  type QueryResult = {
+    exists: boolean;
+    text?: string;
+    value?: string;
+    href?: string;
+    checked?: boolean;
+    disabled?: boolean;
+    rect?: { x: number; y: number; width: number; height: number };
+  };
+
+  /** Lets an agent inspect what's really on the page (existence, text,
+   * form value, link target, checked/disabled state, real on-screen
+   * rect) without depending on a screenshot — same `executeJavaScript`
+   * primitive as `getPageText`, just scoped to one element. */
+  async function query(id: string, selector: string): Promise<({ ok: true } & QueryResult) | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const raw: unknown = await entry.win.webContents.executeJavaScript(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return { exists: false };
+          const r = el.getBoundingClientRect();
+          return {
+            exists: true,
+            text: (el.innerText ?? el.textContent ?? "").slice(0, 2000),
+            value: "value" in el ? String(el.value) : undefined,
+            href: "href" in el ? String(el.href) : undefined,
+            checked: "checked" in el ? Boolean(el.checked) : undefined,
+            disabled: "disabled" in el ? Boolean(el.disabled) : undefined,
+            rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+          };
+        })()
+      `);
+      return { ok: true, ...(raw as QueryResult) };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  // Achado ao vivo (2026-08-31) — `get_page_text`'s "no consent needed"
+  // precedent (item 21 ponto 9 achado 5) covers READ-ONLY access; this
+  // runs ARBITRARY agent-supplied JS in the page's real context, which
+  // can read cookies/session/localStorage the same way a real DevTools
+  // console could. Decisão explícita do usuário: expor mesmo assim, sem
+  // gate humano — a `description` da tool MCP (mcp-server.ts) deixa esse
+  // poder visível pro agente em vez de escondê-lo atrás de uma descrição
+  // genérica.
+  const MAX_EVAL_RESULT_CHARS = 20_000;
+  async function evalJs(id: string, js: string): Promise<{ ok: true; result: string; truncated: boolean } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const raw: unknown = await entry.win.webContents.executeJavaScript(js);
+      let result: string;
+      try {
+        result = JSON.stringify(raw) ?? String(raw);
+      } catch {
+        result = String(raw);
+      }
+      const truncated = result.length > MAX_EVAL_RESULT_CHARS;
+      return { ok: true, result: truncated ? result.slice(0, MAX_EVAL_RESULT_CHARS) : result, truncated };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
   function destroy(id: string) {
     const entry = entries.get(id);
     if (!entry) return;
@@ -328,7 +559,9 @@ export function createBrowserRegistry(callbacks: {
     back,
     forward,
     reload,
+    openDevTools,
     resize,
+    getContentSize,
     setVisible,
     setFocused,
     sendMouseEvent,
@@ -340,6 +573,12 @@ export function createBrowserRegistry(callbacks: {
     cutText,
     testMakeEditable,
     getPageText,
+    clickAtPoint,
+    clickSelector,
+    typeText,
+    scroll,
+    query,
+    evalJs,
     destroy,
     destroyAll,
   };
