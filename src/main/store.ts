@@ -67,6 +67,13 @@ export type ConnectorRow = {
   kind: string | null;
 };
 
+/** DESIGN-BACKLOG.md §2.1 "próxima rodada" — favoritos do navegador,
+ * globais pro app inteiro (decisão explícita do usuário, não por board):
+ * um site salvo faz sentido reusar entre projetos diferentes. `url` como
+ * chave primária — favoritar a mesma URL duas vezes só atualiza o
+ * título, nunca duplica linha. */
+export type FavoriteRow = { url: string; title: string; created_at: number };
+
 export type BoardRow = {
   id: string;
   name: string;
@@ -304,6 +311,14 @@ export function openStore(userDataDir: string) {
     );
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS browser_favorites (
+      url TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
   // Must run after every CREATE TABLE IF NOT EXISTS above (cards,
   // connectors, AND boards — it now ALTERs all three): on a brand-new
   // database running it any earlier throws "no such table" for whichever
@@ -475,6 +490,14 @@ export function openStore(userDataDir: string) {
       max_retries = excluded.max_retries, fallback_providers_json = excluded.fallback_providers_json, updated_at = excluded.updated_at
   `);
 
+  const listFavoritesStmt = db.prepare("SELECT url, title, created_at FROM browser_favorites ORDER BY created_at DESC");
+  const addFavoriteStmt = db.prepare(`
+    INSERT INTO browser_favorites (url, title, created_at)
+    VALUES (@url, @title, @created_at)
+    ON CONFLICT(url) DO UPDATE SET title = excluded.title
+  `);
+  const removeFavoriteStmt = db.prepare("DELETE FROM browser_favorites WHERE url = ?");
+
   return {
     listCards: (boardId: string): CardRow[] => listStmt.all(boardId) as CardRow[],
     listAllCards: (): CardRow[] => listAllStmt.all() as CardRow[],
@@ -524,6 +547,9 @@ export function openStore(userDataDir: string) {
     listTasks: (): TaskRow[] => listTasksStmt.all() as TaskRow[],
     getTask: (id: string): TaskRow | undefined => getTaskStmt.get(id) as TaskRow | undefined,
     upsertTask: (task: TaskRow) => upsertTaskStmt.run(task),
+    listFavorites: (): FavoriteRow[] => listFavoritesStmt.all() as FavoriteRow[],
+    addFavorite: (url: string, title: string) => addFavoriteStmt.run({ url, title, created_at: Date.now() }),
+    removeFavorite: (url: string) => removeFavoriteStmt.run(url),
     close: () => db.close(),
   };
 }

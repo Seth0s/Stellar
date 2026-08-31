@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, net, protocol, session, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, net, protocol, screen, session, shell } from "electron";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -723,6 +723,11 @@ function createWindow() {
     onLoading: (id, loading) => safeSend(win, "browser:loading", id, loading),
     onFrame: (id, jpeg, width, height) => safeSend(win, "browser:frame", id, jpeg, width, height),
     onConsoleMessage: (id, level, message) => safeSend(win, "browser:console-message", id, level, message),
+    // Achado ao vivo ("navegador parece 360p") — o display onde a janela
+    // REAL do app está, não `getPrimaryDisplay()`, é correto mesmo num
+    // setup multi-monitor com DPIs diferentes (a janela pode não estar no
+    // display primário).
+    getScaleFactor: () => screen.getDisplayMatching(win.getBounds()).scaleFactor,
   });
 
   messageBus = createMessageBus(sockPath, {
@@ -904,6 +909,10 @@ function createWindow() {
   ipcMain.handle("store:connectors:upsert", (_e, row: ConnectorRow) => store.upsertConnector(row));
   ipcMain.handle("store:connectors:delete", (_e, id: string) => store.deleteConnector(id));
   ipcMain.handle("store:connectors:delete-for-card", (_e, cardId: string) => store.deleteConnectorsForCard(cardId));
+
+  ipcMain.handle("store:favorites:list", () => store.listFavorites());
+  ipcMain.handle("store:favorites:add", (_e, url: string, title: string) => store.addFavorite(url, title));
+  ipcMain.handle("store:favorites:remove", (_e, url: string) => store.removeFavorite(url));
 
   ipcMain.handle("store:boards:list", () => store.listBoards());
   ipcMain.handle("store:boards:upsert", (_e, board: BoardRow) => store.upsertBoard(board));

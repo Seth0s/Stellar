@@ -38,6 +38,18 @@ export function getTerminalFontSize(cardId: string): number | null {
 (window as unknown as { __getTerminalFontSize: typeof getTerminalFontSize }).__getTerminalFontSize =
   getTerminalFontSize;
 
+/** Test-only (resize-fluidity verify harness) — same pure-read, no-side-
+ * effect profile as `getTerminalFontSize` above. Lets a live CDP test
+ * prove cols/rows stay UNCHANGED during a resize drag (only the CSS
+ * optical transform moves) and DO change for real once `fitNow()` runs
+ * on release. */
+export function getTerminalDims(cardId: string): { cols: number; rows: number } | null {
+  const term = terminals.get(cardId);
+  return term ? { cols: term.cols, rows: term.rows } : null;
+}
+
+(window as unknown as { __getTerminalDims: typeof getTerminalDims }).__getTerminalDims = getTerminalDims;
+
 /**
  * Full scrollback (or just the last `lines`, if given) as plain text —
  * xterm.js keeps every row, printable or not, in `buffer.active`; blank

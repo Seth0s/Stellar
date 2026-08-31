@@ -142,6 +142,10 @@ export type BoardRow = {
 
 export type BoardCounts = { agents: number; active: number };
 
+/** DESIGN-BACKLOG.md §2.1 "próxima rodada" — globais pro app inteiro
+ * (decisão explícita do usuário), `url` como identidade única. */
+export type FavoriteRow = { url: string; title: string; created_at: number };
+
 const store = {
   list: (boardId: string): Promise<CardRow[]> => ipcRenderer.invoke("store:list", boardId),
   upsert: (card: CardRow): Promise<void> => ipcRenderer.invoke("store:upsert", card),
@@ -168,6 +172,11 @@ const store = {
      * `cap: null` resets to the app-wide default. */
     setConcurrencyCap: (id: string, cap: number | null): Promise<void> =>
       ipcRenderer.invoke("store:boards:set-concurrency-cap", id, cap),
+  },
+  favorites: {
+    list: (): Promise<FavoriteRow[]> => ipcRenderer.invoke("store:favorites:list"),
+    add: (url: string, title: string): Promise<void> => ipcRenderer.invoke("store:favorites:add", url, title),
+    remove: (url: string): Promise<void> => ipcRenderer.invoke("store:favorites:remove", url),
   },
   cardCounts: (): Promise<Record<string, BoardCounts>> => ipcRenderer.invoke("store:card-counts"),
   /** DESIGN-BACKLOG.md item 30 — sessions sidebar (every chat card, live
@@ -703,7 +712,7 @@ const debugBridge = {
   seenUrlsCount: (cardId: string): Promise<number> => ipcRenderer.invoke("debug:seen-urls-count", cardId),
   /** Test-only (Trilha A do navegador's verify coverage) — null in a
    * packaged build, see main/index.ts's guard. */
-  browserContentSize: (cardId: string): Promise<{ w: number; h: number } | null> =>
+  browserContentSize: (cardId: string): Promise<{ w: number; h: number; scaleFactor: number } | null> =>
     ipcRenderer.invoke("debug:browser-content-size", cardId),
 };
 contextBridge.exposeInMainWorld("debugBridge", debugBridge);

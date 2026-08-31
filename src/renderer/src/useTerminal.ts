@@ -656,26 +656,46 @@ export function useTerminal(
   // existed only because the fix used to be a small "levemente mais
   // nítido" nudge, not a real anti-blur fix; now that it closes the whole
   // gap, there's no reason a plain shell should stay blurry while an
-  // agent terminal doesn't). Reruns on every zoom tick during a drag-zoom
-  // gesture, but the expensive part (mutating `fontSize` — reallocates
-  // xterm's WebGL glyph atlas — plus a real `fit()`/PTY resize) only
-  // happens when the ROUNDED-to-0.1 zoom step actually changed since the
-  // last time this fired, via `lastFontZoomStepRef`; every other rerun is
-  // a single ref comparison.
+  // agent terminal doesn't). Achado ao vivo (resize fluidity pass): a
+  // versão original disparava a mutação de `fontSize` (realoca o atlas
+  // de glyphs WebGL do xterm) + `fit()` + resize de PTY em CADA tick de
+  // 0.1 no zoom, sem nenhum debounce — um gesto de zoom rápido cruzando
+  // vários passos de 0.1 disparava várias realocações caras em sequência,
+  // a mesma classe de bug já corrigida na Trilha A do navegador
+  // (`BrowserCard.tsx`'s efeito de zoom, 150ms). Mesmo padrão aqui:
+  // `lastFontZoomStepRef` só é atualizado DENTRO do timeout (quando a
+  // mudança realmente é aplicada), não a cada tick — um passo intermediário
+  // durante o gesto só cancela/reagenda o timer, nunca faz o trabalho caro.
   const lastFontZoomStepRef = useRef<number | null>(null);
+  const fontZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const term = termRef.current;
-    const fit = fitRef.current;
-    if (!term || !fit) return;
     const step = Math.round(zoom * 10) / 10;
     if (lastFontZoomStepRef.current === step) return;
-    lastFontZoomStepRef.current = step;
-    const newSize = fontSizeForZoom(step);
-    if (term.options.fontSize === newSize) return;
-    term.options.fontSize = newSize;
-    fit.fit();
-    if (ptyIdRef.current) void window.pty.resize(ptyIdRef.current, term.cols, term.rows);
+
+    if (fontZoomTimerRef.current) {
+      clearTimeout(fontZoomTimerRef.current);
+      fontZoomTimerRef.current = null;
+    }
+
+    fontZoomTimerRef.current = setTimeout(() => {
+      fontZoomTimerRef.current = null;
+      lastFontZoomStepRef.current = step;
+      const term = termRef.current;
+      const fit = fitRef.current;
+      if (!term || !fit) return;
+      const newSize = fontSizeForZoom(step);
+      if (term.options.fontSize === newSize) return;
+      term.options.fontSize = newSize;
+      fit.fit();
+      if (ptyIdRef.current) void window.pty.resize(ptyIdRef.current, term.cols, term.rows);
+    }, 150);
   }, [zoom]);
+
+  useEffect(() => {
+    return () => {
+      if (fontZoomTimerRef.current) clearTimeout(fontZoomTimerRef.current);
+    };
+  }, []);
 
   function fitNow() {
     const fit = fitRef.current;
