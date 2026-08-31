@@ -92,6 +92,14 @@ export type ChatCardData = BaseCard & {
  * limpeza de temp do SO. `view` é o pan+zoom interno da mídia dentro dos
  * limites fixos do card (mini-viewport/crop), independente do zoom do
  * canvas inteiro. */
+export type MediaCardData = BaseCard & {
+  kind: "media";
+  assetPath: string;
+  mediaType: "image" | "pdf";
+  rotation: 0 | 90 | 180 | 270;
+  view: { zoom: number; panX: number; panY: number };
+};
+
 export type Card =
   | TerminalCardData
   | FilesCardData
@@ -100,7 +108,8 @@ export type Card =
   | BrowserCardData
   | RemoteWindowCardData
   | StrokeCardData
-  | ChatCardData;
+  | ChatCardData
+  | MediaCardData;
 
 export type Connector = { id: string; fromCardId: string; toCardId: string };
 // Item 57.8 — "export" desenha um recorte retangular livre (não snapado a

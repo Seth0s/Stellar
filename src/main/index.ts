@@ -858,6 +858,33 @@ function createWindow() {
   });
   ipcMain.handle("chat:read-attachment-image", (_e, path: string) => readAttachmentImage(path));
 
+  // Item 57.9 — see board-assets.ts. `save-bytes` for a clipboard paste
+  // (only bytes in memory), `copy-from-path` for a real dropped OS file.
+  ipcMain.handle("board-assets:save-bytes", (_e, boardId: string, base64: string, mediaType: string) =>
+    saveBoardAssetBytes(boardId, base64, mediaType),
+  );
+  ipcMain.handle("board-assets:copy-from-path", (_e, boardId: string, sourcePath: string) =>
+    copyBoardAssetFromPath(boardId, sourcePath),
+  );
+  // `stellar-asset://asset/<boardId>/<filename>` — boardId/filename BOTH
+  // live in the path, not the hostname. Real bug found live building
+  // this: a "standard"-privileged scheme (required for fetch/streaming)
+  // makes the WHATWG URL parser apply normal-URL host-parsing rules, and
+  // a purely-numeric hostname (board ids are small integers stored as
+  // strings, e.g. "1") gets silently reinterpreted as an IPv4 address in
+  // dotted-decimal shorthand ("1" → "0.0.0.1") — the board-assets folder
+  // is still named "1" on disk, so a hostname-based lookup 404s on every
+  // single-digit board id. The fixed "asset" segment is just there so
+  // the URL has a syntactically valid (non-numeric, harmless) authority.
+  protocol.handle("stellar-asset", (request) => {
+    const url = new URL(request.url);
+    const [, boardId, ...rest] = url.pathname.split("/");
+    const filename = decodeURIComponent(rest.join("/"));
+    const realPath = boardId ? resolveBoardAsset(decodeURIComponent(boardId), filename) : null;
+    if (!realPath) return new Response("not found", { status: 404 });
+    return net.fetch(pathToFileURL(realPath).toString());
+  });
+
   ipcMain.handle("store:list", (_e, boardId: string) => store.listCards(boardId));
   ipcMain.handle("store:upsert", (_e, card: CardRow) => store.upsertCard(card));
   ipcMain.handle("store:delete", (_e, id: string) => store.deleteCard(id));
@@ -951,26 +978,6 @@ function createWindow() {
       return performExport(rect, format, filePath);
     },
   );
-
-  // Item 57.9 — armazenamento persistente pro card de mídia (board-assets.ts).
-  ipcMain.handle("board-assets:save-bytes", (_e, boardId: string, base64: string, mediaType: string) =>
-    saveBoardAssetBytes(boardId, base64, mediaType),
-  );
-  ipcMain.handle("board-assets:copy-from-path", (_e, boardId: string, sourcePath: string) =>
-    copyBoardAssetFromPath(boardId, sourcePath),
-  );
-  // `stellar-asset://<boardId>/<filename>` → o arquivo real dentro da
-  // pasta de assets DAQUELE board (`resolveBoardAsset` já valida o
-  // boundary). `net.fetch` sobre um `file://` real dá streaming de
-  // verdade (importa pro pdf.js) em vez de carregar tudo em memória.
-  protocol.handle("stellar-asset", (request) => {
-    const url = new URL(request.url);
-    const boardId = url.hostname;
-    const filename = decodeURIComponent(url.pathname.replace(/^\//, ""));
-    const realPath = resolveBoardAsset(boardId, filename);
-    if (!realPath) return new Response("not found", { status: 404 });
-    return net.fetch(pathToFileURL(realPath).toString());
-  });
 
   ipcMain.handle("fs:list", (_e, root: string, path: string) => listDir(root, path));
   ipcMain.handle("fs:read", (_e, root: string, path: string) => readFile(root, path));

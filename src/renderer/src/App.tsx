@@ -6,6 +6,7 @@ import { StickyCard } from "./StickyCard";
 import { BrowserCard } from "./BrowserCard";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
+import { MediaCard, type MediaView } from "./MediaCard";
 import {
   ChatCard,
   DEFAULT_CHAT_MODEL,
@@ -38,17 +39,27 @@ import {
   quadraticControlPoint,
   rectCenter,
   rectsOverlap,
+  viewportWorldRect,
   worldRectToScreen,
   type Point,
   type Rect,
 } from "./board-model";
-import type { BoardCounts, CardRow, SpawnCardKind, SpawnQueueEntry } from "../../preload/index";
+import type { BoardCounts, CardRow, SaveBoardAssetResult, SpawnCardKind, SpawnQueueEntry } from "../../preload/index";
 import { useWorldTransform } from "./useWorldTransform";
 import { useConnectorDrag } from "./useConnectorDrag";
 import { useCardSelection } from "./useCardSelection";
 import { useBoardStore } from "./useBoardStore";
 import { useStableCardHandler, useStableCardIdHandler } from "./useStableCardHandler";
-import type { Card, ChatCardData, ChatMessage, ChatProvider, Connector, StickyCardData, Tool } from "./card-types";
+import type {
+  Card,
+  ChatCardData,
+  ChatMessage,
+  ChatProvider,
+  Connector,
+  MediaCardData,
+  StickyCardData,
+  Tool,
+} from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
 import "./app.css";
@@ -242,6 +253,36 @@ function toRow(card: Card, boardId: string): CardRow {
         system_prompt: card.systemPrompt,
         messages_json: JSON.stringify({ messages: card.messages }),
       };
+    case "media":
+      // Item 57.9 — mesma convenção de reuso de coluna que "stroke" já
+      // estabeleceu (sem migração): `provider` guarda `mediaType`, `cwd`
+      // guarda o resto ({assetPath, rotation, view}) como JSON.
+      return {
+        ...base,
+        kind: "media",
+        provider: card.mediaType,
+        cwd: JSON.stringify({ assetPath: card.assetPath, rotation: card.rotation, view: card.view }),
+        resume_id: null,
+        model: null,
+        system_prompt: null,
+      };
+  }
+}
+
+const DEFAULT_MEDIA_VIEW: MediaView = { zoom: 1, panX: 0, panY: 0 };
+
+/** Mesma postura defensiva de `parseStroke` acima — uma row malformada
+ * renderiza como uma mídia vazia (assetPath "") em vez de derrubar o
+ * board inteiro. */
+function parseMedia(raw: string): { assetPath: string; rotation: 0 | 90 | 180 | 270; view: MediaView } {
+  try {
+    const parsed = JSON.parse(raw);
+    const rotation = ([0, 90, 180, 270] as const).includes(parsed?.rotation) ? parsed.rotation : 0;
+    const view: MediaView =
+      parsed?.view && typeof parsed.view.zoom === "number" ? parsed.view : DEFAULT_MEDIA_VIEW;
+    return { assetPath: typeof parsed?.assetPath === "string" ? parsed.assetPath : "", rotation, view };
+  } catch {
+    return { assetPath: "", rotation: 0, view: DEFAULT_MEDIA_VIEW };
   }
 }
 
@@ -330,6 +371,20 @@ function fromRow(r: CardRow): Card {
         cwd: isLegacyRow ? DEFAULT_CWD : r.cwd,
         systemPrompt: r.system_prompt,
         messages: parseChatMessages(r.messages_json, r.cwd),
+        rect,
+        groupId,
+        label,
+      };
+    }
+    case "media": {
+      const { assetPath, rotation, view } = parseMedia(r.cwd);
+      return {
+        id: r.id,
+        kind: "media",
+        assetPath,
+        mediaType: r.provider === "pdf" ? "pdf" : "image",
+        rotation,
+        view,
         rect,
         groupId,
         label,
@@ -752,6 +807,23 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // Item 57.9 — sem isso, um drop que escape do `.viewport` (solto sobre
+  // a rail/topbar) dispara o comportamento padrão do Electron de navegar
+  // a janela pro `file://` solto, quebrando o app. Rede de segurança
+  // global, além do onDrop/onDragOver do `.viewport` abaixo (que cobrem o
+  // caso normal, dentro do canvas vazio).
+  useEffect(() => {
+    function prevent(e: DragEvent) {
+      e.preventDefault();
+    }
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, []);
+
   function raise(id: string) {
     setOrder((prev) => [...prev.filter((x) => x !== id), id]);
   }
@@ -930,6 +1002,111 @@ export function App() {
       groupId: null,
       label: null,
     } as Card);
+  }
+
+  const MEDIA_MAX_DIM = 900;
+  const MEDIA_MIN_DIM = 160;
+  const PDF_DEFAULT_ASPECT = 4 / 3;
+
+  function fitMediaRect(naturalW: number, naturalH: number, at: Point): Rect {
+    const scale = Math.min(1, MEDIA_MAX_DIM / Math.max(naturalW, naturalH));
+    const w = Math.max(MEDIA_MIN_DIM, naturalW * scale);
+    const h = Math.max(MEDIA_MIN_DIM, naturalH * scale);
+    return { x: at.x - w / 2, y: at.y - h / 2, w, h };
+  }
+
+  function defaultPdfRect(at: Point): Rect {
+    const w = 700;
+    const h = w / PDF_DEFAULT_ASPECT;
+    return { x: at.x - w / 2, y: at.y - h / 2, w, h };
+  }
+
+  function imageNaturalSize(file: File): Promise<{ w: number; h: number }> {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve({ w: img.naturalWidth || MEDIA_MAX_DIM, h: img.naturalHeight || MEDIA_MAX_DIM * 0.75 });
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve({ w: MEDIA_MAX_DIM, h: MEDIA_MAX_DIM * 0.75 });
+      };
+      img.src = url;
+    });
+  }
+
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string).split(",")[1] ?? "");
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /** Drop de um arquivo real do SO tem um path resolvível via
+   * `webUtils.getPathForFile` (Electron 32+) — paste do clipboard não
+   * (File sintético, só em memória), daí o try/catch: distingue os dois
+   * casos sem precisar saber de antemão qual gesto originou o File. */
+  function getRealPath(file: File): string | null {
+    try {
+      return window.boardAssets.getPathForFile(file) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Item 57.9 — colar/arrastar uma imagem ou PDF no canvas vazio. PDF só
+   * nasce de drop (path real de SO) — clipboard essencialmente nunca
+   * carrega um PDF como item colável do jeito que carrega uma imagem
+   * (limite de escopo deliberado, ver o plano). */
+  async function createMediaCardFromFile(file: File, at: Point) {
+    const boardId = activeBoardIdRef.current;
+    if (!boardId) return;
+    const mediaType: "image" | "pdf" | null = file.type.startsWith("image/")
+      ? "image"
+      : file.type === "application/pdf"
+        ? "pdf"
+        : null;
+    if (!mediaType) return;
+
+    const realPath = getRealPath(file);
+    let saveResult: SaveBoardAssetResult;
+    if (realPath) {
+      saveResult = await window.boardAssets.copyFromPath(boardId, realPath);
+    } else if (mediaType === "image") {
+      saveResult = await window.boardAssets.saveBytes(boardId, await fileToBase64(file), file.type);
+    } else {
+      toast("PDF precisa ser arrastado (drop) — colar do clipboard não é suportado");
+      return;
+    }
+    if (!saveResult.ok) {
+      toast(`falha ao salvar mídia: ${saveResult.error}`);
+      return;
+    }
+
+    let rect: Rect;
+    if (mediaType === "image") {
+      const { w, h } = await imageNaturalSize(file);
+      rect = fitMediaRect(w, h, at);
+    } else {
+      rect = defaultPdfRect(at);
+    }
+
+    const id = String(nextId.current++);
+    addCard({
+      id,
+      kind: "media",
+      assetPath: saveResult.path,
+      mediaType,
+      rotation: 0,
+      view: DEFAULT_MEDIA_VIEW,
+      rect,
+      groupId: null,
+      label: null,
+    });
   }
 
   /** Agent-requested (post-Allow) or a seenUrls chip click confirmed via the
@@ -1122,6 +1299,8 @@ export function App() {
         lines.push(`- [janela externa] controle remoto`);
       } else if (c.kind === "chat") {
         lines.push(`- [chatbox ${c.model}] ${c.messages.length} mensagens`);
+      } else if (c.kind === "media") {
+        lines.push(`- [mídia ${c.mediaType}] ${c.assetPath}`);
       } else {
         lines.push(`- [terminal ${c.provider}] cwd: ${c.cwd}`);
       }
@@ -1376,6 +1555,22 @@ export function App() {
     void window.store.upsert(toRow({ ...card, color }, activeBoardIdRef.current!));
   }
 
+  /** Rotação (item 57.9) — clique discreto, sempre atualiza+persiste
+   * juntos (mesmo padrão de commitStickyColor acima), ao contrário do
+   * pan/zoom abaixo que segue o padrão live/commit do próprio drag. */
+  function commitMediaRotation(card: MediaCardData, rotation: 0 | 90 | 180 | 270) {
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "media" ? { ...c, rotation } : c)));
+    void window.store.upsert(toRow({ ...card, rotation }, activeBoardIdRef.current!));
+  }
+
+  function changeMediaView(id: string, view: MediaView) {
+    setCards((prev) => prev.map((c) => (c.id === id && c.kind === "media" ? { ...c, view } : c)));
+  }
+
+  function commitMediaView(card: MediaCardData, view: MediaView) {
+    void window.store.upsert(toRow({ ...card, view }, activeBoardIdRef.current!));
+  }
+
   /** DESIGN-BACKLOG.md item 12, Fase B — ChatCard owns its own streaming
    * state locally (token-by-token, no sqlite write per token — see
    * ChatCard.tsx) and calls this once per completed turn (or on an
@@ -1586,6 +1781,48 @@ export function App() {
     setRadialMenu({ screen: { x: e.clientX, y: e.clientY }, world: clientToWorld(e.clientX, e.clientY) });
   }
 
+  /** Reusa o mesmo guard "clicou no fundo vazio, não num card" que
+   * `onBackgroundPointerDown` já usa. */
+  function onViewportDrop(e: React.DragEvent) {
+    if (e.target !== e.currentTarget) return;
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    void createMediaCardFromFile(file, clientToWorld(e.clientX, e.clientY));
+  }
+
+  // Item 57.9 — window-level (não uma prop `onPaste` no `.viewport`):
+  // clicar no fundo vazio não move o foco pra dentro dele (nenhum
+  // elemento focável ali), então um paste com "nada focado" dispara com
+  // `document.activeElement === document.body`, que fica FORA (acima) de
+  // `.viewport` na árvore — nunca bolharia pra um handler preso nele.
+  // Mesmo motivo do keydown global logo acima usar refs em vez de state
+  // capturado: `worldRef.current`/`viewportRef.current` ficam sempre
+  // atuais mesmo dentro de um listener montado uma vez só.
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const active = document.activeElement;
+      const isFormField =
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable);
+      if (isFormField || !e.clipboardData) return;
+      const item = Array.from(e.clipboardData.items).find(
+        (i) => i.kind === "file" && (i.type.startsWith("image/") || i.type === "application/pdf"),
+      );
+      if (!item) return;
+      const file = item.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      const viewportSize = viewportRef.current
+        ? { width: viewportRef.current.clientWidth, height: viewportRef.current.clientHeight }
+        : { width: 0, height: 0 };
+      const at = rectCenter(viewportWorldRect(viewportSize, worldRef.current));
+      void createMediaCardFromFile(file, at);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   function selectRadialAction(action: RadialAction) {
     const at = radialMenu?.world;
     setRadialMenu(null);
@@ -1662,6 +1899,8 @@ export function App() {
       onWheel={onWheel}
       onPointerDown={onBackgroundPointerDown}
       onContextMenu={onBackgroundContextMenu}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onViewportDrop}
       style={backgroundStyle}
     >
       <Titlebar />
@@ -1879,6 +2118,38 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 onOpenChatSession={stableOpenChatSession}
+                selected={selected}
+              />
+            );
+          }
+          case "media": {
+            return (
+              <MediaCard
+                key={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                boardId={activeBoardId}
+                assetPath={c.assetPath}
+                mediaType={c.mediaType}
+                rotation={c.rotation}
+                view={c.view}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                label={c.label}
+                onChange={(r) => tryChangeRect(c.id, r)}
+                onCommit={(r) => commitRect(c, r)}
+                onRaise={() => raise(c.id)}
+                onFocus={() => jumpToCard(c.id)}
+                onClose={() => closeCard(c.id)}
+                onCloseAnimationEnd={() => finalizeCloseCard(c.id)}
+                onRename={(label) => renameCard(c.id, label)}
+                onRotateCommit={(rotation) => commitMediaRotation(c, rotation)}
+                onViewChange={(view) => changeMediaView(c.id, view)}
+                onViewCommit={(view) => commitMediaView(c, view)}
+                onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
                 selected={selected}
               />
             );

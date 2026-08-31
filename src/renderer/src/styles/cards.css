@@ -254,7 +254,8 @@
 .files-card,
 .changes-card,
 .sticky-card,
-.browser-card {
+.browser-card,
+.media-card {
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -1947,4 +1948,91 @@
   font-size: 12px;
   cursor: pointer;
   padding: 0;
+}
+
+/* Item 57.9 — mídia no canvas. `.media-viewport` é o "mini-viewport/crop"
+   fixo (tamanho = rect do card); `.media-content` recebe o transform de
+   pan+zoom+rotação do usuário por cima do fit inicial da própria mídia
+   (img/canvas em width/height:100% + object-fit:contain). */
+.media-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ink);
+  cursor: grab;
+  touch-action: none;
+}
+
+.media-viewport:active {
+  cursor: grabbing;
+}
+
+.media-content {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.media-content img,
+.media-pdf-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.media-pdf-loading {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.media-pdf-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.media-filename {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.media-pdf-nav button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  flex: none;
+}
+
+.media-pdf-nav button:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+
+.media-pdf-nav button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.media-pdf-page {
+  flex: none;
+  font-variant-numeric: tabular-nums;
 }

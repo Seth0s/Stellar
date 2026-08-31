@@ -8,10 +8,17 @@
          correctly-generated data: URL — CSP silently killed the request
          before it ever reached image decoding, showing a broken-image
          icon despite the underlying data being fine) and would've hit
-         FilesCard's image previews (`fs.readImage`) the same way. -->
+         FilesCard's image previews (`fs.readImage`) the same way.
+         `stellar-asset:` (item 57.9, board-assets.ts's custom protocol)
+         needs BOTH img-src (plain `<img src>`) and connect-src (pdf.js
+         loads a PDF via `fetch`/XHR under the hood, which CSP scopes to
+         connect-src, not img-src) — found live the same way as the QR
+         case above: naturalWidth stayed 0 and a direct `fetch()` of the
+         exact same URL threw, with no error surfaced anywhere else,
+         until this was added. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: stellar-asset:; connect-src 'self' stellar-asset:"
     />
     <title>Stellar</title>
     <style>

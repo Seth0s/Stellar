@@ -47,9 +47,6 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
 
 * **FilesCard — Sincronização em Tempo Real (File Watching):**
   * [ ] Implementar watcher de sistema de arquivos (`fs.watch` no processo main com debouncing/throttling) para atualizar a árvore de diretórios e arquivos abertos dinamicamente em tempo real quando alterados por agentes ou processos externos (evitando a sensação de "snapshot estático" na criação).
-* **Mídias no Canvas com Manipulação Completa (Estilo Miro/Figma — Item 57.9 expandido):**
-  * [ ] Handler global de clipboard e drop no canvas vazio para criar cards de visualização para imagens e documentos PDF.
-  * [ ] Ferramental completo de manipulação tipo Miro/Figma: redimensionamento livre com preservação de proporção (aspect ratio), rotação/enquadramento, controles de zoom interno e visualizador integrado robusto.
 
 ### 2.2 Design & Acessibilidade (D1–D8)
 
@@ -129,6 +126,7 @@ Conceitos arquiteturais e melhorias futuras registradas para avaliação:
 * **Navegador Offscreen:** Reescrito para renderização offscreen em `<canvas>`, eliminando problemas de composição e permitindo capturas/snapshots precisos, com tratamento contra travamentos em fullscreen e popups bloqueados.
 * **Notas Adesivas & Desenho:** Paleta de cores escuras ajustada para conforto visual e suporte a anotações e conectores entre cards.
 * **Exportação do Canvas com Seleção de Área (Item 57.8):** Nova ferramenta na rail ("Exportar recorte") desenha um retângulo livre (não precisa ser em cima de um card) sobre o canvas real da janela; ao soltar, escolhe PNG/JPEG/PDF e salva via diálogo nativo. Reusa a mesma captura de janela real (`webContents.capturePage`) que o `snapshot` MCP já usa — não é um DOM-to-canvas de biblioteca, então WebGL/views nativas (terminal, navegador embutido) saem corretas no recorte. PDF embrulha o JPEG capturado num wrapper mínimo (sem lib nova), verificado de verdade rasterizando de volta com `pdftoppm`.
+* **Mídias no Canvas com Manipulação Completa (Estilo Miro/Figma — Item 57.9):** Colar ou arrastar uma imagem/PDF sobre o canvas vazio (nunca em cima de um card) cria um `MediaCard` — resize livre com preservação de proporção (`CardFrame`'s prop aditivo `aspectRatio`), rotação por incrementos de 90°, e pan+zoom interno independente do zoom do board inteiro. Arquivo é copiado pra uma pasta de assets PERSISTENTE por board (`main/board-assets.ts`, `userData/board-assets/<boardId>/`), nunca o diretório temporário `stellar-pastes` que chat/terminal usam. Servido pro `<img>`/pdf.js via protocolo customizado `stellar-asset://asset/<boardId>/<filename>` (`protocol.handle`, primeiro uso deste mecanismo no app) — boardId/filename vivem no PATH da URL, não no hostname: bug real achado ao vivo, um scheme `standard: true` faz o parser WHATWG reinterpretar um hostname puramente numérico ("1") como IPv4 curto ("0.0.0.1"). PDF via `pdfjs-dist`, lazy-loaded (mesmo padrão de `FilesCard`'s `CodeEditor`), viewer completo com navegação de página.
 
 ### 4.3 Chatbox & Inteligência Artificial
 * **Multi-Provedores:** Integração nativa com Anthropic (Messages API) e compatibilidade com OpenAI / Gemini (Gemini 3.7 Flash, GPT-5.6).
@@ -154,6 +152,6 @@ Ordem de prioridade técnica sugerida para as próximas implementações:
 
 1. **Barra Lateral (Rail):** Simplificação visual com agrupamento de ferramentas em menu/modal e novo toggle com animação fluida.
 2. **FilesCard & Terminal:** Sincronização em tempo real (file watcher) e eliminação do flicker visual durante drag de terminais.
-3. **Chatbox & Mídias:** Upload de imagens/anexos no composer (Item 66) e manipulação completa de mídias coladas no canvas (Miro-style).
+3. **Chatbox & Mídias:** Upload de imagens/anexos no composer (Item 66).
 4. **Design System & Acessibilidade:** Documentação do System Design (`docs/SYSTEM_DESIGN.md`) e melhorias D1, D2, D5 e D8.
 5. **CI & Manutenção:** Estabilização dos seletores de testes (`data-kind`), inclusão do workflow de CI e atualização do `SYSTEM.md`.

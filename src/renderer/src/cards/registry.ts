@@ -30,6 +30,7 @@ export const CARD_LABEL: Record<Card["kind"], string> = {
   "remote-window": "janela externa",
   stroke: "desenho",
   chat: "chatbox",
+  media: "mídia",
 };
 
 export const CARD_ICON: Record<Card["kind"], IconName> = {
@@ -41,14 +42,17 @@ export const CARD_ICON: Record<Card["kind"], IconName> = {
   "remote-window": "remoteWindow",
   stroke: "pen",
   chat: "chat",
+  media: "fileImage",
 };
 
 /** Every kind the Rail's linear button strip spawns with a single click —
  * "terminal" keeps its own dedicated popover (provider/resume/model
  * fields no other kind has) and "stroke" has no button at all (it's only
  * ever created by finishing a pen drawing), so both stay out of this
- * list. Order here is the order the buttons render in. */
-export const RAIL_CREATE_ORDER: Exclude<Card["kind"], "terminal" | "stroke">[] = [
+ * list. Order here is the order the buttons render in. "media" (item
+ * 57.9) is excluded too — it só nasce de paste/drop no canvas vazio,
+ * nunca de um botão de "card em branco". */
+export const RAIL_CREATE_ORDER: Exclude<Card["kind"], "terminal" | "stroke" | "media">[] = [
   "files",
   "changes",
   "sticky",

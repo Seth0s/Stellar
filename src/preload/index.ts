@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 export type CardRow = {
   id: string;
@@ -104,20 +104,6 @@ const canvasExport = {
     format: "png" | "jpeg" | "pdf",
     filePath: string,
   ): Promise<ExportCaptureResult> => ipcRenderer.invoke("export:capture-rect-test", rect, format, filePath),
-};
-
-export type SaveBoardAssetResult = { ok: true; path: string } | { ok: false; error: string };
-
-/** Item 57.9 — armazenamento persistente pro card de mídia (paste/drop no
- * canvas vazio), ver main/board-assets.ts. Diferente de `clipboardImage`
- * (diretório temporário `stellar-pastes`, pode ser limpo pelo SO) — este
- * conteúdo é pra durar. Leitura acontece via o protocolo customizado
- * `stellar-asset://<boardId>/<filename>` direto num `src`, sem IPC. */
-const boardAssets = {
-  saveBytes: (boardId: string, base64: string, mediaType: string): Promise<SaveBoardAssetResult> =>
-    ipcRenderer.invoke("board-assets:save-bytes", boardId, base64, mediaType),
-  copyFromPath: (boardId: string, sourcePath: string): Promise<SaveBoardAssetResult> =>
-    ipcRenderer.invoke("board-assets:copy-from-path", boardId, sourcePath),
 };
 
 export type ConnectorRow = {
@@ -633,6 +619,26 @@ const chat = {
    * call to get a model to request a tool. */
   testSimulateTool: (cardId: string, name: string, input: unknown, root: string): Promise<{ ok: boolean; text: string }> =>
     ipcRenderer.invoke("chat:test-simulate-tool", cardId, name, input, root),
+};
+
+export type SaveBoardAssetResult = { ok: true; path: string } | { ok: false; error: string };
+
+/** Item 57.9 — armazenamento persistente pro card de mídia (paste/drop no
+ * canvas vazio), ver main/board-assets.ts. Diferente de `clipboardImage`
+ * (diretório temporário `stellar-pastes`, pode ser limpo pelo SO) — este
+ * conteúdo é pra durar. Leitura acontece via o protocolo customizado
+ * `stellar-asset://<boardId>/<filename>` direto num `src`, sem IPC.
+ * `getPathForFile` is the Electron 32+ replacement for the deprecated
+ * `File.path` — the only way from a renderer to get a dropped file's
+ * real OS path (needed so `copyFromPath` can copy it directly instead of
+ * a base64 round-trip through `saveBytes`, which matters for large
+ * PDFs). */
+const boardAssets = {
+  saveBytes: (boardId: string, base64: string, mediaType: string): Promise<SaveBoardAssetResult> =>
+    ipcRenderer.invoke("board-assets:save-bytes", boardId, base64, mediaType),
+  copyFromPath: (boardId: string, sourcePath: string): Promise<SaveBoardAssetResult> =>
+    ipcRenderer.invoke("board-assets:copy-from-path", boardId, sourcePath),
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld("pty", pty);

@@ -92,7 +92,7 @@ export function CardFrame({
   rectRef.current = rect;
   const [dragging, setDragging] = useState(false);
 
-  // Item 2.1 pendente — "piscar durante o drag", reportado ao vivo: raw
+  // Item 2.1 — "piscar durante o drag", reportado ao vivo: raw
   // `pointermove` pode disparar bem mais rápido que a taxa de atualização
   // real da tela (não é limitado pelo browser), e cada evento aqui virava
   // seu próprio `onChange` → `setCards` → mutação de `left`/`top` (são
