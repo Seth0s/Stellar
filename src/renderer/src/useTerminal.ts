@@ -7,7 +7,7 @@ import { registerTerminal, unregisterTerminal } from "./terminal-registry";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
-const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove", "wheel"] as const;
+const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove"] as const;
 
 const BASE_FONT_SIZE = 15;
 // DESIGN-BACKLOG.md item 57 ponto 10, revisado (SCREEN_SPACE_PROJECTION_
@@ -32,6 +32,36 @@ const FONT_SIZE_MAX = 22;
 function fontSizeForZoom(zoom: number): number {
   const raw = BASE_FONT_SIZE * (1 - FONT_ZOOM_INFLUENCE + zoom * FONT_ZOOM_INFLUENCE);
   return Math.round(Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, raw)));
+}
+
+/**
+ * Custom FitAddon that uses the entire container width without reserving
+ * an empty 14px scrollbar gutter. Default FitAddon subtracts 14px unconditionally
+ * whenever scrollback > 0, which leaves an empty vertical gap on the right.
+ */
+class FullWidthFitAddon extends FitAddon {
+  proposeDimensions(): { cols: number; rows: number } | undefined {
+    const term = (this as any)._terminal as Terminal | undefined;
+    if (!term || !term.element || !term.element.parentElement) return undefined;
+    const dims = (term as any)._core?._renderService?.dimensions;
+    if (!dims || dims.css.cell.width === 0 || dims.css.cell.height === 0) return undefined;
+    const parentStyle = window.getComputedStyle(term.element.parentElement);
+    const parentHeight = parseInt(parentStyle.getPropertyValue("height"), 10) || 0;
+    const parentWidth = Math.max(0, parseInt(parentStyle.getPropertyValue("width"), 10) || 0);
+    const elStyle = window.getComputedStyle(term.element);
+    const padding = {
+      top: parseInt(elStyle.getPropertyValue("padding-top"), 10) || 0,
+      bottom: parseInt(elStyle.getPropertyValue("padding-bottom"), 10) || 0,
+      right: parseInt(elStyle.getPropertyValue("padding-right"), 10) || 0,
+      left: parseInt(elStyle.getPropertyValue("padding-left"), 10) || 0,
+    };
+    const availableHeight = parentHeight - (padding.top + padding.bottom);
+    const availableWidth = parentWidth - (padding.right + padding.left);
+    return {
+      cols: Math.max(2, Math.floor(availableWidth / dims.css.cell.width)),
+      rows: Math.max(1, Math.floor(availableHeight / dims.css.cell.height)),
+    };
+  }
 }
 
 /**
@@ -127,6 +157,18 @@ const TERMINAL_THEME = {
  * original split survives, just scoped to "ever visible" instead of
  * "currently visible".
  */
+function handleTerminalWheel(t: Terminal, e: WheelEvent): boolean {
+  if (t.buffer.active !== t.buffer.normal) {
+    return true;
+  }
+  if (t.buffer.active.baseY === 0) {
+    return false;
+  }
+  const lines = Math.sign(e.deltaY) * Math.max(1, Math.round(Math.abs(e.deltaY) / 30));
+  t.scrollLines(lines);
+  return false;
+}
+
 export function useTerminal(
   containerRef: React.RefObject<HTMLDivElement | null>,
   id: string,
@@ -153,7 +195,7 @@ export function useTerminal(
   const [installHint, setInstallHint] = useState<{ providerId: string; command: string } | null>(null);
   const [discoveredResumeId, setDiscoveredResumeId] = useState<string | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
+  const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
   // Item 34 — guards Effect 3 so the DOM/GPU attachment (`term.open()`)
   // happens at most once per Terminal instance, not once per visibility
@@ -166,6 +208,18 @@ export function useTerminal(
   const attachRef = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+  // Pedido ao vivo (2026-08-31) — "no claude aparece o path da imagem,
+  // quero mascarado (visual só)". `writeImagePathToPty` (registerDomListeners
+  // abaixo) escreve o path absoluto real no PTY — a CLI rodando ali
+  // precisa dele pra ler o arquivo, então o que É ENVIADO nunca muda.
+  // O que MUDA é só o que aparece na TELA: o eco do próprio path (o TTY
+  // ecoa de volta o que recebeu, é isso que o usuário via "impresso" no
+  // terminal) é interceptado aqui e reescrito ANTES de chegar em
+  // `term.write()`, no handler de `pty:data` (Effeito 1 abaixo) — a única
+  // coisa que muda é a RENDERIZAÇÃO no xterm.js, o processo real do
+  // outro lado do PTY nunca vê nada diferente do que sempre viu.
+  const pendingMaskRef = useRef<{ needle: string; replacement: string } | null>(null);
+  const maskBufferRef = useRef("");
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
   // Spawn-time-only options, read via ref instead of effect deps below — see
@@ -202,8 +256,38 @@ export function useTerminal(
       setPtyId(result.id);
     });
 
+    // Achado ao vivo escrevendo isto: o eco de um path colado pode chegar
+    // partido em mais de um chunk de `pty:data` (o TTY não garante um
+    // chunk por escrita) — por isso bufferiza em vez de checar `data`
+    // isolado. Desiste (flush cru) se o buffer já passou do tamanho do
+    // needle sem achar o match — evita segurar output real de verdade
+    // indefinidamente se o eco não vier byte-a-byte igual por algum
+    // motivo (ex.: o processo rodando ali não tem echo local ligado).
+    function writeMasked(data: string) {
+      const pending = pendingMaskRef.current;
+      if (!pending) {
+        termRef.current?.write(data);
+        return;
+      }
+      maskBufferRef.current += data;
+      const idx = maskBufferRef.current.indexOf(pending.needle);
+      if (idx !== -1) {
+        const before = maskBufferRef.current.slice(0, idx);
+        const after = maskBufferRef.current.slice(idx + pending.needle.length);
+        termRef.current?.write(before + pending.replacement + after);
+        pendingMaskRef.current = null;
+        maskBufferRef.current = "";
+        return;
+      }
+      if (maskBufferRef.current.length >= pending.needle.length) {
+        termRef.current?.write(maskBufferRef.current);
+        pendingMaskRef.current = null;
+        maskBufferRef.current = "";
+      }
+    }
+
     const offData = window.pty.onData((id, data) => {
-      if (id === ptyIdRef.current) termRef.current?.write(data);
+      if (id === ptyIdRef.current) writeMasked(data);
     });
     const offExit = window.pty.onExit((id, code) => {
       if (id === ptyIdRef.current) setExitCode(code);
@@ -250,7 +334,7 @@ export function useTerminal(
     if (!ptyId) return;
     function buildTerminal(withWebgl: boolean) {
       const t = new Terminal({ fontSize: BASE_FONT_SIZE, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
-      const f = new FitAddon();
+      const f = new FullWidthFitAddon();
       t.loadAddon(f);
       if (withWebgl) {
         try {
@@ -261,6 +345,7 @@ export function useTerminal(
           // catches the common case for free.
         }
       }
+      t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
       return { t, f };
     }
     const { t: term, f: fit } = buildTerminal(true);
@@ -335,12 +420,13 @@ export function useTerminal(
     }
     function buildTerminalNoWebgl() {
       const t = new Terminal({ fontSize: BASE_FONT_SIZE, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
-      const f = new FitAddon();
+      const f = new FullWidthFitAddon();
       t.loadAddon(f);
+      t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
       return { t, f };
     }
 
-    function registerDomListeners(term: Terminal, _fit: FitAddon, el: HTMLDivElement) {
+    function registerDomListeners(term: Terminal, _fit: FullWidthFitAddon, el: HTMLDivElement) {
       // "não consigo mandar foto pelo terminal" (2026-08-27) — xterm.js's
       // own default paste handler only ever reads `text/plain`; an image on
       // the clipboard silently produced nothing. Capture-phase listener on
@@ -356,6 +442,7 @@ export function useTerminal(
       // `paste` DOM event for the same action; without this guard an
       // image caught by one path could get written again by the other).
       let lastHandledAt = 0;
+      let pastedImageCount = 0;
       function writeImagePathToPty() {
         lastHandledAt = Date.now();
         void window.clipboardImage.save().then((result) => {
@@ -373,7 +460,18 @@ export function useTerminal(
           // que só roda com um `ptyId` real (guard no topo do efeito); a
           // ref (não a variável fechada) é usada porque este listener
           // sobrevive além de qualquer re-render, mesmo sem se re-registrar.
-          void window.pty.write(ptyIdRef.current!, `"${result.path}" `);
+          const typed = `"${result.path}" `;
+          // Pedido ao vivo (2026-08-31) — máscara só visual: o que é
+          // ENVIADO pro PTY continua sendo o path real (`typed`, sem essa
+          // linha o comportamento é idêntico ao de antes); o que o
+          // usuário VÊ na tela vira "[imagem #N]" — o eco desse mesmo
+          // `typed` é interceptado e reescrito no handler de `pty:data`
+          // (Effeito 1, `writeMasked`), armado aqui logo antes de
+          // escrever.
+          pastedImageCount++;
+          pendingMaskRef.current = { needle: typed, replacement: `[imagem #${pastedImageCount}] ` };
+          maskBufferRef.current = "";
+          void window.pty.write(ptyIdRef.current!, typed);
           toast("imagem colada — caminho inserido no terminal");
         });
       }
@@ -412,6 +510,26 @@ export function useTerminal(
       // dos panos — pra não perder bracketed-paste-mode nem qualquer outra
       // normalização que ele já faz.
       function onKeyDown(e: KeyboardEvent) {
+        // Pedido ao vivo (2026-08-31) — "não consigo copiar textos".
+        // xterm.js renderiza em canvas/WebGL — não existe seleção de
+        // texto real do DOM/navegador ali, só a seleção LÓGICA que o
+        // próprio xterm rastreia (`term.getSelection()`); sem esse
+        // handler não existia NENHUM jeito de tirar texto selecionado do
+        // terminal. Ctrl+Shift+C (não Ctrl+C sozinho) — convenção de
+        // todo terminal Linux de verdade (GNOME Terminal, Konsole,
+        // xterm), já que Ctrl+C sozinho continua reservado pro SIGINT
+        // (`interrupt()` abaixo, também o botão "Ctrl+C" do header) —
+        // sobrecarregar Ctrl+C pra copiar quando há seleção mudaria esse
+        // comportamento já estabelecido, arriscado sem necessidade.
+        if (e.ctrlKey && e.shiftKey && (e.key === "c" || e.key === "C")) {
+          const selection = term.getSelection();
+          if (selection) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            void navigator.clipboard.writeText(selection).then(() => toast("copiado"));
+          }
+          return;
+        }
         if (!e.ctrlKey || (e.key !== "v" && e.key !== "V")) return;
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -452,9 +570,28 @@ export function useTerminal(
       // (xterm tracks that continuation on `document`, which this listener
       // doesn't reach) stays uncorrected — narrow edge case, documented rather
       // than chased further.
+      //
+      // A wheel event ALSO needs interception at zoom 1 — pedido ao vivo
+      // (2026-08-30): scrolling the terminal's own scrollback moved
+      // backwards (wheel down scrolled UP). Root-caused to xterm's
+      // vendored VS Code scrollbar code
+      // (@xterm/xterm/src/vs/base/browser/mouseEvent.ts,
+      // `StandardWheelEvent`): for a modern pixel-mode wheel event it
+      // computes `this.deltaY = -e.deltaY / 40`, a deliberate sign flip
+      // baked into that vendored code — correct for the platforms VS
+      // Code itself was tuned against, but it nets out backwards against
+      // real wheel events in this app's actual Electron+Wayland
+      // environment (confirmed live via CDP `Input.dispatchMouseEvent`
+      // with a real `mouseWheel` type — not a plain synthetic
+      // `WheelEvent`, which doesn't reproduce this). Negating `deltaY` a
+      // second time here cancels that out before xterm's own listener
+      // ever sees it — the same shape of fix already applied once in
+      // this app for the BrowserCard's own wheel forwarding
+      // (`sendInputEvent`'s delta sign, browser-registry.ts).
       function correctZoomCoords(e: Event) {
         const z = zoomRef.current;
-        if (z === 1 || (e as any).__zoomCorrected) return;
+        if (z === 1) return;
+        if ((e as any).__zoomCorrected) return;
         const me = e as MouseEvent;
         e.stopImmediatePropagation();
         e.preventDefault();
@@ -477,16 +614,7 @@ export function useTerminal(
           relatedTarget: me.relatedTarget,
           view: window,
         };
-        const corrected =
-          e.type === "wheel"
-            ? new WheelEvent("wheel", {
-                ...init,
-                deltaX: (e as WheelEvent).deltaX,
-                deltaY: (e as WheelEvent).deltaY,
-                deltaZ: (e as WheelEvent).deltaZ,
-                deltaMode: (e as WheelEvent).deltaMode,
-              })
-            : new MouseEvent(e.type, init);
+        const corrected = new MouseEvent(e.type, init);
         (corrected as any).__zoomCorrected = true;
         (e.target as EventTarget | null)?.dispatchEvent(corrected);
       }

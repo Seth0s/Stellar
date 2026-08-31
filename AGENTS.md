@@ -91,5 +91,6 @@ Os agentes em execução no Stellar podem interagir com o ambiente e coordenar o
 ## 7. 📚 Fontes Canônicas & Handoff
 
 * **[SYSTEM.md](file:///home/lucas/Workplace/Projects/Stellar/SYSTEM.md)** — Mapa detalhado de IPCs, processos main/renderer, schemas do SQLite e limites de plataforma.
+* **[docs/SYSTEM_DESIGN.md](file:///home/lucas/Workplace/Projects/Stellar/docs/SYSTEM_DESIGN.md)** — Design System formal, catálogo de componentes, tokens visuais, animações e regras de acessibilidade.
 * **[DESIGN-BACKLOG.md](file:///home/lucas/Workplace/Projects/Stellar/DESIGN-BACKLOG.md)** — Backlog consolidado de design, tarefas pendentes, acessibilidade e ideias futuras.
 * **[docs/HISTORY.md](file:///home/lucas/Workplace/Projects/Stellar/docs/HISTORY.md)** — Registro histórico e cronológico detalhado das sessões de engenharia anteriores (25 a 31 de agosto de 2026).

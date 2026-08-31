@@ -77,7 +77,7 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
 ### 2.3 Qualidade de Código, CI & Testes
 
 * **Documentação Estruturada de System Design:**
-  * [ ] Criar documentação formal e centralizada do **System Design** do Stellar (`docs/SYSTEM_DESIGN.md`), cobrindo componentes base de UI, tokens de design, especificações de animações/transições CSS, estados interativos (hover, focus, dragging) e diretrizes de UX.
+  * [x] Criar documentação formal e centralizada do **System Design** do Stellar (`docs/SYSTEM_DESIGN.md`), cobrindo componentes base de UI, tokens de design, especificações de animações/transições CSS, estados interativos (hover, focus, dragging) e diretrizes de UX.
 * **Integração Contínua (CI):**
   * [ ] Commitar e validar `.github/workflows/ci.yml` com jobs de `typecheck` e testes *smoke* automatizados via `xvfb-run`.
 * **Estabilização de Testes Automatizados:**
