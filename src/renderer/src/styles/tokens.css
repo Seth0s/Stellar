@@ -1,3 +1,31 @@
+/**
+ * ============================================================================
+ * Stellar — Design Tokens & Fundamentos Visuais
+ * ============================================================================
+ * 
+ * Pre-release audit D7 — Registro Formal de Arquitetura (Dark-First Exclusivo):
+ * 
+ * 1. Filosofia Dark-First Exclusiva:
+ *    O Stellar foi projetado exclusivamente para tema escuro. Essa decisão
+ *    prioriza a ergonomia de desenvolvedores e operadores de IA durante
+ *    longas jornadas, integrando-se sem quebras de contraste com terminais
+ *    PTY (xterm.js), editores de código (CodeMirror 6) e logs de streaming.
+ *    Não há suporte nem intenção para alternância de tema claro global.
+ * 
+ * 2. Relações de Contraste WCAG:
+ *    - Texto Primário (`--text` #e6e8ec) sobre `--ink` (#14171d) / `--surface` (#20242c):
+ *      Contraste >= 12:1 (Supera amplamente WCAG AAA de 7:1).
+ *    - Texto Secundário (`--muted` #8b93a1) sobre `--ink`/`--surface`:
+ *      Contraste >= 4.8:1 (Cumpre padrão WCAG AA de 4.5:1).
+ *    - Texto em Superfícies Claras (`--on-accent` #04141c) sobre `--foam`/`--signal`:
+ *      Contraste >= 11:1 (Alto contraste e legibilidade máxima em botões ativos).
+ * 
+ * 3. Princípio de Fonte Única da Verdade:
+ *    É expressamente proibido o uso de valores hexadecimais literais ("magic hex")
+ *    fora deste arquivo. Todo componente DEVE consumir os tokens semânticos abaixo.
+ * ============================================================================
+ */
+
 :root {
   /* Canvas base. Was #0e1014 — reported as reading "too black", especially
      with the dot grid at 7% opacity on top of it; lightened slightly and

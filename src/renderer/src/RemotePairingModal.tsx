@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useOccludesChrome } from "./occlusion";
+import { useModal } from "./useModal";
 import type { RemoteDevice, RemoteDevicePairing } from "../../preload/index";
 
 const POLL_MS = 4000;
@@ -16,7 +16,7 @@ const POLL_MS = 4000;
  * pairing after that is an explicit click on "parear novo dispositivo".
  */
 export function RemotePairingModal({ onClose }: { onClose: () => void }) {
-  useOccludesChrome();
+  const { modalProps } = useModal({ onClose });
   const [devices, setDevices] = useState<RemoteDevice[] | null>(null);
   const [pending, setPending] = useState<RemoteDevicePairing | null>(null);
   const [noNetwork, setNoNetwork] = useState(false);
@@ -75,7 +75,7 @@ export function RemotePairingModal({ onClose }: { onClose: () => void }) {
       onContextMenu={(e) => e.stopPropagation()}
     >
       <div className="modal-backdrop" onClick={onClose} />
-      <div className="modal remote-pairing-modal" role="dialog" aria-labelledby="remote-title">
+      <div className="modal remote-pairing-modal" {...modalProps} aria-labelledby="remote-title">
         <h3 id="remote-title">Controle remoto (celular)</h3>
         {devices === null ? (
           <p>carregando…</p>

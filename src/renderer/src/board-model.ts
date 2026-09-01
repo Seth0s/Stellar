@@ -80,8 +80,9 @@ const SPAWN_H = 660;
  * coincide anyway. Every other spawn path uses `centeredSlot` below.
  */
 export function cascadeSlot(index: number): Rect {
+  // D1 — x: 84 para livrar a área ocupada pela Rail lateral (12px + 48px + margem) no carregamento inicial
   return {
-    x: 40 + (index % 3) * (SPAWN_W + 20),
+    x: 84 + (index % 3) * (SPAWN_W + 20),
     y: 40 + Math.floor(index / 3) * (SPAWN_H + 20),
     w: SPAWN_W,
     h: SPAWN_H,

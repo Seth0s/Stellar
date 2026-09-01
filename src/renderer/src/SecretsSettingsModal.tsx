@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Icon } from "./icons";
 import { toast } from "./useToast";
 import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, keyFormatWarning } from "./secretsUi";
-import { useOccludesChrome } from "./occlusion";
+import { useModal } from "./useModal";
 import type { ChatProvider } from "./card-types";
 
 const ALL_PROVIDERS: ChatProvider[] = ["anthropic", "openai", "gemini", "generic"];
@@ -25,7 +25,7 @@ const EMPTY_ROW: RowState = { hasKey: null, baseUrl: "", keyInput: "", reveal: f
  * rail's "Configurações" button, not scoped to any one card.
  */
 export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
-  useOccludesChrome();
+  const { modalProps } = useModal({ onClose });
   const [rows, setRows] = useState<Record<ChatProvider, RowState>>({
     anthropic: EMPTY_ROW,
     openai: EMPTY_ROW,
@@ -90,7 +90,7 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
       onContextMenu={(e) => e.stopPropagation()}
     >
       <div className="modal-backdrop" onClick={onClose} />
-      <div className="modal secrets-settings-modal" role="dialog" aria-labelledby={titleId}>
+      <div className="modal secrets-settings-modal" {...modalProps} aria-labelledby={titleId}>
         <h3 id={titleId}>API keys</h3>
         {!encryptionAvailable && (
           <p className="chat-key-warn">

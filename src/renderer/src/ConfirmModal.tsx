@@ -1,4 +1,4 @@
-import { useOccludesChrome } from "./occlusion";
+import { useModal } from "./useModal";
 
 /** Generic yes/no confirmation, same modal chrome as AgentAskModal — kept
  * separate from it since that one is specifically the agent-navigation
@@ -21,7 +21,7 @@ export function ConfirmModal({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  useOccludesChrome();
+  const { modalProps } = useModal({ onClose: onCancel });
   return (
     <div
       className="modal-root"
@@ -30,7 +30,7 @@ export function ConfirmModal({
       onContextMenu={(e) => e.stopPropagation()}
     >
       <div className="modal-backdrop" onClick={onCancel} />
-      <div className="modal" role="dialog" aria-labelledby="confirm-title">
+      <div className="modal" {...modalProps} aria-labelledby="confirm-title">
         <h3 id="confirm-title">{title}</h3>
         <p>{message}</p>
         <div className="modal-actions">

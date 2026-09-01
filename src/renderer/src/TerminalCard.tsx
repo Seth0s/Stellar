@@ -176,6 +176,12 @@ function TerminalCardInner({
   }, []);
 
   const statusClass = spawnError !== null ? "danger" : exitCode !== null ? "" : "ok";
+  const statusLabel =
+    spawnError !== null
+      ? `Erro: ${spawnError}`
+      : exitCode !== null
+      ? `Processo encerrado (código ${exitCode})`
+      : "Processo em execução";
   useEffect(() => {
     onStatusChange?.(spawnError !== null ? "error" : exitCode !== null ? "exited" : "ok");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -230,7 +236,12 @@ function TerminalCardInner({
       headerContent={
         <>
           <span className="card-head-label">
-            <span className={`card-status-dot ${statusClass}`} />
+            <span
+              className={`card-status-dot ${statusClass}`}
+              role="status"
+              title={statusLabel}
+              aria-label={statusLabel}
+            />
             <CardTag label={label ?? providerId} onRename={onRename} />
           </span>
           <span className="card-head-actions">
