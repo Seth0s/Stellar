@@ -64,11 +64,11 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check(
     "picking 'Caneta' from the radial menu activates the pen tool on the rail",
-    await page.evalJs(`document.querySelector('.rail-btn[title="Caneta"]')?.classList.contains("active")`),
+    await page.evalJs(`document.querySelector('.rail-btn[title^="Caneta"]')?.classList.contains("active")`),
     true,
   );
   check("radial menu closed after picking a tool", await page.evalJs(`!document.querySelector(".radial-menu")`), true);
-  await page.evalJs(`document.querySelector('.rail-btn[title="Ponteiro"]')?.click()`);
+  await page.evalJs(`document.querySelector('.rail-btn[title^="Ponteiro"]')?.click()`);
   await new Promise((r) => setTimeout(r, 200));
 
   await page.click(point.x, point.y, "right");
