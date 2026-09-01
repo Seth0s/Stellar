@@ -2216,3 +2216,63 @@ select.resume-input {
     }
   }
 }
+
+/* -------------------------------------------------------- offscreen-pips (D3) */
+
+.offscreen-pips-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 550;
+  overflow: hidden;
+}
+
+.offscreen-pip {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+  backdrop-filter: blur(8px);
+}
+
+.offscreen-pip:hover {
+  background: var(--panel);
+  border-color: var(--foam);
+  transform: translate(-50%, -50%) scale(1.05);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--foam);
+}
+
+.offscreen-pip:active {
+  transform: translate(-50%, -50%) scale(0.96);
+}
+
+.offscreen-pip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--foam);
+}
+
+.offscreen-pip-label {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+

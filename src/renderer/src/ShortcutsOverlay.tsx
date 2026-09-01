@@ -1,4 +1,4 @@
-import { useOccludesChrome } from "./occlusion";
+import { useModal } from "./useModal";
 
 /**
  * `?` opens this from anywhere (App.tsx's global keydown, same guard as the
@@ -8,7 +8,7 @@ import { useOccludesChrome } from "./occlusion";
  * discoverable, ask-anytime version (see DESIGN-BACKLOG.md item 1).
  */
 export function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
-  useOccludesChrome();
+  const { modalProps } = useModal({ onClose });
   return (
     <div
       className="modal-root"
@@ -17,7 +17,7 @@ export function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
       onContextMenu={(e) => e.stopPropagation()}
     >
       <div className="modal-backdrop" onClick={onClose} />
-      <div className="modal shortcuts-modal" role="dialog" aria-labelledby="shortcuts-title">
+      <div className="modal shortcuts-modal" {...modalProps} aria-labelledby="shortcuts-title">
         <h3 id="shortcuts-title">Atalhos</h3>
         <div className="shortcuts-grid">
           <div className="shortcuts-group">

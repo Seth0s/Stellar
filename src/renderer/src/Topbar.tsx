@@ -103,11 +103,16 @@ export function Topbar({
           centerline (`left: 12px`, 48px wide). This stacks directly above
           the rail instead, same left/width, reading as one floating column
           instead of two disconnected pieces (bug reported live). */}
-      <button className="topbar-home" title="Voltar pra home" onClick={onGoHome}>
+      <button className="topbar-home" title="Voltar pra home" aria-label="Voltar para a página inicial (Home)" onClick={onGoHome}>
         <Icon name="home" size={17} />
       </button>
       <div className="topbar">
-        <button ref={titleBtnRef} className="topbar-title" onClick={() => setOpen((o) => !o)}>
+        <button
+          ref={titleBtnRef}
+          className="topbar-title"
+          aria-label={`Sessão atual: ${activeBoard?.name ?? "sessão"}`}
+          onClick={() => setOpen((o) => !o)}
+        >
           📁 {rootName}
           <Icon name="chevronDown" size={11} />
           <span className="topbar-crumb-sep">›</span>
@@ -211,13 +216,14 @@ export function Topbar({
         />
       )}
       <div className="zoom-pill">
-        <button onClick={onZoomOut} title="Diminuir zoom">
+        <button onClick={onZoomOut} title="Diminuir zoom" aria-label="Diminuir zoom">
           <Icon name="zoomOut" size={16} />
         </button>
         <button
           ref={zoomBtnRef}
           className="zoom-readout"
           title="Digitar zoom ou arrastar"
+          aria-label={`Zoom atual: ${Math.round(zoom * 100)}%`}
           onClick={() => {
             setZoomDraft(String(Math.round(zoom * 100)));
             setZoomOpen((o) => !o);
@@ -266,19 +272,28 @@ export function Topbar({
             />
           </div>
         </Popover>
-        <button onClick={onZoomIn} title="Aumentar zoom">
+        <button onClick={onZoomIn} title="Aumentar zoom" aria-label="Aumentar zoom">
           <Icon name="zoomIn" size={16} />
         </button>
         <button
           onClick={() => void window.winControls.toggleFullscreen()}
           title={fullscreen ? "Sair da tela cheia" : "Tela cheia de verdade (esconde a barra de título, F11)"}
+          aria-label={fullscreen ? "Sair da tela cheia" : "Tela cheia (F11)"}
         >
           <Icon name={fullscreen ? "fullscreenExit" : "fullscreenEnter"} size={16} />
         </button>
-        <button onClick={onCycleBgStyle} title={`Fundo do canvas: ${bgStyleLabel} (clique para trocar)`}>
+        <button
+          onClick={onCycleBgStyle}
+          title={`Fundo do canvas: ${bgStyleLabel} (clique para trocar)`}
+          aria-label={`Fundo do canvas: ${bgStyleLabel}`}
+        >
           <Icon name="bgStyle" size={16} />
         </button>
-        <button onClick={onOpenRemote} title="Controle remoto (celular, mesma rede local)">
+        <button
+          onClick={onOpenRemote}
+          title="Controle remoto (celular, mesma rede local)"
+          aria-label="Controle remoto (celular, mesma rede local)"
+        >
           <Icon name="remoteControl" size={16} />
         </button>
       </div>

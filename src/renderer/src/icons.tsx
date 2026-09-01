@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Clock,
   Code2,
   Copy,
@@ -93,6 +94,7 @@ export type IconName =
   | "chevronDown"
   | "chevronLeft"
   | "chevronRight"
+  | "chevronUp"
   | "back"
   | "forward"
   | "reload"
@@ -164,6 +166,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   chevronDown: ChevronDown,
   chevronLeft: ChevronLeft,
   chevronRight: ChevronRight,
+  chevronUp: ChevronUp,
   back: ArrowLeft,
   forward: ArrowRight,
   reload: RotateCw,
