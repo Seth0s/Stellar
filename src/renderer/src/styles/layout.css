@@ -39,6 +39,27 @@ body {
   transform-origin: 0 0;
 }
 
+/* Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — sibling of `.world`,
+ * same base geometry, deliberately NO transform (screen-projected cards
+ * compute their own screen-space left/top, see CardFrame.tsx's
+ * `screenProjected` prop). `.world`'s `transform` (any non-`none` value)
+ * unconditionally creates a new CSS stacking context, so individual card
+ * z-index values can NOT interleave across the `.world`/`.cards-layer`
+ * boundary during the coexistence period — each layer's whole subtree
+ * stacks as one block against the other's. Explicit `z-index: 1` (not
+ * relying on implicit DOM order) makes migrated cards always render
+ * ABOVE non-migrated ones — a deliberate, documented, TEMPORARY
+ * limitation of migrating card kinds one at a time; resolves on its own
+ * once every kind shares this one layer. */
+.cards-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  z-index: 1;
+}
+
 .board-overlay {
   position: absolute;
   left: 0;

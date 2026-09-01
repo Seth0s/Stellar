@@ -99,6 +99,9 @@ function BrowserCardInner({
   onCloseAnimationEnd,
   onConnectorStart,
   onSelectStart,
+  screenProjected,
+  panX,
+  panY,
 }: {
   id: string;
   rect: Rect;
@@ -125,6 +128,14 @@ function BrowserCardInner({
   onCloseAnimationEnd?: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
+   * straight through to `CardFrame`; `toCanvasPoint` below needs no
+   * change since it already reads the canvas's real on-screen box via
+   * `getBoundingClientRect()`, which reflects the true position
+   * regardless of how the ancestor got there. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   // Pre-release audit P1 — same render-count counter as TerminalCard.tsx
   // (see its doc comment) — lets the verify harness prove `React.memo`
@@ -490,6 +501,9 @@ function BrowserCardInner({
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
+      screenProjected={screenProjected}
+      panX={panX}
+      panY={panY}
       headerContent={
         <div className="browser-card-address">
           <button onClick={() => window.browser.back(id)}>
