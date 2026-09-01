@@ -14,6 +14,13 @@ const VIEWPORT_PRESETS: { label: string; icon: "viewportMobile" | "viewportTable
   { label: "Tablet (768×1024)", icon: "viewportTablet", w: 768, h: 1024 },
 ];
 
+// Must stay in sync with browser-registry.ts's own BROWSER_ZOOM_MIN/MAX —
+// `toCanvasPoint` needs to know the exact content size `resize()` really
+// applied (post-clamp) to map a click to the right coordinate space, and
+// there's no cheap way to ask the main process for it on every click.
+const BROWSER_ZOOM_MIN = 0.5;
+const BROWSER_ZOOM_MAX = 3;
+
 function keyModifiers(e: React.KeyboardEvent): Array<"shift" | "control" | "alt" | "meta"> {
   const mods: Array<"shift" | "control" | "alt" | "meta"> = [];
   if (e.shiftKey) mods.push("shift");
@@ -132,6 +139,23 @@ function BrowserCardInner({
   const lastSizeRef = useRef({ w: 0, h: 0 });
   const lastZoomStepRef = useRef<number | null>(null);
   const zoomResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Achado ao vivo (2026-09-01) — bug real de clique impreciso em
+  // qualquer zoom != 1, presente desde a Trilha A do navegador (resize()
+  // já escala `w/h` pelo zoom, `browser-registry.ts`), nunca pego pelos
+  // testes porque todos rodam em zoom=1 (onde o bug cancela e vira
+  // invisível). `toCanvasPoint` media a fração do clique dentro do
+  // retângulo REAL na tela (`box`, já pós-transform de zoom do `.world`)
+  // e multiplicava por `rect.w`/`h` — o tamanho de mundo SEM zoom — mas o
+  // espaço de coordenadas que `sendInputEvent` espera é o content size
+  // REAL da BrowserWindow offscreen, que já está multiplicado pelo mesmo
+  // zoom (clampado). Em zoom=2 isso mandava o clique pra metade da
+  // posição real dentro da página embutida. Mantém o tamanho real
+  // aplicado (mesmo clamp de `BROWSER_ZOOM_MIN/MAX` que
+  // `browser-registry.ts`'s `resize()` usa) num ref, atualizado toda vez
+  // que um resize real é disparado — não recalcula o clamp aqui a partir
+  // de `zoom` puro porque o zoom "vivo" (antes do debounce assentar) e o
+  // zoom realmente aplicado no offscreen podem divergir por até 150ms.
+  const contentSizeRef = useRef({ w: rect.w, h: rect.h });
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
@@ -269,6 +293,15 @@ function BrowserCardInner({
   // real e recodifica um JPEG maior — então arredonda pro passo de 0.25
   // mais próximo e espera ~150ms de zoom "assentado" antes de disparar,
   // mesma disciplina do aviso em SCREEN_SPACE_PROJECTION_PLAN.md §0.3.
+  function applyResize(w: number, h: number, z: number) {
+    const effectiveZoom = Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, z));
+    contentSizeRef.current = {
+      w: Math.max(1, Math.round(w * effectiveZoom)),
+      h: Math.max(1, Math.round(h * effectiveZoom)),
+    };
+    void window.browser.resize(id, w, h, z);
+  }
+
   useEffect(() => {
     const w = Math.round(rect.w);
     const h = Math.round(rect.h);
@@ -285,14 +318,14 @@ function BrowserCardInner({
     if (sizeChanged) {
       lastSizeRef.current = { w, h };
       lastZoomStepRef.current = zoomStep;
-      void window.browser.resize(id, w, h, zoom);
+      applyResize(w, h, zoom);
       return;
     }
 
     zoomResizeTimerRef.current = setTimeout(() => {
       zoomResizeTimerRef.current = null;
       lastZoomStepRef.current = zoomStep;
-      void window.browser.resize(id, w, h, zoom);
+      applyResize(w, h, zoom);
     }, 150);
   }, [id, rect.w, rect.h, zoom]);
 
@@ -307,14 +340,19 @@ function BrowserCardInner({
     if (!canvas) return null;
     const box = canvas.getBoundingClientRect();
     if (box.width === 0 || box.height === 0) return null;
-    // The embedded page's own coordinate space is `rect.w`×`rect.h`
-    // (logical CSS px — what `resize()` sets the offscreen window's
-    // content size to), not necessarily `canvas.width`/`height` — mapping
-    // through the canvas's own pixel size assumes those always match,
-    // which happened to hold before but isn't guaranteed by anything.
+    // The embedded page's own coordinate space is `contentSizeRef.current`
+    // (logical CSS px — what `resize()` REALLY set the offscreen window's
+    // content size to, post-zoom-clamp), NOT `rect.w`/`rect.h` (the
+    // card's world-space, pre-zoom size) and not `canvas.width`/`height`
+    // (the raw JPEG's device-pixel size) either. Bug found live
+    // (2026-09-01): using `rect.w`/`rect.h` here was only correct at
+    // zoom=1 by coincidence — Trilha A's `resize()` scales the real
+    // offscreen content by zoom, so at zoom=2 a click was landing at
+    // literally half its intended position inside the embedded page.
+    const { w: contentW, h: contentH } = contentSizeRef.current;
     return {
-      x: ((e.clientX - box.left) / box.width) * rect.w,
-      y: ((e.clientY - box.top) / box.height) * rect.h,
+      x: ((e.clientX - box.left) / box.width) * contentW,
+      y: ((e.clientY - box.top) / box.height) * contentH,
     };
   }
 
