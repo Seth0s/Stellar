@@ -27,13 +27,40 @@ import type { BusRequest, BusResponse } from "./message-bus";
  * this project's existing style (remote-server.ts).
  */
 export function createMcpServer(opts: { port: number; handleRequest: (req: BusRequest) => Promise<BusResponse> }) {
-  function buildServer(): McpServer {
+  /**
+   * Achado ao vivo (2026-09-01): "o modo automático não funciona de fato".
+   * A causa não estava no modo autônomo — estava aqui. Este servidor é UM
+   * só, num endereço só, compartilhado por todos os cards; a identidade do
+   * chamador vinha exclusivamente de um parâmetro `callerCardId` que o
+   * PRÓPRIO modelo tinha que lembrar de preencher, e que estava declarado
+   * `.optional()` em `spawn_agent`/`spawn_card`/`open_url`. Quando o modelo
+   * omitia (o caso comum — parâmetro opcional cuja utilidade não é óbvia
+   * pra quem está chamando), `message-bus.ts` fazia
+   * `getCardBoardId("")` → `undefined` → `autonomous = false`, e o board
+   * inteiro caía de volta no modal de consentimento mesmo com o modo
+   * autônomo ligado. O mesmo buraco silenciava o rótulo de remetente do
+   * `send_to_card` (item 61) e zerava a profundidade de spawn (audit S4).
+   *
+   * `pty-registry.ts` já sabe o id do card no momento do spawn e já injeta
+   * `AGENT_CANVAS_CARD_ID` no ambiente — passa a carimbar o mesmo id na URL
+   * do MCP que registra pra aquele processo (`/mcp?card=<id>`), então a
+   * identidade chega por transporte, não por boa vontade do modelo.
+   * `callerCardId` continua aceito e tem precedência (um agente que
+   * legitimamente fala em nome de outro card não perde nada), e uma URL sem
+   * `?card=` — o smoke test que disca a porta direto, um cliente MCP
+   * externo — se comporta exatamente como antes.
+   */
+  function buildServer(urlCardId?: string): McpServer {
+    /** `callerCardId` explícito ganha do carimbo da URL; string vazia conta
+     * como ausente (um modelo que preenche `""` não está se identificando). */
+    const caller = (explicit?: string) => (explicit && explicit.trim() ? explicit : urlCardId);
     const server = new McpServer({ name: "stellar", version: "1.0.0" });
 
     server.registerTool(
       "list_cards",
       {
-        description: "List every open terminal card on the current board (id, provider, cwd). Use a card's id as the `target` for send_to_card, snapshot, or spawn_agent's requesterId.",
+        description:
+          "List every open card on the board — terminals AND non-terminal cards (browser, sticky, files, changes, media, chat, remote-window). Each entry has id, kind, label (the name a human gave the card in its header, null if unnamed), provider (terminal/chat only), cwd (a real path only for terminal/chat/files/changes), and url (browser cards). Anywhere a tool takes a `target`, you can pass either the id or the card's label.",
         inputSchema: {},
       },
       async () => {
@@ -47,7 +74,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       {
         description: "Type a message into another open terminal card, followed by Enter — same as typing it yourself into that card.",
         inputSchema: {
-          target: z.string().describe("The target card's id (see list_cards)"),
+          target: z.string().describe("The target card's id or label (see list_cards)"),
           text: z.string().describe("The text to type"),
           callerCardId: z
             .string()
@@ -58,7 +85,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         },
       },
       async ({ target, text, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "send", target, text, requesterId: callerCardId });
+        const res = await opts.handleRequest({ cmd: "send", target, text, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -69,12 +96,51 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Read a terminal card's live scrollback as plain text — what's actually on screen (and above it), not a screenshot. Use this to check on a card you spawned or sent a message to.",
         inputSchema: {
-          target: z.string().describe("The target card's id (see list_cards)"),
+          target: z.string().describe("The target card's id or label (see list_cards)"),
           lines: z.number().optional().describe("Only the last N lines of scrollback — omit for the full buffer"),
         },
       },
       async ({ target, lines }) => {
         const res = await opts.handleRequest({ cmd: "read_card", target, lines });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    // Achado ao vivo (2026-09-01): "o send_to_card só escreve em card de
+    // terminal — sticky é editável só por você (SEM LEITURA TAMBEM)", que
+    // é por que um quadro de trabalho vivo acabava num arquivo .md em vez
+    // do board. Tools próprias, não uma extensão de send_to_card/read_card:
+    // não existe Enter pra dar nem scrollback pra paginar numa nota, e
+    // sobrecarregar aqueles nomes só produziria erro de uso.
+    server.registerTool(
+      "read_sticky",
+      {
+        description:
+          "Read a sticky note's text. Sticky notes are the board's own scratch surface — a live checklist or status board a human and an agent can both see. Use list_cards to find them (kind: \"sticky\").",
+        inputSchema: { target: z.string().describe("The sticky card's id or label (see list_cards)") },
+      },
+      async ({ target }) => {
+        const res = await opts.handleRequest({ cmd: "read_sticky", target });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "write_sticky",
+      {
+        description:
+          "Write a sticky note's text — no human approval needed, this is board content, not a disk/process side effect. Refused while a human has that note focused for editing, so it can never overwrite what someone is typing; retry after. Returns the note's resulting content.",
+        inputSchema: {
+          target: z.string().describe("The sticky card's id or label (see list_cards)"),
+          content: z.string().describe("The text to write"),
+          mode: z
+            .enum(["replace", "append"])
+            .optional()
+            .describe("replace (default) swaps the whole note; append adds to the end — prefer append for a running log so a human's own lines survive"),
+        },
+      },
+      async ({ target, content, mode }) => {
+        const res = await opts.handleRequest({ cmd: "write_sticky", target, content, mode });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -85,7 +151,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Check whether a terminal card's process is running, exited, or blocked waiting on a consent decision (e.g. an open_url/spawn_agent/spawn_card call it made that a human hasn't approved or denied yet) — a cheap alternative to polling snapshot/read_card in a loop.",
         inputSchema: {
-          target: z.string().describe("The target card's id (see list_cards)"),
+          target: z.string().describe("The target card's id or label (see list_cards)"),
         },
       },
       async ({ target }) => {
@@ -100,12 +166,17 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Report a structured result back to whoever spawned you, decoupled from process exit — call this when you finish a delegated task, even if you keep running afterward. The caller reads it with read_report, no ANSI/scrollback parsing needed. Requires your own card id.",
         inputSchema: {
-          callerCardId: z.string().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — required, this IS the report's identity"),
+          callerCardId: z
+            .string()
+            .optional()
+            .describe(
+              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: the server already knows which card you are from the MCP URL it registered for your process. Pass it only to report on behalf of a different card.",
+            ),
           report: z.unknown().describe("Any JSON value — e.g. {ok: true, result: '...'} or {ok: false, error: '...'}"),
         },
       },
       async ({ callerCardId, report }) => {
-        const res = await opts.handleRequest({ cmd: "report", requesterId: callerCardId, report });
+        const res = await opts.handleRequest({ cmd: "report", requesterId: caller(callerCardId), report });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -260,15 +331,15 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "open_url",
       {
-        description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass).",
+        description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass). Returns the new card's id as `cardId` on approval: pass that straight to get_page_text/browser_click/browser_query/snapshot to act on the page you just opened. list_cards also shows every open browser card (kind: \"browser\", with its url).",
         inputSchema: {
           url: z.string().describe("The URL to open"),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var), so the human sees who's asking"),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process; this only overrides that."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
         },
       },
       async ({ url, callerCardId, reason }) => {
-        const res = await opts.handleRequest({ cmd: "open", url, requesterId: callerCardId, reason });
+        const res = await opts.handleRequest({ cmd: "open", url, requesterId: caller(callerCardId), reason });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -284,7 +355,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
           model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default"),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — also how the server looks up YOUR real spawn depth server-side, to compute the new card's depth. Omit only if you're not sure, in which case this call is treated as a fresh chain (depth 0)."),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to look up YOUR real spawn depth and whether your board is in autonomous mode. Pass it only to override that."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
           wait: z
             .boolean()
@@ -299,7 +370,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           provider,
           cwd,
           resumeId,
-          requesterId: callerCardId,
+          requesterId: caller(callerCardId),
           reason,
           model,
           label,
@@ -318,12 +389,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           kind: z.enum(["files", "changes", "sticky", "browser", "remote-window"]).describe("Which card kind to create"),
           cwd: z.string().optional().describe("Root path — used by files/changes kinds, defaults to the board's root"),
           url: z.string().optional().describe("URL — used by the browser kind"),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var)"),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
         },
       },
       async ({ kind, cwd, url, callerCardId, reason }) => {
-        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, requesterId: callerCardId, reason });
+        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, requesterId: caller(callerCardId), reason });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -331,7 +402,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "snapshot",
       {
-        description: "See a screenshot of a specific card, an explicit board rect, or the whole window — returned as an embedded image, not a file path (MCP clients don't share this app's filesystem).",
+        description: "See a screenshot of a specific card, an explicit board rect, or the whole window — returned as an embedded image, not a file path (MCP clients don't share this app's filesystem). Targeting a BROWSER card captures that page's own rendered surface at full resolution — exactly the card and nothing else, regardless of where it sits on the board, the board's zoom, or whether it is even on screen. Every other card kind is captured from the app window, so it must be visible on the board.",
         inputSchema: {
           target: z.string().optional().describe("A card id to capture — omit along with rect for the whole window"),
           rect: z
@@ -356,7 +427,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "get_page_text",
       {
         description: "Read a browser card's rendered page text (document.body.innerText, truncated if very long) — cheaper than snapshot when you just need to know what the page says, not see it.",
-        inputSchema: { target: z.string().describe("The browser card's id (see list_cards; note: only terminal cards show there — you likely already have the id from spawn_card's response)") },
+        inputSchema: { target: z.string().describe("The browser card's id or label (see list_cards)") },
       },
       async ({ target }) => {
         const res = await opts.handleRequest({ cmd: "get_page_text", target });
@@ -377,14 +448,18 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Click inside an already-open browser card. Prefer `selector` (a CSS selector — robust to scroll/zoom/resize, resolved against the live page) over raw `x`/`y` (the page's own logical pixel coordinates, only reliable right after a `browser_query` on that exact spot).",
         inputSchema: {
-          target: z.string().describe("The browser card's id"),
-          selector: z.string().optional().describe("CSS selector of the element to click — takes precedence over x/y if both given"),
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          selector: z.string().optional().describe("CSS selector of the element to click — takes precedence over x/y if both given. Plain CSS only (the page's own document.querySelector); Playwright-style :has-text(...)/text=/>> are not supported — use browser_eval to match on text content"),
           x: z.number().optional().describe("X coordinate in the page's own logical pixels, only used if selector is omitted"),
           y: z.number().optional().describe("Y coordinate in the page's own logical pixels, only used if selector is omitted"),
+          ref: z
+            .string()
+            .optional()
+            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
         },
       },
-      async ({ target, selector, x, y }) => {
-        const res = await opts.handleRequest({ cmd: "browser_click", target, selector, x, y });
+      async ({ target, selector, ref, x, y }) => {
+        const res = await opts.handleRequest({ cmd: "browser_click", target, selector, ref, x, y });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -395,13 +470,17 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Type text into an already-open browser card, IME-safe (inserted as a whole string, not synthesized key by key). Give `selector` to focus that field first — omit only if you already know the right element is focused.",
         inputSchema: {
-          target: z.string().describe("The browser card's id"),
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
           text: z.string().describe("The text to type"),
           selector: z.string().optional().describe("CSS selector of the input/textarea/editable element to focus before typing"),
+          ref: z
+            .string()
+            .optional()
+            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
         },
       },
-      async ({ target, text, selector }) => {
-        const res = await opts.handleRequest({ cmd: "browser_type", target, text, selector });
+      async ({ target, text, selector, ref }) => {
+        const res = await opts.handleRequest({ cmd: "browser_type", target, text, selector, ref });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -411,14 +490,18 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       {
         description: "Scroll an already-open browser card. Give `selector` to scroll a specific nested scrollable container instead of the whole page.",
         inputSchema: {
-          target: z.string().describe("The browser card's id"),
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
           dx: z.number().optional().describe("Horizontal scroll delta in pixels (default 0)"),
           dy: z.number().optional().describe("Vertical scroll delta in pixels (default 0)"),
           selector: z.string().optional().describe("CSS selector of the container to scroll — omit to scroll the whole page"),
+          ref: z
+            .string()
+            .optional()
+            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
         },
       },
-      async ({ target, dx, dy, selector }) => {
-        const res = await opts.handleRequest({ cmd: "browser_scroll", target, dx, dy, selector });
+      async ({ target, dx, dy, selector, ref }) => {
+        const res = await opts.handleRequest({ cmd: "browser_scroll", target, dx, dy, selector, ref });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -429,12 +512,89 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Inspect one element on an already-open browser card's page — existence, visible text, form value, link href, checked/disabled state, and real on-screen rect — without a screenshot.",
         inputSchema: {
-          target: z.string().describe("The browser card's id"),
-          selector: z.string().describe("CSS selector of the element to inspect"),
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          selector: z.string().optional().describe("CSS selector of the element to inspect. Plain CSS only (the page's own document.querySelector) — Playwright-style :has-text(...)/text=/>> are not supported"),
+          ref: z
+            .string()
+            .optional()
+            .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
         },
       },
-      async ({ target, selector }) => {
-        const res = await opts.handleRequest({ cmd: "browser_query", target, selector });
+      async ({ target, selector, ref }) => {
+        const res = await opts.handleRequest({ cmd: "browser_query", target, selector, ref });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    // Achados ao vivo (2026-09-01, relato de um agente que dirigiu o
+    // navegador daqui): sem estas quatro, mirar um elemento exigia já
+    // saber o seletor, esperar era dormir e torcer, e uma falha silenciosa
+    // (um botão que não faz nada porque a API deu 500) não tinha nenhum
+    // caminho de diagnóstico pelo lado do Stellar.
+    server.registerTool(
+      "browser_snapshot",
+      {
+        description:
+          "List every visible, interactive element on a browser card's page — each with a stable `ref`, its role, and the name a human reads on screen. This is how you target something you can SEE but have no selector for: snapshot first, then pass the ref to browser_click/browser_type/browser_query. Much cheaper and more reliable than a screenshot plus guessing coordinates. Refs are reissued on every call and stop being valid after a navigation or re-render — snapshot again rather than reusing an old one.",
+        inputSchema: { target: z.string().describe("The browser card's id or label (see list_cards)") },
+      },
+      async ({ target }) => {
+        const res = await opts.handleRequest({ cmd: "browser_snapshot", target });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_console",
+      {
+        description:
+          "Read a browser card's captured console output (recent messages first dropped, ring buffer). The first place to look when a page silently misbehaves — an uncaught error or a failed fetch usually shows up here before anything is visible on screen.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          level: z.enum(["error", "warning", "info", "debug"]).optional().describe("Only messages at this level — start with \"error\""),
+          limit: z.number().optional().describe("Only the last N messages"),
+        },
+      },
+      async ({ target, level, limit }) => {
+        const res = await opts.handleRequest({ cmd: "browser_console", target, level, limit });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_network",
+      {
+        description:
+          "Read the HTTP requests a browser card's page has made (method, url, status, or a transport error). This is what answers \"the save button did nothing — did the request even go out, and what did it return?\". Use failedOnly:true to jump straight to the 4xx/5xx and transport failures.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          failedOnly: z.boolean().optional().describe("Only requests that failed: 4xx, 5xx, or a transport error (DNS, CORS, aborted)"),
+          status: z.number().optional().describe("Only requests with exactly this HTTP status"),
+          urlContains: z.string().optional().describe("Only requests whose URL contains this substring"),
+          limit: z.number().optional().describe("Only the last N requests"),
+        },
+      },
+      async ({ target, failedOnly, status, urlContains, limit }) => {
+        const res = await opts.handleRequest({ cmd: "browser_network", target, failedOnly, status, urlContains, limit });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "browser_wait_for",
+      {
+        description:
+          "Block until a browser card's page shows (or stops showing) something — a CSS selector or a piece of visible text. Use this after an action instead of guessing how long to sleep; it returns as soon as the condition holds, and fails with a clear timeout if it never does.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          selector: z.string().optional().describe("Wait for this CSS selector to match an element (plain CSS only)"),
+          text: z.string().optional().describe("Wait for this text to appear in the page's visible text"),
+          gone: z.boolean().optional().describe("Invert: wait for the selector/text to DISAPPEAR (a spinner going away, a dialog closing)"),
+          timeoutMs: z.number().optional().describe("How long to wait before giving up (default 10000)"),
+        },
+      },
+      async ({ target, selector, text, gone, timeoutMs }) => {
+        const res = await opts.handleRequest({ cmd: "browser_wait_for", target, selector, text, gone, timeoutMs });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -445,7 +605,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Run arbitrary JavaScript in an already-open browser card's real page context and return the (JSON-stringified) result. Unlike the other browser_* tools, this has DevTools-console-level power — the script can read cookies, session storage, and anything else the logged-in page's own JS could read. Only use it against pages/data you'd be comfortable a human collaborator reading.",
         inputSchema: {
-          target: z.string().describe("The browser card's id"),
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
           js: z.string().describe("JavaScript to evaluate in the page's context — the expression's value becomes the result"),
         },
       },
@@ -465,7 +625,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
   }
 
   const httpServer: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    if (req.url !== "/mcp") {
+    // `?card=<id>` — ver o doc de `buildServer`. Base descartável só pra
+    // poder usar o parser de URL num caminho relativo; nada aqui olha o
+    // host (o servidor só escuta em 127.0.0.1).
+    const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (parsed.pathname !== "/mcp") {
       res.writeHead(404).end();
       return;
     }
@@ -473,7 +637,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       methodNotAllowed(res);
       return;
     }
-    const server = buildServer();
+    const server = buildServer(parsed.searchParams.get("card") ?? undefined);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     void server
       .connect(transport)

@@ -23,6 +23,22 @@
    (`.card-resize`), so `right:0; bottom:0` anchors correctly without it. */
 .card-scale {
   transform-origin: 0 0;
+  /* Achado ao vivo (2026-09-01, screenshot de sticky card com "body" que
+     não chega no rodapé do card): `.sticky-card`/`.browser-card` — os dois
+     tipos projetados em screen-space — são `display: flex; flex-direction:
+     column` (regra compartilhada mais abaixo), então ESTE elemento é um
+     flex item no eixo principal vertical. `height` inline é o `rect.h` do
+     mundo (não escalado), enquanto o `.card-frame` que o contém mede
+     `rect.h * zoom`; com `flex-shrink: 1` (o padrão) qualquer zoom < 1
+     encolhe o item pro tamanho do container ANTES do `transform`, e aí o
+     `scale(zoom)` multiplica de novo — altura visual `rect.h * zoom²` em
+     vez de `rect.h * zoom`, deixando uma faixa vazia no fundo do card que
+     cresce conforme se afasta. A largura não sofria porque é eixo
+     transversal com tamanho explícito (o stretch nem se aplica), o que
+     explica o sintoma assimétrico: encostado nas laterais, sobrando
+     embaixo. `flex: none` mantém o item exatamente no tamanho do `rect`,
+     que é a premissa de toda a Trilha B. */
+  flex: none;
 }
 
 /* Clips card-head + body content to the rounded card shape. Deliberately
@@ -281,6 +297,81 @@
 
 .card-resize:hover {
   color: var(--text);
+}
+
+/* Pedido ao vivo (2026-09-01): redimensionar por qualquer lado, não só
+   pelo canto inferior-direito. Sete zonas invisíveis mais o grip que já
+   existia — ver CardFrame.tsx. Ficam FORA de `.card-clip` (o
+   `overflow: hidden` de lá recortaria exatamente a área de acerto nas
+   bordas, que foi o que já tinha inutilizado o punho antigo uma vez).
+
+   14px de faixa e 18px de canto: a zona transborda ~7px pra FORA do card
+   de propósito. Acertar exatamente em cima de uma borda de 1px é difícil,
+   e a área externa não disputa nada com o conteúdo do card — só com o
+   fundo do board, que não tem gesto de arraste começando ali (o pan só
+   nasce em fundo vazio de verdade, e este ponto pertence a um card). */
+.card-resize-zone {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+}
+
+.card-resize-n,
+.card-resize-s {
+  left: 18px;
+  right: 18px;
+  height: 14px;
+  cursor: ns-resize;
+}
+
+.card-resize-e,
+.card-resize-w {
+  top: 18px;
+  bottom: 18px;
+  width: 14px;
+  cursor: ew-resize;
+}
+
+.card-resize-n {
+  top: -7px;
+}
+.card-resize-s {
+  bottom: -7px;
+}
+.card-resize-w {
+  left: -7px;
+}
+.card-resize-e {
+  right: -7px;
+}
+
+.card-resize-ne,
+.card-resize-nw,
+.card-resize-se,
+.card-resize-sw {
+  width: 18px;
+  height: 18px;
+}
+
+.card-resize-nw {
+  top: -7px;
+  left: -7px;
+  cursor: nwse-resize;
+}
+.card-resize-ne {
+  top: -7px;
+  right: -7px;
+  cursor: nesw-resize;
+}
+.card-resize-sw {
+  bottom: -7px;
+  left: -7px;
+  cursor: nesw-resize;
+}
+.card-resize-se {
+  bottom: -7px;
+  right: -7px;
+  cursor: nwse-resize;
 }
 
 .terminal-card,
@@ -2172,6 +2263,63 @@
 
 .media-viewport:active {
   cursor: grabbing;
+}
+
+/* "O CARD TIPO MEDIA NÃO DEVERIA TER BODY" (pedido ao vivo 2026-09-01) —
+   um card de imagem passa a ser a imagem, sem moldura. Só a superfície
+   muda; drag, resize, fechar, girar e renomear continuam todos existindo
+   (ver o doc de `chromeless` em CardFrame.tsx). */
+.card-frame.chromeless.media-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+/* O header vira overlay: `position: absolute` é o ponto todo — assim ele
+   deixa de ocupar altura no flex column do card, e a imagem passa a
+   preencher o `rect` inteiro. Como o `rect` de um card de mídia nasce com
+   a proporção natural da imagem (App.tsx's `fitMediaRect`) e o resize é
+   proporcional (`aspectRatio`), o encaixe é exato e o letterbox some por
+   construção — era o header+rodapé que o causavam. */
+.card-frame.chromeless .card-head {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  /* Legível por cima de qualquer imagem, sem virar uma barra sólida que
+     recria visualmente o header que acabou de ser removido. */
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.card-frame.chromeless:hover .card-head,
+.card-frame.chromeless:focus-within .card-head {
+  opacity: 1;
+}
+
+/* Sem moldura, o próprio recorte arredondado é o que dá forma ao card —
+   e o fundo escuro do viewport não deve aparecer atrás de uma imagem que
+   preenche tudo (só apareceria num frame de transição de carregamento). */
+.card-frame.chromeless .media-viewport {
+  background: transparent;
+  border-radius: var(--radius);
+}
+
+/* O handle de resize vive FORA do `.card-clip` (CardFrame.tsx), então sem
+   moldura ele fica solto sobre a imagem — mesmo tratamento do header:
+   aparece no hover, com contraste próprio. */
+.card-frame.chromeless .card-resize {
+  opacity: 0;
+  transition: opacity 120ms ease;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.card-frame.chromeless:hover .card-resize {
+  opacity: 1;
 }
 
 .media-content {

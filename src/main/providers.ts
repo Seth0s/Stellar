@@ -117,16 +117,15 @@ export const PROVIDERS: ProviderDef[] = [
     label: "Cursor",
     binaryNames: ["agent", "cursor-agent"],
     installCommand: "curl https://cursor.com/install -fsS | bash",
-    // No documented system-prompt flag, AND (unlike claude/codex above)
-    // no ephemeral per-invocation MCP registration flag either — Cursor
-    // CLI only discovers MCP servers from a written .cursor/mcp.json
-    // (project or global), auto-loaded by file-path precedence. Writing
-    // into a project's own .cursor/mcp.json on every spawn was
-    // deliberately NOT done here — that's a real file-system side effect
-    // in the user's repo, not something to do silently on every terminal
-    // spawn. Left undocumented to the agent itself, same as before; a
-    // human can still register `stellar` manually in .cursor/mcp.json if
-    // they want cursor-agent cards to have it.
+    // Sem flag de system-prompt e, ao contrário de claude/codex acima,
+    // sem flag efêmera de registro de MCP: a CLI do Cursor só descobre
+    // servidor MCP por `.cursor/mcp.json` escrito em disco (do projeto ou
+    // global). Escrever no `.cursor/mcp.json` DO PROJETO a cada spawn
+    // continua fora de cogitação — é efeito colateral no repositório do
+    // usuário. O que mudou (2026-09-01, a pedido): o registro passou a
+    // acontecer uma vez só, no config GLOBAL do usuário e apontando pro
+    // shim stdio, em `mcp-registration.ts` — fora do `buildArgs`, que é
+    // por invocação. Por isso não há nada de MCP nos args aqui.
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
@@ -147,10 +146,11 @@ export const PROVIDERS: ProviderDef[] = [
   // registro de MCP por-invocação — confirmado que a única forma é
   // `agy mcp add` (persistente, arquivo `~/.gemini/config/
   // mcp_config.json` ou `.agents/mcp_config.json` por workspace) —
-  // mesma não-escolha deliberada de cursor/gemini antes: não escrever
-  // silenciosamente na config do usuário a cada spawn de terminal. Um
-  // humano ainda pode registrar `stellar` manualmente se quiser que
-  // cards antigravity tenham acesso.
+  // Como no cursor logo acima, isso deixou de ser uma não-escolha
+  // (2026-09-01, a pedido): `mcp-registration.ts` roda `agy mcp add` uma
+  // vez, preguiçosamente, no primeiro spawn de um card antigravity, e
+  // aponta pro shim stdio — nunca por spawn, nunca no repositório do
+  // usuário. Nada de MCP nos args daqui, que são por invocação.
   {
     id: "antigravity",
     label: "Antigravity",

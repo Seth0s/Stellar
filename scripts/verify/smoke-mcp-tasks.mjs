@@ -86,7 +86,10 @@ try {
   await new Promise((r) => setTimeout(r, 500));
 
   const listPayload = await toolJson(MCP_URL, "list_cards", {});
-  bashCardId = listPayload.cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  bashCardId = listPayload.cards.find((c) => c.kind === "terminal").id;
 
   const createPayload = await toolJson(MCP_URL, "create_task", {
     prompt: "tarefa de teste — sobreviver ao fechamento do card e a um restart",

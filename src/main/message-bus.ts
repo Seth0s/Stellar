@@ -80,10 +80,22 @@ const DEFAULT_MAX_RETRIES = 2;
 // disallowed is just noise.
 export const MAX_SPAWN_DEPTH = 3;
 
-export type CardSummary = { id: string; provider: string; cwd: string };
+/** DESIGN-BACKLOG.md item 21 ponto 9 / achado ao vivo (2026-09-01) —
+ * `kind` e `label` são novos. Antes esta lista era filtrada para
+ * `kind === "terminal"` lá no `index.ts`, o que deixava um card de
+ * navegador (ou sticky, ou arquivos) literalmente inendereçável: o agente
+ * precisava do id pra `get_page_text`/`browser_click`/`snapshot`, e o único
+ * jeito de descobri-lo era o valor de retorno do `spawn_card` que o
+ * criou — inútil pra qualquer card que um humano abriu. `label` entra pelo
+ * mesmo motivo do outro achado da mesma sessão: renomear o card ("Stellar")
+ * era puramente decorativo porque nada no bus sabia do nome. Com ele aqui,
+ * `resolveTargetId` abaixo aceita o rótulo como alvo. */
+export type CardSummary = { id: string; kind: string; provider: string; cwd: string; label: string | null; url?: string };
 export type SnapshotResult = { ok: true; path: string } | { ok: false; error: string };
 export type PageTextResult = { ok: true; text: string; truncated: boolean } | { ok: false; error: string };
 export type ReadCardResult = { ok: true; text: string } | { ok: false; error: string };
+export type StickyResult = { ok: true; content: string } | { ok: false; error: string };
+export type StickyOp = { op: "read" } | { op: "write"; content: string; mode: "replace" | "append" };
 export type CardStatusResult = { ok: true; status: "running" | "waiting" | "exited" } | { ok: false; error: string };
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
 export type SpawnAgentResult =
@@ -101,12 +113,30 @@ export type BusRequest =
       rect?: { x: number; y: number; w: number; h: number };
     }
   | { cmd: "get_page_text"; target?: string }
-  | { cmd: "browser_click"; target?: string; x?: number; y?: number; selector?: string }
-  | { cmd: "browser_type"; target?: string; text?: string; selector?: string }
-  | { cmd: "browser_scroll"; target?: string; dx?: number; dy?: number; selector?: string }
-  | { cmd: "browser_query"; target?: string; selector?: string }
+  // `ref` (achado ao vivo 2026-09-01): um id vindo do `browser_snapshot`,
+  // pra mirar um elemento sem já saber um seletor CSS. Tem precedência
+  // sobre `selector`; a tradução ref→seletor vive em index.ts, junto do
+  // registry que carimba o atributo, pra não haver dois lugares sabendo o
+  // nome dele.
+  | { cmd: "browser_click"; target?: string; x?: number; y?: number; selector?: string; ref?: string }
+  | { cmd: "browser_type"; target?: string; text?: string; selector?: string; ref?: string }
+  | { cmd: "browser_scroll"; target?: string; dx?: number; dy?: number; selector?: string; ref?: string }
+  | { cmd: "browser_query"; target?: string; selector?: string; ref?: string }
   | { cmd: "browser_eval"; target?: string; js?: string }
+  | { cmd: "browser_snapshot"; target?: string }
+  | { cmd: "browser_console"; target?: string; level?: string; limit?: number }
+  | { cmd: "browser_network"; target?: string; status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }
+  | { cmd: "browser_wait_for"; target?: string; selector?: string; text?: string; gone?: boolean; timeoutMs?: number }
   | { cmd: "read_card"; target?: string; lines?: number }
+  // Achado ao vivo (2026-09-01): "o send_to_card só escreve em card de
+  // terminal — sticky é editável só por você (SEM LEITURA TAMBEM)".
+  // Tools próprias em vez de estender send_to_card/read_card: "digitar num
+  // terminal e apertar Enter" e "substituir o texto de uma nota" são
+  // operações diferentes o suficiente pra que sobrecarregar o mesmo nome
+  // só produza erro de uso (não há Enter, não há scrollback, `lines` não
+  // significa nada). Decidido com o usuário.
+  | { cmd: "read_sticky"; target?: string }
+  | { cmd: "write_sticky"; target?: string; content?: string; mode?: string }
   | { cmd: "card_status"; target?: string }
   | { cmd: "report"; requesterId?: string; report?: unknown }
   | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number }
@@ -218,15 +248,27 @@ export function createMessageBus(
      * arbitrary agent-supplied JS in the page's real context (cookies/
      * session/localStorage reachable) — accepted risk, documented in the
      * MCP tool's own `description` (mcp-server.ts), not hidden here. */
-    browserClick: (cardId: string, x?: number, y?: number, selector?: string) => Promise<BusResponse>;
-    browserType: (cardId: string, text: string, selector?: string) => Promise<BusResponse>;
-    browserScroll: (cardId: string, dx: number, dy: number, selector?: string) => Promise<BusResponse>;
-    browserQuery: (cardId: string, selector: string) => Promise<BusResponse>;
+    browserClick: (cardId: string, x?: number, y?: number, selector?: string, ref?: string) => Promise<BusResponse>;
+    browserType: (cardId: string, text: string, selector?: string, ref?: string) => Promise<BusResponse>;
+    browserScroll: (cardId: string, dx: number, dy: number, selector?: string, ref?: string) => Promise<BusResponse>;
+    browserQuery: (cardId: string, selector?: string, ref?: string) => Promise<BusResponse>;
     browserEval: (cardId: string, js: string) => Promise<BusResponse>;
+    browserSnapshot: (cardId: string) => Promise<BusResponse>;
+    browserConsole: (cardId: string, level?: string, limit?: number) => BusResponse;
+    browserNetwork: (cardId: string, opts: { status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }) => BusResponse;
+    browserWaitFor: (cardId: string, opts: { selector?: string; text?: string; gone?: boolean; timeoutMs?: number }) => Promise<BusResponse>;
+
     /** DESIGN-BACKLOG.md item 58, M1 — only the renderer holds the live
      * xterm.js Terminal instance for a terminal card (main never sees
      * terminal content, only raw pty bytes flowing through). */
     onReadCardRequest: (requestId: string, cardId: string, lines?: number) => void;
+    /** Mesma forma de request/reply do `onReadCardRequest` acima, e pelo
+     * mesmo motivo: o `<textarea>` montado no renderer é a fonte da verdade
+     * enquanto o card existe. Ler do SQLite devolveria texto velho no meio
+     * de uma digitação (o commit só acontece no blur), e escrever só no
+     * SQLite seria sobrescrito pelo próximo commit de digitação. */
+    onStickyRequest: (requestId: string, cardId: string, op: StickyOp) => void;
+    onStickyTimeout: (requestId: string) => void;
     /** Pre-release audit B6 — same listener-leak-on-timeout fix as
      * `onSnapshotTimeout` above, for `readcard:reply`. */
     onReadCardTimeout: (requestId: string) => void;
@@ -320,10 +362,19 @@ export function createMessageBus(
     }
   }
 
-  const pendingOpens = new Map<string, { resolve: (allowed: boolean) => void; timer: NodeJS.Timeout }>();
+  // Achado ao vivo (2026-09-01, relato de um agente): `open_url` devolvia
+  // só `{ok:true}` e nunca o id do card que acabou de abrir, então não
+  // havia caminho nenhum do `open_url` pro `browser_click`/`get_page_text`
+  // daquele mesmo card — o agente acabou sondando ids numéricos em
+  // sequência (121 a 155) até achar. O renderer SEMPRE soube o id
+  // (`openBrowserFor` já o retornava, e o `spawn_card` de navegador já o
+  // reportava); ele só era descartado no caminho de volta do `open`. O
+  // `cardId` aqui é o que fecha essa lacuna.
+  const pendingOpens = new Map<string, { resolve: (allowed: boolean, cardId?: string) => void; timer: NodeJS.Timeout }>();
   const pendingSnapshots = new Map<string, { resolve: (result: SnapshotResult) => void; timer: NodeJS.Timeout }>();
   const pendingPageTexts = new Map<string, { resolve: (result: PageTextResult) => void; timer: NodeJS.Timeout }>();
   const pendingReadCards = new Map<string, { resolve: (result: ReadCardResult) => void; timer: NodeJS.Timeout }>();
+  const pendingStickyOps = new Map<string, { resolve: (result: StickyResult) => void; timer: NodeJS.Timeout }>();
   // DESIGN-BACKLOG.md item 58, M4 — waiters for `spawn_agent`'s
   // `wait: true`, keyed by the spawned card's id. Several waiters could in
   // principle exist for the same card (two callers both waiting on it),
@@ -433,16 +484,93 @@ export function createMessageBus(
     });
   }
 
+  /** Round-trip de sticky — mesmo timeout e mesma forma do `readCardText`
+   * acima, um helper só pras duas operações porque só o `op` muda. */
+  function stickyOp(target: string, op: StickyOp): Promise<StickyResult> {
+    const requestId = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingStickyOps.delete(requestId);
+        callbacks.onStickyTimeout(requestId);
+        resolve({ ok: false, error: `timed out on sticky ${op.op}` });
+      }, READ_CARD_TIMEOUT_MS);
+      pendingStickyOps.set(requestId, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          pendingStickyOps.delete(requestId);
+          resolve(result);
+        },
+        timer,
+      });
+      callbacks.onStickyRequest(requestId, target, op);
+    });
+  }
+
+  /** Só os cards que têm um PTY vivo por trás — o subconjunto que
+   * `writeToCard`/`readCardText`/`isCardAlive` sabem operar. `listCards()`
+   * passou a devolver TODOS os cards (ver `CardSummary`), então cada
+   * validação que realmente exige um terminal filtra aqui em vez de
+   * confiar no filtro que antes acontecia no `index.ts`. */
+  function listTerminalCards(): CardSummary[] {
+    return callbacks.listCards().filter((c) => c.kind === "terminal");
+  }
+
+  /** Achado ao vivo (2026-09-01): "eu renomeio os card dos agentes para
+   * Stellar, isso só está visual em vez de funcional". Renomear escrevia
+   * `cards.label` e parava aí — todo `target` do bus era comparado só
+   * contra `c.id`, então o nome que o humano vê no header não servia pra
+   * endereçar nada. Aqui o rótulo vira um alias real de id, resolvido uma
+   * única vez na entrada do dispatcher (e não em cada `cmd`), de forma que
+   * send, read_card, card_status, snapshot, os browser_ e report ganham
+   * o alias todos de uma vez.
+   *
+   * Ordem deliberada: id exato SEMPRE primeiro. Um rótulo que por acaso
+   * seja igual ao id de outro card nunca pode sequestrar aquele id — a
+   * comparação por id é a que tem que ser inambígua, o rótulo é livre e
+   * digitado por humano. Comparação de rótulo é case-insensitive e sem
+   * espaços nas pontas (é um campo de texto livre); dois cards com o
+   * mesmo rótulo viram erro explícito em vez de um "escolhi a primeira"
+   * silencioso, que seria exatamente o tipo de acerto ao acaso que essa
+   * feature não pode ter. */
+  function resolveTargetId(raw: string): { id: string } | { error: string } {
+    const cards = callbacks.listCards();
+    if (cards.some((c) => c.id === raw)) return { id: raw };
+    const needle = raw.trim().toLowerCase();
+    if (!needle) return { id: raw };
+    const byLabel = cards.filter((c) => (c.label ?? "").trim().toLowerCase() === needle);
+    if (byLabel.length === 1) return { id: byLabel[0].id };
+    if (byLabel.length > 1) {
+      return { error: `"${raw}" matches ${byLabel.length} cards (${byLabel.map((c) => c.id).join(", ")}) — use the id instead` };
+    }
+    // Nem id nem rótulo: devolve cru, pra cada cmd emitir o próprio erro
+    // ("no open terminal card with id ...") como sempre fez.
+    return { id: raw };
+  }
+
   /** Shared by both frontends — see the module doc comment. Never throws;
    * every branch resolves to a `BusResponse`, including "unknown cmd". */
-  async function handleRequest(req: BusRequest): Promise<BusResponse> {
+  async function handleRequest(request: BusRequest): Promise<BusResponse> {
+    let req = request;
+    if ("target" in req && typeof req.target === "string") {
+      const resolved = resolveTargetId(req.target);
+      if ("error" in resolved) return { ok: false, error: resolved.error };
+      if (resolved.id !== req.target) req = { ...req, target: resolved.id };
+    }
+
     if (req.cmd === "list") {
       return { ok: true, cards: callbacks.listCards() };
     }
 
     if (req.cmd === "send") {
-      const cards = callbacks.listCards();
+      const cards = listTerminalCards();
       if (!req.target || !cards.some((c) => c.id === req.target)) {
+        // Distingue "não existe" de "existe mas não é um terminal": o
+        // segundo caso (mandar texto pra um sticky/navegador) é um pedido
+        // legítimo que este cmd simplesmente não atende, e dizer só "no
+        // open terminal card with id X" mandava o agente procurar um id
+        // que ele já tinha certo.
+        const any = callbacks.listCards().find((c) => c.id === req.target);
+        if (any) return { ok: false, error: `card "${req.target}" is a ${any.kind} card — send_to_card only types into terminal cards` };
         return { ok: false, error: `no open terminal card with id "${req.target}"` };
       }
       const target = req.target;
@@ -496,11 +624,14 @@ export function createMessageBus(
           resolve({ ok: false, error: "timed out waiting for a decision" });
         }, OPEN_TIMEOUT_MS);
         pendingOpens.set(requestId, {
-          resolve: (allowed) => {
+          resolve: (allowed, cardId) => {
             clearTimeout(timer);
             pendingOpens.delete(requestId);
             unmarkWaiting(requesterId);
-            resolve(allowed ? { ok: true } : { ok: false, error: "denied by user" });
+            // `cardId` é opcional na assinatura só por robustez (um
+            // renderer antigo, ou uma recusa, não tem id nenhum pra
+            // mandar) — no caminho de permitir ele vem sempre.
+            resolve(allowed ? { ok: true, ...(cardId ? { cardId } : {}) } : { ok: false, error: "denied by user" });
           },
           timer,
         });
@@ -554,6 +685,27 @@ export function createMessageBus(
       return readCardText(req.target, req.lines);
     }
 
+    // Sem modal de consentimento, decidido com o usuário (2026-09-01): uma
+    // nota é conteúdo do board, não um efeito colateral em disco ou
+    // processo — a categoria que a política de consentimento cobre
+    // (`write_file`, `bash`, `spawn_agent`, `open_url`, ver AGENTS.md §3).
+    // A proteção que importa aqui é outra e vive no renderer: uma nota que
+    // um humano está editando NAQUELE instante recusa a escrita em vez de
+    // apagar o que a pessoa está digitando.
+    if (req.cmd === "read_sticky" || req.cmd === "write_sticky") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      const card = callbacks.listCards().find((c) => c.id === req.target);
+      if (!card) return { ok: false, error: `no card with id "${req.target}"` };
+      if (card.kind !== "sticky") {
+        return { ok: false, error: `card "${req.target}" is a ${card.kind} card — ${req.cmd} only works on sticky notes` };
+      }
+      if (req.cmd === "read_sticky") return stickyOp(req.target, { op: "read" });
+      if (req.content === undefined) return { ok: false, error: "missing content" };
+      const mode = req.mode ?? "replace";
+      if (mode !== "replace" && mode !== "append") return { ok: false, error: `mode must be "replace" or "append"` };
+      return stickyOp(req.target, { op: "write", content: req.content, mode });
+    }
+
     // DESIGN-BACKLOG.md §2.1 — the 5 browser control cmds. Unlike
     // `snapshot`/`get_page_text` above, resolution here is 100% local to
     // THIS process (`browser-registry.ts`'s methods, called straight
@@ -562,27 +714,27 @@ export function createMessageBus(
     // `board_mode` below: call the callback, return what it resolves to.
     if (req.cmd === "browser_click") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      if (!req.selector && (req.x === undefined || req.y === undefined)) {
-        return { ok: false, error: "need either a selector or both x and y" };
+      if (!req.ref && !req.selector && (req.x === undefined || req.y === undefined)) {
+        return { ok: false, error: "need a ref (from browser_snapshot), a selector, or both x and y" };
       }
-      return callbacks.browserClick(req.target, req.x, req.y, req.selector);
+      return callbacks.browserClick(req.target, req.x, req.y, req.selector, req.ref);
     }
 
     if (req.cmd === "browser_type") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
       if (req.text === undefined) return { ok: false, error: "missing text" };
-      return callbacks.browserType(req.target, req.text, req.selector);
+      return callbacks.browserType(req.target, req.text, req.selector, req.ref);
     }
 
     if (req.cmd === "browser_scroll") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      return callbacks.browserScroll(req.target, req.dx ?? 0, req.dy ?? 0, req.selector);
+      return callbacks.browserScroll(req.target, req.dx ?? 0, req.dy ?? 0, req.selector, req.ref);
     }
 
     if (req.cmd === "browser_query") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      if (!req.selector) return { ok: false, error: "missing selector" };
-      return callbacks.browserQuery(req.target, req.selector);
+      if (!req.selector && !req.ref) return { ok: false, error: "need a selector or a ref (from browser_snapshot)" };
+      return callbacks.browserQuery(req.target, req.selector, req.ref);
     }
 
     if (req.cmd === "browser_eval") {
@@ -591,9 +743,40 @@ export function createMessageBus(
       return callbacks.browserEval(req.target, req.js);
     }
 
+    if (req.cmd === "browser_snapshot") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserSnapshot(req.target);
+    }
+
+    if (req.cmd === "browser_console") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserConsole(req.target, req.level, req.limit);
+    }
+
+    if (req.cmd === "browser_network") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      return callbacks.browserNetwork(req.target, {
+        status: req.status,
+        failedOnly: req.failedOnly,
+        urlContains: req.urlContains,
+        limit: req.limit,
+      });
+    }
+
+    if (req.cmd === "browser_wait_for") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (!req.selector && !req.text) return { ok: false, error: "need either selector or text" };
+      return callbacks.browserWaitFor(req.target, {
+        selector: req.selector,
+        text: req.text,
+        gone: req.gone,
+        timeoutMs: req.timeoutMs,
+      });
+    }
+
     if (req.cmd === "card_status") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      const cards = callbacks.listCards();
+      const cards = listTerminalCards();
       if (!cards.some((c) => c.id === req.target)) return { ok: false, error: `no open terminal card with id "${req.target}"` };
       // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 2 —
       // checked BEFORE isAlive: a card blocked on its own consent modal is
@@ -748,7 +931,7 @@ export function createMessageBus(
       // uses. Purely advisory — this app doesn't queue or refuse a spawn
       // over this. Deciding what to do with the number is up to whoever
       // calls it.
-      const running = callbacks.listCards().filter((c) => c.provider !== "bash" && callbacks.isCardAlive(c.id)).length;
+      const running = listTerminalCards().filter((c) => c.provider !== "bash" && callbacks.isCardAlive(c.id)).length;
       const cap = req.cap ?? DEFAULT_CONCURRENCY_CAP;
       return { ok: true, running, cap, atCap: running >= cap };
     }
@@ -871,8 +1054,8 @@ export function createMessageBus(
     return { ok: false, error: `unknown cmd "${(req as { cmd?: string }).cmd}"` };
   }
 
-  function resolveOpen(requestId: string, allowed: boolean) {
-    pendingOpens.get(requestId)?.resolve(allowed);
+  function resolveOpen(requestId: string, allowed: boolean, cardId?: string) {
+    pendingOpens.get(requestId)?.resolve(allowed, cardId);
   }
 
   function resolveSnapshot(requestId: string, result: SnapshotResult) {
@@ -885,6 +1068,10 @@ export function createMessageBus(
 
   function resolveReadCard(requestId: string, result: ReadCardResult) {
     pendingReadCards.get(requestId)?.resolve(result);
+  }
+
+  function resolveSticky(requestId: string, result: StickyResult) {
+    pendingStickyOps.get(requestId)?.resolve(result);
   }
 
   function resolveSpawnAgent(requestId: string, result: SpawnAgentResult) {
@@ -1212,6 +1399,8 @@ export function createMessageBus(
     pendingPageTexts.clear();
     for (const { timer } of pendingReadCards.values()) clearTimeout(timer);
     pendingReadCards.clear();
+    for (const { timer } of pendingStickyOps.values()) clearTimeout(timer);
+    pendingStickyOps.clear();
     pendingCardExits.clear();
     waitingOnConsent.clear();
     cardReports.clear();
@@ -1230,5 +1419,5 @@ export function createMessageBus(
     }
   }
 
-  return { handleRequest, resolveOpen, resolveSnapshot, resolvePageText, resolveReadCard, resolveSpawnAgent, resolveSpawnCard, resolveCardExit, close };
+  return { handleRequest, resolveOpen, resolveSnapshot, resolvePageText, resolveReadCard, resolveSticky, resolveSpawnAgent, resolveSpawnCard, resolveCardExit, close };
 }

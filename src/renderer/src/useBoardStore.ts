@@ -147,6 +147,11 @@ export function useBoardStore(
   async function switchBoard(id: string, template: SessionTemplate = "empty", seedCwd?: string) {
     if (id === activeBoardIdRef.current) return;
     setActiveBoardId(id);
+    // Achado ao vivo (2026-09-01) — o bus escopa `list_cards` por isto.
+    // Antes do `await loadBoard` abaixo de propósito: durante a troca, a
+    // resposta certa pra um agente é a sessão de destino, nunca a que
+    // está sendo desmontada.
+    window.store.boards.setActive(id);
     localStorage.setItem(ACTIVE_BOARD_KEY, id);
     await loadBoard(id, template, seedCwd);
   }
@@ -158,6 +163,7 @@ export function useBoardStore(
    * comment), just landing on "no board" instead of a different one. */
   function goHome() {
     setActiveBoardId(null);
+    window.store.boards.setActive(null);
     setCards([]);
     setOrder([]);
     setConnectors([]);

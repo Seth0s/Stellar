@@ -64,7 +64,10 @@ try {
   await new Promise((r) => setTimeout(r, 500));
 
   const cards = await toolJson("list_cards", {});
-  const bashCardId = cards.cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const bashCardId = cards.cards.find((c) => c.kind === "terminal").id;
 
   // Segundo card bash real — vai ser o "remetente" com identidade
   // própria (ordinal "Bash 2°", mesmo rótulo do AgentAskModal).

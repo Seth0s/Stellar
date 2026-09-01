@@ -43,6 +43,7 @@ export async function startApp({
   userDataDir,
   cwd = PROJECT_ROOT,
   extraArgs = [],
+  extraEnv = {},
   timeoutMs = 15000,
   preserveUserData = false,
 }) {
@@ -87,6 +88,11 @@ export async function startApp({
         ...process.env,
         AGENT_CANVAS_REMOTE_PORT: String(cdpPort + 30000),
         AGENT_CANVAS_MCP_PORT: String(cdpPort + 40000),
+        // Por último de propósito: um teste que precisa de mais uma
+        // variável (hoje `AGENT_CANVAS_REGISTRATION_HOME`, que redireciona
+        // o `~` onde o registro de MCP das CLIs é escrito) passa por aqui
+        // em vez de cada arquivo montar seu próprio `spawn`.
+        ...extraEnv,
       },
     },
   );

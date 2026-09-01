@@ -46,7 +46,29 @@ type Entry = {
    * into the next flush's match so a URL split right at a flush boundary
    * is still recognized whole. */
   urlCarry: string;
+  /** Escalonamento de encerramento (achado ao vivo 2026-09-01) — ver
+   * `kill` abaixo. `null` enquanto o processo não foi mandado encerrar. */
+  killTimer: NodeJS.Timeout | null;
 };
+
+/** Achado ao vivo (2026-09-01): "se eu trocar de sessão os terminais e
+ * serviços não são fechados daquela sessão". A causa não era falta de
+ * chamada de kill — o unmount do card já chamava — era o `kill` antigo
+ * mandar UM `SIGHUP` (o default do node-pty) e apagar a entrada do
+ * registry na mesma linha, sem nunca confirmar que o processo morreu. Um
+ * CLI que ignora ou demora no SIGHUP virava órfão, e como a entrada já
+ * tinha sumido, `isAlive`/`card_status` passavam a mentir "exited" e nada
+ * no app sabia mais que aquele processo existia.
+ *
+ * Um shell (`bash`) propaga SIGHUP e some na hora — por isso o caminho
+ * mais testado parecia correto. CLIs de agente são justamente as que
+ * instalam handler de sinal pra desligar com calma, então são exatamente
+ * as que sobreviviam.
+ *
+ * A escada dá a chance de saída limpa e ainda assim garante o fim: só o
+ * `onExit` REAL do processo remove a entrada. */
+const KILL_ESCALATION: NodeJS.Signals[] = ["SIGHUP", "SIGTERM", "SIGKILL"];
+const KILL_GRACE_MS = 2_000;
 
 export function createPtyRegistry(registryOpts: {
   onData: (id: string, data: string) => void;
@@ -128,7 +150,14 @@ export function createPtyRegistry(registryOpts: {
     | { id: string }
     | { error: "binary_not_found"; providerId: string; installCommand: string | null }
     | { error: "spawn_failed"; providerId: string } {
-    const resolved = resolveSpawn(providerId, { ...spawnOpts, mcpUrl: registryOpts.mcpUrl });
+    // Carimba a identidade do card na URL do MCP registrada PRA ESTE
+    // processo — ver o doc de `buildServer` em mcp-server.ts: sem isso o
+    // servidor MCP (um só, compartilhado por todos os cards) dependia do
+    // modelo lembrar de preencher `callerCardId`, e quando ele não
+    // lembrava o modo autônomo do board simplesmente não valia. Mesmo id
+    // do `AGENT_CANVAS_CARD_ID` logo abaixo, mesma fonte.
+    const cardMcpUrl = registryOpts.mcpUrl ? `${registryOpts.mcpUrl}?card=${encodeURIComponent(id)}` : registryOpts.mcpUrl;
+    const resolved = resolveSpawn(providerId, { ...spawnOpts, mcpUrl: cardMcpUrl });
     if (!resolved) return { error: "binary_not_found", providerId, installCommand: providerInstallCommand(providerId) };
 
     const env: Record<string, string> = {
@@ -142,6 +171,16 @@ export function createPtyRegistry(registryOpts: {
       // a fresh chain at depth 0. This process reports its OWN depth back
       // out via acbridge/MCP if IT spawns another agent.
       AGENT_CANVAS_SPAWN_DEPTH: String(spawnOpts.spawnDepth ?? 0),
+      // Achado ao vivo (2026-09-01) — o shim `stellar-mcp` (resources/bin)
+      // lê isto pra saber a porta VIVA do servidor MCP desta execução da
+      // app, já que a porta é efêmera e o registro nas CLIs que não têm
+      // flag por invocação (cursor, antigravity) é um arquivo escrito uma
+      // vez só. Junto com AGENT_CANVAS_CARD_ID acima, é o par que dá ao
+      // shim endereço e identidade sem nada disso estar no arquivo.
+      // Sem `?card=` aqui: quem carimba a identidade é o shim, e o
+      // `cardMcpUrl` logo acima (que já vai carimbado) é outra coisa — a
+      // flag efêmera do claude/codex.
+      AGENT_CANVAS_MCP_URL: registryOpts.mcpUrl,
       PATH: `${registryOpts.binDir}${delimiter}${process.env.PATH ?? ""}`,
     };
 
@@ -168,6 +207,7 @@ export function createPtyRegistry(registryOpts: {
       stopWatch: null,
       seenUrls: new Set(),
       urlCarry: "",
+      killTimer: null,
     };
     entries.set(id, entry);
 
@@ -196,6 +236,11 @@ export function createPtyRegistry(registryOpts: {
     proc.onExit(({ exitCode }) => {
       flush(id);
       entry.stopWatch?.();
+      if (entry.killTimer) clearTimeout(entry.killTimer);
+      entry.killTimer = null;
+      // O ÚNICO lugar que remove uma entrada. `kill` abaixo não remove
+      // mais por conta própria: enquanto o processo não sai de verdade,
+      // ele continua no registry e `isAlive` continua dizendo a verdade.
       entries.delete(id);
       registryOpts.onExit(id, exitCode);
     });
@@ -219,16 +264,59 @@ export function createPtyRegistry(registryOpts: {
     entries.get(id)?.proc.write("\x03");
   }
 
-  function kill(id: string) {
+  /** Encerra escalando pela `KILL_ESCALATION` — ver o doc daquela
+   * constante. Idempotente: chamar de novo enquanto uma escada já está em
+   * curso não reinicia nada (o unmount do card e um `killAll` podem
+   * perfeitamente coincidir).
+   *
+   * `immediate` pula direto pro SIGKILL, pro caminho de fechamento do app:
+   * ali não existe os ~4s da escada pra gastar, e um processo que
+   * sobrevive ao fim do processo pai é exatamente o órfão que isso tudo
+   * existe pra impedir. */
+  function kill(id: string, { immediate = false }: { immediate?: boolean } = {}) {
     const e = entries.get(id);
     if (!e) return;
     e.stopWatch?.();
-    e.proc.kill();
-    entries.delete(id);
+    if (e.killTimer) return;
+    if (immediate) {
+      try {
+        e.proc.kill("SIGKILL");
+      } catch {
+        // Já morreu entre o get e o kill — nada a fazer.
+      }
+      entries.delete(id);
+      return;
+    }
+    step(0);
+
+    function step(i: number) {
+      // A entrada só some no `onExit` real, então continuar aqui significa
+      // que o processo genuinamente ainda está de pé.
+      if (!entries.has(id)) return;
+      try {
+        e!.proc.kill(KILL_ESCALATION[i]);
+      } catch {
+        // O processo pode ter saído entre o timer e este envio; o onExit
+        // real limpa o resto.
+        return;
+      }
+      if (i + 1 >= KILL_ESCALATION.length) {
+        // Depois do SIGKILL não há pra onde escalar. Não força
+        // `entries.delete` aqui de propósito: o `onExit` do node-pty
+        // ainda vai disparar e é ele quem mantém uma fonte de verdade só.
+        e!.killTimer = null;
+        return;
+      }
+      e!.killTimer = setTimeout(() => {
+        e!.killTimer = null;
+        step(i + 1);
+      }, KILL_GRACE_MS);
+    }
   }
 
+  /** Fechamento do app — SIGKILL direto em tudo, ver `immediate` acima. */
   function killAll() {
-    for (const id of [...entries.keys()]) kill(id);
+    for (const id of [...entries.keys()]) kill(id, { immediate: true });
   }
 
   /** Whether a PTY is actually running right now — the remote-control

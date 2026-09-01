@@ -81,7 +81,10 @@ try {
   await new Promise((r) => setTimeout(r, 500));
 
   const cardsAtStart = await toolJson("list_cards", {});
-  const bashId = cardsAtStart.cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const bashId = cardsAtStart.cards.find((c) => c.kind === "terminal").id;
   // Só window.store expõe o board id bruto — nenhuma tool MCP devolve
   // isso diretamente (mesmo padrão já usado em smoke-mcp-autonomous-mode.mjs
   // pra achar o segundo board).

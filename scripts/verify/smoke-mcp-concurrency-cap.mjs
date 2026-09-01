@@ -99,7 +99,10 @@ try {
   await new Promise((r) => setTimeout(r, 500));
 
   const cards = await toolJson("list_cards", {});
-  const bashId = cards.cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const bashId = cards.cards.find((c) => c.kind === "terminal").id;
 
   // Liga o modo autônomo (pré-condição — o cap só é aplicado dentro dele).
   const titleBtn = await centerOf(page, ".topbar-title");
@@ -152,11 +155,37 @@ try {
   check("primeiro spawn autônomo (dentro do cap customizado) resolve ok:true", first.ok && typeof first.cardId === "string", true);
   await new Promise((r) => setTimeout(r, 700));
 
-  // ...mas o SEGUNDO já é recusado — com o default (3) ele passaria.
-  const second = await toolJson("spawn_agent", { provider: "claude", callerCardId: bashId, reason: "segundo, excede o cap customizado" });
-  check("segundo spawn é recusado ao bater o cap customizado (1), não o default (3)", second.ok, false);
-  check("...e a mensagem de erro cita o cap customizado (1)", second.error?.includes("(1 agents"), true);
+  // ...e o SEGUNDO bate no cap. Cuidado com o contrato aqui: até o item 60
+  // peça 1 isso era um `ok:false` IMEDIATO, e era exatamente assim que este
+  // teste checava. A peça 1 trocou a recusa por uma FILA — a chamada MCP
+  // fica pendurada até um slot liberar (ou até DEFAULT_QUEUE_TIMEOUT_MS,
+  // 10 minutos). Com o `await` de antes, este arquivo passou a travar de
+  // verdade em toda execução: o primeiro agente é uma CLI `claude` que
+  // nunca sai sozinha, então ninguém liberava o slot, e o cliente HTTP
+  // (undici, teto de 5 min) derrubava a conexão antes mesmo do timeout da
+  // fila — daí o "TypeError: terminated / other side closed" intermitente
+  // em vez de uma falha legível. Reportado ao vivo (2026-09-01): "sempre o
+  // teste de fila trava o teste e não finaliza".
+  //
+  // A propriedade que este arquivo existe pra provar continua a mesma —
+  // que vale o cap CUSTOMIZADO (1) e não o default (3) — só que agora ela
+  // se manifesta como "entrou na fila", não como "foi recusado": com cap 3
+  // este segundo spawn teria despachado na hora e a fila estaria vazia.
+  const secondPromise = callTool("spawn_agent", { provider: "claude", callerCardId: bashId, reason: "segundo, excede o cap customizado" });
+  await new Promise((r) => setTimeout(r, 800));
+  check(
+    "segundo spawn entra na fila ao bater o cap customizado (1) — com o default (3) teria despachado direto",
+    (await toolJson("board_mode", { target: bashId })).queueLength,
+    1,
+  );
   check("...sem mostrar modal", await hasModal(page), false);
+
+  // Libera o slot pra fila drenar — sem isso a chamada acima ficaria
+  // pendurada os 10 minutos inteiros do timeout da fila.
+  await page.evalJs(`window.pty.kill(${JSON.stringify(first.cardId)})`);
+  await new Promise((r) => setTimeout(r, 1500));
+  const second = JSON.parse((await secondPromise).content[0].text);
+  check("...e resolve ok:true assim que o slot do cap customizado libera", second.ok, true);
 
   page.close();
 } finally {

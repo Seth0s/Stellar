@@ -2229,7 +2229,12 @@ select.resume-input {
 
 .offscreen-pip {
   position: absolute;
-  transform: translate(-50%, -50%);
+  /* O lado horizontal é ancorado por `left` ou `right` (OffscreenPips.tsx),
+     nunca por transform: `translateX(var(--algo))` numa propriedade que
+     também está em `transition` deixa a matriz travada no valor anterior
+     quando a var muda, e o pip que troca de calha fica pra fora da janela.
+     Aqui sobra só o centro vertical, que é constante. */
+  transform: translateY(-50%);
   pointer-events: auto;
   display: inline-flex;
   align-items: center;
@@ -2246,19 +2251,32 @@ select.resume-input {
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
-  transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+  /* `scale` como propriedade própria, fora do `transform`, pelo mesmo
+     motivo: o realce de hover anima sozinho sem tocar na ancoragem. */
+  transition: background-color 0.14s ease, border-color 0.14s ease, scale 0.14s ease, box-shadow 0.14s ease;
   backdrop-filter: blur(8px);
+}
+
+/* A seta é girada pelo rumo real até o card (OffscreenPips.tsx) — é ela
+   que carrega a direção agora que a posição do pip na tela deixou de
+   carregar. `inline-flex` pra que o rotate gire o glifo em torno do
+   próprio centro. */
+.offscreen-pip-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
 }
 
 .offscreen-pip:hover {
   background: var(--panel);
   border-color: var(--foam);
-  transform: translate(-50%, -50%) scale(1.05);
+  scale: 1.05;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--foam);
 }
 
 .offscreen-pip:active {
-  transform: translate(-50%, -50%) scale(0.96);
+  scale: 0.96;
 }
 
 .offscreen-pip-icon {

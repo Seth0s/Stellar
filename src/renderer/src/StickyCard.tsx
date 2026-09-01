@@ -32,6 +32,7 @@ const STICKY_ACCENT: Record<string, string> = {
 /** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
  * wrapped in `React.memo` below. */
 function StickyCardInner({
+  cardId,
   rect,
   zoom,
   zIndex,
@@ -58,6 +59,11 @@ function StickyCardInner({
   panX,
   panY,
 }: {
+  /** Só pra marcar o `<textarea>` com `data-card-id` — é assim que o
+   * handler de `write_sticky` (App.tsx) descobre se o humano está com ESTA
+   * nota focada agora, e recusa a escrita em vez de apagar o que a pessoa
+   * está digitando. Nada mais aqui usa. */
+  cardId: string;
   rect: Rect;
   zoom: number;
   zIndex: number;
@@ -131,6 +137,7 @@ function StickyCardInner({
     >
       <textarea
         className="sticky-textarea"
+        data-card-id={cardId}
         style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
         value={content}
         onChange={(e) => onContentChange(e.target.value)}

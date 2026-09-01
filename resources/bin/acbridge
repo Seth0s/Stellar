@@ -32,6 +32,7 @@ if (!sockPath) {
 const USAGE =
   "usage: acbridge <list | send <cardId> <message...> | open <url> | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
+  "read-sticky <cardId> | write-sticky [--append] <cardId> <text...> | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "create-task <json> | update-task <taskId> <json> | list-tasks | get-task <taskId> | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
@@ -40,6 +41,8 @@ const USAGE =
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] | " +
   "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
   "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
+  "browser-snapshot <cardId> | browser-console <cardId> [level] | " +
+  "browser-network <cardId> [failed] | browser-wait-for <cardId> <text|selector> <value...> | " +
   "browser-eval <cardId> <js...>>";
 
 const [, , cmd, ...rest] = process.argv;
@@ -82,6 +85,18 @@ if (cmd === "list") {
   const lines = linesStr === undefined ? undefined : Number(linesStr);
   if (lines !== undefined && Number.isNaN(lines)) fail("read-card: lines must be a number");
   request = { cmd: "read_card", target, lines };
+} else if (cmd === "read-sticky") {
+  const [target] = rest;
+  if (!target) fail("usage: acbridge read-sticky <cardId>");
+  request = { cmd: "read_sticky", target };
+} else if (cmd === "write-sticky") {
+  // `--append` como PRIMEIRO argumento, antes do alvo: o texto é
+  // `...rest` até o fim (pode conter qualquer coisa, inclusive algo que
+  // pareça uma flag), então uma flag posicional no fim seria ambígua.
+  const append = rest[0] === "--append";
+  const [target, ...textParts] = append ? rest.slice(1) : rest;
+  if (!target || textParts.length === 0) fail("usage: acbridge write-sticky [--append] <cardId> <text...>");
+  request = { cmd: "write_sticky", target, content: textParts.join(" "), mode: append ? "append" : "replace" };
 } else if (cmd === "card-status") {
   const [target] = rest;
   if (!target) fail("usage: acbridge card-status <cardId>");
@@ -180,6 +195,27 @@ if (cmd === "list") {
   const [target, selector] = rest;
   if (!target || !selector) fail("usage: acbridge browser-query <cardId> <selector>");
   request = { cmd: "browser_query", target, selector };
+} else if (cmd === "browser-snapshot") {
+  const [target] = rest;
+  if (!target) fail("usage: acbridge browser-snapshot <cardId>");
+  request = { cmd: "browser_snapshot", target };
+} else if (cmd === "browser-console") {
+  const [target, level] = rest;
+  if (!target) fail("usage: acbridge browser-console <cardId> [error|warning|info|debug]");
+  request = { cmd: "browser_console", target, level };
+} else if (cmd === "browser-network") {
+  // `failed` como segundo argumento posicional: é de longe o uso comum
+  // ("o que deu errado?"), e uma flag aqui seria mais cerimônia que ajuda.
+  const [target, failed] = rest;
+  if (!target) fail("usage: acbridge browser-network <cardId> [failed]");
+  request = { cmd: "browser_network", target, failedOnly: failed === "failed" };
+} else if (cmd === "browser-wait-for") {
+  const [target, kind, ...valueParts] = rest;
+  if (!target || (kind !== "text" && kind !== "selector") || valueParts.length === 0) {
+    fail("usage: acbridge browser-wait-for <cardId> <text|selector> <value...>");
+  }
+  const value = valueParts.join(" ");
+  request = { cmd: "browser_wait_for", target, ...(kind === "text" ? { text: value } : { selector: value }) };
 } else if (cmd === "browser-eval") {
   const [target, ...jsParts] = rest;
   if (!target || jsParts.length === 0) fail("usage: acbridge browser-eval <cardId> <js...>");
@@ -211,13 +247,19 @@ socket.on("close", () => {
     return;
   }
   if (cmd === "list") {
+    // `kind` e `label` são novos (2026-09-01): a lista deixou de ser só de
+    // terminais, então o tipo do card passa a ser a informação que decide
+    // o que dá pra fazer com ele, e o rótulo é um alvo válido em qualquer
+    // comando que aceita <cardId>.
     const others = (res.cards ?? []).filter((c) => c.id !== ownCardId);
-    if (others.length === 0) console.log("(no other terminal cards open)");
-    else for (const c of others) console.log(`${c.id}\t${c.provider}\t${c.cwd}`);
+    if (others.length === 0) console.log("(no other cards open)");
+    else for (const c of others) console.log([c.id, c.kind ?? "terminal", c.label ?? "-", c.provider ?? "", c.url ?? c.cwd ?? ""].join("\t"));
   } else if (cmd === "send") {
     console.log(`sent to card ${rest[0]}`);
   } else if (cmd === "open") {
-    console.log(`opened: ${rest[0]}`);
+    // O cardId agora vem junto (2026-09-01) — é ele que serve de alvo pros
+    // comandos `browser-*` e `page-text` no card recém-aberto.
+    console.log(res.cardId ? `opened: ${rest[0]}\t${res.cardId}` : `opened: ${rest[0]}`);
   } else if (cmd === "snapshot") {
     // Just the path, nothing else — meant to be read directly (Claude
     // Code's own Read tool renders an image path), not parsed.
@@ -227,6 +269,20 @@ socket.on("close", () => {
     if (res.truncated) process.stderr.write("acbridge: page text truncated\n");
   } else if (cmd === "read-card") {
     console.log(res.text);
+  } else if (cmd === "read-sticky" || cmd === "write-sticky") {
+    console.log(res.content);
+  } else if (cmd === "browser-snapshot") {
+    // Uma linha por elemento, no formato que um humano lê de relance —
+    // o JSON cru some numa parede de chaves. `ref` primeiro porque é o
+    // que vai de volta no próximo comando.
+    for (const el of res.elements ?? []) console.log(`${el.ref}\t${el.role}\t${el.name}`);
+    if (res.truncated) process.stderr.write("acbridge: lista de elementos truncada\n");
+  } else if (cmd === "browser-console") {
+    for (const m of res.messages ?? []) console.log(`${m.level}\t${m.message}`);
+  } else if (cmd === "browser-network") {
+    for (const r of res.requests ?? []) console.log(`${r.status ?? r.error ?? "?"}\t${r.method}\t${r.url}`);
+  } else if (cmd === "browser-wait-for") {
+    console.log(`ok after ${res.waitedMs}ms`);
   } else if (cmd === "card-status") {
     console.log(res.status);
   } else if (cmd === "report") {

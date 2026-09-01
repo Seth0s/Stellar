@@ -28,7 +28,8 @@ import {
   type BrowserWheelEvent,
   type BrowserKeyEvent,
 } from "./browser-registry";
-import { createMessageBus, type BusRequest } from "./message-bus";
+import { createMessageBus, type BusRequest, type StickyResult } from "./message-bus";
+import { ensureMcpRegistered } from "./mcp-registration";
 import { createMcpServer } from "./mcp-server";
 import { runOneShotSummary } from "./ai-action";
 import { createRemoteInputSession } from "./remote-input";
@@ -93,6 +94,11 @@ const isDev = !app.isPackaged;
 // and clean up the exact listener for that `requestId`.
 const pendingSnapshotReplyCleanup = new Map<string, () => void>();
 const pendingReadCardReplyCleanup = new Map<string, () => void>();
+const pendingStickyReplyCleanup = new Map<string, () => void>();
+/** O board aberto na tela agora — escrito só pelo renderer, via
+ * `board:active` (ver o handler lá embaixo). `null` na Home, que é onde a
+ * app sempre inicia. */
+let activeBoardId: string | null = null;
 
 // GPU acceleration re-enabled 2026-08-26 — see DESIGN-BACKLOG.md item 9 and
 // AGENTS.md for the full investigation. It was disabled 2026-08-25 because
@@ -372,6 +378,7 @@ function createWindow() {
   // guarantee it here instead of trusting the working tree.
   try {
     chmodSync(join(binDir, "acbridge"), 0o755);
+    chmodSync(join(binDir, "stellar-mcp"), 0o755);
   } catch {
     // Missing in this checkout — acbridge calls will just fail with ENOENT.
   }
@@ -731,11 +738,49 @@ function createWindow() {
   });
 
   messageBus = createMessageBus(sockPath, {
+    // Achado ao vivo (2026-09-01): o `.filter(kind === "terminal")` que
+    // ficava aqui é o que fazia um agente responder "list_cards doesn't
+    // surface browser cards — I need the card ID". Todo card vivo aparece
+    // agora; quem precisa mesmo de um PTY filtra do lado do bus
+    // (`listTerminalCards`, message-bus.ts), que é onde a restrição de
+    // fato existe. `label` vai junto pra `resolveTargetId` poder aceitar o
+    // nome que o humano deu ao card como alvo.
     listCards: () =>
       store
         .listAllCards()
-        .filter((c) => c.kind === "terminal")
-        .map((c) => ({ id: c.id, provider: c.provider, cwd: c.cwd })),
+        // Escopado na sessão aberta (achado ao vivo 2026-09-01): trocar de
+        // board encerra os PTYs e desmonta os cards do anterior, mas eles
+        // continuavam saindo aqui — `store.listAllCards()` nunca foi
+        // escopado. O sintoma era um `card_status` de um card de outra
+        // sessão respondendo "exited" em vez de "não existe", que lê como
+        // "a sessão antiga continua lá". Nada nesta lista é operável fora
+        // do board ativo: `read_card`/`write_sticky`/`snapshot` dependem do
+        // renderer ter o card montado, e o PTY já foi morto. Na Home
+        // (`activeBoardId === null`) a lista é legitimamente vazia.
+        .filter((c) => c.board_id === activeBoardId)
+        .map((c) => {
+        const base = { id: c.id, kind: c.kind, label: c.label };
+        // Só terminal/chat usam `provider` com o significado do nome, e só
+        // terminal/chat/files/changes usam `cwd` como caminho de verdade.
+        // Todo o resto reaproveita as duas colunas sem migração (App.tsx's
+        // `toRow`: sticky guarda cor + o TEXTO da nota, stroke guarda cor +
+        // os pontos, media guarda o tipo + um JSON, browser guarda
+        // ownerCardId + a URL). Despejar isso cru num campo chamado "cwd"
+        // seria contrato mentiroso agora que a lista não é mais só de
+        // terminais — cada kind expõe só o que de fato significa aquilo.
+        switch (c.kind) {
+          case "terminal":
+          case "chat":
+            return { ...base, provider: c.provider, cwd: c.cwd };
+          case "files":
+          case "changes":
+            return { ...base, provider: "", cwd: c.cwd };
+          case "browser":
+            return { ...base, provider: "", cwd: "", url: c.cwd };
+          default:
+            return { ...base, provider: "", cwd: "" };
+        }
+      }),
     writeToCard: (id, text) => registry.write(id, text),
     isCardAlive: (id) => registry.isAlive(id),
     // DESIGN-BACKLOG.md item 61 — same "Bash 2°" convention as App.tsx's
@@ -767,7 +812,33 @@ function createWindow() {
     setConnectorKind: (id, kind) => store.setConnectorKind(id, kind),
     onOpenRequest: (requestId, requesterId, url, reason, autoApprove) =>
       safeSend(win, "browser:ask-open", requestId, requesterId, url, reason, autoApprove),
-    onSnapshotRequest: (requestId, target) => handleSnapshotRequest(win, messageBus!, requestId, target),
+    // Achado ao vivo (2026-09-01): "eu gostaria que o snapshot fosse
+    // cirúrgico e fizesse apenas do card e nada mais". Para um card de
+    // NAVEGADOR isso é possível de forma exata, e por um caminho totalmente
+    // diferente: ele tem uma BrowserWindow offscreen própria, então dá pra
+    // fotografar a superfície dele diretamente, sem board nenhum no meio.
+    // O caminho antigo (`handleSnapshotRequest`, abaixo) fotografa a JANELA
+    // DO APP recortada onde o card está — daí pegar o fundo do canvas nos
+    // cantos arredondados, pegar card sobreposto, sair na resolução
+    // "tamanho na tela × zoom" e truncar o que estiver fora da área
+    // visível, que é exatamente o que foi relatado. Todo outro tipo de
+    // card continua pelo caminho antigo: eles só existem como pixels
+    // dentro da janela, não há superfície separada pra capturar.
+    onSnapshotRequest: (requestId, target) => {
+      if (target && "cardId" in target && store.getCard(target.cardId)?.kind === "browser") {
+        void browserRegistry.capturePage(target.cardId).then((result) => {
+          if (!result.ok) {
+            messageBus!.resolveSnapshot(requestId, result);
+            return;
+          }
+          const filePath = join(app.getPath("temp"), `agent-canvas-snapshot-${requestId}.png`);
+          writeFileSync(filePath, result.png);
+          messageBus!.resolveSnapshot(requestId, { ok: true, path: filePath });
+        });
+        return;
+      }
+      handleSnapshotRequest(win, messageBus!, requestId, target);
+    },
     // DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — no consent needed
     // (see message-bus.ts's PAGE_TEXT_TIMEOUT_MS comment), so this goes
     // straight to browserRegistry instead of round-tripping through a
@@ -778,12 +849,24 @@ function createWindow() {
     // DESIGN-BACKLOG.md §2.1 — same "no round trip needed" reasoning as
     // onPageTextRequest above: browserRegistry already owns the real
     // webContents, so these resolve straight from here.
-    browserClick: (cardId, x, y, selector) =>
-      selector ? browserRegistry.clickSelector(cardId, selector) : Promise.resolve(browserRegistry.clickAtPoint(cardId, x!, y!)),
-    browserType: (cardId, text, selector) => browserRegistry.typeText(cardId, text, selector),
-    browserScroll: (cardId, dx, dy, selector) => browserRegistry.scroll(cardId, dx, dy, selector),
-    browserQuery: (cardId, selector) => browserRegistry.query(cardId, selector),
+    // `ref` (do `browser_snapshot`) vira seletor AQUI, ao lado do registry
+    // que carimba o atributo — nem o bus nem o servidor MCP precisam saber
+    // o nome dele. Tem precedência sobre `selector`: quem passou um ref
+    // acabou de olhar o snapshot e sabe exatamente o que quer.
+    browserClick: (cardId, x, y, selector, ref) => {
+      const sel = ref ? browserRegistry.refSelector(ref) : selector;
+      return sel ? browserRegistry.clickSelector(cardId, sel) : Promise.resolve(browserRegistry.clickAtPoint(cardId, x!, y!));
+    },
+    browserType: (cardId, text, selector, ref) =>
+      browserRegistry.typeText(cardId, text, ref ? browserRegistry.refSelector(ref) : selector),
+    browserScroll: (cardId, dx, dy, selector, ref) =>
+      browserRegistry.scroll(cardId, dx, dy, ref ? browserRegistry.refSelector(ref) : selector),
+    browserQuery: (cardId, selector, ref) => browserRegistry.query(cardId, ref ? browserRegistry.refSelector(ref) : selector!),
     browserEval: (cardId, js) => browserRegistry.evalJs(cardId, js),
+    browserSnapshot: (cardId) => browserRegistry.pageSnapshot(cardId),
+    browserConsole: (cardId, level, limit) => browserRegistry.getConsole(cardId, level, limit),
+    browserNetwork: (cardId, opts) => browserRegistry.getNetwork(cardId, opts),
+    browserWaitFor: (cardId, opts) => browserRegistry.waitFor(cardId, opts),
     // DESIGN-BACKLOG.md item 58, M1 — same request/reply shape as
     // snapshot:rect-request/-reply below: only the renderer holds the
     // live xterm.js buffer for a terminal card, main can't read it
@@ -809,6 +892,27 @@ function createWindow() {
     // doc comment near the top of this file.
     onSnapshotTimeout: (requestId) => pendingSnapshotReplyCleanup.get(requestId)?.(),
     onReadCardTimeout: (requestId) => pendingReadCardReplyCleanup.get(requestId)?.(),
+    // Achado ao vivo (2026-09-01) — read_sticky/write_sticky. Mesma forma
+    // do onReadCardRequest acima e pelo mesmo motivo: o `<textarea>` no
+    // renderer é a fonte da verdade enquanto o card está montado.
+    onStickyRequest: (requestId, cardId, op) => {
+      let settled = false;
+      function cleanup() {
+        if (settled) return;
+        settled = true;
+        pendingStickyReplyCleanup.delete(requestId);
+        ipcMain.removeListener("sticky:reply", onReply);
+      }
+      function onReply(_e: Electron.IpcMainEvent, replyId: string, result: StickyResult) {
+        if (replyId !== requestId || settled) return;
+        cleanup();
+        messageBus!.resolveSticky(requestId, result);
+      }
+      pendingStickyReplyCleanup.set(requestId, cleanup);
+      ipcMain.on("sticky:reply", onReply);
+      safeSend(win, "sticky:request", requestId, cardId, op);
+    },
+    onStickyTimeout: (requestId) => pendingStickyReplyCleanup.get(requestId)?.(),
     // DESIGN-BACKLOG.md item 21, ponto 9, achados 1 e 2 — same
     // ask-the-renderer/wait-for-a-human-decision shape as onOpenRequest
     // above, generalized. The renderer owns all card creation (it's the
@@ -833,7 +937,17 @@ function createWindow() {
 
   ipcMain.handle(
     "pty:spawn",
-    (_e, id: string, providerId: string, cwd: string, cols: number, rows: number, opts?: SpawnOpts) => {
+    async (_e, id: string, providerId: string, cwd: string, cols: number, rows: number, opts?: SpawnOpts) => {
+      // Precisa acontecer ANTES do spawn: `cursor`/`antigravity` leem o
+      // registro de MCP do disco na subida, então registrar depois só
+      // valeria a partir do próximo card. É no-op imediato pros outros
+      // providers e roda uma vez por execução da app (ver o módulo).
+      const registration = await ensureMcpRegistered(providerId, binDir);
+      if (registration.status === "failed") {
+        // Nunca bloqueia o spawn — sem MCP o card ainda tem o `acbridge`,
+        // que é exatamente o que ele tinha antes disto existir.
+        console.error(`mcp-registration (${providerId}): ${registration.error}`);
+      }
       const result = registry.spawn(id, providerId, cwd, cols, rows, opts);
       if ("id" in result) remoteServer?.broadcastCards();
       return result;
@@ -924,6 +1038,12 @@ function createWindow() {
   // (App.tsx's session UI), never from message-bus.ts/mcp-server.ts —
   // there is no `BusRequest` cmd that touches this at all, on purpose.
   ipcMain.handle("store:boards:set-autonomous", (_e, id: string, autonomous: boolean) => store.setBoardAutonomous(id, autonomous));
+  // Achado ao vivo (2026-09-01) — ver `activeBoardId` e o callback
+  // `listCards` acima. Puro estado de sessão: nada é persistido, e um
+  // relançamento começa em `null` (a app sempre abre na Home).
+  ipcMain.on("board:active", (_e, id: string | null) => {
+    activeBoardId = id;
+  });
   // DESIGN-BACKLOG.md item 60, peça 2 — same shape/guarantee as
   // set-autonomous above: only real renderer UI reaches this, `cap: null`
   // means "back to the global default", never zero.
@@ -1031,8 +1151,8 @@ function createWindow() {
   ipcMain.on("browser:input-mouse", (_e, id: string, evt: BrowserMouseEvent) => browserRegistry.sendMouseEvent(id, evt));
   ipcMain.on("browser:input-wheel", (_e, id: string, evt: BrowserWheelEvent) => browserRegistry.sendWheelEvent(id, evt));
   ipcMain.on("browser:input-key", (_e, id: string, evt: BrowserKeyEvent) => browserRegistry.sendKeyEvent(id, evt));
-  ipcMain.handle("browser:ask-resolve", (_e, requestId: string, allowed: boolean) =>
-    messageBus.resolveOpen(requestId, allowed),
+  ipcMain.handle("browser:ask-resolve", (_e, requestId: string, allowed: boolean, cardId?: string) =>
+    messageBus.resolveOpen(requestId, allowed, cardId),
   );
   // Item 26, teclado — IME e clipboard real (ver browser-registry.ts).
   ipcMain.handle("browser:insert-text", (_e, id: string, text: string) => browserRegistry.insertText(id, text));

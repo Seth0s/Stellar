@@ -624,8 +624,11 @@ export function App() {
       // same immediate-resolve shape as spawn_agent's autoApprove below,
       // extended to open_url.
       if (autoApprove) {
-        openBrowserFor(requesterId, url);
-        void window.browser.resolveAsk(requestId, true);
+        // O id volta pro chamador (achado ao vivo 2026-09-01): sem ele,
+        // `open_url` respondia só `{ok:true}` e não havia caminho nenhum
+        // até `browser_click`/`get_page_text` daquele card.
+        const cardId = openBrowserFor(requesterId, url);
+        void window.browser.resolveAsk(requestId, true, cardId);
         return;
       }
       setPendingAsk({ kind: "open", requestId, requesterId, url, reason });
@@ -723,6 +726,38 @@ export function App() {
     const offReadCard = window.readCard.onRequest((requestId, cardId, lines) => {
       window.readCard.reply(requestId, getTerminalText(cardId, lines));
     });
+    // Achado ao vivo (2026-09-01) — read_sticky/write_sticky. Lê
+    // `cardsRef` (não `cards`): este listener é registrado uma vez na
+    // montagem e precisa do estado atual na hora da chamada, mesma razão
+    // do listener de snapshot logo acima.
+    const offSticky = window.sticky.onRequest((requestId, cardId, op) => {
+      const card = cardsRef.current.find((c) => c.id === cardId);
+      if (!card || card.kind !== "sticky") {
+        window.sticky.reply(requestId, { ok: false, error: `no sticky card with id "${cardId}"` });
+        return;
+      }
+      if (op.op === "read") {
+        window.sticky.reply(requestId, { ok: true, content: card.content });
+        return;
+      }
+      // A única proteção que a escrita tem (decidido com o usuário: sem
+      // modal de consentimento) — e o renderer é o único lado que sabe
+      // disso. `data-card-id` no próprio textarea (StickyCard.tsx) é o que
+      // liga o elemento focado ao card; sem ele, o `document.activeElement`
+      // não diria QUAL nota está sendo editada.
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.classList.contains("sticky-textarea") && active.dataset.cardId === cardId) {
+        window.sticky.reply(requestId, {
+          ok: false,
+          error: `sticky "${cardId}" is being edited by a human right now — not overwriting; try again later`,
+        });
+        return;
+      }
+      const next = op.mode === "append" ? card.content + op.content : op.content;
+      changeStickyContent(cardId, next);
+      commitStickyContent(card, next);
+      window.sticky.reply(requestId, { ok: true, content: next });
+    });
     // DESIGN-BACKLOG.md item 60, peça 1 — one push per board whose queue
     // changed; replaces just that board's entry, leaves every other board
     // untouched.
@@ -737,6 +772,7 @@ export function App() {
       offAskSpawnCard();
       offSnapshot();
       offReadCard();
+      offSticky();
       offQueueChanged();
     };
   }, []);
@@ -1236,8 +1272,8 @@ export function App() {
     const ask = pendingAsk;
     setPendingAsk(null);
     if (ask.kind === "open") {
-      openBrowserFor(ask.requesterId, ask.url);
-      void window.browser.resolveAsk(ask.requestId, true);
+      const cardId = openBrowserFor(ask.requesterId, ask.url);
+      void window.browser.resolveAsk(ask.requestId, true, cardId);
     } else if (ask.kind === "spawn-agent") {
       const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label);
       // DESIGN-BACKLOG.md item 62 — same lineage record as the
@@ -2042,6 +2078,7 @@ export function App() {
             return createPortal(
               <StickyCard
                 key={c.id}
+                cardId={c.id}
                 rect={c.rect}
                 zoom={world.zoom}
                 zIndex={zIndex}
