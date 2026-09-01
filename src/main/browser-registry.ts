@@ -135,9 +135,15 @@ export function createBrowserRegistry(callbacks: {
       if (width === 0 || height === 0) return;
       // JPEG, not the raw BGRA bitmap — a 720×560 raw frame is ~1.6MB;
       // over IPC at any real paint rate across several open cards that's
-      // not viable. JPEG trades a bit of text crispness for something that
-      // actually fits an IPC channel repeatedly.
-      callbacks.onFrame(id, image.toJPEG(70), width, height);
+      // not viable. Queixa ao vivo de qualidade "parece 360p" (2026-09-01,
+      // depois do fix de deviceScaleFactor) — qualidade 70 estava
+      // introduzindo artefato de compressão visível em texto/UI real, um
+      // segundo fator de perda 100% nosso, independente de qualquer
+      // limitação do Electron/GPU. Subida pra 90: ainda troca um pouco de
+      // nitidez por caber num canal IPC repetidamente, mas o degrau de
+      // qualidade em 70 era desnecessariamente agressivo pra conteúdo de
+      // UI/texto (majoritariamente o que se navega aqui).
+      callbacks.onFrame(id, image.toJPEG(90), width, height);
     });
 
     // Same reasoning as before this rewrite: modern Chromium renders
