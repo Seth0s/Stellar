@@ -256,7 +256,12 @@ export type BrowserKeyEvent = {
 };
 
 const browser = {
-  create: (id: string, url: string): Promise<void> => ipcRenderer.invoke("browser:create", id, url),
+  /** Item 6 (Trilha B) — `scaleFactor` resolved once at creation
+   * (`browser-registry.ts`'s `create`, same value `resize()` multiplies
+   * by) so `BrowserCard.tsx` can mirror the same multiplication locally
+   * for `toCanvasPoint`'s click-mapping instead of a round-trip IPC call
+   * on every resize. */
+  create: (id: string, url: string): Promise<{ scaleFactor: number }> => ipcRenderer.invoke("browser:create", id, url),
   navigate: (id: string, url: string): Promise<void> => ipcRenderer.invoke("browser:navigate", id, url),
   back: (id: string): Promise<void> => ipcRenderer.invoke("browser:back", id),
   forward: (id: string): Promise<void> => ipcRenderer.invoke("browser:forward", id),
