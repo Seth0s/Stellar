@@ -71,10 +71,14 @@ try {
     JSON.stringify([
       "board_mode",
       "browser_click",
+      "browser_console",
       "browser_eval",
+      "browser_network",
       "browser_query",
       "browser_scroll",
+      "browser_snapshot",
       "browser_type",
+      "browser_wait_for",
       "card_status",
       "concurrency_status",
       "create_task",
@@ -86,6 +90,7 @@ try {
       "open_url",
       "read_card",
       "read_report",
+      "read_sticky",
       "report",
       "send_to_card",
       "set_connector_kind",
@@ -93,12 +98,23 @@ try {
       "spawn_agent",
       "spawn_card",
       "update_task",
+      "write_sticky",
     ]),
   );
 
   const listPayload = await toolJson("list_cards", {});
-  check("list_cards reflects real board state (the seeded bash card)", listPayload.cards?.[0]?.provider, "bash");
-  const bashCardId = listPayload.cards[0].id;
+  check(
+    "list_cards reflects real board state (the seeded bash card)",
+    // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): a lista
+    // deixou de ser só de terminais, então a primeira posição não é mais
+    // garantidamente o bash seedado.
+    listPayload.cards?.find((c) => c.kind === "terminal")?.provider,
+    "bash",
+  );
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const bashCardId = listPayload.cards.find((c) => c.kind === "terminal").id;
 
   const sendResult = await toolJson("send_to_card", { target: bashCardId, text: "echo mcp-smoke-$((1+1))" });
   check("send_to_card writes into the real card via MCP", sendResult.ok, true);
@@ -133,8 +149,24 @@ try {
   await clickModalButton(page, "Permitir");
   const openResult = JSON.parse((await openPromise).content[0].text);
   check("open_url MCP call resolves ok after Permitir", openResult.ok, true);
+  // Achado ao vivo (2026-09-01, relato de um agente): sem isto, `open_url`
+  // devolvia só `{ok:true}` e não existia caminho nenhum dele pro
+  // `browser_click`/`get_page_text` do card recém-aberto — o agente acabou
+  // sondando ids numéricos em sequência até achar. O renderer sempre soube
+  // o id; ele só era descartado no caminho de volta.
+  check("...devolvendo o id do card que abriu, não só ok:true", typeof openResult.cardId, "string");
   await new Promise((r) => setTimeout(r, 1200));
   check("a real browser card exists after the allowed open_url", await page.evalJs(`document.querySelectorAll('.browser-card').length`), 1);
+  const browserCardIds = JSON.parse(
+    await page.evalJs(`
+      window.store.boards
+        .list()
+        .then((b) => window.store.list(b[0].id))
+        .then((cards) => JSON.stringify(cards.filter((c) => c.kind === "browser").map((c) => c.id)))
+    `),
+  );
+  check("...e o id devolvido é o daquele card de verdade (serve de alvo direto)", browserCardIds.includes(openResult.cardId), true);
+
 
   // spawn_agent — same consent shape, resolves with a real new cardId.
   const spawnAgentPromise = callTool("spawn_agent", { provider: "bash", callerCardId: bashCardId, reason: "need a second shell" });

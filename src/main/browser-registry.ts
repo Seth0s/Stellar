@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { BrowserWindow, type Session } from "electron";
 
 export type BrowserMouseEvent = {
   /** `mouseLeave` — achado ao vivo (2026-08-31): sem sinal explícito de
@@ -20,7 +20,28 @@ export type BrowserKeyEvent = {
   modifiers?: Array<"shift" | "control" | "alt" | "meta">;
 };
 
-type Entry = { win: BrowserWindow; visible: boolean; scaleFactor: number };
+export type ConsoleEntry = { level: string; message: string; at: number };
+export type PageElement = { ref: string; role: string; name: string; tag: string; disabled?: boolean; checked?: boolean; value?: string };
+export type NetworkEntry = { method: string; url: string; status: number | null; error?: string; at: number };
+
+/** Achado ao vivo (2026-09-01, relato de um agente que dirigiu o navegador
+ * daqui): "debugar uma falha silenciosa (um botão de salvar que não faz
+ * nada porque a API deu 500) não tem caminho nenhum pelo lado do Stellar".
+ * Console e rede passam a ser gravados por card, em anel — a captura já
+ * existia pro console (o contador de erros no header do card vem dela),
+ * só era descartada depois de contar. Anel e não lista infinita: uma SPA
+ * ruidosa geraria centenas de entradas por minuto e isso vive pela vida
+ * inteira do card. */
+const CONSOLE_BUFFER = 500;
+const NETWORK_BUFFER = 300;
+
+type Entry = {
+  win: BrowserWindow;
+  visible: boolean;
+  scaleFactor: number;
+  console: ConsoleEntry[];
+  network: NetworkEntry[];
+};
 
 // Pre-release audit P2 — every visible browser card painted at the same
 // rate regardless of whether it's the one the user is actually
@@ -104,6 +125,47 @@ export function createBrowserRegistry(callbacks: {
   getScaleFactor: () => number;
 }) {
   const entries = new Map<string, Entry>();
+  /** `webRequest` só reporta o `webContentsId`; isto o traduz de volta pro
+   * card. Uma entrada morre junto com o card em `destroy`. */
+  const wcIdToCardId = new Map<number, string>();
+  const tappedSessions = new WeakSet<Session>();
+
+  function recordNetwork(webContentsId: number | undefined, record: NetworkEntry) {
+    if (webContentsId === undefined) return;
+    const cardId = wcIdToCardId.get(webContentsId);
+    if (!cardId) return;
+    const entry = entries.get(cardId);
+    if (!entry) return;
+    entry.network.push(record);
+    if (entry.network.length > NETWORK_BUFFER) entry.network.shift();
+  }
+
+  /** Um tap por sessão, idempotente — ver o comentário no `create`. Só
+   * observa (`onCompleted`/`onErrorOccurred`), nunca bloqueia nem reescreve
+   * requisição: um listener que responde tarde num `onBeforeRequest`
+   * travaria a navegação da página inteira, e não há nada aqui que
+   * justifique esse risco. */
+  function ensureNetworkTap(session: Session) {
+    if (tappedSessions.has(session)) return;
+    tappedSessions.add(session);
+    session.webRequest.onCompleted((details) => {
+      recordNetwork(details.webContentsId, {
+        method: details.method,
+        url: details.url,
+        status: details.statusCode ?? null,
+        at: Date.now(),
+      });
+    });
+    session.webRequest.onErrorOccurred((details) => {
+      recordNetwork(details.webContentsId, {
+        method: details.method,
+        url: details.url,
+        status: null,
+        error: details.error,
+        at: Date.now(),
+      });
+    });
+  }
 
   function create(id: string, url: string): { scaleFactor: number } {
     const scaleFactor = callbacks.getScaleFactor();
@@ -194,9 +256,23 @@ export function createBrowserRegistry(callbacks: {
     wc.on("page-title-updated", (_e, title) => callbacks.onTitle(id, title));
     wc.on("did-start-loading", () => callbacks.onLoading(id, true));
     wc.on("did-stop-loading", () => callbacks.onLoading(id, false));
-    wc.on("console-message", (details) => callbacks.onConsoleMessage(id, details.level, details.message));
+    wc.on("console-message", (details) => {
+      const entry = entries.get(id);
+      if (entry) {
+        entry.console.push({ level: details.level, message: details.message, at: Date.now() });
+        if (entry.console.length > CONSOLE_BUFFER) entry.console.shift();
+      }
+      callbacks.onConsoleMessage(id, details.level, details.message);
+    });
 
-    entries.set(id, { win, visible: true, scaleFactor });
+    entries.set(id, { win, visible: true, scaleFactor, console: [], network: [] });
+    // A sessão é a padrão, compartilhada com a janela principal, e o
+    // `webRequest` do Electron aceita UM listener por evento por sessão —
+    // então o registro é feito uma vez só e despachado por
+    // `webContentsId`, nunca um listener por card (o segundo card
+    // silenciosamente desligaria o primeiro).
+    wcIdToCardId.set(wc.id, id);
+    ensureNetworkTap(wc.session);
     void wc.loadURL(normalizeUrl(url));
     return { scaleFactor };
   }
@@ -437,29 +513,79 @@ export function createBrowserRegistry(callbacks: {
    * de clicar — muito mais preciso que pedir pro agente adivinhar x/y a
    * partir de um screenshot, e resiliente a scroll/zoom/resize desde a
    * última vez que a página foi vista. */
-  async function clickSelector(
+  /**
+   * Achado ao vivo (2026-09-01, relato de um agente que dirigiu o navegador
+   * daqui): um `browser_click` com um seletor estilo Playwright
+   * (`button:has-text('Salvar')`) falhava com "Script failed to execute,
+   * this normally means an error was thrown" — a mensagem genérica do
+   * Electron pra QUALQUER exceção dentro do `executeJavaScript`. O agente
+   * não tinha como saber que o problema era o seletor, muito menos que o
+   * motor aqui é o `querySelector` do próprio navegador (CSS puro) e não o
+   * CSS estendido do Playwright; teve que adivinhar e cair pra
+   * `browser_eval` com busca manual por `textContent`.
+   *
+   * O `try/catch` DENTRO da página é o ponto: um seletor inválido lança
+   * `SyntaxError` no `querySelector`, e capturá-lo lá permite distinguir
+   * três casos que antes viravam a mesma frase — seletor inválido,
+   * seletor válido sem correspondência, e uma falha de verdade na
+   * avaliação. Compartilhado por click/scroll/query pra que os três deem a
+   * mesma resposta ao mesmo erro.
+   *
+   * `body` é interpolado como corpo de função e roda com `el` já resolvido.
+   */
+  async function withSelector<T>(
     id: string,
     selector: string,
-  ): Promise<{ ok: true; x: number; y: number } | { ok: false; error: string }> {
+    body: string,
+  ): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
     try {
       const raw: unknown = await entry.win.webContents.executeJavaScript(`
         (() => {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return null;
-          el.scrollIntoView({ block: "center", inline: "center" });
-          const r = el.getBoundingClientRect();
-          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+          let el;
+          try {
+            el = document.querySelector(${JSON.stringify(selector)});
+          } catch (err) {
+            return { __selectorError: String((err && err.message) || err) };
+          }
+          if (!el) return { __noMatch: true };
+          return { __value: (function (el) { ${body} })(el) };
         })()
       `);
-      if (!raw || typeof raw !== "object") return { ok: false, error: `no element matches selector "${selector}"` };
-      const { x, y } = raw as { x: number; y: number };
-      clickAtPoint(id, x, y);
-      return { ok: true, x, y };
+      const tagged = raw as { __selectorError?: string; __noMatch?: boolean; __value?: T };
+      if (tagged?.__selectorError !== undefined) {
+        return {
+          ok: false,
+          error:
+            `invalid CSS selector ${JSON.stringify(selector)}: ${tagged.__selectorError}. ` +
+            `Selectors here go straight to the page's own document.querySelector — plain CSS only. ` +
+            `Playwright/Puppeteer extensions (:has-text(...), text=..., >> , xpath=...) are NOT supported; ` +
+            `use a CSS selector, or browser_eval if you need to match on text content.`,
+        };
+      }
+      if (tagged?.__noMatch) return { ok: false, error: `no element matches selector ${JSON.stringify(selector)}` };
+      return { ok: true, value: tagged.__value as T };
     } catch (err) {
-      return { ok: false, error: String(err) };
+      return { ok: false, error: `failed to evaluate selector ${JSON.stringify(selector)} in the page: ${String(err)}` };
     }
+  }
+
+  async function clickSelector(
+    id: string,
+    selector: string,
+  ): Promise<{ ok: true; x: number; y: number } | { ok: false; error: string }> {
+    const found = await withSelector<{ x: number; y: number }>(
+      id,
+      selector,
+      `el.scrollIntoView({ block: "center", inline: "center" });
+       const r = el.getBoundingClientRect();
+       return { x: r.x + r.width / 2, y: r.y + r.height / 2 };`,
+    );
+    if (!found.ok) return found;
+    const { x, y } = found.value;
+    clickAtPoint(id, x, y);
+    return { ok: true, x, y };
   }
 
   /** `selector` given: focus that field first (via `clickSelector`) so
@@ -492,20 +618,14 @@ export function createBrowserRegistry(callbacks: {
     let x = 0;
     let y = 0;
     if (selector) {
-      try {
-        const raw: unknown = await entry.win.webContents.executeJavaScript(`
-          (() => {
-            const el = document.querySelector(${JSON.stringify(selector)});
-            if (!el) return null;
-            const r = el.getBoundingClientRect();
-            return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-          })()
-        `);
-        if (!raw || typeof raw !== "object") return { ok: false, error: `no element matches selector "${selector}"` };
-        ({ x, y } = raw as { x: number; y: number });
-      } catch (err) {
-        return { ok: false, error: String(err) };
-      }
+      const found = await withSelector<{ x: number; y: number }>(
+        id,
+        selector,
+        `const r = el.getBoundingClientRect();
+         return { x: r.x + r.width / 2, y: r.y + r.height / 2 };`,
+      );
+      if (!found.ok) return found;
+      ({ x, y } = found.value);
     }
     // Same sign inversion BrowserCard.tsx's onCanvasWheel already applies
     // before calling sendWheel — Electron's sendInputEvent mouseWheel
@@ -534,29 +654,29 @@ export function createBrowserRegistry(callbacks: {
    * rect) without depending on a screenshot — same `executeJavaScript`
    * primitive as `getPageText`, just scoped to one element. */
   async function query(id: string, selector: string): Promise<({ ok: true } & QueryResult) | { ok: false; error: string }> {
-    const entry = entries.get(id);
-    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
-    try {
-      const raw: unknown = await entry.win.webContents.executeJavaScript(`
-        (() => {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return { exists: false };
-          const r = el.getBoundingClientRect();
-          return {
-            exists: true,
-            text: (el.innerText ?? el.textContent ?? "").slice(0, 2000),
-            value: "value" in el ? String(el.value) : undefined,
-            href: "href" in el ? String(el.href) : undefined,
-            checked: "checked" in el ? Boolean(el.checked) : undefined,
-            disabled: "disabled" in el ? Boolean(el.disabled) : undefined,
-            rect: { x: r.x, y: r.y, width: r.width, height: r.height },
-          };
-        })()
-      `);
-      return { ok: true, ...(raw as QueryResult) };
-    } catch (err) {
-      return { ok: false, error: String(err) };
+    const found = await withSelector<QueryResult>(
+      id,
+      selector,
+      `const r = el.getBoundingClientRect();
+       return {
+         exists: true,
+         text: (el.innerText ?? el.textContent ?? "").slice(0, 2000),
+         value: "value" in el ? String(el.value) : undefined,
+         href: "href" in el ? String(el.href) : undefined,
+         checked: "checked" in el ? Boolean(el.checked) : undefined,
+         disabled: "disabled" in el ? Boolean(el.disabled) : undefined,
+         rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+       };`,
+    );
+    // `exists: false` continua sendo uma RESPOSTA, não um erro: perguntar
+    // "esse elemento está na página?" e ouvir "não" é o uso normal desta
+    // tool. Só o seletor inválido (e uma falha real de avaliação) viram
+    // `ok: false` — é essa a distinção que faltava.
+    if (!found.ok) {
+      if (found.error.startsWith("no element matches")) return { ok: true, exists: false };
+      return found;
     }
+    return { ok: true, ...found.value };
   }
 
   // Achado ao vivo (2026-08-31) — `get_page_text`'s "no consent needed"
@@ -586,8 +706,215 @@ export function createBrowserRegistry(callbacks: {
     }
   }
 
+  function getConsole(id: string, level?: string, limit?: number): { ok: true; messages: ConsoleEntry[] } | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const filtered = level ? entry.console.filter((m) => m.level === level) : entry.console;
+    // Do FIM da lista: o interessante quase sempre é o que acabou de
+    // acontecer, não o que a página logou ao carregar.
+    return { ok: true, messages: limit ? filtered.slice(-limit) : filtered };
+  }
+
+  function getNetwork(id: string, opts: { status?: number; failedOnly?: boolean; urlContains?: string; limit?: number } = {}) {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false as const, error: `no browser card with id "${id}"` };
+    let list = entry.network;
+    // `failedOnly` inclui erro de transporte (`status: null`), não só
+    // 4xx/5xx — "a chamada de salvar não deu certo" abrange as duas
+    // coisas, e um DNS/CORS falhando é justamente o caso que não aparece
+    // em lugar nenhum na tela.
+    if (opts.failedOnly) list = list.filter((r) => r.error !== undefined || r.status === null || r.status >= 400);
+    if (opts.status !== undefined) list = list.filter((r) => r.status === opts.status);
+    if (opts.urlContains) list = list.filter((r) => r.url.includes(opts.urlContains as string));
+    return { ok: true as const, requests: opts.limit ? list.slice(-opts.limit) : list };
+  }
+
+  /**
+   * Espera uma condição na página em vez de dormir e torcer (achado ao
+   * vivo 2026-09-01). Polling e não MutationObserver de propósito: o
+   * observer teria que ser injetado, sobreviver a navegação e ser
+   * desmontado sem vazar, e o custo de um `executeJavaScript` a cada
+   * 200ms numa página é irrelevante perto disso.
+   */
+  const WAIT_POLL_MS = 200;
+  async function waitFor(
+    id: string,
+    opts: { selector?: string; text?: string; gone?: boolean; timeoutMs?: number },
+  ): Promise<{ ok: true; waitedMs: number } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    if (!opts.selector && !opts.text) return { ok: false, error: "need either selector or text" };
+    const timeoutMs = opts.timeoutMs ?? 10_000;
+    const started = Date.now();
+    const probe = opts.selector
+      ? `(() => { try { return !!document.querySelector(${JSON.stringify(opts.selector)}); } catch (err) { return { __selectorError: String((err && err.message) || err) }; } })()`
+      : `(() => (document.body ? document.body.innerText : "").includes(${JSON.stringify(opts.text ?? "")}))()`;
+    while (Date.now() - started < timeoutMs) {
+      if (entries.get(id) !== entry) return { ok: false, error: `browser card "${id}" closed while waiting` };
+      let present: unknown;
+      try {
+        present = await entry.win.webContents.executeJavaScript(probe);
+      } catch (err) {
+        return { ok: false, error: `failed to evaluate the wait condition: ${String(err)}` };
+      }
+      // Um seletor inválido nunca vai ficar verdadeiro — falha na hora em
+      // vez de gastar o timeout inteiro e reportar "não apareceu".
+      if (present && typeof present === "object" && "__selectorError" in present) {
+        return { ok: false, error: `invalid CSS selector ${JSON.stringify(opts.selector)}: ${String((present as { __selectorError: string }).__selectorError)}` };
+      }
+      if (Boolean(present) === !opts.gone) return { ok: true, waitedMs: Date.now() - started };
+      await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
+    }
+    const what = opts.selector ? `selector ${JSON.stringify(opts.selector)}` : `text ${JSON.stringify(opts.text)}`;
+    return { ok: false, error: `timed out after ${timeoutMs}ms waiting for ${what} to ${opts.gone ? "disappear" : "appear"}` };
+  }
+
+  /**
+   * Achado ao vivo (2026-09-01): "não existe snapshot por árvore de
+   * acessibilidade / ref pra mirar um elemento sem já saber o seletor" — o
+   * agente teve que cair pra `browser_eval` com
+   * `querySelectorAll` + comparação manual de `textContent` pra achar o
+   * botão "Adicionar nota".
+   *
+   * Isto é o mínimo que resolve o problema real, não uma árvore de
+   * acessibilidade de verdade: lista o que é INTERATIVO e VISÍVEL, com o
+   * nome que um humano lê na tela, e carimba `data-stellar-ref` em cada um
+   * pra que `browser_click`/`browser_type` possam mirar por `ref` depois.
+   *
+   * Três decisões que o formato exige:
+   *
+   *  - **Nome acessível na ordem certa**: `aria-label`, depois o `<label>`
+   *    associado, depois `placeholder`/`title`/`alt`/`value`, e só então o
+   *    texto visível. Um botão de ícone só tem `aria-label`; um input só
+   *    tem label ou placeholder. Cair direto no `innerText` acharia
+   *    "" pra metade dos controles de uma UI real.
+   *  - **Só o que está visível**: `getClientRects().length` mais
+   *    `visibility`/`opacity`. Um menu fechado tem os itens no DOM e
+   *    mirá-los produz um clique que não acontece — pior que não listar.
+   *  - **Os refs são reemitidos a cada chamada**, e o carimbo anterior é
+   *    limpo. Um ref é válido até a próxima navegação ou re-render, igual
+   *    ao Playwright MCP: guardar ref velho e clicar depois é justamente o
+   *    erro que uma numeração estável convidaria.
+   */
+  const SNAPSHOT_MAX_ELEMENTS = 400;
+  async function pageSnapshot(id: string): Promise<{ ok: true; url: string; title: string; elements: PageElement[]; truncated: boolean } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const raw: unknown = await entry.win.webContents.executeJavaScript(`
+        (() => {
+          const SEL = [
+            "a[href]", "button", "input", "select", "textarea", "summary",
+            "[role=button]", "[role=link]", "[role=checkbox]", "[role=radio]",
+            "[role=tab]", "[role=menuitem]", "[role=option]", "[role=switch]",
+            "[contenteditable=true]", "[onclick]", "[tabindex]:not([tabindex='-1'])",
+          ].join(",");
+          for (const old of document.querySelectorAll("[data-stellar-ref]")) old.removeAttribute("data-stellar-ref");
+          function visible(el) {
+            if (el.getClientRects().length === 0) return false;
+            const st = getComputedStyle(el);
+            return st.visibility !== "hidden" && st.display !== "none" && Number(st.opacity) !== 0;
+          }
+          function accessibleName(el) {
+            const aria = el.getAttribute("aria-label");
+            if (aria && aria.trim()) return aria.trim();
+            const labelledBy = el.getAttribute("aria-labelledby");
+            if (labelledBy) {
+              const parts = labelledBy.split(/\s+/).map((x) => document.getElementById(x)).filter(Boolean);
+              const joined = parts.map((n) => (n.innerText || n.textContent || "").trim()).join(" ").trim();
+              if (joined) return joined;
+            }
+            if (el.id) {
+              const lbl = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+              if (lbl) {
+                const t = (lbl.innerText || lbl.textContent || "").trim();
+                if (t) return t;
+              }
+            }
+            const closestLabel = el.closest("label");
+            if (closestLabel) {
+              const t = (closestLabel.innerText || closestLabel.textContent || "").trim();
+              if (t) return t;
+            }
+            for (const attr of ["placeholder", "title", "alt", "name"]) {
+              const v = el.getAttribute(attr);
+              if (v && v.trim()) return v.trim();
+            }
+            const text = (el.innerText || el.textContent || "").trim();
+            if (text) return text.replace(/\s+/g, " ").slice(0, 120);
+            if (el.value) return String(el.value).slice(0, 120);
+            return "";
+          }
+          function roleOf(el) {
+            const explicit = el.getAttribute("role");
+            if (explicit) return explicit;
+            const tag = el.tagName.toLowerCase();
+            if (tag === "a") return "link";
+            if (tag === "button" || tag === "summary") return "button";
+            if (tag === "select") return "combobox";
+            if (tag === "textarea") return "textbox";
+            if (tag === "input") {
+              const t = (el.getAttribute("type") || "text").toLowerCase();
+              if (t === "checkbox" || t === "radio") return t;
+              if (t === "submit" || t === "button" || t === "reset") return "button";
+              return "textbox";
+            }
+            return "generic";
+          }
+          const out = [];
+          let n = 0;
+          for (const el of document.querySelectorAll(SEL)) {
+            if (!visible(el)) continue;
+            if (out.length >= ${SNAPSHOT_MAX_ELEMENTS}) return { url: location.href, title: document.title, elements: out, truncated: true };
+            const ref = "e" + ++n;
+            el.setAttribute("data-stellar-ref", ref);
+            const item = { ref, role: roleOf(el), name: accessibleName(el), tag: el.tagName.toLowerCase() };
+            if (el.disabled) item.disabled = true;
+            if (typeof el.checked === "boolean" && el.checked) item.checked = true;
+            if (el.value !== undefined && el.value !== "" && el.type !== "password") item.value = String(el.value).slice(0, 120);
+            out.push(item);
+          }
+          return { url: location.href, title: document.title, elements: out, truncated: false };
+        })()
+      `);
+      const parsed = raw as { url: string; title: string; elements: PageElement[]; truncated: boolean };
+      return { ok: true, ...parsed };
+    } catch (err) {
+      return { ok: false, error: `failed to snapshot the page: ${String(err)}` };
+    }
+  }
+
+  /** Um `ref` do `pageSnapshot` vira um seletor CSS comum — todo o resto do
+   * caminho (click/type/scroll/query) segue exatamente igual. */
+  function refSelector(ref: string): string {
+    return `[data-stellar-ref="${ref.replace(/"/g, '\\"')}"]`;
+  }
+
+
+  /** Captura a página do card, e SÓ ela (achado ao vivo 2026-09-01: "eu
+   * gostaria que o snapshot fosse cirúrgico e fizesse apenas do card e
+   * nada mais"). O `snapshot` de sempre fotografa a JANELA DO APP recortada
+   * onde o card está no board — então pega o fundo do canvas por baixo de
+   * cantos arredondados, pega qualquer card sobreposto, sai na resolução
+   * "tamanho na tela × zoom do board", e trunca o que estiver fora da área
+   * visível. Aqui não existe board nenhum: a BrowserWindow offscreen deste
+   * card é uma superfície própria, então a captura é exatamente o conteúdo
+   * renderizado, na resolução real, independente de onde (ou se) o card
+   * aparece na tela. */
+  async function capturePage(id: string): Promise<{ ok: true; png: Buffer } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const image = await entry.win.webContents.capturePage();
+      return { ok: true, png: image.toPNG() };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
   function destroy(id: string) {
     const entry = entries.get(id);
+    if (entry) wcIdToCardId.delete(entry.win.webContents.id);
     if (!entry) return;
     entry.win.destroy();
     entries.delete(id);
@@ -623,6 +950,12 @@ export function createBrowserRegistry(callbacks: {
     scroll,
     query,
     evalJs,
+    getConsole,
+    getNetwork,
+    waitFor,
+    pageSnapshot,
+    refSelector,
+    capturePage,
     destroy,
     destroyAll,
   };

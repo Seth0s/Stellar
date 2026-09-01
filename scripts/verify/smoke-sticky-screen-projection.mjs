@@ -176,6 +176,36 @@ try {
       approxEqual(real.w, expected.w),
       true,
     );
+
+    // Achado ao vivo (2026-09-01, screenshot de um sticky em zoom ~86%):
+    // o corpo da nota parava bem antes do rodapé do card, deixando uma
+    // faixa vazia que crescia conforme se afastava — e só embaixo, nunca
+    // nas laterais. `.card-scale` (o wrapper que a Trilha B introduziu,
+    // dimensionado no `rect` de mundo e escalado por `transform`) é um
+    // flex item do `.sticky-card`, que é `flex-direction: column`; com o
+    // `flex-shrink: 1` padrão, todo zoom < 1 encolhia o item pro tamanho
+    // do container ANTES do transform, e o `scale(zoom)` multiplicava de
+    // novo — altura visual `rect.h * zoom²`. A largura escapava por ser
+    // eixo transversal com tamanho explícito, o que explica a assimetria
+    // do sintoma. Esta é uma checagem de PROPORÇÃO interna (o corpo
+    // encosta no rodapé do próprio card), então ela é imune ao offset de
+    // viewport/zoom de página que afeta os três checks absolutos acima.
+    const fill = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const ta = document.querySelector('.sticky-card .sticky-textarea');
+          const frame = ta.closest('.card-frame');
+          const a = ta.getBoundingClientRect();
+          const f = frame.getBoundingClientRect();
+          return JSON.stringify({ gap: f.bottom - a.bottom, frameH: f.height });
+        })()
+      `),
+    );
+    check(
+      `o corpo da nota vai até o rodapé do card em ${pct}% (sobra ${fill.gap.toFixed(1)}px de ${fill.frameH.toFixed(0)}px)`,
+      Math.abs(fill.gap) <= 3,
+      true,
+    );
   }
 
   // Volta pra 100% pra deixar o resto do teste em terreno conhecido.

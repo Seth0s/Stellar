@@ -82,7 +82,10 @@ try {
   await new Promise((r) => setTimeout(r, 500));
 
   const cardsAtStart = await toolJson("list_cards", {});
-  const bashId = cardsAtStart.cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const bashId = cardsAtStart.cards.find((c) => c.kind === "terminal").id;
   const boardId = JSON.parse(
     await page.evalJs(`(async () => { const boards = await window.store.boards.list(); return JSON.stringify(boards[0].id); })()`),
   );

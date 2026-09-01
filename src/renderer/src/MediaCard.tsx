@@ -93,10 +93,25 @@ export function MediaCard({
     onRotateCommit(ROTATION_STEPS[(idx + 1) % ROTATION_STEPS.length]);
   }
 
-  /** Pan — arrastar DENTRO do corpo da mídia (não no header, que já é
-   * exclusivo do drag de mover o card inteiro via CardFrame). */
+  /** Pan da imagem DENTRO do card — mas só quando há o que panoramizar.
+   *
+   * Pedido ao vivo (2026-09-01): um card de imagem passou a ser exibido
+   * sem chrome nenhum (`chromeless` no CardFrame), e sem header não sobra
+   * nenhuma faixa dedicada pra iniciar o arraste de mover o card. Regra
+   * confirmada com o usuário: em `view.zoom <= 1` a imagem inteira já
+   * cabe no card, então não existe pan possível — o gesto é liberado
+   * (nada de `stopPropagation`) e borbulha pro `.card-clip`, que move o
+   * card. Ampliada (`view.zoom > 1`) o arraste volta a ser pan, e mover o
+   * card se faz pelo overlay do header (que aparece no hover) ou pela
+   * borda.
+   *
+   * Para PDF nada disso vale (o card mantém o frame completo, header
+   * incluído), então lá o pan segue exclusivo do corpo como sempre foi. */
+  const bodyDragPans = mediaType === "pdf" || view.zoom > 1;
+
   function onBodyPointerDown(e: React.PointerEvent) {
     if (interactionMode !== "normal") return;
+    if (!bodyDragPans) return;
     e.stopPropagation();
     const startX = e.clientX;
     const startY = e.clientY;
@@ -150,6 +165,10 @@ export function MediaCard({
       // nunca algo mais), então não precisa de um campo separado
       // guardando "a proporção original".
       aspectRatio={rect.w / rect.h}
+      // "O CARD TIPO MEDIA NÃO DEVERIA TER BODY" (2026-09-01) — só para
+      // imagem. Um PDF mantém o frame inteiro: a navegação de páginas
+      // vive no rodapé e não tem outro lugar razoável pra morar.
+      chromeless={mediaType === "image"}
       headerContent={
         <>
           <span className="card-head-label">
@@ -164,6 +183,10 @@ export function MediaCard({
           </button>
         </>
       }
+      // Só o PDF tem rodapé. Para imagem ele mostrava o nome do arquivo,
+      // que já é exatamente o rótulo padrão do CardTag no header — linha
+      // duplicada, e agora sem lugar nenhum (CardFrame ignora o rodapé em
+      // modo chromeless de todo jeito).
       footerContent={
         mediaType === "pdf" ? (
           <span className="media-pdf-nav">
@@ -178,9 +201,7 @@ export function MediaCard({
               <Icon name="chevronRight" size={12} />
             </button>
           </span>
-        ) : (
-          filename
-        )
+        ) : undefined
       }
     >
       <div className="media-viewport" onPointerDown={onBodyPointerDown} onWheel={onBodyWheel}>

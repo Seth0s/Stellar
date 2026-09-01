@@ -68,8 +68,20 @@ async function toolJson(name, args) {
 // Fixture: a real button that mutates its own text on click, a real
 // input, a real scrollable container, and a static readback element —
 // enough surface for all 5 tools to prove a genuine page-state change.
-const server = createServer((_req, res) => {
-  res.writeHead(200, { "Content-Type": "text/html" });
+const server = createServer((req, res) => {
+  // Endpoint que sempre falha — é ele que reproduz o cenário relatado
+  // ("o botão de salvar não faz nada porque a API deu 500"): a página não
+  // mostra NADA quando ele falha, de propósito, e é justamente esse o caso
+  // que browser_network tem que conseguir explicar.
+  if (req.url === "/api/salvar") {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(`{"error":"boom"}`);
+    return;
+  }
+  // charset explícito: sem ele o Chromium decodifica os bytes UTF-8 como
+  // latin-1 e "Título" chega como "TÃ­tulo" — o que fez uma checagem de
+  // nome acessível falhar por motivo que não tinha nada a ver com ela.
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><html><body style="margin:0">
     <button id="btn" onclick="document.getElementById('btn').textContent='clicked'">click me</button>
     <input id="inp" type="text" />
@@ -77,6 +89,20 @@ const server = createServer((_req, res) => {
       <div style="height:2000px;">tall content</div>
     </div>
     <div id="info">ready</div>
+
+    <!-- Superfície pros achados de 2026-09-01. O botão de salvar imita o
+         defeito silencioso: dispara um fetch que dá 500, engole o erro e
+         não muda nada na tela. Um "aria-label" num botão de ícone e um
+         "label" associado ao input existem pra provar que o snapshot lê o
+         nome que o HUMANO vê, não o innerText cru. -->
+    <button id="save" onclick="fetch('/api/salvar',{method:'POST'}).then(r=>r.json()).catch(()=>{})">Adicionar nota</button>
+    <button id="icone" aria-label="Fechar painel">&times;</button>
+    <label for="titulo">Título da nota</label>
+    <input id="titulo" type="text" />
+    <button id="boom" onclick="console.error('falha-de-proposito')">gerar erro</button>
+    <button id="tarde" onclick="setTimeout(()=>{document.getElementById('atrasado').textContent='pronto'},800)">demorar</button>
+    <div id="atrasado"></div>
+    <span hidden id="escondido">invisivel</span>
   </body></html>`);
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -210,6 +236,26 @@ try {
   check("browser_query (MCP) reporta rect real com largura/altura positivas", infoQuery.rect?.width > 0 && infoQuery.rect?.height > 0, true);
 
   // browser_eval via MCP — roda JS de verdade e retorna o valor certo.
+  // Achado ao vivo (2026-09-01, relato de um agente): um seletor estilo
+  // Playwright falhava com "Script failed to execute, this normally means
+  // an error was thrown" — a frase genérica do Electron pra qualquer
+  // exceção dentro do executeJavaScript. Sem saber que o motor aqui é o
+  // `querySelector` da própria página, o agente adivinhou e caiu pra
+  // browser_eval com busca manual por textContent.
+  const badSelector = await toolJson("browser_click", { target: cardId, selector: "button:has-text('ready')" });
+  check("um seletor inválido é recusado como tal", badSelector.ok, false);
+  check("...dizendo que é CSS puro e nomeando o que não é suportado", /Playwright/.test(badSelector.error ?? "") && /has-text/.test(badSelector.error ?? ""), true);
+  check("...sem a frase genérica do Electron", /Script failed to execute/.test(badSelector.error ?? ""), false);
+
+  // A distinção que faltava: seletor VÁLIDO que não casa não é erro de
+  // seletor. Em click é falha (não há o que clicar); em query é resposta.
+  const noMatchClick = await toolJson("browser_click", { target: cardId, selector: "#nao-existe-mesmo" });
+  check("um seletor válido sem correspondência dá outra mensagem, não a de inválido", /no element matches/.test(noMatchClick.error ?? ""), true);
+  const noMatchQuery = await toolJson("browser_query", { target: cardId, selector: "#nao-existe-mesmo" });
+  check("browser_query com seletor válido sem match continua sendo ok:true/exists:false", noMatchQuery.ok && noMatchQuery.exists === false, true);
+  const badQuery = await toolJson("browser_query", { target: cardId, selector: "div:has-text('x')" });
+  check("...mas um seletor inválido em query é ok:false, não 'não existe'", badQuery.ok, false);
+
   const evalRes = await toolJson("browser_eval", { target: cardId, js: "2 + 40" });
   check("browser_eval (MCP) roda JS e retorna o valor certo", evalRes.result, "42");
 
@@ -242,6 +288,64 @@ try {
   const evalCli = await runAcbridge(sockPath, ["browser-eval", cardId, "1", "+", "1"]);
   check("browser-eval (acbridge) reporta sucesso", evalCli.ok, true);
   check("browser-eval (acbridge) roda JS e retorna o valor certo", evalCli.stdout, "2");
+
+  // ============================================================
+  // Achados de 2026-09-01 (relato de um agente que dirigiu o navegador):
+  // sem estas quatro, mirar exigia já saber o seletor, esperar era dormir
+  // e torcer, e uma falha silenciosa não tinha diagnóstico nenhum.
+  // ============================================================
+
+  // --- browser_snapshot: refs pra mirar sem saber o seletor ---
+  const snap = await toolJson("browser_snapshot", { target: cardId });
+  check("browser_snapshot lista os elementos interativos", snap.ok && snap.elements.length > 0, true);
+  const salvar = snap.elements.find((el) => el.name === "Adicionar nota");
+  check("...achando o botão pelo nome que o humano LÊ na tela", !!salvar, true);
+  check("...com papel semântico, não só a tag", salvar?.role, "button");
+  // A razão de existir o nome acessível: um botão de ícone não tem texto
+  // nenhum, e um input não tem texto próprio — o innerText cru acharia "".
+  check("...usando aria-label num botão de ícone", snap.elements.some((el) => el.name === "Fechar painel"), true);
+  check("...e o <label> associado num input", snap.elements.some((el) => el.name === "Título da nota" && el.role === "textbox"), true);
+  check("elemento invisível fica de fora (mirá-lo daria um clique que não acontece)", snap.elements.some((el) => el.name === "invisivel"), false);
+
+  const titulo = snap.elements.find((el) => el.name === "Título da nota");
+  const typedByRef = await toolJson("browser_type", { target: cardId, ref: titulo.ref, text: "por ref" });
+  check("browser_type aceita ref do snapshot", typedByRef.ok, true);
+  check(
+    "...e escreveu no elemento certo",
+    (await toolJson("browser_query", { target: cardId, selector: "#titulo" })).value,
+    "por ref",
+  );
+  const queriedByRef = await toolJson("browser_query", { target: cardId, ref: salvar.ref });
+  check("browser_query também aceita ref", queriedByRef.ok && queriedByRef.text === "Adicionar nota", true);
+
+  // --- browser_console ---
+  await toolJson("browser_click", { target: cardId, selector: "#boom" });
+  await new Promise((r) => setTimeout(r, 500));
+  const consoleErrors = await toolJson("browser_console", { target: cardId, level: "error" });
+  check("browser_console entrega os erros que a página logou", consoleErrors.messages.some((m) => m.message.includes("falha-de-proposito")), true);
+
+  // --- browser_network: o cenário do relato, ponta a ponta ---
+  const beforeSave = await toolJson("browser_query", { target: cardId, selector: "#save" });
+  await toolJson("browser_click", { target: cardId, ref: salvar.ref });
+  await new Promise((r) => setTimeout(r, 800));
+  check(
+    "o botão de salvar não muda NADA na tela quando a API falha (é o defeito silencioso)",
+    (await toolJson("browser_query", { target: cardId, selector: "#save" })).text,
+    beforeSave.text,
+  );
+  const failed = await toolJson("browser_network", { target: cardId, failedOnly: true });
+  check("browser_network explica o que a tela escondeu", failed.requests.some((r) => r.url.includes("/api/salvar") && r.status === 500), true);
+  const filtered = await toolJson("browser_network", { target: cardId, urlContains: "/api/salvar" });
+  check("...e dá pra filtrar por URL", filtered.requests.length > 0, true);
+
+  // --- browser_wait_for ---
+  await toolJson("browser_click", { target: cardId, selector: "#tarde" });
+  const waited = await toolJson("browser_wait_for", { target: cardId, text: "pronto", timeoutMs: 5000 });
+  check("browser_wait_for volta assim que o texto aparece", waited.ok, true);
+  const timedOut = await toolJson("browser_wait_for", { target: cardId, text: "nunca-vai-aparecer", timeoutMs: 1200 });
+  check("...e falha com um timeout explícito quando não aparece", timedOut.ok === false && /timed out/.test(timedOut.error ?? ""), true);
+  const goneOk = await toolJson("browser_wait_for", { target: cardId, selector: "#nao-existe", gone: true, timeoutMs: 1500 });
+  check("...com gone:true esperando sumir (já ausente resolve na hora)", goneOk.ok, true);
 
   page.close();
 } finally {

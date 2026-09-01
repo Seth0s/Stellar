@@ -9,6 +9,14 @@ import { worldRectToScreen, type Rect } from "./board-model";
  * tracks the mouse 1:1 while zoomed) and a corner handle that resizes it,
  * both committing only on pointerup, never per frame.
  */
+/** As 8 zonas de redimensionamento — 4 bordas e 4 cantos. A letra diz
+ * quais bordas se movem: "nw" move a de cima e a da esquerda. */
+type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+const RESIZE_DIRS: ResizeDir[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+/** Mesmos mínimos que o punho único já aplicava. */
+const MIN_CARD_W = 160;
+const MIN_CARD_H = 120;
+
 export function CardFrame({
   rect,
   zoom,
@@ -31,6 +39,7 @@ export function CardFrame({
   onSelectStart,
   onCloseAnimationEnd,
   aspectRatio,
+  chromeless = false,
   screenProjected,
   panX,
   panY,
@@ -90,6 +99,23 @@ export function CardFrame({
    * Aditivo: nenhum outro tipo de card passa isso, então o resize livre
    * de sempre continua idêntico pra todos os outros. */
   aspectRatio?: number;
+  /** Pedido ao vivo (2026-09-01): "O CARD TIPO MEDIA NÃO DEVERIA TER BODY"
+   * — para uma imagem, o card É a imagem: sem header, sem rodapé, sem
+   * moldura. O header não some de vez (fechar/girar/renomear precisam
+   * continuar alcançáveis), vira um overlay que só aparece no hover e
+   * que NÃO ocupa altura de layout — é essa diferença que faz a imagem
+   * preencher o card exatamente, já que o `rect` de um card de mídia
+   * nasce com a proporção natural da imagem (App.tsx's `fitMediaRect`) e
+   * o header/rodapé eram justamente o que quebrava esse encaixe.
+   *
+   * Consequência que precisa de tratamento no chamador: `.card-head` é o
+   * único lugar que inicia o arraste de mover o card. Sem ele em layout,
+   * o `pointerdown` que chegar ao `.card-clip` é que passa a mover — o
+   * que só funciona porque o corpo da mídia deixa de engolir o evento
+   * quando não tem o que panoramizar (MediaCard.tsx). Botões e
+   * `[data-no-drag]` continuam excluídos pela mesma checagem de sempre em
+   * `onHeaderPointerDown`. */
+  chromeless?: boolean;
   /** Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — opt-in, additive,
    * same pattern as `aspectRatio` above: when absent/false, behavior is
    * byte-identical to before (`rect` used raw, positioned inside `.world`'s
@@ -221,7 +247,18 @@ export function CardFrame({
     window.addEventListener("pointerup", onUp);
   }
 
-  function onResizePointerDown(e: React.PointerEvent) {
+  /**
+   * Pedido ao vivo (2026-09-01): "gostaria de poder redimensionar o card
+   * por qualquer lado do card". Antes existia UM punho, no canto
+   * inferior-direito — encolher um card pelo topo ou pela esquerda exigia
+   * redimensionar por baixo e depois arrastar o card de volta.
+   *
+   * Um handler só pras 8 direções em vez de oito variações: a única coisa
+   * que muda entre elas é quais bordas se movem. As que incluem `w`/`n`
+   * mexem em `x`/`y` junto com `w`/`h` — é isso que faz a borda OPOSTA
+   * ficar parada, que é o que a pessoa espera ao puxar um lado.
+   */
+  function onResizePointerDown(e: React.PointerEvent, dir: ResizeDir) {
     if (interactionMode !== "normal") return;
     e.stopPropagation();
     onRaise();
@@ -231,27 +268,53 @@ export function CardFrame({
     const startRect = rectRef.current;
     let finalRect = startRect;
     const throttle = rafThrottleRect(onChange);
+    const west = dir.includes("w");
+    const north = dir.includes("n");
+    const horizontal = dir.includes("e") || west;
+    const vertical = dir.includes("s") || north;
+
     function onMove(ev: PointerEvent) {
       const dx = (ev.clientX - startX) / zoom;
       const dy = (ev.clientY - startY) / zoom;
+      let w = startRect.w + (horizontal ? (west ? -dx : dx) : 0);
+      let h = startRect.h + (vertical ? (north ? -dy : dy) : 0);
+
       if (aspectRatio) {
-        // Move pelo maior delta (horizontal ou vertical) dita o tamanho —
-        // deixa arrastar em qualquer direção do canto se sentir "natural",
-        // não só quando o mouse anda mais rápido no eixo X.
-        let w = Math.max(160, startRect.w + (Math.abs(dx) >= Math.abs(dy) ? dx : dy * aspectRatio));
-        let h = w / aspectRatio;
-        if (h < 120) {
-          h = 120;
+        // Item 57.9 — mídia redimensiona livre MAS preservando proporção.
+        // Numa borda pura só um eixo tem gesto, então ele dita o outro; num
+        // canto, o maior delta manda, mesma regra que já valia pro punho
+        // único de antes.
+        if (horizontal && vertical) {
+          if (Math.abs(dx) >= Math.abs(dy)) h = w / aspectRatio;
+          else w = h * aspectRatio;
+        } else if (horizontal) {
+          h = w / aspectRatio;
+        } else {
           w = h * aspectRatio;
         }
-        finalRect = { ...startRect, w, h };
+        if (w < MIN_CARD_W) {
+          w = MIN_CARD_W;
+          h = w / aspectRatio;
+        }
+        if (h < MIN_CARD_H) {
+          h = MIN_CARD_H;
+          w = h * aspectRatio;
+        }
       } else {
-        finalRect = {
-          ...startRect,
-          w: Math.max(160, startRect.w + dx),
-          h: Math.max(120, startRect.h + dy),
-        };
+        w = Math.max(MIN_CARD_W, w);
+        h = Math.max(MIN_CARD_H, h);
       }
+
+      // Reancoragem: puxando pelo oeste/norte, é a borda oposta que fica
+      // parada, então a origem anda pela diferença de tamanho. Feito DEPOIS
+      // dos limites, senão um card no tamanho mínimo continuaria deslizando
+      // enquanto o ponteiro anda.
+      finalRect = {
+        x: west || (aspectRatio && dir === "n") ? startRect.x + (startRect.w - w) : startRect.x,
+        y: north || (aspectRatio && dir === "w") ? startRect.y + (startRect.h - h) : startRect.y,
+        w,
+        h,
+      };
       throttle.schedule(finalRect);
     }
     function onUp() {
@@ -269,6 +332,7 @@ export function CardFrame({
   const frameClass = [
     "card-frame",
     className,
+    chromeless && "chromeless",
     "spawning",
     dragging && "dragging",
     reflowing && "reflow",
@@ -293,8 +357,15 @@ export function CardFrame({
   // lives in, making cards effectively non-resizable in practice.
   const cardInner = (
     <>
-      <div className="card-clip">
-        <div className="card-head" onPointerDown={onHeaderPointerDown}>
+      {/* Em modo chromeless o arraste nasce aqui, no clip inteiro — e o
+          header abaixo NÃO registra o seu próprio, senão um pointerdown
+          sobre ele dispararia os dois handlers (o dele e este, por
+          borbulhamento) e iniciaria dois arrastes concorrentes. Parar a
+          propagação no header em vez disso não serve: quebraria os modos
+          conector/seleção, que dependem do evento chegar ao
+          `.card-frame`. */}
+      <div className="card-clip" onPointerDown={chromeless ? onHeaderPointerDown : undefined}>
+        <div className="card-head" onPointerDown={chromeless ? undefined : onHeaderPointerDown}>
           {/* Wrapping div, not headerContent's own two-item space-between
               row directly — keeps every card kind's own internal layout
               (label ↔ actions) untouched; the focus button below is
@@ -314,11 +385,23 @@ export function CardFrame({
           )}
         </div>
         {children}
-        {footerContent !== undefined && footerContent !== null && (
+        {!chromeless && footerContent !== undefined && footerContent !== null && (
           <div className="card-foot">{footerContent}</div>
         )}
       </div>
-      <div className="card-resize" onPointerDown={onResizePointerDown}>
+      {/* As 8 zonas ficam FORA de `.card-clip` pelo mesmo motivo que o
+          punho sempre ficou: dentro, o `overflow: hidden` recortaria
+          justamente a área de acerto nas bordas. O grip visual continua no
+          canto inferior-direito (é onde as pessoas já procuram); as outras
+          sete são invisíveis, marcadas só pelo cursor. */}
+      {RESIZE_DIRS.map((dir) => (
+        <div
+          key={dir}
+          className={`card-resize-zone card-resize-${dir}`}
+          onPointerDown={(e) => onResizePointerDown(e, dir)}
+        />
+      ))}
+      <div className="card-resize" onPointerDown={(e) => onResizePointerDown(e, "se")}>
         <Icon name="resizeGrip" size={11} />
       </div>
     </>

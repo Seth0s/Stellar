@@ -9,6 +9,7 @@ import type {
   WinControlsApi,
   SnapshotApi,
   ReadCardApi,
+  StickyApi,
   RemoteInputApi,
   RemoteApi,
   UpdaterApi,
@@ -32,6 +33,7 @@ declare global {
     winControls: WinControlsApi;
     snapshot: SnapshotApi;
     readCard: ReadCardApi;
+    sticky: StickyApi;
     remoteInput: RemoteInputApi;
     remote: RemoteApi;
     updater: UpdaterApi;

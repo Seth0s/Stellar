@@ -137,6 +137,98 @@ try {
   }
   check("paste no canvas vazio cria um card de mídia", mediaCardFound, true);
 
+  // Pedido ao vivo (2026-09-01): "O CARD TIPO MEDIA NÃO DEVERIA TER BODY" —
+  // uma imagem passa a ser exibida sem moldura: sem rodapé, e com o header
+  // virando um overlay que não ocupa altura de layout. É essa última parte
+  // que faz a imagem preencher o card exatamente (o `rect` já nasce com a
+  // proporção natural da imagem via `fitMediaRect`; era o header+rodapé que
+  // quebravam o encaixe e deixavam a faixa vazia). Fechar/girar/renomear
+  // continuam existindo no overlay — some a superfície, não a função.
+  // Ponteiro pra longe antes de medir: o header em modo sem moldura é
+  // revelado por `:hover`, então uma medição com o mouse parado em cima do
+  // card (onde um clique anterior do boot pode tê-lo deixado) leria a
+  // opacidade do estado revelado e a checagem de "invisível" viraria ruído.
+  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4, button: "none", buttons: 0, pointerType: "mouse" });
+  await new Promise((r) => setTimeout(r, 400));
+
+  const chrome = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const frame = document.querySelector('.media-card');
+        const head = frame.querySelector('.card-head');
+        const viewport = frame.querySelector('.media-viewport');
+        const f = frame.getBoundingClientRect();
+        const v = viewport.getBoundingClientRect();
+        return JSON.stringify({
+          chromeless: frame.classList.contains('chromeless'),
+          foot: !!frame.querySelector('.card-foot'),
+          headPosition: getComputedStyle(head).position,
+          headOpacity: Number(getComputedStyle(head).opacity),
+          headButtons: head.querySelectorAll('button').length,
+          gapY: f.height - v.height,
+          gapX: f.width - v.width,
+        });
+      })()
+    `),
+  );
+  check("um card de imagem entra em modo sem moldura", chrome.chromeless, true);
+  check("...sem rodapé nenhum (o nome do arquivo já era o rótulo do header)", chrome.foot, false);
+  check("...com o header fora do fluxo de layout, não como linha do card", chrome.headPosition, "absolute");
+  check("...invisível até o hover", chrome.headOpacity, 0);
+  check("...mas com os botões ainda lá (girar, fechar, focar)", chrome.headButtons, (n) => n >= 2);
+  check("a imagem ocupa a altura inteira do card — nada de faixa vazia", Math.abs(chrome.gapY) <= 1, true);
+  check("...e a largura inteira", Math.abs(chrome.gapX) <= 1, true);
+
+  // Sem header não sobra faixa dedicada pra arrastar: a regra combinada é
+  // que o corpo move o card enquanto a imagem cabe inteira (view.zoom <= 1,
+  // não há pan possível), e só volta a dar pan quando ampliada.
+  //
+  // A espera não é folclore: `.card-frame` nasce com a animação `popin`
+  // (animations.css anima `transform: scale`), e um `getBoundingClientRect`
+  // no meio dela devolve a caixa ESCALADA — medir ali dá um ponto de garra
+  // que cai fora do card já assentado, e o "drag" vira um clique no vazio
+  // (foi exatamente esse o falso negativo enquanto isto foi escrito: dois
+  // runs com "antes" diferentes e o mesmo "depois", ou seja, nada se moveu).
+  await new Promise((r) => setTimeout(r, 600));
+  const beforeBodyDrag = await getCardRect();
+  // Centro do card, longe do overlay de header (que ocupa só a faixa do
+  // topo) e longe do canto do handle de resize.
+  const grab = { x: beforeBodyDrag.x + beforeBodyDrag.w / 2, y: beforeBodyDrag.y + beforeBodyDrag.h / 2 };
+  // Arrasta pra CIMA e pra ESQUERDA de propósito: o teste de resize logo
+  // abaixo puxa o canto inferior-direito mais 120px pra fora, e um
+  // `Input.dispatchMouseEvent` com coordenada fora do viewport é um no-op
+  // silencioso (mesmo achado já documentado em smoke-card-actions.mjs) —
+  // empurrar este card pra baixo/direita fazia o resize seguinte falhar
+  // sem ter nada a ver com resize.
+  await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: grab.x, y: grab.y, button: "left", clickCount: 1, pointerType: "mouse" });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: grab.x - 70, y: grab.y - 50, button: "left", pointerType: "mouse" });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: grab.x - 70, y: grab.y - 50, button: "left", clickCount: 1, pointerType: "mouse" });
+  await new Promise((r) => setTimeout(r, 400));
+  const afterBodyDrag = await getCardRect();
+  check(
+    "arrastar o corpo da imagem move o card (o header não é mais o único punho)",
+    Math.abs(afterBodyDrag.x - beforeBodyDrag.x + 70) <= 6 && Math.abs(afterBodyDrag.y - beforeBodyDrag.y + 50) <= 6,
+    true,
+  );
+
+  // Devolve o card exatamente pra onde estava. Não é higiene opcional: as
+  // checagens seguintes (rotação pelo botão do header, resize pelo canto)
+  // clicam em coordenadas derivadas da geometria do card, e um
+  // `Input.dispatchMouseEvent` fora do viewport é um no-op silencioso —
+  // deixar o card deslocado fazia rotação e resize falharem por motivo
+  // nenhum relacionado a eles.
+  const back = { x: grab.x - 70, y: grab.y - 50 };
+  await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: back.x, y: back.y, button: "left", clickCount: 1, pointerType: "mouse" });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: grab.x, y: grab.y, button: "left", pointerType: "mouse" });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: grab.x, y: grab.y, button: "left", clickCount: 1, pointerType: "mouse" });
+  await new Promise((r) => setTimeout(r, 400));
+  const restored = await getCardRect();
+  check(
+    "...e o arraste é simétrico — volta exatamente pra posição original",
+    Math.abs(restored.x - beforeBodyDrag.x) <= 2 && Math.abs(restored.y - beforeBodyDrag.y) <= 2,
+    true,
+  );
+
   let naturalWidth = 0;
   deadline = Date.now() + 3000;
   while (Date.now() < deadline) {

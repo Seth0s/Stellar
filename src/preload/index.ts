@@ -168,6 +168,13 @@ const store = {
      * toggle, called only from the session UI's own checkbox/switch. */
     setAutonomous: (id: string, autonomous: boolean): Promise<void> =>
       ipcRenderer.invoke("store:boards:set-autonomous", id, autonomous),
+/** Achado ao vivo (2026-09-01) — qual board está aberto AGORA. Só o
+ * renderer sabe (é estado de UI, não coluna de tabela), e o bus precisa
+ * saber pra escopar `list_cards`: um card de outra sessão nem está
+ * montado, então nenhuma tool consegue operá-lo — listá-lo só põe ruído
+ * no contexto do agente e o convida a mirar em algo inalcançável.
+ * `send` (não `invoke`): é notificação, ninguém espera resposta. */
+setActive: (id: string | null): void => ipcRenderer.send("board:active", id),
     /** DESIGN-BACKLOG.md item 60, peça 2 — same shape as setAutonomous;
      * `cap: null` resets to the app-wide default. */
     setConcurrencyCap: (id: string, cap: number | null): Promise<void> =>
@@ -288,8 +295,12 @@ const browser = {
   sendMouse: (id: string, evt: BrowserMouseEvent) => ipcRenderer.send("browser:input-mouse", id, evt),
   sendWheel: (id: string, evt: BrowserWheelEvent) => ipcRenderer.send("browser:input-wheel", id, evt),
   sendKey: (id: string, evt: BrowserKeyEvent) => ipcRenderer.send("browser:input-key", id, evt),
-  resolveAsk: (requestId: string, allowed: boolean): Promise<void> =>
-    ipcRenderer.invoke("browser:ask-resolve", requestId, allowed),
+  /** `cardId`: qual card de navegador ficou com a URL (achado ao vivo
+   * 2026-09-01) — `openBrowserFor` já o retorna e o chamador do MCP
+   * precisa dele pra conseguir agir sobre o card que acabou de abrir.
+   * Ausente numa recusa, onde não existe card nenhum. */
+  resolveAsk: (requestId: string, allowed: boolean, cardId?: string): Promise<void> =>
+    ipcRenderer.invoke("browser:ask-resolve", requestId, allowed, cardId),
   /** DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — page content for an
    * agent, not just pixels (see `snapshot`). Truncated server-side
    * (browser-registry.ts) — `truncated` tells the caller whether that
@@ -474,6 +485,25 @@ const readCard = {
     return () => ipcRenderer.removeListener("readcard:request", listener);
   },
   reply: (requestId: string, text: string | null) => ipcRenderer.send("readcard:reply", requestId, text),
+};
+
+export type StickyOp = { op: "read" } | { op: "write"; content: string; mode: "replace" | "append" };
+export type StickyResult = { ok: true; content: string } | { ok: false; error: string };
+
+/** `read_sticky`/`write_sticky` (achado ao vivo 2026-09-01) — mesma forma
+ * de request/reply do `readCard` acima. O renderer é quem responde porque
+ * o `<textarea>` montado é a fonte da verdade: o conteúdo só chega ao
+ * SQLite no blur, então ler do store devolveria texto velho no meio de uma
+ * digitação, e escrever no store seria sobrescrito pelo commit seguinte.
+ * É também o único lado que sabe se um humano está com a nota focada
+ * agora — a escrita é recusada nesse caso. */
+const sticky = {
+  onRequest: (cb: (requestId: string, cardId: string, op: StickyOp) => void) => {
+    const listener = (_e: unknown, requestId: string, cardId: string, op: StickyOp) => cb(requestId, cardId, op);
+    ipcRenderer.on("sticky:request", listener);
+    return () => ipcRenderer.removeListener("sticky:request", listener);
+  },
+  reply: (requestId: string, result: StickyResult) => ipcRenderer.send("sticky:reply", requestId, result),
 };
 
 export type RemoteInputEnsureResult = { granted: true } | { granted: false; error: string };
@@ -694,6 +724,7 @@ contextBridge.exposeInMainWorld("ai", ai);
 contextBridge.exposeInMainWorld("winControls", winControls);
 contextBridge.exposeInMainWorld("snapshot", snapshot);
 contextBridge.exposeInMainWorld("readCard", readCard);
+contextBridge.exposeInMainWorld("sticky", sticky);
 contextBridge.exposeInMainWorld("remoteInput", remoteInput);
 contextBridge.exposeInMainWorld("remote", remote);
 contextBridge.exposeInMainWorld("updater", updater);
@@ -735,6 +766,7 @@ export type AiApi = typeof ai;
 export type WinControlsApi = typeof winControls;
 export type SnapshotApi = typeof snapshot;
 export type ReadCardApi = typeof readCard;
+export type StickyApi = typeof sticky;
 export type RemoteInputApi = typeof remoteInput;
 export type RemoteApi = typeof remote;
 export type UpdaterApi = typeof updater;

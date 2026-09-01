@@ -84,7 +84,10 @@ try {
   await new Promise((r) => setTimeout(r, 500));
 
   const cards = await toolJson("list_cards", {});
-  const bashId = cards.cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const bashId = cards.cards.find((c) => c.kind === "terminal").id;
 
   // Liga autônomo + cap=1 via UI real, mesmo fluxo do smoke de peça 2.
   const titleBtn = await centerOf(page, ".topbar-title");

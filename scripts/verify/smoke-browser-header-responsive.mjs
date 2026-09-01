@@ -78,7 +78,10 @@ try {
   await bootIntoFreshSession(page, "Browser Header Responsive Teste");
   await new Promise((r) => setTimeout(r, 500));
 
-  const bashCardId = (await toolJson("list_cards", {})).cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const bashCardId = (await toolJson("list_cards", {})).cards.find((c) => c.kind === "terminal").id;
   const spawnPromise = callTool("spawn_card", {
     kind: "browser",
     url: `http://127.0.0.1:${port}/`,

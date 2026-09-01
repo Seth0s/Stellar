@@ -60,7 +60,10 @@ try {
   await new Promise((r) => setTimeout(r, 500));
 
   const listPayload = await toolJson("list_cards", {});
-  const bashCardId = listPayload.cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const bashCardId = listPayload.cards.find((c) => c.kind === "terminal").id;
 
   const spawnPromise = callTool("spawn_agent", { provider: "claude", model: "sonnet", callerCardId: bashCardId, reason: "smoke test M3" });
   await new Promise((r) => setTimeout(r, 500));

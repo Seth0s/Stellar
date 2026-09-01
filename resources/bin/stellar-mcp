@@ -1,0 +1,165 @@
+#!/usr/bin/env node
+// Servidor MCP em stdio — um proxy puro pro servidor MCP HTTP que a app já
+// roda (src/main/mcp-server.ts). Não define ferramenta nenhuma: repassa
+// `tools/list`, `tools/call` e tudo mais tal e qual, então a lista de
+// ferramentas nunca pode divergir da de lá.
+//
+// Por que ele existe (achado ao vivo 2026-09-01, pedido do usuário pra
+// registrar `cursor` e `antigravity` como providers com MCP):
+//
+//   claude  → `--mcp-config '{...}'`      flag efêmera, por invocação
+//   codex   → `-c mcp_servers.stellar...` idem
+//   cursor  → SÓ `.cursor/mcp.json` (projeto) ou `~/.cursor/mcp.json`
+//   agy     → SÓ `agy mcp add` (persistente, `~/.gemini/config/`)
+//
+// Confirmado lendo o `--help` real dos dois binários instalados, não
+// adivinhado: nenhum dos dois aceita registro efêmero. Sobra config
+// persistente — e é aí que está o problema que este arquivo resolve: a
+// URL do servidor HTTP tem uma PORTA EFÊMERA (`port: 0`, escolhida pelo SO
+// a cada launch) e, desde o mesmo achado, um `?card=<id>` diferente por
+// card. Nenhum dos dois cabe num arquivo escrito uma vez.
+//
+// O comando, sim, é estável. Registrado uma vez como `stellar-mcp`, este
+// script descobre a cada execução, pelo ambiente que o processo do card já
+// tem, tanto a porta viva quanto QUEM ele é:
+//
+//   AGENT_CANVAS_MCP_URL   a URL do servidor HTTP desta execução da app
+//   AGENT_CANVAS_CARD_ID   o card em cujo terminal a CLI está rodando
+//
+// `pty-registry.ts` injeta os dois no spawn; a CLI do agente sobe este
+// script como processo filho, que herda o ambiente. A identidade chega
+// então pelo mesmo caminho que ela já chega pro claude/codex (o `?card=`
+// carimbado na URL), sem depender do modelo lembrar de preencher nada.
+//
+// ESM e sem dependência nenhuma, mesma restrição do `acbridge` ao lado: é
+// um arquivo solto em `resources/bin`, empacotado como extraResource, sem
+// node_modules por perto. `resources/bin` está no PATH de todo card
+// (`binDir`), então `"command": "stellar-mcp"` resolve sozinho.
+//
+// stdout é EXCLUSIVO do protocolo — uma linha JSON-RPC por mensagem.
+// Qualquer diagnóstico vai pra stderr, senão corrompe o transporte.
+
+const mcpUrl = process.env.AGENT_CANVAS_MCP_URL;
+const cardId = process.env.AGENT_CANVAS_CARD_ID || "";
+
+function log(msg) {
+  process.stderr.write(`stellar-mcp: ${msg}\n`);
+}
+
+/** A URL desta sessão, já carimbada com a identidade do card. Sem
+ * `AGENT_CANVAS_MCP_URL` não há app pra falar — ver `respondOffline`. */
+const target = mcpUrl ? `${mcpUrl}${mcpUrl.includes("?") ? "&" : "?"}card=${encodeURIComponent(cardId)}` : null;
+
+if (!target) {
+  log("AGENT_CANVAS_MCP_URL não está definida — rodando fora de um card do Stellar; nenhuma ferramenta será exposta.");
+}
+
+/** O servidor HTTP responde ou JSON puro ou um frame SSE, dependendo do
+ * `accept` negociado — mesma tolerância que os smoke tests já têm: procura
+ * a linha `data:` por conteúdo, nunca assume que ela é a primeira (uma
+ * chamada que espera na fila de spawn segura a conexão aberta tempo
+ * suficiente pro transporte intercalar um `: keepalive` antes). */
+function parseBody(text) {
+  const dataLine = text.split("\n").find((l) => l.startsWith("data:"));
+  return JSON.parse(dataLine ? dataLine.slice(5).trim() : text);
+}
+
+function errorResponse(id, code, message) {
+  return { jsonrpc: "2.0", id, error: { code, message } };
+}
+
+/** Sem app do outro lado, um cliente MCP ainda merece um handshake válido e
+ * uma lista vazia — melhor que um servidor que morre no boot e vira uma
+ * linha vermelha sem explicação na CLI do agente. */
+function respondOffline(msg) {
+  if (msg.method === "initialize") {
+    return {
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: {
+        protocolVersion: msg.params?.protocolVersion ?? "2025-06-18",
+        capabilities: { tools: {} },
+        serverInfo: { name: "stellar (offline)", version: "1.0.0" },
+      },
+    };
+  }
+  if (msg.method === "tools/list") return { jsonrpc: "2.0", id: msg.id, result: { tools: [] } };
+  if (msg.method === "ping") return { jsonrpc: "2.0", id: msg.id, result: {} };
+  return errorResponse(msg.id, -32603, "Stellar não está acessível a partir deste processo (AGENT_CANVAS_MCP_URL ausente)");
+}
+
+function send(payload) {
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+async function forward(msg) {
+  const res = await fetch(target, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify(msg),
+  });
+  const text = await res.text();
+  // Uma notificação (sem `id`) não tem resposta pra devolver, e o servidor
+  // pode legitimamente responder 202 com corpo vazio.
+  if (msg.id === undefined || msg.id === null) return null;
+  if (!text.trim()) return errorResponse(msg.id, -32603, `resposta vazia do Stellar (HTTP ${res.status})`);
+  return parseBody(text);
+}
+
+async function handle(msg) {
+  if (!target) {
+    if (msg.id === undefined || msg.id === null) return;
+    send(respondOffline(msg));
+    return;
+  }
+  try {
+    const reply = await forward(msg);
+    if (reply) send(reply);
+  } catch (err) {
+    log(`falha repassando ${msg.method}: ${err}`);
+    if (msg.id !== undefined && msg.id !== null) {
+      send(errorResponse(msg.id, -32603, `falha falando com o Stellar: ${String(err)}`));
+    }
+  }
+}
+
+// Enfileira em SÉRIE de propósito. O servidor HTTP é stateless (um
+// `McpServer` novo por POST), então requisições paralelas seriam corretas —
+// mas uma chamada que bloqueia (um `spawn_agent` esperando consentimento
+// humano, ou parado na fila de concorrência) pode segurar minutos, e
+// deixar as outras passarem na frente reordenaria as respostas em relação
+// aos pedidos. Um cliente MCP tolera isso pelo `id`, porém a ordem estável
+// é mais fácil de depurar e o custo aqui é nulo: um agente faz uma chamada
+// por vez de qualquer jeito.
+let queue = Promise.resolve();
+function enqueue(msg) {
+  queue = queue.then(() => handle(msg)).catch((err) => log(`erro na fila: ${err}`));
+}
+
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  // Framing por linha (o transporte stdio do MCP é NDJSON). A última parte
+  // pode ser uma mensagem cortada no meio — fica no buffer pro próximo
+  // chunk, exatamente como o framing do socket do acbridge faz.
+  const lines = buffer.split("\n");
+  buffer = lines.pop() ?? "";
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let msg;
+    try {
+      msg = JSON.parse(trimmed);
+    } catch {
+      log(`linha ignorada, não é JSON: ${trimmed.slice(0, 120)}`);
+      continue;
+    }
+    enqueue(msg);
+  }
+});
+
+process.stdin.on("end", () => {
+  // Deixa a fila drenar antes de sair, senão a última resposta se perde.
+  queue.finally(() => process.exit(0));
+});

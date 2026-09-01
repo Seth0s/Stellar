@@ -108,7 +108,10 @@ try {
   await new Promise((r) => setTimeout(r, 500));
 
   const board1Cards = await toolJson("list_cards", {});
-  const board1BashId = board1Cards.cards[0].id;
+  // `.find(kind === "terminal")` em vez de `[0]` (2026-09-01): `list_cards`
+  // devolve TODOS os cards vivos agora, não só terminais, então a primeira
+  // posição da lista deixou de ser garantidamente o bash seedado.
+  const board1BashId = board1Cards.cards.find((c) => c.kind === "terminal").id;
 
   const modeBefore = await toolJson("board_mode", { target: board1BashId });
   check(
@@ -282,7 +285,13 @@ try {
   while (Date.now() < deadline && !board2BashId) {
     await new Promise((r) => setTimeout(r, 300));
     const board2Cards = await toolJson("list_cards", {});
-    board2BashId = board2Cards.cards.find((c) => c.id !== board1BashId && !autoSpawnedIds.includes(c.id))?.id ?? null;
+    // `kind === "terminal"` explícito (2026-09-01): `list_cards` passou a
+    // devolver TODOS os cards vivos, não só terminais. Sem o filtro, este
+    // "primeiro card que não é o do board 1" cai no card de navegador (ou
+    // no sticky) que os testes de open_url/spawn_card acima criaram NO
+    // BOARD 1 — e aí as duas checagens seguintes mediam o board errado.
+    board2BashId =
+      board2Cards.cards.find((c) => c.kind === "terminal" && c.id !== board1BashId && !autoSpawnedIds.includes(c.id))?.id ?? null;
   }
   check("um segundo board real foi criado, com um novo card seedado", board2BashId !== null, true);
   if (board2BashId !== null) {
