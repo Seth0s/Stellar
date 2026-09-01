@@ -105,7 +105,7 @@ export function createBrowserRegistry(callbacks: {
 }) {
   const entries = new Map<string, Entry>();
 
-  function create(id: string, url: string) {
+  function create(id: string, url: string): { scaleFactor: number } {
     const scaleFactor = callbacks.getScaleFactor();
     const win = new BrowserWindow({
       show: false,
@@ -198,6 +198,7 @@ export function createBrowserRegistry(callbacks: {
 
     entries.set(id, { win, visible: true, scaleFactor });
     void wc.loadURL(normalizeUrl(url));
+    return { scaleFactor };
   }
 
   function navigate(id: string, url: string) {
@@ -245,12 +246,34 @@ export function createBrowserRegistry(callbacks: {
    * `fontSize` tracks zoom (Trilha A). `zoom` defaults to 1 for callers
    * that only care about a plain rect resize (kept content resolution
    * unscaled) — every real caller in this app always passes the current
-   * board zoom. */
+   * board zoom.
+   *
+   * Item 6 (Trilha B, docs/SCREEN_SPACE_PROJECTION_PLAN.md) — also
+   * multiplies by `entry.scaleFactor` now. IMPORTANT, found live testing
+   * this (2026-09-01, 3 isolated diagnostic scripts): this is NOT true
+   * HiDPI supersampling. Confirmed `webPreferences.offscreen.
+   * deviceScaleFactor` is a no-op for the actual raster output in this
+   * Electron version/platform (image.getSize() byte-identical regardless
+   * of its value) — and so is `webContents.setZoomFactor()` (raster
+   * stays tied to content size even as `getZoomFactor()` correctly
+   * reports the new value) — and so is the global Chromium flag
+   * `--force-device-scale-factor` (page's own `devicePixelRatio` changes,
+   * raster output doesn't). `setContentSize` is the ONLY lever that
+   * changes actual paint buffer resolution in this build, and it's the
+   * same number the embedded page's own CSS layout uses as its viewport
+   * — there is no independent "render N× denser, same logical size"
+   * signal available. So this multiplication genuinely makes the
+   * embedded page BELIEVE its viewport is scaleFactor× bigger than what
+   * the card visually displays: sharper detail per visible pixel, but
+   * proportionally MORE of the page fits in the same on-screen card (a
+   * real trade-off, not a pure win — verified live with the user via a
+   * real comparison page before shipping this, not assumed). */
   function resize(id: string, w: number, h: number, zoom = 1) {
     const entry = entries.get(id);
     if (!entry) return;
     const effectiveZoom = Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, zoom));
-    entry.win.setContentSize(Math.max(1, Math.round(w * effectiveZoom)), Math.max(1, Math.round(h * effectiveZoom)));
+    const factor = effectiveZoom * entry.scaleFactor;
+    entry.win.setContentSize(Math.max(1, Math.round(w * factor)), Math.max(1, Math.round(h * factor)));
   }
 
   /** Test-only (scripts/verify) — the real content-pixel size the

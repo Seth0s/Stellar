@@ -167,6 +167,14 @@ function BrowserCardInner({
   // de `zoom` puro porque o zoom "vivo" (antes do debounce assentar) e o
   // zoom realmente aplicado no offscreen podem divergir por até 150ms.
   const contentSizeRef = useRef({ w: rect.w, h: rect.h });
+  // Item 6 (Trilha B) — resolved once from `browser:create`'s response
+  // (`browser-registry.ts`'s `resize()` doc comment has the full story on
+  // why this can't be true HiDPI supersampling and what it trades off).
+  // Starts at 1 (no-op) until the async `create()` call below resolves —
+  // an early resize before then just uses standard density; the next
+  // real resize corrects it, same bootstrapping gap `contentSizeRef`
+  // itself already has.
+  const scaleFactorRef = useRef(1);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
@@ -227,7 +235,9 @@ function BrowserCardInner({
   useEffect(() => {
     if (!createdRef.current) {
       createdRef.current = true;
-      void window.browser.create(id, url);
+      void window.browser.create(id, url).then(({ scaleFactor }) => {
+        scaleFactorRef.current = scaleFactor;
+      });
     }
     return () => {
       void window.browser.destroy(id);
@@ -306,9 +316,10 @@ function BrowserCardInner({
   // mesma disciplina do aviso em SCREEN_SPACE_PROJECTION_PLAN.md §0.3.
   function applyResize(w: number, h: number, z: number) {
     const effectiveZoom = Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, z));
+    const factor = effectiveZoom * scaleFactorRef.current;
     contentSizeRef.current = {
-      w: Math.max(1, Math.round(w * effectiveZoom)),
-      h: Math.max(1, Math.round(h * effectiveZoom)),
+      w: Math.max(1, Math.round(w * factor)),
+      h: Math.max(1, Math.round(h * factor)),
     };
     void window.browser.resize(id, w, h, z);
   }
