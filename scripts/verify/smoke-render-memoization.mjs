@@ -29,6 +29,18 @@
 // empty background) causes ZERO extra renders for ANY of the four cards
 // — none of their own props actually changed, so memo should skip all
 // of them.
+//
+// Trilha B (2026-09-01, docs/SCREEN_SPACE_PROJECTION_PLAN.md) changed
+// the browser card's own invariant here — see CardFrame.tsx's
+// `screenProjected` doc comment for the full "known perf debt, accepted"
+// writeup. It's now screen-projected (portaled outside `.world`, no
+// ambient CSS transform), so its on-screen position depends on real
+// `panX`/`panY` PROPS that genuinely change every pan tick — `memo` is
+// correctly re-rendering it, not regressing. The browser check below
+// asserts "some renders happened" instead of "zero", so a REAL future
+// regression (e.g. it stops tracking pan at all, or the count explodes
+// far past one-per-pointermove) still fails loud instead of this file
+// going permanently red and training people to ignore it.
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 
 const CDP_PORT = 9452;
@@ -219,7 +231,17 @@ try {
   check("panning the board causes ZERO extra renders for terminal card A", afterPan[idA], afterDrag[idA]);
   check("panning the board causes ZERO extra renders for terminal card B", afterPan[idB], afterDrag[idB]);
   check("panning the board causes ZERO extra renders for the chat card", afterPan[chatId], afterChatDrag[chatId]);
-  check("panning the board causes ZERO extra renders for the browser card", afterPan[browserId], afterBrowserCreate[browserId]);
+  // Screen-projected (Trilha B) — see the file-header comment above.
+  // Panning genuinely re-renders it now (real panX/panY props), so this
+  // checks "renders happened, roughly once per pan step" instead of
+  // "zero" — a runaway count (way more than the ~4 mousemoves the pan
+  // gesture above sends) would still fail loud.
+  const browserPanRenders = afterPan[browserId] - afterBrowserCreate[browserId];
+  check(
+    `panning the board re-renders the browser card a bounded number of times (screen-projected, got ${browserPanRenders})`,
+    browserPanRenders > 0 && browserPanRenders <= 20,
+    true,
+  );
 
   page.close();
 } finally {

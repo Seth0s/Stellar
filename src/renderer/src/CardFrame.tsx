@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Icon } from "./icons";
-import type { Rect } from "./board-model";
+import { worldRectToScreen, type Rect } from "./board-model";
 
 /**
  * Shared drag/resize/z-order chrome for every board item kind. Pulled out of
@@ -31,6 +31,9 @@ export function CardFrame({
   onSelectStart,
   onCloseAnimationEnd,
   aspectRatio,
+  screenProjected,
+  panX,
+  panY,
 }: {
   rect: Rect;
   zoom: number;
@@ -87,6 +90,67 @@ export function CardFrame({
    * Aditivo: nenhum outro tipo de card passa isso, então o resize livre
    * de sempre continua idêntico pra todos os outros. */
   aspectRatio?: number;
+  /** Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — opt-in, additive,
+   * same pattern as `aspectRatio` above: when absent/false, behavior is
+   * byte-identical to before (`rect` used raw, positioned inside `.world`'s
+   * own CSS `scale(zoom)`). When true, this card is rendered by the caller
+   * OUTSIDE `.world` (in the sibling `.cards-layer`, no CSS scale) and
+   * needs its OWN screen-space rect computed here instead of relying on
+   * an ancestor transform. `panX`/`panY` are required when this is true
+   * (the world camera's pan, `.world`'s own `translate()`) — omitted
+   * otherwise since only the screen-projected branch needs them.
+   *
+   * Deliberately still positions via `left`/`top` (not `transform:
+   * translate3d`, the plan doc's original suggestion) — `animations.css`
+   * animates `transform: scale(...)` for spawn/close (`popin`/`popout`)
+   * and `left`/`top` for `.reflow`; a CSS animation/transition on
+   * `transform` REPLACES the whole computed value rather than composing
+   * with a separately-set static `transform`, so a screen-projected card
+   * positioned via `translate3d` would visually snap to (0,0) during
+   * spawn/close and `.reflow` would silently do nothing (animating a
+   * property that no longer positions the card). Keeping `left`/`top`
+   * sidesteps this without touching any animation.
+   *
+   * Found live (`smoke-group-select.mjs` broke — two heavily-overlapped
+   * sticky cards zoomed way out, header clicks started landing on the
+   * wrong sub-element): resizing only the OUTER box via left/top/width/
+   * height is a LAYOUT change, not a visual scale — under the old model
+   * `.world`'s `transform: scale(zoom)` shrank/grew the whole card
+   * subtree as pure paint, so a card's internal padding/font-size/button
+   * sizes visually scaled together with it "for free". Here, without
+   * that ancestor transform, internal content would render at its native
+   * unscaled size inside a resized box, reflowing/overflowing instead of
+   * scaling — completely different geometry at any zoom off 1, worst at
+   * extremes. Fixed below by giving the INNER content (`.card-clip` +
+   * `.card-resize`) its own wrapper sized to the raw world `rect` with
+   * `transform: scale(zoom)` (`transformOrigin: "0 0"` so it grows/shrinks
+   * from the same top-left corner `screenRect.x/y` already anchors) —
+   * `rect.w*zoom === screenRect.w` by construction, so the scaled inner
+   * box exactly fills the outer one, reproducing the old CSS-transform
+   * visual behavior without touching the outer positioning or the
+   * popin/popout/reflow animations (those still target `.card-frame`
+   * itself, untouched by this separate inner transform).
+   *
+   * KNOWN PERF DEBT (accepted, not fixed — decided live with the user
+   * 2026-09-01, `smoke-render-memoization.mjs`'s "panning causes ZERO
+   * extra renders" check fails for the browser card, ~9 renders per pan
+   * gesture): non-migrated cards never re-render on a pure board pan —
+   * their screen position comes entirely from `.world`'s own ambient CSS
+   * transform, so `React.memo`'s shallow prop comparison sees nothing
+   * changed (that guarantee is the whole point of the "Pre-release audit
+   * P1" render-memoization fix this same test file proves). A
+   * screen-projected card can't get that for free anymore: `panX`/`panY`
+   * are now real props it needs to compute ITS OWN on-screen rect, and
+   * they genuinely change every pan tick, so memo correctly re-renders
+   * it. Fixing this without regressing correctness means moving pan
+   * off React props entirely — a ref/subscription the world-transform
+   * hook pushes to directly, read imperatively by CardFrame to update
+   * `left`/`top` outside React's render cycle — real new plumbing, not
+   * a local tweak, and not worth it for a 2-of-9-card-kinds slice.
+   * Revisit if/when more kinds migrate and the cost compounds. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
@@ -214,15 +278,61 @@ export function CardFrame({
     .filter(Boolean)
     .join(" ");
 
+  // Trilha B — see `screenProjected`'s doc comment above. `worldRectToScreen`
+  // (board-model.ts) already does exactly this projection for the
+  // snapshot IPC handler; `viewportOrigin` is zeroed here because
+  // `.cards-layer` lives inside `.viewport` itself (same containing
+  // block `.world` uses), unlike the snapshot handler's cross-process
+  // window-relative use.
+  const screenRect = screenProjected ? worldRectToScreen(rect, { panX: panX ?? 0, panY: panY ?? 0, zoom }, { x: 0, y: 0 }) : rect;
+
+  // Owns overflow:hidden + border-radius (clips content to the rounded
+  // card shape). The resize handle below is deliberately OUTSIDE this
+  // wrapper — it used to be a child of the clipped box itself, which
+  // clipped away most of its own hit area right in the corner it
+  // lives in, making cards effectively non-resizable in practice.
+  const cardInner = (
+    <>
+      <div className="card-clip">
+        <div className="card-head" onPointerDown={onHeaderPointerDown}>
+          {/* Wrapping div, not headerContent's own two-item space-between
+              row directly — keeps every card kind's own internal layout
+              (label ↔ actions) untouched; the focus button below is
+              appended as a separate, always-last flex item instead of a
+              3rd competitor for that space-between pair. */}
+          <div className="card-head-inner">{headerContent}</div>
+          {onFocus && (
+            <button
+              type="button"
+              className="card-focus-btn"
+              title="Focar nesse card (ajustar zoom pra ele)"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={onFocus}
+            >
+              <Icon name="fit" size={12} />
+            </button>
+          )}
+        </div>
+        {children}
+        {footerContent !== undefined && footerContent !== null && (
+          <div className="card-foot">{footerContent}</div>
+        )}
+      </div>
+      <div className="card-resize" onPointerDown={onResizePointerDown}>
+        <Icon name="resizeGrip" size={11} />
+      </div>
+    </>
+  );
+
   return (
     <div
       className={frameClass}
       style={{
         position: "absolute",
-        left: rect.x,
-        top: rect.y,
-        width: rect.w,
-        height: rect.h,
+        left: screenRect.x,
+        top: screenRect.y,
+        width: screenRect.w,
+        height: screenRect.h,
         zIndex,
         ...(accent ? ({ "--accent": accent } as React.CSSProperties) : {}),
       }}
@@ -259,39 +369,20 @@ export function CardFrame({
         if (closing && e.currentTarget === e.target) onCloseAnimationEnd?.();
       }}
     >
-      {/* Owns overflow:hidden + border-radius (clips content to the rounded
-          card shape). The resize handle below is deliberately OUTSIDE this
-          wrapper — it used to be a child of the clipped box itself, which
-          clipped away most of its own hit area right in the corner it
-          lives in, making cards effectively non-resizable in practice. */}
-      <div className="card-clip">
-        <div className="card-head" onPointerDown={onHeaderPointerDown}>
-          {/* Wrapping div, not headerContent's own two-item space-between
-              row directly — keeps every card kind's own internal layout
-              (label ↔ actions) untouched; the focus button below is
-              appended as a separate, always-last flex item instead of a
-              3rd competitor for that space-between pair. */}
-          <div className="card-head-inner">{headerContent}</div>
-          {onFocus && (
-            <button
-              type="button"
-              className="card-focus-btn"
-              title="Focar nesse card (ajustar zoom pra ele)"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={onFocus}
-            >
-              <Icon name="fit" size={12} />
-            </button>
-          )}
+      {/* Trilha B — see `screenProjected`'s doc comment above. Only the
+          inner content needs scaling to reproduce the old CSS-transform
+          visual behavior; non-migrated cards render `cardInner` as a
+          direct child of `.card-frame`, byte-identical to before. */}
+      {screenProjected ? (
+        <div
+          className="card-scale"
+          style={{ width: rect.w, height: rect.h, transform: `scale(${zoom})` }}
+        >
+          {cardInner}
         </div>
-        {children}
-        {footerContent !== undefined && footerContent !== null && (
-          <div className="card-foot">{footerContent}</div>
-        )}
-      </div>
-      <div className="card-resize" onPointerDown={onResizePointerDown}>
-        <Icon name="resizeGrip" size={11} />
-      </div>
+      ) : (
+        cardInner
+      )}
     </div>
   );
 }

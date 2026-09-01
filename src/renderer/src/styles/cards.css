@@ -12,6 +12,19 @@
   border-radius: var(--radius);
 }
 
+/* Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — CardFrame.tsx's
+   `screenProjected` doc comment has the full story: sized to the raw
+   world `rect` (unscaled) and visually scaled to fit the outer
+   `.card-frame` (sized to `rect*zoom`) via `transform: scale(zoom)`, so
+   internal content (padding, font-size, button sizes) scales together
+   exactly like it used to under `.world`'s own CSS transform. No
+   `position` needed here — a `transform` other than `none` already
+   establishes a new containing block for absolutely-positioned children
+   (`.card-resize`), so `right:0; bottom:0` anchors correctly without it. */
+.card-scale {
+  transform-origin: 0 0;
+}
+
 /* Clips card-head + body content to the rounded card shape. Deliberately
    NOT the element the resize handle lives on — see CardFrame.tsx. */
 .card-clip {

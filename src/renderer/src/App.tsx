@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { TerminalCard } from "./TerminalCard";
 import { FilesCard } from "./FilesCard";
 import { ChangesCard } from "./ChangesCard";
@@ -579,6 +580,14 @@ export function App() {
     onWheel,
     startPan,
   } = useWorldTransform(cardsRef);
+  // Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — DOM node for the new
+  // `.cards-layer` sibling of `.world` (no CSS scale, screen-projected
+  // cards live here). Callback-ref state (not a plain `useRef`) because
+  // cards render via `createPortal` into this node, and a portal target
+  // that's `null` on the very first render (before the ref attaches)
+  // needs a re-render once it's actually available — a plain ref update
+  // wouldn't trigger that.
+  const [cardsLayerEl, setCardsLayerEl] = useState<HTMLDivElement | null>(null);
   const {
     loaded,
     boards,
@@ -2018,7 +2027,17 @@ export function App() {
             );
           }
           case "sticky": {
-            return (
+            // Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — this kind
+            // is migrated to screen-projected rendering, so it portals
+            // into `.cards-layer` instead of rendering inline here inside
+            // `.world`'s scaled subtree. Which kinds are migrated is
+            // exactly the set of `case`s below wrapped this way — kept as
+            // the single, self-documenting source of truth rather than a
+            // separate list that could drift out of sync. `cardsLayerEl`
+            // is null for one render before the ref attaches — skip that
+            // single frame rather than risk a flash inside `.world`.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <StickyCard
                 key={c.id}
                 rect={c.rect}
@@ -2043,7 +2062,12 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "stroke": {
@@ -2163,7 +2187,10 @@ export function App() {
             );
           }
           case "browser": {
-            return (
+            // Trilha B — screen-projected, same portal pattern as "sticky"
+            // above.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <BrowserCard
                 key={c.id}
                 id={c.id}
@@ -2187,7 +2214,12 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           default:
@@ -2277,6 +2309,13 @@ export function App() {
           {marquee && <rect className="marquee" x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} />}
         </svg>
       </div>
+      {/* Trilha B — migrated card kinds (currently "sticky"/"browser",
+          see their `case` blocks below) portal their DOM here instead of
+          rendering inline inside `.world`'s map; see CardFrame.tsx's
+          `screenProjected` prop doc comment for why (no CSS scale here,
+          cards compute their own on-screen left/top). Empty div,
+          contents arrive via `createPortal`. */}
+      <div className="cards-layer" ref={setCardsLayerEl} />
       <Rail
         tool={tool}
         setTool={setTool}
