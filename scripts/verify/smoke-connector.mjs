@@ -79,7 +79,7 @@ try {
   await new Promise((r) => setTimeout(r, 200));
   check(
     "connector tool active",
-    await page.evalJs(`document.querySelector('.rail-btn[title="Conector"]')?.classList.contains("active")`),
+    await page.evalJs(`document.querySelector('.rail-btn[title^="Conector"]')?.classList.contains("active")`),
     true,
   );
 

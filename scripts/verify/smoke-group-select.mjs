@@ -177,11 +177,11 @@ try {
   await dragHeader(hb, { x: 1150, y: 720 });
   await new Promise((r) => setTimeout(r, 300));
 
-  await clickSelector('.rail-btn[title="Selecionar"]');
+  await clickSelector('.rail-btn[title^="Selecionar"]');
   await new Promise((r) => setTimeout(r, 200));
   check(
     "select tool active",
-    await page.evalJs(`document.querySelector('.rail-btn[title="Selecionar"]')?.classList.contains("active")`),
+    await page.evalJs(`document.querySelector('.rail-btn[title^="Selecionar"]')?.classList.contains("active")`),
     true,
   );
 
@@ -204,7 +204,7 @@ try {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  await clickSelector('.rail-btn[title="Ponteiro"]');
+  await clickSelector('.rail-btn[title^="Ponteiro"]');
   await new Promise((r) => setTimeout(r, 200));
 
   const before = await stickyRects();
@@ -223,7 +223,7 @@ try {
   check("dragged card moved by the gesture delta", Math.abs(dDx - DX) < 5 && Math.abs(dDy - DY) < 5, true);
   check("sibling card followed by the same delta (group drag-sync)", Math.abs(sDx - dDx) < 3 && Math.abs(sDy - dDy) < 3, true);
 
-  await clickSelector('.rail-btn[title="Selecionar"]');
+  await clickSelector('.rail-btn[title^="Selecionar"]');
   await new Promise((r) => setTimeout(r, 200));
   await selectBothStickies();
   check("both selected again for ungroup", await page.evalJs(`document.querySelectorAll(".card-frame.selected").length`), 2);
@@ -244,7 +244,7 @@ try {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  await clickSelector('.rail-btn[title="Ponteiro"]');
+  await clickSelector('.rail-btn[title^="Ponteiro"]');
   await new Promise((r) => setTimeout(r, 200));
 
   const before2 = await stickyRects();
