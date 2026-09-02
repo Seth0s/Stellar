@@ -440,14 +440,44 @@ function BrowserCardInner({
     if (e.nativeEvent.isComposing) return;
     // Real OS clipboard round-trip — a synthetic keyDown alone never
     // inserts/copies real clipboard content (see browser-registry.ts's
-    // insertText/paste/copy/cut doc comment). Still forward the raw keyDown
-    // below too (harmless, matches what a page's own shortcut-handling
-    // keydown listener would see in a real browser), but do the actual
-    // data movement through the dedicated Electron API.
+    // insertText/paste/copy/cut doc comment), so the actual data movement
+    // goes through the dedicated Electron API below.
+    //
+    // Achado ao vivo (2026-09-02, bug reportado pelo usuário — "o ato de
+    // copiar, copia 3 vezes a mesma coisa"): o comentário original aqui
+    // dizia que ALÉM de chamar o método dedicado, encaminhar o keyDown
+    // cru "também" era inofensivo. Não é — confirmado ao vivo com
+    // `smoke-browser-keyboard-gaps.mjs` contra um campo editável real:
+    // um Ctrl+V colava o texto do clipboard DUAS vezes, não uma. O
+    // `sendKey` cru abaixo, quando também alcança um elemento focado de
+    // verdade no WebContents offscreen, dispara o comando de edição
+    // NATIVO do próprio Chromium pra Ctrl+V/C/X (rotina interna de
+    // atalho-pra-comando-de-edição, separada de qualquer listener JS de
+    // 'keydown' da página) — a MESMA ação do método dedicado
+    // (`webContents.paste()`/`.copy()`/`.cut()`), disparando duas vezes
+    // pro mesmo evento físico. `return` cedo aqui evita esse segundo
+    // disparo: o método dedicado já é o caminho correto e completo (é
+    // exatamente por isso que ele existe, ver doc comment do
+    // browser-registry.ts), o encaminhamento cru nunca era necessário
+    // pra copy/paste/cut especificamente (diferente de um atalho
+    // arbitrário de página tipo Ctrl+S, que continua sendo encaminhado
+    // normalmente abaixo).
     const mod = e.ctrlKey || e.metaKey;
-    if (mod && (e.key === "v" || e.key === "V")) void window.browser.paste(id);
-    else if (mod && (e.key === "c" || e.key === "C")) void window.browser.copy(id);
-    else if (mod && (e.key === "x" || e.key === "X")) void window.browser.cut(id);
+    if (mod && (e.key === "v" || e.key === "V")) {
+      e.preventDefault();
+      void window.browser.paste(id);
+      return;
+    }
+    if (mod && (e.key === "c" || e.key === "C")) {
+      e.preventDefault();
+      void window.browser.copy(id);
+      return;
+    }
+    if (mod && (e.key === "x" || e.key === "X")) {
+      e.preventDefault();
+      void window.browser.cut(id);
+      return;
+    }
 
     const keyCode = toElectronKeyCode(e.key);
     if (!keyCode) return;
