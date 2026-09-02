@@ -60,6 +60,10 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
 * **Validação de Rolagem Invertida no Terminal (Item 64):**
   * *Estado*: Correção de inversão de sinal no `deltaY` do `useTerminal.ts` aplicada.
   * *Bloqueio*: Aguarda validação tátil/sensorial pelo usuário em hardware físico para garantir que a rolagem do trackpad/mouse wheel corresponde ao comportamento natural do sistema.
+* **Topbar Também Afetado no Header Sumindo (detalhe adicional, 2026-09-02) — on hold:**
+  * *Estado*: causa raiz do sumiço do Titlebar (F11 vazando de dentro de um terminal) corrigida — ver §0/histórico. Usuário confirmou que o Topbar (barra com título do board + zoom-pill) também era afetado, "quebrando o layout", não só o Titlebar.
+  * *Investigado*: `Topbar.tsx` é projetado de propósito pra continuar visível em fullscreen (reposiciona via `--titlebar-h`, não desmonta) — testei o ciclo completo antes/durante/depois de um fullscreen real isolado e ele se comporta certo, sem sumir. Não reproduzido.
+  * *Bloqueio*: usuário sem pista adicional agora (não sabe se era sumiço de vez ou sobreposição/corte). Colocado em espera — retomar só se acontecer de novo, idealmente com screenshot ou descrição mais específica do que "quebrou".
 * **Inspeção do Badge de Links no Rodapé do Terminal (Item 57.12):**
   * *Estado*: Investigação aponta que o elemento próximo ao badge visualizado em print decorre da sobreposição com a alça de resize de outro card adjacente.
   * *Bloqueio*: Aguarda confirmação visual do usuário se ainda há desalinhamento percebido.
