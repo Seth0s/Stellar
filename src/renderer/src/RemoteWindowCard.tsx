@@ -27,6 +27,9 @@ function RemoteWindowCardInner({
   onRename,
   onConnectorStart,
   onSelectStart,
+  screenProjected,
+  panX,
+  panY,
 }: {
   rect: Rect;
   zoom: number;
@@ -45,6 +48,14 @@ function RemoteWindowCardInner({
   onRename: (label: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
+   * straight through, same pattern the other migrated kinds use. The
+   * relative pointer/keyboard forwarding below (`onVideoPointerMove` etc.,
+   * `e.movementX/Y`) never touches board zoom/pan math at all, so unlike
+   * Terminal there's no coordinate-correction concern here. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState("");
@@ -148,6 +159,9 @@ function RemoteWindowCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      screenProjected={screenProjected}
+      panX={panX}
+      panY={panY}
       interactionMode={interactionMode}
       selected={selected}
       reflowing={reflowing}

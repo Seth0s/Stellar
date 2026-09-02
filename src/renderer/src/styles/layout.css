@@ -954,6 +954,25 @@ select.resume-input {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--foam) 25%, transparent);
 }
 
+/* Manual "check for updates" button (achado ao vivo, 2026-09-02 -- só a
+ * checagem automática de boot existia, sem jeito nenhum de disparar uma
+ * checagem sob demanda). Reaproveita `.titlebar-controls button`; o
+ * ícone gira enquanto `checking` e fica vermelho se a última tentativa
+ * falhou, pra falha de rede/rate-limit deixar de ser 100% silenciosa. */
+.titlebar-update-check.is-checking svg {
+  animation: titlebar-update-check-spin 0.8s linear infinite;
+}
+
+.titlebar-update-check.has-error {
+  color: var(--danger);
+}
+
+@keyframes titlebar-update-check-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ------------------------------------------------------------- popover */
 
 .popover {

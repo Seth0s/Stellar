@@ -20,7 +20,7 @@ import { useUpdateStatus } from "./useUpdateStatus";
 export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const { version: updateVersion, undismiss } = useUpdateStatus();
+  const { version: updateVersion, checking: updateChecking, checkError: updateCheckError, undismiss, checkNow } = useUpdateStatus();
 
   useEffect(() => {
     window.winControls.isMaximized().then(setMaximized);
@@ -57,6 +57,19 @@ export function Titlebar() {
         </span>
       </span>
       <div className="titlebar-controls">
+        <button
+          className={`titlebar-update-check${updateChecking ? " is-checking" : ""}${updateCheckError ? " has-error" : ""}`}
+          title={
+            updateChecking
+              ? "Checando atualização..."
+              : updateCheckError
+                ? `Falha ao checar atualização: ${updateCheckError}`
+                : "Checar atualização"
+          }
+          onClick={checkNow}
+        >
+          <Icon name="reload" size={14} />
+        </button>
         {updateVersion && (
           <button
             className="titlebar-update-dot"

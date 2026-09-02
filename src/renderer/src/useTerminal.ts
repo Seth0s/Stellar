@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { toast } from "./useToast";
 import { registerTerminal, unregisterTerminal } from "./terminal-registry";
 
@@ -10,27 +11,47 @@ const DEFAULT_ROWS = 24;
 const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove"] as const;
 
 const BASE_FONT_SIZE = 15;
-// DESIGN-BACKLOG.md item 57 ponto 10, revisado (SCREEN_SPACE_PROJECTION_
-// PLAN.md, Trilha A) — "fonte que acompanha o zoom" começou com influência
-// PARCIAL (15%, só pra terminais com agente) porque a motivação original
-// era "levemente mais nítido nos extremos", não uma correção completa. O
-// blur real foi confirmado ao vivo depois (2026-08-31): o card inteiro já
-// escala opticamente via `transform: scale()` (App.tsx) — isso sozinho
-// deixa o glifo pequeno-renderizado-e-esticado borrado em zooms altos, já
-// que o canvas WebGL do xterm.js continua rasterizando no mesmo tamanho de
-// fonte físico independente do zoom, e só 15% do delta de zoom estava
-// sendo compensado; os outros 85% continuavam vindo do `scale()` que
-// borra. Influência = 1.0 fecha o gap inteiro (fontSize real acompanha o
-// zoom 1:1, dentro do clamp abaixo) em vez de só atenuá-lo, sem precisar
-// do rewrite completo de screen-space projection — mesmo princípio da
-// Fase 3.1 daquele plano, só que já em produção. Em zoom=1 continua dando
-// exatamente `BASE_FONT_SIZE` (sem regressão no caso comum, influência
-// não muda esse ponto de ancoragem).
-const FONT_ZOOM_INFLUENCE = 1.0;
-const FONT_SIZE_MIN = 11;
-const FONT_SIZE_MAX = 22;
+// Achado ao vivo (2026-09-02) — a versão anterior deste mecanismo fazia
+// `fontSize` acompanhar o zoom DIRETAMENTE (`fontSize = BASE * zoom`), na
+// crença de que isso melhorava a nitidez em qualquer zoom. Matemática real,
+// achada ao investigar um relato do usuário ("zoom '-' diminui a fonte, eu
+// esperava o contrário"): o `fontSize` do xterm não é só "densidade de
+// raster" — ele TAMBÉM decide quantas colunas/linhas cabem no container
+// (que fica em tamanho de mundo FIXO, não escalado — Trilha B), e depois
+// o card INTEIRO ainda escala visualmente de novo via `transform:
+// scale(zoom)` (App.tsx/`.card-scale`). As duas escalas multiplicam:
+// tamanho aparente na tela = fontSize(∝zoom) × transform(zoom) ∝ zoom² —
+// o texto crescia/encolhia ao QUADRADO do zoom do board, não 1:1 como
+// todo o resto do card (zoom 0.5x → texto 4x menor, não 2x). Isso
+// explicava os dois lados do mesmo sintoma: "mais nítido" no zoom-in
+// (na real, ficava desproporcionalmente GRANDE, lido como "nítido") e
+// "encolhe rápido demais" no zoom-out.
+//
+// Pedido explícito do usuário corrigindo a direção: zoom-IN deveria
+// DIMINUIR a fonte (até um piso legível — já perto o bastante, não
+// precisa de mais glifo) e zoom-OUT deveria AUMENTAR (compensar o
+// `transform` encolhendo tudo, mantendo legibilidade "de longe") — o
+// INVERSO da relação anterior, não só uma versão atenuada dela.
+// `fontSize = BASE / zoom` faz exatamente isso e tem uma propriedade
+// elegante: tamanho aparente na tela = (BASE/zoom) × zoom = BASE,
+// CONSTANTE — o texto do terminal fica com o mesmo tamanho visual
+// aproximado em qualquer zoom do board, dentro do clamp abaixo (que
+// existe pra não pedir uma textura-fonte absurdamente grande/pequena nos
+// extremos de zoom 0.2–3.0, useWorldTransform.ts). Em zoom=1 continua
+// dando exatamente `BASE_FONT_SIZE` (mesmo ponto de ancoragem de sempre).
+//
+// Nota honesta, não é o mesmo mecanismo do navegador embutido: isso NÃO
+// é "resolução real" tipo `deviceScaleFactor`/`setContentSize`
+// (BrowserCard.tsx) — o canvas do xterm continua com a mesma resolução
+// crua do container (não muda com fontSize). O que fontSize maior faz é
+// rasterizar cada GLYPH numa textura-fonte de maior detalhe (WebGL desenha
+// a partir dela, não do container inteiro) — aqui isso só entra em jogo
+// pra manter o glifo legível quando o zoom-out pede uma fonte maior;
+// supersampling do glyph, não aumento real da resolução do canvas.
+const FONT_SIZE_MIN = 3;
+const FONT_SIZE_MAX = 45;
 function fontSizeForZoom(zoom: number): number {
-  const raw = BASE_FONT_SIZE * (1 - FONT_ZOOM_INFLUENCE + zoom * FONT_ZOOM_INFLUENCE);
+  const raw = BASE_FONT_SIZE / zoom;
   return Math.round(Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, raw)));
 }
 
@@ -127,6 +148,32 @@ const TERMINAL_THEME = {
 };
 
 /**
+ * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — cursor tingido
+ * pelo acento do provider (o mesmo laranja/prateado/azul-escuro/verde de
+ * `PROVIDER_ACCENT`, TerminalCard.tsx). xterm.js's `theme` só aceita cor
+ * literal, nunca uma referência `var(--x)` — resolvida aqui em runtime a
+ * partir do computed style do `documentElement`, NUNCA duplicada como hex
+ * solto (tokens.css continua a única fonte da verdade; `getComputedStyle`
+ * já devolve o valor final, com qualquer `var()` aninhado resolvido).
+ * Fallback pro foam original de `TERMINAL_THEME.cursor` se a variável não
+ * existir por algum motivo (provider desconhecido).
+ */
+function resolveCssVar(varName: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  return value || fallback;
+}
+function resolveProviderAccent(providerId: string): string {
+  return resolveCssVar(`--accent-${providerId}`, TERMINAL_THEME.cursor);
+}
+
+function buildTerminalTheme(providerId: string) {
+  return {
+    ...TERMINAL_THEME,
+    cursor: resolveProviderAccent(providerId),
+  };
+}
+
+/**
  * Splits PTY lifecycle from the xterm renderer on purpose: the PTY (a real
  * process, the actual conversation state) must survive a card leaving the
  * viewport.
@@ -194,6 +241,28 @@ export function useTerminal(
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [installHint, setInstallHint] = useState<{ providerId: string; command: string } | null>(null);
   const [discoveredResumeId, setDiscoveredResumeId] = useState<string | null>(null);
+  // Achado ao vivo (2026-09-02) -- `--resume` numa sessão real e grande
+  // pode passar dezenas de segundos sem imprimir NADA (a CLI resumida
+  // carregando/processando o histórico, fora do controle deste app), e
+  // não existia nenhum jeito de distinguir isso de um card travado de
+  // verdade -- terminal fica em branco os dois jeitos. `TerminalCard`
+  // usa isto pra mostrar "carregando sessão..." só nessa janela (spawn
+  // ok, PTY rodando, zero bytes recebidos ainda).
+  const [hasReceivedOutput, setHasReceivedOutput] = useState(false);
+  /**
+   * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — sinal real por
+   * trás da barra de atividade do header (TerminalCard.tsx). Aproximação
+   * honesta, não detecção semântica: este PTY não expõe nenhum marcador
+   * de "início/fim de turno" (sem shell-integration/OSC 133 aqui) — o que
+   * dá pra observar de verdade é só "o processo está escrevendo bytes
+   * agora". `true` a cada `pty:data`, `false` depois de
+   * `ACTIVITY_IDLE_MS` sem nenhum byte novo — mesma doutrina de debounce
+   * já usada nesta função pro zoom de fonte (150ms) e pro badge de "
+   * carregando sessão" (1200ms), só que aqui o "silêncio" É o sinal
+   * (idle), não o inverso.
+   */
+  const [isActive, setIsActive] = useState(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
@@ -286,8 +355,17 @@ export function useTerminal(
       }
     }
 
+    const ACTIVITY_IDLE_MS = 900;
     const offData = window.pty.onData((id, data) => {
-      if (id === ptyIdRef.current) writeMasked(data);
+      if (id !== ptyIdRef.current) return;
+      writeMasked(data);
+      setHasReceivedOutput(true);
+      setIsActive(true);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        idleTimerRef.current = null;
+        setIsActive(false);
+      }, ACTIVITY_IDLE_MS);
     });
     const offExit = window.pty.onExit((id, code) => {
       if (id === ptyIdRef.current) setExitCode(code);
@@ -301,9 +379,15 @@ export function useTerminal(
       offData();
       offExit();
       offSessionFound();
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
       if (ptyIdRef.current) void window.pty.kill(ptyIdRef.current);
       ptyIdRef.current = null;
       setPtyId(null);
+      setHasReceivedOutput(false);
+      setIsActive(false);
     };
     // resumeId/continueLast/model/systemPrompt are deliberately NOT deps.
     // Confirmed via CDP: App.tsx's resumeIdDiscovered() writes a freshly
@@ -333,7 +417,16 @@ export function useTerminal(
   useEffect(() => {
     if (!ptyId) return;
     function buildTerminal(withWebgl: boolean) {
-      const t = new Terminal({ fontSize: BASE_FONT_SIZE, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
+      const t = new Terminal({
+        fontSize: BASE_FONT_SIZE,
+        cursorBlink: true,
+        fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
+        theme: buildTerminalTheme(providerId),
+        // DESIGN-BACKLOG.md's "ganhos baratos" item — default era 1000
+        // (o próprio default do xterm.js, nunca setado explicitamente
+        // antes), contra as 10.000 do Kitty.
+        scrollback: 10000,
+      });
       const f = new FullWidthFitAddon();
       t.loadAddon(f);
       if (withWebgl) {
@@ -344,6 +437,16 @@ export function useTerminal(
           // only actually fail later, inside open() below — this check still
           // catches the common case for free.
         }
+      }
+      // JetBrains Mono já suporta ligaduras — só não renderizavam sem este
+      // addon (nenhum código aqui as detectava/desenhava). `font-ligatures`
+      // (dependência real do addon) faz detecção pura-JS via opentype.js,
+      // sem binding nativo — mesmo padrão defensivo do WebGL acima: uma
+      // falha aqui nunca deve impedir o terminal de abrir.
+      try {
+        t.loadAddon(new LigaturesAddon());
+      } catch {
+        // sem ligaduras nesse ambiente — terminal continua funcional.
       }
       t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
       return { t, f };
@@ -419,9 +522,20 @@ export function useTerminal(
       registerDomListeners(term, fit, el);
     }
     function buildTerminalNoWebgl() {
-      const t = new Terminal({ fontSize: BASE_FONT_SIZE, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
+      const t = new Terminal({
+        fontSize: BASE_FONT_SIZE,
+        cursorBlink: true,
+        fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
+        theme: buildTerminalTheme(providerId),
+        scrollback: 10000,
+      });
       const f = new FullWidthFitAddon();
       t.loadAddon(f);
+      try {
+        t.loadAddon(new LigaturesAddon());
+      } catch {
+        // sem ligaduras nesse ambiente — terminal continua funcional.
+      }
       t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
       return { t, f };
     }
@@ -460,16 +574,39 @@ export function useTerminal(
           // que só roda com um `ptyId` real (guard no topo do efeito); a
           // ref (não a variável fechada) é usada porque este listener
           // sobrevive além de qualquer re-render, mesmo sem se re-registrar.
-          const typed = `"${result.path}" `;
+          const quotedPath = `"${result.path}"`;
+          const typed = `${quotedPath} `;
           // Pedido ao vivo (2026-08-31) — máscara só visual: o que é
           // ENVIADO pro PTY continua sendo o path real (`typed`, sem essa
           // linha o comportamento é idêntico ao de antes); o que o
           // usuário VÊ na tela vira "[imagem #N]" — o eco desse mesmo
-          // `typed` é interceptado e reescrito no handler de `pty:data`
+          // texto é interceptado e reescrito no handler de `pty:data`
           // (Effeito 1, `writeMasked`), armado aqui logo antes de
           // escrever.
+          //
+          // Achado ao vivo (2026-09-02, reportado pelo usuário — "no
+          // Claude ainda mostra o path completo"): o `needle` usado pra
+          // casar contra o ECO real não pode incluir o espaço à direita
+          // de `typed`. Um shell simples (bash) ecoa exatamente o que
+          // recebeu, espaço incluso — mas `claude` (e presumivelmente
+          // qualquer CLI com input box próprio, redesenhado via ANSI, não
+          // um terminal "cooked" comum) redesenha a linha inteira com
+          // seus próprios códigos de cursor (`\x1b[2D`, `\x1b[5A` etc.)
+          // ANTES do path, e o espaço digitado depois do path vira parte
+          // desse redesenho (ex.: um `\r` de quebra de linha), nunca um
+          // caractere de espaço literal no eco — confirmado ao vivo
+          // capturando os bytes crus de `pty:data` com um listener
+          // paralelo contra um `claude` real: o eco continha
+          // `"...arquivo.png"\r` (aspas + `\r`), não `"...arquivo.png" `
+          // (aspas + espaço). `needle` com o espaço nunca batia, o buffer
+          // desistia (`writeMasked`'s guarda de tamanho) e mostrava o
+          // path cru. `needle` agora é só o path entre aspas — o que É
+          // ecoado de volta igual em ambos os casos — e o espaço
+          // continua sendo ENVIADO pro PTY normalmente (`typed`, com o
+          // espaço, continua o que é escrito), só não faz mais parte do
+          // que precisa bater no eco pra mascarar.
           pastedImageCount++;
-          pendingMaskRef.current = { needle: typed, replacement: `[imagem #${pastedImageCount}] ` };
+          pendingMaskRef.current = { needle: quotedPath, replacement: `[imagem #${pastedImageCount}]` };
           maskBufferRef.current = "";
           void window.pty.write(ptyIdRef.current!, typed);
           toast("imagem colada — caminho inserido no terminal");
@@ -652,7 +789,7 @@ export function useTerminal(
   }, [visible]);
 
   // Effect 5 (item 57 ponto 10, Trilha A) — every terminal now, `bash`
-  // included (see `FONT_ZOOM_INFLUENCE`'s own comment — the exclusion
+  // included (see `fontSizeForZoom`'s own comment above — the exclusion
   // existed only because the fix used to be a small "levemente mais
   // nítido" nudge, not a real anti-blur fix; now that it closes the whole
   // gap, there's no reason a plain shell should stay blurry while an
@@ -710,5 +847,5 @@ export function useTerminal(
     if (ptyIdRef.current) void window.pty.interrupt(ptyIdRef.current);
   }
 
-  return { ptyId, exitCode, spawnError, installHint, discoveredResumeId, fitNow, interrupt };
+  return { ptyId, exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt };
 }

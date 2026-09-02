@@ -41,6 +41,7 @@ import {
   quadraticControlPoint,
   rectCenter,
   rectsOverlap,
+  overlapArea,
   viewportWorldRect,
   worldRectToScreen,
   type Point,
@@ -822,12 +823,32 @@ export function App() {
         setRadialMenu(null);
         setShowRemotePairing(false);
       }
+      // Achado ao vivo (2026-09-02) — usuário relatou o header sumindo "sem
+      // precedentes" no meio de uma sessão longa. `Titlebar.tsx` esconde o
+      // header inteiro em fullscreen real do SO, e F11 (abaixo) era
+      // verificado ANTES deste guard existir — nenhum `stopPropagation` em
+      // `useTerminal.ts`/`BrowserCard.tsx` (só `preventDefault`, que não
+      // impede bubbling) pra F11 especificamente, então UM F11 apertado com
+      // foco dentro de qualquer terminal ou navegador embutido (uma TUI com
+      // seu próprio bind de F11, uma página web pedindo fullscreen, etc.)
+      // bubblava até aqui e ligava o fullscreen REAL da janela do Stellar
+      // — escondendo o header sem o usuário ter pedido isso do app. Mesmo
+      // guard `typing` que já protege os atalhos de ferramenta abaixo,
+      // movido pra cobrir F11 também.
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "CANVAS" ||
+        target?.isContentEditable;
       if (e.key === "F11") {
+        if (typing) return;
         e.preventDefault();
         void window.winControls.toggleFullscreen();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
+        if (typing) return;
         e.preventDefault();
         const topId = orderRef.current[orderRef.current.length - 1];
         if (topId) duplicateCard(topId);
@@ -842,12 +863,6 @@ export function App() {
       // would also swap the app's whole tool mid-type, which then silently
       // cuts off further input/wheel forwarding (both gate on
       // interactionMode === "normal").
-      const target = e.target as HTMLElement | null;
-      const typing =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.tagName === "CANVAS" ||
-        target?.isContentEditable;
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "v" || e.key === "V") setTool("pointer");
       if (e.key === "p" || e.key === "P") setTool("pen");
@@ -1033,7 +1048,7 @@ export function App() {
       model: newModel.trim() || null,
       systemPrompt: newSystemPrompt.trim() || null,
       initialInput: null,
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect)),
       groupId: null,
       label: null,
     });
@@ -1053,7 +1068,7 @@ export function App() {
     addCard({
       id,
       ...defaultCardFields(kind, activeBoardCwd),
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect)),
       groupId: null,
       label: null,
     } as Card);
@@ -1185,7 +1200,7 @@ export function App() {
       kind: "browser",
       url,
       ownerCardId,
-      rect: centeredSlot(visibleRect, cardsRef.current.length),
+      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
       groupId: null,
       label: null,
     };
@@ -1212,7 +1227,7 @@ export function App() {
       model: model || null,
       systemPrompt: null,
       initialInput: null,
-      rect: centeredSlot(visibleRect, cardsRef.current.length),
+      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
       groupId: null,
       // DESIGN-BACKLOG.md item 62 — an MCP-driven spawn can name its own
       // child agent, same free-text field CardTag rename already sets;
@@ -1241,7 +1256,7 @@ export function App() {
       model: null,
       systemPrompt: null,
       initialInput: command,
-      rect: centeredSlot(visibleRect, cardsRef.current.length),
+      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
       groupId: null,
       label: `instalar ${providerId}`,
     });
@@ -1255,7 +1270,7 @@ export function App() {
   function spawnCardFor(kind: SpawnCardKind, cwd: string | undefined, url: string | undefined, requesterId: string | null): string {
     if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank");
     const id = String(nextId.current++);
-    const rect = centeredSlot(visibleRect, cardsRef.current.length);
+    const rect = centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect));
     const card = {
       id,
       ...defaultCardFields(kind, cwd || activeBoardCwd),
@@ -1557,19 +1572,33 @@ export function App() {
    * z-index — there's no way to make a dragged terminal/files/sticky card
    * visually cover a browser card the way DOM cards cover each other. Same
    * mitigation CentralByte's Fase 1 used for the identical structural
-   * problem (native VTE over DOM): reject the move outright instead of
-   * pretending overlap works.
+   * problem (native VTE over DOM): reject a move that would increase
+   * overlap with a browser card, instead of pretending overlap works.
+   *
+   * "Would increase" (not "produces any overlap at all") — 2026-09-02, real
+   * bug report: `centeredSlot`'s old stagger-only spawn (fixed separately,
+   * see board-model.ts) could already land a browser card exactly on top of
+   * another. Rejecting every overlapping rect outright, unconditionally,
+   * meant BOTH cards involved were then stuck forever — since `rect` here
+   * is the live pointer position and any drag that hasn't fully cleared the
+   * other card's bounds yet still overlaps it, the plain reject fired on
+   * literally every pointermove tick, so neither card ever moved a single
+   * pixel, exactly the "imoveis, sem possivel de drag" the user saw.
+   * Comparing the new overlap area against the CURRENTLY COMMITTED rect's
+   * overlap area (not a flat yes/no) keeps the original guarantee — a drag
+   * can never make a browser overlap worse than it already is — while still
+   * letting an already-overlapping pair be dragged apart, one incremental
+   * step at a time, same as a normal drag anywhere else on the board.
    */
   function tryChangeRect(id: string, rect: Rect) {
     const moving = cardsRef.current.find((c) => c.id === id);
     if (!moving) return;
-    const collides = cardsRef.current.some(
-      (other) =>
-        other.id !== id &&
-        (moving.kind === "browser" || other.kind === "browser") &&
-        rectsOverlap(rect, other.rect),
-    );
-    if (collides) return;
+    const worsens = cardsRef.current.some((other) => {
+      if (other.id === id || (moving.kind !== "browser" && other.kind !== "browser")) return false;
+      if (!rectsOverlap(rect, other.rect)) return false;
+      return overlapArea(rect, other.rect) > overlapArea(moving.rect, other.rect);
+    });
+    if (worsens) return;
     changeRect(id, rect);
   }
 
@@ -1977,7 +2006,13 @@ export function App() {
           // "4 (deferida)").
           switch (c.kind) {
           case "terminal": {
-            return (
+            // Trilha B — último e mais arriscado kind migrado (por
+            // design, ver plano). `correctZoomCoords` (useTerminal.ts)
+            // deliberadamente NÃO foi tocado aqui — continua necessário
+            // mesmo screen-projected, ver o comentário no prop
+            // `screenProjected` de TerminalCard.tsx.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <TerminalCard
                 key={c.id}
                 id={c.id}
@@ -2011,11 +2046,19 @@ export function App() {
                 onSelectStart={onSelectStart}
                 selected={selected}
                 onSuggestInstall={stableSuggestInstall}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "files": {
-            return (
+            // Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — segundo card
+            // kind migrado depois de sticky/browser. Mesmo padrão de portal.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <FilesCard
                 key={c.id}
                 rect={c.rect}
@@ -2036,11 +2079,18 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "changes": {
-            return (
+            // Trilha B — mesmo padrão de portal que "files" acima.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <ChangesCard
                 key={c.id}
                 rect={c.rect}
@@ -2061,7 +2111,12 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "sticky": {
@@ -2110,7 +2165,9 @@ export function App() {
             );
           }
           case "stroke": {
-            return (
+            // Trilha B — mesmo padrão de portal que "files"/"changes" acima.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <StrokeCard
                 key={c.id}
                 rect={c.rect}
@@ -2131,11 +2188,21 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "remote-window": {
-            return (
+            // Trilha B — último kind migrado, o mais simples dos 9: o
+            // encaminhamento de ponteiro/teclado (`onVideoPointerMove` etc.)
+            // é todo relativo (`e.movementX/Y`), nunca lê zoom/pan do board
+            // — zero risco de coordenada, ao contrário de Terminal.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <RemoteWindowCard
                 key={c.id}
                 rect={c.rect}
@@ -2155,11 +2222,19 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "chat": {
-            return (
+            // Trilha B — 9º e último tipo de card migrado. Fecha o plano
+            // §0.8 ponto 2 (todos os 9 kinds, nenhum órfão no modelo antigo).
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <ChatCard
                 key={c.id}
                 id={c.id}
@@ -2190,11 +2265,24 @@ export function App() {
                 onSelectStart={onSelectStart}
                 onOpenChatSession={stableOpenChatSession}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "media": {
-            return (
+            // Trilha B — mesmo padrão de portal que "files"/"changes"/
+            // "stroke" acima. Combinação nova aqui: MediaCard em modo
+            // imagem é `chromeless` (nenhum outro kind migrado até agora
+            // era) — ver CardFrame.tsx's `onHeaderPointerDown`/resize, que
+            // já dividem por `zoom` de forma genérica, então não deveria
+            // exigir tratamento especial, mas é a primeira vez que essa
+            // combinação roda de verdade.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <MediaCard
                 key={c.id}
                 rect={c.rect}
@@ -2222,7 +2310,12 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "browser": {
@@ -2348,12 +2441,18 @@ export function App() {
           {marquee && <rect className="marquee" x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} />}
         </svg>
       </div>
-      {/* Trilha B — migrated card kinds (currently "sticky"/"browser",
-          see their `case` blocks below) portal their DOM here instead of
+      {/* Trilha B — all 9 card kinds now portal their DOM here instead of
           rendering inline inside `.world`'s map; see CardFrame.tsx's
           `screenProjected` prop doc comment for why (no CSS scale here,
-          cards compute their own on-screen left/top). Empty div,
-          contents arrive via `createPortal`. */}
+          cards compute their own on-screen left/top). Empty div, contents
+          arrive via `createPortal`. `.world`'s own `scale(zoom)` can't be
+          removed yet even so — the `<svg className="board-overlay">`
+          above (connector lines, the pen-drawing live preview, the
+          group-select marquee) still lives inside `.world` and still
+          relies on that ambient transform for its own coordinates; see
+          DESIGN-BACKLOG.md's Trilha B entry for the follow-up this
+          implies before §0.8 ponto 3 (remover scale(zoom) de .world) can
+          be closed. */}
       <div className="cards-layer" ref={setCardsLayerEl} />
       <Rail
         tool={tool}

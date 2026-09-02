@@ -1,9 +1,14 @@
-// DESIGN-BACKLOG.md item 57 ponto 10, revisado (SCREEN_SPACE_PROJECTION_
-// PLAN.md, Trilha A) — a fonte do terminal agora acompanha o zoom do
-// canvas 1:1 (`FONT_ZOOM_INFLUENCE = 1.0`), pra TODO provider, `bash`
-// incluído — antes só 15% do delta afetava o tamanho real e só terminais
-// com agente reagiam, o resto do blur em zoom continuava vindo do
-// `transform: scale()` puramente óptico.
+// DESIGN-BACKLOG.md item 57 ponto 10, revisado de novo (2026-09-02,
+// pedido explícito do usuário) — `fontSize = BASE / zoom` (INVERSO do
+// zoom do board), pra TODO provider, `bash` incluído. Zoom-IN encolhe o
+// fontSize (até o piso), zoom-OUT aumenta (até o teto) — o oposto da
+// versão anterior deste mecanismo (`fontSize = BASE * zoom`), que fazia o
+// tamanho aparente na tela crescer/encolher ao QUADRADO do zoom (a fonte
+// já escala 1:1 com o `transform: scale()` do card por fora; multiplicar
+// o fontSize interno pelo MESMO zoom compunha as duas escalas). Com a
+// fórmula inversa, tamanho aparente = (BASE/zoom) × zoom = BASE,
+// aproximadamente CONSTANTE em qualquer zoom do board — ver o comentário
+// de `fontSizeForZoom` em useTerminal.ts pra matemática completa.
 //
 // Sinal usado: `terminal-registry.ts`'s `getTerminalFontSize(cardId)`,
 // exposto em `window.__getTerminalFontSize` — lê `term.options.fontSize`
@@ -131,37 +136,42 @@ try {
 
   const bashAfter = await fontSizeFor(page, ids.bashId);
   const claudeAfter = await fontSizeFor(page, ids.claudeId);
+  // Fórmula inversa (2026-09-02): zoom-IN agora ENCOLHE o fontSize (era
+  // o contrário antes da correção de direção).
   check(
-    `claude: fontSize cresceu com o zoom-in (antes ${claudeBefore}, depois ${claudeAfter})`,
-    claudeAfter > claudeBefore,
+    `claude: fontSize ENCOLHEU com o zoom-in (antes ${claudeBefore}, depois ${claudeAfter}) — fórmula inversa`,
+    claudeAfter < claudeBefore,
     true,
   );
-  // Trilha A — antes deste fix, `providerId === "bash"` era excluído do
-  // efeito: seu fontSize continuava travado em BASE_FONT_SIZE mesmo
-  // depois de zoom-in (só o `scale()` esticava visualmente, borrando).
-  // Agora reage igual a um terminal de agente.
+  // Trilha A — todo provider reage igual, `bash` incluído (mesma fórmula,
+  // sem exceção por provider).
   check(
-    `bash: fontSize TAMBÉM cresceu com o mesmo zoom-in (antes ${bashBefore}, depois ${bashAfter}) — Trilha A`,
-    bashAfter > bashBefore,
+    `bash: fontSize TAMBÉM encolheu com o mesmo zoom-in (antes ${bashBefore}, depois ${bashAfter}) — Trilha A`,
+    bashAfter < bashBefore,
     true,
   );
   check(`bash e claude chegam no MESMO fontSize (mesma fórmula, mesmo zoom): bash=${bashAfter}, claude=${claudeAfter}`, bashAfter, claudeAfter);
-  check(`fontSize respeita o teto do clamp (FONT_SIZE_MAX=22)`, bashAfter <= 22, true);
+  // A ~2x de zoom, fontSize teórico = 15/2.01 ≈ 7 — bem acima do piso
+  // (FONT_SIZE_MIN=3), prova que o clamp não está mascarando o cálculo.
+  check(`fontSize a ~2x de zoom ainda está acima do piso (FONT_SIZE_MIN=3): ${bashAfter}`, bashAfter > 3, true);
+  check(`...e dentro do teto (FONT_SIZE_MAX=45)`, bashAfter <= 45, true);
 
-  // Zoom-out abaixo do ponto de partida, confirma que o piso do clamp
-  // (FONT_SIZE_MIN=11) segura a fonte legível em vez de encolher sem limite.
+  // Zoom-out até o mínimo do board (0.2) — fontSize teórico = 15/0.2 = 75,
+  // clampado no teto (45). Deve CRESCER em relação ao zoom=1 (o oposto do
+  // zoom-in acima), não encolher.
   const zoomOutBtn = await centerOf(page, '.zoom-pill button[title="Diminuir zoom"]');
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 20; i++) {
     await page.click(zoomOutBtn.x, zoomOutBtn.y);
     await new Promise((r) => setTimeout(r, 150));
   }
   await new Promise((r) => setTimeout(r, 400));
   const claudeZoomedOut = await fontSizeFor(page, ids.claudeId);
   check(
-    `zoom-out reduz o fontSize (era ${claudeAfter}, agora ${claudeZoomedOut}) e respeita o piso do clamp (FONT_SIZE_MIN=11)`,
-    claudeZoomedOut < claudeAfter && claudeZoomedOut >= 11,
+    `zoom-out no mínimo do board CRESCE o fontSize (base=${claudeBefore}, zoomed-out=${claudeZoomedOut}) — fórmula inversa`,
+    claudeZoomedOut > claudeBefore,
     true,
   );
+  check(`...e bate no teto NOVO (FONT_SIZE_MAX=45, teórico seria 75 sem clamp)`, claudeZoomedOut, 45);
 
   page.close();
 } finally {
