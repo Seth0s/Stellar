@@ -40,6 +40,8 @@ export function CardFrame({
   onCloseAnimationEnd,
   aspectRatio,
   chromeless = false,
+  chromeActive = false,
+  onHeaderClick,
   screenProjected,
   panX,
   panY,
@@ -116,6 +118,19 @@ export function CardFrame({
    * `[data-no-drag]` continuam excluídos pela mesma checagem de sempre em
    * `onHeaderPointerDown`. */
   chromeless?: boolean;
+  /** Pedido ao vivo (2026-09-02): a faixa de chrome de um card `chromeless`
+   * deixou de reagir a hover — só a um click de verdade (sem arraste) na
+   * área do card, ver `onHeaderClick` abaixo. Este prop é o estado
+   * controlado pelo chamador (MediaCard) que decide se essa faixa está
+   * visível agora; sem efeito em cards não-chromeless. */
+  chromeActive?: boolean;
+  /** Disparado em `onHeaderPointerDown`/`.card-clip`'s pointerdown quando o
+   * gesto termina SEM ter se movido (abaixo do limiar) — ou seja, um click
+   * de verdade, distinto do arraste que move o card. Hoje só o MediaCard
+   * chromeless usa isto (pra abrir/fechar a faixa de chrome ao clicar na
+   * imagem); outros tipos de card não passam o prop, então nada muda para
+   * eles. */
+  onHeaderClick?: () => void;
   /** Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — opt-in, additive,
    * same pattern as `aspectRatio` above: when absent/false, behavior is
    * byte-identical to before (`rect` used raw, positioned inside `.world`'s
@@ -229,8 +244,16 @@ export function CardFrame({
     const startY = e.clientY;
     const startRect = rectRef.current;
     let finalRect = startRect;
+    // Distingue um click de verdade de um arraste — abaixo do limiar (4px de
+    // tela) conta como click e dispara `onHeaderClick` em vez de mover o
+    // card. Sem isto, qualquer click no card-clip chromeless (onde este
+    // handler dobra de função como "iniciar mover o card") teria sido
+    // interpretado como um drag de distância zero, e nunca haveria como
+    // distinguir "só clicou" de "arrastou e soltou no mesmo lugar".
+    let moved = false;
     const throttle = rafThrottleRect(onChange);
     function onMove(ev: PointerEvent) {
+      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) moved = true;
       const dx = (ev.clientX - startX) / zoom;
       const dy = (ev.clientY - startY) / zoom;
       finalRect = { ...startRect, x: startRect.x + dx, y: startRect.y + dy };
@@ -242,6 +265,7 @@ export function CardFrame({
       setDragging(false);
       throttle.flushAndCancel(finalRect);
       onCommit(finalRect);
+      if (!moved) onHeaderClick?.();
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -333,6 +357,7 @@ export function CardFrame({
     "card-frame",
     className,
     chromeless && "chromeless",
+    chromeless && chromeActive && "chrome-active",
     "spawning",
     dragging && "dragging",
     reflowing && "reflow",
@@ -390,10 +415,13 @@ export function CardFrame({
         )}
       </div>
       {/* As 8 zonas ficam FORA de `.card-clip` pelo mesmo motivo que o
-          punho sempre ficou: dentro, o `overflow: hidden` recortaria
-          justamente a área de acerto nas bordas. O grip visual continua no
-          canto inferior-direito (é onde as pessoas já procuram); as outras
-          sete são invisíveis, marcadas só pelo cursor. */}
+          punho visível sempre ficou: dentro, o `overflow: hidden`
+          recortaria justamente a área de acerto nas bordas. Pedido ao vivo
+          (2026-09-02): "o ícone de redimensionar não precisaria existir
+          (...) agora todos os pontos de um card podem ser redimensionados"
+          — o grip visual que antes só existia no canto inferior-direito
+          foi removido; as 8 zonas continuam existindo, marcadas só pelo
+          cursor (nwse-resize/ns-resize/etc.), sem afordance visual própria. */}
       {RESIZE_DIRS.map((dir) => (
         <div
           key={dir}
@@ -401,9 +429,6 @@ export function CardFrame({
           onPointerDown={(e) => onResizePointerDown(e, dir)}
         />
       ))}
-      <div className="card-resize" onPointerDown={(e) => onResizePointerDown(e, "se")}>
-        <Icon name="resizeGrip" size={11} />
-      </div>
     </>
   );
 

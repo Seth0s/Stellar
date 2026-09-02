@@ -32,7 +32,6 @@ import {
   GitBranch,
   Globe,
   Grid2x2,
-  GripHorizontal,
   Group,
   Home as HomeGlyph,
   Image,
@@ -107,7 +106,6 @@ export type IconName =
   | "winRestore"
   | "fullscreenEnter"
   | "fullscreenExit"
-  | "resizeGrip"
   | "group"
   | "ungroup"
   | "check"
@@ -186,7 +184,6 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   winRestore: Copy,
   fullscreenEnter: Maximize,
   fullscreenExit: Minimize,
-  resizeGrip: GripHorizontal,
   group: Group,
   ungroup: Ungroup,
   check: Check,

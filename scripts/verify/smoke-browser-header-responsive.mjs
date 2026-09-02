@@ -115,7 +115,11 @@ try {
   // Encolhe o card de verdade abaixo do breakpoint (380px) via drag real
   // da alça de resize — não um valor forçado direto no store.
   const cardRectBefore = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('.card-frame.browser-card').getBoundingClientRect())`));
-  const handle = await centerOf(page, ".card-frame.browser-card .card-resize");
+  // 2026-09-02: o grip visual `.card-resize` foi removido (redimensionar
+  // por qualquer ponto do card não precisa mais de afordance própria) —
+  // `.card-resize-se` é a zona invisível de hit-test que ocupa o mesmo
+  // canto, ver CardFrame.tsx/cards.css.
+  const handle = await centerOf(page, ".card-frame.browser-card .card-resize-se");
   const targetWidth = 300;
   const shrinkBy = cardRectBefore.width - targetWidth;
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });

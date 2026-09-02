@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
@@ -82,6 +82,29 @@ export function MediaCard({
   const [pdfPage, setPdfPage] = useState(1);
   const [pdfNumPages, setPdfNumPages] = useState(1);
   const commitTimer = useRef<number | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Pedido ao vivo (2026-09-02): a faixa de chrome (renomear/girar/fechar)
+  // de uma imagem só deve aparecer com um click de verdade na área efetiva
+  // do card, não em hover — hover cobre o rect inteiro mesmo fora dos
+  // pixels visíveis da imagem e "pisca" ao simplesmente passar o mouse
+  // pelo canvas. `chromeOpen` é esse estado, fechado por padrão.
+  const [chromeOpen, setChromeOpen] = useState(false);
+
+  useEffect(() => {
+    if (!chromeOpen) return;
+    function onDocPointerDown(ev: PointerEvent) {
+      if (rootRef.current && !rootRef.current.contains(ev.target as Node)) setChromeOpen(false);
+    }
+    function onKeyDown(ev: KeyboardEvent) {
+      if (ev.key === "Escape") setChromeOpen(false);
+    }
+    window.addEventListener("pointerdown", onDocPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onDocPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [chromeOpen]);
 
   function scheduleViewCommit(v: MediaView) {
     if (commitTimer.current !== null) window.clearTimeout(commitTimer.current);
@@ -117,7 +140,13 @@ export function MediaCard({
     const startY = e.clientY;
     const startView = view;
     let finalView = startView;
+    // Mesma distinção click-vs-arraste do onHeaderClick do CardFrame (ver o
+    // doc lá) — aqui não passa por ele porque, com zoom > 1, o gesto no
+    // corpo já é consumido como pan (e.stopPropagation() acima), então o
+    // toggle da faixa de chrome precisa da própria checagem.
+    let moved = false;
     function onMove(ev: PointerEvent) {
+      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) moved = true;
       const dx = (ev.clientX - startX) / zoom;
       const dy = (ev.clientY - startY) / zoom;
       finalView = { ...startView, panX: startView.panX + dx, panY: startView.panY + dy };
@@ -127,6 +156,7 @@ export function MediaCard({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       onViewCommit(finalView);
+      if (!moved && mediaType === "image") setChromeOpen((v) => !v);
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -143,81 +173,118 @@ export function MediaCard({
   }
 
   return (
-    <CardFrame
-      className="media-card"
-      rect={rect}
-      zoom={zoom}
-      zIndex={zIndex}
-      interactionMode={interactionMode}
-      selected={selected}
-      reflowing={reflowing}
-      closing={closing}
-      onChange={onChange}
-      onCommit={onCommit}
-      onRaise={onRaise}
-      onFocus={onFocus}
-      onCloseAnimationEnd={onCloseAnimationEnd}
-      onConnectorStart={onConnectorStart}
-      onSelectStart={onSelectStart}
-      // Resize proporcional (item 57.9) — `rect.w/rect.h` NA HORA do
-      // resize é sempre a razão real da mídia (só o próprio resize
-      // proporcional deste prop pode mudar w/h de um card de mídia,
-      // nunca algo mais), então não precisa de um campo separado
-      // guardando "a proporção original".
-      aspectRatio={rect.w / rect.h}
-      // "O CARD TIPO MEDIA NÃO DEVERIA TER BODY" (2026-09-01) — só para
-      // imagem. Um PDF mantém o frame inteiro: a navegação de páginas
-      // vive no rodapé e não tem outro lugar razoável pra morar.
-      chromeless={mediaType === "image"}
-      headerContent={
-        <>
-          <span className="card-head-label">
-            <Icon name="fileImage" size={14} />
-            <CardTag label={label ?? filename} onRename={onRename} />
-          </span>
-          <button onClick={cycleRotation} title="Girar 90°">
-            <Icon name="rotate" size={12} />
-          </button>
-          <button onClick={onClose}>
-            <Icon name="close" size={12} />
-          </button>
-        </>
-      }
-      // Só o PDF tem rodapé. Para imagem ele mostrava o nome do arquivo,
-      // que já é exatamente o rótulo padrão do CardTag no header — linha
-      // duplicada, e agora sem lugar nenhum (CardFrame ignora o rodapé em
-      // modo chromeless de todo jeito).
-      footerContent={
-        mediaType === "pdf" ? (
-          <span className="media-pdf-nav">
-            <span className="media-filename">{filename}</span>
-            <button disabled={pdfPage <= 1} onClick={() => setPdfPage((p) => Math.max(1, p - 1))}>
-              <Icon name="chevronLeft" size={12} />
-            </button>
-            <span className="media-pdf-page">
-              {pdfPage}/{pdfNumPages}
+    // `display: contents` — puramente pra ter um nó DOM estável (`rootRef`)
+    // que envolve o card inteiro pro "click fora fecha a faixa de chrome"
+    // acima, sem entrar na árvore de layout: nem cria contexto de posição
+    // (o `.card-frame` de dentro segue posicionado em relação ao mesmo
+    // ancestral de sempre) nem altera nenhuma medida.
+    <div ref={rootRef} style={{ display: "contents" }}>
+      <CardFrame
+        className="media-card"
+        rect={rect}
+        zoom={zoom}
+        zIndex={zIndex}
+        interactionMode={interactionMode}
+        selected={selected}
+        reflowing={reflowing}
+        closing={closing}
+        onChange={onChange}
+        onCommit={onCommit}
+        onRaise={onRaise}
+        onFocus={onFocus}
+        onCloseAnimationEnd={onCloseAnimationEnd}
+        onConnectorStart={onConnectorStart}
+        onSelectStart={onSelectStart}
+        // Resize proporcional (item 57.9) — `rect.w/rect.h` NA HORA do
+        // resize é sempre a razão real da mídia (só o próprio resize
+        // proporcional deste prop pode mudar w/h de um card de mídia,
+        // nunca algo mais), então não precisa de um campo separado
+        // guardando "a proporção original".
+        aspectRatio={rect.w / rect.h}
+        // "O CARD TIPO MEDIA NÃO DEVERIA TER BODY" (2026-09-01) — só para
+        // imagem. Um PDF mantém o frame inteiro: a navegação de páginas
+        // vive no rodapé e não tem outro lugar razoável pra morar.
+        chromeless={mediaType === "image"}
+        // Pedido ao vivo (2026-09-02) — chromeless deixa de ser "aparece no
+        // hover" e passa a ser "aparece só com um click de verdade na
+        // imagem" (ver `chromeOpen`, `onHeaderClick`/`onBodyPointerDown`
+        // acima e o doc de `chromeActive` em CardFrame.tsx).
+        chromeActive={chromeOpen}
+        onHeaderClick={() => setChromeOpen((v) => !v)}
+        headerContent={
+          <>
+            <span className="card-head-label">
+              <Icon name="fileImage" size={14} />
+              <CardTag label={label ?? filename} onRename={onRename} />
             </span>
-            <button disabled={pdfPage >= pdfNumPages} onClick={() => setPdfPage((p) => Math.min(pdfNumPages, p + 1))}>
-              <Icon name="chevronRight" size={12} />
+            {/* Para imagem, girar deixa de morar na faixa do header — vira
+                ferramenta solta ao redor da própria imagem
+                (`.media-toolbar` abaixo), estilo canvas (Miro etc.). Um PDF
+                mantém o header fixo de sempre, sem toolbar flutuante
+                equivalente. */}
+            {mediaType === "pdf" && (
+              <button onClick={cycleRotation} title="Girar 90°">
+                <Icon name="rotate" size={12} />
+              </button>
+            )}
+            <button onClick={onClose}>
+              <Icon name="close" size={12} />
             </button>
-          </span>
-        ) : undefined
-      }
-    >
-      <div className="media-viewport" onPointerDown={onBodyPointerDown} onWheel={onBodyWheel}>
-        <div
-          className="media-content"
-          style={{ transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom}) rotate(${rotation}deg)` }}
-        >
-          {mediaType === "image" ? (
-            <img src={assetUrl} draggable={false} alt={filename} />
-          ) : (
-            <Suspense fallback={<div className="media-pdf-loading">carregando PDF…</div>}>
-              <PdfViewer url={assetUrl} page={pdfPage} onDocInfo={setPdfNumPages} />
-            </Suspense>
+          </>
+        }
+        // Só o PDF tem rodapé. Para imagem ele mostrava o nome do arquivo,
+        // que já é exatamente o rótulo padrão do CardTag no header — linha
+        // duplicada, e agora sem lugar nenhum (CardFrame ignora o rodapé em
+        // modo chromeless de todo jeito).
+        footerContent={
+          mediaType === "pdf" ? (
+            <span className="media-pdf-nav">
+              <span className="media-filename">{filename}</span>
+              <button disabled={pdfPage <= 1} onClick={() => setPdfPage((p) => Math.max(1, p - 1))}>
+                <Icon name="chevronLeft" size={12} />
+              </button>
+              <span className="media-pdf-page">
+                {pdfPage}/{pdfNumPages}
+              </span>
+              <button
+                disabled={pdfPage >= pdfNumPages}
+                onClick={() => setPdfPage((p) => Math.min(pdfNumPages, p + 1))}
+              >
+                <Icon name="chevronRight" size={12} />
+              </button>
+            </span>
+          ) : undefined
+        }
+      >
+        <div className="media-viewport" onPointerDown={onBodyPointerDown} onWheel={onBodyWheel}>
+          <div
+            className="media-content"
+            style={{
+              transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom}) rotate(${rotation}deg)`,
+            }}
+          >
+            {mediaType === "image" ? (
+              <img src={assetUrl} draggable={false} alt={filename} />
+            ) : (
+              <Suspense fallback={<div className="media-pdf-loading">carregando PDF…</div>}>
+                <PdfViewer url={assetUrl} page={pdfPage} onDocInfo={setPdfNumPages} />
+              </Suspense>
+            )}
+          </div>
+          {/* Ferramenta solta ao redor da imagem (não dentro da faixa do
+              header) — mesmo gatilho de click (`chromeOpen`) do header.
+              `data-no-drag` porque vive dentro de `.card-clip`, que em modo
+              chromeless trata qualquer pointerdown como início de arraste
+              do card (ver o doc de `chromeless` em CardFrame.tsx). */}
+          {mediaType === "image" && (
+            <div className={`media-toolbar${chromeOpen ? " visible" : ""}`} data-no-drag>
+              <button onClick={cycleRotation} title="Girar 90°">
+                <Icon name="rotate" size={14} />
+              </button>
+            </div>
           )}
         </div>
-      </div>
-    </CardFrame>
+      </CardFrame>
+    </div>
   );
 }
