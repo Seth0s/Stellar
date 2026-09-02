@@ -11,47 +11,47 @@ const DEFAULT_ROWS = 24;
 const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove"] as const;
 
 const BASE_FONT_SIZE = 15;
-// DESIGN-BACKLOG.md item 57 ponto 10, revisado (SCREEN_SPACE_PROJECTION_
-// PLAN.md, Trilha A) — "fonte que acompanha o zoom" começou com influência
-// PARCIAL (15%, só pra terminais com agente) porque a motivação original
-// era "levemente mais nítido nos extremos", não uma correção completa. O
-// blur real foi confirmado ao vivo depois (2026-08-31): o card inteiro já
-// escala opticamente via `transform: scale()` (App.tsx) — isso sozinho
-// deixa o glifo pequeno-renderizado-e-esticado borrado em zooms altos, já
-// que o canvas WebGL do xterm.js continua rasterizando no mesmo tamanho de
-// fonte físico independente do zoom, e só 15% do delta de zoom estava
-// sendo compensado; os outros 85% continuavam vindo do `scale()` que
-// borra. Influência = 1.0 fecha o gap inteiro (fontSize real acompanha o
-// zoom 1:1, dentro do clamp abaixo) em vez de só atenuá-lo, sem precisar
-// do rewrite completo de screen-space projection — mesmo princípio da
-// Fase 3.1 daquele plano, só que já em produção. Em zoom=1 continua dando
-// exatamente `BASE_FONT_SIZE` (sem regressão no caso comum, influência
-// não muda esse ponto de ancoragem).
-const FONT_ZOOM_INFLUENCE = 1.0;
-// Achado ao vivo (2026-09-02, testando o redesign do header): "só aumenta
-// a fonte, mas não melhora a qualidade durante zoom" — real. O board
-// zoom vai de 0.2 a 3.0 (useWorldTransform.ts), mas este clamp (11/22 —
-// sobra de quando FONT_ZOOM_INFLUENCE ainda era 15% parcial, nunca
-// revisado depois de virar 1.0) só cobre fontSize de 15*0.733 a 15*1.467
-// — uma fatia PEQUENA do range real. Fora dela (a maior parte do zoom-in
-// e zoom-out possíveis), o fontSize trava e só o `transform: scale()`
-// segue esticando o mesmo raster, borrando de verdade — exatamente o
-// sintoma reportado. Widened pra cobrir o range real inteiro (3px a
-// 45px, os extremos matemáticos de 15×[0.2, 3.0]).
+// Achado ao vivo (2026-09-02) — a versão anterior deste mecanismo fazia
+// `fontSize` acompanhar o zoom DIRETAMENTE (`fontSize = BASE * zoom`), na
+// crença de que isso melhorava a nitidez em qualquer zoom. Matemática real,
+// achada ao investigar um relato do usuário ("zoom '-' diminui a fonte, eu
+// esperava o contrário"): o `fontSize` do xterm não é só "densidade de
+// raster" — ele TAMBÉM decide quantas colunas/linhas cabem no container
+// (que fica em tamanho de mundo FIXO, não escalado — Trilha B), e depois
+// o card INTEIRO ainda escala visualmente de novo via `transform:
+// scale(zoom)` (App.tsx/`.card-scale`). As duas escalas multiplicam:
+// tamanho aparente na tela = fontSize(∝zoom) × transform(zoom) ∝ zoom² —
+// o texto crescia/encolhia ao QUADRADO do zoom do board, não 1:1 como
+// todo o resto do card (zoom 0.5x → texto 4x menor, não 2x). Isso
+// explicava os dois lados do mesmo sintoma: "mais nítido" no zoom-in
+// (na real, ficava desproporcionalmente GRANDE, lido como "nítido") e
+// "encolhe rápido demais" no zoom-out.
+//
+// Pedido explícito do usuário corrigindo a direção: zoom-IN deveria
+// DIMINUIR a fonte (até um piso legível — já perto o bastante, não
+// precisa de mais glifo) e zoom-OUT deveria AUMENTAR (compensar o
+// `transform` encolhendo tudo, mantendo legibilidade "de longe") — o
+// INVERSO da relação anterior, não só uma versão atenuada dela.
+// `fontSize = BASE / zoom` faz exatamente isso e tem uma propriedade
+// elegante: tamanho aparente na tela = (BASE/zoom) × zoom = BASE,
+// CONSTANTE — o texto do terminal fica com o mesmo tamanho visual
+// aproximado em qualquer zoom do board, dentro do clamp abaixo (que
+// existe pra não pedir uma textura-fonte absurdamente grande/pequena nos
+// extremos de zoom 0.2–3.0, useWorldTransform.ts). Em zoom=1 continua
+// dando exatamente `BASE_FONT_SIZE` (mesmo ponto de ancoragem de sempre).
 //
 // Nota honesta, não é o mesmo mecanismo do navegador embutido: isso NÃO
 // é "resolução real" tipo `deviceScaleFactor`/`setContentSize`
 // (BrowserCard.tsx) — o canvas do xterm continua com a mesma resolução
 // crua do container (não muda com fontSize). O que fontSize maior faz é
 // rasterizar cada GLYPH numa textura-fonte de maior detalhe (WebGL desenha
-// a partir dela, não do container inteiro) — melhora bastante a nitidez
-// aparente depois do stretch, mas é supersampling do glyph, não um
-// aumento real da resolução do canvas. Suficiente pro caso de uso, mas é
-// uma aproximação, documentada como tal.
+// a partir dela, não do container inteiro) — aqui isso só entra em jogo
+// pra manter o glifo legível quando o zoom-out pede uma fonte maior;
+// supersampling do glyph, não aumento real da resolução do canvas.
 const FONT_SIZE_MIN = 3;
 const FONT_SIZE_MAX = 45;
 function fontSizeForZoom(zoom: number): number {
-  const raw = BASE_FONT_SIZE * (1 - FONT_ZOOM_INFLUENCE + zoom * FONT_ZOOM_INFLUENCE);
+  const raw = BASE_FONT_SIZE / zoom;
   return Math.round(Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, raw)));
 }
 
@@ -789,7 +789,7 @@ export function useTerminal(
   }, [visible]);
 
   // Effect 5 (item 57 ponto 10, Trilha A) — every terminal now, `bash`
-  // included (see `FONT_ZOOM_INFLUENCE`'s own comment — the exclusion
+  // included (see `fontSizeForZoom`'s own comment above — the exclusion
   // existed only because the fix used to be a small "levemente mais
   // nítido" nudge, not a real anti-blur fix; now that it closes the whole
   // gap, there's no reason a plain shell should stay blurry while an
