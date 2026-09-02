@@ -150,6 +150,82 @@
   line-height: 1;
 }
 
+/* Sino de notificação (2026-09-02) — mesma base de `.card-head button`;
+   `.on` (ligado, padrão) tinge com `--accent` — a MESMA variável que
+   CardFrame.tsx já seta em `.card-frame` a partir de PROVIDER_ACCENT
+   (TerminalCard.tsx), herdada por qualquer descendente sem precisar
+   replicar a variável em cada elemento. */
+.terminal-card-bell.on {
+  color: var(--accent, var(--foam));
+}
+.terminal-card-bell:not(.on) {
+  opacity: 0.55;
+}
+
+/* Ícone real do provider no header (2026-09-02) — ver o comentário de
+   PROVIDER_GLYPH em TerminalCard.tsx. Mesmo glyph do PureNerdFont já
+   carregado globalmente (main.tsx) — nada novo pra carregar aqui. Efeito
+   "metálico": texto preenchido com o próprio gradiente diagonal via
+   `background-clip: text`; `.flat` (bash/cursor, sem `--m-dark`) cai pra
+   cor sólida. */
+.terminal-card-provider-glyph {
+  font-family: "PureNerdFont", monospace;
+  font-size: 12px;
+  width: 15px;
+  line-height: 1;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(125deg, var(--m-dark, var(--m-mid)) 0%, var(--m-mid) 48%, var(--m-dark, var(--m-mid)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.terminal-card-provider-glyph.flat {
+  background: none;
+  -webkit-text-fill-color: var(--m-mid);
+  color: var(--m-mid);
+}
+
+/* Barra de atividade (2026-09-02) — fina, invisível em repouso; pulsa
+   esquerda→direita durante `isActive` (useTerminal.ts) e some ao acabar.
+   `overflow: hidden` no container fixo, a faixa que se move é um filho
+   mais largo que ele mesmo (mesma técnica de "sweep" de loading bar). */
+.terminal-card-activity {
+  height: 2px;
+  flex: none;
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+}
+.terminal-card-activity-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  left: -34%;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, var(--accent, var(--foam)), transparent);
+}
+.terminal-card-activity.on .terminal-card-activity-sweep {
+  opacity: 1;
+  animation: terminal-activity-sweep 1s linear infinite;
+}
+@keyframes terminal-activity-sweep {
+  from { transform: translateX(0); }
+  to { transform: translateX(288%); } /* atravessa o container inteiro: (100% + 34%*2) / 34% */
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-card-activity-sweep {
+    animation: none !important;
+  }
+  .terminal-card-activity.on .terminal-card-activity-sweep {
+    opacity: 0.6;
+  }
+}
+
 .card-head button.active {
   background: var(--foam);
   color: var(--on-accent);
@@ -247,6 +323,35 @@
   outline: none;
   width: 120px;
   flex: none;
+}
+
+/* Indicador de rename (2026-09-02, "Terminal, Revisitado") — ver o
+   comentário em CardTag.tsx. `.card-tag` sozinho continua funcionando
+   idêntico a antes (a lógica de renomear não mudou, só ganhou um
+   segundo gatilho visível); esconde/mostra com o resto do header. */
+.card-tag-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.card-tag-rename-hint {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-tag-rename-hint:hover {
+  opacity: 1;
+  color: var(--accent, var(--text));
+  background: color-mix(in srgb, var(--accent, var(--muted)) 16%, transparent);
 }
 
 .card-foot {
@@ -403,9 +508,10 @@
 }
 
 /* xterm.js's own scrollbar (a VS Code-derived overlay scrollbar, not the
-   browser's native one — real, functional: `new Terminal()` gets no
-   explicit `scrollback`, so it defaults to 1000 lines, and a busy session
-   genuinely fills that).
+   browser's native one — real, functional: `new Terminal()` sets
+   `scrollback: 10000` (useTerminal.ts, 2026-09-02 — era o default do
+   próprio xterm.js, 1000, nunca setado explicitamente antes), e uma
+   sessão movimentada genuinely enche isso).
    Pedido ao vivo (2026-08-30) — a transparent-slider fix (below, kept for
    history) wasn't enough; the human wants the scrollbar gone entirely,
    not just unpainted. `visibility: hidden` on the two scrollbar container

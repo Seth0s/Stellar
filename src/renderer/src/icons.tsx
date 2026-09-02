@@ -6,6 +6,7 @@
 import {
   ArrowLeft,
   ArrowRight,
+  Bell,
   BotMessageSquare,
   BoxSelect,
   Braces,
@@ -47,7 +48,6 @@ import {
   MoreVertical,
   MousePointer2,
   MousePointerClick,
-  OctagonX,
   PanelLeft,
   Pen,
   Plus,
@@ -99,6 +99,8 @@ export type IconName =
   | "forward"
   | "reload"
   | "interrupt"
+  | "rename"
+  | "bell"
   | "winMinimize"
   | "winMaximize"
   | "winRestore"
@@ -171,9 +173,15 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   forward: ArrowRight,
   reload: RotateCw,
   // 2026-08-27 — plain Octagon at 12px read as a blank ring, mistaken
-  // live for a "copy" icon. OctagonX keeps the stop-sign shape but adds
-  // an unambiguous mark inside it.
-  interrupt: OctagonX,
+  // live for a "copy" icon; switched to OctagonX (stop-sign + mark).
+  // 2026-09-02 ("Terminal, Revisitado") — pedido ao vivo pra trocar de
+  // novo: OctagonX ainda lia ambíguo num botão pequeno, um quadrado
+  // sólido (o mesmo símbolo universal de "stop" de qualquer player de
+  // mídia) é mais direto. Usado com `fill="currentColor"` no call site —
+  // sem isso vira só o contorno vazado do quadrado.
+  interrupt: Square,
+  rename: Pen,
+  bell: Bell,
   winMinimize: Minus,
   winMaximize: Square,
   winRestore: Copy,
@@ -220,7 +228,19 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   viewportTablet: Tablet,
 };
 
-export function Icon({ name, size = 18, color }: { name: IconName; size?: number; color?: string }) {
+export function Icon({
+  name,
+  size = 18,
+  color,
+  fill,
+}: {
+  name: IconName;
+  size?: number;
+  color?: string;
+  /** Opt-in — lucide icons default to unfilled outlines everywhere else in
+   * the app; only the new solid "stop" glyph (`interrupt`) passes this. */
+  fill?: string;
+}) {
   const Component = COMPONENTS[name];
-  return <Component size={size} strokeWidth={1.75} color={color} />;
+  return <Component size={size} strokeWidth={1.75} color={color} fill={fill} />;
 }
