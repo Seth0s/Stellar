@@ -6,6 +6,7 @@
 import {
   ArrowLeft,
   ArrowRight,
+  Bell,
   BotMessageSquare,
   BoxSelect,
   Braces,
@@ -47,7 +48,6 @@ import {
   MoreVertical,
   MousePointer2,
   MousePointerClick,
-  OctagonX,
   PanelLeft,
   Pen,
   Pin,
@@ -101,6 +101,8 @@ export type IconName =
   | "forward"
   | "reload"
   | "interrupt"
+  | "rename"
+  | "bell"
   | "winMinimize"
   | "winMaximize"
   | "winRestore"
@@ -176,9 +178,15 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   forward: ArrowRight,
   reload: RotateCw,
   // 2026-08-27 — plain Octagon at 12px read as a blank ring, mistaken
-  // live for a "copy" icon. OctagonX keeps the stop-sign shape but adds
-  // an unambiguous mark inside it.
-  interrupt: OctagonX,
+  // live for a "copy" icon; switched to OctagonX (stop-sign + mark).
+  // 2026-09-02 ("Terminal, Revisitado") — pedido ao vivo pra trocar de
+  // novo: OctagonX ainda lia ambíguo num botão pequeno, um quadrado
+  // sólido (o mesmo símbolo universal de "stop" de qualquer player de
+  // mídia) é mais direto. Usado com `fill="currentColor"` no call site —
+  // sem isso vira só o contorno vazado do quadrado.
+  interrupt: Square,
+  rename: Pen,
+  bell: Bell,
   winMinimize: Minus,
   winMaximize: Square,
   winRestore: Copy,
@@ -230,7 +238,30 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   bug: Bug,
 };
 
-export function Icon({ name, size = 18, color }: { name: IconName; size?: number; color?: string }) {
+export function Icon({
+  name,
+  size = 18,
+  color,
+  fill,
+}: {
+  name: IconName;
+  size?: number;
+  color?: string;
+  /** Opt-in — lucide icons default to unfilled outlines everywhere else in
+   * the app; only the new solid "stop" glyph (`interrupt`) passes this.
+   * Achado ao vivo (2026-09-02, screenshot real do usuário): passar
+   * `fill={undefined}` explícito pra TODO ícone (mesmo quando ninguém usa
+   * a prop) ainda inclui a chave `fill` no objeto de props que o lucide-
+   * react espalha por cima do próprio default (`fill: "none"`) — spread de
+   * objeto sobrescreve com `undefined` mesmo, não pula a chave. Resultado:
+   * `fill` sumia do SVG renderizado (nem "none", nem cor nenhuma — a
+   * própria spec do SVG cai pro preto sólido default), enchendo de preto
+   * qualquer ícone com forma fechada por baixo de outra (ex: o `<rect>`
+   * de `SquareTerminal` cobrindo os dois `<path>` do glyph ">_" por
+   * dentro). Só passar `fill` quando ele existir de verdade evita
+   * competir com o default do próprio lucide-react. */
+  fill?: string;
+}) {
   const Component = COMPONENTS[name];
-  return <Component size={size} strokeWidth={1.75} color={color} />;
+  return <Component size={size} strokeWidth={1.75} color={color} {...(fill ? { fill } : {})} />;
 }

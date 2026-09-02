@@ -26,6 +26,9 @@ function StrokeCardInner({
   onCloseAnimationEnd,
   onConnectorStart,
   onSelectStart,
+  screenProjected,
+  panX,
+  panY,
 }: {
   rect: Rect;
   zoom: number;
@@ -46,6 +49,16 @@ function StrokeCardInner({
   onCloseAnimationEnd?: () => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
+   * straight through, same pattern StickyCard/BrowserCard/FilesCard/
+   * ChangesCard already use. Low urgency for Stroke specifically (SVG
+   * vector content never had the bitmap-blur problem this track exists
+   * for — §0.3 of the plan), migrated for architectural completeness so
+   * `.world`'s `scale(zoom)` can eventually be dropped once all 9 kinds
+   * are on this model. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   const polyline = points.map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
   return (
@@ -64,6 +77,9 @@ function StrokeCardInner({
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
+      screenProjected={screenProjected}
+      panX={panX}
+      panY={panY}
       headerContent={
         <button className="stroke-card-close" onClick={onClose}>
           <Icon name="close" size={12} />

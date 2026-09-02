@@ -40,7 +40,21 @@
 // asserts "some renders happened" instead of "zero", so a REAL future
 // regression (e.g. it stops tracking pan at all, or the count explodes
 // far past one-per-pointermove) still fails loud instead of this file
-// going permanently red and training people to ignore it.
+// going permanently red and training people to ignore it. Terminal
+// joined the screen-projected side too (2026-09-02) — same "bounded,
+// not zero" pan invariant now applies to both terminal cards below.
+//
+// Achado ao vivo na mesma sessão que migrou Terminal: com um card
+// screen-projected (Terminal, `.cards-layer`) sempre desenhando por
+// cima de um não migrado (Chat, ainda `.world`) — limitação conhecida,
+// ver `layout.css`'s `.cards-layer` comment — um terminal recém-
+// arrastado (grande por padrão) sobrepondo a área onde o chat cascateia
+// fazia um clique real na tag do CHAT acertar o TERMINAL por baixo em
+// vez disso: um bug real de arraste desviado, não só um artefato deste
+// teste. Registrado em DESIGN-BACKLOG.md; contornado aqui encolhendo e
+// movendo o terminal recém-arrastado pro canto antes do chat existir,
+// pra este arquivo continuar medindo só o que se propõe (contagem de
+// render).
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 
 const CDP_PORT = 9452;
@@ -133,6 +147,64 @@ try {
     frameAfterDrag.left !== tagBefore.frameLeft || frameAfterDrag.top !== tagBefore.frameTop,
     true,
   );
+
+  // Achado ao vivo escrevendo este teste (Trilha B, Terminal migrado):
+  // com Terminal agora em `.cards-layer`, ele desenha SEMPRE por cima de
+  // cards ainda não migrados (Chat/RemoteWindow) — limitação conhecida e
+  // documentada em `layout.css`'s `.cards-layer` comment, "resolve
+  // sozinha quando todos os tipos migrarem". Isso deixou de ser só uma
+  // ressalva teórica: os dois cards terminal (860x660 cada, enormes por
+  // padrão) cobrem quase a viewport inteira, então onde quer que chat/
+  // browser cascateiem por padrão, um deles está por baixo — e um clique
+  // real na TAG do chat acertava o TERMINAL por baixo em vez disso, bug
+  // real de produto (arraste desviado), não só artefato deste teste,
+  // achado registrado em DESIGN-BACKLOG.md. Encolhe e empurra os DOIS
+  // terminais pra cantos opostos aqui, fora do caminho de onde chat/
+  // browser cascateiam, pra este teste continuar medindo só o que se
+  // propõe (contagem de render), sem o achado colateral confundindo o
+  // resultado.
+  async function shrinkAndTuckInto(domIndex, handleDx, handleDy, tagDx, tagDy) {
+    const before = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const tags = document.querySelectorAll('.terminal-card .card-tag');
+          const tag = tags[${domIndex}];
+          const frame = tag.closest('.card-frame');
+          const handle = frame.querySelector('.card-resize');
+          const hr = handle.getBoundingClientRect();
+          return JSON.stringify({ handleX: hr.x + hr.width / 2, handleY: hr.y + hr.height / 2 });
+        })()
+      `),
+    );
+    await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: before.handleX, y: before.handleY, button: "left", clickCount: 1, pointerType: "mouse" });
+    await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: before.handleX + handleDx, y: before.handleY + handleDy, button: "left", pointerType: "mouse" });
+    await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: before.handleX + handleDx, y: before.handleY + handleDy, button: "left", clickCount: 1, pointerType: "mouse" });
+    await new Promise((r) => setTimeout(r, 300));
+    const shrunk = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const tags = document.querySelectorAll('.terminal-card .card-tag');
+          const tag = tags[${domIndex}];
+          const r = tag.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()
+      `),
+    );
+    await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: shrunk.x, y: shrunk.y, button: "left", clickCount: 1, pointerType: "mouse" });
+    await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: shrunk.x + tagDx, y: shrunk.y + tagDy, button: "left", pointerType: "mouse" });
+    await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: shrunk.x + tagDx, y: shrunk.y + tagDy, button: "left", clickCount: 1, pointerType: "mouse" });
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  // index 1 (last in DOM, the one just dragged above) -> tucked bottom-right;
+  // index 0 (still at its untouched, giant default cascade slot) -> tucked
+  // bottom-left. Opposite corners, both well clear of the top-left area
+  // where new cards cascade in.
+  await shrinkAndTuckInto(1, -600, -450, 450, 350);
+  await shrinkAndTuckInto(0, -600, -450, -450, 350);
+  // All four moves above are themselves real renders of the two terminal
+  // cards — re-baseline both ids so the checks below measure only what
+  // happens FROM HERE on, same spirit as `afterDrag` further up.
+  Object.assign(afterDrag, await renderCounts());
 
   // ---- Add a chat card and a browser card — the other two instrumented
   // kinds (see TerminalCard.tsx/ChatCard.tsx/BrowserCard.tsx) ----
@@ -228,14 +300,26 @@ try {
   await new Promise((r) => setTimeout(r, 300));
 
   const afterPan = await renderCounts();
-  check("panning the board causes ZERO extra renders for terminal card A", afterPan[idA], afterDrag[idA]);
-  check("panning the board causes ZERO extra renders for terminal card B", afterPan[idB], afterDrag[idB]);
-  check("panning the board causes ZERO extra renders for the chat card", afterPan[chatId], afterChatDrag[chatId]);
   // Screen-projected (Trilha B) — see the file-header comment above.
   // Panning genuinely re-renders it now (real panX/panY props), so this
   // checks "renders happened, roughly once per pan step" instead of
   // "zero" — a runaway count (way more than the ~4 mousemoves the pan
-  // gesture above sends) would still fail loud.
+  // gesture above sends) would still fail loud. Terminal joined the
+  // screen-projected side in the very same commit as this comment
+  // (2026-09-02) — same invariant, same reasoning, now for both A and B.
+  const terminalAPanRenders = afterPan[idA] - afterBrowserCreate[idA];
+  check(
+    `panning the board re-renders terminal card A a bounded number of times (screen-projected, got ${terminalAPanRenders})`,
+    terminalAPanRenders > 0 && terminalAPanRenders <= 20,
+    true,
+  );
+  const terminalBPanRenders = afterPan[idB] - afterBrowserCreate[idB];
+  check(
+    `panning the board re-renders terminal card B a bounded number of times (screen-projected, got ${terminalBPanRenders})`,
+    terminalBPanRenders > 0 && terminalBPanRenders <= 20,
+    true,
+  );
+  check("panning the board causes ZERO extra renders for the chat card", afterPan[chatId], afterChatDrag[chatId]);
   const browserPanRenders = afterPan[browserId] - afterBrowserCreate[browserId];
   check(
     `panning the board re-renders the browser card a bounded number of times (screen-projected, got ${browserPanRenders})`,

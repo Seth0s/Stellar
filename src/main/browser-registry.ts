@@ -57,6 +57,27 @@ type Entry = {
 const FOCUSED_FRAME_RATE = 60;
 const UNFOCUSED_FRAME_RATE = 8;
 
+// Supersample fixo, pedido explícito do usuário (2026-09-02: "mandar
+// renderizar o triplo da resolução e aumentar para escala 1:1") — ver o
+// doc comment de `resize()` abaixo pro porquê de precisar do PAR
+// `setContentSize`+`setZoomFactor` (não `setContentSize` sozinho) pra isto
+// ser supersample de verdade, e não só a página acreditando que tem um
+// viewport maior. Verificado ao vivo, 3 scripts de diagnóstico isolados
+// antes de embarcar: (1) `setContentSize(N×)` sozinho deixa o conteúdo
+// lógico da página proporcionalmente MENOR na tela (mais página cabe no
+// card, texto ilegível a 3×) — não é supersample; (2) `setContentSize(N×)`
+// + `setZoomFactor(N)` juntos mantêm a MESMA área lógica visível (mesmo
+// "zoom" aparente do conteúdo) com N²× mais pixels reais de raster por
+// trás — supersample de verdade, texto visivelmente mais nítido no
+// screenshot comparado lado a lado; (3) clique continua preciso com o
+// combo ativo (`sendInputEvent` opera no espaço de coordenadas da janela,
+// não no espaço pós-zoom da página — mesmo raciocínio de por que zoom de
+// página nunca quebra clique num browser real). Custo real medido numa
+// página de conteúdo denso (texto real, não tela em branco): ~5× bytes
+// por frame em JPEG qualidade 90 (não 9× — JPEG comprime o detalhe extra
+// bem melhor que pixels brutos sugeririam).
+const BROWSER_SUPERSAMPLE = 3;
+
 /**
  * Ported from CentralByte's browser.rs::normalize_url — rejects schemes that
  * would let a "navigate to a URL" request turn into local code execution or
@@ -189,6 +210,11 @@ export function createBrowserRegistry(callbacks: {
     // the user just asked for — starts at the focused rate; `setFocused`
     // below lowers it once something else gets raised on top.
     wc.setFrameRate(FOCUSED_FRAME_RATE);
+    // Supersample fixo (ver doc comment de BROWSER_SUPERSAMPLE/`resize()`)
+    // — setado uma vez aqui e nunca mudado depois; `resize()` multiplica o
+    // content size pelo MESMO fator, o que cancela o "mais página cabe no
+    // card" que `setContentSize` sozinho introduziria.
+    wc.setZoomFactor(BROWSER_SUPERSAMPLE);
 
     wc.on("paint", (_event, _dirty, image) => {
       const entry = entries.get(id);
@@ -304,57 +330,64 @@ export function createBrowserRegistry(callbacks: {
   }
 
   // Trilha A do navegador (SCREEN_SPACE_PROJECTION_PLAN.md §0.3's "Trilha
-  // A do navegador" note, executada 2026-08-31) — mesmo mecanismo de bug
-  // que o terminal tinha antes da própria Trilha A: a `BrowserWindow`
-  // offscreen rasterizava sempre no tamanho de MUNDO (pré-zoom), e o
-  // `scale(zoom)` do `.world` só esticava o JPEG capturado, borrando.
-  // Clampado (não `zoom` cru) pela mesma razão do `FONT_SIZE_MIN/MAX` do
-  // terminal: sem teto, zoom extremo faria a página re-renderizar e
-  // codificar JPEG num tamanho de pixel correndo solto (mais caro que o
-  // fontSize do terminal — ver o aviso do próprio plano); sem piso, zoom
-  // extremo pra fora encolheria o conteúdo real a quase nada.
-  const BROWSER_ZOOM_MIN = 0.5;
-  const BROWSER_ZOOM_MAX = 3;
-
-  /** Resizes the offscreen viewport itself — the renderer calls this when
-   * the card's own (world-space, pre-zoom) rect w/h changes OR the board
-   * zoom settles on a new step, matching how the terminal's real
-   * `fontSize` tracks zoom (Trilha A). `zoom` defaults to 1 for callers
-   * that only care about a plain rect resize (kept content resolution
-   * unscaled) — every real caller in this app always passes the current
-   * board zoom.
-   *
-   * Item 6 (Trilha B, docs/SCREEN_SPACE_PROJECTION_PLAN.md) — also
-   * multiplies by `entry.scaleFactor` now. IMPORTANT, found live testing
-   * this (2026-09-01, 3 isolated diagnostic scripts): this is NOT true
-   * HiDPI supersampling. Confirmed `webPreferences.offscreen.
-   * deviceScaleFactor` is a no-op for the actual raster output in this
-   * Electron version/platform (image.getSize() byte-identical regardless
-   * of its value) — and so is `webContents.setZoomFactor()` (raster
-   * stays tied to content size even as `getZoomFactor()` correctly
-   * reports the new value) — and so is the global Chromium flag
-   * `--force-device-scale-factor` (page's own `devicePixelRatio` changes,
-   * raster output doesn't). `setContentSize` is the ONLY lever that
-   * changes actual paint buffer resolution in this build, and it's the
-   * same number the embedded page's own CSS layout uses as its viewport
-   * — there is no independent "render N× denser, same logical size"
-   * signal available. So this multiplication genuinely makes the
-   * embedded page BELIEVE its viewport is scaleFactor× bigger than what
-   * the card visually displays: sharper detail per visible pixel, but
-   * proportionally MORE of the page fits in the same on-screen card (a
-   * real trade-off, not a pure win — verified live with the user via a
-   * real comparison page before shipping this, not assumed). */
-  function resize(id: string, w: number, h: number, zoom = 1) {
+  // A do navegador" note, executada 2026-08-31) originalmente também
+  // multiplicava a resolução offscreen pelo zoom do board, mesma ideia do
+  // `fontSize` do terminal escalando com o zoom. Revertido a pedido
+  // explícito do usuário (2026-09-02: "o navegador não precisa ser afetado
+  // pelo efeito do zoom aumentar ou diminuir a fonte") — era, na prática,
+  // a causa da "resolução quase 4K" que ele notou num teste de zoom bem
+  // alto: em `zoom` perto do antigo teto de 3, `factor` chegava a
+  // 3×`scaleFactor`, MUITO acima da densidade real do monitor. `zoom` só
+  // existe agora no parâmetro por compatibilidade de assinatura com os
+  // chamadores existentes (`BrowserCard.tsx`/`browser:resize`) — ignorado
+  // aqui de propósito; a resolução do card depende só do tamanho de mundo
+  // do rect e do `scaleFactor` real do monitor (Item 6 abaixo), nunca do
+  // zoom interativo do board.
+  //
+  // Item 6 (Trilha B, docs/SCREEN_SPACE_PROJECTION_PLAN.md) — multiplica
+  // por `entry.scaleFactor`. IMPORTANTE, achado ao vivo testando isto
+  // (2026-09-01, 3 scripts de diagnóstico isolados): `setContentSize`
+  // SOZINHO não é supersampling HiDPI de verdade. Confirmado que
+  // `webPreferences.offscreen.deviceScaleFactor` é um no-op pro raster
+  // real nesta versão/plataforma de Electron (image.getSize() idêntico
+  // byte a byte independente do valor) — e pra flag global do Chromium
+  // `--force-device-scale-factor` (o `devicePixelRatio` da própria página
+  // muda, o raster não). `setContentSize` é a alavanca que muda a
+  // resolução real do paint buffer nesta build, mas é TAMBÉM o mesmo
+  // número que o layout CSS da página embutida usa como seu próprio
+  // viewport — SOZINHO, ele faz a página embutida ACREDITAR que seu
+  // viewport é N× maior do que o card mostra visualmente: detalhe mais
+  // nítido por pixel, mas proporcionalmente MAIS da página cabe no mesmo
+  // card na tela (conteúdo lógico fica menor, não só mais nítido).
+  //
+  // Supersample fixo (BROWSER_SUPERSAMPLE, pedido explícito do usuário,
+  // 2026-09-02: "mandar renderizar o triplo da resolução e aumentar para
+  // escala 1:1") — fecha exatamente essa lacuna. `webContents.
+  // setZoomFactor()` sozinho já era sabido no-op pro TAMANHO do paint
+  // buffer (`getZoomFactor()` reporta certo, o buffer não muda) — mas
+  // COMBINADO com um `setContentSize` já maior, o zoom da página faz o
+  // conteúdo renderizar N× maior DENTRO desse viewport N× maior,
+  // cancelando o "mais página cabe no card": a mesma área lógica fica
+  // visível de antes, só que com N²× mais pixels reais de raster por
+  // trás — supersample de verdade. Verificado ao vivo com screenshot lado
+  // a lado (mesma janela, mesmo card, mesmo crop de tela): texto
+  // visivelmente mais nítido, MESMA quantidade de conteúdo visível — e
+  // clique continua preciso com o zoom ativo (`sendInputEvent` opera no
+  // espaço de coordenadas da JANELA, não no espaço pós-zoom da página,
+  // mesmo motivo de zoom de página nunca quebrar clique num browser
+  // real). Custo real medido (conteúdo denso, JPEG qualidade 90): ~5×
+  // bytes por frame, não 9× — JPEG comprime o detalhe extra bem melhor
+  // que a contagem de pixels sugeriria.
+  function resize(id: string, w: number, h: number, _zoom = 1) {
     const entry = entries.get(id);
     if (!entry) return;
-    const effectiveZoom = Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, zoom));
-    const factor = effectiveZoom * entry.scaleFactor;
+    const factor = entry.scaleFactor * BROWSER_SUPERSAMPLE;
     entry.win.setContentSize(Math.max(1, Math.round(w * factor)), Math.max(1, Math.round(h * factor)));
   }
 
   /** Test-only (scripts/verify) — the real content-pixel size the
    * offscreen `BrowserWindow` is currently rasterizing at, straight from
-   * Electron itself. Used to prove `resize`'s zoom scaling actually
+   * Electron itself. Used to prove `resize`'s scaleFactor scaling actually
    * happened, the same "read the real instance, don't infer it" spirit
    * as `terminal-registry.ts`'s `getTerminalFontSize`. */
   function getContentSize(id: string): { w: number; h: number; scaleFactor: number } | null {
@@ -362,6 +395,50 @@ export function createBrowserRegistry(callbacks: {
     if (!entry) return null;
     const [w, h] = entry.win.getContentSize();
     return { w, h, scaleFactor: entry.scaleFactor };
+  }
+
+  /** Achado ao vivo (2026-09-02, pedido explícito do usuário: "não apenas
+   * monitor 4K" — resolução real também precisa reagir a TROCAR de
+   * monitor com a janela aberta, não só ao zoom do board). `entry.
+   * scaleFactor` (item 6 acima) era resolvido uma ÚNICA vez, em
+   * `create()` — arrastar a janela do app pra outro monitor com
+   * scaleFactor diferente nunca reavaliava nada, o navegador embutido
+   * continuava rasterizando na densidade do monitor ONDE FOI CRIADO, não
+   * do monitor onde está agora. `callbacks.getScaleFactor()` em si já é
+   * dinâmico (consulta `screen.getDisplayMatching(win.getBounds())` na
+   * hora) — só nunca era CHAMADO de novo. `main/index.ts` chama isto pra
+   * cada card vivo quando a janela principal se move (`win.on("moved")`)
+   * ou quando o SO reporta mudança de métricas de display (`screen.on(
+   * "display-metrics-changed")`) — devolve o novo valor só quando ele
+   * REALMENTE mudou (evita round-trip de IPC/resize à toa em todo micro-
+   * movimento de janela que não cruza monitor nenhum). */
+  function refreshScaleFactor(id: string): number | null {
+    const entry = entries.get(id);
+    if (!entry) return null;
+    const next = callbacks.getScaleFactor();
+    if (next === entry.scaleFactor) return null;
+    entry.scaleFactor = next;
+    return next;
+  }
+
+  /** Ids de todo browser card com uma `BrowserWindow` offscreen viva —
+   * usado por `refreshScaleFactor`'s caller (main/index.ts) pra saber
+   * quais cards revisitar num evento de troca de monitor, sem precisar
+   * de acesso direto ao Map interno. */
+  function liveIds(): string[] {
+    return [...entries.keys()];
+  }
+
+  /** Test-only (mesmo raciocínio de `testMakeEditable`) — grava
+   * `entry.scaleFactor` direto, sem consultar `callbacks.getScaleFactor()`
+   * de verdade. Simula só o VALOR que viria de um monitor diferente; o
+   * resto do caminho real (IPC pro renderer, `BrowserCard.tsx` re-
+   * disparando resize) roda sem nenhuma simulação — ver o handler
+   * `browser:test-force-scale-factor` (main/index.ts) pro porquê. */
+  function forceScaleFactor(id: string, scaleFactor: number) {
+    const entry = entries.get(id);
+    if (!entry) return;
+    entry.scaleFactor = scaleFactor;
   }
 
   /** Pauses/resumes actual compositing (`stopPainting`/`startPainting`),
@@ -933,6 +1010,9 @@ export function createBrowserRegistry(callbacks: {
     openDevTools,
     resize,
     getContentSize,
+    refreshScaleFactor,
+    liveIds,
+    forceScaleFactor,
     setVisible,
     setFocused,
     sendMouseEvent,

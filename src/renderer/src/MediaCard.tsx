@@ -44,6 +44,9 @@ export function MediaCard({
   onViewCommit,
   onConnectorStart,
   onSelectStart,
+  screenProjected,
+  panX,
+  panY,
 }: {
   rect: Rect;
   zoom: number;
@@ -70,6 +73,15 @@ export function MediaCard({
   onViewCommit: (view: MediaView) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
+   * straight through, same pattern the other migrated kinds use. The
+   * internal `view: {zoom,panX,panY}` transform (image/PDF pan-zoom-
+   * rotate) is untouched by this — it already divides mouse delta by
+   * `zoom` (the CANVAS zoom, unrelated to screen projection), see
+   * `onBodyPointerDown` below and §0.5 ponto 2 do plano. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   const filename = assetPath.split(/[\\/]/).pop() ?? assetPath;
   // `stellar-asset://asset/<boardId>/<filename>` (main/index.ts's
@@ -195,6 +207,9 @@ export function MediaCard({
         onCloseAnimationEnd={onCloseAnimationEnd}
         onConnectorStart={onConnectorStart}
         onSelectStart={onSelectStart}
+        screenProjected={screenProjected}
+        panX={panX}
+        panY={panY}
         // Resize proporcional (item 57.9) — `rect.w/rect.h` NA HORA do
         // resize é sempre a razão real da mídia (só o próprio resize
         // proporcional deste prop pode mudar w/h de um card de mídia,

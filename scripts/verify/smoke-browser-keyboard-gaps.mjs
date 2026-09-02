@@ -17,13 +17,18 @@
 // `browser:test-make-editable` (guardado por `!app.isPackaged`, mesmo
 // padrão de `chat:test-simulate-tool`) pra não depender de markup de uma
 // página real de terceiro (rede = instável nesse harness).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
 
 const CDP_PORT = 9445;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-keyboard-gaps", import.meta.url).pathname;
+// Achado ao vivo (2026-09-02): reaproveitar sempre o mesmo diretório entre
+// execuções manuais repetidas deste arquivo específico (histórico de
+// depuração desta sessão) deixou um estado de board obsoleto que fazia
+// `bootIntoFreshSession` divergir do resto da suíte -- sufixo próprio pra
+// nunca colidir com uma execução anterior potencialmente suja.
+const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-keyboard-gaps-v2", import.meta.url).pathname;
 
 async function centerOf(page, selector) {
-  let res = JSON.parse(
+  return JSON.parse(
     await page.evalJs(`
       (() => {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -33,49 +38,25 @@ async function centerOf(page, selector) {
       })()
     `),
   );
-  if (!res && selector.includes(".rail-btn[title=")) {
-    const titleMatch = selector.match(/title=["']([^"']+)["']/);
-    if (titleMatch) {
-      const title = titleMatch[1];
-      const addBtn = JSON.parse(
-        await page.evalJs(`
-          (() => {
-            const b = document.querySelector('.rail-btn[title="Adicionar card"]');
-            if (!b) return JSON.stringify(null);
-            const r = b.getBoundingClientRect();
-            return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-          })()
-        `),
-      );
-      if (addBtn) {
-        await page.click(addBtn.x, addBtn.y);
-        await new Promise((r) => setTimeout(r, 250));
-        res = JSON.parse(
-          await page.evalJs(`
-            (() => {
-              const el = document.querySelector(\`.popover-row[title="${title}"]\`);
-              if (!el) return JSON.stringify(null);
-              const r = el.getBoundingClientRect();
-              return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-            })()
-          `),
-        );
-      }
-    }
-  }
-  return res;
 }
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 try {
   const page = await connectPage(CDP_PORT);
-  await new Promise((r) => setTimeout(r, 1000));
+  await new Promise((r) => setTimeout(r, 1500));
   await bootIntoFreshSession(page, "Teclado Browser Teste");
-  await new Promise((r) => setTimeout(r, 600));
+  await new Promise((r) => setTimeout(r, 1000));
 
-  const browserBtn = await centerOf(page, '.rail-btn[title="Novo navegador"]');
-  await page.click(browserBtn.x, browserBtn.y);
+  // Achado ao vivo (2026-09-02): este teste nunca rodava de verdade desde
+  // o reorg da Rail ("menu único de Ferramentas/Cards", ANTES desta
+  // worktree existir) — `.rail-btn[title="Novo navegador"]` não existe
+  // mais como botão direto, o fallback pro popover aqui em cima também
+  // nunca disparava certo, e o teste crashava logo no primeiro passo,
+  // achado enquanto investigava o bug de "copiar triplica" reportado
+  // pelo usuário. `spawnCard` (cdp-client.mjs) é o helper compartilhado
+  // que já lida com as duas formas (botão direto ou popover).
+  await spawnCard(page, "browser");
   await new Promise((r) => setTimeout(r, 800));
 
   const cardId = JSON.parse(
@@ -133,6 +114,18 @@ try {
 
   const afterPaste = await page.evalJs(`window.browser.getPageText(${JSON.stringify(cardId)})`);
   check("real OS clipboard content landed in the offscreen page after Ctrl+V (not just a synthetic keydown)", afterPaste.ok && afterPaste.text.includes(pasteText), true);
+  // Achado ao vivo (2026-09-02) — o mesmo bug de duplicação (ver check de
+  // Ctrl+C abaixo) também se manifestava aqui, na origem: um Ctrl+V só
+  // inseria o texto do clipboard DUAS vezes na página (`window.browser.
+  // paste(id)` E o keyDown cru encaminhado disparando o comando nativo de
+  // colar do próprio Chromium pro mesmo atalho). `.includes()` sozinho
+  // não pegava isso.
+  const pasteOccurrences = afterPaste.ok ? afterPaste.text.split(pasteText).length - 1 : -1;
+  check(
+    `Ctrl+V não duplica/triplica o texto inserido (marcador apareceu ${pasteOccurrences}x na página)`,
+    pasteOccurrences,
+    1,
+  );
 
   // Select-all + copy, then clear the OS clipboard and verify Ctrl+C put it back.
   await page.send("Input.dispatchKeyEvent", { type: "rawKeyDown", modifiers: 2, windowsVirtualKeyCode: 65, key: "a", code: "KeyA" });
@@ -145,6 +138,20 @@ try {
   await new Promise((r) => setTimeout(r, 500));
   const clipboardAfterCopy = await page.evalJs(`navigator.clipboard.readText()`);
   check("Ctrl+C on the offscreen page's selection wrote the real page content back to the OS clipboard", clipboardAfterCopy.includes(pasteText), true);
+  // Achado ao vivo (2026-09-02) — bug reportado pelo usuário: "o ato de
+  // copiar, copia 3 vezes a mesma coisa". `.includes()` sozinho não
+  // pegaria isso (uma string duplicada ainda CONTÉM o original) — conta
+  // quantas vezes o marcador aparece no clipboard. `about:blank`'s body
+  // inteiro (contentEditable via `testMakeEditable`) vira parte da
+  // seleção do Ctrl+A junto com o resto da página real navegada, então
+  // não dá pra comparar o clipboard inteiro por igualdade exata — só que
+  // o marcador em si não se repita.
+  const occurrences = clipboardAfterCopy.split(pasteText).length - 1;
+  check(
+    `Ctrl+C não duplica/triplica o conteúdo colado (marcador apareceu ${occurrences}x no clipboard, real: ${JSON.stringify(clipboardAfterCopy).slice(0, 160)})`,
+    occurrences,
+    1,
+  );
 
   // ---- 3. IME composition: real CompositionEvent dispatched on the DOM ----
   const composed = "日本語テスト";

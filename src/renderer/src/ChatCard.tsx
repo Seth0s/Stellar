@@ -227,6 +227,9 @@ function ChatCardInner({
   onSelectStart,
   onOpenChatSession,
   onNewSession,
+  screenProjected,
+  panX,
+  panY,
 }: {
   id: string;
   rect: Rect;
@@ -263,6 +266,11 @@ function ChatCardInner({
    * reseta ESTE card pra uma sessão nova vazia (mesmo provider), sem
    * abrir um segundo card no board. */
   onNewSession: (cardId: string, provider: ChatProvider) => void;
+  /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
+   * straight through, same pattern the other migrated kinds use. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   // Pre-release audit P1 — same render-count counter as TerminalCard.tsx
   // (see its doc comment) — lets the verify harness prove `React.memo`
@@ -588,6 +596,9 @@ function ChatCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      screenProjected={screenProjected}
+      panX={panX}
+      panY={panY}
       interactionMode={interactionMode}
       selected={selected}
       accent="var(--accent-chat)"
