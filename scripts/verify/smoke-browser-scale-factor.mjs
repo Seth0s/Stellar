@@ -95,8 +95,20 @@ try {
       return true;
     })()
   `);
-  await new Promise((r) => setTimeout(r, 500));
-  const frameSize = await page.evalJs(`window.__lastBrowserFrameSize`);
+  // Poll em vez de espera fixa (achado ao vivo, 2026-09-02, adicionando o
+  // supersample fixo 3× — ver browser-registry.ts's BROWSER_SUPERSAMPLE):
+  // o primeiro paint real, mesmo de about:blank, ficou mensuravelmente mais
+  // lento com 9× mais pixels de raster/encode por trás (visto na prática:
+  // ~400ms, contra a folga confortável que uma espera fixa de 500ms tinha
+  // antes do supersample) — poll de 3s dá margem real sem travar o teste
+  // se algo realmente quebrar.
+  let frameSize = null;
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    frameSize = await page.evalJs(`window.__lastBrowserFrameSize`);
+    if (frameSize) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
   check("um frame browser:frame real chegou pro card", frameSize !== null, true);
 
   const expectedW = Math.round(contentSize.w * contentSize.scaleFactor);

@@ -57,6 +57,27 @@ type Entry = {
 const FOCUSED_FRAME_RATE = 60;
 const UNFOCUSED_FRAME_RATE = 8;
 
+// Supersample fixo, pedido explícito do usuário (2026-09-02: "mandar
+// renderizar o triplo da resolução e aumentar para escala 1:1") — ver o
+// doc comment de `resize()` abaixo pro porquê de precisar do PAR
+// `setContentSize`+`setZoomFactor` (não `setContentSize` sozinho) pra isto
+// ser supersample de verdade, e não só a página acreditando que tem um
+// viewport maior. Verificado ao vivo, 3 scripts de diagnóstico isolados
+// antes de embarcar: (1) `setContentSize(N×)` sozinho deixa o conteúdo
+// lógico da página proporcionalmente MENOR na tela (mais página cabe no
+// card, texto ilegível a 3×) — não é supersample; (2) `setContentSize(N×)`
+// + `setZoomFactor(N)` juntos mantêm a MESMA área lógica visível (mesmo
+// "zoom" aparente do conteúdo) com N²× mais pixels reais de raster por
+// trás — supersample de verdade, texto visivelmente mais nítido no
+// screenshot comparado lado a lado; (3) clique continua preciso com o
+// combo ativo (`sendInputEvent` opera no espaço de coordenadas da janela,
+// não no espaço pós-zoom da página — mesmo raciocínio de por que zoom de
+// página nunca quebra clique num browser real). Custo real medido numa
+// página de conteúdo denso (texto real, não tela em branco): ~5× bytes
+// por frame em JPEG qualidade 90 (não 9× — JPEG comprime o detalhe extra
+// bem melhor que pixels brutos sugeririam).
+const BROWSER_SUPERSAMPLE = 3;
+
 /**
  * Ported from CentralByte's browser.rs::normalize_url — rejects schemes that
  * would let a "navigate to a URL" request turn into local code execution or
@@ -189,6 +210,11 @@ export function createBrowserRegistry(callbacks: {
     // the user just asked for — starts at the focused rate; `setFocused`
     // below lowers it once something else gets raised on top.
     wc.setFrameRate(FOCUSED_FRAME_RATE);
+    // Supersample fixo (ver doc comment de BROWSER_SUPERSAMPLE/`resize()`)
+    // — setado uma vez aqui e nunca mudado depois; `resize()` multiplica o
+    // content size pelo MESMO fator, o que cancela o "mais página cabe no
+    // card" que `setContentSize` sozinho introduziria.
+    wc.setZoomFactor(BROWSER_SUPERSAMPLE);
 
     wc.on("paint", (_event, _dirty, image) => {
       const entry = entries.get(id);
@@ -320,29 +346,42 @@ export function createBrowserRegistry(callbacks: {
   //
   // Item 6 (Trilha B, docs/SCREEN_SPACE_PROJECTION_PLAN.md) — multiplica
   // por `entry.scaleFactor`. IMPORTANTE, achado ao vivo testando isto
-  // (2026-09-01, 3 scripts de diagnóstico isolados): isto NÃO é
-  // supersampling HiDPI de verdade. Confirmado que `webPreferences.
-  // offscreen.deviceScaleFactor` é um no-op pro raster real nesta versão/
-  // plataforma de Electron (image.getSize() idêntico byte a byte
-  // independente do valor) — e o mesmo vale pra `webContents.
-  // setZoomFactor()` (o raster continua preso ao content size mesmo com
-  // `getZoomFactor()` reportando certo o novo valor) — e pra flag global
-  // do Chromium `--force-device-scale-factor` (o `devicePixelRatio` da
-  // própria página muda, o raster não). `setContentSize` é a ÚNICA
-  // alavanca que muda a resolução real do paint buffer nesta build, e é o
-  // mesmo número que o layout CSS da página embutida usa como seu próprio
-  // viewport — não existe um sinal independente de "renderiza N× mais
-  // denso, mesmo tamanho lógico". Então esta multiplicação genuinamente
-  // faz a página embutida ACREDITAR que seu viewport é scaleFactor× maior
-  // do que o card mostra visualmente: detalhe mais nítido por pixel
-  // visível, mas proporcionalmente MAIS da página cabe no mesmo card na
-  // tela (uma troca real, não um ganho puro — verificado ao vivo com o
-  // usuário via uma página de comparação real antes de embarcar isto, não
-  // assumido).
+  // (2026-09-01, 3 scripts de diagnóstico isolados): `setContentSize`
+  // SOZINHO não é supersampling HiDPI de verdade. Confirmado que
+  // `webPreferences.offscreen.deviceScaleFactor` é um no-op pro raster
+  // real nesta versão/plataforma de Electron (image.getSize() idêntico
+  // byte a byte independente do valor) — e pra flag global do Chromium
+  // `--force-device-scale-factor` (o `devicePixelRatio` da própria página
+  // muda, o raster não). `setContentSize` é a alavanca que muda a
+  // resolução real do paint buffer nesta build, mas é TAMBÉM o mesmo
+  // número que o layout CSS da página embutida usa como seu próprio
+  // viewport — SOZINHO, ele faz a página embutida ACREDITAR que seu
+  // viewport é N× maior do que o card mostra visualmente: detalhe mais
+  // nítido por pixel, mas proporcionalmente MAIS da página cabe no mesmo
+  // card na tela (conteúdo lógico fica menor, não só mais nítido).
+  //
+  // Supersample fixo (BROWSER_SUPERSAMPLE, pedido explícito do usuário,
+  // 2026-09-02: "mandar renderizar o triplo da resolução e aumentar para
+  // escala 1:1") — fecha exatamente essa lacuna. `webContents.
+  // setZoomFactor()` sozinho já era sabido no-op pro TAMANHO do paint
+  // buffer (`getZoomFactor()` reporta certo, o buffer não muda) — mas
+  // COMBINADO com um `setContentSize` já maior, o zoom da página faz o
+  // conteúdo renderizar N× maior DENTRO desse viewport N× maior,
+  // cancelando o "mais página cabe no card": a mesma área lógica fica
+  // visível de antes, só que com N²× mais pixels reais de raster por
+  // trás — supersample de verdade. Verificado ao vivo com screenshot lado
+  // a lado (mesma janela, mesmo card, mesmo crop de tela): texto
+  // visivelmente mais nítido, MESMA quantidade de conteúdo visível — e
+  // clique continua preciso com o zoom ativo (`sendInputEvent` opera no
+  // espaço de coordenadas da JANELA, não no espaço pós-zoom da página,
+  // mesmo motivo de zoom de página nunca quebrar clique num browser
+  // real). Custo real medido (conteúdo denso, JPEG qualidade 90): ~5×
+  // bytes por frame, não 9× — JPEG comprime o detalhe extra bem melhor
+  // que a contagem de pixels sugeriria.
   function resize(id: string, w: number, h: number, _zoom = 1) {
     const entry = entries.get(id);
     if (!entry) return;
-    const factor = entry.scaleFactor;
+    const factor = entry.scaleFactor * BROWSER_SUPERSAMPLE;
     entry.win.setContentSize(Math.max(1, Math.round(w * factor)), Math.max(1, Math.round(h * factor)));
   }
 
