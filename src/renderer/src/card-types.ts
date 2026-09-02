@@ -22,7 +22,13 @@ export type TerminalCardData = BaseCard & {
 
 export type FilesCardData = BaseCard & { kind: "files"; root: string };
 export type ChangesCardData = BaseCard & { kind: "changes"; root: string };
-export type StickyCardData = BaseCard & { kind: "sticky"; content: string; color: string };
+/** `mode` (2026-09-02) — controlável via MCP (`set_sticky_mode`), mesmo
+ * padrão de `color` (`set_sticky_color`): persistido, não estado de UI
+ * local, pra um agente conseguir alternar a nota sem depender de clique
+ * humano. Reaproveita a coluna genérica `model` do row (App.tsx's
+ * toRow/fromRow), livre pra este kind — mesmo truque de `content`→`cwd`
+ * e `color`→`provider` logo abaixo, sem migração de schema. */
+export type StickyCardData = BaseCard & { kind: "sticky"; content: string; color: string; mode: "edit" | "preview" };
 export type BrowserCardData = BaseCard & { kind: "browser"; url: string; ownerCardId: string | null };
 /** No meaningful state to persist — which window/screen it shows comes
  * from a live OS picker at open time (DESIGN-BACKLOG.md item 3, phase 1),

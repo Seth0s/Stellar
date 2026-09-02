@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import * as z from "zod";
-import type { BusRequest, BusResponse } from "./message-bus";
+import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface,
@@ -129,7 +129,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "write_sticky",
       {
         description:
-          "Write a sticky note's text — no human approval needed, this is board content, not a disk/process side effect. Refused while a human has that note focused for editing, so it can never overwrite what someone is typing; retry after. Returns the note's resulting content.",
+          "Write a sticky note's text — no human approval needed, this is board content, not a disk/process side effect. Refused while a human has that note focused for editing, so it can never overwrite what someone is typing; retry after. Returns the note's resulting content. A connector automatically links your own card to this note (no duplicate on repeated writes to the same note).",
         inputSchema: {
           target: z.string().describe("The sticky card's id or label (see list_cards)"),
           content: z.string().describe("The text to write"),
@@ -137,10 +137,60 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(["replace", "append"])
             .optional()
             .describe("replace (default) swaps the whole note; append adds to the end — prefer append for a running log so a human's own lines survive"),
+          callerCardId: z
+            .string()
+            .optional()
+            .describe(
+              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to draw the auto-connector to this note.",
+            ),
         },
       },
-      async ({ target, content, mode }) => {
-        const res = await opts.handleRequest({ cmd: "write_sticky", target, content, mode });
+      async ({ target, content, mode, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "write_sticky", target, content, mode, requesterId: caller(callerCardId) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "set_sticky_color",
+      {
+        description:
+          "Set a sticky note's color, which doubles as its category on the board (yellow = note, green = done, blue = in progress, pink = bug) — see list_cards. No human approval needed, purely visual board state. A connector automatically links your own card to this note.",
+        inputSchema: {
+          target: z.string().describe("The sticky card's id or label (see list_cards)"),
+          color: z.enum(STICKY_COLORS).describe("yellow = note, green = done, blue = in progress, pink = bug"),
+          callerCardId: z
+            .string()
+            .optional()
+            .describe(
+              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to draw the auto-connector to this note.",
+            ),
+        },
+      },
+      async ({ target, color, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "set_sticky_color", target, color, requesterId: caller(callerCardId) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "set_sticky_mode",
+      {
+        description:
+          "Switch a sticky note between its rendered Markdown preview and raw edit view. Switching to \"edit\" is always allowed; switching to \"preview\" is refused while a human has the note focused right now (same guard as write_sticky) so it never yanks the view out from under someone mid-edit.",
+        inputSchema: {
+          target: z.string().describe("The sticky card's id or label (see list_cards)"),
+          mode: z.enum(["edit", "preview"]),
+          callerCardId: z
+            .string()
+            .optional()
+            .describe(
+              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to draw the auto-connector to this note.",
+            ),
+        },
+      },
+      async ({ target, mode, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "set_sticky_mode", target, mode, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

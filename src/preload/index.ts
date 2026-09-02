@@ -158,6 +158,17 @@ const store = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke("store:connectors:delete", id),
     deleteForCard: (cardId: string): Promise<void> =>
       ipcRenderer.invoke("store:connectors:delete-for-card", cardId),
+    /** Regra geral de auto-conector (2026-09-02) — push fire-and-forget
+     * do main (message-bus.ts's `onAutoConnect`) sempre que uma mutação
+     * MCP cross-card (hoje só `send_to_card`, que nunca passa pelo
+     * renderer por outro motivo) identifica quem a pediu. App.tsx's
+     * `autoConnect` decide sozinho se já existe conector entre o par. */
+    onAutoConnect: (cb: (fromCardId: string, toCardId: string, kind: string) => void) => {
+      const listener = (_e: unknown, fromCardId: string, toCardId: string, kind: string) =>
+        cb(fromCardId, toCardId, kind);
+      ipcRenderer.on("connector:auto", listener);
+      return () => ipcRenderer.removeListener("connector:auto", listener);
+    },
   },
   boards: {
     list: (): Promise<BoardRow[]> => ipcRenderer.invoke("store:boards:list"),
@@ -488,8 +499,16 @@ const readCard = {
   reply: (requestId: string, text: string | null) => ipcRenderer.send("readcard:reply", requestId, text),
 };
 
-export type StickyOp = { op: "read" } | { op: "write"; content: string; mode: "replace" | "append" };
-export type StickyResult = { ok: true; content: string } | { ok: false; error: string };
+export type StickyOp =
+  | { op: "read" }
+  | { op: "write"; content: string; mode: "replace" | "append"; requesterId?: string }
+  | { op: "set_color"; color: string; requesterId?: string }
+  | { op: "set_mode"; mode: "edit" | "preview"; requesterId?: string };
+export type StickyResult =
+  | { ok: true; content: string }
+  | { ok: true; color: string }
+  | { ok: true; mode: "edit" | "preview" }
+  | { ok: false; error: string };
 
 /** `read_sticky`/`write_sticky` (achado ao vivo 2026-09-01) — mesma forma
  * de request/reply do `readCard` acima. O renderer é quem responde porque
