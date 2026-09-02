@@ -171,65 +171,6 @@
   opacity: 0.55;
 }
 
-/* Transparência + blur (2026-09-02) — trade-off explícito do artifact,
-   opt-in por card, padrão desligado.
-   Achado ao vivo (2026-09-02, screenshot real do usuário): `backdrop-
-   filter` + `box-shadow` no MESMO elemento com `border-radius`
-   (`.terminal-card`, que também carrega o anel de acento — ver a regra
-   logo acima do grupo compartilhado) vazava reto nos 4 cantos, ignorando
-   o arredondado — só com a transparência ligada, box-shadow sozinho
-   (caso opaco) sempre renderizou limpo. Bug conhecido de composição
-   dessa combinação em alguns caminhos de GPU/driver (Mesa/software,
-   confirmado que esta máquina usa: MESA-LOADER/ANGLE já apareceram
-   noutros achados desta sessão). Fix: `background`+`backdrop-filter`
-   NUNCA vivem no mesmo elemento que o `box-shadow` — movidos pra
-   `.card-clip` (o wrapper INTERNO que já tem `overflow: hidden;
-   border-radius: inherit` de verdade, não dependendo do próprio
-   recorte arredondado do `backdrop-filter`) — `overflow: hidden` é um
-   clip universal e confiável, não sujeito a essa combinação de bug;
-   `.terminal-card`'s próprio box-shadow (anel + sombra) fica livre do
-   backdrop-filter e nunca mais vaza.
-   Segundo achado, ao restartar o servidor pra reconferir (2026-09-02):
-   o fix acima corrigiu o vazamento do canto mas quebrou a própria
-   transparência — `.terminal-card` (o PAI de `.card-clip`) continua
-   com `background: var(--surface)` opaco, sem condição nenhuma, vindo
-   do grupo base compartilhado (regra `.terminal-card, .files-card, ...`
-   lá em cima). Como esse fundo opaco é pintado diretamente atrás de
-   `.card-clip` na mesma pilha, o `backdrop-filter` do filho borrava o
-   PRÓPRIO fundo sólido do card, não o board por trás — efeito vidro
-   sumiu de vez, mesmo com o canto certo. `.terminal-card.translucent`
-   agora zera o próprio fundo (`background: transparent`) também, pra
-   deixar `.card-clip` enxergar de verdade o que está atrás do card
-   inteiro. */
-.terminal-card-translucent-btn.on {
-  color: var(--accent, var(--foam));
-}
-.terminal-card-translucent-btn:not(.on) {
-  opacity: 0.55;
-}
-.terminal-card.translucent {
-  background: transparent;
-}
-.terminal-card.translucent .card-clip {
-  background: var(--surface-translucent);
-  backdrop-filter: blur(var(--blur-glass));
-  -webkit-backdrop-filter: blur(var(--blur-glass));
-}
-.terminal-card.translucent .card-head,
-.terminal-card.translucent .card-foot,
-.terminal-card.translucent .terminal-card-body {
-  background: transparent;
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  /* Sem suporte real a backdrop-filter nesta plataforma/GPU — melhor um
-     card translúcido sem blur (ainda funcional, só sem o efeito vidro)
-     do que um card ilegível com fundo de tudo por trás sem nenhum
-     desfoque. */
-  .terminal-card.translucent .card-clip {
-    background: var(--surface);
-  }
-}
-
 /* Ícone real do provider no header (2026-09-02) — ver o comentário de
    PROVIDER_GLYPH em TerminalCard.tsx. Mesmo glyph do PureNerdFont já
    carregado globalmente (main.tsx) — nada novo pra carregar aqui. Efeito
