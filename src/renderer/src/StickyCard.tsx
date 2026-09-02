@@ -299,7 +299,7 @@ function StickyCardInner({
       {editing ? (
         <textarea
           ref={textareaRef}
-          className="sticky-textarea"
+          className="sticky-textarea thin-scroll"
           data-card-id={cardId}
           style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
           value={content}

@@ -110,8 +110,8 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check(
     "o clique real focou o textarea (pré-condição da checagem seguinte)",
-    JSON.parse(await page.evalJs(`JSON.stringify(document.activeElement?.className ?? '')`)),
-    "sticky-textarea",
+    JSON.parse(await page.evalJs(`JSON.stringify(document.activeElement?.classList.contains('sticky-textarea') ?? false)`)),
+    true,
   );
 
   const refused = await toolJson("write_sticky", { target: stickyId, content: "APAGARIA TUDO" });

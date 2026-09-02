@@ -6,6 +6,27 @@ import { watchForSession } from "./session-watch";
 const COALESCE_MS = 16;
 const COALESCE_MAX = 64 * 1024;
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/g;
+// Achado ao vivo (2026-09-02) — chip de URL mostrando "127.0.0.1:5175)":
+// saída real de log costuma envolver a URL em parênteses ("(http://…)"),
+// e `URL_PATTERN` não para em `)`/`]`/`}` (não dá pra excluir de cara —
+// uma URL legítima pode ter parênteses BALANCEADOS dentro, ex. artigos da
+// Wikipedia). Corrigido removendo só fechamento(s) no FIM do match que não
+// tem abertura correspondente ANTES dele no mesmo match — cobre o caso
+// relatado (parêntese só de embrulho, nenhum aberto antes) sem truncar um
+// caso balanceado de verdade.
+const TRAILING_UNBALANCED_CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+function trimTrailingUnbalancedClosers(url: string): string {
+  while (url.length > 0) {
+    const last = url[url.length - 1];
+    const opener = TRAILING_UNBALANCED_CLOSERS[last];
+    if (!opener) break;
+    const closers = url.split(last).length - 1;
+    const openers = url.split(opener).length - 1;
+    if (openers >= closers) break;
+    url = url.slice(0, -1);
+  }
+  return url;
+}
 // Pre-release audit B5 — bounds how much of a flush's tail gets carried
 // forward as a possibly-unterminated URL (see `flush`'s doc comment
 // below). Generous for any realistic URL, but never unbounded.
@@ -128,7 +149,8 @@ export function createPtyRegistry(registryOpts: {
     // its own, just surfaces what the agent already printed as a chip a
     // human can click.
     const cleaned = e.urlCarry + data.replace(ANSI_PATTERN, "");
-    for (const url of cleaned.match(URL_PATTERN) ?? []) {
+    for (const rawUrl of cleaned.match(URL_PATTERN) ?? []) {
+      const url = trimTrailingUnbalancedClosers(rawUrl);
       if (!e.seenUrls.has(url)) {
         e.seenUrls.add(url);
         registryOpts.onUrlSeen(id, url);
