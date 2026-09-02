@@ -133,7 +133,19 @@ try {
   // Simula trocar pra um monitor com scaleFactor bem diferente do atual
   // (nunca igual ao real, senão o `refreshScaleFactor` real acharia "sem
   // mudança" e não dispararia nada — não provaria a fiação).
-  const fakeScaleFactor = before.scaleFactor === 2 ? 1 : 2;
+  //
+  // Achado ao vivo (density cap, mesma data): `resize()` agora aplica
+  // `factor = min(scaleFactor × BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY)`.
+  // Com BROWSER_MAX_DENSITY=2 e BROWSER_SUPERSAMPLE=3, o teto DOMINA (e
+  // fica idêntico) pra qualquer scaleFactor >= 2/3 — inclusive o par antigo
+  // deste teste (1 → 2, os dois capados em 2, content size não muda nada).
+  // Por isso o valor simulado abaixo tem que ficar ABAIXO desse limiar,
+  // senão o "frame novo de tamanho diferente" nunca chega e o poll abaixo
+  // dá timeout.
+  const BROWSER_SUPERSAMPLE = 3;
+  const BROWSER_MAX_DENSITY = 2;
+  const capThreshold = BROWSER_MAX_DENSITY / BROWSER_SUPERSAMPLE; // ~0.667
+  const fakeScaleFactor = before.scaleFactor < capThreshold ? capThreshold + 0.5 : capThreshold - 0.167; // 0.5
   // Achado ao vivo escrevendo este teste: registrar o listener de frame
   // ANTES de forçar (não depois) — e ler `entry.scaleFactor` imediatamente
   // depois do force, sem esperar — porque a própria janela do app dispara
@@ -213,19 +225,26 @@ try {
   }
   check("um frame REAL novo (tamanho DIFERENTE do 1x original) chegou depois da troca simulada de monitor", frameSize !== null, true);
 
-  // Comparado contra `before.w/h` (o tamanho de mundo do card, que NÃO
-  // muda com a troca de monitor) × `fakeScaleFactor` (a constante do
-  // teste) — nunca contra uma releitura de `entry.scaleFactor` que pode
-  // já ter sido resincronizada de volta pro valor real da máquina.
-  const expectedW = Math.round(before.w * fakeScaleFactor);
-  const expectedH = Math.round(before.h * fakeScaleFactor);
+  // `before.w/h` já reflete o factor CAPADO do estado inicial (getContentSize
+  // devolve o content size real pós-`resize()`, não o tamanho de mundo bruto)
+  // — recupera o tamanho de mundo dividindo pelo factor capado inicial, então
+  // reaplica o factor capado do valor SIMULADO. Nunca contra uma releitura de
+  // `entry.scaleFactor` que pode já ter sido resincronizada de volta pro
+  // valor real da máquina.
+  const factorBefore = Math.min(before.scaleFactor * BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY);
+  const factorAfter = Math.min(fakeScaleFactor * BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY);
+  check("factor capado simulado difere do factor capado inicial (senão o teste não prova nada)", factorAfter !== factorBefore, true);
+  const worldW = before.w / factorBefore;
+  const worldH = before.h / factorBefore;
+  const expectedW = Math.round(worldW * factorAfter);
+  const expectedH = Math.round(worldH * factorAfter);
   check(
-    `frame real pós-troca tem largura em pixels == contentSize.w × scaleFactor SIMULADO (esperado ${expectedW}, real ${frameSize?.width}) — não travado no valor antigo`,
+    `frame real pós-troca tem largura em pixels == tamanho de mundo × factor CAPADO simulado (esperado ${expectedW}, real ${frameSize?.width}) — não travado no valor antigo`,
     frameSize?.width,
     expectedW,
   );
   check(
-    `frame real pós-troca tem altura em pixels == contentSize.h × scaleFactor SIMULADO (esperado ${expectedH}, real ${frameSize?.height})`,
+    `frame real pós-troca tem altura em pixels == tamanho de mundo × factor CAPADO simulado (esperado ${expectedH}, real ${frameSize?.height})`,
     frameSize?.height,
     expectedH,
   );

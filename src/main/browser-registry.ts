@@ -75,8 +75,49 @@ const UNFOCUSED_FRAME_RATE = 8;
 // página nunca quebra clique num browser real). Custo real medido numa
 // página de conteúdo denso (texto real, não tela em branco): ~5× bytes
 // por frame em JPEG qualidade 90 (não 9× — JPEG comprime o detalhe extra
-// bem melhor que pixels brutos sugeririam).
+// bem melhor que pixels brutos sugeririam) — MAS esse número foi medido só
+// com `scaleFactor=1` (a máquina de dev não tem monitor HiDPI real).
+//
+// Dois bugs reais achados ao vivo pelo usuário testando num monitor 4K de
+// verdade (2026-09-02), NENHUM pego pelos testes porque todos rodam em
+// scaleFactor=1 (onde os dois degeneram e viram invisíveis):
+//
+// 1. "Tudo muito pequeno" — `setZoomFactor` era setado UMA VEZ em
+//    `create()`, sempre com o valor fixo `BROWSER_SUPERSAMPLE`, mas o
+//    `factor` real usado em `setContentSize` (abaixo) é
+//    `scaleFactor × BROWSER_SUPERSAMPLE`. Em scaleFactor=1 os dois batem
+//    por coincidência (3 == 1×3); em qualquer monitor real com
+//    scaleFactor > 1 (comum em 4K) o zoom passa a compensar MENOS do que
+//    o content size cresceu — sobra um fator `scaleFactor` de "mais
+//    página cabe no card" não cancelado, o MESMO bug que o combo
+//    content-size+zoom foi feito pra eliminar, só que vazando de novo.
+//    Fix: `setZoomFactor` agora é recalculado e reaplicado em TODA
+//    chamada de `resize()` (que já roda a cada resize real de rect e a
+//    cada troca de `scaleFactor`/monitor — `refreshScaleFactor`), sempre
+//    com o MESMO fator aplicado ao content size, nunca uma constante solta.
+//
+// 2. "Travar" — o custo real de raster escala com o QUADRADO do fator
+//    total (`scaleFactor × BROWSER_SUPERSAMPLE`)². Num monitor
+//    scaleFactor=2 isso já é 6× de densidade — 36× a contagem de pixels
+//    da base, 4× mais pesado que os 9× medidos em scaleFactor=1. Um
+//    monitor HiDPI já ganha nitidez real só do `scaleFactor` (Item 6);
+//    empilhar o supersample fixo por cima sem limite é onde o custo
+//    explode sem ganho proporcional. Fix: `BROWSER_MAX_DENSITY` — teto no
+//    fator TOTAL (não só no supersample), então quanto maior o
+//    `scaleFactor` do monitor, menos supersample extra é empilhado em
+//    cima (em vez de multiplicar sem parar). `2` é o primeiro candidato
+//    real pra testar ao vivo num monitor 4K de verdade — não o "ponto
+//    doce" final ainda (investigação em rodadas: 4K primeiro, depois
+//    telas maiores, depois 1080p, cada uma com seu próprio teto ideal).
+//    Medido num script de diagnóstico descartável antes de escolher este
+//    valor: com o teto ativo, o custo (bytes/frame, latência) fica
+//    IDÊNTICO pra qualquer `scaleFactor` de 1 a 2 — o teto absorve toda a
+//    variação do monitor, exatamente o comportamento pretendido. `2`
+//    entrega ~323KB/frame (JPEG qualidade 90) contra ~572KB do teto
+//    antigo de `3` — bem mais leve, ainda com ganho real de nitidez sobre
+//    a densidade pura do Item 6 (sem supersample nenhum).
 const BROWSER_SUPERSAMPLE = 3;
+const BROWSER_MAX_DENSITY = 2;
 
 /**
  * Ported from CentralByte's browser.rs::normalize_url — rejects schemes that
@@ -211,10 +252,11 @@ export function createBrowserRegistry(callbacks: {
     // below lowers it once something else gets raised on top.
     wc.setFrameRate(FOCUSED_FRAME_RATE);
     // Supersample fixo (ver doc comment de BROWSER_SUPERSAMPLE/`resize()`)
-    // — setado uma vez aqui e nunca mudado depois; `resize()` multiplica o
-    // content size pelo MESMO fator, o que cancela o "mais página cabe no
-    // card" que `setContentSize` sozinho introduziria.
-    wc.setZoomFactor(BROWSER_SUPERSAMPLE);
+    // — NÃO setado aqui (achado ao vivo: setar uma constante fixa uma
+    // única vez, sem reconsiderar o `scaleFactor` real, é exatamente o bug
+    // 1 documentado acima). `resize()` recalcula e reaplica `setZoomFactor`
+    // toda vez, incluindo na primeira chamada real (disparada pelo
+    // primeiro resize do renderer logo após `create()` resolver).
 
     wc.on("paint", (_event, _dirty, image) => {
       const entry = entries.get(id);
@@ -377,11 +419,19 @@ export function createBrowserRegistry(callbacks: {
   // mesmo motivo de zoom de página nunca quebrar clique num browser
   // real). Custo real medido (conteúdo denso, JPEG qualidade 90): ~5×
   // bytes por frame, não 9× — JPEG comprime o detalhe extra bem melhor
-  // que a contagem de pixels sugeriria.
+  // que a contagem de pixels sugeriria (medido só em scaleFactor=1 — ver
+  // os dois achados ao vivo/fixes no doc comment de BROWSER_SUPERSAMPLE/
+  // BROWSER_MAX_DENSITY acima pro que mudou desde então).
   function resize(id: string, w: number, h: number, _zoom = 1) {
     const entry = entries.get(id);
     if (!entry) return;
-    const factor = entry.scaleFactor * BROWSER_SUPERSAMPLE;
+    // `factor` é o fator TOTAL de densidade — content size E zoom da
+    // página são sempre o MESMO número (nunca duas fontes de verdade
+    // separadas, achado ao vivo/bug 1 acima). `BROWSER_MAX_DENSITY` teta o
+    // fator TOTAL (não só o supersample) — quanto maior o `scaleFactor`
+    // real do monitor, menos supersample extra fica por cima dele.
+    const factor = Math.min(entry.scaleFactor * BROWSER_SUPERSAMPLE, maxDensityOverride ?? BROWSER_MAX_DENSITY);
+    entry.win.webContents.setZoomFactor(factor);
     entry.win.setContentSize(Math.max(1, Math.round(w * factor)), Math.max(1, Math.round(h * factor)));
   }
 
@@ -439,6 +489,17 @@ export function createBrowserRegistry(callbacks: {
     const entry = entries.get(id);
     if (!entry) return;
     entry.scaleFactor = scaleFactor;
+  }
+
+  /** EXPERIMENTAL, test-only, 2026-09-02 — investigando o "ponto doce" de
+   * `BROWSER_MAX_DENSITY` (pedido do usuário: achar o teto certo pra 4K,
+   * depois telas maiores, depois 1080p). Override em runtime pra varrer
+   * candidatos sem rebuild a cada valor — não é a fiação real, que
+   * continua sendo a constante `BROWSER_MAX_DENSITY`. Removível quando o
+   * valor final for decidido e virar a constante de verdade. */
+  let maxDensityOverride: number | null = null;
+  function testSetMaxDensity(value: number | null) {
+    maxDensityOverride = value;
   }
 
   /** Pauses/resumes actual compositing (`stopPainting`/`startPainting`),
@@ -1013,6 +1074,7 @@ export function createBrowserRegistry(callbacks: {
     refreshScaleFactor,
     liveIds,
     forceScaleFactor,
+    testSetMaxDensity,
     setVisible,
     setFocused,
     sendMouseEvent,

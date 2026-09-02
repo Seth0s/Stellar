@@ -14,11 +14,17 @@ const VIEWPORT_PRESETS: { label: string; icon: "viewportMobile" | "viewportTable
   { label: "Tablet (768×1024)", icon: "viewportTablet", w: 768, h: 1024 },
 ];
 
-// Must stay in sync with browser-registry.ts's own BROWSER_SUPERSAMPLE —
-// `applyResize` below mirrors the exact same `factor` the main process
-// really applies, so `contentSizeRef` (click-mapping, `toCanvasPoint`)
-// matches the real offscreen content size instead of drifting from it.
+// Must stay in sync with browser-registry.ts's own BROWSER_SUPERSAMPLE/
+// BROWSER_MAX_DENSITY — `applyResize` below mirrors the exact same
+// `factor` the main process really applies, so `contentSizeRef` (click-
+// mapping, `toCanvasPoint`) matches the real offscreen content size
+// instead of drifting from it. Achado ao vivo (2026-09-02, monitor 4K
+// real do usuário): um `BROWSER_SUPERSAMPLE` fixo, sem teto, ignora o
+// `scaleFactor` real do monitor ao decidir o quanto empilhar por cima —
+// `BROWSER_MAX_DENSITY` teta o fator TOTAL (scaleFactor × supersample),
+// não só o supersample sozinho.
 const BROWSER_SUPERSAMPLE = 3;
+const BROWSER_MAX_DENSITY = 2;
 
 function keyModifiers(e: React.KeyboardEvent): Array<"shift" | "control" | "alt" | "meta"> {
   const mods: Array<"shift" | "control" | "alt" | "meta"> = [];
@@ -329,7 +335,7 @@ function BrowserCardInner({
   // `scale(zoom)` do `.world`/projeção de tela, exatamente como qualquer
   // outro card, sem recodificar um JPEG novo a cada passo de zoom.
   function applyResize(w: number, h: number) {
-    const factor = scaleFactorRef.current * BROWSER_SUPERSAMPLE;
+    const factor = Math.min(scaleFactorRef.current * BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY);
     contentSizeRef.current = {
       w: Math.max(1, Math.round(w * factor)),
       h: Math.max(1, Math.round(h * factor)),
