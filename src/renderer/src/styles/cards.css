@@ -50,10 +50,26 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  /* Not inherited by default — `inherit` here explicitly copies the
-     radius set on .terminal-card/.files-card/etc (the parent), so the
-     clip boundary always matches the card's own visible border. */
-  border-radius: inherit;
+  /* Achado ao vivo (2026-09-02, reportado com screenshot real: canto
+     inferior direito do footer quadrado, "comendo" a margem, junto do
+     resize-grip): era `border-radius: inherit` — copia o valor
+     COMPUTADO do pai (.terminal-card/.files-card/etc) depois de
+     qualquer `transform`. Sob o `transform: scale()` fracionário do
+     board (Trilha B, `.card-scale`, zoom != 100%), esse `inherit`
+     resolvia pra 0px de verdade (confirmado via getComputedStyle
+     .borderBottomRightRadius, não só visual) mesmo o pai reportando
+     10px — .card-clip ficava com cantos quadrados E ~1px mais largo
+     que o pai (mesma causa: layout sub-pixel sob o scale fracionário).
+     Em cards opacos isso nunca apareceu — o próprio fundo sólido de
+     `.card-clip` cobria o degrau quadrado com a mesma cor do card por
+     trás. Só ficou visível depois do anel de acento (`box-shadow` em
+     `.terminal-card`, que segue o raio CORRETO do pai) contornar um
+     canto que `.card-clip` não arredondava mais. Fix: usar `var(--radius)`
+     direto (mesma fonte que todo card-kind já usa pro próprio raio, ver
+     tokens.css) em vez de depender do `inherit` recalcular certo sob
+     transform — bug presente em QUALQUER zoom != 100%, não é específico
+     de transparência (reproduzido também em cards opacos). */
+  border-radius: var(--radius);
 }
 
 .card-head {
@@ -172,12 +188,27 @@
    recorte arredondado do `backdrop-filter`) — `overflow: hidden` é um
    clip universal e confiável, não sujeito a essa combinação de bug;
    `.terminal-card`'s próprio box-shadow (anel + sombra) fica livre do
-   backdrop-filter e nunca mais vaza. */
+   backdrop-filter e nunca mais vaza.
+   Segundo achado, ao restartar o servidor pra reconferir (2026-09-02):
+   o fix acima corrigiu o vazamento do canto mas quebrou a própria
+   transparência — `.terminal-card` (o PAI de `.card-clip`) continua
+   com `background: var(--surface)` opaco, sem condição nenhuma, vindo
+   do grupo base compartilhado (regra `.terminal-card, .files-card, ...`
+   lá em cima). Como esse fundo opaco é pintado diretamente atrás de
+   `.card-clip` na mesma pilha, o `backdrop-filter` do filho borrava o
+   PRÓPRIO fundo sólido do card, não o board por trás — efeito vidro
+   sumiu de vez, mesmo com o canto certo. `.terminal-card.translucent`
+   agora zera o próprio fundo (`background: transparent`) também, pra
+   deixar `.card-clip` enxergar de verdade o que está atrás do card
+   inteiro. */
 .terminal-card-translucent-btn.on {
   color: var(--accent, var(--foam));
 }
 .terminal-card-translucent-btn:not(.on) {
   opacity: 0.55;
+}
+.terminal-card.translucent {
+  background: transparent;
 }
 .terminal-card.translucent .card-clip {
   background: var(--surface-translucent);

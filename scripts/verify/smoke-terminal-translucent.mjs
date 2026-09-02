@@ -73,23 +73,31 @@ try {
   const after = await page.evalJs(`
     (() => {
       const card = document.querySelector('.terminal-card');
+      const clip = card.querySelector('.card-clip');
       const head = document.querySelector('.terminal-card .card-head');
       const body = document.querySelector('.terminal-card-body');
-      const cs = window.getComputedStyle(card);
+      const cardCs = window.getComputedStyle(card);
+      const clipCs = window.getComputedStyle(clip);
       return JSON.stringify({
         hasClass: card.classList.contains('translucent'),
+        cardBg: cardCs.backgroundColor,
         headBg: window.getComputedStyle(head).backgroundColor,
         bodyBg: window.getComputedStyle(body).backgroundColor,
-        backdrop: cs.backdropFilter || cs.webkitBackdropFilter,
+        backdrop: clipCs.backdropFilter || clipCs.webkitBackdropFilter,
       });
     })()
   `);
   const afterState = JSON.parse(after);
   check("card ganhou .translucent depois do clique real no botão", afterState.hasClass, true);
+  check(
+    "o PRÓPRIO .terminal-card (pai de .card-clip) virou transparente — achado ao vivo: sem isso, o fundo opaco do pai fica atrás do blur do filho e o efeito vidro não aparece",
+    afterState.cardBg,
+    "rgba(0, 0, 0, 0)",
+  );
   check("header virou transparente (deixa o blur do shell aparecer, não pinta opaco por cima)", afterState.headBg, "rgba(0, 0, 0, 0)");
   check(".terminal-card-body também virou transparente pelo mesmo motivo", afterState.bodyBg, "rgba(0, 0, 0, 0)");
   check(
-    `.card-frame ganhou backdrop-filter REAL (não 'none') — computado: "${afterState.backdrop}"`,
+    `.card-clip (não mais .terminal-card — canto arredondado real, ver cards.css) ganhou backdrop-filter REAL (não 'none') — computado: "${afterState.backdrop}"`,
     !afterState.backdrop || afterState.backdrop === "none",
     false,
   );
