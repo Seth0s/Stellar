@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { homedir } from "node:os";
 
 export type CardRow = {
   id: string;
@@ -713,6 +714,18 @@ const boardAssets = {
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 
+/** Bug real achado ao vivo (2026-09-02, reportado por um usuário fora da
+ * máquina do autor): `App.tsx` tinha `DEFAULT_CWD`/`DEFAULT_WORKSPACE_ROOT`
+ * como paths absolutos hardcoded pro `$HOME` do autor — funcionava só
+ * nessa máquina, quebrava (diretório inexistente) em qualquer outra no
+ * primeiro boot ou num board sem `cwd` persistido. `homedir()` roda direto
+ * aqui no preload (sandbox: false em `main/index.ts`, sem round-trip de
+ * IPC) e dá um valor síncrono real e portátil disponível antes do
+ * `App.tsx` avaliar seus `const` de módulo. */
+const system = {
+  homeDir: homedir(),
+};
+
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("clipboardImage", clipboardImage);
 contextBridge.exposeInMainWorld("store", store);
@@ -732,6 +745,7 @@ contextBridge.exposeInMainWorld("secrets", secrets);
 contextBridge.exposeInMainWorld("chat", chat);
 contextBridge.exposeInMainWorld("canvasExport", canvasExport);
 contextBridge.exposeInMainWorld("boardAssets", boardAssets);
+contextBridge.exposeInMainWorld("system", system);
 
 /** Test-only, dev builds only — DESIGN-BACKLOG.md item 37's crash-safety
  * net (main/index.ts's `process.on("uncaughtException", ...)`). */
@@ -757,6 +771,7 @@ export type PtyApi = typeof pty;
 export type ClipboardImageApi = typeof clipboardImage;
 export type CanvasExportApi = typeof canvasExport;
 export type BoardAssetsApi = typeof boardAssets;
+export type SystemApi = typeof system;
 export type StoreApi = typeof store;
 export type FsApi = typeof fs;
 export type GitApi = typeof git;

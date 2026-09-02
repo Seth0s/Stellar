@@ -18,6 +18,7 @@ import type {
   ClipboardImageApi,
   CanvasExportApi,
   BoardAssetsApi,
+  SystemApi,
 } from "../../preload/index";
 
 declare global {
@@ -41,5 +42,6 @@ declare global {
     chat: ChatApi;
     canvasExport: CanvasExportApi;
     boardAssets: BoardAssetsApi;
+    system: SystemApi;
   }
 }

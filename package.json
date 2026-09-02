@@ -3,6 +3,7 @@
   "version": "0.3.1",
   "description": "Stellar — a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/Seth0s/Stellar",
   "author": {
     "name": "Seth0s",
     "email": "seth0s@users.noreply.github.com"

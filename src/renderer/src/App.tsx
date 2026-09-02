@@ -96,20 +96,19 @@ type PendingAsk =
       reason?: string;
     };
 
-const DEFAULT_CWD = "/home/lucas/Workplace/Projects/Stellar";
-/** The multi-repo workspace this app itself lives in (see CLAUDE.md at
- * this path) — its top-level directories are real sibling projects
- * (CentralByte, IdyPlatform, ...), offered as a real picker for "which
- * project is this session for" (item 1 follow-up: the user wants to
- * *select* a workspace, not type one blind). Just the initial value now —
- * the user pointed out this was hardcoded with no way to point the app at
- * a different workspace ("deve ser algo navegável, para ser universal"),
- * so it's real state below (`workspaceRoot`), changeable via a native
- * folder dialog from `ProjectPicker` (shared by every modal with a
- * project field — SessionModal's create and edit modes), and persisted
- * across launches.
- */
-const DEFAULT_WORKSPACE_ROOT = "/home/lucas/Workplace/Projects";
+/** Bug real achado ao vivo (2026-09-02, reportado por um usuário rodando o
+ * app numa máquina diferente da do autor): estas duas constantes eram
+ * paths absolutos hardcoded do `$HOME` do autor — só existiam nessa
+ * máquina, então o app "só funcionava" ali (1º boot com `localStorage`
+ * vazio, ou um board sem `cwd` persistido, apontavam pra um diretório
+ * inexistente em qualquer outra instalação). `window.system.homeDir`
+ * (preload/index.ts, `os.homedir()`) é o `$HOME` real de quem está
+ * rodando o app, portátil por definição — nunca hardcoded. */
+const DEFAULT_CWD = window.system.homeDir;
+/** Só o valor inicial — o usuário pode trocar pra qualquer workspace via
+ * `ProjectPicker` (folder dialog nativo), e a escolha persiste entre
+ * lançamentos (`workspaceRoot` state abaixo, `WORKSPACE_ROOT_KEY`). */
+const DEFAULT_WORKSPACE_ROOT = window.system.homeDir;
 const WORKSPACE_ROOT_KEY = "ac.workspaceRoot";
 
 /** Home/Topbar's "📁 {name}" label — the last path segment of whatever
