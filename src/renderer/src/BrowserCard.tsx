@@ -175,6 +175,20 @@ function BrowserCardInner({
   // real resize corrects it, same bootstrapping gap `contentSizeRef`
   // itself already has.
   const scaleFactorRef = useRef(1);
+  // Achado ao vivo (2026-09-02, escrevendo o teste do item de troca de
+  // monitor) — espelha `rect.w`/`rect.h`/`zoom` atuais pro efeito de
+  // `onScaleFactorChanged` abaixo poder ler o valor ATUAL sem precisar
+  // desses três nas suas próprias deps (o que forçaria remover/recriar o
+  // listener de IPC a cada tick de resize/zoom — uma pequena janela onde
+  // NENHUM listener está registrado, e um evento real chegando bem
+  // nessa hora seria perdido de vez, nunca reagido; confirmado ao vivo
+  // com um teste isolado antes deste fix — o evento chegava no processo
+  // do renderer mas `BrowserCard.tsx` nunca disparava o resize). Mesmo
+  // espírito de `scaleFactorRef`/`contentSizeRef` acima: um ref evita
+  // que a IDENTIDADE do valor entre nas deps de um efeito que precisa
+  // ficar estável (aqui, "só recriar quando o card muda de verdade").
+  const rectZoomRef = useRef({ w: rect.w, h: rect.h, zoom });
+  rectZoomRef.current = { w: rect.w, h: rect.h, zoom };
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
@@ -356,6 +370,34 @@ function BrowserCardInner({
       if (zoomResizeTimerRef.current) clearTimeout(zoomResizeTimerRef.current);
     };
   }, []);
+
+  // Achado ao vivo (2026-09-02, pedido explícito: "não apenas monitor
+  // 4K") — browser-registry.ts's `refreshScaleFactor` doc comment tem a
+  // história completa. `scaleFactorRef` (linha ~177) era só um espelho
+  // local do valor resolvido na CRIAÇÃO do card (`browser:create`'s
+  // retorno) — nunca atualizava depois, então mesmo com o processo
+  // principal já sabendo do novo monitor, este card continuava calculando
+  // `applyResize`'s `factor` com o scaleFactor ANTIGO. Atualiza o espelho
+  // E dispara um resize de verdade com o rect/zoom ATUAIS (mesma função
+  // que o efeito de zoom acima já usa) — sem isso o valor certo chegaria
+  // no main process mas nunca voltaria a afetar ESTE card já criado.
+  // Deps só `[id]` (igual ao efeito de `onFrame` acima) — lê rect/zoom
+  // ATUAIS via `rectZoomRef`, não como closure direta, propositalmente:
+  // ver o comentário de `rectZoomRef` pro porquê (achado ao vivo real,
+  // não hipotético — um teste isolado pegou o listener perdendo o
+  // evento com a versão anterior, que tinha rect.w/rect.h/zoom nas deps).
+  useEffect(() => {
+    const off = window.browser.onScaleFactorChanged((changedId, scaleFactor) => {
+      if (changedId !== id) return;
+      scaleFactorRef.current = scaleFactor;
+      const { w, h, zoom: z } = rectZoomRef.current;
+      applyResize(Math.round(w), Math.round(h), z);
+    });
+    return () => {
+      off();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   function toCanvasPoint(e: React.PointerEvent<HTMLCanvasElement> | React.WheelEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
