@@ -12,12 +12,19 @@
 // Este teste agora prova o invariante OPOSTO do que provava antes: a
 // resolução real do BrowserWindow offscreen NÃO muda com o zoom do board,
 // nem durante uma rajada de zoom nem no valor final — só o `scaleFactor`
-// real do monitor (smoke-browser-scale-factor.mjs) e um resize genuíno do
-// rect (smoke-card-resize-and-surgical-snapshot.mjs) ainda mudam a
-// resolução real. O card continua ficando visualmente maior/menor na tela
-// durante o zoom (isso é só o `scale(zoom)` do `.world`/projeção de tela,
-// como qualquer outro card) — só o raster real por trás do JPEG que fica
-// parado.
+// real do monitor e o `BROWSER_SUPERSAMPLE` fixo (smoke-browser-scale-
+// factor.mjs, browser-registry.ts) e um resize genuíno do rect (smoke-
+// card-resize-and-surgical-snapshot.mjs) ainda mudam a resolução real. O
+// card continua ficando visualmente maior/menor na tela durante o zoom
+// (isso é só o `scale(zoom)` do `.world`/projeção de tela, como qualquer
+// outro card) — só o raster real por trás do JPEG que fica parado.
+//
+// BROWSER_SUPERSAMPLE (2026-09-02, pedido explícito do usuário: "mandar
+// renderizar o triplo da resolução") — o valor inicial esperado abaixo
+// precisa incluir esse fator fixo, não só `scaleFactor`; ver browser-
+// registry.ts's `resize` doc comment pro porquê (supersample fixo,
+// independente do zoom, decoupled igual ao resto deste arquivo).
+const BROWSER_SUPERSAMPLE = 3;
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9534;
@@ -97,9 +104,12 @@ try {
 
   const initialSize = await contentSize();
   check(
-    "resolução inicial do BrowserWindow offscreen bate com o rect × scaleFactor (sem zoom aplicado ainda)",
+    "resolução inicial do BrowserWindow offscreen bate com o rect × scaleFactor × BROWSER_SUPERSAMPLE (sem zoom aplicado ainda)",
     JSON.stringify({ w: initialSize.w, h: initialSize.h }),
-    JSON.stringify({ w: Math.round(rectW * initialSize.scaleFactor), h: Math.round(rectH * initialSize.scaleFactor) }),
+    JSON.stringify({
+      w: Math.round(rectW * initialSize.scaleFactor * BROWSER_SUPERSAMPLE),
+      h: Math.round(rectH * initialSize.scaleFactor * BROWSER_SUPERSAMPLE),
+    }),
   );
 
   const zoomInBtn = await centerOf(page, '.zoom-pill button[title="Aumentar zoom"]');

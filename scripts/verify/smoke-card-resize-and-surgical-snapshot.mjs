@@ -146,7 +146,31 @@ try {
   // Card criado pelo rail, o caminho real. Nada de escrever no store e dar
   // reload: a app SEMPRE inicia na Home, então um reload voltaria pra lá e
   // desmontaria o card — e sem card montado não existe janela offscreen.
-  const browserBtn = await centerOf(page, '.rail-btn[title="Novo navegador"]');
+  // Achado ao vivo (2026-09-02) — `centerOf` tenta só UMA vez (direto +
+  // fallback pro popover), sem retry; numa máquina sob carga o rail podia
+  // não estar montado ainda nos 500ms fixos acima, derrubando o script
+  // inteiro com `browserBtn === null` em vez de um FAIL legível. Uma
+  // primeira versão deste fix chamava `centerOf` de novo num loop — bug
+  // achado ao vivo escrevendo ISSO: `centerOf` CLICA em "Adicionar card"
+  // (um toggle) toda vez que cai no fallback, então retentar a função
+  // inteira reabre/fecha o popover a cada tentativa, quase garantindo
+  // pegar ele fechado. Abre o popover UMA vez só; poll só pela LINHA
+  // dentro dele, sem re-clicar em nada.
+  let browserBtn = await centerOf(page, '.rail-btn[title="Novo navegador"]');
+  if (!browserBtn) {
+    const addBtn = await centerOf(page, '.rail-btn[title="Adicionar card"]');
+    if (!addBtn) throw new Error("nem o rail nem o botão 'Adicionar card' apareceram");
+    await page.click(addBtn.x, addBtn.y);
+    for (let i = 0; i < 20 && !browserBtn; i++) {
+      browserBtn = JSON.parse(
+        await page.evalJs(
+          `(() => { const el = document.querySelector('.popover-row[title="Novo navegador"]'); if (!el) return JSON.stringify(null); const r = el.getBoundingClientRect(); return JSON.stringify({x:r.x+r.width/2, y:r.y+r.height/2}); })()`,
+        ),
+      );
+      if (!browserBtn) await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  if (!browserBtn) throw new Error("botão 'Novo navegador' (direto ou via popover) nunca apareceu");
   await page.click(browserBtn.x, browserBtn.y);
   await new Promise((r) => setTimeout(r, 700));
   await page.evalJs(`

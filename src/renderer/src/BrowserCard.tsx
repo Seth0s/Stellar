@@ -14,6 +14,12 @@ const VIEWPORT_PRESETS: { label: string; icon: "viewportMobile" | "viewportTable
   { label: "Tablet (768×1024)", icon: "viewportTablet", w: 768, h: 1024 },
 ];
 
+// Must stay in sync with browser-registry.ts's own BROWSER_SUPERSAMPLE —
+// `applyResize` below mirrors the exact same `factor` the main process
+// really applies, so `contentSizeRef` (click-mapping, `toCanvasPoint`)
+// matches the real offscreen content size instead of drifting from it.
+const BROWSER_SUPERSAMPLE = 3;
+
 function keyModifiers(e: React.KeyboardEvent): Array<"shift" | "control" | "alt" | "meta"> {
   const mods: Array<"shift" | "control" | "alt" | "meta"> = [];
   if (e.shiftKey) mods.push("shift");
@@ -312,16 +318,18 @@ function BrowserCardInner({
   // originalmente também acompanhava o zoom do board, não só o tamanho de
   // mundo do card — revertido a pedido explícito do usuário (2026-09-02:
   // "o navegador não precisa ser afetado pelo efeito do zoom aumentar ou
-  // diminuir a fonte"). `factor` agora é só `scaleFactorRef.current` (Item
-  // 6, densidade real do monitor) — um resize genuíno de rect (arraste da
-  // alça, já throttled por rAF no CardFrame) dispara na hora; zoom puro do
-  // board não dispara mais NADA aqui (nem debounce, nem re-render da
-  // página embutida) — o card só fica visualmente maior/menor na tela via
-  // o `scale(zoom)` do `.world`/projeção de tela, exatamente como
-  // qualquer outro card, sem recodificar um JPEG novo a cada passo de
-  // zoom.
+  // diminuir a fonte"). `factor` é `scaleFactorRef.current × BROWSER_
+  // SUPERSAMPLE` (densidade real do monitor × supersample fixo, ver
+  // browser-registry.ts's `resize` pro porquê do supersample precisar de
+  // `setZoomFactor` combinado, não só `setContentSize`) — nenhum dos dois
+  // depende do zoom do board. Um resize genuíno de rect (arraste da alça,
+  // já throttled por rAF no CardFrame) dispara na hora; zoom puro do board
+  // não dispara mais NADA aqui (nem debounce, nem re-render da página
+  // embutida) — o card só fica visualmente maior/menor na tela via o
+  // `scale(zoom)` do `.world`/projeção de tela, exatamente como qualquer
+  // outro card, sem recodificar um JPEG novo a cada passo de zoom.
   function applyResize(w: number, h: number) {
-    const factor = scaleFactorRef.current;
+    const factor = scaleFactorRef.current * BROWSER_SUPERSAMPLE;
     contentSizeRef.current = {
       w: Math.max(1, Math.round(w * factor)),
       h: Math.max(1, Math.round(h * factor)),
