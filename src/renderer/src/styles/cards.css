@@ -444,6 +444,42 @@
   background: transparent !important;
 }
 
+/* Achado ao vivo (2026-09-02) -- `--resume` numa sessão real e grande
+ * pode passar dezenas de segundos sem imprimir nada (a CLI resumida
+ * carregando/processando o histórico), e o terminal em branco era
+ * indistinguível de um card travado de verdade. Só aparece depois de um
+ * atraso (ver TerminalCard.tsx) pra não piscar num spawn normal rápido. */
+.terminal-card-loading {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.terminal-card-loading-spinner {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 40%, transparent);
+  border-top-color: var(--muted);
+  animation: terminal-card-loading-spin 0.7s linear infinite;
+}
+
+@keyframes terminal-card-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .terminal-card-exited {
   position: absolute;
   bottom: 50px;
