@@ -204,8 +204,8 @@ try {
   await delay(300);
   check(
     "clique real focou o textarea (pré-condição da guarda)",
-    JSON.parse(await page.evalJs(`JSON.stringify(document.activeElement?.className ?? '')`)),
-    "sticky-textarea",
+    JSON.parse(await page.evalJs(`JSON.stringify(document.activeElement?.classList.contains('sticky-textarea') ?? false)`)),
+    true,
   );
   const refusedPreview = await toolJson("set_sticky_mode", { target: stickyId, mode: "preview" });
   check("set_sticky_mode('preview') recusado com humano editando AGORA", refusedPreview.ok, false);

@@ -2628,7 +2628,19 @@ export function App() {
           message={`Abrir "${pendingOpenUrl}" no navegador interno deste agente?`}
           confirmLabel="Abrir"
           onConfirm={() => {
-            openBrowserFor(null, pendingOpenUrl);
+            const cardId = openBrowserFor(null, pendingOpenUrl);
+            // Achado ao vivo (2026-09-02) — "clico no ícone e não abre":
+            // quando já existe um card de navegador sem dono (aberto antes,
+            // de qualquer terminal), openBrowserFor REUTILIZA esse card em
+            // vez de criar um novo — se ele estiver fora do viewport atual
+            // (usuário deu pan/zoom pra outro canto do board desde então),
+            // a navegação/raise acontece de verdade, só que fora da vista:
+            // pro usuário parece que nada aconteceu. Só centraliza a câmera
+            // quando o card reusado de fato não está visível agora — um
+            // card novo já nasce dentro do visibleRect (centeredSlot), não
+            // precisa de jump nenhum.
+            const card = cardsRef.current.find((c) => c.id === cardId);
+            if (card && !isInView(card.rect, visibleRect)) focusCard(cardId);
             setPendingOpenUrl(null);
           }}
           onCancel={() => setPendingOpenUrl(null)}
