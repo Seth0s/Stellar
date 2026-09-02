@@ -24,6 +24,18 @@ export type ReadImageResult = { dataUrl: string } | { tooLarge: true } | { notIm
 
 export class PathEscapeError extends Error {}
 
+/** Every relative path this module hands back to the renderer (`DirEntry.path`,
+ * search results) is normalized to forward slashes, regardless of platform.
+ * `relative()`/`join()` return the native separator (`\` on Windows), but the
+ * renderer's tree/breadcrumb logic (`PathPicker.tsx`) only ever splits on
+ * "/" — a bare `relative()` result on Windows would read as ONE unsplittable
+ * segment there (nested folders wouldn't nest). Safe to normalize: every one
+ * of these strings flows back into `confine()` below, whose `resolve()` (and
+ * Windows' own path APIs) accept "/" just as well as "\". */
+function toPosix(p: string): string {
+  return sep === "/" ? p : p.split(sep).join("/");
+}
+
 /**
  * Canonicalizes `target` as far as the filesystem actually goes: the
  * deepest existing ancestor is resolved with `realpathSync` (so every
@@ -102,7 +114,7 @@ export async function listDir(root: string, path: string): Promise<DirEntry[]> {
     .filter((e) => !IGNORE.has(e.name))
     .map((e) => ({
       name: e.name,
-      path: relative(root, join(dir, e.name)),
+      path: toPosix(relative(root, join(dir, e.name))),
       isDir: e.isDirectory(),
     }));
   items.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
@@ -263,7 +275,7 @@ export async function searchFileNames(root: string, query: string): Promise<DirE
       if (results.length >= SEARCH_MAX_RESULTS || scanned >= SEARCH_MAX_SCANNED) return;
       if (IGNORE.has(e.name)) continue;
       scanned++;
-      const path = relative(root, join(dir, e.name));
+      const path = toPosix(relative(root, join(dir, e.name)));
       if (path.toLowerCase().includes(q)) {
         results.push({ name: e.name, path, isDir: e.isDirectory() });
       }
@@ -357,7 +369,7 @@ export async function searchFileContents(root: string, query: string): Promise<C
       }
       if (BINARY_EXTS.has(extname(e.name).toLowerCase())) continue;
       scanned++;
-      await grepFile(root, relative(root, full), q, results);
+      await grepFile(root, toPosix(relative(root, full)), q, results);
     }
   }
 

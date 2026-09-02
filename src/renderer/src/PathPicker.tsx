@@ -3,14 +3,26 @@ import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import type { DirEntry } from "../../preload/index";
 
+/** Splits on "/" OR "\\" — `path` here is always an OS-native absolute path
+ * (`root` or one of its ancestors), native-separator on Windows
+ * (`C:\Users\name`). The "rel" keys elsewhere in this file (fs-tools'
+ * relative paths) are already normalized to "/" and never go through
+ * this function. */
 function baseName(path: string): string {
-  return path.split("/").filter(Boolean).pop() || path;
+  return path.split(/[/\\]/).filter(Boolean).pop() || path;
 }
 
-/** `value` relative to `root` ("" if `value` is `root` itself or outside it). */
+/** `value` relative to `root` ("" if `value` is `root` itself or outside it).
+ * Both are OS-native absolute paths (native separator on Windows), compared
+ * here with slashes normalized so a `value` picked outside this component
+ * (the native folder dialog, `window.system.homeDir`) still matches — the
+ * "rel" this returns stays "/"-joined regardless, same convention as
+ * fs-tools' now-normalized relative paths. */
 function relOf(root: string, value: string): string {
-  if (value === root) return "";
-  if (value.startsWith(root + "/")) return value.slice(root.length + 1);
+  const nRoot = root.replace(/\\/g, "/");
+  const nValue = value.replace(/\\/g, "/");
+  if (nValue === nRoot) return "";
+  if (nValue.startsWith(nRoot + "/")) return nValue.slice(nRoot.length + 1);
   return "";
 }
 
@@ -21,10 +33,13 @@ function absOf(root: string, rel: string): string {
 /** Parent of an absolute path, or `null` once there's nowhere higher to
  * go (filesystem root). Pure string math — no `window.fs` round trip
  * needed just to know an ancestor's own name. */
+/** Same OS-native-path caveat as `baseName` above — recognizes both
+ * separators so Windows breadcrumbs (`ancestorsOf`) walk up correctly
+ * instead of finding no "/" at all and stopping immediately. */
 function dirName(path: string): string | null {
-  const trimmed = path.replace(/\/+$/, "");
-  const i = trimmed.lastIndexOf("/");
-  if (i <= 0) return trimmed.length > 0 && i === 0 ? "/" : null;
+  const trimmed = path.replace(/[/\\]+$/, "");
+  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (i <= 0) return trimmed.length > 0 && i === 0 ? trimmed.slice(0, 1) : null;
   return trimmed.slice(0, i);
 }
 
