@@ -27,6 +27,12 @@ Este documento consolida o estado atual de design, produto e arquitetura do proj
 
 Reportados ao vivo pelo usuário em 2026-09-02, ainda não investigados. Prioridade sobre o resto do backlog — foco atual é otimização de performance/código, provável causa raiz comum dos três.
 
+* **App só funciona na máquina do autor — [x] causa raiz achada e corrigida (2026-09-02):**
+  * Palavras do usuário: "descobri por meio de outro user fora do meu pc, todas as configs de path, dep e etc, são tudo path absoluto, ou seja o app só funciona na minha máquina".
+  * Causa raiz, dupla: (1) `App.tsx`'s `DEFAULT_CWD`/`DEFAULT_WORKSPACE_ROOT` eram paths absolutos hardcoded do `$HOME` do autor (`/home/lucas/...`), usados como fallback REAL em runtime — 1º boot com `localStorage` vazio (`workspaceRoot`), board legado sem `cwd` persistido, `defaultCwd` do `PathPicker`/`Home`; numa máquina sem esse path exato, aponta pra um diretório inexistente. (2) `package.json` não declarava `"homepage"` — `electron-builder` (`FpmTarget`, target `rpm`) recusa empacotar sem esse campo (erro do log de terceiro: "Please specify project homepage"), reproduzível em qualquer máquina, independente do achado 1.
+  * Corrigido: `preload/index.ts` expõe `window.system.homeDir` (`os.homedir()`, síncrono, sem round-trip de IPC — preload roda com `sandbox: false`) e `App.tsx` usa isso como fallback em vez do path hardcoded — `$HOME` de quem está rodando o app, garantido existir em qualquer máquina. `package.json` ganhou `"homepage"` (aponta pro mesmo repo do `publish.owner`/`publish.repo` já configurado).
+  * Verificado: `npx tsc --noEmit` limpo, `npm run build` limpo, nenhum `/home/lucas` restante em `src/` (`grep` confirmado).
+
 * **Auto-updater não notifica atualização disponível — [x] causa raiz achada e corrigida (2026-09-02):**
   * Empacotamento (`.rpm`, `latest-linux.yml`, GitHub Release) verificado correto nas últimas 3 tags (v0.2.0/v0.3.0/v0.3.1, baixadas e inspecionadas ao vivo) — não era bug de CI/publish.
   * Causa real, dupla: (1) `main/updater.ts`'s `updater:check` engolia qualquer falha de `checkForUpdates()` (rede, rate-limit da API do GitHub sem token) num `console.warn` do processo main — invisível em quem roda o pacote instalado sem terminal; (2) o `void window.updater.check()` no boot (`useUpdateStatus.ts`) descartava até o retorno bem-sucedido, então mesmo um erro devolvido não tinha pra onde ir. Sem contar isso: **não existia gatilho manual nenhum** — só a checagem automática de boot, sem jeito de forçar uma nova tentativa.
