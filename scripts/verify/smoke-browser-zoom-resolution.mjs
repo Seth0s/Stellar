@@ -24,7 +24,15 @@
 // precisa incluir esse fator fixo, não só `scaleFactor`; ver browser-
 // registry.ts's `resize` doc comment pro porquê (supersample fixo,
 // independente do zoom, decoupled igual ao resto deste arquivo).
+//
+// BROWSER_MAX_DENSITY (2026-09-02, mesma sessão, achado ao vivo no log do
+// dev server num monitor 4K real: "travar" era o custo quadrático do
+// supersample fixo escalando com `scaleFactor` do monitor sem teto) — o
+// factor real aplicado por `resize()` é `min(scaleFactor × BROWSER_SUPERSAMPLE,
+// BROWSER_MAX_DENSITY)`, não só `scaleFactor × BROWSER_SUPERSAMPLE`. Nesta
+// máquina de teste (scaleFactor=1) o teto já domina (1×3=3 > 2).
 const BROWSER_SUPERSAMPLE = 3;
+const BROWSER_MAX_DENSITY = 2;
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9534;
@@ -103,12 +111,13 @@ try {
   }
 
   const initialSize = await contentSize();
+  const expectedFactor = Math.min(initialSize.scaleFactor * BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY);
   check(
-    "resolução inicial do BrowserWindow offscreen bate com o rect × scaleFactor × BROWSER_SUPERSAMPLE (sem zoom aplicado ainda)",
+    "resolução inicial do BrowserWindow offscreen bate com o rect × factor (scaleFactor × BROWSER_SUPERSAMPLE, capado em BROWSER_MAX_DENSITY) (sem zoom aplicado ainda)",
     JSON.stringify({ w: initialSize.w, h: initialSize.h }),
     JSON.stringify({
-      w: Math.round(rectW * initialSize.scaleFactor * BROWSER_SUPERSAMPLE),
-      h: Math.round(rectH * initialSize.scaleFactor * BROWSER_SUPERSAMPLE),
+      w: Math.round(rectW * expectedFactor),
+      h: Math.round(rectH * expectedFactor),
     }),
   );
 
