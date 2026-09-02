@@ -150,6 +150,13 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
 
 Conceitos arquiteturais e melhorias futuras registradas para avaliação:
 
+* **Ideias de design pro terminal, inspiradas na config de Kitty (2026-09-02):**
+  * Usuário trouxe `github.com/proxysoul/PouiiT-Files` esperando um terminal construído do zero pra substituir o motor atual — na prática é um dotfiles pessoal (Neovim + config do Kitty, um terminal nativo de terceiros, não algo embarcável) sem nenhum código de terminal próprio. Nada a substituir; mapeadas as ideias de DESIGN da config do Kitty que fazem sentido mantendo xterm.js/node-pty como estão.
+  * **Ganhos baratos, ainda não feitos**: `scrollback` nunca é setado em `new Terminal({...})` (`useTerminal.ts`) — preso no default de 1000 linhas do xterm.js, contra as 10000 do Kitty. `@xterm/addon-ligatures` não está instalado/carregado — a fonte atual (JetBrains Mono) suporta ligaduras, só não renderizam.
+  * **Infra já existe, achado ao vivo**: `PROVIDER_ACCENT` (`TerminalCard.tsx`) já mapeia bash/claude/codex/cursor pra cores `--accent-*` distintas, passado pro `CardFrame`'s prop `accent` — mas o próprio comentário em `CardFrame.tsx` diz que a barra de acento é "unused today". Um tint sutil de borda/fundo por provider (análogo ao tint por diretório do Kitty) ativaria uma infra que já existe, sem nada novo pra construir.
+  * **Trade-off real, não ganho garantido**: transparência+blur (`background_opacity 0.91`, o visual mais marcante do Kitty) — hoje o fundo do terminal é opaco sólido. Board do Stellar tem vários cards por perto o tempo todo; transparência real pode ficar poluída em vez de elegante, vale prototipar antes de assumir que é melhoria.
+  * **Não portável**: intervalo de blink do cursor (xterm.js não expõe esse controle granular). **Já coberto e melhor**: detecção de URL — Stellar já abre direto num card de browser embutido, o Kitty só sublinha pro SO tratar.
+  * *Bloqueio*: usuário pediu só o mapeamento por ora, sem escolher o que implementar — nenhuma das 3 ideias acima foi codificada ainda.
 * **Spawn por Coordenadas e Abertura em Linha Exata (Item 23):**
   * Permitir que agentes criem cards especificando coordenadas absolutas no board ou relativas a um card âncora (`anchorCardId` + `side`), com desvio inteligente de colisões.
   * Extensão do comando `spawn_card(files)` para aceitar `path` e `line`, abrindo o editor já focado na linha exata mencionada pelo agente.
