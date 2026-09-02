@@ -111,7 +111,7 @@ export function defaultCardFields(
     case "changes":
       return { kind: "changes", root: cwd };
     case "sticky":
-      return { kind: "sticky", content: "", color: "yellow" };
+      return { kind: "sticky", content: "", color: "yellow", mode: "edit" };
     case "browser":
       return { kind: "browser", url: "https://google.com", ownerCardId: null };
     case "chat":

@@ -222,7 +222,7 @@ function toRow(card: Card, boardId: string): CardRow {
         provider: card.color,
         cwd: card.content,
         resume_id: null,
-        model: null,
+        model: card.mode,
         system_prompt: null,
       };
     case "browser":
@@ -340,7 +340,19 @@ function fromRow(r: CardRow): Card {
     case "changes":
       return { id: r.id, kind: "changes", root: r.cwd, rect, groupId, label };
     case "sticky":
-      return { id: r.id, kind: "sticky", content: r.cwd, color: r.provider || "yellow", rect, groupId, label };
+      return {
+        id: r.id,
+        kind: "sticky",
+        content: r.cwd,
+        color: r.provider || "yellow",
+        // Legado (linha de antes deste campo existir, `model` null) cai em
+        // "preview" — condizente com uma nota que já tem conteúdo salvo,
+        // não a abrir em edição do nada a cada boot.
+        mode: r.model === "edit" ? "edit" : "preview",
+        rect,
+        groupId,
+        label,
+      };
     case "browser":
       return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect, groupId, label };
     case "remote-window":
@@ -519,6 +531,12 @@ export function App() {
    * empty array forever. */
   const orderRef = useRef<string[]>([]);
   orderRef.current = order;
+  /** Regra geral de auto-conector (2026-09-02) abaixo (`autoConnect`) —
+   * lida de dentro de handlers registrados uma vez no mount (mesmo
+   * motivo de cardsRef/orderRef acima: sem isso, fecharia sobre um
+   * array de conectores vazio pra sempre). */
+  const connectorsRef = useRef<Connector[]>([]);
+  connectorsRef.current = connectors;
 
   // Pre-release audit P1 — stable per-card handler references, the
   // prerequisite for `React.memo` on the card components below to
@@ -549,6 +567,7 @@ export function App() {
   const getContentChangeHandler = useStableCardIdHandler(changeStickyContent);
   const getContentCommitHandler = useStableCardHandler(commitStickyContent);
   const getColorCommitHandler = useStableCardHandler(commitStickyColor);
+  const getModeCommitHandler = useStableCardHandler(commitStickyMode);
   const getMessagesCommitHandler = useStableCardHandler(commitChatMessages);
   const getModelCommitHandler = useStableCardHandler(commitChatModel);
   const getProviderCommitHandler = useStableCardHandler(commitChatProvider);
@@ -747,8 +766,37 @@ export function App() {
       // disso. `data-card-id` no próprio textarea (StickyCard.tsx) é o que
       // liga o elemento focado ao card; sem ele, o `document.activeElement`
       // não diria QUAL nota está sendo editada.
-      const active = document.activeElement as HTMLElement | null;
-      if (active?.classList.contains("sticky-textarea") && active.dataset.cardId === cardId) {
+      const humanEditingNow = () => {
+        const active = document.activeElement as HTMLElement | null;
+        return !!active?.classList.contains("sticky-textarea") && active.dataset.cardId === cardId;
+      };
+      // Cor/categoria (2026-09-02, `set_sticky_color`) — inofensivo, sem
+      // guarda de foco (troca visual não apaga nada que um humano esteja
+      // digitando).
+      if (op.op === "set_color") {
+        commitStickyColor(card, op.color);
+        autoConnect(op.requesterId, cardId, "modified");
+        window.sticky.reply(requestId, { ok: true, color: op.color });
+        return;
+      }
+      // Modo edição/preview (2026-09-02, `set_sticky_mode`) — entrar em
+      // edição é sempre inofensivo; FORÇAR preview enquanto um humano tem
+      // o textarea focado de verdade recusa, mesma doutrina do write
+      // abaixo ("nunca interromper o que a pessoa está fazendo").
+      if (op.op === "set_mode") {
+        if (op.mode === "preview" && humanEditingNow()) {
+          window.sticky.reply(requestId, {
+            ok: false,
+            error: `sticky "${cardId}" is being edited by a human right now — not switching to preview; try again later`,
+          });
+          return;
+        }
+        commitStickyMode(card, op.mode);
+        autoConnect(op.requesterId, cardId, "modified");
+        window.sticky.reply(requestId, { ok: true, mode: op.mode });
+        return;
+      }
+      if (humanEditingNow()) {
         window.sticky.reply(requestId, {
           ok: false,
           error: `sticky "${cardId}" is being edited by a human right now — not overwriting; try again later`,
@@ -758,6 +806,7 @@ export function App() {
       const next = op.mode === "append" ? card.content + op.content : op.content;
       changeStickyContent(cardId, next);
       commitStickyContent(card, next);
+      autoConnect(op.requesterId, cardId, "modified");
       window.sticky.reply(requestId, { ok: true, content: next });
     });
     // DESIGN-BACKLOG.md item 60, peça 1 — one push per board whose queue
@@ -765,6 +814,14 @@ export function App() {
     // untouched.
     const offQueueChanged = window.spawn.onQueueChanged((boardId, queue) => {
       setSpawnQueues((prev) => ({ ...prev, [boardId]: queue }));
+    });
+    // Regra geral de auto-conector, metade que NÃO passa pelo renderer
+    // hoje: `send_to_card` escreve direto no PTY em main (message-bus.ts),
+    // sem round-trip nenhum — só assim consegue fazer o `connectorsRef`
+    // dedup check + criar o conector de verdade no board aberto (a única
+    // fonte de verdade pro estado `connectors` VISÍVEL é este processo).
+    const offAutoConnect = window.store.connectors.onAutoConnect((fromCardId, toCardId, kind) => {
+      autoConnect(fromCardId, toCardId, kind);
     });
     return () => {
       offUrlSeen();
@@ -776,6 +833,7 @@ export function App() {
       offReadCard();
       offSticky();
       offQueueChanged();
+      offAutoConnect();
     };
   }, []);
 
@@ -987,6 +1045,32 @@ export function App() {
       kind: kind ?? null,
     });
     if (!kind) toast("conector criado");
+  }
+
+  /** Regra geral pedida ao vivo (2026-09-02): "se um agente faz
+   * modificação, spawn, write, em relação a outro objeto, o conector
+   * conecta os dois card". `requesterId` já existe hoje pra spawn
+   * (`addConnector(..., "spawned")`, achados nos 2 pontos que chamam
+   * `spawnAgentFor` mais abaixo); isso generaliza pra qualquer outra
+   * mutação cross-card que carregue identidade do chamador
+   * (`write_sticky`/`set_sticky_color`/`set_sticky_mode`'s `offSticky`
+   * abaixo, `send_to_card`'s push via `connector:auto`, ver
+   * message-bus.ts). Idempotente por design, não só por educação: um
+   * par (A,B) já conectado (em QUALQUER direção, kind qualquer —
+   * inclusive um conector decorativo que um humano desenhou à mão) não
+   * ganha uma 2ª seta a cada nova ação; não sabendo o `kind` de um
+   * conector já existente (`Connector` do renderer não carrega isso, só
+   * o `ConnectorRow` do banco), a escolha segura é não tocar nele —
+   * nunca sobrescrever um kind que um humano ou outro agente já decidiu. */
+  function autoConnect(requesterId: string | undefined | null, targetId: string, kind: string) {
+    if (!requesterId || requesterId === targetId) return;
+    const already = connectorsRef.current.some(
+      (c) =>
+        (c.fromCardId === requesterId && c.toCardId === targetId) ||
+        (c.fromCardId === targetId && c.toCardId === requesterId),
+    );
+    if (already) return;
+    addConnector(requesterId, targetId, kind);
   }
 
   const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
@@ -1394,7 +1478,16 @@ export function App() {
       const result = await window.ai.summarize(newProvider, activeBoardCwd, prompt);
       const id = String(nextId.current++);
       const content = "text" in result ? result.text : `Erro: ${result.error}`;
-      addCard({ id, kind: "sticky", content, color: "blue", rect: cascadeSlot(cardsRef.current.length), groupId: null, label: null });
+      addCard({
+        id,
+        kind: "sticky",
+        content,
+        color: "blue",
+        mode: "preview",
+        rect: cascadeSlot(cardsRef.current.length),
+        groupId: null,
+        label: null,
+      });
       toast("Nota de resumo criada");
     } finally {
       setAiBusy(false);
@@ -1624,6 +1717,16 @@ export function App() {
   function commitStickyColor(card: StickyCardData, color: string) {
     setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, color } : c)));
     void window.store.upsert(toRow({ ...card, color }, activeBoardIdRef.current!));
+  }
+
+  /** Pedido ao vivo (2026-09-02) — "modo edição vs preview" controlável.
+   * Mesmo padrão de commitStickyColor acima: persistido (via `model`,
+   * ver card-types.ts), não estado de UI local — assim `set_sticky_mode`
+   * (MCP) e o botão no header de `StickyCardInner` são o MESMO caminho,
+   * nenhum atalho paralelo. */
+  function commitStickyMode(card: StickyCardData, mode: "edit" | "preview") {
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, mode } : c)));
+    void window.store.upsert(toRow({ ...card, mode }, activeBoardIdRef.current!));
   }
 
   /** Rotação (item 57.9) — clique discreto, sempre atualiza+persiste
@@ -2100,6 +2203,7 @@ export function App() {
                 zIndex={zIndex}
                 content={c.content}
                 color={c.color}
+                mode={c.mode}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
@@ -2114,6 +2218,7 @@ export function App() {
                 onContentChange={getContentChangeHandler(c)}
                 onContentCommit={getContentCommitHandler(c)}
                 onColorCommit={getColorCommitHandler(c)}
+                onModeCommit={getModeCommitHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}

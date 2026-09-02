@@ -926,6 +926,9 @@ function createWindow() {
     // DESIGN-BACKLOG.md item 60, peça 1 — live push so a queue panel never
     // has to poll; same safeSend guard as every other main→renderer event.
     onQueueChanged: (boardId, queue) => safeSend(win, "spawn-queue:changed", boardId, queue),
+    // Regra geral de auto-conector (2026-09-02) — ver message-bus.ts's
+    // doc comment na interface de callbacks.
+    onAutoConnect: (fromCardId, toCardId, kind) => safeSend(win, "connector:auto", fromCardId, toCardId, kind),
   });
   ipcMain.handle("browser:get-page-text", (_e, id: string) => browserRegistry.getPageText(id));
   ipcMain.handle("spawn:agent-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>

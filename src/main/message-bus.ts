@@ -94,8 +94,28 @@ export type CardSummary = { id: string; kind: string; provider: string; cwd: str
 export type SnapshotResult = { ok: true; path: string } | { ok: false; error: string };
 export type PageTextResult = { ok: true; text: string; truncated: boolean } | { ok: false; error: string };
 export type ReadCardResult = { ok: true; text: string } | { ok: false; error: string };
-export type StickyResult = { ok: true; content: string } | { ok: false; error: string };
-export type StickyOp = { op: "read" } | { op: "write"; content: string; mode: "replace" | "append" };
+/** Mesma paleta de `StickyCard.tsx` — duplicada aqui de propósito, não
+ * importada: main e renderer são bundles separados neste app Electron
+ * (ver AGENTS.md), sem import cross-processo possível. Exportada (não só
+ * interna a este arquivo) porque mcp-server.ts, no MESMO processo main,
+ * reusa o valor pro enum do zod em `set_sticky_color`. */
+export const STICKY_COLORS = ["yellow", "green", "blue", "pink"] as const;
+
+export type StickyResult =
+  | { ok: true; content: string }
+  | { ok: true; color: string }
+  | { ok: true; mode: "edit" | "preview" }
+  | { ok: false; error: string };
+/** `requesterId` (2026-09-02) em toda variante que MUTA a nota — nunca em
+ * `read` (leitura não conecta card nenhum) — é o que deixa a regra geral
+ * de auto-conector (App.tsx's `autoConnect`, chamada do `offSticky`)
+ * saber QUEM pediu a mutação, sem precisar de um round-trip extra só pra
+ * descobrir isso. */
+export type StickyOp =
+  | { op: "read" }
+  | { op: "write"; content: string; mode: "replace" | "append"; requesterId?: string }
+  | { op: "set_color"; color: string; requesterId?: string }
+  | { op: "set_mode"; mode: "edit" | "preview"; requesterId?: string };
 export type CardStatusResult = { ok: true; status: "running" | "waiting" | "exited" } | { ok: false; error: string };
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
 export type SpawnAgentResult =
@@ -136,7 +156,12 @@ export type BusRequest =
   // só produza erro de uso (não há Enter, não há scrollback, `lines` não
   // significa nada). Decidido com o usuário.
   | { cmd: "read_sticky"; target?: string }
-  | { cmd: "write_sticky"; target?: string; content?: string; mode?: string }
+  | { cmd: "write_sticky"; target?: string; content?: string; mode?: string; requesterId?: string }
+  // Regra geral de auto-conector (2026-09-02) — controle de cor/categoria
+  // e modo edição/preview, mesma identidade de chamador que write_sticky
+  // já carrega.
+  | { cmd: "set_sticky_color"; target?: string; color?: string; requesterId?: string }
+  | { cmd: "set_sticky_mode"; target?: string; mode?: string; requesterId?: string }
   | { cmd: "card_status"; target?: string }
   | { cmd: "report"; requesterId?: string; report?: unknown }
   | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number }
@@ -272,6 +297,15 @@ export function createMessageBus(
     /** Pre-release audit B6 — same listener-leak-on-timeout fix as
      * `onSnapshotTimeout` above, for `readcard:reply`. */
     onReadCardTimeout: (requestId: string) => void;
+    /** Regra geral de auto-conector (2026-09-02) — push fire-and-forget
+     * pro renderer (única fonte de verdade do `connectors` visível no
+     * board aberto) sempre que uma mutação cross-card identifica quem a
+     * pediu. Só o "send" cmd chama isso hoje — write_sticky/
+     * set_sticky_color/set_sticky_mode já round-trip pro renderer por
+     * outro motivo (o `<textarea>` é a fonte de verdade do conteúdo) e
+     * chamam App.tsx's `autoConnect` direto de lá, sem precisar deste
+     * push. Dedup/idempotência vivem inteiramente do lado do renderer. */
+    onAutoConnect: (fromCardId: string, toCardId: string, kind: string) => void;
     /** DESIGN-BACKLOG.md item 58, M4 — pty-registry.ts's own `isAlive`,
      * threaded straight through: no round trip needed, main already knows. */
     isCardAlive: (cardId: string) => boolean;
@@ -587,6 +621,12 @@ export function createMessageBus(
       const senderLabel = req.requesterId && targetProvider !== "bash" ? callbacks.describeCardLabel(req.requesterId) : null;
       const text = senderLabel ? `[de: ${senderLabel}] ${req.text ?? ""}` : (req.text ?? "");
       callbacks.writeToCard(target, text);
+      // Regra geral de auto-conector (2026-09-02) — "send" nunca passa
+      // pelo renderer (escreve direto no PTY aqui), diferente de
+      // write_sticky/spawn; um push (`onAutoConnect`) é o único jeito de
+      // fazer o board aberto desenhar a seta ao vivo. Idempotência/dedup
+      // real vive do outro lado (App.tsx's `autoConnect`), não aqui.
+      if (req.requesterId) callbacks.onAutoConnect(req.requesterId, target, "modified");
       // DESIGN-BACKLOG.md item 58, M2 follow-up — self-verifying submit:
       // write the Enter, then read the card back (same round-trip as
       // read_card) and check whether the composer still shows an
@@ -692,7 +732,12 @@ export function createMessageBus(
     // A proteção que importa aqui é outra e vive no renderer: uma nota que
     // um humano está editando NAQUELE instante recusa a escrita em vez de
     // apagar o que a pessoa está digitando.
-    if (req.cmd === "read_sticky" || req.cmd === "write_sticky") {
+    if (
+      req.cmd === "read_sticky" ||
+      req.cmd === "write_sticky" ||
+      req.cmd === "set_sticky_color" ||
+      req.cmd === "set_sticky_mode"
+    ) {
       if (!req.target) return { ok: false, error: "missing target cardId" };
       const card = callbacks.listCards().find((c) => c.id === req.target);
       if (!card) return { ok: false, error: `no card with id "${req.target}"` };
@@ -700,10 +745,22 @@ export function createMessageBus(
         return { ok: false, error: `card "${req.target}" is a ${card.kind} card — ${req.cmd} only works on sticky notes` };
       }
       if (req.cmd === "read_sticky") return stickyOp(req.target, { op: "read" });
+      if (req.cmd === "set_sticky_color") {
+        if (!req.color || !STICKY_COLORS.includes(req.color as (typeof STICKY_COLORS)[number])) {
+          return { ok: false, error: `color must be one of ${STICKY_COLORS.join(", ")}` };
+        }
+        return stickyOp(req.target, { op: "set_color", color: req.color, requesterId: req.requesterId });
+      }
+      if (req.cmd === "set_sticky_mode") {
+        if (req.mode !== "edit" && req.mode !== "preview") {
+          return { ok: false, error: `mode must be "edit" or "preview"` };
+        }
+        return stickyOp(req.target, { op: "set_mode", mode: req.mode, requesterId: req.requesterId });
+      }
       if (req.content === undefined) return { ok: false, error: "missing content" };
       const mode = req.mode ?? "replace";
       if (mode !== "replace" && mode !== "append") return { ok: false, error: `mode must be "replace" or "append"` };
-      return stickyOp(req.target, { op: "write", content: req.content, mode });
+      return stickyOp(req.target, { op: "write", content: req.content, mode, requesterId: req.requesterId });
     }
 
     // DESIGN-BACKLOG.md §2.1 — the 5 browser control cmds. Unlike

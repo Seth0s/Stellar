@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
@@ -75,6 +75,7 @@ function StickyCardInner({
   zIndex,
   content,
   color,
+  mode,
   interactionMode,
   selected,
   reflowing,
@@ -90,6 +91,7 @@ function StickyCardInner({
   onContentChange,
   onContentCommit,
   onColorCommit,
+  onModeCommit,
   onConnectorStart,
   onSelectStart,
   screenProjected,
@@ -106,6 +108,10 @@ function StickyCardInner({
   zIndex: number;
   content: string;
   color: string;
+  /** Controlado, não estado local (2026-09-02) — persistido em
+   * `StickyCardData.mode`, controlável via MCP `set_sticky_mode` (mesmo
+   * caminho que `onModeCommit` abaixo, nenhum atalho paralelo). */
+  mode: "edit" | "preview";
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
@@ -121,6 +127,7 @@ function StickyCardInner({
   onContentChange: (content: string) => void;
   onContentCommit: (content: string) => void;
   onColorCommit: (color: string) => void;
+  onModeCommit: (mode: "edit" | "preview") => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
   /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
@@ -130,21 +137,19 @@ function StickyCardInner({
   panY?: number;
 }) {
   // Pedido ao vivo (2026-09-02) — preview Markdown real em vez de texto
-  // cru sempre. Nota nova (sem conteúdo) abre já em edição; conteúdo
-  // existente abre em preview (é assim que a maioria vê a nota, não
-  // edita toda vez). Só estado de UI local, nada persistido — mesma
-  // nota reaberta depois volta a decidir por este mesmo cálculo.
-  const [editing, setEditing] = useState(() => content.trim().length === 0);
+  // cru sempre; `mode` é prop CONTROLADA (persistida, ver card-types.ts),
+  // não estado local — assim `set_sticky_mode` (MCP) e o clique humano
+  // são o MESMO caminho (`onModeCommit`), nenhum atalho paralelo.
+  const editing = mode === "edit";
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   // Achado ao vivo rodando smoke-mcp-sticky-io.mjs: focar o textarea toda
-  // vez que `editing` vira `true` — incluindo o valor INICIAL (nota nova
-  // vazia já abre em edição) — fazia `write_sticky`'s guard
-  // (`document.activeElement`, App.tsx) achar que um humano estava
-  // editando uma nota que NINGUÉM tinha tocado ainda, recusando toda
-  // escrita MCP numa nota recém-criada. Só focar de verdade quando ESTE
-  // componente que decidiu entrar em edição (clique explícito), nunca no
-  // estado inicial/mount.
+  // vez que `mode` vira "edit" — incluindo quando isso vem de um
+  // `set_sticky_mode` remoto via MCP, sem clique humano nenhum — fazia
+  // `write_sticky`'s guard (`document.activeElement`, App.tsx) achar que
+  // um humano estava editando uma nota que ninguém tinha tocado. Só focar
+  // de verdade quando ESTE componente que pediu a mudança (clique
+  // explícito), nunca numa transição de `mode` vinda de fora.
   const focusOnEditRef = useRef(false);
   useEffect(() => {
     if (editing && focusOnEditRef.current) {
@@ -155,7 +160,7 @@ function StickyCardInner({
 
   function enterEditing() {
     focusOnEditRef.current = true;
-    setEditing(true);
+    onModeCommit("edit");
   }
 
   // Checklist clicável (item 2) — `Markdown` (marked+DOMPurify) renderiza
@@ -260,17 +265,18 @@ function StickyCardInner({
               title={editing ? "ver preview" : "editar"}
               // Sem isso, o clique aqui primeiro tira o foco do textarea
               // (blur nativo do navegador ao mover foco pro botão) — o
-              // `onBlur` já chama `setEditing(false)`, e o `onClick` deste
-              // botão rodaria LOGO DEPOIS, closure sobre um `editing` que
-              // pode já estar desatualizado (blur e click são dois eventos
-              // distintos, não um só). `preventDefault` no mousedown impede
-              // o botão de roubar o foco — sem blur, sem corrida, o
-              // `onClick` abaixo decide sozinho com o `editing` real.
+              // `onBlur` já chama `onModeCommit("preview")`, e o `onClick`
+              // deste botão rodaria LOGO DEPOIS, closure sobre um `editing`
+              // que pode já estar desatualizado (blur e click são dois
+              // eventos distintos, não um só). `preventDefault` no
+              // mousedown impede o botão de roubar o foco — sem blur, sem
+              // corrida, o `onClick` abaixo decide sozinho com o `editing`
+              // real.
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 if (editing) {
                   onContentCommit(content);
-                  setEditing(false);
+                  onModeCommit("preview");
                 } else {
                   enterEditing();
                 }
@@ -300,7 +306,7 @@ function StickyCardInner({
           onChange={(e) => onContentChange(e.target.value)}
           onBlur={() => {
             onContentCommit(content);
-            if (content.trim().length > 0) setEditing(false);
+            if (content.trim().length > 0) onModeCommit("preview");
           }}
         />
       ) : (
