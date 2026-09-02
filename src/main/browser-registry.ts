@@ -364,6 +364,50 @@ export function createBrowserRegistry(callbacks: {
     return { w, h, scaleFactor: entry.scaleFactor };
   }
 
+  /** Achado ao vivo (2026-09-02, pedido explícito do usuário: "não apenas
+   * monitor 4K" — resolução real também precisa reagir a TROCAR de
+   * monitor com a janela aberta, não só ao zoom do board). `entry.
+   * scaleFactor` (item 6 acima) era resolvido uma ÚNICA vez, em
+   * `create()` — arrastar a janela do app pra outro monitor com
+   * scaleFactor diferente nunca reavaliava nada, o navegador embutido
+   * continuava rasterizando na densidade do monitor ONDE FOI CRIADO, não
+   * do monitor onde está agora. `callbacks.getScaleFactor()` em si já é
+   * dinâmico (consulta `screen.getDisplayMatching(win.getBounds())` na
+   * hora) — só nunca era CHAMADO de novo. `main/index.ts` chama isto pra
+   * cada card vivo quando a janela principal se move (`win.on("moved")`)
+   * ou quando o SO reporta mudança de métricas de display (`screen.on(
+   * "display-metrics-changed")`) — devolve o novo valor só quando ele
+   * REALMENTE mudou (evita round-trip de IPC/resize à toa em todo micro-
+   * movimento de janela que não cruza monitor nenhum). */
+  function refreshScaleFactor(id: string): number | null {
+    const entry = entries.get(id);
+    if (!entry) return null;
+    const next = callbacks.getScaleFactor();
+    if (next === entry.scaleFactor) return null;
+    entry.scaleFactor = next;
+    return next;
+  }
+
+  /** Ids de todo browser card com uma `BrowserWindow` offscreen viva —
+   * usado por `refreshScaleFactor`'s caller (main/index.ts) pra saber
+   * quais cards revisitar num evento de troca de monitor, sem precisar
+   * de acesso direto ao Map interno. */
+  function liveIds(): string[] {
+    return [...entries.keys()];
+  }
+
+  /** Test-only (mesmo raciocínio de `testMakeEditable`) — grava
+   * `entry.scaleFactor` direto, sem consultar `callbacks.getScaleFactor()`
+   * de verdade. Simula só o VALOR que viria de um monitor diferente; o
+   * resto do caminho real (IPC pro renderer, `BrowserCard.tsx` re-
+   * disparando resize) roda sem nenhuma simulação — ver o handler
+   * `browser:test-force-scale-factor` (main/index.ts) pro porquê. */
+  function forceScaleFactor(id: string, scaleFactor: number) {
+    const entry = entries.get(id);
+    if (!entry) return;
+    entry.scaleFactor = scaleFactor;
+  }
+
   /** Pauses/resumes actual compositing (`stopPainting`/`startPainting`),
    * not just frame delivery — an off-viewport card costs nothing instead of
    * still paying for paints nobody draws. */
@@ -933,6 +977,9 @@ export function createBrowserRegistry(callbacks: {
     openDevTools,
     resize,
     getContentSize,
+    refreshScaleFactor,
+    liveIds,
+    forceScaleFactor,
     setVisible,
     setFocused,
     sendMouseEvent,
