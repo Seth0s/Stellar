@@ -512,12 +512,31 @@
    de card) porque `--accent` só faz sentido pra terminal hoje; um anel
    de 1px quase transparente + um glow bem baixo, mais sutil que a régua
    do header. Composto com o box-shadow já existente (D2's sombra de
-   baixo zoom), não substitui. */
+   baixo zoom), não substitui.
+   Achado ao vivo (2026-09-02, dois screenshots reais do usuário — "o
+   neon em volta começa a ser consumido pelo layout" a partir de ~55% de
+   zoom, piorando com menos zoom): não é bug de GPU/compositing desta
+   vez — é matemática de spec do CSS. O spread NEGATIVO de um box-shadow
+   encolhe o raio efetivo do próprio shadow: `raio_efetivo = max(0,
+   --radius + spread)`. Com `--radius: 10px` (tokens.css) e spread de
+   -12px, `10 + (-12) = -2`, grampeado em **0** — a camada de glow
+   borrava a partir de um retângulo de canto RETO por baixo do pano,
+   mesmo o card sendo arredondado (o anel de 1px, spread 0, nunca teve
+   esse problema — só a camada de glow). Um retângulo de fonte reto
+   borrado tem MUITO menos halo bem no canto arredondado visível do que
+   ao longo da borda reta (a distância do canto reto grampeado até o
+   canto arredondado real é maior que a distância equivalente na borda
+   reta) — daí o glow sumir exatamente no canto e "piorar com menos
+   zoom" (zoom baixo = card menor em tela = o corte relativo fica mais
+   evidente proporcionalmente). Fix: spread reduzido pra -6px — bem
+   dentro do raio de 10px (raio efetivo do shadow = 4px, ainda
+   arredondado de verdade), then o halo acompanha o canto em vez de
+   recuar bruscamente nele. */
 .terminal-card {
   box-shadow:
     var(--card-shadow, var(--shadow-card)),
     0 0 0 1px color-mix(in srgb, var(--accent, transparent) 30%, transparent),
-    0 0 20px -12px var(--accent, transparent);
+    0 0 20px -6px var(--accent, transparent);
 }
 
 .terminal-card-body {
