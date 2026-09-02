@@ -19,6 +19,25 @@ try {
   check("no update banner before any update is found", await page.evalJs(`!!document.querySelector('.update-banner')`), false);
   check("no pending-update dot in the titlebar yet", await page.evalJs(`!!document.querySelector('.titlebar-update-dot')`), false);
 
+  // Achado ao vivo (2026-09-02) — não existia jeito nenhum de disparar
+  // uma checagem sob demanda, só a automática de boot. Botão manual
+  // sempre visível no titlebar (item novo, `useUpdateStatus.ts`'s
+  // `checkNow`), independente de já haver update pendente ou não.
+  check("manual update-check button exists in the titlebar", await page.evalJs(`!!document.querySelector('.titlebar-update-check')`), true);
+  await new Promise((r) => setTimeout(r, 300)); // let the dev-build boot check (no-op, `app.isPackaged` false) settle
+  check(
+    "manual check button has no error state after the dev boot check",
+    await page.evalJs(`document.querySelector('.titlebar-update-check')?.classList.contains('has-error')`),
+    false,
+  );
+  await page.evalJs(`document.querySelector('.titlebar-update-check')?.click()`);
+  await new Promise((r) => setTimeout(r, 300));
+  check(
+    "manual click re-runs the check and settles back out of the 'checking' state",
+    await page.evalJs(`document.querySelector('.titlebar-update-check')?.classList.contains('is-checking')`),
+    false,
+  );
+
   const NOTES = "- fixed a bug\n- added a feature";
   await page.evalJs(`window.updater.testEmitAvailable("1.2.3", ${JSON.stringify(NOTES)})`);
   await new Promise((r) => setTimeout(r, 300));

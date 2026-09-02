@@ -63,8 +63,15 @@ export function registerUpdater(win: BrowserWindow) {
       await autoUpdater.checkForUpdates();
       return { checked: true };
     } catch (err) {
+      // Achado ao vivo (2026-09-02): antes disso o erro só ia pro
+      // `console.warn` do processo main — invisível pra quem roda o
+      // pacote instalado (não abre por terminal), então uma falha de
+      // rede/rate-limit da API do GitHub nunca aparecia em lugar nenhum
+      // pro usuário. Agora a mensagem volta pro renderer pra virar
+      // estado visível (`useUpdateStatus`'s `checkError`).
+      const message = err instanceof Error ? err.message : String(err);
       console.warn("[updater] check failed:", err);
-      return { checked: false };
+      return { checked: false, error: message };
     }
   });
 

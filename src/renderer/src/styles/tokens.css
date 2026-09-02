@@ -63,9 +63,24 @@
    outside this file should hardcode a hex for these roles. */
 :root {
   --accent-bash: var(--muted);
-  --accent-claude: var(--violet);
-  --accent-codex: var(--foam);
+  /* Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — claude e codex
+     ganharam acento metálico próprio (laranja/prateado) em vez do
+     violeta/foam genéricos; cursor ficou como estava. Os pares *-dark
+     abaixo são a sombra do gradiente diagonal usado pelo chip metálico
+     do header (TerminalCard.tsx) — só existem pros providers que
+     realmente usam esse efeito (claude/codex/antigravity); cursor/bash
+     continuam "flat", sem par -dark. */
+  --accent-claude: #ff8c3d;
+  --accent-claude-dark: #6b3610;
+  --accent-codex: #cdd3d9;
+  --accent-codex-dark: #565d64;
   --accent-cursor: var(--good);
+  /* Gap real: antigravity é provider de verdade (main/providers.ts etc.)
+     mas nunca teve entrada aqui — caía no cinza do bash sem ninguém ter
+     decidido isso. Azul-escuro metálico, pedido ao vivo junto com as
+     cores acima. */
+  --accent-antigravity: #4f7fc9;
+  --accent-antigravity-dark: #0b1626;
   --accent-files: var(--violet);
   --accent-changes: var(--warn);
   --accent-browser: var(--foam);

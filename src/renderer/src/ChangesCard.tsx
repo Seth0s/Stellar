@@ -26,6 +26,9 @@ function ChangesCardInner({
   onRename,
   onConnectorStart,
   onSelectStart,
+  screenProjected,
+  panX,
+  panY,
 }: {
   rect: Rect;
   zoom: number;
@@ -45,6 +48,11 @@ function ChangesCardInner({
   onRename: (label: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
+   * straight through, same pattern StickyCard/BrowserCard already use. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   const [status, setStatus] = useState<GitStatus | null>(null);
 
@@ -76,6 +84,9 @@ function ChangesCardInner({
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
+      screenProjected={screenProjected}
+      panX={panX}
+      panY={panY}
       headerContent={
         <>
           <span className="card-head-label">
