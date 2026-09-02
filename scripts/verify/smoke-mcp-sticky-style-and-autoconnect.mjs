@@ -134,7 +134,13 @@ try {
   await delay(600);
   const stickyId = (await toolJson("list_cards", {})).cards.find((c) => c.kind === "sticky").id;
 
-  check("board recém-criado começa sem conector nenhum", (await toolJson("list_connectors", {})).connectors.length, 0);
+  // spawn_card tinha a MESMA lacuna que este pedido corrigiu de propósito
+  // (só spawn_agent registrava lineage antes) — a nota nasce já ligada
+  // ao bashId que pediu, kind "spawned" (mesmo significado de sempre,
+  // não o novo "modified").
+  const afterSpawn = (await toolJson("list_connectors", {})).connectors;
+  check("spawn_card (com callerCardId) TAMBÉM desenha lineage agora", afterSpawn.length, 1);
+  check("...kind 'spawned' (mesmo mecanismo de spawn_agent, não 'modified')", afterSpawn[0].kind, "spawned");
 
   // --- set_sticky_color ---
   const badColor = (await callTool("set_sticky_color", { target: stickyId, color: "roxo" })).content[0].text;
@@ -156,11 +162,15 @@ try {
   const written = await toolJson("write_sticky", { target: stickyId, content: "linha 1", callerCardId: bashId });
   check("write_sticky (com callerCardId) resolve ok", written.ok, true);
   const afterWrite = (await toolJson("list_connectors", {})).connectors;
-  check("...e desenha um conector real entre quem chamou e a nota", afterWrite.length, 1);
   const auto = afterWrite[0];
   const autoPair = new Set([auto.fromCardId, auto.toCardId]);
   check("...ligando exatamente bashId<->stickyId", autoPair.has(bashId) && autoPair.has(stickyId), true);
-  check("...com kind 'modified' (não confundido com 'spawned')", auto.kind, "modified");
+  check(
+    "...NÃO duplica o conector do spawn (par já ligado, dedup por design)",
+    afterWrite.length,
+    1,
+  );
+  check("...e NÃO sobrescreve o kind 'spawned' já existente pra 'modified'", auto.kind, "spawned");
 
   await toolJson("write_sticky", { target: stickyId, content: "linha 2", mode: "append", callerCardId: bashId });
   check(
@@ -223,6 +233,7 @@ try {
   const sendAuto = afterSend.find((c) => new Set([c.fromCardId, c.toCardId]).has(secondId));
   const sendPair = new Set([sendAuto.fromCardId, sendAuto.toCardId]);
   check("...ligando bashId<->o 2º terminal", sendPair.has(bashId) && sendPair.has(secondId), true);
+  check("...com kind 'modified' (send_to_card não tem lineage de spawn)", sendAuto.kind, "modified");
 
   await toolJson("send_to_card", { target: secondId, text: "echo oi de novo", callerCardId: bashId });
   await delay(400);

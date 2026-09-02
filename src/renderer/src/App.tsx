@@ -649,6 +649,12 @@ export function App() {
         // `open_url` respondia só `{ok:true}` e não havia caminho nenhum
         // até `browser_click`/`get_page_text` daquele card.
         const cardId = openBrowserFor(requesterId, url);
+        // Achado ao vivo (2026-09-02) — este caminho (autoApprove, modo
+        // autônomo) nunca registrava lineage nenhuma; só `spawn_agent`
+        // tinha o próprio `addConnector(..., "spawned")` (item 62). Mesmo
+        // princípio, generalizado: open_url TAMBÉM cria um card a partir
+        // de um pedido de outro card.
+        if (requesterId) autoConnect(requesterId, cardId, "spawned");
         void window.browser.resolveAsk(requestId, true, cardId);
         return;
       }
@@ -699,6 +705,9 @@ export function App() {
       // autoApprove above, extended to non-terminal cards.
       if (params.autoApprove) {
         const cardId = spawnCardFor(params.kind, params.cwd, params.url, requesterId);
+        // Achado ao vivo (2026-09-02) — mesma lacuna do open_url acima:
+        // spawn_card nunca registrava lineage, só spawn_agent tinha.
+        if (requesterId) autoConnect(requesterId, cardId, "spawned");
         void window.spawn.resolveCard(requestId, { ok: true, cardId });
         return;
       }
@@ -1373,6 +1382,9 @@ export function App() {
     setPendingAsk(null);
     if (ask.kind === "open") {
       const cardId = openBrowserFor(ask.requesterId, ask.url);
+      // Achado ao vivo (2026-09-02) — mesma lacuna do autoApprove acima,
+      // pro caminho aprovado por um humano.
+      if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
       void window.browser.resolveAsk(ask.requestId, true, cardId);
     } else if (ask.kind === "spawn-agent") {
       const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label);
@@ -1382,6 +1394,7 @@ export function App() {
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
     } else {
       const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId);
+      if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
       void window.spawn.resolveCard(ask.requestId, { ok: true, cardId });
     }
   }

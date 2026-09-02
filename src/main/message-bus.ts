@@ -138,11 +138,14 @@ export type BusRequest =
   // sobre `selector`; a tradução ref→seletor vive em index.ts, junto do
   // registry que carimba o atributo, pra não haver dois lugares sabendo o
   // nome dele.
-  | { cmd: "browser_click"; target?: string; x?: number; y?: number; selector?: string; ref?: string }
-  | { cmd: "browser_type"; target?: string; text?: string; selector?: string; ref?: string }
-  | { cmd: "browser_scroll"; target?: string; dx?: number; dy?: number; selector?: string; ref?: string }
+  // `requesterId` (2026-09-02) nos 4 mutantes — regra geral de
+  // auto-conector, ver `AUTO_CONNECT_CMDS` abaixo. Ausente em
+  // `browser_query` (leitura, nunca conecta nada).
+  | { cmd: "browser_click"; target?: string; x?: number; y?: number; selector?: string; ref?: string; requesterId?: string }
+  | { cmd: "browser_type"; target?: string; text?: string; selector?: string; ref?: string; requesterId?: string }
+  | { cmd: "browser_scroll"; target?: string; dx?: number; dy?: number; selector?: string; ref?: string; requesterId?: string }
   | { cmd: "browser_query"; target?: string; selector?: string; ref?: string }
-  | { cmd: "browser_eval"; target?: string; js?: string }
+  | { cmd: "browser_eval"; target?: string; js?: string; requesterId?: string }
   | { cmd: "browser_snapshot"; target?: string }
   | { cmd: "browser_console"; target?: string; level?: string; limit?: number }
   | { cmd: "browser_network"; target?: string; status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }
@@ -581,8 +584,48 @@ export function createMessageBus(
     return { id: raw };
   }
 
+  /** Regra geral de auto-conector (2026-09-02) — "qualquer interação entre
+   * cards via MCP conecta os dois, não só sticky": todo cmd que MUTA um
+   * card que já existe (identificado por `target`) e carrega `requesterId`
+   * entra aqui, mapeado pro `kind` gravado no conector. Um lugar só, não
+   * uma chamada repetida em cada handler — cobre o cmd de hoje e qualquer
+   * um que um tool novo adicionar amanhã, sem precisar lembrar de tocar
+   * aqui toda vez (o jeito antigo, um `if` manual dentro do handler de
+   * "send", já tinha ficado pra trás assim que `browser_*` ganhou os
+   * mesmos 4 tools). Deliberadamente ausente: leituras (`list`, `read_*`,
+   * `browser_query`/`snapshot`/`browser_console`/`browser_network`/
+   * `browser_wait_for`, `card_status`, `get_report`, `list_tasks`,
+   * `get_task`, `list_connectors`, `concurrency_status`, `board_mode`) —
+   * olhar pra um card não é interagir com ele. Também ausente de propósito:
+   * `write_sticky`/`set_sticky_color`/`set_sticky_mode` — essas 3 já
+   * chamam `autoConnect` direto no `offSticky` do App.tsx (é lá que
+   * `content`/`color`/`mode` realmente vivem, round-trip que já existia
+   * por outro motivo); incluí-las aqui também dispararia um 2º push
+   * redundante pro mesmo par (inofensivo — dedup do outro lado — mas sem
+   * propósito). E `open`/`spawn_agent`/`spawn_card`: essas CRIAM um card
+   * novo em vez de mutar um existente, `target` não é o card afetado (é
+   * a URL/provider/kind pedido) — já têm seu próprio mecanismo mais
+   * antigo (`kind: "spawned"`, App.tsx's spawnAgentFor/openBrowserFor/
+   * spawnCardFor callers), não o generalizado aqui. */
+  const AUTO_CONNECT_CMDS: Partial<Record<BusRequest["cmd"], string>> = {
+    send: "modified",
+    browser_click: "modified",
+    browser_type: "modified",
+    browser_scroll: "modified",
+    browser_eval: "modified",
+  };
+
   /** Shared by both frontends — see the module doc comment. Never throws;
-   * every branch resolves to a `BusResponse`, including "unknown cmd". */
+   * every branch resolves to a `BusResponse`, including "unknown cmd".
+   * Thin wrapper around `dispatchRequest` — the only thing added here is
+   * the auto-connector rule above, so every caller (MCP, acbridge, the
+   * internal recursive call in the socket server below) gets it for free
+   * without dispatchRequest's ~30 `if (req.cmd === ...)` branches each
+   * needing their own copy of the same 3 lines. Label→id resolution also
+   * moved here (out of dispatchRequest) — `autoConnect` below needs the
+   * REAL card id, not whatever label the caller happened to pass in
+   * `target`; `dispatchRequest` used to do this resolution itself, on a
+   * local shadowed `req` that never escaped it. */
   async function handleRequest(request: BusRequest): Promise<BusResponse> {
     let req = request;
     if ("target" in req && typeof req.target === "string") {
@@ -590,7 +633,15 @@ export function createMessageBus(
       if ("error" in resolved) return { ok: false, error: resolved.error };
       if (resolved.id !== req.target) req = { ...req, target: resolved.id };
     }
+    const res = await dispatchRequest(req);
+    const kind = AUTO_CONNECT_CMDS[req.cmd];
+    if (kind && res.ok && "target" in req && req.target && "requesterId" in req && req.requesterId) {
+      callbacks.onAutoConnect(req.requesterId, req.target, kind);
+    }
+    return res;
+  }
 
+  async function dispatchRequest(req: BusRequest): Promise<BusResponse> {
     if (req.cmd === "list") {
       return { ok: true, cards: callbacks.listCards() };
     }
@@ -621,12 +672,11 @@ export function createMessageBus(
       const senderLabel = req.requesterId && targetProvider !== "bash" ? callbacks.describeCardLabel(req.requesterId) : null;
       const text = senderLabel ? `[de: ${senderLabel}] ${req.text ?? ""}` : (req.text ?? "");
       callbacks.writeToCard(target, text);
-      // Regra geral de auto-conector (2026-09-02) — "send" nunca passa
-      // pelo renderer (escreve direto no PTY aqui), diferente de
-      // write_sticky/spawn; um push (`onAutoConnect`) é o único jeito de
-      // fazer o board aberto desenhar a seta ao vivo. Idempotência/dedup
-      // real vive do outro lado (App.tsx's `autoConnect`), não aqui.
-      if (req.requesterId) callbacks.onAutoConnect(req.requesterId, target, "modified");
+      // Regra geral de auto-conector (2026-09-02, generalizada a QUALQUER
+      // interação entre cards via MCP — ver `AUTO_CONNECT_CMDS` no fim
+      // deste arquivo, chamado de dentro do `handleRequest` wrapper) —
+      // nada a fazer aqui, o wrapper cuida disso depois que este bloco
+      // devolver `{ok:true}`.
       // DESIGN-BACKLOG.md item 58, M2 follow-up — self-verifying submit:
       // write the Enter, then read the card back (same round-trip as
       // read_card) and check whether the composer still shows an
