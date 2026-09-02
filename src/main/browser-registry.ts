@@ -304,57 +304,51 @@ export function createBrowserRegistry(callbacks: {
   }
 
   // Trilha A do navegador (SCREEN_SPACE_PROJECTION_PLAN.md §0.3's "Trilha
-  // A do navegador" note, executada 2026-08-31) — mesmo mecanismo de bug
-  // que o terminal tinha antes da própria Trilha A: a `BrowserWindow`
-  // offscreen rasterizava sempre no tamanho de MUNDO (pré-zoom), e o
-  // `scale(zoom)` do `.world` só esticava o JPEG capturado, borrando.
-  // Clampado (não `zoom` cru) pela mesma razão do `FONT_SIZE_MIN/MAX` do
-  // terminal: sem teto, zoom extremo faria a página re-renderizar e
-  // codificar JPEG num tamanho de pixel correndo solto (mais caro que o
-  // fontSize do terminal — ver o aviso do próprio plano); sem piso, zoom
-  // extremo pra fora encolheria o conteúdo real a quase nada.
-  const BROWSER_ZOOM_MIN = 0.5;
-  const BROWSER_ZOOM_MAX = 3;
-
-  /** Resizes the offscreen viewport itself — the renderer calls this when
-   * the card's own (world-space, pre-zoom) rect w/h changes OR the board
-   * zoom settles on a new step, matching how the terminal's real
-   * `fontSize` tracks zoom (Trilha A). `zoom` defaults to 1 for callers
-   * that only care about a plain rect resize (kept content resolution
-   * unscaled) — every real caller in this app always passes the current
-   * board zoom.
-   *
-   * Item 6 (Trilha B, docs/SCREEN_SPACE_PROJECTION_PLAN.md) — also
-   * multiplies by `entry.scaleFactor` now. IMPORTANT, found live testing
-   * this (2026-09-01, 3 isolated diagnostic scripts): this is NOT true
-   * HiDPI supersampling. Confirmed `webPreferences.offscreen.
-   * deviceScaleFactor` is a no-op for the actual raster output in this
-   * Electron version/platform (image.getSize() byte-identical regardless
-   * of its value) — and so is `webContents.setZoomFactor()` (raster
-   * stays tied to content size even as `getZoomFactor()` correctly
-   * reports the new value) — and so is the global Chromium flag
-   * `--force-device-scale-factor` (page's own `devicePixelRatio` changes,
-   * raster output doesn't). `setContentSize` is the ONLY lever that
-   * changes actual paint buffer resolution in this build, and it's the
-   * same number the embedded page's own CSS layout uses as its viewport
-   * — there is no independent "render N× denser, same logical size"
-   * signal available. So this multiplication genuinely makes the
-   * embedded page BELIEVE its viewport is scaleFactor× bigger than what
-   * the card visually displays: sharper detail per visible pixel, but
-   * proportionally MORE of the page fits in the same on-screen card (a
-   * real trade-off, not a pure win — verified live with the user via a
-   * real comparison page before shipping this, not assumed). */
-  function resize(id: string, w: number, h: number, zoom = 1) {
+  // A do navegador" note, executada 2026-08-31) originalmente também
+  // multiplicava a resolução offscreen pelo zoom do board, mesma ideia do
+  // `fontSize` do terminal escalando com o zoom. Revertido a pedido
+  // explícito do usuário (2026-09-02: "o navegador não precisa ser afetado
+  // pelo efeito do zoom aumentar ou diminuir a fonte") — era, na prática,
+  // a causa da "resolução quase 4K" que ele notou num teste de zoom bem
+  // alto: em `zoom` perto do antigo teto de 3, `factor` chegava a
+  // 3×`scaleFactor`, MUITO acima da densidade real do monitor. `zoom` só
+  // existe agora no parâmetro por compatibilidade de assinatura com os
+  // chamadores existentes (`BrowserCard.tsx`/`browser:resize`) — ignorado
+  // aqui de propósito; a resolução do card depende só do tamanho de mundo
+  // do rect e do `scaleFactor` real do monitor (Item 6 abaixo), nunca do
+  // zoom interativo do board.
+  //
+  // Item 6 (Trilha B, docs/SCREEN_SPACE_PROJECTION_PLAN.md) — multiplica
+  // por `entry.scaleFactor`. IMPORTANTE, achado ao vivo testando isto
+  // (2026-09-01, 3 scripts de diagnóstico isolados): isto NÃO é
+  // supersampling HiDPI de verdade. Confirmado que `webPreferences.
+  // offscreen.deviceScaleFactor` é um no-op pro raster real nesta versão/
+  // plataforma de Electron (image.getSize() idêntico byte a byte
+  // independente do valor) — e o mesmo vale pra `webContents.
+  // setZoomFactor()` (o raster continua preso ao content size mesmo com
+  // `getZoomFactor()` reportando certo o novo valor) — e pra flag global
+  // do Chromium `--force-device-scale-factor` (o `devicePixelRatio` da
+  // própria página muda, o raster não). `setContentSize` é a ÚNICA
+  // alavanca que muda a resolução real do paint buffer nesta build, e é o
+  // mesmo número que o layout CSS da página embutida usa como seu próprio
+  // viewport — não existe um sinal independente de "renderiza N× mais
+  // denso, mesmo tamanho lógico". Então esta multiplicação genuinamente
+  // faz a página embutida ACREDITAR que seu viewport é scaleFactor× maior
+  // do que o card mostra visualmente: detalhe mais nítido por pixel
+  // visível, mas proporcionalmente MAIS da página cabe no mesmo card na
+  // tela (uma troca real, não um ganho puro — verificado ao vivo com o
+  // usuário via uma página de comparação real antes de embarcar isto, não
+  // assumido).
+  function resize(id: string, w: number, h: number, _zoom = 1) {
     const entry = entries.get(id);
     if (!entry) return;
-    const effectiveZoom = Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, zoom));
-    const factor = effectiveZoom * entry.scaleFactor;
+    const factor = entry.scaleFactor;
     entry.win.setContentSize(Math.max(1, Math.round(w * factor)), Math.max(1, Math.round(h * factor)));
   }
 
   /** Test-only (scripts/verify) — the real content-pixel size the
    * offscreen `BrowserWindow` is currently rasterizing at, straight from
-   * Electron itself. Used to prove `resize`'s zoom scaling actually
+   * Electron itself. Used to prove `resize`'s scaleFactor scaling actually
    * happened, the same "read the real instance, don't infer it" spirit
    * as `terminal-registry.ts`'s `getTerminalFontSize`. */
   function getContentSize(id: string): { w: number; h: number; scaleFactor: number } | null {

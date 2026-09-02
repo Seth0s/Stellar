@@ -17,12 +17,13 @@
 // isso era impossível por construção — o que não está na janela nunca foi
 // rasterizado.
 //
-// O que este arquivo deliberadamente NÃO afirma: que a captura independe do
-// ZOOM do board. Não independe, e está certo assim — `browser-registry.ts`
-// dimensiona a janela offscreen em `tamanho do card × zoom × scaleFactor`
-// de propósito (ver smoke-browser-zoom-resolution.mjs), pra que aproximar
-// renderize mais nítido em vez de esticar pixel. Zoom muda a resolução da
-// captura; posição no board não muda mais nada.
+// Atualizado 2026-09-02 (pedido explícito do usuário: "o navegador não
+// precisa ser afetado pelo efeito do zoom") — a captura AGORA também
+// independe do zoom do board, não só da posição: `browser-registry.ts`
+// dimensiona a janela offscreen em `tamanho do card × scaleFactor` (ver
+// smoke-browser-zoom-resolution.mjs), sem o zoom que antes multiplicava
+// junto. Zoom do board não muda mais a resolução da captura; só o
+// `scaleFactor` real do monitor e o tamanho de mundo do card mudam.
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

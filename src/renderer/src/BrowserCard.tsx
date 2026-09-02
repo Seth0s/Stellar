@@ -14,13 +14,6 @@ const VIEWPORT_PRESETS: { label: string; icon: "viewportMobile" | "viewportTable
   { label: "Tablet (768×1024)", icon: "viewportTablet", w: 768, h: 1024 },
 ];
 
-// Must stay in sync with browser-registry.ts's own BROWSER_ZOOM_MIN/MAX —
-// `toCanvasPoint` needs to know the exact content size `resize()` really
-// applied (post-clamp) to map a click to the right coordinate space, and
-// there's no cheap way to ask the main process for it on every click.
-const BROWSER_ZOOM_MIN = 0.5;
-const BROWSER_ZOOM_MAX = 3;
-
 function keyModifiers(e: React.KeyboardEvent): Array<"shift" | "control" | "alt" | "meta"> {
   const mods: Array<"shift" | "control" | "alt" | "meta"> = [];
   if (e.shiftKey) mods.push("shift");
@@ -148,24 +141,19 @@ function BrowserCardInner({
   const createdRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastSizeRef = useRef({ w: 0, h: 0 });
-  const lastZoomStepRef = useRef<number | null>(null);
-  const zoomResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Achado ao vivo (2026-09-01) — bug real de clique impreciso em
-  // qualquer zoom != 1, presente desde a Trilha A do navegador (resize()
-  // já escala `w/h` pelo zoom, `browser-registry.ts`), nunca pego pelos
-  // testes porque todos rodam em zoom=1 (onde o bug cancela e vira
-  // invisível). `toCanvasPoint` media a fração do clique dentro do
-  // retângulo REAL na tela (`box`, já pós-transform de zoom do `.world`)
-  // e multiplicava por `rect.w`/`h` — o tamanho de mundo SEM zoom — mas o
-  // espaço de coordenadas que `sendInputEvent` espera é o content size
-  // REAL da BrowserWindow offscreen, que já está multiplicado pelo mesmo
-  // zoom (clampado). Em zoom=2 isso mandava o clique pra metade da
-  // posição real dentro da página embutida. Mantém o tamanho real
-  // aplicado (mesmo clamp de `BROWSER_ZOOM_MIN/MAX` que
-  // `browser-registry.ts`'s `resize()` usa) num ref, atualizado toda vez
-  // que um resize real é disparado — não recalcula o clamp aqui a partir
-  // de `zoom` puro porque o zoom "vivo" (antes do debounce assentar) e o
-  // zoom realmente aplicado no offscreen podem divergir por até 150ms.
+  // Achado ao vivo (2026-09-01) — bug real de clique impreciso sempre que
+  // o content size real da BrowserWindow offscreen diverge do tamanho de
+  // mundo do rect (o único caso hoje: `scaleFactor` != 1, Item 6 abaixo).
+  // `toCanvasPoint` media a fração do clique dentro do retângulo REAL na
+  // tela (`box`, já pós-transform de zoom do `.world`) e multiplicava por
+  // `rect.w`/`h` — o tamanho de mundo, sem scaleFactor — mas o espaço de
+  // coordenadas que `sendInputEvent` espera é o content size REAL da
+  // BrowserWindow offscreen. Mantém o tamanho real aplicado (o que
+  // `browser-registry.ts`'s `resize()` realmente setou) num ref,
+  // atualizado toda vez que um resize real é disparado — não recalcula a
+  // partir de `scaleFactorRef` puro aqui porque o valor "vivo" e o
+  // realmente aplicado no offscreen podem divergir brevemente entre o
+  // disparo do resize e o próximo frame.
   const contentSizeRef = useRef({ w: rect.w, h: rect.h });
   // Item 6 (Trilha B) — resolved once from `browser:create`'s response
   // (`browser-registry.ts`'s `resize()` doc comment has the full story on
@@ -176,19 +164,20 @@ function BrowserCardInner({
   // itself already has.
   const scaleFactorRef = useRef(1);
   // Achado ao vivo (2026-09-02, escrevendo o teste do item de troca de
-  // monitor) — espelha `rect.w`/`rect.h`/`zoom` atuais pro efeito de
+  // monitor) — espelha `rect.w`/`rect.h` atuais pro efeito de
   // `onScaleFactorChanged` abaixo poder ler o valor ATUAL sem precisar
-  // desses três nas suas próprias deps (o que forçaria remover/recriar o
-  // listener de IPC a cada tick de resize/zoom — uma pequena janela onde
-  // NENHUM listener está registrado, e um evento real chegando bem
-  // nessa hora seria perdido de vez, nunca reagido; confirmado ao vivo
-  // com um teste isolado antes deste fix — o evento chegava no processo
-  // do renderer mas `BrowserCard.tsx` nunca disparava o resize). Mesmo
-  // espírito de `scaleFactorRef`/`contentSizeRef` acima: um ref evita
-  // que a IDENTIDADE do valor entre nas deps de um efeito que precisa
-  // ficar estável (aqui, "só recriar quando o card muda de verdade").
-  const rectZoomRef = useRef({ w: rect.w, h: rect.h, zoom });
-  rectZoomRef.current = { w: rect.w, h: rect.h, zoom };
+  // dele nas próprias deps (o que forçaria remover/recriar o listener de
+  // IPC a cada tick de resize — uma pequena janela onde NENHUM listener
+  // está registrado, e um evento real chegando bem nessa hora seria
+  // perdido de vez, nunca reagido; confirmado ao vivo com um teste
+  // isolado antes deste fix — o evento chegava no processo do renderer
+  // mas `BrowserCard.tsx` nunca disparava o resize). Mesmo espírito de
+  // `scaleFactorRef`/`contentSizeRef` acima: um ref evita que a IDENTIDADE
+  // do valor entre nas deps de um efeito que precisa ficar estável (aqui,
+  // "só recriar quando o card muda de verdade"). Zoom não faz mais parte
+  // disto (decoupled a pedido do usuário — ver `applyResize` acima).
+  const rectRef = useRef({ w: rect.w, h: rect.h });
+  rectRef.current = { w: rect.w, h: rect.h };
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
@@ -319,57 +308,34 @@ function BrowserCardInner({
     void window.browser.setFocused(id, isFocused);
   }, [id, isFocused]);
 
-  // Trilha A do navegador (browser-registry.ts's `resize` doc comment) —
-  // a resolução real do conteúdo offscreen agora acompanha o zoom do
-  // board, não só o tamanho de mundo do card. Um resize genuíno de rect
-  // (arraste da alça, já throttled por rAF no CardFrame) dispara na
-  // hora, sempre com o zoom atual; um zoom PURO (rect igual, só o board
-  // deu zoom) é mais caro que mudar um fontSize — re-renderiza a página
-  // real e recodifica um JPEG maior — então arredonda pro passo de 0.25
-  // mais próximo e espera ~150ms de zoom "assentado" antes de disparar,
-  // mesma disciplina do aviso em SCREEN_SPACE_PROJECTION_PLAN.md §0.3.
-  function applyResize(w: number, h: number, z: number) {
-    const effectiveZoom = Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, z));
-    const factor = effectiveZoom * scaleFactorRef.current;
+  // Trilha A do navegador (browser-registry.ts's `resize` doc comment)
+  // originalmente também acompanhava o zoom do board, não só o tamanho de
+  // mundo do card — revertido a pedido explícito do usuário (2026-09-02:
+  // "o navegador não precisa ser afetado pelo efeito do zoom aumentar ou
+  // diminuir a fonte"). `factor` agora é só `scaleFactorRef.current` (Item
+  // 6, densidade real do monitor) — um resize genuíno de rect (arraste da
+  // alça, já throttled por rAF no CardFrame) dispara na hora; zoom puro do
+  // board não dispara mais NADA aqui (nem debounce, nem re-render da
+  // página embutida) — o card só fica visualmente maior/menor na tela via
+  // o `scale(zoom)` do `.world`/projeção de tela, exatamente como
+  // qualquer outro card, sem recodificar um JPEG novo a cada passo de
+  // zoom.
+  function applyResize(w: number, h: number) {
+    const factor = scaleFactorRef.current;
     contentSizeRef.current = {
       w: Math.max(1, Math.round(w * factor)),
       h: Math.max(1, Math.round(h * factor)),
     };
-    void window.browser.resize(id, w, h, z);
+    void window.browser.resize(id, w, h);
   }
 
   useEffect(() => {
     const w = Math.round(rect.w);
     const h = Math.round(rect.h);
-    const zoomStep = Math.round(zoom * 4) / 4;
-    const sizeChanged = lastSizeRef.current.w !== w || lastSizeRef.current.h !== h;
-    const zoomChanged = lastZoomStepRef.current !== zoomStep;
-    if (!sizeChanged && !zoomChanged) return;
-
-    if (zoomResizeTimerRef.current) {
-      clearTimeout(zoomResizeTimerRef.current);
-      zoomResizeTimerRef.current = null;
-    }
-
-    if (sizeChanged) {
-      lastSizeRef.current = { w, h };
-      lastZoomStepRef.current = zoomStep;
-      applyResize(w, h, zoom);
-      return;
-    }
-
-    zoomResizeTimerRef.current = setTimeout(() => {
-      zoomResizeTimerRef.current = null;
-      lastZoomStepRef.current = zoomStep;
-      applyResize(w, h, zoom);
-    }, 150);
-  }, [id, rect.w, rect.h, zoom]);
-
-  useEffect(() => {
-    return () => {
-      if (zoomResizeTimerRef.current) clearTimeout(zoomResizeTimerRef.current);
-    };
-  }, []);
+    if (lastSizeRef.current.w === w && lastSizeRef.current.h === h) return;
+    lastSizeRef.current = { w, h };
+    applyResize(w, h);
+  }, [id, rect.w, rect.h]);
 
   // Achado ao vivo (2026-09-02, pedido explícito: "não apenas monitor
   // 4K") — browser-registry.ts's `refreshScaleFactor` doc comment tem a
@@ -378,20 +344,20 @@ function BrowserCardInner({
   // retorno) — nunca atualizava depois, então mesmo com o processo
   // principal já sabendo do novo monitor, este card continuava calculando
   // `applyResize`'s `factor` com o scaleFactor ANTIGO. Atualiza o espelho
-  // E dispara um resize de verdade com o rect/zoom ATUAIS (mesma função
-  // que o efeito de zoom acima já usa) — sem isso o valor certo chegaria
-  // no main process mas nunca voltaria a afetar ESTE card já criado.
-  // Deps só `[id]` (igual ao efeito de `onFrame` acima) — lê rect/zoom
-  // ATUAIS via `rectZoomRef`, não como closure direta, propositalmente:
-  // ver o comentário de `rectZoomRef` pro porquê (achado ao vivo real,
-  // não hipotético — um teste isolado pegou o listener perdendo o
-  // evento com a versão anterior, que tinha rect.w/rect.h/zoom nas deps).
+  // E dispara um resize de verdade com o rect ATUAL (mesma função que o
+  // efeito de resize acima já usa) — sem isso o valor certo chegaria no
+  // main process mas nunca voltaria a afetar ESTE card já criado. Deps só
+  // `[id]` (igual ao efeito de `onFrame` acima) — lê o rect ATUAL via
+  // `rectRef`, não como closure direta, propositalmente: ver o comentário
+  // de `rectRef` pro porquê (achado ao vivo real, não hipotético — um
+  // teste isolado pegou o listener perdendo o evento com a versão
+  // anterior, que tinha rect.w/rect.h nas deps).
   useEffect(() => {
     const off = window.browser.onScaleFactorChanged((changedId, scaleFactor) => {
       if (changedId !== id) return;
       scaleFactorRef.current = scaleFactor;
-      const { w, h, zoom: z } = rectZoomRef.current;
-      applyResize(Math.round(w), Math.round(h), z);
+      const { w, h } = rectRef.current;
+      applyResize(Math.round(w), Math.round(h));
     });
     return () => {
       off();
@@ -406,13 +372,13 @@ function BrowserCardInner({
     if (box.width === 0 || box.height === 0) return null;
     // The embedded page's own coordinate space is `contentSizeRef.current`
     // (logical CSS px — what `resize()` REALLY set the offscreen window's
-    // content size to, post-zoom-clamp), NOT `rect.w`/`rect.h` (the
-    // card's world-space, pre-zoom size) and not `canvas.width`/`height`
-    // (the raw JPEG's device-pixel size) either. Bug found live
-    // (2026-09-01): using `rect.w`/`rect.h` here was only correct at
-    // zoom=1 by coincidence — Trilha A's `resize()` scales the real
-    // offscreen content by zoom, so at zoom=2 a click was landing at
-    // literally half its intended position inside the embedded page.
+    // content size to, post-scaleFactor), NOT `rect.w`/`rect.h` (the
+    // card's world-space size) and not `canvas.width`/`height` (the raw
+    // JPEG's device-pixel size) either. Bug found live (2026-09-01): using
+    // `rect.w`/`rect.h` here was only correct at scaleFactor=1 by
+    // coincidence — `resize()` scales the real offscreen content by the
+    // monitor's real density, so on a HiDPI monitor a click was landing at
+    // a fraction of its intended position inside the embedded page.
     const { w: contentW, h: contentH } = contentSizeRef.current;
     return {
       x: ((e.clientX - box.left) / box.width) * contentW,
