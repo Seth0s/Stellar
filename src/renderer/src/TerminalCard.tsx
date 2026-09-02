@@ -52,6 +52,9 @@ function TerminalCardInner({
   onSelectStart,
   onStatusChange,
   onSuggestInstall,
+  screenProjected,
+  panX,
+  panY,
 }: {
   /** The card's own persisted id — also the PTY id and AGENT_CANVAS_CARD_ID, so acbridge/store/registry all speak the same id. */
   id: string;
@@ -95,6 +98,19 @@ function TerminalCardInner({
   /** Item 57 ponto 13 — "binary not found" offers a pre-filled (never
    * auto-run) install terminal instead of just a dead-end error string. */
   onSuggestInstall?: (providerId: string, cwd: string, command: string) => void;
+  /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
+   * straight through, same pattern the other migrated kinds use.
+   * Deliberately does NOT touch `useTerminal.ts`'s `correctZoomCoords` —
+   * the plan's own Fase 1 ponto 3 assumed disabling it once a card is
+   * "projetado em 1:1", but `CardFrame`'s actual `screenProjected`
+   * mechanism still applies a CSS `transform: scale(zoom)` (via
+   * `.card-scale`, just moved from `.world` to here) rather than
+   * eliminating the scale-vs-`getBoundingClientRect()` mismatch that
+   * correction exists for — confirmed live before assuming otherwise,
+   * see the smoke test covering click precision at zoom != 1. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   // Pre-release audit P1 — a render-count counter, not gated behind any
   // dev-only flag (this renderer has none to gate on), but as cheap as a
@@ -237,6 +253,9 @@ function TerminalCardInner({
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
+      screenProjected={screenProjected}
+      panX={panX}
+      panY={panY}
       // The last onChange's state update lands in the DOM asynchronously
       // (React commit + layout) — measuring in fitNow() synchronously here
       // can read the pre-resize container size. Defer one frame.
