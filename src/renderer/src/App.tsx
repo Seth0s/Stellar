@@ -2182,7 +2182,12 @@ export function App() {
             );
           }
           case "remote-window": {
-            return (
+            // Trilha B — último kind migrado, o mais simples dos 9: o
+            // encaminhamento de ponteiro/teclado (`onVideoPointerMove` etc.)
+            // é todo relativo (`e.movementX/Y`), nunca lê zoom/pan do board
+            // — zero risco de coordenada, ao contrário de Terminal.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <RemoteWindowCard
                 key={c.id}
                 rect={c.rect}
@@ -2202,11 +2207,19 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "chat": {
-            return (
+            // Trilha B — 9º e último tipo de card migrado. Fecha o plano
+            // §0.8 ponto 2 (todos os 9 kinds, nenhum órfão no modelo antigo).
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <ChatCard
                 key={c.id}
                 id={c.id}
@@ -2237,7 +2250,12 @@ export function App() {
                 onSelectStart={onSelectStart}
                 onOpenChatSession={stableOpenChatSession}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "media": {
