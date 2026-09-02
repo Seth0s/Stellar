@@ -18,6 +18,16 @@ export function rectsOverlap(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
+/** Intersection area of two rects, 0 when they don't overlap. Used by
+ * App.tsx's `tryChangeRect` to tell "this drag makes an existing browser
+ * overlap worse" apart from "this drag is escaping one" — see its doc
+ * comment for why the distinction matters. */
+export function overlapArea(a: Rect, b: Rect): number {
+  const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return ix * iy;
+}
+
 /** AABB visibility test — is `rect` at least partially inside `viewport`? */
 export function isInView(rect: Rect, viewport: Rect): boolean {
   return rectsOverlap(rect, viewport);
@@ -104,16 +114,52 @@ export function cascadeSlot(index: number): Rect {
  * instead of exact-stacking; cycles every 5 so it never drifts off the
  * visible area after many spawns.
  */
-export function centeredSlot(visibleRect: Rect, index: number): Rect {
+/**
+ * `existingRects` (2026-09-02, real bug report — a browser card spawned
+ * right on top of a terminal left BOTH permanently undraggable, see
+ * App.tsx's `tryChangeRect`: it refuses any drag that would increase
+ * overlap with a browser card, but never GRANTED that overlap in the first
+ * place — nothing here checked for one). The 36px/5-cycle stagger above was
+ * only ever meant to fan out a quick burst of spawns, not avoid collision;
+ * past the 5th card at an unmoved viewport it wraps back to (0,0) and
+ * guarantees an exact restack. When the plain staggered slot collides with
+ * something already on the board, this now walks outward in a ring (8
+ * compass directions per radius step) until it finds a free spot, and only
+ * falls back to the old colliding slot if the board is packed solid out to
+ * a generous radius — matches `tryChangeRect`'s own "never make it worse,
+ * but don't hang forever" spirit instead of introducing a new failure mode.
+ */
+export function centeredSlot(visibleRect: Rect, index: number, existingRects: Rect[] = []): Rect {
   const cx = visibleRect.x + visibleRect.w / 2;
   const cy = visibleRect.y + visibleRect.h / 2;
   const stagger = (index % 5) * 36;
-  return {
+  const base: Rect = {
     x: cx - SPAWN_W / 2 + stagger,
     y: cy - SPAWN_H / 2 + stagger,
     w: SPAWN_W,
     h: SPAWN_H,
   };
+  if (!existingRects.some((r) => rectsOverlap(base, r))) return base;
+
+  const RING_STEP = 60;
+  const MAX_RINGS = 12; // 12 * 60 = 720px — clears an 860×660 spawn even from dead-center overlap
+  const DIRECTIONS = [
+    { dx: 1, dy: 0 },
+    { dx: 1, dy: 1 },
+    { dx: 0, dy: 1 },
+    { dx: -1, dy: 1 },
+    { dx: -1, dy: 0 },
+    { dx: -1, dy: -1 },
+    { dx: 0, dy: -1 },
+    { dx: 1, dy: -1 },
+  ];
+  for (let ring = 1; ring <= MAX_RINGS; ring++) {
+    for (const { dx, dy } of DIRECTIONS) {
+      const candidate: Rect = { ...base, x: base.x + dx * ring * RING_STEP, y: base.y + dy * ring * RING_STEP };
+      if (!existingRects.some((r) => rectsOverlap(candidate, r))) return candidate;
+    }
+  }
+  return base; // board saturado até o raio de busca — mantém o comportamento antigo em vez de travar
 }
 
 /** Default position for a card spawned at a specific world point — the

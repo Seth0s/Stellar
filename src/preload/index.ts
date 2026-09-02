@@ -343,6 +343,18 @@ const browser = {
     ipcRenderer.on("browser:loading", listener);
     return () => ipcRenderer.removeListener("browser:loading", listener);
   },
+  /** Achado ao vivo (2026-09-02) — browser-registry.ts's `refreshScaleFactor`
+   * doc comment tem a história completa: main/index.ts dispara isto quando
+   * a janela do app troca de monitor (ou o SO reporta mudança de escala
+   * do monitor atual) E a densidade real mudou. `BrowserCard.tsx` reage
+   * atualizando seu espelho local (`scaleFactorRef`) e re-disparando um
+   * resize real com o rect/zoom atuais — sem isso o card continuaria
+   * rasterizando pra sempre na densidade do monitor onde foi criado. */
+  onScaleFactorChanged: (cb: (id: string, scaleFactor: number) => void) => {
+    const listener = (_e: unknown, id: string, scaleFactor: number) => cb(id, scaleFactor);
+    ipcRenderer.on("browser:scale-factor-changed", listener);
+    return () => ipcRenderer.removeListener("browser:scale-factor-changed", listener);
+  },
   /** DESIGN-BACKLOG.md §2.1 Item E — `level` is Electron's own current
    * console-message string scale. */
   onConsoleMessage: (cb: (id: string, level: "info" | "warning" | "error" | "debug", message: string) => void) => {
@@ -380,6 +392,9 @@ const browser = {
   cut: (id: string): Promise<void> => ipcRenderer.invoke("browser:cut", id),
   /** Test-only, dev builds only — see main/index.ts. */
   testMakeEditable: (id: string): Promise<void> => ipcRenderer.invoke("browser:test-make-editable", id),
+  /** Test-only, dev builds only — see main/index.ts. */
+  testForceScaleFactor: (id: string, scaleFactor: number): Promise<void> =>
+    ipcRenderer.invoke("browser:test-force-scale-factor", id, scaleFactor),
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";

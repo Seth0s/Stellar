@@ -326,9 +326,22 @@ function openExternally(target: string): void {
 }
 
 function createWindow() {
+  // Test-only (2026-09-02) — mesmo padrão de `!app.isPackaged` já usado
+  // por `browser:test-make-editable`/`chat:test-simulate-tool`: sem isso,
+  // não existia jeito de abrir a janela principal num monitor específico
+  // pra verificar de verdade o fix de scaleFactor real do navegador
+  // embutido (Item 6, DESIGN-BACKLOG.md) — a pendência ficou "sem
+  // confirmação visual num monitor HiDPI real" porque não dava pra
+  // posicionar a janela lá sem controle externo de janela (Wayland não
+  // deixa ferramenta nenhuma mover janela de outro processo). Nunca
+  // ativa fora de um `startApp` de diagnóstico que setar essa env var.
+  const testBounds = !app.isPackaged && process.env.AGENT_CANVAS_TEST_WINDOW_BOUNDS
+    ? (JSON.parse(process.env.AGENT_CANVAS_TEST_WINDOW_BOUNDS) as { x: number; y: number; width: number; height: number })
+    : null;
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: testBounds?.width ?? 1280,
+    height: testBounds?.height ?? 800,
+    ...(testBounds ? { x: testBounds.x, y: testBounds.y } : {}),
     frame: false,
     backgroundColor: "#0e1014",
     webPreferences: {
@@ -627,7 +640,16 @@ function createWindow() {
   // so an arbitrary site loaded there still can't silently read or
   // overwrite the user's OS clipboard — a real hijack vector this
   // handler's whole point was to close off, not reopen broadly.
-  const MAIN_WINDOW_ONLY_PERMISSIONS = new Set(["clipboard-sanitized-write", "clipboard-read"]);
+  // "notifications" (2026-09-02, "Terminal, Revisitado" — bell button per
+  // terminal card, fires when a turn goes idle) added the same way
+  // clipboard was above: this is the app's OWN first-party window asking
+  // for its own OS-notification capability, not an arbitrary page loaded
+  // inside a BrowserCard. Confirmed live before this change: with
+  // "notifications" absent from every set above, `setPermissionRequestHandler`
+  // fell through to the final `callback(false)` — `new Notification(...)`
+  // in the renderer would have silently never shown anything, not an
+  // error, just a feature that looked wired up but never fired.
+  const MAIN_WINDOW_ONLY_PERMISSIONS = new Set(["clipboard-sanitized-write", "clipboard-read", "notifications"]);
 
   // Shared "ask the renderer, wait for a human decision" primitive — used
   // both for the generic media-permission prompt right below and for
@@ -736,6 +758,29 @@ function createWindow() {
     // display primário).
     getScaleFactor: () => screen.getDisplayMatching(win.getBounds()).scaleFactor,
   });
+
+  // Achado ao vivo (2026-09-02, pedido explícito: "não apenas monitor
+  // 4K") — `getScaleFactor` acima é dinâmico (consulta o display real na
+  // hora), mas só era CHAMADO uma vez, em `browser:create` — arrastar a
+  // janela do app pra um monitor com scaleFactor diferente nunca
+  // reavaliava nada depois disso; todo browser card continuava
+  // rasterizando na densidade do monitor onde foi criado. `"moved"` (a
+  // janela terminou de se mover — evento discreto, não o `"move"`
+  // contínuo que dispara a cada pixel de arraste) cobre trocar de
+  // monitor; `screen.on("display-metrics-changed")` cobre o SO mudando a
+  // escala de um monitor com a janela parada nele (ex: usuário mexe nas
+  // configurações de display). `refreshScaleFactor` só retorna não-null
+  // quando o valor de fato mudou, então isto não dispara nenhum
+  // resize/IPC à toa em todo micro-movimento de janela dentro do mesmo
+  // monitor.
+  function recheckBrowserScaleFactors() {
+    for (const id of browserRegistry.liveIds()) {
+      const next = browserRegistry.refreshScaleFactor(id);
+      if (next !== null) safeSend(win, "browser:scale-factor-changed", id, next);
+    }
+  }
+  win.on("moved", recheckBrowserScaleFactors);
+  screen.on("display-metrics-changed", recheckBrowserScaleFactors);
 
   messageBus = createMessageBus(sockPath, {
     // Achado ao vivo (2026-09-01): o `.filter(kind === "terminal")` que
@@ -1172,6 +1217,26 @@ function createWindow() {
     return browserRegistry.testMakeEditable(id);
   });
 
+  // Test-only (2026-09-02), mesmo padrão de `browser:test-make-editable`
+  // acima — não dá pra provar "trocar de monitor com scaleFactor
+  // diferente" nesta máquina/CI sem um segundo monitor físico com
+  // densidade diferente (Wayland nativo, o modo real deste app, nem
+  // deixa reposicionar a janela programaticamente — já confirmado nesta
+  // sessão). Simula só o GATILHO (o valor de scaleFactor que
+  // `getScaleFactor()` teria lido de um monitor diferente) — todo o
+  // resto do caminho (`browserRegistry.refreshScaleFactor`'s diffing,
+  // `browser:scale-factor-changed` IPC, `BrowserCard.tsx` atualizando o
+  // espelho e re-disparando um resize real) roda de verdade, sem
+  // simulação nenhuma. `refreshScaleFactor` só existe pra chamar
+  // `callbacks.getScaleFactor()` de novo, então setar o entry direto e
+  // reusar o MESMO IPC que o caminho real dispara é fiel ao
+  // comportamento real, só troca de onde o número novo vem.
+  ipcMain.handle("browser:test-force-scale-factor", (_e, id: string, scaleFactor: number) => {
+    if (app.isPackaged) return;
+    browserRegistry.forceScaleFactor(id, scaleFactor);
+    safeSend(win, "browser:scale-factor-changed", id, scaleFactor);
+  });
+
   ipcMain.handle("ai:summarize", (_e, providerId: string, cwd: string, prompt: string) =>
     runOneShotSummary(providerId, cwd, prompt),
   );
@@ -1353,6 +1418,12 @@ function createWindow() {
     browserRegistry.destroyAll();
   });
   win.on("closed", () => {
+    // `screen.on(...)` acima é um listener GLOBAL do módulo `screen`, não
+    // escopado a `win` (diferente de `win.on("moved", ...)`, que o
+    // próprio Electron já limpa ao destruir a janela) — sem isto, ficaria
+    // pendurado referenciando um `win` já destruído se `createWindow()`
+    // algum dia rodasse mais de uma vez no mesmo processo.
+    screen.removeListener("display-metrics-changed", recheckBrowserScaleFactors);
     stopAllWatchers();
     messageBus?.close();
     mcpServer.close();

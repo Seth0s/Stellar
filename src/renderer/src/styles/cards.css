@@ -50,10 +50,26 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  /* Not inherited by default — `inherit` here explicitly copies the
-     radius set on .terminal-card/.files-card/etc (the parent), so the
-     clip boundary always matches the card's own visible border. */
-  border-radius: inherit;
+  /* Achado ao vivo (2026-09-02, reportado com screenshot real: canto
+     inferior direito do footer quadrado, "comendo" a margem, junto do
+     resize-grip): era `border-radius: inherit` — copia o valor
+     COMPUTADO do pai (.terminal-card/.files-card/etc) depois de
+     qualquer `transform`. Sob o `transform: scale()` fracionário do
+     board (Trilha B, `.card-scale`, zoom != 100%), esse `inherit`
+     resolvia pra 0px de verdade (confirmado via getComputedStyle
+     .borderBottomRightRadius, não só visual) mesmo o pai reportando
+     10px — .card-clip ficava com cantos quadrados E ~1px mais largo
+     que o pai (mesma causa: layout sub-pixel sob o scale fracionário).
+     Em cards opacos isso nunca apareceu — o próprio fundo sólido de
+     `.card-clip` cobria o degrau quadrado com a mesma cor do card por
+     trás. Só ficou visível depois do anel de acento (`box-shadow` em
+     `.terminal-card`, que segue o raio CORRETO do pai) contornar um
+     canto que `.card-clip` não arredondava mais. Fix: usar `var(--radius)`
+     direto (mesma fonte que todo card-kind já usa pro próprio raio, ver
+     tokens.css) em vez de depender do `inherit` recalcular certo sob
+     transform — bug presente em QUALQUER zoom != 100%, não é específico
+     de transparência (reproduzido também em cards opacos). */
+  border-radius: var(--radius);
 }
 
 .card-head {
@@ -135,19 +151,88 @@
   color: var(--text);
 }
 
-/* 2026-08-27 — the interrupt button used to be icon-only (a plain
-   outlined octagon at 12px, mistaken live for a "copy" icon); paired here
-   with a visible "Ctrl+C" label ("uma legenda interna mais clara", the
-   user's own words) instead of relying on the hover tooltip alone. */
-.terminal-card-interrupt {
-  gap: 4px;
-  padding: 4px 7px;
-  font-size: 11px;
-  font-weight: 500;
+/* 2026-08-27 — a plain outlined octagon a 12px lia como "copy" (achado ao
+   vivo), ganhou um label "Ctrl+C" visível como legenda. 2026-09-02
+   ("Terminal, Revisitado") — trocado pro quadrado sólido de stop (ver
+   Icon's `fill`, icons.tsx) e o usuário pediu pra tirar o label: o ícone
+   sozinho já é claro, sem o texto ficando. Volta pra base padrão de
+   `.card-head button` (mesmo padding/tamanho de sino/gota/fechar), nada
+   de override próprio mais. */
+
+/* Sino de notificação (2026-09-02) — mesma base de `.card-head button`;
+   `.on` (ligado, padrão) tinge com `--accent` — a MESMA variável que
+   CardFrame.tsx já seta em `.card-frame` a partir de PROVIDER_ACCENT
+   (TerminalCard.tsx), herdada por qualquer descendente sem precisar
+   replicar a variável em cada elemento. */
+.terminal-card-bell.on {
+  color: var(--accent, var(--foam));
+}
+.terminal-card-bell:not(.on) {
+  opacity: 0.55;
 }
 
-.terminal-card-interrupt-label {
+/* Ícone real do provider no header (2026-09-02) — ver o comentário de
+   PROVIDER_GLYPH em TerminalCard.tsx. Mesmo glyph do PureNerdFont já
+   carregado globalmente (main.tsx) — nada novo pra carregar aqui. Efeito
+   "metálico": texto preenchido com o próprio gradiente diagonal via
+   `background-clip: text`; `.flat` (bash/cursor, sem `--m-dark`) cai pra
+   cor sólida. */
+.terminal-card-provider-glyph {
+  font-family: "PureNerdFont", monospace;
+  font-size: 12px;
+  width: 15px;
   line-height: 1;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(125deg, var(--m-dark, var(--m-mid)) 0%, var(--m-mid) 48%, var(--m-dark, var(--m-mid)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.terminal-card-provider-glyph.flat {
+  background: none;
+  -webkit-text-fill-color: var(--m-mid);
+  color: var(--m-mid);
+}
+
+/* Barra de atividade (2026-09-02) — fina, invisível em repouso; pulsa
+   esquerda→direita durante `isActive` (useTerminal.ts) e some ao acabar.
+   `overflow: hidden` no container fixo, a faixa que se move é um filho
+   mais largo que ele mesmo (mesma técnica de "sweep" de loading bar). */
+.terminal-card-activity {
+  height: 2px;
+  flex: none;
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+}
+.terminal-card-activity-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  left: -34%;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, var(--accent, var(--foam)), transparent);
+}
+.terminal-card-activity.on .terminal-card-activity-sweep {
+  opacity: 1;
+  animation: terminal-activity-sweep 1s linear infinite;
+}
+@keyframes terminal-activity-sweep {
+  from { transform: translateX(0); }
+  to { transform: translateX(288%); } /* atravessa o container inteiro: (100% + 34%*2) / 34% */
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-card-activity-sweep {
+    animation: none !important;
+  }
+  .terminal-card-activity.on .terminal-card-activity-sweep {
+    opacity: 0.6;
+  }
 }
 
 .card-head button.active {
@@ -247,6 +332,35 @@
   outline: none;
   width: 120px;
   flex: none;
+}
+
+/* Indicador de rename (2026-09-02, "Terminal, Revisitado") — ver o
+   comentário em CardTag.tsx. `.card-tag` sozinho continua funcionando
+   idêntico a antes (a lógica de renomear não mudou, só ganhou um
+   segundo gatilho visível); esconde/mostra com o resto do header. */
+.card-tag-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.card-tag-rename-hint {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-tag-rename-hint:hover {
+  opacity: 1;
+  color: var(--accent, var(--text));
+  background: color-mix(in srgb, var(--accent, var(--muted)) 16%, transparent);
 }
 
 .card-foot {
@@ -361,6 +475,41 @@
   box-shadow: var(--card-shadow, var(--shadow-card));
 }
 
+/* Acento do provider ao redor do card inteiro (2026-09-02, pedido ao vivo
+   testando — "bem leve"), não só no card-tag/chip do header. `--accent`
+   já vem herdado de `.card-frame` (CardFrame.tsx, a partir de
+   PROVIDER_ACCENT) — mesma variável, nenhuma nova plumbing. Regra
+   própria (não dentro do grupo acima, que é compartilhado por todo tipo
+   de card) porque `--accent` só faz sentido pra terminal hoje; um anel
+   de 1px quase transparente + um glow bem baixo, mais sutil que a régua
+   do header. Composto com o box-shadow já existente (D2's sombra de
+   baixo zoom), não substitui.
+   Achado ao vivo (2026-09-02, dois screenshots reais do usuário — "o
+   neon em volta começa a ser consumido pelo layout" a partir de ~55% de
+   zoom, piorando com menos zoom): não é bug de GPU/compositing desta
+   vez — é matemática de spec do CSS. O spread NEGATIVO de um box-shadow
+   encolhe o raio efetivo do próprio shadow: `raio_efetivo = max(0,
+   --radius + spread)`. Com `--radius: 10px` (tokens.css) e spread de
+   -12px, `10 + (-12) = -2`, grampeado em **0** — a camada de glow
+   borrava a partir de um retângulo de canto RETO por baixo do pano,
+   mesmo o card sendo arredondado (o anel de 1px, spread 0, nunca teve
+   esse problema — só a camada de glow). Um retângulo de fonte reto
+   borrado tem MUITO menos halo bem no canto arredondado visível do que
+   ao longo da borda reta (a distância do canto reto grampeado até o
+   canto arredondado real é maior que a distância equivalente na borda
+   reta) — daí o glow sumir exatamente no canto e "piorar com menos
+   zoom" (zoom baixo = card menor em tela = o corte relativo fica mais
+   evidente proporcionalmente). Fix: spread reduzido pra -6px — bem
+   dentro do raio de 10px (raio efetivo do shadow = 4px, ainda
+   arredondado de verdade), then o halo acompanha o canto em vez de
+   recuar bruscamente nele. */
+.terminal-card {
+  box-shadow:
+    var(--card-shadow, var(--shadow-card)),
+    0 0 0 1px color-mix(in srgb, var(--accent, transparent) 30%, transparent),
+    0 0 20px -6px var(--accent, transparent);
+}
+
 .terminal-card-body {
   flex: 1;
   overflow: hidden;
@@ -374,9 +523,10 @@
 }
 
 /* xterm.js's own scrollbar (a VS Code-derived overlay scrollbar, not the
-   browser's native one — real, functional: `new Terminal()` gets no
-   explicit `scrollback`, so it defaults to 1000 lines, and a busy session
-   genuinely fills that).
+   browser's native one — real, functional: `new Terminal()` sets
+   `scrollback: 10000` (useTerminal.ts, 2026-09-02 — era o default do
+   próprio xterm.js, 1000, nunca setado explicitamente antes), e uma
+   sessão movimentada genuinely enche isso).
    Pedido ao vivo (2026-08-30) — a transparent-slider fix (below, kept for
    history) wasn't enough; the human wants the scrollbar gone entirely,
    not just unpainted. `visibility: hidden` on the two scrollbar container

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { worldRectToScreen, type Rect } from "./board-model";
 
@@ -197,6 +197,26 @@ export function CardFrame({
   rectRef.current = rect;
   const [dragging, setDragging] = useState(false);
 
+  // Achado ao vivo (2026-09-02, escrevendo o teste de resize/snapshot do
+  // navegador) — `"spawning"` (frameClass abaixo) era uma string LITERAL
+  // no array, sempre presente em TODO render, não só na montagem inicial.
+  // A animação CSS (`popin`, animations.css) só REPETE quando o elemento
+  // DOM em si é recriado (React troca de key, ou o pai desmonta/remonta) —
+  // o card em uso normal nunca sentia isso, mas um teste medindo
+  // `getBoundingClientRect()` logo depois de um evento que causa remount
+  // (ex: navegar um browser card) podia pegar o card NO MEIO da animação
+  // de entrada de novo, lendo um rect encolhido por `transform: scale()`
+  // (0.92 do keyframe inicial) em vez do tamanho real assentado — ficou
+  // mais fácil de reproduzir depois do supersample fixo (Item 6) deixar a
+  // criação/primeiro paint do navegador mensuravelmente mais lenta,
+  // deslocando quando esse remount acontece em relação ao resto. Fix:
+  // `isFirstRenderRef` só é `true` na primeira renderização de verdade —
+  // `spawning` (abaixo) passa a depender dele em vez de ser incondicional.
+  const isFirstRenderRef = useRef(true);
+  useEffect(() => {
+    isFirstRenderRef.current = false;
+  }, []);
+
   // Item 2.1 — "piscar durante o drag", reportado ao vivo: raw
   // `pointermove` pode disparar bem mais rápido que a taxa de atualização
   // real da tela (não é limitado pelo browser), e cada evento aqui virava
@@ -358,7 +378,7 @@ export function CardFrame({
     className,
     chromeless && "chromeless",
     chromeless && chromeActive && "chrome-active",
-    "spawning",
+    isFirstRenderRef.current && "spawning",
     dragging && "dragging",
     reflowing && "reflow",
     selected && "selected",
