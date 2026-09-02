@@ -2426,12 +2426,18 @@ export function App() {
           {marquee && <rect className="marquee" x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} />}
         </svg>
       </div>
-      {/* Trilha B — migrated card kinds (currently "sticky"/"browser",
-          see their `case` blocks below) portal their DOM here instead of
+      {/* Trilha B — all 9 card kinds now portal their DOM here instead of
           rendering inline inside `.world`'s map; see CardFrame.tsx's
           `screenProjected` prop doc comment for why (no CSS scale here,
-          cards compute their own on-screen left/top). Empty div,
-          contents arrive via `createPortal`. */}
+          cards compute their own on-screen left/top). Empty div, contents
+          arrive via `createPortal`. `.world`'s own `scale(zoom)` can't be
+          removed yet even so — the `<svg className="board-overlay">`
+          above (connector lines, the pen-drawing live preview, the
+          group-select marquee) still lives inside `.world` and still
+          relies on that ambient transform for its own coordinates; see
+          DESIGN-BACKLOG.md's Trilha B entry for the follow-up this
+          implies before §0.8 ponto 3 (remover scale(zoom) de .world) can
+          be closed. */}
       <div className="cards-layer" ref={setCardsLayerEl} />
       <Rail
         tool={tool}
