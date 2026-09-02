@@ -2230,7 +2230,15 @@ export function App() {
             );
           }
           case "media": {
-            return (
+            // Trilha B — mesmo padrão de portal que "files"/"changes"/
+            // "stroke" acima. Combinação nova aqui: MediaCard em modo
+            // imagem é `chromeless` (nenhum outro kind migrado até agora
+            // era) — ver CardFrame.tsx's `onHeaderPointerDown`/resize, que
+            // já dividem por `zoom` de forma genérica, então não deveria
+            // exigir tratamento especial, mas é a primeira vez que essa
+            // combinação roda de verdade.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <MediaCard
                 key={c.id}
                 rect={c.rect}
@@ -2258,7 +2266,12 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "browser": {
