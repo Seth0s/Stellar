@@ -41,6 +41,7 @@ import {
   quadraticControlPoint,
   rectCenter,
   rectsOverlap,
+  overlapArea,
   viewportWorldRect,
   worldRectToScreen,
   type Point,
@@ -1047,7 +1048,7 @@ export function App() {
       model: newModel.trim() || null,
       systemPrompt: newSystemPrompt.trim() || null,
       initialInput: null,
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect)),
       groupId: null,
       label: null,
     });
@@ -1067,7 +1068,7 @@ export function App() {
     addCard({
       id,
       ...defaultCardFields(kind, activeBoardCwd),
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length),
+      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect)),
       groupId: null,
       label: null,
     } as Card);
@@ -1199,7 +1200,7 @@ export function App() {
       kind: "browser",
       url,
       ownerCardId,
-      rect: centeredSlot(visibleRect, cardsRef.current.length),
+      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
       groupId: null,
       label: null,
     };
@@ -1226,7 +1227,7 @@ export function App() {
       model: model || null,
       systemPrompt: null,
       initialInput: null,
-      rect: centeredSlot(visibleRect, cardsRef.current.length),
+      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
       groupId: null,
       // DESIGN-BACKLOG.md item 62 — an MCP-driven spawn can name its own
       // child agent, same free-text field CardTag rename already sets;
@@ -1255,7 +1256,7 @@ export function App() {
       model: null,
       systemPrompt: null,
       initialInput: command,
-      rect: centeredSlot(visibleRect, cardsRef.current.length),
+      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
       groupId: null,
       label: `instalar ${providerId}`,
     });
@@ -1269,7 +1270,7 @@ export function App() {
   function spawnCardFor(kind: SpawnCardKind, cwd: string | undefined, url: string | undefined, requesterId: string | null): string {
     if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank");
     const id = String(nextId.current++);
-    const rect = centeredSlot(visibleRect, cardsRef.current.length);
+    const rect = centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect));
     const card = {
       id,
       ...defaultCardFields(kind, cwd || activeBoardCwd),
@@ -1571,19 +1572,33 @@ export function App() {
    * z-index — there's no way to make a dragged terminal/files/sticky card
    * visually cover a browser card the way DOM cards cover each other. Same
    * mitigation CentralByte's Fase 1 used for the identical structural
-   * problem (native VTE over DOM): reject the move outright instead of
-   * pretending overlap works.
+   * problem (native VTE over DOM): reject a move that would increase
+   * overlap with a browser card, instead of pretending overlap works.
+   *
+   * "Would increase" (not "produces any overlap at all") — 2026-09-02, real
+   * bug report: `centeredSlot`'s old stagger-only spawn (fixed separately,
+   * see board-model.ts) could already land a browser card exactly on top of
+   * another. Rejecting every overlapping rect outright, unconditionally,
+   * meant BOTH cards involved were then stuck forever — since `rect` here
+   * is the live pointer position and any drag that hasn't fully cleared the
+   * other card's bounds yet still overlaps it, the plain reject fired on
+   * literally every pointermove tick, so neither card ever moved a single
+   * pixel, exactly the "imoveis, sem possivel de drag" the user saw.
+   * Comparing the new overlap area against the CURRENTLY COMMITTED rect's
+   * overlap area (not a flat yes/no) keeps the original guarantee — a drag
+   * can never make a browser overlap worse than it already is — while still
+   * letting an already-overlapping pair be dragged apart, one incremental
+   * step at a time, same as a normal drag anywhere else on the board.
    */
   function tryChangeRect(id: string, rect: Rect) {
     const moving = cardsRef.current.find((c) => c.id === id);
     if (!moving) return;
-    const collides = cardsRef.current.some(
-      (other) =>
-        other.id !== id &&
-        (moving.kind === "browser" || other.kind === "browser") &&
-        rectsOverlap(rect, other.rect),
-    );
-    if (collides) return;
+    const worsens = cardsRef.current.some((other) => {
+      if (other.id === id || (moving.kind !== "browser" && other.kind !== "browser")) return false;
+      if (!rectsOverlap(rect, other.rect)) return false;
+      return overlapArea(rect, other.rect) > overlapArea(moving.rect, other.rect);
+    });
+    if (worsens) return;
     changeRect(id, rect);
   }
 

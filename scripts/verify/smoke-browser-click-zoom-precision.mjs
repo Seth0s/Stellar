@@ -1,33 +1,33 @@
 // Bug real achado ao vivo (2026-09-01, feedback do usuário: "está
 // impreciso o click"): `BrowserCard.tsx`'s `toCanvasPoint` mapeava a
 // fração do clique dentro do retângulo REAL na tela pelo tamanho de
-// MUNDO do card (`rect.w`/`rect.h`, pré-zoom) — mas o espaço de
-// coordenadas que `sendInputEvent` espera é o content size REAL da
-// BrowserWindow offscreen, que a Trilha A do navegador já escala pelo
-// mesmo zoom (`browser-registry.ts`'s `resize()`). Em zoom=1 os dois
-// tamanhos coincidem por acaso (nenhum teste em zoom!=1 existia até
-// agora), mas em qualquer outro zoom o clique media só uma fração do
-// espaço real — em zoom=2, por exemplo, clicar perto do canto/borda do
-// card na tela mandava a coordenada pra literalmente METADE da posição
-// real dentro da página embutida.
+// MUNDO do card (`rect.w`/`rect.h`), mas o espaço de coordenadas que
+// `sendInputEvent` espera é o content size REAL da BrowserWindow
+// offscreen (`browser-registry.ts`'s `resize()`) — que na época deste
+// teste também escalava pelo zoom do board (Trilha A), e desde
+// 2026-09-02 (pedido explícito do usuário) só escala pelo `scaleFactor`
+// real do monitor. Em qualquer um dos dois casos, o teste continua
+// válido: `toCanvasPoint` mapeia por FRAÇÃO do box visual (que a
+// transform CSS de zoom do `.world` sempre muda), então mesmo com o
+// content size agora fixo independente do zoom, um clique preciso em
+// zoom=200% só se mantém correto se a fração for calculada certa — a
+// regressão que este teste pega não mudou de natureza, só a fórmula do
+// content size esperado mudou (lida ao vivo agora, não recalculada aqui).
 //
 // Verifica ao vivo, sem mock: um botão real fixado perto do rodapé da
 // viewport da página (`position: fixed; bottom`), zoom do board setado
-// pra 200% via o campo de entrada direta do zoom-pill (não s
+// pra 200% via o campo de entrada direta do zoom-pill (não
 // aproximações de scroll/wheel), clique real disparado exatamente na
 // posição da tela que DEVERIA acertar o botão (calculada a partir do
-// content size REAL pós-clamp, mesma fórmula do fix) — confirma que o
-// clique realmente chegou nele via `window.browser.onTitle` (o botão só
-// muda o título real da página no seu próprio onclick).
+// content size REAL, lido de `debugBridge.browserContentSize`, não
+// recomputado por uma fórmula duplicada aqui) — confirma que o clique
+// realmente chegou nele via `window.browser.onTitle` (o botão só muda o
+// título real da página no seu próprio onclick).
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
 const CDP_PORT = 9541;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-click-zoom-precision", import.meta.url).pathname;
-
-// Mesmo clamp de browser-registry.ts's BROWSER_ZOOM_MIN/MAX.
-const BROWSER_ZOOM_MIN = 0.5;
-const BROWSER_ZOOM_MAX = 3;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(
@@ -73,22 +73,24 @@ async function centerOf(page, selector) {
   return res;
 }
 
-// Botão real numa posição absoluta perto do CENTRO do content space (não
-// perto de um canto) — em zoom=200% o card fica maior que a própria
-// janela e zoom centraliza no centro do card, então qualquer alvo perto
-// de uma borda/canto do CONTEÚDO cai fora da área visível da tela real
-// (achado ao vivo construindo este teste). Um deslocamento modesto a
-// partir do centro (150,120) ainda distingue claramente a versão com bug
-// (que manda a coordenada pra METADE da posição real — em zoom=2 isso
-// entrega um deslocamento de só (75,60) a partir do centro, fora do
-// alcance do botão) da versão corrigida, e continua dentro da área
-// visível de qualquer janela razoável.
-const TARGET_LEFT = 1010;
-const TARGET_TOP = 780;
+// Botão ancorado no CENTRO do content space via `left/top: 50%` +
+// `translate(-50%,-50%)` — nunca em pixels absolutos. Achado ao vivo
+// construindo este teste (2026-09-02, depois da mudança que desacopla a
+// resolução real do zoom do board — ver browser-registry.ts's `resize`):
+// um alvo em pixel absoluto calibrado pro content space ANTIGO (que
+// crescia com o zoom) cai fora da página real agora que o content space
+// fica fixo independente do zoom — a página deixou de ser "maior" em
+// zoom=200%, só o CSS `scale()` do `.world` deixa o CARD maior na tela.
+// Âncora percentual sobrevive a qualquer fórmula de content-size futura:
+// o centro é sempre fração (0.5, 0.5), e ainda distingue claramente a
+// versão com bug de coordenada (que mandava o clique pra METADE da
+// posição real) da corrigida, porque o clique real é disparado a partir
+// da fração medida no BOX VISUAL na tela (que o zoom sempre muda), não
+// de um valor cravado.
 const server = createServer((_req, res) => {
   res.writeHead(200, { "Content-Type": "text/html" });
   res.end(`<!doctype html><html><head><title>antes</title></head><body style="margin:0;">
-    <button id="btn" style="position:fixed;left:${TARGET_LEFT}px;top:${TARGET_TOP}px;width:60px;height:30px;"
+    <button id="btn" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:60px;height:30px;"
       onclick="document.title='clicked-target'">Alvo</button>
   </body></html>`);
 });
@@ -159,15 +161,11 @@ try {
   const zoomText = await page.evalJs(`document.querySelector('.zoom-readout')?.textContent ?? ""`);
   check(`board real em 200% de zoom (leitura real: "${zoomText}")`, zoomText.trim(), "200%");
 
-  // Calcula a posição na TELA que deveria acertar o botão, a partir do
-  // content size REAL pós-clamp (mesma fórmula do fix em BrowserCard.tsx
-  // e de resize() em browser-registry.ts) — não um valor cravado.
-  const effectiveZoom = Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, 2));
-  const contentH = Math.max(1, Math.round(card.h * effectiveZoom));
-  const contentW = Math.max(1, Math.round(card.w * effectiveZoom));
-  // Centro real do botão no espaço de conteúdo.
-  const targetFractionX = (TARGET_LEFT + 30) / contentW;
-  const targetFractionY = (TARGET_TOP + 15) / contentH;
+  // O botão é ancorado no centro exato do content space (ver comentário
+  // acima) — sua fração é sempre (0.5, 0.5), não depende de ler o content
+  // size real nem de recalcular nada.
+  const targetFractionX = 0.5;
+  const targetFractionY = 0.5;
 
   const canvasBox = JSON.parse(
     await page.evalJs(`
@@ -198,7 +196,7 @@ try {
 
   const titleAfterClick = await page.evalJs(`window.__titleAfterClick`);
   check(
-    `clique real em zoom=200% acerta o botão de verdade (espaço de conteúdo real ${contentW}x${contentH}, canvas na tela ${JSON.stringify(canvasBox)}, clique em (${Math.round(clickX)},${Math.round(clickY)}), título real depois: ${titleAfterClick})`,
+    `clique real em zoom=200% acerta o botão de verdade (canvas na tela ${JSON.stringify(canvasBox)}, clique em (${Math.round(clickX)},${Math.round(clickY)}), título real depois: ${titleAfterClick})`,
     titleAfterClick,
     "clicked-target",
   );
