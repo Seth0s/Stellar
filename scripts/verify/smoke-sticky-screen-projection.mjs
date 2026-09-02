@@ -245,11 +245,10 @@ try {
   );
 
   // --- fechar real (animação pop) ---
-  // `.card-head button` sozinho pegaria os 4 botões de swatch de cor
-  // primeiro (`querySelector` pega o primeiro match) — o botão de
-  // fechar é filho DIRETO de `.card-head-inner`, os swatches estão
-  // aninhados mais fundo dentro do próprio label.
-  const closeBtn = await centerOf(page, ".sticky-card .card-head-inner > button");
+  // Nota ganhou um 2º botão no header (toggle editar/preview,
+  // 2026-09-02) — mesma convenção de ChatCard/BrowserCard agora:
+  // ambos vivem em `.card-head-actions`, close é sempre o último.
+  const closeBtn = await centerOf(page, ".sticky-card .card-head-actions button:last-child");
   await page.click(closeBtn.x, closeBtn.y);
   await new Promise((r) => setTimeout(r, 400));
   const cardCountAfterClose = await page.evalJs(`document.querySelectorAll('.sticky-card').length`);
