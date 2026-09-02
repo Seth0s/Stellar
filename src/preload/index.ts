@@ -556,7 +556,7 @@ const remote = {
  * unconditionally at boot. `onAvailable`/`onDownloaded` only ever fire in
  * a packaged build with a real update actually found. */
 const updater = {
-  check: (): Promise<{ checked: boolean }> => ipcRenderer.invoke("updater:check"),
+  check: (): Promise<{ checked: boolean; error?: string }> => ipcRenderer.invoke("updater:check"),
   install: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke("updater:install"),
   onAvailable: (cb: (version: string, releaseNotes: string | null) => void) => {
     const listener = (_e: unknown, version: string, releaseNotes: string | null) => cb(version, releaseNotes);

@@ -6,6 +6,7 @@ Este documento consolida o estado atual de design, produto e arquitetura do proj
 
 ## 📌 Sumário de Navegação
 
+0. [🐛 Bugs Urgentes (Recém-Reportados)](#-0-bugs-urgentes-recém-reportados)
 1. [⏳ Em Andamento / Em Espera](#-1-em-andamento--em-espera)
 2. [📋 Pendente](#-2-pendente)
    * [2.1 Funcionalidades & Gaps de Produto](#21-funcionalidades--gaps-de-produto)
@@ -19,6 +20,24 @@ Este documento consolida o estado atual de design, produto e arquitetura do proj
    * [4.4 Orquestração & Superfície MCP](#44-orquestração--superfície-mcp)
    * [4.5 Segurança, Resiliência & Performance](#45-segurança-resiliência--performance)
 5. [🎯 Próxima Rodada Recomendada](#-5-próxima-rodada-recomendada)
+
+---
+
+## 🐛 0. Bugs Urgentes (Recém-Reportados)
+
+Reportados ao vivo pelo usuário em 2026-09-02, ainda não investigados. Prioridade sobre o resto do backlog — foco atual é otimização de performance/código, provável causa raiz comum dos três.
+
+* **Auto-updater não notifica atualização disponível — [x] causa raiz achada e corrigida (2026-09-02):**
+  * Empacotamento (`.rpm`, `latest-linux.yml`, GitHub Release) verificado correto nas últimas 3 tags (v0.2.0/v0.3.0/v0.3.1, baixadas e inspecionadas ao vivo) — não era bug de CI/publish.
+  * Causa real, dupla: (1) `main/updater.ts`'s `updater:check` engolia qualquer falha de `checkForUpdates()` (rede, rate-limit da API do GitHub sem token) num `console.warn` do processo main — invisível em quem roda o pacote instalado sem terminal; (2) o `void window.updater.check()` no boot (`useUpdateStatus.ts`) descartava até o retorno bem-sucedido, então mesmo um erro devolvido não tinha pra onde ir. Sem contar isso: **não existia gatilho manual nenhum** — só a checagem automática de boot, sem jeito de forçar uma nova tentativa.
+  * Corrigido: `updater:check` agora devolve `{checked, error?}`; `useUpdateStatus.ts` guarda `checking`/`checkError` e expõe `checkNow()`; `Titlebar.tsx` ganhou um botão de refresh sempre visível (ícone gira enquanto checa, fica vermelho com `title` explicando se a última tentativa falhou). `smoke-updater.mjs` estendido com 3 checks novos cobrindo o botão — suite completa (13/13) passando ao vivo.
+  * *Pendente de validação do usuário*: instalado hoje já é v0.3.1 (a mais recente), então não há update real pra ele confirmar visualmente ainda — validar no próximo bump de tag, ou usar `window.updater.testEmitAvailable` em build de dev pra ver o botão reagir a um erro simulado.
+* **Reabrir sessão anterior trava o app, principalmente com muitos cards:**
+  * Clicar numa sessão já existente (não nova) na home trava o Stellar — piora com o número de cards salvos na sessão.
+  * *Investigar*: hidratação/restore de cards no load da sessão — suspeita de trabalho síncrono bloqueando a main thread ou N+1 de recriação de webContents/PTYs por card, sem virtualização/lazy-load.
+* **Header do card some durante sessão longa, gatilho ainda não identificado:**
+  * Em algum momento de uma sessão longa o header de um card desaparece. Trigger desconhecido — precisa reprodução/instrumentação antes de propor causa.
+  * *Pista achada de graça investigando o bug do updater* (não confirmada): `Titlebar.tsx` tem `if (fullscreen) return null` — o header GLOBAL do app inteiro (não de um card específico) some sempre que `window.winControls.isFullscreen()`/`onFullscreenChange` reporta fullscreen real do SO. Se o "header" que some é esse (barra de título/janela), qualquer coisa entrando em fullscreen sem gesto explícito (F11 sem querer, atalho colidindo) explicaria o sumiço sem trigger óbvio. Falta confirmar com o usuário se é o header global ou o header de um card, e então instrumentar `onFullscreenChange` pra registrar quem/o que disparou.
 
 ---
 
@@ -117,6 +136,9 @@ Conceitos arquiteturais e melhorias futuras registradas para avaliação:
   * Avaliar transição do blob JSON único em `messages_json` para uma tabela relacional de mensagens em padrão *append-only* caso o volume de turnos longos aumente.
 * **Acesso Remoto Hospedado via Relay & Magic Link (Item 2 - Fase C):**
   * Criação de infraestrutura gerenciada de relay para pareamento sem necessidade de túnel próprio do usuário (mantido fora de escopo no momento).
+* **`spawn_card` de Sticky Sem Gate Humano (achado ao vivo, 2026-09-02):**
+  * `write_sticky`/`read_sticky` já não pedem aprovação (conteúdo de board, não side-effect de disco/processo), mas criar o card sticky em si passa por `spawn_card`, que pede aprovação pra todo `kind` (files/changes/sticky/browser/remote-window) igual. Em sessão remota sem humano no PC pra decidir o dialog, o pedido expira (`"timed out waiting for a decision"`) e trava o fluxo de status/goal do agente.
+  * Avaliar isentar `kind: "sticky"` do gate — mesma classe de risco de `write_sticky` (nota de board, reversível, sem side-effect de disco/processo), diferente de `browser`/`remote-window` que abrem superfícies novas de execução.
 * **Header do Navegador — Restante da Paridade com CentralByte (§2.1, deliberadamente fora do escopo do plano de controle MCP + Trilha A):**
   * Checado ao vivo (grep no código, 2026-08-31): não existe HOJE nenhuma captura de `console-message`/`debugger` fora da que acabou de entrar, e `Connector` (`fromCardId`/`toCardId`, `kind`) é 100% decorativo — não existe mecanismo nenhum de "mandar algo de um card pro outro através de uma linha conectada". Cada item abaixo é arquitetura nova, não um ajuste pontual.
   * **Design Mode:** picker de elemento na página embutida → captura tag/seletor/HTML → envia pro chat conectado. Depende do item de conectores funcionais abaixo — sem plumbing de tempo de execução, não tem pra onde mandar.
