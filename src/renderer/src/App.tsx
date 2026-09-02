@@ -1991,7 +1991,13 @@ export function App() {
           // "4 (deferida)").
           switch (c.kind) {
           case "terminal": {
-            return (
+            // Trilha B — último e mais arriscado kind migrado (por
+            // design, ver plano). `correctZoomCoords` (useTerminal.ts)
+            // deliberadamente NÃO foi tocado aqui — continua necessário
+            // mesmo screen-projected, ver o comentário no prop
+            // `screenProjected` de TerminalCard.tsx.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <TerminalCard
                 key={c.id}
                 id={c.id}
@@ -2025,7 +2031,12 @@ export function App() {
                 onSelectStart={onSelectStart}
                 selected={selected}
                 onSuggestInstall={stableSuggestInstall}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "files": {
