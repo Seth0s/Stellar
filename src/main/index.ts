@@ -326,9 +326,22 @@ function openExternally(target: string): void {
 }
 
 function createWindow() {
+  // Test-only (2026-09-02) — mesmo padrão de `!app.isPackaged` já usado
+  // por `browser:test-make-editable`/`chat:test-simulate-tool`: sem isso,
+  // não existia jeito de abrir a janela principal num monitor específico
+  // pra verificar de verdade o fix de scaleFactor real do navegador
+  // embutido (Item 6, DESIGN-BACKLOG.md) — a pendência ficou "sem
+  // confirmação visual num monitor HiDPI real" porque não dava pra
+  // posicionar a janela lá sem controle externo de janela (Wayland não
+  // deixa ferramenta nenhuma mover janela de outro processo). Nunca
+  // ativa fora de um `startApp` de diagnóstico que setar essa env var.
+  const testBounds = !app.isPackaged && process.env.AGENT_CANVAS_TEST_WINDOW_BOUNDS
+    ? (JSON.parse(process.env.AGENT_CANVAS_TEST_WINDOW_BOUNDS) as { x: number; y: number; width: number; height: number })
+    : null;
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: testBounds?.width ?? 1280,
+    height: testBounds?.height ?? 800,
+    ...(testBounds ? { x: testBounds.x, y: testBounds.y } : {}),
     frame: false,
     backgroundColor: "#0e1014",
     webPreferences: {
