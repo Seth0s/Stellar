@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { toast } from "./useToast";
 import { registerTerminal, unregisterTerminal } from "./terminal-registry";
 
@@ -127,6 +128,25 @@ const TERMINAL_THEME = {
 };
 
 /**
+ * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — cursor tingido
+ * pelo acento do provider (o mesmo laranja/prateado/azul-escuro/verde de
+ * `PROVIDER_ACCENT`, TerminalCard.tsx). xterm.js's `theme` só aceita cor
+ * literal, nunca uma referência `var(--x)` — resolvida aqui em runtime a
+ * partir do computed style do `documentElement`, NUNCA duplicada como hex
+ * solto (tokens.css continua a única fonte da verdade; `getComputedStyle`
+ * já devolve o valor final, com qualquer `var()` aninhado resolvido).
+ * Fallback pro foam original de `TERMINAL_THEME.cursor` se a variável não
+ * existir por algum motivo (provider desconhecido).
+ */
+function resolveProviderAccent(providerId: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(`--accent-${providerId}`).trim();
+  return value || TERMINAL_THEME.cursor;
+}
+function buildTerminalTheme(providerId: string) {
+  return { ...TERMINAL_THEME, cursor: resolveProviderAccent(providerId) };
+}
+
+/**
  * Splits PTY lifecycle from the xterm renderer on purpose: the PTY (a real
  * process, the actual conversation state) must survive a card leaving the
  * viewport.
@@ -202,6 +222,20 @@ export function useTerminal(
   // usa isto pra mostrar "carregando sessão..." só nessa janela (spawn
   // ok, PTY rodando, zero bytes recebidos ainda).
   const [hasReceivedOutput, setHasReceivedOutput] = useState(false);
+  /**
+   * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — sinal real por
+   * trás da barra de atividade do header (TerminalCard.tsx). Aproximação
+   * honesta, não detecção semântica: este PTY não expõe nenhum marcador
+   * de "início/fim de turno" (sem shell-integration/OSC 133 aqui) — o que
+   * dá pra observar de verdade é só "o processo está escrevendo bytes
+   * agora". `true` a cada `pty:data`, `false` depois de
+   * `ACTIVITY_IDLE_MS` sem nenhum byte novo — mesma doutrina de debounce
+   * já usada nesta função pro zoom de fonte (150ms) e pro badge de "
+   * carregando sessão" (1200ms), só que aqui o "silêncio" É o sinal
+   * (idle), não o inverso.
+   */
+  const [isActive, setIsActive] = useState(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
@@ -294,10 +328,17 @@ export function useTerminal(
       }
     }
 
+    const ACTIVITY_IDLE_MS = 900;
     const offData = window.pty.onData((id, data) => {
       if (id !== ptyIdRef.current) return;
       writeMasked(data);
       setHasReceivedOutput(true);
+      setIsActive(true);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        idleTimerRef.current = null;
+        setIsActive(false);
+      }, ACTIVITY_IDLE_MS);
     });
     const offExit = window.pty.onExit((id, code) => {
       if (id === ptyIdRef.current) setExitCode(code);
@@ -311,10 +352,15 @@ export function useTerminal(
       offData();
       offExit();
       offSessionFound();
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
       if (ptyIdRef.current) void window.pty.kill(ptyIdRef.current);
       ptyIdRef.current = null;
       setPtyId(null);
       setHasReceivedOutput(false);
+      setIsActive(false);
     };
     // resumeId/continueLast/model/systemPrompt are deliberately NOT deps.
     // Confirmed via CDP: App.tsx's resumeIdDiscovered() writes a freshly
@@ -344,7 +390,16 @@ export function useTerminal(
   useEffect(() => {
     if (!ptyId) return;
     function buildTerminal(withWebgl: boolean) {
-      const t = new Terminal({ fontSize: BASE_FONT_SIZE, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
+      const t = new Terminal({
+        fontSize: BASE_FONT_SIZE,
+        cursorBlink: true,
+        fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
+        theme: buildTerminalTheme(providerId),
+        // DESIGN-BACKLOG.md's "ganhos baratos" item — default era 1000
+        // (o próprio default do xterm.js, nunca setado explicitamente
+        // antes), contra as 10.000 do Kitty.
+        scrollback: 10000,
+      });
       const f = new FullWidthFitAddon();
       t.loadAddon(f);
       if (withWebgl) {
@@ -355,6 +410,16 @@ export function useTerminal(
           // only actually fail later, inside open() below — this check still
           // catches the common case for free.
         }
+      }
+      // JetBrains Mono já suporta ligaduras — só não renderizavam sem este
+      // addon (nenhum código aqui as detectava/desenhava). `font-ligatures`
+      // (dependência real do addon) faz detecção pura-JS via opentype.js,
+      // sem binding nativo — mesmo padrão defensivo do WebGL acima: uma
+      // falha aqui nunca deve impedir o terminal de abrir.
+      try {
+        t.loadAddon(new LigaturesAddon());
+      } catch {
+        // sem ligaduras nesse ambiente — terminal continua funcional.
       }
       t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
       return { t, f };
@@ -430,9 +495,20 @@ export function useTerminal(
       registerDomListeners(term, fit, el);
     }
     function buildTerminalNoWebgl() {
-      const t = new Terminal({ fontSize: BASE_FONT_SIZE, cursorBlink: true, fontFamily: '"JetBrains Mono", "PureNerdFont", monospace', theme: TERMINAL_THEME });
+      const t = new Terminal({
+        fontSize: BASE_FONT_SIZE,
+        cursorBlink: true,
+        fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
+        theme: buildTerminalTheme(providerId),
+        scrollback: 10000,
+      });
       const f = new FullWidthFitAddon();
       t.loadAddon(f);
+      try {
+        t.loadAddon(new LigaturesAddon());
+      } catch {
+        // sem ligaduras nesse ambiente — terminal continua funcional.
+      }
       t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
       return { t, f };
     }
@@ -744,5 +820,5 @@ export function useTerminal(
     if (ptyIdRef.current) void window.pty.interrupt(ptyIdRef.current);
   }
 
-  return { ptyId, exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, fitNow, interrupt };
+  return { ptyId, exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt };
 }

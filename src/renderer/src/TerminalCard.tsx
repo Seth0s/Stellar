@@ -13,6 +13,29 @@ const PROVIDER_ACCENT: Record<string, string> = {
   claude: "var(--accent-claude)",
   codex: "var(--accent-codex)",
   cursor: "var(--accent-cursor)",
+  // Gap real fechado (2026-09-02) — antigravity é provider de verdade
+  // (main/providers.ts) mas nunca teve entrada aqui, caindo no cinza do
+  // bash sem ninguém ter decidido isso.
+  antigravity: "var(--accent-antigravity)",
+};
+
+/**
+ * Ícone real de cada provider no header (2026-09-02, "Terminal,
+ * Revisitado") — glyph do MESMO Nerd Font que o app já empacota
+ * (`@azurity/pure-nerd-font`, carregado globalmente por main.tsx,
+ * também usado como fallback de fonte do próprio xterm.js em
+ * useTerminal.ts). Codepoints conferidos no cmap real do arquivo de
+ * fonte (fontTools), mesma metáfora que ProviderPicker.tsx já usa hoje
+ * com ícones Lucide (bash=terminal, claude=robô, codex=code,
+ * cursor=ponteiro, antigravity=foguete). `dark` ausente = chip "flat"
+ * (cor sólida, sem gradiente metálico) — mesmo par que PROVIDER_ACCENT.
+ */
+const PROVIDER_GLYPH: Record<string, { glyph: string; mid: string; dark?: string }> = {
+  bash: { glyph: "", mid: "var(--accent-bash)" }, // fa-terminal
+  claude: { glyph: "", mid: "var(--accent-claude)", dark: "var(--accent-claude-dark)" }, // fa-robot
+  codex: { glyph: "", mid: "var(--accent-codex)", dark: "var(--accent-codex-dark)" }, // fa-code
+  cursor: { glyph: "", mid: "var(--accent-cursor)" }, // fa-mouse_pointer
+  antigravity: { glyph: "", mid: "var(--accent-antigravity)", dark: "var(--accent-antigravity-dark)" }, // fa-rocket
 };
 
 /** Pre-release audit P1 — wrapped in `React.memo` below (see
@@ -143,7 +166,7 @@ function TerminalCardInner({
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
     copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
   }
-  const { exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, fitNow, interrupt } = useTerminal(
+  const { exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
     containerRef,
     id,
     providerId,
@@ -204,6 +227,35 @@ function TerminalCardInner({
       if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
     };
   }, []);
+
+  // Sino de notificação (2026-09-02, "Terminal, Revisitado") — opt-in por
+  // card, ligado por padrão. Local ao componente, não persistido no card
+  // (sem coluna própria em card-types.ts ainda) — reseta pra "ligado" a
+  // cada boot/remount; limitação conhecida, aceita por ora.
+  const [bellEnabled, setBellEnabled] = useState(true);
+  // `wasActiveRef` começa false e só vira true quando `isActive` real de
+  // fato acontece — evita notificar no MOUNT (onde `isActive` também
+  // começa false, e o efeito abaixo roda uma vez de qualquer jeito).
+  const wasActiveRef = useRef(false);
+  useEffect(() => {
+    if (isActive) {
+      wasActiveRef.current = true;
+      return;
+    }
+    if (!wasActiveRef.current) return;
+    wasActiveRef.current = false;
+    if (!bellEnabled) return;
+    try {
+      // Requer "notifications" em MAIN_WINDOW_ONLY_PERMISSIONS
+      // (main/index.ts) — sem isso o construtor abaixo nunca mostra nada,
+      // silenciosamente (confirmado antes de mexer, ver o comentário lá).
+      new Notification(`${label ?? providerId} terminou o turno`, { body: cwd, silent: false });
+    } catch {
+      // Notification API indisponível/negada nesse ambiente — nunca deve
+      // quebrar o terminal, só não notifica.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   const statusClass = spawnError !== null ? "danger" : exitCode !== null ? "" : "ok";
   const statusLabel =
@@ -275,16 +327,42 @@ function TerminalCardInner({
               title={statusLabel}
               aria-label={statusLabel}
             />
+            {(() => {
+              const metal = PROVIDER_GLYPH[providerId] ?? PROVIDER_GLYPH.bash;
+              return (
+                <span
+                  className={`terminal-card-provider-glyph${metal.dark ? "" : " flat"}`}
+                  style={
+                    {
+                      "--m-mid": metal.mid,
+                      ...(metal.dark ? { "--m-dark": metal.dark } : {}),
+                    } as React.CSSProperties
+                  }
+                  aria-hidden="true"
+                >
+                  {metal.glyph}
+                </span>
+              );
+            })()}
             <CardTag label={label ?? providerId} onRename={onRename} />
           </span>
           <span className="card-head-actions">
+            <button
+              className={`terminal-card-bell${bellEnabled ? " on" : ""}`}
+              data-no-drag
+              title={bellEnabled ? "Notificação ao concluir um turno: ligada" : "Notificação ao concluir um turno: desligada"}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setBellEnabled((v) => !v)}
+            >
+              <Icon name="bell" size={12} />
+            </button>
             <button
               className="terminal-card-interrupt"
               title="Interromper o processo (Ctrl+C)"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={interrupt}
             >
-              <Icon name="interrupt" size={12} />
+              <Icon name="interrupt" size={10} fill="currentColor" />
               <span className="terminal-card-interrupt-label">Ctrl+C</span>
             </button>
             <button onClick={onClose}>
@@ -311,6 +389,15 @@ function TerminalCardInner({
         </span>
       }
     >
+      {/* Barra de atividade (2026-09-02, "Terminal, Revisitado") — sinal
+       * real é `isActive` (useTerminal.ts, ver o comentário lá sobre o
+       * que ele de fato mede). Cor vem de `--accent`, já herdada de
+       * `.card-frame` (nenhum inline style próprio precisa repetir isso).
+       * `aria-hidden`: puramente decorativa, o status já acessível vive em
+       * `.card-status-dot` acima. */}
+      <div className={`terminal-card-activity${isActive ? " on" : ""}`} aria-hidden="true">
+        <div className="terminal-card-activity-sweep" />
+      </div>
       <div className="terminal-card-body" ref={containerRef} />
       {showLoadingHint && (
         <div className="terminal-card-loading" role="status">

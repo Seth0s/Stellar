@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Icon } from "./icons";
 
 /**
  * The small pill in a card's header (provider name, "arquivos", ...) —
@@ -53,8 +54,31 @@ export function CardTag({ label, onRename }: { label: string; onRename: (next: s
   // just commit a ~0px no-op drag first, imperceptible). Kept only on the
   // active `<input>` above, which genuinely must not start a drag.
   return (
-    <span className="card-tag" title="clique duas vezes para renomear" onDoubleClick={startEditing}>
-      {label}
+    <span className="card-tag-group">
+      <span className="card-tag" title="clique duas vezes para renomear" onDoubleClick={startEditing}>
+        {label}
+      </span>
+      {/* Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — o
+       * `title="clique duas vezes..."` acima já existia, mas é invisível
+       * até passar o mouse por cima do texto certo; sem NENHUM indício
+       * visual, renomear ficava um recurso escondido. Este ✎ é o
+       * indício. Também é o único lugar que explica O PORQUÊ renomear
+       * importa: o label vira o `target` que as ferramentas MCP
+       * (list_cards, send_to_card, read_card...) aceitam pra mirar este
+       * card — ver mcp-server.ts ("you can pass either the id or the
+       * card's label"). `data-no-drag`: mesmo motivo do `<input>` acima,
+       * um clique aqui não pode também iniciar um arraste de header.
+       */}
+      <button
+        type="button"
+        className="card-tag-rename-hint"
+        data-no-drag
+        title="Renomeável (clique duas vezes no nome) — vira o nome que ferramentas MCP usam pra mirar este card"
+        onClick={startEditing}
+        tabIndex={-1}
+      >
+        <Icon name="rename" size={10} />
+      </button>
     </span>
   );
 }

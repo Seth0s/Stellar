@@ -627,7 +627,16 @@ function createWindow() {
   // so an arbitrary site loaded there still can't silently read or
   // overwrite the user's OS clipboard — a real hijack vector this
   // handler's whole point was to close off, not reopen broadly.
-  const MAIN_WINDOW_ONLY_PERMISSIONS = new Set(["clipboard-sanitized-write", "clipboard-read"]);
+  // "notifications" (2026-09-02, "Terminal, Revisitado" — bell button per
+  // terminal card, fires when a turn goes idle) added the same way
+  // clipboard was above: this is the app's OWN first-party window asking
+  // for its own OS-notification capability, not an arbitrary page loaded
+  // inside a BrowserCard. Confirmed live before this change: with
+  // "notifications" absent from every set above, `setPermissionRequestHandler`
+  // fell through to the final `callback(false)` — `new Notification(...)`
+  // in the renderer would have silently never shown anything, not an
+  // error, just a feature that looked wired up but never fired.
+  const MAIN_WINDOW_ONLY_PERMISSIONS = new Set(["clipboard-sanitized-write", "clipboard-read", "notifications"]);
 
   // Shared "ask the renderer, wait for a human decision" primitive — used
   // both for the generic media-permission prompt right below and for
