@@ -11,6 +11,7 @@ import {
   Braces,
   Bug,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -50,6 +51,7 @@ import {
   OctagonX,
   PanelLeft,
   Pen,
+  Pin,
   Plus,
   QrCode,
   Rocket,
@@ -66,6 +68,7 @@ import {
   TerminalSquare,
   Trash2,
   Ungroup,
+  Wrench,
   X,
   ZoomIn,
   ZoomOut,
@@ -142,7 +145,11 @@ export type IconName =
   | "viewportFluid"
   | "viewportMobile"
   | "viewportTablet"
-  | "favorite";
+  | "favorite"
+  | "pin"
+  | "checkCircle"
+  | "wrench"
+  | "bug";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -218,6 +225,12 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   viewportFluid: Monitor,
   viewportMobile: Smartphone,
   viewportTablet: Tablet,
+  // StickyCard.tsx's STICKY_KIND — categoria por cor (nota/feito/em
+  // andamento/bug), não só um swatch de cor.
+  pin: Pin,
+  checkCircle: CheckCircle2,
+  wrench: Wrench,
+  bug: Bug,
 };
 
 export function Icon({ name, size = 18, color }: { name: IconName; size?: number; color?: string }) {
