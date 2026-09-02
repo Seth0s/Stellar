@@ -114,11 +114,14 @@ const WORKSPACE_ROOT_KEY = "ac.workspaceRoot";
 /** Home/Topbar's "📁 {name}" label — the last path segment of whatever
  * root is currently chosen, falling back to "Projects" for a root that's
  * just "/" or empty (shouldn't happen via the picker, but a bad persisted
- * value should never crash the label). */
+ * value should never crash the label). Splits on "/" OR "\\" — `root` is a
+ * real OS path (from `window.system.homeDir` or the native folder dialog),
+ * native-separator on Windows (`C:\Users\name`), never normalized to "/"
+ * like the fs-tools relative-path keys are. */
 function rootDisplayName(root: string): string {
   return (
     root
-      .split("/")
+      .split(/[/\\]/)
       .filter(Boolean)
       .pop() || "Projects"
   );
