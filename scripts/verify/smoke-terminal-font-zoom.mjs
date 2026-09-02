@@ -146,22 +146,30 @@ try {
     true,
   );
   check(`bash e claude chegam no MESMO fontSize (mesma fórmula, mesmo zoom): bash=${bashAfter}, claude=${claudeAfter}`, bashAfter, claudeAfter);
-  check(`fontSize respeita o teto do clamp (FONT_SIZE_MAX=22)`, bashAfter <= 22, true);
+  // Achado ao vivo (2026-09-02): o clamp era 11-22, bem mais estreito que
+  // o range real de zoom do board (0.2-3.0) — a ~2x de zoom (este teste),
+  // fontSize teórico é ~30, MAS travava em 22 e só o transform esticava,
+  // borrando. Clamp widened pra 3-45 (os extremos matemáticos de
+  // 15×[0.2,3.0]) — agora ~2x deve produzir fontSize MAIOR que o teto
+  // antigo, prova de que o fix real está em vigor, não só o número certo.
+  check(`fontSize a ~2x de zoom passa do teto ANTIGO (22) — clamp widened de verdade, não só travando mais alto`, bashAfter > 22, true);
+  check(`...e continua dentro do teto NOVO (FONT_SIZE_MAX=45)`, bashAfter <= 45, true);
 
-  // Zoom-out abaixo do ponto de partida, confirma que o piso do clamp
-  // (FONT_SIZE_MIN=11) segura a fonte legível em vez de encolher sem limite.
+  // Zoom-out até o mínimo do board (0.2) — antes travava em 11, agora deve
+  // chegar perto do novo piso (3 = 15×0.2, o próprio mínimo matemático).
   const zoomOutBtn = await centerOf(page, '.zoom-pill button[title="Diminuir zoom"]');
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 20; i++) {
     await page.click(zoomOutBtn.x, zoomOutBtn.y);
     await new Promise((r) => setTimeout(r, 150));
   }
   await new Promise((r) => setTimeout(r, 400));
   const claudeZoomedOut = await fontSizeFor(page, ids.claudeId);
   check(
-    `zoom-out reduz o fontSize (era ${claudeAfter}, agora ${claudeZoomedOut}) e respeita o piso do clamp (FONT_SIZE_MIN=11)`,
-    claudeZoomedOut < claudeAfter && claudeZoomedOut >= 11,
+    `zoom-out no mínimo do board passa do piso ANTIGO (11) — fontSize real: ${claudeZoomedOut}`,
+    claudeZoomedOut < claudeAfter && claudeZoomedOut < 11,
     true,
   );
+  check(`...e respeita o piso NOVO (FONT_SIZE_MIN=3)`, claudeZoomedOut >= 3, true);
 
   page.close();
 } finally {

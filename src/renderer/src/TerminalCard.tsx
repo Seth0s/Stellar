@@ -378,7 +378,6 @@ function TerminalCardInner({
               onClick={interrupt}
             >
               <Icon name="interrupt" size={10} fill="currentColor" />
-              <span className="terminal-card-interrupt-label">Ctrl+C</span>
             </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />

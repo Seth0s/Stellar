@@ -28,8 +28,28 @@ const BASE_FONT_SIZE = 15;
 // exatamente `BASE_FONT_SIZE` (sem regressão no caso comum, influência
 // não muda esse ponto de ancoragem).
 const FONT_ZOOM_INFLUENCE = 1.0;
-const FONT_SIZE_MIN = 11;
-const FONT_SIZE_MAX = 22;
+// Achado ao vivo (2026-09-02, testando o redesign do header): "só aumenta
+// a fonte, mas não melhora a qualidade durante zoom" — real. O board
+// zoom vai de 0.2 a 3.0 (useWorldTransform.ts), mas este clamp (11/22 —
+// sobra de quando FONT_ZOOM_INFLUENCE ainda era 15% parcial, nunca
+// revisado depois de virar 1.0) só cobre fontSize de 15*0.733 a 15*1.467
+// — uma fatia PEQUENA do range real. Fora dela (a maior parte do zoom-in
+// e zoom-out possíveis), o fontSize trava e só o `transform: scale()`
+// segue esticando o mesmo raster, borrando de verdade — exatamente o
+// sintoma reportado. Widened pra cobrir o range real inteiro (3px a
+// 45px, os extremos matemáticos de 15×[0.2, 3.0]).
+//
+// Nota honesta, não é o mesmo mecanismo do navegador embutido: isso NÃO
+// é "resolução real" tipo `deviceScaleFactor`/`setContentSize`
+// (BrowserCard.tsx) — o canvas do xterm continua com a mesma resolução
+// crua do container (não muda com fontSize). O que fontSize maior faz é
+// rasterizar cada GLYPH numa textura-fonte de maior detalhe (WebGL desenha
+// a partir dela, não do container inteiro) — melhora bastante a nitidez
+// aparente depois do stretch, mas é supersampling do glyph, não um
+// aumento real da resolução do canvas. Suficiente pro caso de uso, mas é
+// uma aproximação, documentada como tal.
+const FONT_SIZE_MIN = 3;
+const FONT_SIZE_MAX = 45;
 function fontSizeForZoom(zoom: number): number {
   const raw = BASE_FONT_SIZE * (1 - FONT_ZOOM_INFLUENCE + zoom * FONT_ZOOM_INFLUENCE);
   return Math.round(Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, raw)));
