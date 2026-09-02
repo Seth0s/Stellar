@@ -135,20 +135,13 @@
   color: var(--text);
 }
 
-/* 2026-08-27 — the interrupt button used to be icon-only (a plain
-   outlined octagon at 12px, mistaken live for a "copy" icon); paired here
-   with a visible "Ctrl+C" label ("uma legenda interna mais clara", the
-   user's own words) instead of relying on the hover tooltip alone. */
-.terminal-card-interrupt {
-  gap: 4px;
-  padding: 4px 7px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.terminal-card-interrupt-label {
-  line-height: 1;
-}
+/* 2026-08-27 — a plain outlined octagon a 12px lia como "copy" (achado ao
+   vivo), ganhou um label "Ctrl+C" visível como legenda. 2026-09-02
+   ("Terminal, Revisitado") — trocado pro quadrado sólido de stop (ver
+   Icon's `fill`, icons.tsx) e o usuário pediu pra tirar o label: o ícone
+   sozinho já é claro, sem o texto ficando. Volta pra base padrão de
+   `.card-head button` (mesmo padding/tamanho de sino/gota/fechar), nada
+   de override próprio mais. */
 
 /* Sino de notificação (2026-09-02) — mesma base de `.card-head button`;
    `.on` (ligado, padrão) tinge com `--accent` — a MESMA variável que
@@ -526,6 +519,22 @@
   border: var(--card-border-w, 1px) solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--card-shadow, var(--shadow-card));
+}
+
+/* Acento do provider ao redor do card inteiro (2026-09-02, pedido ao vivo
+   testando — "bem leve"), não só no card-tag/chip do header. `--accent`
+   já vem herdado de `.card-frame` (CardFrame.tsx, a partir de
+   PROVIDER_ACCENT) — mesma variável, nenhuma nova plumbing. Regra
+   própria (não dentro do grupo acima, que é compartilhado por todo tipo
+   de card) porque `--accent` só faz sentido pra terminal hoje; um anel
+   de 1px quase transparente + um glow bem baixo, mais sutil que a régua
+   do header. Composto com o box-shadow já existente (D2's sombra de
+   baixo zoom), não substitui. */
+.terminal-card {
+  box-shadow:
+    var(--card-shadow, var(--shadow-card)),
+    0 0 0 1px color-mix(in srgb, var(--accent, transparent) 30%, transparent),
+    0 0 20px -12px var(--accent, transparent);
 }
 
 .terminal-card-body {
