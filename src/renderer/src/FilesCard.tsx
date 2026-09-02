@@ -328,6 +328,9 @@ function FilesCardInner({
   onRename,
   onConnectorStart,
   onSelectStart,
+  screenProjected,
+  panX,
+  panY,
 }: {
   rect: Rect;
   zoom: number;
@@ -347,6 +350,11 @@ function FilesCardInner({
   onRename: (label: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
+  /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
+   * straight through, same pattern StickyCard/BrowserCard already use. */
+  screenProjected?: boolean;
+  panX?: number;
+  panY?: number;
 }) {
   const [kids, setKids] = useState<Record<string, DirEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -800,6 +808,9 @@ function FilesCardInner({
       onCloseAnimationEnd={onCloseAnimationEnd}
       onConnectorStart={onConnectorStart}
       onSelectStart={onSelectStart}
+      screenProjected={screenProjected}
+      panX={panX}
+      panY={panY}
       headerContent={
         <>
           <span className="card-head-label">

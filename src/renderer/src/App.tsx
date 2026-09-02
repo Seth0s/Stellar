@@ -2029,7 +2029,10 @@ export function App() {
             );
           }
           case "files": {
-            return (
+            // Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — segundo card
+            // kind migrado depois de sticky/browser. Mesmo padrão de portal.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <FilesCard
                 key={c.id}
                 rect={c.rect}
@@ -2050,11 +2053,18 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "changes": {
-            return (
+            // Trilha B — mesmo padrão de portal que "files" acima.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <ChangesCard
                 key={c.id}
                 rect={c.rect}
@@ -2075,7 +2085,12 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "sticky": {
@@ -2124,7 +2139,9 @@ export function App() {
             );
           }
           case "stroke": {
-            return (
+            // Trilha B — mesmo padrão de portal que "files"/"changes" acima.
+            if (!cardsLayerEl) return null;
+            return createPortal(
               <StrokeCard
                 key={c.id}
                 rect={c.rect}
@@ -2145,7 +2162,12 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-              />
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
             );
           }
           case "remote-window": {
