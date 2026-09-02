@@ -138,12 +138,44 @@ const TERMINAL_THEME = {
  * Fallback pro foam original de `TERMINAL_THEME.cursor` se a variável não
  * existir por algum motivo (provider desconhecido).
  */
-function resolveProviderAccent(providerId: string): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(`--accent-${providerId}`).trim();
-  return value || TERMINAL_THEME.cursor;
+function resolveCssVar(varName: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  return value || fallback;
 }
-function buildTerminalTheme(providerId: string) {
-  return { ...TERMINAL_THEME, cursor: resolveProviderAccent(providerId) };
+function resolveProviderAccent(providerId: string): string {
+  return resolveCssVar(`--accent-${providerId}`, TERMINAL_THEME.cursor);
+}
+
+/**
+ * Pedido ao vivo (2026-09-02) — transparência + blur do terminal (trade-
+ * off explícito do artifact, opt-in por card via `transparent` abaixo).
+ * xterm.js pinta o PRÓPRIO fundo por célula no canvas WebGL/2D — CSS
+ * `background: transparent` no `.terminal-card-body` sozinho não basta,
+ * o canvas continua opaco por baixo. `allowTransparency: true` (setado
+ * na construção, ver `new Terminal({...})` abaixo — a doc do próprio
+ * xterm.js diz que não dá pra mudar depois sem reabrir) habilita o
+ * canvas a de fato respeitar alpha no `theme.background`; confirmado
+ * antes de usar que o addon WebGL cria seu contexto sem `alpha:false`
+ * explícito (o WebGL2 já é alpha:true por padrão da spec) — não
+ * assumido. `hexToRgba` só entende `#rrggbb` (o formato real de
+ * `--panel` em tokens.css); cai pro hex cru sem alpha se vier em outro
+ * formato, nunca quebra.
+ */
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const r = parseInt(m[1].slice(0, 2), 16);
+  const g = parseInt(m[1].slice(2, 4), 16);
+  const b = parseInt(m[1].slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+const TRANSLUCENT_BG_ALPHA = 0.82;
+function buildTerminalTheme(providerId: string, transparent: boolean) {
+  return {
+    ...TERMINAL_THEME,
+    cursor: resolveProviderAccent(providerId),
+    background: transparent ? hexToRgba(resolveCssVar("--panel", TERMINAL_THEME.background), TRANSLUCENT_BG_ALPHA) : TERMINAL_THEME.background,
+  };
 }
 
 /**
@@ -208,6 +240,11 @@ export function useTerminal(
   initialInput: string | null,
   visible: boolean,
   zoom: number,
+  /** Pedido ao vivo (2026-09-02) — transparência + blur, opt-in por card
+   * (botão no header, TerminalCard.tsx). Lido via ref (Effect 6 abaixo),
+   * não precisa estar na Terminal na hora da construção (só
+   * `allowTransparency` precisa, isso sim é setado sempre). */
+  transparent: boolean,
 ) {
   const [ptyId, setPtyId] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -394,7 +431,13 @@ export function useTerminal(
         fontSize: BASE_FONT_SIZE,
         cursorBlink: true,
         fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
-        theme: buildTerminalTheme(providerId),
+        theme: buildTerminalTheme(providerId, transparent),
+        // Sempre true (barato quando não usado — só habilita o CÓDIGO de
+        // respeitar alpha, o `background` real continua opaco até o
+        // toggle de transparência ligar) — a doc do xterm.js diz que não
+        // dá pra mudar depois sem reabrir o terminal, então precisa vir
+        // certo já na primeira construção.
+        allowTransparency: true,
         // DESIGN-BACKLOG.md's "ganhos baratos" item — default era 1000
         // (o próprio default do xterm.js, nunca setado explicitamente
         // antes), contra as 10.000 do Kitty.
@@ -499,7 +542,8 @@ export function useTerminal(
         fontSize: BASE_FONT_SIZE,
         cursorBlink: true,
         fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
-        theme: buildTerminalTheme(providerId),
+        theme: buildTerminalTheme(providerId, transparent),
+        allowTransparency: true,
         scrollback: 10000,
       });
       const f = new FullWidthFitAddon();
@@ -806,6 +850,18 @@ export function useTerminal(
       if (fontZoomTimerRef.current) clearTimeout(fontZoomTimerRef.current);
     };
   }, []);
+
+  // Effect 6 (2026-09-02) — atualiza o `theme` ao vivo quando o botão de
+  // transparência (TerminalCard.tsx) é ligado/desligado. `theme` é uma
+  // opção livremente mutável depois da construção (diferente de
+  // `allowTransparency`, que precisa vir certo desde o `new Terminal()`
+  // acima) — sem isso o toggle exigiria destruir/recriar o terminal
+  // inteiro, perdendo o buffer visível.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = buildTerminalTheme(providerId, transparent);
+  }, [transparent, providerId]);
 
   function fitNow() {
     const fit = fitRef.current;

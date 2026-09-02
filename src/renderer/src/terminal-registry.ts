@@ -38,6 +38,17 @@ export function getTerminalFontSize(cardId: string): number | null {
 (window as unknown as { __getTerminalFontSize: typeof getTerminalFontSize }).__getTerminalFontSize =
   getTerminalFontSize;
 
+/** Test-only (mesmo raciocínio acima) — o `theme.background` real que o
+ * toggle de transparência (TerminalCard.tsx, 2026-09-02) aplicou de fato
+ * no xterm.js, não uma suposição sobre o que o botão "deveria" ter
+ * feito. */
+export function getTerminalBackground(cardId: string): string | null {
+  return (terminals.get(cardId)?.options.theme?.background as string | undefined) ?? null;
+}
+
+(window as unknown as { __getTerminalBackground: typeof getTerminalBackground }).__getTerminalBackground =
+  getTerminalBackground;
+
 /** Test-only (resize-fluidity verify harness) — same pure-read, no-side-
  * effect profile as `getTerminalFontSize` above. Lets a live CDP test
  * prove cols/rows stay UNCHANGED during a resize drag (only the CSS
