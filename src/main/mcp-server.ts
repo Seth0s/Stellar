@@ -50,11 +50,51 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
    * `?card=` — o smoke test que disca a porta direto, um cliente MCP
    * externo — se comporta exatamente como antes.
    */
+  /** Pedido ao vivo (2026-09-02): "toda nova sessão eu preciso dizer o
+   * agente está na infraestrutura do stellar... acho que além de dizer no
+   * system prompt (que só alguns providers têm — ver ACBRIDGE_HINT em
+   * providers.ts, `--append-system-prompt` só existe pro `claude`),
+   * devemos usar outra técnica". Esta é: `ServerOptions.instructions`,
+   * campo do protocolo MCP devolvido na resposta de `initialize` — todo
+   * cliente MCP que o suporta mostra isso ao modelo automaticamente ao
+   * CONECTAR no servidor, sem depender de flag de provider nenhuma
+   * (funciona igual pra claude/codex/cursor/antigravity, não só quem tem
+   * `--append-system-prompt`). Complementa, não substitui, o
+   * `ACBRIDGE_HINT`: aquele cobre o fallback `acbridge` (não-MCP) e o
+   * caso raro de um cliente MCP que ignora `instructions`; este cobre
+   * todo o resto, na fonte certa (protocolo), não um hack de prompt.
+   */
+  const SERVER_INSTRUCTIONS =
+    "You're inside Stellar, a multi-agent spatial canvas — a shared board of cards " +
+    "(terminals, browsers, sticky notes, file explorers, and possibly other agents) " +
+    "that a human, and maybe other agents, are looking at right now. Call list_cards " +
+    "first to see what's already on the board; every tool below targets a card id or " +
+    "label from there. Reading a card is free and needs no approval; spawning a new " +
+    "card or opening a URL asks the human first (unless the board is in autonomous " +
+    "mode). Any tool that modifies an EXISTING card you don't own (write_sticky, " +
+    "send_to_card, set_sticky_color/set_sticky_mode, browser_click/type/scroll/eval, " +
+    "spawn_agent/spawn_card, open_url) automatically draws a connector between your " +
+    "own card and that one — your influence on the board stays visible without you " +
+    "drawing it yourself. If another card spawned you to do a task, call report with " +
+    "a structured result when you finish it, even if you keep running afterward.";
+
+  /** Repetido em toda tool que precisa de identidade pra auto-conector
+   * (2026-09-02) sem também precisar de consentimento — as que já tinham
+   * esse campo por outro motivo (send_to_card, spawn_agent, spawn_card,
+   * open_url) mantêm a própria descrição, mais específica ao que cada
+   * uma faz com o id. */
+  const CALLER_CARD_ID_FIELD = z
+    .string()
+    .optional()
+    .describe(
+      "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to draw the auto-connector to the card you're acting on.",
+    );
+
   function buildServer(urlCardId?: string): McpServer {
     /** `callerCardId` explícito ganha do carimbo da URL; string vazia conta
      * como ausente (um modelo que preenche `""` não está se identificando). */
     const caller = (explicit?: string) => (explicit && explicit.trim() ? explicit : urlCardId);
-    const server = new McpServer({ name: "stellar", version: "1.0.0" });
+    const server = new McpServer({ name: "stellar", version: "1.0.0" }, { instructions: SERVER_INSTRUCTIONS });
 
     server.registerTool(
       "list_cards",
@@ -506,10 +546,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
+          callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, selector, ref, x, y }) => {
-        const res = await opts.handleRequest({ cmd: "browser_click", target, selector, ref, x, y });
+      async ({ target, selector, ref, x, y, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "browser_click", target, selector, ref, x, y, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -527,10 +568,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
+          callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, text, selector, ref }) => {
-        const res = await opts.handleRequest({ cmd: "browser_type", target, text, selector, ref });
+      async ({ target, text, selector, ref, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "browser_type", target, text, selector, ref, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -548,10 +590,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
+          callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, dx, dy, selector, ref }) => {
-        const res = await opts.handleRequest({ cmd: "browser_scroll", target, dx, dy, selector, ref });
+      async ({ target, dx, dy, selector, ref, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "browser_scroll", target, dx, dy, selector, ref, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -657,10 +700,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
           js: z.string().describe("JavaScript to evaluate in the page's context — the expression's value becomes the result"),
+          callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, js }) => {
-        const res = await opts.handleRequest({ cmd: "browser_eval", target, js });
+      async ({ target, js, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "browser_eval", target, js, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
