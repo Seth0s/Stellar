@@ -127,7 +127,7 @@ function TerminalCardInner({
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
     copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
   }
-  const { exitCode, spawnError, installHint, discoveredResumeId, fitNow, interrupt } = useTerminal(
+  const { exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, fitNow, interrupt } = useTerminal(
     containerRef,
     id,
     providerId,
@@ -160,6 +160,20 @@ function TerminalCardInner({
     el.style.transform = `scale(${rect.w / fw}, ${rect.h / fh})`;
     el.style.transformOrigin = "top left";
   }, [rect.w, rect.h]);
+
+  // Achado ao vivo (2026-09-02) -- ver `terminal-card-loading` no CSS: um
+  // spawn normal (bash, sessão pequena) mostra prompt em bem menos de
+  // 1.2s, então o atraso evita o badge piscar à toa; um `--resume` real e
+  // pesado passa disso de sobra e ganha o aviso.
+  const [showLoadingHint, setShowLoadingHint] = useState(false);
+  useEffect(() => {
+    if (hasReceivedOutput || exitCode !== null || spawnError !== null) {
+      setShowLoadingHint(false);
+      return;
+    }
+    const t = setTimeout(() => setShowLoadingHint(true), 1200);
+    return () => clearTimeout(t);
+  }, [hasReceivedOutput, exitCode, spawnError]);
 
   const reportedRef = useRef(false);
   useEffect(() => {
@@ -279,6 +293,12 @@ function TerminalCardInner({
       }
     >
       <div className="terminal-card-body" ref={containerRef} />
+      {showLoadingHint && (
+        <div className="terminal-card-loading" role="status">
+          <span className="terminal-card-loading-spinner" aria-hidden="true" />
+          carregando sessão…
+        </div>
+      )}
       {spawnError !== null && (
         <div className="terminal-card-exited">
           {spawnError}

@@ -194,6 +194,14 @@ export function useTerminal(
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [installHint, setInstallHint] = useState<{ providerId: string; command: string } | null>(null);
   const [discoveredResumeId, setDiscoveredResumeId] = useState<string | null>(null);
+  // Achado ao vivo (2026-09-02) -- `--resume` numa sessão real e grande
+  // pode passar dezenas de segundos sem imprimir NADA (a CLI resumida
+  // carregando/processando o histórico, fora do controle deste app), e
+  // não existia nenhum jeito de distinguir isso de um card travado de
+  // verdade -- terminal fica em branco os dois jeitos. `TerminalCard`
+  // usa isto pra mostrar "carregando sessão..." só nessa janela (spawn
+  // ok, PTY rodando, zero bytes recebidos ainda).
+  const [hasReceivedOutput, setHasReceivedOutput] = useState(false);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
@@ -287,7 +295,9 @@ export function useTerminal(
     }
 
     const offData = window.pty.onData((id, data) => {
-      if (id === ptyIdRef.current) writeMasked(data);
+      if (id !== ptyIdRef.current) return;
+      writeMasked(data);
+      setHasReceivedOutput(true);
     });
     const offExit = window.pty.onExit((id, code) => {
       if (id === ptyIdRef.current) setExitCode(code);
@@ -304,6 +314,7 @@ export function useTerminal(
       if (ptyIdRef.current) void window.pty.kill(ptyIdRef.current);
       ptyIdRef.current = null;
       setPtyId(null);
+      setHasReceivedOutput(false);
     };
     // resumeId/continueLast/model/systemPrompt are deliberately NOT deps.
     // Confirmed via CDP: App.tsx's resumeIdDiscovered() writes a freshly
@@ -710,5 +721,5 @@ export function useTerminal(
     if (ptyIdRef.current) void window.pty.interrupt(ptyIdRef.current);
   }
 
-  return { ptyId, exitCode, spawnError, installHint, discoveredResumeId, fitNow, interrupt };
+  return { ptyId, exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, fitNow, interrupt };
 }
