@@ -52,6 +52,17 @@
   --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.4);
   --shadow-float: 0 8px 28px rgba(0, 0, 0, 0.5);
 
+  /* Transparência + blur do terminal (2026-09-02, "Terminal, Revisitado")
+     — trade-off explícito do artifact de proposta, opt-in por card
+     (padrão desligado). `--surface-translucent` é a MESMA cor de
+     `--surface` (o fundo do shell do card), só com alpha — mesma regra
+     de hex-só-aqui, nada de rgba() solto fora deste arquivo. A cor de
+     fundo do PRÓPRIO xterm.js (--panel com alpha) é resolvida em
+     runtime a partir de `--panel` em useTerminal.ts, não duplicada aqui.
+   */
+  --surface-translucent: rgba(32, 36, 44, 0.55);
+  --blur-glass: 14px;
+
   /* Dark ink for text sitting on a bright surface (an active rail icon, a
      primary popover button, sticky-note paper) — the one color role that's
      the inverse of --text, so it gets its own token instead of a literal. */

@@ -166,6 +166,11 @@ function TerminalCardInner({
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
     copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
   }
+  // Transparência + blur (2026-09-02) — opt-in por card, local ao
+  // componente, mesma limitação já aceita do sino (não persistido, sem
+  // coluna própria em card-types.ts ainda). Padrão desligado: nenhuma
+  // mudança visual pra ninguém que não tocar no botão.
+  const [transparentEnabled, setTransparentEnabled] = useState(false);
   const { exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
     containerRef,
     id,
@@ -178,6 +183,7 @@ function TerminalCardInner({
     initialInput,
     visible,
     zoom,
+    transparentEnabled,
   );
 
   // Achado ao vivo (resize "quebra e volta") — `fitNow()` (real
@@ -289,7 +295,7 @@ function TerminalCardInner({
 
   return (
     <CardFrame
-      className="terminal-card"
+      className={`terminal-card${transparentEnabled ? " translucent" : ""}`}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -347,6 +353,15 @@ function TerminalCardInner({
             <CardTag label={label ?? providerId} onRename={onRename} />
           </span>
           <span className="card-head-actions">
+            <button
+              className={`terminal-card-translucent-btn${transparentEnabled ? " on" : ""}`}
+              data-no-drag
+              title={transparentEnabled ? "Transparência + blur: ligado (trade-off — julgue num board cheio)" : "Transparência + blur: desligado"}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setTransparentEnabled((v) => !v)}
+            >
+              <Icon name="translucent" size={12} />
+            </button>
             <button
               className={`terminal-card-bell${bellEnabled ? " on" : ""}`}
               data-no-drag
