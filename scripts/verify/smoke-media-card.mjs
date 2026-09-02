@@ -144,10 +144,11 @@ try {
   // proporção natural da imagem via `fitMediaRect`; era o header+rodapé que
   // quebravam o encaixe e deixavam a faixa vazia). Fechar/girar/renomear
   // continuam existindo no overlay — some a superfície, não a função.
-  // Ponteiro pra longe antes de medir: o header em modo sem moldura é
-  // revelado por `:hover`, então uma medição com o mouse parado em cima do
-  // card (onde um clique anterior do boot pode tê-lo deixado) leria a
-  // opacidade do estado revelado e a checagem de "invisível" viraria ruído.
+  // Ponteiro pra longe antes de medir: 2026-09-02, o header em modo sem
+  // moldura deixou de ser revelado por `:hover` — só por um click de
+  // verdade na imagem (`chromeOpen`, ver MediaCard.tsx) — mas a checagem
+  // abaixo continua sem tocar o card antes de medir, pra provar que o
+  // estado inicial é mesmo fechado.
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4, button: "none", buttons: 0, pointerType: "mouse" });
   await new Promise((r) => setTimeout(r, 400));
 
@@ -174,8 +175,8 @@ try {
   check("um card de imagem entra em modo sem moldura", chrome.chromeless, true);
   check("...sem rodapé nenhum (o nome do arquivo já era o rótulo do header)", chrome.foot, false);
   check("...com o header fora do fluxo de layout, não como linha do card", chrome.headPosition, "absolute");
-  check("...invisível até o hover", chrome.headOpacity, 0);
-  check("...mas com os botões ainda lá (girar, fechar, focar)", chrome.headButtons, (n) => n >= 2);
+  check("...invisível até um click de verdade na imagem", chrome.headOpacity, 0);
+  check("...mas com os botões ainda lá (fechar, focar)", chrome.headButtons, (n) => n >= 2);
   check("a imagem ocupa a altura inteira do card — nada de faixa vazia", Math.abs(chrome.gapY) <= 1, true);
   check("...e a largura inteira", Math.abs(chrome.gapX) <= 1, true);
 
@@ -316,6 +317,22 @@ try {
   // ---- rotation button: click twice (0→90→180), stop at a non-default
   // value on purpose — a later check re-reads this after a full app
   // restart, so ending at the default (0) would prove nothing. ----
+  //
+  // 2026-09-02: girar deixou de morar na faixa do header — vira uma
+  // ferramenta solta (`.media-toolbar`) que só existe/reage a click quando
+  // `chromeOpen` está true, e só abre com um click de verdade (sem
+  // arraste) na própria imagem. Abre aqui antes de tentar clicar em girar
+  // — sem isto o botão está em `pointer-events: none`, e o click cairia
+  // "através" dele na imagem por baixo (que reabriria/fecharia o chrome
+  // em vez de girar, um falso negativo sem nada a ver com rotação).
+  const resizedCardRect = await getCardRect();
+  await page.click(resizedCardRect.x + resizedCardRect.w / 2, resizedCardRect.y + resizedCardRect.h / 2);
+  await new Promise((r) => setTimeout(r, 200));
+  const chromeAfterClick = JSON.parse(
+    await page.evalJs(`JSON.stringify(document.querySelector('.media-card').classList.contains('chrome-active'))`),
+  );
+  check("um click de verdade na imagem abre a faixa de chrome", chromeAfterClick, true);
+
   const rotateBtnBox = JSON.parse(
     await page.evalJs(`
       (() => {

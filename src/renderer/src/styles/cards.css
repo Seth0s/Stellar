@@ -252,12 +252,13 @@
 .card-foot {
   flex: none;
   /* Reportado ao vivo (2026-08-31) — o badge de fim de linha (contagem de
-     links do terminal, branch do files-card) encostava no `.card-resize`
-     (22x22px, `right:0;bottom:0`, fora de `.card-clip` — CardFrame.tsx —
-     então sempre por CIMA do footer nesse canto). Padding direito de
-     28px (22px do grip + ~6px de respiro) garante que nenhum conteúdo do
-     footer nunca renderiza sob a área de acerto do resize. */
-  padding: 5px 28px 5px 12px;
+     links do terminal, branch do files-card) encostava na zona de resize
+     do canto SE (18x18px, `right:-7px;bottom:-7px` — CardFrame.tsx/
+     `.card-resize-se` abaixo — 11px dela ficam DENTRO do card). Padding
+     direito de 18px garante que nenhum conteúdo do footer nunca renderiza
+     sob a área de acerto do resize (2026-09-02: o grip visual que ficava
+     nesse canto foi removido — só a zona de hit-test invisível continua). */
+  padding: 5px 18px 5px 12px;
   font-size: 11px;
   color: var(--muted);
   border-top: 1px solid var(--border);
@@ -267,41 +268,11 @@
   text-overflow: ellipsis;
 }
 
-.card-resize {
-  position: absolute;
-  /* Reported live (2026-08-27) — "mal posicionado, colado no canto": the
-     glyph itself was flex-end/flex-end inside this box, squeezing it into
-     the box's own outer corner (which also sits -2px past the card's
-     visual edge) instead of reading as a centered grip anchored to the
-     corner. Centered in the box now, box nudged fully onto the card
-     (0/0, not -2/-2) so it reads as part of the card, not floating past
-     it. */
-  right: 0;
-  bottom: 0;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  cursor: nwse-resize;
-  transition: color 0.12s ease;
-  /* Lives outside .card-clip on purpose — see CardFrame.tsx — so the
-     rounded corner never eats its hit area again. */
-}
-
-.card-resize svg {
-  transform: rotate(90deg);
-  pointer-events: none;
-}
-
-.card-resize:hover {
-  color: var(--text);
-}
-
 /* Pedido ao vivo (2026-09-01): redimensionar por qualquer lado, não só
-   pelo canto inferior-direito. Sete zonas invisíveis mais o grip que já
-   existia — ver CardFrame.tsx. Ficam FORA de `.card-clip` (o
+   pelo canto inferior-direito. Oito zonas invisíveis (2026-09-02: o grip
+   visual que existia só no canto SE foi removido — ver CardFrame.tsx,
+   nenhum tipo de card precisa mais de afordance visual pra saber que dá
+   pra redimensionar por qualquer ponto). Ficam FORA de `.card-clip` (o
    `overflow: hidden` de lá recortaria exatamente a área de acerto nas
    bordas, que foi o que já tinha inutilizado o punho antigo uma vez).
 
@@ -2376,7 +2347,13 @@
    preencher o `rect` inteiro. Como o `rect` de um card de mídia nasce com
    a proporção natural da imagem (App.tsx's `fitMediaRect`) e o resize é
    proporcional (`aspectRatio`), o encaixe é exato e o letterbox some por
-   construção — era o header+rodapé que o causavam. */
+   construção — era o header+rodapé que o causavam.
+   Pedido ao vivo (2026-09-02): deixou de reagir a hover (a faixa inteira
+   "piscava" ao só passar o mouse pelo canvas, mesmo fora dos pixels
+   visíveis da imagem) — agora só aparece com um click de verdade na
+   imagem (`.chrome-active`, controlado por `chromeOpen` em MediaCard.tsx).
+   `pointer-events: none` enquanto fechada pra a faixa de 32px de altura
+   parar de capturar hover/click quando está invisível. */
 .card-frame.chromeless .card-head {
   position: absolute;
   top: 0;
@@ -2384,6 +2361,7 @@
   right: 0;
   z-index: 2;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 120ms ease;
   /* Legível por cima de qualquer imagem, sem virar uma barra sólida que
      recria visualmente o header que acabou de ser removido. */
@@ -2391,9 +2369,9 @@
   border-radius: var(--radius) var(--radius) 0 0;
 }
 
-.card-frame.chromeless:hover .card-head,
-.card-frame.chromeless:focus-within .card-head {
+.card-frame.chromeless.chrome-active .card-head {
   opacity: 1;
+  pointer-events: auto;
 }
 
 /* Sem moldura, o próprio recorte arredondado é o que dá forma ao card —
@@ -2404,18 +2382,63 @@
   border-radius: var(--radius);
 }
 
-/* O handle de resize vive FORA do `.card-clip` (CardFrame.tsx), então sem
-   moldura ele fica solto sobre a imagem — mesmo tratamento do header:
-   aparece no hover, com contraste próprio. */
-.card-frame.chromeless .card-resize {
+/* Ferramenta solta ao redor da imagem (girar, etc.) — separada da faixa do
+   header, estilo toolbar contextual de canvas (Miro/Figma). Mesmo gatilho
+   de click (`.chrome-active`) do header; fica ancorada dentro do recorte
+   arredondado do card (perto do topo, logo abaixo do header), não fora
+   dele — evitar overflow:visible aqui pouparia complicação de z-index com
+   cards vizinhos sobrepostos, sem perder a leitura de "ferramenta ao redor
+   da imagem".
+   Achado ao vivo (2026-09-02, smoke-media-card.mjs): ancorada perto da
+   borda INFERIOR, um card alto o bastante (mais alto que a janela/viewport
+   visível) empurra a toolbar pra fora da área clicável de verdade — o
+   mesmo achado já documentado alhures neste arquivo sobre
+   `Input.dispatchMouseEvent` fora do viewport ser um no-op silencioso, só
+   que aqui é um bug de UX real, não só do harness de teste: a ferramenta
+   fica inalcançável. Perto do TOPO (logo abaixo da faixa do header, que já
+   vive lá) não sofre disso — o topo do card é a parte que mais
+   provavelmente está visível. */
+.media-toolbar {
+  position: absolute;
+  left: 50%;
+  top: 40px;
+  transform: translateX(-50%) translateY(-4px);
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(20, 20, 24, 0.78);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   opacity: 0;
-  transition: opacity 120ms ease;
-  color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
 }
 
-.card-frame.chromeless:hover .card-resize {
+.media-toolbar.visible {
   opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+.media-toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background-color 0.12s ease;
+}
+
+.media-toolbar button:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .media-content {
@@ -2430,8 +2453,19 @@
 
 .media-content img,
 .media-pdf-canvas {
-  max-width: 100%;
-  max-height: 100%;
+  /* Reportado ao vivo (2026-09-02): "se eu redimensionar para aumentar, o
+     chrome estoura e não faz resize real da mídia" — `max-width/max-height:
+     100%` só ENCOLHE uma imagem/canvas maior que o container; uma mídia
+     menor (o caso comum: canvas do PDF ou <img> na resolução nativa)
+     nunca cresce além do próprio tamanho intrínseco, então crescer o
+     `rect` do card só aumentava a área vazia ao redor — a mídia ficava
+     presa no canto, do tamanho de sempre. `width/height: 100%` faz a caixa
+     do elemento sempre acompanhar o container; `object-fit: contain` (já
+     aqui) cuida de escalar o CONTEÚDO (pra cima ou pra baixo) preservando
+     a proporção dentro dessa caixa — essa combinação é o fix, não só
+     `object-fit` sozinho. */
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   pointer-events: none;
   user-select: none;

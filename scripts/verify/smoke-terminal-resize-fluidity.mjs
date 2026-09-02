@@ -44,7 +44,9 @@ try {
   const initialDims = await page.evalJs(`window.__getTerminalDims(${JSON.stringify(cardId)})`);
   check("dims iniciais reais lidas do xterm", initialDims && initialDims.cols > 0 && initialDims.rows > 0, true);
 
-  const handle = await centerOf(page, ".card-resize");
+  // 2026-09-02: o grip visual `.card-resize` foi removido — `.card-resize-se`
+  // é a zona invisível de hit-test que ocupa o mesmo canto.
+  const handle = await centerOf(page, ".card-resize-se");
   check("alça de resize real encontrada", handle !== null, true);
 
   // Arrasta pra crescer o card — várias etapas ANTES de soltar, dando

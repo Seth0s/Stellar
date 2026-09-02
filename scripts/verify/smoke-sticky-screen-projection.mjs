@@ -232,7 +232,9 @@ try {
 
   // --- resize real ---
   const beforeResize = await stickyStoredRect();
-  const handle = await centerOf(page, ".sticky-card .card-resize");
+  // 2026-09-02: o grip visual `.card-resize` foi removido — `.card-resize-se`
+  // é a zona invisível de hit-test que ocupa o mesmo canto.
+  const handle = await centerOf(page, ".sticky-card .card-resize-se");
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: handle.x + 50, y: handle.y + 40, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x + 50, y: handle.y + 40, button: "left", clickCount: 1, pointerType: "mouse" });
