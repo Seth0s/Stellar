@@ -20,7 +20,6 @@ import {
   Code2,
   Copy,
   Crop,
-  Droplet,
   Eye,
   EyeOff,
   File,
@@ -102,7 +101,6 @@ export type IconName =
   | "interrupt"
   | "rename"
   | "bell"
-  | "translucent"
   | "winMinimize"
   | "winMaximize"
   | "winRestore"
@@ -184,7 +182,6 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   interrupt: Square,
   rename: Pen,
   bell: Bell,
-  translucent: Droplet,
   winMinimize: Minus,
   winMaximize: Square,
   winRestore: Copy,
