@@ -14,6 +14,24 @@ const URL_DELIM_PATTERN = /[\s"'<>]/;
 // Pre-release audit B7 — caps `seenUrls` per terminal so a long-running
 // agent printing thousands of distinct URLs can't grow it forever.
 const MAX_SEEN_URLS = 500;
+// Achado ao vivo (2026-09-02) — usuário relatou um `claude` aberto num card
+// de terminal ora reabrindo dentro de uma sessão alheia, ora só mostrando
+// "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker".
+// Causa raiz: quando o próprio Stellar é lançado a partir de um processo
+// que é (ou descende de) uma sessão do Claude Code — dev via `npm run dev`
+// num terminal do Claude Code, ou o app empacotado aberto de dentro de um
+// card de terminal que já roda `claude`, como neste exato processo — essas
+// variáveis de identidade de sessão ficam no `process.env` do processo main
+// da app inteira. `spawn()` abaixo herdava tudo cegamente; todo card novo
+// (claude, codex, bash) passava a herdar a identidade da sessão ALHEIA que
+// por acaso lançou o Stellar, nunca uma sessão nova de verdade — inclusive
+// `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN`, que dariam ao processo novo
+// acesso ao canal de IPC de outra sessão. Removidas antes de todo spawn,
+// não só pra `claude`: qualquer card aberto no board é sempre um processo
+// novo e independente, nunca um filho implícito de quem lançou o app.
+function isInheritedClaudeSessionEnvKey(key: string): boolean {
+  return key === "CLAUDECODE" || key === "CLAUDE_PID" || key === "CLAUDE_EFFORT" || key === "AI_AGENT" || key.startsWith("CLAUDE_CODE_");
+}
 // DESIGN-BACKLOG.md item 57, ponto 12 — real bug reported live: seen-url
 // chips showed garbage like "claude.ai/cod[54G/a[57Gtifact/..." — raw
 // ANSI escapes (cursor repositioning, e.g. terminal line-wrap redraws on
@@ -160,8 +178,14 @@ export function createPtyRegistry(registryOpts: {
     const resolved = resolveSpawn(providerId, { ...spawnOpts, mcpUrl: cardMcpUrl });
     if (!resolved) return { error: "binary_not_found", providerId, installCommand: providerInstallCommand(providerId) };
 
+    const inheritedEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined || isInheritedClaudeSessionEnvKey(key)) continue;
+      inheritedEnv[key] = value;
+    }
+
     const env: Record<string, string> = {
-      ...(process.env as Record<string, string>),
+      ...inheritedEnv,
       AGENT_CANVAS_SOCK: registryOpts.sockPath,
       AGENT_CANVAS_CARD_ID: id,
       // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — fork-bomb guard.
