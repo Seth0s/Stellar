@@ -1237,6 +1237,16 @@ function createWindow() {
     safeSend(win, "browser:scale-factor-changed", id, scaleFactor);
   });
 
+  // EXPERIMENTAL, test-only (2026-09-02) — ver browser-registry.ts's
+  // `testSetMaxDensity` doc comment. Só muda o override; não dispara
+  // resize sozinho — combine com `browser:test-force-scale-factor` (ou
+  // qualquer resize real) pra ver o efeito. Removível quando o "ponto
+  // doce" virar a constante `BROWSER_MAX_DENSITY` de verdade.
+  ipcMain.handle("browser:test-set-max-density", (_e, value: number | null) => {
+    if (app.isPackaged) return;
+    browserRegistry.testSetMaxDensity(value);
+  });
+
   ipcMain.handle("ai:summarize", (_e, providerId: string, cwd: string, prompt: string) =>
     runOneShotSummary(providerId, cwd, prompt),
   );

@@ -395,6 +395,8 @@ const browser = {
   /** Test-only, dev builds only — see main/index.ts. */
   testForceScaleFactor: (id: string, scaleFactor: number): Promise<void> =>
     ipcRenderer.invoke("browser:test-force-scale-factor", id, scaleFactor),
+  /** EXPERIMENTAL, test-only, dev builds only — see main/index.ts. */
+  testSetMaxDensity: (value: number | null): Promise<void> => ipcRenderer.invoke("browser:test-set-max-density", value),
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
