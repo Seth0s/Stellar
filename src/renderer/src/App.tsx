@@ -822,12 +822,32 @@ export function App() {
         setRadialMenu(null);
         setShowRemotePairing(false);
       }
+      // Achado ao vivo (2026-09-02) — usuário relatou o header sumindo "sem
+      // precedentes" no meio de uma sessão longa. `Titlebar.tsx` esconde o
+      // header inteiro em fullscreen real do SO, e F11 (abaixo) era
+      // verificado ANTES deste guard existir — nenhum `stopPropagation` em
+      // `useTerminal.ts`/`BrowserCard.tsx` (só `preventDefault`, que não
+      // impede bubbling) pra F11 especificamente, então UM F11 apertado com
+      // foco dentro de qualquer terminal ou navegador embutido (uma TUI com
+      // seu próprio bind de F11, uma página web pedindo fullscreen, etc.)
+      // bubblava até aqui e ligava o fullscreen REAL da janela do Stellar
+      // — escondendo o header sem o usuário ter pedido isso do app. Mesmo
+      // guard `typing` que já protege os atalhos de ferramenta abaixo,
+      // movido pra cobrir F11 também.
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "CANVAS" ||
+        target?.isContentEditable;
       if (e.key === "F11") {
+        if (typing) return;
         e.preventDefault();
         void window.winControls.toggleFullscreen();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
+        if (typing) return;
         e.preventDefault();
         const topId = orderRef.current[orderRef.current.length - 1];
         if (topId) duplicateCard(topId);
@@ -842,12 +862,6 @@ export function App() {
       // would also swap the app's whole tool mid-type, which then silently
       // cuts off further input/wheel forwarding (both gate on
       // interactionMode === "normal").
-      const target = e.target as HTMLElement | null;
-      const typing =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.tagName === "CANVAS" ||
-        target?.isContentEditable;
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "v" || e.key === "V") setTool("pointer");
       if (e.key === "p" || e.key === "P") setTool("pen");
