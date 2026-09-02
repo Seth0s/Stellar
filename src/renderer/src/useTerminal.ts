@@ -471,16 +471,39 @@ export function useTerminal(
           // que só roda com um `ptyId` real (guard no topo do efeito); a
           // ref (não a variável fechada) é usada porque este listener
           // sobrevive além de qualquer re-render, mesmo sem se re-registrar.
-          const typed = `"${result.path}" `;
+          const quotedPath = `"${result.path}"`;
+          const typed = `${quotedPath} `;
           // Pedido ao vivo (2026-08-31) — máscara só visual: o que é
           // ENVIADO pro PTY continua sendo o path real (`typed`, sem essa
           // linha o comportamento é idêntico ao de antes); o que o
           // usuário VÊ na tela vira "[imagem #N]" — o eco desse mesmo
-          // `typed` é interceptado e reescrito no handler de `pty:data`
+          // texto é interceptado e reescrito no handler de `pty:data`
           // (Effeito 1, `writeMasked`), armado aqui logo antes de
           // escrever.
+          //
+          // Achado ao vivo (2026-09-02, reportado pelo usuário — "no
+          // Claude ainda mostra o path completo"): o `needle` usado pra
+          // casar contra o ECO real não pode incluir o espaço à direita
+          // de `typed`. Um shell simples (bash) ecoa exatamente o que
+          // recebeu, espaço incluso — mas `claude` (e presumivelmente
+          // qualquer CLI com input box próprio, redesenhado via ANSI, não
+          // um terminal "cooked" comum) redesenha a linha inteira com
+          // seus próprios códigos de cursor (`\x1b[2D`, `\x1b[5A` etc.)
+          // ANTES do path, e o espaço digitado depois do path vira parte
+          // desse redesenho (ex.: um `\r` de quebra de linha), nunca um
+          // caractere de espaço literal no eco — confirmado ao vivo
+          // capturando os bytes crus de `pty:data` com um listener
+          // paralelo contra um `claude` real: o eco continha
+          // `"...arquivo.png"\r` (aspas + `\r`), não `"...arquivo.png" `
+          // (aspas + espaço). `needle` com o espaço nunca batia, o buffer
+          // desistia (`writeMasked`'s guarda de tamanho) e mostrava o
+          // path cru. `needle` agora é só o path entre aspas — o que É
+          // ecoado de volta igual em ambos os casos — e o espaço
+          // continua sendo ENVIADO pro PTY normalmente (`typed`, com o
+          // espaço, continua o que é escrito), só não faz mais parte do
+          // que precisa bater no eco pra mascarar.
           pastedImageCount++;
-          pendingMaskRef.current = { needle: typed, replacement: `[imagem #${pastedImageCount}] ` };
+          pendingMaskRef.current = { needle: quotedPath, replacement: `[imagem #${pastedImageCount}]` };
           maskBufferRef.current = "";
           void window.pty.write(ptyIdRef.current!, typed);
           toast("imagem colada — caminho inserido no terminal");
