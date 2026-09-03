@@ -64,7 +64,7 @@ try {
 
   const notOnScreenPayload = await page.evalJs(`
     (() => {
-      const card = document.querySelector('.terminal-card');
+      const card = document.querySelector('[data-kind="terminal"]');
       return JSON.stringify(card?.textContent.includes(${JSON.stringify(TOP_MARKER)}) ?? null);
     })()
   `);

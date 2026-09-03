@@ -57,7 +57,7 @@ try {
   const termRect = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('.terminal-card');
+        const el = document.querySelector('[data-kind="terminal"]');
         if (!el) return JSON.stringify(null);
         const r = el.getBoundingClientRect();
         return JSON.stringify({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });

@@ -51,7 +51,7 @@ try {
   // this fix existed).
   const clip = JSON.parse(
     await page.evalJs(`
-      (() => { const r = document.querySelector('.terminal-card-body').getBoundingClientRect(); return JSON.stringify({x: r.x, y: r.y, width: r.width, height: r.height, scale: 1}); })()
+      (() => { const r = document.querySelector('[data-role="terminal-body"]').getBoundingClientRect(); return JSON.stringify({x: r.x, y: r.y, width: r.width, height: r.height, scale: 1}); })()
     `),
   );
   // Reference "blank" screenshot — captured BEFORE any content is
@@ -96,7 +96,7 @@ try {
   // chega no xterm.js, não fica no default (courier-new) por engano.
   const fontFamily = await page.evalJs(`
     (() => {
-      const canvas = document.querySelector('.terminal-card-body .xterm-screen') || document.querySelector('.terminal-card-body canvas');
+      const canvas = document.querySelector('[data-role="terminal-body"] .xterm-screen') || document.querySelector('[data-role="terminal-body"] canvas');
       return canvas ? getComputedStyle(canvas.closest('.xterm')).fontFamily : 'no .xterm element found';
     })()
   `);

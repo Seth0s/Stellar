@@ -105,7 +105,7 @@ try {
   const tagBefore = JSON.parse(
     await page.evalJs(`
       (() => {
-        const tags = document.querySelectorAll('.terminal-card .card-tag');
+        const tags = document.querySelectorAll('[data-kind="terminal"] .card-tag');
         const tag = tags[tags.length - 1];
         const frame = tag.closest('.card-frame');
         const r = tag.getBoundingClientRect();
@@ -136,7 +136,7 @@ try {
   const frameAfterDrag = JSON.parse(
     await page.evalJs(`
       (() => {
-        const tags = document.querySelectorAll('.terminal-card .card-tag');
+        const tags = document.querySelectorAll('[data-kind="terminal"] .card-tag');
         const f = tags[tags.length - 1].closest('.card-frame').getBoundingClientRect();
         return JSON.stringify({ left: f.left, top: f.top });
       })()
@@ -167,7 +167,7 @@ try {
     const before = JSON.parse(
       await page.evalJs(`
         (() => {
-          const tags = document.querySelectorAll('.terminal-card .card-tag');
+          const tags = document.querySelectorAll('[data-kind="terminal"] .card-tag');
           const tag = tags[${domIndex}];
           const frame = tag.closest('.card-frame');
           const handle = frame.querySelector('.card-resize-se');
@@ -183,7 +183,7 @@ try {
     const shrunk = JSON.parse(
       await page.evalJs(`
         (() => {
-          const tags = document.querySelectorAll('.terminal-card .card-tag');
+          const tags = document.querySelectorAll('[data-kind="terminal"] .card-tag');
           const tag = tags[${domIndex}];
           const r = tag.getBoundingClientRect();
           return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });

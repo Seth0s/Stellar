@@ -56,7 +56,7 @@ try {
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: mid.x, y: mid.y, button: "left", pointerType: "mouse" });
   await new Promise((r) => setTimeout(r, 200));
 
-  const transformDuringDrag = await page.evalJs(`document.querySelector('.terminal-card-body')?.style.transform ?? null`);
+  const transformDuringDrag = await page.evalJs(`document.querySelector('[data-role="terminal-body"]')?.style.transform ?? null`);
   check("transform ótico REAL aplicado durante o arraste (acompanha ao vivo)", transformDuringDrag && transformDuringDrag.includes("scale("), true);
 
   const dimsDuringDrag = await page.evalJs(`window.__getTerminalDims(${JSON.stringify(cardId)})`);
@@ -72,7 +72,7 @@ try {
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: end.x, y: end.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await new Promise((r) => setTimeout(r, 500));
 
-  const transformAfterRelease = await page.evalJs(`document.querySelector('.terminal-card-body')?.style.transform ?? null`);
+  const transformAfterRelease = await page.evalJs(`document.querySelector('[data-role="terminal-body"]')?.style.transform ?? null`);
   check("transform ótico volta a vazio depois do settle (raster real já bate com a caixa)", transformAfterRelease, "");
 
   const dimsAfterRelease = await page.evalJs(`window.__getTerminalDims(${JSON.stringify(cardId)})`);

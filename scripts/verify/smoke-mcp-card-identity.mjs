@@ -96,7 +96,7 @@ try {
   // ---------------------------------------------------------------
   // Sintoma 2 — renomear um card passa a ser funcional, não decorativo.
   // ---------------------------------------------------------------
-  const tag = await centerOf(page, ".terminal-card .card-tag");
+  const tag = await centerOf(page, '[data-kind="terminal"] .card-tag');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: tag.x, y: tag.y, button: "left", clickCount: 2, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: tag.x, y: tag.y, button: "left", clickCount: 2, pointerType: "mouse" });
   await new Promise((r) => setTimeout(r, 300));

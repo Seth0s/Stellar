@@ -219,7 +219,7 @@ try {
   const ownerNotFullyVisibleBefore = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('.card-frame.terminal-card');
+        const el = document.querySelector('.card-frame[data-kind="terminal"]');
         const r = el.getBoundingClientRect();
         return JSON.stringify(r.left < 0 || r.right > window.innerWidth || r.top < 0 || r.bottom > window.innerHeight);
       })()
@@ -248,7 +248,7 @@ try {
   const ownerFullyVisibleAfter = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('.card-frame.terminal-card');
+        const el = document.querySelector('.card-frame[data-kind="terminal"]');
         const r = el.getBoundingClientRect();
         return JSON.stringify(r.left >= -1 && r.top >= -1 && r.right <= window.innerWidth + 1 && r.bottom <= window.innerHeight + 1);
       })()

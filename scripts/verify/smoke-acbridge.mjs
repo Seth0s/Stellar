@@ -73,7 +73,7 @@ try {
   const spawnResult = await spawnPromise;
   check("acbridge spawn-agent succeeds after Permitir and prints the new cardId", spawnResult.ok && spawnResult.stdout.length > 0, true);
   await new Promise((r) => setTimeout(r, 500));
-  check("a second real terminal card exists after acbridge spawn-agent", await page.evalJs(`document.querySelectorAll('.terminal-card').length`), 2);
+  check("a second real terminal card exists after acbridge spawn-agent", await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`), 2);
 
   // page-text — needs a real browser card first (spawn-card, allowed).
   const spawnCardPromise = runAcbridge(sockPath, bashCardId, ["spawn-card", "browser", "https://example.com"]);

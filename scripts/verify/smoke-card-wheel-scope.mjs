@@ -93,7 +93,7 @@ try {
   await new Promise((r) => setTimeout(r, 1500));
 
   const zoomBefore = await readZoom(page);
-  const termCoords = await centerOf(page, ".terminal-card-body");
+  const termCoords = await centerOf(page, '[data-role="terminal-body"]');
   // Achado ao investigar este mesmo teste: `.xterm-viewport`'s `scrollTop`
   // NÃO reflete a posição real de scroll nesta versão do xterm.js — o
   // scroll de verdade vive num overlay próprio (`.xterm-scrollable-
@@ -105,7 +105,7 @@ try {
   // wheel-up (real scroll, não um artefato de teste).
   const termClip = JSON.parse(
     await page.evalJs(`
-      (() => { const r = document.querySelector('.terminal-card-body').getBoundingClientRect(); return JSON.stringify({x: r.x, y: r.y, width: r.width, height: r.height, scale: 1}); })()
+      (() => { const r = document.querySelector('[data-role="terminal-body"]').getBoundingClientRect(); return JSON.stringify({x: r.x, y: r.y, width: r.width, height: r.height, scale: 1}); })()
     `),
   );
   const pixelsBefore = (await page.send("Page.captureScreenshot", { format: "png", clip: termClip })).data;

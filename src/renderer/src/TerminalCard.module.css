@@ -1,0 +1,307 @@
+/* Colocalização de CSS (2026-09-03), sexto componente migrado. Achados:
+ * (1) `.terminal-card { box-shadow: ... }` é um override kind-específico
+ *     por cima do `.card-base` global -- usa `:global(.card-base)` como
+ *     parte do próprio seletor composto (mesmo padrão de StickyCard.module.css)
+ *     pra especificidade vencer sem depender de ordem de import;
+ * (2) o corpo do terminal contém classes do PRÓPRIO xterm.js
+ *     (`.terminal.xterm`, `.xterm-viewport`, `.xterm-scrollable-element`,
+ *     `.scrollbar`, `.visible`/`.invisible`, `.slider`) -- nomes reais da
+ *     lib, não nossos, então ficam atrás de `:global()`;
+ * (3) `.terminal-card-interrupt` nunca teve regra própria (só usa a base
+ *     de `.card-head button` — ver comentário em cards.css) e virou
+ *     className="" (nenhuma classe module criada pra ela). */
+
+.terminalCard:global(.card-base) {
+  box-shadow:
+    var(--card-shadow, var(--shadow-card)),
+    0 0 0 1px color-mix(in srgb, var(--accent, transparent) 30%, transparent),
+    0 0 20px -6px var(--accent, transparent);
+}
+
+/* Sino de notificação (2026-09-02) — mesma base de `.card-head button`;
+   `.on` (ligado, padrão) tinge com `--accent` — a MESMA variável que
+   CardFrame.tsx já seta em `.card-frame` a partir de PROVIDER_ACCENT
+   (TerminalCard.tsx), herdada por qualquer descendente sem precisar
+   replicar a variável em cada elemento. */
+.terminalCardBell.on {
+  color: var(--accent, var(--foam));
+}
+.terminalCardBell:not(.on) {
+  opacity: 0.55;
+}
+
+/* Ícone real do provider no header (2026-09-02) — ver o comentário de
+   PROVIDER_GLYPH em TerminalCard.tsx. Mesmo glyph do PureNerdFont já
+   carregado globalmente (main.tsx) — nada novo pra carregar aqui. Efeito
+   "metálico": texto preenchido com o próprio gradiente diagonal via
+   `background-clip: text`; `.flat` (bash/cursor, sem `--m-dark`) cai pra
+   cor sólida. */
+.terminalCardProviderGlyph {
+  font-family: "PureNerdFont", monospace;
+  font-size: 12px;
+  width: 15px;
+  line-height: 1;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(125deg, var(--m-dark, var(--m-mid)) 0%, var(--m-mid) 48%, var(--m-dark, var(--m-mid)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.terminalCardProviderGlyph.flat {
+  background: none;
+  -webkit-text-fill-color: var(--m-mid);
+  color: var(--m-mid);
+}
+
+/* Barra de atividade (2026-09-02) — fina, invisível em repouso; pulsa
+   esquerda→direita durante `isActive` (useTerminal.ts) e some ao acabar.
+   `overflow: hidden` no container fixo, a faixa que se move é um filho
+   mais largo que ele mesmo (mesma técnica de "sweep" de loading bar). */
+.terminalCardActivity {
+  height: 2px;
+  flex: none;
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+}
+.terminalCardActivitySweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  left: -34%;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, var(--accent, var(--foam)), transparent);
+}
+.terminalCardActivity.on .terminalCardActivitySweep {
+  opacity: 1;
+  animation: terminal-activity-sweep 1s linear infinite;
+}
+
+/* Achado ao vivo (2026-09-03, migração pra CSS Module): esta regra vivia
+ * em cards.css referenciando as classes literais antigas dentro de um
+ * `@media` -- um grep por `^\.terminal` (âncora de coluna 0) não pega
+ * seletor indentado dentro de bloco, então ficou pra trás como morta
+ * (nunca mais batia com a classe hasheada) até rodar o smoke test de
+ * precisão de clique e ver uma regressão real: com a animação NUNCA mais
+ * desligando sob reduced-motion, o sweep continuava repintando o card
+ * durante o teste (headless/Xvfb reporta prefers-reduced-motion:reduce
+ * por padrão), jank suficiente pra empurrar a seleção de texto por
+ * arraste alguns pixels. */
+@media (prefers-reduced-motion: reduce) {
+  .terminalCardActivitySweep {
+    animation: none !important;
+  }
+  .terminalCardActivity.on .terminalCardActivitySweep {
+    opacity: 0.6;
+  }
+}
+
+.terminalCardBody {
+  flex: 1;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  background: var(--panel);
+}
+
+.terminalCardBody :global(.terminal.xterm) {
+  padding: 0;
+  margin: 0;
+}
+
+/* xterm.js's own scrollbar (a VS Code-derived overlay scrollbar, not the
+   browser's native one — real, functional: `new Terminal()` sets
+   `scrollback: 10000` (useTerminal.ts, 2026-09-02 — era o default do
+   próprio xterm.js, 1000, nunca setado explicitamente antes), e uma
+   sessão movimentada genuinely enche isso).
+   Pedido ao vivo (2026-08-30) — a transparent-slider fix (below, kept for
+   history) wasn't enough; the human wants the scrollbar gone entirely,
+   not just unpainted. `visibility: hidden` on the two scrollbar container
+   divs themselves (`.invisible.scrollbar.horizontal`/`.vertical` — real
+   xterm 6 class names, confirmed live via DOM dump; NOT
+   `.xterm-scrollable-element` itself, which is an ANCESTOR of
+   `.xterm-screen`, the actual rendered terminal — hiding that would hide
+   the terminal's own content). `visibility` (not `display: none`):
+   removes it from hit-testing/painting same as `display: none` would,
+   but — unlike `display: none` — never collapses the box these
+   `position: absolute` elements sit in, so it can't perturb VS Code's own
+   internal layout math for them. Wheel-scroll keeps working: xterm's own
+   wheel listener lives on `.xterm-scrollable-element` (an ancestor,
+   untouched here), never on the scrollbar sub-elements being hidden. */
+.terminalCardBody :global(.xterm-viewport) {
+  overflow-y: auto !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.terminalCardBody :global(.xterm-viewport)::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.terminalCardBody :global(.xterm-scrollable-element) > :global(.scrollbar) {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+}
+
+.terminalCardBody :global(.xterm-scrollable-element) > :global(.visible) :global(.slider),
+.terminalCardBody :global(.xterm-scrollable-element) > :global(.invisible) :global(.slider) {
+  display: none !important;
+  background: transparent !important;
+}
+
+/* Achado ao vivo (2026-09-02) -- `--resume` numa sessão real e grande
+ * pode passar dezenas de segundos sem imprimir nada (a CLI resumida
+ * carregando/processando o histórico), e o terminal em branco era
+ * indistinguível de um card travado de verdade. Só aparece depois de um
+ * atraso (ver TerminalCard.tsx) pra não piscar num spawn normal rápido. */
+.terminalCardLoading {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.terminalCardLoadingSpinner {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 40%, transparent);
+  border-top-color: var(--muted);
+  animation: terminal-card-loading-spin 0.7s linear infinite;
+}
+
+@keyframes terminal-card-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.terminalCardExited {
+  position: absolute;
+  bottom: 50px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+/* Achado ao vivo (2026-08-27): a versão antiga desses chips era
+   `position: absolute` por CIMA das linhas do terminal, sem limite nem
+   expiração — qualquer sessão que imprimisse alguns links (docs, npm,
+   git remote…) acumulava uma faixa permanente cobrindo conteúdo real.
+   Vira um badge dentro do próprio footer (nunca sobrepõe o terminal); a
+   lista completa mora num Popover sob demanda. */
+.terminalCardFootRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.terminalCardFootText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminalCardUrlBadge {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--panel);
+  color: var(--foam);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.terminalCardUrlPopover {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  min-width: 220px;
+}
+
+.terminalCardUrlRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminalCardUrlChip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--panel);
+  color: var(--foam);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Feedback visual real (não otimista) do clique-pra-copiar — só aparece
+   depois que `navigator.clipboard.writeText` de fato resolveu ou falhou. */
+.terminalCardUrlChip.copied {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.terminalCardUrlChip.copyError {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.terminalCardUrlOpen {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.terminalCardUrlOpen:hover {
+  color: var(--foam);
+  border-color: var(--foam);
+}

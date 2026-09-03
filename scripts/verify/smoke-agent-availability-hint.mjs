@@ -144,7 +144,7 @@ try {
   await page.click(installBtn.x, installBtn.y);
   await new Promise((r) => setTimeout(r, 1000));
 
-  check("um novo terminal (bash) foi criado pelo botão de instalação", await page.evalJs(`document.querySelectorAll('.terminal-card').length`), 2);
+  check("um novo terminal (bash) foi criado pelo botão de instalação", await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`), 2);
   check("o popover fechou depois do clique", await page.evalJs(`!document.querySelector('.agent-availability-row')`), true);
 
   const newCard = JSON.parse(
@@ -198,7 +198,7 @@ try {
   await page.click(criarBtn.x, criarBtn.y);
   await new Promise((r) => setTimeout(r, 800));
 
-  const errorText = await page.evalJs(`document.querySelector('.terminal-card-exited')?.textContent`);
+  const errorText = await page.evalJs(`document.querySelector('[data-role="terminal-exited"]')?.textContent`);
   check('a mensagem de erro honesta ainda aparece ("antigravity" não encontrado)', errorText?.includes("antigravity") && errorText?.includes("não encontrado"), true);
   check("...mas sem o botão de instalação embutido no spawn (removido, item 57 ponto 13)", await page.evalJs(`!!document.querySelector('.terminal-card-install-btn')`), false);
 

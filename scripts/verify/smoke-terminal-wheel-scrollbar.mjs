@@ -30,7 +30,7 @@ try {
   // 1. Check terminal container and scrollbar gutter removal
   const viewportScrollbarWidth = await page.evalJs(`
     (() => {
-      const vp = document.querySelector(".terminal-card-body .xterm-viewport");
+      const vp = document.querySelector('[data-role="terminal-body"] .xterm-viewport');
       if (!vp) return null;
       const style = window.getComputedStyle(vp);
       return {
@@ -45,7 +45,7 @@ try {
   check("clientWidth equals offsetWidth (zero scrollbar gutter reserved)", viewportScrollbarWidth?.clientWidth === viewportScrollbarWidth?.offsetWidth, true);
 
   // 2. Test mouse wheel over fresh terminal prompt (no scrollback)
-  const termBodyPos = await centerOf(page, ".terminal-card-body");
+  const termBodyPos = await centerOf(page, '[data-role="terminal-body"]');
   check("terminal body found", !!termBodyPos, true);
 
   await page.click(termBodyPos.x, termBodyPos.y);
@@ -90,8 +90,8 @@ try {
   // 3. Verify terminal canvas spans full container width without the 14px scrollbar deduction
   const columnMath = await page.evalJs(`
     (() => {
-      const termBody = document.querySelector(".terminal-card-body");
-      const canvas = document.querySelector(".terminal-card-body .xterm-screen canvas");
+      const termBody = document.querySelector('[data-role="terminal-body"]');
+      const canvas = document.querySelector('[data-role="terminal-body"] .xterm-screen canvas');
       if (!termBody || !canvas) return null;
       const bodyW = termBody.clientWidth;
       const canvasW = canvas.offsetWidth || canvas.width;
@@ -104,7 +104,7 @@ try {
   await page.evalJs(`
     (() => {
       // Type command to produce scrollback
-      const termId = document.querySelector(".terminal-card")?.dataset?.cardId || "terminal";
+      const termId = document.querySelector('[data-kind="terminal"]')?.dataset?.cardId || "terminal";
     })()
   `);
 

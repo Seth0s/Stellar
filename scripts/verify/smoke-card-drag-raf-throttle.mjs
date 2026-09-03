@@ -43,7 +43,7 @@ try {
   const before = JSON.parse(
     await page.evalJs(`
       (async () => {
-        const head = document.querySelector('.terminal-card .card-head');
+        const head = document.querySelector('[data-kind="terminal"] .card-head');
         const r = head.getBoundingClientRect();
         const boards = await window.store.boards.list();
         const cards = await window.store.list(boards[0].id);
@@ -89,7 +89,7 @@ try {
   const after = JSON.parse(
     await page.evalJs(`
       (async () => {
-        const head = document.querySelector('.terminal-card .card-head');
+        const head = document.querySelector('[data-kind="terminal"] .card-head');
         const r = head.getBoundingClientRect();
         const boards = await window.store.boards.list();
         const cards = await window.store.list(boards[0].id);

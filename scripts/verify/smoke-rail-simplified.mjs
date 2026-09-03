@@ -97,7 +97,7 @@ try {
   await page.click(createTerminalBtn.x, createTerminalBtn.y);
   await delay(400);
 
-  const terminalCardCount = await page.evalJs(`document.querySelectorAll(".terminal-card").length`);
+  const terminalCardCount = await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`);
   check("new terminal card was created (seeded + newly created = 2)", terminalCardCount, 2);
 
   // 6. Test collapse / expand toggle with fluid animation & subtle state

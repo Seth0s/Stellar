@@ -92,7 +92,7 @@ try {
   const dispatchResult = JSON.parse(
     await page.evalJs(`
       (() => {
-        const body = document.querySelector('.terminal-card-body');
+        const body = document.querySelector('[data-role="terminal-body"]');
         const dt = new DataTransfer();
         const file = new File([new Uint8Array([0])], 'paste.png', { type: 'image/png' });
         dt.items.add(file);

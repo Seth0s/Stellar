@@ -103,7 +103,7 @@ try {
   // rejeita um resize que colidiria com outro card; `ownerCardId` já foi
   // capturado (é só o id, não depende do card ainda existir), então
   // fechar o terminal não afeta o que este teste verifica.
-  const terminalCloseBtn = await centerOf(page, ".card-frame.terminal-card .card-head-actions button:last-child");
+  const terminalCloseBtn = await centerOf(page, '.card-frame[data-kind="terminal"] .card-head-actions button:last-child');
   await page.click(terminalCloseBtn.x, terminalCloseBtn.y);
   await new Promise((r) => setTimeout(r, 300));
   // Terminal com processo vivo pede confirmação antes de fechar de verdade.
