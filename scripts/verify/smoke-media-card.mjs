@@ -129,7 +129,7 @@ try {
   let deadline = Date.now() + 5000;
   let mediaCardFound = false;
   while (Date.now() < deadline) {
-    if (JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector(".media-card"))`))) {
+    if (JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector('[data-kind="media"]'))`))) {
       mediaCardFound = true;
       break;
     }
@@ -155,9 +155,9 @@ try {
   const chrome = JSON.parse(
     await page.evalJs(`
       (() => {
-        const frame = document.querySelector('.media-card');
+        const frame = document.querySelector('[data-kind="media"]');
         const head = frame.querySelector('.card-head');
-        const viewport = frame.querySelector('.media-viewport');
+        const viewport = frame.querySelector('[data-role="media-viewport"]');
         const f = frame.getBoundingClientRect();
         const v = viewport.getBoundingClientRect();
         return JSON.stringify({
@@ -234,7 +234,7 @@ try {
   deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
     naturalWidth = JSON.parse(
-      await page.evalJs(`JSON.stringify(document.querySelector(".media-content img")?.naturalWidth || 0)`),
+      await page.evalJs(`JSON.stringify(document.querySelector('[data-role="media-content"] img')?.naturalWidth || 0)`),
     );
     if (naturalWidth > 0) break;
     await new Promise((r) => setTimeout(r, 150));
@@ -243,7 +243,7 @@ try {
     const diag = JSON.parse(
       await page.evalJs(`
         (async () => {
-          const img = document.querySelector(".media-content img");
+          const img = document.querySelector('[data-role="media-content"] img');
           let fetchStatus = "n/a";
           try {
             const res = await fetch(img.src);
@@ -260,14 +260,14 @@ try {
   check("a <img> via stellar-asset:// carrega de verdade", naturalWidth, (n) => n > 0);
   check(
     "src usa o protocolo stellar-asset://",
-    await page.evalJs(`document.querySelector(".media-content img")?.src.startsWith("stellar-asset://")`),
+    await page.evalJs(`document.querySelector('[data-role="media-content"] img')?.src.startsWith("stellar-asset://")`),
     true,
   );
 
   const assetFilesAfterPaste = findMediaAssetFiles(join(USER_DATA_DIR, "board-assets"));
   check("arquivo colado foi salvo na pasta PERSISTENTE do board", assetFilesAfterPaste.length, (n) => n >= 1);
 
-  async function getCardRect(selector = ".media-card") {
+  async function getCardRect(selector = '[data-kind="media"]') {
     return JSON.parse(
       await page.evalJs(`
         (() => {
@@ -329,14 +329,14 @@ try {
   await page.click(resizedCardRect.x + resizedCardRect.w / 2, resizedCardRect.y + resizedCardRect.h / 2);
   await new Promise((r) => setTimeout(r, 200));
   const chromeAfterClick = JSON.parse(
-    await page.evalJs(`JSON.stringify(document.querySelector('.media-card').classList.contains('chrome-active'))`),
+    await page.evalJs(`JSON.stringify(document.querySelector('[data-kind="media"]').classList.contains('chrome-active'))`),
   );
   check("um click de verdade na imagem abre a faixa de chrome", chromeAfterClick, true);
 
   const rotateBtnBox = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.media-card [title="Girar 90°"]');
+        const b = document.querySelector('[data-kind="media"] [title="Girar 90°"]');
         const r = b.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()
@@ -345,7 +345,7 @@ try {
   for (const expected of [90, 180]) {
     await page.click(rotateBtnBox.x, rotateBtnBox.y);
     await new Promise((r) => setTimeout(r, 120));
-    const transform = await page.evalJs(`document.querySelector(".media-content").style.transform`);
+    const transform = await page.evalJs(`document.querySelector('[data-role="media-content"]').style.transform`);
     check(`rotação do botão chega em ${expected}deg`, transform.includes(`rotate(${expected}deg)`), true);
   }
 
@@ -408,7 +408,7 @@ try {
   deadline = Date.now() + 5000;
   let cardsAfterReload = 0;
   while (Date.now() < deadline) {
-    cardsAfterReload = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelectorAll(".media-card").length)`));
+    cardsAfterReload = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelectorAll('[data-kind="media"]').length)`));
     if (cardsAfterReload >= 2) break;
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -416,8 +416,8 @@ try {
 
   const imageTransformAfterReload = await page.evalJs(`
     (() => {
-      const imageCard = [...document.querySelectorAll(".media-card")].find((c) => !c.querySelector(".media-pdf-nav"));
-      return imageCard?.querySelector(".media-content")?.style.transform ?? "";
+      const imageCard = [...document.querySelectorAll('[data-kind="media"]')].find((c) => !c.querySelector('[data-role="media-pdf-nav"]'));
+      return imageCard?.querySelector('[data-role="media-content"]')?.style.transform ?? "";
     })()
   `);
   check(
@@ -428,13 +428,13 @@ try {
 
   await new Promise((r) => setTimeout(r, 800)); // let pdf.js's lazy chunk + worker actually load and render
 
-  const pdfNav = await page.evalJs(`document.querySelector(".media-pdf-nav")?.textContent || ""`);
+  const pdfNav = await page.evalJs(`document.querySelector('[data-role="media-pdf-nav"]')?.textContent || ""`);
   check("footer do PDF mostra 1/1 páginas", pdfNav.includes("1/1") || pdfNav.includes("1") , true);
 
   const pdfCanvasSize = JSON.parse(
     await page.evalJs(`
       (() => {
-        const c = document.querySelector(".media-pdf-canvas");
+        const c = document.querySelector('[data-role="media-pdf-canvas"]');
         return JSON.stringify(c ? { w: c.width, h: c.height } : null);
       })()
     `),

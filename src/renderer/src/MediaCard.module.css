@@ -1,0 +1,169 @@
+/* Colocalização de CSS (2026-09-03), quinto componente migrado. Achados:
+ * (1) `.card-frame.chromeless.media-card` (override do card sem chrome,
+ *     modo imagem) trocou a classe marcadora `.media-card` pelo atributo
+ *     `[data-kind="media"]` que o CardFrame já expõe -- não precisa mais
+ *     de classe nenhuma só pra essa combinação;
+ * (2) `.media-pdf-canvas` é renderizada por PdfViewer.tsx, um componente
+ *     à parte (lazy/Suspense child de MediaCard, nunca usado sozinho) --
+ *     ele importa este mesmo módulo em vez de ganhar um próprio. */
+
+.mediaViewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ink);
+  cursor: grab;
+  touch-action: none;
+}
+
+.mediaViewport:active {
+  cursor: grabbing;
+}
+
+/* Sem moldura, o próprio recorte arredondado é o que dá forma ao card —
+   e o fundo escuro do viewport não deve aparecer atrás de uma imagem que
+   preenche tudo (só apareceria num frame de transição de carregamento). */
+:global(.card-frame.chromeless) .mediaViewport {
+  background: transparent;
+  border-radius: var(--radius);
+}
+
+/* Ferramenta solta ao redor da imagem (girar, etc.) — separada da faixa do
+   header, estilo toolbar contextual de canvas (Miro/Figma). Mesmo gatilho
+   de click (`.chrome-active`) do header; fica ancorada dentro do recorte
+   arredondado do card (perto do topo, logo abaixo do header), não fora
+   dele — evitar overflow:visible aqui pouparia complicação de z-index com
+   cards vizinhos sobrepostos, sem perder a leitura de "ferramenta ao redor
+   da imagem".
+   Achado ao vivo (2026-09-02, smoke-media-card.mjs): ancorada perto da
+   borda INFERIOR, um card alto o bastante (mais alto que a janela/viewport
+   visível) empurra a toolbar pra fora da área clicável de verdade — o
+   mesmo achado já documentado alhures neste arquivo sobre
+   `Input.dispatchMouseEvent` fora do viewport ser um no-op silencioso, só
+   que aqui é um bug de UX real, não só do harness de teste: a ferramenta
+   fica inalcançável. Perto do TOPO (logo abaixo da faixa do header, que já
+   vive lá) não sofre disso — o topo do card é a parte que mais
+   provavelmente está visível. */
+.mediaToolbar {
+  position: absolute;
+  left: 50%;
+  top: 40px;
+  transform: translateX(-50%) translateY(-4px);
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(20, 20, 24, 0.78);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.mediaToolbar.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+.mediaToolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background-color 0.12s ease;
+}
+
+.mediaToolbar button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.mediaContent {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.mediaContent img,
+.mediaPdfCanvas {
+  /* Reportado ao vivo (2026-09-02): "se eu redimensionar para aumentar, o
+     chrome estoura e não faz resize real da mídia" — `max-width/max-height:
+     100%` só ENCOLHE uma imagem/canvas maior que o container; uma mídia
+     menor (o caso comum: canvas do PDF ou <img> na resolução nativa)
+     nunca cresce além do próprio tamanho intrínseco, então crescer o
+     `rect` do card só aumentava a área vazia ao redor — a mídia ficava
+     presa no canto, do tamanho de sempre. `width/height: 100%` faz a caixa
+     do elemento sempre acompanhar o container; `object-fit: contain` (já
+     aqui) cuida de escalar o CONTEÚDO (pra cima ou pra baixo) preservando
+     a proporção dentro dessa caixa — essa combinação é o fix, não só
+     `object-fit` sozinho. */
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.mediaPdfLoading {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mediaPdfNav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.mediaFilename {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.mediaPdfNav button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  flex: none;
+}
+
+.mediaPdfNav button:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+
+.mediaPdfNav button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mediaPdfPage {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
