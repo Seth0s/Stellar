@@ -549,6 +549,7 @@ function BrowserCardInner({
   return (
     <CardFrame
       className="browser-card"
+      kind="browser"
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}

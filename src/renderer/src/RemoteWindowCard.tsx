@@ -4,6 +4,7 @@ import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import { keyEventToKeysym } from "./keysyms";
+import styles from "./RemoteWindowCard.module.css";
 
 type Phase = "idle" | "requesting" | "live" | "error";
 
@@ -155,7 +156,8 @@ function RemoteWindowCardInner({
 
   return (
     <CardFrame
-      className="remote-window-card"
+      className=""
+      kind="remote-window"
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -194,12 +196,12 @@ function RemoteWindowCardInner({
         </>
       }
     >
-      <div className="remote-window-body">
+      <div className={styles.remoteWindowBody}>
         {phase !== "live" && (
-          <div className="remote-window-placeholder">
+          <div className={styles.remoteWindowPlaceholder}>
             {phase === "error" ? (
               <>
-                <span className="remote-window-error">{error || "não foi possível capturar"}</span>
+                <span className={styles.remoteWindowError}>{error || "não foi possível capturar"}</span>
                 <button className="primary" onClick={start}>
                   tentar de novo
                 </button>
@@ -213,7 +215,7 @@ function RemoteWindowCardInner({
         )}
         <video
           ref={videoRef}
-          className={`remote-window-video${phase === "live" ? "" : " hidden"}${controlling ? " controlling" : ""}`}
+          className={`${styles.remoteWindowVideo}${phase === "live" ? "" : ` ${styles.hidden}`}${controlling ? ` ${styles.controlling}` : ""}`}
           autoPlay
           muted
           tabIndex={controlling ? 0 : -1}
@@ -224,7 +226,7 @@ function RemoteWindowCardInner({
           onKeyDown={onVideoKeyDown}
           onKeyUp={onVideoKeyUp}
         />
-        {phase === "live" && !controlling && <div className="remote-window-hint">clique em ▶ para controlar</div>}
+        {phase === "live" && !controlling && <div className={styles.remoteWindowHint}>clique em ▶ para controlar</div>}
       </div>
     </CardFrame>
   );

@@ -170,7 +170,7 @@ try {
           const tags = document.querySelectorAll('.terminal-card .card-tag');
           const tag = tags[${domIndex}];
           const frame = tag.closest('.card-frame');
-          const handle = frame.querySelector('.card-resize');
+          const handle = frame.querySelector('.card-resize-se');
           const hr = handle.getBoundingClientRect();
           return JSON.stringify({ handleX: hr.x + hr.width / 2, handleY: hr.y + hr.height / 2 });
         })()

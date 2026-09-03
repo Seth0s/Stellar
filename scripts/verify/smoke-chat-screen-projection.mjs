@@ -146,7 +146,7 @@ try {
 
   // --- resize real ---
   const beforeResize = await chatStoredRect();
-  const handle = await centerOf(page, ".chat-card .card-resize");
+  const handle = await centerOf(page, ".chat-card .card-resize-se");
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: handle.x + 50, y: handle.y + 40, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x + 50, y: handle.y + 40, button: "left", clickCount: 1, pointerType: "mouse" });

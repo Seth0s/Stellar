@@ -1,0 +1,58 @@
+/* Colocalização de CSS (2026-09-03), segundo componente migrado --
+ * RemoteWindowCard nunca teve override próprio da regra base de card
+ * (só participava do grupo compartilhado, agora `.card-base` em
+ * cards.css, aplicado direto pelo CardFrame via `baseStyle`), então este
+ * módulo só carrega os elementos internos que já eram exclusivos dele. */
+
+.remoteWindowBody {
+  position: relative;
+  flex: 1;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.remoteWindowPlaceholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+}
+
+.remoteWindowError {
+  color: var(--danger, #e06c75);
+  font-size: 12px;
+  max-width: 220px;
+}
+
+.remoteWindowVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  outline: none;
+}
+
+.remoteWindowVideo.hidden {
+  display: none;
+}
+
+.remoteWindowVideo.controlling {
+  cursor: none;
+}
+
+.remoteWindowHint {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+}

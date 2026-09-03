@@ -593,6 +593,7 @@ function ChatCardInner({
   return (
     <CardFrame
       className="chat-card"
+      kind="chat"
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}

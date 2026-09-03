@@ -793,6 +793,7 @@ function FilesCardInner({
   return (
     <CardFrame
       className="files-card"
+      kind="files"
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
