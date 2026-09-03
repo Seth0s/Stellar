@@ -74,7 +74,7 @@ function registerCursor(shim: string): McpRegistrationResult {
   // or ~/.cursor/mcp.json"). O de projeto é deliberadamente ignorado: é o
   // repositório do usuário.
   const file = join(registrationHome(), ".cursor", "mcp.json");
-  let config: Record<string, unknown> = {};
+  let config: Record<string, unknown>;
   try {
     config = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
   } catch {

@@ -21,6 +21,9 @@
     "package:mac": "electron-vite build && electron-builder --mac",
     "package:win": "electron-vite build && electron-builder --win",
     "postinstall": "electron-rebuild -f -w node-pty -w better-sqlite3",
+    "lint": "eslint .",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
     "verify": "npx tsc --noEmit && npm run build && for f in scripts/verify/smoke-*.mjs; do node \"$f\" || exit 1; done"
   },
   "build": {

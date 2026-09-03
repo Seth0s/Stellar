@@ -103,6 +103,22 @@ const server = createServer((req, res) => {
     <button id="tarde" onclick="setTimeout(()=>{document.getElementById('atrasado').textContent='pronto'},800)">demorar</button>
     <div id="atrasado"></div>
     <span hidden id="escondido">invisivel</span>
+
+    <!-- Achado ao vivo (2026-09-03, rodando eslint pela primeira vez):
+         accessibleName() (browser-registry.ts) usa /\s+/ dentro de um
+         template literal injetado via executeJavaScript — sem o segundo
+         backslash, o parser JS engole o \s e a regex que chega no
+         navegador vira /s+/ (casa a LETRA "s", não espaço em branco).
+         Os IDs abaixo ("first"/"second") só produzem o resultado certo
+         se o split for por espaço de verdade — com o bug antigo, viram
+         "fir"/"t "/"econd" (nenhum bate um getElementById real). O
+         texto "multiple   spaces  here" só colapsa pro esperado se o
+         replace for por espaço — com o bug, cada "s" some e sobra
+         espaço extra no lugar dela. -->
+    <span hidden id="first">Primeiro</span>
+    <span hidden id="second">Segundo</span>
+    <button id="multilabel" aria-labelledby="first second"></button>
+    <button id="espacos">multiple   spaces  here</button>
   </body></html>`);
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -306,6 +322,14 @@ try {
   check("...usando aria-label num botão de ícone", snap.elements.some((el) => el.name === "Fechar painel"), true);
   check("...e o <label> associado num input", snap.elements.some((el) => el.name === "Título da nota" && el.role === "textbox"), true);
   check("elemento invisível fica de fora (mirá-lo daria um clique que não acontece)", snap.elements.some((el) => el.name === "invisivel"), false);
+  // Achado ao vivo (2026-09-03) — regex sem escape duplo dentro do
+  // template literal injetado (ver comentário no HTML acima): as duas
+  // checagens abaixo FALHAVAM antes do fix (confirmado revertendo
+  // browser-registry.ts e rodando de novo) — "Primeiro Segundo" virava
+  // nome vazio (split por "s" nunca acha os ids reais "first"/"second")
+  // e o texto de "espaços" saía com as letras "s" comidas.
+  check("aria-labelledby com múltiplos ids resolve nome certo (split por espaço, não por 's')", snap.elements.some((el) => el.name === "Primeiro Segundo"), true);
+  check("texto com múltiplos espaços colapsa certo sem comer a letra 's'", snap.elements.some((el) => el.name === "multiple spaces here"), true);
 
   const titulo = snap.elements.find((el) => el.name === "Título da nota");
   const typedByRef = await toolJson("browser_type", { target: cardId, ref: titulo.ref, text: "por ref" });

@@ -958,7 +958,7 @@ export function createBrowserRegistry(callbacks: {
             if (aria && aria.trim()) return aria.trim();
             const labelledBy = el.getAttribute("aria-labelledby");
             if (labelledBy) {
-              const parts = labelledBy.split(/\s+/).map((x) => document.getElementById(x)).filter(Boolean);
+              const parts = labelledBy.split(/\\s+/).map((x) => document.getElementById(x)).filter(Boolean);
               const joined = parts.map((n) => (n.innerText || n.textContent || "").trim()).join(" ").trim();
               if (joined) return joined;
             }
@@ -979,7 +979,7 @@ export function createBrowserRegistry(callbacks: {
               if (v && v.trim()) return v.trim();
             }
             const text = (el.innerText || el.textContent || "").trim();
-            if (text) return text.replace(/\s+/g, " ").slice(0, 120);
+            if (text) return text.replace(/\\s+/g, " ").slice(0, 120);
             if (el.value) return String(el.value).slice(0, 120);
             return "";
           }
