@@ -773,12 +773,14 @@ export function App() {
       }
       // A única proteção que a escrita tem (decidido com o usuário: sem
       // modal de consentimento) — e o renderer é o único lado que sabe
-      // disso. `data-card-id` no próprio textarea (StickyCard.tsx) é o que
-      // liga o elemento focado ao card; sem ele, o `document.activeElement`
-      // não diria QUAL nota está sendo editada.
+      // disso. `data-role`/`data-card-id` no próprio textarea
+      // (StickyCard.tsx) é o que liga o elemento focado ao card; sem eles,
+      // o `document.activeElement` não diria QUAL nota está sendo editada.
+      // `data-role` (não a classe de estilo, que virou CSS Module hasheado
+      // em 2026-09-03) é o hook estável pra esse tipo de checagem.
       const humanEditingNow = () => {
         const active = document.activeElement as HTMLElement | null;
-        return !!active?.classList.contains("sticky-textarea") && active.dataset.cardId === cardId;
+        return active?.dataset.role === "sticky-textarea" && active.dataset.cardId === cardId;
       };
       // Cor/categoria (2026-09-02, `set_sticky_color`) — inofensivo, sem
       // guarda de foco (troca visual não apaga nada que um humano esteja

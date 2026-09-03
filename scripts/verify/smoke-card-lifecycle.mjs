@@ -85,7 +85,7 @@ try {
   await page.click(stickyBtn.x, stickyBtn.y);
   await new Promise((r) => setTimeout(r, 400));
   check("radial menu closed after pick", await page.evalJs(`!document.querySelector(".radial-menu")`), true);
-  check("sticky card spawned", await page.evalJs(`document.querySelectorAll(".sticky-card").length`), 1);
+  check("sticky card spawned", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 1);
 
   // Close-confirm gate: the auto-seeded bash terminal is "live" (no
   // spawnError/exitCode yet) — clicking its × should ask for

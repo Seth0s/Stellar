@@ -59,7 +59,7 @@ async function clickModalButton(page, label) {
   await page.click(coords.x, coords.y);
 }
 async function textareaValue(page) {
-  return JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('.sticky-textarea')?.value ?? null)`));
+  return JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('[data-role="sticky-textarea"]')?.value ?? null)`));
 }
 
 const { check, finish } = makeChecker();
@@ -100,7 +100,7 @@ try {
   const ta = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('.sticky-textarea');
+        const el = document.querySelector('[data-role="sticky-textarea"]');
         const r = el.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width/2, y: r.y + r.height/2 });
       })()
@@ -110,7 +110,7 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check(
     "o clique real focou o textarea (pré-condição da checagem seguinte)",
-    JSON.parse(await page.evalJs(`JSON.stringify(document.activeElement?.classList.contains('sticky-textarea') ?? false)`)),
+    JSON.parse(await page.evalJs(`JSON.stringify(document.activeElement?.dataset.role === "sticky-textarea")`)),
     true,
   );
 

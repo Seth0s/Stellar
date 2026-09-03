@@ -9,7 +9,7 @@
 // index order is NOT a reliable way to track "which card is which"
 // across a z-order change (confirmed empirically, several confusing
 // false negatives before landing on this). This script instead verifies
-// via elementFromPoint().closest(".sticky-card") immediately before each
+// via elementFromPoint().closest('[data-kind="sticky"]') immediately before each
 // click which card a point actually belongs to right now, rather than
 // assuming a header's measured center stays hit-testable after any
 // intervening raise — and zooms out first so the two cards can be
@@ -78,7 +78,7 @@ try {
   async function stickyRects() {
     return JSON.parse(
       await page.evalJs(`
-        JSON.stringify([...document.querySelectorAll(".sticky-card")].map(el => {
+        JSON.stringify([...document.querySelectorAll('[data-kind="sticky"]')].map(el => {
           const r = el.getBoundingClientRect();
           return { x: r.x, y: r.y };
         }))
@@ -91,7 +91,7 @@ try {
     return JSON.parse(
       await page.evalJs(`
         (() => {
-          const el = document.elementFromPoint(${x}, ${y})?.closest(".sticky-card");
+          const el = document.elementFromPoint(${x}, ${y})?.closest('[data-kind="sticky"]');
           const r = el?.getBoundingClientRect();
           return JSON.stringify(r ? { x: r.x, y: r.y } : null);
         })()
@@ -101,7 +101,7 @@ try {
   async function headerCenters() {
     return JSON.parse(
       await page.evalJs(`
-        JSON.stringify([...document.querySelectorAll(".sticky-card .card-head")].map(el => {
+        JSON.stringify([...document.querySelectorAll('[data-kind="sticky"] .card-head')].map(el => {
           const r = el.getBoundingClientRect();
           return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
         }))
@@ -159,7 +159,7 @@ try {
   await new Promise((r) => setTimeout(r, 400));
   await clickSelector('.rail-btn[title="Nova nota adesiva"]');
   await new Promise((r) => setTimeout(r, 400));
-  check("two sticky cards spawned", await page.evalJs(`document.querySelectorAll(".sticky-card").length`), 2);
+  check("two sticky cards spawned", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 2);
 
   const zoomOutBtn = JSON.parse(
     await page.evalJs(`

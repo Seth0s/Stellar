@@ -193,7 +193,7 @@ try {
   await clickModalButton(page, "Negar");
   const spawnCardDenyPayload = JSON.parse((await spawnCardDenyPromise).content[0].text);
   check("spawn_card (denied) reports ok:false", spawnCardDenyPayload.ok, false);
-  check("nothing got created by the denied spawn_card", await page.evalJs(`document.querySelectorAll('.sticky-card').length`), 0);
+  check("nothing got created by the denied spawn_card", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 0);
 
   // spawn_card, allowed — the sticky card actually appears.
   const spawnCardPromise = callTool("spawn_card", { kind: "sticky", callerCardId: bashCardId, reason: "note for later" });
@@ -202,7 +202,7 @@ try {
   const spawnCardPayload = JSON.parse((await spawnCardPromise).content[0].text);
   check("spawn_card (allowed) resolves ok with a cardId", spawnCardPayload.ok && typeof spawnCardPayload.cardId === "string", true);
   await new Promise((r) => setTimeout(r, 500));
-  check("a real sticky card exists after the allowed spawn_card", await page.evalJs(`document.querySelectorAll('.sticky-card').length`), 1);
+  check("a real sticky card exists after the allowed spawn_card", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 1);
 
   // get_page_text — real extracted page content, not pixels.
   const browserCardId = JSON.parse(

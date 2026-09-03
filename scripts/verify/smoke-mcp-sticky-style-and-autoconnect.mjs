@@ -80,7 +80,7 @@ async function clickSelector(page, selector) {
 async function stickyMode(page) {
   return JSON.parse(
     await page.evalJs(`
-      JSON.stringify(document.querySelector('.sticky-textarea') ? 'edit' : (document.querySelector('.sticky-preview') ? 'preview' : null))
+      JSON.stringify(document.querySelector('[data-role="sticky-textarea"]') ? 'edit' : (document.querySelector('[data-role="sticky-preview"]') ? 'preview' : null))
     `),
   );
 }
@@ -200,11 +200,11 @@ try {
     1,
   );
 
-  await clickSelector(page, ".sticky-textarea");
+  await clickSelector(page, '[data-role="sticky-textarea"]');
   await delay(300);
   check(
     "clique real focou o textarea (pré-condição da guarda)",
-    JSON.parse(await page.evalJs(`JSON.stringify(document.activeElement?.classList.contains('sticky-textarea') ?? false)`)),
+    JSON.parse(await page.evalJs(`JSON.stringify(document.activeElement?.dataset.role === "sticky-textarea")`)),
     true,
   );
   const refusedPreview = await toolJson("set_sticky_mode", { target: stickyId, mode: "preview" });
