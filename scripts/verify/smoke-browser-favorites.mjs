@@ -73,7 +73,7 @@ async function createBrowserCard(page, url) {
   const barCoords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const inputs = document.querySelectorAll('.browser-card-address input');
+        const inputs = document.querySelectorAll('[data-role="browser-address"] input');
         const el = inputs[inputs.length - 1];
         const r = el.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
@@ -83,7 +83,7 @@ async function createBrowserCard(page, url) {
   await page.click(barCoords.x, barCoords.y);
   await page.evalJs(`
     (() => {
-      const inputs = document.querySelectorAll('.browser-card-address input');
+      const inputs = document.querySelectorAll('[data-role="browser-address"] input');
       const inp = inputs[inputs.length - 1];
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, ${JSON.stringify(url)});
@@ -120,18 +120,18 @@ try {
   // favoritar, senão o título salvo seria só a URL crua.
   await new Promise((r) => setTimeout(r, 500));
 
-  const favBtn = await centerOf(page, ".browser-card-favorite-btn");
+  const favBtn = await centerOf(page, '[data-role="browser-favorite-btn"]');
   check("botão de estrela real encontrado no header", favBtn !== null, true);
   await page.click(favBtn.x, favBtn.y);
   await new Promise((r) => setTimeout(r, 250));
 
-  const favMenuAfterOpen = await page.evalJs(`!!document.querySelector('.browser-card-favorites-menu')`);
+  const favMenuAfterOpen = await page.evalJs(`!!document.querySelector('[data-role="browser-favorites-menu"]')`);
   check("popover de favoritos real abre", favMenuAfterOpen, true);
 
   const toggleBtn = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.browser-card-favorites-menu button');
+        const b = document.querySelector('[data-role="browser-favorites-menu"] button');
         const r = b.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()
@@ -147,11 +147,11 @@ try {
 
   // Navega a segunda página manualmente (fora do popover), reabre o
   // popover, clica o favorito salvo, confirma que voltou pra primeira.
-  const barCoords2 = await centerOf(page, ".browser-card-address input");
+  const barCoords2 = await centerOf(page, '[data-role="browser-address"] input');
   await page.click(barCoords2.x, barCoords2.y);
   await page.evalJs(`
     (() => {
-      const inp = document.querySelector('.browser-card-address input');
+      const inp = document.querySelector('[data-role="browser-address"] input');
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, ${JSON.stringify(secondUrl)});
       inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -160,7 +160,7 @@ try {
   await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
   await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
   await new Promise((r) => setTimeout(r, 500));
-  const barAfterNav = await page.evalJs(`document.querySelector('.browser-card-address input')?.value`);
+  const barAfterNav = await page.evalJs(`document.querySelector('[data-role="browser-address"] input')?.value`);
   check("navegação manual real pra segunda página aconteceu", barAfterNav, secondUrl);
 
   await page.click(favBtn.x, favBtn.y);
@@ -168,7 +168,7 @@ try {
   const favRowCoords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('.browser-card-fav-row');
+        const el = document.querySelector('[data-role="browser-fav-row"]');
         if (!el) return JSON.stringify(null);
         const r = el.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -178,7 +178,7 @@ try {
   check("linha do favorito salvo aparece de verdade no popover", favRowCoords !== null, true);
   await page.click(favRowCoords.x, favRowCoords.y);
   await new Promise((r) => setTimeout(r, 500));
-  const barAfterFavClick = await page.evalJs(`document.querySelector('.browser-card-address input')?.value`);
+  const barAfterFavClick = await page.evalJs(`document.querySelector('[data-role="browser-address"] input')?.value`);
   check("clicar o favorito salvo navega o card de volta pra lá de verdade", barAfterFavClick, firstUrl);
 
   // Remove o favorito, confirma que sumiu.
@@ -187,7 +187,7 @@ try {
   const removeBtnCoords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.browser-card-fav-remove');
+        const b = document.querySelector('[data-role="browser-fav-remove"]');
         if (!b) return JSON.stringify(null);
         const r = b.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });

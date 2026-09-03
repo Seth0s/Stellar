@@ -3,6 +3,7 @@ import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
+import styles from "./BrowserCard.module.css";
 
 // DESIGN-BACKLOG.md §2.1 Item E — Mobile/Tablet mirroring the real
 // devices CentralByte's own presets target. "Fluido" (free resize) has
@@ -548,7 +549,7 @@ function BrowserCardInner({
 
   return (
     <CardFrame
-      className="browser-card"
+      className={styles.browserCard}
       kind="browser"
       rect={rect}
       zoom={zoom}
@@ -569,7 +570,7 @@ function BrowserCardInner({
       panX={panX}
       panY={panY}
       headerContent={
-        <div className="browser-card-address">
+        <div className={styles.browserCardAddress} data-role="browser-address">
           <button onClick={() => window.browser.back(id)}>
             <Icon name="back" size={12} />
           </button>
@@ -591,7 +592,8 @@ function BrowserCardInner({
             // até o card que abriu este navegador (`jumpToCard` via
             // `onFocusOwner`), não só uma etiqueta informativa.
             <button
-              className="browser-card-owner"
+              className={styles.browserCardOwner}
+              data-role="browser-owner"
               title={`aberto por card #${ownerCardId} — clique pra ir até lá`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={onFocusOwner}
@@ -601,7 +603,8 @@ function BrowserCardInner({
           )}
           {consoleBadgeCount > 0 && (
             <span
-              className="browser-card-console-badge"
+              className={styles.browserCardConsoleBadge}
+              data-role="browser-console-badge"
               data-severity={consoleCounts.error > 0 ? "error" : "warning"}
               title={`${consoleCounts.error} erro(s), ${consoleCounts.warning} aviso(s) no console`}
             >
@@ -610,7 +613,8 @@ function BrowserCardInner({
           )}
           <button
             ref={favBtnRef}
-            className="browser-card-favorite-btn"
+            className={styles.browserCardFavoriteBtn}
+            data-role="browser-favorite-btn"
             data-active={isFavorited}
             title={isFavorited ? "Remover dos favoritos" : "Favoritar esta página"}
             onPointerDown={(e) => e.stopPropagation()}
@@ -634,7 +638,8 @@ function BrowserCardInner({
     >
       <canvas
         ref={canvasRef}
-        className="browser-card-body"
+        className={styles.browserCardBody}
+        data-role="browser-body"
         tabIndex={0}
         onPointerDown={onCanvasPointerDown}
         onPointerMove={onCanvasPointerMove}
@@ -645,7 +650,7 @@ function BrowserCardInner({
         onKeyUp={onCanvasKeyUp}
         onCompositionEnd={onCanvasCompositionEnd}
       />
-      <Popover anchorRef={menuBtnRef} open={menuOpen} onClose={() => setMenuOpen(false)} className="browser-card-menu">
+      <Popover anchorRef={menuBtnRef} open={menuOpen} onClose={() => setMenuOpen(false)} className={styles.browserCardMenu} dataRole="browser-menu">
         {/* Header responsivo (§2.1) — sempre presentes aqui, não só
          * quando a linha principal esconde os badges (< 380px de
          * largura via @container em cards.css): nenhuma informação fica
@@ -662,11 +667,11 @@ function BrowserCardInner({
           </button>
         )}
         {consoleBadgeCount > 0 && (
-          <div className="browser-card-menu-info" data-severity={consoleCounts.error > 0 ? "error" : "warning"}>
+          <div className={styles.browserCardMenuInfo} data-severity={consoleCounts.error > 0 ? "error" : "warning"}>
             {consoleCounts.error} erro(s), {consoleCounts.warning} aviso(s) no console
           </div>
         )}
-        {(ownerCardId || consoleBadgeCount > 0) && <div className="browser-card-fav-divider" />}
+        {(ownerCardId || consoleBadgeCount > 0) && <div className={styles.browserCardFavDivider} />}
         <button
           onClick={() => {
             void window.browser.openDevTools(id);
@@ -689,21 +694,21 @@ function BrowserCardInner({
           </button>
         ))}
       </Popover>
-      <Popover anchorRef={favBtnRef} open={favMenuOpen} onClose={() => setFavMenuOpen(false)} className="browser-card-menu browser-card-favorites-menu">
+      <Popover anchorRef={favBtnRef} open={favMenuOpen} onClose={() => setFavMenuOpen(false)} className={`${styles.browserCardMenu} ${styles.browserCardFavoritesMenu}`} dataRole="browser-favorites-menu">
         <button onClick={toggleFavorite}>
           <Icon name="favorite" size={14} />
           {isFavorited ? "Remover dos favoritos" : "Favoritar esta página"}
         </button>
         {favorites.length > 0 && (
           <>
-            <div className="browser-card-fav-divider" />
-            <div className="browser-card-fav-list">
+            <div className={styles.browserCardFavDivider} />
+            <div className={styles.browserCardFavList}>
               {favorites.map((fav) => (
-                <div key={fav.url} className="browser-card-fav-row" onClick={() => goToFavorite(fav.url)}>
-                  <span className="browser-card-fav-title" title={fav.url}>
+                <div key={fav.url} className={styles.browserCardFavRow} data-role="browser-fav-row" onClick={() => goToFavorite(fav.url)}>
+                  <span className={styles.browserCardFavTitle} title={fav.url}>
                     {fav.title || fav.url}
                   </span>
-                  <button className="browser-card-fav-remove" title="Remover" onClick={(e) => void removeFavoriteRow(fav.url, e)}>
+                  <button className={styles.browserCardFavRemove} data-role="browser-fav-remove" title="Remover" onClick={(e) => void removeFavoriteRow(fav.url, e)}>
                     <Icon name="close" size={11} />
                   </button>
                 </div>

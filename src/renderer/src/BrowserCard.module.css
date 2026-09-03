@@ -1,0 +1,261 @@
+/* Colocalização de CSS (2026-09-03), sétimo componente migrado. Achados:
+ * (1) `.browser-card .card-head` (altura maior que o header padrão) usa
+ *     `:global(.card-head)` como descendente de `.browserCard`, mesmo
+ *     padrão de StrokeCard's `.strokeCard :global(.card-head)`;
+ * (2) `container-name` é só um identificador de string, não precisa de
+ *     `:global()` nem hasheia -- mas os seletores DENTRO do `@container`
+ *     continuam sendo classes locais normais do módulo. */
+
+.browserCard :global(.card-head) {
+  height: 44px;
+  padding: 0 10px;
+  gap: 8px;
+}
+
+.browserCardAddress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  /* Header responsivo (§2.1) — largura do PRÓPRIO card, não a viewport
+   * inteira (um @media normal não serviria: dois cards do mesmo tipo em
+   * larguras diferentes precisam colapsar independentemente). Electron
+   * 42 já suporta Container Queries nativamente, sem JS/ResizeObserver. */
+  container-type: inline-size;
+  container-name: browser-header;
+}
+
+.browserCardAddress button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.browserCardAddress button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.browserCardAddress input {
+  flex: 1;
+  min-width: 0;
+  background: var(--ink);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.browserCardAddress input:focus {
+  outline: none;
+  border-color: var(--accent-browser);
+}
+
+/* Item E — o badge de origem virou um <button> clicável (pan até o card
+   que abriu este navegador); a regra genérica `.browserCardAddress
+   button` acima tem especificidade maior (elemento+classe) que uma
+   `.browserCardOwner` sozinha, então essa qualifica o seletor pra
+   sobrescrever de verdade, em vez de brigar por ordem de declaração. */
+.browserCardAddress button.browserCardOwner {
+  width: auto;
+  height: auto;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
+.browserCardAddress button.browserCardOwner:hover {
+  color: var(--text);
+  border-color: var(--accent-browser);
+}
+
+.browserCardConsoleBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: var(--danger, #d9534f);
+}
+
+.browserCardConsoleBadge[data-severity="warning"] {
+  background: var(--warning, #c98a1f);
+}
+
+/* Header responsivo (§2.1) — < 380px (mesma largura lógica do preset
+ * Mobile, de propósito), some da linha principal, mas nada fica
+ * inacessível: os dois viram itens informativos dentro do Popover do
+ * kebab (ver BrowserCard.tsx). Especificidade igual/maior que as regras
+ * base acima (`.browserCardAddress button.browserCardOwner` inclusive)
+ * E depois delas no arquivo — @container não eleva prioridade sozinho,
+ * um empate de especificidade ainda cai pra ordem de origem (achado ao
+ * vivo: a primeira versão, mais cedo no arquivo e com especificidade
+ * menor, nunca vencia a cascata apesar da condição bater). */
+@container browser-header (max-width: 380px) {
+  .browserCardAddress button.browserCardOwner,
+  .browserCardConsoleBadge {
+    display: none;
+  }
+}
+
+.browserCardMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+}
+
+.browserCardMenu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browserCardMenu button:hover {
+  background: var(--border);
+}
+
+/* Header responsivo (§2.1) — mesma info do badge de console, só que como
+ * linha de texto dentro do popover em vez de um chip redondo. */
+.browserCardMenuInfo {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.browserCardMenuInfo[data-severity="error"] {
+  color: var(--danger, #d9534f);
+}
+
+.browserCardMenuInfo[data-severity="warning"] {
+  color: var(--warning, #c98a1f);
+}
+
+/* Próxima rodada §3 — favoritos globais. Estrela preenchida (cor de
+ * destaque) quando a URL atual já está salva, oca (herda a cor padrão de
+ * botão do header) quando não. */
+.browserCardFavoriteBtn[data-active="true"] svg {
+  fill: var(--accent-browser);
+  color: var(--accent-browser);
+}
+
+.browserCardFavoritesMenu {
+  min-width: 220px;
+  max-width: 280px;
+}
+
+.browserCardFavDivider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.browserCardFavList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.browserCardFavRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.browserCardFavRow:hover {
+  background: var(--border);
+}
+
+.browserCardFavTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.browserCardFavRemove {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.browserCardFavRow:hover .browserCardFavRemove {
+  opacity: 1;
+}
+
+.browserCardFavRemove:hover {
+  background: var(--danger, #d9534f);
+  color: #fff;
+}
+
+.browserCardBody {
+  flex: 1;
+  /* A <canvas> is a replaced element — its width/height ATTRIBUTES (set in
+     BrowserCard.tsx to the real offscreen bitmap size, e.g. 720×560) count
+     as an intrinsic size that a flex child won't shrink below unless told
+     to, regardless of `flex: 1`/height:100%. Without this, the canvas could
+     overflow .card-clip's fixed-height column and push the header (the
+     other flex child, above it) out of the clipped/visible area — this is
+     what read as "the header disappeared" the first time this shipped. */
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #fff;
+  cursor: default;
+  outline: none;
+}
+
+/* Visible cue for the click-to-focus gate above (BrowserCard.tsx's
+   onCanvasWheel) — otherwise there's no way to tell, before scrolling,
+   whether this card or the board underneath it will respond to the wheel. */
+.browserCardBody:focus {
+  box-shadow: inset 0 0 0 2px var(--accent-browser);
+}

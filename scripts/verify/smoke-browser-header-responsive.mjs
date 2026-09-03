@@ -1,6 +1,6 @@
 // Header responsivo por breakpoint (§2.1, próxima rodada) — abaixo de
 // ~380px de largura do PRÓPRIO card (CSS Container Query em
-// `.browser-card-address`, não @media de viewport), o badge de origem e
+// `[data-role="browser-address"]`, não @media de viewport), o badge de origem e
 // o badge de console saem da linha principal — mas nada fica
 // inacessível: os dois viram itens informativos dentro do popover do
 // kebab. Verifica ao vivo, sem mock: um card real com dono real e
@@ -93,8 +93,8 @@ try {
   const cardId = (JSON.parse((await spawnPromise).content[0].text)).cardId;
   await new Promise((r) => setTimeout(r, 800));
 
-  const ownerVisibleBefore = await page.evalJs(`getComputedStyle(document.querySelector('.browser-card-owner')).display`);
-  const consoleBadgeVisibleBefore = await page.evalJs(`getComputedStyle(document.querySelector('.browser-card-console-badge')).display`);
+  const ownerVisibleBefore = await page.evalJs(`getComputedStyle(document.querySelector('[data-role="browser-owner"]')).display`);
+  const consoleBadgeVisibleBefore = await page.evalJs(`getComputedStyle(document.querySelector('[data-role="browser-console-badge"]')).display`);
   check("na largura normal, badge de origem está visível na linha principal", ownerVisibleBefore !== "none", true);
   check("na largura normal, badge de console está visível na linha principal", consoleBadgeVisibleBefore !== "none", true);
 
@@ -114,12 +114,12 @@ try {
 
   // Encolhe o card de verdade abaixo do breakpoint (380px) via drag real
   // da alça de resize — não um valor forçado direto no store.
-  const cardRectBefore = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('.card-frame.browser-card').getBoundingClientRect())`));
+  const cardRectBefore = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('.card-frame[data-kind="browser"]').getBoundingClientRect())`));
   // 2026-09-02: o grip visual `.card-resize` foi removido (redimensionar
   // por qualquer ponto do card não precisa mais de afordance própria) —
   // `.card-resize-se` é a zona invisível de hit-test que ocupa o mesmo
   // canto, ver CardFrame.tsx/cards.css.
-  const handle = await centerOf(page, ".card-frame.browser-card .card-resize-se");
+  const handle = await centerOf(page, '.card-frame[data-kind="browser"] .card-resize-se');
   const targetWidth = 300;
   const shrinkBy = cardRectBefore.width - targetWidth;
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -128,19 +128,19 @@ try {
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x - shrinkBy, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await new Promise((r) => setTimeout(r, 400));
 
-  const addressWidthAfter = await page.evalJs(`document.querySelector('.browser-card-address').getBoundingClientRect().width`);
+  const addressWidthAfter = await page.evalJs(`document.querySelector('[data-role="browser-address"]').getBoundingClientRect().width`);
   check(`card real encolhido abaixo do breakpoint de 380px (largura real: ${addressWidthAfter})`, addressWidthAfter < 380, true);
 
-  const ownerVisibleAfter = await page.evalJs(`getComputedStyle(document.querySelector('.browser-card-owner')).display`);
-  const consoleBadgeVisibleAfter = await page.evalJs(`getComputedStyle(document.querySelector('.browser-card-console-badge')).display`);
+  const ownerVisibleAfter = await page.evalJs(`getComputedStyle(document.querySelector('[data-role="browser-owner"]')).display`);
+  const consoleBadgeVisibleAfter = await page.evalJs(`getComputedStyle(document.querySelector('[data-role="browser-console-badge"]')).display`);
   check("abaixo do breakpoint, badge de origem some de verdade da linha principal (@container real)", ownerVisibleAfter, "none");
   check("abaixo do breakpoint, badge de console some de verdade da linha principal", consoleBadgeVisibleAfter, "none");
 
   // Nada fica inacessível — a mesma info real aparece dentro do popover do kebab.
-  const kebab = await centerOf(page, '.browser-card-address button[title="Mais opções"]');
+  const kebab = await centerOf(page, '[data-role="browser-address"] button[title="Mais opções"]');
   await page.click(kebab.x, kebab.y);
   await new Promise((r) => setTimeout(r, 250));
-  const menuText = await page.evalJs(`document.querySelector('.browser-card-menu')?.textContent ?? ""`);
+  const menuText = await page.evalJs(`document.querySelector('[data-role="browser-menu"]')?.textContent ?? ""`);
   check(`popover do kebab mostra a info real de origem (#${bashCardId})`, menuText.includes(bashCardId), true);
   check("popover do kebab mostra a info real de erro de console", menuText.toLowerCase().includes("erro"), true);
 

@@ -69,7 +69,7 @@ try {
     `),
   );
 
-  const canvasCoords = await centerOf(page, ".browser-card-body");
+  const canvasCoords = await centerOf(page, '[data-role="browser-body"]');
   await page.click(canvasCoords.x, canvasCoords.y); // focus, matches real user gesture
 
   // testMakeEditable also mirrors keydown.key into document.title (see
@@ -157,7 +157,7 @@ try {
   const composed = "日本語テスト";
   await page.evalJs(`
     (() => {
-      const canvas = document.querySelector(${JSON.stringify(".browser-card-body")});
+      const canvas = document.querySelector(${JSON.stringify('[data-role="browser-body"]')});
       canvas.dispatchEvent(new CompositionEvent("compositionend", { data: ${JSON.stringify(composed)}, bubbles: true }));
     })()
   `);
