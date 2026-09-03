@@ -61,13 +61,20 @@ export function getTerminalText(cardId: string, lines?: number): string | null {
   if (!term) return null;
   const buf = term.buffer.active;
   const total = buf.length;
-  const start = lines && lines > 0 ? Math.max(0, total - lines) : 0;
   const out: string[] = [];
-  for (let i = start; i < total; i++) {
+  for (let i = 0; i < total; i++) {
     out.push(buf.getLine(i)?.translateToString(true) ?? "");
   }
+  // Trim trailing blanks BEFORE slicing to the last `lines` — the raw
+  // buffer is padded with blank rows below the cursor to fill the
+  // viewport height, so an idle card with a couple of lines of real
+  // content sitting near the top would otherwise have its `lines: N`
+  // window land entirely on that padding (achado ao vivo, 2026-09-03,
+  // card_status idle smoke test: `read_card` came back "" for a card
+  // that plainly had a shell prompt printed).
   while (out.length > 0 && out[out.length - 1] === "") out.pop();
-  return out.join("\n");
+  const start = lines && lines > 0 ? Math.max(0, out.length - lines) : 0;
+  return out.slice(start).join("\n");
 }
 
 /**

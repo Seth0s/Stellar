@@ -11,6 +11,21 @@ const OPEN_TIMEOUT_MS = 120_000;
 const SNAPSHOT_TIMEOUT_MS = 10_000;
 // Same reasoning as OPEN_TIMEOUT_MS — spawning a card is a human decision.
 const SPAWN_TIMEOUT_MS = 120_000;
+// Sticky item "close_card" (2026-09-03) — same reasoning as OPEN_TIMEOUT_MS:
+// closing a card (killing a real process, for a terminal) is a human
+// decision, not a bug-detection backstop.
+const CLOSE_TIMEOUT_MS = 120_000;
+// Sticky item "card_status idle" (2026-09-03) — "card_status nunca
+// retorna idle, só waiting/running/exited". No PTY output for this long
+// reads as "sitting at a prompt, not actively working" — same imprecision
+// as `useTerminal.ts`'s own `isActive` (item 6, sticky: can't distinguish
+// a long "thinking" pause from real idle without understanding each
+// provider's own UI), picked deliberately LONGER than that 900ms client
+// heuristic so a normal generation pause doesn't misreport as idle here.
+const IDLE_THRESHOLD_MS = 5_000;
+// How often the idle-watch poller (below) re-checks every terminal card
+// for a running -> idle transition, to notify whoever spawned it.
+const IDLE_WATCH_INTERVAL_MS = 2_000;
 // Reading a page's text is exactly as sensitive as a pixel snapshot (an
 // already-open page an agent already has a card reference to) — no human
 // decision needed, same short backstop-only timeout as snapshot.
@@ -127,6 +142,7 @@ export type BusRequest =
   | { cmd: "list" }
   | { cmd: "send"; target?: string; text?: string; requesterId?: string }
   | { cmd: "open"; url?: string; requesterId?: string; reason?: string }
+  | { cmd: "close_card"; target?: string; requesterId?: string; reason?: string }
   | {
       cmd: "snapshot";
       target?: string;
@@ -201,6 +217,11 @@ export type BusRequest =
       requesterId?: string;
       reason?: string;
       model?: string;
+      /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity needs
+       * this alongside `model` (`providers.ts`'s `SpawnOpts.effort`) or it
+       * silently falls back to a different model with only a warning, no
+       * error. `undefined` for every provider that ignores it. */
+      effort?: "low" | "high";
       /** DESIGN-BACKLOG.md item 62 — same free-text label a human sets via
        * CardTag rename; `describeCardLabel`/the renderer's `describeCard`
        * already prefer it over the "Bash 2°" ordinal when present. */
@@ -244,6 +265,14 @@ export function createMessageBus(
      * (would need an awkward extra positional arg) — the consent modal
      * just shows nothing for that line when absent. */
     onOpenRequest: (requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) => void;
+    /** Sticky item "close_card" (2026-09-03) — same ask/consent/resolve
+     * shape as `onOpenRequest` above, generalized to closing ANY existing
+     * card (not just terminal — a stuck files/browser/sticky card is just
+     * as legitimate a target). `closeCard()`'s own live-terminal
+     * "are you sure" gate (App.tsx) is skipped on this path — the human's
+     * approval of THIS request already covers it, asking twice would be
+     * pure friction. */
+    onCloseCardRequest: (requestId: string, requesterId: string, target: string, reason?: string, autoApprove?: boolean) => void;
     /** cardId set: that card's current on-screen rect. rect set: an
      * explicit world-space rect. Neither: the whole window. Resolving
      * either into actual capturePage() screen pixels lives in
@@ -312,6 +341,10 @@ export function createMessageBus(
     /** DESIGN-BACKLOG.md item 58, M4 — pty-registry.ts's own `isAlive`,
      * threaded straight through: no round trip needed, main already knows. */
     isCardAlive: (cardId: string) => boolean;
+    /** Sticky item "card_status idle" — `null` for a card with no live
+     * PTY entry (never spawned/exited/error), matching `isCardAlive`'s
+     * own "no entry" convention. */
+    getCardLastActivityAt: (cardId: string) => number | null;
     /** DESIGN-BACKLOG.md item 59 — which board a card lives on, and
      * whether that board's opt-in autonomous mode is on. Only ever read
      * here, never written — the only write path is a human's toggle in
@@ -361,6 +394,9 @@ export function createMessageBus(
         depth: number;
         reason?: string;
         model?: string;
+        /** Sticky item "spawn_agent effort" — see the `spawn_agent` cmd's
+         * own field above. */
+        effort?: "low" | "high";
         /** DESIGN-BACKLOG.md item 62 — same free-text label CardTag
          * rename sets; `undefined` leaves the new card unlabeled (the
          * ordinal "Bash 2°" convention applies), same as before this
@@ -408,6 +444,7 @@ export function createMessageBus(
   // reportava); ele só era descartado no caminho de volta do `open`. O
   // `cardId` aqui é o que fecha essa lacuna.
   const pendingOpens = new Map<string, { resolve: (allowed: boolean, cardId?: string) => void; timer: NodeJS.Timeout }>();
+  const pendingCloseCards = new Map<string, { resolve: (allowed: boolean) => void; timer: NodeJS.Timeout }>();
   const pendingSnapshots = new Map<string, { resolve: (result: SnapshotResult) => void; timer: NodeJS.Timeout }>();
   const pendingPageTexts = new Map<string, { resolve: (result: PageTextResult) => void; timer: NodeJS.Timeout }>();
   const pendingReadCards = new Map<string, { resolve: (result: ReadCardResult) => void; timer: NodeJS.Timeout }>();
@@ -447,7 +484,16 @@ export function createMessageBus(
     requestedAt: number;
     timer: NodeJS.Timeout;
     resolve: (result: SpawnAgentResult) => void;
-    params: { provider: string; cwd?: string; resumeId?: string; depth: number; reason?: string; model?: string; label?: string };
+    params: {
+      provider: string;
+      cwd?: string;
+      resumeId?: string;
+      depth: number;
+      reason?: string;
+      model?: string;
+      effort?: "low" | "high";
+      label?: string;
+    };
   };
   const spawnQueue = new Map<string, SpawnQueueEntry[]>();
   // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 2 — a card
@@ -551,6 +597,61 @@ export function createMessageBus(
   function listTerminalCards(): CardSummary[] {
     return callbacks.listCards().filter((c) => c.kind === "terminal");
   }
+
+  /** Sticky item "card_status idle" — `false` for a card with no PTY
+   * entry at all (never spawned/already exited) — that's `isCardAlive`'s
+   * job to report, not this one's; callers only ask this once they've
+   * already confirmed the card is alive. */
+  function isCardIdle(cardId: string): boolean {
+    const lastActivityAt = callbacks.getCardLastActivityAt(cardId);
+    if (lastActivityAt === null) return false;
+    return Date.now() - lastActivityAt >= IDLE_THRESHOLD_MS;
+  }
+
+  /** Sticky item "card_status idle" — "o agente precisa saber que o card
+   * que ele spawnou ficou ocioso... um evento tipo card_status_changed
+   * que dispare notificação automática pro agente que fez o spawn_agent".
+   * No generic MCP push channel actually reaches an arbitrary external
+   * client here — what DOES already reach one is `send_to_card`'s own
+   * mechanism (`writeToCard`), so this reuses exactly that: on a real
+   * running -> idle transition, look up who spawned this card (the
+   * `kind: "spawned"` connector already recorded automatically, item 62)
+   * and type a system line straight into ITS OWN terminal, the same way
+   * a human would notice by glancing at the board. Silent no-op if the
+   * spawner is gone, wasn't a terminal, or there's no recorded spawner at
+   * all (a card opened by a human, not another agent). */
+  function notifySpawnerOfIdleCard(cardId: string) {
+    const spawnedBy = callbacks
+      .listAllConnectors()
+      .filter((c) => c.kind === "spawned" && c.to_card_id === cardId)
+      .sort((a, b) => b.updated_at - a.updated_at)[0];
+    if (!spawnedBy) return;
+    const spawnerId = spawnedBy.from_card_id;
+    if (!callbacks.isCardAlive(spawnerId)) return;
+    const label = callbacks.describeCardLabel(cardId);
+    callbacks.writeToCard(spawnerId, `[sistema] "${label}" ficou ocioso (sem atividade por ${IDLE_THRESHOLD_MS / 1000}s) — pode estar esperando você.`);
+  }
+
+  /** Sticky item "card_status idle" — polls instead of hooking `onData`
+   * directly: idle is defined by the ABSENCE of activity for a while, not
+   * an event `pty-registry.ts` can ever fire on its own (there's nothing
+   * to react to when nothing happens). `previousIdleState` is what turns
+   * a level (idle right now) into an edge (JUST became idle) — without it
+   * every tick after the first would "re-notify" a card that's been
+   * sitting idle for an hour. Cleared on `close()` below. */
+  const previousIdleState = new Map<string, boolean>();
+  const idleWatchTimer = setInterval(() => {
+    for (const card of listTerminalCards()) {
+      if (waitingOnConsent.has(card.id) || !callbacks.isCardAlive(card.id)) {
+        previousIdleState.delete(card.id);
+        continue;
+      }
+      const idleNow = isCardIdle(card.id);
+      const wasIdle = previousIdleState.get(card.id) ?? false;
+      previousIdleState.set(card.id, idleNow);
+      if (idleNow && !wasIdle) notifySpawnerOfIdleCard(card.id);
+    }
+  }, IDLE_WATCH_INTERVAL_MS);
 
   /** Achado ao vivo (2026-09-01): "eu renomeio os card dos agentes para
    * Stellar, isso só está visual em vez de funcional". Renomear escrevia
@@ -684,6 +785,28 @@ export function createMessageBus(
       // Enter (never the text again, that would duplicate it) — bounded
       // by SEND_ENTER_MAX_ATTEMPTS so a card that's genuinely just slow
       // to render can't loop forever.
+      //
+      // Sticky item "send_to_card não confirma envio" (2026-09-03) —
+      // the placeholder regex alone only catches ONE symptom (a CLI that
+      // collapses a big paste into a "[Pasted text ...]" chip). Reported
+      // live: a plain, short message just sat RAW in the input box —
+      // never collapsed, so `check.text` never matched, so the loop broke
+      // immediately on the very first read even though nothing was ever
+      // submitted; `{ok:true}` came back with the message still unsent.
+      // Second, provider-agnostic signal added: the composer's own input
+      // line generally still shows the literal text it was given, until
+      // it's actually submitted (whatever the CLI does after submit —
+      // spinner, new prompt, echoed history line — reliably looks
+      // DIFFERENT from the raw typed line). Checking for a meaningful
+      // prefix of what was just written, not the whole thing (terminal
+      // soft-wrap can split a long line across rows) and normalized for
+      // whitespace (wrapping/redraw can turn a space into a newline).
+      const sentPrefix = text.trim().replace(/\s+/g, " ").slice(0, 24);
+      function looksUnsent(checkText: string): boolean {
+        if (/pasted text/i.test(checkText)) return true;
+        if (sentPrefix.length < 8) return false; // too short to mean anything, avoid false positives
+        return checkText.replace(/\s+/g, " ").includes(sentPrefix);
+      }
       for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
         await delay(SEND_ENTER_DELAY_MS);
         callbacks.writeToCard(target, "\r");
@@ -691,7 +814,7 @@ export function createMessageBus(
         const check = await readCardText(target, 8);
         // A read failure (timed out, card gone) isn't evidence the
         // submit failed — stop retrying rather than guess.
-        if (!check.ok || !/pasted text/i.test(check.text)) break;
+        if (!check.ok || !looksUnsent(check.text)) break;
       }
       return { ok: true };
     }
@@ -726,6 +849,40 @@ export function createMessageBus(
           timer,
         });
         callbacks.onOpenRequest(requestId, requesterId, req.url as string, req.reason, autonomous);
+      });
+    }
+
+    // Sticky item "close_card" (2026-09-03) — "o orquestrador não consegue
+    // fechar o card ou qualquer outro card, sem poder" — `closeCard()`
+    // (App.tsx) always existed but only ever behind the UI's own X button,
+    // no MCP/acbridge path reached it. Same ask/consent/resolve shape as
+    // `open` above, generalized to any card kind (not just terminal — see
+    // `onCloseCardRequest`'s own doc comment).
+    if (req.cmd === "close_card") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      const target = req.target;
+      if (!callbacks.listCards().some((c) => c.id === target)) return { ok: false, error: `no open card with id "${target}"` };
+      const requestId = randomUUID();
+      const requesterId = req.requesterId ?? "";
+      const requesterBoardId = callbacks.getCardBoardId(requesterId);
+      const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
+      markWaiting(requesterId);
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingCloseCards.delete(requestId);
+          unmarkWaiting(requesterId);
+          resolve({ ok: false, error: "timed out waiting for a decision" });
+        }, CLOSE_TIMEOUT_MS);
+        pendingCloseCards.set(requestId, {
+          resolve: (allowed) => {
+            clearTimeout(timer);
+            pendingCloseCards.delete(requestId);
+            unmarkWaiting(requesterId);
+            resolve(allowed ? { ok: true } : { ok: false, error: "denied by user" });
+          },
+          timer,
+        });
+        callbacks.onCloseCardRequest(requestId, requesterId, target, req.reason, autonomous);
       });
     }
 
@@ -890,7 +1047,8 @@ export function createMessageBus(
       // still a live process (isAlive true), but reporting "running" here
       // is exactly the ambiguity this state exists to remove.
       if (waitingOnConsent.has(req.target)) return { ok: true, status: "waiting" };
-      return { ok: true, status: callbacks.isCardAlive(req.target) ? "running" : "exited" };
+      if (!callbacks.isCardAlive(req.target)) return { ok: true, status: "exited" };
+      return { ok: true, status: isCardIdle(req.target) ? "idle" : "running" };
     }
 
     if (req.cmd === "report") {
@@ -1085,6 +1243,7 @@ export function createMessageBus(
         depth,
         reason: req.reason,
         model: req.model,
+        effort: req.effort,
         label: req.label,
       };
       const spawnResult: SpawnAgentResult =
@@ -1163,6 +1322,10 @@ export function createMessageBus(
 
   function resolveOpen(requestId: string, allowed: boolean, cardId?: string) {
     pendingOpens.get(requestId)?.resolve(allowed, cardId);
+  }
+
+  function resolveCloseCard(requestId: string, allowed: boolean) {
+    pendingCloseCards.get(requestId)?.resolve(allowed);
   }
 
   function resolveSnapshot(requestId: string, result: SnapshotResult) {
@@ -1500,6 +1663,8 @@ export function createMessageBus(
   function close() {
     for (const { timer } of pendingOpens.values()) clearTimeout(timer);
     pendingOpens.clear();
+    for (const { timer } of pendingCloseCards.values()) clearTimeout(timer);
+    pendingCloseCards.clear();
     for (const { timer } of pendingSnapshots.values()) clearTimeout(timer);
     pendingSnapshots.clear();
     for (const { timer } of pendingPageTexts.values()) clearTimeout(timer);
@@ -1518,6 +1683,8 @@ export function createMessageBus(
     pendingSpawnCards.clear();
     for (const list of spawnQueue.values()) for (const { timer } of list) clearTimeout(timer);
     spawnQueue.clear();
+    clearInterval(idleWatchTimer);
+    previousIdleState.clear();
     server.close();
     try {
       unlinkSync(sockPath);
@@ -1526,5 +1693,30 @@ export function createMessageBus(
     }
   }
 
-  return { handleRequest, resolveOpen, resolveSnapshot, resolvePageText, resolveReadCard, resolveSticky, resolveSpawnAgent, resolveSpawnCard, resolveCardExit, close };
+  /** Sticky item "Fila de concorrência quebrada", achado 1 (2026-09-03) —
+   * `tryDispatchQueued` só era chamado de `resolveCardExit`, nunca quando
+   * um slot "libera" por outro motivo: subir `concurrency_cap` num board
+   * com fila nunca reavaliava nada, a request ficava presa até o timeout
+   * de 10min (`DEFAULT_QUEUE_TIMEOUT_MS`) mesmo com capacidade de sobra.
+   * Fina camada pública só pra isso — `index.ts` chama depois de persistir
+   * um cap novo, mesmo padrão de "avisa o motor, não deixa ele confiar só
+   * em polling" que o resto deste arquivo já usa. */
+  function notifyConcurrencyCapChanged(boardId: string) {
+    tryDispatchQueued(boardId);
+  }
+
+  return {
+    handleRequest,
+    resolveOpen,
+    resolveCloseCard,
+    resolveSnapshot,
+    resolvePageText,
+    resolveReadCard,
+    resolveSticky,
+    resolveSpawnAgent,
+    resolveSpawnCard,
+    resolveCardExit,
+    notifyConcurrencyCapChanged,
+    close,
+  };
 }

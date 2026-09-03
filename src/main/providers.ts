@@ -17,6 +17,14 @@ export type SpawnOpts = {
    * hard cap in message-bus.ts (MAX_SPAWN_DEPTH) before any consent
    * modal even shows. */
   spawnDepth?: number;
+  /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity's CLI
+   * requires `--effort <low|high>` alongside certain models (`--model
+   * gemini-3.1-pro` on its own falls back silently to a different model
+   * with a warning, never actually running the one asked for). `model`
+   * stays a plain string on purpose (every other provider only ever takes
+   * one) — this is additive and provider-specific, `undefined` for every
+   * provider whose `buildArgs` doesn't read it. */
+  effort?: "low" | "high";
   /** Internal only — never set by the renderer/IPC caller. Injected by
    * `pty-registry.ts::spawn()` from its own closed-over `mcpUrl` so
    * `buildArgs` below can register the MCP server per-provider without
@@ -32,7 +40,7 @@ export type SpawnOpts = {
 const ACBRIDGE_HINT =
   "You're running inside agent-canvas, a board of cards. If an MCP server " +
   "named `stellar` is connected, prefer its tools (list/send/open/spawn/" +
-  "snapshot/page-text/read_card/card_status/report/read_report — read " +
+  "close_card/snapshot/page-text/read_card/card_status/report/read_report — read " +
   "each tool's own description). Otherwise a CLI `acbridge` is on your " +
   "PATH with the same capabilities (`acbridge` with no args prints " +
   "usage). If another card spawned you to do a task, call `report` (or " +
@@ -176,11 +184,12 @@ export const PROVIDERS: ProviderDef[] = [
       posix: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
       windows: "irm https://antigravity.google/cli/install.ps1 | iex",
     },
-    buildArgs: ({ resumeId, continueLast, model }) => {
+    buildArgs: ({ resumeId, continueLast, model, effort }) => {
       const args: string[] = [];
       if (resumeId) args.push("--conversation", resumeId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
+      if (effort) args.push("--effort", effort);
       return args;
     },
   },

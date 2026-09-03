@@ -13,6 +13,12 @@ export type TerminalCardData = BaseCard & {
   /** One-shot launch preference, never persisted (see AGENTS.md) — always false for a card restored from the store. */
   continueLast: boolean;
   model: string | null;
+  /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity-only
+   * companion to `model` (`providers.ts`'s `SpawnOpts.effort`). Same
+   * one-shot, never-persisted spirit as `continueLast`/`initialInput`
+   * below: it only matters at the exact moment the PTY is spawned, never
+   * re-read afterward — always null for a card restored from the store. */
+  effort: "low" | "high" | null;
   systemPrompt: string | null;
   /** One-shot text typed into the PTY right after spawn (item 57 ponto
    * 13) — same never-persisted spirit as `continueLast`, always null for

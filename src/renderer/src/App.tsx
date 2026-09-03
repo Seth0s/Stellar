@@ -85,6 +85,7 @@ type PendingAsk =
       resumeId?: string;
       reason?: string;
       model?: string;
+      effort?: "low" | "high";
       label?: string;
     }
   | {
@@ -95,7 +96,8 @@ type PendingAsk =
       cwd?: string;
       url?: string;
       reason?: string;
-    };
+    }
+  | { kind: "close-card"; requestId: string; requesterId: string; target: string; reason?: string };
 
 /** Bug real achado ao vivo (2026-09-02, reportado por um usuário rodando o
  * app numa máquina diferente da do autor): estas duas constantes eram
@@ -417,6 +419,7 @@ function fromRow(r: CardRow): Card {
         resumeId: r.resume_id,
         continueLast: false,
         model: r.model,
+        effort: null,
         systemPrompt: r.system_prompt,
         initialInput: null,
         label,
@@ -440,6 +443,7 @@ function fromRow(r: CardRow): Card {
         resumeId: r.resume_id,
         continueLast: false,
         model: r.model,
+        effort: null,
         systemPrompt: r.system_prompt,
         initialInput: null,
         label,
@@ -680,7 +684,7 @@ export function App() {
       // a human-approved spawn, just triggered immediately instead of by
       // a button click.
       if (params.autoApprove) {
-        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model, params.label);
+        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model, params.label, params.effort);
         // DESIGN-BACKLOG.md item 62 — records real spawn lineage
         // automatically; `requesterId` is "" for the task engine's own
         // dispatches (item 60 peça 3), which have no real requester
@@ -698,6 +702,7 @@ export function App() {
         resumeId: params.resumeId,
         reason: params.reason,
         model: params.model,
+        effort: params.effort,
         label: params.label,
       });
     });
@@ -721,6 +726,20 @@ export function App() {
         url: params.url,
         reason: params.reason,
       });
+    });
+    // Sticky item "close_card" (2026-09-03) — same ask/consent shape as
+    // spawn above, opposite direction. `beginCloseAnimation` directly
+    // (not `closeCard`'s own live-terminal "are you sure" gate) — the
+    // human's approval of THIS request (or the autonomous auto-approve
+    // below) already covers that decision, a second confirm would be
+    // pure friction.
+    const offAskClose = window.spawn.onAskClose((requestId, requesterId, target, reason, autoApprove) => {
+      if (autoApprove) {
+        beginCloseAnimation(target);
+        void window.spawn.resolveClose(requestId, true);
+        return;
+      }
+      setPendingAsk({ kind: "close-card", requestId, requesterId, target, reason });
     });
     // acbridge snapshot (item 4, DESIGN-BACKLOG.md) — main asks "what's on
     // screen for this target right now", only the renderer has the live
@@ -841,6 +860,7 @@ export function App() {
       offAskBrowserPermission();
       offAskSpawnAgent();
       offAskSpawnCard();
+      offAskClose();
       offSnapshot();
       offReadCard();
       offSticky();
@@ -1154,6 +1174,7 @@ export function App() {
       resumeId: newResumeId.trim() || null,
       continueLast: newResumeId.trim() === "" && newContinueLast,
       model: newModel.trim() || null,
+      effort: null,
       systemPrompt: newSystemPrompt.trim() || null,
       initialInput: null,
       rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect)),
@@ -1328,7 +1349,7 @@ export function App() {
   // rather than a human. Always through `addCard` (unlike openBrowserFor
   // above) — this IS the "something appeared on the board that a human
   // didn't click" moment the toast exists for.
-  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string): string {
+  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string, effort?: "low" | "high"): string {
     const id = String(nextId.current++);
     addCard({
       id,
@@ -1338,6 +1359,7 @@ export function App() {
       resumeId: resumeId || null,
       continueLast: false,
       model: model || null,
+      effort: effort || null,
       systemPrompt: null,
       initialInput: null,
       rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
@@ -1371,6 +1393,7 @@ export function App() {
       resumeId: null,
       continueLast: false,
       model: null,
+      effort: null,
       systemPrompt: null,
       initialInput: command,
       rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
@@ -1410,15 +1433,21 @@ export function App() {
       if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
       void window.browser.resolveAsk(ask.requestId, true, cardId);
     } else if (ask.kind === "spawn-agent") {
-      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label);
+      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort);
       // DESIGN-BACKLOG.md item 62 — same lineage record as the
       // autonomous auto-approve path above, for a human-approved spawn.
       if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned");
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
-    } else {
+    } else if (ask.kind === "spawn-card") {
       const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId);
       if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
       void window.spawn.resolveCard(ask.requestId, { ok: true, cardId });
+    } else {
+      // "close-card" — see `beginCloseAnimation`'s own note in the
+      // autonomous auto-approve branch above for why this skips
+      // `closeCard()`'s live-terminal re-confirm.
+      beginCloseAnimation(ask.target);
+      void window.spawn.resolveClose(ask.requestId, true);
     }
   }
 
@@ -1428,7 +1457,8 @@ export function App() {
     setPendingAsk(null);
     if (ask.kind === "open") void window.browser.resolveAsk(ask.requestId, false);
     else if (ask.kind === "spawn-agent") void window.spawn.resolveAgent(ask.requestId, { ok: false, error: "denied by user" });
-    else void window.spawn.resolveCard(ask.requestId, { ok: false, error: "denied by user" });
+    else if (ask.kind === "spawn-card") void window.spawn.resolveCard(ask.requestId, { ok: false, error: "denied by user" });
+    else void window.spawn.resolveClose(ask.requestId, false);
   }
 
   /** title/command text for whichever AgentAskModal is currently pending — kept out of the JSX below for readability. */
@@ -1442,10 +1472,13 @@ export function App() {
         command: `${ask.provider}${ask.label ? ` "${ask.label}"` : ""}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.resumeId ? ` (retomar ${ask.resumeId})` : ""}`,
       };
     }
-    return {
-      title: "Permissão: criar card",
-      command: `${ask.cardKind}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.url ? ` (${ask.url})` : ""}`,
-    };
+    if (ask.kind === "spawn-card") {
+      return {
+        title: "Permissão: criar card",
+        command: `${ask.cardKind}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.url ? ` (${ask.url})` : ""}`,
+      };
+    }
+    return { title: "Permissão: fechar card", command: describeCard(ask.target) };
   }
 
   /** Reuses cascadeSlot (already the grid a new card lands on) — reorganize is just re-running that grid over every existing card. */
@@ -2164,6 +2197,7 @@ export function App() {
                 resumeId={c.resumeId}
                 continueLast={c.continueLast}
                 model={c.model}
+                effort={c.effort}
                 systemPrompt={c.systemPrompt}
                 initialInput={c.initialInput}
                 visible={isInView(c.rect, visibleRect)}

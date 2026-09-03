@@ -88,6 +88,12 @@ type Entry = {
   /** Escalonamento de encerramento (achado ao vivo 2026-09-01) — ver
    * `kill` abaixo. `null` enquanto o processo não foi mandado encerrar. */
   killTimer: NodeJS.Timeout | null;
+  /** Sticky item "card_status idle" (2026-09-03) — timestamp da última
+   * vez que o processo mandou QUALQUER dado, atualizado na chegada crua
+   * (`proc.onData`), não no `flush` debounced — a única forma de
+   * `card_status` distinguir "trabalhando" de "vivo mas parado no
+   * prompt" sem precisar entender a UI de nenhum provider específico. */
+  lastActivityAt: number;
 };
 
 /** Achado ao vivo (2026-09-01): "se eu trocar de sessão os terminais e
@@ -254,6 +260,7 @@ export function createPtyRegistry(registryOpts: {
       seenUrls: new Set(),
       urlCarry: "",
       killTimer: null,
+      lastActivityAt: Date.now(),
     };
     entries.set(id, entry);
 
@@ -268,6 +275,7 @@ export function createPtyRegistry(registryOpts: {
     }
 
     proc.onData((data) => {
+      entry.lastActivityAt = Date.now();
       entry.chunks.push(data);
       entry.pending += data.length;
       if (entry.pending >= COALESCE_MAX) {
@@ -375,6 +383,13 @@ export function createPtyRegistry(registryOpts: {
     return entries.has(id);
   }
 
+  /** Sticky item "card_status idle" — `null` for a card with no live
+   * entry (never spawned, exited, or a spawn error) — same "no entry
+   * means gone" convention as `isAlive`. */
+  function getLastActivityAt(id: string): number | null {
+    return entries.get(id)?.lastActivityAt ?? null;
+  }
+
   /** Test-only accessor (pre-release audit B7's verify coverage) — the
    * live harness has no other way to observe that `seenUrls` actually
    * stays capped at `MAX_SEEN_URLS` rather than growing forever. */
@@ -382,5 +397,5 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, resize, interrupt, kill, killAll, isAlive, seenUrlsCount };
+  return { spawn, write, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, seenUrlsCount };
 }

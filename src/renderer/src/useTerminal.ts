@@ -49,10 +49,52 @@ const BASE_FONT_SIZE = 15;
 // pra manter o glifo legível quando o zoom-out pede uma fonte maior;
 // supersampling do glyph, não aumento real da resolução do canvas.
 const FONT_SIZE_MIN = 3;
-const FONT_SIZE_MAX = 45;
+// Reported live (2026-09-03, zoom 43%, reproduced with a screenshot
+// comparison): the old `FONT_SIZE_MAX = 45` ceiling let the font grow way
+// past `BASE_FONT_SIZE` whenever zoomed out — but Effect 5 below still
+// refits cols/rows against the container's fixed (world-space,
+// zoom-invariant — Trilha B) box width right after, so a bigger font
+// genuinely means fewer real columns. A CLI's own statusline (needs
+// ~80+ cols) wrapped into 2 lines of giant text, or later (a softer,
+// per-card column-floor cap tried first) got silently truncated instead —
+// neither is acceptable, and there's no general way to know how many
+// columns any given CLI's own UI actually needs to not truncate. The one
+// cap that can't ever cause either: never let the font grow BIGGER than
+// its zoom=1 anchor at all — that guarantees the exact same cols/rows the
+// card already has at zoom=1, at any zoom <= 1 (a resized-bigger card
+// keeps its bigger cols too, this isn't a fixed column count). Trade-off
+// accepted explicitly with the user: apparent text size no longer stays
+// visually constant when zoomed way out — it shrinks like everything else
+// on the board — in exchange for content never breaking. Zoom-in
+// (zoom > 1) is untouched: `raw` is already below `BASE_FONT_SIZE` there.
 function fontSizeForZoom(zoom: number): number {
   const raw = BASE_FONT_SIZE / zoom;
-  return Math.round(Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, raw)));
+  return Math.round(Math.min(BASE_FONT_SIZE, Math.max(FONT_SIZE_MIN, raw)));
+}
+
+/**
+ * Shared by `FullWidthFitAddon` below and by the zoom-driven font cap
+ * (Effect 5) — both need the same "real usable pixels inside this
+ * terminal's box" number, parent box minus its own padding. Pulled out so
+ * the cap doesn't duplicate (and risk drifting from) the padding math the
+ * fit addon already gets right.
+ */
+function availableSize(term: Terminal): { width: number; height: number } | undefined {
+  if (!term.element || !term.element.parentElement) return undefined;
+  const parentStyle = window.getComputedStyle(term.element.parentElement);
+  const parentHeight = parseInt(parentStyle.getPropertyValue("height"), 10) || 0;
+  const parentWidth = Math.max(0, parseInt(parentStyle.getPropertyValue("width"), 10) || 0);
+  const elStyle = window.getComputedStyle(term.element);
+  const padding = {
+    top: parseInt(elStyle.getPropertyValue("padding-top"), 10) || 0,
+    bottom: parseInt(elStyle.getPropertyValue("padding-bottom"), 10) || 0,
+    right: parseInt(elStyle.getPropertyValue("padding-right"), 10) || 0,
+    left: parseInt(elStyle.getPropertyValue("padding-left"), 10) || 0,
+  };
+  return {
+    width: parentWidth - (padding.right + padding.left),
+    height: parentHeight - (padding.top + padding.bottom),
+  };
 }
 
 /**
@@ -63,24 +105,14 @@ function fontSizeForZoom(zoom: number): number {
 class FullWidthFitAddon extends FitAddon {
   proposeDimensions(): { cols: number; rows: number } | undefined {
     const term = (this as any)._terminal as Terminal | undefined;
-    if (!term || !term.element || !term.element.parentElement) return undefined;
+    if (!term) return undefined;
     const dims = (term as any)._core?._renderService?.dimensions;
     if (!dims || dims.css.cell.width === 0 || dims.css.cell.height === 0) return undefined;
-    const parentStyle = window.getComputedStyle(term.element.parentElement);
-    const parentHeight = parseInt(parentStyle.getPropertyValue("height"), 10) || 0;
-    const parentWidth = Math.max(0, parseInt(parentStyle.getPropertyValue("width"), 10) || 0);
-    const elStyle = window.getComputedStyle(term.element);
-    const padding = {
-      top: parseInt(elStyle.getPropertyValue("padding-top"), 10) || 0,
-      bottom: parseInt(elStyle.getPropertyValue("padding-bottom"), 10) || 0,
-      right: parseInt(elStyle.getPropertyValue("padding-right"), 10) || 0,
-      left: parseInt(elStyle.getPropertyValue("padding-left"), 10) || 0,
-    };
-    const availableHeight = parentHeight - (padding.top + padding.bottom);
-    const availableWidth = parentWidth - (padding.right + padding.left);
+    const available = availableSize(term);
+    if (!available) return undefined;
     return {
-      cols: Math.max(2, Math.floor(availableWidth / dims.css.cell.width)),
-      rows: Math.max(1, Math.floor(availableHeight / dims.css.cell.height)),
+      cols: Math.max(2, Math.floor(available.width / dims.css.cell.width)),
+      rows: Math.max(1, Math.floor(available.height / dims.css.cell.height)),
     };
   }
 }
@@ -224,6 +256,10 @@ export function useTerminal(
   resumeId: string | null,
   continueLast: boolean,
   model: string | null,
+  /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity-only
+   * companion to `model` (`providers.ts`'s `SpawnOpts.effort`), same
+   * one-shot never-persisted spirit as `continueLast`. */
+  effort: "low" | "high" | null,
   systemPrompt: string | null,
   /** DESIGN-BACKLOG.md item 57 ponto 13 — one-shot text typed into the PTY
    * right after a successful spawn, never executed on its own (no `\r`
@@ -292,18 +328,19 @@ export function useTerminal(
   zoomRef.current = zoom;
   // Spawn-time-only options, read via ref instead of effect deps below — see
   // the comment on Effect 1's dependency array for why.
-  const spawnOptsRef = useRef({ resumeId, continueLast, model, systemPrompt, initialInput });
-  spawnOptsRef.current = { resumeId, continueLast, model, systemPrompt, initialInput };
+  const spawnOptsRef = useRef({ resumeId, continueLast, model, effort, systemPrompt, initialInput });
+  spawnOptsRef.current = { resumeId, continueLast, model, effort, systemPrompt, initialInput };
 
   // Effect 1: PTY lifecycle. Independent of the container/visible — spawns
   // once per identity and keeps running regardless of on-screen visibility.
   useEffect(() => {
     let disposed = false;
-    const { resumeId, continueLast, model, systemPrompt, initialInput } = spawnOptsRef.current;
+    const { resumeId, continueLast, model, effort, systemPrompt, initialInput } = spawnOptsRef.current;
     const spawnOpts = {
       resumeId: resumeId ?? undefined,
       continueLast,
       model: model ?? undefined,
+      effort: effort ?? undefined,
       systemPrompt: systemPrompt ?? undefined,
     };
     window.pty.spawn(id, providerId, cwd, DEFAULT_COLS, DEFAULT_ROWS, spawnOpts).then((result) => {

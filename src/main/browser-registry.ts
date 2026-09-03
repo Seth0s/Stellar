@@ -240,6 +240,18 @@ export function createBrowserRegistry(callbacks: {
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
+        // Documentado ao vivo (2026-09-03) — sem `partition`, Electron usa
+        // `session.defaultSession` pra QUALQUER BrowserWindow, então todo
+        // card de navegador aberto (não só os de um board, TODOS) compartilha
+        // cookies/localStorage/service workers entre si. Achado direto:
+        // não dava pra simular 2 usuários logados ao mesmo tempo em cards
+        // separados — só sequencial (login → ação → logout → outro login)
+        // no MESMO card. Um nome de partição único POR CARD isola cada um
+        // (Electron cria a sessão isolada sob demanda). Sem prefixo
+        // `persist:` de propósito — efêmera, morre com o card/app, do
+        // mesmo jeito que uma aba anônima nova; nada aqui pede que um login
+        // sobreviva a fechar e reabrir o card.
+        partition: `stellar-browser-${id}`,
       },
     });
     const wc = win.webContents;

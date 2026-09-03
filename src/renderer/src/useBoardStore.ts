@@ -29,6 +29,7 @@ function seedCards(defaultCwd: string, nextId: React.RefObject<number>, template
     resumeId: null,
     continueLast: false,
     model: null,
+    effort: null,
     systemPrompt: null,
     initialInput: null,
     rect: cascadeSlot(index),

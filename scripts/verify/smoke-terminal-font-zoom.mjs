@@ -1,14 +1,21 @@
 // DESIGN-BACKLOG.md item 57 ponto 10, revisado de novo (2026-09-02,
 // pedido explícito do usuário) — `fontSize = BASE / zoom` (INVERSO do
 // zoom do board), pra TODO provider, `bash` incluído. Zoom-IN encolhe o
-// fontSize (até o piso), zoom-OUT aumenta (até o teto) — o oposto da
-// versão anterior deste mecanismo (`fontSize = BASE * zoom`), que fazia o
-// tamanho aparente na tela crescer/encolher ao QUADRADO do zoom (a fonte
-// já escala 1:1 com o `transform: scale()` do card por fora; multiplicar
-// o fontSize interno pelo MESMO zoom compunha as duas escalas). Com a
-// fórmula inversa, tamanho aparente = (BASE/zoom) × zoom = BASE,
-// aproximadamente CONSTANTE em qualquer zoom do board — ver o comentário
-// de `fontSizeForZoom` em useTerminal.ts pra matemática completa.
+// fontSize (até o piso) — o oposto da versão anterior deste mecanismo
+// (`fontSize = BASE * zoom`), que fazia o tamanho aparente na tela
+// crescer/encolher ao QUADRADO do zoom (a fonte já escala 1:1 com o
+// `transform: scale()` do card por fora; multiplicar o fontSize interno
+// pelo MESMO zoom compunha as duas escalas).
+//
+// Revisado de novo (2026-09-03) — zoom-OUT NÃO cresce mais o fontSize
+// além de `BASE_FONT_SIZE`: crescer mantinha o tamanho aparente
+// constante, mas Effect 5 (useTerminal.ts) refaz o fit() de cols/rows
+// contra a largura FIXA do container logo depois, então fonte maior
+// sempre significava menos colunas reais — reproduzido ao vivo quebrando
+// a statusline do Claude Code em 2 linhas de fonte gigante a zoom baixo.
+// Ver o comentário de `fontSizeForZoom` em useTerminal.ts pra matemática
+// completa e o trade-off aceito (tamanho aparente deixa de ser
+// constante no zoom-out, em troca de nunca mais quebrar/cortar conteúdo).
 //
 // Sinal usado: `terminal-registry.ts`'s `getTerminalFontSize(cardId)`,
 // exposto em `window.__getTerminalFontSize` — lê `term.options.fontSize`
@@ -154,11 +161,21 @@ try {
   // A ~2x de zoom, fontSize teórico = 15/2.01 ≈ 7 — bem acima do piso
   // (FONT_SIZE_MIN=3), prova que o clamp não está mascarando o cálculo.
   check(`fontSize a ~2x de zoom ainda está acima do piso (FONT_SIZE_MIN=3): ${bashAfter}`, bashAfter > 3, true);
-  check(`...e dentro do teto (FONT_SIZE_MAX=45)`, bashAfter <= 45, true);
+  check(`...e dentro do teto (nunca passa de BASE_FONT_SIZE=15)`, bashAfter <= 15, true);
 
-  // Zoom-out até o mínimo do board (0.2) — fontSize teórico = 15/0.2 = 75,
-  // clampado no teto (45). Deve CRESCER em relação ao zoom=1 (o oposto do
-  // zoom-in acima), não encolher.
+  // Revisado ao vivo (2026-09-03, zoom 43%, statusline do Claude Code
+  // quebrando/cortando) — a versão anterior deste teste esperava o
+  // fontSize CRESCER até um teto de 45 no zoom mínimo do board (fórmula
+  // inversa "pura"). Reproduzido ao vivo: como Effect 5 (useTerminal.ts)
+  // refaz o fit() de cols/rows contra a largura FIXA do container logo
+  // depois de mudar o fontSize, uma fonte maior sempre significa MENOS
+  // colunas reais — no zoom mínimo, isso quebrava a statusline em 2
+  // linhas de fonte gigante. Não existe piso de colunas genérico e seguro
+  // pra qualquer conteúdo (o quanto uma CLI precisa varia) — a única
+  // garantia que nunca quebra é NUNCA deixar a fonte passar do próprio
+  // tamanho de zoom=1, então zoom-out agora mantém o fontSize (não cresce
+  // mais), trade-off aceito explicitamente com o usuário em troca de
+  // nunca mais cortar/quebrar conteúdo.
   const zoomOutBtn = await centerOf(page, '.zoom-pill button[title="Diminuir zoom"]');
   for (let i = 0; i < 20; i++) {
     await page.click(zoomOutBtn.x, zoomOutBtn.y);
@@ -167,11 +184,11 @@ try {
   await new Promise((r) => setTimeout(r, 400));
   const claudeZoomedOut = await fontSizeFor(page, ids.claudeId);
   check(
-    `zoom-out no mínimo do board CRESCE o fontSize (base=${claudeBefore}, zoomed-out=${claudeZoomedOut}) — fórmula inversa`,
-    claudeZoomedOut > claudeBefore,
+    `zoom-out no mínimo do board NÃO cresce mais o fontSize além de zoom=1 (base=${claudeBefore}, zoomed-out=${claudeZoomedOut}) — nunca quebra colunas`,
+    claudeZoomedOut <= claudeBefore,
     true,
   );
-  check(`...e bate no teto NOVO (FONT_SIZE_MAX=45, teórico seria 75 sem clamp)`, claudeZoomedOut, 45);
+  check(`...e não passa de BASE_FONT_SIZE=15 em nenhum zoom <= 1`, claudeZoomedOut, 15);
 
   page.close();
 } finally {

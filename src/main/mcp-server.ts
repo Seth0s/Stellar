@@ -239,13 +239,30 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "card_status",
       {
         description:
-          "Check whether a terminal card's process is running, exited, or blocked waiting on a consent decision (e.g. an open_url/spawn_agent/spawn_card call it made that a human hasn't approved or denied yet) — a cheap alternative to polling snapshot/read_card in a loop.",
+          "Check a terminal card's status: 'running' (actively producing output), 'idle' (alive but no output for a while — sitting at a prompt, likely waiting on you), 'exited', or 'waiting' (blocked on a consent decision, e.g. an open_url/spawn_agent/spawn_card call it made that a human hasn't approved or denied yet). A cheap alternative to polling snapshot/read_card in a loop. 'idle' is a heuristic (no-output-for-Nsec, same imprecision as any turn-detection) — a long 'thinking' pause can occasionally still read as idle.",
         inputSchema: {
           target: z.string().describe("The target card's id or label (see list_cards)"),
         },
       },
       async ({ target }) => {
         const res = await opts.handleRequest({ cmd: "card_status", target });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "close_card",
+      {
+        description:
+          "Ask the human to close ANY open card (yours, one you spawned, or any other) — same consent gate as spawn_agent/spawn_card/open_url. Requires human approval unless the requester's board is in autonomous mode. Closing a live terminal kills its process; no undo.",
+        inputSchema: {
+          target: z.string().describe("The target card's id or label (see list_cards)"),
+          reason: z.string().optional().describe("Why you want this closed — shown to the human in the approval dialog"),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — used to check whether YOUR board is in autonomous mode."),
+        },
+      },
+      async ({ target, reason, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "close_card", target, reason, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -444,6 +461,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
           model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default"),
+          effort: z
+            .enum(["low", "high"])
+            .optional()
+            .describe(
+              "Antigravity ONLY — some of its models (e.g. 'gemini-3.1-pro') require this alongside `model` or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. Ignored by every other provider.",
+            ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to look up YOUR real spawn depth and whether your board is in autonomous mode. Pass it only to override that."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
@@ -454,7 +477,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           waitTimeoutMs: z.number().optional().describe("Override the default wait window (10 minutes) when wait is true"),
         },
       },
-      async ({ provider, cwd, resumeId, model, label, callerCardId, reason, wait, waitTimeoutMs }) => {
+      async ({ provider, cwd, resumeId, model, effort, label, callerCardId, reason, wait, waitTimeoutMs }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
           provider,
@@ -463,6 +486,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           requesterId: caller(callerCardId),
           reason,
           model,
+          effort,
           label,
           wait,
           waitTimeoutMs,
