@@ -4,6 +4,7 @@ import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import type { GitStatus } from "../../preload/index";
+import styles from "./ChangesCard.module.css";
 
 /** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
  * wrapped in `React.memo` below. */
@@ -68,7 +69,7 @@ function ChangesCardInner({
 
   return (
     <CardFrame
-      className="changes-card"
+      className=""
       kind="changes"
       rect={rect}
       zoom={zoom}
@@ -103,27 +104,27 @@ function ChangesCardInner({
       }
       footerContent={root}
     >
-      <div className="changes-card-body thin-scroll">
-        {!status && <div className="changes-msg">carregando…</div>}
-        {status && !status.repo && <div className="changes-msg">não é um repositório git</div>}
+      <div className={`${styles.changesCardBody} thin-scroll`}>
+        {!status && <div className={styles.changesMsg}>carregando…</div>}
+        {status && !status.repo && <div className={styles.changesMsg}>não é um repositório git</div>}
         {status && status.repo && (
           <>
-            <div className="changes-header">
+            <div className={styles.changesHeader}>
               <span>{status.branch}</span>
               <span className="changes-totals">
-                <span className="changes-ins">+{status.insertions}</span>{" "}
-                <span className="changes-del">−{status.deletions}</span>
+                <span className={styles.changesIns}>+{status.insertions}</span>{" "}
+                <span className={styles.changesDel}>−{status.deletions}</span>
               </span>
               <button onClick={refresh}>atualizar</button>
             </div>
-            <div className="changes-list">
-              {status.entries.length === 0 && <div className="changes-msg">sem alterações</div>}
+            <div className={styles.changesList}>
+              {status.entries.length === 0 && <div className={styles.changesMsg}>sem alterações</div>}
               {status.entries.map((entry) => (
-                <div key={entry.path} className="changes-entry">
-                  <span className="changes-entry-status">{entry.status}</span>
-                  <span className="changes-entry-path">{entry.path}</span>
-                  <span className="changes-ins">+{entry.insertions}</span>
-                  <span className="changes-del">−{entry.deletions}</span>
+                <div key={entry.path} className={styles.changesEntry}>
+                  <span className={styles.changesEntryStatus}>{entry.status}</span>
+                  <span className={styles.changesEntryPath}>{entry.path}</span>
+                  <span className={styles.changesIns}>+{entry.insertions}</span>
+                  <span className={styles.changesDel}>−{entry.deletions}</span>
                 </div>
               ))}
             </div>

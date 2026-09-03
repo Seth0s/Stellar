@@ -130,10 +130,10 @@ try {
   await new Promise((r) => setTimeout(r, 800));
 
   check("files card real criado", Number(await page.evalJs(`document.querySelectorAll('.files-card').length`)), 1);
-  check("changes card real criado", Number(await page.evalJs(`document.querySelectorAll('.changes-card').length`)), 1);
+  check("changes card real criado", Number(await page.evalJs(`document.querySelectorAll('[data-kind="changes"]').length`)), 1);
 
   // --- DOM real: dentro de .cards-layer, NÃO dentro de .world ---
-  for (const cls of [".files-card", ".changes-card"]) {
+  for (const cls of [".files-card", '[data-kind="changes"]']) {
     check(`${cls} vive em .cards-layer (migrado)`, await page.evalJs(`!!document.querySelector('.cards-layer ${cls}')`), true);
     check(`${cls} NÃO vive mais em .world`, await page.evalJs(`!!document.querySelector('.world ${cls}')`), false);
   }
@@ -153,7 +153,7 @@ try {
 
     for (const [id, selector] of [
       ["proj-files", ".files-card"],
-      ["proj-changes", ".changes-card"],
+      ["proj-changes", '[data-kind="changes"]'],
     ]) {
       const stored = await storedRect(id);
       const expected = {
@@ -198,7 +198,7 @@ try {
 
   // --- resize real (changes card) ---
   const beforeResize = await storedRect("proj-changes");
-  const handle = await centerOf(page, ".changes-card .card-resize-se");
+  const handle = await centerOf(page, '[data-kind="changes"] .card-resize-se');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: handle.x + 50, y: handle.y + 40, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x + 50, y: handle.y + 40, button: "left", clickCount: 1, pointerType: "mouse" });
