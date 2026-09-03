@@ -1,0 +1,55 @@
+/* Piloto de colocalização CSS (2026-09-03) — primeiro componente
+ * migrado de styles/cards.css pra um CSS Module ao lado do .tsx, pra
+ * validar o mecanismo antes de migrar o resto (achado real: classes
+ * compartilhadas com CardFrame.tsx, como .card-clip/.card-head/
+ * .card-head-inner, continuam GLOBAIS via :global() — só o que é
+ * exclusivo deste componente vira classe com escopo de módulo). */
+
+.strokeCard {
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.strokeCard :global(.card-clip) {
+  overflow: visible;
+}
+
+.strokeCard :global(.card-head) {
+  background: transparent;
+  height: 18px;
+  padding: 0 4px;
+}
+
+/* StrokeCard doesn't get `.card-focus-btn` (its header is deliberately
+   near-invisible, opacity:0 close button — a permanent focus button
+   would fight that minimal chrome) — `.card-head-inner` is its only
+   flex child, so its own `justify-content` needs to right-align that
+   single close button, same as `.card-head`'s used to before it existed. */
+.strokeCard :global(.card-head-inner) {
+  justify-content: flex-end;
+}
+
+.strokeCardClose {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.strokeCard:hover .strokeCardClose {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.strokeCardBody {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}

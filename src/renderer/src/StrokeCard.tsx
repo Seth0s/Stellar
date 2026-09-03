@@ -2,6 +2,7 @@ import { memo } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
+import styles from "./StrokeCard.module.css";
 
 export const STROKE_COLORS = ["#f5f5f5", "#ff6b6b", "#6bc5ff", "#6bff9d"] as const;
 
@@ -63,7 +64,7 @@ function StrokeCardInner({
   const polyline = points.map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
   return (
     <CardFrame
-      className="stroke-card"
+      className={styles.strokeCard}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
@@ -81,12 +82,12 @@ function StrokeCardInner({
       panX={panX}
       panY={panY}
       headerContent={
-        <button className="stroke-card-close" onClick={onClose}>
+        <button className={styles.strokeCardClose} onClick={onClose}>
           <Icon name="close" size={12} />
         </button>
       }
     >
-      <svg className="stroke-card-body" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <svg className={styles.strokeCardBody} viewBox="0 0 100 100" preserveAspectRatio="none">
         <polyline
           points={polyline}
           fill="none"
