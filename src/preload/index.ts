@@ -22,7 +22,7 @@ export type CardRow = {
   archived_at: number | null;
 };
 
-type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; systemPrompt?: string };
+type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; effort?: "low" | "high"; systemPrompt?: string };
 type SpawnResult =
   | { id: string }
   | { error: "binary_not_found"; providerId: string; installCommand: string | null }
@@ -407,6 +407,9 @@ export type SpawnAgentAskParams = {
   depth: number;
   reason?: string;
   model?: string;
+  /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity-only
+   * companion to `model`. */
+  effort?: "low" | "high";
   /** DESIGN-BACKLOG.md item 62 — names the new card, same free-text
    * field CardTag rename sets. */
   label?: string;
@@ -452,6 +455,24 @@ const spawn = {
     ipcRenderer.invoke("spawn:agent-resolve", requestId, result),
   resolveCard: (requestId: string, result: SpawnCardResolveResult): Promise<void> =>
     ipcRenderer.invoke("spawn:card-resolve", requestId, result),
+  /** Sticky item "close_card" (2026-09-03) — same ask/consent/resolve
+   * shape as `onAskAgent`/`resolveAgent` above, for closing an existing
+   * card instead of creating one. Kept on this same bridge object rather
+   * than a new one — it's the same "an agent is asking for a decision on
+   * a card" capability, just the opposite direction. */
+  onAskClose: (cb: (requestId: string, requesterId: string, target: string, reason: string | undefined, autoApprove: boolean | undefined) => void) => {
+    const listener = (
+      _e: unknown,
+      requestId: string,
+      requesterId: string,
+      target: string,
+      reason: string | undefined,
+      autoApprove: boolean | undefined,
+    ) => cb(requestId, requesterId, target, reason, autoApprove);
+    ipcRenderer.on("card:ask-close", listener);
+    return () => ipcRenderer.removeListener("card:ask-close", listener);
+  },
+  resolveClose: (requestId: string, allowed: boolean): Promise<void> => ipcRenderer.invoke("card:close-resolve", requestId, allowed),
   /** DESIGN-BACKLOG.md item 60, peça 1 — pushed whenever a board's spawn
    * queue changes; `queue` is already FIFO-ordered (index is position). */
   onQueueChanged: (cb: (boardId: string, queue: SpawnQueueEntry[]) => void) => {

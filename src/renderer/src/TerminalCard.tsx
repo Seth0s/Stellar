@@ -54,6 +54,7 @@ function TerminalCardInner({
   resumeId,
   continueLast,
   model,
+  effort,
   systemPrompt,
   initialInput,
   visible,
@@ -90,6 +91,9 @@ function TerminalCardInner({
   /** One-shot launch preference, never persisted — see AGENTS.md. */
   continueLast: boolean;
   model: string | null;
+  /** Sticky item "spawn_agent effort" — Antigravity-only companion to
+   * `model`, same one-shot never-persisted spirit. */
+  effort: "low" | "high" | null;
   systemPrompt: string | null;
   /** One-shot text typed into a fresh PTY right after spawn (see
    * useTerminal.ts) — never persisted, only ever set by
@@ -171,6 +175,7 @@ function TerminalCardInner({
     resumeId,
     continueLast,
     model,
+    effort,
     systemPrompt,
     initialInput,
     visible,

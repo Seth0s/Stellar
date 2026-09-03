@@ -534,6 +534,29 @@ function createWindow() {
   // closures actually run until real events fire, well after this whole
   // function returns, so the forward reference is safe.
   let messageBus: ReturnType<typeof createMessageBus> | null = null;
+
+  /** Sticky item "Fila de concorrência quebrada", achado 2 (2026-09-03) —
+   * fechar um card real (não um processo que simplesmente morreu) apaga a
+   * linha do store (`store:delete` abaixo) essencialmente na mesma
+   * síncrona de `finalizeCloseCard` no renderer, enquanto a saída real do
+   * processo PTY (o que dispara `resolveCardExit` → `tryDispatchQueued`,
+   * `onExit` do registry mais abaixo) chega DEPOIS, assíncrona — o sinal
+   * mata o processo, o SO confirma a saída mais tarde. Se a linha já sumiu
+   * quando esse evento chega, `getCardBoardId` (usado por
+   * `resolveCardExit`) retorna `undefined` e o drain da fila é pulado em
+   * silêncio, mesmo havendo capacidade livre de verdade. Cache curto,
+   * populado logo ANTES do delete (abaixo) — só existe pra sobreviver essa
+   * janela entre "linha apagada" e "processo confirmado morto"; um card
+   * fechado tem exatamente um `onExit` esperado depois, então cada entrada
+   * se limpa sozinha num timeout generoso em vez de crescer pra sempre. */
+  const recentlyClosedCardBoardIds = new Map<string, string>();
+  function rememberBoardIdBeforeDelete(cardId: string) {
+    const boardId = store.getCard(cardId)?.board_id;
+    if (!boardId) return;
+    recentlyClosedCardBoardIds.set(cardId, boardId);
+    setTimeout(() => recentlyClosedCardBoardIds.delete(cardId), 60_000);
+  }
+
   const mcpServer = createMcpServer({
     // Default 0 lets the OS assign a free ephemeral port — the URL is only
     // ever read in-process (registry's `mcpUrl` getter below), never
@@ -828,6 +851,7 @@ function createWindow() {
       }),
     writeToCard: (id, text) => registry.write(id, text),
     isCardAlive: (id) => registry.isAlive(id),
+    getCardLastActivityAt: (id) => registry.getLastActivityAt(id),
     // DESIGN-BACKLOG.md item 61 — same "Bash 2°" convention as App.tsx's
     // `describeCard` (AgentAskModal's requester label), reimplemented
     // against store.ts directly since this is main-process code.
@@ -843,7 +867,7 @@ function createWindow() {
       const name = card.provider.charAt(0).toUpperCase() + card.provider.slice(1);
       return `${name} ${ordinal}°`;
     },
-    getCardBoardId: (id) => store.getCard(id)?.board_id,
+    getCardBoardId: (id) => store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id),
     isBoardAutonomous: (boardId) => store.getBoard(boardId)?.autonomous ?? false,
     getBoardConcurrencyCap: (boardId) => store.getBoard(boardId)?.concurrency_cap ?? null,
     countRunningAgentsOnBoard: (boardId) =>
@@ -857,6 +881,8 @@ function createWindow() {
     setConnectorKind: (id, kind) => store.setConnectorKind(id, kind),
     onOpenRequest: (requestId, requesterId, url, reason, autoApprove) =>
       safeSend(win, "browser:ask-open", requestId, requesterId, url, reason, autoApprove),
+    onCloseCardRequest: (requestId, requesterId, target, reason, autoApprove) =>
+      safeSend(win, "card:ask-close", requestId, requesterId, target, reason, autoApprove),
     // Achado ao vivo (2026-09-01): "eu gostaria que o snapshot fosse
     // cirúrgico e fizesse apenas do card e nada mais". Para um card de
     // NAVEGADOR isso é possível de forma exata, e por um caminho totalmente
@@ -989,6 +1015,7 @@ function createWindow() {
   ipcMain.handle("spawn:card-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>
     messageBus!.resolveSpawnCard(requestId, result),
   );
+  ipcMain.handle("card:close-resolve", (_e, requestId: string, allowed: boolean) => messageBus!.resolveCloseCard(requestId, allowed));
 
   ipcMain.handle(
     "pty:spawn",
@@ -1072,7 +1099,10 @@ function createWindow() {
 
   ipcMain.handle("store:list", (_e, boardId: string) => store.listCards(boardId));
   ipcMain.handle("store:upsert", (_e, card: CardRow) => store.upsertCard(card));
-  ipcMain.handle("store:delete", (_e, id: string) => store.deleteCard(id));
+  ipcMain.handle("store:delete", (_e, id: string) => {
+    rememberBoardIdBeforeDelete(id);
+    return store.deleteCard(id);
+  });
 
   ipcMain.handle("store:connectors:list", (_e, boardId: string) => store.listConnectors(boardId));
   ipcMain.handle("store:connectors:upsert", (_e, row: ConnectorRow) => store.upsertConnector(row));
@@ -1102,7 +1132,14 @@ function createWindow() {
   // DESIGN-BACKLOG.md item 60, peça 2 — same shape/guarantee as
   // set-autonomous above: only real renderer UI reaches this, `cap: null`
   // means "back to the global default", never zero.
-  ipcMain.handle("store:boards:set-concurrency-cap", (_e, id: string, cap: number | null) => store.setBoardConcurrencyCap(id, cap));
+  ipcMain.handle("store:boards:set-concurrency-cap", (_e, id: string, cap: number | null) => {
+    const result = store.setBoardConcurrencyCap(id, cap);
+    // Sticky item "Fila de concorrência quebrada", achado 1 — sem isso,
+    // subir o cap num board com fila nunca reavaliava nada até o timeout
+    // de 10min da request enfileirada.
+    messageBus?.notifyConcurrencyCapChanged(id);
+    return result;
+  });
   ipcMain.handle("store:card-counts", () => store.cardCounts());
   ipcMain.handle("store:next-id-seed", () => store.nextIdSeed());
   // Item 30 — sessions sidebar (every chat card, live or archived) +

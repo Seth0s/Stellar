@@ -31,6 +31,7 @@ if (!sockPath) {
 
 const USAGE =
   "usage: acbridge <list | send <cardId> <message...> | open <url> | " +
+  "close-card <cardId> [reason...] | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
   "read-sticky <cardId> | write-sticky [--append] <cardId> <text...> | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
@@ -63,6 +64,10 @@ if (cmd === "list") {
   const [url] = rest;
   if (!url) fail("usage: acbridge open <url>");
   request = { cmd: "open", url, requesterId: ownCardId };
+} else if (cmd === "close-card") {
+  const [target, ...reasonParts] = rest;
+  if (!target) fail("usage: acbridge close-card <cardId> [reason...]");
+  request = { cmd: "close_card", target, reason: reasonParts.length ? reasonParts.join(" ") : undefined, requesterId: ownCardId };
 } else if (cmd === "snapshot") {
   if (rest.length === 0) {
     request = { cmd: "snapshot" };
@@ -260,6 +265,8 @@ socket.on("close", () => {
     // O cardId agora vem junto (2026-09-01) — é ele que serve de alvo pros
     // comandos `browser-*` e `page-text` no card recém-aberto.
     console.log(res.cardId ? `opened: ${rest[0]}\t${res.cardId}` : `opened: ${rest[0]}`);
+  } else if (cmd === "close-card") {
+    console.log(`closed: ${rest[0]}`);
   } else if (cmd === "snapshot") {
     // Just the path, nothing else — meant to be read directly (Claude
     // Code's own Read tool renders an image path), not parsed.
