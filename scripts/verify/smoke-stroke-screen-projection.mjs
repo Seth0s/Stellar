@@ -114,12 +114,16 @@ try {
   await page.click(target.x, target.y);
   await new Promise((r) => setTimeout(r, 800));
 
-  check("stroke card real criado", Number(await page.evalJs(`document.querySelectorAll('.stroke-card').length`)), 1);
-  check("stroke card vive em .cards-layer (migrado)", await page.evalJs(`!!document.querySelector('.cards-layer .stroke-card')`), true);
-  check("stroke card NÃO vive mais em .world", await page.evalJs(`!!document.querySelector('.world .stroke-card')`), false);
+  // StrokeCard virou CSS Module (2026-09-03) -- `.strokeCard` sai como
+  // classe hasheada em runtime (ex: `_strokeCard_1mafv_8`), então os
+  // seletores daqui em diante usam `[class*="strokeCard_"]` (substring,
+  // sobrevive ao hash) em vez do nome literal.
+  check("stroke card real criado", Number(await page.evalJs(`document.querySelectorAll('[class*="strokeCard_"]').length`)), 1);
+  check("stroke card vive em .cards-layer (migrado)", await page.evalJs(`!!document.querySelector('.cards-layer [class*="strokeCard_"]')`), true);
+  check("stroke card NÃO vive mais em .world", await page.evalJs(`!!document.querySelector('.world [class*="strokeCard_"]')`), false);
   check(
     "a linha real (polyline SVG) ainda desenha os pontos certos",
-    await page.evalJs(`document.querySelector('.stroke-card polyline')?.getAttribute('points')`),
+    await page.evalJs(`document.querySelector('[class*="strokeCard_"] polyline')?.getAttribute('points')`),
     "10,10 50,50 90,20",
   );
 
@@ -141,7 +145,7 @@ try {
       y: world.panY + stored.y * world.zoom,
       w: stored.w * world.zoom,
     };
-    const real = await realRect(page, ".stroke-card");
+    const real = await realRect(page, '[class*="strokeCard_"]');
     check(
       `posição X real bate com rect*zoom+pan em ${pct}% (esperado ${expected.x.toFixed(1)}, real ${real.x.toFixed(1)})`,
       approxEqual(real.x, expected.x),
@@ -163,7 +167,7 @@ try {
 
   // --- drag real ---
   const beforeDrag = await storedRect();
-  const header = await centerOf(page, ".stroke-card .card-head");
+  const header = await centerOf(page, '[class*="strokeCard_"] .card-head');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: header.x, y: header.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: header.x + 70, y: header.y + 50, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: header.x + 70, y: header.y + 50, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -177,7 +181,7 @@ try {
 
   // --- resize real ---
   const beforeResize = await storedRect();
-  const handle = await centerOf(page, ".stroke-card .card-resize");
+  const handle = await centerOf(page, '[class*="strokeCard_"] .card-resize-e');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: handle.x + 40, y: handle.y + 30, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x + 40, y: handle.y + 30, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -190,10 +194,15 @@ try {
   );
 
   // --- fechar real ---
-  const closeBtn = await centerOf(page, ".stroke-card .stroke-card-close");
+  // Close button só fica clicável em :hover (opacity/pointer-events) --
+  // um mouseMoved real antes do click estabelece esse estado; page.click
+  // sozinho manda pressed/released sem passar por lá primeiro.
+  const closeBtn = await centerOf(page, '[class*="strokeCard_"] [class*="strokeCardClose_"]');
+  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: closeBtn.x, y: closeBtn.y, pointerType: "mouse" });
+  await new Promise((r) => setTimeout(r, 100));
   await page.click(closeBtn.x, closeBtn.y);
   await new Promise((r) => setTimeout(r, 400));
-  check("fechar real remove o stroke card de verdade", Number(await page.evalJs(`document.querySelectorAll('.stroke-card').length`)), 0);
+  check("fechar real remove o stroke card de verdade", Number(await page.evalJs(`document.querySelectorAll('[class*="strokeCard_"]').length`)), 0);
 
   page.close();
 } finally {

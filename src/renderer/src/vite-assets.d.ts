@@ -10,3 +10,13 @@ declare module "*?url" {
   const url: string;
   export default url;
 }
+
+// Colocalização de CSS (2026-09-03) — Vite processa `*.module.css`
+// nativamente em runtime (escopo de classe por hash), mas o TS precisa
+// dessa declaração ambiente pra aceitar `import styles from
+// "./X.module.css"` — o shape real (objeto de string->string) é o
+// mesmo que `vite/client` documenta.
+declare module "*.module.css" {
+  const classes: { readonly [key: string]: string };
+  export default classes;
+}

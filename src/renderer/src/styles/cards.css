@@ -1708,55 +1708,6 @@
   border-color: var(--foam);
 }
 
-.stroke-card {
-  display: flex;
-  flex-direction: column;
-  background: transparent;
-  border: none;
-  box-shadow: none;
-}
-
-.stroke-card .card-clip {
-  overflow: visible;
-}
-
-.stroke-card .card-head {
-  background: transparent;
-  height: 18px;
-  padding: 0 4px;
-}
-
-/* StrokeCard doesn't get `.card-focus-btn` (its header is deliberately
-   near-invisible, opacity:0 close button — a permanent focus button
-   would fight that minimal chrome) — `.card-head-inner` is its only
-   flex child, so its own `justify-content` needs to right-align that
-   single close button, same as `.card-head`'s used to before it existed. */
-.stroke-card .card-head-inner {
-  justify-content: flex-end;
-}
-
-.stroke-card-close {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 13px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.stroke-card:hover .stroke-card-close {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.stroke-card-body {
-  flex: 1;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
 /* DESIGN-BACKLOG.md item 12, Fase B — chat card. Mirrors the visual
    language of the Fase A artifact prototype (`chatbox-prototype.html`),
    built with the same real tokens, but only the subset this phase
