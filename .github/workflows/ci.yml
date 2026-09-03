@@ -47,6 +47,12 @@ jobs:
       - name: tsc --noEmit
         run: npx tsc --noEmit
 
+      - name: eslint
+        run: npm run lint
+
+      - name: vitest (unit)
+        run: npm run test:unit
+
       - run: npm run build
 
   # A suíte CDP de verdade. `xvfb-run` é exatamente a lacuna que

@@ -13,10 +13,12 @@ já mapeada aqui.
 ## O que é
 
 Electron: um canvas infinito (pan/zoom) de "cards" — terminais reais
-(node-pty, com ou sem agente de IA por trás), navegador embutido,
-arquivos, git status, notas, desenho à mão livre, e um card de controle
-de janela externa via portal do Wayland. Board = uma sessão; um projeto
-tem N boards; cada board tem N cards + conectores entre eles.
+(node-pty, com ou sem agente de IA por trás), chat conversacional
+multi-provedor (Anthropic/OpenAI/Gemini/genérico OpenAI-compatible),
+visualizador de mídia (imagem/PDF), navegador embutido, arquivos, git
+status, notas, desenho à mão livre, e um card de controle de janela
+externa via portal do Wayland. Board = uma sessão; um projeto tem N
+boards; cada board tem N cards + conectores entre eles.
 
 ## Três processos
 
