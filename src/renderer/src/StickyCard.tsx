@@ -220,6 +220,7 @@ function StickyCardInner({
   return (
     <CardFrame
       className="sticky-card"
+      kind="sticky"
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}

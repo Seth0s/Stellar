@@ -286,6 +286,7 @@ function TerminalCardInner({
   return (
     <CardFrame
       className="terminal-card"
+      kind="terminal"
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}

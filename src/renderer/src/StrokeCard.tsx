@@ -65,6 +65,8 @@ function StrokeCardInner({
   return (
     <CardFrame
       className={styles.strokeCard}
+      kind="stroke"
+      baseStyle={false}
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}

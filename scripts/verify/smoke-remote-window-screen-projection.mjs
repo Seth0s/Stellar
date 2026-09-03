@@ -72,10 +72,10 @@ try {
 
   await spawnCard(page, "remote-window");
   await new Promise((r) => setTimeout(r, 500));
-  check("remote-window card real criado", Number(await page.evalJs(`document.querySelectorAll('.remote-window-card').length`)), 1);
+  check("remote-window card real criado", Number(await page.evalJs(`document.querySelectorAll('[data-kind="remote-window"]').length`)), 1);
 
-  check("remote-window card vive em .cards-layer (migrado)", await page.evalJs(`!!document.querySelector('.cards-layer .remote-window-card')`), true);
-  check("remote-window card NÃO vive mais em .world", await page.evalJs(`!!document.querySelector('.world .remote-window-card')`), false);
+  check("remote-window card vive em .cards-layer (migrado)", await page.evalJs(`!!document.querySelector('.cards-layer [data-kind="remote-window"]')`), true);
+  check("remote-window card NÃO vive mais em .world", await page.evalJs(`!!document.querySelector('.world [data-kind="remote-window"]')`), false);
 
   const boardId = JSON.parse(await page.evalJs(`window.store.boards.list().then((b) => JSON.stringify(b[0].id))`));
   async function storedRect() {
@@ -90,7 +90,7 @@ try {
     return JSON.parse(
       await page.evalJs(`
         (() => {
-          const el = document.querySelector('.remote-window-card');
+          const el = document.querySelector('[data-kind="remote-window"]');
           const r = el.getBoundingClientRect();
           return JSON.stringify({ x: r.x, y: r.y, w: r.width, h: r.height });
         })()
@@ -131,7 +131,7 @@ try {
 
   // --- drag real ---
   const beforeDrag = await storedRect();
-  const tag = await centerOf(page, ".remote-window-card .card-tag");
+  const tag = await centerOf(page, '[data-kind="remote-window"] .card-tag');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: tag.x, y: tag.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: tag.x + 80, y: tag.y + 60, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: tag.x + 80, y: tag.y + 60, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -150,7 +150,7 @@ try {
 
   // --- resize real ---
   const beforeResize = await storedRect();
-  const handle = await centerOf(page, ".remote-window-card .card-resize");
+  const handle = await centerOf(page, '[data-kind="remote-window"] .card-resize-e');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: handle.x + 50, y: handle.y + 40, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x + 50, y: handle.y + 40, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -163,10 +163,16 @@ try {
   );
 
   // --- fechar real ---
-  const closeBtn = await centerOf(page, ".remote-window-card .card-head-actions button:last-child, .remote-window-card .card-head button:last-child");
+  // `.card-head button:last-child` pegava o card-focus-btn (ícone "fit"),
+  // não o close real -- CardFrame injeta esse botão de foco DEPOIS do
+  // headerContent quando `onFocus` é passado (que RemoteWindowCard passa).
+  // E `button:last-child` sem `>` também pegava o botão de renomear (ele
+  // TAMBÉM é last-child, só que do próprio .card-tag-group, não de
+  // .card-head-inner) -- precisa do combinador de filho direto.
+  const closeBtn = await centerOf(page, '[data-kind="remote-window"] .card-head-inner > button:last-child');
   await page.click(closeBtn.x, closeBtn.y);
   await new Promise((r) => setTimeout(r, 400));
-  const cardCountAfterClose = await page.evalJs(`document.querySelectorAll('.remote-window-card').length`);
+  const cardCountAfterClose = await page.evalJs(`document.querySelectorAll('[data-kind="remote-window"]').length`);
   check("fechar real remove o remote-window card de verdade", cardCountAfterClose, 0);
 
   page.close();

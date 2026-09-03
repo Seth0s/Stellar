@@ -198,7 +198,7 @@ try {
 
   // --- resize real (changes card) ---
   const beforeResize = await storedRect("proj-changes");
-  const handle = await centerOf(page, ".changes-card .card-resize");
+  const handle = await centerOf(page, ".changes-card .card-resize-se");
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: handle.x + 50, y: handle.y + 40, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x + 50, y: handle.y + 40, button: "left", clickCount: 1, pointerType: "mouse" });

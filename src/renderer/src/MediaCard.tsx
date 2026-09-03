@@ -193,6 +193,7 @@ export function MediaCard({
     <div ref={rootRef} style={{ display: "contents" }}>
       <CardFrame
         className="media-card"
+        kind="media"
         rect={rect}
         zoom={zoom}
         zIndex={zIndex}

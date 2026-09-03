@@ -69,6 +69,7 @@ function ChangesCardInner({
   return (
     <CardFrame
       className="changes-card"
+      kind="changes"
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}

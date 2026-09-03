@@ -95,7 +95,7 @@ try {
   // um `store.upsert()` direto daqui de fora NÃO move o card renderizado
   // (o estado `cards` em memória do App.tsx não reage a uma escrita de
   // DB fora de banda; só o próprio fluxo de drag real do app faz isso).
-  const resizeHandle = await centerOf(page, ".terminal-card .card-resize");
+  const resizeHandle = await centerOf(page, ".terminal-card .card-resize-se");
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: resizeHandle.x, y: resizeHandle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: resizeHandle.x - 360, y: resizeHandle.y - 260, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: resizeHandle.x - 360, y: resizeHandle.y - 260, button: "left", clickCount: 1, pointerType: "mouse" });

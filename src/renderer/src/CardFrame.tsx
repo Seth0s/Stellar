@@ -22,6 +22,8 @@ export function CardFrame({
   zoom,
   zIndex,
   className,
+  kind,
+  baseStyle = true,
   headerContent,
   footerContent,
   onFocus,
@@ -50,6 +52,14 @@ export function CardFrame({
   zoom: number;
   zIndex: number;
   className: string;
+  /** Selector estável pra smoke tests, sobrevive a qualquer refactor de
+   * CSS (hash de CSS Module incluso) — ver DESIGN-BACKLOG.md item sobre
+   * seletores data-kind. Renderizado como `data-kind` na raiz. */
+  kind: string;
+  /** Aplica a classe global `.card-base` (fundo/borda/sombra padrão de
+   * todo card) na raiz. `false` pros kinds que já controlam esse visual
+   * inteiramente pelo próprio CSS (hoje só Stroke). */
+  baseStyle?: boolean;
   headerContent: React.ReactNode;
   /** One-line strip at the bottom of the card (cwd, root path, URL, ...) —
    * reported live (2026-08-27) as inconsistent: each card kind that
@@ -375,6 +385,7 @@ export function CardFrame({
 
   const frameClass = [
     "card-frame",
+    baseStyle && "card-base",
     className,
     chromeless && "chromeless",
     chromeless && chromeActive && "chrome-active",
@@ -462,6 +473,7 @@ export function CardFrame({
   return (
     <div
       className={frameClass}
+      data-kind={kind}
       style={{
         position: "absolute",
         left: screenRect.x,

@@ -459,14 +459,12 @@
   cursor: nwse-resize;
 }
 
-.terminal-card,
-.files-card,
-.changes-card,
-.sticky-card,
-.browser-card,
-.media-card,
-.chat-card,
-.remote-window-card {
+/* Visual base de todo card, exceto Stroke (CardFrame's `baseStyle={false}`)
+   -- 2026-09-03, colocalização de CSS: passou a ser aplicada direto pelo
+   CardFrame.tsx (data-kind/baseStyle) em vez de listar cada `.<kind>-card`
+   aqui, então componentes migrados pra CSS Module não precisam duplicar
+   essas 5 propriedades no próprio módulo. */
+.card-base {
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -1553,58 +1551,6 @@
   box-shadow: inset 0 0 0 2px var(--accent-browser);
 }
 
-.remote-window-body {
-  position: relative;
-  flex: 1;
-  background: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.remote-window-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 16px;
-  text-align: center;
-}
-
-.remote-window-error {
-  color: var(--danger, #e06c75);
-  font-size: 12px;
-  max-width: 220px;
-}
-
-.remote-window-video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  outline: none;
-}
-
-.remote-window-video.hidden {
-  display: none;
-}
-
-.remote-window-video.controlling {
-  cursor: none;
-}
-
-.remote-window-hint {
-  position: absolute;
-  bottom: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.6);
-  color: var(--text);
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  pointer-events: none;
-}
 
 /* Achado ao vivo (2026-08-27): a versão antiga desses chips era
    `position: absolute` por CIMA das linhas do terminal, sem limite nem
