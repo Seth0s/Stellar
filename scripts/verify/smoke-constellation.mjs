@@ -27,20 +27,25 @@ try {
   // find its on-screen position, so the synthetic mouse can be aimed
   // directly at it through a real coordinate transform (viewBox -> CSS px,
   // same `slice` math the component itself does).
+  //
+  // Position reads below use `getBoundingClientRect()` (real rendered
+  // position, in client px) instead of the `cx`/`cy` attributes — perf fix
+  // (2026-09-03, CPU spike on the home screen) moved per-frame movement to
+  // `style.transform` (cheaper than mutating SVG geometry attrs every
+  // frame), so `cx`/`cy` now stay frozen at their JSX-authored base value
+  // and only the bounding rect reflects the star's true on-screen position.
   const svgBox = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('.home-stars').getBoundingClientRect())`));
-  const before = JSON.parse(
-    await page.evalJs(`
+  const readCenter = (sel) =>
+    page.evalJs(`
       (() => {
-        const c = document.querySelectorAll('.home-stars circle')[5];
-        return JSON.stringify({ x: parseFloat(c.getAttribute('cx')), y: parseFloat(c.getAttribute('cy')) });
+        const r = document.querySelectorAll('${sel}')[5].getBoundingClientRect();
+        return JSON.stringify({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
       })()
-    `),
-  );
+    `);
+  const before = JSON.parse(await readCenter(".home-stars circle"));
   const scale = Math.max(svgBox.width / 100, svgBox.height / 100);
-  const offX = (svgBox.width - 100 * scale) / 2;
-  const offY = (svgBox.height - 100 * scale) / 2;
-  const clientX = svgBox.left + offX + before.x * scale;
-  const clientY = svgBox.top + offY + before.y * scale;
+  const clientX = before.x;
+  const clientY = before.y;
 
   // A fast synthetic flick straight across the star's own position —
   // several dispatched mouseMoved events close together in time, same as
@@ -56,48 +61,22 @@ try {
   }
   await new Promise((r) => setTimeout(r, 80));
 
-  const pushed = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const c = document.querySelectorAll('.home-stars circle')[5];
-        return JSON.stringify({ x: parseFloat(c.getAttribute('cx')), y: parseFloat(c.getAttribute('cy')) });
-      })()
-    `),
-  );
-  check("a fast mouse pass near a field star measurably displaces it", dist(before, pushed) > 0.3, true);
+  const pushed = JSON.parse(await readCenter(".home-stars circle"));
+  // Thresholds below are in client px (`scale` converts the original
+  // viewBox-unit thresholds — see the perf-fix comment above `readCenter`).
+  check("a fast mouse pass near a field star measurably displaces it", dist(before, pushed) > 0.3 * scale, true);
 
   // Stop moving the mouse entirely and confirm the spring decays the
   // offset back toward the star's drifted-but-unpushed rest position.
   await new Promise((r) => setTimeout(r, 1500));
-  const settled = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const c = document.querySelectorAll('.home-stars circle')[5];
-        return JSON.stringify({ x: parseFloat(c.getAttribute('cx')), y: parseFloat(c.getAttribute('cy')) });
-      })()
-    `),
-  );
+  const settled = JSON.parse(await readCenter(".home-stars circle"));
   check("...and settles back down after the mouse stops moving", dist(pushed, settled) > dist(before, pushed) * 0.4, true);
 
   // Camera drift — real elapsed time, no synthetic input at all.
-  const drift0 = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const c = document.querySelectorAll('.home-stars circle')[5];
-        return JSON.stringify({ x: parseFloat(c.getAttribute('cx')), y: parseFloat(c.getAttribute('cy')) });
-      })()
-    `),
-  );
+  const drift0 = JSON.parse(await readCenter(".home-stars circle"));
   await new Promise((r) => setTimeout(r, 4000));
-  const drift1 = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const c = document.querySelectorAll('.home-stars circle')[5];
-        return JSON.stringify({ x: parseFloat(c.getAttribute('cx')), y: parseFloat(c.getAttribute('cy')) });
-      })()
-    `),
-  );
-  check("the whole field drifts on its own over real time, with no input", dist(drift0, drift1) > 0.005, true);
+  const drift1 = JSON.parse(await readCenter(".home-stars circle"));
+  check("the whole field drifts on its own over real time, with no input", dist(drift0, drift1) > 0.005 * scale, true);
 
   // A cluster's polyline must stay a rigid shape while drifting/pushed —
   // this is exactly the bug the rigid-body wrap shift was written to

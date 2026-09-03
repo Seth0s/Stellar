@@ -136,6 +136,26 @@ const PUSH_STRENGTH = 0.6;
 const MAX_OFFSET = 5;
 const SPRING_K = 0.06; // fraction of the offset that decays back to rest each frame
 
+// Perf (achado ao vivo, 2026-09-03 — reportado como "spike de CPU ao entrar
+// na home"): a ~204 elementos SVG recebendo geometry attrs (`cx`/`cy`) via
+// DOM direto a 60fps, cada write força o navegador a recalcular layout/paint
+// do documento SVG inteiro — caro, e desnecessário pra um fundo decorativo
+// com deriva lenta (ciclo de alguns minutos) e empurrão de mouse sutil.
+// Duas mudanças, sem qualquer diferença visual perceptível:
+// (1) a lógica (deriva + física de empurrão + escrita no DOM) roda numa
+// cadência própria de ~30fps via acumulador de tempo real, independente da
+// taxa de atualização da tela (60/120/144Hz) — movimento tão lento não se
+// distingue entre 30 e 60fps.
+// (2) estrelas passam a se mover via `style.transform` (delta relativo à
+// posição-base já declarada no JSX) em vez de sobrescrever `cx`/`cy` — CSS
+// transform não invalida geometria/layout do SVG, só recompõe, então é
+// ordens de magnitude mais barato por escrita mesmo na mesma frequência.
+// As polylines dos clusters (só 12, poucos pontos cada) continuam via
+// atributo `points` — não são o custo real e não dá pra representar como
+// transform único (cada vértice tem seu próprio deslocamento de empurrão).
+const LOGIC_FPS = 30;
+const LOGIC_INTERVAL_MS = 1000 / LOGIC_FPS;
+
 type Offset = { x: number; y: number };
 
 export function ConstellationBg() {
@@ -206,7 +226,15 @@ export function ConstellationBg() {
     let raf = 0;
     let lastFrame = performance.now();
     function frame(now: number) {
-      const dt = Math.min(now - lastFrame, 100); // clamp — a tab-switch/minimize gap shouldn't jump the drift
+      raf = requestAnimationFrame(frame);
+
+      // Throttle da LÓGICA (não do agendamento) a ~30fps — ver comentário
+      // de LOGIC_INTERVAL_MS acima. `requestAnimationFrame` continua sendo
+      // chamado na taxa real da tela (precisa disso pra ter timestamps),
+      // só o trabalho de física+DOM abaixo é que roda mais devagar.
+      const elapsed = now - lastFrame;
+      if (elapsed < LOGIC_INTERVAL_MS) return;
+      const dt = Math.min(elapsed, 100); // clamp — a tab-switch/minimize gap shouldn't jump the drift
       lastFrame = now;
 
       const cam = cameraRef.current;
@@ -225,8 +253,9 @@ export function ConstellationBg() {
         const dispY = wrap(star.y - cam.y, VIRTUAL_H);
         const off = fieldOffsetsRef.current[i];
         applyPush(off, dispX, dispY, speed);
-        el.setAttribute("cx", String(dispX + off.x));
-        el.setAttribute("cy", String(dispY + off.y));
+        // Delta relativo ao cx/cy-base já declarado no JSX (star.x/star.y)
+        // — ver comentário de LOGIC_INTERVAL_MS acima.
+        el.style.transform = `translate(${dispX + off.x - star.x}px, ${dispY + off.y - star.y}px)`;
       });
 
       CLUSTER_INSTANCES.forEach((cluster, ci) => {
@@ -242,16 +271,15 @@ export function ConstellationBg() {
           const fy = dispY + off.y;
           pts.push([fx, fy]);
           const el = clusterPointElsRef.current[ci]?.[pi];
-          if (el) {
-            el.setAttribute("cx", String(fx));
-            el.setAttribute("cy", String(fy));
-          }
+          // Delta relativo ao cx/cy-base já declarado no JSX (bx/by) — ver
+          // comentário de LOGIC_INTERVAL_MS acima. A polyline continua via
+          // atributo `points` (poucos elementos, cada vértice desloca
+          // independente — não representável como um único transform).
+          if (el) el.style.transform = `translate(${fx - bx}px, ${fy - by}px)`;
         });
         const line = clusterLineElsRef.current[ci];
         if (line) line.setAttribute("points", pts.map(([x, y]) => `${x},${y}`).join(" "));
       });
-
-      raf = requestAnimationFrame(frame);
     }
 
     function start() {

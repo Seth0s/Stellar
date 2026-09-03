@@ -63,14 +63,24 @@ export function registerUpdater(win: BrowserWindow) {
       await autoUpdater.checkForUpdates();
       return { checked: true };
     } catch (err) {
-      // Achado ao vivo (2026-09-02): antes disso o erro só ia pro
-      // `console.warn` do processo main — invisível pra quem roda o
-      // pacote instalado (não abre por terminal), então uma falha de
-      // rede/rate-limit da API do GitHub nunca aparecia em lugar nenhum
-      // pro usuário. Agora a mensagem volta pro renderer pra virar
-      // estado visível (`useUpdateStatus`'s `checkError`).
-      const message = err instanceof Error ? err.message : String(err);
       console.warn("[updater] check failed:", err);
+      // Achado ao vivo (2026-09-03): repo de publish (`Seth0s/Stellar`) é
+      // privado por decisão do usuário — toda checagem sem token dá 404
+      // no feed `releases.atom`, sempre, não é uma falha transitória.
+      // electron-updater devolve isso como `HttpError` (statusCode 404)
+      // com uma mensagem que embute o corpo/headers crus da resposta e um
+      // texto genérico de "confira seu token de autenticação" — enganoso
+      // aqui (não existe token nenhum embutido no app pra conferir) e
+      // feio o bastante pra assustar quem só está usando o app. Tratado
+      // como "sem checagem disponível" (mesmo formato de sucesso sem
+      // update, sem `error`) em vez de virar `checkError` visível — repo
+      // privado não é um estado de erro pro usuário, é a configuração
+      // atual. Qualquer OUTRA falha (rede, rate-limit, etc.) continua
+      // surfaceando normalmente.
+      if (err instanceof Error && "statusCode" in err && (err as { statusCode?: number }).statusCode === 404) {
+        return { checked: false };
+      }
+      const message = err instanceof Error ? err.message : String(err);
       return { checked: false, error: message };
     }
   });
