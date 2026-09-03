@@ -2,8 +2,9 @@
 
 Referência rápida da forma atual do sistema — **não é histórico**. O
 porquê de cada decisão (o que foi tentado, o que quebrou, o que foi
-verificado ao vivo) vive em `AGENTS.md`, em ordem cronológica; este
-arquivo existe pra não precisar ler ~1800 linhas de changelog só pra
+verificado ao vivo) vive em `docs/HISTORY.md`, em ordem cronológica
+(`AGENTS.md` ficou só com diretrizes ativas depois da migração); este
+arquivo existe pra não precisar ler milhares de linhas de changelog só pra
 entender "o que existe hoje e onde". Atualize-o quando a FORMA do sistema
 mudar (novo processo, novo canal IPC, novo tipo de card) — não precisa
 tocar a cada feature pequena que só muda comportamento dentro de uma peça
@@ -22,7 +23,7 @@ tem N boards; cada board tem N cards + conectores entre eles.
 | Processo | Onde vive | Responsabilidade |
 |---|---|---|
 | **main** | `src/main/` | Dono de todo estado real: SQLite (`store.ts`), PTYs (`pty-registry.ts`), `WebContentsView`s de navegador (`browser-registry.ts`), o socket Unix do `acbridge` (`message-bus.ts`), o servidor HTTP+WS do controle remoto (`remote-server.ts`), a sessão D-Bus do portal (`remote-input.ts`), a janela (`index.ts`, orquestra tudo). |
-| **preload** | `src/preload/index.ts` | Única ponte — `contextBridge.exposeInMainWorld` por domínio (`pty`, `store`, `fs`, `git`, `browser`, `ai`, `winControls`, `snapshot`, `remoteInput`, `remote`). Cada objeto exportado tem um tipo `*Api` espelhado em `src/renderer/src/env.d.ts`. |
+| **preload** | `src/preload/index.ts` | Única ponte — `contextBridge.exposeInMainWorld` por domínio (`pty`, `clipboardImage`, `store`, `fs`, `git`, `browser`, `spawn`, `ai`, `winControls`, `snapshot`, `readCard`, `sticky`, `remoteInput`, `remote`, `updater`, `agents`, `secrets`, `chat`, `canvasExport`, `boardAssets`, `system`). Cada objeto exportado tem um tipo `*Api` espelhado em `src/renderer/src/env.d.ts`. |
 | **renderer** | `src/renderer/src/` | React. `App.tsx` é o componente raiz — dono do estado de `cards`/`world` (pan/zoom)/seleção/conectores, e de toda chamada `window.*` pro preload. |
 
 Regra de ouro deste projeto: **nunca assumir "deve funcionar" sem rodar**
@@ -47,6 +48,21 @@ Convenção de nome: `domínio:ação`. Handlers reais em
 | `snapshot` | `onRectRequest`/`replyRect` (evento, não invoke) | `acbridge snapshot` — só o renderer sabe o transform de mundo (pan/zoom) ao vivo, então main pede pra ele resolver cardId/rect em pixels de tela antes de `capturePage()`. |
 | `remoteInput` | `ensure`, `move`, `button`, `scroll`, `keysym` | Sessão D-Bus do portal `org.freedesktop.portal.RemoteDesktop` (`remote-input.ts`) — controle humano de uma janela externa (`RemoteWindowCard.tsx`). Singleton de app, não por card. |
 | `remote` | `pairing`, `revoke`, `connection-count` | Servidor de controle remoto mobile (`remote-server.ts`) — QR/token/contagem de conexões (`RemotePairingModal.tsx`). |
+| `clipboardImage` | `save`, `testWriteImage`, `saveAttachmentImage`, `readAttachmentImage` | Imagem colada vira arquivo real (paste de screenshot em qualquer terminal, anexo de imagem no Chatbox) — `clipboard-image.ts`. |
+| `spawn` | evento `ask-agent`/`ask-card` (não invoke) | O modal de consentimento pra `spawn_agent`/`spawn_card` MCP mora no renderer — main manda o pedido, renderer resolve via `spawn:agent-resolve`/`spawn:card-resolve` (`ipcMain.handle`, ver `main/index.ts`). |
+| `readCard`/`sticky` | evento `request` (não invoke) | Mesmo padrão do `spawn` acima — `read_card`/`write_sticky` MCP pedem o conteúdo ao renderer (scrollback de terminal, texto de sticky) via evento, resolvidos de volta por `ipcMain.handle`. |
+| `updater` | `check`, `install`, `testEmitAvailable` | Auto-updater via GitHub Releases (`updater.ts`) — nunca baixa/instala sem clique explícito (`UpdateBanner.tsx`). |
+| `agents` | `checkAvailability` | Checagem proativa de CLI de agente instalada por SO (`providers.ts`'s `checkAgentAvailability`) — badge no `Topbar.tsx`, não mais um aviso embutido no spawn de card. |
+| `secrets` | `hasKey`, `setKey`, `clearKey`, `isEncryptionAvailable`, `getBaseURL` | Chaves de API do Chatbox via `safeStorage` (`secrets.ts`) — nunca em texto puro no SQLite. |
+| `chat` | `send`, `cancel`, evento `token`/`done` | Streaming de token do Chatbox multi-provedor (Anthropic/Gemini/OpenAI), `chat.ts`. |
+| `canvasExport` | `captureRect` | Exportar um recorte do board pra PNG (`pdf-export.ts`/`export.ts`), mesma API `capturePage` do `snapshot` MCP. |
+| `boardAssets` | `saveBytes`, `copyFromPath` | Mídia colada/arrastada num board (imagem/PDF, `MediaCard.tsx`) — arquivo real em disco, não blob no SQLite. |
+| `system` | — (não é IPC — `os.homedir()` síncrono, exposto direto no preload) | Fallback de `cwd` padrão pra qualquer máquina (ver `App.tsx`'s `DEFAULT_CWD`). |
+
+Fora dessa lista: `debugBridge` (`debug:*`) é superfície só-de-teste
+(contagem de listener, forçar exceção não tratada) que `scripts/verify/`
+usa pra provar ausência de vazamento de memória/listener — nunca chamado
+por UI real.
 
 **Fora do IPC do Electron**: `acbridge` (script em `resources/bin/`,
 protocolo JSON-line sobre socket Unix, `message-bus.ts`) é como um
@@ -69,6 +85,8 @@ Union em `App.tsx` (`type Card = ...`). Cada kind tem seu componente em
 | `browser` | `BrowserCard.tsx` | `url`, `ownerCardId` | `url`→`cwd`, `ownerCardId`→`provider` |
 | `remote-window` | `RemoteWindowCard.tsx` | nada persistido (escolha de janela é ao vivo, via picker do SO a cada abertura) | campos base só |
 | `stroke` | `StrokeCard.tsx` | `points`, `color`, `width`, `style` | JSON em `cwd`, `color`→`provider` |
+| `chat` | `ChatCard.tsx` | `provider`, `model`, `systemPrompt`, `messages` (streaming multi-turno) | Campos próprios de `CardRow` |
+| `media` | `MediaCard.tsx` | `assetPath`, `mediaType` (`image`/`pdf`), `rotation`, `view` (zoom/pan interno) | `{assetPath,rotation,view}` JSON→`cwd`, `mediaType`→`provider` |
 
 `CardRow.kind` é `string` solto (não union no schema) — adicionar um novo
 kind não pede migração de banco, só as ~7-8 edições espalhadas em
@@ -80,18 +98,17 @@ deferido: um registro declarativo reduziria isso).
 - **`WebContentsView` sempre pinta por cima do DOM**, independente de
   z-index — é nativo, não CSS. `browser-registry.ts` faz
   raise/show/hide/bounds manualmente por isso.
-- **`capturePage()` não compõe `WebContentsView`** nesta máquina (GPU
-  desabilitada/renderização por software) — confirmado empiricamente, não
-  assumido. `acbridge snapshot` de um card de navegador sai com um
-  retângulo liso em vez do conteúdo real; todo o resto (DOM puro) sai
-  certo.
 - **`desktopCapturer.getSources()` não enumera janelas no Wayland** desta
   máquina sem a flag `WebRTCPipeWireCapturer` (ligada em `index.ts`) —
   sem ela, devolve 1 fonte genérica sem nome/thumbnail.
-- **GPU desabilitada** (`app.disableHardwareAcceleration()`) — driver
-  desta máquina crasha o processo de GPU. xterm cai pro renderer
-  canvas2d quando o addon WebGL falha (`useTerminal.ts`, `try/catch`
-  silencioso e esperado).
+- **GPU acelerada** (reabilitada 2026-08-26, ver `main/index.ts` — foi
+  desabilitada uma vez em 2026-08-25 por segfault do driver, reteste
+  posterior veio limpo e não regrediu desde então; confirmado ao vivo de
+  novo em 2026-09-03 via `nvidia-smi`, VRAM real alocada pro processo GPU
+  do Stellar). `useTerminal.ts` ainda tenta `@xterm/addon-webgl` com
+  fallback defensivo pro renderer canvas2d (`try/catch`) — não é mais o
+  caminho esperado nesta máquina, só proteção contra driver/combinação
+  de GPU que falhe a criação do contexto WebGL em outra máquina.
 - **`org.freedesktop.portal.RemoteDesktop`** (D-Bus/xdg-desktop-portal) é
   o mecanismo real por trás do controle de janela externa — sessão
   singleton de app, `Start()` é a única chamada que mostra diálogo nativo
