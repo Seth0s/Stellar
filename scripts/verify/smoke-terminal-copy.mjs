@@ -51,7 +51,7 @@ try {
   // has to happen AFTER focus, not before.
   const bodyCoords = JSON.parse(
     await page.evalJs(`
-      (() => { const r = document.querySelector('.terminal-card-body').getBoundingClientRect(); return JSON.stringify({x: r.x + 10, y: r.y + 10}); })()
+      (() => { const r = document.querySelector('[data-role="terminal-body"]').getBoundingClientRect(); return JSON.stringify({x: r.x + 10, y: r.y + 10}); })()
     `),
   );
   await page.click(bodyCoords.x, bodyCoords.y);

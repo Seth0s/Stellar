@@ -50,35 +50,35 @@ try {
   const deadline1 = Date.now() + 6000;
   let badgeText = null;
   while (Date.now() < deadline1) {
-    badgeText = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('.terminal-card-url-badge')?.textContent ?? null)`));
+    badgeText = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('[data-role="terminal-url-badge"]')?.textContent ?? null)`));
     if (badgeText === "2") break;
     await new Promise((r) => setTimeout(r, 200));
   }
   check("badge de links aparece no footer depois do bash imprimir 2 URLs", badgeText, "2");
   check(
     "o badge vive DENTRO do .card-foot (nunca mais uma tira absolute por cima do terminal)",
-    await page.evalJs(`!!document.querySelector('.terminal-card-url-badge')?.closest('.card-foot')`),
+    await page.evalJs(`!!document.querySelector('[data-role="terminal-url-badge"]')?.closest('.card-foot')`),
     true,
   );
   check("a classe antiga (overlay absolute) não existe mais no DOM", await page.evalJs(`!document.querySelector('.terminal-card-urls')`), true);
 
   const badgeCoords = JSON.parse(
-    await page.evalJs(`(() => { const b = document.querySelector('.terminal-card-url-badge'); const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x+r.width/2, y: r.y+r.height/2}); })()`),
+    await page.evalJs(`(() => { const b = document.querySelector('[data-role="terminal-url-badge"]'); const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x+r.width/2, y: r.y+r.height/2}); })()`),
   );
   await page.click(badgeCoords.x, badgeCoords.y);
   await new Promise((r) => setTimeout(r, 250));
-  check("popover abre com a lista completa de links", await page.evalJs(`document.querySelectorAll('.terminal-card-url-chip').length`), 2);
+  check("popover abre com a lista completa de links", await page.evalJs(`document.querySelectorAll('[data-role="terminal-url-chip"]').length`), 2);
 
   // Clique no chip = copiar pro clipboard, com feedback visual real (só
   // depois que navigator.clipboard.writeText de fato resolveu).
   const chipCoords = JSON.parse(
-    await page.evalJs(`(() => { const b = document.querySelector('.terminal-card-url-chip'); const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x+r.width/2, y: r.y+r.height/2}); })()`),
+    await page.evalJs(`(() => { const b = document.querySelector('[data-role="terminal-url-chip"]'); const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x+r.width/2, y: r.y+r.height/2}); })()`),
   );
   await page.click(chipCoords.x, chipCoords.y);
   const deadline2 = Date.now() + 3000;
   let copied = false;
   while (Date.now() < deadline2) {
-    copied = JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector('.terminal-card-url-chip.copied'))`));
+    copied = JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector('[data-role="terminal-url-chip"][data-copied="true"]'))`));
     if (copied) break;
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -88,7 +88,7 @@ try {
 
   // Botão "abrir" pede confirmação — ConfirmModal, não abertura direta.
   const openBtnCoords = JSON.parse(
-    await page.evalJs(`(() => { const b = document.querySelector('.terminal-card-url-open'); const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x+r.width/2, y: r.y+r.height/2}); })()`),
+    await page.evalJs(`(() => { const b = document.querySelector('[data-role="terminal-url-open"]'); const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x+r.width/2, y: r.y+r.height/2}); })()`),
   );
   const cardCountBefore = JSON.parse(
     await page.evalJs(`
@@ -130,7 +130,7 @@ try {
   await page.click(badgeCoords.x, badgeCoords.y);
   await new Promise((r) => setTimeout(r, 250));
   const openBtnCoordsAgain = JSON.parse(
-    await page.evalJs(`(() => { const b = document.querySelector('.terminal-card-url-open'); const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x+r.width/2, y: r.y+r.height/2}); })()`),
+    await page.evalJs(`(() => { const b = document.querySelector('[data-role="terminal-url-open"]'); const r = b.getBoundingClientRect(); return JSON.stringify({x: r.x+r.width/2, y: r.y+r.height/2}); })()`),
   );
   await page.click(openBtnCoordsAgain.x, openBtnCoordsAgain.y);
   await new Promise((r) => setTimeout(r, 250));
@@ -173,7 +173,7 @@ try {
   const dispatchResultImage = JSON.parse(
     await page.evalJs(`
       (() => {
-        const body = document.querySelector('.terminal-card-body');
+        const body = document.querySelector('[data-role="terminal-body"]');
         const dt = new DataTransfer();
         const file = new File([new Uint8Array([0])], 'paste.png', { type: 'image/png' });
         dt.items.add(file);
@@ -201,7 +201,7 @@ try {
   const dispatchResultText = JSON.parse(
     await page.evalJs(`
       (() => {
-        const body = document.querySelector('.terminal-card-body');
+        const body = document.querySelector('[data-role="terminal-body"]');
         const dt = new DataTransfer();
         dt.setData('text/plain', 'oi');
         const evt = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });

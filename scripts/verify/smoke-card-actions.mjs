@@ -26,7 +26,7 @@ try {
   const providers = JSON.parse(
     await page.evalJs(`
       (() => {
-        const cards = [...document.querySelectorAll('.terminal-card .card-tag')].map((t) => t.textContent.trim());
+        const cards = [...document.querySelectorAll('[data-kind="terminal"] .card-tag')].map((t) => t.textContent.trim());
         return JSON.stringify(cards);
       })()
     `),
@@ -43,7 +43,7 @@ try {
   const tagBefore = JSON.parse(
     await page.evalJs(`
       (() => {
-        const tag = document.querySelector('.terminal-card .card-tag');
+        const tag = document.querySelector('[data-kind="terminal"] .card-tag');
         const frame = tag.closest('.card-frame');
         const t = tag.getBoundingClientRect();
         const f = frame.getBoundingClientRect();
@@ -62,7 +62,7 @@ try {
   });
   await new Promise((r) => setTimeout(r, 300));
   const frameAfter = JSON.parse(
-    await page.evalJs(`JSON.stringify(document.querySelector('.terminal-card').closest('.card-frame').getBoundingClientRect())`),
+    await page.evalJs(`JSON.stringify(document.querySelector('[data-kind="terminal"]').closest('.card-frame').getBoundingClientRect())`),
   );
   check(
     "dragging from the card-tag pill itself actually moves the card (used to be blocked)",

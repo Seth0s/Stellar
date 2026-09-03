@@ -5,6 +5,7 @@ import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
+import styles from "./TerminalCard.module.css";
 
 export type { Rect };
 
@@ -285,7 +286,7 @@ function TerminalCardInner({
 
   return (
     <CardFrame
-      className="terminal-card"
+      className={styles.terminalCard}
       kind="terminal"
       rect={rect}
       zoom={zoom}
@@ -328,7 +329,7 @@ function TerminalCardInner({
               const metal = PROVIDER_GLYPH[providerId] ?? PROVIDER_GLYPH.bash;
               return (
                 <span
-                  className={`terminal-card-provider-glyph${metal.dark ? "" : " flat"}`}
+                  className={`${styles.terminalCardProviderGlyph}${metal.dark ? "" : ` ${styles.flat}`}`}
                   style={
                     {
                       "--m-mid": metal.mid,
@@ -345,7 +346,7 @@ function TerminalCardInner({
           </span>
           <span className="card-head-actions">
             <button
-              className={`terminal-card-bell${bellEnabled ? " on" : ""}`}
+              className={`${styles.terminalCardBell}${bellEnabled ? ` ${styles.on}` : ""}`}
               data-no-drag
               title={bellEnabled ? "Notificação ao concluir um turno: ligada" : "Notificação ao concluir um turno: desligada"}
               onPointerDown={(e) => e.stopPropagation()}
@@ -354,7 +355,6 @@ function TerminalCardInner({
               <Icon name="bell" size={12} />
             </button>
             <button
-              className="terminal-card-interrupt"
               title="Interromper o processo (Ctrl+C)"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={interrupt}
@@ -368,12 +368,13 @@ function TerminalCardInner({
         </>
       }
       footerContent={
-        <span className="terminal-card-foot-row">
-          <span className="terminal-card-foot-text">{footerParts.join(" · ")}</span>
+        <span className={styles.terminalCardFootRow}>
+          <span className={styles.terminalCardFootText}>{footerParts.join(" · ")}</span>
           {seenUrls.length > 0 && (
             <button
               ref={urlBadgeRef}
-              className="terminal-card-url-badge"
+              className={styles.terminalCardUrlBadge}
+              data-role="terminal-url-badge"
               title={`${seenUrls.length} link${seenUrls.length > 1 ? "s" : ""} vistos no output`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setUrlPopoverOpen((v) => !v)}
@@ -391,13 +392,18 @@ function TerminalCardInner({
        * `.card-frame` (nenhum inline style próprio precisa repetir isso).
        * `aria-hidden`: puramente decorativa, o status já acessível vive em
        * `.card-status-dot` acima. */}
-      <div className={`terminal-card-activity${isActive ? " on" : ""}`} aria-hidden="true">
-        <div className="terminal-card-activity-sweep" />
+      <div
+        className={`${styles.terminalCardActivity}${isActive ? ` ${styles.on}` : ""}`}
+        data-role="terminal-activity"
+        data-active={isActive ? "true" : undefined}
+        aria-hidden="true"
+      >
+        <div className={styles.terminalCardActivitySweep} />
       </div>
-      <div className="terminal-card-body" ref={containerRef} />
+      <div className={styles.terminalCardBody} data-role="terminal-body" ref={containerRef} />
       {showLoadingHint && (
-        <div className="terminal-card-loading" role="status">
-          <span className="terminal-card-loading-spinner" aria-hidden="true" />
+        <div className={styles.terminalCardLoading} data-role="terminal-loading" role="status">
+          <span className={styles.terminalCardLoadingSpinner} aria-hidden="true" />
           carregando sessão…
         </div>
       )}
@@ -407,15 +413,25 @@ function TerminalCardInner({
           proativa, no Topbar (useAgentAvailability.ts), antes de
           qualquer spawn — este erro fica só como o texto honesto do
           que aconteceu com ESTE card específico. */}
-      {spawnError !== null && <div className="terminal-card-exited">{spawnError}</div>}
-      {exitCode !== null && <div className="terminal-card-exited">processo encerrado ({exitCode})</div>}
-      <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className="terminal-card-url-popover thin-scroll">
+      {spawnError !== null && (
+        <div className={styles.terminalCardExited} data-role="terminal-exited">
+          {spawnError}
+        </div>
+      )}
+      {exitCode !== null && (
+        <div className={styles.terminalCardExited} data-role="terminal-exited">
+          processo encerrado ({exitCode})
+        </div>
+      )}
+      <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className={`${styles.terminalCardUrlPopover} thin-scroll`}>
         {[...seenUrls].reverse().map((url) => {
           const feedback = copyFeedback?.url === url ? copyFeedback : null;
           return (
-            <div key={url} className="terminal-card-url-row">
+            <div key={url} className={styles.terminalCardUrlRow}>
               <button
-                className={`terminal-card-url-chip${feedback ? (feedback.ok ? " copied" : " copy-error") : ""}`}
+                className={`${styles.terminalCardUrlChip}${feedback ? (feedback.ok ? ` ${styles.copied}` : ` ${styles.copyError}`) : ""}`}
+                data-role="terminal-url-chip"
+                data-copied={feedback?.ok ? "true" : undefined}
                 title={url}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => copyUrl(url)}
@@ -433,7 +449,8 @@ function TerminalCardInner({
                 )}
               </button>
               <button
-                className="terminal-card-url-open"
+                className={styles.terminalCardUrlOpen}
+                data-role="terminal-url-open"
                 title="Abrir no navegador interno (pede confirmação)"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => onOpenUrl(url)}

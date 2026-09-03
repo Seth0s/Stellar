@@ -105,19 +105,19 @@ try {
   await page.evalJs(`window.pty.write(${JSON.stringify(bashCardId)}, ${JSON.stringify(`echo "(http://127.0.0.1:5175)"\r`)})`);
   await new Promise((r) => setTimeout(r, 1000));
 
-  const badgeCoords = await elCenter(page, ".terminal-card-url-badge");
+  const badgeCoords = await elCenter(page, '[data-role="terminal-url-badge"]');
   check("badge de URLs vistas apareceu", badgeCoords !== null, true);
   await page.click(badgeCoords.x, badgeCoords.y);
   await new Promise((r) => setTimeout(r, 250));
 
   const chipTitles = JSON.parse(
-    await page.evalJs(`JSON.stringify([...document.querySelectorAll('.terminal-card-url-chip')].map((b) => b.title))`),
+    await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-role="terminal-url-chip"]')].map((b) => b.title))`),
   );
   check("URL real capturada SEM o ')' de embrulho vazando junto", chipTitles.includes("http://127.0.0.1:5175"), true);
   check("nenhum chip com o ')' indevido no fim", chipTitles.some((t) => t.endsWith(")")), false);
 
   // --- achado 2: 1º clique cria um browser card novo, já dentro da vista ---
-  const openBtnCoords = await elCenter(page, ".terminal-card-url-open");
+  const openBtnCoords = await elCenter(page, '[data-role="terminal-url-open"]');
   check("ícone de abrir no navegador encontrado", openBtnCoords !== null, true);
   await page.click(openBtnCoords.x, openBtnCoords.y);
   await new Promise((r) => setTimeout(r, 300));
@@ -164,10 +164,10 @@ try {
   // --- achado 2 de verdade: reabrir o MESMO link reusa o card (sem dono)
   // agora fora da vista — antes da correção, isso navegava/raise()ava sem
   // trazer a câmera de volta, indistinguível de "não abriu nada" ---
-  const badgeCoords2 = await elCenter(page, ".terminal-card-url-badge");
+  const badgeCoords2 = await elCenter(page, '[data-role="terminal-url-badge"]');
   await page.click(badgeCoords2.x, badgeCoords2.y);
   await new Promise((r) => setTimeout(r, 250));
-  const openBtnCoords2 = await elCenter(page, ".terminal-card-url-open");
+  const openBtnCoords2 = await elCenter(page, '[data-role="terminal-url-open"]');
   await page.click(openBtnCoords2.x, openBtnCoords2.y);
   await new Promise((r) => setTimeout(r, 300));
   const confirmCoords2 = JSON.parse(

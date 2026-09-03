@@ -138,7 +138,7 @@ try {
   await page.click(criarBtn.x, criarBtn.y);
   await new Promise((r) => setTimeout(r, 1000));
 
-  const spawnErrorText = await page.evalJs(`document.querySelector('.terminal-card-exited')?.textContent`);
+  const spawnErrorText = await page.evalJs(`document.querySelector('[data-role="terminal-exited"]')?.textContent`);
   check(
     "criar um terminal com provider antigravity (binário ausente nesta máquina) falha de forma honesta, sem crash",
     typeof spawnErrorText === "string" && spawnErrorText.length > 0,
@@ -149,7 +149,7 @@ try {
   // real, resolve ok com um cardId (a falha de binário é DENTRO do card,
   // não uma rejeição da própria chamada MCP — mesmo comportamento de
   // qualquer provider ausente hoje) ----
-  const cardsBefore = await page.evalJs(`document.querySelectorAll('.terminal-card').length`);
+  const cardsBefore = await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`);
   const bashCardId = JSON.parse(
     await page.evalJs(`
       (async () => {
@@ -165,7 +165,7 @@ try {
   await clickModalButton(page, "Permitir");
   const spawnPayload = JSON.parse((await spawnPromise).content[0].text);
   check("spawn_agent MCP aceita provider antigravity e resolve ok com um cardId", spawnPayload.ok && typeof spawnPayload.cardId === "string", true);
-  const cardsAfter = await page.evalJs(`document.querySelectorAll('.terminal-card').length`);
+  const cardsAfter = await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`);
   check("um novo terminal card real existe depois do spawn_agent(antigravity) aprovado", cardsAfter, cardsBefore + 1);
 
   page.close();

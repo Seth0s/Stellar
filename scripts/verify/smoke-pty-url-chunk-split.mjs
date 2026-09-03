@@ -104,7 +104,7 @@ try {
   const badgeCoords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.terminal-card-url-badge');
+        const b = document.querySelector('[data-role="terminal-url-badge"]');
         if (!b) return JSON.stringify(null);
         const r = b.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
@@ -116,7 +116,7 @@ try {
     await page.click(badgeCoords.x, badgeCoords.y);
     await new Promise((r) => setTimeout(r, 200));
     const chipTitles = JSON.parse(
-      await page.evalJs(`JSON.stringify([...document.querySelectorAll('.terminal-card-url-chip')].map((b) => b.title))`),
+      await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-role="terminal-url-chip"]')].map((b) => b.title))`),
     );
     check("the real DOM chip shows the exact, complete URL", chipTitles.includes(LONG_URL), true);
   }

@@ -63,14 +63,14 @@ try {
   // atividade genuína de spawn ainda dentro do debounce, não um bug.
   await delay(1200);
   const activityOffAtStart = await page.evalJs(`
-    (() => !document.querySelector('.terminal-card-activity')?.classList.contains('on'))()
+    (() => document.querySelector('[data-role="terminal-activity"]')?.dataset.active !== "true")()
   `);
   check("barra de atividade começa desligada (idle)", activityOffAtStart, true);
 
   await page.evalJs(`window.pty.write(${JSON.stringify(cardId)}, ${JSON.stringify("echo terminal-activity-proof\n")})`);
   await delay(250);
   const activityOnAfterWrite = await page.evalJs(`
-    (() => !!document.querySelector('.terminal-card-activity')?.classList.contains('on'))()
+    (() => document.querySelector('[data-role="terminal-activity"]')?.dataset.active === "true")()
   `);
   check("barra de atividade liga com bytes reais chegando do PTY (echo real, não simulado)", activityOnAfterWrite, true);
 
@@ -78,7 +78,7 @@ try {
   // nenhum byte novo (o echo já terminou de imprimir bem antes).
   await delay(1400);
   const activityOffAfterIdle = await page.evalJs(`
-    (() => !document.querySelector('.terminal-card-activity')?.classList.contains('on'))()
+    (() => document.querySelector('[data-role="terminal-activity"]')?.dataset.active !== "true")()
   `);
   check("...e desliga sozinha depois do silêncio (debounce real, não travada em 'on')", activityOffAfterIdle, true);
 

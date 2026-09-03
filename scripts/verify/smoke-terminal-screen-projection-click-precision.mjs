@@ -71,8 +71,8 @@ try {
   await bootIntoFreshSession(page);
   await new Promise((r) => setTimeout(r, 500));
 
-  check("terminal card vive em .cards-layer (migrado)", await page.evalJs(`!!document.querySelector('.cards-layer .terminal-card')`), true);
-  check("terminal card NÃO vive mais em .world", await page.evalJs(`!!document.querySelector('.world .terminal-card')`), false);
+  check("terminal card vive em .cards-layer (migrado)", await page.evalJs(`!!document.querySelector('.cards-layer [data-kind="terminal"]')`), true);
+  check("terminal card NÃO vive mais em .world", await page.evalJs(`!!document.querySelector('.world [data-kind="terminal"]')`), false);
 
   const cardId = JSON.parse(
     await page.evalJs(`
@@ -95,13 +95,13 @@ try {
   // um `store.upsert()` direto daqui de fora NÃO move o card renderizado
   // (o estado `cards` em memória do App.tsx não reage a uma escrita de
   // DB fora de banda; só o próprio fluxo de drag real do app faz isso).
-  const resizeHandle = await centerOf(page, ".terminal-card .card-resize-se");
+  const resizeHandle = await centerOf(page, '[data-kind="terminal"] .card-resize-se');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: resizeHandle.x, y: resizeHandle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: resizeHandle.x - 360, y: resizeHandle.y - 260, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: resizeHandle.x - 360, y: resizeHandle.y - 260, button: "left", clickCount: 1, pointerType: "mouse" });
   await new Promise((r) => setTimeout(r, 300));
 
-  const cardHead = await centerOf(page, ".terminal-card .card-head");
+  const cardHead = await centerOf(page, '[data-kind="terminal"] .card-head');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: cardHead.x, y: cardHead.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cardHead.x + 30, y: cardHead.y + 200, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: cardHead.x + 30, y: cardHead.y + 200, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -152,7 +152,7 @@ try {
     const geo = JSON.parse(
       await page.evalJs(`
         (() => {
-          const r = document.querySelector('.terminal-card-body').getBoundingClientRect();
+          const r = document.querySelector('[data-role="terminal-body"]').getBoundingClientRect();
           return JSON.stringify({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, innerWidth: window.innerWidth, innerHeight: window.innerHeight });
         })()
       `),

@@ -92,18 +92,18 @@ try {
   // confirmation, not close immediately.
   // The terminal card header has two buttons (^C interrupt, then close) —
   // close is the last one, not the first.
-  await page.evalJs(`document.querySelector(".terminal-card .card-head-actions button:last-child")?.click()`);
+  await page.evalJs(`document.querySelector('[data-kind="terminal"] .card-head-actions button:last-child')?.click()`);
   await new Promise((r) => setTimeout(r, 300));
   check("confirm modal appeared for live terminal", await page.evalJs(`!!document.querySelector(".modal")`), true);
   check(
     "terminal card still present while confirm is open",
-    await page.evalJs(`document.querySelectorAll(".terminal-card").length`),
+    await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`),
     1,
   );
 
   await page.evalJs(`[...document.querySelectorAll(".modal-actions button")].find(b => b.textContent.includes("Fechar"))?.click()`);
   await new Promise((r) => setTimeout(r, 500));
-  check("terminal card removed after confirming close", await page.evalJs(`document.querySelectorAll(".terminal-card").length`), 0);
+  check("terminal card removed after confirming close", await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`), 0);
 
   page.close();
 } finally {

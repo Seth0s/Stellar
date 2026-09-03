@@ -176,7 +176,7 @@ try {
   const spawnAgentPayload = JSON.parse((await spawnAgentPromise).content[0].text);
   check("spawn_agent MCP call resolves ok with a cardId", spawnAgentPayload.ok && typeof spawnAgentPayload.cardId === "string", true);
   await new Promise((r) => setTimeout(r, 500));
-  check("a second real terminal card exists after the allowed spawn_agent", await page.evalJs(`document.querySelectorAll('.terminal-card').length`), 2);
+  check("a second real terminal card exists after the allowed spawn_agent", await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`), 2);
 
   // spawn_card, denied — must NOT create anything and must report the denial.
   // Requester here is the SECOND bash card (spawnAgentPayload.cardId), not

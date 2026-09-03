@@ -37,7 +37,7 @@ try {
   check("topbar rendered once a session exists", await page.evalJs(`!!document.querySelector(".topbar")`), true);
   check(
     "bootIntoFreshSession's spawned bash terminal is present",
-    await page.evalJs(`document.querySelectorAll(".terminal-card").length`),
+    await page.evalJs(`document.querySelectorAll('[data-kind="terminal"]').length`),
     1,
   );
   check("no uncaught exceptions on boot", errors, (arr) => arr.length === 0);

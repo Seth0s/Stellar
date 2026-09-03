@@ -29,7 +29,7 @@ try {
   // chega bem antes dos 1200ms de debounce) — o badge nunca deve aparecer.
   let sawBadge = false;
   for (let i = 0; i < 10; i++) {
-    const has = JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector('.terminal-card-loading'))`));
+    const has = JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector('[data-role="terminal-loading"]'))`));
     if (has) sawBadge = true;
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -39,7 +39,7 @@ try {
   // confirma que não é só "ainda não deu tempo de aparecer".
   await new Promise((r) => setTimeout(r, 800));
   const badgeAfterDebounceWindow = JSON.parse(
-    await page.evalJs(`JSON.stringify(!!document.querySelector('.terminal-card-loading'))`),
+    await page.evalJs(`JSON.stringify(!!document.querySelector('[data-role="terminal-loading"]'))`),
   );
   check("...e continua ausente depois de passar a janela inteira de debounce", badgeAfterDebounceWindow, false);
 
