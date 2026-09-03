@@ -23,7 +23,7 @@ try {
   }
   await spawnSticky();
   await spawnSticky();
-  check("two sticky cards spawned", await page.evalJs(`document.querySelectorAll(".sticky-card").length`), 2);
+  check("two sticky cards spawned", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 2);
 
   // The two spawn near-fully overlapping (centeredSlot's 36px stagger is
   // tiny next to an 860x660 card — DESIGN-BACKLOG.md item 12, achado 3 —
@@ -47,7 +47,7 @@ try {
   const secondHead = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelectorAll(".sticky-card .card-head")[1];
+        const el = document.querySelectorAll('[data-kind="sticky"] .card-head')[1];
         const r = el.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
       })()
@@ -66,7 +66,7 @@ try {
 
   const [headA, headB] = JSON.parse(
     await page.evalJs(`
-      JSON.stringify([...document.querySelectorAll(".sticky-card .card-head")].map(el => {
+      JSON.stringify([...document.querySelectorAll('[data-kind="sticky"] .card-head')].map(el => {
         const r = el.getBoundingClientRect();
         return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
       }))

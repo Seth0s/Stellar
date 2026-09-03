@@ -1,0 +1,82 @@
+/* Colocalização de CSS (2026-09-03), terceiro componente migrado.
+ * `.stickyCard` sobrescreve só o border-left (faixa de cor por
+ * categoria) por cima do `.card-base` global (CardFrame's `baseStyle`,
+ * default true aqui) -- usa `:global(.card-base)` como parte do próprio
+ * seletor composto (não dois seletores separados) pra especificidade
+ * (0,2,0) vencer `.card-base` (0,1,0) garantido, sem depender de ordem
+ * de import no bundle. */
+
+.stickyCard:global(.card-base) {
+  border-left: 3px solid var(--accent);
+}
+
+.stickyTextarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  /* Pedido ao vivo (2026-08-28): real pre-existing contrast bug caught
+     live — `--on-accent` (#04141c, near-black) is meant for text on a
+     *solid accent-colored* fill elsewhere in the app; this textarea's
+     own background is `STICKY_BG` (StickyCard.tsx, always dark), not the
+     accent. Near-black text on that dark background computed to
+     rgb(4,20,28) on rgb(74,69,32) — essentially unreadable. `--text`
+     (the app's real light body-text color) is legible against every one
+     of the 4 dark STICKY_BG tints. */
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  padding: 10px;
+}
+
+/* Preview renderizado (Markdown.tsx's `.md-content`) — mesmo fundo/padding
+   do `.sticky-textarea` acima, cursor de texto convida a clicar pra
+   editar (StickyCardInner's onClick). */
+.stickyPreview {
+  flex: 1;
+  overflow: auto;
+  padding: 10px;
+  cursor: text;
+}
+.stickyPreview.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* Checklist GFM (`- [ ]`/`- [x]`) — marked renderiza `<input disabled>`;
+   StickyCardInner remove o `disabled` via MutationObserver e liga cada
+   um a uma linha real do markdown por posição. Risco em cursor:pointer +
+   opacidade/riscado no item concluído dá o "widget de tarefa" pedido,
+   sem HTML livre — só o mesmo motor Markdown sanitizado de sempre. */
+/* input/li são seletores de elemento, não de classe -- CSS Modules só
+   hasheia tokens `.classe`, então não precisam de :global() aqui. */
+.stickyPreview input[type="checkbox"] {
+  cursor: pointer;
+  margin-right: 6px;
+  accent-color: var(--accent);
+}
+.stickyPreview li:has(> input[type="checkbox"]:checked) {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* Barra de progresso animada (X/Y concluído) — só aparece quando a nota
+   tem pelo menos 1 item de checklist (StickyCardInner's `totalCount`).
+   `width` anima via transition ao marcar/desmarcar um item. */
+.stickyProgress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface);
+  overflow: hidden;
+  flex-shrink: 0;
+  margin: 0 10px;
+}
+.stickyProgressFill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}

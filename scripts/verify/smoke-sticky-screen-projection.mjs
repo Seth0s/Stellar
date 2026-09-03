@@ -104,7 +104,7 @@ async function stickyRealRect(page) {
   return JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('.sticky-card');
+        const el = document.querySelector('[data-kind="sticky"]');
         if (!el) return JSON.stringify(null);
         const r = el.getBoundingClientRect();
         return JSON.stringify({ x: r.x, y: r.y, w: r.width, h: r.height });
@@ -128,11 +128,11 @@ try {
   const stickyBtn = await centerOf(page, '.rail-btn[title="Nova nota adesiva"]');
   await page.click(stickyBtn.x, stickyBtn.y);
   await new Promise((r) => setTimeout(r, 500));
-  check("sticky card real criado", Number(await page.evalJs(`document.querySelectorAll('.sticky-card').length`)), 1);
+  check("sticky card real criado", Number(await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`)), 1);
 
   // --- DOM real: dentro de .cards-layer, NÃO dentro de .world ---
-  const inCardsLayer = await page.evalJs(`!!document.querySelector('.cards-layer .sticky-card')`);
-  const inWorld = await page.evalJs(`!!document.querySelector('.world .sticky-card')`);
+  const inCardsLayer = await page.evalJs(`!!document.querySelector('.cards-layer [data-kind="sticky"]')`);
+  const inWorld = await page.evalJs(`!!document.querySelector('.world [data-kind="sticky"]')`);
   check("sticky card real vive em .cards-layer (migrado)", inCardsLayer, true);
   check("sticky card real NÃO vive mais em .world", inWorld, false);
 
@@ -193,7 +193,7 @@ try {
     const fill = JSON.parse(
       await page.evalJs(`
         (() => {
-          const ta = document.querySelector('.sticky-card .sticky-textarea');
+          const ta = document.querySelector('[data-kind="sticky"] [data-role="sticky-textarea"]');
           const frame = ta.closest('.card-frame');
           const a = ta.getBoundingClientRect();
           const f = frame.getBoundingClientRect();
@@ -213,7 +213,7 @@ try {
 
   // --- drag real ---
   const beforeDrag = await stickyStoredRect();
-  const header = await centerOf(page, ".sticky-card .card-head");
+  const header = await centerOf(page, '[data-kind="sticky"] .card-head');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: header.x, y: header.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: header.x + 80, y: header.y + 60, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: header.x + 80, y: header.y + 60, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -234,7 +234,7 @@ try {
   const beforeResize = await stickyStoredRect();
   // 2026-09-02: o grip visual `.card-resize` foi removido — `.card-resize-se`
   // é a zona invisível de hit-test que ocupa o mesmo canto.
-  const handle = await centerOf(page, ".sticky-card .card-resize-se");
+  const handle = await centerOf(page, '[data-kind="sticky"] .card-resize-se');
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: handle.x + 50, y: handle.y + 40, button: "left", pointerType: "mouse" });
   await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x + 50, y: handle.y + 40, button: "left", clickCount: 1, pointerType: "mouse" });
@@ -250,10 +250,10 @@ try {
   // Nota ganhou um 2º botão no header (toggle editar/preview,
   // 2026-09-02) — mesma convenção de ChatCard/BrowserCard agora:
   // ambos vivem em `.card-head-actions`, close é sempre o último.
-  const closeBtn = await centerOf(page, ".sticky-card .card-head-actions button:last-child");
+  const closeBtn = await centerOf(page, '[data-kind="sticky"] .card-head-actions button:last-child');
   await page.click(closeBtn.x, closeBtn.y);
   await new Promise((r) => setTimeout(r, 400));
-  const cardCountAfterClose = await page.evalJs(`document.querySelectorAll('.sticky-card').length`);
+  const cardCountAfterClose = await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`);
   check("fechar real remove o sticky card de verdade (animação pop não trava)", cardCountAfterClose, 0);
 
   page.close();

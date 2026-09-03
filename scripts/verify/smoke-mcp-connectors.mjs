@@ -85,7 +85,7 @@ try {
   const secondHead = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelectorAll(".sticky-card .card-head")[1];
+        const el = document.querySelectorAll('[data-kind="sticky"] .card-head')[1];
         const r = el.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
       })()
@@ -99,7 +99,7 @@ try {
 
   const [headA, headB] = JSON.parse(
     await page.evalJs(`
-      JSON.stringify([...document.querySelectorAll(".sticky-card .card-head")].map(el => {
+      JSON.stringify([...document.querySelectorAll('[data-kind="sticky"] .card-head')].map(el => {
         const r = el.getBoundingClientRect();
         return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
       }))

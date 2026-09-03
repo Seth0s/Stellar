@@ -4,6 +4,7 @@ import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
+import styles from "./StickyCard.module.css";
 
 export const STICKY_COLORS = ["yellow", "green", "blue", "pink"] as const;
 const STICKY_BG: Record<string, string> = {
@@ -219,7 +220,7 @@ function StickyCardInner({
 
   return (
     <CardFrame
-      className="sticky-card"
+      className={styles.stickyCard}
       kind="sticky"
       rect={rect}
       zoom={zoom}
@@ -293,14 +294,15 @@ function StickyCardInner({
       }
     >
       {totalCount > 0 && (
-        <div className="sticky-progress" title={`${doneCount}/${totalCount} concluído`}>
-          <div className="sticky-progress-fill" style={{ width: `${(doneCount / totalCount) * 100}%` }} />
+        <div className={styles.stickyProgress} title={`${doneCount}/${totalCount} concluído`}>
+          <div className={styles.stickyProgressFill} style={{ width: `${(doneCount / totalCount) * 100}%` }} />
         </div>
       )}
       {editing ? (
         <textarea
           ref={textareaRef}
-          className="sticky-textarea thin-scroll"
+          className={`${styles.stickyTextarea} thin-scroll`}
+          data-role="sticky-textarea"
           data-card-id={cardId}
           style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
           value={content}
@@ -313,7 +315,8 @@ function StickyCardInner({
       ) : (
         <div
           ref={previewRef}
-          className={`sticky-preview thin-scroll${content.trim().length === 0 ? " empty" : ""}`}
+          className={`${styles.stickyPreview} thin-scroll${content.trim().length === 0 ? ` ${styles.empty}` : ""}`}
+          data-role="sticky-preview"
           style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
           onClick={onPreviewClick}
         >
