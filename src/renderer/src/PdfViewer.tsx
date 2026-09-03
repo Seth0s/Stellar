@@ -4,6 +4,11 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 // Vite `?url` import — the worker script needs its own real URL, not
 // bundled inline (pdf.js spins it up as a genuine Worker).
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+// PdfViewer só existe como implementation detail de MediaCard (Suspense
+// child, nunca usado sozinho) — compartilha o módulo dele em vez de ter
+// um próprio, já que `.mediaPdfCanvas` é estilizada junto com o resto do
+// conteúdo de mídia (`.mediaContent img, .mediaPdfCanvas` no CSS).
+import styles from "./MediaCard.module.css";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -71,5 +76,5 @@ export function PdfViewer({
     };
   }, [page, docGen]);
 
-  return <canvas ref={canvasRef} className="media-pdf-canvas" />;
+  return <canvas ref={canvasRef} className={styles.mediaPdfCanvas} data-role="media-pdf-canvas" />;
 }

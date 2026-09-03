@@ -3,6 +3,7 @@ import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
+import styles from "./MediaCard.module.css";
 
 // Mesmo padrão de FilesCard.tsx's CodeEditor — pdf.js só carrega quando
 // um card de mídia tipo PDF realmente monta.
@@ -192,7 +193,7 @@ export function MediaCard({
     // ancestral de sempre) nem altera nenhuma medida.
     <div ref={rootRef} style={{ display: "contents" }}>
       <CardFrame
-        className="media-card"
+        className=""
         kind="media"
         rect={rect}
         zoom={zoom}
@@ -254,12 +255,12 @@ export function MediaCard({
         // modo chromeless de todo jeito).
         footerContent={
           mediaType === "pdf" ? (
-            <span className="media-pdf-nav">
-              <span className="media-filename">{filename}</span>
+            <span className={styles.mediaPdfNav} data-role="media-pdf-nav">
+              <span className={styles.mediaFilename}>{filename}</span>
               <button disabled={pdfPage <= 1} onClick={() => setPdfPage((p) => Math.max(1, p - 1))}>
                 <Icon name="chevronLeft" size={12} />
               </button>
-              <span className="media-pdf-page">
+              <span className={styles.mediaPdfPage}>
                 {pdfPage}/{pdfNumPages}
               </span>
               <button
@@ -272,9 +273,15 @@ export function MediaCard({
           ) : undefined
         }
       >
-        <div className="media-viewport" onPointerDown={onBodyPointerDown} onWheel={onBodyWheel}>
+        <div
+          className={styles.mediaViewport}
+          data-role="media-viewport"
+          onPointerDown={onBodyPointerDown}
+          onWheel={onBodyWheel}
+        >
           <div
-            className="media-content"
+            className={styles.mediaContent}
+            data-role="media-content"
             style={{
               transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom}) rotate(${rotation}deg)`,
             }}
@@ -282,7 +289,7 @@ export function MediaCard({
             {mediaType === "image" ? (
               <img src={assetUrl} draggable={false} alt={filename} />
             ) : (
-              <Suspense fallback={<div className="media-pdf-loading">carregando PDF…</div>}>
+              <Suspense fallback={<div className={styles.mediaPdfLoading}>carregando PDF…</div>}>
                 <PdfViewer url={assetUrl} page={pdfPage} onDocInfo={setPdfNumPages} />
               </Suspense>
             )}
@@ -293,7 +300,7 @@ export function MediaCard({
               chromeless trata qualquer pointerdown como início de arraste
               do card (ver o doc de `chromeless` em CardFrame.tsx). */}
           {mediaType === "image" && (
-            <div className={`media-toolbar${chromeOpen ? " visible" : ""}`} data-no-drag>
+            <div className={`${styles.mediaToolbar}${chromeOpen ? ` ${styles.visible}` : ""}`} data-no-drag>
               <button onClick={cycleRotation} title="Girar 90°">
                 <Icon name="rotate" size={14} />
               </button>

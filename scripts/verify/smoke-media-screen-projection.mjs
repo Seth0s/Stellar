@@ -81,9 +81,9 @@ try {
   `);
   await new Promise((r) => setTimeout(r, 800));
 
-  check("media card real criado (paste de imagem)", await page.evalJs(`!!document.querySelector('.media-card')`), true);
-  check("media card vive em .cards-layer (migrado)", await page.evalJs(`!!document.querySelector('.cards-layer .media-card')`), true);
-  check("media card NÃO vive mais em .world", await page.evalJs(`!!document.querySelector('.world .media-card')`), false);
+  check("media card real criado (paste de imagem)", await page.evalJs(`!!document.querySelector('[data-kind="media"]')`), true);
+  check("media card vive em .cards-layer (migrado)", await page.evalJs(`!!document.querySelector('.cards-layer [data-kind="media"]')`), true);
+  check("media card NÃO vive mais em .world", await page.evalJs(`!!document.querySelector('.world [data-kind="media"]')`), false);
 
   // Zoom interno da mídia (roda/pinça na imagem) continua usando o zoom
   // do CANVAS pra converter delta de mouse -- não algo recalculado pela
@@ -94,7 +94,7 @@ try {
   const body = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('.media-viewport');
+        const el = document.querySelector('[data-role="media-viewport"]');
         const r = el.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()
@@ -102,7 +102,7 @@ try {
   );
   await page.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: body.x, y: body.y, deltaX: 0, deltaY: -240 });
   await new Promise((r) => setTimeout(r, 200));
-  const transform = await page.evalJs(`document.querySelector('.media-content')?.style?.transform ?? ""`);
+  const transform = await page.evalJs(`document.querySelector('[data-role="media-content"]')?.style?.transform ?? ""`);
   check("wheel real sobre o corpo da imagem ainda muda o zoom interno (scale > 1)", /scale\(([\d.]+)\)/.exec(transform) ? Number(/scale\(([\d.]+)\)/.exec(transform)[1]) > 1 : false, true);
 
   page.close();
