@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
-import type { SpawnOpts } from "./providers";
+import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import {
   createEntry,
   deletePath,
@@ -976,6 +976,13 @@ function createWindow() {
     onAutoConnect: (fromCardId, toCardId, kind) => safeSend(win, "connector:auto", fromCardId, toCardId, kind),
   });
   ipcMain.handle("browser:get-page-text", (_e, id: string) => browserRegistry.getPageText(id));
+  // Achado ao vivo, 2026-09-03 — "aviso antes mesmo de abrir um agente":
+  // o Topbar consulta isto uma vez ao entrar num board, ANTES de qualquer
+  // spawn de card, pra avisar de cara quais CLIs faltam instalar (ver
+  // Topbar.tsx/useAgentAvailability.ts). Substitui o antigo aviso que só
+  // aparecia DEPOIS de tentar (e falhar) spawnar o card — quebrava o
+  // fluxo (removido de TerminalCard.tsx/useTerminal.ts).
+  ipcMain.handle("agents:check-availability", () => checkAgentAvailability());
   ipcMain.handle("spawn:agent-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>
     messageBus!.resolveSpawnAgent(requestId, result),
   );

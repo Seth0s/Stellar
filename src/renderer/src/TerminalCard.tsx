@@ -74,7 +74,6 @@ function TerminalCardInner({
   onConnectorStart,
   onSelectStart,
   onStatusChange,
-  onSuggestInstall,
   screenProjected,
   panX,
   panY,
@@ -118,9 +117,6 @@ function TerminalCardInner({
   /** Bubbles live status up for the session breadcrumb/list (item 1) — the
    * only place this app has real (not structural-proxy) agent status. */
   onStatusChange?: (status: "ok" | "error" | "exited") => void;
-  /** Item 57 ponto 13 — "binary not found" offers a pre-filled (never
-   * auto-run) install terminal instead of just a dead-end error string. */
-  onSuggestInstall?: (providerId: string, cwd: string, command: string) => void;
   /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
    * straight through, same pattern the other migrated kinds use.
    * Deliberately does NOT touch `useTerminal.ts`'s `correctZoomCoords` —
@@ -166,7 +162,7 @@ function TerminalCardInner({
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
     copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
   }
-  const { exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
+  const { exitCode, spawnError, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
     containerRef,
     id,
     providerId,
@@ -404,21 +400,13 @@ function TerminalCardInner({
           carregando sessão…
         </div>
       )}
-      {spawnError !== null && (
-        <div className="terminal-card-exited">
-          {spawnError}
-          {installHint && onSuggestInstall && (
-            <button
-              className="terminal-card-install-btn"
-              title={`Abre um terminal bash com o comando pré-preenchido — nada é executado sozinho, você confirma com Enter: ${installHint.command}`}
-              onClick={() => onSuggestInstall(installHint.providerId, cwd, installHint.command)}
-            >
-              <Icon name="terminal" size={12} />
-              instalar {installHint.providerId}
-            </button>
-          )}
-        </div>
-      )}
+      {/* Achado ao vivo, 2026-09-03 — o botão "instalar {provider}" que
+          vivia aqui (só aparecia DEPOIS de tentar e falhar o spawn)
+          quebrava o fluxo do usuário. Removido: a checagem agora é
+          proativa, no Topbar (useAgentAvailability.ts), antes de
+          qualquer spawn — este erro fica só como o texto honesto do
+          que aconteceu com ESTE card específico. */}
+      {spawnError !== null && <div className="terminal-card-exited">{spawnError}</div>}
       {exitCode !== null && <div className="terminal-card-exited">processo encerrado ({exitCode})</div>}
       <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className="terminal-card-url-popover thin-scroll">
         {[...seenUrls].reverse().map((url) => {
