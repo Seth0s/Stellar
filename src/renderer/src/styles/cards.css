@@ -1,6 +1,12 @@
 .card-frame {
   position: relative;
   font-family: var(--font-ui);
+  /* Fallback pro caminho não-projetado (`screenProjected` sempre true
+     hoje via App.tsx — nenhum card usa isto de fato ainda): sem
+     `.card-scale` como wrapper, os `cqw` de `.card-head`/`.card-foot`
+     caem pra este container em vez do viewport inteiro. */
+  container-type: inline-size;
+  container-name: card;
 }
 
 /* Multi-select highlight (item 4) — an outline on the outer (unclipped)
@@ -39,6 +45,15 @@
      embaixo. `flex: none` mantém o item exatamente no tamanho do `rect`,
      que é a premissa de toda a Trilha B. */
   flex: none;
+  /* Pendentes #188 — `.card-head`/`.card-foot` abaixo usavam px fixo pra
+     height/font-size: um resize (arrastar maior/menor) nunca os afetava,
+     só o zoom mudava a aparência deles (e só porque este elemento inteiro
+     é escalado por `transform`). `width`/`height` inline acima JÁ são o
+     `rect` em unidades de mundo, sem zoom — exatamente o eixo que se quer
+     acompanhar. Container query em vez de zoom: os filhos usam `cqw`
+     (abaixo) medido contra ESTA caixa, que só muda com resize de verdade. */
+  container-type: inline-size;
+  container-name: card;
 }
 
 /* Clips card-head + body content to the rounded card shape. Deliberately
@@ -76,7 +91,13 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 32px;
+  /* Pendentes #188 — antes 32px/13px fixos, iguais num card de 320px e
+     num de 2000px de largura. `cqw` mede contra `.card-scale`/`.card-frame`
+     (ver container-name: card acima) — a largura real do card em
+     unidades de mundo, sem zoom misturado junto. Faixa calibrada pra
+     bater ~32px/13px (a aparência de sempre) perto da largura padrão de
+     spawn (~700px de mundo); só cresce/encolhe visivelmente fora disso. */
+  height: clamp(28px, 4.6cqw, 48px);
   /* Both sides need >= --radius (10px) of clearance: .card-clip clips this
      whole row to the card's rounded corners (overflow:hidden;
      border-radius:inherit), so a button whose box reaches into the curved
@@ -86,7 +107,7 @@
      radius. */
   padding: 0 6px 0 10px;
   background: var(--panel);
-  font-size: 13px;
+  font-size: clamp(12px, 1.9cqw, 16px);
   color: var(--muted);
   cursor: grab;
   user-select: none;
@@ -302,7 +323,9 @@
      sob a área de acerto do resize (2026-09-02: o grip visual que ficava
      nesse canto foi removido — só a zona de hit-test invisível continua). */
   padding: 5px 18px 5px 12px;
-  font-size: 11px;
+  /* Pendentes #188 — mesma lógica do `.card-head` acima: 11px fixo não
+     acompanhava o resize do card. */
+  font-size: clamp(10px, 1.6cqw, 14px);
   color: var(--muted);
   border-top: 1px solid var(--border);
   background: var(--panel);

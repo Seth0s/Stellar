@@ -13,9 +13,22 @@ import { worldRectToScreen, type Rect } from "./board-model";
  * quais bordas se movem: "nw" move a de cima e a da esquerda. */
 type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 const RESIZE_DIRS: ResizeDir[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
-/** Mesmos mínimos que o punho único já aplicava. */
+/** Mesmos mínimos que o punho único já aplicava — usados como piso pra
+ * qualquer `kind` sem entrada própria em `KIND_MIN_SIZE` abaixo. */
 const MIN_CARD_W = 160;
 const MIN_CARD_H = 120;
+/** Pendentes #188 — um piso único pra todo `kind` deixava um terminal
+ * encolher até ilegível. Cards com conteúdo denso (texto/código, canvas
+ * de página real) ganham um piso maior; sticky/stroke (nota solta, forma
+ * livre) continuam no mínimo global. */
+const KIND_MIN_SIZE: Record<string, { w: number; h: number }> = {
+  terminal: { w: 320, h: 200 },
+  chat: { w: 280, h: 220 },
+  browser: { w: 320, h: 240 },
+  files: { w: 240, h: 180 },
+  changes: { w: 280, h: 200 },
+  "remote-window": { w: 320, h: 200 },
+};
 
 export function CardFrame({
   rect,
@@ -326,6 +339,7 @@ export function CardFrame({
     const north = dir.includes("n");
     const horizontal = dir.includes("e") || west;
     const vertical = dir.includes("s") || north;
+    const minSize = KIND_MIN_SIZE[kind] ?? { w: MIN_CARD_W, h: MIN_CARD_H };
 
     function onMove(ev: PointerEvent) {
       const dx = (ev.clientX - startX) / zoom;
@@ -346,17 +360,17 @@ export function CardFrame({
         } else {
           w = h * aspectRatio;
         }
-        if (w < MIN_CARD_W) {
-          w = MIN_CARD_W;
+        if (w < minSize.w) {
+          w = minSize.w;
           h = w / aspectRatio;
         }
-        if (h < MIN_CARD_H) {
-          h = MIN_CARD_H;
+        if (h < minSize.h) {
+          h = minSize.h;
           w = h * aspectRatio;
         }
       } else {
-        w = Math.max(MIN_CARD_W, w);
-        h = Math.max(MIN_CARD_H, h);
+        w = Math.max(minSize.w, w);
+        h = Math.max(minSize.h, h);
       }
 
       // Reancoragem: puxando pelo oeste/norte, é a borda oposta que fica

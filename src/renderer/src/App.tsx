@@ -974,6 +974,17 @@ export function App() {
     setOrder((prev) => [...prev, card.id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
     toast(`${CARD_LABEL[card.kind]} criado${card.kind === "sticky" ? "a" : ""}`);
+    // Pendentes #188 — every spawn path (rail, MCP spawn_card/spawn_agent,
+    // open_url's auto-connect, duplicate) funnels through here, so this is
+    // the one place that fixes "nasce no zoom atual do usuário" for all of
+    // them at once. A card born at, say, 30% zoom reads as illegibly tiny
+    // right when it's most useful to read. `setZoomAbs` anchors on the
+    // current viewport CENTER (same math the zoom-pill already uses), not
+    // on this new card's own rect — a full recenter-on-spawn would yank the
+    // view away from whatever the user is actually looking at, which is
+    // worse than leaving pan alone for a background/orchestrator-driven
+    // spawn the human isn't watching.
+    if (world.zoom !== 1) setZoomAbs(1);
   }
 
   /** Ctrl/Cmd+D (below) — clones the topmost card's full config (provider/
@@ -1304,6 +1315,11 @@ export function App() {
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
+    // Pendentes #188 — same fix as `addCard`'s, duplicated here since this
+    // path deliberately skips `addCard` (see its own comment above) and a
+    // browser card born from open_url is exactly the "hard to read at the
+    // user's current zoom" case the item calls out.
+    if (world.zoom !== 1) setZoomAbs(1);
     return id;
   }
 
