@@ -24,7 +24,8 @@
     "lint": "eslint .",
     "format": "prettier --write src",
     "format:check": "prettier --check src",
-    "verify": "npx tsc --noEmit && npm run build && for f in scripts/verify/smoke-*.mjs; do node \"$f\" || exit 1; done"
+    "test:unit": "vitest run",
+    "verify": "npx tsc --noEmit && npm run test:unit && npm run build && for f in scripts/verify/smoke-*.mjs; do node \"$f\" || exit 1; done"
   },
   "build": {
     "appId": "com.stellar.app",
