@@ -398,7 +398,6 @@ export function useTerminal(
     // running session. They're spawn-time-only options (see spawnOptsRef
     // above), not identity: only id/providerId/cwd changing means "this is
     // actually a different session, tear down and start over."
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, providerId, cwd]);
 
   // Effect 2: creates the xterm.js Terminal instance itself — cheap, no

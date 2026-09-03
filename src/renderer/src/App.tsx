@@ -731,7 +731,7 @@ export function App() {
     const offSnapshot = window.snapshot.onRectRequest((requestId, target) => {
       const vp = viewportRef.current?.getBoundingClientRect();
       const origin = vp ? { x: vp.x, y: vp.y } : { x: 0, y: 0 };
-      let worldRect: Rect | null = null;
+      let worldRect: Rect | null;
       if ("rect" in target) {
         worldRect = target.rect;
       } else {
