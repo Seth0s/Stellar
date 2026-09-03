@@ -77,7 +77,7 @@ try {
   const barCoords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const inp = document.querySelector('.browser-card-address input');
+        const inp = document.querySelector('[data-role="browser-address"] input');
         const r = inp.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
       })()
@@ -86,7 +86,7 @@ try {
   await page.click(barCoords.x, barCoords.y);
   await page.evalJs(`
     (() => {
-      const inp = document.querySelector('.browser-card-address input');
+      const inp = document.querySelector('[data-role="browser-address"] input');
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, 'https://example.com');
       inp.dispatchEvent(new Event('input', { bubbles: true }));

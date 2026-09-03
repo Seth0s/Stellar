@@ -63,7 +63,7 @@ try {
   // Mesmo teste pro canvas de um card de navegador.
   await spawnCard(page, "browser");
   await new Promise((r) => setTimeout(r, 600));
-  const browserResult = await dispatchF11On(page, ".browser-card canvas");
+  const browserResult = await dispatchF11On(page, '[data-kind="browser"] canvas');
   check("browser card canvas found and focused for the F11 dispatch", browserResult.ok, true);
   await new Promise((r) => setTimeout(r, 400));
   check(

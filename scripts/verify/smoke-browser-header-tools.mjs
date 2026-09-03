@@ -156,9 +156,9 @@ try {
   const expectedErrors = msgsForCard.filter((m) => m.level === "error").length;
   const expectedWarnings = msgsForCard.filter((m) => m.level === "warning").length;
   check("pelo menos os 2 erros + 1 aviso reais da fixture chegaram via IPC", expectedErrors >= 2 && expectedWarnings >= 1, true);
-  const badgeText = await page.evalJs(`document.querySelector('.browser-card-console-badge')?.textContent ?? null`);
+  const badgeText = await page.evalJs(`document.querySelector('[data-role="browser-console-badge"]')?.textContent ?? null`);
   check("badge de console reflete a contagem real recebida via IPC", badgeText, String(expectedErrors + expectedWarnings));
-  const badgeSeverity = await page.evalJs(`document.querySelector('.browser-card-console-badge')?.getAttribute('data-severity') ?? null`);
+  const badgeSeverity = await page.evalJs(`document.querySelector('[data-role="browser-console-badge"]')?.getAttribute('data-severity') ?? null`);
   check("severidade do badge é 'error' (tem >=1 erro real)", badgeSeverity, "error");
 
   // --- presets de viewport ---
@@ -174,13 +174,13 @@ try {
     );
   }
   async function openKebabAndClick(label) {
-    const kebab = await centerOf(page, '.browser-card-address button[title="Mais opções"]');
+    const kebab = await centerOf(page, '[data-role="browser-address"] button[title="Mais opções"]');
     await page.click(kebab.x, kebab.y);
     await new Promise((r) => setTimeout(r, 250));
     const btnCoords = JSON.parse(
       await page.evalJs(`
         (() => {
-          const b = [...document.querySelectorAll('.browser-card-menu button')].find((x) => x.textContent.trim().includes(${JSON.stringify(label)}));
+          const b = [...document.querySelectorAll('[data-role="browser-menu"] button')].find((x) => x.textContent.trim().includes(${JSON.stringify(label)}));
           if (!b) return JSON.stringify(null);
           const r = b.getBoundingClientRect();
           return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -242,7 +242,7 @@ try {
     await new Promise((r) => setTimeout(r, 200));
   }
 
-  const ownerBadge = await centerOf(page, ".browser-card-owner");
+  const ownerBadge = await centerOf(page, '[data-role="browser-owner"]');
   await page.click(ownerBadge.x, ownerBadge.y);
   await new Promise((r) => setTimeout(r, 500));
   const ownerFullyVisibleAfter = JSON.parse(

@@ -32,7 +32,7 @@ try {
   const initial = JSON.parse(
     await page.evalJs(`
       (() => {
-        const c = document.querySelector('.browser-card-body');
+        const c = document.querySelector('[data-role="browser-body"]');
         return JSON.stringify({ exists: !!c, w: c && c.width, h: c && c.height });
       })()
     `),
@@ -44,7 +44,7 @@ try {
   const barCoords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const inp = document.querySelector('.browser-card-address input');
+        const inp = document.querySelector('[data-role="browser-address"] input');
         const r = inp.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
       })()
@@ -53,7 +53,7 @@ try {
   await page.click(barCoords.x, barCoords.y);
   await page.evalJs(`
     (() => {
-      const inp = document.querySelector('.browser-card-address input');
+      const inp = document.querySelector('[data-role="browser-address"] input');
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, 'https://example.com');
       inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -66,7 +66,7 @@ try {
   const pixels = JSON.parse(
     await page.evalJs(`
       (() => {
-        const c = document.querySelector('.browser-card-body');
+        const c = document.querySelector('[data-role="browser-body"]');
         const ctx = c.getContext('2d');
         const data = ctx.getImageData(0, 0, c.width, c.height).data;
         let nonWhite = 0;
@@ -93,7 +93,7 @@ try {
   // DOM WheelEvent it's built from (fixed by negating it).
   await page.evalJs(`
     (() => {
-      const inp = document.querySelector('.browser-card-address input');
+      const inp = document.querySelector('[data-role="browser-address"] input');
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, 'https://duckduckgo.com/html/');
       inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -144,7 +144,7 @@ try {
   const canvasBox = JSON.parse(
     await page.evalJs(`
       (() => {
-        const c = document.querySelector('.browser-card-body');
+        const c = document.querySelector('[data-role="browser-body"]');
         const r = c.getBoundingClientRect();
         return JSON.stringify({ left: r.left, top: r.top, width: r.width, height: r.height, cw: c.width, ch: c.height });
       })()
@@ -181,7 +181,7 @@ try {
   await page.click(barCoords.x, barCoords.y);
   await page.evalJs(`
     (() => {
-      const inp = document.querySelector('.browser-card-address input');
+      const inp = document.querySelector('[data-role="browser-address"] input');
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, 'https://en.wikipedia.org/wiki/Electron_(software_framework)');
       inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -247,7 +247,7 @@ try {
   // silently cut off further input forwarding and, via the flex/intrinsic-
   // size bug below, could push the card's own header out of view.
   await page.evalJs(`
-    (() => { document.querySelector('.browser-card-body').focus(); })()
+    (() => { document.querySelector('[data-role="browser-body"]').focus(); })()
   `);
   await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "s", code: "KeyS", text: "s" });
   await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "s", code: "KeyS" });
@@ -255,7 +255,7 @@ try {
   const afterType = JSON.parse(
     await page.evalJs(`
       (() => {
-        const header = document.querySelector('.browser-card-address');
+        const header = document.querySelector('[data-role="browser-address"]');
         const r = header ? header.getBoundingClientRect() : null;
         const selectBtn = [...document.querySelectorAll('.rail-btn')].find((b) => b.title?.toLowerCase().includes('sele'));
         return JSON.stringify({
@@ -271,14 +271,14 @@ try {
   const closed = JSON.parse(
     await page.evalJs(`
       (() => {
-        const btn = [...document.querySelectorAll('.browser-card-address button')].pop();
+        const btn = [...document.querySelectorAll('[data-role="browser-address"] button')].pop();
         btn.click();
         return JSON.stringify({ ok: true });
       })()
     `),
   );
   await new Promise((r) => setTimeout(r, 500));
-  const gone = await page.evalJs(`JSON.stringify(!document.querySelector('.browser-card-body'))`);
+  const gone = await page.evalJs(`JSON.stringify(!document.querySelector('[data-role="browser-body"]'))`);
   check("browser card closes cleanly", JSON.parse(gone), true);
   void closed;
 

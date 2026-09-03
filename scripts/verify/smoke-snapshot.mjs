@@ -90,7 +90,7 @@ try {
   await new Promise((r) => setTimeout(r, 500));
   await page.evalJs(`
     (() => {
-      const inp = document.querySelector('.browser-card-address input');
+      const inp = document.querySelector('[data-role="browser-address"] input');
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, 'https://example.com');
       inp.dispatchEvent(new Event('input', { bubbles: true }));

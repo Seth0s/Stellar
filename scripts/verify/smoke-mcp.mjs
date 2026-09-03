@@ -156,7 +156,7 @@ try {
   // o id; ele só era descartado no caminho de volta.
   check("...devolvendo o id do card que abriu, não só ok:true", typeof openResult.cardId, "string");
   await new Promise((r) => setTimeout(r, 1200));
-  check("a real browser card exists after the allowed open_url", await page.evalJs(`document.querySelectorAll('.browser-card').length`), 1);
+  check("a real browser card exists after the allowed open_url", await page.evalJs(`document.querySelectorAll('[data-kind="browser"]').length`), 1);
   const browserCardIds = JSON.parse(
     await page.evalJs(`
       window.store.boards

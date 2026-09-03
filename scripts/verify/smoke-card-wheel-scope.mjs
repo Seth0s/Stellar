@@ -144,7 +144,7 @@ try {
   // ---- browser card, sem foco: wheel não faz mais zoom-through, nem rola a página ----
   await spawnCard(page, "browser");
   await new Promise((r) => setTimeout(r, 1200)); // deixa a página carregar
-  const browserCoords = await centerOf(page, ".browser-card");
+  const browserCoords = await centerOf(page, '[data-kind="browser"]');
   check("browser card coords found", !!browserCoords, true);
   const zoomBeforeBrowser = await readZoom(page);
   await wheelAt(page, browserCoords.x, browserCoords.y, -400);

@@ -58,7 +58,7 @@ async function dragBrowserCardAway(page) {
   const rect = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.browser-card .card-head');
+        const b = document.querySelector('[data-kind="browser"] .card-head');
         if (!b) return JSON.stringify(null);
         const r = b.getBoundingClientRect();
         return JSON.stringify({x: r.x, y: r.y, height: r.height});
@@ -151,7 +151,7 @@ try {
   const browserVisible = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.browser-card');
+        const b = document.querySelector('[data-kind="browser"]');
         if (!b) return JSON.stringify(null);
         const r = b.getBoundingClientRect();
         const vw = window.innerWidth, vh = window.innerHeight;
@@ -192,7 +192,7 @@ try {
   const browserVisibleAfterReopen = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('.browser-card');
+        const b = document.querySelector('[data-kind="browser"]');
         if (!b) return JSON.stringify(null);
         const r = b.getBoundingClientRect();
         const vw = window.innerWidth, vh = window.innerHeight;

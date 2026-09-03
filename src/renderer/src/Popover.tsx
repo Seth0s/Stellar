@@ -16,6 +16,7 @@ export function Popover({
   side = "right",
   className,
   gap = 14,
+  dataRole,
 }: {
   anchorRef: React.RefObject<HTMLElement | null>;
   open: boolean;
@@ -39,6 +40,10 @@ export function Popover({
    * few px inside the modal's own edge, reading as "touching it" — that
    * caller passes a bigger gap to actually clear the modal first. */
   gap?: number;
+  /** Stable test hook for callers whose popover content a smoke test needs
+   * to query — a locally-hashed CSS Module class on `className` isn't a
+   * usable selector, mirroring the `data-role` pattern on card internals. */
+  dataRole?: string;
 }) {
   const popRef = useRef<HTMLDivElement>(null);
 
@@ -114,6 +119,7 @@ export function Popover({
   return createPortal(
     <div
       className={`popover${className ? ` ${className}` : ""}`}
+      data-role={dataRole}
       ref={popRef}
       style={style}
       onPointerDown={(e) => e.stopPropagation()}

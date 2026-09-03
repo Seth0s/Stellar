@@ -103,7 +103,7 @@ async function createBrowserCard(page, url) {
   const barCoords = JSON.parse(
     await page.evalJs(`
       (() => {
-        const inputs = document.querySelectorAll('.browser-card-address input');
+        const inputs = document.querySelectorAll('[data-role="browser-address"] input');
         const el = inputs[inputs.length - 1];
         const r = el.getBoundingClientRect();
         return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
@@ -113,7 +113,7 @@ async function createBrowserCard(page, url) {
   await page.click(barCoords.x, barCoords.y);
   await page.evalJs(`
     (() => {
-      const inputs = document.querySelectorAll('.browser-card-address input');
+      const inputs = document.querySelectorAll('[data-role="browser-address"] input');
       const inp = inputs[inputs.length - 1];
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, ${JSON.stringify(url)});
@@ -150,7 +150,7 @@ try {
   const canvasRect = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelector('.browser-card-body');
+        const el = document.querySelector('[data-role="browser-body"]');
         const r = el.getBoundingClientRect();
         return JSON.stringify({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, cx: r.x + r.width / 2, cy: r.y + r.height / 2 });
       })()

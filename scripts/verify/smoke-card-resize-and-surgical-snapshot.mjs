@@ -89,7 +89,7 @@ async function centerOf(page, selector) {
 async function cardRect(page) {
   return JSON.parse(
     await page.evalJs(
-      `(() => { const r = document.querySelector('.browser-card').getBoundingClientRect(); return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height}); })()`,
+      `(() => { const r = document.querySelector('[data-kind="browser"]').getBoundingClientRect(); return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height}); })()`,
     ),
   );
 }
@@ -175,7 +175,7 @@ try {
   await new Promise((r) => setTimeout(r, 700));
   await page.evalJs(`
     (() => {
-      const inputs = document.querySelectorAll('.browser-card-address input');
+      const inputs = document.querySelectorAll('[data-role="browser-address"] input');
       const inp = inputs[inputs.length - 1];
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       setter.call(inp, ${JSON.stringify(`http://127.0.0.1:${port}/`)});
@@ -251,7 +251,7 @@ try {
   await panBoard(page, -1500, -1100);
   const wentOff = JSON.parse(
     await page.evalJs(
-      `(() => { const el = document.querySelector('.browser-card'); if (!el) return JSON.stringify(true); const r = el.getBoundingClientRect(); return JSON.stringify(r.right < 0 || r.bottom < 0 || r.left > innerWidth || r.top > innerHeight); })()`,
+      `(() => { const el = document.querySelector('[data-kind="browser"]'); if (!el) return JSON.stringify(true); const r = el.getBoundingClientRect(); return JSON.stringify(r.right < 0 || r.bottom < 0 || r.left > innerWidth || r.top > innerHeight); })()`,
     ),
   );
   check("o card saiu mesmo da área visível (pré-condição do que vem a seguir)", wentOff, true);
