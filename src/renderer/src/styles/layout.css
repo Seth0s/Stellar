@@ -773,6 +773,47 @@ select.resume-input {
   background: var(--surface);
 }
 
+/* Aviso de CLI de agente não instalada (achado ao vivo, 2026-09-03) —
+ * mesma cor de alerta que `.titlebar-update-check.has-error` já usa,
+ * só aparece quando `useAgentAvailability` acha algo faltando. */
+.topbar-agents-warn {
+  color: var(--danger) !important;
+}
+
+.agent-availability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 260px;
+}
+
+.agent-availability-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+.agent-availability-install-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.agent-availability-install-btn:hover {
+  background: var(--surface);
+}
+
 /* DESIGN-BACKLOG.md item 12, achado 6 — was a read-only <span>, now a
    button opening the popover below; explicit reset since it's excluded
    from the generic `.zoom-pill button` circular-icon-button styling

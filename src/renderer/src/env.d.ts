@@ -13,6 +13,7 @@ import type {
   RemoteInputApi,
   RemoteApi,
   UpdaterApi,
+  AgentsApi,
   SecretsApi,
   ChatApi,
   ClipboardImageApi,
@@ -38,6 +39,7 @@ declare global {
     remoteInput: RemoteInputApi;
     remote: RemoteApi;
     updater: UpdaterApi;
+    agents: AgentsApi;
     secrets: SecretsApi;
     chat: ChatApi;
     canvasExport: CanvasExportApi;

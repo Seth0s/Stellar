@@ -239,7 +239,6 @@ export function useTerminal(
   const [ptyId, setPtyId] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [spawnError, setSpawnError] = useState<string | null>(null);
-  const [installHint, setInstallHint] = useState<{ providerId: string; command: string } | null>(null);
   const [discoveredResumeId, setDiscoveredResumeId] = useState<string | null>(null);
   // Achado ao vivo (2026-09-02) -- `--resume` numa sessão real e grande
   // pode passar dezenas de segundos sem imprimir NADA (a CLI resumida
@@ -315,9 +314,6 @@ export function useTerminal(
             ? `"${providerId}" não encontrado no PATH`
             : `falha ao iniciar "${providerId}"`,
         );
-        if (result.error === "binary_not_found" && result.installCommand) {
-          setInstallHint({ providerId, command: result.installCommand });
-        }
         return;
       }
       ptyIdRef.current = result.id;
@@ -847,5 +843,5 @@ export function useTerminal(
     if (ptyIdRef.current) void window.pty.interrupt(ptyIdRef.current);
   }
 
-  return { ptyId, exitCode, spawnError, installHint, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt };
+  return { ptyId, exitCode, spawnError, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt };
 }

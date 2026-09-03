@@ -575,7 +575,7 @@ export function App() {
   const openInstallTerminalRef = useRef(openInstallTerminal);
   openInstallTerminalRef.current = openInstallTerminal;
   const stableSuggestInstall = useCallback(
-    (providerId: string, cwd: string, command: string) => openInstallTerminalRef.current(providerId, cwd, command),
+    (providerId: string, command: string) => openInstallTerminalRef.current(providerId, command),
     [],
   );
   // Not per-card (no card identity involved — creating/opening a
@@ -1333,19 +1333,23 @@ export function App() {
     return id;
   }
 
-  /** DESIGN-BACKLOG.md item 57 ponto 13 — the "instalar {provider}" button
-   * on a terminal card's "binário não encontrado" error (TerminalCard.tsx).
-   * A plain `bash` card at the same cwd, with `command` typed into its PTY
-   * right after spawn (useTerminal.ts's `initialInput`) — never executed
-   * on its own, the human still presses Enter, same spirit as every other
-   * consent-gated action in this app (never auto-run an install). */
-  function openInstallTerminal(providerId: string, cwd: string, command: string) {
+  /** DESIGN-BACKLOG.md item 57 ponto 13 — o botão "abrir terminal" do
+   * aviso de CLI ausente (Topbar.tsx/useAgentAvailability.ts). Achado ao
+   * vivo, 2026-09-03: morava dentro do fluxo de spawn de um card
+   * (mostrava só DEPOIS de tentar e falhar, quebrando o fluxo do
+   * usuário) — movido pro Topbar, que consulta a disponibilidade ANTES
+   * de qualquer spawn. Um card `bash` puro no cwd do board ativo, com
+   * `command` digitado no PTY logo após o spawn (useTerminal.ts's
+   * `initialInput`) — nunca executado sozinho, o humano ainda aperta
+   * Enter, mesmo espírito de toda ação com gate de consentimento
+   * neste app (nunca rodar um install sozinho). */
+  function openInstallTerminal(providerId: string, command: string) {
     const id = String(nextId.current++);
     addCard({
       id,
       kind: "terminal",
       provider: "bash",
-      cwd,
+      cwd: activeBoardCwd,
       resumeId: null,
       continueLast: false,
       model: null,
@@ -2163,7 +2167,6 @@ export function App() {
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
-                onSuggestInstall={stableSuggestInstall}
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
@@ -2647,6 +2650,7 @@ export function App() {
         onDeleteBoard={deleteBoard}
         onToggleAutonomous={setBoardAutonomous}
         onSetConcurrencyCap={setBoardConcurrencyCap}
+        onSuggestInstall={stableSuggestInstall}
       />
       <OffscreenPips
         cards={cards}

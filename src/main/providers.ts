@@ -40,6 +40,13 @@ const ACBRIDGE_HINT =
   "it, even if you keep running afterward. Use these only when it " +
   "genuinely helps the task at hand.";
 
+/** Um comando por família de SO — `npm install -g` já é igual nas duas,
+ * mas os installers via `curl | bash` (cursor/antigravity) não existem no
+ * Windows (achado ao vivo, 2026-09-03: "no Windows não tem bash"), que
+ * tem seu próprio instalador PowerShell nativo em cada um desses
+ * provedores (confirmado contra a documentação real de cada um). */
+type InstallCommand = { posix: string; windows: string };
+
 type ProviderDef = {
   id: ProviderId;
   label: string;
@@ -47,11 +54,11 @@ type ProviderDef = {
   buildArgs: (opts: SpawnOpts) => string[];
   /** DESIGN-BACKLOG.md item 57 ponto 13 — real, current install command
    * per provider (confirmed live against each provider's own docs/npm
-   * package on 2026-08-29, not guessed): `binary_not_found` surfaces this
-   * to the renderer so it can offer a pre-filled (never auto-run)
-   * terminal. `null` for `bash` — always resolves via $SHELL, never
-   * "not installed". */
-  installCommand: string | null;
+   * package, `windows` variant confirmed 2026-09-03): `binary_not_found`
+   * surfaces this to the renderer so it can offer a pre-filled (never
+   * auto-run) terminal. `null` for `bash` — always resolves via $SHELL/
+   * ComSpec, never "not installed". */
+  installCommand: InstallCommand | null;
 };
 
 export const PROVIDERS: ProviderDef[] = [
@@ -60,7 +67,7 @@ export const PROVIDERS: ProviderDef[] = [
     id: "claude",
     label: "Claude",
     binaryNames: ["claude"],
-    installCommand: "npm install -g @anthropic-ai/claude-code",
+    installCommand: { posix: "npm install -g @anthropic-ai/claude-code", windows: "npm install -g @anthropic-ai/claude-code" },
     buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
@@ -88,7 +95,7 @@ export const PROVIDERS: ProviderDef[] = [
     id: "codex",
     label: "Codex",
     binaryNames: ["codex"],
-    installCommand: "npm install -g @openai/codex",
+    installCommand: { posix: "npm install -g @openai/codex", windows: "npm install -g @openai/codex" },
     // Codex's resume is a subcommand, must come before any other flag.
     // No documented system-prompt flag — gets the MCP server registered
     // instead (codex supports an ephemeral `-c key=value` TOML override,
@@ -116,7 +123,13 @@ export const PROVIDERS: ProviderDef[] = [
     id: "cursor",
     label: "Cursor",
     binaryNames: ["agent", "cursor-agent"],
-    installCommand: "curl https://cursor.com/install -fsS | bash",
+    // Windows confirmado contra cursor.com/docs/cli/installation
+    // (2026-09-03) — instalador PowerShell nativo, mesmo endpoint com
+    // um query param a mais, sem WSL.
+    installCommand: {
+      posix: "curl https://cursor.com/install -fsS | bash",
+      windows: "irm 'https://cursor.com/install?win32=true' | iex",
+    },
     // Sem flag de system-prompt e, ao contrário de claude/codex acima,
     // sem flag efêmera de registro de MCP: a CLI do Cursor só descobre
     // servidor MCP por `.cursor/mcp.json` escrito em disco (do projeto ou
@@ -155,7 +168,14 @@ export const PROVIDERS: ProviderDef[] = [
     id: "antigravity",
     label: "Antigravity",
     binaryNames: ["agy"],
-    installCommand: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+    // Windows confirmado contra a documentação real do Antigravity CLI
+    // (2026-09-03) — instalador PowerShell nativo, sem WSL (há também uma
+    // variante `.cmd` pro prompt puro, mas o PowerShell já cobre o caso
+    // padrão sem precisar de um segundo comando por SO).
+    installCommand: {
+      posix: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+      windows: "irm https://antigravity.google/cli/install.ps1 | iex",
+    },
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--conversation", resumeId);
@@ -170,14 +190,33 @@ export function providerById(id: string): ProviderDef | undefined {
   return PROVIDERS.find((p) => p.id === id);
 }
 
-export function providerInstallCommand(id: string): string | null {
-  return providerById(id)?.installCommand ?? null;
+/** Achado ao vivo, 2026-09-03 — "no Windows não tem bash": não existe
+ * jeito de sugerir `installCommand.posix` numa máquina sem bash/curl. */
+export function providerInstallCommand(id: string, platform: NodeJS.Platform = process.platform): string | null {
+  const cmd = providerById(id)?.installCommand;
+  if (!cmd) return null;
+  return platform === "win32" ? cmd.windows : cmd.posix;
 }
 
-export function which(names: string[]): string | null {
+// Extensões que o Windows tenta, em ordem, quando um nome sem extensão é
+// "executado" — mesma lista que o próprio shell do Windows usa (variável
+// `PATHEXT`, com um fallback caso ela não exista por algum motivo). Sem
+// isso, `which(["claude"])` nunca acharia o shim real que `npm install -g`
+// cria lá (`claude.cmd`/`claude.ps1`, nunca um `claude` sem extensão) —
+// achado ao vivo, 2026-09-03, junto com o problema do bash acima: a
+// detecção de binário em si já não dependia de shell nenhum (sempre foi
+// busca de arquivo pura em `process.env.PATH`), só faltava tentar as
+// extensões certas por SO.
+const WINDOWS_EXECUTABLE_EXTENSIONS = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD;.PS1")
+  .split(";")
+  .filter(Boolean);
+
+export function which(names: string[], platform: NodeJS.Platform = process.platform): string | null {
   const path = process.env.PATH ?? "";
+  const candidateNames =
+    platform === "win32" ? names.flatMap((name) => [name, ...WINDOWS_EXECUTABLE_EXTENSIONS.map((ext) => name + ext)]) : names;
   for (const dir of path.split(delimiter)) {
-    for (const name of names) {
+    for (const name of candidateNames) {
       const candidate = join(dir, name);
       if (existsSync(candidate)) return candidate;
     }
@@ -185,14 +224,38 @@ export function which(names: string[]): string | null {
   return null;
 }
 
-/** Resolves the binary + args to spawn for a provider. `bash` always resolves via $SHELL. */
+/** Resolves the binary + args to spawn for a provider. `bash` always
+ * resolves via $SHELL no POSIX; no Windows não existe `$SHELL`
+ * (variável de ambiente é uma convenção só de shells Unix) nem `/bin/
+ * bash` — resolve via `ComSpec` (sempre presente, aponta pro `cmd.exe`
+ * real), mesma convenção que o próprio Windows/outras ferramentas
+ * (ex. VS Code) usam como shell padrão quando nada mais foi escolhido. */
 export function resolveSpawn(providerId: string, opts: SpawnOpts = {}): { binary: string; args: string[] } | null {
   const provider = providerById(providerId);
   if (!provider) return null;
   if (provider.id === "bash") {
+    if (process.platform === "win32") {
+      return { binary: process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", args: [] };
+    }
     return { binary: process.env.SHELL || "/bin/bash", args: [] };
   }
   const binary = which(provider.binaryNames);
   if (!binary) return null;
   return { binary, args: provider.buildArgs(opts) };
+}
+
+export type AgentAvailability = { id: ProviderId; label: string; installed: boolean; installCommand: string | null };
+
+/** Checagem proativa (DESIGN-BACKLOG.md — "aviso antes mesmo de abrir um
+ * agente", pedido ao vivo 2026-09-03): roda uma vez, fora do fluxo de
+ * spawn de qualquer card, pro Topbar mostrar de cara quais CLIs de agente
+ * faltam instalar. `bash` fica de fora — não é uma CLI de agente
+ * instalável, é sempre o shell do próprio SO (ver resolveSpawn acima). */
+export function checkAgentAvailability(): AgentAvailability[] {
+  return PROVIDERS.filter((p) => p.id !== "bash").map((p) => ({
+    id: p.id,
+    label: p.label,
+    installed: which(p.binaryNames) !== null,
+    installCommand: providerInstallCommand(p.id),
+  }));
 }

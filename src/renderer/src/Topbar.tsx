@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import { SessionModal } from "./SessionModal";
+import { useAgentAvailability } from "./useAgentAvailability";
 import type { SessionTemplate } from "./useBoardStore";
 import { groupByProject, StatusDot, UNGROUPED_LABEL, type Board, type BoardCounts as Counts } from "./sessions";
 
@@ -30,6 +31,7 @@ export function Topbar({
   onDeleteBoard,
   onToggleAutonomous,
   onSetConcurrencyCap,
+  onSuggestInstall,
 }: {
   boards: Board[];
   activeBoardId: string;
@@ -65,16 +67,24 @@ export function Topbar({
   onToggleAutonomous: (id: string, autonomous: boolean) => void;
   /** DESIGN-BACKLOG.md item 60, peça 2. */
   onSetConcurrencyCap: (id: string, cap: number | null) => void;
+  /** Achado ao vivo, 2026-09-03 — botão "abrir terminal" do aviso de CLI
+   * ausente abaixo. Mesma ação que já existia (App.tsx's
+   * `openInstallTerminal`), só que disparada daqui em vez de um botão que
+   * só aparecia depois de um spawn já ter falhado. */
+  onSuggestInstall: (providerId: string, command: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
   const [zoomOpen, setZoomOpen] = useState(false);
   const [zoomDraft, setZoomDraft] = useState("");
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const titleBtnRef = useRef<HTMLButtonElement>(null);
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
+  const agentsBtnRef = useRef<HTMLButtonElement>(null);
   const activeBoard = boards.find((b) => b.id === activeBoardId);
   const activeCounts = boardCounts[activeBoardId];
   const [fullscreen, setFullscreen] = useState(false);
+  const { missing: missingAgents } = useAgentAvailability();
 
   // 2026-08-27 revisit — real fullscreen (F11, Titlebar.tsx hides the
   // header for it) already worked, but had NO visible trigger at all
@@ -216,6 +226,44 @@ export function Topbar({
         />
       )}
       <div className="zoom-pill">
+        {/* Achado ao vivo, 2026-09-03 — "aviso antes mesmo de abrir um
+            agente": checagem proativa (useAgentAvailability.ts), visível
+            só quando falta alguma CLI, sempre ANTES de qualquer tentativa
+            de spawn (não mais um botão que só aparecia depois de uma
+            falha real). */}
+        {missingAgents.length > 0 && (
+          <button
+            ref={agentsBtnRef}
+            className="topbar-agents-warn"
+            title={`${missingAgents.length} CLI${missingAgents.length === 1 ? "" : "s"} de agente não encontrada${missingAgents.length === 1 ? "" : "s"} — clique para instalar`}
+            onClick={() => setAgentsOpen((o) => !o)}
+          >
+            <Icon name="warning" size={16} />
+          </button>
+        )}
+        <Popover anchorRef={agentsBtnRef} open={agentsOpen} onClose={() => setAgentsOpen(false)}>
+          <div className="board-list-heading">CLIs NÃO ENCONTRADAS</div>
+          <div className="agent-availability-list">
+            {missingAgents.map((a) => (
+              <div key={a.id} className="agent-availability-row">
+                <span>{a.label}</span>
+                {a.installCommand && (
+                  <button
+                    className="agent-availability-install-btn"
+                    title={`Abre um terminal com o comando pré-preenchido — nada é executado sozinho, você confirma com Enter: ${a.installCommand}`}
+                    onClick={() => {
+                      onSuggestInstall(a.id, a.installCommand!);
+                      setAgentsOpen(false);
+                    }}
+                  >
+                    <Icon name="terminal" size={12} />
+                    instalar
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Popover>
         <button onClick={onZoomOut} title="Diminuir zoom" aria-label="Diminuir zoom">
           <Icon name="zoomOut" size={16} />
         </button>

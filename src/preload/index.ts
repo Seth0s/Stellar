@@ -612,6 +612,15 @@ const updater = {
     ipcRenderer.invoke("updater:test-emit-available", version, releaseNotes),
 };
 
+export type AgentAvailability = { id: string; label: string; installed: boolean; installCommand: string | null };
+
+/** Achado ao vivo, 2026-09-03 — checagem proativa de CLIs de agente
+ * instaladas, consultada pelo Topbar ao entrar num board (ver
+ * useAgentAvailability.ts), não mais no meio de um spawn de card. */
+const agents = {
+  checkAvailability: (): Promise<AgentAvailability[]> => ipcRenderer.invoke("agents:check-availability"),
+};
+
 // Kept in sync with main/secrets.ts's own SecretProvider by hand (preload
 // can't import main-process modules) — item 28 added "gemini"/"generic".
 export type SecretProvider = "anthropic" | "openai" | "gemini" | "generic";
@@ -777,6 +786,7 @@ contextBridge.exposeInMainWorld("sticky", sticky);
 contextBridge.exposeInMainWorld("remoteInput", remoteInput);
 contextBridge.exposeInMainWorld("remote", remote);
 contextBridge.exposeInMainWorld("updater", updater);
+contextBridge.exposeInMainWorld("agents", agents);
 contextBridge.exposeInMainWorld("secrets", secrets);
 contextBridge.exposeInMainWorld("chat", chat);
 contextBridge.exposeInMainWorld("canvasExport", canvasExport);
@@ -821,5 +831,6 @@ export type StickyApi = typeof sticky;
 export type RemoteInputApi = typeof remoteInput;
 export type RemoteApi = typeof remote;
 export type UpdaterApi = typeof updater;
+export type AgentsApi = typeof agents;
 export type SecretsApi = typeof secrets;
 export type ChatApi = typeof chat;

@@ -66,6 +66,7 @@ import {
   Tablet,
   TerminalSquare,
   Trash2,
+  TriangleAlert,
   Ungroup,
   Wrench,
   X,
@@ -149,7 +150,8 @@ export type IconName =
   | "pin"
   | "checkCircle"
   | "wrench"
-  | "bug";
+  | "bug"
+  | "warning";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -236,6 +238,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   checkCircle: CheckCircle2,
   wrench: Wrench,
   bug: Bug,
+  warning: TriangleAlert,
 };
 
 export function Icon({
