@@ -18,6 +18,26 @@
   border-radius: var(--radius);
 }
 
+/* Achado ao vivo (2026-09-04) — "quando faço resize e existe caracteres
+   no caminho, sempre tem o efeito de seleção de texto que acaba quebrando
+   o resize". A zona de resize (`.card-resize-zone` abaixo) invade de
+   propósito ~7px pra DENTRO do card, então em cards de texto (sticky) o
+   pointerdown pousa a poucos pixels do conteúdo selecionável — o
+   navegador inicia sua própria seleção de texto em paralelo ao mousemove
+   do drag, varrendo o documento inteiro enquanto o resize tenta
+   acontecer (confirmado ao vivo via CDP: seleção cobria até texto de
+   OUTROS elementos da página, não só o card). Tentativa 1 (revertida):
+   `preventDefault()` no pointerdown da zona de resize — suprimia a
+   seleção, mas também quebrava o transform ótico ao vivo do resize de
+   terminal (`smoke-terminal-resize-fluidity.mjs`), então a zona já
+   reaproveita a classe `.dragging` que `CardFrame.tsx` aplica em QUALQUER
+   drag/resize — `user-select: none` aqui não interfere no pipeline de
+   ponteiro, só impede o navegador de tratar o conteúdo como selecionável
+   enquanto o gesto está em andamento. */
+.card-frame.dragging {
+  user-select: none;
+}
+
 /* Trilha B (docs/SCREEN_SPACE_PROJECTION_PLAN.md) — CardFrame.tsx's
    `screenProjected` doc comment has the full story: sized to the raw
    world `rect` (unscaled) and visually scaled to fit the outer
