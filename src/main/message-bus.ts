@@ -345,6 +345,12 @@ export function createMessageBus(
      * PTY entry (never spawned/exited/error), matching `isCardAlive`'s
      * own "no entry" convention. */
     getCardLastActivityAt: (cardId: string) => number | null;
+    /** Sticky item "card_status idle" (fix ao vivo, 2026-09-04) — OS
+     * notification, never touches any terminal's PTY/input. See the doc
+     * comment on `notifySpawnerOfIdleCard` above for why `writeToCard`
+     * was wrong here. `idleThresholdMs` is passed through purely for the
+     * notification body text, not used for any timing decision here. */
+    notifyIdleCard: (spawnerId: string, idleCardLabel: string, idleThresholdMs: number) => void;
     /** DESIGN-BACKLOG.md item 59 — which board a card lives on, and
      * whether that board's opt-in autonomous mode is on. Only ever read
      * here, never written — the only write path is a human's toggle in
@@ -611,15 +617,24 @@ export function createMessageBus(
   /** Sticky item "card_status idle" — "o agente precisa saber que o card
    * que ele spawnou ficou ocioso... um evento tipo card_status_changed
    * que dispare notificação automática pro agente que fez o spawn_agent".
-   * No generic MCP push channel actually reaches an arbitrary external
-   * client here — what DOES already reach one is `send_to_card`'s own
-   * mechanism (`writeToCard`), so this reuses exactly that: on a real
-   * running -> idle transition, look up who spawned this card (the
-   * `kind: "spawned"` connector already recorded automatically, item 62)
-   * and type a system line straight into ITS OWN terminal, the same way
-   * a human would notice by glancing at the board. Silent no-op if the
-   * spawner is gone, wasn't a terminal, or there's no recorded spawner at
-   * all (a card opened by a human, not another agent). */
+   *
+   * Achado ao vivo (2026-09-04) — a primeira versão disto reusava
+   * `writeToCard` (o mecanismo do `send_to_card`), digitando um texto de
+   * sistema direto no PTY do spawner. Isso é invasivo por construção:
+   * `writeToCard` simula teclas reais, sem apertar Enter — o texto fica
+   * sentado, NÃO ENVIADO, dentro do prompt de quem quer que esteja do
+   * outro lado. Quando o spawner é o próprio card de chat ao vivo do
+   * usuário (o caso comum quando o usuário está orquestrando sub-agentes
+   * na mesma sessão em que está digitando), isso invade literalmente a
+   * entrada dele — relatado ao vivo como "extremamente invasiva". Trocado
+   * por uma notificação de SO (`Notification.notifyIdleCard`, main
+   * process), o mesmo canal não-intrusivo já revisado e aprovado nesta
+   * sessão pro "turno terminado" — nunca toca o buffer/entrada de
+   * nenhum terminal. Um agente orquestrador que precise saber
+   * programaticamente ainda tem `card_status` pra fazer poll (o próprio
+   * padrão usado ao longo desta sessão). Silent no-op se o spawner sumiu
+   * ou não há spawner registrado (card aberto por um humano, não por
+   * outro agente). */
   function notifySpawnerOfIdleCard(cardId: string) {
     const spawnedBy = callbacks
       .listAllConnectors()
@@ -629,7 +644,7 @@ export function createMessageBus(
     const spawnerId = spawnedBy.from_card_id;
     if (!callbacks.isCardAlive(spawnerId)) return;
     const label = callbacks.describeCardLabel(cardId);
-    callbacks.writeToCard(spawnerId, `[sistema] "${label}" ficou ocioso (sem atividade por ${IDLE_THRESHOLD_MS / 1000}s) — pode estar esperando você.`);
+    callbacks.notifyIdleCard(spawnerId, label, IDLE_THRESHOLD_MS);
   }
 
   /** Sticky item "card_status idle" — polls instead of hooking `onData`

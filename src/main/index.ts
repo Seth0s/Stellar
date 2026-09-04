@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, net, protocol, screen, session, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, net, Notification, protocol, screen, session, shell } from "electron";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -557,6 +557,15 @@ function createWindow() {
     setTimeout(() => recentlyClosedCardBoardIds.delete(cardId), 60_000);
   }
 
+  /** Test-only (verify harness — scripts/verify/smoke-mcp-card-status-idle.mjs)
+   * — `electron.Notification` is a real OS popup, nothing a CDP smoke test
+   * can assert on directly the way it mocks `window.Notification` in the
+   * renderer. Records the last `notifyIdleCard` call so the test can poll
+   * it over `debug:last-idle-notification` (same `!app.isPackaged`-gated
+   * pattern as every other debug: handler below); never read outside
+   * dev builds. */
+  let lastIdleNotification: { label: string; idleThresholdMs: number } | null = null;
+
   const mcpServer = createMcpServer({
     // Default 0 lets the OS assign a free ephemeral port — the URL is only
     // ever read in-process (registry's `mcpUrl` getter below), never
@@ -852,6 +861,28 @@ function createWindow() {
     writeToCard: (id, text) => registry.write(id, text),
     isCardAlive: (id) => registry.isAlive(id),
     getCardLastActivityAt: (id) => registry.getLastActivityAt(id),
+    // Achado ao vivo (2026-09-04) — main-process `Notification`, não
+    // `writeToCard`: a versão anterior digitava o aviso direto no PTY do
+    // spawner (sem apertar Enter), o que sentava como texto NÃO ENVIADO
+    // dentro do prompt de quem estivesse do outro lado — inclusive o
+    // próprio chat ao vivo do usuário quando ele mesmo é o "spawner".
+    // `electron.Notification` é uma notificação de SO de verdade: nunca
+    // toca buffer/entrada de nenhum card, e (diferente do `new
+    // Notification()` do renderer) não depende do
+    // `setPermissionRequestHandler`/`MAIN_WINDOW_ONLY_PERMISSIONS` acima
+    // — é o processo principal disparando, não uma página.
+    notifyIdleCard: (_spawnerId, idleCardLabel, idleThresholdMs) => {
+      lastIdleNotification = { label: idleCardLabel, idleThresholdMs };
+      try {
+        new Notification({
+          title: `"${idleCardLabel}" ficou ocioso`,
+          body: `Sem atividade por ${idleThresholdMs / 1000}s — pode estar esperando você.`,
+        }).show();
+      } catch {
+        // Notification indisponível nesse ambiente/SO — nunca deve
+        // derrubar o poller de idle, só não notifica.
+      }
+    },
     // DESIGN-BACKLOG.md item 61 — same "Bash 2°" convention as App.tsx's
     // `describeCard` (AgentAskModal's requester label), reimplemented
     // against store.ts directly since this is main-process code.
@@ -1341,6 +1372,12 @@ function createWindow() {
   ipcMain.handle("debug:browser-content-size", (_e, cardId: string) => {
     if (app.isPackaged) return null;
     return browserRegistry.getContentSize(cardId);
+  });
+
+  // Test-only, same guard — see `lastIdleNotification`'s doc comment above.
+  ipcMain.handle("debug:last-idle-notification", () => {
+    if (app.isPackaged) return null;
+    return lastIdleNotification;
   });
 
   // DESIGN-BACKLOG.md item 12, Fase B/C.
