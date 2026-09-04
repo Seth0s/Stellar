@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { toast } from "./useToast";
-import { registerTerminal, unregisterTerminal } from "./terminal-registry";
+import { registerTerminal, unregisterTerminal, noteAtlasClear } from "./terminal-registry";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -300,6 +300,21 @@ export function useTerminal(
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
+  // Achado ao vivo (2026-09-04, "fica borrada dependendo do zoom" — a
+  // fonte deveria ficar nítida em qualquer zoom, per `fontSizeForZoom`
+  // acima, mas continuava borrada mesmo depois do refit de Effect 5).
+  // `@xterm/addon-webgl` cacheia cada glifo já desenhado num atlas de
+  // textura, medido em pixels reais no fontSize vigente na hora do
+  // primeiro desenho (mesma classe de bug documentada acima pro atlas
+  // de tofu do Nerd Font, achada ao vivo naquela ocasião: o atlas nunca
+  // se auto-invalida). Mudar só `term.options.fontSize` NÃO limpa esse
+  // atlas — os glifos antigos (rasterizados no fontSize anterior) ficam
+  // esticados/encolhidos pro novo tamanho de célula em vez de
+  // redesenhados nitidamente, exatamente o "zoom óptico" relatado.
+  // Precisa da instância do addon guardada aqui pra poder chamar
+  // `clearTextureAtlas()` (dispara um redraw de verdade) toda vez que o
+  // fontSize muda de fato.
+  const webglAddonRef = useRef<WebglAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
   // Item 34 — guards Effect 3 so the DOM/GPU attachment (`term.open()`)
   // happens at most once per Terminal instance, not once per visibility
@@ -461,13 +476,16 @@ export function useTerminal(
       });
       const f = new FullWidthFitAddon();
       t.loadAddon(f);
+      let webgl: WebglAddon | undefined;
       if (withWebgl) {
         try {
-          t.loadAddon(new WebglAddon());
+          webgl = new WebglAddon();
+          t.loadAddon(webgl);
         } catch {
           // Some GPU/driver combinations report WebGL2 as available here but
           // only actually fail later, inside open() below — this check still
           // catches the common case for free.
+          webgl = undefined;
         }
       }
       // JetBrains Mono já suporta ligaduras — só não renderizavam sem este
@@ -481,11 +499,12 @@ export function useTerminal(
         // sem ligaduras nesse ambiente — terminal continua funcional.
       }
       t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
-      return { t, f };
+      return { t, f, webgl };
     }
-    const { t: term, f: fit } = buildTerminal(true);
+    const { t: term, f: fit, webgl } = buildTerminal(true);
     termRef.current = term;
     fitRef.current = fit;
+    webglAddonRef.current = webgl ?? null;
     registerTerminal(id, term);
     const onTermData = term.onData((data) => {
       if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, data);
@@ -496,6 +515,7 @@ export function useTerminal(
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      webglAddonRef.current = null;
       openedRef.current = false;
     };
   }, [ptyId]);
@@ -547,6 +567,7 @@ export function useTerminal(
         fit = rebuilt.f;
         termRef.current = term;
         fitRef.current = fit;
+        webglAddonRef.current = null;
         term.open(el);
       }
       fit.fit();
@@ -856,6 +877,15 @@ export function useTerminal(
       if (term.options.fontSize === newSize) return;
       term.options.fontSize = newSize;
       fit.fit();
+      // `clearTextureAtlas()` — see `webglAddonRef`'s doc comment above.
+      // Without this, the WebGL addon keeps drawing glyphs cached at the
+      // PREVIOUS fontSize, stretched to the new cell size: real quality
+      // never changes, only the optical scale, exactly the "borrada
+      // dependendo do zoom" report.
+      if (webglAddonRef.current) {
+        webglAddonRef.current.clearTextureAtlas();
+        noteAtlasClear(id);
+      }
       if (ptyIdRef.current) void window.pty.resize(ptyIdRef.current, term.cols, term.rows);
     }, 150);
   }, [zoom]);
