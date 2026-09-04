@@ -2212,14 +2212,15 @@ export function App() {
                 onFocus={getFocusHandler(c)}
                 onClose={getCloseHandler(c)}
                 onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
-                onRename={getRenameHandler(c)}
-                onResumeIdDiscovered={getResumeIdDiscoveredHandler(c)}
-                onStatusChange={getStatusChangeHandler(c)}
-                onOpenUrl={setPendingOpenUrl}
-                onConnectorStart={onConnectorStart}
-                onSelectStart={onSelectStart}
-                selected={selected}
-                screenProjected
+                 onRename={getRenameHandler(c)}
+                 onResumeIdDiscovered={getResumeIdDiscoveredHandler(c)}
+                 onStatusChange={getStatusChangeHandler(c)}
+                 onOpenUrl={setPendingOpenUrl}
+                 onConnectorStart={onConnectorStart}
+                 onSelectStart={onSelectStart}
+                 selected={selected}
+                 screenProjected
+                isFocused={zIndex === order.length - 1}
                 panX={world.panX}
                 panY={world.panY}
               />,

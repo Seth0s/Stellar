@@ -63,6 +63,7 @@ function TerminalCardInner({
   selected,
   reflowing,
   closing,
+  isFocused,
   label,
   onChange,
   onCommit,
@@ -106,6 +107,8 @@ function TerminalCardInner({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
+  /** True when this card is on top of the z-order (zIndex === order.length - 1). Used to suppress notifications when the user is actively looking at this card. */
+  isFocused?: boolean;
   /** User-set header name, null = fall back to `providerId`. */
   label: string | null;
   onChange: (rect: Rect) => void;
@@ -239,6 +242,13 @@ function TerminalCardInner({
   // fato acontece — evita notificar no MOUNT (onde `isActive` também
   // começa false, e o efeito abaixo roda uma vez de qualquer jeito).
   const wasActiveRef = useRef(false);
+  // `isFocusedRef` tracks the current `isFocused` prop via ref so the
+  // isActive-only effect can read it without re-running on focus changes.
+  // Suppresses the notification when the card is top-of-z-order AND the
+  // Electron window has OS focus — meaning the user is actively looking
+  // at this card and a notification would be a false positive.
+   const isFocusedRef = useRef(false);
+  if (Boolean(isFocused) !== isFocusedRef.current) isFocusedRef.current = Boolean(isFocused);
   useEffect(() => {
     if (isActive) {
       wasActiveRef.current = true;
@@ -247,6 +257,9 @@ function TerminalCardInner({
     if (!wasActiveRef.current) return;
     wasActiveRef.current = false;
     if (!bellEnabled) return;
+    // Suppress notification when this card is the focused one and the
+    // window itself has OS focus — user is actively looking at it.
+    if (isFocusedRef.current && document.hasFocus()) return;
     try {
       // Requer "notifications" em MAIN_WINDOW_ONLY_PERMISSIONS
       // (main/index.ts) — sem isso o construtor abaixo nunca mostra nada,
