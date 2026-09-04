@@ -15,10 +15,12 @@ const execFileAsync = promisify(execFile);
  * O contraste, confirmado lendo o `--help` real dos binários instalados e
  * não por suposição:
  *
- *   claude  `--mcp-config '{...}'`        efêmero, some com o processo
- *   codex   `-c mcp_servers.stellar.url`  idem
- *   cursor  só `.cursor/mcp.json` (projeto) ou `~/.cursor/mcp.json`
- *   agy     só `agy mcp add` (persistente, `~/.gemini/config/`)
+ *   claude    `--mcp-config '{...}'`        efêmero, some com o processo
+ *   codex     `-c mcp_servers.stellar.url`  idem
+ *   cursor    só `.cursor/mcp.json` (projeto) ou `~/.cursor/mcp.json`
+ *   agy       só `agy mcp add` (persistente, `~/.gemini/config/`)
+ *   opencode  só config persistente (`~/.config/opencode/opencode.json`,
+ *             chave `mcp`) — sem flag de registro por invocação
  *
  * Para os dois de baixo sobra config persistente, e é por isso que o
  * registro aponta pro shim stdio (`resources/bin/stellar-mcp`) em vez da
@@ -116,6 +118,35 @@ async function approveCursor(binary: string): Promise<void> {
   });
 }
 
+/** `~/.config/opencode/opencode.json` — o config global do próprio
+ * opencode (confirmado no schema real: chave `mcp`, entradas `{type:
+ * "local", command: [...], enabled}` pra stdio). Mesmo cuidado de
+ * `registerCursor`: parse defensivo, só mexe na chave `mcp`, preserva
+ * `provider`/`$schema`/qualquer outra coisa que já esteja no arquivo
+ * (este projeto já usa esse config pro provider `qwen-local` — ver ai
+ * memory `qwen-buun-local-server`). */
+function registerOpencode(shim: string): McpRegistrationResult {
+  const file = join(registrationHome(), ".config", "opencode", "opencode.json");
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+  } catch {
+    config = {};
+  }
+  const servers = (config.mcp ?? {}) as Record<string, { type?: string; command?: string[]; enabled?: boolean }>;
+  const existing = servers[SERVER_NAME];
+  if (existing?.type === "local" && existing.command?.[0] === shim) return { status: "ok", changed: false };
+  servers[SERVER_NAME] = { type: "local", command: [shim], enabled: true };
+  config.mcp = servers;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  } catch (err) {
+    return { status: "failed", error: `não consegui escrever ${file}: ${String(err)}` };
+  }
+  return { status: "ok", changed: true };
+}
+
 async function registerAntigravity(binary: string, shim: string): Promise<McpRegistrationResult> {
   // `agy` não expõe o arquivo de config por flag e não documenta uma
   // variável de ambiente pra redirecioná-lo (procurei nas strings do
@@ -147,7 +178,7 @@ export function ensureMcpRegistered(providerId: string, binDir: string): Promise
   if (cached) return cached;
 
   const run = (async (): Promise<McpRegistrationResult> => {
-    if (providerId !== "cursor" && providerId !== "antigravity") {
+    if (providerId !== "cursor" && providerId !== "antigravity" && providerId !== "opencode") {
       return { status: "skipped", reason: "provider registra MCP por invocação" };
     }
     const shim = shimPath(binDir);
@@ -157,6 +188,7 @@ export function ensureMcpRegistered(providerId: string, binDir: string): Promise
       if (result.status === "ok" && result.changed && binary) await approveCursor(binary);
       return result;
     }
+    if (providerId === "opencode") return registerOpencode(shim);
     const binary = which(["agy"]);
     if (!binary) return { status: "skipped", reason: "binário agy não encontrado" };
     return registerAntigravity(binary, shim);

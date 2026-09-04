@@ -6,6 +6,7 @@ const PROVIDER_ICON: Record<string, IconName> = {
   codex: "providerCodex",
   cursor: "providerCursor",
   antigravity: "providerAntigravity",
+  opencode: "providerOpencode",
 };
 
 /**

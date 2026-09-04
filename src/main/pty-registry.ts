@@ -115,6 +115,27 @@ type Entry = {
 const KILL_ESCALATION: NodeJS.Signals[] = ["SIGHUP", "SIGTERM", "SIGKILL"];
 const KILL_GRACE_MS = 2_000;
 
+/** Pedido ao vivo (2026-09-04) — worker local (Qwen via llama-server atrás
+ * de llama-swap, ver ai memory `qwen-buun-local-server`) não deve ficar
+ * de pé o tempo todo: fica vivo enquanto pelo menos um card `opencode`
+ * (o único provider hoje configurado pra falar com ele) estiver aberto, e
+ * llama-swap descarrega o processo assim que o último fechar — sem TTL,
+ * porque um TTL de inatividade derrubaria o modelo NO MEIO de uma sessão
+ * longa com pausas entre tool calls, pagando cold-start (~40s) de novo a
+ * cada pausa em vez de uma vez só por invocação do agente. Contagem por
+ * id (não um contador cru) pra sobreviver a um card fechando duas vezes
+ * ou a uma entrada que nunca chegou a existir de verdade. */
+const OPENCODE_LLAMA_SWAP_UNLOAD_URL = "http://127.0.0.1:8080/api/models/unload/Qwen3.6-27B-IQ3-MTP";
+const openOpencodeCardIds = new Set<string>();
+
+function notifyLastOpencodeCardClosed(): void {
+  // Fire-and-forget — nunca bloqueia nem falha o fechamento do card por
+  // isso. llama-swap pode nem estar rodando (setup opcional); um erro
+  // aqui só significa que o worker fica carregado até a próxima chamada
+  // de unload ou até alguém derrubar o processo na mão.
+  fetch(OPENCODE_LLAMA_SWAP_UNLOAD_URL, { method: "POST" }).catch(() => {});
+}
+
 export function createPtyRegistry(registryOpts: {
   onData: (id: string, data: string) => void;
   onExit: (id: string, exitCode: number) => void;
@@ -263,6 +284,7 @@ export function createPtyRegistry(registryOpts: {
       lastActivityAt: Date.now(),
     };
     entries.set(id, entry);
+    if (providerId === "opencode") openOpencodeCardIds.add(id);
 
     // Only watch for a fresh session when the caller didn't already pass a
     // resumeId — a spawn that already targets a known session has nothing
@@ -296,6 +318,7 @@ export function createPtyRegistry(registryOpts: {
       // mais por conta própria: enquanto o processo não sai de verdade,
       // ele continua no registry e `isAlive` continua dizendo a verdade.
       entries.delete(id);
+      if (openOpencodeCardIds.delete(id) && openOpencodeCardIds.size === 0) notifyLastOpencodeCardClosed();
       registryOpts.onExit(id, exitCode);
     });
 

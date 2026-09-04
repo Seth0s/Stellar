@@ -129,7 +129,7 @@ function rootDisplayName(root: string): string {
       .pop() || "Projects"
   );
 }
-const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor", "antigravity"];
+const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor", "antigravity", "opencode"];
 const MIN_STROKE_POINTS = 2;
 const MIN_STROKE_DISTANCE = 2;
 const STROKE_PADDING = 8;
