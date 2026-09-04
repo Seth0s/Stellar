@@ -15,28 +15,12 @@ export function registerTerminal(cardId: string, term: Terminal) {
 
 export function unregisterTerminal(cardId: string) {
   terminals.delete(cardId);
-  atlasClearCounts.delete(cardId);
 }
-
-/** Test-only (verify harness — scripts/verify/smoke-terminal-webgl-atlas-clear.mjs)
- * — "fica borrada dependendo do zoom" (2026-09-04): proving
- * `clearTextureAtlas()` actually fires on a fontSize change (useTerminal.ts's
- * Effect 5) needs a signal a CDP test can read, since `@xterm/addon-webgl`
- * itself isn't exposed on `window` and its instance is per-card, private to
- * the hook. Counted here instead of asserting on visual blur directly (no
- * pixel-diffing harness exists in this repo). */
-const atlasClearCounts = new Map<string, number>();
-export function noteAtlasClear(cardId: string) {
-  atlasClearCounts.set(cardId, (atlasClearCounts.get(cardId) ?? 0) + 1);
-}
-export function getAtlasClearCount(cardId: string): number {
-  return atlasClearCounts.get(cardId) ?? 0;
-}
-(window as unknown as { __getAtlasClearCount: typeof getAtlasClearCount }).__getAtlasClearCount = getAtlasClearCount;
 
 /** Test-only (SCREEN_SPACE_PROJECTION_PLAN.md, Trilha A's verify
- * harness — `smoke-terminal-font-zoom.mjs`) — the real `fontSize`
- * `useTerminal.ts` set on this terminal via `fontSizeForZoom`. Reading it
+ * harness — `smoke-terminal-font-zoom.mjs`) — the real `fontSize` the
+ * live xterm.js instance has (fixed at `BASE_FONT_SIZE`, useTerminal.ts —
+ * board zoom never touches it, achado ao vivo 2026-09-04). Reading it
  * directly here is far more reliable than the canvas-introspection
  * heuristics the earlier version of that test used (xterm's internal
  * measurement canvas is recreated on demand and isn't stably present

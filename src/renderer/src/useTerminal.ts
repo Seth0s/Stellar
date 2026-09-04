@@ -4,80 +4,27 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { toast } from "./useToast";
-import { registerTerminal, unregisterTerminal, noteAtlasClear } from "./terminal-registry";
+import { registerTerminal, unregisterTerminal } from "./terminal-registry";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove"] as const;
 
+// Achado ao vivo (2026-09-04) — a fonte já teve uma fase em que
+// acompanhava o zoom do board (`fontSize = BASE / zoom`, compensando o
+// `transform: scale(zoom)` do card por fora pra manter o tamanho aparente
+// constante em qualquer zoom). Removido a pedido explícito do usuário: o
+// zoom do board é puramente ÓPTICO pra qualquer card (Trilha B) — o
+// terminal não é diferente. `BASE_FONT_SIZE` agora é fixo pra sempre, do
+// spawn até o fechamento do card; a única coisa que ainda recalcula
+// cols/rows de verdade é um RESIZE real (arrastar a borda do card,
+// `fitNow()`/`onResizeSettled`, TerminalCard.tsx) — o board zoom nunca
+// mais toca fontSize, fit() ou o PTY.
 const BASE_FONT_SIZE = 15;
-// Achado ao vivo (2026-09-02) — a versão anterior deste mecanismo fazia
-// `fontSize` acompanhar o zoom DIRETAMENTE (`fontSize = BASE * zoom`), na
-// crença de que isso melhorava a nitidez em qualquer zoom. Matemática real,
-// achada ao investigar um relato do usuário ("zoom '-' diminui a fonte, eu
-// esperava o contrário"): o `fontSize` do xterm não é só "densidade de
-// raster" — ele TAMBÉM decide quantas colunas/linhas cabem no container
-// (que fica em tamanho de mundo FIXO, não escalado — Trilha B), e depois
-// o card INTEIRO ainda escala visualmente de novo via `transform:
-// scale(zoom)` (App.tsx/`.card-scale`). As duas escalas multiplicam:
-// tamanho aparente na tela = fontSize(∝zoom) × transform(zoom) ∝ zoom² —
-// o texto crescia/encolhia ao QUADRADO do zoom do board, não 1:1 como
-// todo o resto do card (zoom 0.5x → texto 4x menor, não 2x). Isso
-// explicava os dois lados do mesmo sintoma: "mais nítido" no zoom-in
-// (na real, ficava desproporcionalmente GRANDE, lido como "nítido") e
-// "encolhe rápido demais" no zoom-out.
-//
-// Pedido explícito do usuário corrigindo a direção: zoom-IN deveria
-// DIMINUIR a fonte (até um piso legível — já perto o bastante, não
-// precisa de mais glifo) e zoom-OUT deveria AUMENTAR (compensar o
-// `transform` encolhendo tudo, mantendo legibilidade "de longe") — o
-// INVERSO da relação anterior, não só uma versão atenuada dela.
-// `fontSize = BASE / zoom` faz exatamente isso e tem uma propriedade
-// elegante: tamanho aparente na tela = (BASE/zoom) × zoom = BASE,
-// CONSTANTE — o texto do terminal fica com o mesmo tamanho visual
-// aproximado em qualquer zoom do board, dentro do clamp abaixo (que
-// existe pra não pedir uma textura-fonte absurdamente grande/pequena nos
-// extremos de zoom 0.2–3.0, useWorldTransform.ts). Em zoom=1 continua
-// dando exatamente `BASE_FONT_SIZE` (mesmo ponto de ancoragem de sempre).
-//
-// Nota honesta, não é o mesmo mecanismo do navegador embutido: isso NÃO
-// é "resolução real" tipo `deviceScaleFactor`/`setContentSize`
-// (BrowserCard.tsx) — o canvas do xterm continua com a mesma resolução
-// crua do container (não muda com fontSize). O que fontSize maior faz é
-// rasterizar cada GLYPH numa textura-fonte de maior detalhe (WebGL desenha
-// a partir dela, não do container inteiro) — aqui isso só entra em jogo
-// pra manter o glifo legível quando o zoom-out pede uma fonte maior;
-// supersampling do glyph, não aumento real da resolução do canvas.
-const FONT_SIZE_MIN = 3;
-// Reported live (2026-09-03, zoom 43%, reproduced with a screenshot
-// comparison): the old `FONT_SIZE_MAX = 45` ceiling let the font grow way
-// past `BASE_FONT_SIZE` whenever zoomed out — but Effect 5 below still
-// refits cols/rows against the container's fixed (world-space,
-// zoom-invariant — Trilha B) box width right after, so a bigger font
-// genuinely means fewer real columns. A CLI's own statusline (needs
-// ~80+ cols) wrapped into 2 lines of giant text, or later (a softer,
-// per-card column-floor cap tried first) got silently truncated instead —
-// neither is acceptable, and there's no general way to know how many
-// columns any given CLI's own UI actually needs to not truncate. The one
-// cap that can't ever cause either: never let the font grow BIGGER than
-// its zoom=1 anchor at all — that guarantees the exact same cols/rows the
-// card already has at zoom=1, at any zoom <= 1 (a resized-bigger card
-// keeps its bigger cols too, this isn't a fixed column count). Trade-off
-// accepted explicitly with the user: apparent text size no longer stays
-// visually constant when zoomed way out — it shrinks like everything else
-// on the board — in exchange for content never breaking. Zoom-in
-// (zoom > 1) is untouched: `raw` is already below `BASE_FONT_SIZE` there.
-function fontSizeForZoom(zoom: number): number {
-  const raw = BASE_FONT_SIZE / zoom;
-  return Math.round(Math.min(BASE_FONT_SIZE, Math.max(FONT_SIZE_MIN, raw)));
-}
 
 /**
- * Shared by `FullWidthFitAddon` below and by the zoom-driven font cap
- * (Effect 5) — both need the same "real usable pixels inside this
- * terminal's box" number, parent box minus its own padding. Pulled out so
- * the cap doesn't duplicate (and risk drifting from) the padding math the
- * fit addon already gets right.
+ * Shared by `FullWidthFitAddon` below — the real usable pixels inside
+ * this terminal's box, parent box minus its own padding.
  */
 function availableSize(term: Terminal): { width: number; height: number } | undefined {
   if (!term.element || !term.element.parentElement) return undefined;
@@ -300,21 +247,6 @@ export function useTerminal(
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
-  // Achado ao vivo (2026-09-04, "fica borrada dependendo do zoom" — a
-  // fonte deveria ficar nítida em qualquer zoom, per `fontSizeForZoom`
-  // acima, mas continuava borrada mesmo depois do refit de Effect 5).
-  // `@xterm/addon-webgl` cacheia cada glifo já desenhado num atlas de
-  // textura, medido em pixels reais no fontSize vigente na hora do
-  // primeiro desenho (mesma classe de bug documentada acima pro atlas
-  // de tofu do Nerd Font, achada ao vivo naquela ocasião: o atlas nunca
-  // se auto-invalida). Mudar só `term.options.fontSize` NÃO limpa esse
-  // atlas — os glifos antigos (rasterizados no fontSize anterior) ficam
-  // esticados/encolhidos pro novo tamanho de célula em vez de
-  // redesenhados nitidamente, exatamente o "zoom óptico" relatado.
-  // Precisa da instância do addon guardada aqui pra poder chamar
-  // `clearTextureAtlas()` (dispara um redraw de verdade) toda vez que o
-  // fontSize muda de fato.
-  const webglAddonRef = useRef<WebglAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
   // Item 34 — guards Effect 3 so the DOM/GPU attachment (`term.open()`)
   // happens at most once per Terminal instance, not once per visibility
@@ -476,16 +408,13 @@ export function useTerminal(
       });
       const f = new FullWidthFitAddon();
       t.loadAddon(f);
-      let webgl: WebglAddon | undefined;
       if (withWebgl) {
         try {
-          webgl = new WebglAddon();
-          t.loadAddon(webgl);
+          t.loadAddon(new WebglAddon());
         } catch {
           // Some GPU/driver combinations report WebGL2 as available here but
           // only actually fail later, inside open() below — this check still
           // catches the common case for free.
-          webgl = undefined;
         }
       }
       // JetBrains Mono já suporta ligaduras — só não renderizavam sem este
@@ -499,12 +428,11 @@ export function useTerminal(
         // sem ligaduras nesse ambiente — terminal continua funcional.
       }
       t.attachCustomWheelEventHandler((e) => handleTerminalWheel(t, e));
-      return { t, f, webgl };
+      return { t, f };
     }
-    const { t: term, f: fit, webgl } = buildTerminal(true);
+    const { t: term, f: fit } = buildTerminal(true);
     termRef.current = term;
     fitRef.current = fit;
-    webglAddonRef.current = webgl ?? null;
     registerTerminal(id, term);
     const onTermData = term.onData((data) => {
       if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, data);
@@ -515,7 +443,6 @@ export function useTerminal(
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
-      webglAddonRef.current = null;
       openedRef.current = false;
     };
   }, [ptyId]);
@@ -567,7 +494,6 @@ export function useTerminal(
         fit = rebuilt.f;
         termRef.current = term;
         fitRef.current = fit;
-        webglAddonRef.current = null;
         term.open(el);
       }
       fit.fit();
@@ -840,61 +766,6 @@ export function useTerminal(
   useEffect(() => {
     if (visible) attachRef.current?.();
   }, [visible]);
-
-  // Effect 5 (item 57 ponto 10, Trilha A) — every terminal now, `bash`
-  // included (see `fontSizeForZoom`'s own comment above — the exclusion
-  // existed only because the fix used to be a small "levemente mais
-  // nítido" nudge, not a real anti-blur fix; now that it closes the whole
-  // gap, there's no reason a plain shell should stay blurry while an
-  // agent terminal doesn't). Achado ao vivo (resize fluidity pass): a
-  // versão original disparava a mutação de `fontSize` (realoca o atlas
-  // de glyphs WebGL do xterm) + `fit()` + resize de PTY em CADA tick de
-  // 0.1 no zoom, sem nenhum debounce — um gesto de zoom rápido cruzando
-  // vários passos de 0.1 disparava várias realocações caras em sequência,
-  // a mesma classe de bug já corrigida na Trilha A do navegador
-  // (`BrowserCard.tsx`'s efeito de zoom, 150ms). Mesmo padrão aqui:
-  // `lastFontZoomStepRef` só é atualizado DENTRO do timeout (quando a
-  // mudança realmente é aplicada), não a cada tick — um passo intermediário
-  // durante o gesto só cancela/reagenda o timer, nunca faz o trabalho caro.
-  const lastFontZoomStepRef = useRef<number | null>(null);
-  const fontZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    const step = Math.round(zoom * 10) / 10;
-    if (lastFontZoomStepRef.current === step) return;
-
-    if (fontZoomTimerRef.current) {
-      clearTimeout(fontZoomTimerRef.current);
-      fontZoomTimerRef.current = null;
-    }
-
-    fontZoomTimerRef.current = setTimeout(() => {
-      fontZoomTimerRef.current = null;
-      lastFontZoomStepRef.current = step;
-      const term = termRef.current;
-      const fit = fitRef.current;
-      if (!term || !fit) return;
-      const newSize = fontSizeForZoom(step);
-      if (term.options.fontSize === newSize) return;
-      term.options.fontSize = newSize;
-      fit.fit();
-      // `clearTextureAtlas()` — see `webglAddonRef`'s doc comment above.
-      // Without this, the WebGL addon keeps drawing glyphs cached at the
-      // PREVIOUS fontSize, stretched to the new cell size: real quality
-      // never changes, only the optical scale, exactly the "borrada
-      // dependendo do zoom" report.
-      if (webglAddonRef.current) {
-        webglAddonRef.current.clearTextureAtlas();
-        noteAtlasClear(id);
-      }
-      if (ptyIdRef.current) void window.pty.resize(ptyIdRef.current, term.cols, term.rows);
-    }, 150);
-  }, [zoom]);
-
-  useEffect(() => {
-    return () => {
-      if (fontZoomTimerRef.current) clearTimeout(fontZoomTimerRef.current);
-    };
-  }, []);
 
   function fitNow() {
     const fit = fitRef.current;
