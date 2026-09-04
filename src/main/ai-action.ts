@@ -77,6 +77,13 @@ export async function runOneShotSummary(providerId: string, cwd: string, prompt:
       }
     }
 
+    // opencode's one-shot shape (`run [message] --format json`) is a
+    // JSONL event stream, not a single final-answer object like the other
+    // three below — parsing it right needs its own extractor, not built
+    // here yet. Fails explicit and fast instead of sending it `-p`/
+    // `--output-format`, flags it doesn't have, and silently misbehaving.
+    if (provider.id === "opencode") return { error: "ação de IA em um clique ainda não suporta opencode — use o card de terminal diretamente" };
+
     // claude, cursor-agent, and antigravity (agy) all share the same
     // -p/--output-format flags (see extractJsonResult's doc comment).
     const { stdout } = await execFileNoStdin(binary, ["-p", prompt, "--output-format", "json"], {

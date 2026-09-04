@@ -107,6 +107,43 @@ try {
   } else {
     console.error("agy não instalado — pulando a perna do antigravity");
   }
+
+  // --- opencode: config próprio (~/.config/opencode/opencode.json, chave
+  // `mcp`), lido por fs direto (mesmo padrão do cursor acima) — precisa
+  // mergear com o que já está lá (o provider `qwen-local` já configurado
+  // nesta máquina, ver ai memory `qwen-buun-local-server`) e ser idempotente.
+  const OPENCODE_CONFIG = join(FAKE_HOME, ".config", "opencode", "opencode.json");
+  mkdirSync(join(FAKE_HOME, ".config", "opencode"), { recursive: true });
+  writeFileSync(
+    OPENCODE_CONFIG,
+    JSON.stringify({ provider: { "outro-provider": { npm: "@ai-sdk/openai-compatible" } } }, null, 2),
+    "utf8",
+  );
+  function readOpencodeConfig() {
+    return JSON.parse(readFileSync(OPENCODE_CONFIG, "utf8"));
+  }
+
+  if (which(["opencode"])) {
+    await page.evalJs(
+      `window.pty.spawn("opencode-probe", "opencode", ${JSON.stringify(FAKE_HOME)}, 80, 24).then(r => JSON.stringify(r))`,
+    );
+    await new Promise((r) => setTimeout(r, 2500));
+
+    const afterOpencode = readOpencodeConfig();
+    check("spawnar um card opencode registra o stellar no config global do opencode", afterOpencode.mcp?.stellar?.type, "local");
+    check("...apontando pro shim stdio (command é um array de 1 elemento com o path do shim)", afterOpencode.mcp?.stellar?.command?.[0], SHIM);
+    check("...e MERGEIA: o provider `qwen-local` que já estava configurado continua lá", afterOpencode.provider?.["outro-provider"]?.npm, "@ai-sdk/openai-compatible");
+
+    // Idempotência: um segundo card não deve reescrever nada.
+    const markedOpencode = readOpencodeConfig();
+    markedOpencode.__marcadorDoTeste = 1;
+    writeFileSync(OPENCODE_CONFIG, JSON.stringify(markedOpencode, null, 2), "utf8");
+    await page.evalJs(`window.pty.spawn("opencode-probe-2", "opencode", ${JSON.stringify(FAKE_HOME)}, 80, 24)`);
+    await new Promise((r) => setTimeout(r, 2000));
+    check("um segundo card opencode não reescreve o arquivo", readOpencodeConfig().__marcadorDoTeste, 1);
+  } else {
+    console.error("opencode não instalado — pulando a perna do opencode");
+  }
 } finally {
   finish();
   await stopApp(app);

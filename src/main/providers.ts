@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
-export type ProviderId = "bash" | "claude" | "codex" | "cursor" | "antigravity";
+export type ProviderId = "bash" | "claude" | "codex" | "cursor" | "antigravity" | "opencode";
 
 export type SpawnOpts = {
   resumeId?: string;
@@ -190,6 +190,28 @@ export const PROVIDERS: ProviderDef[] = [
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
       if (effort) args.push("--effort", effort);
+      return args;
+    },
+  },
+  // Pedido ao vivo (2026-09-04) — worker local (Qwen via llama-server,
+  // ver ai memory `qwen-buun-local-server`) precisava de um agente de
+  // terminal de verdade (tool-calling real) em vez de só chat cru; em
+  // vez de construir um harness próprio, reusa o `opencode` (sst/opencode)
+  // já instalado, que já fala com qualquer endpoint OpenAI-compatible via
+  // `provider` custom em `~/.config/opencode/opencode.json`. Sem flag
+  // efêmera de registro de MCP (confirmado no `--help` real: só
+  // `opencode mcp` persistente) — mesma categoria de cursor/antigravity
+  // acima, registro fica em `mcp-registration.ts`.
+  {
+    id: "opencode",
+    label: "OpenCode",
+    binaryNames: ["opencode"],
+    installCommand: { posix: "npm install -g opencode-ai", windows: "npm install -g opencode-ai" },
+    buildArgs: ({ resumeId, continueLast, model }) => {
+      const args: string[] = [];
+      if (resumeId) args.push("--session", resumeId);
+      else if (continueLast) args.push("--continue");
+      if (model) args.push("--model", model);
       return args;
     },
   },

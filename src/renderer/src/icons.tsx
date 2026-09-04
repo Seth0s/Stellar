@@ -8,6 +8,7 @@ import {
   ArrowRight,
   Bell,
   BotMessageSquare,
+  Boxes,
   BoxSelect,
   Braces,
   Bug,
@@ -127,6 +128,7 @@ export type IconName =
   | "providerCodex"
   | "providerCursor"
   | "providerAntigravity"
+  | "providerOpencode"
   | "folderOpen"
   | "fileImage"
   | "fileMarkdown"
@@ -212,6 +214,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   providerCodex: Code2,
   providerCursor: MousePointerClick,
   providerAntigravity: Rocket,
+  providerOpencode: Boxes,
   folderOpen: FolderOpen,
   fileImage: Image,
   fileMarkdown: FileText,
