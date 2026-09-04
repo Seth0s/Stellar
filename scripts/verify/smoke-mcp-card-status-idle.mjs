@@ -4,10 +4,16 @@
 // card_status_changed que dispare notificação automática pro agente que
 // fez o spawn_agent". Verifies BOTH halves: `card_status` reports 'idle'
 // (not just 'running') for a card that's genuinely gone quiet, and the
-// spawner gets a real, visible notification written into its OWN
-// terminal the moment that transition happens — no polling on the
-// spawner's side, no new push channel invented, just `writeToCard`
-// reused (the same mechanism `send_to_card` already uses).
+// spawner gets notified the moment that transition happens.
+//
+// Achado ao vivo (2026-09-04) — a primeira versão disto verificava a
+// notificação escrevendo (via `writeToCard`) direto no PTY do spawner.
+// Relatado ao vivo como "extremamente invasiva": sentava como texto NÃO
+// ENVIADO no prompt de quem estivesse do outro lado, inclusive o chat ao
+// vivo do próprio usuário quando ele é o spawner. Trocado por uma
+// notificação de SO (`electron.Notification`, main process) — este teste
+// agora confirma a chamada via `debug:last-idle-notification` (test-only,
+// ver main/index.ts) em vez de ler o buffer do terminal.
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
 
 const CDP_PORT = 9614;
@@ -84,23 +90,12 @@ try {
   const idleStatus = await toolJson("card_status", { target: childCardId });
   check("card_status reporta 'idle' depois do card ficar quieto de verdade", idleStatus.status, "idle");
 
-  // O spawner (o card que chamou spawn_agent) deve ter recebido a
-  // notificação real, escrita no PRÓPRIO terminal dele — não é preciso
-  // fazer polling nenhum do lado de quem spawnou.
-  const spawnerText = await toolJson("read_card", { target: spawnerCardId, lines: 20 });
-  check(
-    "o spawner recebeu a notificação real de 'ficou ocioso' escrita no próprio terminal",
-    /sistema/i.test(spawnerText.text) && /ocioso/i.test(spawnerText.text),
-    true,
-  );
-
-  // Confirma que o card ORIGINAL (o próprio spawner, ainda com atividade
-  // recente da escrita acima) continua 'running', não 'idle' — a
-  // notificação em si é uma escrita real no PTY, então reseta a
-  // atividade dele por conta própria; só checa que o estado por card é
-  // mesmo independente.
-  const spawnerStatus = await toolJson("card_status", { target: spawnerCardId });
-  check("o card do spawner (que acabou de receber a notificação) continua 'running', não 'idle'", spawnerStatus.status, "running");
+  // O spawner (o card que chamou spawn_agent) deve ter disparado uma
+  // notificação de SO real — sem tocar no buffer/entrada de nenhum
+  // terminal. `debug:last-idle-notification` é test-only (main/index.ts).
+  const lastNotif = JSON.parse(await page.evalJs(`window.debugBridge.lastIdleNotification().then(JSON.stringify)`));
+  check("uma notificação de SO foi disparada (não uma escrita no PTY)", lastNotif !== null, true);
+  check("a notificação referencia o card que ficou ocioso", lastNotif?.label != null, true);
 
   page.close();
 } finally {

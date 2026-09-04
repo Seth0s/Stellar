@@ -831,6 +831,10 @@ const debugBridge = {
    * packaged build, see main/index.ts's guard. */
   browserContentSize: (cardId: string): Promise<{ w: number; h: number; scaleFactor: number } | null> =>
     ipcRenderer.invoke("debug:browser-content-size", cardId),
+  /** Test-only (verify harness — scripts/verify/smoke-mcp-card-status-idle.mjs)
+   * — null in a packaged build, see main/index.ts's guard. */
+  lastIdleNotification: (): Promise<{ label: string; idleThresholdMs: number } | null> =>
+    ipcRenderer.invoke("debug:last-idle-notification"),
 };
 contextBridge.exposeInMainWorld("debugBridge", debugBridge);
 
