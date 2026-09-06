@@ -276,6 +276,32 @@ function BrowserCardInner({
     };
   }, [id]);
 
+  // Pendentes #188 — menu de contexto nativo do Chromium embutido. O
+  // botão direito real já chega na página via `onCanvasPointerDown`'s
+  // forward normal de mouse (mouseButtonName cobre "right"); o Chromium
+  // da página offscreen dispara `context-menu` sozinho, main process
+  // reencaminha aqui. `params.x/y` chegam no espaço de CONTEÚDO
+  // (`contentSizeRef`, mesmo de `toCanvasPoint`) — a conversão inversa
+  // abaixo (conteúdo → tela real) é o que `Menu.popup({window,x,y})`
+  // precisa, já que ele posiciona relativo à janela real do app, não ao
+  // webContents offscreen (que nunca teve posição de tela nenhuma).
+  useEffect(() => {
+    const offMenu = window.browser.onContextMenu((menuId, params) => {
+      if (menuId !== id) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const box = canvas.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0) return;
+      const { w: contentW, h: contentH } = contentSizeRef.current;
+      const screenX = box.left + (params.x / contentW) * box.width;
+      const screenY = box.top + (params.y / contentH) * box.height;
+      void window.browser.showContextMenu(id, screenX, screenY, params);
+    });
+    return () => {
+      offMenu();
+    };
+  }, [id]);
+
   // Draws each JPEG frame from the card's offscreen BrowserWindow straight
   // onto its own canvas (see browser-registry.ts) — plain DOM content, so
   // it rides the same CSS transform every other card kind already gets for
@@ -649,6 +675,12 @@ function BrowserCardInner({
         onKeyDown={onCanvasKeyDown}
         onKeyUp={onCanvasKeyUp}
         onCompositionEnd={onCanvasCompositionEnd}
+        // O menu de verdade chega assíncrono, via `onContextMenu` do
+        // `window.browser` acima (a página embutida é quem decide os
+        // itens) — este handler só evita que o botão direito também
+        // dispare algo do PRÓPRIO app (radial menu do board, menu OS
+        // default) por cima/embaixo do menu real.
+        onContextMenu={(e) => e.preventDefault()}
       />
       <Popover anchorRef={menuBtnRef} open={menuOpen} onClose={() => setMenuOpen(false)} className={styles.browserCardMenu} dataRole="browser-menu">
         {/* Header responsivo (§2.1) — sempre presentes aqui, não só

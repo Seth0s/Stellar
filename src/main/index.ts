@@ -1,4 +1,18 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, net, Notification, protocol, screen, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  desktopCapturer,
+  dialog,
+  ipcMain,
+  Menu,
+  net,
+  Notification,
+  protocol,
+  screen,
+  session,
+  shell,
+} from "electron";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -27,6 +41,7 @@ import {
   type BrowserMouseEvent,
   type BrowserWheelEvent,
   type BrowserKeyEvent,
+  type BrowserContextMenuParams,
 } from "./browser-registry";
 import { createMessageBus, type BusRequest, type StickyResult } from "./message-bus";
 import { ensureMcpRegistered } from "./mcp-registration";
@@ -784,6 +799,7 @@ function createWindow() {
     onLoading: (id, loading) => safeSend(win, "browser:loading", id, loading),
     onFrame: (id, jpeg, width, height) => safeSend(win, "browser:frame", id, jpeg, width, height),
     onConsoleMessage: (id, level, message) => safeSend(win, "browser:console-message", id, level, message),
+    onContextMenu: (id, params) => safeSend(win, "browser:context-menu", id, params),
     // Achado ao vivo ("navegador parece 360p") — o display onde a janela
     // REAL do app está, não `getPrimaryDisplay()`, é correto mesmo num
     // setup multi-monitor com DPIs diferentes (a janela pode não estar no
@@ -1294,6 +1310,52 @@ function createWindow() {
   ipcMain.handle("browser:forward", (_e, id: string) => browserRegistry.forward(id));
   ipcMain.handle("browser:reload", (_e, id: string) => browserRegistry.reload(id));
   ipcMain.handle("browser:open-devtools", (_e, id: string) => browserRegistry.openDevTools(id));
+  // Pendentes #188 — menu de contexto nativo do Chromium embutido.
+  // `x`/`y` já chegam em coordenadas reais de tela relativas a `win`
+  // (BrowserCard.tsx fez a conversão a partir do retângulo real do
+  // canvas — ver `browser-registry.ts`'s `context-menu` listener e o
+  // doc comment de `BrowserContextMenuParams`). Cada item chama um
+  // método já existente do registry — nada novo em termos de mecanismo,
+  // só um jeito nativo de disparar o que o rail/teclado já disparavam.
+  ipcMain.handle(
+    "browser:show-context-menu",
+    (_e, id: string, x: number, y: number, params: BrowserContextMenuParams) => {
+      const template: Electron.MenuItemConstructorOptions[] = [];
+      template.push(
+        { label: "Voltar", enabled: params.canGoBack, click: () => browserRegistry.back(id) },
+        { label: "Avançar", enabled: params.canGoForward, click: () => browserRegistry.forward(id) },
+        { label: "Recarregar", click: () => browserRegistry.reload(id) },
+      );
+      if (params.linkURL) {
+        template.push(
+          { type: "separator" },
+          { label: "Abrir link", click: () => browserRegistry.navigate(id, params.linkURL) },
+          { label: "Copiar endereço do link", click: () => clipboard.writeText(params.linkURL) },
+        );
+      }
+      if (params.mediaType === "image" && params.srcURL) {
+        template.push(
+          { type: "separator" },
+          { label: "Copiar endereço da imagem", click: () => clipboard.writeText(params.srcURL) },
+        );
+      }
+      if (params.selectionText || params.isEditable) {
+        template.push({ type: "separator" });
+        if (params.selectionText) template.push({ label: "Copiar", click: () => browserRegistry.copyText(id) });
+        if (params.isEditable) {
+          template.push(
+            { label: "Recortar", click: () => browserRegistry.cutText(id) },
+            { label: "Colar", click: () => browserRegistry.pasteText(id) },
+          );
+        }
+      }
+      template.push(
+        { type: "separator" },
+        { label: "Inspecionar elemento", click: () => browserRegistry.inspectElementAt(id, params.x, params.y) },
+      );
+      Menu.buildFromTemplate(template).popup({ window: win, x, y });
+    },
+  );
   ipcMain.handle("browser:resize", (_e, id: string, w: number, h: number, zoom?: number) => browserRegistry.resize(id, w, h, zoom));
   ipcMain.handle("browser:set-visible", (_e, id: string, visible: boolean) => browserRegistry.setVisible(id, visible));
   ipcMain.handle("browser:set-focused", (_e, id: string, focused: boolean) => browserRegistry.setFocused(id, focused));
