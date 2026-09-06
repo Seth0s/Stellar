@@ -24,7 +24,7 @@ import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
 import { Rail } from "./Rail";
-import { OffscreenPips } from "./OffscreenPips";
+import { Compass } from "./Compass";
 import { Topbar } from "./Topbar";
 import { Titlebar } from "./Titlebar";
 import { UpdateBanner } from "./UpdateBanner";
@@ -599,7 +599,6 @@ export function App() {
     setWorld,
     worldRef,
     viewportRef,
-    viewportSize,
     visibleRect,
     clientToWorld,
     zoomBy,
@@ -2730,15 +2729,7 @@ export function App() {
         onSetConcurrencyCap={setBoardConcurrencyCap}
         onSuggestInstall={stableSuggestInstall}
       />
-      <OffscreenPips
-        cards={cards}
-        visibleRect={visibleRect}
-        world={world}
-        viewportSize={viewportSize}
-        kindIcon={CARD_ICON}
-        kindLabel={CARD_LABEL}
-        onFocusCard={jumpToCard}
-      />
+      <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} onFocusCard={jumpToCard} />
       <UpdateBanner />
       <ToastHost />
       {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
