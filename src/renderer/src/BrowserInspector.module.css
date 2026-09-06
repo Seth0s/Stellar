@@ -86,8 +86,27 @@
   padding: 0 2px;
 }
 
+/* Achado ao vivo (screenshot do usuário): faltava o reset de botão nativo
+   aqui — `.dockButtons button` só definia padding, então os 3 ícones de
+   dock (dentro de uma div própria, não filhos DIRETOS de `.inspectorTabs`,
+   então não pegavam o reset de `.inspectorTabs > button` abaixo) caíam no
+   estilo padrão do Chromium (fundo branco, borda, ícone preto) — exatamente
+   o "ícones quebrados e sem fundo" reportado. */
 .dockButtons button {
+  background: none;
+  border: none;
+  color: var(--muted);
   padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dockButtons button:hover {
+  background: var(--surface);
+  color: var(--text);
 }
 
 .dockButtons button[data-active] {
