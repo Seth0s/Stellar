@@ -16,10 +16,10 @@
 // depending on YouTube's actual DOM/network (flaky, out of this app's
 // control) the way the original live investigation had to.
 import { createServer } from "node:http";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9454;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-fullscreen-crash", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-fullscreen-crash-${CDP_PORT}`, import.meta.url).pathname;
 
 const server = createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/html" });

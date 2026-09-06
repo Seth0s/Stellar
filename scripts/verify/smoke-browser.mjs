@@ -8,10 +8,10 @@
 // never shows native/offscreen-composited content), so this reads the
 // canvas's own pixel data directly via `getImageData`, a plain DOM API with
 // no such blind spot.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9406;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-${CDP_PORT}`, import.meta.url).pathname;
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });

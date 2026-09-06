@@ -4,10 +4,10 @@
 // (none exists yet — see docs/packaging.md), so this drives the UI via
 // `window.updater.testEmitAvailable` (main/updater.ts's `app.isPackaged`-
 // guarded test-only trigger) instead of a real update.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9413;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-updater", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-updater-${CDP_PORT}`, import.meta.url).pathname;
 
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 const { check, finish } = makeChecker();

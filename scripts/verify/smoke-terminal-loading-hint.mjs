@@ -13,10 +13,10 @@
 // externa grande (frágil/lenta pra CI) não é prático — este teste cobre
 // o caso que TEM que ser sólido: um spawn normal (bash) nunca mostra o
 // aviso, mesmo puxando 5 amostras ao longo do primeiro segundo real.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9497;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-loading-hint", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-loading-hint-${CDP_PORT}`, import.meta.url).pathname;
 
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 const { check, finish } = makeChecker();

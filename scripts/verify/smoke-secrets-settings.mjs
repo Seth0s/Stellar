@@ -6,10 +6,10 @@
 // persistiu de verdade (não otimista), confirma que o dot no picker do
 // ChatCard reflete isso, testa mostrar/ocultar, e o caminho de erro real
 // (baseURL vazio pro provider custom já é bloqueado no próprio botão).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9453;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-secrets-settings", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-secrets-settings-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

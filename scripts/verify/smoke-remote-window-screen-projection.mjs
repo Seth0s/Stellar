@@ -11,10 +11,10 @@
 // Trilha B — posição/DOM/drag/resize/close — deixando o fluxo de captura
 // de tela real fora de escopo (já não tinha smoke test cobrindo isso
 // antes desta migração).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9573;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-remote-window-screen-projection", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-remote-window-screen-projection-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   return JSON.parse(

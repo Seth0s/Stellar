@@ -26,10 +26,10 @@
 // gone after the timeout, not just that the request eventually resolves.
 import net from "node:net";
 import { fileURLToPath } from "node:url";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9445;
-const USER_DATA_DIR_URL = new URL("../../.verify-tmp/smoke-listener-leak-timeout", import.meta.url);
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR_URL = new URL(`../../.verify-tmp/smoke-listener-leak-timeout-${CDP_PORT}`, import.meta.url);
 const USER_DATA_DIR = fileURLToPath(USER_DATA_DIR_URL);
 const SOCK_PATH = `${USER_DATA_DIR}/agent-canvas.sock`;
 

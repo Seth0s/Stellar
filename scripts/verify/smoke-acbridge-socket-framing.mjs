@@ -8,10 +8,10 @@
 // mesmo chunk TCP") — and confirms both come back answered, in order, not
 // just the first.
 import { connect } from "node:net";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9432;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-acbridge-socket-framing", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-acbridge-socket-framing-${CDP_PORT}`, import.meta.url).pathname;
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });

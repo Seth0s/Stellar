@@ -18,11 +18,11 @@
 import { readdirSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import zlib from "node:zlib";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9430;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-media-card", import.meta.url).pathname;
-const FIXTURES_DIR = new URL("../../.verify-tmp/smoke-media-card-fixtures", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-media-card-${CDP_PORT}`, import.meta.url).pathname;
+const FIXTURES_DIR = new URL(`../../.verify-tmp/smoke-media-card-fixtures-${CDP_PORT}`, import.meta.url).pathname;
 
 // ---- minimal real PNG encoder (no deps) — 40x20 solid RGB, deliberately
 // non-square so aspect-ratio-preserving resize has something real to

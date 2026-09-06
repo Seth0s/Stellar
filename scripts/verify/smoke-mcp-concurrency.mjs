@@ -9,12 +9,12 @@
 // Real cards, real processes: spawns actual "claude" cards (installed on
 // this machine, same provider other smoke tests already use) and kills
 // one for real, rather than asserting against a canned number.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9538;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-concurrency", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-concurrency-${CDP_PORT}`, import.meta.url).pathname;
 
 let nextRpcId = 1;
 async function mcpCall(method, params) {

@@ -3,10 +3,10 @@
 // for a live terminal — both added this session, both prone to silent
 // regression from unrelated changes elsewhere in App.tsx (card kind
 // unions, closeCard's animation/confirm split, etc).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9402;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-card-lifecycle", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-card-lifecycle-${CDP_PORT}`, import.meta.url).pathname;
 
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 const { check, finish } = makeChecker();

@@ -16,10 +16,10 @@
 // ultimately resolves depends on real capturable sources existing in
 // whatever display environment this runs under, which this harness
 // doesn't control and shouldn't assert on).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9410;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-display-media-gate", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-display-media-gate-${CDP_PORT}`, import.meta.url).pathname;
 
 async function connectRawTarget(cdpPort, urlSubstring) {
   const targets = await fetch(`http://127.0.0.1:${cdpPort}/json`).then((r) => r.json());

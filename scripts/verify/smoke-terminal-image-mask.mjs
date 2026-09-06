@@ -13,12 +13,12 @@
 // texto REAL renderizado no buffer do xterm.js (via terminal-registry.ts),
 // confirmando que a TELA mostra o placeholder mascarado, não o path.
 import { existsSync } from "node:fs";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9472;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-image-mask", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-image-mask-${CDP_PORT}`, import.meta.url).pathname;
 
 let nextRpcId = 1;
 async function mcpCall(method, params) {

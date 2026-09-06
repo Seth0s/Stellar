@@ -3,12 +3,12 @@
 // cross-card carried no attribution — achado ao vivo, reportado
 // diretamente pelo usuário: uma mensagem chegou sem rótulo de origem,
 // causando confusão real sobre quem estava "falando".
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9602;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-send-sender-label", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-send-sender-label-${CDP_PORT}`, import.meta.url).pathname;
 
 let nextRpcId = 1;
 async function mcpCall(method, params) {

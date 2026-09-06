@@ -11,10 +11,10 @@
 // resposta — sem mock de `window.chat`, o clique dispara o IPC real, que
 // aborta o fetch real contra este servidor.
 import { createServer } from "node:http";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9469;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-stop-button", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-stop-button-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

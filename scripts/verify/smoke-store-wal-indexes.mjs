@@ -14,10 +14,10 @@
 // (the same library store.ts itself uses) and running real
 // `PRAGMA`/`EXPLAIN QUERY PLAN` statements against it.
 import Database from "better-sqlite3";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9449;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-store-wal-indexes", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-store-wal-indexes-${CDP_PORT}`, import.meta.url).pathname;
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });

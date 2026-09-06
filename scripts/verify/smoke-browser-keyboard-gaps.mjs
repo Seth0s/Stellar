@@ -17,15 +17,15 @@
 // `browser:test-make-editable` (guardado por `!app.isPackaged`, mesmo
 // padrão de `chat:test-simulate-tool`) pra não depender de markup de uma
 // página real de terceiro (rede = instável nesse harness).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9445;
+const CDP_PORT = await pickFreePort();
 // Achado ao vivo (2026-09-02): reaproveitar sempre o mesmo diretório entre
 // execuções manuais repetidas deste arquivo específico (histórico de
 // depuração desta sessão) deixou um estado de board obsoleto que fazia
 // `bootIntoFreshSession` divergir do resto da suíte -- sufixo próprio pra
 // nunca colidir com uma execução anterior potencialmente suja.
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-keyboard-gaps-v2", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-keyboard-gaps-v2-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   return JSON.parse(

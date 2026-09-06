@@ -14,10 +14,10 @@
 // não `.world`), a mesma prova mínima que sticky/files/changes/stroke já
 // fizeram antes de confiar que a combinação nova não quebrou nada.
 import zlib from "node:zlib";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9558;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-media-screen-projection", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-media-screen-projection-${CDP_PORT}`, import.meta.url).pathname;
 
 // Mesmo encoder PNG mínimo que smoke-media-card.mjs já usa (sem deps).
 function crc32(buf) {

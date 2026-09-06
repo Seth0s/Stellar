@@ -14,12 +14,12 @@
 // self-verifying regardless: it now reads the card back after the Enter
 // and retries just the Enter (never the text) if a paste placeholder is
 // still showing. This test guards that mechanism for this payload shape.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9591;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-send-submit-longline", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-send-submit-longline-${CDP_PORT}`, import.meta.url).pathname;
 const MARKER = "CONFIRMADO-LONGLINE-88301";
 
 let nextRpcId = 1;

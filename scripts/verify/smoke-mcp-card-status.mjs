@@ -5,12 +5,12 @@
 //
 // No visual snapshot polling anywhere in this test, by design — that's
 // exactly the thing being replaced.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9495;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-card-status", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-card-status-${CDP_PORT}`, import.meta.url).pathname;
 
 let nextRpcId = 1;
 async function mcpCall(method, params) {

@@ -12,10 +12,10 @@
 // shape end-to-end, just via the expected-auth-failure branch rather than
 // a real completion. A human should do one real send with a real key
 // before trusting this against production traffic.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9438;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-${CDP_PORT}`, import.meta.url).pathname;
 
 async function clickByTitle(page, title) {
   let coords = JSON.parse(

@@ -16,10 +16,10 @@
 // resposta de texto simples válida. Confirma que a mensagem chega
 // renderizada em vez do card travar em erro.
 import { createServer } from "node:http";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9470;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-tool-call-index-fallback", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-tool-call-index-fallback-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

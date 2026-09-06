@@ -27,10 +27,10 @@
 //   DEPOIS, nasce com o painel JÁ aberto (herdado desse valor). Mesmo
 //   padrão já usado em smoke-chat-sessions-sidebar.mjs: só clica o toggle
 //   se ainda não estiver aberto.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9461;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-new-session-per-provider", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-new-session-per-provider-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

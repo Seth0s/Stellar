@@ -14,11 +14,11 @@
 // client, which — unlike a real browser — lets a test set an arbitrary
 // `Origin` header to prove the rejection path, not just the happy path).
 import { WebSocket as NodeWebSocket } from "ws";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9403;
+const CDP_PORT = await pickFreePort();
 const REMOTE_PORT = CDP_PORT + 30000; // matches cdp-client.mjs's own AGENT_CANVAS_REMOTE_PORT derivation
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-remote-control", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-remote-control-${CDP_PORT}`, import.meta.url).pathname;
 
 /** Opens a WS connection the way the real mobile client does post-S7:
  * bare URL, token sent as the first message right after `open`. Resolves

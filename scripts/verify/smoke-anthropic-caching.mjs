@@ -9,10 +9,10 @@
 // Anthropic's actual event format, not assumed) — inspects the REAL
 // request body the SDK sent, not the source code.
 import { createServer } from "node:http";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9456;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-anthropic-caching", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-anthropic-caching-${CDP_PORT}`, import.meta.url).pathname;
 
 let lastRequestBody = null;
 const server = createServer((req, res) => {

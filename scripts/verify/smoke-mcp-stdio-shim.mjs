@@ -13,12 +13,12 @@
 // instância real da app. Nada de mock: se o proxy quebrar o framing, o
 // handshake ou a identidade, quebra aqui.
 import { spawn } from "node:child_process";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9567;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-stdio-shim", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-stdio-shim-${CDP_PORT}`, import.meta.url).pathname;
 const SHIM = new URL("../../resources/bin/stellar-mcp", import.meta.url).pathname;
 
 let nextRpcId = 1;

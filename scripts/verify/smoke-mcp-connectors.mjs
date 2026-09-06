@@ -12,13 +12,13 @@
 // gate) and (2) the migration didn't break the existing UI path at all.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
 const execFileAsync = promisify(execFile);
-const CDP_PORT = 9523;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-connectors", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-connectors-${CDP_PORT}`, import.meta.url).pathname;
 const ACBRIDGE_BIN = new URL("../../resources/bin/acbridge", import.meta.url).pathname;
 
 async function runAcbridge(sockPath, args) {

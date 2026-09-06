@@ -10,10 +10,10 @@
 // multiplicação de verdade, funciona não importa o scaleFactor real da
 // máquina de teste (mesmo se for 1, a igualdade ainda é uma checagem
 // real da fiação, não um valor cravado).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9538;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-scale-factor", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-scale-factor-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

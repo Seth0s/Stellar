@@ -55,10 +55,10 @@
 // movendo o terminal recém-arrastado pro canto antes do chat existir,
 // pra este arquivo continuar medindo só o que se propõe (contagem de
 // render).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9452;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-render-memoization", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-render-memoization-${CDP_PORT}`, import.meta.url).pathname;
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });

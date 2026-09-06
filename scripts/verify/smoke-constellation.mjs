@@ -4,10 +4,10 @@
 // state — no re-render to hook into, so this drives the SAME real thing a
 // human eye would see: reads a field star's live `cx`/`cy` attributes
 // before/after synthetic mouse movement and after a real time delay.
-import { startApp, stopApp, connectPage, makeChecker } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9432;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-constellation", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-constellation-${CDP_PORT}`, import.meta.url).pathname;
 
 function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);

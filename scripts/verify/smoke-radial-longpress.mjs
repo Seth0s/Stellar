@@ -3,10 +3,10 @@
 // smoke-card-lifecycle.mjs). Held still past the 450ms timer opens it; a
 // real drag (moved past the 6px threshold early) must NOT open it — that
 // would make ordinary panning pop the menu constantly.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9412;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-radial-longpress", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-radial-longpress-${CDP_PORT}`, import.meta.url).pathname;
 
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 const { check, finish } = makeChecker();

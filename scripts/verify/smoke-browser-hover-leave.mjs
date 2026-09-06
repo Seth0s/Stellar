@@ -6,13 +6,13 @@
 // a real `mouseenter` in the embedded page's own DOM, and moving OUT of
 // the canvas triggers a real `mouseleave` there too — not two isolated
 // facts, the actual close-the-gap behavior end to end.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
-const CDP_PORT = 9535;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-hover-leave", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-hover-leave-${CDP_PORT}`, import.meta.url).pathname;
 
 let nextRpcId = 1;
 async function mcpCall(method, params) {

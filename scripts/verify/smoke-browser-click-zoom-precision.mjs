@@ -23,11 +23,11 @@
 // recomputado por uma fórmula duplicada aqui) — confirma que o clique
 // realmente chegou nele via `window.browser.onTitle` (o botão só muda o
 // título real da página no seu próprio onclick).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
-const CDP_PORT = 9541;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-click-zoom-precision", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-click-zoom-precision-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

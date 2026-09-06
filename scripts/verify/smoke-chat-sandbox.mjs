@@ -11,11 +11,11 @@
 import { mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9442;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-sandbox", import.meta.url).pathname;
-const SCRATCH_ROOT = fileURLToPath(new URL("../../.verify-tmp/smoke-chat-sandbox-scratch/", import.meta.url));
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-sandbox-${CDP_PORT}`, import.meta.url).pathname;
+const SCRATCH_ROOT = fileURLToPath(new URL(`../../.verify-tmp/smoke-chat-sandbox-scratch-${CDP_PORT}/`, import.meta.url));
 
 rmSync(SCRATCH_ROOT, { recursive: true, force: true });
 mkdirSync(SCRATCH_ROOT, { recursive: true });

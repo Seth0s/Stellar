@@ -18,11 +18,11 @@
 // capturing it.
 import { mkdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9446;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-sandbox-bash-output-cap", import.meta.url).pathname;
-const SCRATCH_ROOT = fileURLToPath(new URL("../../.verify-tmp/smoke-sandbox-bash-output-cap-scratch/", import.meta.url));
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-sandbox-bash-output-cap-${CDP_PORT}`, import.meta.url).pathname;
+const SCRATCH_ROOT = fileURLToPath(new URL(`../../.verify-tmp/smoke-sandbox-bash-output-cap-scratch-${CDP_PORT}/`, import.meta.url));
 
 rmSync(SCRATCH_ROOT, { recursive: true, force: true });
 mkdirSync(SCRATCH_ROOT, { recursive: true });

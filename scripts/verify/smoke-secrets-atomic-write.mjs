@@ -21,10 +21,10 @@
 // crash mid-write from a previous run) doesn't break the next write —
 // it's overwritten and renamed over cleanly, no corruption, no leftover.
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9454;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-secrets-atomic-write", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-secrets-atomic-write-${CDP_PORT}`, import.meta.url).pathname;
 const SECRETS_PATH = `${USER_DATA_DIR}/secrets.json`;
 const TMP_PATH = `${SECRETS_PATH}.tmp`;
 

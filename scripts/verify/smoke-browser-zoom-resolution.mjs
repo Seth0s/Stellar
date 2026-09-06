@@ -33,10 +33,10 @@
 // máquina de teste (scaleFactor=1) o teto já domina (1×3=3 > 2).
 const BROWSER_SUPERSAMPLE = 3;
 const BROWSER_MAX_DENSITY = 2;
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9534;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-zoom-resolution", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-zoom-resolution-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

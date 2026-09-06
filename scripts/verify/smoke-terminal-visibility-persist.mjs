@@ -10,10 +10,10 @@
 //
 // Fix: instância do xterm.js sobrevive a ciclos de visibilidade — só é
 // criada/destruída de verdade por identidade real de PTY, não por pan.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9451;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-visibility-persist", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-visibility-persist-${CDP_PORT}`, import.meta.url).pathname;
 
 async function drag(page, x0, y0, x1, y1, steps = 10) {
   await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: x0, y: y0, button: "left", clickCount: 1, pointerType: "mouse" });

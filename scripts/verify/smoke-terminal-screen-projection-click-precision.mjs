@@ -23,10 +23,10 @@
 // cancelar por coincidência), seguido do Ctrl+Shift+C real — se
 // `correctZoomCoords` não estivesse mais funcionando sob o card
 // projetado, o texto copiado viria errado/incompleto/vazio.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9559;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-screen-projection-click-precision", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-screen-projection-click-precision-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   return JSON.parse(

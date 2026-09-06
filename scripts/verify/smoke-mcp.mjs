@@ -5,14 +5,14 @@
 // REAL Streamable HTTP protocol via plain `fetch()` — the same thing a
 // provider's own MCP client implementation does — not a shortcut through
 // some internal function.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9430;
+const CDP_PORT = await pickFreePort();
 // Matches cdp-client.mjs's own AGENT_CANVAS_MCP_PORT derivation (cdpPort
 // + 40000) for isolated test instances — never the real app's port 4489.
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-${CDP_PORT}`, import.meta.url).pathname;
 
 let nextRpcId = 1;
 async function mcpCall(method, params) {

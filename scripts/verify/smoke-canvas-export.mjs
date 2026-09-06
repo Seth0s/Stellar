@@ -19,11 +19,11 @@
 // mesmo precedente de `clipboard:test-write-image`.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9490;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-canvas-export", import.meta.url).pathname;
-const OUT_DIR = new URL("../../.verify-tmp/smoke-canvas-export-out", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-canvas-export-${CDP_PORT}`, import.meta.url).pathname;
+const OUT_DIR = new URL(`../../.verify-tmp/smoke-canvas-export-out-${CDP_PORT}`, import.meta.url).pathname;
 mkdirSync(OUT_DIR, { recursive: true });
 
 async function centerOf(page, selector) {

@@ -15,9 +15,9 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const CDP_PORT = 9460;
-const USER_DATA_DIR = fileURLToPath(new URL("../../.verify-tmp/smoke-window-nav-guard", import.meta.url));
-const SHIM_DIR = fileURLToPath(new URL("../../.verify-tmp/smoke-window-nav-guard-shim", import.meta.url));
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = fileURLToPath(new URL(`../../.verify-tmp/smoke-window-nav-guard-${CDP_PORT}`, import.meta.url));
+const SHIM_DIR = fileURLToPath(new URL(`../../.verify-tmp/smoke-window-nav-guard-shim-${CDP_PORT}`, import.meta.url));
 const OPENED_LOG = `${SHIM_DIR}/opened.txt`;
 
 rmSync(SHIM_DIR, { recursive: true, force: true });

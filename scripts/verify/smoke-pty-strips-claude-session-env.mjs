@@ -15,10 +15,10 @@
 // real roda `env` e o stream real do PTY (via `window.pty.onData`) é
 // inspecionado por essas chaves — se a fix regredir, elas reaparecem no
 // terminal de verdade.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9461;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-pty-strips-claude-session-env", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-pty-strips-claude-session-env-${CDP_PORT}`, import.meta.url).pathname;
 
 // Valores fabricados de propósito — não dependemos do ambiente de quem
 // roda a suíte já ter (ou não) essas variáveis setadas de verdade; o

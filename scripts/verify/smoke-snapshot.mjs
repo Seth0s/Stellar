@@ -17,13 +17,13 @@
 // capturePage() now shows the real page (confirmed visually, a live Google
 // homepage came through pixel-for-pixel). No workaround code needed; this
 // test is the regression guard against it silently breaking again.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
-const CDP_PORT = 9427;
-const USER_DATA_DIR_URL = new URL("../../.verify-tmp/smoke-snapshot", import.meta.url);
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR_URL = new URL(`../../.verify-tmp/smoke-snapshot-${CDP_PORT}`, import.meta.url);
 const USER_DATA_DIR = fileURLToPath(USER_DATA_DIR_URL);
 const SOCK_PATH = `${USER_DATA_DIR}/agent-canvas.sock`;
 

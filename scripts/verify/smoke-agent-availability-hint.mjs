@@ -15,11 +15,11 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9467;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-agent-availability-hint", import.meta.url).pathname;
-const SHIM_BIN_DIR = new URL("../../.verify-tmp/smoke-agent-availability-hint-bin", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-agent-availability-hint-${CDP_PORT}`, import.meta.url).pathname;
+const SHIM_BIN_DIR = new URL(`../../.verify-tmp/smoke-agent-availability-hint-bin-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

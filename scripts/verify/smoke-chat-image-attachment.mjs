@@ -17,10 +17,10 @@
 // ClipboardEvent/DragEvent sintético com DataTransfer+File já usado por
 // smoke-terminal-links-paste.mjs/smoke-terminal-image-mask.mjs.
 import { createServer } from "node:http";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9485;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-image-attachment", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-image-attachment-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(
