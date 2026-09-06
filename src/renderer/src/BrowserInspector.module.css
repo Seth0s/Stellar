@@ -1,0 +1,231 @@
+/* Pendentes #188 — mini-inspector embutido no card. Drawer absoluto na
+   parte de baixo do canvas (não reflow do viewport da página — ver
+   BrowserInspector.tsx's doc comment no topo do arquivo pro porquê). */
+
+.inspector {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 46%;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+  color: var(--text);
+  z-index: 5;
+}
+
+.inspectorTabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.inspectorTabs > button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.inspectorTabs > button:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.inspectorTabs > button[data-active] {
+  background: var(--surface);
+  color: var(--foam);
+}
+
+.inspectorTabsSpacer {
+  flex: 1;
+}
+
+.inspectorBody {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.inspectorEmpty {
+  padding: 12px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------ Elements */
+
+.tree {
+  padding: 6px 4px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.treeNode {
+  min-width: max-content;
+}
+
+.treeLine {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.treeLine:hover {
+  background: var(--surface);
+}
+
+.treeLine[data-selected] {
+  background: color-mix(in srgb, var(--foam) 20%, transparent);
+}
+
+.treeToggle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 0;
+  width: 14px;
+}
+
+.treeToggleSpacer {
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.treeChildren {
+  margin-left: 14px;
+}
+
+.treeTag {
+  color: var(--violet);
+}
+
+.treeAttrs {
+  color: var(--good);
+}
+
+.treeText {
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+/* ------------------------------------------------------------- Console */
+
+.console {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.consoleLog {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+}
+
+.consoleLine {
+  padding: 2px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.consoleLine[data-level="error"] {
+  color: var(--danger);
+}
+
+.consoleLine[data-level="warning"] {
+  color: var(--warn);
+}
+
+.consoleLine[data-level="input"] {
+  color: var(--foam);
+}
+
+.consoleLine[data-level="result"] {
+  color: var(--good);
+}
+
+.consoleInputRow {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.consoleInputRow input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.consoleInputRow button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 10px;
+}
+
+.consoleInputRow button:hover {
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------- Responsive */
+
+.responsive {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.responsiveHint {
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+
+.responsive button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.responsive button[data-active] {
+  border-color: var(--foam);
+  color: var(--foam);
+}

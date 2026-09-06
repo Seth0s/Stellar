@@ -1349,9 +1349,16 @@ function createWindow() {
           );
         }
       }
+      // Pendentes #188 — abre o mini-inspector EMBUTIDO no card
+      // (BrowserCard.tsx's `BrowserInspector`) em vez do DevTools real
+      // destacado — o menu kebab "Abrir DevTools" continua existindo pra
+      // quem quiser o DevTools de verdade, sem elemento nenhum focado.
+      // `params.x/y` aqui ainda no espaço de CONTEÚDO (mesmo do evento
+      // `context-menu` original), é o que `document.elementFromPoint` do
+      // inspector espera.
       template.push(
         { type: "separator" },
-        { label: "Inspecionar elemento", click: () => browserRegistry.inspectElementAt(id, params.x, params.y) },
+        { label: "Inspecionar elemento", click: () => safeSend(win, "browser:open-inspector", id, params.x, params.y) },
       );
       Menu.buildFromTemplate(template).popup({ window: win, x, y });
     },
@@ -1360,6 +1367,19 @@ function createWindow() {
   ipcMain.handle("browser:set-visible", (_e, id: string, visible: boolean) => browserRegistry.setVisible(id, visible));
   ipcMain.handle("browser:set-focused", (_e, id: string, focused: boolean) => browserRegistry.setFocused(id, focused));
   ipcMain.handle("browser:destroy", (_e, id: string) => browserRegistry.destroy(id));
+  // Pendentes #188 — mini-inspector embutido no card (BrowserCard.tsx's
+  // `BrowserInspector`). `evalJs`/`getConsole` já existiam pro lado MCP
+  // (message-bus.ts) — mesmo poder, agora alcançável pela própria UI do
+  // Stellar sem gate humano extra, mesma categoria de risco de
+  // `getPageText`/`clickAtPoint` (já sem gate): é o PRÓPRIO usuário
+  // rodando JS no card que ELE está olhando, não um agente externo.
+  ipcMain.handle("browser:eval", (_e, id: string, js: string) => browserRegistry.evalJs(id, js));
+  ipcMain.handle("browser:get-console", (_e, id: string) => browserRegistry.getConsole(id));
+  ipcMain.handle(
+    "browser:set-device-emulation",
+    (_e, id: string, params: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | null) =>
+      browserRegistry.setDeviceEmulation(id, params),
+  );
   ipcMain.on("browser:input-mouse", (_e, id: string, evt: BrowserMouseEvent) => browserRegistry.sendMouseEvent(id, evt));
   ipcMain.on("browser:input-wheel", (_e, id: string, evt: BrowserWheelEvent) => browserRegistry.sendWheelEvent(id, evt));
   ipcMain.on("browser:input-key", (_e, id: string, evt: BrowserKeyEvent) => browserRegistry.sendKeyEvent(id, evt));

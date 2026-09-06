@@ -234,6 +234,18 @@
   color: #fff;
 }
 
+/* Pendentes #188 — envolve o canvas pra dar ao mini-inspector embutido
+   (BrowserInspector.tsx) um contexto de posicionamento real: ele é um
+   `position: absolute` docado embaixo, precisa de um ancestral
+   `position: relative` que ocupe exatamente a área do corpo do card (não
+   o card inteiro, que inclui header/footer). */
+.browserCardBodyWrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .browserCardBody {
   flex: 1;
   /* A <canvas> is a replaced element — its width/height ATTRIBUTES (set in

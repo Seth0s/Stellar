@@ -420,14 +420,43 @@ export function createBrowserRegistry(callbacks: {
     entries.get(id)?.win.webContents.openDevTools({ mode: "detach" });
   }
 
-  /** Pendentes #188, item "Inspecionar elemento" do menu de contexto —
-   * `x`/`y` no mesmo espaço de conteúdo que `sendMouseEvent` (o ponto do
-   * clique original, vindo de `BrowserContextMenuParams`), não em
-   * coordenadas de tela. Abre DevTools destacado (mesma limitação de
-   * `openDevTools` acima — offscreen não renderiza DevTools sozinho) já
-   * com o elemento clicado selecionado no painel Elements. */
-  function inspectElementAt(id: string, x: number, y: number) {
-    entries.get(id)?.win.webContents.inspectElement(Math.round(x), Math.round(y));
+  /** Pendentes #188 — "modo responsivo real" pro mini-inspector embutido
+   * no card (BrowserCard.tsx's `BrowserInspector`), pedido explícito do
+   * usuário como alternativa ao DevTools real (que só sabe abrir numa
+   * janela separada — offscreen não pinta a UI do DevTools, ver
+   * `openDevTools` acima). `null` desliga a emulação.
+   *
+   * Achado ao vivo (2026-09-06): `wc.enableDeviceEmulation` NÃO é usado
+   * aqui de propósito, apesar do nome sugerir que seria o mecanismo
+   * óbvio. Testado e descartado: com `setContentSize(w,h)` +
+   * `setZoomFactor(1)` sozinhos, `window.innerWidth` já bate exatamente
+   * com `params.width` (confirmado: preset Mobile 390 → innerWidth
+   * '390'). Adicionar `enableDeviceEmulation` por cima disso CORROMPE
+   * esse resultado correto (innerWidth passa a reportar 980, nem o
+   * tamanho do card nem o do preset) — um webContents offscreen não tem
+   * o compositor nativo que uma janela on-screen tem por trás da API de
+   * emulação, então `viewSize`/`screenSize` competem com o content size
+   * real em vez de complementá-lo. Redimensionar o content size de
+   * verdade (o que a página mede) já É a emulação, sem precisar da API. */
+  function setDeviceEmulation(
+    id: string,
+    params: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | null,
+  ) {
+    const entry = entries.get(id);
+    if (!entry) return;
+    const wc = entry.win.webContents;
+    if (!params) {
+      // Não restaura o content size/zoom do supersample aqui de propósito
+      // — quem desliga a emulação (BrowserInspector.tsx) sempre chama
+      // `resize()` de novo logo em seguida com o tamanho real do card,
+      // que já recalcula os dois juntos (ver doc comment de `resize`
+      // abaixo). Restaurar às cegas aqui SEM saber o `w`/`h` atual do
+      // card deixaria o content size (mudado abaixo, pro tamanho do
+      // preset) sem zoom nenhum compensando.
+      return;
+    }
+    wc.setZoomFactor(1);
+    entry.win.setContentSize(params.width, params.height);
   }
 
   // Trilha A do navegador (SCREEN_SPACE_PROJECTION_PLAN.md §0.3's "Trilha
@@ -1128,7 +1157,7 @@ export function createBrowserRegistry(callbacks: {
     forward,
     reload,
     openDevTools,
-    inspectElementAt,
+    setDeviceEmulation,
     resize,
     getContentSize,
     refreshScaleFactor,

@@ -277,6 +277,7 @@ export type BrowserMouseEvent = {
   button?: "left" | "middle" | "right";
   clickCount?: number;
 };
+export type ConsoleEntry = { level: string; message: string; at: number };
 export type BrowserWheelEvent = { x: number; y: number; deltaX: number; deltaY: number };
 export type BrowserKeyEvent = {
   type: "keyDown" | "keyUp" | "char";
@@ -435,11 +436,37 @@ const browser = {
     ipcRenderer.on("browser:context-menu", listener);
     return () => ipcRenderer.removeListener("browser:context-menu", listener);
   },
+  /** Pendentes #188 — "Inspecionar elemento" do menu de contexto agora
+   * abre o mini-inspector embutido (BrowserInspector.tsx) em vez do
+   * DevTools real destacado — `x`/`y` no espaço de CONTEÚDO (mesmo de
+   * `onContextMenu` acima), o que `document.elementFromPoint` do
+   * inspector espera. */
+  onOpenInspector: (cb: (id: string, x: number, y: number) => void) => {
+    const listener = (_e: unknown, id: string, x: number, y: number) => cb(id, x, y);
+    ipcRenderer.on("browser:open-inspector", listener);
+    return () => ipcRenderer.removeListener("browser:open-inspector", listener);
+  },
   /** `x`/`y` aqui já em coordenadas reais de tela relativas à janela do
    * app (BrowserCard.tsx fez a conversão) — main/index.ts monta o
    * `Menu` e chama `.popup({ window, x, y })` com elas direto. */
   showContextMenu: (id: string, x: number, y: number, params: BrowserContextMenuParams): Promise<void> =>
     ipcRenderer.invoke("browser:show-context-menu", id, x, y, params),
+  /** Pendentes #188 — mini-inspector embutido no card (BrowserCard.tsx's
+   * `BrowserInspector`). `evalJs` roda JS arbitrário no contexto real da
+   * página (mesmo poder que o `evalJs` MCP já tinha) — usado tanto pra
+   * serializar a árvore DOM/destacar um elemento (aba Elements) quanto
+   * pro console interativo (aba Console). Sem gate humano — é o próprio
+   * usuário agindo no card que ele está olhando, mesma categoria de
+   * `getPageText`/`clickAtPoint` acima. */
+  evalJs: (id: string, js: string): Promise<{ ok: true; result: string; truncated: boolean } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:eval", id, js),
+  getConsole: (id: string): Promise<{ ok: true; messages: ConsoleEntry[] } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:get-console", id),
+  /** `null` desliga a emulação — ver browser-registry.ts's `setDeviceEmulation`. */
+  setDeviceEmulation: (
+    id: string,
+    params: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | null,
+  ): Promise<void> => ipcRenderer.invoke("browser:set-device-emulation", id, params),
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
