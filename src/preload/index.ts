@@ -278,6 +278,17 @@ export type BrowserMouseEvent = {
   clickCount?: number;
 };
 export type ConsoleEntry = { level: string; message: string; at: number };
+export type NetworkEntry = { method: string; url: string; status: number | null; error?: string; at: number };
+export type CookieEntry = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expirationDate?: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: string;
+};
 export type BrowserWheelEvent = { x: number; y: number; deltaX: number; deltaY: number };
 export type BrowserKeyEvent = {
   type: "keyDown" | "keyUp" | "char";
@@ -462,6 +473,29 @@ const browser = {
     ipcRenderer.invoke("browser:eval", id, js),
   getConsole: (id: string): Promise<{ ok: true; messages: ConsoleEntry[] } | { ok: false; error: string }> =>
     ipcRenderer.invoke("browser:get-console", id),
+  /** Aba Network do inspector redesenhado (coluna dockável, aprovado
+   * 2026-09-06) — `NetworkEntry[]` já era gravado internamente pelo tap de
+   * `session.webRequest` (browser-registry.ts), só faltava alcançar a
+   * UI. Snapshot pull, igual `getConsole` — sem push ao vivo por
+   * requisição (o card já teria que reabrir a aba pra ver algo novo de
+   * qualquer forma, um botão "Atualizar" cobre isso). */
+  getNetwork: (id: string): Promise<{ ok: true; requests: NetworkEntry[] } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:get-network", id),
+  /** Aba Application/Cookies — vem de `session.cookies.get` no MAIN
+   * process (browser-registry.ts's `getCookies`), não de `evalJs`/
+   * `document.cookie`: página nunca enxerga cookie HttpOnly nem atributos
+   * reais (domain/path/expiry/secure). */
+  getCookies: (id: string): Promise<{ ok: true; cookies: CookieEntry[] } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:get-cookies", id),
+  /** Aba Application/Local+Session Storage — a outra metade de
+   * `getCookies` acima (essa sim só dá pra ler via `evalJs`, sem
+   * equivalente no processo main). */
+  getLocalSessionStorage: (
+    id: string,
+  ): Promise<{ ok: true; local: [string, string][]; session: [string, string][] } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:get-local-session-storage", id),
+  deleteLocalSessionItem: (id: string, area: "local" | "session", key: string): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:delete-local-session-item", id, area, key),
   /** `null` desliga a emulação — ver browser-registry.ts's `setDeviceEmulation`. */
   setDeviceEmulation: (
     id: string,

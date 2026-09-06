@@ -167,6 +167,31 @@
   color: var(--accent-browser);
 }
 
+/* Pendentes #188 — Design Mode (picker de elemento → chat conectado). */
+.browserCardDesignBtn[data-active="true"] {
+  background: var(--accent-browser);
+  color: #fff;
+}
+
+.browserCardDesignInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+}
+
+.browserCardDesignTag {
+  font-family: var(--font-mono);
+  color: var(--violet);
+  font-size: 12px;
+}
+
+.browserCardDesignMeta {
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
 .browserCardFavoritesMenu {
   min-width: 220px;
   max-width: 280px;
@@ -270,4 +295,11 @@
    whether this card or the board underneath it will respond to the wheel. */
 .browserCardBody:focus {
   box-shadow: inset 0 0 0 2px var(--accent-browser);
+}
+
+/* Pendentes #188 — Design Mode: feedback visual de que o próximo clique
+   escolhe um elemento (crosshair no canvas inteiro), além do outline que
+   o script injetado já desenha em cima do elemento sob o cursor. */
+.browserCardBody[data-design-mode="true"] {
+  cursor: crosshair;
 }

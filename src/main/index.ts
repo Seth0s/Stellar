@@ -1375,6 +1375,20 @@ function createWindow() {
   // rodando JS no card que ELE está olhando, não um agente externo.
   ipcMain.handle("browser:eval", (_e, id: string, js: string) => browserRegistry.evalJs(id, js));
   ipcMain.handle("browser:get-console", (_e, id: string) => browserRegistry.getConsole(id));
+  // Pendentes #188 — aba Application/Network do inspector redesenhado
+  // como coluna dockável (aprovado pelo usuário via protótipo HTML,
+  // 2026-09-06). `getNetwork`/`getCookies` já existiam no registry (o
+  // primeiro pro lado MCP, `getCookies` novo) — só faltava alcançar a UI.
+  ipcMain.handle("browser:get-network", (_e, id: string) => browserRegistry.getNetwork(id));
+  ipcMain.handle("browser:get-cookies", (_e, id: string) => browserRegistry.getCookies(id));
+  // Pendentes #188 — aba Application (metade local/session storage; a
+  // metade de cookies já é `browser:get-cookies` acima, via
+  // `session.cookies.get` — não duplicar a mesma leitura por dois
+  // caminhos diferentes).
+  ipcMain.handle("browser:get-local-session-storage", (_e, id: string) => browserRegistry.getLocalSessionStorage(id));
+  ipcMain.handle("browser:delete-local-session-item", (_e, id: string, area: "local" | "session", key: string) =>
+    browserRegistry.deleteLocalSessionItem(id, area, key),
+  );
   ipcMain.handle(
     "browser:set-device-emulation",
     (_e, id: string, params: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | null) =>

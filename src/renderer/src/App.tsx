@@ -2564,6 +2564,7 @@ export function App() {
                 isFocused={zIndex === order.length - 1}
                 url={c.url}
                 ownerCardId={c.ownerCardId}
+                sendTargets={cards.filter((x) => x.kind === "terminal" && x.id !== c.id).map((x) => ({ id: x.id, label: x.label }))}
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
