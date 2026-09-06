@@ -5,6 +5,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { toast } from "./useToast";
 import { registerTerminal, unregisterTerminal } from "./terminal-registry";
+import { MaskQueue } from "./mask-buffer";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -269,8 +270,13 @@ export function useTerminal(
   // `term.write()`, no handler de `pty:data` (Effeito 1 abaixo) — a única
   // coisa que muda é a RENDERIZAÇÃO no xterm.js, o processo real do
   // outro lado do PTY nunca vê nada diferente do que sempre viu.
-  const pendingMaskRef = useRef<{ needle: string; replacement: string } | null>(null);
-  const maskBufferRef = useRef("");
+  // Achado ao vivo (2026-09-06) — hipótese antiga confirmada: colar DUAS
+  // imagens em sequência rápida (antes do eco da primeira ter batido com
+  // seu próprio needle) sobrescrevia o slot único de antes por inteiro —
+  // ver `mask-buffer.ts`'s `MaskQueue` pro raciocínio completo e o teste
+  // unitário que reproduz o bug sem depender do timing real de um round-
+  // trip de clipboard/PTY (que se provou impraticável de forçar via CDP).
+  const maskQueueRef = useRef(new MaskQueue());
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
   // Spawn-time-only options, read via ref instead of effect deps below — see
@@ -313,26 +319,8 @@ export function useTerminal(
     // indefinidamente se o eco não vier byte-a-byte igual por algum
     // motivo (ex.: o processo rodando ali não tem echo local ligado).
     function writeMasked(data: string) {
-      const pending = pendingMaskRef.current;
-      if (!pending) {
-        termRef.current?.write(data);
-        return;
-      }
-      maskBufferRef.current += data;
-      const idx = maskBufferRef.current.indexOf(pending.needle);
-      if (idx !== -1) {
-        const before = maskBufferRef.current.slice(0, idx);
-        const after = maskBufferRef.current.slice(idx + pending.needle.length);
-        termRef.current?.write(before + pending.replacement + after);
-        pendingMaskRef.current = null;
-        maskBufferRef.current = "";
-        return;
-      }
-      if (maskBufferRef.current.length >= pending.needle.length) {
-        termRef.current?.write(maskBufferRef.current);
-        pendingMaskRef.current = null;
-        maskBufferRef.current = "";
-      }
+      const out = maskQueueRef.current.consume(data);
+      if (out) termRef.current?.write(out);
     }
 
     const ACTIVITY_IDLE_MS = 900;
@@ -585,8 +573,10 @@ export function useTerminal(
           // espaço, continua o que é escrito), só não faz mais parte do
           // que precisa bater no eco pra mascarar.
           pastedImageCount++;
-          pendingMaskRef.current = { needle: quotedPath, replacement: `[imagem #${pastedImageCount}]` };
-          maskBufferRef.current = "";
+          // Empilha — nunca sobrescreve um item pendente de uma colagem
+          // anterior ainda não resolvida (ver o comentário de
+          // `maskQueueRef` acima / `mask-buffer.ts`).
+          maskQueueRef.current.push({ needle: quotedPath, replacement: `[imagem #${pastedImageCount}]` });
           void window.pty.write(ptyIdRef.current!, typed);
           toast("imagem colada — caminho inserido no terminal");
         });
