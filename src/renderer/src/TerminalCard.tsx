@@ -9,6 +9,11 @@ import styles from "./TerminalCard.module.css";
 
 export type { Rect };
 
+/** Pedido ao vivo (2026-09-06) — "pros providers sem hook oficial, por
+ * enquanto desativa as notificações". `bash` deliberadamente NÃO está
+ * aqui — não é um agente com "turnos", nunca fez parte deste problema. */
+const NOTIFICATION_DISABLED_PROVIDERS = new Set(["codex", "cursor", "antigravity", "opencode"]);
+
 const PROVIDER_ACCENT: Record<string, string> = {
   bash: "var(--accent-bash)",
   claude: "var(--accent-claude)",
@@ -291,6 +296,22 @@ function TerminalCardInner({
     if (!wasActiveRef.current) return;
     wasActiveRef.current = false;
     if (!bellEnabled) return;
+    // Pedido ao vivo (2026-09-06) — "pros providers sem hook oficial, por
+    // enquanto desativa as notificações": as CLIs de agente sem um sinal
+    // real de fim de turno — `codex`/`cursor`/`antigravity`/`opencode`,
+    // nenhuma tem hook oficial (confirmado investigando os binários) —
+    // ficam sem notificação por ora. `codex` ganhou um pattern-match de
+    // output (useTerminal.ts's TURN_END_PATTERNS) bom o bastante pra não
+    // apagar a barra de atividade à toa, mas ainda uma heurística sobre
+    // texto renderizado (uma CLI atualizada pode mudar a frase e nunca
+    // mais bater, sem aviso nenhum disso aqui) — não confiável o bastante
+    // pra uma notificação de SO ainda. `claude` (hook real) segue normal;
+    // `bash` também segue normal — não é um agente com "turnos", nunca
+    // fez parte deste problema, sempre notificou pela aproximação de
+    // silêncio antiga (ver smoke-terminal-focus-notification.mjs).
+    // Reavaliar codex depois de validar o pattern-match ao vivo por um
+    // tempo.
+    if (NOTIFICATION_DISABLED_PROVIDERS.has(providerId)) return;
     // Suppress notification when this card is the focused one and the
     // window itself has OS focus — user is actively looking at it.
     if (isFocusedRef.current && document.hasFocus()) return;
