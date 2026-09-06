@@ -25,44 +25,62 @@ try {
   await spawnSticky();
   check("two sticky cards spawned", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 2);
 
-  // The two spawn near-fully overlapping (centeredSlot's 36px stagger is
-  // tiny next to an 860x660 card — DESIGN-BACKLOG.md item 12, achado 3 —
-  // in a 1280x800 window, worse now than at the old 720x560). Zoom out
-  // first (same fix smoke-group-select.mjs already uses) so there's real
-  // screen-space margin regardless of card size, THEN drag the second
-  // one's header (already pointer-tool-tested gesture, see CardFrame.tsx)
-  // well clear of the first before touching the connector tool at all.
-  const zoomOutBtn = JSON.parse(
+  // Achado ao vivo (2026-09-06, escrevendo o smoke test do menu de
+  // contexto): `centeredSlot`'s anti-colisão (board-model.ts) centraliza
+  // CADA card novo no viewport atual — 2 cards de 860×660 nascendo um
+  // atrás do outro NÃO cabem os dois centralizados ao mesmo tempo, então
+  // o ring-search do 2º empurra ele pra bem longe (o suficiente pra sair
+  // da tela mesmo em zoom 100%), e o guard de "recentraliza se nasceu
+  // fora de tela" (`addCardOfKind`, App.tsx) então recentraliza a câmera
+  // NELE — deixando o 1º card (o que estava centralizado antes) de fora.
+  // A receita antiga daqui ("zoom out 6x" + arrastar só o 2º pra um ponto
+  // fixo) dependia de geometria implícita de zoom/anti-colisão que não
+  // se sustenta — falhava porque o 1º card ficava fora de tela ANTES de
+  // qualquer zoom, não por causa dele. Fix: reposiciona os dois direto no
+  // banco (mesma técnica que os outros smoke tests já usam pra seedar
+  // posição — não é o gesto de drag que está sob teste aqui, é o
+  // conector), depois reabre a sessão pra `loadBoard` pegar as posições
+  // novas com os dois cards garantidamente em tela.
+  const boardId = JSON.parse(await page.evalJs(`window.store.boards.list().then((b) => JSON.stringify(b[0].id))`));
+  const stickyIds = JSON.parse(
     await page.evalJs(`
-      (() => {
-        const b = [...document.querySelectorAll("button")].find((x) => x.title === "Diminuir zoom");
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-      })()
+      window.store.list(${JSON.stringify(boardId)}).then((rows) => JSON.stringify(rows.filter((r) => r.kind === 'sticky').map((r) => r.id)))
     `),
   );
-  for (let i = 0; i < 6; i++) await page.click(zoomOutBtn.x, zoomOutBtn.y);
-  await new Promise((r) => setTimeout(r, 200));
+  await page.evalJs(`
+    (async () => {
+      const rows = await window.store.list(${JSON.stringify(boardId)});
+      const [idA, idB] = ${JSON.stringify(stickyIds)};
+      const rowA = rows.find((r) => r.id === idA);
+      const rowB = rows.find((r) => r.id === idB);
+      await window.store.upsert({ ...rowA, x: 100, y: 100 });
+      await window.store.upsert({ ...rowB, x: 900, y: 100 });
+    })()
+  `);
 
-  const secondHead = JSON.parse(
+  const homeBtn = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelectorAll('[data-kind="sticky"] .card-head')[1];
+        const el = document.querySelector('.topbar-home');
         const r = el.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()
     `),
   );
-  // Absolute, not relative — the two cards' actual spawn position isn't
-  // guaranteed (depends on however many cards already exist on the
-  // board), so an offset from the current position risks landing
-  // off-screen. A fixed, safely-on-screen point for an 1280x800 window
-  // doesn't have that problem.
-  const dest = { x: 1000, y: 700 };
-  await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: secondHead.x, y: secondHead.y, button: "left", clickCount: 1, pointerType: "mouse" });
-  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: dest.x, y: dest.y, pointerType: "mouse" });
-  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: dest.x, y: dest.y, button: "left", clickCount: 1, pointerType: "mouse" });
+  await page.click(homeBtn.x, homeBtn.y);
   await new Promise((r) => setTimeout(r, 300));
+  const sessionBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.home-session-name')?.closest('button');
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  await page.click(sessionBtn.x, sessionBtn.y);
+  await new Promise((r) => setTimeout(r, 800));
 
   const [headA, headB] = JSON.parse(
     await page.evalJs(`

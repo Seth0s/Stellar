@@ -70,32 +70,53 @@ try {
   await spawnSticky();
   await spawnSticky();
 
-  const zoomOutBtn = JSON.parse(
+  // Achado ao vivo (2026-09-06, ver smoke-connector.mjs's mesmo comentário
+  // completo) — `centeredSlot`'s ring-search anti-colisão pode empurrar o
+  // 2º card de 860×660 pra fora da tela já em zoom 100%, e o guard de
+  // recentralização (`addCardOfKind`) então centraliza NELE, deixando o 1º
+  // fora. A receita antiga ("zoom out 6x" + arrastar só o 2º) dependia de
+  // geometria que não se sustenta. Fix: reposiciona os dois direto no
+  // banco pra coordenadas fixas e reabre a sessão — não é o gesto de spawn
+  // que está sob teste aqui, é o conector.
+  const boardId = JSON.parse(await page.evalJs(`window.store.boards.list().then((b) => JSON.stringify(b[0].id))`));
+  const stickyIds = JSON.parse(
     await page.evalJs(`
-      (() => {
-        const b = [...document.querySelectorAll("button")].find((x) => x.title === "Diminuir zoom");
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-      })()
+      window.store.list(${JSON.stringify(boardId)}).then((rows) => JSON.stringify(rows.filter((r) => r.kind === 'sticky').map((r) => r.id)))
     `),
   );
-  for (let i = 0; i < 6; i++) await page.click(zoomOutBtn.x, zoomOutBtn.y);
-  await new Promise((r) => setTimeout(r, 200));
-
-  const secondHead = JSON.parse(
+  await page.evalJs(`
+    (async () => {
+      const rows = await window.store.list(${JSON.stringify(boardId)});
+      const [idA, idB] = ${JSON.stringify(stickyIds)};
+      const rowA = rows.find((r) => r.id === idA);
+      const rowB = rows.find((r) => r.id === idB);
+      await window.store.upsert({ ...rowA, x: 100, y: 100 });
+      await window.store.upsert({ ...rowB, x: 900, y: 100 });
+    })()
+  `);
+  const homeBtnReload = JSON.parse(
     await page.evalJs(`
       (() => {
-        const el = document.querySelectorAll('[data-kind="sticky"] .card-head')[1];
+        const el = document.querySelector('.topbar-home');
         const r = el.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()
     `),
   );
-  const dest = { x: 1000, y: 700 };
-  await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: secondHead.x, y: secondHead.y, button: "left", clickCount: 1, pointerType: "mouse" });
-  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: dest.x, y: dest.y, pointerType: "mouse" });
-  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: dest.x, y: dest.y, button: "left", clickCount: 1, pointerType: "mouse" });
+  await page.click(homeBtnReload.x, homeBtnReload.y);
   await new Promise((r) => setTimeout(r, 300));
+  const sessionBtnReload = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.home-session-name')?.closest('button');
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  await page.click(sessionBtnReload.x, sessionBtnReload.y);
+  await new Promise((r) => setTimeout(r, 800));
 
   const [headA, headB] = JSON.parse(
     await page.evalJs(`
