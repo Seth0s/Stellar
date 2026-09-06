@@ -55,7 +55,7 @@ async function centerOf(page, selector) {
       const addBtn = JSON.parse(
         await page.evalJs(`
           (() => {
-            const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+            const b = document.querySelector('[data-role="rail-add-card"]');
             if (!b) return JSON.stringify(null);
             const r = b.getBoundingClientRect();
             return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -90,7 +90,7 @@ try {
   await new Promise((r) => setTimeout(r, 600));
 
   // ---- 1. UI: opencode aparece no provider picker do popover de terminal ----
-  const terminalBtn = await centerOf(page, '.rail-btn[title="Novo terminal"]');
+  const terminalBtn = await centerOf(page, '[data-kind="terminal"]');
   await page.click(terminalBtn.x, terminalBtn.y);
   await new Promise((r) => setTimeout(r, 300));
   const opencodeBtnCoords = await centerOf(page, '.provider-picker-btn[title="opencode"]');

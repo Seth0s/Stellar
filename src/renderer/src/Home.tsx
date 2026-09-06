@@ -135,6 +135,7 @@ export function Home({
                         {b.id === mostRecentId && <span className="home-session-recent">recente</span>}
                         <span
                           className={`home-session-edit${b.id === mostRecentId ? " home-session-edit--below-badge" : ""}`}
+                          data-role="edit-session"
                           title="Editar sessão"
                           onClick={(e) => {
                             e.stopPropagation();

@@ -64,7 +64,7 @@ async function centerOf(page, selector) {
       const addBtn = JSON.parse(
         await page.evalJs(`
           (() => {
-            const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+            const b = document.querySelector('[data-role="rail-add-card"]');
             if (!b) return JSON.stringify(null);
             const r = b.getBoundingClientRect();
             return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -108,7 +108,7 @@ try {
   const titleBtn = await centerOf(page, ".topbar-title");
   await page.click(titleBtn.x, titleBtn.y);
   await new Promise((r) => setTimeout(r, 300));
-  const pencilBtn = await centerOf(page, '.board-row.active button[title="Editar sessão"]');
+  const pencilBtn = await centerOf(page, '.board-row.active button[data-role="edit-session"]');
   await page.click(pencilBtn.x, pencilBtn.y);
   await new Promise((r) => setTimeout(r, 300));
   const checkbox = await centerOf(page, '.autonomous-toggle-label input[type="checkbox"]');

@@ -205,6 +205,7 @@ export function Rail({
         <button
           ref={addCardBtnRef}
           className={`rail-btn${isAddCardOpen ? " active" : ""}`}
+          data-role="rail-add-card"
           title="Adicionar card"
           aria-label="Adicionar card"
           onClick={() => setOpenPopover((p) => (p === "cards" || p === "terminal-config" ? null : "cards"))}

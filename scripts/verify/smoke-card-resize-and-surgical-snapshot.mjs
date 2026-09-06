@@ -71,7 +71,7 @@ async function centerOf(page, selector) {
     const title = selector.match(/title=["']([^"']+)["']/)?.[1];
     const addBtn = JSON.parse(
       await page.evalJs(
-        `(() => { const b = document.querySelector('.rail-btn[title="Adicionar card"]'); if (!b) return JSON.stringify(null); const r = b.getBoundingClientRect(); return JSON.stringify({x:r.x+r.width/2, y:r.y+r.height/2}); })()`,
+        `(() => { const b = document.querySelector('[data-role="rail-add-card"]'); if (!b) return JSON.stringify(null); const r = b.getBoundingClientRect(); return JSON.stringify({x:r.x+r.width/2, y:r.y+r.height/2}); })()`,
       ),
     );
     if (addBtn && title) {
@@ -158,7 +158,7 @@ try {
   // dentro dele, sem re-clicar em nada.
   let browserBtn = await centerOf(page, '.rail-btn[title="Novo navegador"]');
   if (!browserBtn) {
-    const addBtn = await centerOf(page, '.rail-btn[title="Adicionar card"]');
+    const addBtn = await centerOf(page, '[data-role="rail-add-card"]');
     if (!addBtn) throw new Error("nem o rail nem o botão 'Adicionar card' apareceram");
     await page.click(addBtn.x, addBtn.y);
     for (let i = 0; i < 20 && !browserBtn; i++) {

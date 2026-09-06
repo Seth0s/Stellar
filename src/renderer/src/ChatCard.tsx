@@ -672,6 +672,7 @@ function ChatCardInner({
           <span className="card-head-actions">
             <button
               className={sessionsOpen ? "active" : ""}
+              data-role="chat-sessions-toggle"
               title="Sessões de chat"
               onClick={() => setSessionsOpen((v) => !v)}
             >

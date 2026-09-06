@@ -34,7 +34,7 @@ async function centerOf(page, selector) {
       const addBtn = JSON.parse(
         await page.evalJs(`
           (() => {
-            const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+            const b = document.querySelector('[data-role="rail-add-card"]');
             if (!b) return JSON.stringify(null);
             const r = b.getBoundingClientRect();
             return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -155,7 +155,7 @@ try {
   await new Promise((r) => setTimeout(r, 500));
   check("um segundo chatbox (novo, vazio) foi criado", await page.evalJs(`document.querySelectorAll('.chat-card').length`), 1);
 
-  const sessionsToggleBtn = await centerOf(page, '.chat-card .card-head-actions button[title="Sessões de chat"]');
+  const sessionsToggleBtn = await centerOf(page, '.chat-card .card-head-actions button[data-role="chat-sessions-toggle"]');
   await page.click(sessionsToggleBtn.x, sessionsToggleBtn.y);
   await new Promise((r) => setTimeout(r, 400));
   const panelText = await page.evalJs(`document.querySelector('.chat-sessions-panel')?.textContent`);
@@ -240,7 +240,7 @@ try {
   await new Promise((r) => setTimeout(r, 500));
   const panelAlreadyOpen = await page.evalJs(`!!document.querySelector('.chat-sessions-panel')`);
   if (!panelAlreadyOpen) {
-    const sessionsToggleBtn2 = await centerOf(page, '.chat-card .card-head-actions button[title="Sessões de chat"]');
+    const sessionsToggleBtn2 = await centerOf(page, '.chat-card .card-head-actions button[data-role="chat-sessions-toggle"]');
     await page.click(sessionsToggleBtn2.x, sessionsToggleBtn2.y);
     await new Promise((r) => setTimeout(r, 400));
   }

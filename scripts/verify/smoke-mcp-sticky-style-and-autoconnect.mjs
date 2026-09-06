@@ -92,12 +92,12 @@ async function spawnSecondTerminal(page) {
   const terminalBtn = JSON.parse(
     await page.evalJs(`
       (() => {
-        const direct = document.querySelector('.rail-btn[title="Novo terminal"]');
+        const direct = document.querySelector('[data-kind="terminal"]');
         if (direct) {
           const r = direct.getBoundingClientRect();
           return JSON.stringify({ type: 'direct', x: r.x + r.width/2, y: r.y + r.height/2 });
         }
-        const addBtn = document.querySelector('.rail-btn[title="Adicionar card"]');
+        const addBtn = document.querySelector('[data-role="rail-add-card"]');
         if (addBtn) {
           const r = addBtn.getBoundingClientRect();
           return JSON.stringify({ type: 'grouped', x: r.x + r.width/2, y: r.y + r.height/2 });
