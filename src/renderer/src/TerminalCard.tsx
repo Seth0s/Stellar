@@ -195,14 +195,48 @@ function TerminalCardInner({
   // um transform CSS barato estica o raster antigo pro tamanho atual a
   // cada tick de `rect`, sem nenhum custo de fit()/PTY. `onResizeSettled`
   // abaixo zera o transform depois do fit real.
+  //
+  // Achado ao vivo (2026-09-04) — "durante o arrasto... parece mal
+  // acabado (o resize)": esse esticamento óptico não tinha piso nenhum —
+  // num arrasto longo o raster antigo ficava cada vez mais deformado (e
+  // borrado, canvas WebGL) conforme a diferença pro último fit() real
+  // crescia, e só resetava no soltar. Fix: um refit real (fit() + resize
+  // de PTY) a cada ~200ms de arrasto contínuo — não por frame — reancora
+  // periodicamente o raster num tamanho fresco, então o esticamento
+  // nunca acumula por mais que essa janela, sem pagar o custo de um
+  // fit()/PTY-resize por tick de `rect` (que é o que esse mecanismo
+  // sempre existiu pra evitar).
   const lastFittedRectRef = useRef({ w: rect.w, h: rect.h });
+  const lastRealFitAtRef = useRef(0);
+  // Distingue "acabou de começar a arrastar" de "continuando o mesmo
+  // arrasto" — sem isso, um card parado por minutos e então arrastado
+  // faria seu PRIMEIRO tick já contar como "mais de 200ms desde o
+  // último fit real" e disparar um fit de verdade na hora, pulando o
+  // transform ótico por completo no início de todo arrasto. Um gap
+  // grande desde o tick anterior (ticks de arrasto real, throttled por
+  // rAF, chegam bem abaixo de 500ms entre si) é o sinal de "arrasto
+  // novo" — só aí a janela de 200ms é reancorada no agora.
+  const lastTickAtRef = useRef(0);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const { w: fw, h: fh } = lastFittedRectRef.current;
     if (rect.w === fw && rect.h === fh) return;
+    const now = Date.now();
+    const isDragStart = now - lastTickAtRef.current > 500;
+    lastTickAtRef.current = now;
+    if (isDragStart) {
+      lastRealFitAtRef.current = now;
+    } else if (now - lastRealFitAtRef.current >= 200) {
+      lastRealFitAtRef.current = now;
+      fitNow();
+      lastFittedRectRef.current = { w: rect.w, h: rect.h };
+      el.style.transform = "";
+      return;
+    }
     el.style.transform = `scale(${rect.w / fw}, ${rect.h / fh})`;
     el.style.transformOrigin = "top left";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rect.w, rect.h]);
 
   // Achado ao vivo (2026-09-02) -- ver `terminal-card-loading` no CSS: um
