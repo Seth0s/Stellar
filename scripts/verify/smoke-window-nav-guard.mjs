@@ -14,6 +14,7 @@
 // cdp-client.mjs needed).
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { pickFreePort } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const USER_DATA_DIR = fileURLToPath(new URL(`../../.verify-tmp/smoke-window-nav-guard-${CDP_PORT}`, import.meta.url));
