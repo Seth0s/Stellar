@@ -69,7 +69,22 @@ export async function startApp({
   // whole group at once via a negative pid instead of just the wrapper.
   const proc = spawn(
     ELECTRON_BIN,
-    [ELECTRON_MAIN, `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${userDataDir}`, ...extraArgs],
+    [
+      ELECTRON_MAIN,
+      `--remote-debugging-port=${cdpPort}`,
+      `--user-data-dir=${userDataDir}`,
+      // CI runners don't (and shouldn't) chown+setuid `chrome-sandbox` to
+      // root — Chromium's own sandbox helper refuses to run without that
+      // and aborts on launch with SIGTRAP ("app didn't come up on port
+      // ... within 15000ms", the actual failure signature this whole
+      // suite's been showing in ci.yml since before 2026-08-31). `--no-
+      // sandbox` is the standard workaround for exactly this (same one
+      // Playwright/Puppeteer docs recommend for CI). Gated to `process.env.CI`
+      // (set by GitHub Actions) so local runs keep testing under the real
+      // sandboxed conditions, which already work fine here.
+      ...(process.env.CI ? ["--no-sandbox"] : []),
+      ...extraArgs,
+    ],
     {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
