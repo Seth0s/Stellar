@@ -2340,6 +2340,19 @@ select.resume-input {
   scale: 0.96;
 }
 
+/* Modo compacto (Compass.tsx: mais de `COMPACT_THRESHOLD` cards fora da
+   tela ao mesmo tempo) — só o ícone, num botão circular de largura fixa;
+   sem isso, caber muitos chips na mesma fita exigiria medir o rótulo
+   renderizado de verdade. A opacidade (inline, por card) carrega a
+   distância no lugar do selo de anéis, sem gastar largura nenhuma; o
+   nome continua no `title` (tooltip padrão do navegador). */
+.compass-chip-compact {
+  width: 26px;
+  padding: 0;
+  justify-content: center;
+  color: var(--foam);
+}
+
 /* Girada pelo rumo EXATO até o card (Compass.tsx) — a posição do chip na
    fita já é contínua, mas fica visualmente apertada; a seta carrega a
    direção precisa. `inline-flex` pra girar em torno do próprio centro. */
