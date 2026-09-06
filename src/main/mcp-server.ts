@@ -192,6 +192,27 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "update_card_content",
+      {
+        description:
+          "Write a sticky note's text even on a board that isn't currently loaded (write_sticky only reaches the board that's actually open). For a sticky on the loaded board this behaves exactly like write_sticky (same human-focus guard, same auto-connector). For any other board this only works if THAT board is in autonomous mode — no live UI there to ever refuse a conflicting human edit, so it's the same contract spawn_card/open_url use for a board explicitly told this is fine.",
+        inputSchema: {
+          target: z.string().describe("The sticky card's id (list_cards only shows the loaded board's cards, so a cross-board target must be a real id you already have, not a label)"),
+          content: z.string().describe("The text to write"),
+          mode: z
+            .enum(["replace", "append"])
+            .optional()
+            .describe("replace (default) swaps the whole note; append adds to the end"),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it."),
+        },
+      },
+      async ({ target, content, mode, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "update_card_content", target, content, mode, requesterId: caller(callerCardId) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "set_sticky_color",
       {
         description:
@@ -263,6 +284,23 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
       async ({ target, reason, callerCardId }) => {
         const res = await opts.handleRequest({ cmd: "close_card", target, reason, requesterId: caller(callerCardId) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "delete_card",
+      {
+        description:
+          "Permanently delete a card, even one on a board that isn't currently loaded (close_card only reaches the board that's actually open). For a card on the loaded board this behaves exactly like close_card (same consent gate, same live-terminal handling). For any other board — no live UI there to ever ask a human — this only works if THAT board is in autonomous mode; otherwise it's refused with a clear error telling you to load the board or turn autonomous mode on.",
+        inputSchema: {
+          target: z.string().describe("The target card's id (list_cards only shows the loaded board's cards, so a cross-board target must be a real id you already have, not a label)"),
+          reason: z.string().optional().describe("Why you want this deleted — shown to the human in the approval dialog when the board is loaded"),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var) — used to check whether YOUR board is in autonomous mode when the target is on the loaded board."),
+        },
+      },
+      async ({ target, reason, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "delete_card", target, reason, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
