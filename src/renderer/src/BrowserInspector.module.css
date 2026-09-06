@@ -168,10 +168,220 @@
 
 /* ------------------------------------------------------------ Elements */
 
+/* Split vertical árvore/detalhes (pedido do usuário — painel Styles/
+   Computed igual o DevTools real). Cada metade rola por conta própria
+   (a árvore pode ter centenas de linhas, os detalhes de um elemento
+   fundo de página não devem forçar scroll de volta lá em cima). */
+.elementsSplit {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
 .tree {
+  flex: 1 1 56%;
+  min-height: 0;
+  overflow: auto;
   padding: 6px 4px;
   font-family: var(--font-mono);
   white-space: nowrap;
+}
+
+.detailsPane {
+  flex: 1 1 44%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.subtabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 5px 6px 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.subtab {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+}
+
+.subtab:hover {
+  color: var(--text);
+}
+
+.subtab[data-active] {
+  color: var(--foam);
+  background: var(--panel);
+}
+
+.subpanel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11.3px;
+}
+
+.rule {
+  margin-bottom: 12px;
+}
+
+.ruleSelector {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--foam);
+  margin-bottom: 2px;
+}
+
+.ruleSource {
+  color: var(--muted);
+  font-weight: 400;
+  float: right;
+  font-size: 10.5px;
+}
+
+.ruleEmpty {
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.decl {
+  padding-left: 12px;
+}
+
+.decl > div {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+}
+
+.prop {
+  color: var(--text);
+}
+
+.prop::after {
+  content: ":";
+  color: var(--muted);
+}
+
+.propval {
+  color: var(--good);
+  word-break: break-all;
+}
+
+.computedFilter {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  margin-bottom: 8px;
+}
+
+/* Diagrama de box model (margin > border > padding > content), aninhado
+   igual o DevTools real — números vêm de `getComputedStyle` de verdade
+   (ver `elementStylesScript`), não são só decoração. */
+.boxModel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0 14px;
+}
+
+.bmMargin,
+.bmBorder,
+.bmPadding {
+  border: 1px dashed var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  font-size: 9px;
+  color: var(--muted);
+  width: 100%;
+}
+
+.bmMargin {
+  padding: 16px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
+.bmBorder {
+  padding: 12px;
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+}
+
+.bmPadding {
+  padding: 12px;
+  background: color-mix(in srgb, var(--good) 10%, transparent);
+}
+
+.bmContent {
+  width: 100%;
+  height: 30px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 10.5px;
+}
+
+.bmTag {
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.bmNum {
+  position: absolute;
+  font-size: 9.5px;
+  color: var(--text);
+}
+
+.bmNumT {
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.bmNumB {
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.bmNumL {
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.bmNumR {
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .treeNode {

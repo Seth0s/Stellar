@@ -25,6 +25,26 @@ type Tab = "elements" | "console" | "network" | "application" | "responsive";
 type NetworkLine = { method: string; url: string; status: number | null; error?: string; at: number };
 type Dock = "right" | "bottom" | "left";
 type StorageArea = "local" | "session" | "cookies";
+type DetailsSubtab = "styles" | "computed";
+type StyleDecl = { prop: string; value: string; important: boolean };
+type MatchedRule = { selector: string; source: string; decls: StyleDecl[] };
+type BoxModel = {
+  marginTop: number;
+  marginRight: number;
+  marginBottom: number;
+  marginLeft: number;
+  borderTop: number;
+  borderRight: number;
+  borderBottom: number;
+  borderLeft: number;
+  paddingTop: number;
+  paddingRight: number;
+  paddingBottom: number;
+  paddingLeft: number;
+  width: number;
+  height: number;
+};
+type ElementStyles = { inline: StyleDecl[]; matched: MatchedRule[]; computed: StyleDecl[]; box: BoxModel };
 
 export type ResponsivePreset = { label: string; width: number; height: number; deviceScaleFactor: number; mobile: boolean };
 
@@ -89,10 +109,24 @@ const SNAPSHOT_SCRIPT = `
 `;
 
 function highlightScript(elId: string | null): string {
+  // Achado ao vivo (via smoke test do painel Styles): a versão anterior
+  // escrevia o destaque DIRETO em `el.style` — inofensivo pro destaque em
+  // si, mas poluía o painel "Styles" (aba nova): o `element.style` do
+  // elemento selecionado sempre mostrava o outline vermelho de destaque
+  // como se fosse um estilo inline de verdade da página, escondendo o
+  // inline real. Fix: uma única regra CSS injetada uma vez (`<style
+  // id="stellar-highlight-style">`), o destaque vira só um atributo
+  // (`data-stellar-highlighted`) que não toca `el.style` — `elementStylesScript`
+  // (painel Styles) fica livre pra ler o `element.style` real do autor.
   return `
     (() => {
+      if (!document.getElementById("stellar-highlight-style")) {
+        const style = document.createElement("style");
+        style.id = "stellar-highlight-style";
+        style.textContent = '[data-stellar-highlighted] { outline: 2px solid #ff5a5f !important; outline-offset: -1px !important; }';
+        document.head.appendChild(style);
+      }
       document.querySelectorAll("[data-stellar-highlighted]").forEach((el) => {
-        el.style.outline = "";
         el.removeAttribute("data-stellar-highlighted");
       });
       ${
@@ -100,8 +134,6 @@ function highlightScript(elId: string | null): string {
           ? `const el = document.querySelector('[data-stellar-el-id="${elId}"]');
       if (el) {
         el.setAttribute("data-stellar-highlighted", "1");
-        el.style.outline = "2px solid #ff5a5f";
-        el.style.outlineOffset = "-1px";
         el.scrollIntoView({ block: "center", behavior: "instant" });
       }`
           : ""
@@ -113,6 +145,107 @@ function highlightScript(elId: string | null): string {
 
 function elementAtPointScript(x: number, y: number): string {
   return `document.elementFromPoint(${Math.round(x)}, ${Math.round(y)})?.getAttribute("data-stellar-el-id") ?? null`;
+}
+
+// Achado ao vivo escrevendo o smoke test deste painel: devolver TODAS as
+// ~300 propriedades de `getComputedStyle` (ideia original) estoura o
+// `MAX_EVAL_RESULT_CHARS` (20_000, browser-registry.ts's `evalJs`) —
+// o JSON vem cortado no meio, `JSON.parse` falha em silêncio (capturado
+// pelo try/catch de `evalJson`) e a UI mostrava "elemento não encontrado"
+// pra QUALQUER seleção. Fix: escopar `computed` pra um allowlist real das
+// propriedades que mais importam (mesmas categorias que o DevTools
+// destaca) em vez de despejar a lista inteira crua — ainda é dado 100%
+// real (`getComputedStyle` de verdade), só não every-single-property.
+const COMPUTED_PROPS = [
+  "display", "position", "top", "right", "bottom", "left", "float", "clear", "z-index", "box-sizing",
+  "width", "height", "min-width", "min-height", "max-width", "max-height",
+  "margin-top", "margin-right", "margin-bottom", "margin-left",
+  "padding-top", "padding-right", "padding-bottom", "padding-left",
+  "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+  "border-top-style", "border-color", "border-radius",
+  "flex-direction", "flex-wrap", "justify-content", "align-items", "align-content", "gap", "flex-grow", "flex-shrink", "flex-basis",
+  "grid-template-columns", "grid-template-rows",
+  "font-family", "font-size", "font-weight", "font-style", "line-height", "letter-spacing",
+  "text-align", "text-decoration-line", "text-transform", "white-space", "color",
+  "background-color", "background-image", "opacity", "box-shadow", "overflow", "overflow-x", "overflow-y", "visibility", "cursor",
+  "transform", "transition", "animation-name",
+];
+
+// Painel de detalhes (Styles/Computed) do Elements — sem CDP, então sem
+// `CSS.getMatchedCSSRules` (removida do DOM padrão, só existia mesmo no
+// WebKit antigo). Aproximação real de qualquer jeito: varre
+// `document.styleSheets` (pulando folhas cross-origin, que lançam ao ler
+// `.cssRules`) e testa `el.matches(rule.selectorText)` regra por regra —
+// ordena pelo índice de varredura DECRESCENTE (a regra encontrada por
+// último tende a vencer a cascata na prática, já que folhas/posições
+// mais tardias no documento normalmente têm prioridade) como
+// aproximação de especificidade real, que exigiria reimplementar o
+// algoritmo de cascata inteiro. Devolve o objeto CRU — `evalJs` já
+// stringifica.
+function elementStylesScript(elId: string): string {
+  return `
+(() => {
+  const el = document.querySelector('[data-stellar-el-id="${elId}"]');
+  if (!el) return null;
+  function declsOf(decl) {
+    const out = [];
+    for (let i = 0; i < decl.length; i++) {
+      const prop = decl[i];
+      out.push({ prop, value: decl.getPropertyValue(prop), important: decl.getPropertyPriority(prop) === "important" });
+    }
+    return out;
+  }
+  const inline = declsOf(el.style);
+  const matched = [];
+  let order = 0;
+  function walkRules(rules, sourceLabel) {
+    for (const rule of rules) {
+      if (rule.type === CSSRule.MEDIA_RULE) {
+        let matches = false;
+        try { matches = window.matchMedia(rule.conditionText || "").matches; } catch {}
+        if (matches) walkRules(rule.cssRules, sourceLabel);
+        continue;
+      }
+      if (rule.type !== CSSRule.STYLE_RULE) continue;
+      let isMatch = false;
+      try { isMatch = el.matches(rule.selectorText); } catch {}
+      if (!isMatch) continue;
+      matched.push({ selector: rule.selectorText, source: sourceLabel, decls: declsOf(rule.style), order: order++ });
+    }
+  }
+  for (const sheet of document.styleSheets) {
+    // Pula a folha de destaque injetada por highlightScript (nosso próprio
+    // instrumento, não estilo do autor da página) — senão o elemento
+    // selecionado sempre mostraria sua própria regra de destaque
+    // ([data-stellar-highlighted]) como se fosse CSS real da página.
+    if (sheet.ownerNode && sheet.ownerNode.id === "stellar-highlight-style") continue;
+    let rules;
+    try { rules = sheet.cssRules; } catch { continue; }
+    if (!rules) continue;
+    let label = "estilo inline";
+    if (sheet.href) {
+      try { label = new URL(sheet.href).pathname.split("/").pop() || sheet.href; } catch { label = sheet.href; }
+    }
+    walkRules(rules, label);
+  }
+  matched.sort((a, b) => b.order - a.order);
+  for (const m of matched) delete m.order;
+  const cs = getComputedStyle(el);
+  const computed = [];
+  for (const prop of ${JSON.stringify(COMPUTED_PROPS)}) {
+    const value = cs.getPropertyValue(prop);
+    if (value) computed.push({ prop, value, important: false });
+  }
+  function num(v) { return Math.round(parseFloat(v) || 0); }
+  const box = {
+    marginTop: num(cs.marginTop), marginRight: num(cs.marginRight), marginBottom: num(cs.marginBottom), marginLeft: num(cs.marginLeft),
+    borderTop: num(cs.borderTopWidth), borderRight: num(cs.borderRightWidth), borderBottom: num(cs.borderBottomWidth), borderLeft: num(cs.borderLeftWidth),
+    paddingTop: num(cs.paddingTop), paddingRight: num(cs.paddingRight), paddingBottom: num(cs.paddingBottom), paddingLeft: num(cs.paddingLeft),
+    width: num(cs.width), height: num(cs.height),
+  };
+  return { inline, matched, computed, box };
+})()
+`;
 }
 
 async function evalJson<T>(id: string, js: string): Promise<T | null> {
@@ -207,6 +340,98 @@ function ElementsTree({
   );
 }
 
+function DeclRow({ d }: { d: StyleDecl }) {
+  return (
+    <div>
+      <span className={styles.prop}>{d.prop}</span>
+      <span className={styles.propval}>
+        {d.value}
+        {d.important ? " !important" : ""}
+      </span>
+    </div>
+  );
+}
+
+function StylesPanel({ es }: { es: ElementStyles }) {
+  return (
+    <>
+      <div className={styles.rule}>
+        <div className={styles.ruleSelector}>element.style</div>
+        {es.inline.length === 0 ? (
+          <div className={styles.ruleEmpty}>— nenhum estilo inline —</div>
+        ) : (
+          <div className={styles.decl}>
+            {es.inline.map((d) => (
+              <DeclRow key={d.prop} d={d} />
+            ))}
+          </div>
+        )}
+      </div>
+      {es.matched.map((rule, i) => (
+        <div key={i} className={styles.rule} data-role="inspector-style-rule">
+          <div className={styles.ruleSelector}>
+            {rule.selector} <span className={styles.ruleSource}>{rule.source}</span>
+          </div>
+          <div className={styles.decl}>
+            {rule.decls.map((d) => (
+              <DeclRow key={d.prop} d={d} />
+            ))}
+          </div>
+        </div>
+      ))}
+      {es.matched.length === 0 && <div className={styles.ruleEmpty}>Nenhuma regra de CSS externa corresponde a este elemento.</div>}
+    </>
+  );
+}
+
+function ComputedPanel({ es, filter, onFilterChange }: { es: ElementStyles; filter: string; onFilterChange: (v: string) => void }) {
+  const needle = filter.trim().toLowerCase();
+  const rows = es.computed.filter((d) => !needle || d.prop.includes(needle));
+  return (
+    <>
+      <div className={styles.boxModel} data-role="inspector-box-model">
+        <div className={styles.bmMargin}>
+          <span className={styles.bmTag}>margin</span>
+          <span className={`${styles.bmNum} ${styles.bmNumT}`}>{es.box.marginTop}</span>
+          <span className={`${styles.bmNum} ${styles.bmNumR}`}>{es.box.marginRight}</span>
+          <span className={`${styles.bmNum} ${styles.bmNumB}`}>{es.box.marginBottom}</span>
+          <span className={`${styles.bmNum} ${styles.bmNumL}`}>{es.box.marginLeft}</span>
+          <div className={styles.bmBorder}>
+            <span className={styles.bmTag}>border</span>
+            <span className={`${styles.bmNum} ${styles.bmNumT}`}>{es.box.borderTop}</span>
+            <span className={`${styles.bmNum} ${styles.bmNumR}`}>{es.box.borderRight}</span>
+            <span className={`${styles.bmNum} ${styles.bmNumB}`}>{es.box.borderBottom}</span>
+            <span className={`${styles.bmNum} ${styles.bmNumL}`}>{es.box.borderLeft}</span>
+            <div className={styles.bmPadding}>
+              <span className={styles.bmTag}>padding</span>
+              <span className={`${styles.bmNum} ${styles.bmNumT}`}>{es.box.paddingTop}</span>
+              <span className={`${styles.bmNum} ${styles.bmNumR}`}>{es.box.paddingRight}</span>
+              <span className={`${styles.bmNum} ${styles.bmNumB}`}>{es.box.paddingBottom}</span>
+              <span className={`${styles.bmNum} ${styles.bmNumL}`}>{es.box.paddingLeft}</span>
+              <div className={styles.bmContent} data-role="inspector-box-content">
+                {es.box.width} × {es.box.height}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <input
+        className={styles.computedFilter}
+        data-role="inspector-computed-filter"
+        placeholder="Filtrar propriedades…"
+        value={filter}
+        onChange={(e) => onFilterChange(e.target.value)}
+      />
+      <div className={styles.decl} data-role="inspector-computed-list">
+        {rows.map((d) => (
+          <DeclRow key={d.prop} d={d} />
+        ))}
+        {rows.length === 0 && <div className={styles.ruleEmpty}>Nenhuma propriedade encontrada.</div>}
+      </div>
+    </>
+  );
+}
+
 export function BrowserInspector({
   id,
   cardSize,
@@ -228,6 +453,10 @@ export function BrowserInspector({
   const [loadingTree, setLoadingTree] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [detailsSubtab, setDetailsSubtab] = useState<DetailsSubtab>("styles");
+  const [elementStyles, setElementStyles] = useState<ElementStyles | null>(null);
+  const [loadingStyles, setLoadingStyles] = useState(false);
+  const [computedFilter, setComputedFilter] = useState("");
   const [consoleEntries, setConsoleEntries] = useState<ConsoleLine[]>([]);
   const [consoleInput, setConsoleInput] = useState("");
   const [activeEmulation, setActiveEmulation] = useState<{ width: number; height: number; deviceScaleFactor: number; mobile: boolean; label: string } | null>(
@@ -335,6 +564,29 @@ export function BrowserInspector({
     if (tab === "network") void refreshNetwork();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, id]);
+
+  // Painel de detalhes (Styles/Computed) — refaz a busca sempre que a
+  // seleção mudar. `selectedId` pode apontar pra um `data-stellar-el-id`
+  // que não existe mais depois de um `refreshTree()` (a numeração
+  // reinicia a cada snapshot novo, ver comentário do `SNAPSHOT_SCRIPT`) —
+  // `elementStylesScript` já devolve `null` nesse caso e a UI mostra um
+  // estado vazio em vez de dado velho/quebrado.
+  useEffect(() => {
+    if (tab !== "elements" || !selectedId) {
+      setElementStyles(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingStyles(true);
+    void evalJson<ElementStyles>(id, elementStylesScript(selectedId)).then((res) => {
+      if (cancelled) return;
+      setElementStyles(res);
+      setLoadingStyles(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, id, selectedId]);
 
   async function deleteStorageRow(key: string) {
     if (storageArea === "cookies") return; // cookies são só-leitura por ora (ver doc comment da tabela abaixo)
@@ -524,16 +776,54 @@ export function BrowserInspector({
         </button>
       </div>
       <div className={styles.inspectorBody}>
-        {tab === "elements" &&
-          (loadingTree ? (
-            <div className={styles.inspectorEmpty}>Carregando árvore…</div>
-          ) : tree ? (
+        {tab === "elements" && (
+          <div className={styles.elementsSplit}>
             <div className={styles.tree} data-role="inspector-tree">
-              <ElementsTree node={tree} selectedId={selectedId} expanded={expanded} onToggle={toggleNode} onSelect={selectNode} />
+              {loadingTree ? (
+                <div className={styles.inspectorEmpty}>Carregando árvore…</div>
+              ) : tree ? (
+                <ElementsTree node={tree} selectedId={selectedId} expanded={expanded} onToggle={toggleNode} onSelect={selectNode} />
+              ) : (
+                <div className={styles.inspectorEmpty}>Não foi possível ler a página.</div>
+              )}
             </div>
-          ) : (
-            <div className={styles.inspectorEmpty}>Não foi possível ler a página.</div>
-          ))}
+            <div className={styles.detailsPane} data-role="inspector-details-pane">
+              <div className={styles.subtabs}>
+                <button
+                  className={styles.subtab}
+                  data-role="inspector-subtab"
+                  data-sub="styles"
+                  data-active={detailsSubtab === "styles" || undefined}
+                  onClick={() => setDetailsSubtab("styles")}
+                >
+                  Styles
+                </button>
+                <button
+                  className={styles.subtab}
+                  data-role="inspector-subtab"
+                  data-sub="computed"
+                  data-active={detailsSubtab === "computed" || undefined}
+                  onClick={() => setDetailsSubtab("computed")}
+                >
+                  Computed
+                </button>
+              </div>
+              <div className={styles.subpanel} data-role="inspector-subpanel">
+                {!selectedId ? (
+                  <div className={styles.inspectorEmpty}>Selecione um elemento na árvore.</div>
+                ) : loadingStyles ? (
+                  <div className={styles.inspectorEmpty}>Carregando estilos…</div>
+                ) : !elementStyles ? (
+                  <div className={styles.inspectorEmpty}>Elemento não encontrado (a árvore pode ter sido atualizada).</div>
+                ) : detailsSubtab === "styles" ? (
+                  <StylesPanel es={elementStyles} />
+                ) : (
+                  <ComputedPanel es={elementStyles} filter={computedFilter} onFilterChange={setComputedFilter} />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {tab === "console" && (
           <div className={styles.console}>
             <div className={styles.consoleLog} data-role="inspector-console-log">
