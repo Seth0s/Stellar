@@ -57,6 +57,7 @@ import {
   Rocket,
   RotateCw,
   Scan,
+  Crosshair,
   Search,
   Settings,
   Smartphone,
@@ -153,7 +154,8 @@ export type IconName =
   | "checkCircle"
   | "wrench"
   | "bug"
-  | "warning";
+  | "warning"
+  | "inspector";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -231,6 +233,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   rotate: RotateCw,
   moreVertical: MoreVertical,
   devTools: Bug,
+  inspector: Crosshair,
   favorite: Star,
   viewportFluid: Monitor,
   viewportMobile: Smartphone,

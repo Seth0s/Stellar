@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
+import { BrowserInspector } from "./BrowserInspector";
 import type { Rect } from "./board-model";
 import styles from "./BrowserCard.module.css";
 
@@ -205,6 +206,18 @@ function BrowserCardInner({
   // no z-order/raise real: enquanto o ponteiro está fisicamente sobre o
   // canvas, a página pinta em taxa cheia, esteja ou não no topo da pilha.
   const [hovering, setHovering] = useState(false);
+  // Pendentes #188 — mini-inspector embutido (BrowserInspector.tsx).
+  // `inspectorFocusPoint` chega do menu de contexto ("Inspecionar
+  // elemento", espaço de conteúdo) — `null` quando aberto pelo kebab
+  // menu, sem elemento nenhum pré-selecionado.
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorFocusPoint, setInspectorFocusPoint] = useState<{ x: number; y: number } | null>(null);
+  // Um novo "Inspecionar elemento" com o painel JÁ aberto precisa
+  // refocar num elemento DIFERENTE — `BrowserInspector` só lê seu
+  // `initialFocusPoint` uma vez (na montagem); usar isto como parte da
+  // `key` força uma remontagem real a cada pedido novo, sem afetar as
+  // outras aberturas (kebab menu) que nunca mudam esse contador.
+  const inspectorRequestIdRef = useRef(0);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
   // (no reading UI for that yet, just the "something needs attention"
@@ -312,6 +325,21 @@ function BrowserCardInner({
     });
     return () => {
       offMenu();
+    };
+  }, [id]);
+
+  // Pendentes #188 — "Inspecionar elemento" do menu de contexto acima
+  // abre o mini-inspector embutido (BrowserInspector.tsx) já com o
+  // elemento clicado pré-selecionado, em vez do DevTools real destacado.
+  useEffect(() => {
+    const off = window.browser.onOpenInspector((menuId, x, y) => {
+      if (menuId !== id) return;
+      inspectorRequestIdRef.current++;
+      setInspectorFocusPoint({ x, y });
+      setInspectorOpen(true);
+    });
+    return () => {
+      off();
     };
   }, [id]);
 
@@ -685,27 +713,38 @@ function BrowserCardInner({
         </div>
       }
     >
-      <canvas
-        ref={canvasRef}
-        className={styles.browserCardBody}
-        data-role="browser-body"
-        tabIndex={0}
-        onPointerDown={onCanvasPointerDown}
-        onPointerMove={onCanvasPointerMove}
-        onPointerEnter={onCanvasPointerEnter}
-        onPointerUp={onCanvasPointerUp}
-        onPointerLeave={onCanvasPointerLeave}
-        onWheel={onCanvasWheel}
-        onKeyDown={onCanvasKeyDown}
-        onKeyUp={onCanvasKeyUp}
-        onCompositionEnd={onCanvasCompositionEnd}
-        // O menu de verdade chega assíncrono, via `onContextMenu` do
-        // `window.browser` acima (a página embutida é quem decide os
-        // itens) — este handler só evita que o botão direito também
-        // dispare algo do PRÓPRIO app (radial menu do board, menu OS
-        // default) por cima/embaixo do menu real.
-        onContextMenu={(e) => e.preventDefault()}
-      />
+      <div className={styles.browserCardBodyWrap}>
+        <canvas
+          ref={canvasRef}
+          className={styles.browserCardBody}
+          data-role="browser-body"
+          tabIndex={0}
+          onPointerDown={onCanvasPointerDown}
+          onPointerMove={onCanvasPointerMove}
+          onPointerEnter={onCanvasPointerEnter}
+          onPointerUp={onCanvasPointerUp}
+          onPointerLeave={onCanvasPointerLeave}
+          onWheel={onCanvasWheel}
+          onKeyDown={onCanvasKeyDown}
+          onKeyUp={onCanvasKeyUp}
+          onCompositionEnd={onCanvasCompositionEnd}
+          // O menu de verdade chega assíncrono, via `onContextMenu` do
+          // `window.browser` acima (a página embutida é quem decide os
+          // itens) — este handler só evita que o botão direito também
+          // dispare algo do PRÓPRIO app (radial menu do board, menu OS
+          // default) por cima/embaixo do menu real.
+          onContextMenu={(e) => e.preventDefault()}
+        />
+        {inspectorOpen && (
+          <BrowserInspector
+            key={inspectorRequestIdRef.current}
+            id={id}
+            cardSize={{ w: rect.w, h: rect.h }}
+            initialFocusPoint={inspectorFocusPoint}
+            onClose={() => setInspectorOpen(false)}
+          />
+        )}
+      </div>
       <Popover anchorRef={menuBtnRef} open={menuOpen} onClose={() => setMenuOpen(false)} className={styles.browserCardMenu} dataRole="browser-menu">
         {/* Header responsivo (§2.1) — sempre presentes aqui, não só
          * quando a linha principal esconde os badges (< 380px de
@@ -730,12 +769,22 @@ function BrowserCardInner({
         {(ownerCardId || consoleBadgeCount > 0) && <div className={styles.browserCardFavDivider} />}
         <button
           onClick={() => {
+            setInspectorFocusPoint(null);
+            setInspectorOpen((v) => !v);
+            setMenuOpen(false);
+          }}
+        >
+          <Icon name="inspector" size={14} />
+          {inspectorOpen ? "Fechar inspector" : "Abrir inspector"}
+        </button>
+        <button
+          onClick={() => {
             void window.browser.openDevTools(id);
             setMenuOpen(false);
           }}
         >
           <Icon name="devTools" size={14} />
-          Abrir DevTools
+          Abrir DevTools (janela separada)
         </button>
         {VIEWPORT_PRESETS.map((preset) => (
           <button
