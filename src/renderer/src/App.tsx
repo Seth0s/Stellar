@@ -32,6 +32,7 @@ import { Home } from "./Home";
 import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
 import {
+  anchoredSlot,
   bboxOf,
   cascadeSlot,
   centeredSlot,
@@ -44,6 +45,7 @@ import {
   overlapArea,
   viewportWorldRect,
   worldRectToScreen,
+  type AnchorSide,
   type Point,
   type Rect,
 } from "./board-model";
@@ -96,6 +98,8 @@ type PendingAsk =
       cwd?: string;
       url?: string;
       reason?: string;
+      anchorCardId?: string;
+      side?: "left" | "right" | "top" | "bottom";
     }
   | { kind: "close-card"; requestId: string; requesterId: string; target: string; reason?: string };
 
@@ -709,7 +713,7 @@ export function App() {
       // DESIGN-BACKLOG.md item 60, peça 5 — same shape as spawn_agent's
       // autoApprove above, extended to non-terminal cards.
       if (params.autoApprove) {
-        const cardId = spawnCardFor(params.kind, params.cwd, params.url, requesterId);
+        const cardId = spawnCardFor(params.kind, params.cwd, params.url, requesterId, params.anchorCardId, params.side);
         // Achado ao vivo (2026-09-02) — mesma lacuna do open_url acima:
         // spawn_card nunca registrava lineage, só spawn_agent tinha.
         if (requesterId) autoConnect(requesterId, cardId, "spawned");
@@ -724,6 +728,8 @@ export function App() {
         cwd: params.cwd,
         url: params.url,
         reason: params.reason,
+        anchorCardId: params.anchorCardId,
+        side: params.side,
       });
     });
     // Sticky item "close_card" (2026-09-03) — same ask/consent shape as
@@ -1340,7 +1346,7 @@ export function App() {
    * Returns the card id — spawn_card's browser variant (below) and the
    * acbridge/MCP "open" ask flow both need to report which card actually
    * got used back to the caller. */
-  function openBrowserFor(ownerCardId: string | null, url: string): string {
+  function openBrowserFor(ownerCardId: string | null, url: string, rectOverride?: Rect): string {
     const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
     if (existing) {
       void window.browser.navigate(existing.id, url);
@@ -1353,7 +1359,7 @@ export function App() {
       kind: "browser",
       url,
       ownerCardId,
-      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
+      rect: rectOverride ?? centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
       groupId: null,
       label: null,
     };
@@ -1431,10 +1437,24 @@ export function App() {
   // delegates straight to openBrowserFor for identical owner-reuse
   // behavior — spawn_card's browser variant and the legacy `open` cmd
   // both end up at one real implementation, not two.
-  function spawnCardFor(kind: SpawnCardKind, cwd: string | undefined, url: string | undefined, requesterId: string | null): string {
-    if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank");
+  function spawnCardFor(
+    kind: SpawnCardKind,
+    cwd: string | undefined,
+    url: string | undefined,
+    requesterId: string | null,
+    anchorCardId?: string,
+    side?: AnchorSide,
+  ): string {
+    // Pendentes #188 ("spawn_card por coordenadas") — anchorCardId's
+    // existence was already validated by message-bus.ts against the live
+    // card list; a card that closed in the gap between that check and this
+    // call is the one case still possible here, so fall back to the usual
+    // centeredSlot rather than crash on `undefined.rect`.
+    const anchor = anchorCardId ? cardsRef.current.find((c) => c.id === anchorCardId) : undefined;
+    const anchoredRect = anchor && side ? anchoredSlot(anchor.rect, side) : undefined;
+    if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank", anchoredRect);
     const id = String(nextId.current++);
-    const rect = centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect));
+    const rect = anchoredRect ?? centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect));
     const card = {
       id,
       ...defaultCardFields(kind, cwd || activeBoardCwd),
@@ -1463,7 +1483,7 @@ export function App() {
       if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned");
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
     } else if (ask.kind === "spawn-card") {
-      const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId);
+      const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId, ask.anchorCardId, ask.side);
       if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
       void window.spawn.resolveCard(ask.requestId, { ok: true, cardId });
     } else {

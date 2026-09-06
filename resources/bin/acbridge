@@ -39,7 +39,7 @@ const USAGE =
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "concurrency-status [cap] | board-mode <cardId> | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
-  "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] | " +
+  "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] | " +
   "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
   "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
   "browser-snapshot <cardId> | browser-console <cardId> [level] | " +
@@ -178,12 +178,23 @@ if (cmd === "list") {
   if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
   request = { cmd: "spawn_agent", provider, cwd, resumeId, requesterId: ownCardId };
 } else if (cmd === "spawn-card") {
-  const [kind, cwdOrUrl] = rest;
-  if (!kind) fail("usage: acbridge spawn-card <files|changes|sticky|browser|remote-window> [cwd|url]");
+  // Pendentes #188 ("spawn_card por coordenadas") — `--anchor`/`--side` are
+  // optional trailing flags, stripped out before the positional kind/
+  // cwdOrUrl below so existing callers (no flags) parse identically to
+  // before.
+  const positional = [];
+  let anchorCardId, side;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--anchor") anchorCardId = rest[++i];
+    else if (rest[i] === "--side") side = rest[++i];
+    else positional.push(rest[i]);
+  }
+  const [kind, cwdOrUrl] = positional;
+  if (!kind) fail("usage: acbridge spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>]");
   request =
     kind === "browser"
-      ? { cmd: "spawn_card", kind, url: cwdOrUrl, requesterId: ownCardId }
-      : { cmd: "spawn_card", kind, cwd: cwdOrUrl, requesterId: ownCardId };
+      ? { cmd: "spawn_card", kind, url: cwdOrUrl, requesterId: ownCardId, anchorCardId, side }
+      : { cmd: "spawn_card", kind, cwd: cwdOrUrl, requesterId: ownCardId, anchorCardId, side };
 } else if (cmd === "browser-click") {
   // Selector-only via the CLI (unlike the MCP `browser_click` tool,
   // which also takes raw x/y) — a human/script typing this by hand has
