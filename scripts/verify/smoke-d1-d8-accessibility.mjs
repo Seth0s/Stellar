@@ -139,28 +139,25 @@ try {
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  const pipInfo = JSON.parse(
+  // D3 — a bússola (Compass.tsx) substituiu os antigos offscreen-pips
+  // (2026-09-06, pedido do usuário: "bússola centralizada, será
+  // organizado, antes ficava espalhado pela tela") — mesmo teste, seletor
+  // novo.
+  const compassInfo = JSON.parse(
     await page.evalJs(`
       (() => {
-        const pips = Array.from(document.querySelectorAll('.offscreen-pip'));
-        const layer = document.querySelector('.offscreen-pips-layer');
-        return JSON.stringify({
-          hasLayer: !!layer,
-          pipsCount: pips.length,
-          edge: pips[0]?.getAttribute('data-edge'),
-          title: pips[0]?.getAttribute('title')
-        });
+        const compass = document.querySelector('[data-role="compass"]');
+        return JSON.stringify({ found: !!compass, title: compass?.getAttribute('title') });
       })()
     `)
   );
-  check("D3: Camada de Offscreen Pips montada na viewport", pipInfo?.hasLayer, true);
-  check("D3: Pip direcional apontando para card fora da tela", pipInfo?.pipsCount > 0, true);
+  check("D3: Bússola aparece na viewport quando há card fora da tela", compassInfo?.found, true);
 
-  // Testa clique no Pip para focar de volta no card
+  // Testa clique na bússola pra focar de volta no card
   await page.evalJs(`
     (() => {
-      const pip = document.querySelector('.offscreen-pip');
-      if (pip) pip.click();
+      const compass = document.querySelector('[data-role="compass"]');
+      if (compass) compass.click();
     })()
   `);
   await new Promise((r) => setTimeout(r, 500));
@@ -175,7 +172,7 @@ try {
       })()
     `)
   );
-  check("D3: Clique no Offscreen Pip traz o card de volta ao campo de visão", cardBackInView, true);
+  check("D3: Clique na bússola traz o card de volta ao campo de visão", cardBackInView, true);
 
   finish();
 } catch (e) {
