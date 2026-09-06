@@ -498,7 +498,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "spawn_card",
       {
-        description: "Ask the human to create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, or remote window) on the board. Requires human approval.",
+        description: "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, or remote window) on the board. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind still requires human approval unless the board is in autonomous mode.",
         inputSchema: {
           kind: z.enum(["files", "changes", "sticky", "browser", "remote-window"]).describe("Which card kind to create"),
           cwd: z.string().optional().describe("Root path — used by files/changes kinds, defaults to the board's root"),

@@ -442,9 +442,12 @@ export function createMessageBus(
         reason?: string;
         /** DESIGN-BACKLOG.md item 60, peça 5 — same meaning as
          * spawn_agent's `autoApprove` above, extended to non-terminal
-         * cards. Still only ever true for the requester's own autonomous
-         * board — no concurrency cap applies here (only spawn_agent
-         * counts against it). */
+         * cards. True for the requester's own autonomous board (no
+         * concurrency cap applies here, only spawn_agent counts against
+         * it) — OR, achado ao vivo 2026-09-06, for `kind: "sticky"`
+         * regardless of autonomous mode: same risk class as
+         * `write_sticky` (already gate-free), reversible, no disk/process
+         * side effect, unlike every other `spawn_card` kind. */
         autoApprove?: boolean;
       },
     ) => void;
@@ -1329,6 +1332,17 @@ export function createMessageBus(
       // as `open` above.
       const requesterBoardId = callbacks.getCardBoardId(requesterId);
       const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
+      // Ideia registrada no sticky "Ideias/Brainstorm" (192), verificada e
+      // aplicada 2026-09-06 — `spawn_card` de uma sticky é a MESMA classe
+      // de risco de `write_sticky` (já sem gate humano nenhum): reversível
+      // com um clique, sem side-effect de disco ou de processo (ao
+      // contrário de `browser`/`remote-window`/`files`/`changes`, que
+      // abrem uma página real, um processo remoto, ou expõem o
+      // filesystem). Numa sessão remota sem humano no PC, o modal de
+      // consentimento simplesmente trava o agente pra sempre nesse caso —
+      // isentar só `sticky`, isolado dos outros kinds, que continuam
+      // exigindo o modal normalmente fora de um board autônomo.
+      const autoApprove = autonomous || req.kind === "sticky";
       markWaiting(requesterId);
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
@@ -1350,7 +1364,7 @@ export function createMessageBus(
           cwd: req.cwd,
           url: req.url,
           reason: req.reason,
-          autoApprove: autonomous,
+          autoApprove,
         });
       });
     }
