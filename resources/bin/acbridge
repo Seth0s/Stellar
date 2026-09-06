@@ -31,7 +31,8 @@ if (!sockPath) {
 
 const USAGE =
   "usage: acbridge <list | send <cardId> <message...> | open <url> | " +
-  "close-card <cardId> [reason...] | " +
+  "close-card <cardId> [reason...] | delete-card <cardId> [reason...] | " +
+  "update-card-content [--append] <cardId> <text...> | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
   "read-sticky <cardId> | write-sticky [--append] <cardId> <text...> | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
@@ -68,6 +69,17 @@ if (cmd === "list") {
   const [target, ...reasonParts] = rest;
   if (!target) fail("usage: acbridge close-card <cardId> [reason...]");
   request = { cmd: "close_card", target, reason: reasonParts.length ? reasonParts.join(" ") : undefined, requesterId: ownCardId };
+} else if (cmd === "delete-card") {
+  // Pendentes #188 — reaches a card on ANY board, not just the one
+  // currently loaded (close-card can't: no live UI on any other board).
+  const [target, ...reasonParts] = rest;
+  if (!target) fail("usage: acbridge delete-card <cardId> [reason...]");
+  request = { cmd: "delete_card", target, reason: reasonParts.length ? reasonParts.join(" ") : undefined, requesterId: ownCardId };
+} else if (cmd === "update-card-content") {
+  const append = rest[0] === "--append";
+  const [target, ...textParts] = append ? rest.slice(1) : rest;
+  if (!target || textParts.length === 0) fail("usage: acbridge update-card-content [--append] <cardId> <text...>");
+  request = { cmd: "update_card_content", target, content: textParts.join(" "), mode: append ? "append" : "replace", requesterId: ownCardId };
 } else if (cmd === "snapshot") {
   if (rest.length === 0) {
     request = { cmd: "snapshot" };
@@ -284,8 +296,8 @@ socket.on("close", () => {
     // O cardId agora vem junto (2026-09-01) — é ele que serve de alvo pros
     // comandos `browser-*` e `page-text` no card recém-aberto.
     console.log(res.cardId ? `opened: ${rest[0]}\t${res.cardId}` : `opened: ${rest[0]}`);
-  } else if (cmd === "close-card") {
-    console.log(`closed: ${rest[0]}`);
+  } else if (cmd === "close-card" || cmd === "delete-card") {
+    console.log(`${cmd === "delete-card" ? "deleted" : "closed"}: ${rest[0]}`);
   } else if (cmd === "snapshot") {
     // Just the path, nothing else — meant to be read directly (Claude
     // Code's own Read tool renders an image path), not parsed.
@@ -295,7 +307,7 @@ socket.on("close", () => {
     if (res.truncated) process.stderr.write("acbridge: page text truncated\n");
   } else if (cmd === "read-card") {
     console.log(res.text);
-  } else if (cmd === "read-sticky" || cmd === "write-sticky") {
+  } else if (cmd === "read-sticky" || cmd === "write-sticky" || cmd === "update-card-content") {
     console.log(res.content);
   } else if (cmd === "browser-snapshot") {
     // Uma linha por elemento, no formato que um humano lê de relance —

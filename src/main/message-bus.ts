@@ -181,6 +181,19 @@ export type BusRequest =
   // já carrega.
   | { cmd: "set_sticky_color"; target?: string; color?: string; requesterId?: string }
   | { cmd: "set_sticky_mode"; target?: string; mode?: string; requesterId?: string }
+  // Pendentes #188 ("delete_card"/"update_card_content") — close_card and
+  // write_sticky/read_sticky only ever look at `callbacks.listCards()`,
+  // which is scoped to whichever ONE board is currently loaded (every
+  // other board's cards only exist as DB rows, no live PTY/DOM at all —
+  // see AGENTS.md). These two reach a card on ANY board, loaded or not:
+  // for the loaded one they delegate straight to close_card/write_sticky
+  // (identical behavior, not a second implementation); for any other
+  // board — no live UI to ever show a human a consent modal — they
+  // require that board's OWN autonomous flag, same "no human in the
+  // loop, but explicitly told this is fine" contract spawn_card/open_url
+  // already use.
+  | { cmd: "delete_card"; target?: string; requesterId?: string; reason?: string }
+  | { cmd: "update_card_content"; target?: string; content?: string; mode?: string; requesterId?: string }
   | { cmd: "card_status"; target?: string }
   /** Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
    * usuário: hoje `isActive` (useTerminal.ts) é só uma aproximação por
@@ -388,6 +401,22 @@ export function createMessageBus(
      * MCP/acbridge cmd (see AGENTS.md's architecture entry). */
     getCardBoardId: (cardId: string) => string | undefined;
     isBoardAutonomous: (boardId: string) => boolean;
+    /** Pendentes #188 ("delete_card"/"update_card_content") — unlike
+     * `listCards()` (only the currently loaded board's live cards), this
+     * reads straight from the store across EVERY board — the only way to
+     * even validate a target that isn't on the loaded board at all. */
+    getAnyCard: (cardId: string) => { boardId: string; kind: string } | undefined;
+    /** Direct store mutation, no live renderer/IPC round-trip at all —
+     * dispatchRequest only ever calls these for a card whose board ISN'T
+     * the one currently loaded (nothing live to keep in sync there; a
+     * loaded-board card goes through close_card/write_sticky's normal
+     * live path instead). */
+    deleteCardDirect: (cardId: string) => void;
+    updateStickyContentDirect: (
+      cardId: string,
+      content: string,
+      mode: "replace" | "append",
+    ) => { ok: true; content: string } | { ok: false; error: string };
     /** DESIGN-BACKLOG.md item 60, peça 2 — per-board override of
      * DEFAULT_CONCURRENCY_CAP below. `null`/`undefined` means "use the
      * default", never "zero". */
@@ -937,6 +966,57 @@ export function createMessageBus(
         });
         callbacks.onCloseCardRequest(requestId, requesterId, target, req.reason, autonomous);
       });
+    }
+
+    if (req.cmd === "delete_card") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      const target = req.target;
+      // Already on the loaded board — close_card handles this exact card
+      // today (live-terminal reconfirm, consent modal/autonomous gate);
+      // delegate instead of a second, subtly different implementation.
+      if (callbacks.listCards().some((c) => c.id === target)) {
+        return handleRequest({ cmd: "close_card", target, requesterId: req.requesterId, reason: req.reason });
+      }
+      const any = callbacks.getAnyCard(target);
+      if (!any) return { ok: false, error: `no card with id "${target}"` };
+      // No loaded board means no live UI to ever show a human a consent
+      // modal through — the only safe path left is the same contract
+      // spawn_card/open_url already use for "no human in the loop, but
+      // this board is explicitly fine with it": THAT card's own board
+      // being autonomous, not the requester's.
+      if (!callbacks.isBoardAutonomous(any.boardId)) {
+        return {
+          ok: false,
+          error: `card "${target}" is on board "${any.boardId}", which isn't currently loaded — load that board and use close_card, or turn on autonomous mode for it first`,
+        };
+      }
+      callbacks.deleteCardDirect(target);
+      return { ok: true };
+    }
+
+    if (req.cmd === "update_card_content") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (req.content === undefined) return { ok: false, error: "missing content" };
+      const mode = req.mode ?? "replace";
+      if (mode !== "replace" && mode !== "append") return { ok: false, error: `mode must be "replace" or "append"` };
+      const target = req.target;
+      if (callbacks.listCards().some((c) => c.id === target)) {
+        return handleRequest({ cmd: "write_sticky", target, content: req.content, mode, requesterId: req.requesterId });
+      }
+      const any = callbacks.getAnyCard(target);
+      if (!any) return { ok: false, error: `no card with id "${target}"` };
+      if (any.kind !== "sticky") {
+        return { ok: false, error: `card "${target}" is a ${any.kind} card — update_card_content only works on sticky notes` };
+      }
+      if (!callbacks.isBoardAutonomous(any.boardId)) {
+        return {
+          ok: false,
+          error: `card "${target}" is on board "${any.boardId}", which isn't currently loaded — load that board and use write_sticky, or turn on autonomous mode for it first`,
+        };
+      }
+      const result = callbacks.updateStickyContentDirect(target, req.content, mode);
+      if (result.ok && req.requesterId) callbacks.onAutoConnect(req.requesterId, target, "modified");
+      return result;
     }
 
     if (req.cmd === "snapshot") {

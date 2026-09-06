@@ -908,6 +908,26 @@ function createWindow() {
     getCardBoardId: (id) => store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id),
     isBoardAutonomous: (boardId) => store.getBoard(boardId)?.autonomous ?? false,
     getBoardConcurrencyCap: (boardId) => store.getBoard(boardId)?.concurrency_cap ?? null,
+    // Pendentes #188 ("delete_card"/"update_card_content") — direct store
+    // access, same as getCardBoardId above, for a card that may not be on
+    // whichever board is currently loaded.
+    getAnyCard: (id) => {
+      const row = store.getCard(id);
+      return row ? { boardId: row.board_id, kind: row.kind } : undefined;
+    },
+    deleteCardDirect: (id) => {
+      store.deleteConnectorsForCard(id);
+      store.deleteCard(id);
+    },
+    updateStickyContentDirect: (id, content, mode) => {
+      const row = store.getCard(id);
+      if (!row) return { ok: false, error: `no card with id "${id}"` };
+      // toRow's convention (App.tsx) — a sticky's content lives in the
+      // generic `cwd` column, no schema of its own.
+      const next = mode === "append" ? (row.cwd ?? "") + content : content;
+      store.upsertCard({ ...row, cwd: next, updated_at: Date.now() });
+      return { ok: true, content: next };
+    },
     countRunningAgentsOnBoard: (boardId) =>
       store
         .listCards(boardId)
