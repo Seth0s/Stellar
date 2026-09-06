@@ -123,7 +123,7 @@ export type Card =
   | ChatCardData
   | MediaCardData;
 
-export type Connector = { id: string; fromCardId: string; toCardId: string };
+export type Connector = { id: string; fromCardId: string; toCardId: string; kind?: string | null };
 // Item 57.8 — "export" desenha um recorte retangular livre (não snapado a
 // cards, ver App.tsx's onBackgroundPointerDown) e exporta os pixels reais
 // daquela área da janela pra um arquivo (PNG/JPEG/PDF).

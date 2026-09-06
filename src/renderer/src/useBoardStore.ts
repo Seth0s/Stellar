@@ -94,7 +94,9 @@ export function useBoardStore(
       window.store.list(boardId),
       window.store.connectors.list(boardId),
     ]);
-    setConnectors(connectorRows.map((r) => ({ id: r.id, fromCardId: r.from_card_id, toCardId: r.to_card_id })));
+    setConnectors(
+      connectorRows.map((r) => ({ id: r.id, fromCardId: r.from_card_id, toCardId: r.to_card_id, kind: r.kind })),
+    );
     setWorld({ panX: 0, panY: 0, zoom: 1 });
     // Every id here belonged to the departing board — never valid for
     // whatever loads next (see App.tsx's liveStatus module comment).
