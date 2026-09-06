@@ -18,12 +18,12 @@
 // só o último degrau da escada (SIGKILL) o encerra. Se o escalonamento
 // regredir pra um sinal só, este arquivo fica vermelho.
 import { execSync } from "node:child_process";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9569;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-session-teardown", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-session-teardown-${CDP_PORT}`, import.meta.url).pathname;
 const MARKER = "STELLAR_TEARDOWN_PROBE";
 
 let nextRpcId = 1;

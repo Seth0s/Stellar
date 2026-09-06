@@ -16,11 +16,11 @@
 // CDP `Page.reload`) that must resolve them rather than leave them hanging.
 import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9443;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-consent-teardown", import.meta.url).pathname;
-const SCRATCH_ROOT = fileURLToPath(new URL("../../.verify-tmp/smoke-chat-consent-teardown-scratch/", import.meta.url));
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-consent-teardown-${CDP_PORT}`, import.meta.url).pathname;
+const SCRATCH_ROOT = fileURLToPath(new URL(`../../.verify-tmp/smoke-chat-consent-teardown-scratch-${CDP_PORT}/`, import.meta.url));
 
 rmSync(SCRATCH_ROOT, { recursive: true, force: true });
 mkdirSync(SCRATCH_ROOT, { recursive: true });

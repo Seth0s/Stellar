@@ -16,10 +16,10 @@
 // aparece quando há conteúdo selecionável embaixo/perto da zona de
 // resize) e confirma as DUAS coisas: o resize aconteceu de verdade, E
 // `document.getSelection()` ficou vazio depois do drag.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9613;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-card-resize-no-text-select", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-card-resize-no-text-select-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

@@ -11,10 +11,10 @@
 // original some do board) com o texto real da conversa, reabre no board
 // certo (incluindo cross-board) e desarquiva de verdade — cobre o ciclo
 // completo: arquivar -> listar -> reabrir -> desarquivar.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9457;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-sessions-sidebar", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-sessions-sidebar-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

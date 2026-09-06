@@ -14,10 +14,10 @@
 // despachado no elemento que xterm.js/BrowserCard de fato focam, e um
 // controle mostrando que F11 sem foco em nenhum card ainda funciona
 // normalmente (a correção é escopada, não uma quebra geral do atalho).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9499;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-f11-scoped", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-f11-scoped-${CDP_PORT}`, import.meta.url).pathname;
 
 async function dispatchF11On(page, selector) {
   return JSON.parse(

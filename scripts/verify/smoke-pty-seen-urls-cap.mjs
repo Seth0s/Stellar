@@ -13,10 +13,10 @@
 // suppresses reporting a URL a human hasn't seen before — all 800
 // distinct URLs still arrive individually over the real `pty:url-seen`
 // IPC, none silently dropped just because an older entry aged out.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9448;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-pty-seen-urls-cap", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-pty-seen-urls-cap-${CDP_PORT}`, import.meta.url).pathname;
 const URL_COUNT = 800;
 const MAX_SEEN_URLS = 500; // sandbox.ts's own cap, mirrored here for the assertion
 

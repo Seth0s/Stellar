@@ -1,9 +1,9 @@
 // DESIGN-BACKLOG.md item 7 (fluxo de uso) — duplicar card (Ctrl/Cmd+D) and
 // jump-to-card (Rail's "localizar card" popover).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9409;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-card-actions", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-card-actions-${CDP_PORT}`, import.meta.url).pathname;
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });

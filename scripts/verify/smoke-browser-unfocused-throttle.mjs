@@ -21,10 +21,10 @@
 // window — not a synthetic frame-rate read, since Electron's
 // `webContents` exposes no getter for its own configured rate.
 import { createServer } from "node:http";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9451;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-unfocused-throttle", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-unfocused-throttle-${CDP_PORT}`, import.meta.url).pathname;
 
 const server = createServer((_req, res) => {
   res.writeHead(200, { "Content-Type": "text/html" });

@@ -18,12 +18,12 @@
 // Os três checks abaixo batem contra o DOM real (`.modal` presente ou
 // ausente), não só contra a resposta MCP: um auto-approve errado que pula
 // o modal só aparece se você de fato procurar o modal.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9563;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_BASE = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-card-identity", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-card-identity-${CDP_PORT}`, import.meta.url).pathname;
 
 let nextRpcId = 1;
 /** `url` explícito — o ponto inteiro deste arquivo é que `/mcp` e

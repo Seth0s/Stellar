@@ -17,10 +17,10 @@
 // (the cache isn't just stuck reporting the last thing it saw), and that
 // the file heals correctly on the next real write afterward.
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9450;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-secrets-cache", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-secrets-cache-${CDP_PORT}`, import.meta.url).pathname;
 const SECRETS_PATH = `${USER_DATA_DIR}/secrets.json`;
 
 const { check, finish } = makeChecker();

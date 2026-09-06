@@ -18,10 +18,10 @@
 // exact, complete, non-corrupted URL surfaces both on the `pty:url-seen`
 // IPC event itself and in the real DOM chip's `title` (the one place the
 // untruncated URL is kept for copying), not a shortened/garbled version.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9447;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-pty-url-chunk-split", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-pty-url-chunk-split-${CDP_PORT}`, import.meta.url).pathname;
 
 async function clickByTitle(page, title) {
   let coords = JSON.parse(

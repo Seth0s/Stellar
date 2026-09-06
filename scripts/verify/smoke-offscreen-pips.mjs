@@ -20,10 +20,10 @@
 // direto pra cima, e aí o rumo real dos cards ERA ~-90°, então a checagem
 // "não é um chevron de quatro posições" passava ou falhava conforme a
 // cascata de duplicatas caísse — flaky por construção minha, não do produto.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9577;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-offscreen-pips", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-offscreen-pips-${CDP_PORT}`, import.meta.url).pathname;
 
 /** Mesmos limites de calha do componente (OffscreenPips.tsx). */
 const MIN_X = 76;

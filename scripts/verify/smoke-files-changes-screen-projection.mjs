@@ -9,11 +9,11 @@
 // bug de projeção poderia cancelar por coincidência), e drag/resize/close
 // reais continuando funcionais no modo novo.
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9552;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-files-changes-screen-projection", import.meta.url).pathname;
-const SCRATCH_DIR = new URL("../../.verify-tmp/smoke-files-changes-screen-projection-scratch", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-files-changes-screen-projection-${CDP_PORT}`, import.meta.url).pathname;
+const SCRATCH_DIR = new URL(`../../.verify-tmp/smoke-files-changes-screen-projection-scratch-${CDP_PORT}`, import.meta.url).pathname;
 
 rmSync(SCRATCH_DIR, { recursive: true, force: true });
 mkdirSync(SCRATCH_DIR, { recursive: true });

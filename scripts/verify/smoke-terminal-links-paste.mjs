@@ -9,10 +9,10 @@
 //    padrão do xterm.js), salva um PNG real via main/clipboard-image.ts,
 //    escreve o caminho no PTY.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9443;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-links-paste", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-links-paste-${CDP_PORT}`, import.meta.url).pathname;
 
 function pngFilesIn(dir) {
   if (!existsSync(dir)) return [];

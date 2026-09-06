@@ -2,10 +2,10 @@
 // render its own chrome? Run this first when something feels broken —
 // it fails fast on "the whole UI is dark" class of bugs before spending
 // time on a more specific smoke script.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9401;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-boot", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-boot-${CDP_PORT}`, import.meta.url).pathname;
 
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 const { check, finish } = makeChecker();

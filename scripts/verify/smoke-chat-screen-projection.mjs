@@ -6,10 +6,10 @@
 // sem correctZoomCoords, sem transform interno de zoom/pan como
 // MediaCard) que pudesse interagir mal com a projeção, então o risco
 // aqui é o mais baixo do lote.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9572;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-screen-projection", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-screen-projection-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   return JSON.parse(

@@ -5,11 +5,11 @@
 // `window.store.favorites.list()`), clicar um favorito salvo no popover
 // navega o card de verdade (evento `did-navigate` real), e remover
 // realmente some da lista.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
-const CDP_PORT = 9539;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-favorites", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-favorites-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

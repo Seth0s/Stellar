@@ -1,10 +1,10 @@
 // The connector-drag gesture (useConnectorDrag.ts) — drag from one card's
 // body to another while the connector tool is active should draw and
 // persist a link between them. Not covered by the other smoke scripts.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, spawnCard, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9404;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-connector", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-connector-${CDP_PORT}`, import.meta.url).pathname;
 
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 const { check, finish } = makeChecker();

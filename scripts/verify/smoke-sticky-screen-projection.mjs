@@ -15,10 +15,10 @@
 // poderia cancelar por coincidência — foi exatamente assim que o bug de
 // clique do navegador ficou invisível até hoje), e que drag/resize/close
 // continuam funcionando de verdade nesse modo novo.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9551;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-sticky-screen-projection", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-sticky-screen-projection-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   let res = JSON.parse(

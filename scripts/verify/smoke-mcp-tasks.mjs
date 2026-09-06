@@ -17,16 +17,16 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const ELECTRON_BIN = fileURLToPath(new URL("../../node_modules/.bin/electron", import.meta.url));
 const ELECTRON_MAIN = "out/main/index.js";
 
-const CDP_PORT = 9516;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-tasks", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-tasks-${CDP_PORT}`, import.meta.url).pathname;
 
 /** Same launch shape as cdp-client.mjs's `startApp`, minus the
  * `rmSync(userDataDir)` wipe — this is the one case that needs the

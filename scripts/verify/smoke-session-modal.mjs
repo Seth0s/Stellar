@@ -6,10 +6,10 @@
 // stale render closure) — replaced with one combined `updateBoard`. This
 // checks the actual persisted DB row, not just in-memory React state, so a
 // regression back to the two-call version would fail here.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9407;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-session-modal", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-session-modal-${CDP_PORT}`, import.meta.url).pathname;
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });

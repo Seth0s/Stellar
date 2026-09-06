@@ -13,11 +13,11 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9573;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-provider-registration", import.meta.url).pathname;
-const FAKE_HOME = new URL("../../.verify-tmp/smoke-mcp-provider-registration-home", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-provider-registration-${CDP_PORT}`, import.meta.url).pathname;
+const FAKE_HOME = new URL(`../../.verify-tmp/smoke-mcp-provider-registration-home-${CDP_PORT}`, import.meta.url).pathname;
 const SHIM = new URL("../../resources/bin/stellar-mcp", import.meta.url).pathname;
 const CURSOR_CONFIG = join(FAKE_HOME, ".cursor", "mcp.json");
 

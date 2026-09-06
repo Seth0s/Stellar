@@ -10,11 +10,11 @@
 // the same `chat.testSimulateTool` hook smoke-chat-tools.mjs already uses.
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9442;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-chat-write-consent-large-file", import.meta.url).pathname;
-const SCRATCH_ROOT = fileURLToPath(new URL("../../.verify-tmp/smoke-chat-write-consent-large-file-scratch/", import.meta.url));
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-chat-write-consent-large-file-${CDP_PORT}`, import.meta.url).pathname;
+const SCRATCH_ROOT = fileURLToPath(new URL(`../../.verify-tmp/smoke-chat-write-consent-large-file-scratch-${CDP_PORT}/`, import.meta.url));
 
 rmSync(SCRATCH_ROOT, { recursive: true, force: true });
 mkdirSync(SCRATCH_ROOT, { recursive: true });

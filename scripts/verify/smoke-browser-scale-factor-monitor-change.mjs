@@ -23,10 +23,10 @@
 // disparado, um frame REAL capturado na densidade nova) roda sem
 // simulação nenhuma.
 import { createServer } from "node:http";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9539;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-browser-scale-factor-monitor-change", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-scale-factor-monitor-change-${CDP_PORT}`, import.meta.url).pathname;
 
 // data:/file: são bloqueados por design em browser-registry.ts's
 // normalizeUrl (segurança) — precisa de um servidor http real local,

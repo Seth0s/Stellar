@@ -20,10 +20,10 @@
 // por `jumpToCard` noutros lugares do app) quando o card reusado não está
 // visível — só nesse caso, pra não mexer na câmera à toa quando o card
 // reusado já estava visível.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9464;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-url-open-offscreen", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-url-open-offscreen-${CDP_PORT}`, import.meta.url).pathname;
 
 async function worldState(page) {
   const style = await page.evalJs(`document.querySelector('.world')?.getAttribute('style') ?? ""`);

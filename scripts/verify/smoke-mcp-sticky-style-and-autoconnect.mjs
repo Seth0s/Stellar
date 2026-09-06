@@ -16,13 +16,13 @@
 //     ação repetida no mesmo par.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
 const execFileAsync = promisify(execFile);
-const CDP_PORT = 9571;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-mcp-sticky-style-and-autoconnect", import.meta.url).pathname;
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-sticky-style-and-autoconnect-${CDP_PORT}`, import.meta.url).pathname;
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 

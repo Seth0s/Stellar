@@ -19,10 +19,55 @@ import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { rmSync } from "node:fs";
+import { createServer } from "node:net";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const ELECTRON_BIN = fileURLToPath(new URL("../../node_modules/.bin/electron", import.meta.url));
 const ELECTRON_MAIN = "out/main/index.js";
+
+/**
+ * Pendentes #188 — most smoke scripts hardcode a specific CDP_PORT
+ * number (and a fixed --user-data-dir under .verify-tmp/), which was
+ * fine for one agent running the suite sequentially but collides for
+ * real the moment two agents run scripts concurrently on the same
+ * machine — confirmed live (2026-09) with orphaned/racing Electron
+ * instances sharing a port and a user-data-dir.
+ *
+ * Achado ao vivo migrando a suíte inteira pra isto: a primeira versão
+ * fazia bind na porta 0 e lia de volta a porta efêmera que o SO
+ * atribuiu — real e livre, sem race, MAS o Linux normalmente atribui
+ * essas portas na faixa ~32768-60999. Vários scripts (e este próprio
+ * arquivo, no `extraEnv` de `startApp` abaixo) derivam OUTRAS portas
+ * somando um offset fixo ao CDP_PORT (`+30000`/`+40000` — seguro
+ * quando CDP_PORT vem da faixa baixa 9400-9900 de sempre, jamais
+ * verificado contra o teto de 65535 porque nunca precisou). Uma porta
+ * efêmera de ~35000 + 40000 estoura esse teto, e a porta resultante
+ * (truncada/inválida) quebra o próprio setup interno do app (MCP
+ * server) em silêncio — a janela nunca termina de carregar, sem
+ * processo de renderer, sem erro nenhum no stderr. Reproduzido e
+ * confirmado isolando: o hang some assim que a porta-base fica baixa
+ * o bastante pra sobrar margem no +40000. Fix: sortear dentro de uma
+ * faixa baixa fixa (mesmo espírito da faixa 9400-9900 já usada nos
+ * literais que isto substitui) e tentar bindar NELA — se colidir
+ * (outro processo já usando), tenta de novo com outro sorteio, até um
+ * teto de tentativas.
+ */
+export async function pickFreePort() {
+  const MIN_PORT = 12000;
+  const MAX_PORT = 19000; // deixa MUITA margem pro +40000 (max real 59000) abaixo de 65535
+  const MAX_ATTEMPTS = 50;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const port = MIN_PORT + Math.floor(Math.random() * (MAX_PORT - MIN_PORT));
+    const ok = await new Promise((resolve) => {
+      const srv = createServer();
+      srv.unref();
+      srv.on("error", () => resolve(false));
+      srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
+    });
+    if (ok) return port;
+  }
+  throw new Error(`pickFreePort: no free port found in ${MAX_ATTEMPTS} attempts within [${MIN_PORT}, ${MAX_PORT})`);
+}
 
 /**
  * Launches an isolated `electron out/main/index.js` instance and waits

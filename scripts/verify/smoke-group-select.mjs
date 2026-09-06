@@ -16,10 +16,10 @@
 // dragged genuinely clear of each other at all (at zoom 1 there is no
 // on-screen destination that fully separates two 720x560 cards in an
 // 1280x800 window).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9405;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-group-select", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-group-select-${CDP_PORT}`, import.meta.url).pathname;
 
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 const { check, finish } = makeChecker();

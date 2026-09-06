@@ -17,10 +17,10 @@
 // BEM menos renders/commits do que eventos disparados (prova o
 // coalescing), e (b) a posição final na tela e no banco continua exata
 // (prova que agrupar não perde nem atrasa o resultado real do arraste).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9481;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-card-drag-raf-throttle", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-card-drag-raf-throttle-${CDP_PORT}`, import.meta.url).pathname;
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });

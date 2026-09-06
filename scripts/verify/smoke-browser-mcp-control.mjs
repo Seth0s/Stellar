@@ -11,10 +11,10 @@ import { promisify } from "node:util";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
 const execFileAsync = promisify(execFile);
-const CDP_PORT = 9599;
+const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
 const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 // os.tmpdir(), not a .verify-tmp/ dir under this worktree — confirmed live
@@ -30,7 +30,7 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 // asserts `.ok === false` for a rejected-by-validation call, which an
 // ENOENT connection failure also satisfies — a real, separate weak-
 // assertion gap in that file, not proof acbridge was actually reachable.
-const USER_DATA_DIR = join(tmpdir(), "stellar-verify-browser-mcp-control");
+const USER_DATA_DIR = join(tmpdir(), `stellar-verify-browser-mcp-control-${CDP_PORT}`);
 const ACBRIDGE_BIN = new URL("../../resources/bin/acbridge", import.meta.url).pathname;
 
 async function runAcbridge(sockPath, args) {

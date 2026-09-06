@@ -6,10 +6,10 @@
 // estiverem no mesmo modelo). Mesma prova real que sticky/files/changes
 // já fizeram: DOM no lugar certo, posição batendo com a fórmula
 // `rect*zoom+pan` em dois zooms, drag/resize/close reais.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9554;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-stroke-screen-projection", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-stroke-screen-projection-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   return JSON.parse(

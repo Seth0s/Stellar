@@ -10,11 +10,11 @@
 // mechanism the app's own board-switch already uses, no shortcut around
 // product code.
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9411;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-files-card", import.meta.url).pathname;
-const SCRATCH_DIR = new URL("../../.verify-tmp/smoke-files-card-scratch", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-files-card-${CDP_PORT}`, import.meta.url).pathname;
+const SCRATCH_DIR = new URL(`../../.verify-tmp/smoke-files-card-scratch-${CDP_PORT}`, import.meta.url).pathname;
 
 rmSync(SCRATCH_DIR, { recursive: true, force: true });
 mkdirSync(`${SCRATCH_DIR}/sub`, { recursive: true });

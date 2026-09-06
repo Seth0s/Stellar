@@ -2,10 +2,10 @@
 // grouped by project) instead of straight into a board, with a Topbar
 // button to come back to it. Covers: empty state, create-from-Home,
 // project grouping, opening a session, and the home button round-trip.
-import { startApp, stopApp, connectPage, makeChecker } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9410;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-home", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-home-${CDP_PORT}`, import.meta.url).pathname;
 
 const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });

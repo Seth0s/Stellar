@@ -7,10 +7,10 @@
 // + fit real só no settle. Verifica AO VIVO, via CDP, sem mock: durante o
 // arraste o transform está aplicado E cols/rows NÃO mudaram ainda; ao
 // soltar, o transform volta a vazio E cols/rows mudaram de verdade.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9536;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-resize-fluidity", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-resize-fluidity-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   return JSON.parse(

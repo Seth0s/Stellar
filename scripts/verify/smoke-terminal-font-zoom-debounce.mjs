@@ -11,10 +11,10 @@
 // valores DISTINTOS vistos — deve ser só 2 (inicial -> final), nunca um
 // por tick, provando o debounce funcionando de verdade, não só o
 // resultado final batendo.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9537;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-font-zoom-debounce", import.meta.url).pathname;
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-font-zoom-debounce-${CDP_PORT}`, import.meta.url).pathname;
 
 async function centerOf(page, selector) {
   return JSON.parse(

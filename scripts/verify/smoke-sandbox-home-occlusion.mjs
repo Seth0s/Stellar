@@ -31,11 +31,11 @@
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
-const CDP_PORT = 9445;
-const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-sandbox-home-occlusion", import.meta.url).pathname;
-const SCRATCH_ROOT = fileURLToPath(new URL("../../.verify-tmp/smoke-sandbox-home-occlusion-scratch/", import.meta.url));
+const CDP_PORT = await pickFreePort();
+const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-sandbox-home-occlusion-${CDP_PORT}`, import.meta.url).pathname;
+const SCRATCH_ROOT = fileURLToPath(new URL(`../../.verify-tmp/smoke-sandbox-home-occlusion-scratch-${CDP_PORT}/`, import.meta.url));
 rmSync(SCRATCH_ROOT, { recursive: true, force: true });
 mkdirSync(SCRATCH_ROOT, { recursive: true });
 
