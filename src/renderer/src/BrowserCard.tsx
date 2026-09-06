@@ -192,6 +192,19 @@ function BrowserCardInner({
   const rectRef = useRef({ w: rect.w, h: rect.h });
   rectRef.current = { w: rect.w, h: rect.h };
   const [menuOpen, setMenuOpen] = useState(false);
+  // Pendentes #188 ("hover não responsivo"/"textarea não responde") —
+  // relato ao vivo confirmado pelo usuário como sendo dentro da PÁGINA
+  // carregada, não na UI do Stellar. Medido ao vivo: `isFocused` (abaixo)
+  // é só "sou o card mais no topo do z-order" — 2 browser cards lado a
+  // lado, sem se sobrepor, o que NÃO é topmost pinta a 8fps
+  // (`UNFOCUSED_FRAME_RATE`, browser-registry.ts) mesmo recebendo hover
+  // real e contínuo (mousemove é sempre forwardado, sem gate de foco —
+  // `onCanvasPointerMove` abaixo). Um cursor/tooltip/dropdown que segue o
+  // mouse na página embutida travava visivelmente a ~125ms por frame,
+  // exatamente o sintoma relatado. `hovering` cobre esse caso sem mexer
+  // no z-order/raise real: enquanto o ponteiro está fisicamente sobre o
+  // canvas, a página pinta em taxa cheia, esteja ou não no topo da pilha.
+  const [hovering, setHovering] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
   // (no reading UI for that yet, just the "something needs attention"
@@ -342,10 +355,12 @@ function BrowserCardInner({
   }, [id, visible]);
 
   // Pre-release audit P2 — lowers paint rate for a visible-but-not-
-  // topmost card instead of always painting at full 30fps.
+  // topmost card instead of always painting at full 30fps. `hovering`
+  // (see its own doc comment above) overrides the throttle while the
+  // pointer is physically over this card, regardless of z-order.
   useEffect(() => {
-    void window.browser.setFocused(id, isFocused);
-  }, [id, isFocused]);
+    void window.browser.setFocused(id, isFocused || hovering);
+  }, [id, isFocused, hovering]);
 
   // Trilha A do navegador (browser-registry.ts's `resize` doc comment)
   // originalmente também acompanhava o zoom do board, não só o tamanho de
@@ -447,11 +462,19 @@ function BrowserCardInner({
     if (!p) return;
     window.browser.sendMouse(id, { type: "mouseUp", ...p, button: mouseButtonName(e.button), clickCount: 1 });
   }
+  // Companion to `onCanvasPointerLeave` below — see `hovering`'s own doc
+  // comment (near its useState) for why this exists. Not gated by
+  // `interactionMode`: a card should paint at full rate while the
+  // pointer is over it regardless of which tool is active.
+  function onCanvasPointerEnter() {
+    setHovering(true);
+  }
   // Achado ao vivo (2026-08-31) — sem isso, qualquer `:hover`/tooltip/
   // dropdown que a página embutida abriu ao passar o mouse nunca fecha
   // quando o cursor sai do canvas (nada aqui nunca disparava um sinal
   // de "saiu"). x/y não importam pro tipo `mouseLeave` em si.
   function onCanvasPointerLeave() {
+    setHovering(false);
     if (interactionMode !== "normal") return;
     window.browser.sendMouse(id, { type: "mouseLeave", x: 0, y: 0 });
   }
@@ -669,6 +692,7 @@ function BrowserCardInner({
         tabIndex={0}
         onPointerDown={onCanvasPointerDown}
         onPointerMove={onCanvasPointerMove}
+        onPointerEnter={onCanvasPointerEnter}
         onPointerUp={onCanvasPointerUp}
         onPointerLeave={onCanvasPointerLeave}
         onWheel={onCanvasWheel}
