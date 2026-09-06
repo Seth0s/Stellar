@@ -498,17 +498,19 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "spawn_card",
       {
-        description: "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, or remote window) on the board. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind still requires human approval unless the board is in autonomous mode.",
+        description: "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, or remote window) on the board. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind still requires human approval unless the board is in autonomous mode. By default it lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open on the file in question).",
         inputSchema: {
           kind: z.enum(["files", "changes", "sticky", "browser", "remote-window"]).describe("Which card kind to create"),
           cwd: z.string().optional().describe("Root path — used by files/changes kinds, defaults to the board's root"),
           url: z.string().optional().describe("URL — used by the browser kind"),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
+          anchorCardId: z.string().optional().describe("Place the new card right next to this existing card (see list_cards) instead of the default centered placement"),
+          side: z.enum(["left", "right", "top", "bottom"]).optional().describe("Which side of anchorCardId to place the new card on. Defaults to \"right\" when anchorCardId is given. Ignored without anchorCardId."),
         },
       },
-      async ({ kind, cwd, url, callerCardId, reason }) => {
-        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, requesterId: caller(callerCardId), reason });
+      async ({ kind, cwd, url, callerCardId, reason, anchorCardId, side }) => {
+        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, requesterId: caller(callerCardId), reason, anchorCardId, side });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

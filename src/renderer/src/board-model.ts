@@ -170,6 +170,33 @@ export function pointSlot(point: Point): Rect {
   return { x: point.x - SPAWN_W / 2, y: point.y - SPAWN_H / 2, w: SPAWN_W, h: SPAWN_H };
 }
 
+export type AnchorSide = "left" | "right" | "top" | "bottom";
+
+/** Pendentes #188 ("spawn_card por coordenadas") — a card spawned right
+ * next to another one an agent already cares about (an editor already
+ * focused on the file in question, e.g.), instead of wherever
+ * `centeredSlot`'s ring-search happens to land. Same size as every other
+ * spawn (`SPAWN_W`/`SPAWN_H`), centered on the anchor's cross-axis, offset
+ * by `gap` along the requested side. Deliberately no collision
+ * avoidance — like `pointSlot` above, this is a specific deliberate
+ * placement, not a "find me a free spot" request; a caller chaining
+ * several of these expects them adjacent, not scattered by a ring-search
+ * escaping the very adjacency it asked for. */
+export function anchoredSlot(anchor: Rect, side: AnchorSide, gap = 24): Rect {
+  const cx = anchor.x + anchor.w / 2;
+  const cy = anchor.y + anchor.h / 2;
+  switch (side) {
+    case "left":
+      return { x: anchor.x - gap - SPAWN_W, y: cy - SPAWN_H / 2, w: SPAWN_W, h: SPAWN_H };
+    case "right":
+      return { x: anchor.x + anchor.w + gap, y: cy - SPAWN_H / 2, w: SPAWN_W, h: SPAWN_H };
+    case "top":
+      return { x: cx - SPAWN_W / 2, y: anchor.y - gap - SPAWN_H, w: SPAWN_W, h: SPAWN_H };
+    case "bottom":
+      return { x: cx - SPAWN_W / 2, y: anchor.y + anchor.h + gap, w: SPAWN_W, h: SPAWN_H };
+  }
+}
+
 /** World-space rect -> window-content pixel rect. Used by the snapshot
  * IPC handler (see App.tsx / main/index.ts's handleSnapshotRequest), which
  * only knows a card's live world-space rect and needs it in real screen

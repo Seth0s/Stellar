@@ -436,6 +436,10 @@ export type SpawnCardAskParams = {
   /** DESIGN-BACKLOG.md item 60, peça 5 — same meaning as
    * SpawnAgentAskParams.autoApprove above. */
   autoApprove?: boolean;
+  /** Pendentes #188 ("spawn_card por coordenadas") — already validated
+   * against the live card list by message-bus.ts before this fires. */
+  anchorCardId?: string;
+  side?: "left" | "right" | "top" | "bottom";
 };
 /** DESIGN-BACKLOG.md item 60, peça 1 — one queued spawn_agent request. */
 export type SpawnQueueEntry = { id: string; requesterId: string; provider: string; reason?: string; requestedAt: number };

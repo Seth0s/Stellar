@@ -240,7 +240,20 @@ export type BusRequest =
       wait?: boolean;
       waitTimeoutMs?: number;
     }
-  | { cmd: "spawn_card"; kind?: string; cwd?: string; url?: string; requesterId?: string; reason?: string };
+  | {
+      cmd: "spawn_card";
+      kind?: string;
+      cwd?: string;
+      url?: string;
+      requesterId?: string;
+      reason?: string;
+      /** Pendentes #188 ("spawn_card por coordenadas") — place the new
+       * card right next to an existing one instead of `centeredSlot`'s
+       * viewport-center placement. `side` defaults to "right" when
+       * `anchorCardId` is given without it. */
+      anchorCardId?: string;
+      side?: "left" | "right" | "top" | "bottom";
+    };
 
 export type BusResponse = Record<string, unknown> & { ok: boolean };
 
@@ -449,6 +462,11 @@ export function createMessageBus(
          * `write_sticky` (already gate-free), reversible, no disk/process
          * side effect, unlike every other `spawn_card` kind. */
         autoApprove?: boolean;
+        /** Pendentes #188 ("spawn_card por coordenadas") — already
+         * validated against `callbacks.listCards()` by the time this
+         * fires, so the renderer can trust it names a real live card. */
+        anchorCardId?: string;
+        side?: "left" | "right" | "top" | "bottom";
       },
     ) => void;
   },
@@ -1326,6 +1344,17 @@ export function createMessageBus(
       if (!req.kind || !validKinds.includes(req.kind as SpawnCardKind)) {
         return { ok: false, error: `kind must be one of ${validKinds.join(", ")}` };
       }
+      // Pendentes #188 ("spawn_card por coordenadas") — validated here, not
+      // just by mcp-server.ts's zod schema: acbridge talks to this bus
+      // directly over the socket, no zod in that path at all (same reason
+      // write_sticky's `mode` is re-checked here too).
+      const validSides = ["left", "right", "top", "bottom"] as const;
+      if (req.side !== undefined && !validSides.includes(req.side)) {
+        return { ok: false, error: `side must be one of ${validSides.join(", ")}` };
+      }
+      if (req.anchorCardId !== undefined && !callbacks.listCards().some((c) => c.id === req.anchorCardId)) {
+        return { ok: false, error: `no open card with id "${req.anchorCardId}"` };
+      }
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
       // DESIGN-BACKLOG.md item 60, peça 5 — same board-scoped auto-approve
@@ -1365,6 +1394,8 @@ export function createMessageBus(
           url: req.url,
           reason: req.reason,
           autoApprove,
+          anchorCardId: req.anchorCardId,
+          side: req.anchorCardId ? (req.side ?? "right") : undefined,
         });
       });
     }
