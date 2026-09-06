@@ -1583,14 +1583,41 @@ select.resume-input {
 
 /* ----------------------------------------------------------- connector */
 
-/* Single connector style — every connector today comes from the human
-   gesture via the 🔗 tool (see AGENTS.md); the artifact's IA/human dual
-   palette only applies once an AI action creates connectors of its own. */
+/* Pendentes #188 — conectores agora carregam `kind` até o render (antes
+   ficava só no banco, todo conector desenhava igual). Cor por kind é só
+   leitura visual; nenhum kind muda comportamento de execução/dispatch. */
 .connector-line {
   fill: none;
   stroke-width: 2;
   stroke: var(--foam);
   stroke-dasharray: 6 6;
+}
+
+.connector-line--spawned {
+  stroke: var(--signal);
+  stroke-dasharray: none;
+}
+
+.connector-line--depends {
+  stroke: var(--danger);
+}
+
+.connector-line--context {
+  stroke: var(--violet);
+}
+
+/* Faixa larga e invisível por baixo da curva fina — só pra aumentar a
+   área clicável/hover; clicar navega pro card de destino (App.tsx). */
+.connector-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18;
+  cursor: pointer;
+}
+
+.connector-group:hover .connector-line {
+  stroke-width: 3;
+  opacity: 1;
 }
 
 .connector-delete {

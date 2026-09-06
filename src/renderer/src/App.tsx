@@ -70,6 +70,16 @@ import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultC
 import { getTerminalText } from "./terminal-registry";
 import "./app.css";
 
+// Pendentes #188 — rótulo do tooltip por `kind` de conector (só leitura
+// visual; nunca dispara nada, ver addConnector's doc comment acima de
+// onde é usado).
+const CONNECTOR_KIND_LABEL: Record<string, string> = {
+  manual: "conector manual",
+  spawned: "spawn: quem criou quem",
+  depends: "depende de (advisory)",
+  context: "contexto (advisory)",
+};
+
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
 // agent-canvas/ → Stellar/ mid-session (2026-08-26); updated to match.
 // DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — every kind of agent ask
@@ -1085,16 +1095,18 @@ export function App() {
     requestAnimationFrame(() => requestAnimationFrame(() => jumpToCard(session.id)));
   }
 
-  /** `kind` — DESIGN-BACKLOG.md item 58 peça 4's field, invisible to this
-   * component's own `Connector` state (never rendered differently by
-   * kind, on purpose — see item 60/62's notes on why it stays advisory).
-   * Item 62 — a real spawn (`spawnAgentFor`'s callers) passes
-   * `kind: "spawned"` here to record actual lineage automatically;
-   * a human hand-drawing a connector never passes one, staying `null`
-   * (purely decorative), exactly as before this item. */
+  /** `kind` — DESIGN-BACKLOG.md item 58 peça 4's field. Never drives
+   * dispatch (see mcp-server.ts's `set_connector_kind`: advisory only,
+   * on purpose — the real auto-dispatch mechanism is create_task's
+   * `deps`, item 60 peça 3, deliberately separate). It DOES now flow
+   * into this component's `Connector` state so the board can render/
+   * react to it (Pendentes #188 — "conectores 100% decorativos"): a
+   * real spawn (`spawnAgentFor`'s callers) passes `kind: "spawned"` here
+   * to record actual lineage automatically; a human hand-drawing a
+   * connector never passes one, staying `null` (purely decorative). */
   function addConnector(fromCardId: string, toCardId: string, kind?: string) {
     const id = String(nextId.current++);
-    const connector = { id, fromCardId, toCardId };
+    const connector = { id, fromCardId, toCardId, kind: kind ?? null };
     setConnectors((prev) => [...prev, connector]);
     void window.store.connectors.upsert({
       id,
@@ -1118,10 +1130,9 @@ export function App() {
    * message-bus.ts). Idempotente por design, não só por educação: um
    * par (A,B) já conectado (em QUALQUER direção, kind qualquer —
    * inclusive um conector decorativo que um humano desenhou à mão) não
-   * ganha uma 2ª seta a cada nova ação; não sabendo o `kind` de um
-   * conector já existente (`Connector` do renderer não carrega isso, só
-   * o `ConnectorRow` do banco), a escolha segura é não tocar nele —
-   * nunca sobrescrever um kind que um humano ou outro agente já decidiu. */
+   * ganha uma 2ª seta a cada nova ação; mesmo carregando `kind` agora, a
+   * escolha continua sendo não tocar num conector já existente — nunca
+   * sobrescrever um kind que um humano ou outro agente já decidiu. */
   function autoConnect(requesterId: string | undefined | null, targetId: string, kind: string) {
     if (!requesterId || requesterId === targetId) return;
     const already = connectorsRef.current.some(
@@ -2613,19 +2624,34 @@ export function App() {
             const control = quadraticControlPoint(start, end, 0.18);
             const midX = 0.25 * start.x + 0.5 * control.x + 0.25 * end.x;
             const midY = 0.25 * start.y + 0.5 * control.y + 0.25 * end.y;
+            const kindClass = conn.kind ?? "manual";
+            const d = `M${start.x},${start.y} Q${control.x},${control.y} ${end.x},${end.y}`;
             return (
-              <g key={conn.id}>
+              <g key={conn.id} className={`connector-group connector-group--${kindClass}`}>
+                {/* Faixa larga invisível só pra facilitar o clique/hover na
+                    curva real (fina, tracejada) — sem isso o hit-test do
+                    SVG (stroke-only, sem fill) exigiria acertar poucos
+                    pixels. Clicar aqui navega pro card de destino: dá à
+                    seta um efeito real (Pendentes #188 — "conectores 100%
+                    decorativos"), sem tocar em dispatch/execução nenhuma. */}
                 <path
-                  className="connector-line"
-                  d={`M${start.x},${start.y} Q${control.x},${control.y} ${end.x},${end.y}`}
-                  markerEnd="url(#connector-arrow)"
+                  d={d}
+                  className="connector-hit"
+                  style={{ pointerEvents: "auto" }}
+                  onClick={() => jumpToCard(conn.toCardId)}
                 />
+                <path className={`connector-line connector-line--${kindClass}`} d={d} markerEnd="url(#connector-arrow)">
+                  <title>{CONNECTOR_KIND_LABEL[kindClass] ?? kindClass}</title>
+                </path>
                 <g
                   className="connector-delete"
                   style={{ pointerEvents: "auto" }}
                   transform={`translate(${midX}, ${midY})`}
                   onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => removeConnector(conn.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeConnector(conn.id);
+                  }}
                 >
                   <circle r={8} />
                   <text x={0} y={1} textAnchor="middle" dominantBaseline="middle">
