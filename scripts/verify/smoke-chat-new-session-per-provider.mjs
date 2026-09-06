@@ -50,7 +50,7 @@ async function centerOf(page, selector) {
       const addBtn = JSON.parse(
         await page.evalJs(`
           (() => {
-            const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+            const b = document.querySelector('[data-role="rail-add-card"]');
             if (!b) return JSON.stringify(null);
             const r = b.getBoundingClientRect();
             return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -113,7 +113,7 @@ try {
   // inequívoco (sem sobreposição possível ainda).
   const panelAlreadyOpen1 = await page.evalJs(`!!document.querySelector('.chat-sessions-panel')`);
   if (!panelAlreadyOpen1) {
-    const sessionsToggleBtn1 = await centerOf(page, '.chat-card button[title="Sessões de chat"]');
+    const sessionsToggleBtn1 = await centerOf(page, '.chat-card button[data-role="chat-sessions-toggle"]');
     await page.click(sessionsToggleBtn1.x, sessionsToggleBtn1.y);
     await new Promise((r) => setTimeout(r, 400));
   }
@@ -196,7 +196,7 @@ try {
       await page.evalJs(`
         (() => {
           const card = document.querySelectorAll('.chat-card')[${cardIndex}];
-          const btn = card.querySelector('button[title="Sessões de chat"]');
+          const btn = card.querySelector('button[data-role="chat-sessions-toggle"]');
           const r = btn.getBoundingClientRect();
           return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
         })()

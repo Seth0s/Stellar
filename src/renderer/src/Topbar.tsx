@@ -174,7 +174,7 @@ export function Topbar({
                         {counts ? `${counts.agents} agentes · ${counts.active} ativos` : "0 agentes"}
                       </span>
                     </button>
-                    <button title="Editar sessão" onClick={() => setModal({ mode: "edit", board: b })}>
+                    <button data-role="edit-session" title="Editar sessão" onClick={() => setModal({ mode: "edit", board: b })}>
                       <Icon name="pen" size={13} />
                     </button>
                   </div>

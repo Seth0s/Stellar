@@ -32,7 +32,7 @@ try {
   check("rail has 9 compact buttons (5 tools + 1 add card + 3 actions)", btnCount, 9);
 
   // 2. Check add card button exists
-  const addBtn = await centerOf(page, `.rail-btn[title="Adicionar card"]`);
+  const addBtn = await centerOf(page, `[data-role="rail-add-card"]`);
   check("add card button exists", !!addBtn, true);
 
   // 3. Click add card button to open popover

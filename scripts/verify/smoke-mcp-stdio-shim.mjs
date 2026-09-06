@@ -149,7 +149,7 @@ try {
   const titleBtn = await centerOf(page, ".topbar-title");
   await page.click(titleBtn.x, titleBtn.y);
   await new Promise((r) => setTimeout(r, 300));
-  const pencil = await centerOf(page, '.board-row.active button[title="Editar sessão"]');
+  const pencil = await centerOf(page, '.board-row.active button[data-role="edit-session"]');
   await page.click(pencil.x, pencil.y);
   await new Promise((r) => setTimeout(r, 300));
   const checkbox = await centerOf(page, '.autonomous-toggle-label input[type="checkbox"]');

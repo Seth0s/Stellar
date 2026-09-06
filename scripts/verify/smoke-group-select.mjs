@@ -47,7 +47,7 @@ try {
         const addBtn = JSON.parse(
           await page.evalJs(`
             (() => {
-              const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+              const b = document.querySelector('[data-role="rail-add-card"]');
               if (!b) return null;
               const r = b.getBoundingClientRect();
               return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
