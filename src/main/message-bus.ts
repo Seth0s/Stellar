@@ -182,6 +182,17 @@ export type BusRequest =
   | { cmd: "set_sticky_color"; target?: string; color?: string; requesterId?: string }
   | { cmd: "set_sticky_mode"; target?: string; mode?: string; requesterId?: string }
   | { cmd: "card_status"; target?: string }
+  /** Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
+   * usuário: hoje `isActive` (useTerminal.ts) é só uma aproximação por
+   * silêncio de bytes (900ms sem nada = "parou"), que faz a barra de
+   * atividade sumir mesmo com o agente ainda genuinamente trabalhando
+   * (pensando, chamando ferramenta). Sinal real pro provider `claude`:
+   * um hook `Stop` (`--settings` efêmero, providers.ts) chama `acbridge
+   * turn-complete` exatamente quando o turno acaba de verdade — sem
+   * `target`/`requesterId` explícitos porque `acbridge`'s CLI já
+   * preenche `cardId` sozinho a partir do próprio `AGENT_CANVAS_CARD_ID`
+   * do processo que roda o hook, mesmo padrão de auto-fill de `report`. */
+  | { cmd: "turn_complete"; cardId?: string }
   | { cmd: "report"; requesterId?: string; report?: unknown }
   | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number }
   | {
@@ -351,6 +362,12 @@ export function createMessageBus(
      * was wrong here. `idleThresholdMs` is passed through purely for the
      * notification body text, not used for any timing decision here. */
     notifyIdleCard: (spawnerId: string, idleCardLabel: string, idleThresholdMs: number) => void;
+    /** Prototipo (2026-09-06) — ver o comentário de `turn_complete` no
+     * `BusRequest` acima. Push fire-and-forget pro renderer, keyed pelo
+     * mesmo id unificado card/PTY (pty-registry.ts); `useTerminal.ts`
+     * escuta e, só pro provider `claude`, usa isto como o sinal
+     * DEFINITIVO de fim de turno em vez do timer de silêncio de 900ms. */
+    notifyTurnComplete: (cardId: string) => void;
     /** DESIGN-BACKLOG.md item 59 — which board a card lives on, and
      * whether that board's opt-in autonomous mode is on. Only ever read
      * here, never written — the only write path is a human's toggle in
@@ -1064,6 +1081,12 @@ export function createMessageBus(
       if (waitingOnConsent.has(req.target)) return { ok: true, status: "waiting" };
       if (!callbacks.isCardAlive(req.target)) return { ok: true, status: "exited" };
       return { ok: true, status: isCardIdle(req.target) ? "idle" : "running" };
+    }
+
+    if (req.cmd === "turn_complete") {
+      if (!req.cardId) return { ok: false, error: "missing cardId (your own card id)" };
+      callbacks.notifyTurnComplete(req.cardId);
+      return { ok: true };
     }
 
     if (req.cmd === "report") {

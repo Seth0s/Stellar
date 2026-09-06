@@ -62,6 +62,16 @@ const pty = {
     ipcRenderer.on("pty:url-seen", listener);
     return () => ipcRenderer.removeListener("pty:url-seen", listener);
   },
+  /** Prototipo (2026-09-06) — ver message-bus.ts's doc comment no cmd
+   * `turn_complete`. Sinal real de fim de turno pro provider `claude`
+   * (um hook `Stop` chama `acbridge turn-complete`), em vez da
+   * aproximação por silêncio de bytes que `useTerminal.ts` usa pra
+   * todo o resto. */
+  onTurnComplete: (cb: (id: string) => void) => {
+    const listener = (_e: unknown, id: string) => cb(id);
+    ipcRenderer.on("pty:turn-complete", listener);
+    return () => ipcRenderer.removeListener("pty:turn-complete", listener);
+  },
 };
 
 export type SaveClipboardImageResult = { ok: true; path: string } | { ok: false; error: string };
