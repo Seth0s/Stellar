@@ -2281,22 +2281,39 @@ select.resume-input {
 
 /* Substitui o antigo "radar" de offscreen-pips (D3, calhas laterais) —
    pedido ao vivo (2026-09-06): "aceito a bússola centralizada, será
-   organizado, antes ficava espalhado pela tela". Um pill só, sempre no
-   mesmo lugar, mesmo `top` do `.topbar` mas centralizado horizontalmente
-   por conta própria (mesma técnica de `.topbar-home` — um filho real do
-   `.topbar` nunca fica centralizado de verdade contra um `title` de
-   largura variável no `justify-content: space-between`). */
-.compass {
+   organizado, antes ficava espalhado pela tela". Estilo bússola
+   horizontal de jogo (2ª versão, mesmo dia — a 1ª era um pill único que
+   ciclava um alvo por vez, não era o que o usuário tinha em mente): uma
+   fita fixa (`STRIP_WIDTH` em Compass.tsx) sempre no mesmo lugar, mesmo
+   `top` do `.topbar` mas centralizada horizontalmente por conta própria
+   (mesma técnica de `.topbar-home` — um filho real do `.topbar` nunca
+   fica centralizado de verdade contra um `title` de largura variável no
+   `justify-content: space-between`). Cada card fora da tela vira um chip
+   clicável POSICIONADO ao longo da fita pelo próprio rumo (Compass.tsx),
+   não empilhado — vários aparecem ao mesmo tempo, sem ciclar nada. */
+.compass-strip {
   position: absolute;
   top: calc(var(--titlebar-h) + 12px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 500;
+  width: 460px;
+  height: 26px;
+  pointer-events: none;
+}
+
+.compass-chip {
+  position: absolute;
+  top: 0;
+  /* `left` é setado inline por Compass.tsx (posição = rumo); só o
+     translateX centraliza o chip no próprio ponto calculado. */
+  transform: translateX(-50%);
+  pointer-events: auto;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   height: 26px;
-  padding: 0 10px;
+  padding: 0 8px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -2311,19 +2328,21 @@ select.resume-input {
   backdrop-filter: blur(8px);
 }
 
-.compass:hover {
+.compass-chip:hover {
   background: var(--panel);
   border-color: var(--foam);
   scale: 1.05;
+  z-index: 1;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--foam);
 }
 
-.compass:active {
+.compass-chip:active {
   scale: 0.96;
 }
 
-/* Girada pelo rumo real até o card mais próximo fora da tela
-   (Compass.tsx) — `inline-flex` pra girar em torno do próprio centro. */
+/* Girada pelo rumo EXATO até o card (Compass.tsx) — a posição do chip na
+   fita já é contínua, mas fica visualmente apertada; a seta carrega a
+   direção precisa. `inline-flex` pra girar em torno do próprio centro. */
 .compass-arrow {
   display: inline-flex;
   align-items: center;
@@ -2339,23 +2358,46 @@ select.resume-input {
 }
 
 .compass-label {
-  max-width: 110px;
+  max-width: 80px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.compass-count {
+/* Selo de distância — estilo "barras de sinal": quanto mais anéis
+   preenchidos, mais PERTO (não mais longe) do centro da viewport atual. */
+.compass-rings {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.compass-ring {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.compass-ring.filled {
+  background: var(--foam);
+}
+
+.compass-more {
+  position: absolute;
+  top: 0;
+  right: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
+  height: 26px;
+  padding: 0 8px;
   border-radius: 999px;
-  background: var(--foam);
-  color: var(--on-accent);
-  font-size: 10px;
-  font-weight: 700;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: auto;
 }
 

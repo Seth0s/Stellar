@@ -141,23 +141,25 @@ try {
 
   // D3 — a bússola (Compass.tsx) substituiu os antigos offscreen-pips
   // (2026-09-06, pedido do usuário: "bússola centralizada, será
-  // organizado, antes ficava espalhado pela tela") — mesmo teste, seletor
-  // novo.
+  // organizado, antes ficava espalhado pela tela"; 2ª versão no mesmo dia,
+  // estilo fita horizontal de jogo — vários chips clicáveis ao mesmo
+  // tempo, um por card fora da tela, em vez de um pill único que ciclava).
   const compassInfo = JSON.parse(
     await page.evalJs(`
       (() => {
-        const compass = document.querySelector('[data-role="compass"]');
-        return JSON.stringify({ found: !!compass, title: compass?.getAttribute('title') });
+        const strip = document.querySelector('[data-role="compass"]');
+        const chip = document.querySelector('[data-role="compass-chip"]');
+        return JSON.stringify({ found: !!strip, chipFound: !!chip, title: chip?.getAttribute('title') });
       })()
     `)
   );
-  check("D3: Bússola aparece na viewport quando há card fora da tela", compassInfo?.found, true);
+  check("D3: Bússola aparece na viewport quando há card fora da tela", compassInfo?.found && compassInfo?.chipFound, true);
 
-  // Testa clique na bússola pra focar de volta no card
+  // Testa clique num chip da bússola pra focar de volta no card
   await page.evalJs(`
     (() => {
-      const compass = document.querySelector('[data-role="compass"]');
-      if (compass) compass.click();
+      const chip = document.querySelector('[data-role="compass-chip"]');
+      if (chip) chip.click();
     })()
   `);
   await new Promise((r) => setTimeout(r, 500));

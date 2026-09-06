@@ -1,9 +1,10 @@
 // Pendentes #188 — bússola de navegação na topbar (2026-09-06, pedido do
-// usuário: "aceito a bússola centralizada, será organizado — antes ficava
-// espalhado pela tela"). Substitui os antigos offscreen-pips (D3) por um
-// único pill centralizado que aponta pro card mais PRÓXIMO fora da tela e,
-// a cada clique, foca o atual e avança pro próximo — visita todos em
-// sequência sem lista nenhuma (decisão do usuário).
+// usuário). 2ª versão no mesmo dia: a 1ª (pill único que ciclava um alvo
+// por vez) não era o que o usuário tinha em mente — pediu um estilo de
+// jogo, fita horizontal com vários ícones clicáveis ao mesmo tempo,
+// posicionados pelo rumo real (setas, não texto de ângulo), com selo de
+// "níveis de distância" por ícone, medida a partir do centro da viewport
+// atual (não do centro fixo do board).
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
@@ -38,19 +39,22 @@ try {
     "true",
   );
 
-  // 3 cards bem fora da viewport, em direções distintas (mundo == tela
-  // aqui: board recém-carregado, pan/zoom padrão) — cada um com um `label`
-  // único, que vira o texto da bússola (Compass.tsx: `card.label ?? ...`),
-  // dando uma forma de identificar QUAL foi visitado sem precisar
-  // reimplementar a transformação pan/zoom aqui pra mapear DOM -> id.
+  // 3 cards bem fora da viewport, em direções e distâncias distintas
+  // (mundo == tela aqui: board recém-carregado, pan/zoom padrão) — cada um
+  // com um `label` único (vira o `title` do chip), e escolhidos pra cair
+  // em 3 níveis de distância diferentes (perto/médio/longe, ver
+  // Compass.tsx's `distanceTier`: viewport ~1280x800, diagonal ~1509).
   await page.evalJs(`
     (async () => {
       const boards = await window.store.boards.list();
       const board = boards.find((b) => b.name === 'Bussola Teste');
       const base = { board_id: board.id, provider: '', resume_id: null, model: null, system_prompt: null, group_id: null, updated_at: Date.now() };
-      await window.store.upsert({ ...base, id: 'compass-right', kind: 'files', cwd: '/tmp', label: 'alvo-direita', x: 2400, y: 100, w: 200, h: 150 });
-      await window.store.upsert({ ...base, id: 'compass-below', kind: 'files', cwd: '/tmp', label: 'alvo-abaixo', x: 100, y: 1600, w: 200, h: 150 });
-      await window.store.upsert({ ...base, id: 'compass-farleft', kind: 'files', cwd: '/tmp', label: 'alvo-longe-esquerda', x: -1900, y: -1900, w: 200, h: 150 });
+      // dist ~807 (<=1509) -> tier 3 (perto)
+      await window.store.upsert({ ...base, id: 'compass-near', kind: 'files', cwd: '/tmp', label: 'alvo-perto', x: 100, y: 1000, w: 200, h: 150 });
+      // dist ~1785 (<=3772) -> tier 2 (médio)
+      await window.store.upsert({ ...base, id: 'compass-mid', kind: 'files', cwd: '/tmp', label: 'alvo-medio', x: 2400, y: 100, w: 200, h: 150 });
+      // dist ~4849 (>3772) -> tier 1 (longe)
+      await window.store.upsert({ ...base, id: 'compass-far', kind: 'files', cwd: '/tmp', label: 'alvo-longe', x: -4200, y: 100, w: 200, h: 150 });
     })()
   `);
 
@@ -71,32 +75,49 @@ try {
   await page.click(sessionBtn.x, sessionBtn.y);
   await new Promise((r) => setTimeout(r, 800));
 
-  const compassInfo = JSON.parse(
+  const chipsInfo = JSON.parse(
     await page.evalJs(`
       (() => {
-        const c = document.querySelector('[data-role="compass"]');
-        return JSON.stringify({ found: !!c, title: c?.getAttribute('title') });
+        const strip = document.querySelector('[data-role="compass"]');
+        const chips = [...document.querySelectorAll('[data-role="compass-chip"]')];
+        return JSON.stringify({
+          stripFound: !!strip,
+          count: chips.length,
+          titles: chips.map((c) => c.getAttribute('title')),
+        });
       })()
     `),
   );
-  check("com 3 cards fora da tela, a bússola aparece", compassInfo.found, true);
-  check("...e o título indica 3 cards fora da tela", compassInfo.title.includes("3"), true);
+  check("com 3 cards fora da tela, a fita da bússola aparece", chipsInfo.stripFound, true);
+  check("...e existe um chip clicável por card fora da tela (3)", chipsInfo.count, 3);
+  check(
+    "...e os 3 chips têm rótulos distintos (um por alvo)",
+    new Set(chipsInfo.titles.map((t) => t.replace("Focar em ", ""))).size,
+    3,
+  );
 
-  const compassCoords = await centerOf(page, '[data-role="compass"]');
-  const LABELS = ["alvo-direita", "alvo-abaixo", "alvo-longe-esquerda"];
-
-  // Qual dos 3 alvos a bússola aponta ANTES do clique (extrai do título:
-  // "Focar em <label> — N/3 cards fora da tela").
-  async function compassTargetLabel() {
-    const title = await page.evalJs(`document.querySelector('[data-role="compass"]')?.getAttribute('title') ?? ''`);
-    return LABELS.find((l) => title.includes(l)) ?? null;
+  async function ringsFilledFor(labelSubstr) {
+    return JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const chip = [...document.querySelectorAll('[data-role="compass-chip"]')].find((c) => c.getAttribute('title').includes(${JSON.stringify(labelSubstr)}));
+          if (!chip) return JSON.stringify(null);
+          return JSON.stringify(chip.querySelectorAll('.compass-ring.filled').length);
+        })()
+      `),
+    );
   }
 
-  // Depois do clique, o alvo deve ter sido trazido de fato pra viewport —
+  const nearRings = await ringsFilledFor("alvo-perto");
+  const midRings = await ringsFilledFor("alvo-medio");
+  const farRings = await ringsFilledFor("alvo-longe");
+  console.log("DEBUG rings (near/mid/far):", nearRings, midRings, farRings);
+  check("selo de distância: o alvo PERTO tem mais anéis preenchidos que o MÉDIO", nearRings > midRings, true);
+  check("selo de distância: o alvo MÉDIO tem mais anéis preenchidos que o LONGE", midRings > farRings, true);
+
+  // Cada chip clicado deve trazer de fato seu próprio card pra viewport —
   // checa via DOM real (getBoundingClientRect pós-transform), não
-  // reimplementando a matemática de pan/zoom aqui. `.files-card` não
-  // carrega o `label` como atributo, então soma quantos `.files-card`
-  // frames têm o centro dentro da tela — o alvo focado deve ser um deles.
+  // reimplementando a matemática de pan/zoom aqui.
   async function anyFilesCardInView() {
     return JSON.parse(
       await page.evalJs(`
@@ -112,21 +133,23 @@ try {
     );
   }
 
-  const visitedTargets = [];
-  const broughtIntoView = [];
-  for (let i = 0; i < 3; i++) {
-    const target = await compassTargetLabel();
-    visitedTargets.push(target);
-    await page.click(compassCoords.x, compassCoords.y);
+  async function clickChip(labelSubstr) {
+    const coords = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const chip = [...document.querySelectorAll('[data-role="compass-chip"]')].find((c) => c.getAttribute('title').includes(${JSON.stringify(labelSubstr)}));
+          if (!chip) return JSON.stringify(null);
+          const r = chip.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()
+      `),
+    );
+    await page.click(coords.x, coords.y);
     await new Promise((r) => setTimeout(r, 400));
-    broughtIntoView.push(await anyFilesCardInView());
   }
-  console.log("DEBUG visitedTargets:", JSON.stringify(visitedTargets), "broughtIntoView:", JSON.stringify(broughtIntoView));
 
-  check("cada clique na bússola traz um card de arquivos pra dentro da viewport", broughtIntoView.every(Boolean), true);
-
-  const allThreeDistinctTargets = new Set(visitedTargets);
-  check("em 3 cliques, a bússola apontou pros 3 alvos diferentes (cicla, não repete)", allThreeDistinctTargets.size, 3);
+  await clickChip("alvo-medio");
+  check("clicar num chip específico traz o card correspondente pra viewport", await anyFilesCardInView(), true);
 
   page.close();
 } finally {
