@@ -24,6 +24,34 @@ const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove"] as const;
 const BASE_FONT_SIZE = 15;
 
 /**
+ * Pedido ao vivo (2026-09-06) — "unificar detecção de turno" pra
+ * codex/cursor/antigravity: nenhum dos três expõe um hook de verdade pro
+ * fim do turno do agente PRINCIPAL (confirmado investigando os 3
+ * binários — codex tem hooks reais, mas só PreToolUse/PostToolUse/
+ * PreCompact/PostCompact/SessionStart/SessionEnd/SubagentStart/
+ * SubagentStop/Interrupt, nenhum mapeia pra "turno acabou"; cursor-agent
+ * não tem hook nenhum; antigravity tem indício de um "stop hook" interno
+ * mas só via plugin instalado, sem flag efêmera por-invocação). Como
+ * alternativa, um marcador de TEXTO que o próprio TUI imprime só depois
+ * que o turno de fato terminou (relatado ao vivo pelo usuário observando
+ * codex: "Worked for 1m 06s") — ainda uma heurística (o texto pode mudar
+ * numa atualização da CLI), mas lida do conteúdo real em vez de um
+ * intervalo arbitrário de silêncio, então sobrevive a uma pausa longa e
+ * silenciosa (pensando, chamando ferramenta) sem apagar a barra à toa,
+ * mesmo problema que o hook Stop resolveu pra claude. Só codex por
+ * enquanto — sem um padrão confirmado pros outros dois ainda.
+ */
+const TURN_END_PATTERNS: Partial<Record<string, RegExp>> = {
+  codex: /Worked for (?:\d+h\s*)?(?:\d+m\s*)?\d+s/,
+};
+/** Janela do buffer rolante que acumula bytes crus pra testar contra
+ * `TURN_END_PATTERNS` — generosa o bastante pro marcador mais longo
+ * esperado sobreviver inteiro mesmo se vier partido em vários chunks de
+ * `pty:data` (o TTY não garante um chunk por escrita), sem crescer sem
+ * limite numa sessão longa. */
+const TURN_END_BUFFER_MAX = 500;
+
+/**
  * Shared by `FullWidthFitAddon` below — the real usable pixels inside
  * this terminal's box, parent box minus its own padding.
  */
@@ -246,6 +274,11 @@ export function useTerminal(
    */
   const [isActive, setIsActive] = useState(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Buffer rolante pro pattern-match de fim de turno (`TURN_END_PATTERNS`
+   * acima) — ver Effect 1. Resetado a cada (re)spawn e a cada match, pra
+   * nunca acumular além do necessário nem re-disparar num chunk seguinte
+   * não relacionado que ainda contenha a cauda do marcador antigo. */
+  const turnEndBufferRef = useRef("");
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
@@ -324,21 +357,36 @@ export function useTerminal(
     }
 
     const ACTIVITY_IDLE_MS = 900;
+    turnEndBufferRef.current = "";
     // Prototipo (2026-09-06) — "unificar detecção de turno": pro provider
     // `claude`, `providers.ts`'s `buildArgs` registra um hook `Stop` real
     // (--settings efêmero) que chama `acbridge turn-complete` no fim de
-    // verdade do turno. Só pra ele, o timer de silêncio de 900ms é
-    // dispensado por completo — `isActive` só desliga via esse sinal real
-    // (ou `onExit`/`interrupt`, abaixo), nunca por um mero intervalo sem
-    // bytes novos (que fazia a barra sumir com o agente ainda pensando/
-    // chamando ferramenta). Todo outro provider continua na aproximação
-    // por silêncio de sempre, sem nenhuma mudança de comportamento.
-    const hasRealTurnSignal = providerId === "claude";
+    // verdade do turno. Estendido no mesmo dia pra qualquer provider com
+    // um marcador de texto confirmado em `TURN_END_PATTERNS` (só codex
+    // por enquanto, ver comentário lá) — sinal lido do próprio output em
+    // vez de um hook de verdade, mas com o mesmo efeito prático: o timer
+    // de silêncio de 900ms é dispensado por completo pra esses
+    // providers, `isActive` só desliga via um sinal real (hook, pattern-
+    // match, ou `onExit`/`interrupt` abaixo), nunca por um mero intervalo
+    // sem bytes novos (que fazia a barra sumir com o agente ainda
+    // pensando/chamando ferramenta). Todo outro provider (cursor,
+    // antigravity, opencode, bash) continua na aproximação por silêncio
+    // de sempre, sem nenhuma mudança de comportamento — nenhum padrão
+    // confirmado pra eles ainda.
+    const turnEndPattern = TURN_END_PATTERNS[providerId];
+    const hasRealTurnSignal = providerId === "claude" || turnEndPattern !== undefined;
     const offData = window.pty.onData((id, data) => {
       if (id !== ptyIdRef.current) return;
       writeMasked(data);
       setHasReceivedOutput(true);
       setIsActive(true);
+      if (turnEndPattern) {
+        turnEndBufferRef.current = (turnEndBufferRef.current + data).slice(-TURN_END_BUFFER_MAX);
+        if (turnEndPattern.test(turnEndBufferRef.current)) {
+          turnEndBufferRef.current = "";
+          setIsActive(false);
+        }
+      }
       if (hasRealTurnSignal) return;
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       idleTimerRef.current = setTimeout(() => {
