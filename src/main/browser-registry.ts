@@ -20,6 +20,20 @@ export type BrowserKeyEvent = {
   modifiers?: Array<"shift" | "control" | "alt" | "meta">;
 };
 
+/** Subconjunto de `Electron.ContextMenuParams` que o menu montado em
+ * main/index.ts realmente usa — ver `onContextMenu` abaixo. */
+export type BrowserContextMenuParams = {
+  x: number;
+  y: number;
+  linkURL: string;
+  srcURL: string;
+  selectionText: string;
+  isEditable: boolean;
+  mediaType: "none" | "image" | "video" | "audio" | "canvas" | "file" | "plugin";
+  canGoBack: boolean;
+  canGoForward: boolean;
+};
+
 export type ConsoleEntry = { level: string; message: string; at: number };
 export type PageElement = { ref: string; role: string; name: string; tag: string; disabled?: boolean; checked?: boolean; value?: string };
 export type NetworkEntry = { method: string; url: string; status: number | null; error?: string; at: number };
@@ -176,6 +190,15 @@ export function createBrowserRegistry(callbacks: {
    * `console-message` is a plain built-in `webContents` event, same
    * primitive class as `did-navigate`/`page-title-updated` right below. */
   onConsoleMessage: (id: string, level: "info" | "warning" | "error" | "debug", message: string) => void;
+  /** Pendentes #188 — botão direito real dentro da página embutida
+   * (não sintetizado; ver `sendMouseEvent` abaixo: o próprio mouseDown/
+   * mouseUp de botão direito, já forwardado normalmente, é o que faz o
+   * Chromium da página offscreen disparar este evento sozinho). `x`/`y`
+   * de `params` chegam no mesmo espaço de coordenadas de conteúdo que
+   * `sendInputEvent` usa (ver BROWSER_SUPERSAMPLE/`resize()` acima) —
+   * quem decide onde a seta real aparece na tela é o renderer
+   * (BrowserCard.tsx), que sabe o retângulo on-screen real do canvas. */
+  onContextMenu: (id: string, params: BrowserContextMenuParams) => void;
   /** Achado ao vivo ("navegador parece 360p") — `webPreferences.offscreen`
    * defaults to `deviceScaleFactor: 1` regardless of the real monitor,
    * confirmed direto no `electron.d.ts` da versão instalada. Toda página
@@ -345,6 +368,20 @@ export function createBrowserRegistry(callbacks: {
       callbacks.onConsoleMessage(id, details.level, details.message);
     });
 
+    wc.on("context-menu", (_e, params) => {
+      callbacks.onContextMenu(id, {
+        x: params.x,
+        y: params.y,
+        linkURL: params.linkURL,
+        srcURL: params.srcURL,
+        selectionText: params.selectionText,
+        isEditable: params.isEditable,
+        mediaType: params.mediaType,
+        canGoBack: wc.navigationHistory.canGoBack(),
+        canGoForward: wc.navigationHistory.canGoForward(),
+      });
+    });
+
     entries.set(id, { win, visible: true, scaleFactor, console: [], network: [] });
     // A sessão é a padrão, compartilhada com a janela principal, e o
     // `webRequest` do Electron aceita UM listener por evento por sessão —
@@ -381,6 +418,16 @@ export function createBrowserRegistry(callbacks: {
    * itself offscreen, which Electron doesn't support. */
   function openDevTools(id: string) {
     entries.get(id)?.win.webContents.openDevTools({ mode: "detach" });
+  }
+
+  /** Pendentes #188, item "Inspecionar elemento" do menu de contexto —
+   * `x`/`y` no mesmo espaço de conteúdo que `sendMouseEvent` (o ponto do
+   * clique original, vindo de `BrowserContextMenuParams`), não em
+   * coordenadas de tela. Abre DevTools destacado (mesma limitação de
+   * `openDevTools` acima — offscreen não renderiza DevTools sozinho) já
+   * com o elemento clicado selecionado no painel Elements. */
+  function inspectElementAt(id: string, x: number, y: number) {
+    entries.get(id)?.win.webContents.inspectElement(Math.round(x), Math.round(y));
   }
 
   // Trilha A do navegador (SCREEN_SPACE_PROJECTION_PLAN.md §0.3's "Trilha
@@ -1081,6 +1128,7 @@ export function createBrowserRegistry(callbacks: {
     forward,
     reload,
     openDevTools,
+    inspectElementAt,
     resize,
     getContentSize,
     refreshScaleFactor,

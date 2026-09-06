@@ -284,6 +284,24 @@ export type BrowserKeyEvent = {
   modifiers?: Array<"shift" | "control" | "alt" | "meta">;
 };
 
+/** Pendentes #188 — menu de contexto nativo do Chromium embutido.
+ * `x`/`y` chegam no MESMO espaço de coordenadas que `sendMouse`/`toCanvasPoint`
+ * (conteúdo offscreen, ver BrowserCard.tsx), não em coordenadas de tela reais
+ * — quem popa o menu (`showContextMenu` abaixo) converte pro espaço real
+ * antes de invocar. Campos espelham `Electron.ContextMenuParams`, só o
+ * subconjunto que os itens do menu realmente usam. */
+export type BrowserContextMenuParams = {
+  x: number;
+  y: number;
+  linkURL: string;
+  srcURL: string;
+  selectionText: string;
+  isEditable: boolean;
+  mediaType: "none" | "image" | "video" | "audio" | "canvas" | "file" | "plugin";
+  canGoBack: boolean;
+  canGoForward: boolean;
+};
+
 const browser = {
   /** Item 6 (Trilha B) — `scaleFactor` resolved once at creation
    * (`browser-registry.ts`'s `create`, same value `resize()` multiplies
@@ -407,6 +425,21 @@ const browser = {
     ipcRenderer.invoke("browser:test-force-scale-factor", id, scaleFactor),
   /** EXPERIMENTAL, test-only, dev builds only — see main/index.ts. */
   testSetMaxDensity: (value: number | null): Promise<void> => ipcRenderer.invoke("browser:test-set-max-density", value),
+  /** Pendentes #188 — a página embutida pediu um menu de contexto nativo
+   * (botão direito real, ver browser-registry.ts's `context-menu`
+   * listener). `params.x/y` ainda no espaço de conteúdo offscreen;
+   * BrowserCard.tsx converte pro retângulo real do canvas antes de
+   * chamar `showContextMenu`. */
+  onContextMenu: (cb: (id: string, params: BrowserContextMenuParams) => void) => {
+    const listener = (_e: unknown, id: string, params: BrowserContextMenuParams) => cb(id, params);
+    ipcRenderer.on("browser:context-menu", listener);
+    return () => ipcRenderer.removeListener("browser:context-menu", listener);
+  },
+  /** `x`/`y` aqui já em coordenadas reais de tela relativas à janela do
+   * app (BrowserCard.tsx fez a conversão) — main/index.ts monta o
+   * `Menu` e chama `.popup({ window, x, y })` com elas direto. */
+  showContextMenu: (id: string, x: number, y: number, params: BrowserContextMenuParams): Promise<void> =>
+    ipcRenderer.invoke("browser:show-context-menu", id, x, y, params),
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
