@@ -21,14 +21,41 @@ const TIMEOUT_MS = 30_000;
  * the app's lifetime, deliberately never cleared — a claimed id should
  * never be handed to a second card later either.
  *
- * Still a narrow residual race if two watchers' own filesystem reads
- * interleave (both compute the same "best" candidate before either has
- * claimed it) — accepted as much rarer than the original bug (which
- * reproduced on effectively every overlapping spawn), not eliminated by
- * construction. A real per-candidate lock would close that gap but isn't
- * proportionate here.
+ * Achado ao vivo (2026-09-06) — a "narrow residual race" documentada
+ * abaixo aconteceu de verdade em produção: dois cards com o MESMO cwd
+ * (`/home/lucas/Workplace/Projects`) persistiram o mesmo `resume_id` no
+ * banco (`SELECT resume_id, count(*) ... GROUP BY resume_id HAVING
+ * count(*) > 1` no `agent-canvas.db` ao vivo confirmou o par). Cada
+ * watcher faz `readdir`+`stat` (I/O assíncrono, `findClaudeSession`) antes
+ * de decidir seu "best" candidato — se os dois pollers (setInterval
+ * independentes, um por watcher) disparam perto o bastante um do outro,
+ * o segundo pode terminar seu próprio `readdir`/`stat` e computar o MESMO
+ * "best" ANTES do primeiro ter chamado `claimedSessionIds.add()`, já que
+ * nada serializa essa seção crítica entre watchers diferentes — só
+ * dentro do mesmo watcher (um `setInterval` nunca sobrepõe consigo
+ * mesmo). Fix: `runExclusive` abaixo — uma fila de promises COMPARTILHADA
+ * entre TODOS os watchers (não só claude/codex/cursor entre si, o mesmo
+ * global) — garante que o "achar candidato + reivindicar" de qualquer
+ * watcher nunca roda concorrente com o de outro, não importa como os
+ * timers reais caiam. `session-watch-collision-stress.mjs` reproduz a
+ * colisão de verdade (watchers simultâneos, mesmo spawnedAtMs, um único
+ * arquivo candidato) — falha ~sempre sem isto, nunca falhou com isto.
  */
 const claimedSessionIds = new Set<string>();
+
+let claimQueue: Promise<unknown> = Promise.resolve();
+/** Serializa a seção crítica (achar candidato + `claimedSessionIds.add`)
+ * entre TODOS os watchers, não só os de um mesmo provider — a fila é
+ * módulo-level de propósito, mesmo raciocínio de `claimedSessionIds`
+ * acima: o ponto é visibilidade entre watchers, não por-watcher. */
+function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const result = claimQueue.then(fn, fn);
+  claimQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 function encodeCwdForClaude(cwd: string): string {
   return cwd.replace(/\//g, "-");
@@ -161,20 +188,27 @@ export function watchForSession(
   const timer = setInterval(async () => {
     if (stopped) return;
     try {
-      let found: string | null = null;
-      if (providerId === "claude") {
-        found = await findClaudeSession(cwd, spawnedAtMs);
-      } else if (providerId === "codex") {
-        if (!codexOffsetReady) {
-          codexOffset = await initCodexOffset;
-          codexOffsetReady = true;
+      // `runExclusive` — todo o "achar candidato + reivindicar" roda como
+      // seção crítica única entre TODOS os watchers vivos (ver o comentário
+      // de `runExclusive` acima); sem isto, dois watchers cujo `readdir`/
+      // `stat` interleavam podiam computar o mesmo "best" antes de
+      // qualquer um dos dois chamar `claimedSessionIds.add`.
+      const found = await runExclusive(async () => {
+        if (providerId === "claude") {
+          return findClaudeSession(cwd, spawnedAtMs);
+        } else if (providerId === "codex") {
+          if (!codexOffsetReady) {
+            codexOffset = await initCodexOffset;
+            codexOffsetReady = true;
+          }
+          const result = await findCodexSession(codexOffset);
+          codexOffset = result.newOffset;
+          return result.id;
+        } else if (providerId === "cursor") {
+          return findCursorSession(cwd, spawnedAtMs);
         }
-        const result = await findCodexSession(codexOffset);
-        codexOffset = result.newOffset;
-        found = result.id;
-      } else if (providerId === "cursor") {
-        found = await findCursorSession(cwd, spawnedAtMs);
-      }
+        return null;
+      });
       if (found) {
         // Claim synchronously, before anything else runs — the narrow
         // remaining race is two watchers' own filesystem reads
