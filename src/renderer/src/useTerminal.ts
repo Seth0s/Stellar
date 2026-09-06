@@ -324,11 +324,22 @@ export function useTerminal(
     }
 
     const ACTIVITY_IDLE_MS = 900;
+    // Prototipo (2026-09-06) — "unificar detecção de turno": pro provider
+    // `claude`, `providers.ts`'s `buildArgs` registra um hook `Stop` real
+    // (--settings efêmero) que chama `acbridge turn-complete` no fim de
+    // verdade do turno. Só pra ele, o timer de silêncio de 900ms é
+    // dispensado por completo — `isActive` só desliga via esse sinal real
+    // (ou `onExit`/`interrupt`, abaixo), nunca por um mero intervalo sem
+    // bytes novos (que fazia a barra sumir com o agente ainda pensando/
+    // chamando ferramenta). Todo outro provider continua na aproximação
+    // por silêncio de sempre, sem nenhuma mudança de comportamento.
+    const hasRealTurnSignal = providerId === "claude";
     const offData = window.pty.onData((id, data) => {
       if (id !== ptyIdRef.current) return;
       writeMasked(data);
       setHasReceivedOutput(true);
       setIsActive(true);
+      if (hasRealTurnSignal) return;
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       idleTimerRef.current = setTimeout(() => {
         idleTimerRef.current = null;
@@ -336,7 +347,15 @@ export function useTerminal(
       }, ACTIVITY_IDLE_MS);
     });
     const offExit = window.pty.onExit((id, code) => {
-      if (id === ptyIdRef.current) setExitCode(code);
+      if (id !== ptyIdRef.current) return;
+      setExitCode(code);
+      // Processo pode morrer no meio de um turno (crash, kill externo) sem
+      // nunca disparar o hook Stop — sem isto a barra ficaria "ligada" pra
+      // sempre num card cujo processo nem existe mais.
+      setIsActive(false);
+    });
+    const offTurnComplete = window.pty.onTurnComplete((id) => {
+      if (id === ptyIdRef.current) setIsActive(false);
     });
     const offSessionFound = window.pty.onSessionFound((id, sessionId) => {
       if (id === ptyIdRef.current) setDiscoveredResumeId(sessionId);
@@ -346,6 +365,7 @@ export function useTerminal(
       disposed = true;
       offData();
       offExit();
+      offTurnComplete();
       offSessionFound();
       if (idleTimerRef.current) {
         clearTimeout(idleTimerRef.current);
@@ -767,7 +787,13 @@ export function useTerminal(
   }
 
   function interrupt() {
-    if (ptyIdRef.current) void window.pty.interrupt(ptyIdRef.current);
+    if (!ptyIdRef.current) return;
+    void window.pty.interrupt(ptyIdRef.current);
+    // Um Ctrl+C explícito do usuário é sempre "isto parou de rodar" — pro
+    // provider `claude` (sinal real via hook Stop, ver Effect 1 acima), um
+    // turno abortado no meio pode nunca disparar o Stop; sem isto a barra
+    // ficaria "ligada" indefinidamente.
+    setIsActive(false);
   }
 
   return { ptyId, exitCode, spawnError, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt };

@@ -883,6 +883,13 @@ function createWindow() {
         // derrubar o poller de idle, só não notifica.
       }
     },
+    // Prototipo (2026-09-06) — ver message-bus.ts's doc comment no cmd
+    // `turn_complete`. Push simples pro renderer, mesmo padrão de
+    // `pty:session-found`/`pty:data` abaixo — nenhum estado novo aqui no
+    // main, só relay.
+    notifyTurnComplete: (cardId) => {
+      safeSend(win, "pty:turn-complete", cardId);
+    },
     // DESIGN-BACKLOG.md item 61 — same "Bash 2°" convention as App.tsx's
     // `describeCard` (AgentAskModal's requester label), reimplemented
     // against store.ts directly since this is main-process code.

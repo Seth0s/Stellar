@@ -96,6 +96,29 @@ export const PROVIDERS: ProviderDef[] = [
       if (mcpUrl) {
         args.push("--mcp-config", JSON.stringify({ mcpServers: { stellar: { type: "http", url: mcpUrl } } }));
       }
+      // Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
+      // usuário: `isActive` (useTerminal.ts) hoje é só uma aproximação por
+      // silêncio de bytes (900ms sem nada = "parou"), documentada como tal
+      // no próprio código — faz a barra de atividade sumir mesmo com o
+      // agente genuinamente ainda trabalhando (pensando, chamando
+      // ferramenta), sem nenhum marcador real de fim de turno. `claude`
+      // suporta hooks de verdade — `--settings` (confirmado ao vivo,
+      // aceita um JSON string direto, não só path de arquivo) registra um
+      // hook `Stop` EFÊMERO, aditivo igual o `--mcp-config` acima (nunca
+      // toca `~/.claude/settings.json` nem o `.claude/settings.json` do
+      // projeto — sem `--strict-mcp-config` equivalente aqui porque
+      // `--settings` já é descrito como "additional settings", soma em
+      // vez de substituir). O comando do hook é só `acbridge
+      // turn-complete`, sem argumento nenhum — `acbridge` já lê seu
+      // próprio `AGENT_CANVAS_CARD_ID` do ambiente (pty-registry.ts's
+      // `spawn()` injeta isso em todo processo spawnado), mesmo auto-fill
+      // que `report`/`send` já usam. Sinal REAL de fim de turno, não mais
+      // heurística — `useTerminal.ts` usa isto pra decidir quando
+      // `isActive` vira false, só pra este provider.
+      args.push(
+        "--settings",
+        JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "acbridge turn-complete" }] }] } }),
+      );
       return args;
     },
   },

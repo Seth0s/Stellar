@@ -447,6 +447,7 @@ function TerminalCardInner({
       <div
         className={`${styles.terminalCardActivity}${isActive ? ` ${styles.on}` : ""}`}
         data-role="terminal-activity"
+        data-card-id={id}
         data-active={isActive ? "true" : undefined}
         aria-hidden="true"
       >

@@ -106,6 +106,14 @@ if (cmd === "list") {
   const [target] = rest;
   if (!target) fail("usage: acbridge card-status <cardId>");
   request = { cmd: "card_status", target };
+} else if (cmd === "turn-complete") {
+  // Prototipo (2026-09-06) — chamado por um hook `Stop` (providers.ts's
+  // buildArgs do claude, --settings efêmero), nunca por um humano/agente
+  // diretamente. Sem argumentos: `cardId` vem só do próprio
+  // AGENT_CANVAS_CARD_ID do processo que roda o hook, mesmo auto-fill de
+  // `report` acima.
+  if (!ownCardId) fail("turn-complete: AGENT_CANVAS_CARD_ID is not set — not running inside agent-canvas?");
+  request = { cmd: "turn_complete", cardId: ownCardId };
 } else if (cmd === "report") {
   const [json] = rest;
   if (!json) fail("usage: acbridge report <json>");
