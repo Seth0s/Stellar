@@ -1,10 +1,21 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import { Icon, type IconName } from "./icons";
 import { isInView, type Rect } from "./board-model";
 import type { Card } from "./card-types";
 
-/** Largura da fita (cards.css/layout.css). */
-const STRIP_WIDTH = 460;
+/** Largura MÁXIMA da fita quando há espaço de sobra — o valor real usado
+ * (`stripWidth`, calculado no componente) encolhe pra caber entre os
+ * vizinhos reais da topbar. Antes era uma constante fixa usada direto
+ * como `left:50%` no CSS, sem noção nenhuma do que estava ao redor —
+ * relatado ao vivo (2026-09-06, screenshot): com um breadcrumb comprido
+ * (`.topbar-title`), a fita centralizada na tela invadia o texto à
+ * esquerda. */
+const MAX_STRIP_WIDTH = 460;
+/** Piso pra fita nunca desaparecer de vez numa janela genuinamente
+ * apertada — cabe pelo menos ~3 chips compactos + o "+N". */
+const MIN_STRIP_WIDTH = 110;
+/** Respiro entre a fita e o vizinho mais próximo de cada lado. */
+const OUTER_GAP = 16;
 /** Respiro mínimo entre as BORDAS reais de dois chips vizinhos (não entre
  * os centros — largura de chip varia com o rótulo, então um respiro fixo
  * de centro-a-centro só funciona por acaso; foi o que colidiu no relato
@@ -80,6 +91,45 @@ function distanceTier(dist: number, vpDiagonal: number): Tier {
  *   assim, com MUITOS cards (20+) ainda cabe só um tanto — o resto vira
  *   um chip "+N" de resumo, igual ao modo completo.
  */
+/** Mede a borda real dos dois vizinhos que compartilham a linha da topbar
+ * com a bússola — `.topbar-title` (breadcrumb + contagem de agentes, à
+ * esquerda) e `.zoom-pill` (aviso de CLI + zoom, à direita) — pra nunca
+ * desenhar a fita por cima deles. Um `ResizeObserver` em cada um cobre
+ * tanto resize de janela quanto o texto do próprio breadcrumb mudando de
+ * largura (nome de board editado, contagem de agentes ganhando um
+ * dígito, badge "autônomo" aparecendo) sem precisar re-medir a cada
+ * render da bússola. Ausência de qualquer um dos dois (DOM ainda não
+ * montado, ou um teste isolado sem Topbar real) degrada pra `null` —
+ * tratado como "sem vizinho para evitar" nos limites abaixo. */
+function useTopbarNeighborBounds(): { titleRight: number | null; zoomPillLeft: number | null } {
+  const [bounds, setBounds] = useState<{ titleRight: number | null; zoomPillLeft: number | null }>({
+    titleRight: null,
+    zoomPillLeft: null,
+  });
+
+  useEffect(() => {
+    const titleEl = document.querySelector(".topbar-title");
+    const zoomEl = document.querySelector(".zoom-pill");
+    const measure = () => {
+      setBounds({
+        titleRight: titleEl ? titleEl.getBoundingClientRect().right : null,
+        zoomPillLeft: zoomEl ? zoomEl.getBoundingClientRect().left : null,
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (titleEl) ro.observe(titleEl);
+    if (zoomEl) ro.observe(zoomEl);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+
+  return bounds;
+}
+
 export const Compass = memo(function Compass({
   cards,
   visibleRect,
@@ -93,6 +143,7 @@ export const Compass = memo(function Compass({
   kindLabel: Record<string, string>;
   onFocusCard: (id: string) => void;
 }) {
+  const { titleRight, zoomPillLeft } = useTopbarNeighborBounds();
   const vpCenterX = visibleRect.x + visibleRect.w / 2;
   const vpCenterY = visibleRect.y + visibleRect.h / 2;
   const vpDiagonal = Math.hypot(visibleRect.w, visibleRect.h);
@@ -112,6 +163,21 @@ export const Compass = memo(function Compass({
 
   if (all.length === 0) return null;
 
+  // Espaço realmente livre entre os vizinhos da topbar (ou a janela
+  // inteira, se algum dos dois ainda não montou). `stripWidth` é o teto
+  // que TODO o resto da função usa em vez da constante fixa antiga —
+  // encolhe sozinho quando o breadcrumb ou a área de zoom crescem, em
+  // vez de desenhar por cima deles. `stripLeft` centraliza a fita dentro
+  // desse espaço livre (não mais 50% da JANELA) — o mesmo empacotamento
+  // "bolinha de gude" abaixo (empurra + clampa nas duas pontas) já lida
+  // com acumulação quando `stripWidth` encolhe o bastante pra apertar os
+  // chips, sem nunca invadir o vizinho.
+  const availableLeft = (titleRight ?? 0) + OUTER_GAP;
+  const availableRight = (zoomPillLeft ?? window.innerWidth) - OUTER_GAP;
+  const stripWidth = Math.max(MIN_STRIP_WIDTH, Math.min(MAX_STRIP_WIDTH, availableRight - availableLeft));
+  const idealLeft = (window.innerWidth - stripWidth) / 2;
+  const stripLeft = Math.min(Math.max(idealLeft, availableLeft), Math.max(availableLeft, availableRight - stripWidth));
+
   // Decide o modo pela largura REAL projetada, não só pela contagem — um
   // punhado de rótulos compridos pode não caber mesmo sendo "poucos"
   // (achado ao vivo, 2026-09-06: 4 chips, 2 com rumo próximo, já
@@ -121,16 +187,16 @@ export const Compass = memo(function Compass({
   const fullTotalWidth =
     fullCandidates.reduce((sum, c) => sum + estimateFullChipWidth(c.card.label ?? kindLabel[c.card.kind] ?? c.card.kind), 0) +
     Math.max(0, fullCandidates.length - 1) * GAP;
-  const compact = all.length > FULL_HARD_CAP || fullTotalWidth > STRIP_WIDTH;
+  const compact = all.length > FULL_HARD_CAP || fullTotalWidth > stripWidth;
 
   // Quantos cabem na fita, dado o modo: completo usa os candidatos já
   // testados acima; compacto tem largura uniforme, então dá pra calcular
   // direto quantos cabem — os mais próximos entram primeiro (`all` já
   // ordenado por `dist`).
-  const maxShown = compact ? Math.floor((STRIP_WIDTH - MORE_CHIP_RESERVED) / (COMPACT_CHIP_W + GAP)) : fullCandidates.length;
+  const maxShown = compact ? Math.floor((stripWidth - MORE_CHIP_RESERVED) / (COMPACT_CHIP_W + GAP)) : fullCandidates.length;
   const shown = all.slice(0, Math.max(1, maxShown));
   const hiddenCount = all.length - shown.length;
-  const effectiveWidth = hiddenCount > 0 ? STRIP_WIDTH - MORE_CHIP_RESERVED : STRIP_WIDTH;
+  const effectiveWidth = hiddenCount > 0 ? stripWidth - MORE_CHIP_RESERVED : stripWidth;
 
   // `bearing` 0° -> t=0.5 (centro), +180°/-180° -> t=1/t=0 (as duas
   // pontas, mesma direção física "oeste").
@@ -181,7 +247,13 @@ export const Compass = memo(function Compass({
   if (positioned.length > 0) positioned[0].x = Math.max(positioned[0].x, positioned[0].w / 2);
 
   return (
-    <div className="compass-strip" data-role="compass" data-compact={compact} aria-label="Cards fora da tela">
+    <div
+      className="compass-strip"
+      data-role="compass"
+      data-compact={compact}
+      aria-label="Cards fora da tela"
+      style={{ left: `${stripLeft}px`, width: `${stripWidth}px` }}
+    >
       {positioned.map(({ card, dist, bearing, x }) => {
         const label = card.label ?? kindLabel[card.kind] ?? card.kind;
         const tier = distanceTier(dist, vpDiagonal);

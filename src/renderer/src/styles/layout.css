@@ -2318,13 +2318,15 @@ select.resume-input {
    `justify-content: space-between`). Cada card fora da tela vira um chip
    clicável POSICIONADO ao longo da fita pelo próprio rumo (Compass.tsx),
    não empilhado — vários aparecem ao mesmo tempo, sem ciclar nada. */
+/* `left`/`width` são setados inline por Compass.tsx a cada render —
+   dependem da largura real medida dos vizinhos na mesma linha da topbar
+   (`.topbar-title`/`.zoom-pill`), então não podem ser uma regra CSS fixa
+   (bug relatado ao vivo, 2026-09-06: fita centralizada na JANELA inteira
+   invadia um breadcrumb comprido, sem noção nenhuma do vizinho). */
 .compass-strip {
   position: absolute;
   top: calc(var(--titlebar-h) + 12px);
-  left: 50%;
-  transform: translateX(-50%);
   z-index: 500;
-  width: 460px;
   height: 26px;
   pointer-events: none;
 }
