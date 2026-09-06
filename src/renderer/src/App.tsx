@@ -989,6 +989,18 @@ export function App() {
     setOrder((prev) => [...prev.filter((x) => x !== id), id]);
   }
 
+  /** Stricter than `isInView` (which is a plain bounding-box overlap check,
+   * board-model.ts): a card mostly below the fold with just a sliver
+   * poking into the viewport's bottom edge counts as "in view" there,
+   * which is not what a human means by it. Used only for the new-card
+   * off-screen-spawn guard below — `isInView` itself is unchanged since
+   * other callers (visibility culling) want the lenient overlap check. */
+  function centerInView(rect: Rect, viewport: Rect): boolean {
+    const cx = rect.x + rect.w / 2;
+    const cy = rect.y + rect.h / 2;
+    return cx >= viewport.x && cx <= viewport.x + viewport.w && cy >= viewport.y && cy <= viewport.y + viewport.h;
+  }
+
   function addCard(card: Card) {
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, card.id]);
@@ -1166,6 +1178,7 @@ export function App() {
    * rail's own buttons, which keep centering on the visible viewport. */
   function addTerminalCard(at?: Point) {
     const id = String(nextId.current++);
+    const rect = at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect));
     addCard({
       id,
       kind: "terminal",
@@ -1177,10 +1190,19 @@ export function App() {
       effort: null,
       systemPrompt: newSystemPrompt.trim() || null,
       initialInput: null,
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect)),
+      rect,
       groupId: null,
       label: null,
     });
+    // centeredSlot's collision ring-search (board-model.ts) can walk a new
+    // card's slot almost a full SPAWN_H/W past the naive centered position
+    // to dodge an existing card — easily past the edge of the viewport on a
+    // small window. Same guard as the pendingOpenUrl reuse path below: only
+    // recenter when the card actually landed out of view. Deferred a tick:
+    // `focusCard` reads `cardsRef.current`, which only picks up this card
+    // after the `setCards` above commits and re-renders — calling it in the
+    // same tick finds nothing and silently no-ops.
+    if (!centerInView(rect, visibleRect)) setTimeout(() => focusCard(id), 0);
   }
 
   /** Replaces the 6 near-identical addXCard functions that used to live
@@ -1194,13 +1216,16 @@ export function App() {
    * visible viewport. */
   function addCardOfKind(kind: (typeof RAIL_CREATE_ORDER)[number], at?: Point) {
     const id = String(nextId.current++);
+    const rect = at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect));
     addCard({
       id,
       ...defaultCardFields(kind, activeBoardCwd),
-      rect: at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect)),
+      rect,
       groupId: null,
       label: null,
     } as Card);
+    // Same off-screen-spawn guard as addTerminalCard above — see its comment.
+    if (!centerInView(rect, visibleRect)) setTimeout(() => focusCard(id), 0);
   }
 
   const MEDIA_MAX_DIM = 900;
