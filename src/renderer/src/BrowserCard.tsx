@@ -82,6 +82,90 @@ function mouseButtonName(button: number): "left" | "middle" | "right" {
   return "left";
 }
 
+/** Pendentes #188 — "Design Mode" (item explicitamente aberto na sticky
+ * #188, separado do mini-inspector já entregue): comunicação de
+ * componente exato pro agente, igual o "add element to chat" do Cursor.
+ * Sem CDP/plumbing nova no main process — reaproveita `evalJs` (já
+ * existia) dos dois lados: injeta um picker (hover destaca, clique
+ * captura E ENGOLE o clique real com `preventDefault`/`stopPropagation`
+ * em fase de captura, senão um botão real da página dispararia normal ao
+ * ser "escolhido") e o renderer faz polling curto num campo global até
+ * achar uma escolha — não existe canal de push de dentro da página pro
+ * processo main além de console-message, e reaproveitar isso pra dado
+ * estruturado seria mais gambiarra que o polling.
+ *
+ * "Enviar" usa `window.pty.write` direto — o MESMO primitivo que
+ * `send_to_card` (MCP) usa por trás (`pty-registry.ts`'s `write`), só que
+ * chamado direto do renderer: é o próprio usuário agindo num card que ele
+ * está olhando, mesma categoria de `evalJs`/`getPageText` (sem gate). */
+const DESIGN_ENABLE_SCRIPT = `
+(() => {
+  if (window.__stellarDesignActive) return true;
+  window.__stellarDesignActive = true;
+  window.__stellarDesignPick = null;
+  const onOver = (e) => { if (e.target && e.target.nodeType === 1) e.target.setAttribute("data-stellar-design-hover", "1"); };
+  const onOut = (e) => { if (e.target && e.target.nodeType === 1) e.target.removeAttribute("data-stellar-design-hover"); };
+  const onClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = e.target;
+    const r = el.getBoundingClientRect();
+    const cls = typeof el.className === "string" ? el.className.trim() : "";
+    window.__stellarDesignPick = {
+      tag: el.tagName.toLowerCase(),
+      className: cls,
+      selector: el.tagName.toLowerCase() + (cls ? "." + cls.split(/\\s+/).join(".") : ""),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    };
+  };
+  document.addEventListener("mouseover", onOver, true);
+  document.addEventListener("mouseout", onOut, true);
+  document.addEventListener("click", onClick, true);
+  window.__stellarDesignHandlers = { onOver, onOut, onClick };
+  const style = document.createElement("style");
+  style.id = "stellar-design-style";
+  style.textContent = '[data-stellar-design-hover]{outline:2px dashed #7c8cf5 !important;outline-offset:-2px !important;cursor:crosshair !important;}';
+  document.head.appendChild(style);
+  return true;
+})()
+`;
+const DESIGN_DISABLE_SCRIPT = `
+(() => {
+  window.__stellarDesignActive = false;
+  window.__stellarDesignPick = null;
+  const h = window.__stellarDesignHandlers;
+  if (h) {
+    document.removeEventListener("mouseover", h.onOver, true);
+    document.removeEventListener("mouseout", h.onOut, true);
+    document.removeEventListener("click", h.onClick, true);
+    window.__stellarDesignHandlers = null;
+  }
+  document.querySelectorAll("[data-stellar-design-hover]").forEach((el) => el.removeAttribute("data-stellar-design-hover"));
+  const style = document.getElementById("stellar-design-style");
+  if (style) style.remove();
+  return true;
+})()
+`;
+// Consome o pick (limpa o campo global na mesma chamada) — evita que o
+// mesmo clique seja processado duas vezes por dois ticks de poll
+// concorrentes.
+const DESIGN_POLL_SCRIPT = `
+(() => {
+  const p = window.__stellarDesignPick;
+  if (p) window.__stellarDesignPick = null;
+  return p || null;
+})()
+`;
+const DESIGN_POLL_INTERVAL_MS = 200;
+
+type DesignPick = { tag: string; className: string; selector: string; width: number; height: number };
+
+function designContextText(pick: DesignPick, pageUrl: string): string {
+  const opening = pick.className ? `<${pick.tag} class="${pick.className}">` : `<${pick.tag}>`;
+  return `${opening} — ${pick.selector}\n${pageUrl} · ${pick.width}×${pick.height}px`;
+}
+
 /** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
  * wrapped in `React.memo` below. */
 function BrowserCardInner({
@@ -97,6 +181,7 @@ function BrowserCardInner({
   selected,
   reflowing,
   closing,
+  sendTargets,
   onChange,
   onCommit,
   onRaise,
@@ -118,6 +203,11 @@ function BrowserCardInner({
   isFocused: boolean;
   url: string;
   ownerCardId: string | null;
+  /** Pendentes #188 — Design Mode: outros cards de TERMINAL no mesmo
+   * board, pra escolher o alvo de "Enviar" no popover de elemento
+   * escolhido. Vem de `cards` (já em escopo no `App.tsx` — mesmo array
+   * que `Compass.tsx` recebe), filtrado/mapeado ali, não uma tabela nova. */
+  sendTargets: { id: string; label: string | null }[];
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
@@ -219,6 +309,12 @@ function BrowserCardInner({
   // outras aberturas (kebab menu) que nunca mudam esse contador.
   const inspectorRequestIdRef = useRef(0);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
+  // Pendentes #188 — Design Mode (ver doc comment de DESIGN_ENABLE_SCRIPT
+  // acima). `designPick` não-nulo é o que abre o popover de "pra quem
+  // enviar" — ligar/desligar o modo em si não mexe nele.
+  const [designMode, setDesignMode] = useState(false);
+  const [designPick, setDesignPick] = useState<DesignPick | null>(null);
+  const designBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
   // (no reading UI for that yet, just the "something needs attention"
   // signal CentralByte's own console badge gives).
@@ -342,6 +438,48 @@ function BrowserCardInner({
       off();
     };
   }, [id]);
+
+  // Pendentes #188 — Design Mode. `setInterval` (não um único poll) só
+  // enquanto `designMode` está ligado — a página só ganha um pick quando
+  // o usuário CLICA de verdade (o script injetado consome/limpa o campo
+  // sozinho, ver DESIGN_POLL_SCRIPT), então isto é barato: a maior parte
+  // dos ticks só lê `null` e não faz nada.
+  useEffect(() => {
+    if (!designMode) return;
+    const interval = window.setInterval(() => {
+      void window.browser.evalJs(id, DESIGN_POLL_SCRIPT).then((res) => {
+        if (!res.ok || res.result === "null") return;
+        let pick: DesignPick;
+        try {
+          pick = JSON.parse(res.result) as DesignPick;
+        } catch {
+          return;
+        }
+        setDesignMode(false);
+        void window.browser.evalJs(id, DESIGN_DISABLE_SCRIPT);
+        setDesignPick(pick);
+      });
+    }, DESIGN_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [id, designMode]);
+
+  function toggleDesignMode() {
+    setDesignMode((prev) => {
+      const next = !prev;
+      void window.browser.evalJs(id, next ? DESIGN_ENABLE_SCRIPT : DESIGN_DISABLE_SCRIPT);
+      if (!next) setDesignPick(null);
+      return next;
+    });
+  }
+
+  function sendDesignPickTo(targetId: string) {
+    if (!designPick) return;
+    const text = designContextText(designPick, bar);
+    void window.pty.write(targetId, text).then(() => {
+      window.setTimeout(() => void window.pty.write(targetId, "\r"), 60);
+    });
+    setDesignPick(null);
+  }
 
   // Draws each JPEG frame from the card's offscreen BrowserWindow straight
   // onto its own canvas (see browser-registry.ts) — plain DOM content, so
@@ -700,6 +838,17 @@ function BrowserCardInner({
             <Icon name="favorite" size={12} />
           </button>
           <button
+            ref={designBtnRef}
+            className={styles.browserCardDesignBtn}
+            data-role="browser-design-mode-btn"
+            data-active={designMode || undefined}
+            title={designMode ? "Cancelar modo design" : "Modo design — selecionar elemento pra enviar a um agente"}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={toggleDesignMode}
+          >
+            <Icon name="designMode" size={12} />
+          </button>
+          <button
             ref={menuBtnRef}
             title="Mais opções"
             onPointerDown={(e) => e.stopPropagation()}
@@ -718,6 +867,7 @@ function BrowserCardInner({
           ref={canvasRef}
           className={styles.browserCardBody}
           data-role="browser-body"
+          data-design-mode={designMode || undefined}
           tabIndex={0}
           onPointerDown={onCanvasPointerDown}
           onPointerMove={onCanvasPointerMove}
@@ -819,6 +969,36 @@ function BrowserCardInner({
                 </div>
               ))}
             </div>
+          </>
+        )}
+      </Popover>
+      <Popover
+        anchorRef={designBtnRef}
+        open={designPick !== null}
+        onClose={() => setDesignPick(null)}
+        className={styles.browserCardMenu}
+        dataRole="browser-design-card"
+      >
+        {designPick && (
+          <>
+            <div className={styles.browserCardDesignInfo}>
+              <span className={styles.browserCardDesignTag}>&lt;{designPick.tag}&gt;</span>
+              <span className={styles.browserCardDesignMeta}>{designPick.selector}</span>
+              <span className={styles.browserCardDesignMeta}>
+                {designPick.width} × {designPick.height}px
+              </span>
+            </div>
+            <div className={styles.browserCardFavDivider} />
+            {sendTargets.length === 0 ? (
+              <div className={styles.browserCardMenuInfo}>Nenhum terminal no board pra enviar.</div>
+            ) : (
+              sendTargets.map((t) => (
+                <button key={t.id} onClick={() => sendDesignPickTo(t.id)}>
+                  <Icon name="terminal" size={14} />
+                  {t.label || `Card #${t.id}`}
+                </button>
+              ))
+            )}
           </>
         )}
       </Popover>

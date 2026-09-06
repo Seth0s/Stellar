@@ -1,22 +1,98 @@
-/* Pendentes #188 — mini-inspector embutido no card. Drawer absoluto na
-   parte de baixo do canvas (não reflow do viewport da página — ver
-   BrowserInspector.tsx's doc comment no topo do arquivo pro porquê). */
+/* Pendentes #188 — mini-inspector embutido no card. Coluna dockável
+   (redesenho 2026-09-06, protótipo HTML aprovado) — ancora à direita
+   por padrão (igual o DevTools real), embaixo ou à esquerda, cada uma
+   com sua própria alça de resize (`.resizeHandle`, ver `data-dock`
+   abaixo). Continua um overlay absoluto sobre o canvas (não reflow do
+   viewport da página) — nunca um flex sibling que empurraria o canvas. */
 
 .inspector {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 46%;
-  min-height: 160px;
   display: flex;
   flex-direction: column;
   background: var(--panel);
-  border-top: 1px solid var(--border);
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
   font-size: 12px;
   color: var(--text);
   z-index: 5;
+}
+
+.inspector[data-dock="right"] {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  min-width: 300px;
+  border-left: 1px solid var(--border);
+}
+
+.inspector[data-dock="left"] {
+  top: 0;
+  left: 0;
+  bottom: 0;
+  min-width: 300px;
+  border-right: 1px solid var(--border);
+}
+
+.inspector[data-dock="bottom"] {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  min-height: 160px;
+  border-top: 1px solid var(--border);
+}
+
+.resizeHandle {
+  position: absolute;
+  z-index: 6;
+  /* Achado ao vivo comparando com o protótipo aprovado: a alça só existia
+     como zona de clique invisível (nada visível em repouso, só um
+     highlight no hover) — o usuário pediu explicitamente "beirados
+     indicativas de resize", igual o `.resize-handle{background:var(--border)}`
+     sempre visível do protótipo. */
+  background: var(--border);
+}
+
+.inspector[data-dock="right"] .resizeHandle {
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.inspector[data-dock="left"] .resizeHandle {
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.inspector[data-dock="bottom"] .resizeHandle {
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.resizeHandle:hover {
+  background: color-mix(in srgb, var(--foam) 40%, transparent);
+}
+
+.dockButtons {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 2px;
+}
+
+.dockButtons button {
+  padding: 5px 6px;
+}
+
+.dockButtons button[data-active] {
+  color: var(--foam);
+  background: var(--surface);
 }
 
 .inspectorTabs {
@@ -26,6 +102,28 @@
   padding: 4px 6px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  /* Achado ao vivo — sem isto, um card/painel mais estreito que o
+     conteúdo da barra (4 abas de texto + reload + 3 dock + fechar) fazia
+     o botão "Fechar inspector" renderizar VISUALMENTE fora do card
+     (cortado pelo overflow:hidden do próprio CardFrame), clicável só na
+     teoria — `elementFromPoint` ali achava o board por baixo, não o
+     botão. `DOCK_MIN`/`DOCK_DEFAULT` (BrowserInspector.tsx) já garantem
+     largura suficiente pro caso comum; isto é a rede de segurança pro
+     que ainda não couber (zoom do board bem baixo, card manualmente
+     encolhido demais) — rola dentro do próprio inspector em vez de
+     vazar pra fora dele. Achado ao vivo comparando com o protótipo
+     aprovado: sem esconder a scrollbar nativa, esse `overflow-x:auto`
+     pintava uma barra OS feia (com setinhas, estilo GTK) permanentemente
+     visível embaixo das abas mesmo quando cabia tudo — `DOCK_MIN`
+     (BrowserInspector.tsx) já resolve o caso comum, isto some com o
+     resto (mesma convenção de esconder scrollbar do xterm.js em
+     TerminalCard.module.css). */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.inspectorTabs::-webkit-scrollbar {
+  display: none;
 }
 
 .inspectorTabs > button {
@@ -39,6 +137,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .inspectorTabs > button:hover {
@@ -228,4 +328,227 @@
 .responsive button[data-active] {
   border-color: var(--foam);
   color: var(--foam);
+}
+
+.customSize {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.customSizeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.customSizeRow input {
+  width: 70px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.customSizeRow span {
+  color: var(--muted);
+}
+
+.customSizeRow button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.customSizeRow button:hover {
+  border-color: var(--foam);
+  color: var(--foam);
+}
+
+/* Ruler de presets de largura — mesma "linha horizontal" de atalhos que
+   o usuário apontou no device toolbar real do Chrome (print ao vivo). */
+.widthRuler {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.widthRuler button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 3px 9px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+}
+
+.widthRuler button:hover {
+  color: var(--text);
+  border-color: var(--foam);
+}
+
+.stopEmulation {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  cursor: pointer;
+  padding: 5px 10px;
+  font-size: 11.5px;
+}
+
+/* -------------------------------------------------------------- Network */
+
+.network {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.networkToolbar {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.networkToolbar button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.networkToolbar button[data-active] {
+  color: var(--foam);
+  border-color: var(--foam);
+}
+
+.networkUrl {
+  max-width: 0;
+  width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storageTable td[data-severity="ok"] {
+  color: var(--good);
+}
+
+.storageTable td[data-severity="error"] {
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------- Application */
+
+.application {
+  display: flex;
+  height: 100%;
+}
+
+.storageNav {
+  flex: none;
+  width: 140px;
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  padding: 6px 0;
+}
+
+.storageGroupTitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  padding: 8px 10px 3px;
+}
+
+.storageItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 5px 10px 5px 18px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.storageItem:hover {
+  color: var(--text);
+}
+
+.storageItem[data-active] {
+  color: var(--foam);
+  background: var(--surface);
+}
+
+.storageTableWrap {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.storageTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11.3px;
+}
+
+.storageTable th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  background: var(--panel);
+  font-family: inherit;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.storageTable td {
+  padding: 5px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--text);
+  vertical-align: top;
+  word-break: break-all;
+}
+
+.storageKey {
+  color: var(--violet);
+  white-space: nowrap;
+}
+
+.storageTable button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+}
+
+.storageTable button:hover {
+  color: var(--danger);
 }

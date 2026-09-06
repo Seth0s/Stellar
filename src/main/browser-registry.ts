@@ -35,8 +35,26 @@ export type BrowserContextMenuParams = {
 };
 
 export type ConsoleEntry = { level: string; message: string; at: number };
+/** Local/session storage — só o `evalJs` de dentro da página enxerga
+ * (sem equivalente no processo main). Cookies ficam de fora de propósito:
+ * `getCookies`/`CookieEntry` (mais abaixo) já cobrem isso via
+ * `session.cookies.get`, evitando duplicar a mesma leitura por dois
+ * caminhos diferentes. */
+export type LocalSessionStorage = { local: [string, string][]; session: [string, string][] };
 export type PageElement = { ref: string; role: string; name: string; tag: string; disabled?: boolean; checked?: boolean; value?: string };
 export type NetworkEntry = { method: string; url: string; status: number | null; error?: string; at: number };
+/** Aba Application do mini-inspector — ver `getCookies` abaixo pro porquê
+ * de vir de `session.cookies.get` (main process) e não de `evalJs`. */
+export type CookieEntry = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expirationDate?: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: string;
+};
 
 /** Achado ao vivo (2026-09-01, relato de um agente que dirigiu o navegador
  * daqui): "debugar uma falha silenciosa (um botão de salvar que não faz
@@ -932,6 +950,48 @@ export function createBrowserRegistry(callbacks: {
     }
   }
 
+  /** Pendentes #188 — aba Application do mini-inspector (real, não
+   * "planejado" — o gap não era CDP nenhum). Só local/session storage:
+   * cookies já vêm de `getCookies` abaixo (via `session.cookies.get`,
+   * processo main) — combinar os dois é responsabilidade de quem monta a
+   * UI da aba (BrowserInspector.tsx), não deste registry. */
+  async function getLocalSessionStorage(id: string): Promise<({ ok: true } & LocalSessionStorage) | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const raw = (await entry.win.webContents.executeJavaScript(`
+        (() => {
+          const local = [];
+          for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); local.push([k, localStorage.getItem(k)]); }
+          const session = [];
+          for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); session.push([k, sessionStorage.getItem(k)]); }
+          return { local, session };
+        })()
+      `)) as LocalSessionStorage;
+      return { ok: true, local: raw.local, session: raw.session };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** Remove uma entrada só (não a área inteira) de local/session storage —
+   * remoção de cookie fica com quem já dono da leitura (`getCookies`),
+   * evita dois caminhos escrevendo na mesma sessão de card. */
+  async function deleteLocalSessionItem(
+    id: string,
+    area: "local" | "session",
+    key: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      await entry.win.webContents.executeJavaScript(`${area === "local" ? "localStorage" : "sessionStorage"}.removeItem(${JSON.stringify(key)})`);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
   function getConsole(id: string, level?: string, limit?: number): { ok: true; messages: ConsoleEntry[] } | { ok: false; error: string } {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
@@ -939,6 +999,38 @@ export function createBrowserRegistry(callbacks: {
     // Do FIM da lista: o interessante quase sempre é o que acabou de
     // acontecer, não o que a página logou ao carregar.
     return { ok: true, messages: limit ? filtered.slice(-limit) : filtered };
+  }
+
+  /** Aba Application do mini-inspector (Pendentes #188, pedido de coluna
+   * completa 2026-09-06) — cookies NÃO passam por `evalJs`/`document.
+   * cookie` de propósito: JS de página nunca enxerga um cookie `HttpOnly`
+   * (por design do próprio navegador) nem seus atributos de verdade
+   * (domain/path/expiry/secure/sameSite, só `nome=valor`). `session.
+   * cookies.get` é uma API do Electron NO PROCESSO MAIN, escopada à
+   * partition isolada deste card (`create()` acima) — dá a tabela real
+   * que o DevTools mostra, sem precisar de CDP. */
+  async function getCookies(id: string): Promise<{ ok: true; cookies: CookieEntry[] } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const url = entry.win.webContents.getURL();
+      const raw = await entry.win.webContents.session.cookies.get(url ? { url } : {});
+      return {
+        ok: true,
+        cookies: raw.map((c) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain ?? "",
+          path: c.path ?? "/",
+          expirationDate: c.expirationDate,
+          httpOnly: Boolean(c.httpOnly),
+          secure: Boolean(c.secure),
+          sameSite: c.sameSite ?? "unspecified",
+        })),
+      };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
   }
 
   function getNetwork(id: string, opts: { status?: number; failedOnly?: boolean; urlContains?: string; limit?: number } = {}) {
@@ -1182,7 +1274,10 @@ export function createBrowserRegistry(callbacks: {
     query,
     evalJs,
     getConsole,
+    getLocalSessionStorage,
+    deleteLocalSessionItem,
     getNetwork,
+    getCookies,
     waitFor,
     pageSnapshot,
     refSelector,

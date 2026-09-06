@@ -22,6 +22,7 @@ import {
   Code2,
   Copy,
   Crop,
+  Database,
   Eye,
   EyeOff,
   File,
@@ -49,7 +50,9 @@ import {
   MoreVertical,
   MousePointer2,
   MousePointerClick,
+  PanelBottom,
   PanelLeft,
+  PanelRight,
   Pen,
   Pin,
   Plus,
@@ -66,7 +69,9 @@ import {
   Star,
   StickyNote,
   Tablet,
+  Target,
   TerminalSquare,
+  Waypoints,
   Trash2,
   TriangleAlert,
   Ungroup,
@@ -155,7 +160,13 @@ export type IconName =
   | "wrench"
   | "bug"
   | "warning"
-  | "inspector";
+  | "inspector"
+  | "designMode"
+  | "network"
+  | "storage"
+  | "dockRight"
+  | "dockBottom"
+  | "dockLeft";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -234,6 +245,12 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   moreVertical: MoreVertical,
   devTools: Bug,
   inspector: Crosshair,
+  designMode: Target,
+  network: Waypoints,
+  storage: Database,
+  dockRight: PanelRight,
+  dockBottom: PanelBottom,
+  dockLeft: PanelLeft,
   favorite: Star,
   viewportFluid: Monitor,
   viewportMobile: Smartphone,
