@@ -185,8 +185,14 @@ try {
   // Requester here is the SECOND bash card (spawnAgentPayload.cardId), not
   // the first — real proof the ordinal actually increments per provider
   // instead of always reading "1°" by coincidence.
+  //
+  // `kind: "files"`, not "sticky" — achado ao vivo (2026-09-06, sticky
+  // "Ideias/Brainstorm"): spawn_card de sticky agora é auto-aprovado sem
+  // NENHUM modal (mesma classe de risco de write_sticky, já sem gate),
+  // então "sticky" não serve mais pra exercitar o fluxo de consentimento
+  // em si — ver o bloco novo logo abaixo pra essa mudança específica.
   const secondBashCardId = spawnAgentPayload.cardId;
-  const spawnCardDenyPromise = callTool("spawn_card", { kind: "sticky", callerCardId: secondBashCardId });
+  const spawnCardDenyPromise = callTool("spawn_card", { kind: "files", callerCardId: secondBashCardId });
   await new Promise((r) => setTimeout(r, 500));
   check(
     "the SECOND bash card's requester label is 'Bash 2°' (ordinal really increments, not hardcoded)",
@@ -196,16 +202,29 @@ try {
   await clickModalButton(page, "Negar");
   const spawnCardDenyPayload = JSON.parse((await spawnCardDenyPromise).content[0].text);
   check("spawn_card (denied) reports ok:false", spawnCardDenyPayload.ok, false);
-  check("nothing got created by the denied spawn_card", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 0);
+  check("nothing got created by the denied spawn_card", await page.evalJs(`document.querySelectorAll('[data-kind="files"]').length`), 0);
 
-  // spawn_card, allowed — the sticky card actually appears.
-  const spawnCardPromise = callTool("spawn_card", { kind: "sticky", callerCardId: bashCardId, reason: "note for later" });
+  // spawn_card, allowed — the files card actually appears.
+  const spawnCardPromise = callTool("spawn_card", { kind: "files", callerCardId: bashCardId, reason: "note for later" });
   await new Promise((r) => setTimeout(r, 500));
   await clickModalButton(page, "Permitir");
   const spawnCardPayload = JSON.parse((await spawnCardPromise).content[0].text);
   check("spawn_card (allowed) resolves ok with a cardId", spawnCardPayload.ok && typeof spawnCardPayload.cardId === "string", true);
   await new Promise((r) => setTimeout(r, 500));
-  check("a real sticky card exists after the allowed spawn_card", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 1);
+  check("a real files card exists after the allowed spawn_card", await page.evalJs(`document.querySelectorAll('[data-kind="files"]').length`), 1);
+
+  // spawn_card kind:"sticky" — achado ao vivo (2026-09-06) — auto-aprovado
+  // de propósito, sem NENHUM modal, mesma classe de risco de write_sticky
+  // (reversível, sem side-effect de disco/processo). Confirma que resolve
+  // imediatamente (sem precisar clicar em nada) e que o card realmente existe.
+  const spawnStickyPromise = callTool("spawn_card", { kind: "sticky", callerCardId: bashCardId, reason: "auto-approved" });
+  const spawnStickyPayload = JSON.parse((await spawnStickyPromise).content[0].text);
+  check(
+    "spawn_card kind:sticky resolves ok immediately, no modal needed",
+    spawnStickyPayload.ok && typeof spawnStickyPayload.cardId === "string",
+    true,
+  );
+  check("a real sticky card exists after the auto-approved spawn_card", await page.evalJs(`document.querySelectorAll('[data-kind="sticky"]').length`), 1);
 
   // get_page_text — real extracted page content, not pixels.
   const browserCardId = JSON.parse(

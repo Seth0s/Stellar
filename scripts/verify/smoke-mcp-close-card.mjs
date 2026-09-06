@@ -91,13 +91,13 @@ try {
   check("close_card num alvo inexistente retorna ok:false com erro claro", missing.ok === false && typeof missing.error === "string", true);
 
   // --- humano nega: card sobrevive ---
-  // spawn_card TAMBÉM pede consentimento fora de modo autônomo — cria o
-  // fixture de teste pelo mesmo round-trip real, em vez de contornar via
-  // IPC direto (o que está sendo testado é close_card, não este passo,
-  // mas ainda assim precisa ser um card real criado pela app de verdade).
+  // Cria o fixture de teste pelo mesmo round-trip real do spawn_card, em
+  // vez de contornar via IPC direto (o que está sendo testado é
+  // close_card, não este passo, mas ainda assim precisa ser um card real
+  // criado pela app de verdade). Achado ao vivo (2026-09-06): kind:"sticky"
+  // não pede mais consentimento (auto-aprovado, mesma classe de risco de
+  // write_sticky) — resolve na hora, sem modal pra clicar.
   const stickyPromise = callTool("spawn_card", { kind: "sticky" });
-  await new Promise((r) => setTimeout(r, 500));
-  await clickModalButton(page, "Permitir");
   const stickyId = JSON.parse((await stickyPromise).content[0].text);
   check("sticky de teste criado", typeof stickyId.cardId === "string", true);
   const stickyCardId = stickyId.cardId;

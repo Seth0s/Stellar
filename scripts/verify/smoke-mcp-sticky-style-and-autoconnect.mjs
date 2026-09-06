@@ -127,10 +127,9 @@ try {
 
   const bashId = (await toolJson("list_cards", {})).cards.find((c) => c.kind === "terminal").id;
 
-  const spawnPromise = callTool("spawn_card", { kind: "sticky", callerCardId: bashId, reason: "estilo + auto-conector" });
-  await delay(600);
-  await clickModalButton(page, "Permitir");
-  await spawnPromise;
+  // Achado ao vivo (2026-09-06): kind:"sticky" agora é auto-aprovado, sem
+  // modal nenhum pra clicar (mesma classe de risco de write_sticky).
+  await callTool("spawn_card", { kind: "sticky", callerCardId: bashId, reason: "estilo + auto-conector" });
   await delay(600);
   const stickyId = (await toolJson("list_cards", {})).cards.find((c) => c.kind === "sticky").id;
 

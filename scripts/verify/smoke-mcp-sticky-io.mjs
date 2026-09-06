@@ -72,12 +72,11 @@ try {
 
   const bashId = (await toolJson("list_cards", {})).cards.find((c) => c.kind === "terminal").id;
 
-  // Cria a nota pelo caminho normal (spawn_card, com consentimento) — o
-  // consentimento SÓ existe pra criar o card; escrever nele não pede nada.
-  const spawnPromise = callTool("spawn_card", { kind: "sticky", callerCardId: bashId, reason: "quadro vivo" });
-  await new Promise((r) => setTimeout(r, 600));
-  await clickModalButton(page, "Permitir");
-  await spawnPromise;
+  // Cria a nota pelo caminho normal (spawn_card) — achado ao vivo
+  // (2026-09-06): kind:"sticky" agora é auto-aprovado, sem consentimento
+  // nenhum (mesma classe de risco de write_sticky, que nunca pediu) —
+  // resolve na hora, sem modal pra clicar.
+  await callTool("spawn_card", { kind: "sticky", callerCardId: bashId, reason: "quadro vivo" });
   await new Promise((r) => setTimeout(r, 600));
 
   const stickyId = (await toolJson("list_cards", {})).cards.find((c) => c.kind === "sticky")?.id;
