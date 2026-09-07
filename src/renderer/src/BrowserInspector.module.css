@@ -969,11 +969,16 @@
   flex-direction: column;
 }
 
-/* Nota permanente, não um erro — sempre visível quando um arquivo está
-   aberto: um limite honesto de escopo (sem breakpoints até a Fase 6 da
-   adoção de CDP), não um aviso de falha. */
+/* DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 6) — dois usos: nota de
+   escopo (documento/CSS não aceitam breakpoint, tom neutro) e o banner de
+   "pausado num breakpoint de verdade" (`[data-severity="paused"]`, tom
+   --warn — é um estado ativo que pede ação, não uma nota permanente). */
 .sourceBreakpointNotice {
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 6px 10px;
   color: var(--muted);
   background: var(--surface);
@@ -981,6 +986,23 @@
   font-family: var(--font-ui);
   font-size: 10.5px;
   line-height: 1.4;
+}
+
+.sourceBreakpointNotice[data-severity="paused"] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+.sourceBreakpointNotice button {
+  flex: none;
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: 20px;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 10px;
+  font-size: 10.5px;
+  font-family: inherit;
 }
 
 .sourceTruncatedNotice {

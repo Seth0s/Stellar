@@ -6,6 +6,14 @@
 // main (`session.fetch`, ver browser-registry.ts's `fetchSource`), não
 // de `evalJs` (que estouraria o teto de truncamento pra um arquivo real)
 // nem de um mock.
+//
+// DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 6, 2026-09-07) — o gutter
+// de breakpoint (antes permanentemente desabilitado, nota fixa em
+// qualquer arquivo aberto) vira real via Debugger.setBreakpointByUrl/
+// removeBreakpoint: este teste clica no gutter de uma linha de JS de
+// verdade e confirma que o marcador aparece/some ao alternar, e que
+// style.css (não é JS) continua mostrando a nota de escopo em vez do
+// gutter.
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
@@ -36,6 +44,19 @@ const server = createServer((req, res) => {
 });
 await new Promise((resolve) => server.listen(httpPort, "127.0.0.1", resolve));
 const fixtureUrl = `http://127.0.0.1:${httpPort}/`;
+
+// Sonda em vez de dormir uma vez só — `fetchSource` é um fetch de
+// verdade no main process, tempo variável sob carga (ver uso abaixo).
+async function waitForContentIncluding(page, needle, { timeoutMs = 4000, intervalMs = 150 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  while (Date.now() < deadline) {
+    last = await page.evalJs(`document.querySelector('[data-role="inspector-source-viewer"] .cm-content')?.textContent ?? ''`);
+    if (last.includes(needle)) return last;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return last;
+}
 
 async function centerOf(page, selector) {
   const res = JSON.parse(
@@ -116,9 +137,50 @@ try {
   await new Promise((r) => setTimeout(r, 600));
 
   check(
-    "a nota de breakpoints desabilitados aparece SEMPRE que um arquivo está aberto",
+    "num arquivo JS de verdade, NÃO aparece a nota de 'só em JS' (é exatamente um arquivo JS)",
     await page.evalJs(`!!document.querySelector('[data-role="inspector-breakpoint-notice"]')`),
+    false,
+  );
+
+  // --- Breakpoint real no gutter (Fase 6, adoção de CDP) ---
+  // Sonda (não uma espera fixa) — o conteúdo do arquivo (`fetchSource`,
+  // fetch de verdade no main process) pode ainda não ter chegado logo
+  // depois do clique no item da lista.
+  async function gutterClickPointForLine(needle, { timeoutMs = 4000, intervalMs = 150 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const point = JSON.parse(
+        await page.evalJs(`
+          (() => {
+            const gutter = document.querySelector('.cm-breakpoint-gutter');
+            const line = [...document.querySelectorAll('.cm-line')].find((l) => l.textContent.includes(${JSON.stringify(needle)}));
+            if (!gutter || !line) return JSON.stringify(null);
+            const gr = gutter.getBoundingClientRect();
+            const lr = line.getBoundingClientRect();
+            return JSON.stringify({ x: gr.x + gr.width / 2, y: lr.y + lr.height / 2 });
+          })()
+        `),
+      );
+      if (point) return point;
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return null;
+  }
+  const gutterPoint = await gutterClickPointForLine("console.log");
+  check("o gutter de breakpoint existe no visualizador de um arquivo JS", gutterPoint !== null, true);
+  await page.click(gutterPoint.x, gutterPoint.y);
+  await new Promise((r) => setTimeout(r, 400));
+  check(
+    "clicar no gutter cria um breakpoint DE VERDADE (Debugger.setBreakpointByUrl, marcador visível aparece)",
+    await page.evalJs(`!!document.querySelector('.cm-breakpoint-marker')`),
     true,
+  );
+  await page.click(gutterPoint.x, gutterPoint.y);
+  await new Promise((r) => setTimeout(r, 400));
+  check(
+    "clicar de novo remove o breakpoint DE VERDADE (Debugger.removeBreakpoint, marcador some)",
+    await page.evalJs(`!!document.querySelector('.cm-breakpoint-marker')`),
+    false,
   );
 
   const editorText = await page.evalJs(`document.querySelector('[data-role="inspector-source-viewer"] .cm-content')?.textContent ?? ''`);
@@ -135,8 +197,35 @@ try {
   const editorTextAfterType = await page.evalJs(`document.querySelector('[data-role="inspector-source-viewer"] .cm-content')?.textContent ?? ''`);
   check("...e digitar de verdade NÃO muda o documento (readOnly de verdade, não só onChange descartado)", editorTextAfterType, editorText);
 
-  // Troca pra CSS e confirma que troca de arquivo funciona (não fica
-  // preso mostrando sempre o primeiro selecionado).
+  // --- Pausar de verdade num breakpoint (o ciclo completo da Fase 6) ---
+  // Continua no MESMO app.js (nunca troca de arquivo até aqui) — marca o
+  // breakpoint de novo (desta vez sem desfazer) e recarrega a página:
+  // reexecuta o script, bate no breakpoint, e Debugger.paused deveria
+  // chegar de verdade.
+  await page.click(gutterPoint.x, gutterPoint.y);
+  await new Promise((r) => setTimeout(r, 400));
+  check("breakpoint marcado de novo antes de recarregar", await page.evalJs(`!!document.querySelector('.cm-breakpoint-marker')`), true);
+
+  await page.evalJs(`window.browser.navigate(${JSON.stringify(browserId)}, ${JSON.stringify(fixtureUrl)})`);
+  await new Promise((r) => setTimeout(r, 1000));
+  check(
+    "recarregar a página com o breakpoint ativo pausa a execução DE VERDADE (Debugger.paused real)",
+    await page.evalJs(`!!document.querySelector('[data-role="inspector-debugger-paused"]')`),
+    true,
+  );
+
+  const resumeBtn = await centerOf(page, '[data-role="inspector-debugger-paused"] button');
+  await page.click(resumeBtn.x, resumeBtn.y);
+  await new Promise((r) => setTimeout(r, 500));
+  check(
+    "clicar 'Continuar' resume a execução de verdade (Debugger.resume, o banner de pausa some)",
+    await page.evalJs(`!!document.querySelector('[data-role="inspector-debugger-paused"]')`),
+    false,
+  );
+
+  // --- Troca pra CSS por último (flake pré-existente documentado nesta
+  // troca de arquivo — isolado no FIM da suíte de propósito, pra não
+  // arriscar cascatear numa checagem de outra coisa se ela flacar). ---
   const styleItem = JSON.parse(
     await page.evalJs(`
       (() => {
@@ -148,9 +237,16 @@ try {
     `),
   );
   await page.click(styleItem.x, styleItem.y);
-  await new Promise((r) => setTimeout(r, 600));
-  const cssText = await page.evalJs(`document.querySelector('[data-role="inspector-source-viewer"] .cm-content')?.textContent ?? ''`);
+  await new Promise((r) => setTimeout(r, 300));
+  const cssText = await waitForContentIncluding(page, STYLE_MARKER_CLASS);
   check("trocar de arquivo na lista mostra o conteúdo REAL do outro arquivo (style.css)", cssText.includes(STYLE_MARKER_CLASS), true);
+
+  check(
+    "style.css NÃO é JS — mostra a nota de escopo em vez do gutter de breakpoint",
+    await page.evalJs(`!!document.querySelector('[data-role="inspector-breakpoint-notice"]')`),
+    true,
+  );
+  check("...e de fato não existe gutter de breakpoint nenhum nesse arquivo (não é JS)", await page.evalJs(`!!document.querySelector('.cm-breakpoint-gutter')`), false);
 
   page.close();
 } finally {

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { EditorState, Compartment } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from "@codemirror/view";
+import { EditorState, Compartment, StateEffect, StateField, RangeSetBuilder } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, gutter, GutterMarker } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
   indentOnInput,
@@ -59,6 +59,18 @@ const editorTheme = EditorView.theme(
       borderRight: "1px solid var(--border)",
     },
     ".cm-foldGutter .cm-gutterElement": { cursor: "pointer" },
+    // DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 6) — gutter de
+    // breakpoint da aba Sources do Inspector. Só existe quando
+    // `breakpointLines`/`onToggleBreakpoint` são passados (FilesCard.tsx
+    // nunca passa esses props, então nunca renderiza esse gutter).
+    ".cm-breakpoint-gutter": { width: "14px", cursor: "pointer" },
+    ".cm-breakpoint-gutter .cm-gutterElement": { display: "flex", alignItems: "center", justifyContent: "center" },
+    ".cm-breakpoint-marker": {
+      width: "9px",
+      height: "9px",
+      borderRadius: "50%",
+      backgroundColor: "var(--danger)",
+    },
     // DESIGN-BACKLOG.md item 45 — `.cm-scroller` is CodeMirror's OWN
     // internal scroll container (see the `.code-editor` comment in
     // cards.css), not an element this app renders directly, so the
@@ -183,6 +195,53 @@ async function legacyLang(mode: "shell" | "ruby" | "go" | "yaml" | "toml" | "pro
   return StreamLanguage.define(modeExport as never) as unknown as LanguageSupport;
 }
 
+/** Fase 6 (adoção de CDP) — gutter clicável de breakpoint. `breakpointLinesField`
+ * guarda o conjunto de linhas (1-indexed, mesma convenção de `jumpToLine`)
+ * como estado do CodeMirror; `setBreakpointLines` é o único jeito de
+ * alterá-lo — React é a fonte de verdade (`BrowserInspector.tsx`'s
+ * `breakpointsByUrl`, sincronizado via `Debugger.setBreakpointByUrl`/
+ * `removeBreakpoint`), o CodeMirror só REFLETE isso; um clique no gutter
+ * não altera o field sozinho, só chama `onToggle(line)` pra React decidir. */
+const setBreakpointLines = StateEffect.define<Set<number>>();
+const breakpointLinesField = StateField.define<Set<number>>({
+  create: () => new Set(),
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setBreakpointLines)) return e.value;
+    return value;
+  },
+});
+
+class BreakpointDot extends GutterMarker {
+  toDOM() {
+    const el = document.createElement("div");
+    el.className = "cm-breakpoint-marker";
+    return el;
+  }
+}
+const breakpointDot = new BreakpointDot();
+
+function breakpointGutter(onToggle: (line: number) => void) {
+  return gutter({
+    class: "cm-breakpoint-gutter",
+    markers(view) {
+      const lines = view.state.field(breakpointLinesField);
+      const builder = new RangeSetBuilder<GutterMarker>();
+      for (const lineNo of [...lines].sort((a, b) => a - b)) {
+        if (lineNo < 1 || lineNo > view.state.doc.lines) continue;
+        const line = view.state.doc.line(lineNo);
+        builder.add(line.from, line.from, breakpointDot);
+      }
+      return builder.finish();
+    },
+    domEventHandlers: {
+      mousedown(view, line) {
+        onToggle(view.state.doc.lineAt(line.from).number);
+        return true;
+      },
+    },
+  });
+}
+
 function loadLanguage(filename: string): Promise<LanguageSupport | null> {
   const i = filename.lastIndexOf(".");
   const e = i === -1 ? "" : filename.slice(i).toLowerCase();
@@ -196,6 +255,8 @@ export function CodeEditor({
   filename,
   jumpToLine,
   readOnly,
+  breakpointLines,
+  onToggleBreakpoint,
 }: {
   /** Initial content only — read once when the editor mounts (or when
    * `filename` changes, forcing a remount). Typing updates CodeMirror's
@@ -220,6 +281,11 @@ export function CodeEditor({
    * Defaults to false — every existing caller (FilesCard.tsx) keeps
    * editing exactly as before. */
   readOnly?: boolean;
+  /** Fase 6 (adoção de CDP) — linhas com breakpoint (1-indexed), fonte de
+   * verdade em `BrowserInspector.tsx`. Ambos ausentes (padrão) = sem
+   * gutter de breakpoint nenhum — `FilesCard.tsx` nunca passa isso. */
+  breakpointLines?: Set<number>;
+  onToggleBreakpoint?: (line: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -228,6 +294,8 @@ export function CodeEditor({
   // render would otherwise tear down and rebuild the whole editor).
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onToggleBreakpointRef = useRef(onToggleBreakpoint);
+  onToggleBreakpointRef.current = onToggleBreakpoint;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -249,6 +317,9 @@ export function CodeEditor({
           indentationMarkers({ hideFirstIndent: true }),
           syntaxHighlighting(highlightStyle, { fallback: true }),
           editorTheme,
+          ...(onToggleBreakpoint
+            ? [breakpointLinesField.init(() => breakpointLines ?? new Set()), breakpointGutter((line) => onToggleBreakpointRef.current?.(line))]
+            : []),
           keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
@@ -285,6 +356,14 @@ export function CodeEditor({
     // Deliberately just `filename` — see the `value` prop doc above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filename]);
+
+  // Sincroniza o gutter de breakpoint SEM remontar o editor (perderia
+  // scroll/cursor a cada toggle) — React continua a fonte de verdade,
+  // este efeito só reflete `breakpointLines` no field do CodeMirror.
+  useEffect(() => {
+    if (!viewRef.current || !breakpointLines) return;
+    viewRef.current.dispatch({ effects: setBreakpointLines.of(breakpointLines) });
+  }, [breakpointLines]);
 
   return <div className="code-editor" ref={containerRef} />;
 }
