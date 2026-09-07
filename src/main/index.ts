@@ -1385,6 +1385,10 @@ function createWindow() {
   // main process (`net.fetch`, sem CORS, sem passar pelo teto de 20k
   // chars do `evalJs`) — ver o doc comment dela em browser-registry.ts.
   ipcMain.handle("browser:fetch-source", (_e, id: string, url: string) => browserRegistry.fetchSource(id, url));
+  // DESIGN-BACKLOG.md §2.1 item 8 — aba Performance. `getProcessStats`
+  // (`app.getAppMetrics()`, sem CDP) — ver o doc comment dela em
+  // browser-registry.ts.
+  ipcMain.handle("browser:get-process-stats", (_e, id: string) => browserRegistry.getProcessStats(id));
   // Pendentes #188 — aba Application (metade local/session storage; a
   // metade de cookies já é `browser:get-cookies` acima, via
   // `session.cookies.get` — não duplicar a mesma leitura por dois

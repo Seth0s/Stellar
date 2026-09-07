@@ -26,7 +26,7 @@ const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.C
 type DomNode = { id: string; tag: string; attrs: Record<string, string>; children: DomNode[]; text: string };
 type SnapshotResult = { root: DomNode; truncated: boolean; nodeCount: number };
 type ConsoleLine = { level: string; message: string; at: number };
-type Tab = "elements" | "console" | "network" | "application" | "sources";
+type Tab = "elements" | "console" | "network" | "application" | "sources" | "performance";
 type SourceEntry = { url: string; kind: "document" | "script" | "stylesheet" };
 type NetworkLine = { method: string; url: string; status: number | null; error?: string; at: number };
 type Dock = "right" | "bottom" | "left";
@@ -659,6 +659,27 @@ export function BrowserInspector({
   const [sourceContent, setSourceContent] = useState<{ content: string; truncated: boolean; totalChars: number } | { error: string } | null>(null);
   const [loadingSourceContent, setLoadingSourceContent] = useState(false);
 
+  // Aba Performance (DESIGN-BACKLOG.md §2.1 item 8) — FPS ao vivo é
+  // medido inteiro no renderer (`window.browser.onFrame`, o MESMO evento
+  // que BrowserCard.tsx já escuta pra desenhar — múltiplos listeners no
+  // mesmo `ipcRenderer.on` convivem sem conflito nenhum), não precisa de
+  // instrumentação nova no main process. `frameTimestampsRef` acumula
+  // chegadas SEM disparar re-render a cada frame (até 60/s) — um
+  // `setInterval` de 1s lê o acumulado, calcula o fps daquele segundo e
+  // alimenta a "timeline" (janela deslizante, pro pequeno gráfico de
+  // barras). CPU/memória do processo (`getProcessStats`) já não dá pra
+  // medir aqui — exige `app.getAppMetrics()` no main process de verdade.
+  const frameTimestampsRef = useRef<number[]>([]);
+  const [liveFps, setLiveFps] = useState<number | null>(null);
+  const [fpsTimeline, setFpsTimeline] = useState<number[]>([]);
+  const [totalFrames, setTotalFrames] = useState(0);
+  const [processStats, setProcessStats] = useState<{ cpuPercent: number; memoryMB: number } | { error: string } | null>(null);
+  const [loadingProcessStats, setLoadingProcessStats] = useState(false);
+  // Contagem pro grid de estatísticas — busca própria, independente de
+  // `networkRows`/`consoleEntries` das outras abas (Performance pode ser
+  // a PRIMEIRA aba aberta, sem ninguém ter visitado Network ainda).
+  const [perfNetworkSummary, setPerfNetworkSummary] = useState<{ total: number; failed: number } | null>(null);
+
   async function refreshTree() {
     setLoadingTree(true);
     const snapshot = await evalJson<SnapshotResult>(id, SNAPSHOT_SCRIPT);
@@ -765,6 +786,56 @@ export function BrowserInspector({
       cancelled = true;
     };
   }, [id, selectedSourceUrl]);
+
+  async function refreshProcessStats() {
+    setLoadingProcessStats(true);
+    const [statsRes, networkRes] = await Promise.all([window.browser.getProcessStats(id), window.browser.getNetwork(id)]);
+    setProcessStats(statsRes.ok ? { cpuPercent: statsRes.cpuPercent, memoryMB: statsRes.memoryMB } : { error: statsRes.error });
+    if (networkRes.ok) {
+      setPerfNetworkSummary({
+        total: networkRes.requests.length,
+        failed: networkRes.requests.filter((r) => r.error !== undefined || r.status === null || r.status >= 400).length,
+      });
+    }
+    setLoadingProcessStats(false);
+  }
+
+  useEffect(() => {
+    if (tab === "performance") void refreshProcessStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, id]);
+
+  useEffect(() => {
+    if (tab !== "performance") return;
+    frameTimestampsRef.current = [];
+    let totalCount = 0;
+    setLiveFps(null);
+    setFpsTimeline([]);
+    setTotalFrames(0);
+    const offFrame = window.browser.onFrame((frameId) => {
+      if (frameId !== id) return;
+      frameTimestampsRef.current.push(Date.now());
+      totalCount++;
+    });
+    // A cada 1s: quantos frames chegaram no ÚLTIMO segundo (fps daquele
+    // segundo) — `filter` (não um contador zerado a cada tick) porque um
+    // frame pode chegar bem no limiar entre dois ticks; contar só o que
+    // está DENTRO da janela de 1000ms é mais estável que um contador que
+    // reseta exatamente no tick. `totalCount` é um contador monotônico
+    // separado, incrementado uma vez por frame de verdade — nunca deriva
+    // do array filtrado (que reconta o mesmo frame em ticks vizinhos).
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      frameTimestampsRef.current = frameTimestampsRef.current.filter((t) => now - t <= 1000);
+      setLiveFps(frameTimestampsRef.current.length);
+      setTotalFrames(totalCount);
+      setFpsTimeline((prev) => [...prev.slice(-29), frameTimestampsRef.current.length]);
+    }, 1000);
+    return () => {
+      offFrame();
+      window.clearInterval(interval);
+    };
+  }, [tab, id]);
 
   // Painel de detalhes (Styles/Computed) — refaz a busca sempre que a
   // seleção mudar. `selectedId` pode apontar pra um `data-stellar-el-id`
@@ -1101,6 +1172,9 @@ export function BrowserInspector({
         <button data-role="inspector-tab" data-tab="sources" data-active={tab === "sources" || undefined} onClick={() => setTab("sources")}>
           Sources
         </button>
+        <button data-role="inspector-tab" data-tab="performance" data-active={tab === "performance" || undefined} onClick={() => setTab("performance")}>
+          Performance
+        </button>
         <div className={styles.inspectorTabsSpacer} />
         {tab === "elements" && (
           <button title="Atualizar árvore" onClick={() => void refreshTree()}>
@@ -1114,6 +1188,11 @@ export function BrowserInspector({
         )}
         {tab === "sources" && (
           <button title="Atualizar lista de arquivos" onClick={() => void refreshSources()}>
+            <Icon name="reload" size={13} />
+          </button>
+        )}
+        {tab === "performance" && (
+          <button title="Atualizar CPU/memória" onClick={() => void refreshProcessStats()}>
             <Icon name="reload" size={13} />
           </button>
         )}
@@ -1445,6 +1524,67 @@ export function BrowserInspector({
                   </Suspense>
                 </>
               )}
+            </div>
+          </div>
+        )}
+        {tab === "performance" && (
+          <div className={styles.performance} data-role="inspector-performance">
+            {/* DESIGN-BACKLOG.md §2.1 item 8 — nota honesta permanente,
+                mesmo espírito do aviso de Event Listeners/Sources: sem
+                CDP, não tem profiling de verdade (call stacks, flame
+                graph, sample de JS/layout/paint isolados) — só o que dá
+                pra medir de fora: taxa de frame real (o mesmo sinal que
+                já pinta o canvas) e CPU/memória do processo offscreen
+                (`app.getAppMetrics()`, a mesma API do Task Manager). */}
+            <div className={styles.perfNotice} data-role="inspector-performance-notice">
+              Sem profiling de verdade (exigiria o protocolo do DevTools/CDP) — só métricas reais que dão pra medir de fora: taxa de frame ao vivo e
+              CPU/memória do processo.
+            </div>
+            <div className={styles.perfGrid} data-role="inspector-perf-grid">
+              <div className={styles.perfStat} data-role="inspector-perf-fps">
+                <div className={styles.perfStatLabel}>FPS ao vivo</div>
+                <div className={styles.perfStatValue}>{liveFps ?? "—"}</div>
+              </div>
+              <div className={styles.perfStat}>
+                <div className={styles.perfStatLabel}>Frames capturados</div>
+                <div className={styles.perfStatValue}>{totalFrames}</div>
+              </div>
+              <div className={styles.perfStat} data-role="inspector-perf-cpu">
+                <div className={styles.perfStatLabel}>CPU do processo</div>
+                <div className={styles.perfStatValue}>
+                  {loadingProcessStats ? "…" : !processStats ? "—" : "error" in processStats ? "—" : `${processStats.cpuPercent}%`}
+                </div>
+              </div>
+              <div className={styles.perfStat} data-role="inspector-perf-memory">
+                <div className={styles.perfStatLabel}>Memória do processo</div>
+                <div className={styles.perfStatValue}>
+                  {loadingProcessStats ? "…" : !processStats ? "—" : "error" in processStats ? "—" : `${processStats.memoryMB} MB`}
+                </div>
+              </div>
+              <div className={styles.perfStat}>
+                <div className={styles.perfStatLabel}>Console</div>
+                <div className={styles.perfStatValue}>
+                  {consoleEntries.filter((e) => e.level === "error").length} erro(s), {consoleEntries.filter((e) => e.level === "warning").length} aviso(s)
+                </div>
+              </div>
+              <div className={styles.perfStat}>
+                <div className={styles.perfStatLabel}>Network</div>
+                <div className={styles.perfStatValue}>
+                  {perfNetworkSummary ? `${perfNetworkSummary.total} requisição(ões), ${perfNetworkSummary.failed} falha(s)` : "—"}
+                </div>
+              </div>
+            </div>
+            <div className={styles.perfTimeline} data-role="inspector-perf-timeline">
+              <div className={styles.perfTimelineLabel}>FPS nos últimos {fpsTimeline.length}s</div>
+              <div className={styles.perfTimelineBars}>
+                {fpsTimeline.length === 0 ? (
+                  <div className={styles.inspectorEmpty}>Aguardando frames…</div>
+                ) : (
+                  fpsTimeline.map((v, i) => (
+                    <div key={i} className={styles.perfBar} data-role="inspector-perf-bar" data-fps={v} style={{ height: `${Math.min(100, (v / 60) * 100)}%` }} />
+                  ))
+                )}
+              </div>
             </div>
           </div>
         )}

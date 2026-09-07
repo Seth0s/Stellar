@@ -940,3 +940,94 @@
   font-family: var(--font-ui);
   font-size: 11px;
 }
+
+/* ---------------------------------------------------------- Performance */
+/* DESIGN-BACKLOG.md §2.1 item 8 — sem CDP, sem timeline real de
+   scripting/layout/paint separados; só grid de estatísticas (FPS ao
+   vivo, CPU/memória do processo, contagens já rastreadas em outras
+   abas) + um sparkline simples de barras do FPS. */
+
+.performance {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.perfNotice {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.perfGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.perfStat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.perfStatLabel {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-family: var(--font-ui);
+}
+
+.perfStatValue {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  margin-top: 3px;
+}
+
+.perfTimeline {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.perfTimelineLabel {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-family: var(--font-ui);
+  margin-bottom: 4px;
+}
+
+.perfTimelineBars {
+  flex: 1;
+  min-height: 60px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.perfBar {
+  flex: 1;
+  min-width: 2px;
+  background: var(--foam);
+  border-radius: 1px;
+  min-height: 2px;
+}
