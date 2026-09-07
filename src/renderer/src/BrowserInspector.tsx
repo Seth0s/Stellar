@@ -38,6 +38,52 @@ type CdpRawNode = {
   attributes?: string[];
 };
 type ConsoleLine = { level: string; message: string; at: number };
+/** CDP `Runtime.RemoteObject` — só os campos usados aqui pra formatar uma
+ * linha de console (não é um inspector de objeto completo, escopo cortado
+ * de propósito, mesmo espírito das outras fases desta adoção de CDP). */
+type CdpRemoteObject = { type: string; subtype?: string; value?: unknown; description?: string };
+/** Item 4.3 do backlog, achado ao vivo comparando com DevTools real
+ * (screenshot: o aviso nativo `%cElectron Security Warning...` do próprio
+ * Electron aparecia com o `%c` e a string de CSS como texto literal) —
+ * `webContents.on("console-message")` (browser-registry.ts) só entrega uma
+ * STRING JÁ ACHATADA (`details.message`), nunca os args estruturados que
+ * `console.log('%c...', style, ...)` realmente passa, então nunca houve
+ * como interpolar. `Runtime.consoleAPICalled` (CDP, domínio já habilitado
+ * no attach desde a Fase 0) entrega `args[]` de verdade — substituição
+ * printf-style simplificada (suficiente pro caso real: `%c`/`%s`/`%d`/
+ * `%i`/`%f`/`%o`/`%O`), sem um inspector de objeto completo (`%o`/`%O` só
+ * usa `description`, um resumo de uma linha — mesmo corte de escopo já
+ * usado nas outras fases). `%c` é consumido (a string de CSS não aparece)
+ * mas NÃO aplicado como estilo de verdade — este painel é só texto plano,
+ * sem rich-text; esconder a string de estilo já resolve o sintoma
+ * relatado (o aviso nativo do Electron vira texto legível normal). */
+function cdpArgToText(arg: CdpRemoteObject): string {
+  if (arg.type === "undefined") return "undefined";
+  if (arg.value !== undefined) return typeof arg.value === "string" ? arg.value : JSON.stringify(arg.value);
+  return arg.description ?? `[${arg.subtype ?? arg.type}]`;
+}
+function formatConsoleArgs(args: CdpRemoteObject[]): string {
+  if (args.length === 0) return "";
+  const [first, ...rest] = args;
+  if (first.type !== "string" || typeof first.value !== "string" || !/%[sdifoOcj]/.test(first.value)) {
+    return args.map(cdpArgToText).join(" ");
+  }
+  let argIdx = 0;
+  const substituted = first.value.replace(/%[sdifoOcj]/g, (spec) => {
+    const arg = rest[argIdx];
+    if (spec === "%c") {
+      argIdx++;
+      return "";
+    }
+    if (arg === undefined) return spec;
+    argIdx++;
+    if (spec === "%d" || spec === "%i") return String(Math.trunc(Number(arg.value))) || cdpArgToText(arg);
+    if (spec === "%f") return String(Number(arg.value));
+    return cdpArgToText(arg);
+  });
+  const leftover = rest.slice(argIdx).map(cdpArgToText);
+  return [substituted, ...leftover].join(" ").trim();
+}
 type Tab = "elements" | "console" | "network" | "application" | "sources" | "performance";
 type SourceEntry = { url: string; kind: "document" | "script" | "stylesheet" };
 /** Fase 4 (adoção de CDP) — a aba Network do Inspector passa a usar isto
@@ -774,6 +820,12 @@ export function BrowserInspector({
       }
       if (method === "Debugger.resumed") {
         setDebuggerPaused(false);
+        return;
+      }
+      if (method === "Runtime.consoleAPICalled") {
+        const p = params as { type: string; args: CdpRemoteObject[]; timestamp: number };
+        const level = p.type === "error" ? "error" : p.type === "warning" ? "warning" : p.type;
+        setConsoleEntries((prev) => [...prev.slice(-299), { level, message: formatConsoleArgs(p.args), at: p.timestamp }]);
       }
     });
     return () => {
@@ -1020,17 +1072,17 @@ export function BrowserInspector({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, cdpAttachResult]);
 
+  // Só o HISTÓRICO de antes do inspector abrir vem daqui (buffer do
+  // processo principal, `console-message` nativo do Electron — mensagem já
+  // achatada em string, sem `%c`/`%s` interpolado). Mensagens NOVAS depois
+  // do attach chegam via `Runtime.consoleAPICalled` (CDP, ver dispatcher
+  // `onCdpEvent` acima) — sem assinar `onConsoleMessage` aqui também, senão
+  // toda mensagem nova apareceria DUPLICADA (uma vez pelo IPC antigo, outra
+  // pelo evento CDP).
   useEffect(() => {
     void window.browser.getConsole(id).then((res) => {
       if (res.ok) setConsoleEntries(res.messages);
     });
-    const off = window.browser.onConsoleMessage((msgId, level, message) => {
-      if (msgId !== id) return;
-      setConsoleEntries((prev) => [...prev.slice(-299), { level, message, at: Date.now() }]);
-    });
-    return () => {
-      off();
-    };
   }, [id]);
 
   async function refreshStorage() {
@@ -1561,6 +1613,36 @@ export function BrowserInspector({
     if (!activeEmulation || !canvasEl) return;
     const rect = canvasEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
+    // Achado ao vivo (2026-09-07, "resize em Y agora não é possível, parece
+    // que o content do frame do Y está anexado ao card"): em zoom "Ajustar",
+    // assim que um eixo emulado cresce o bastante pra virar o eixo DOMINANTE
+    // do aspect-ratio (ex. altura >> largura), o `<canvas>` fica preso no
+    // teto de tamanho do container naquele eixo (rect.height == altura do
+    // wrap, sempre a mesma) enquanto o OUTRO eixo encolhe pra manter a
+    // proporção — `activeEmulation.height / rect.height` cresce JUNTO com a
+    // própria altura emulada (denominador travado no teto, numerador
+    // crescendo sem parar; por preservar a proporção, o mesmo valor sairia
+    // idêntico usando largura em vez de altura — não é uma diferença entre
+    // eixos, é o próprio fator ficando maior a cada vez que o container
+    // fica mais "letterboxed"). Um único gesto contínuo já não acelera (a
+    // escala trava no início dele, comentário abaixo) — mas soltar e pegar
+    // de novo pra continuar arrastando (um padrão de uso bem realista)
+    // recomeça CADA gesto novo já com esse fator inflado pelo gesto
+    // anterior, disparando um crescimento bem maior do que a MESMA
+    // distância de mouse daria num gesto só (confirmado ao vivo: 4 arrastes
+    // separados de 150px cada somam 844→2019; um arraste ÚNICO contínuo de
+    // 600px — a mesma distância total — soma só 844→1669). Fix: em vez do
+    // fator "eixo dominante" (que segue o pior caso, o mais distorcido),
+    // usa um fator ÚNICO baseado na ÁREA (`sqrt(áreaEmulada/áreaWrap)`) —
+    // cresce bem mais devagar conforme o frame vira uma tira fina, porque
+    // a raiz quadrada amortece o crescimento em vez de segui-lo linear.
+    // Sem constante mágica: é só a mesma relação emulado/container de
+    // sempre, só que medida pela área em vez de pelo pior eixo.
+    const wrapEl = canvasEl.parentElement;
+    const wrapRect = wrapEl?.getBoundingClientRect();
+    const wrapArea = wrapRect && wrapRect.width > 0 && wrapRect.height > 0 ? wrapRect.width * wrapRect.height : rect.width * rect.height;
+    const emulArea = activeEmulation.width * activeEmulation.height;
+    const scale = Math.sqrt(emulArea / wrapArea);
     frameResizeRef.current = {
       axis,
       startX: clientX,
@@ -1573,8 +1655,8 @@ export function BrowserInspector({
       // não um zoom), então travar a escala do começo do gesto é o que
       // dá um arraste previsível em vez de acelerar/desacelerar sozinho
       // conforme a caixa "contida" reencaixa.
-      scaleX: activeEmulation.width / rect.width,
-      scaleY: activeEmulation.height / rect.height,
+      scaleX: scale,
+      scaleY: scale,
     };
   }
   function onFrameResizePointerMove(e: React.PointerEvent) {

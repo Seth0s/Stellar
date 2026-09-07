@@ -6,8 +6,19 @@
  *     `:global()` nem hasheia -- mas os seletores DENTRO do `@container`
  *     continuam sendo classes locais normais do módulo. */
 
+/* Achado ao vivo (2026-09-07, pedido do usuário: "espero que essa
+   característica [o header não redimensionar] seja herdada pelo
+   componente card genérico") — o genérico (`.card-head` em cards.css) JÁ É
+   responsivo (`clamp(28px, 4.6cqw, 48px)`, via container query na largura
+   real do card); este override é quem opta por SAIR fora dele com uma
+   altura fixa, não o contrário. Fix: vira um `clamp()` também (mesmo teto
+   de 48px do genérico, mesma inclinação `4.6cqw`), só com o piso levantado
+   de 28 pra 36px — preserva a intenção original ("altura maior que o
+   padrão", a barra de endereço tem mais botões que um header comum:
+   voltar/avançar/recarregar/menu) só que agora ela também encolhe/cresce
+   com o card de verdade, em vez de ficar travada num valor só. */
 .browserCard :global(.card-head) {
-  height: 44px;
+  height: clamp(36px, 4.6cqw, 48px);
   padding: 0 10px;
   gap: 8px;
 }

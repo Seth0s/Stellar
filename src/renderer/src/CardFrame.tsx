@@ -484,6 +484,62 @@ export function CardFrame({
       ? `0 0 0 ${borderW ?? "1px"} var(--border), 0 ${Math.round(8 / zoom)}px ${Math.round(28 / zoom)}px rgba(0, 0, 0, 0.7)`
       : undefined;
 
+  // Achado ao vivo (2026-09-07, screenshot real a 20% de zoom): `.card-scale`
+  // (e por consequência `.card-clip`, 100%/100% dele) media a mesma largura/
+  // altura EXTERNA de `.card-frame` (`rect.w`/`rect.h`) sem descontar a
+  // borda real que `.card-base` desenha (`box-sizing:border-box`) — ficava
+  // maior que a content-box do frame por exatamente a espessura da borda,
+  // cobrindo a borda nos lados DIREITO/BAIXO (fundo opaco do `.card-clip`
+  // pintando por cima) e deixando só CIMA/ESQUERDA sem cobertura, onde a
+  // borda aparecia como uma sombra clara indevida. Imperceptível a zoom
+  // normal (borda de 1px quase sub-pixel); o próprio D2 acima (que ENGROSSA
+  // a borda pra até 3px abaixo de 90% zoom) foi o que tornou essa divergência
+  // sempre presente finalmente visível. Sem borda nenhuma (`baseStyle=false`,
+  // ex. StrokeCard) não há nada a descontar.
+  //
+  // Regressão achada na PRÓPRIA verificação deste fix (`smoke-browser-zoom-
+  // resolution.mjs`, 2026-09-07): a primeira versão deste fix encolhia
+  // `rect.w`/`rect.h` (as props de largura/altura de `.card-scale`, em
+  // unidades de MUNDO) — isso quebra o invariante "resolução real do
+  // navegador embutido não muda com o zoom do board", porque `rect.w`/
+  // `rect.h` é exatamente o que `BrowserCard.tsx`'s `ResizeObserver` mede
+  // pra decidir o tamanho real do `BrowserWindow` offscreen (`ResizeObserver`
+  // mede a CAIXA CSS/layout, não afetada por `transform` — mas MEDIDA
+  // afetada por uma mudança de tamanho de verdade, que é o que a versão
+  // antiga fazia). Fix: nunca tocar `rect.w`/`rect.h` (ficam exatamente
+  // como sempre foram, 100% decoupled do zoom) — a compensação de borda
+  // vira só um ajuste na TRANSFORM (`scale`), que é puramente visual e
+  // nunca aparece pra `ResizeObserver`/`getBoundingClientRect` de um jeito
+  // que mude o tamanho de MUNDO de nada. `transform-origin` de `.card-scale`
+  // é `0 0` (`cards.css`) — e o canto superior-esquerdo desse `0 0` já cai
+  // exatamente na content-box de `.card-frame` (o box model do browser já
+  // insere automaticamente um filho em fluxo normal depois da borda do pai,
+  // sem precisar de nenhum ajuste manual) — só falta encolher o lado
+  // DIREITO/BAIXO, que é a única sobra depois do `scale(zoom)` esticar
+  // até preencher a largura/altura EXTERNA (border-box) do frame.
+  //
+  // Restrito ao mesmo limiar de `borderW`/`cardShadow` acima (`zoom < 0.9`)
+  // por um motivo a mais descoberto SÓ agora, testando de novo depois do
+  // fix acima: acima desse limiar a borda é sempre 1px fixo (fallback
+  // CSS puro, sem D2 nenhum), overflow de exatos 1px sub-pixel, sempre
+  // foi assim e nunca foi visível/reportado (só o D2 engrossando a borda
+  // embaixo de 0.9 tornou isso visível) — mas COMPENSAR mesmo esse 1px
+  // sub-pixel em zoom normal (100%/201%, os dois usados pelos smoke tests
+  // deste navegador) reintroduzia um novo problema: `scaleX`/`scaleY`
+  // deixam de ser EXATAMENTE `zoom`, e código que lê `getBoundingClientRect`
+  // de algo dentro do card pra fazer conta de pixel (`BrowserInspector.tsx`'s
+  // `beginFrameResize`, que mede o wrap do device frame) passa a ver uma
+  // área ligeiramente menor que o esperado — o suficiente pra um
+  // arredondamento de 1-3px aparecer em `smoke-browser-inspector-frame-
+  // resize.mjs` (844→843, 3000→2997), que não existia antes. Abaixo de
+  // 0.9 (onde o D2 já MUDA várias outras coisas de qualquer forma — borda
+  // até 3× mais grossa, sombra de alto contraste) a superfície de teste é
+  // outra, sem essa regressão, e é onde o bug original (screenshot a 20%)
+  // foi reportado — então a compensação fica restrita a esse mesmo regime.
+  const borderPxScreen = baseStyle && zoom < 0.9 ? Math.min(3, Math.max(1, 1 / zoom)) : 0;
+  const scaleX = borderPxScreen > 0 && rect.w > 0 ? Math.max(0, zoom - borderPxScreen / rect.w) : zoom;
+  const scaleY = borderPxScreen > 0 && rect.h > 0 ? Math.max(0, zoom - borderPxScreen / rect.h) : zoom;
+
   return (
     <div
       className={frameClass}
@@ -539,7 +595,11 @@ export function CardFrame({
       {screenProjected ? (
         <div
           className="card-scale"
-          style={{ width: rect.w, height: rect.h, transform: `scale(${zoom})` }}
+          style={{
+            width: rect.w,
+            height: rect.h,
+            transform: `scale(${scaleX}, ${scaleY})`,
+          }}
         >
           {cardInner}
         </div>
