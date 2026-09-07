@@ -587,7 +587,7 @@ export function BrowserInspector({
    * desligado), pra ele desenhar o device-frame na proporção certa e
    * manter o mapeamento de clique correto (ver o doc comment de
    * `handleEmulationChange` em BrowserCard.tsx). */
-  onEmulationChange?: (dims: { width: number; height: number; zoom: "fit" | "1" | "0.75" | "0.5" } | null) => void;
+  onEmulationChange?: (dims: { width: number; height: number; zoom: "fit" | "1" | "0.75" | "0.5"; deviceScaleFactor: number } | null) => void;
   /** DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário (revista ao vivo
    * em 2026-09-07: o botão morava no address bar de BrowserCard.tsx;
    * pedido explícito de mover a ferramenta de device-frame pra DENTRO do
@@ -657,7 +657,27 @@ export function BrowserInspector({
   // acompanham qualquer resize (card, dock, o que for) por construção,
   // sem chance de divergir.
   const inspectorRootRef = useRef<HTMLDivElement>(null);
-  const [frameBox, setFrameBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  // Achado ao vivo (2026-09-07, screenshot do usuário: alças "presas",
+  // bem longe da borda real do frame depois de zoomar o BOARD, não o
+  // device toolbar): `frameBox` guardava `left/top/width/height` em
+  // pixels de TELA (`getBoundingClientRect()`, pós-transform), aplicados
+  // depois como estilo inline DENTRO do mesmo `.card-frame` que já leva
+  // `transform: scale(zoom)` (CardFrame.tsx) — um valor em px de tela
+  // capturado num zoom vira ERRADO assim que o zoom muda (a alça
+  // acabava escalada DUAS vezes: uma vez already-baked no px capturado,
+  // outra pelo próprio `transform` do ancestral) porque nada nesta
+  // medição reage a mudança de zoom do board (zoom é só um `transform`
+  // do ancestral, não muda o box LOCAL do canvas que o `ResizeObserver`
+  // observa — então nunca disparava de novo). Fix: guarda FRAÇÕES
+  // (0–1) do próprio `wrap` (`.browserCardBodyWrap`, o mesmo elemento
+  // `position:relative` que `.frameResizeOverlay` usa como containing
+  // block) em vez de pixels absolutos — a proporção entre canvas e wrap
+  // é invariante a qualquer escala UNIFORME de um ancestral comum
+  // (cancela exatamente, canvas e wrap escalam pelo MESMO fator), então
+  // convertida de volta pra `%` no JSX abaixo ela funciona em QUALQUER
+  // zoom de board sem precisar depender dele nas deps do efeito.
+  const [frameBox, setFrameBox] = useState<{ leftPct: number; topPct: number; widthPct: number; heightPct: number } | null>(null);
+  const frameCanvasElRef = useRef<HTMLElement | null>(null);
   const frameResizeRef = useRef<{ axis: "right" | "bottom" | "corner"; startX: number; startY: number; startW: number; startH: number; scaleX: number; scaleY: number } | null>(null);
 
   const [storageArea, setStorageArea] = useState<StorageArea>("local");
@@ -1032,7 +1052,11 @@ export function BrowserInspector({
   // de zoom de exibição, nunca por causa da identidade da própria função
   // (ver comentário do ref acima).
   useEffect(() => {
-    onEmulationChangeRef.current?.(activeEmulation ? { width: activeEmulation.width, height: activeEmulation.height, zoom: frameZoom } : null);
+    onEmulationChangeRef.current?.(
+      activeEmulation
+        ? { width: activeEmulation.width, height: activeEmulation.height, zoom: frameZoom, deviceScaleFactor: activeEmulation.deviceScaleFactor }
+        : null,
+    );
   }, [activeEmulation, frameZoom]);
 
   // Desliga a emulação de dispositivo se o card fechar o inspector (ou
@@ -1049,6 +1073,23 @@ export function BrowserInspector({
     },
     [id],
   );
+
+  // Pedido ao vivo do usuário (screenshot real): abrir a barra de
+  // dispositivo só REVELAVA os controles, com o dropdown em "Nenhum" —
+  // exigia escolher um preset manualmente antes de ver qualquer device-
+  // frame de verdade. Um DevTools real ativa um device (o último usado,
+  // ou um default) no mesmo clique que abre a barra. Aplica o primeiro
+  // preset (Mobile) na transição false→true, só quando não há emulação
+  // ativa ainda — não pisa em cima de uma emulação que o usuário já tinha
+  // ligado antes de esconder a barra (ver smoke-browser-inspector-device-
+  // toolbar-toggle.mjs, "esconder controles ≠ 'Parar emulação'": reabrir a
+  // barra com uma emulação já ativa não deve trocar o preset escolhido).
+  useEffect(() => {
+    if (!deviceToolbarOpen || activeEmulationRef.current) return;
+    const preset = RESPONSIVE_PRESETS[0];
+    applyEmulation(preset.width, preset.height, preset.deviceScaleFactor, preset.mobile, preset.label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceToolbarOpen]);
 
   // Alça de resize — um único listener de ponteiro no CONTAINER externo
   // (`onPointerMove`/`onPointerUp` no próprio `.inspector`, ver JSX)
@@ -1120,24 +1161,38 @@ export function BrowserInspector({
     const wrap = inspectorRootRef.current?.parentElement;
     const canvas = wrap?.querySelector<HTMLElement>('[data-role="browser-body"]');
     if (!wrap || !canvas) return;
+    frameCanvasElRef.current = canvas;
     function measure() {
       const wrapRect = wrap!.getBoundingClientRect();
       const canvasRect = canvas!.getBoundingClientRect();
+      if (wrapRect.width <= 0 || wrapRect.height <= 0) return;
       setFrameBox({
-        left: canvasRect.left - wrapRect.left,
-        top: canvasRect.top - wrapRect.top,
-        width: canvasRect.width,
-        height: canvasRect.height,
+        leftPct: (canvasRect.left - wrapRect.left) / wrapRect.width,
+        topPct: (canvasRect.top - wrapRect.top) / wrapRect.height,
+        widthPct: canvasRect.width / wrapRect.width,
+        heightPct: canvasRect.height / wrapRect.height,
       });
     }
     const ro = new ResizeObserver(measure);
     ro.observe(canvas);
+    ro.observe(wrap);
     measure();
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      frameCanvasElRef.current = null;
+    };
   }, [activeEmulation, frameZoom]);
 
   function beginFrameResize(axis: "right" | "bottom" | "corner", clientX: number, clientY: number) {
-    if (!activeEmulation || !frameBox) return;
+    // Lê a caixa do canvas FRESCA (não de `frameBox`, que agora guarda
+    // frações — precisamos do tamanho de TELA real deste instante pra
+    // converter delta de ponteiro, que também chega em px de tela) —
+    // mesmo espírito de "nunca uma segunda fonte de verdade", só que
+    // aqui precisa ser em pixels mesmo, então lê direto do DOM.
+    const canvasEl = frameCanvasElRef.current;
+    if (!activeEmulation || !canvasEl) return;
+    const rect = canvasEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
     frameResizeRef.current = {
       axis,
       startX: clientX,
@@ -1150,8 +1205,8 @@ export function BrowserInspector({
       // não um zoom), então travar a escala do começo do gesto é o que
       // dá um arraste previsível em vez de acelerar/desacelerar sozinho
       // conforme a caixa "contida" reencaixa.
-      scaleX: activeEmulation.width / frameBox.width,
-      scaleY: activeEmulation.height / frameBox.height,
+      scaleX: activeEmulation.width / rect.width,
+      scaleY: activeEmulation.height / rect.height,
     };
   }
   function onFrameResizePointerMove(e: React.PointerEvent) {
@@ -1733,7 +1788,7 @@ export function BrowserInspector({
         <div
           className={styles.frameResizeRight}
           data-role="inspector-frame-resize-right"
-          style={{ left: frameBox.left + frameBox.width - 3, top: frameBox.top, height: frameBox.height }}
+          style={{ left: `calc(${(frameBox.leftPct + frameBox.widthPct) * 100}% - 3px)`, top: `${frameBox.topPct * 100}%`, height: `${frameBox.heightPct * 100}%` }}
           onPointerDown={(e) => {
             e.stopPropagation();
             e.currentTarget.setPointerCapture(e.pointerId);
@@ -1743,7 +1798,7 @@ export function BrowserInspector({
         <div
           className={styles.frameResizeBottom}
           data-role="inspector-frame-resize-bottom"
-          style={{ left: frameBox.left, top: frameBox.top + frameBox.height - 3, width: frameBox.width }}
+          style={{ left: `${frameBox.leftPct * 100}%`, top: `calc(${(frameBox.topPct + frameBox.heightPct) * 100}% - 3px)`, width: `${frameBox.widthPct * 100}%` }}
           onPointerDown={(e) => {
             e.stopPropagation();
             e.currentTarget.setPointerCapture(e.pointerId);
@@ -1753,7 +1808,10 @@ export function BrowserInspector({
         <div
           className={styles.frameResizeCorner}
           data-role="inspector-frame-resize-corner"
-          style={{ left: frameBox.left + frameBox.width - 10, top: frameBox.top + frameBox.height - 10 }}
+          style={{
+            left: `calc(${(frameBox.leftPct + frameBox.widthPct) * 100}% - 10px)`,
+            top: `calc(${(frameBox.topPct + frameBox.heightPct) * 100}% - 10px)`,
+          }}
           onPointerDown={(e) => {
             e.stopPropagation();
             e.currentTarget.setPointerCapture(e.pointerId);

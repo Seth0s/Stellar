@@ -118,23 +118,22 @@ try {
   await page.click(inspectorBtn.x, inspectorBtn.y);
   await new Promise((r) => setTimeout(r, 500));
 
+  check("sem o device toolbar aberto, nenhuma alça de resize do frame aparece (nem emulação ativa ainda)", await page.evalJs(`!!document.querySelector('[data-role="inspector-frame-resize-overlay"]')`), false);
+
+  // DESIGN-BACKLOG.md §2.1 (revisto ao vivo 2026-09-07, pedido do
+  // usuário: "foi preciso clicar em algum preset em vez de já aplicar os
+  // frames") — abrir a barra de dispositivo agora aplica o preset Mobile
+  // AUTOMATICAMENTE (não fica mais parado em "Nenhum" esperando escolha
+  // manual), então as alças já aparecem no mesmo clique que abre a barra.
   const deviceToggle = await centerOf(page, '[data-role="inspector-device-toolbar-toggle"]');
   await page.click(deviceToggle.x, deviceToggle.y);
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 400));
 
-  check("sem emulação ativa, nenhuma alça de resize do frame aparece", await page.evalJs(`!!document.querySelector('[data-role="inspector-frame-resize-overlay"]')`), false);
-
-  await page.evalJs(`
-    (() => {
-      const select = document.querySelector('[data-role="inspector-device-select"]');
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-      setter.call(select, 'Mobile (390×844)');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    })()
-  `);
-  await new Promise((r) => setTimeout(r, 600));
-
-  check("com emulação ativa e zoom 'Ajustar' (padrão), as 3 alças aparecem", await page.evalJs(`!!document.querySelector('[data-role="inspector-frame-resize-overlay"]') && !!document.querySelector('[data-role="inspector-frame-resize-right"]') && !!document.querySelector('[data-role="inspector-frame-resize-bottom"]') && !!document.querySelector('[data-role="inspector-frame-resize-corner"]')`), true);
+  check(
+    "abrir a barra de dispositivo JÁ aplica emulação Mobile sozinho e as 3 alças aparecem (sem precisar escolher preset manualmente)",
+    await page.evalJs(`!!document.querySelector('[data-role="inspector-frame-resize-overlay"]') && !!document.querySelector('[data-role="inspector-frame-resize-right"]') && !!document.querySelector('[data-role="inspector-frame-resize-bottom"]') && !!document.querySelector('[data-role="inspector-frame-resize-corner"]')`),
+    true,
+  );
 
   const before = await readEmulatedSize(page);
   check("tamanho inicial é o do preset Mobile (390×844) antes de qualquer arraste", before, (v) => v.width === 390 && v.height === 844);

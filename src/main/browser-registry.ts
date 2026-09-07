@@ -473,8 +473,25 @@ export function createBrowserRegistry(callbacks: {
       // preset) sem zoom nenhum compensando.
       return;
     }
-    wc.setZoomFactor(1);
-    entry.win.setContentSize(params.width, params.height);
+    // Achado ao vivo (2026-09-07, pedido explícito do usuário: "espero que
+    // o size de resolução seja de verdade"): até aqui `deviceScaleFactor`
+    // era só um número decorativo no dropdown de DPR — `setContentSize`
+    // usava `params.width/height` puros, então um preset "Mobile" (DPR 3)
+    // e um "Desktop" (DPR 1) do MESMO tamanho lógico rasterizavam
+    // IDENTICOS, sem nenhum ganho real de nitidez. Mesma técnica já usada
+    // por `resize()` abaixo (supersample fixo pra navegação normal):
+    // `setZoomFactor(factor)` + `setContentSize(w×factor, h×factor)` juntos
+    // — nunca só um dos dois (bug 1 do doc comment de `resize`) — faz a
+    // página ACREDITAR que seu viewport CSS continua largura/altura lógica
+    // (zoom cancela o "mais conteúdo cabe"), enquanto o paint buffer real
+    // fica `deviceScaleFactor`× maior, exatamente o que um DPR de
+    // dispositivo real significa. Sem cap extra (BROWSER_MAX_DENSITY é
+    // sobre supersample AUTOMÁTICO de navegação comum, não sobre um DPR de
+    // preset escolhido explicitamente pelo usuário; o próprio seletor já
+    // limita a 1x/2x/3x).
+    const factor = Math.max(1, params.deviceScaleFactor);
+    wc.setZoomFactor(factor);
+    entry.win.setContentSize(Math.max(1, Math.round(params.width * factor)), Math.max(1, Math.round(params.height * factor)));
   }
 
   // Trilha A do navegador (SCREEN_SPACE_PROJECTION_PLAN.md §0.3's "Trilha

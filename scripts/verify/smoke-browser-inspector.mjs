@@ -163,32 +163,44 @@ try {
     await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`),
     false,
   );
+  const widthBeforeToolbar = JSON.parse(
+    await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),
+  );
+
   const deviceToggle = await centerOf(page, '[data-role="inspector-device-toolbar-toggle"]');
   await page.click(deviceToggle.x, deviceToggle.y);
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 500));
   check(
     "clicar no ícone do inspector revela a barra de dispositivo",
     await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`),
     true,
   );
 
-  const widthBefore = JSON.parse(
+  // DESIGN-BACKLOG.md §2.1 (revisto ao vivo 2026-09-07, pedido do
+  // usuário: "foi preciso clicar em algum preset em vez de já aplicar os
+  // frames") — abrir a barra já aplica o preset Mobile sozinho, sem
+  // exigir escolha manual no dropdown.
+  const widthAfterOpen = JSON.parse(
     await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),
   );
+  check("abrir a barra de dispositivo JÁ aplica o preset Mobile sozinho (innerWidth REAL vira 390 sem escolher nada)", widthAfterOpen.result, "390");
+  check("...e era diferente de 390 antes de abrir a barra", widthBeforeToolbar.result !== "390", true);
+
+  // Trocar pra um preset DIFERENTE ainda deve funcionar via o dropdown
+  // normalmente (cobertura da seleção manual, não só do auto-apply).
   await page.evalJs(`
     (() => {
       const select = document.querySelector('[data-role="inspector-device-select"]');
       const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-      setter.call(select, 'Mobile (390×844)');
+      setter.call(select, 'Tablet (768×1024)');
       select.dispatchEvent(new Event('change', { bubbles: true }));
     })()
   `);
   await new Promise((r) => setTimeout(r, 500));
-  const widthAfter = JSON.parse(
+  const widthAfterTablet = JSON.parse(
     await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),
   );
-  check("preset 'Mobile' muda o innerWidth REAL da página pra 390 (emulação de verdade, não resize do card)", widthAfter.result, "390");
-  check("...e era diferente de 390 antes de ativar o preset", widthBefore.result !== "390", true);
+  check("trocar pro preset 'Tablet' pelo dropdown muda o innerWidth REAL pra 768", widthAfterTablet.result, "768");
 
   // Achado ao vivo (screenshot do usuário): com emulação ativa (o botão
   // "Parar emulação" aparece, deixando a barra mais cheia) e o painel na
@@ -236,7 +248,7 @@ try {
   const widthAfterClose = JSON.parse(
     await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),
   );
-  check("fechar o inspector desliga a emulação de dispositivo sozinho", widthAfterClose.result !== "390", true);
+  check("fechar o inspector desliga a emulação de dispositivo sozinho", widthAfterClose.result !== "768", true);
   check("o drawer some do DOM depois de fechado", await page.evalJs(`!document.querySelector('[data-role="browser-inspector"]')`), true);
 
   page.close();
