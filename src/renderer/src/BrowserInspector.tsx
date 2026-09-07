@@ -213,16 +213,6 @@ function findNodeById(node: DomNode, nodeId: number): DomNode | null {
   return null;
 }
 
-/** Bridge pro elemento selecionado — `DOM.setAttributeValue` marca o
- * elemento de VERDADE via comando CDP (sem executar JS na página), pra
- * Styles/Event Listeners (ainda `evalJs`-based até as próprias fases,
- * ver DESIGN-BACKLOG.md §2.1) continuarem achando o elemento certo por
- * `document.querySelector('[data-stellar-el-id="…"]')`, exatamente como
- * antes — só quem escreve o atributo mudou. */
-function tagSelectedNode(cardId: string, nodeId: number) {
-  void window.browser.sendCdp(cardId, "DOM.setAttributeValue", { nodeId, name: "data-stellar-el-id", value: String(nodeId) });
-}
-
 /** `Overlay.highlightNode`/`Overlay.hideHighlight` substituem a injeção
  * de `<style id="stellar-highlight-style">` + atributo
  * `data-stellar-highlighted` — o overlay pinta FORA do DOM/CSSOM da
@@ -329,44 +319,42 @@ async function fetchElementStyles(cardId: string, nodeId: number, styleSheetLabe
   return { inline, matched, computed, box };
 }
 
-// Event Listeners (DESIGN-BACKLOG.md §2.1 item 6) — sem `webContents.
-// debugger`/CDP (decisão explícita deste projeto, ver os doc comments
-// acima de `openDevTools`/`setDeviceEmulation` em browser-registry.ts),
-// não existe jeito de enumerar listeners registrados via
-// `addEventListener` de FORA da página depois do fato — isso é
-// exatamente o que a DevTools real usa o protocolo do V8 Inspector pra
-// fazer, e é a razão de este projeto ter escolhido não depender de CDP
-// em primeiro lugar. O que ESTE script consegue ver honestamente, só com
-// `evalJs` (mesmo mecanismo de todo o resto do inspector): as
-// propriedades IDL `on<evento>` do elemento — cobre handlers via atributo
-// HTML (`onclick="..."`, o navegador compila isso na mesma propriedade)
-// E via atribuição direta (`el.onclick = fn`), mas NUNCA
-// `addEventListener` puro (a forma mais comum em código moderno,
-// inclusive frameworks como React). A UI (`ListenersPanel` abaixo) deixa
-// esse limite explícito — mostrar uma lista vazia sem essa ressalva
-// enganaria o usuário a achar que o elemento não tem NENHUM listener.
-const LISTENER_EVENTS = [
-  "click", "dblclick", "mousedown", "mouseup", "mouseenter", "mouseleave", "mouseover", "mouseout", "mousemove", "contextmenu",
-  "keydown", "keyup", "keypress",
-  "input", "change", "submit", "reset", "focus", "blur", "focusin", "focusout",
-  "dragstart", "dragend", "dragover", "dragenter", "dragleave", "drop",
-  "touchstart", "touchend", "touchmove", "touchcancel",
-  "pointerdown", "pointerup", "pointermove", "pointerenter", "pointerleave",
-  "wheel", "scroll", "load", "error", "animationend", "transitionend", "toggle",
-];
-
-function elementListenersScript(elId: string | number): string {
-  return `
-(() => {
-  const el = document.querySelector('[data-stellar-el-id="${elId}"]');
-  if (!el) return null;
-  const found = [];
-  for (const event of ${JSON.stringify(LISTENER_EVENTS)}) {
-    if (typeof el["on" + event] === "function") found.push({ event });
+/** DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 3) — a lacuna ABSOLUTA que
+ * as fases anteriores não fechavam: sem CDP não existe jeito de
+ * enumerar listeners registrados via `addEventListener` de FORA da
+ * página depois do fato (só dava pra ver as propriedades IDL `on<evento>`
+ * — cobria `onclick="..."` no atributo HTML e `el.onclick = fn`, mas
+ * NUNCA `addEventListener`, a forma mais comum em código moderno,
+ * inclusive todo framework como React). `DOMDebugger.getEventListeners`
+ * resolve isso de verdade, mas pede um `objectId` (handle de objeto
+ * remoto do Runtime), não um `nodeId` — bridge de duas chamadas:
+ * `DOM.resolveNode({nodeId})` devolve `{object:{objectId}}`, então
+ * `DOMDebugger.getEventListeners({objectId})` devolve os listeners reais
+ * (tipo capturado é o `type` de cada entrada — "click", "keydown" etc.,
+ * dedup por tipo já que o mesmo evento pode ter N handlers empilhados).
+ * `Runtime.releaseObject` libera o handle remoto depois de ler — sem
+ * isso cada seleção deixaria um objeto pendurado na página até a sessão
+ * CDP inteira desanexar. */
+async function fetchElementListeners(cardId: string, nodeId: number): Promise<ListenerEntry[] | null> {
+  const resolved = await window.browser.sendCdp(cardId, "DOM.resolveNode", { nodeId });
+  if (!resolved.ok) return null;
+  const objectId = (resolved.result as { object?: { objectId?: string } }).object?.objectId;
+  if (!objectId) return null;
+  try {
+    const listeners = await window.browser.sendCdp(cardId, "DOMDebugger.getEventListeners", { objectId });
+    if (!listeners.ok) return null;
+    const raw = (listeners.result as { listeners: { type: string }[] }).listeners;
+    const seen = new Set<string>();
+    const out: ListenerEntry[] = [];
+    for (const l of raw) {
+      if (seen.has(l.type)) continue;
+      seen.add(l.type);
+      out.push({ event: l.type });
+    }
+    return out;
+  } finally {
+    void window.browser.sendCdp(cardId, "Runtime.releaseObject", { objectId });
   }
-  return found;
-})()
-`;
 }
 
 // Aba Sources (DESIGN-BACKLOG.md §2.1 item 7) — só a LISTA de URLs vem
@@ -579,10 +567,6 @@ function ComputedPanel({ es, filter, onFilterChange }: { es: ElementStyles; filt
 function ListenersPanel({ entries }: { entries: ListenerEntry[] }) {
   return (
     <>
-      <div className={styles.listenersNotice} data-role="inspector-listeners-notice">
-        Só mostra handlers via atributo HTML (<code>onclick=&quot;…&quot;</code>) ou atribuição direta (<code>el.onclick = fn</code>) — listeners
-        registrados via <code>addEventListener</code> exigiriam o protocolo do DevTools (CDP), que este inspector não usa.
-      </div>
       {entries.length === 0 ? (
         <div className={styles.ruleEmpty}>Nenhum handler desse tipo neste elemento.</div>
       ) : (
@@ -1052,9 +1036,9 @@ export function BrowserInspector({
   }, [tab, id, selectedId]);
 
   // Mesma ideia do efeito de Styles/Computed acima, mas pra Event
-  // Listeners — busca separada (não a mesma chamada de `evalJs`) porque
-  // `elementListenersScript` é um instrumento independente, não uma
-  // ampliação de `elementStylesScript`.
+  // Listeners — busca separada (`fetchElementListeners`, bridge
+  // `DOM.resolveNode`+`DOMDebugger.getEventListeners`) porque é um
+  // domínio CDP independente do `CSS` usado por Styles/Computed.
   useEffect(() => {
     if (tab !== "elements" || !selectedId) {
       setElementListeners(null);
@@ -1062,7 +1046,7 @@ export function BrowserInspector({
     }
     let cancelled = false;
     setLoadingListeners(true);
-    void evalJson<ListenerEntry[]>(id, elementListenersScript(selectedId)).then((res) => {
+    void fetchElementListeners(id, selectedId).then((res) => {
       if (cancelled) return;
       setElementListeners(res);
       setLoadingListeners(false);
@@ -1080,7 +1064,6 @@ export function BrowserInspector({
 
   function selectNode(nodeId: number) {
     setSelectedId(nodeId);
-    tagSelectedNode(id, nodeId);
     highlightNode(id, nodeId);
   }
 

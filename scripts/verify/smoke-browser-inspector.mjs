@@ -14,7 +14,7 @@ const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-inspector-${CDP_P
 
 const FIXTURE_HTML = `<!doctype html><html><body style="margin:0">
   <h1 id="title">Fixture da prova</h1>
-  <button id="btn">clique aqui</button>
+  <button id="btn" style="outline-color: rgb(11, 22, 33)">clique aqui</button>
 </body></html>`;
 const httpPort = await pickFreePort();
 const server = createServer((_req, res) => {
@@ -123,18 +123,21 @@ try {
   if (btnNode) {
     await page.click(btnNode.x, btnNode.y);
     await new Promise((r) => setTimeout(r, 400));
-    // DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 1) trocou o destaque por
-    // `Overlay.highlightNode` — pinta FORA do DOM/CSSOM da página (não é
-    // mais um atributo `data-stellar-highlighted` observável via
-    // `document.querySelector`, estritamente melhor). O sinal observável
-    // que sobra é a ponte `data-stellar-el-id` que `DOM.setAttributeValue`
-    // grava no elemento real selecionado (usada pelas abas Styles/
-    // Listeners, ainda no evalJs até suas próprias fases) — confirma que a
-    // seleção de fato identificou e marcou o elemento CERTO na página real.
-    const bridged = JSON.parse(
-      await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "document.querySelector('#btn')?.hasAttribute('data-stellar-el-id') ?? false").then((r) => JSON.stringify(r))`),
-    );
-    check("clicar no nó da árvore seleciona o elemento DE VERDADE na página embutida (bridge data-stellar-el-id)", bridged.ok && bridged.result === "true", true);
+    // DESIGN-BACKLOG.md §2.1 (adoção de CDP) trocou o destaque por
+    // `Overlay.highlightNode` (Fase 1) — pinta FORA do DOM/CSSOM da página
+    // (não é mais um atributo observável via `document.querySelector`,
+    // estritamente melhor). A ponte `data-stellar-el-id` que existia como
+    // sinal observável de reposição foi removida de vez na Fase 2/3 (Styles
+    // e Listeners migraram pra usar o `nodeId` do CDP direto, sem
+    // atributo nenhum) — o sinal que sobra e prova que a seleção identificou
+    // o elemento CERTO na página real é o próprio painel Styles refletindo
+    // o `outline-color` único da fixture (`rgb(11, 22, 33)`, não uma cor
+    // que qualquer outro elemento da página teria).
+    const stylesTab = await centerOf(page, '[data-role="inspector-subtab"][data-sub="styles"]');
+    await page.click(stylesTab.x, stylesTab.y);
+    await new Promise((r) => setTimeout(r, 300));
+    const stylesText = await page.evalJs(`document.querySelector('[data-role="inspector-subpanel"]')?.textContent ?? ""`);
+    check("clicar no nó da árvore seleciona o elemento DE VERDADE na página embutida (Styles mostra o outline-color único do #btn)", stylesText.includes("rgb(11, 22, 33)"), true);
   }
 
   // --- Console ---
