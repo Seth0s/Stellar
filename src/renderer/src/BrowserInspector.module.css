@@ -1083,6 +1083,36 @@
   min-height: 2px;
 }
 
+/* DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 5) — profiling de CPU real. */
+.perfProfiler {
+  flex: none;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.perfProfiler button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 12px;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.perfProfiler button[data-active] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.perfProfileSummary {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
 /* --------------------------------------- Device-frame resize handles */
 /* DESIGN-BACKLOG.md §2.1 item 3, sub-item pendente — arrastar as bordas
    do device-frame emulado (visto no protótipo como `.resize-edge`),
