@@ -883,23 +883,6 @@ function BrowserCardInner({
             <Icon name="favorite" size={12} />
           </button>
           <button
-            className={styles.browserCardDesignBtn}
-            data-role="browser-device-toolbar-toggle"
-            data-active={deviceToolbarOpen || undefined}
-            title={deviceToolbarOpen ? "Ocultar barra de dispositivo" : "Mostrar barra de dispositivo (modo responsivo)"}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => {
-              if (!inspectorOpen) {
-                inspectorRequestIdRef.current++;
-                setInspectorFocusPoint(null);
-                setInspectorOpen(true);
-              }
-              setDeviceToolbarOpen((v) => !v);
-            }}
-          >
-            <Icon name="viewportMobile" size={12} />
-          </button>
-          <button
             ref={designBtnRef}
             className={styles.browserCardDesignBtn}
             data-role="browser-design-mode-btn"
@@ -975,6 +958,7 @@ function BrowserCardInner({
             onEmulationChange={handleEmulationChange}
             onDockChange={(dock, size) => setDockInfo({ dock, size })}
             deviceToolbarOpen={deviceToolbarOpen}
+            onToggleDeviceToolbar={() => setDeviceToolbarOpen((v) => !v)}
             onClose={() => setInspectorOpen(false)}
           />
         )}

@@ -163,11 +163,11 @@ try {
     await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`),
     false,
   );
-  const deviceToggle = await centerOf(page, '[data-role="browser-device-toolbar-toggle"]');
+  const deviceToggle = await centerOf(page, '[data-role="inspector-device-toolbar-toggle"]');
   await page.click(deviceToggle.x, deviceToggle.y);
   await new Promise((r) => setTimeout(r, 300));
   check(
-    "clicar no toggle do address bar revela a barra de dispositivo",
+    "clicar no ícone do inspector revela a barra de dispositivo",
     await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`),
     true,
   );
