@@ -153,24 +153,25 @@ try {
   );
   check("console eval real: '21 * 2' produz um resultado com 42", consoleResult.some((l) => l.level === "result" && l.text.includes("42")), true);
 
-  // --- Responsivo ---
-  const respTab = await centerOf(page, '[data-role="inspector-tab"][data-tab="responsive"]');
-  await page.click(respTab.x, respTab.y);
-  await new Promise((r) => setTimeout(r, 200));
-
+  // --- Device toolbar (não é mais uma aba — pedido direto do usuário,
+  // "e não tab", sempre visível acima das abas igual o device toolbar
+  // real do Chrome) ---
   const widthBefore = JSON.parse(
     await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),
   );
-  const mobilePreset = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const b = [...document.querySelectorAll('[data-role="inspector-responsive-preset"]')].find((x) => x.getAttribute('data-label').includes('Mobile'));
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
-      })()
-    `),
+  check(
+    "a barra de dispositivo aparece SEM precisar clicar em aba nenhuma (sempre visível)",
+    await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`),
+    true,
   );
-  await page.click(mobilePreset.x, mobilePreset.y);
+  await page.evalJs(`
+    (() => {
+      const select = document.querySelector('[data-role="inspector-device-select"]');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+      setter.call(select, 'Mobile (390×844)');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()
+  `);
   await new Promise((r) => setTimeout(r, 500));
   const widthAfter = JSON.parse(
     await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),

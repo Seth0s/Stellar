@@ -529,90 +529,102 @@
 
 /* ---------------------------------------------------------- Responsive */
 
-.responsive {
-  padding: 10px;
+/* Achado ao vivo (screenshot do usuário comparando com o device toolbar
+   real do Chrome): a barra de dispositivo vivia escondida atrás de uma
+   aba ("Responsivo") que só aparecia com clique — no real ela fica
+   SEMPRE visível, acima das outras abas. `.deviceToolbar` (linha 1:
+   seletor de dispositivo + W×H + girar + DPR + parar) e `.widthRulerBar`
+   (linha 2: atalhos de largura) substituem o antigo conteúdo da aba —
+   renderizados incondicionalmente no JSX agora, não mais atrás de
+   `tab === "responsive"`. */
+.deviceToolbar {
+  flex: none;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  background: color-mix(in srgb, var(--foam) 8%, var(--panel));
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
 }
 
-.responsiveHint {
+.deviceLabel {
   color: var(--muted);
-  margin: 0 0 4px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
 }
 
-.responsive button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+.deviceToolbar select {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
   color: var(--text);
-  padding: 8px 10px;
-  cursor: pointer;
-  text-align: left;
-}
-
-.responsive button[data-active] {
-  border-color: var(--foam);
-  color: var(--foam);
-}
-
-.customSize {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.customSizeRow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.customSizeRow input {
-  width: 70px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 8px;
+  border-radius: 5px;
+  height: 24px;
+  padding: 0 6px;
+}
+
+.deviceDim {
+  width: 56px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  height: 24px;
+  padding: 0 6px;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11.5px;
+  text-align: center;
 }
 
-.customSizeRow span {
+.deviceX {
   color: var(--muted);
 }
 
-.customSizeRow button {
+.deviceToolbar button {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 5px;
   color: var(--text);
   cursor: pointer;
-  padding: 5px 10px;
-  font-size: 12px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  display: flex;
+  align-items: center;
 }
 
-.customSizeRow button:hover {
+.deviceToolbar button:hover {
   border-color: var(--foam);
   color: var(--foam);
+}
+
+.deviceToolbarSpacer {
+  flex: 1;
 }
 
 /* Ruler de presets de largura — mesma "linha horizontal" de atalhos que
    o usuário apontou no device toolbar real do Chrome (print ao vivo). */
-.widthRuler {
+.widthRulerBar {
+  flex: none;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
 }
 
-.widthRuler button {
+.widthRulerBar::-webkit-scrollbar {
+  display: none;
+}
+
+.widthRulerBar button {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 20px;
@@ -621,21 +633,27 @@
   padding: 3px 9px;
   font-size: 10.5px;
   font-family: var(--font-mono);
+  flex-shrink: 0;
 }
 
-.widthRuler button:hover {
+.widthRulerBar button:hover {
   color: var(--text);
   border-color: var(--foam);
 }
 
+.widthRulerBar button[data-active] {
+  color: var(--foam);
+  border-color: var(--foam);
+}
+
 .stopEmulation {
-  align-self: flex-start;
   background: none;
   border: 1px solid var(--danger);
   border-radius: 6px;
   color: var(--danger);
   cursor: pointer;
-  padding: 5px 10px;
+  padding: 0 10px;
+  height: 24px;
   font-size: 11.5px;
 }
 
