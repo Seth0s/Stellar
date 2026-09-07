@@ -501,6 +501,11 @@ const browser = {
     id: string,
     params: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | null,
   ): Promise<void> => ipcRenderer.invoke("browser:set-device-emulation", id, params),
+  /** Aba Sources (DESIGN-BACKLOG.md §2.1 item 7) — `session.fetch()` no
+   * processo main (browser-registry.ts's `fetchSource`), não `evalJs`:
+   * sem CORS e sem o teto de 20k chars do round-trip de página. */
+  fetchSource: (id: string, url: string): Promise<{ ok: true; content: string; truncated: boolean; totalChars: number } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:fetch-source", id, url),
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";

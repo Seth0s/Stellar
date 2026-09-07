@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import styles from "./BrowserInspector.module.css";
+
+// Mesma lazy-load de FilesCard.tsx — CodeMirror é pesado, uma sessão que
+// nunca abre a aba Sources não deveria pagar por ele no bundle inicial.
+const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.CodeEditor })));
 
 /** Pendentes #188 — mini-inspector embutido no card, pedido explícito do
  * usuário depois de ver que o DevTools real só abre numa janela
@@ -22,7 +26,8 @@ import styles from "./BrowserInspector.module.css";
 type DomNode = { id: string; tag: string; attrs: Record<string, string>; children: DomNode[]; text: string };
 type SnapshotResult = { root: DomNode; truncated: boolean; nodeCount: number };
 type ConsoleLine = { level: string; message: string; at: number };
-type Tab = "elements" | "console" | "network" | "application";
+type Tab = "elements" | "console" | "network" | "application" | "sources";
+type SourceEntry = { url: string; kind: "document" | "script" | "stylesheet" };
 type NetworkLine = { method: string; url: string; status: number | null; error?: string; at: number };
 type Dock = "right" | "bottom" | "left";
 type StorageArea = "local" | "session" | "cookies";
@@ -310,6 +315,25 @@ function elementListenersScript(elId: string): string {
 `;
 }
 
+// Aba Sources (DESIGN-BACKLOG.md §2.1 item 7) — só a LISTA de URLs vem
+// via `evalJs` (payload pequeno, bem longe do teto de truncamento); o
+// CONTEÚDO de cada arquivo vem depois via `window.browser.fetchSource`
+// (main process, ver browser-registry.ts), não daqui.
+const SOURCES_LIST_SCRIPT = `
+(() => {
+  const out = [{ url: location.href, kind: "document" }];
+  const seen = new Set([location.href]);
+  for (const s of document.scripts) {
+    if (s.src && !seen.has(s.src)) { seen.add(s.src); out.push({ url: s.src, kind: "script" }); }
+  }
+  for (const sheet of document.styleSheets) {
+    const href = sheet.href;
+    if (href && !seen.has(href)) { seen.add(href); out.push({ url: href, kind: "stylesheet" }); }
+  }
+  return out;
+})()
+`;
+
 async function evalJson<T>(id: string, js: string): Promise<T | null> {
   const res = await window.browser.evalJs(id, js);
   if (!res.ok) return null;
@@ -332,6 +356,20 @@ function findPath(node: DomNode, targetId: string, path: string[] = []): string[
     if (found) return found;
   }
   return null;
+}
+
+/** Nome curto pra mostrar na lista da aba Sources — a URL completa fica
+ * no `title` (tooltip) do botão. `CodeEditor`'s `loadLanguage` também
+ * usa este mesmo nome (via a prop `filename`) pra escolher o highlight
+ * de sintaxe pela extensão, então precisa preservá-la. */
+function sourceFilename(url: string): string {
+  try {
+    const { pathname } = new URL(url);
+    const last = pathname.split("/").filter(Boolean).pop();
+    return last || url;
+  } catch {
+    return url;
+  }
 }
 
 function ElementsTree({
@@ -609,6 +647,18 @@ export function BrowserInspector({
   const [loadingNetwork, setLoadingNetwork] = useState(false);
   const [networkOnlyFailed, setNetworkOnlyFailed] = useState(false);
 
+  // Aba Sources (DESIGN-BACKLOG.md §2.1 item 7) — árvore read-only de
+  // scripts/stylesheets/documento principal + visualizador de código.
+  // Nova aba do ZERO (não existia nada disto antes), por isso o estado é
+  // mais verboso que os outros: lista (leve, `evalJs`) + conteúdo do
+  // arquivo selecionado (pesado, `fetchSource` no main process — ver o
+  // doc comment dela em browser-registry.ts).
+  const [sourceList, setSourceList] = useState<SourceEntry[]>([]);
+  const [loadingSourceList, setLoadingSourceList] = useState(false);
+  const [selectedSourceUrl, setSelectedSourceUrl] = useState<string | null>(null);
+  const [sourceContent, setSourceContent] = useState<{ content: string; truncated: boolean; totalChars: number } | { error: string } | null>(null);
+  const [loadingSourceContent, setLoadingSourceContent] = useState(false);
+
   async function refreshTree() {
     setLoadingTree(true);
     const snapshot = await evalJson<SnapshotResult>(id, SNAPSHOT_SCRIPT);
@@ -683,6 +733,38 @@ export function BrowserInspector({
     if (tab === "network") void refreshNetwork();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, id]);
+
+  async function refreshSources() {
+    setLoadingSourceList(true);
+    const list = await evalJson<SourceEntry[]>(id, SOURCES_LIST_SCRIPT);
+    setSourceList(list ?? []);
+    setLoadingSourceList(false);
+  }
+
+  useEffect(() => {
+    if (tab === "sources") void refreshSources();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, id]);
+
+  // Busca o conteúdo do arquivo selecionado — `fetchSource` roda no main
+  // process (session.fetch, sem CORS, sem o teto de 20k chars do
+  // `evalJs`), ver o doc comment dela em browser-registry.ts.
+  useEffect(() => {
+    if (!selectedSourceUrl) {
+      setSourceContent(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingSourceContent(true);
+    void window.browser.fetchSource(id, selectedSourceUrl).then((res) => {
+      if (cancelled) return;
+      setSourceContent(res.ok ? { content: res.content, truncated: res.truncated, totalChars: res.totalChars } : { error: res.error });
+      setLoadingSourceContent(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, selectedSourceUrl]);
 
   // Painel de detalhes (Styles/Computed) — refaz a busca sempre que a
   // seleção mudar. `selectedId` pode apontar pra um `data-stellar-el-id`
@@ -1016,6 +1098,9 @@ export function BrowserInspector({
         <button data-role="inspector-tab" data-tab="application" data-active={tab === "application" || undefined} onClick={() => setTab("application")}>
           Application
         </button>
+        <button data-role="inspector-tab" data-tab="sources" data-active={tab === "sources" || undefined} onClick={() => setTab("sources")}>
+          Sources
+        </button>
         <div className={styles.inspectorTabsSpacer} />
         {tab === "elements" && (
           <button title="Atualizar árvore" onClick={() => void refreshTree()}>
@@ -1024,6 +1109,11 @@ export function BrowserInspector({
         )}
         {tab === "network" && (
           <button title="Atualizar requisições" onClick={() => void refreshNetwork()}>
+            <Icon name="reload" size={13} />
+          </button>
+        )}
+        {tab === "sources" && (
+          <button title="Atualizar lista de arquivos" onClick={() => void refreshSources()}>
             <Icon name="reload" size={13} />
           </button>
         )}
@@ -1290,6 +1380,70 @@ export function BrowserInspector({
                     )}
                   </tbody>
                 </table>
+              )}
+            </div>
+          </div>
+        )}
+        {tab === "sources" && (
+          <div className={styles.sources} data-role="inspector-sources">
+            <div className={styles.sourcesList} data-role="inspector-sources-list">
+              {loadingSourceList ? (
+                <div className={styles.inspectorEmpty}>Carregando…</div>
+              ) : sourceList.length === 0 ? (
+                <div className={styles.inspectorEmpty}>Nenhum arquivo encontrado.</div>
+              ) : (
+                sourceList.map((s) => (
+                  <button
+                    key={s.url}
+                    className={styles.sourceItem}
+                    data-role="inspector-source-item"
+                    data-kind={s.kind}
+                    data-active={selectedSourceUrl === s.url || undefined}
+                    title={s.url}
+                    onClick={() => setSelectedSourceUrl(s.url)}
+                  >
+                    <Icon name="fileCode" size={12} />
+                    {sourceFilename(s.url)}
+                  </button>
+                ))
+              )}
+            </div>
+            <div className={styles.sourceViewer} data-role="inspector-source-viewer">
+              {!selectedSourceUrl ? (
+                <div className={styles.inspectorEmpty}>Selecione um arquivo na lista.</div>
+              ) : loadingSourceContent ? (
+                <div className={styles.inspectorEmpty}>Carregando arquivo…</div>
+              ) : !sourceContent ? (
+                <div className={styles.inspectorEmpty}>—</div>
+              ) : "error" in sourceContent ? (
+                <div className={styles.inspectorEmpty}>Não foi possível buscar o arquivo: {sourceContent.error}</div>
+              ) : (
+                <>
+                  {/* DESIGN-BACKLOG.md §2.1 item 7 — o gutter de breakpoint
+                      do protótipo fica DESABILITADO de propósito, não
+                      esquecido: abrir um breakpoint de verdade (pausar a
+                      execução de verdade) exige o protocolo do V8
+                      Inspector (`webContents.debugger`/CDP), que este
+                      projeto decidiu não usar (mesma decisão por trás do
+                      limite de Event Listeners acima). Fingir um gutter
+                      clicável sem nenhum breakpoint real por trás seria
+                      exatamente o tipo de controle decorativo que este
+                      projeto evita (mesmo raciocínio do "SEM THROTTLING"
+                      não construído no device toolbar). */}
+                  <div className={styles.sourceBreakpointNotice} data-role="inspector-breakpoint-notice">
+                    Breakpoints desabilitados — pausar a execução de verdade exige o protocolo do DevTools (CDP), que este inspector não usa. Somente
+                    leitura.
+                  </div>
+                  {sourceContent.truncated && (
+                    <div className={styles.sourceTruncatedNotice} data-role="inspector-source-truncated">
+                      Arquivo grande demais pra mostrar por completo — exibindo os primeiros {sourceContent.content.length.toLocaleString("pt-BR")} de{" "}
+                      {sourceContent.totalChars.toLocaleString("pt-BR")} caracteres.
+                    </div>
+                  )}
+                  <Suspense fallback={<div className={styles.inspectorEmpty}>Carregando editor…</div>}>
+                    <CodeEditor key={selectedSourceUrl} value={sourceContent.content} onChange={() => {}} filename={selectedSourceUrl} readOnly />
+                  </Suspense>
+                </>
               )}
             </div>
           </div>

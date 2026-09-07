@@ -1033,6 +1033,38 @@ export function createBrowserRegistry(callbacks: {
     }
   }
 
+  // Aba Sources do mini-inspector (DESIGN-BACKLOG.md §2.1 item 7). Achado
+  // ao planejar: buscar o conteúdo de um script via `evalJs`/`fetch()` DE
+  // DENTRO da página embutida bateria direto no mesmo teto de truncamento
+  // de `evalJs` (`MAX_EVAL_RESULT_CHARS`, 20_000 chars) que já quebrou o
+  // Elements/Computed duas vezes nesta mesma sessão — um bundle JS real
+  // facilmente passa disso. `session.fetch()` (não `net.fetch()`, que
+  // sempre usa a sessão DEFAULT — achado checando os tipos: `net.fetch`
+  // não aceita `session` no init, só `ses.fetch()` na própria `Session`
+  // tem esse método) roda aqui no processo MAIN, fora
+  // do round-trip JSON de `evalJs` — usa a partition/sessão ISOLADA deste
+  // card (mesma ideia de `getCookies` acima) e não sofre CORS (não é uma
+  // chamada de dentro de uma página, é o processo Node buscando um
+  // recurso), então funciona pra scripts cross-origin que uma `fetch()`
+  // de dentro da própria página rejeitaria. Teto próprio, bem maior que o
+  // de `evalJs` (esse texto nunca passa pelo `JSON.stringify`+parse do
+  // round-trip de página): 300_000 chars é generoso pra ler um arquivo
+  // fonte real sem deixar a UI travada tentando renderizar um bundle
+  // minificado de vários MB inteiro.
+  const MAX_SOURCE_CHARS = 300_000;
+  async function fetchSource(id: string, url: string): Promise<{ ok: true; content: string; truncated: boolean; totalChars: number } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const res = await entry.win.webContents.session.fetch(url);
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status} ${res.statusText}` };
+      const full = await res.text();
+      return { ok: true, content: full.slice(0, MAX_SOURCE_CHARS), truncated: full.length > MAX_SOURCE_CHARS, totalChars: full.length };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
   function getNetwork(id: string, opts: { status?: number; failedOnly?: boolean; urlContains?: string; limit?: number } = {}) {
     const entry = entries.get(id);
     if (!entry) return { ok: false as const, error: `no browser card with id "${id}"` };
@@ -1278,6 +1310,7 @@ export function createBrowserRegistry(callbacks: {
     deleteLocalSessionItem,
     getNetwork,
     getCookies,
+    fetchSource,
     waitFor,
     pageSnapshot,
     refSelector,
