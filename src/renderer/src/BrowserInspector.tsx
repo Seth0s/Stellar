@@ -21,7 +21,7 @@ import styles from "./BrowserInspector.module.css";
 
 type DomNode = { id: string; tag: string; attrs: Record<string, string>; children: DomNode[]; text: string };
 type ConsoleLine = { level: string; message: string; at: number };
-type Tab = "elements" | "console" | "network" | "application" | "responsive";
+type Tab = "elements" | "console" | "network" | "application";
 type NetworkLine = { method: string; url: string; status: number | null; error?: string; at: number };
 type Dock = "right" | "bottom" | "left";
 type StorageArea = "local" | "session" | "cookies";
@@ -639,15 +639,6 @@ export function BrowserInspector({
     void window.browser.setDeviceEmulation(id, { width, height, deviceScaleFactor, mobile });
   }
 
-  function togglePreset(preset: ResponsivePreset) {
-    if (activeEmulation?.label === preset.label) {
-      setActiveEmulation(null);
-      disableEmulation();
-    } else {
-      applyEmulation(preset.width, preset.height, preset.deviceScaleFactor, preset.mobile, preset.label);
-    }
-  }
-
   function applyCustomSize() {
     applyEmulation(customW, customH, activeEmulation?.deviceScaleFactor ?? 2, customW < 768, `${customW}×${customH} (personalizado)`);
   }
@@ -655,6 +646,44 @@ export function BrowserInspector({
   function pickRulerWidth(w: number) {
     setCustomW(w);
     applyEmulation(w, activeEmulation?.height ?? customH, activeEmulation?.deviceScaleFactor ?? 2, w < 768, `${w}×${activeEmulation?.height ?? customH} (personalizado)`);
+  }
+
+  // Pedido direto do usuário (com screenshot do device toolbar real do
+  // Chrome): a barra de dispositivo/responsividade não deveria ser uma
+  // ABA que precisa de clique pra aparecer — no DevTools real ela fica
+  // sempre visível, acima das outras abas, direto no card. `deviceSelectValue`
+  // deriva do `activeEmulation` atual em vez de guardar estado próprio —
+  // uma única fonte de verdade evita o dropdown dessincronizar do que
+  // está realmente ativo (ex: depois de girar ou usar o ruler).
+  const deviceSelectValue = !activeEmulation ? "none" : RESPONSIVE_PRESETS.some((p) => p.label === activeEmulation.label) ? activeEmulation.label : "custom";
+
+  function onDeviceSelectChange(value: string) {
+    if (value === "none") {
+      setActiveEmulation(null);
+      disableEmulation();
+      return;
+    }
+    if (value === "custom") {
+      applyCustomSize();
+      return;
+    }
+    const preset = RESPONSIVE_PRESETS.find((p) => p.label === value);
+    if (preset) applyEmulation(preset.width, preset.height, preset.deviceScaleFactor, preset.mobile, preset.label);
+  }
+
+  function applyDpr(deviceScaleFactor: number) {
+    const width = activeEmulation?.width ?? customW;
+    const height = activeEmulation?.height ?? customH;
+    const mobile = activeEmulation?.mobile ?? customW < 768;
+    const label = activeEmulation?.label ?? `${width}×${height} (personalizado)`;
+    applyEmulation(width, height, deviceScaleFactor, mobile, label);
+  }
+
+  function rotateSize() {
+    const width = activeEmulation?.width ?? customW;
+    const height = activeEmulation?.height ?? customH;
+    const deviceScaleFactor = activeEmulation?.deviceScaleFactor ?? 2;
+    applyEmulation(height, width, deviceScaleFactor, height < 768, `${height}×${width} (personalizado)`);
   }
 
   // `activePresetRef`/`cardSizeRef` abaixo — o efeito de desmontagem só
@@ -728,6 +757,69 @@ export function BrowserInspector({
           beginResize(dock, dock === "bottom" ? e.clientY : e.clientX);
         }}
       />
+      <div className={styles.deviceToolbar} data-role="inspector-device-toolbar">
+        <span className={styles.deviceLabel}>Dispositivo</span>
+        <select
+          data-role="inspector-device-select"
+          value={deviceSelectValue}
+          onChange={(e) => onDeviceSelectChange(e.target.value)}
+        >
+          <option value="none">Sem emulação</option>
+          {RESPONSIVE_PRESETS.map((preset) => (
+            <option key={preset.label} value={preset.label}>
+              {preset.label}
+            </option>
+          ))}
+          <option value="custom">Personalizado</option>
+        </select>
+        <input
+          type="number"
+          data-role="inspector-custom-width"
+          className={styles.deviceDim}
+          value={customW}
+          onChange={(e) => setCustomW(Number(e.target.value) || 0)}
+        />
+        <span className={styles.deviceX}>×</span>
+        <input
+          type="number"
+          data-role="inspector-custom-height"
+          className={styles.deviceDim}
+          value={customH}
+          onChange={(e) => setCustomH(Number(e.target.value) || 0)}
+        />
+        <button data-role="inspector-apply-custom-size" onClick={applyCustomSize}>
+          Aplicar
+        </button>
+        <button title="Girar (trocar largura/altura)" data-role="inspector-rotate" onClick={rotateSize}>
+          <Icon name="rotate" size={13} />
+        </button>
+        <span className={styles.deviceLabel}>DPR</span>
+        <select data-role="inspector-dpr-select" value={activeEmulation?.deviceScaleFactor ?? 2} onChange={(e) => applyDpr(Number(e.target.value))}>
+          <option value={1}>1x</option>
+          <option value={2}>2x</option>
+          <option value={3}>3x</option>
+        </select>
+        <div className={styles.deviceToolbarSpacer} />
+        {activeEmulation && (
+          <button
+            className={styles.stopEmulation}
+            data-role="inspector-stop-emulation"
+            onClick={() => {
+              setActiveEmulation(null);
+              disableEmulation();
+            }}
+          >
+            Parar emulação
+          </button>
+        )}
+      </div>
+      <div className={styles.widthRulerBar} data-role="inspector-width-ruler">
+        {WIDTH_RULER.map((w) => (
+          <button key={w} data-role="inspector-width-preset" data-width={w} data-active={customW === w || undefined} onClick={() => pickRulerWidth(w)}>
+            {w}
+          </button>
+        ))}
+      </div>
       <div className={styles.inspectorTabs}>
         <button data-role="inspector-tab" data-tab="elements" data-active={tab === "elements" || undefined} onClick={() => setTab("elements")}>
           Elements
@@ -740,9 +832,6 @@ export function BrowserInspector({
         </button>
         <button data-role="inspector-tab" data-tab="application" data-active={tab === "application" || undefined} onClick={() => setTab("application")}>
           Application
-        </button>
-        <button data-role="inspector-tab" data-tab="responsive" data-active={tab === "responsive" || undefined} onClick={() => setTab("responsive")}>
-          Responsivo
         </button>
         <div className={styles.inspectorTabsSpacer} />
         {tab === "elements" && (
@@ -994,66 +1083,6 @@ export function BrowserInspector({
                     )}
                   </tbody>
                 </table>
-              )}
-            </div>
-          </div>
-        )}
-        {tab === "responsive" && (
-          <div className={styles.responsive}>
-            <p className={styles.responsiveHint}>
-              Emulação de dispositivo de verdade (viewport, DPR, media query mobile) — diferente de só redimensionar o
-              card.
-            </p>
-            {RESPONSIVE_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                data-role="inspector-responsive-preset"
-                data-label={preset.label}
-                data-active={activeEmulation?.label === preset.label || undefined}
-                onClick={() => togglePreset(preset)}
-              >
-                <Icon name={preset.mobile ? "viewportMobile" : "viewportTablet"} size={14} />
-                {preset.label}
-              </button>
-            ))}
-            <div className={styles.customSize}>
-              <span className={styles.responsiveHint}>Tamanho personalizado</span>
-              <div className={styles.customSizeRow}>
-                <input
-                  type="number"
-                  data-role="inspector-custom-width"
-                  value={customW}
-                  onChange={(e) => setCustomW(Number(e.target.value) || 0)}
-                />
-                <span>×</span>
-                <input
-                  type="number"
-                  data-role="inspector-custom-height"
-                  value={customH}
-                  onChange={(e) => setCustomH(Number(e.target.value) || 0)}
-                />
-                <button data-role="inspector-apply-custom-size" onClick={applyCustomSize}>
-                  Aplicar
-                </button>
-              </div>
-              <div className={styles.widthRuler} data-role="inspector-width-ruler">
-                {WIDTH_RULER.map((w) => (
-                  <button key={w} data-role="inspector-width-preset" data-width={w} onClick={() => pickRulerWidth(w)}>
-                    {w}
-                  </button>
-                ))}
-              </div>
-              {activeEmulation && (
-                <button
-                  className={styles.stopEmulation}
-                  data-role="inspector-stop-emulation"
-                  onClick={() => {
-                    setActiveEmulation(null);
-                    disableEmulation();
-                  }}
-                >
-                  Parar emulação ({activeEmulation.label})
-                </button>
               )}
             </div>
           </div>
