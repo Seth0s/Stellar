@@ -241,105 +241,92 @@ function highlightNode(cardId: string, nodeId: number | null) {
   }
 }
 
-// Achado ao vivo escrevendo o smoke test deste painel: devolver TODAS as
-// ~300 propriedades de `getComputedStyle` (ideia original) estoura o
-// `MAX_EVAL_RESULT_CHARS` (20_000, browser-registry.ts's `evalJs`) —
-// o JSON vem cortado no meio, `JSON.parse` falha em silêncio (capturado
-// pelo try/catch de `evalJson`) e a UI mostrava "elemento não encontrado"
-// pra QUALQUER seleção. Fix: escopar `computed` pra um allowlist real das
-// propriedades que mais importam (mesmas categorias que o DevTools
-// destaca) em vez de despejar a lista inteira crua — ainda é dado 100%
-// real (`getComputedStyle` de verdade), só não every-single-property.
-const COMPUTED_PROPS = [
-  "display", "position", "top", "right", "bottom", "left", "float", "clear", "z-index", "box-sizing",
-  "width", "height", "min-width", "min-height", "max-width", "max-height",
-  "margin-top", "margin-right", "margin-bottom", "margin-left",
-  "padding-top", "padding-right", "padding-bottom", "padding-left",
-  "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
-  "border-top-style", "border-color", "border-radius",
-  "flex-direction", "flex-wrap", "justify-content", "align-items", "align-content", "gap", "flex-grow", "flex-shrink", "flex-basis",
-  "grid-template-columns", "grid-template-rows",
-  "font-family", "font-size", "font-weight", "font-style", "line-height", "letter-spacing",
-  "text-align", "text-decoration-line", "text-transform", "white-space", "color",
-  "background-color", "background-image", "opacity", "box-shadow", "overflow", "overflow-x", "overflow-y", "visibility", "cursor",
-  "transform", "transition", "animation-name",
-];
+/** DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 2) — troca a aproximação
+ * de cascata por `document.styleSheets`+`el.matches()` (nunca foi
+ * especificidade real, só uma ordem de varredura que dava certo na
+ * maioria dos casos) por `CSS.getMatchedStylesForNode`/
+ * `CSS.getComputedStyleForNode` — o motor de match/cascata de VERDADE do
+ * Chrome, e todas as ~300 propriedades computadas de uma vez (sem
+ * allowlist nenhuma — o teto antigo, `COMPUTED_PROPS`, só existia porque
+ * o `evalJs` antigo precisava caber no round-trip JSON de
+ * `MAX_EVAL_RESULT_CHARS`; CDP nunca passa por esse caminho). Não
+ * depende mais da ponte `data-stellar-el-id` — `nodeId` do CDP já
+ * identifica o elemento direto, sem round-trip por atributo HTML. */
+type CdpCssProperty = { name: string; value: string; important?: boolean; disabled?: boolean };
+type CdpMatchedRule = {
+  rule: {
+    selectorList: { selectors: { text: string }[] };
+    origin: string;
+    style: { cssProperties: CdpCssProperty[] };
+    styleSheetId?: string;
+  };
+};
 
-// Painel de detalhes (Styles/Computed) do Elements — sem CDP, então sem
-// `CSS.getMatchedCSSRules` (removida do DOM padrão, só existia mesmo no
-// WebKit antigo). Aproximação real de qualquer jeito: varre
-// `document.styleSheets` (pulando folhas cross-origin, que lançam ao ler
-// `.cssRules`) e testa `el.matches(rule.selectorText)` regra por regra —
-// ordena pelo índice de varredura DECRESCENTE (a regra encontrada por
-// último tende a vencer a cascata na prática, já que folhas/posições
-// mais tardias no documento normalmente têm prioridade) como
-// aproximação de especificidade real, que exigiria reimplementar o
-// algoritmo de cascata inteiro. Devolve o objeto CRU — `evalJs` já
-// stringifica.
-function elementStylesScript(elId: string | number): string {
-  return `
-(() => {
-  const el = document.querySelector('[data-stellar-el-id="${elId}"]');
-  if (!el) return null;
-  function declsOf(decl) {
-    const out = [];
-    for (let i = 0; i < decl.length; i++) {
-      const prop = decl[i];
-      out.push({ prop, value: decl.getPropertyValue(prop), important: decl.getPropertyPriority(prop) === "important" });
-    }
-    return out;
+function cssPropsToDecls(props: CdpCssProperty[] | undefined): StyleDecl[] {
+  if (!props) return [];
+  return props.filter((p) => !p.disabled).map((p) => ({ prop: p.name, value: p.value, important: !!p.important }));
+}
+
+/** `styleSheetId` (interno da sessão CDP) → um rótulo legível, populado
+ * pelo evento `CSS.styleSheetAdded` (dispara pra cada stylesheet já
+ * carregada assim que `CSS.enable` roda no attach, e de novo pra cada
+ * `<style>`/`<link>` novo depois). Sem URL (`<style>` inline) vira
+ * "estilo interno", igual antes. */
+function styleSheetLabel(labels: Map<string, string>, styleSheetId: string | undefined): string {
+  if (!styleSheetId) return "estilo interno";
+  return labels.get(styleSheetId) ?? "estilo interno";
+}
+
+async function fetchElementStyles(cardId: string, nodeId: number, styleSheetLabels: Map<string, string>): Promise<ElementStyles | null> {
+  const [matchedRes, computedRes] = await Promise.all([
+    window.browser.sendCdp(cardId, "CSS.getMatchedStylesForNode", { nodeId }),
+    window.browser.sendCdp(cardId, "CSS.getComputedStyleForNode", { nodeId }),
+  ]);
+  if (!matchedRes.ok || !computedRes.ok) return null;
+  const matchedResult = matchedRes.result as {
+    inlineStyle?: { cssProperties: CdpCssProperty[] };
+    matchedCSSRules?: CdpMatchedRule[];
+  };
+  const computedResult = computedRes.result as { computedStyle: { name: string; value: string }[] };
+
+  const inline = cssPropsToDecls(matchedResult.inlineStyle?.cssProperties);
+  // CDP devolve `matchedCSSRules` em ordem de aplicação (menos específica
+  // primeiro); invertido pra mostrar a regra mais forte no topo — mesmo
+  // idioma visual da aproximação antiga (que ordenava por "achada por
+  // último" primeiro). Regras `origin:"user-agent"` (folha default do
+  // navegador, ex. `display:block` de um `<div>`) ficam de fora, igual
+  // antes (a versão evalJs só via `document.styleSheets`, nunca UA).
+  const matched: MatchedRule[] = (matchedResult.matchedCSSRules ?? [])
+    .filter((m) => m.rule.origin === "regular")
+    .map((m) => ({
+      selector: m.rule.selectorList.selectors.map((s) => s.text).join(", "),
+      source: styleSheetLabel(styleSheetLabels, m.rule.styleSheetId),
+      decls: cssPropsToDecls(m.rule.style.cssProperties),
+    }))
+    .reverse();
+
+  const computed: StyleDecl[] = computedResult.computedStyle.map((c) => ({ prop: c.name, value: c.value, important: false }));
+  const computedMap = new Map(computedResult.computedStyle.map((c) => [c.name, c.value] as const));
+  function num(name: string): number {
+    return Math.round(parseFloat(computedMap.get(name) ?? "0") || 0);
   }
-  const inline = declsOf(el.style);
-  const matched = [];
-  let order = 0;
-  function walkRules(rules, sourceLabel) {
-    for (const rule of rules) {
-      if (rule.type === CSSRule.MEDIA_RULE) {
-        let matches = false;
-        try { matches = window.matchMedia(rule.conditionText || "").matches; } catch {}
-        if (matches) walkRules(rule.cssRules, sourceLabel);
-        continue;
-      }
-      if (rule.type !== CSSRule.STYLE_RULE) continue;
-      let isMatch = false;
-      try { isMatch = el.matches(rule.selectorText); } catch {}
-      if (!isMatch) continue;
-      matched.push({ selector: rule.selectorText, source: sourceLabel, decls: declsOf(rule.style), order: order++ });
-    }
-  }
-  for (const sheet of document.styleSheets) {
-    // Pula a folha de destaque injetada por highlightScript (nosso próprio
-    // instrumento, não estilo do autor da página) — senão o elemento
-    // selecionado sempre mostraria sua própria regra de destaque
-    // ([data-stellar-highlighted]) como se fosse CSS real da página.
-    if (sheet.ownerNode && sheet.ownerNode.id === "stellar-highlight-style") continue;
-    let rules;
-    try { rules = sheet.cssRules; } catch { continue; }
-    if (!rules) continue;
-    let label = "estilo inline";
-    if (sheet.href) {
-      try { label = new URL(sheet.href).pathname.split("/").pop() || sheet.href; } catch { label = sheet.href; }
-    }
-    walkRules(rules, label);
-  }
-  matched.sort((a, b) => b.order - a.order);
-  for (const m of matched) delete m.order;
-  const cs = getComputedStyle(el);
-  const computed = [];
-  for (const prop of ${JSON.stringify(COMPUTED_PROPS)}) {
-    const value = cs.getPropertyValue(prop);
-    if (value) computed.push({ prop, value, important: false });
-  }
-  function num(v) { return Math.round(parseFloat(v) || 0); }
-  const box = {
-    marginTop: num(cs.marginTop), marginRight: num(cs.marginRight), marginBottom: num(cs.marginBottom), marginLeft: num(cs.marginLeft),
-    borderTop: num(cs.borderTopWidth), borderRight: num(cs.borderRightWidth), borderBottom: num(cs.borderBottomWidth), borderLeft: num(cs.borderLeftWidth),
-    paddingTop: num(cs.paddingTop), paddingRight: num(cs.paddingRight), paddingBottom: num(cs.paddingBottom), paddingLeft: num(cs.paddingLeft),
-    width: num(cs.width), height: num(cs.height),
+  const box: BoxModel = {
+    marginTop: num("margin-top"),
+    marginRight: num("margin-right"),
+    marginBottom: num("margin-bottom"),
+    marginLeft: num("margin-left"),
+    borderTop: num("border-top-width"),
+    borderRight: num("border-right-width"),
+    borderBottom: num("border-bottom-width"),
+    borderLeft: num("border-left-width"),
+    paddingTop: num("padding-top"),
+    paddingRight: num("padding-right"),
+    paddingBottom: num("padding-bottom"),
+    paddingLeft: num("padding-left"),
+    width: num("width"),
+    height: num("height"),
   };
   return { inline, matched, computed, box };
-})()
-`;
 }
 
 // Event Listeners (DESIGN-BACKLOG.md §2.1 item 6) — sem `webContents.
@@ -673,6 +660,12 @@ export function BrowserInspector({
   const parentMapRef = useRef<Map<number, number>>(new Map());
   const requestedChildrenRef = useRef<Set<number>>(new Set());
 
+  // `styleSheetId` (CSS domain) → rótulo legível pro painel Styles — ver
+  // doc comment de `styleSheetLabel` acima. Populado pelo evento
+  // `CSS.styleSheetAdded` (Fase 2, adoção de CDP), capturado pelo mesmo
+  // dispatcher genérico de `onCdpEvent` abaixo.
+  const styleSheetLabelsRef = useRef<Map<string, string>>(new Map());
+
   // Desconexão inesperada no meio do caminho (ex: outra coisa forçou
   // attach por fora) chega como o evento sintético "__detached__" de
   // browser-cdp.ts, pelo MESMO canal genérico que toda fase futura vai
@@ -693,6 +686,19 @@ export function BrowserInspector({
         recordParentLinks(parentMapRef.current, parentId, nodes);
         const converted = nodes.filter((n) => n.nodeType === 1).map(cdpNodeToDomNode);
         setTree((prev) => (prev ? mergeChildrenIntoTree(prev, parentId, converted) : prev));
+        return;
+      }
+      if (method === "CSS.styleSheetAdded") {
+        const header = (params as { header: { styleSheetId: string; sourceURL: string } }).header;
+        let label = "estilo interno";
+        if (header.sourceURL) {
+          try {
+            label = new URL(header.sourceURL).pathname.split("/").pop() || header.sourceURL;
+          } catch {
+            label = header.sourceURL;
+          }
+        }
+        styleSheetLabelsRef.current.set(header.styleSheetId, label);
       }
     });
     return () => {
@@ -1023,12 +1029,11 @@ export function BrowserInspector({
   }, [tab, id]);
 
   // Painel de detalhes (Styles/Computed) — refaz a busca sempre que a
-  // seleção mudar. `selectedId` pode apontar pra um `data-stellar-el-id`
-  // que não existe mais depois de um `refreshTree()` (CDP reatribui
-  // `nodeId`s a cada `DOM.getDocument()` novo, e `tagSelectedNode` só
-  // marca o elemento vivo NA hora da seleção) — `elementStylesScript` já
-  // devolve `null` nesse caso e a UI mostra um estado vazio em vez de
-  // dado velho/quebrado.
+  // seleção mudar. `nodeId` é o próprio identificador CDP da seleção
+  // (Fase 1) — `CSS.getMatchedStylesForNode`/`getComputedStyleForNode`
+  // falham limpo (`ok:false`) se o node não existir mais na sessão atual
+  // (ex: depois de um `refreshTree()`, que reatribui `nodeId`s), e a UI
+  // mostra um estado vazio em vez de dado velho/quebrado.
   useEffect(() => {
     if (tab !== "elements" || !selectedId) {
       setElementStyles(null);
@@ -1036,7 +1041,7 @@ export function BrowserInspector({
     }
     let cancelled = false;
     setLoadingStyles(true);
-    void evalJson<ElementStyles>(id, elementStylesScript(selectedId)).then((res) => {
+    void fetchElementStyles(id, selectedId, styleSheetLabelsRef.current).then((res) => {
       if (cancelled) return;
       setElementStyles(res);
       setLoadingStyles(false);

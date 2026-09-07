@@ -125,6 +125,8 @@ try {
   check("Computed mostra getComputedStyle DE VERDADE (padding-top real: 12px, resolvido do shorthand)", computedText.includes("padding-top") && computedText.includes("12px"), true);
   check("...e o box model real (largura×altura do content box, não um placeholder)", await page.evalJs(`/\\d+ × \\d+/.test(document.querySelector('[data-role="inspector-box-content"]')?.textContent ?? "")`), true);
 
+  const unfilteredCount = await page.evalJs(`document.querySelectorAll('[data-role="inspector-computed-list"] > div').length`);
+
   const filterInput = await centerOf(page, '[data-role="inspector-computed-filter"]');
   await page.click(filterInput.x, filterInput.y);
   await page.evalJs(`
@@ -139,7 +141,17 @@ try {
   const filteredRows = JSON.parse(
     await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-role="inspector-computed-list"] > div')].map((d) => d.textContent))`),
   );
-  check("o filtro de propriedades computadas funciona de verdade (só 1 linha, padding-top)", filteredRows.length === 1 && filteredRows[0].includes("padding-top"), true);
+  // DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 2): `CSS.getComputedStyleForNode`
+  // devolve TODAS as propriedades computadas reais (~460, sem allowlist
+  // nenhuma) — inclui primas de mesmo prefixo como `scroll-padding-top`,
+  // então filtrar por "padding-top" bate em mais de 1 linha de verdade
+  // (comportamento correto do filtro por substring, não um bug). A
+  // asserção certa não é mais "só 1 linha" e sim "toda linha mostrada
+  // contém o termo, a linha exata `padding-top` está entre elas, e o
+  // filtro de fato ESTREITA a lista" (prova que filtra de verdade, sem
+  // assumir uma contagem total que depende da versão do Chrome).
+  check("o filtro de propriedades computadas funciona de verdade (toda linha bate, padding-top está entre elas)", filteredRows.every((r) => r.includes("padding-top")) && filteredRows.some((r) => r.startsWith("padding-top")), true);
+  check("...e o filtro de fato estreita a lista (menos linhas que a lista computada inteira)", filteredRows.length > 0 && filteredRows.length < unfilteredCount, true);
 
   page.close();
 } finally {
