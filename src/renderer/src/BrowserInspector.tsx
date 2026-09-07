@@ -631,6 +631,24 @@ export function BrowserInspector({
   const [panelSizes, setPanelSizes] = useState<Record<Dock, number>>({ ...DOCK_DEFAULT });
   const resizingRef = useRef<{ dock: Dock; start: number; startSize: number } | null>(null);
 
+  // Alças de resize DIRETO nas bordas do device-frame (DESIGN-BACKLOG.md
+  // §2.1 item 3, sub-item pendente — o usuário relatou ao vivo: "não
+  // consegue nem mexer com a altura do content se mexer na altura do
+  // card inteiro", confirmando que resize por arraste do FRAME em si
+  // (não só do card/dock) faz falta). `.inspector` (o próprio painel do
+  // dock) é filho direto de `.browserCardBodyWrap` — o MESMO
+  // `position:relative` que já contém o `<canvas>` (ver BrowserCard.tsx)
+  // — então basta um ref no root deste componente pra achar o wrap via
+  // `.parentElement` e medir o espaço disponível de verdade, sem precisar
+  // de nenhuma prop nova vinda de BrowserCard.tsx. `wrapSize` alimenta o
+  // MESMO cálculo de "contido" (`aspect-ratio`+`max-width/height:100%`+
+  // `margin:auto`) que o CSS de BrowserCard.module.css já faz sozinho —
+  // replicado aqui em JS só pra saber ONDE desenhar as alças (o CSS
+  // continua sendo a fonte de verdade do que aparece na tela).
+  const inspectorRootRef = useRef<HTMLDivElement>(null);
+  const [wrapSize, setWrapSize] = useState<{ w: number; h: number } | null>(null);
+  const frameResizeRef = useRef<{ axis: "right" | "bottom" | "corner"; startX: number; startY: number; startW: number; startH: number; scaleX: number; scaleY: number } | null>(null);
+
   const [storageArea, setStorageArea] = useState<StorageArea>("local");
   const [localItems, setLocalItems] = useState<[string, string][]>([]);
   const [sessionItems, setSessionItems] = useState<[string, string][]>([]);
@@ -1052,10 +1070,77 @@ export function BrowserInspector({
     resizingRef.current = null;
   }
 
+  // Só existe (e só faz sentido medir) enquanto uma emulação está ativa
+  // — sem isso `wrapSize` fica em `null` a maior parte do tempo, sem
+  // custo.
+  useEffect(() => {
+    const wrap = inspectorRootRef.current?.parentElement;
+    if (!wrap) return;
+    const ro = new ResizeObserver(() => {
+      setWrapSize({ w: wrap.clientWidth, h: wrap.clientHeight });
+    });
+    ro.observe(wrap);
+    setWrapSize({ w: wrap.clientWidth, h: wrap.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
+  // Caixa do frame na tela (mesma matemática do "contido" que o CSS de
+  // BrowserCard.module.css já aplica sozinho via `aspect-ratio`+`max-
+  // width/height:100%` — replicada aqui só pra saber ONDE desenhar as
+  // alças). Só existe em zoom "Ajustar": nos zooms fixos (100%/75%/50%)
+  // o frame pode ficar MAIOR que a área visível e rolar (ver o CSS de
+  // `.browserCardBodyWrap[data-emulating]`) — as alças precisariam
+  // então compensar `scrollLeft`/`scrollTop` do wrap, uma complicação a
+  // mais que fica de fora desta rodada (decisão de escopo, não
+  // esquecida).
+  const frameBox =
+    activeEmulation && frameZoom === "fit" && wrapSize && wrapSize.w > 0 && wrapSize.h > 0
+      ? (() => {
+          const deviceRatio = activeEmulation.width / activeEmulation.height;
+          const wrapRatio = wrapSize.w / wrapSize.h;
+          const width = wrapRatio > deviceRatio ? wrapSize.h * deviceRatio : wrapSize.w;
+          const height = wrapRatio > deviceRatio ? wrapSize.h : wrapSize.w / deviceRatio;
+          return { left: (wrapSize.w - width) / 2, top: (wrapSize.h - height) / 2, width, height };
+        })()
+      : null;
+
+  function beginFrameResize(axis: "right" | "bottom" | "corner", clientX: number, clientY: number) {
+    if (!activeEmulation || !frameBox) return;
+    frameResizeRef.current = {
+      axis,
+      startX: clientX,
+      startY: clientY,
+      startW: activeEmulation.width,
+      startH: activeEmulation.height,
+      // Conversão screen-px→device-px fixada no INÍCIO do arraste (não
+      // recalculada a cada tick) — o frame muda de tamanho/proporção
+      // durante o próprio arraste (é um redimensionamento de verdade,
+      // não um zoom), então travar a escala do começo do gesto é o que
+      // dá um arraste previsível em vez de acelerar/desacelerar sozinho
+      // conforme a caixa "contida" reencaixa.
+      scaleX: activeEmulation.width / frameBox.width,
+      scaleY: activeEmulation.height / frameBox.height,
+    };
+  }
+  function onFrameResizePointerMove(e: React.PointerEvent) {
+    const r = frameResizeRef.current;
+    if (!r || !activeEmulation) return;
+    const dx = (e.clientX - r.startX) * r.scaleX;
+    const dy = (e.clientY - r.startY) * r.scaleY;
+    const width = r.axis === "bottom" ? r.startW : Math.round(Math.max(100, Math.min(3000, r.startW + dx)));
+    const height = r.axis === "right" ? r.startH : Math.round(Math.max(100, Math.min(3000, r.startH + dy)));
+    applyEmulation(width, height, activeEmulation.deviceScaleFactor, width < 768, `${width}×${height} (personalizado)`);
+  }
+  function endFrameResize() {
+    frameResizeRef.current = null;
+  }
+
   const panelSizeStyle = dock === "bottom" ? { height: panelSizes.bottom } : { width: panelSizes[dock] };
 
   return (
+    <>
     <div
+      ref={inspectorRootRef}
       className={styles.inspector}
       data-role="browser-inspector"
       data-dock={dock}
@@ -1590,5 +1675,53 @@ export function BrowserInspector({
         )}
       </div>
     </div>
+    {/* Alças de resize do device-frame — DESIGN-BACKLOG.md §2.1 item 3,
+        sub-item pendente. Renderizadas como IRMÃS do painel do dock
+        (não filhas), ambas sob o MESMO `.browserCardBodyWrap` (o
+        `<canvas>` mora lá também, ver BrowserCard.tsx) — é o que dá o
+        contexto de posicionamento certo pra alinhar exatamente com a
+        borda visível do frame, sem precisar de nenhuma prop nova vinda
+        do pai. */}
+    {frameBox && (
+      <div
+        className={styles.frameResizeOverlay}
+        data-role="inspector-frame-resize-overlay"
+        onPointerMove={onFrameResizePointerMove}
+        onPointerUp={endFrameResize}
+        onPointerLeave={endFrameResize}
+      >
+        <div
+          className={styles.frameResizeRight}
+          data-role="inspector-frame-resize-right"
+          style={{ left: frameBox.left + frameBox.width - 3, top: frameBox.top, height: frameBox.height }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            beginFrameResize("right", e.clientX, e.clientY);
+          }}
+        />
+        <div
+          className={styles.frameResizeBottom}
+          data-role="inspector-frame-resize-bottom"
+          style={{ left: frameBox.left, top: frameBox.top + frameBox.height - 3, width: frameBox.width }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            beginFrameResize("bottom", e.clientX, e.clientY);
+          }}
+        />
+        <div
+          className={styles.frameResizeCorner}
+          data-role="inspector-frame-resize-corner"
+          style={{ left: frameBox.left + frameBox.width - 10, top: frameBox.top + frameBox.height - 10 }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            beginFrameResize("corner", e.clientX, e.clientY);
+          }}
+        />
+      </div>
+    )}
+    </>
   );
 }
