@@ -775,6 +775,46 @@
   color: var(--danger);
 }
 
+/* DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 4) — linha de request
+   clicável (expande headers/body/timing reais abaixo dela), mesmo
+   idioma de tabela de `.storageTable` acima. */
+[data-role="inspector-network-row"] {
+  cursor: pointer;
+}
+
+[data-role="inspector-network-row"]:hover td {
+  background: var(--surface);
+}
+
+[data-role="inspector-network-row"][data-expanded] td {
+  background: var(--surface);
+}
+
+.networkDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 4px;
+}
+
+.networkDetailSection .ruleSelector {
+  margin-bottom: 3px;
+}
+
+.networkBody {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow: auto;
+}
+
 /* ---------------------------------------------------------- Application */
 
 .application {
