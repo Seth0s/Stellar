@@ -123,10 +123,18 @@ try {
   if (btnNode) {
     await page.click(btnNode.x, btnNode.y);
     await new Promise((r) => setTimeout(r, 400));
-    const highlighted = JSON.parse(
-      await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "document.querySelector('#btn')?.hasAttribute('data-stellar-highlighted') ?? false").then((r) => JSON.stringify(r))`),
+    // DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 1) trocou o destaque por
+    // `Overlay.highlightNode` — pinta FORA do DOM/CSSOM da página (não é
+    // mais um atributo `data-stellar-highlighted` observável via
+    // `document.querySelector`, estritamente melhor). O sinal observável
+    // que sobra é a ponte `data-stellar-el-id` que `DOM.setAttributeValue`
+    // grava no elemento real selecionado (usada pelas abas Styles/
+    // Listeners, ainda no evalJs até suas próprias fases) — confirma que a
+    // seleção de fato identificou e marcou o elemento CERTO na página real.
+    const bridged = JSON.parse(
+      await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "document.querySelector('#btn')?.hasAttribute('data-stellar-el-id') ?? false").then((r) => JSON.stringify(r))`),
     );
-    check("clicar no nó da árvore destaca o elemento DE VERDADE na página embutida (data-stellar-highlighted)", highlighted.ok && highlighted.result === "true", true);
+    check("clicar no nó da árvore seleciona o elemento DE VERDADE na página embutida (bridge data-stellar-el-id)", bridged.ok && bridged.result === "true", true);
   }
 
   // --- Console ---
