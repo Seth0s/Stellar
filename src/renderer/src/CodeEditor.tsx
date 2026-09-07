@@ -195,6 +195,7 @@ export function CodeEditor({
   onChange,
   filename,
   jumpToLine,
+  readOnly,
 }: {
   /** Initial content only — read once when the editor mounts (or when
    * `filename` changes, forcing a remount). Typing updates CodeMirror's
@@ -212,6 +213,13 @@ export function CodeEditor({
    * genuinely different file. 1-indexed, matching how editors and
    * `fs-tools.ts`'s `ContentMatch.line` both count lines. */
   jumpToLine?: number | null;
+  /** DESIGN-BACKLOG.md §2.1 item 7 — the inspector's Sources tab reuses
+   * this component for a genuinely read-only source viewer (not just a
+   * `onChange` that silently discards edits, which would let the user
+   * type into something that visually looks editable but isn't real).
+   * Defaults to false — every existing caller (FilesCard.tsx) keeps
+   * editing exactly as before. */
+  readOnly?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -246,6 +254,8 @@ export function CodeEditor({
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
           }),
           languageCompartment.of([]),
+          EditorState.readOnly.of(Boolean(readOnly)),
+          EditorView.editable.of(!readOnly),
         ],
       }),
       parent: containerRef.current,

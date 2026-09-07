@@ -1381,6 +1381,10 @@ function createWindow() {
   // primeiro pro lado MCP, `getCookies` novo) — só faltava alcançar a UI.
   ipcMain.handle("browser:get-network", (_e, id: string) => browserRegistry.getNetwork(id));
   ipcMain.handle("browser:get-cookies", (_e, id: string) => browserRegistry.getCookies(id));
+  // DESIGN-BACKLOG.md §2.1 item 7 — aba Sources. `fetchSource` roda no
+  // main process (`net.fetch`, sem CORS, sem passar pelo teto de 20k
+  // chars do `evalJs`) — ver o doc comment dela em browser-registry.ts.
+  ipcMain.handle("browser:fetch-source", (_e, id: string, url: string) => browserRegistry.fetchSource(id, url));
   // Pendentes #188 — aba Application (metade local/session storage; a
   // metade de cookies já é `browser:get-cookies` acima, via
   // `session.cookies.get` — não duplicar a mesma leitura por dois
