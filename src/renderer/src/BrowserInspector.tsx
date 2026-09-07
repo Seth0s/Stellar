@@ -20,6 +20,7 @@ import styles from "./BrowserInspector.module.css";
  * já wireados por ele em browser-registry.ts/preload). */
 
 type DomNode = { id: string; tag: string; attrs: Record<string, string>; children: DomNode[]; text: string };
+type SnapshotResult = { root: DomNode; truncated: boolean; nodeCount: number };
 type ConsoleLine = { level: string; message: string; at: number };
 type Tab = "elements" | "console" | "network" | "application";
 type NetworkLine = { method: string; url: string; status: number | null; error?: string; at: number };
@@ -86,11 +87,30 @@ const DOCK_DEFAULT = { right: 600, bottom: 280, left: 600 } as const;
 // elemento de VERDADE na página renderizada, sem precisar reconstruir um
 // seletor CSS frágil. Retorna o objeto puro (não uma string) — `evalJs`
 // (browser-registry.ts) já faz o `JSON.stringify` sozinho.
+//
+// Achado ao vivo (relatado pelo usuário com screenshot: "Não foi possível
+// ler a página" em google.com — funcionava só nas fixtures pequenas dos
+// smoke tests) — `depth<=14`/`children<=80` por nó não bastam: um site
+// real com MUITOS ramos rasos (não um único ramo fundo/largo) ainda
+// produz um JSON grande o bastante pra estourar `MAX_EVAL_RESULT_CHARS`
+// (20_000, `evalJs` em browser-registry.ts) — o resultado vem truncado
+// no meio, `JSON.parse` (em `evalJson` abaixo) falha em silêncio, e a UI
+// mostra "não foi possível ler". Confirmado com instrumentação real (não
+// só suspeita): 60 nós reais de `google.com` ocupam 14_595 chars, 60 de
+// um artigo aleatório da Wikipédia ocupam 10_613 — ambos com margem
+// confortável abaixo do teto; 80 nós já ficava em 18_578 (margem
+// apertada demais pra variação real de atributos). `BUDGET` abaixo é um
+// contador GLOBAL (compartilha `n`, já usado pros ids) que para de
+// descer a árvore inteira (não só um ramo) assim que atingido — retorna
+// `{ root, truncated, nodeCount }` em vez do nó cru, pra UI poder avisar
+// honestamente em vez de falhar calada quando uma página é grande demais
+// pra mostrar por completo de uma vez.
+const SNAPSHOT_NODE_BUDGET = 60;
 const SNAPSHOT_SCRIPT = `
 (() => {
   let n = 0;
   function walk(el, depth) {
-    if (!el || depth > 14) return null;
+    if (!el || depth > 14 || n >= ${SNAPSHOT_NODE_BUDGET}) return null;
     const id = "stellar-el-" + (n++);
     el.setAttribute("data-stellar-el-id", id);
     const attrs = {};
@@ -104,7 +124,8 @@ const SNAPSHOT_SCRIPT = `
     const text = children.length === 0 ? (el.textContent || "").trim().slice(0, 160) : "";
     return { id, tag: el.tagName.toLowerCase(), attrs, children, text };
   }
-  return walk(document.documentElement, 0);
+  const root = walk(document.documentElement, 0);
+  return { root, truncated: n >= ${SNAPSHOT_NODE_BUDGET}, nodeCount: n };
 })()
 `;
 
@@ -451,6 +472,7 @@ export function BrowserInspector({
   const [tab, setTab] = useState<Tab>("elements");
   const [tree, setTree] = useState<DomNode | null>(null);
   const [loadingTree, setLoadingTree] = useState(false);
+  const [treeTruncated, setTreeTruncated] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [detailsSubtab, setDetailsSubtab] = useState<DetailsSubtab>("styles");
@@ -493,8 +515,9 @@ export function BrowserInspector({
 
   async function refreshTree() {
     setLoadingTree(true);
-    const snapshot = await evalJson<DomNode>(id, SNAPSHOT_SCRIPT);
-    setTree(snapshot);
+    const snapshot = await evalJson<SnapshotResult>(id, SNAPSHOT_SCRIPT);
+    setTree(snapshot?.root ?? null);
+    setTreeTruncated(snapshot?.truncated ?? false);
     setLoadingTree(false);
     if (!snapshot) return;
     const point = focusPointRef.current;
@@ -502,7 +525,7 @@ export function BrowserInspector({
     if (point) {
       const targetId = await evalJson<string | null>(id, elementAtPointScript(point.x, point.y));
       if (targetId) {
-        const path = findPath(snapshot, targetId);
+        const path = findPath(snapshot.root, targetId);
         if (path) {
           setExpanded((prev) => new Set([...prev, ...path]));
           setSelectedId(targetId);
@@ -513,7 +536,7 @@ export function BrowserInspector({
     }
     // Sem alvo específico — abre pelo menos a raiz, senão a árvore
     // inteira nasce fechada e parece vazia.
-    setExpanded((prev) => (prev.size > 0 ? prev : new Set([snapshot.id])));
+    setExpanded((prev) => (prev.size > 0 ? prev : new Set([snapshot.root.id])));
   }
 
   useEffect(() => {
@@ -871,7 +894,14 @@ export function BrowserInspector({
               {loadingTree ? (
                 <div className={styles.inspectorEmpty}>Carregando árvore…</div>
               ) : tree ? (
-                <ElementsTree node={tree} selectedId={selectedId} expanded={expanded} onToggle={toggleNode} onSelect={selectNode} />
+                <>
+                  {treeTruncated && (
+                    <div className={styles.treeTruncatedNotice} data-role="inspector-tree-truncated">
+                      Página grande demais pra mostrar por completo — exibindo os primeiros {SNAPSHOT_NODE_BUDGET} elementos.
+                    </div>
+                  )}
+                  <ElementsTree node={tree} selectedId={selectedId} expanded={expanded} onToggle={toggleNode} onSelect={selectNode} />
+                </>
               ) : (
                 <div className={styles.inspectorEmpty}>Não foi possível ler a página.</div>
               )}
