@@ -1193,3 +1193,35 @@
   border-radius: 3px;
   cursor: nwse-resize;
 }
+
+/* DESIGN-BACKLOG.md item 4.3: a alça visível de 6px (14px no canto) vira
+   um alvo minúsculo demais pra clicar assim que o board dá zoom-out e/ou
+   o frame encolhe por conta do containment de "Ajustar" -- confirmado ao
+   vivo, `getBoundingClientRect()` da alça mede só 3px de tela a 50% de
+   zoom do board. Um `::after` invisível alarga só a ÁREA DE CLIQUE, sem
+   engrossar a linha visível (`background` continua só no elemento host). */
+.frameResizeRight::after,
+.frameResizeBottom::after,
+.frameResizeCorner::after {
+  content: "";
+  position: absolute;
+  pointer-events: auto;
+}
+
+.frameResizeRight::after {
+  left: -5px;
+  right: -5px;
+  top: 0;
+  bottom: 0;
+}
+
+.frameResizeBottom::after {
+  top: -5px;
+  bottom: -5px;
+  left: 0;
+  right: 0;
+}
+
+.frameResizeCorner::after {
+  inset: -5px;
+}

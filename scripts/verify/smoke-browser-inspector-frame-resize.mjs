@@ -68,6 +68,32 @@ async function setZoom(page, value) {
   await new Promise((r) => setTimeout(r, 350));
 }
 
+/** Zoom do BOARD (não confundir com `setZoom` acima, que é o select do
+ * "Ajustar/100%/etc" DENTRO do inspector) — mesmo padrão de
+ * smoke-chat-screen-projection.mjs, usado só pelo teste de regressão do
+ * item 4.3 abaixo. */
+async function setBoardZoom(page, pct) {
+  const alreadyOpen = await page.evalJs(`!!document.querySelector('.zoom-input')`);
+  if (!alreadyOpen) {
+    const zoomReadout = await centerOf(page, ".zoom-readout");
+    await page.click(zoomReadout.x, zoomReadout.y);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  const zoomInputCoords = await centerOf(page, ".zoom-input");
+  await page.click(zoomInputCoords.x, zoomInputCoords.y);
+  await page.evalJs(`
+    (() => {
+      const inp = document.querySelector('.zoom-input');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(inp, ${JSON.stringify(String(pct))});
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+    })()
+  `);
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  await new Promise((r) => setTimeout(r, 1500));
+}
+
 /** Não existe nenhuma API exposta pra ler `activeEmulation` (estado interno
  * do componente) direto do DOM — mas em zoom "100%" o `<canvas>` renderiza
  * no tamanho REAL do dispositivo em CSS px (mesma técnica já usada por
@@ -137,6 +163,56 @@ try {
 
   const before = await readEmulatedSize(page);
   check("tamanho inicial é o do preset Mobile (390×844) antes de qualquer arraste", before, (v) => v.width === 390 && v.height === 844);
+
+  // DESIGN-BACKLOG.md item 4.3 -- reproduzido ao vivo: com o board com
+  // zoom-out, a alça de 6px encolhe pra só ~3px de tela, tornando o
+  // clique real fácil de errar por completo (mousedown cai no <canvas>
+  // por baixo, e o arraste nunca começa -- exatamente o "arrastar não
+  // muda o tamanho" relatado). O `::after` invisível que alarga só a
+  // ÁREA de clique, sem engrossar a linha visível (BrowserInspector.
+  // module.css), cobre esse caso. Zoom do board a 50% e clica 1px FORA
+  // da caixa visível da alça -- miss garantido sem o `::after`, hit
+  // garantido com ele. Usa o campo de largura personalizada (não
+  // `readEmulatedSize`, que mede o `<canvas>` em CSS px assumindo board a
+  // 100% -- inválido sob zoom de board diferente de 100%) e roda ANTES
+  // de qualquer arraste/round-trip de zoom do inspector (flake
+  // pré-existente e independente deste fix: `frameBox` ocasionalmente
+  // fica com percentuais desatualizados por um instante depois do
+  // round-trip "1"→"Ajustar" de `readEmulatedSize`, deixando as alças de
+  // baixo/canto temporariamente fora de posição -- reproduzido mesmo no
+  // arquivo original sem nenhuma mudança desta rodada, portanto fora de
+  // escopo aqui; rodar este bloco cedo evita depender dele).
+  await setBoardZoom(page, 50);
+  await new Promise((r) => setTimeout(r, 300));
+  const zoomedHandle = await centerOf(page, '[data-role="inspector-frame-resize-right"]');
+  const missPointX = zoomedHandle.left - 1;
+  const missPointY = zoomedHandle.top + zoomedHandle.height / 2;
+  const hitRole = await page.evalJs(`document.elementFromPoint(${missPointX}, ${missPointY})?.getAttribute('data-role')`);
+  check("a 50% de zoom do board, um clique 1px fora da linha visível da alça ainda cai na alça (área de clique alargada)", hitRole, "inspector-frame-resize-right");
+
+  const widthBeforeZoomDrag = await page.evalJs(`document.querySelector('[data-role="inspector-custom-width"]')?.value`);
+  await drag(page, missPointX, missPointY, missPointX + 100, missPointY);
+  await new Promise((r) => setTimeout(r, 400));
+  const widthAfterZoomDrag = await page.evalJs(`document.querySelector('[data-role="inspector-custom-width"]')?.value`);
+  check("...e o arraste a partir desse ponto quase-errado muda a largura emulada de verdade", widthAfterZoomDrag, (v) => v !== widthBeforeZoomDrag);
+
+  await setBoardZoom(page, 100);
+  await new Promise((r) => setTimeout(r, 300));
+
+  // Preset Mobile de novo pra zerar o efeito do arraste acima antes das
+  // asserções de eixo abaixo (que dependem de largura/altura conhecidas).
+  await page.evalJs(`
+    (() => {
+      const select = document.querySelector('[data-role="inspector-device-select"]');
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+      const opt = [...select.options].find((o) => o.textContent.includes('Mobile'));
+      setter.call(select, opt.value);
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()
+  `);
+  await new Promise((r) => setTimeout(r, 400));
+  const beforeAxisTests = await readEmulatedSize(page);
+  check("preset Mobile reaplicado (390×844) antes dos testes de eixo abaixo", beforeAxisTests, (v) => v.width === 390 && v.height === 844);
 
   // Arrasta a alça DIREITA pra direita — só a LARGURA deve mudar.
   const rightHandle = await centerOf(page, '[data-role="inspector-frame-resize-right"]');
