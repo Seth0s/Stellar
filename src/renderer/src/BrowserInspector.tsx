@@ -459,6 +459,7 @@ export function BrowserInspector({
   initialFocusPoint,
   onEmulationChange,
   onDockChange,
+  deviceToolbarOpen,
   onClose,
 }: {
   id: string;
@@ -486,6 +487,12 @@ export function BrowserInspector({
    * (o frame existia, com a proporção certa, mas invisível, escondido
    * embaixo do dock). */
   onDockChange?: (dock: Dock, size: number) => void;
+  /** DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário: a barra de
+   * dispositivo deixa de ser sempre visível, vira um toggle no address
+   * bar de BrowserCard.tsx (ícone de celular), escondida por padrão. O
+   * estado mora lá (sobrevive ao inspector fechar/reabrir) porque o
+   * BOTÃO que liga isto vive lá, não aqui. */
+  deviceToolbarOpen: boolean;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("elements");
@@ -828,6 +835,7 @@ export function BrowserInspector({
           beginResize(dock, dock === "bottom" ? e.clientY : e.clientX);
         }}
       />
+      {deviceToolbarOpen && (
       <div className={styles.deviceToolbar} data-role="inspector-device-toolbar">
         <span className={styles.deviceLabel}>Dispositivo</span>
         <select
@@ -899,6 +907,8 @@ export function BrowserInspector({
           </button>
         )}
       </div>
+      )}
+      {deviceToolbarOpen && (
       <div className={styles.widthRulerBar} data-role="inspector-width-ruler">
         {WIDTH_RULER.map((w) => (
           <button key={w} data-role="inspector-width-preset" data-width={w} data-active={customW === w || undefined} onClick={() => pickRulerWidth(w)}>
@@ -906,6 +916,7 @@ export function BrowserInspector({
           </button>
         ))}
       </div>
+      )}
       <div className={styles.inspectorTabs}>
         <button data-role="inspector-tab" data-tab="elements" data-active={tab === "elements" || undefined} onClick={() => setTab("elements")}>
           Elements

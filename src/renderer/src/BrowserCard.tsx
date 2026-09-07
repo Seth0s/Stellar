@@ -335,6 +335,11 @@ function BrowserCardInner({
   // consultado enquanto `emulatedFrame` também está ativo — fora disso o
   // canvas continua esticado 100%/100% como sempre foi.
   const [dockInfo, setDockInfo] = useState<{ dock: "right" | "bottom" | "left"; size: number } | null>(null);
+  // DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário: a barra de
+  // dispositivo (device toolbar) do inspector deixa de ser sempre visível
+  // e vira um toggle no address bar (ícone de celular), escondida por
+  // padrão, igual o protótipo aprovado.
+  const [deviceToolbarOpen, setDeviceToolbarOpen] = useState(false);
   const designBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
   // (no reading UI for that yet, just the "something needs attention"
@@ -878,6 +883,23 @@ function BrowserCardInner({
             <Icon name="favorite" size={12} />
           </button>
           <button
+            className={styles.browserCardDesignBtn}
+            data-role="browser-device-toolbar-toggle"
+            data-active={deviceToolbarOpen || undefined}
+            title={deviceToolbarOpen ? "Ocultar barra de dispositivo" : "Mostrar barra de dispositivo (modo responsivo)"}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              if (!inspectorOpen) {
+                inspectorRequestIdRef.current++;
+                setInspectorFocusPoint(null);
+                setInspectorOpen(true);
+              }
+              setDeviceToolbarOpen((v) => !v);
+            }}
+          >
+            <Icon name="viewportMobile" size={12} />
+          </button>
+          <button
             ref={designBtnRef}
             className={styles.browserCardDesignBtn}
             data-role="browser-design-mode-btn"
@@ -952,6 +974,7 @@ function BrowserCardInner({
             initialFocusPoint={inspectorFocusPoint}
             onEmulationChange={handleEmulationChange}
             onDockChange={(dock, size) => setDockInfo({ dock, size })}
+            deviceToolbarOpen={deviceToolbarOpen}
             onClose={() => setInspectorOpen(false)}
           />
         )}

@@ -154,15 +154,26 @@ try {
   check("console eval real: '21 * 2' produz um resultado com 42", consoleResult.some((l) => l.level === "result" && l.text.includes("42")), true);
 
   // --- Device toolbar (não é mais uma aba — pedido direto do usuário,
-  // "e não tab", sempre visível acima das abas igual o device toolbar
-  // real do Chrome) ---
-  const widthBefore = JSON.parse(
-    await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),
-  );
+  // "e não tab" — mas também não fica mais sempre visível: DESIGN-
+  // BACKLOG.md §2.1 item 4, decisão do usuário, escondida por padrão
+  // atrás de um toggle no address bar, ícone de celular, igual o
+  // protótipo) ---
   check(
-    "a barra de dispositivo aparece SEM precisar clicar em aba nenhuma (sempre visível)",
+    "a barra de dispositivo NÃO aparece antes de clicar no toggle (escondida por padrão, item 4)",
+    await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`),
+    false,
+  );
+  const deviceToggle = await centerOf(page, '[data-role="browser-device-toolbar-toggle"]');
+  await page.click(deviceToggle.x, deviceToggle.y);
+  await new Promise((r) => setTimeout(r, 300));
+  check(
+    "clicar no toggle do address bar revela a barra de dispositivo",
     await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`),
     true,
+  );
+
+  const widthBefore = JSON.parse(
+    await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),
   );
   await page.evalJs(`
     (() => {
