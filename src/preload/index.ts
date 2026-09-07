@@ -267,6 +267,12 @@ const git = {
   status: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke("git:status", cwd),
 };
 
+/** DESIGN-BACKLOG.md §2.1 — cópia local dos tipos de browser-cdp.ts,
+ * mesma convenção já usada por `BrowserMouseEvent`/`BrowserContextMenuParams`
+ * abaixo (preload não cross-importa de `../main`). */
+export type CdpAttachResult = { ok: true } | { ok: false; error: string };
+export type CdpSendResult = { ok: true; result: unknown } | { ok: false; error: string };
+
 export type BrowserMouseEvent = {
   /** `mouseLeave` — closes any `:hover`/tooltip/dropdown the embedded
    * page had open when the real cursor leaves the card's canvas (see
@@ -328,8 +334,26 @@ const browser = {
   /** DESIGN-BACKLOG.md §2.1 Item E — opens the offscreen webContents' real
    * DevTools as a normal, separate, on-screen window (`mode: "detach"`
    * — see browser-registry.ts's own doc comment for why detach is the
-   * only option here). */
-  openDevTools: (id: string): Promise<void> => ipcRenderer.invoke("browser:open-devtools", id),
+   * only option here). Returns a typed result (not `void`) since 2026-09-07
+   * — Electron only allows one debugger-protocol consumer per webContents,
+   * so this now fails cleanly instead of silently detaching the embedded
+   * inspector's own CDP session if that's attached. */
+  openDevTools: (id: string): Promise<{ ok: true } | { ok: false; error: string }> => ipcRenderer.invoke("browser:open-devtools", id),
+  /** DESIGN-BACKLOG.md §2.1 — CDP do inspector embutido (browser-cdp.ts).
+   * `attachInspector`/`detachInspector` seguem o mount/unmount de
+   * BrowserInspector.tsx (ver o doc comment de `attachInspector` em
+   * browser-registry.ts). `onCdpEvent` é o canal ÚNICO pra qualquer
+   * evento CDP — o `method` já se autodescreve, sem necessidade de um
+   * canal por domínio. */
+  attachInspector: (id: string): Promise<CdpAttachResult> => ipcRenderer.invoke("browser:cdp-attach", id),
+  detachInspector: (id: string): Promise<void> => ipcRenderer.invoke("browser:cdp-detach", id),
+  sendCdp: (id: string, method: string, params?: object): Promise<CdpSendResult> =>
+    ipcRenderer.invoke("browser:cdp-send", id, method, params),
+  onCdpEvent: (cb: (id: string, method: string, params: unknown) => void) => {
+    const listener = (_e: unknown, id: string, method: string, params: unknown) => cb(id, method, params);
+    ipcRenderer.on("browser:cdp-event", listener);
+    return () => ipcRenderer.removeListener("browser:cdp-event", listener);
+  },
   /** `zoom` — Trilha A do navegador (browser-registry.ts's `resize`
    * doc comment): resolução real do conteúdo offscreen acompanha o zoom
    * do board, não só o tamanho de mundo do card. */

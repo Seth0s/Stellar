@@ -612,6 +612,46 @@ export function BrowserInspector({
   onToggleDeviceToolbar: () => void;
   onClose: () => void;
 }) {
+  // DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 0) — attach/detach seguem
+  // o mount/unmount deste componente (não a criação/destruição do card),
+  // restringindo o custo de uma sessão CDP ao caso raro (inspector
+  // aberto) em vez do caso comum (qualquer card aberto). `cdpAttachResult`
+  // começa `null` (ainda não resolveu) — `!ok` dispara o banner de erro
+  // (causa mais provável: DevTools real já aberto pra este card).
+  const [cdpAttachResult, setCdpAttachResult] = useState<Awaited<ReturnType<typeof window.browser.attachInspector>> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void window.browser.attachInspector(id).then((res) => {
+      if (!cancelled) setCdpAttachResult(res);
+    });
+    return () => {
+      cancelled = true;
+      void window.browser.detachInspector(id);
+    };
+  }, [id]);
+
+  // Desconexão inesperada no meio do caminho (ex: outra coisa forçou
+  // attach por fora) chega como o evento sintético "__detached__" de
+  // browser-cdp.ts, pelo MESMO canal genérico que toda fase futura vai
+  // usar (`onCdpEvent`, um só, sem canal por domínio — CDP já se
+  // autodescreve pelo `method`).
+  useEffect(() => {
+    const off = window.browser.onCdpEvent((eventId, method, params) => {
+      if (eventId !== id) return;
+      if (method === "__detached__") {
+        const reason = (params as { reason?: string })?.reason;
+        setCdpAttachResult({ ok: false, error: `Sessão de depuração desanexada${reason ? ` (${reason})` : ""}.` });
+      }
+    });
+    return () => {
+      off();
+    };
+  }, [id]);
+
+  function retryCdpAttach() {
+    void window.browser.attachInspector(id).then(setCdpAttachResult);
+  }
+
   const [tab, setTab] = useState<Tab>("elements");
   const [tree, setTree] = useState<DomNode | null>(null);
   const [loadingTree, setLoadingTree] = useState(false);
@@ -1421,6 +1461,12 @@ export function BrowserInspector({
           <Icon name="close" size={13} />
         </button>
       </div>
+      {cdpAttachResult && !cdpAttachResult.ok && (
+        <div className={styles.cdpErrorBanner} data-role="inspector-cdp-error">
+          <span>{cdpAttachResult.error}</span>
+          <button onClick={retryCdpAttach}>Tentar novamente</button>
+        </div>
+      )}
       <div className={styles.inspectorBody}>
         {tab === "elements" && (
           <div className={styles.elementsSplit}>

@@ -241,6 +241,38 @@
   white-space: normal;
 }
 
+/* DESIGN-BACKLOG.md §2.1 (adoção de CDP) — Electron só permite UM
+   consumidor do protocolo de depuração por webContents; se o DevTools
+   real já estiver aberto (ou a sessão desanexar no meio do caminho por
+   qualquer outro motivo), o attach do inspector falha. Mesmo idioma
+   visual de `.treeTruncatedNotice` acima (tom --warn, é um erro de
+   verdade, não uma nota permanente de escopo como `.listenersNotice`). */
+.cdpErrorBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 0 0 8px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+  border-radius: 6px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.cdpErrorBanner button {
+  flex: none;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 3px 8px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+}
+
 .detailsPane {
   flex: 1 1 44%;
   min-height: 0;

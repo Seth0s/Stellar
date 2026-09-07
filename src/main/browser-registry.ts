@@ -1,4 +1,5 @@
 import { app, BrowserWindow, type Session } from "electron";
+import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
 
 export type BrowserMouseEvent = {
   /** `mouseLeave` — achado ao vivo (2026-08-31): sem sinal explícito de
@@ -73,6 +74,11 @@ type Entry = {
   scaleFactor: number;
   console: ConsoleEntry[];
   network: NetworkEntry[];
+  /** DESIGN-BACKLOG.md §2.1 — sessão CDP do inspector embutido, ver
+   * browser-cdp.ts. `null` a maior parte da vida do card — só existe
+   * entre `attachInspector`/`detachInspector` (mount/unmount do
+   * `BrowserInspector.tsx`), nunca durante a vida inteira do card. */
+  cdp: CdpSession | null;
 };
 
 // Pre-release audit P2 — every visible browser card painted at the same
@@ -226,6 +232,12 @@ export function createBrowserRegistry(callbacks: {
    * index.ts) usa o display onde a janela do app REALMENTE está, correto
    * em multi-monitor com DPIs diferentes, não só "primary display". */
   getScaleFactor: () => number;
+  /** DESIGN-BACKLOG.md §2.1 — repassa QUALQUER evento CDP (`DOM.setChildNodes`,
+   * `Network.responseReceived`, `Debugger.paused`, o `"__detached__"`
+   * sintético de browser-cdp.ts, etc.) por um canal só — CDP já se
+   * autodescreve pelo `method`, um canal por domínio só duplicaria esse
+   * discriminante. Ver `browser-cdp.ts`'s doc comment. */
+  onCdpEvent: (id: string, method: string, params: unknown) => void;
 }) {
   const entries = new Map<string, Entry>();
   /** `webRequest` só reporta o `webContentsId`; isto o traduz de volta pro
@@ -400,7 +412,7 @@ export function createBrowserRegistry(callbacks: {
       });
     });
 
-    entries.set(id, { win, visible: true, scaleFactor, console: [], network: [] });
+    entries.set(id, { win, visible: true, scaleFactor, console: [], network: [], cdp: null });
     // A sessão é a padrão, compartilhada com a janela principal, e o
     // `webRequest` do Electron aceita UM listener por evento por sessão —
     // então o registro é feito uma vez só e despachado por
@@ -433,9 +445,58 @@ export function createBrowserRegistry(callbacks: {
   /** DESIGN-BACKLOG.md §2.1 Item E — `openDevTools` works on an offscreen
    * `webContents` same as a real one; `mode: "detach"` opens it as its
    * OWN normal (on-screen) window rather than trying to render DevTools
-   * itself offscreen, which Electron doesn't support. */
-  function openDevTools(id: string) {
-    entries.get(id)?.win.webContents.openDevTools({ mode: "detach" });
+   * itself offscreen, which Electron doesn't support.
+   *
+   * DESIGN-BACKLOG.md §2.1 (adoção de CDP) — Electron só permite UM
+   * consumidor do protocolo de depuração por `webContents` por vez.
+   * Com o inspector embutido agora também usando `webContents.debugger`
+   * (`entry.cdp`, ver browser-cdp.ts), abrir o DevTools real enquanto o
+   * inspector está anexado desanexaria a sessão dele sozinho (Electron
+   * dispara "detach", não erro — ver doc comment de `createCdpSession`).
+   * Recusa explicitamente em vez de deixar isso acontecer "por baixo dos
+   * panos": devolve um resultado tipado que a UI usa pra avisar o
+   * usuário, em vez de void silencioso. */
+  function openDevTools(id: string): { ok: true } | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: "card not found" };
+    if (entry.cdp?.isAttached()) {
+      return { ok: false, error: "Feche o inspector embutido antes de abrir o DevTools real (os dois usam o mesmo protocolo de depuração)." };
+    }
+    entry.win.webContents.openDevTools({ mode: "detach" });
+    return { ok: true };
+  }
+
+  /** DESIGN-BACKLOG.md §2.1 — anexa a sessão CDP do inspector embutido.
+   * Chamado no MOUNT de `BrowserInspector.tsx` (não em `create()` do
+   * card) — a maioria dos cards nunca abre o inspector, então nunca paga
+   * o custo de uma sessão CDP. Idempotente: reattach com uma sessão já
+   * viva é um no-op (`CdpSession.attach()` já trata isso). */
+  async function attachInspector(id: string): Promise<CdpAttachResult> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: "card not found" };
+    if (entry.win.webContents.isDevToolsOpened()) {
+      return { ok: false, error: "Feche o DevTools real antes de abrir o inspector embutido (os dois usam o mesmo protocolo de depuração)." };
+    }
+    if (!entry.cdp) {
+      entry.cdp = createCdpSession(entry.win.webContents, (method, params) => callbacks.onCdpEvent(id, method, params));
+    }
+    return entry.cdp.attach();
+  }
+
+  /** Chamado no UNMOUNT de `BrowserInspector.tsx` E em `destroy()`/
+   * `destroyAll()` abaixo — idempotente nos dois casos, qual dos dois
+   * rodar primeiro não importa. */
+  function detachInspector(id: string): void {
+    const entry = entries.get(id);
+    if (!entry?.cdp) return;
+    entry.cdp.detach();
+    entry.cdp = null;
+  }
+
+  async function sendCdp(id: string, method: string, params?: object): Promise<CdpSendResult> {
+    const entry = entries.get(id);
+    if (!entry?.cdp) return { ok: false, error: "CDP session not attached" };
+    return entry.cdp.send(method, params);
   }
 
   /** Pendentes #188 — "modo responsivo real" pro mini-inspector embutido
@@ -1302,6 +1363,11 @@ export function createBrowserRegistry(callbacks: {
     const entry = entries.get(id);
     if (entry) wcIdToCardId.delete(entry.win.webContents.id);
     if (!entry) return;
+    // Idempotente mesmo se o unmount do BrowserInspector.tsx já tiver
+    // desanexado antes (`detachInspector` acima) — a ordem entre "React
+    // unmount → IPC detach" e "card fechando → IPC destroy" nunca
+    // precisa de sincronização nova por causa disso.
+    entry.cdp?.detach();
     entry.win.destroy();
     entries.delete(id);
   }
@@ -1317,6 +1383,9 @@ export function createBrowserRegistry(callbacks: {
     forward,
     reload,
     openDevTools,
+    attachInspector,
+    detachInspector,
+    sendCdp,
     setDeviceEmulation,
     resize,
     getContentSize,
