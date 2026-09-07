@@ -106,6 +106,12 @@ try {
 
   check("sem emulação ativa, o seletor de zoom nem aparece (só faz sentido com um device-frame de verdade)", await page.evalJs(`!!document.querySelector('[data-role="inspector-zoom-select"]')`), false);
 
+  // Item 4 — a barra de dispositivo agora fica escondida por padrão atrás
+  // de um toggle no address bar (ícone de celular), não mais sempre visível.
+  const deviceToggle = await centerOf(page, '[data-role="browser-device-toolbar-toggle"]');
+  await page.click(deviceToggle.x, deviceToggle.y);
+  await new Promise((r) => setTimeout(r, 300));
+
   await page.evalJs(`
     (() => {
       const select = document.querySelector('[data-role="inspector-device-select"]');
