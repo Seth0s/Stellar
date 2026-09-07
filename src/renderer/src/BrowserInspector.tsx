@@ -84,6 +84,28 @@ function formatConsoleArgs(args: CdpRemoteObject[]): string {
   const leftover = rest.slice(argIdx).map(cdpArgToText);
   return [substituted, ...leftover].join(" ").trim();
 }
+/** Achado ao vivo (2026-09-07, o usuário ainda via `%c...` cru DEPOIS do
+ * fix acima): `formatConsoleArgs` só entra em ação pra mensagens NOVAS,
+ * capturadas ao vivo via `Runtime.consoleAPICalled` DEPOIS que o inspector
+ * anexa. O aviso de segurança do Electron dispara na hora que a página
+ * carrega — quase sempre ANTES do usuário pensar em abrir o inspector —
+ * então ele já está no HISTÓRICO (`window.browser.getConsole`, buffer de
+ * `console-message` nativo do Electron em `browser-registry.ts`, que só
+ * guarda a string JÁ ACHATADA, sem args estruturados) muito antes de
+ * qualquer sessão CDP existir. Essa string achatada perdeu a fronteira
+ * entre os args pra sempre (`details.message` já vem com tudo concatenado
+ * por espaço) — não dá pra reconstruir a substituição printf de verdade
+ * a partir dela. Mas o `%c` do PRÓPRIO Electron é um caso conhecido e
+ * estável (usa sempre a mesma string de estilo literal, `"font-weight:
+ * bold;"`, em todos os avisos nativos de segurança) — limpeza cirúrgica
+ * só pra ESSE padrão específico, não um parser genérico de printf sobre
+ * texto já achatado (isso exigiria adivinhar fronteira de argumento, o
+ * que não dá pra fazer com segurança). */
+const ELECTRON_WARNING_STYLE_LITERAL = "font-weight: bold;";
+function sanitizeFlattenedConsoleText(text: string): string {
+  if (!text.includes("%c")) return text;
+  return text.replaceAll("%c", "").replaceAll(ELECTRON_WARNING_STYLE_LITERAL, "").replace(/^\s+/, "");
+}
 type Tab = "elements" | "console" | "network" | "application" | "sources" | "performance";
 type SourceEntry = { url: string; kind: "document" | "script" | "stylesheet" };
 /** Fase 4 (adoção de CDP) — a aba Network do Inspector passa a usar isto
@@ -1081,7 +1103,7 @@ export function BrowserInspector({
   // pelo evento CDP).
   useEffect(() => {
     void window.browser.getConsole(id).then((res) => {
-      if (res.ok) setConsoleEntries(res.messages);
+      if (res.ok) setConsoleEntries(res.messages.map((m) => ({ ...m, message: sanitizeFlattenedConsoleText(m.message) })));
     });
   }, [id]);
 
