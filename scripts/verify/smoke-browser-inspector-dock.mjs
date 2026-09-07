@@ -4,7 +4,8 @@
 // na mesma sticky). smoke-browser-inspector.mjs já cobre Elements/
 // Console/Responsivo — este arquivo cobre o que ficou faltando: dock/
 // resize, Application (local/session storage + cookies reais), Network
-// (session.webRequest real) e Design Mode (evalJs picker + window.pty.write).
+// (push ao vivo via CDP, DESIGN-BACKLOG.md §2.1 Fase 4) e Design Mode
+// (evalJs picker + window.pty.write).
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
@@ -30,13 +31,20 @@ async function toolJson(name, args) {
   return JSON.parse(rpc.result.content[0].text);
 }
 
+// DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 4): \`Network.enable\` só
+// liga quando a aba Network abre pela 1ª vez (não no attach do inspector
+// inteiro — é o domínio com custo real de buffering), então requisições
+// que já terminaram ANTES da aba abrir nunca chegam (mesmo comportamento
+// do DevTools real — "preserve log" à parte, abrir o painel depois não
+// resmuscita o passado). \`window.__firePing\` deixa o teste disparar o
+// fetch só DEPOIS de abrir a aba, provando o push ao vivo de verdade.
 const FIXTURE_HTML = `<!doctype html><html><body style="margin:0">
   <h1 id="title">Fixture do dock</h1>
   <button id="btn" class="pick-me">clique aqui</button>
   <script>
     localStorage.setItem("stellar_k", "stellar_v");
     document.cookie = "stellar_c=stellar_cv; path=/";
-    fetch("/api/ping").catch(() => {});
+    window.__firePing = () => fetch("/api/ping").catch(() => {});
   </script>
 </body></html>`;
 const httpPort = await pickFreePort();
@@ -141,12 +149,17 @@ try {
   // --- Network ---
   const networkTab = await centerOf(page, '[data-role="inspector-tab"][data-tab="network"]');
   await page.click(networkTab.x, networkTab.y);
+  await new Promise((r) => setTimeout(r, 300));
+  // Network.enable só liga agora que a aba abriu — dispara o fetch DEPOIS
+  // disso, pra provar o push ao vivo (Network.requestWillBeSent/
+  // responseReceived reais), não um snapshot de algo que já tinha acontecido.
+  await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.__firePing()")`);
   await new Promise((r) => setTimeout(r, 500));
   const networkRows = JSON.parse(
     await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-role="inspector-network-row"]')].map((r) => r.textContent))`),
   );
   check(
-    "aba Network mostra a requisição real (session.webRequest, sem CDP) que a página disparou",
+    "aba Network mostra a requisição real (Network domain do CDP, push ao vivo) que a página disparou",
     networkRows.some((r) => r.includes("api/ping") && r.includes("200")),
     true,
   );

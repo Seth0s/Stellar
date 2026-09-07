@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import styles from "./BrowserInspector.module.css";
 
@@ -40,7 +40,30 @@ type CdpRawNode = {
 type ConsoleLine = { level: string; message: string; at: number };
 type Tab = "elements" | "console" | "network" | "application" | "sources" | "performance";
 type SourceEntry = { url: string; kind: "document" | "script" | "stylesheet" };
-type NetworkLine = { method: string; url: string; status: number | null; error?: string; at: number };
+/** Fase 4 (adoção de CDP) — a aba Network do Inspector passa a usar isto
+ * em vez do shape `NetworkLine` simples que `window.browser.getNetwork`
+ * ainda devolve (a tool MCP `getNetwork`/o resumo da aba Performance
+ * continuam nesse shape antigo, sem CDP — ver `refreshProcessStats`
+ * abaixo). `startedMonotonic` é o
+ * `timestamp` CRU do evento `Network.requestWillBeSent` (relógio
+ * monotônico do processo, não wall-clock) — guardado só pra calcular
+ * `durationMs` quando `loadingFinished`/`loadingFailed` chegar; `at` (pra
+ * exibição) já vem de `wallTime` (esse sim wall-clock) convertido pra ms. */
+type NetworkEntry = {
+  requestId: string;
+  method: string;
+  url: string;
+  status: number | null;
+  statusText?: string;
+  mimeType?: string;
+  error?: string;
+  requestHeaders: Record<string, string>;
+  responseHeaders: Record<string, string>;
+  initiatorType?: string;
+  at: number;
+  startedMonotonic: number;
+  durationMs?: number;
+};
 type Dock = "right" | "bottom" | "left";
 type StorageArea = "local" | "session" | "cookies";
 type DetailsSubtab = "styles" | "computed" | "listeners";
@@ -683,6 +706,58 @@ export function BrowserInspector({
           }
         }
         styleSheetLabelsRef.current.set(header.styleSheetId, label);
+        return;
+      }
+      // Fase 4 (adoção de CDP) — push ao vivo da aba Network, um evento
+      // por etapa do ciclo de vida do request (o mesmo request cruza os 4
+      // eventos por `requestId`, nunca chega pronto de uma vez só).
+      if (method === "Network.requestWillBeSent") {
+        const p = params as {
+          requestId: string;
+          request: { url: string; method: string; headers: Record<string, string> };
+          wallTime: number;
+          timestamp: number;
+          initiator?: { type?: string };
+        };
+        setNetworkEntries((prev) => [
+          ...prev.slice(-499),
+          {
+            requestId: p.requestId,
+            method: p.request.method,
+            url: p.request.url,
+            status: null,
+            requestHeaders: p.request.headers,
+            responseHeaders: {},
+            initiatorType: p.initiator?.type,
+            at: p.wallTime * 1000,
+            startedMonotonic: p.timestamp,
+          },
+        ]);
+        return;
+      }
+      if (method === "Network.responseReceived") {
+        const p = params as { requestId: string; response: { status: number; statusText: string; headers: Record<string, string>; mimeType: string } };
+        setNetworkEntries((prev) =>
+          prev.map((e) =>
+            e.requestId === p.requestId
+              ? { ...e, status: p.response.status, statusText: p.response.statusText, responseHeaders: p.response.headers, mimeType: p.response.mimeType }
+              : e,
+          ),
+        );
+        return;
+      }
+      if (method === "Network.loadingFinished") {
+        const p = params as { requestId: string; timestamp: number };
+        setNetworkEntries((prev) => prev.map((e) => (e.requestId === p.requestId ? { ...e, durationMs: (p.timestamp - e.startedMonotonic) * 1000 } : e)));
+        return;
+      }
+      if (method === "Network.loadingFailed") {
+        const p = params as { requestId: string; timestamp: number; errorText: string; canceled?: boolean };
+        setNetworkEntries((prev) =>
+          prev.map((e) =>
+            e.requestId === p.requestId ? { ...e, error: p.canceled ? "cancelado" : p.errorText, durationMs: (p.timestamp - e.startedMonotonic) * 1000 } : e,
+          ),
+        );
       }
     });
     return () => {
@@ -781,13 +856,25 @@ export function BrowserInspector({
   >([]);
   const [loadingStorage, setLoadingStorage] = useState(false);
 
-  // Aba Network — `getNetwork` já existia no registry pro lado MCP
-  // (tap de `session.webRequest`, sem CDP); só faltava a UI alcançá-lo.
-  // Snapshot pull (igual `getConsole`), não push ao vivo — um botão
-  // "Atualizar" cobre requisições novas sem precisar reabrir a aba.
-  const [networkRows, setNetworkRows] = useState<NetworkLine[]>([]);
-  const [loadingNetwork, setLoadingNetwork] = useState(false);
+  // Aba Network (DESIGN-BACKLOG.md §2.1, adoção de CDP, Fase 4) — o
+  // domínio `Network` fica de fora de `EAGER_DOMAINS` (browser-cdp.ts) de
+  // propósito: só ele tem custo real de buffering (bodies de resposta
+  // ficam retidos em memória enquanto o request "vivo" na sessão), então
+  // só habilita (`Network.enable`, um comando CDP comum como outro
+  // qualquer — `sendCdp` genérico, sem precisar de método dedicado) na
+  // PRIMEIRA vez que esta aba abre, não no attach do inspector inteiro.
+  // Push ao vivo via `requestWillBeSent`/`responseReceived`/
+  // `loadingFinished`/`loadingFailed` (capturados no dispatcher genérico
+  // de `onCdpEvent`) substitui o polling antigo de `getNetwork` SÓ pra
+  // esta aba — `ensureNetworkTap`/`NETWORK_BUFFER` (browser-registry.ts)
+  // continuam intocados, servindo a tool MCP `getNetwork` e o resumo da
+  // aba Performance (`refreshProcessStats` abaixo), que não precisam de
+  // headers/body/timing reais.
+  const [networkEntries, setNetworkEntries] = useState<NetworkEntry[]>([]);
   const [networkOnlyFailed, setNetworkOnlyFailed] = useState(false);
+  const [expandedNetworkId, setExpandedNetworkId] = useState<string | null>(null);
+  const [networkBodies, setNetworkBodies] = useState<Record<string, { content: string; base64Encoded: boolean } | { error: string }>>({});
+  const networkEnabledRef = useRef(false);
 
   // Aba Sources (DESIGN-BACKLOG.md §2.1 item 7) — árvore read-only de
   // scripts/stylesheets/documento principal + visualizador de código.
@@ -918,17 +1005,29 @@ export function BrowserInspector({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, id]);
 
-  async function refreshNetwork() {
-    setLoadingNetwork(true);
-    const res = await window.browser.getNetwork(id);
-    setNetworkRows(res.ok ? res.requests : []);
-    setLoadingNetwork(false);
+  useEffect(() => {
+    if (tab !== "network" || networkEnabledRef.current) return;
+    networkEnabledRef.current = true;
+    void window.browser.sendCdp(id, "Network.enable", {});
+  }, [tab, id]);
+
+  async function fetchNetworkBody(requestId: string) {
+    const res = await window.browser.sendCdp(id, "Network.getResponseBody", { requestId });
+    if (!res.ok) {
+      setNetworkBodies((prev) => ({ ...prev, [requestId]: { error: res.error } }));
+      return;
+    }
+    const { body, base64Encoded } = res.result as { body: string; base64Encoded: boolean };
+    setNetworkBodies((prev) => ({ ...prev, [requestId]: { content: body, base64Encoded } }));
   }
 
-  useEffect(() => {
-    if (tab === "network") void refreshNetwork();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, id]);
+  function toggleNetworkRow(requestId: string) {
+    setExpandedNetworkId((prev) => {
+      const next = prev === requestId ? null : requestId;
+      if (next && !(next in networkBodies)) void fetchNetworkBody(next);
+      return next;
+    });
+  }
 
   async function refreshSources() {
     setLoadingSourceList(true);
@@ -1505,8 +1604,15 @@ export function BrowserInspector({
           </button>
         )}
         {tab === "network" && (
-          <button title="Atualizar requisições" onClick={() => void refreshNetwork()}>
-            <Icon name="reload" size={13} />
+          <button
+            title="Limpar requisições"
+            onClick={() => {
+              setNetworkEntries([]);
+              setNetworkBodies({});
+              setExpandedNetworkId(null);
+            }}
+          >
+            <Icon name="close" size={13} />
           </button>
         )}
         {tab === "sources" && (
@@ -1657,9 +1763,7 @@ export function BrowserInspector({
               </button>
             </div>
             <div className={styles.storageTableWrap}>
-              {loadingNetwork ? (
-                <div className={styles.inspectorEmpty}>Carregando requisições…</div>
-              ) : networkRows.length === 0 ? (
+              {networkEntries.length === 0 ? (
                 <div className={styles.inspectorEmpty}>Nenhuma requisição registrada ainda.</div>
               ) : (
                 <table className={styles.storageTable} data-role="inspector-network-table">
@@ -1668,22 +1772,80 @@ export function BrowserInspector({
                       <th>Método</th>
                       <th>URL</th>
                       <th>Status</th>
-                      <th>Quando</th>
+                      <th>Tipo</th>
+                      <th>Tempo</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {networkRows
-                      .filter((r) => !networkOnlyFailed || r.error !== undefined || r.status === null || r.status >= 400)
-                      .map((r, i) => (
-                        <tr key={i} data-role="inspector-network-row">
-                          <td>{r.method}</td>
-                          <td className={styles.networkUrl} title={r.url}>
-                            {r.url}
-                          </td>
-                          <td data-severity={r.status !== null && r.status < 400 && !r.error ? "ok" : "error"}>{r.error ? "erro" : (r.status ?? "—")}</td>
-                          <td>{new Date(r.at).toLocaleTimeString()}</td>
-                        </tr>
-                      ))}
+                    {networkEntries
+                      .filter((r) => !networkOnlyFailed || r.error !== undefined || (r.status !== null && r.status >= 400))
+                      .map((r) => {
+                        const body = networkBodies[r.requestId];
+                        const isOpen = expandedNetworkId === r.requestId;
+                        return (
+                          <Fragment key={r.requestId}>
+                            <tr data-role="inspector-network-row" data-expanded={isOpen || undefined} onClick={() => toggleNetworkRow(r.requestId)}>
+                              <td>{r.method}</td>
+                              <td className={styles.networkUrl} title={r.url}>
+                                {r.url}
+                              </td>
+                              <td data-severity={r.status !== null && r.status < 400 && !r.error ? "ok" : "error"}>{r.error ? "erro" : (r.status ?? "—")}</td>
+                              <td>{r.mimeType ?? "—"}</td>
+                              <td>{r.durationMs !== undefined ? `${Math.round(r.durationMs)} ms` : "…"}</td>
+                            </tr>
+                            {isOpen && (
+                              <tr data-role="inspector-network-detail">
+                                <td colSpan={5}>
+                                  <div className={styles.networkDetail}>
+                                    <div className={styles.networkDetailSection}>
+                                      <div className={styles.ruleSelector}>Initiator</div>
+                                      <div>{r.initiatorType ?? "—"}</div>
+                                    </div>
+                                    <div className={styles.networkDetailSection}>
+                                      <div className={styles.ruleSelector}>Request Headers</div>
+                                      <div className={styles.decl}>
+                                        {Object.entries(r.requestHeaders).map(([k, v]) => (
+                                          <div key={k}>
+                                            <span className={styles.prop}>{k}</span>
+                                            <span className={styles.propval}>{v}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    <div className={styles.networkDetailSection}>
+                                      <div className={styles.ruleSelector}>Response Headers</div>
+                                      {Object.keys(r.responseHeaders).length === 0 ? (
+                                        <div className={styles.ruleEmpty}>— sem resposta ainda —</div>
+                                      ) : (
+                                        <div className={styles.decl}>
+                                          {Object.entries(r.responseHeaders).map(([k, v]) => (
+                                            <div key={k}>
+                                              <span className={styles.prop}>{k}</span>
+                                              <span className={styles.propval}>{v}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className={styles.networkDetailSection} data-role="inspector-network-body">
+                                      <div className={styles.ruleSelector}>Body</div>
+                                      {!body ? (
+                                        <div className={styles.ruleEmpty}>Carregando…</div>
+                                      ) : "error" in body ? (
+                                        <div className={styles.ruleEmpty}>{body.error}</div>
+                                      ) : (
+                                        <pre className={styles.networkBody} data-role="inspector-network-body-content">
+                                          {body.base64Encoded ? "(binário, base64)" : body.content}
+                                        </pre>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
                   </tbody>
                 </table>
               )}

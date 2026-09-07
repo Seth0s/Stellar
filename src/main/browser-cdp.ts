@@ -16,9 +16,12 @@ import type { WebContents } from "electron";
  * inspector (Elements/Styles/Listeners/Network/Sources/Performance) —
  * não uma sessão por feature. `attach()` habilita de propósito só os
  * domínios sem custo de buffering/instrumentação (`DOM`/`CSS`/`Overlay`/
- * `Runtime`); `Network`/`Debugger`/`Profiler` habilitam sob demanda via
- * `enableDomain()`, chamados só quando a aba correspondente abre pela
- * primeira vez (ver `BrowserInspector.tsx`).
+ * `Runtime`); `Network`/`Debugger`/`Profiler` habilitam sob demanda —
+ * `send("Network.enable")` genérico via `sendCdp` do lado do renderer,
+ * chamado só quando a aba correspondente abre pela primeira vez (ver
+ * `BrowserInspector.tsx`) — sem precisar de um método dedicado além do
+ * `send()` que já existe: um domínio `.enable` é só mais um comando CDP
+ * como outro qualquer.
  *
  * `attach()` é síncrono e lança na hora se outro consumidor do
  * protocolo já estiver anexado ao MESMO `webContents` (`electron.d.ts`:
@@ -38,7 +41,6 @@ export type CdpSession = {
   attach: () => Promise<CdpAttachResult>;
   detach: () => void;
   send: (method: string, params?: object) => Promise<CdpSendResult>;
-  enableDomain: (domain: string) => Promise<CdpSendResult>;
   isAttached: () => boolean;
 };
 
@@ -60,8 +62,8 @@ export function createCdpSession(wc: WebContents, onEvent: (method: string, para
     });
     // Ver doc comment do módulo — dispara tanto num detach EXPLÍCITO nosso
     // quanto quando outra coisa (DevTools real) assume o protocolo por
-    // fora; `attached` precisa refletir isso pra `send()`/`enableDomain()`
-    // pararem de tentar mandar comando num debugger que já não responde
+    // fora; `attached` precisa refletir isso pra `send()` parar de
+    // tentar mandar comando num debugger que já não responde
     // mais, e pro renderer poder mostrar o banner de "inspector
     // indisponível" mesmo numa desconexão que ESTE módulo não iniciou.
     wc.debugger.on("detach", (_event, reason) => {
@@ -113,13 +115,9 @@ export function createCdpSession(wc: WebContents, onEvent: (method: string, para
     }
   }
 
-  function enableDomain(domain: string): Promise<CdpSendResult> {
-    return send(`${domain}.enable`);
-  }
-
   function isAttached(): boolean {
     return attached;
   }
 
-  return { attach, detach, send, enableDomain, isAttached };
+  return { attach, detach, send, isAttached };
 }
