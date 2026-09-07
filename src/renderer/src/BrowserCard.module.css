@@ -290,6 +290,47 @@
   outline: none;
 }
 
+/* Device-frame model (DESIGN-BACKLOG.md §2.1 item 3, 2026-09-07) — antes,
+   ligar emulação de dispositivo mudava o content size REAL do webContents
+   (ex: 390×844 pro preset Mobile) mas o <canvas> continuava esticado
+   width:100%/height:100% pro tamanho do card inteiro — a proporção real
+   do dispositivo (390:844) ficava forçada num retângulo com proporção
+   bem diferente (ex: 860:616), distorcendo/esticando a página inteira
+   (confirmado ao vivo com uma fixture de teste virando um borrão vertical
+   esticado). Com emulação ativa, o wrap vira um fundo mais escuro
+   (`--ink`, o neutro mais escuro já existente na paleta, sem precisar de
+   token novo) e centraliza o canvas via `margin: auto` num container
+   `overflow: auto` — preserva a proporção real (via `aspect-ratio`
+   inline, ver BrowserCard.tsx) e, se o zoom escolhido (100%/75%/50%,
+   device toolbar) for maior que o espaço disponível, rola de verdade em
+   vez de espremer. `margin: auto` (não `align-items:center` no pai) é de
+   propósito — vira `0` sozinho quando o conteúdo não cabe mais,
+   comportamento padrão do zoom com scroll sem o bug conhecido de
+   flexbox+overflow+center cortando a borda inicial do conteúdo. */
+.browserCardBodyWrap[data-emulating="true"] {
+  display: flex;
+  overflow: auto;
+  background: var(--ink);
+}
+
+.browserCardBodyWrap[data-emulating="true"] .browserCardBody {
+  /* `flex: none` (não só `flex-shrink:0`) é o ponto real do fix — a regra
+     base herda `flex: 1` (flex-grow:1), que sozinho já ignora `width:auto`/
+     `aspect-ratio` e cresce o item pra preencher o eixo principal inteiro
+     (achado ao vivo: `getComputedStyle` mostrava aspect-ratio computado
+     certo, MAS width/height ainda batiam exatamente com o wrap). Com
+     `flex:none`, o item some do "tira o espaço livre" e vira dimensionado
+     só pelo `aspect-ratio`+`max-width`/`max-height` abaixo; `margin:auto`
+     então centraliza ele dentro do espaço livre restante. */
+  flex: none;
+  width: auto;
+  height: auto;
+  margin: auto;
+  border-radius: 8px;
+  box-shadow: var(--shadow-float);
+  background: #fff;
+}
+
 /* Visible cue for the click-to-focus gate above (BrowserCard.tsx's
    onCanvasWheel) — otherwise there's no way to tell, before scrolling,
    whether this card or the board underneath it will respond to the wheel. */
