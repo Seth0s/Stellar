@@ -215,8 +215,22 @@ try {
 
   // Fecha o inspector — a emulação de dispositivo deve desligar sozinha
   // (não pode deixar a página presa em viewport mobile sem controle
-  // nenhum visível pra desligar).
-  const closeBtn = await centerOf(page, '[data-role="browser-inspector"] button[title="Fechar inspector"]');
+  // nenhum visível pra desligar). Painel acabou de ser espremido pro
+  // `DOCK_MIN` (acima) com emulação ativa — o dock agora encolhe de
+  // VERDADE sob aperto (refactor overlay→reflow), então o botão de
+  // fechar pode estar rolado pra fora da área visível de
+  // `.inspectorTabs` (`overflow-x:auto`); `scrollIntoView` simula o
+  // gesto de rolar até ele, igual um usuário real precisaria fazer.
+  const closeBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = document.querySelector('[data-role="browser-inspector"] button[title="Fechar inspector"]');
+        b.scrollIntoView({ block: "nearest", inline: "nearest" });
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
   await page.click(closeBtn.x, closeBtn.y);
   await new Promise((r) => setTimeout(r, 400));
   const widthAfterClose = JSON.parse(

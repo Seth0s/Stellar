@@ -569,7 +569,6 @@ export function BrowserInspector({
   cardSize,
   initialFocusPoint,
   onEmulationChange,
-  onDockChange,
   deviceToolbarOpen,
   onToggleDeviceToolbar,
   onClose,
@@ -589,16 +588,6 @@ export function BrowserInspector({
    * manter o mapeamento de clique correto (ver o doc comment de
    * `handleEmulationChange` em BrowserCard.tsx). */
   onEmulationChange?: (dims: { width: number; height: number; zoom: "fit" | "1" | "0.75" | "0.5" } | null) => void;
-  /** O dock é um overlay ABSOLUTO por cima do canvas, de propósito (não
-   * reflow — ver o doc comment no topo de BrowserCard.module.css), então
-   * BrowserCard.tsx não tem como saber sozinho quanto espaço o painel
-   * está cobrindo agora. Sem isto, o device-frame centralizado (device-
-   * frame model, item 3) centraliza contra a largura CHEIA do corpo do
-   * card e cai atrás do próprio painel que o abriu — achado ao vivo
-   * comparando `getBoundingClientRect()` do canvas com um screenshot real
-   * (o frame existia, com a proporção certa, mas invisível, escondido
-   * embaixo do dock). */
-  onDockChange?: (dock: Dock, size: number) => void;
   /** DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário (revista ao vivo
    * em 2026-09-07: o botão morava no address bar de BrowserCard.tsx;
    * pedido explícito de mover a ferramenta de device-frame pra DENTRO do
@@ -606,8 +595,7 @@ export function BrowserInspector({
    * em BrowserCard.tsx (sobrevive o inspector fechar/reabrir), só o botão
    * que troca ele mudou de lugar — por isso o valor chega como prop
    * (`deviceToolbarOpen`) e a mudança sai por callback
-   * (`onToggleDeviceToolbar`), mesmo padrão de `onDockChange`/
-   * `onEmulationChange` acima. */
+   * (`onToggleDeviceToolbar`), mesmo padrão de `onEmulationChange` acima. */
   deviceToolbarOpen: boolean;
   onToggleDeviceToolbar: () => void;
   onClose: () => void;
@@ -655,14 +643,21 @@ export function BrowserInspector({
   // dock) é filho direto de `.browserCardBodyWrap` — o MESMO
   // `position:relative` que já contém o `<canvas>` (ver BrowserCard.tsx)
   // — então basta um ref no root deste componente pra achar o wrap via
-  // `.parentElement` e medir o espaço disponível de verdade, sem precisar
-  // de nenhuma prop nova vinda de BrowserCard.tsx. `wrapSize` alimenta o
-  // MESMO cálculo de "contido" (`aspect-ratio`+`max-width/height:100%`+
-  // `margin:auto`) que o CSS de BrowserCard.module.css já faz sozinho —
-  // replicado aqui em JS só pra saber ONDE desenhar as alças (o CSS
-  // continua sendo a fonte de verdade do que aparece na tela).
+  // `.parentElement` e ler a caixa real do canvas dentro dele, sem
+  // precisar de nenhuma prop nova vinda de BrowserCard.tsx. `frameBox`
+  // (abaixo) lê `getBoundingClientRect()` do PRÓPRIO `<canvas>` — não
+  // reimplementa o cálculo de "contido" (`aspect-ratio`+`max-width/
+  // height:100%`+`margin:auto`) que o CSS já faz sozinho. Antes disto
+  // (achado ao vivo, screenshot do usuário: "as linhas do frame ficam
+  // fora do content") esta era uma SEGUNDA implementação independente da
+  // mesma matemática de layout — podia divergir (visivelmente um frame
+  // atrás durante resize rápido, e ficou de fato errada quando
+  // BrowserCard.tsx reservava espaço do dock via `padding`, removido no
+  // refactor overlay→reflow). Lendo a caixa REAL do canvas, as alças
+  // acompanham qualquer resize (card, dock, o que for) por construção,
+  // sem chance de divergir.
   const inspectorRootRef = useRef<HTMLDivElement>(null);
-  const [wrapSize, setWrapSize] = useState<{ w: number; h: number; padLeft: number; padTop: number } | null>(null);
+  const [frameBox, setFrameBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const frameResizeRef = useRef<{ axis: "right" | "bottom" | "corner"; startX: number; startY: number; startW: number; startH: number; scaleX: number; scaleY: number } | null>(null);
 
   const [storageArea, setStorageArea] = useState<StorageArea>("local");
@@ -1031,8 +1026,6 @@ export function BrowserInspector({
   // espelhado já usado acima pra `activeEmulation`/`cardSize`.
   const onEmulationChangeRef = useRef(onEmulationChange);
   onEmulationChangeRef.current = onEmulationChange;
-  const onDockChangeRef = useRef(onDockChange);
-  onDockChangeRef.current = onDockChange;
 
   // Avisa BrowserCard.tsx (dono do <canvas>) do que está realmente
   // aplicado agora — dispara de novo a cada mudança real de emulação OU
@@ -1041,12 +1034,6 @@ export function BrowserInspector({
   useEffect(() => {
     onEmulationChangeRef.current?.(activeEmulation ? { width: activeEmulation.width, height: activeEmulation.height, zoom: frameZoom } : null);
   }, [activeEmulation, frameZoom]);
-
-  // Idem, pro lado/tamanho do dock — só importa enquanto o painel existe
-  // (`inspectorOpen` do lado de BrowserCard.tsx já cobre "painel fechado").
-  useEffect(() => {
-    onDockChangeRef.current?.(dock, panelSizes[dock]);
-  }, [dock, panelSizes]);
 
   // Desliga a emulação de dispositivo se o card fechar o inspector (ou
   // desmontar) com uma ainda ativa — não deve sobreviver ao inspector
@@ -1073,6 +1060,19 @@ export function BrowserInspector({
   function beginResize(d: Dock, clientPos: number) {
     resizingRef.current = { dock: d, start: clientPos, startSize: panelSizes[d] };
   }
+  // Throttle via rAF (mesmo espírito do `rafThrottleRect`, CardFrame.tsx,
+  // incluindo o "flush" final no fim do arraste) — revisto ao vivo no
+  // refactor overlay→reflow: arrastar esta alça agora reflow de VERDADE
+  // o canvas a cada mudança de `panelSizes` (o dock virou flex sibling,
+  // não mais overlay absoluto), o que por sua vez dispara o
+  // `ResizeObserver` novo de BrowserCard.tsx a cada tick — sem o
+  // throttle, cada pointermove cru viraria uma chamada IPC de resize.
+  // `pendingResizeRef` guarda sempre o ÚLTIMO valor calculado (mesmo
+  // enquanto um rAF já está agendado) pra `endResize` poder aplicar o
+  // valor final de verdade na hora de soltar, em vez de simplesmente
+  // cancelar e perder o último tick.
+  const panelResizeRafRef = useRef<number | null>(null);
+  const pendingResizeRef = useRef<{ dock: Dock; next: number } | null>(null);
   function onResizePointerMove(e: React.PointerEvent) {
     const r = resizingRef.current;
     if (!r) return;
@@ -1080,76 +1080,61 @@ export function BrowserInspector({
     const delta = pos - r.start;
     const signed = r.dock === "right" ? -delta : r.dock === "left" ? delta : -delta;
     const next = Math.max(DOCK_MIN[r.dock], Math.min(DOCK_MAX[r.dock], r.startSize + signed));
-    setPanelSizes((prev) => ({ ...prev, [r.dock]: next }));
+    pendingResizeRef.current = { dock: r.dock, next };
+    if (panelResizeRafRef.current !== null) return;
+    panelResizeRafRef.current = requestAnimationFrame(() => {
+      panelResizeRafRef.current = null;
+      const p = pendingResizeRef.current;
+      if (p) setPanelSizes((prev) => ({ ...prev, [p.dock]: p.next }));
+    });
   }
   function endResize() {
     resizingRef.current = null;
+    if (panelResizeRafRef.current !== null) {
+      cancelAnimationFrame(panelResizeRafRef.current);
+      panelResizeRafRef.current = null;
+      const p = pendingResizeRef.current;
+      if (p) setPanelSizes((prev) => ({ ...prev, [p.dock]: p.next }));
+    }
+    pendingResizeRef.current = null;
   }
 
-  // Só existe (e só faz sentido medir) enquanto uma emulação está ativa
-  // — sem isso `wrapSize` fica em `null` a maior parte do tempo, sem
-  // custo.
+  // Só existe (e só faz sentido medir) em zoom "Ajustar" com emulação
+  // ativa — sem isso `frameBox` fica em `null` o resto do tempo, sem
+  // custo. Nos zooms fixos (100%/75%/50%) o frame pode ficar MAIOR que a
+  // área visível e rolar (ver o CSS de `.browserCardBodyWrap[data-
+  // emulating]`) — as alças precisariam então compensar `scrollLeft`/
+  // `scrollTop` do wrap, uma complicação a mais que fica de fora desta
+  // rodada (decisão de escopo, não esquecida).
   //
-  // Achado ao vivo (screenshot do usuário: as linhas das alças apareciam
-  // bem longe do frame de verdade, "fora do content"): `wrap.clientWidth/
-  // clientHeight` medem a PADDING BOX (conteúdo + padding) — mas
-  // BrowserCard.tsx aplica `paddingRight`/`paddingLeft`/`paddingBottom`
-  // NELE MESMO (via `onDockChange`) só pra reservar o espaço do dock, e o
-  // canvas (centralizado com `margin:auto` dentro do flex) respeita esse
-  // padding, ficando menor/deslocado pra caber no espaço que SOBRA. Medir
-  // a padding box inteira (ignorando o padding reservado) fazia o cálculo
-  // de "contido" abaixo achar que tinha MAIS espaço livre do que existe de
-  // verdade, desenhando as alças bem fora de onde o frame realmente
-  // aparece. Fix: subtrai o padding de verdade (via `getComputedStyle`) e
-  // guarda o offset (`padLeft`/`padTop`) pra somar de volta na posição das
-  // alças — a mesma caixa de conteúdo que o flexbox já usa por baixo dos
-  // panos.
+  // Lê a caixa REAL do `<canvas>` (`getBoundingClientRect()`, relativa
+  // ao wrap) em vez de re-derivar a matemática de "contido" — o
+  // `ResizeObserver` no canvas acompanha qualquer resize (card, dock, o
+  // que for) automaticamente, sem chance de divergir do que o CSS
+  // realmente pintou.
   useEffect(() => {
+    if (!activeEmulation || frameZoom !== "fit") {
+      setFrameBox(null);
+      return;
+    }
     const wrap = inspectorRootRef.current?.parentElement;
-    if (!wrap) return;
+    const canvas = wrap?.querySelector<HTMLElement>('[data-role="browser-body"]');
+    if (!wrap || !canvas) return;
     function measure() {
-      const cs = getComputedStyle(wrap!);
-      const padLeft = parseFloat(cs.paddingLeft) || 0;
-      const padRight = parseFloat(cs.paddingRight) || 0;
-      const padTop = parseFloat(cs.paddingTop) || 0;
-      const padBottom = parseFloat(cs.paddingBottom) || 0;
-      setWrapSize({
-        w: wrap!.clientWidth - padLeft - padRight,
-        h: wrap!.clientHeight - padTop - padBottom,
-        padLeft,
-        padTop,
+      const wrapRect = wrap!.getBoundingClientRect();
+      const canvasRect = canvas!.getBoundingClientRect();
+      setFrameBox({
+        left: canvasRect.left - wrapRect.left,
+        top: canvasRect.top - wrapRect.top,
+        width: canvasRect.width,
+        height: canvasRect.height,
       });
     }
     const ro = new ResizeObserver(measure);
-    ro.observe(wrap);
+    ro.observe(canvas);
     measure();
     return () => ro.disconnect();
-  }, []);
-
-  // Caixa do frame na tela (mesma matemática do "contido" que o CSS de
-  // BrowserCard.module.css já aplica sozinho via `aspect-ratio`+`max-
-  // width/height:100%` — replicada aqui só pra saber ONDE desenhar as
-  // alças). Só existe em zoom "Ajustar": nos zooms fixos (100%/75%/50%)
-  // o frame pode ficar MAIOR que a área visível e rolar (ver o CSS de
-  // `.browserCardBodyWrap[data-emulating]`) — as alças precisariam
-  // então compensar `scrollLeft`/`scrollTop` do wrap, uma complicação a
-  // mais que fica de fora desta rodada (decisão de escopo, não
-  // esquecida).
-  const frameBox =
-    activeEmulation && frameZoom === "fit" && wrapSize && wrapSize.w > 0 && wrapSize.h > 0
-      ? (() => {
-          const deviceRatio = activeEmulation.width / activeEmulation.height;
-          const wrapRatio = wrapSize.w / wrapSize.h;
-          const width = wrapRatio > deviceRatio ? wrapSize.h * deviceRatio : wrapSize.w;
-          const height = wrapRatio > deviceRatio ? wrapSize.h : wrapSize.w / deviceRatio;
-          return {
-            left: wrapSize.padLeft + (wrapSize.w - width) / 2,
-            top: wrapSize.padTop + (wrapSize.h - height) / 2,
-            width,
-            height,
-          };
-        })()
-      : null;
+  }, [activeEmulation, frameZoom]);
 
   function beginFrameResize(axis: "right" | "bottom" | "corner", clientX: number, clientY: number) {
     if (!activeEmulation || !frameBox) return;

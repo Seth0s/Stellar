@@ -252,6 +252,21 @@ function BrowserCardInner({
   const createdRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastSizeRef = useRef({ w: 0, h: 0 });
+  // Achado ao vivo (2026-09-07, refactor overlay→reflow do dock): `rect.h`
+  // é a altura de MUNDO do card INTEIRO (header+body, ver CardFrame.tsx's
+  // `style={{ height: rect.h }}` no root do card) — a área de body de
+  // verdade (onde o canvas realmente pinta) é sempre MENOR que isso, o
+  // header consome uma fatia fixa por cima. O `ResizeObserver` novo
+  // (abaixo) mede essa altura REAL; sem consolidar as OUTRAS duas fontes
+  // de resize (efeito de `rect.w/rect.h` e o listener de
+  // `onScaleFactorChanged`, ambos abaixo) pra usar essa MESMA altura
+  // medida, as três brigariam — cada uma aplicando um tamanho de conteúdo
+  // ligeiramente diferente (a diferença exata da altura do header)
+  // dependendo de qual delas rodou por último, um esticamento vertical
+  // sutil que ia e voltava. `null` até a primeira medição real chegar
+  // (fallback pro `rect.h` bruto nesse meio tempo, corrigido no instante
+  // seguinte pelo próprio observer).
+  const bodyHeightRef = useRef<number | null>(null);
   // Achado ao vivo (2026-09-01) — bug real de clique impreciso sempre que
   // o content size real da BrowserWindow offscreen diverge do tamanho de
   // mundo do rect (o único caso hoje: `scaleFactor` != 1, Item 6 abaixo).
@@ -326,15 +341,13 @@ function BrowserCardInner({
   // controla o CSS do canvas (proporção real do dispositivo, não mais
   // esticado pro tamanho do card) e o zoom escolhido no device toolbar.
   const [emulatedFrame, setEmulatedFrame] = useState<EmulatedFrame | null>(null);
-  // O dock do inspector é um overlay ABSOLUTO por cima do canvas (não
-  // reflow, ver o doc comment em BrowserCard.module.css) — sem isto, o
-  // device-frame centralizado (abaixo) centraliza contra a largura CHEIA
-  // do corpo do card e cai atrás do próprio painel que o abriu (achado ao
-  // vivo: `getBoundingClientRect()` batia certo, mas o frame ficava
-  // invisível num screenshot real, escondido embaixo do dock). Só é
-  // consultado enquanto `emulatedFrame` também está ativo — fora disso o
-  // canvas continua esticado 100%/100% como sempre foi.
-  const [dockInfo, setDockInfo] = useState<{ dock: "right" | "bottom" | "left"; size: number } | null>(null);
+  // Espelho em ref do `emulatedFrame` acima — mesmo padrão já usado por
+  // `rectRef`/`scaleFactorRef` neste arquivo: o novo `ResizeObserver` do
+  // canvas (abaixo) precisa ler o valor ATUAL dentro de um callback que
+  // não deve re-executar a cada mudança de `emulatedFrame` (o observer é
+  // criado uma vez só, `useEffect([id])`).
+  const emulatedFrameRef = useRef(emulatedFrame);
+  emulatedFrameRef.current = emulatedFrame;
   // DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário: a barra de
   // dispositivo (device toolbar) do inspector deixa de ser sempre visível
   // e vira um toggle no address bar (ícone de celular), escondida por
@@ -598,7 +611,7 @@ function BrowserCardInner({
 
   useEffect(() => {
     const w = Math.round(rect.w);
-    const h = Math.round(rect.h);
+    const h = Math.round(bodyHeightRef.current ?? rect.h);
     if (lastSizeRef.current.w === w && lastSizeRef.current.h === h) return;
     lastSizeRef.current = { w, h };
     applyResize(w, h);
@@ -624,10 +637,65 @@ function BrowserCardInner({
       if (changedId !== id) return;
       scaleFactorRef.current = scaleFactor;
       const { w, h } = rectRef.current;
-      applyResize(Math.round(w), Math.round(h));
+      applyResize(Math.round(w), Math.round(bodyHeightRef.current ?? h));
     });
     return () => {
       off();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Revisto ao vivo (2026-09-07, refactor overlay→reflow do dock do
+  // inspector): antes, só `rect.w`/`rect.h` (tamanho do card no board,
+  // efeito acima) disparava `applyResize` — o dock era um overlay
+  // absoluto, então abrir/redimensionar ele nunca mudava a caixa real do
+  // canvas. Agora o dock é um flex sibling de verdade (ver
+  // `.browserCardBodyWrap` em BrowserCard.module.css): abrir/redimensionar
+  // ele ENCOLHE a caixa do canvas sem mexer em `rect.w`/`rect.h` — sem
+  // isto, o bitmap offscreen ficaria fora de sincronia com a caixa CSS
+  // (borrado/esticado). Um `ResizeObserver` no próprio canvas fecha esse
+  // gap, lendo o tamanho REAL renderizado em vez de inferir.
+  //
+  // Gate crítico: NUNCA roda enquanto `emulatedFrame` está ativo
+  // (`emulatedFrameRef`, espelho igual `rectRef`/`scaleFactorRef` — o
+  // observer é criado uma vez só, `useEffect([id])`, precisa ler o valor
+  // ATUAL). Durante emulação, o tamanho do dispositivo é controlado por
+  // `setDeviceEmulation`/`applyEmulation` (BrowserInspector.tsx), e o CSS
+  // de "Ajustar" (`aspect-ratio`+`max-width/height:100%`) já lê o tamanho
+  // INTRÍNSECO do canvas (os atributos width/height do bitmap) como
+  // entrada — rodar os dois ao mesmo tempo arriscaria um loop de
+  // feedback (o observer vendo a caixa mudar por causa do PRÓPRIO
+  // `applyResize` que ele acabou de disparar).
+  //
+  // Throttle via rAF (mesmo padrão de `rafThrottleRect`, CardFrame.tsx)
+  // — arrastar a alça do dock dispara isto a cada tick de pointermove;
+  // sem o throttle, cada tick vira uma chamada IPC de resize.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let rafId: number | null = null;
+    let pending: { w: number; h: number } | null = null;
+    function flush() {
+      rafId = null;
+      if (!pending) return;
+      const { w, h } = pending;
+      bodyHeightRef.current = h;
+      if (emulatedFrameRef.current) return;
+      if (lastSizeRef.current.w === w && lastSizeRef.current.h === h) return;
+      lastSizeRef.current = { w, h };
+      applyResize(w, h);
+    }
+    const ro = new ResizeObserver((entries) => {
+      if (emulatedFrameRef.current) return;
+      const box = entries[0]?.contentRect;
+      if (!box) return;
+      pending = { w: Math.max(1, Math.round(box.width)), h: Math.max(1, Math.round(box.height)) };
+      if (rafId === null) rafId = requestAnimationFrame(flush);
+    });
+    ro.observe(canvas);
+    return () => {
+      ro.disconnect();
+      if (rafId !== null) cancelAnimationFrame(rafId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -871,6 +939,33 @@ function BrowserCardInner({
               {consoleBadgeCount}
             </span>
           )}
+          {/* Fecha o Bug E (relatado ao vivo): `emulatedFrame` e
+           * `deviceToolbarOpen` são propositalmente independentes
+           * (esconder a barra ≠ parar a emulação, DESIGN-BACKLOG.md item
+           * 4) — sem isto, não existia NENHUM indicador em lugar nenhum
+           * de que a emulação continuava ativa depois de esconder a
+           * barra ou fechar/reabrir o inspector. Clique reabre o
+           * inspector E revela o device toolbar num clique só (repõe a
+           * descoberta que o botão antigo do address bar dava antes de
+           * mudar de lugar pra dentro do inspector). */}
+          {emulatedFrame && (
+            <button
+              className={styles.browserCardEmulationBadge}
+              data-role="browser-emulation-badge"
+              title={`Emulação de dispositivo ativa (${emulatedFrame.width}×${emulatedFrame.height}) — clique para abrir o inspector`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                if (!inspectorOpen) {
+                  inspectorRequestIdRef.current++;
+                  setInspectorFocusPoint(null);
+                  setInspectorOpen(true);
+                }
+                setDeviceToolbarOpen(true);
+              }}
+            >
+              <Icon name="viewportMobile" size={12} />
+            </button>
+          )}
           <button
             ref={favBtnRef}
             className={styles.browserCardFavoriteBtn}
@@ -907,19 +1002,7 @@ function BrowserCardInner({
         </div>
       }
     >
-      <div
-        className={styles.browserCardBodyWrap}
-        data-emulating={emulatedFrame ? "true" : undefined}
-        style={
-          emulatedFrame && dockInfo
-            ? {
-                paddingRight: dockInfo.dock === "right" ? dockInfo.size : undefined,
-                paddingLeft: dockInfo.dock === "left" ? dockInfo.size : undefined,
-                paddingBottom: dockInfo.dock === "bottom" ? dockInfo.size : undefined,
-              }
-            : undefined
-        }
-      >
+      <div className={styles.browserCardBodyWrap} data-emulating={emulatedFrame ? "true" : undefined}>
         <canvas
           ref={canvasRef}
           className={styles.browserCardBody}
@@ -956,7 +1039,6 @@ function BrowserCardInner({
             cardSize={{ w: rect.w, h: rect.h }}
             initialFocusPoint={inspectorFocusPoint}
             onEmulationChange={handleEmulationChange}
-            onDockChange={(dock, size) => setDockInfo({ dock, size })}
             deviceToolbarOpen={deviceToolbarOpen}
             onToggleDeviceToolbar={() => setDeviceToolbarOpen((v) => !v)}
             onClose={() => setInspectorOpen(false)}
@@ -984,7 +1066,23 @@ function BrowserCardInner({
             {consoleCounts.error} erro(s), {consoleCounts.warning} aviso(s) no console
           </div>
         )}
-        {(ownerCardId || consoleBadgeCount > 0) && <div className={styles.browserCardFavDivider} />}
+        {emulatedFrame && (
+          <button
+            onClick={() => {
+              if (!inspectorOpen) {
+                inspectorRequestIdRef.current++;
+                setInspectorFocusPoint(null);
+                setInspectorOpen(true);
+              }
+              setDeviceToolbarOpen(true);
+              setMenuOpen(false);
+            }}
+          >
+            <Icon name="viewportMobile" size={14} />
+            Emulação ativa ({emulatedFrame.width}×{emulatedFrame.height})
+          </button>
+        )}
+        {(ownerCardId || consoleBadgeCount > 0 || emulatedFrame) && <div className={styles.browserCardFavDivider} />}
         <button
           onClick={() => {
             setInspectorFocusPoint(null);
