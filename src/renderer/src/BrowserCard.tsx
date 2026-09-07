@@ -1104,7 +1104,17 @@ function BrowserCardInner({
         </button>
         <button
           onClick={() => {
-            void window.browser.openDevTools(id);
+            // DESIGN-BACKLOG.md §2.1 (adoção de CDP) — Electron só permite
+            // um consumidor do protocolo de depuração por webContents;
+            // com o inspector embutido aberto (própria sessão CDP), isto
+            // agora pode recusar em vez de desanexar a sessão dele por
+            // baixo dos panos. Sem componente de toast neste arquivo —
+            // `console.warn` é honesto o bastante pro caso raro (usuário
+            // precisa ter o inspector aberto E clicar isto) sem introduzir
+            // infraestrutura nova só pra este banner.
+            void window.browser.openDevTools(id).then((res) => {
+              if (!res.ok) console.warn("[browser] não foi possível abrir o DevTools real:", res.error);
+            });
             setMenuOpen(false);
           }}
         >

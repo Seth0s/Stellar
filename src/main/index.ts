@@ -800,6 +800,7 @@ function createWindow() {
     onFrame: (id, jpeg, width, height) => safeSend(win, "browser:frame", id, jpeg, width, height),
     onConsoleMessage: (id, level, message) => safeSend(win, "browser:console-message", id, level, message),
     onContextMenu: (id, params) => safeSend(win, "browser:context-menu", id, params),
+    onCdpEvent: (id, method, params) => safeSend(win, "browser:cdp-event", id, method, params),
     // Achado ao vivo ("navegador parece 360p") — o display onde a janela
     // REAL do app está, não `getPrimaryDisplay()`, é correto mesmo num
     // setup multi-monitor com DPIs diferentes (a janela pode não estar no
@@ -1310,6 +1311,13 @@ function createWindow() {
   ipcMain.handle("browser:forward", (_e, id: string) => browserRegistry.forward(id));
   ipcMain.handle("browser:reload", (_e, id: string) => browserRegistry.reload(id));
   ipcMain.handle("browser:open-devtools", (_e, id: string) => browserRegistry.openDevTools(id));
+  // DESIGN-BACKLOG.md §2.1 — CDP do inspector embutido (browser-cdp.ts).
+  // Attach/detach são disparados pelo mount/unmount de BrowserInspector.tsx,
+  // não pela criação/destruição do card — ver o doc comment de
+  // `attachInspector` em browser-registry.ts pro porquê.
+  ipcMain.handle("browser:cdp-attach", (_e, id: string) => browserRegistry.attachInspector(id));
+  ipcMain.handle("browser:cdp-detach", (_e, id: string) => browserRegistry.detachInspector(id));
+  ipcMain.handle("browser:cdp-send", (_e, id: string, method: string, params?: object) => browserRegistry.sendCdp(id, method, params));
   // Pendentes #188 — menu de contexto nativo do Chromium embutido.
   // `x`/`y` já chegam em coordenadas reais de tela relativas a `win`
   // (BrowserCard.tsx fez a conversão a partir do retângulo real do

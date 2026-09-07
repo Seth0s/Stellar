@@ -206,10 +206,25 @@ export async function stopApp(app) {
 
 /** A live CDP connection to the app's one page target — `send` for raw
  * protocol calls, `evalJs` for the common "run this expression in the
- * page, get the value back" case. */
+ * page, get the value back" case.
+ *
+ * Achado ao vivo (2026-09-07, planejando a adoção de CDP no Browser
+ * Inspector): `--remote-debugging-port`'s `/json` lista TODO `type:"page"`
+ * target do processo Electron, inclusive a `BrowserWindow` offscreen de
+ * cada browser card aberto — `.find((t) => t.type === "page")` (sem
+ * filtro nenhum) pegava sempre o PRIMEIRO da lista, que só por acidente
+ * era sempre a janela principal porque nenhum smoke test até agora abria
+ * um card ANTES de chamar `connectPage()`. Uma suíte que abrisse um card
+ * primeiro arriscaria controlar o alvo errado silenciosamente (sem
+ * erro nenhum, só clique/evalJs indo pro card em vez da shell). A janela
+ * principal empacotada carrega via `win.loadFile(join(__dirname, "../
+ * renderer/index.html"))` (main/index.ts) — sufixo estável que nenhuma
+ * URL real que um card navegue (google.com, fixture http://127.0.0.1:PORT/)
+ * jamais teria. Prefere esse match; cai pro `.find` antigo (primeiro
+ * `page` da lista) só se nada bater, por segurança. */
 export async function connectPage(cdpPort) {
   const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json();
-  const target = list.find((t) => t.type === "page");
+  const target = list.find((t) => t.type === "page" && t.url.endsWith("renderer/index.html")) ?? list.find((t) => t.type === "page");
   if (!target) throw new Error("no page target found");
   const ws = new WebSocket(target.webSocketDebuggerUrl);
 
