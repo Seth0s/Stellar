@@ -762,6 +762,18 @@ export function BrowserInspector({
             e.requestId === p.requestId ? { ...e, error: p.canceled ? "cancelado" : p.errorText, durationMs: (p.timestamp - e.startedMonotonic) * 1000 } : e,
           ),
         );
+        return;
+      }
+      // Fase 6 (adoção de CDP) — `Debugger.paused` chega quando um
+      // breakpoint real é atingido (o único jeito de pausar era esperar
+      // isso acontecer; sem step-into/over/out, `resumed` é o único jeito
+      // de continuar, via `resumeDebugger` abaixo).
+      if (method === "Debugger.paused") {
+        setDebuggerPaused(true);
+        return;
+      }
+      if (method === "Debugger.resumed") {
+        setDebuggerPaused(false);
       }
     });
     return () => {
@@ -891,6 +903,16 @@ export function BrowserInspector({
   const [selectedSourceUrl, setSelectedSourceUrl] = useState<string | null>(null);
   const [sourceContent, setSourceContent] = useState<{ content: string; truncated: boolean; totalChars: number } | { error: string } | null>(null);
   const [loadingSourceContent, setLoadingSourceContent] = useState(false);
+  // DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 6) — breakpoints reais
+  // via `Debugger.setBreakpointByUrl`/`removeBreakpoint`. `Debugger.enable`
+  // só liga na 1ª tentativa de toggle (não no attach do inspector
+  // inteiro), mesmo padrão de `Network.enable` na Fase 4. Só faz sentido
+  // em `kind:"script"` (arquivo JS de verdade) — `SOURCES_LIST_SCRIPT`
+  // só lista scripts EXTERNOS (`s.src`), então todo item `script` tem uma
+  // URL real que `setBreakpointByUrl` consegue casar.
+  const [breakpointsByUrl, setBreakpointsByUrl] = useState<Record<string, { breakpointId: string; lineNumber: number }[]>>({});
+  const [debuggerPaused, setDebuggerPaused] = useState(false);
+  const debuggerEnabledRef = useRef(false);
 
   // Aba Performance (DESIGN-BACKLOG.md §2.1 item 8) — FPS ao vivo é
   // medido inteiro no renderer (`window.browser.onFrame`, o MESMO evento
@@ -1082,6 +1104,30 @@ export function BrowserInspector({
       cancelled = true;
     };
   }, [id, selectedSourceUrl]);
+
+  async function toggleBreakpoint(url: string, lineNumber: number) {
+    if (!debuggerEnabledRef.current) {
+      const enableRes = await window.browser.sendCdp(id, "Debugger.enable", {});
+      if (!enableRes.ok) return;
+      debuggerEnabledRef.current = true;
+    }
+    const existing = (breakpointsByUrl[url] ?? []).find((b) => b.lineNumber === lineNumber);
+    if (existing) {
+      await window.browser.sendCdp(id, "Debugger.removeBreakpoint", { breakpointId: existing.breakpointId });
+      setBreakpointsByUrl((prev) => ({ ...prev, [url]: (prev[url] ?? []).filter((b) => b.lineNumber !== lineNumber) }));
+      return;
+    }
+    // CDP é 0-indexed; a UI (CodeEditor's gutter, `jumpToLine` etc.) é
+    // 1-indexed em todo lugar — converte só na fronteira com o protocolo.
+    const res = await window.browser.sendCdp(id, "Debugger.setBreakpointByUrl", { lineNumber: lineNumber - 1, url });
+    if (!res.ok) return;
+    const { breakpointId } = res.result as { breakpointId: string };
+    setBreakpointsByUrl((prev) => ({ ...prev, [url]: [...(prev[url] ?? []), { breakpointId, lineNumber }] }));
+  }
+
+  function resumeDebugger() {
+    void window.browser.sendCdp(id, "Debugger.resume", {});
+  }
 
   async function refreshProcessStats() {
     setLoadingProcessStats(true);
@@ -1545,6 +1591,9 @@ export function BrowserInspector({
   }
 
   const panelSizeStyle = dock === "bottom" ? { height: panelSizes.bottom } : { width: panelSizes[dock] };
+  // Fase 6 (adoção de CDP) — breakpoints só fazem sentido em `kind:"script"`.
+  const selectedSourceKind = sourceList.find((s) => s.url === selectedSourceUrl)?.kind;
+  const breakpointLineSet = new Set((selectedSourceUrl ? breakpointsByUrl[selectedSourceUrl] : undefined)?.map((b) => b.lineNumber) ?? []);
 
   return (
     <>
@@ -2066,21 +2115,29 @@ export function BrowserInspector({
                 <div className={styles.inspectorEmpty}>Não foi possível buscar o arquivo: {sourceContent.error}</div>
               ) : (
                 <>
-                  {/* DESIGN-BACKLOG.md §2.1 item 7 — o gutter de breakpoint
-                      do protótipo fica DESABILITADO de propósito, não
-                      esquecido: abrir um breakpoint de verdade (pausar a
-                      execução de verdade) exige o protocolo do V8
-                      Inspector (`webContents.debugger`/CDP), que este
-                      projeto decidiu não usar (mesma decisão por trás do
-                      limite de Event Listeners acima). Fingir um gutter
-                      clicável sem nenhum breakpoint real por trás seria
-                      exatamente o tipo de controle decorativo que este
-                      projeto evita (mesmo raciocínio do "SEM THROTTLING"
-                      não construído no device toolbar). */}
-                  <div className={styles.sourceBreakpointNotice} data-role="inspector-breakpoint-notice">
-                    Breakpoints desabilitados — pausar a execução de verdade exige o protocolo do DevTools (CDP), que este inspector não usa. Somente
-                    leitura.
-                  </div>
+                  {/* DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 6) — o
+                      gutter de breakpoint do protótipo virou real:
+                      `Debugger.setBreakpointByUrl`/`removeBreakpoint` no
+                      clique, `Debugger.paused`/`resumed` refletidos no
+                      banner abaixo. Escopo explícito e reduzido: sem watch
+                      expressions, sem navegação de call-stack-frame, sem
+                      step-into/over/out — um botão único de Continuar. Só
+                      existe em `kind:"script"` (arquivo JS real com URL
+                      externa de verdade); documento/CSS continuam
+                      somente-leitura sem gutter, não faz sentido pausar JS
+                      neles. */}
+                  {debuggerPaused && (
+                    <div className={styles.sourceBreakpointNotice} data-role="inspector-debugger-paused" data-severity="paused">
+                      Execução pausada num breakpoint.
+                      <button onClick={resumeDebugger}>Continuar</button>
+                    </div>
+                  )}
+                  {selectedSourceKind !== "script" && (
+                    <div className={styles.sourceBreakpointNotice} data-role="inspector-breakpoint-notice">
+                      Breakpoints só em arquivos JS — {selectedSourceKind === "document" ? "isto é o documento principal" : "isto é uma folha de estilo"},
+                      somente leitura.
+                    </div>
+                  )}
                   {sourceContent.truncated && (
                     <div className={styles.sourceTruncatedNotice} data-role="inspector-source-truncated">
                       Arquivo grande demais pra mostrar por completo — exibindo os primeiros {sourceContent.content.length.toLocaleString("pt-BR")} de{" "}
@@ -2088,7 +2145,15 @@ export function BrowserInspector({
                     </div>
                   )}
                   <Suspense fallback={<div className={styles.inspectorEmpty}>Carregando editor…</div>}>
-                    <CodeEditor key={selectedSourceUrl} value={sourceContent.content} onChange={() => {}} filename={selectedSourceUrl} readOnly />
+                    <CodeEditor
+                      key={selectedSourceUrl}
+                      value={sourceContent.content}
+                      onChange={() => {}}
+                      filename={selectedSourceUrl}
+                      readOnly
+                      breakpointLines={selectedSourceKind === "script" ? breakpointLineSet : undefined}
+                      onToggleBreakpoint={selectedSourceKind === "script" ? (line) => void toggleBreakpoint(selectedSourceUrl, line) : undefined}
+                    />
                   </Suspense>
                 </>
               )}
