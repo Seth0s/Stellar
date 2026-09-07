@@ -194,10 +194,34 @@ try {
         .then((r) => r.result)
     `),
   );
+  // Achado ao vivo depurando o refactor overlay→reflow do dock (2026-09-07):
+  // `browser-registry.ts`'s `sendMouseEvent` passa x/y DIRETO pro
+  // `sendInputEvent` do Electron, sem nenhuma conversão de escala — ou
+  // seja, espera coordenadas no espaço de PIXEL DE CONTEÚDO (o tamanho
+  // real do `setContentSize`, inflado por `BROWSER_SUPERSAMPLE`/
+  // `scaleFactor`), NÃO no espaço lógico/CSS que `getBoundingClientRect()`
+  // relata dentro da própria página (`window.innerWidth`, o que o zoom
+  // page já cancela). Mesma conversão que `toCanvasPoint` (BrowserCard.tsx)
+  // já faz pra cliques reais no canvas — sem ela, um clique em (x,y)
+  // lógico cai bem mais perto do topo/esquerda do que o elemento de
+  // verdade (confirmado ao vivo: mirava o `<h1>` do topo em vez do
+  // `#btn`, sempre que o fator de conteúdo real for > 1). Deriva o fator
+  // de verdade via `debugBridge.browserContentSize` (real content size)
+  // dividido pelo `window.innerWidth` lógico da própria página embutida,
+  // em vez de hardcodar as constantes de `browser-registry.ts`.
+  const scaleInfo = JSON.parse(
+    await page.evalJs(`
+      Promise.all([
+        window.debugBridge.browserContentSize(${JSON.stringify(browserId)}),
+        window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => r.result),
+      ]).then(([content, logicalWidth]) => JSON.stringify({ factor: content.w / logicalWidth }))
+    `),
+  );
+  const scaledPoint = { x: btnPoint.x * scaleInfo.factor, y: btnPoint.y * scaleInfo.factor };
   await page.evalJs(`
-    window.browser.sendMouse(${JSON.stringify(browserId)}, { type: "mouseMove", x: ${btnPoint.x}, y: ${btnPoint.y} });
-    window.browser.sendMouse(${JSON.stringify(browserId)}, { type: "mouseDown", x: ${btnPoint.x}, y: ${btnPoint.y}, button: "left", clickCount: 1 });
-    window.browser.sendMouse(${JSON.stringify(browserId)}, { type: "mouseUp", x: ${btnPoint.x}, y: ${btnPoint.y}, button: "left", clickCount: 1 });
+    window.browser.sendMouse(${JSON.stringify(browserId)}, { type: "mouseMove", x: ${scaledPoint.x}, y: ${scaledPoint.y} });
+    window.browser.sendMouse(${JSON.stringify(browserId)}, { type: "mouseDown", x: ${scaledPoint.x}, y: ${scaledPoint.y}, button: "left", clickCount: 1 });
+    window.browser.sendMouse(${JSON.stringify(browserId)}, { type: "mouseUp", x: ${scaledPoint.x}, y: ${scaledPoint.y}, button: "left", clickCount: 1 });
     "ok"
   `);
   // Poll — o pick chega via `setInterval` de 200ms no lado do renderer

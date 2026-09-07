@@ -103,21 +103,34 @@ try {
   await bootIntoFreshSession(page, "Browser Zoom Resolution Teste", { spawnTerminal: false });
   await new Promise((r) => setTimeout(r, 500));
 
-  const { id: cardId, w: rectW, h: rectH } = await createBrowserCard(page);
+  const { id: cardId, w: rectW } = await createBrowserCard(page);
   check("browser card real criado", typeof cardId === "string" && cardId.length > 0, true);
 
   async function contentSize() {
     return await page.evalJs(`window.debugBridge.browserContentSize(${JSON.stringify(cardId)})`);
   }
 
+  // Revisto ao vivo (2026-09-07, refactor overlay→reflow do dock do
+  // inspector): `rectH` (tamanho de MUNDO do card, header+body juntos)
+  // não é mais o que vira a altura do CONTEÚDO — desde que o dock passou
+  // a ser um flex sibling de verdade, `BrowserCard.tsx` ganhou um
+  // `ResizeObserver` no próprio `<canvas>` que mede a caixa REAL da
+  // área de body (excluindo o header), fechando um gap que sempre
+  // existiu mas nunca era exercitado (antes, só `rect.w`/`rect.h`
+  // disparava resize, então o bitmap ficava ~44px mais alto do que a
+  // caixa CSS de verdade mostrava — um esticamento vertical sutil,
+  // nunca sinalizado). A LARGURA não muda (o header não consome espaço
+  // horizontal), só a altura precisa vir de uma medição real do corpo
+  // do card, não do `rect.h` bruto.
+  const bodyRect = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('[data-role="browser-body"]').getBoundingClientRect())`));
   const initialSize = await contentSize();
   const expectedFactor = Math.min(initialSize.scaleFactor * BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY);
   check(
-    "resolução inicial do BrowserWindow offscreen bate com o rect × factor (scaleFactor × BROWSER_SUPERSAMPLE, capado em BROWSER_MAX_DENSITY) (sem zoom aplicado ainda)",
+    "resolução inicial do BrowserWindow offscreen bate com a área de body real × factor (scaleFactor × BROWSER_SUPERSAMPLE, capado em BROWSER_MAX_DENSITY) (sem zoom aplicado ainda)",
     JSON.stringify({ w: initialSize.w, h: initialSize.h }),
     JSON.stringify({
       w: Math.round(rectW * expectedFactor),
-      h: Math.round(rectH * expectedFactor),
+      h: Math.round(bodyRect.height * expectedFactor),
     }),
   );
 

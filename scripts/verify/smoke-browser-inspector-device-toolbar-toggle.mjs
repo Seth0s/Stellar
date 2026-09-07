@@ -129,11 +129,19 @@ try {
   // Fecha e reabre o inspector — o estado (deviceToolbarOpen mora em
   // BrowserCard.tsx) deve sobreviver, mesmo o BOTÃO agora vivendo dentro
   // do inspector que acabou de desmontar.
+  // DESIGN-BACKLOG.md item 3 (refactor overlay→reflow, 2026-09-07): o
+  // dock agora encolhe de VERDADE sob aperto (ex: emulação de um
+  // dispositivo largo deixando pouco espaço) — a própria barra de abas
+  // (`.inspectorTabs`, `overflow-x:auto`) pode rolar o botão de fechar
+  // pra fora da área visível, exatamente como um usuário real precisaria
+  // rolar pra alcançá-lo. `scrollIntoView` simula esse gesto antes de
+  // medir/clicar.
   const closeBtn = JSON.parse(
     await page.evalJs(`
       (() => {
         const b = [...document.querySelectorAll('[data-role="browser-inspector"] button')].find((x) => x.title === 'Fechar inspector');
         if (!b) return JSON.stringify(null);
+        b.scrollIntoView({ block: "nearest", inline: "nearest" });
         const r = b.getBoundingClientRect();
         return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
       })()

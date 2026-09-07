@@ -102,6 +102,28 @@
   background: var(--warning, #c98a1f);
 }
 
+/* Fecha o Bug E — indicador persistente de emulação ativa, independente
+   de `deviceToolbarOpen`/inspector aberto. Mesmo padrão visual do badge
+   de console acima (pill arredondado), mas clicável e sem contador — só
+   um indicador colorido com ícone. */
+.browserCardEmulationBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--accent-browser);
+  cursor: pointer;
+}
+
+.browserCardEmulationBadge:hover {
+  filter: brightness(1.15);
+}
+
 /* Header responsivo (§2.1) — < 380px (mesma largura lógica do preset
  * Mobile, de propósito), some da linha principal, mas nada fica
  * inacessível: os dois viram itens informativos dentro do Popover do
@@ -113,7 +135,8 @@
  * menor, nunca vencia a cascata apesar da condição bater). */
 @container browser-header (max-width: 380px) {
   .browserCardAddress button.browserCardOwner,
-  .browserCardConsoleBadge {
+  .browserCardConsoleBadge,
+  .browserCardEmulationBadge {
     display: none;
   }
 }
@@ -259,16 +282,28 @@
   color: #fff;
 }
 
-/* Pendentes #188 — envolve o canvas pra dar ao mini-inspector embutido
-   (BrowserInspector.tsx) um contexto de posicionamento real: ele é um
-   `position: absolute` docado embaixo, precisa de um ancestral
-   `position: relative` que ocupe exatamente a área do corpo do card (não
-   o card inteiro, que inclui header/footer). */
+/* Pendentes #188 — envolve o canvas E o mini-inspector embutido
+   (BrowserInspector.tsx). Revisto ao vivo (2026-09-07, causa raiz dos
+   bugs A/B relatados pelo usuário): ERA só um ancestral `position:
+   relative` pro dock (então `position:absolute`) se posicionar por
+   cima do canvas, com `BrowserCard.tsx` reservando espaço via `padding`
+   manual (`dockInfo`/`onDockChange`, removidos). Agora é um flex
+   container DE VERDADE — o dock (`.inspector`, agora `position:
+   relative`, ver BrowserInspector.module.css) é um flex sibling real
+   do canvas, que empurra/encolhe ele de verdade, igual o DevTools real.
+   `flex-direction` muda sozinho via `:has()` a partir do `data-dock` do
+   próprio inspector — nenhum estado/callback novo precisou existir. */
 .browserCardBodyWrap {
   position: relative;
+  display: flex;
+  flex-direction: row;
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+.browserCardBodyWrap:has(> [data-role="browser-inspector"][data-dock="bottom"]) {
+  flex-direction: column;
 }
 
 .browserCardBody {
@@ -279,9 +314,17 @@
      to, regardless of `flex: 1`/height:100%. Without this, the canvas could
      overflow .card-clip's fixed-height column and push the header (the
      other flex child, above it) out of the clipped/visible area — this is
-     what read as "the header disappeared" the first time this shipped. */
-  min-width: 0;
-  min-height: 0;
+     what read as "the header disappeared" the first time this shipped.
+     160×120 (not 0) é a mesma correção, só que com um PISO — decisão do
+     usuário ao revisar o refactor overlay→reflow: um card muito estreito
+     com o dock à direita/esquerda deve fazer o DOCK ceder espaço primeiro
+     (ver `.inspector` sem min-width próprio em BrowserInspector.module.css),
+     não o canvas — o navegador nunca deve sumir de vista por completo. Nos
+     eixos CRUZADOS (altura quando o dock é lateral, largura quando é
+     embaixo) o mesmo piso só protege contra um squeeze incomum, sem
+     atrapalhar — sizing de eixo cruzado não usa flex-shrink. */
+  min-width: 160px;
+  min-height: 120px;
   width: 100%;
   height: 100%;
   display: block;
@@ -325,6 +368,18 @@
   flex: none;
   width: auto;
   height: auto;
+  /* O piso de 160×120 da regra base (acima) é pra proteger a visualização
+     NORMAL do navegador contra o dock espremendo demais — durante
+     emulação, o tamanho de verdade já é 100% intencional (o dispositivo
+     emulado pode legitimamente ser mais estreito que 160px, ex: as alças
+     de resize testam até 100px de largura) e já tem sua própria proteção
+     via `aspect-ratio`+`max-width/height:100%`. Sem este reset, o piso da
+     regra base brigava com um device-frame estreito de propósito,
+     forçando 160px de largura mesmo quando o dispositivo emulado pedia
+     menos (achado ao vivo: teste de arraste extremo até 100px de largura
+     travava em 160). */
+  min-width: 0;
+  min-height: 0;
   margin: auto;
   border-radius: 8px;
   box-shadow: var(--shadow-float);

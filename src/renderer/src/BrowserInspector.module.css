@@ -2,11 +2,18 @@
    (redesenho 2026-09-06, protótipo HTML aprovado) — ancora à direita
    por padrão (igual o DevTools real), embaixo ou à esquerda, cada uma
    com sua própria alça de resize (`.resizeHandle`, ver `data-dock`
-   abaixo). Continua um overlay absoluto sobre o canvas (não reflow do
-   viewport da página) — nunca um flex sibling que empurraria o canvas. */
+   abaixo). Revisto ao vivo (2026-09-07, causa raiz dos bugs A/B
+   relatados pelo usuário): ERA um overlay absoluto por cima do canvas
+   com `BrowserCard.tsx` reservando espaço via `padding` manual — agora
+   é um FLEX SIBLING de verdade (ver `.browserCardBodyWrap` em
+   BrowserCard.module.css), que empurra/encolhe o canvas de verdade,
+   igual o DevTools real. `flex-direction`/ordem de quem fica em qual
+   lado são decididos por CSS puro (`:has([data-dock=...])` na wrap,
+   `order:-1` aqui pro dock esquerdo) — nenhum estado/callback novo em
+   React precisou existir pra isso. */
 
 .inspector {
-  position: absolute;
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -14,29 +21,40 @@
   font-size: 12px;
   color: var(--text);
   z-index: 5;
+  /* Achado ao vivo depurando o refactor overlay→reflow: um flex item SEM
+     `min-width`/`min-height` explícitos usa `auto` por padrão, que
+     resolve pro MIN-CONTENT do próprio conteúdo (aqui, a barra de abas
+     inteira, cujos botões são `flex-shrink:0; white-space:nowrap` —
+     ver `.inspectorTabs`) — na prática um piso de ~680px que NADA de
+     `flex-shrink:1` consegue furar. Sem isto, o dock nunca encolhia de
+     verdade: ficava sempre na largura "pedida" (`panelSizes[dock]`),
+     estourando o próprio `.browserCardBodyWrap` (que tem `overflow:
+     auto`, deixa passar) até ser cortado de vez pelo `overflow:hidden`
+     de `.card-clip` (achado ao vivo comparando `getBoundingClientRect()`
+     do dock com a da própria wrap — o dock relatava uma largura maior
+     que a da wrap que o contém). Mesma classe de bug (e mesmo fix) já
+     documentado pro `<canvas>` em BrowserCard.module.css. `overflow-x`/
+     `overflow-y:auto` de `.inspectorTabs`/`.inspectorBody` (já
+     existentes) é quem absorve o aperto resultante, exatamente como
+     hoje quando o board fica com zoom baixo. */
+  min-width: 0;
+  min-height: 0;
 }
 
 .inspector[data-dock="right"] {
-  top: 0;
-  right: 0;
-  bottom: 0;
-  min-width: 300px;
   border-left: 1px solid var(--border);
 }
 
 .inspector[data-dock="left"] {
-  top: 0;
-  left: 0;
-  bottom: 0;
-  min-width: 300px;
   border-right: 1px solid var(--border);
+  /* Sem isto, `.inspector` continuaria depois do `<canvas>` na ordem
+     visual também (DOM order = canvas sempre primeiro, ver
+     BrowserCard.tsx) — inverte só a ordem VISUAL do flex, sem precisar
+     remontar/reordenar o JSX. */
+  order: -1;
 }
 
 .inspector[data-dock="bottom"] {
-  left: 0;
-  right: 0;
-  bottom: 0;
-  min-height: 160px;
   border-top: 1px solid var(--border);
 }
 
