@@ -38,6 +38,15 @@ type CdpRawNode = {
   attributes?: string[];
 };
 type ConsoleLine = { level: string; message: string; at: number };
+/** Zoom de EXIBIÇÃO do device-frame — "fit" (contido, `.card-clip`-style)
+ * ou uma string numérica (px de tela por px de dispositivo) pro modo de
+ * pixel explícito, que o wrap rola de verdade se não couber. As 3 opções
+ * do dropdown (100%/75%/50%) são casos fixos desse mesmo template; o
+ * arraste das alças de resize (`beginFrameResize` abaixo) computa um
+ * valor arbitrário temporário, daí o tipo aceitar qualquer numérico, não
+ * só os 3 literais. Exportado pra `BrowserCard.tsx` (dono do `<canvas>`
+ * real) reusar em vez de duplicar. */
+export type EmulationZoom = "fit" | `${number}`;
 /** CDP `Runtime.RemoteObject` — só os campos usados aqui pra formatar uma
  * linha de console (não é um inspector de objeto completo, escopo cortado
  * de propósito, mesmo espírito das outras fases desta adoção de CDP). */
@@ -700,7 +709,7 @@ export function BrowserInspector({
    * desligado), pra ele desenhar o device-frame na proporção certa e
    * manter o mapeamento de clique correto (ver o doc comment de
    * `handleEmulationChange` em BrowserCard.tsx). */
-  onEmulationChange?: (dims: { width: number; height: number; zoom: "fit" | "1" | "0.75" | "0.5"; deviceScaleFactor: number } | null) => void;
+  onEmulationChange?: (dims: { width: number; height: number; zoom: EmulationZoom; deviceScaleFactor: number } | null) => void;
   /** DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário (revista ao vivo
    * em 2026-09-07: o botão morava no address bar de BrowserCard.tsx;
    * pedido explícito de mover a ferramenta de device-frame pra DENTRO do
@@ -882,6 +891,14 @@ export function BrowserInspector({
   // padrão, contido no espaço disponível sem cortar; ver o CSS de
   // `.browserCardBodyWrap[data-emulating]` em BrowserCard.module.css).
   const [frameZoom, setFrameZoom] = useState<"fit" | "1" | "0.75" | "0.5">("fit");
+  // Override temporário de `frameZoom` ativo só durante um arraste real
+  // das alças de resize (`beginFrameResize`/`endFrameResize` abaixo) —
+  // troca a exibição de "Ajustar" (contido, não deixa a caixa crescer
+  // além do que já cabe num eixo) pro mesmo modo de pixel explícito que
+  // os zooms fixos já usam, dando feedback visual DIRETO em qualquer
+  // eixo durante o arraste. `frameZoom` em si nunca muda — ao soltar o
+  // botão (`null` de novo), a exibição volta a "Ajustar" sozinha.
+  const [dragDisplayZoom, setDragDisplayZoom] = useState<EmulationZoom | null>(null);
   const focusPointRef = useRef(initialFocusPoint);
 
   // Coluna dockável — `dock` decide o LADO; `panelSize` é width (right/
@@ -1496,10 +1513,10 @@ export function BrowserInspector({
   useEffect(() => {
     onEmulationChangeRef.current?.(
       activeEmulation
-        ? { width: activeEmulation.width, height: activeEmulation.height, zoom: frameZoom, deviceScaleFactor: activeEmulation.deviceScaleFactor }
+        ? { width: activeEmulation.width, height: activeEmulation.height, zoom: dragDisplayZoom ?? frameZoom, deviceScaleFactor: activeEmulation.deviceScaleFactor }
         : null,
     );
-  }, [activeEmulation, frameZoom]);
+  }, [activeEmulation, frameZoom, dragDisplayZoom]);
 
   // Desliga a emulação de dispositivo se o card fechar o inspector (ou
   // desmontar) com uma ainda ativa — não deve sobreviver ao inspector
@@ -1635,51 +1652,44 @@ export function BrowserInspector({
     if (!activeEmulation || !canvasEl) return;
     const rect = canvasEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
-    // Achado ao vivo (2026-09-07, "resize em Y agora não é possível, parece
-    // que o content do frame do Y está anexado ao card"): em zoom "Ajustar",
-    // assim que um eixo emulado cresce o bastante pra virar o eixo DOMINANTE
-    // do aspect-ratio (ex. altura >> largura), o `<canvas>` fica preso no
-    // teto de tamanho do container naquele eixo (rect.height == altura do
-    // wrap, sempre a mesma) enquanto o OUTRO eixo encolhe pra manter a
-    // proporção — `activeEmulation.height / rect.height` cresce JUNTO com a
-    // própria altura emulada (denominador travado no teto, numerador
-    // crescendo sem parar; por preservar a proporção, o mesmo valor sairia
-    // idêntico usando largura em vez de altura — não é uma diferença entre
-    // eixos, é o próprio fator ficando maior a cada vez que o container
-    // fica mais "letterboxed"). Um único gesto contínuo já não acelera (a
-    // escala trava no início dele, comentário abaixo) — mas soltar e pegar
-    // de novo pra continuar arrastando (um padrão de uso bem realista)
-    // recomeça CADA gesto novo já com esse fator inflado pelo gesto
-    // anterior, disparando um crescimento bem maior do que a MESMA
-    // distância de mouse daria num gesto só (confirmado ao vivo: 4 arrastes
-    // separados de 150px cada somam 844→2019; um arraste ÚNICO contínuo de
-    // 600px — a mesma distância total — soma só 844→1669). Fix: em vez do
-    // fator "eixo dominante" (que segue o pior caso, o mais distorcido),
-    // usa um fator ÚNICO baseado na ÁREA (`sqrt(áreaEmulada/áreaWrap)`) —
-    // cresce bem mais devagar conforme o frame vira uma tira fina, porque
-    // a raiz quadrada amortece o crescimento em vez de segui-lo linear.
-    // Sem constante mágica: é só a mesma relação emulado/container de
-    // sempre, só que medida pela área em vez de pelo pior eixo.
-    const wrapEl = canvasEl.parentElement;
-    const wrapRect = wrapEl?.getBoundingClientRect();
-    const wrapArea = wrapRect && wrapRect.width > 0 && wrapRect.height > 0 ? wrapRect.width * wrapRect.height : rect.width * rect.height;
-    const emulArea = activeEmulation.width * activeEmulation.height;
-    const scale = Math.sqrt(emulArea / wrapArea);
+    // Histórico (2026-09-07): a 1ª versão deste fix usava um fator ÚNICO
+    // baseado na ÁREA (`sqrt(emulArea/wrapArea)`) pra amortecer o
+    // crescimento entre arrastes separados — mas isso SUBESTIMAVA a
+    // escala real sempre que o frame já estava "letterboxed" (o caso do
+    // preset Mobile, já preso pela ALTURA desde o início), e o usuário
+    // relatou "ainda não vejo efeito em mudar o Y" + "o content escapa se
+    // for muito longe". Achado ao vivo: a causa raiz de verdade não era a
+    // fórmula da escala — é que o modo "Ajustar" (`max-width/max-height:
+    // 100% + aspect-ratio`) NUNCA deixa a caixa crescer além do que já
+    // cabe no container; uma vez que um eixo emulado já bate no teto do
+    // wrap, arrastar aquele handle só encolhe o OUTRO eixo (mantendo a
+    // proporção) — o valor numérico muda de verdade, mas a tela não
+    // reflete. Fix de verdade: `dragDisplayZoom` abaixo troca
+    // temporariamente pro mesmo modo de pixel explícito que os zooms
+    // fixos (100%/75%/50%) já usam, dando feedback visual DIRETO. Voltado
+    // pra fator PRECISO por eixo aqui (não mais a área) porque agora o
+    // valor SÓ precisa ser exato no INSTANTE do `mousedown` (continuidade
+    // visual ao trocar de modo) — sem mais nenhuma dependência de
+    // "amortecer entre gestos", já que cada gesto agora dá feedback
+    // visual real o tempo todo, não preciso mais adivinhar.
+    const scaleX = activeEmulation.width / rect.width;
+    const scaleY = activeEmulation.height / rect.height;
     frameResizeRef.current = {
       axis,
       startX: clientX,
       startY: clientY,
       startW: activeEmulation.width,
       startH: activeEmulation.height,
-      // Conversão screen-px→device-px fixada no INÍCIO do arraste (não
-      // recalculada a cada tick) — o frame muda de tamanho/proporção
-      // durante o próprio arraste (é um redimensionamento de verdade,
-      // não um zoom), então travar a escala do começo do gesto é o que
-      // dá um arraste previsível em vez de acelerar/desacelerar sozinho
-      // conforme a caixa "contida" reencaixa.
-      scaleX: scale,
-      scaleY: scale,
+      scaleX,
+      scaleY,
     };
+    // Zoom de exibição travado no mesmo instante — `1/scaleX` (px de tela
+    // por px de dispositivo) reproduz EXATAMENTE o tamanho atual na tela
+    // (contínuo, sem pulo ao trocar de "Ajustar" pro modo de pixel
+    // explícito), e a partir daí cresce/encolhe 1:1 com o arraste real,
+    // porque a MESMA escala usada pra converter o delta é a usada pra
+    // exibir o resultado.
+    setDragDisplayZoom(String(1 / scaleX) as EmulationZoom);
   }
   function onFrameResizePointerMove(e: React.PointerEvent) {
     const r = frameResizeRef.current;
@@ -1692,9 +1702,29 @@ export function BrowserInspector({
   }
   function endFrameResize() {
     frameResizeRef.current = null;
+    setDragDisplayZoom(null);
   }
 
-  const panelSizeStyle = dock === "bottom" ? { height: panelSizes.bottom } : { width: panelSizes[dock] };
+  // Achado ao vivo (2026-09-07, investigando por que fechar o inspector
+  // deixava o dock permanentemente espremido a ~16px de largura): `.inspector`
+  // zera `min-width`/`min-height` de propósito (ver comentário em
+  // BrowserInspector.module.css) pra deixar o dock encolher ABAIXO do
+  // min-content natural da própria barra de abas, até o valor pedido em
+  // `panelSizes[dock]` — mas isso também remove QUALQUER piso, então um
+  // `<canvas>` vizinho com `flex:none` (não participa de shrink) pode
+  // reivindicar `max-width:100%` do wrap INTEIRO (não "100% do espaço que
+  // sobra depois do dock" — % num item `flex:none` resolve contra o
+  // container, não contra o espaço livre) sempre que o dispositivo emulado
+  // tiver proporção larga o bastante — e como só o dock tem `flex-shrink`
+  // habilitado, ele absorve TODA a sobra, inclusive além do próprio
+  // `panelSizes[dock]` que pediu. Min-width/height explícito aqui (igual
+  // ao piso que `DOCK_MIN` já impõe no PRÓPRIO `panelSizes[dock]`, nunca
+  // mais que isso) devolve o piso de verdade sem tirar o "encolhe até
+  // panelSizes[dock]" que o zero original também queria permitir — os
+  // dois nunca conflitam porque `panelSizes[dock]` já É clampado pra nunca
+  // ficar abaixo de `DOCK_MIN[dock]`.
+  const panelSizeStyle =
+    dock === "bottom" ? { height: panelSizes.bottom, minHeight: DOCK_MIN.bottom } : { width: panelSizes[dock], minWidth: DOCK_MIN[dock] };
   // Fase 6 (adoção de CDP) — breakpoints só fazem sentido em `kind:"script"`.
   const selectedSourceKind = sourceList.find((s) => s.url === selectedSourceUrl)?.kind;
   const breakpointLineSet = new Set((selectedSourceUrl ? breakpointsByUrl[selectedSourceUrl] : undefined)?.map((b) => b.lineNumber) ?? []);
