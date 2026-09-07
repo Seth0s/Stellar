@@ -87,6 +87,10 @@ type BoxModel = {
   height: number;
 };
 type ElementStyles = { inline: StyleDecl[]; matched: MatchedRule[]; computed: StyleDecl[]; box: BoxModel };
+/** Fase 5 (adoção de CDP) — `Profiler.stop`'s formato cru (`CdpProfileNode`)
+ * vs. o que a UI mostra (`ProfileHotspot`, já ordenado/resumido). */
+type CdpProfileNode = { id: number; callFrame: { functionName: string; url: string; lineNumber: number }; hitCount?: number };
+type ProfileHotspot = { functionName: string; url: string; lineNumber: number; hitCount: number; selfPercent: number };
 
 export type ResponsivePreset = { label: string; width: number; height: number; deviceScaleFactor: number; mobile: boolean };
 
@@ -904,6 +908,24 @@ export function BrowserInspector({
   const [totalFrames, setTotalFrames] = useState(0);
   const [processStats, setProcessStats] = useState<{ cpuPercent: number; memoryMB: number } | { error: string } | null>(null);
   const [loadingProcessStats, setLoadingProcessStats] = useState(false);
+  // DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 5) — profiling de CPU
+  // REAL via `Profiler.start`/`stop` (domínio `Profiler`, fora de
+  // `EAGER_DOMAINS`, habilitado sob demanda no 1º "Iniciar profiling").
+  // Escopo explícito e reduzido, mesmo espírito de corte de escopo já
+  // usado nas alças de resize: só sampling de CPU, sem o domínio
+  // `Tracing` completo (timeline isolada de script/layout/paint exigiria
+  // buffering de trace-events + parsing do formato Chrome trace,
+  // desproporcional pro que uma view de hotspots de CPU precisa). O
+  // resultado (`Profiler.stop`'s `profile.nodes`, cada um com
+  // `hitCount` = quantas amostras do sampler caíram nessa função) vira
+  // uma lista dos hotspots reais por contagem de amostra — não um flame
+  // graph completo, mas dado 100% real do V8, não decorativo.
+  const [profiling, setProfiling] = useState(false);
+  const [profileResult, setProfileResult] = useState<{ hotspots: ProfileHotspot[]; totalHitCount: number; durationMs: number } | { error: string } | null>(
+    null,
+  );
+  const profilerEnabledRef = useRef(false);
+  const profilingRef = useRef(false);
   // Contagem pro grid de estatísticas — busca própria, independente de
   // `networkRows`/`consoleEntries` das outras abas (Performance pode ser
   // a PRIMEIRA aba aberta, sem ninguém ter visitado Network ainda).
@@ -1078,6 +1100,60 @@ export function BrowserInspector({
     if (tab === "performance") void refreshProcessStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, id]);
+
+  async function startProfiling() {
+    if (!profilerEnabledRef.current) {
+      const enableRes = await window.browser.sendCdp(id, "Profiler.enable", {});
+      if (!enableRes.ok) {
+        setProfileResult({ error: enableRes.error });
+        return;
+      }
+      profilerEnabledRef.current = true;
+    }
+    setProfileResult(null);
+    const res = await window.browser.sendCdp(id, "Profiler.start", {});
+    if (!res.ok) {
+      setProfileResult({ error: res.error });
+      return;
+    }
+    profilingRef.current = true;
+    setProfiling(true);
+  }
+
+  async function stopProfiling() {
+    const res = await window.browser.sendCdp(id, "Profiler.stop", {});
+    profilingRef.current = false;
+    setProfiling(false);
+    if (!res.ok) {
+      setProfileResult({ error: res.error });
+      return;
+    }
+    const profile = (res.result as { profile: { nodes: CdpProfileNode[]; startTime: number; endTime: number } }).profile;
+    const totalHitCount = profile.nodes.reduce((sum, n) => sum + (n.hitCount ?? 0), 0);
+    const hotspots: ProfileHotspot[] = profile.nodes
+      .filter((n) => (n.hitCount ?? 0) > 0)
+      .map((n) => ({
+        functionName: n.callFrame.functionName || "(anônima)",
+        url: n.callFrame.url,
+        lineNumber: n.callFrame.lineNumber,
+        hitCount: n.hitCount ?? 0,
+        selfPercent: totalHitCount > 0 ? ((n.hitCount ?? 0) / totalHitCount) * 100 : 0,
+      }))
+      .sort((a, b) => b.hitCount - a.hitCount)
+      .slice(0, 15);
+    setProfileResult({ hotspots, totalHitCount, durationMs: (profile.endTime - profile.startTime) / 1000 });
+  }
+
+  useEffect(() => {
+    // Sessão CDP desanexando (fecha o inspector, ou conflito com DevTools
+    // real) com profiling ativo não deveria deixar o `Profiler` do V8
+    // rodando pra sempre na página — mesmo cuidado de `Runtime.releaseObject`
+    // na Fase 3. `Profiler.stop` sem sessão anexada falha limpo (`sendCdp`
+    // já guarda isso), então chamar sem checar de novo é seguro.
+    return () => {
+      if (profilingRef.current) void window.browser.sendCdp(id, "Profiler.stop", {});
+    };
+  }, [id]);
 
   useEffect(() => {
     if (tab !== "performance") return;
@@ -2021,16 +2097,16 @@ export function BrowserInspector({
         )}
         {tab === "performance" && (
           <div className={styles.performance} data-role="inspector-performance">
-            {/* DESIGN-BACKLOG.md §2.1 item 8 — nota honesta permanente,
-                mesmo espírito do aviso de Event Listeners/Sources: sem
-                CDP, não tem profiling de verdade (call stacks, flame
-                graph, sample de JS/layout/paint isolados) — só o que dá
-                pra medir de fora: taxa de frame real (o mesmo sinal que
-                já pinta o canvas) e CPU/memória do processo offscreen
-                (`app.getAppMetrics()`, a mesma API do Task Manager). */}
+            {/* DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 5) — profiling
+                de CPU real via `Profiler.start`/`stop` existe agora
+                (abaixo), mas com escopo reduzido de propósito: só
+                hotspots por contagem de amostra, sem flame graph nem o
+                domínio `Tracing` completo (timeline isolada de script/
+                layout/paint) — ver doc comment de `profileResult` acima.
+                FPS/CPU/memória continuam medidos de fora, sem CDP. */}
             <div className={styles.perfNotice} data-role="inspector-performance-notice">
-              Sem profiling de verdade (exigiria o protocolo do DevTools/CDP) — só métricas reais que dão pra medir de fora: taxa de frame ao vivo e
-              CPU/memória do processo.
+              Profiling de CPU real (amostragem V8) disponível abaixo — sem flame graph nem timeline de script/layout/paint isolados (fora de escopo). FPS
+              ao vivo e CPU/memória do processo continuam medidos de fora, sem CDP.
             </div>
             <div className={styles.perfGrid} data-role="inspector-perf-grid">
               <div className={styles.perfStat} data-role="inspector-perf-fps">
@@ -2077,6 +2153,51 @@ export function BrowserInspector({
                   ))
                 )}
               </div>
+            </div>
+            <div className={styles.perfProfiler} data-role="inspector-perf-profiler">
+              <div className={styles.perfTimelineLabel}>Profiling de CPU</div>
+              <button
+                data-role="inspector-perf-profile-toggle"
+                data-active={profiling || undefined}
+                onClick={() => void (profiling ? stopProfiling() : startProfiling())}
+              >
+                {profiling ? "Parar profiling" : "Iniciar profiling"}
+              </button>
+              {profiling && <div className={styles.inspectorEmpty}>Coletando amostras…</div>}
+              {!profiling && profileResult && "error" in profileResult && <div className={styles.ruleEmpty}>{profileResult.error}</div>}
+              {!profiling && profileResult && !("error" in profileResult) && (
+                <div data-role="inspector-perf-profile-result">
+                  <div className={styles.perfProfileSummary}>
+                    {profileResult.hotspots.length === 0
+                      ? `Nenhuma amostra coletada em ${Math.round(profileResult.durationMs)}ms (função inativa nesse intervalo).`
+                      : `${profileResult.totalHitCount} amostra(s) em ${Math.round(profileResult.durationMs)}ms — top ${profileResult.hotspots.length} função(ões) por tempo próprio:`}
+                  </div>
+                  {profileResult.hotspots.length > 0 && (
+                    <table className={styles.storageTable} data-role="inspector-perf-profile-table">
+                      <thead>
+                        <tr>
+                          <th>Função</th>
+                          <th>Local</th>
+                          <th>Amostras</th>
+                          <th>%</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {profileResult.hotspots.map((h, i) => (
+                          <tr key={i}>
+                            <td>{h.functionName}</td>
+                            <td className={styles.networkUrl} title={h.url}>
+                              {h.url ? `${h.url.split("/").pop()}:${h.lineNumber + 1}` : "(nativo)"}
+                            </td>
+                            <td>{h.hitCount}</td>
+                            <td>{h.selfPercent.toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
