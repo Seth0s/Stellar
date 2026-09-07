@@ -457,6 +457,8 @@ export function BrowserInspector({
   id,
   cardSize,
   initialFocusPoint,
+  onEmulationChange,
+  onDockChange,
   onClose,
 }: {
   id: string;
@@ -467,6 +469,23 @@ export function BrowserInspector({
   /** Espaço de CONTEÚDO (mesmo de `toCanvasPoint`/`sendMouse`), não tela
    * real — vem direto do menu de contexto ("Inspecionar elemento"). */
   initialFocusPoint?: { x: number; y: number } | null;
+  /** BrowserCard.tsx owns o `<canvas>`/coordenadas de clique — este é o
+   * único jeito de avisá-lo do que está REALMENTE aplicado no webContents
+   * agora (dims do dispositivo + zoom de exibição escolhido, `null` quando
+   * desligado), pra ele desenhar o device-frame na proporção certa e
+   * manter o mapeamento de clique correto (ver o doc comment de
+   * `handleEmulationChange` em BrowserCard.tsx). */
+  onEmulationChange?: (dims: { width: number; height: number; zoom: "fit" | "1" | "0.75" | "0.5" } | null) => void;
+  /** O dock é um overlay ABSOLUTO por cima do canvas, de propósito (não
+   * reflow — ver o doc comment no topo de BrowserCard.module.css), então
+   * BrowserCard.tsx não tem como saber sozinho quanto espaço o painel
+   * está cobrindo agora. Sem isto, o device-frame centralizado (device-
+   * frame model, item 3) centraliza contra a largura CHEIA do corpo do
+   * card e cai atrás do próprio painel que o abriu — achado ao vivo
+   * comparando `getBoundingClientRect()` do canvas com um screenshot real
+   * (o frame existia, com a proporção certa, mas invisível, escondido
+   * embaixo do dock). */
+  onDockChange?: (dock: Dock, size: number) => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("elements");
@@ -486,6 +505,11 @@ export function BrowserInspector({
   );
   const [customW, setCustomW] = useState(390);
   const [customH, setCustomH] = useState(844);
+  // Zoom de EXIBIÇÃO do device-frame (não muda a resolução real do
+  // dispositivo emulado, só como ele é mostrado no canvas — "Ajustar" é o
+  // padrão, contido no espaço disponível sem cortar; ver o CSS de
+  // `.browserCardBodyWrap[data-emulating]` em BrowserCard.module.css).
+  const [frameZoom, setFrameZoom] = useState<"fit" | "1" | "0.75" | "0.5">("fit");
   const focusPointRef = useRef(initialFocusPoint);
 
   // Coluna dockável — `dock` decide o LADO; `panelSize` é width (right/
@@ -720,6 +744,29 @@ export function BrowserInspector({
   activeEmulationRef.current = activeEmulation;
   const cardSizeRef = useRef(cardSize);
   cardSizeRef.current = cardSize;
+  // `onEmulationChange` é uma closure NOVA a cada render de BrowserCard.tsx
+  // (arrow function inline) — não pode entrar nas deps de nenhum efeito
+  // aqui embaixo (causaria o efeito refazer/disparar de novo TODA hora sem
+  // relação nenhuma com emulação de verdade mudando). Mesmo padrão de ref
+  // espelhado já usado acima pra `activeEmulation`/`cardSize`.
+  const onEmulationChangeRef = useRef(onEmulationChange);
+  onEmulationChangeRef.current = onEmulationChange;
+  const onDockChangeRef = useRef(onDockChange);
+  onDockChangeRef.current = onDockChange;
+
+  // Avisa BrowserCard.tsx (dono do <canvas>) do que está realmente
+  // aplicado agora — dispara de novo a cada mudança real de emulação OU
+  // de zoom de exibição, nunca por causa da identidade da própria função
+  // (ver comentário do ref acima).
+  useEffect(() => {
+    onEmulationChangeRef.current?.(activeEmulation ? { width: activeEmulation.width, height: activeEmulation.height, zoom: frameZoom } : null);
+  }, [activeEmulation, frameZoom]);
+
+  // Idem, pro lado/tamanho do dock — só importa enquanto o painel existe
+  // (`inspectorOpen` do lado de BrowserCard.tsx já cobre "painel fechado").
+  useEffect(() => {
+    onDockChangeRef.current?.(dock, panelSizes[dock]);
+  }, [dock, panelSizes]);
 
   // Desliga a emulação de dispositivo se o card fechar o inspector (ou
   // desmontar) com uma ainda ativa — não deve sobreviver ao inspector
@@ -730,6 +777,7 @@ export function BrowserInspector({
       if (activeEmulationRef.current) {
         void window.browser.setDeviceEmulation(id, null);
         void window.browser.resize(id, cardSizeRef.current.w, cardSizeRef.current.h);
+        onEmulationChangeRef.current?.(null);
       }
     },
     [id],
@@ -822,6 +870,21 @@ export function BrowserInspector({
           <option value={2}>2x</option>
           <option value={3}>3x</option>
         </select>
+        {activeEmulation && (
+          <>
+            <span className={styles.deviceLabel}>Zoom</span>
+            <select
+              data-role="inspector-zoom-select"
+              value={frameZoom}
+              onChange={(e) => setFrameZoom(e.target.value as typeof frameZoom)}
+            >
+              <option value="fit">Ajustar</option>
+              <option value="1">100%</option>
+              <option value="0.75">75%</option>
+              <option value="0.5">50%</option>
+            </select>
+          </>
+        )}
         <div className={styles.deviceToolbarSpacer} />
         {activeEmulation && (
           <button

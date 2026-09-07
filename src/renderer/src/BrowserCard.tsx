@@ -161,6 +161,13 @@ const DESIGN_POLL_INTERVAL_MS = 200;
 
 type DesignPick = { tag: string; className: string; selector: string; width: number; height: number };
 
+/** `"fit"` — o frame do dispositivo cabe no espaço disponível (contido,
+ * sem cortar); os outros são zoom fixo em cima do tamanho real do
+ * dispositivo, podendo exigir rolagem de verdade (ver `handleEmulationChange`
+ * e o CSS de `.browserCardBodyWrap[data-emulating]`). */
+type EmulationZoom = "fit" | "1" | "0.75" | "0.5";
+type EmulatedFrame = { width: number; height: number; zoom: EmulationZoom };
+
 function designContextText(pick: DesignPick, pageUrl: string): string {
   const opening = pick.className ? `<${pick.tag} class="${pick.className}">` : `<${pick.tag}>`;
   return `${opening} — ${pick.selector}\n${pageUrl} · ${pick.width}×${pick.height}px`;
@@ -314,6 +321,20 @@ function BrowserCardInner({
   // enviar" — ligar/desligar o modo em si não mexe nele.
   const [designMode, setDesignMode] = useState(false);
   const [designPick, setDesignPick] = useState<DesignPick | null>(null);
+  // Device-frame model (ver `handleEmulationChange` abaixo) — só existe
+  // enquanto `BrowserInspector`'s emulação de dispositivo está ligada;
+  // controla o CSS do canvas (proporção real do dispositivo, não mais
+  // esticado pro tamanho do card) e o zoom escolhido no device toolbar.
+  const [emulatedFrame, setEmulatedFrame] = useState<EmulatedFrame | null>(null);
+  // O dock do inspector é um overlay ABSOLUTO por cima do canvas (não
+  // reflow, ver o doc comment em BrowserCard.module.css) — sem isto, o
+  // device-frame centralizado (abaixo) centraliza contra a largura CHEIA
+  // do corpo do card e cai atrás do próprio painel que o abriu (achado ao
+  // vivo: `getBoundingClientRect()` batia certo, mas o frame ficava
+  // invisível num screenshot real, escondido embaixo do dock). Só é
+  // consultado enquanto `emulatedFrame` também está ativo — fora disso o
+  // canvas continua esticado 100%/100% como sempre foi.
+  const [dockInfo, setDockInfo] = useState<{ dock: "right" | "bottom" | "left"; size: number } | null>(null);
   const designBtnRef = useRef<HTMLButtonElement>(null);
   // DESIGN-BACKLOG.md §2.1 Item E — count-only, not the full log text
   // (no reading UI for that yet, just the "something needs attention"
@@ -542,13 +563,32 @@ function BrowserCardInner({
   // embutida) — o card só fica visualmente maior/menor na tela via o
   // `scale(zoom)` do `.world`/projeção de tela, exatamente como qualquer
   // outro card, sem recodificar um JPEG novo a cada passo de zoom.
-  function applyResize(w: number, h: number) {
+  function computeContentSize(w: number, h: number) {
     const factor = Math.min(scaleFactorRef.current * BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY);
-    contentSizeRef.current = {
-      w: Math.max(1, Math.round(w * factor)),
-      h: Math.max(1, Math.round(h * factor)),
-    };
+    return { w: Math.max(1, Math.round(w * factor)), h: Math.max(1, Math.round(h * factor)) };
+  }
+
+  function applyResize(w: number, h: number) {
+    contentSizeRef.current = computeContentSize(w, h);
     void window.browser.resize(id, w, h);
+  }
+
+  // Device-frame model (DESIGN-BACKLOG.md §2.1 item 3, 2026-09-07) —
+  // `BrowserInspector.tsx`'s device toolbar calls `window.browser.
+  // setDeviceEmulation` directly (bypassing `applyResize` above), so
+  // `contentSizeRef` never used to learn the real applied content size
+  // during emulation — click/context-menu coordinate mapping (`toCanvasPoint`,
+  // the context-menu effect above) stayed keyed to the pre-emulation
+  // content size the whole time, a real latent bug never reported because
+  // nobody clicked inside an emulated page in a smoke test. Also stayed
+  // stale FOREVER after turning emulation back off (`disableEmulation`'s
+  // `window.browser.resize` call doesn't run through `applyResize` either),
+  // not just while it's on. This callback is `BrowserInspector`'s only
+  // way to tell this component what's really applied right now, in both
+  // directions.
+  function handleEmulationChange(dims: { width: number; height: number; zoom: EmulationZoom } | null) {
+    contentSizeRef.current = dims ? { w: dims.width, h: dims.height } : computeContentSize(rectRef.current.w, rectRef.current.h);
+    setEmulatedFrame(dims);
   }
 
   useEffect(() => {
@@ -862,10 +902,29 @@ function BrowserCardInner({
         </div>
       }
     >
-      <div className={styles.browserCardBodyWrap}>
+      <div
+        className={styles.browserCardBodyWrap}
+        data-emulating={emulatedFrame ? "true" : undefined}
+        style={
+          emulatedFrame && dockInfo
+            ? {
+                paddingRight: dockInfo.dock === "right" ? dockInfo.size : undefined,
+                paddingLeft: dockInfo.dock === "left" ? dockInfo.size : undefined,
+                paddingBottom: dockInfo.dock === "bottom" ? dockInfo.size : undefined,
+              }
+            : undefined
+        }
+      >
         <canvas
           ref={canvasRef}
           className={styles.browserCardBody}
+          style={
+            emulatedFrame
+              ? emulatedFrame.zoom === "fit"
+                ? { maxWidth: "100%", maxHeight: "100%", aspectRatio: `${emulatedFrame.width} / ${emulatedFrame.height}` }
+                : { width: emulatedFrame.width * Number(emulatedFrame.zoom), height: emulatedFrame.height * Number(emulatedFrame.zoom) }
+              : undefined
+          }
           data-role="browser-body"
           data-design-mode={designMode || undefined}
           tabIndex={0}
@@ -891,6 +950,8 @@ function BrowserCardInner({
             id={id}
             cardSize={{ w: rect.w, h: rect.h }}
             initialFocusPoint={inspectorFocusPoint}
+            onEmulationChange={handleEmulationChange}
+            onDockChange={(dock, size) => setDockInfo({ dock, size })}
             onClose={() => setInspectorOpen(false)}
           />
         )}
