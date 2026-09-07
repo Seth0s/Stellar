@@ -228,9 +228,9 @@
 /* DESIGN-BACKLOG.md §2.1 (adoção de CDP) — Electron só permite UM
    consumidor do protocolo de depuração por webContents; se o DevTools
    real já estiver aberto (ou a sessão desanexar no meio do caminho por
-   qualquer outro motivo), o attach do inspector falha. Mesmo idioma
-   visual de `.treeTruncatedNotice` acima (tom --warn, é um erro de
-   verdade, não uma nota permanente de escopo como `.listenersNotice`). */
+   qualquer outro motivo), o attach do inspector falha. Tom --warn: é um
+   erro de verdade (a sessão CDP não conectou), não uma nota permanente
+   de escopo. */
 .cdpErrorBanner {
   display: flex;
   align-items: center;
@@ -324,29 +324,6 @@
 .ruleEmpty {
   color: var(--muted);
   padding: 2px 0;
-}
-
-/* DESIGN-BACKLOG.md §2.1 item 6 — nota honesta de escopo (não um aviso de
-   erro, por isso tons neutros, não --warn): sem CDP, este inspector só
-   enxerga handlers via propriedade/atributo `on*`, nunca
-   `addEventListener`. Fica sempre visível na aba, não só quando a lista
-   vem vazia — uma lista vazia sem isto pareceria "elemento sem nenhum
-   listener", o que normalmente é falso. */
-.listenersNotice {
-  color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  margin-bottom: 10px;
-  font-family: var(--font-ui);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.listenersNotice code {
-  font-family: var(--font-mono);
-  color: var(--text);
 }
 
 .decl {
@@ -953,8 +930,8 @@
 }
 
 /* Nota permanente, não um erro — sempre visível quando um arquivo está
-   aberto (mesmo espírito do `.listenersNotice`: um limite honesto de
-   escopo, não um aviso de falha). */
+   aberto: um limite honesto de escopo (sem breakpoints até a Fase 6 da
+   adoção de CDP), não um aviso de falha. */
 .sourceBreakpointNotice {
   flex: none;
   padding: 6px 10px;

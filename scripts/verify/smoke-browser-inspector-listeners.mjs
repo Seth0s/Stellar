@@ -1,13 +1,14 @@
-// DESIGN-BACKLOG.md §2.1 item 6 (2026-09-07) — 3ª sub-aba do painel de
-// detalhes do Elements (Styles/Computed já existiam, commit `4d995e0`).
-// Sem `webContents.debugger`/CDP (decisão deste projeto), o único jeito
-// honesto de ver handlers de FORA da página depois do fato é via
-// propriedade IDL `on<evento>` do elemento — cobre atributo HTML
-// (`onclick="..."`) e atribuição direta (`el.onclick = fn`), nunca
-// `addEventListener`. Este teste usa uma fixture real com um handler de
-// cada tipo (mais um elemento sem handler nenhum) pra provar que o painel
-// reflete exatamente essa realidade, nota de escopo incluída — não uma
-// lista inventada/mockada.
+// DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 3) — 3ª sub-aba do painel de
+// detalhes do Elements (Styles/Computed migradas na Fase 2). Antes desta
+// fase, sem `webContents.debugger`, o único jeito honesto de ver handlers
+// de fora da página era via propriedade IDL `on<evento>` — cobria atributo
+// HTML (`onclick="..."`) e atribuição direta (`el.onclick = fn`), mas
+// NUNCA `addEventListener`, a forma mais comum em código real (qualquer
+// framework como React usa só isso). `DOMDebugger.getEventListeners`
+// (bridge via `DOM.resolveNode`→`objectId`) fecha essa lacuna de verdade —
+// este teste agora inclui um handler registrado via `addEventListener`
+// puro, exatamente o caso que era invisível antes, pra provar que a
+// lacuna foi fechada e não só documentada.
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
@@ -17,8 +18,12 @@ const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-inspector-listene
 const FIXTURE_HTML = `<!doctype html><html><body style="margin:0">
   <button id="withAttr" onclick="void 0">via atributo</button>
   <button id="withProp">via propriedade</button>
+  <button id="withAddEventListener">via addEventListener</button>
   <button id="noHandler">sem handler</button>
-  <script>document.querySelector('#withProp').onmouseenter = () => {};</script>
+  <script>
+    document.querySelector('#withProp').onmouseenter = () => {};
+    document.querySelector('#withAddEventListener').addEventListener('dblclick', () => {});
+  </script>
 </body></html>`;
 const httpPort = await pickFreePort();
 const server = createServer((_req, res) => {
@@ -44,7 +49,7 @@ async function centerOf(page, selector) {
 }
 
 // `document.documentElement` já nasce auto-expandido (`refreshTree`), então
-// só falta abrir o <body> uma vez pra revelar os 3 botões da fixture (que
+// só falta abrir o <body> uma vez pra revelar os 4 botões da fixture (que
 // são folhas, sem toggle próprio) — clicar TODOS os toggles visíveis em
 // loop, como outros testes fazem, oscila (cada clique em html/body alterna
 // aberto↔fechado, período 4) e não converge de forma confiável pra uma
@@ -119,17 +124,34 @@ try {
   await page.click(subtab.x, subtab.y);
   await new Promise((r) => setTimeout(r, 300));
 
-  check("a nota de escopo (sem CDP/addEventListener) aparece na aba Event Listeners", await page.evalJs(`!!document.querySelector('[data-role="inspector-listeners-notice"]')`), true);
+  check(
+    "a nota de escopo antiga (sem CDP/addEventListener) NÃO existe mais — a lacuna foi fechada, não só documentada",
+    await page.evalJs(`!!document.querySelector('[data-role="inspector-listeners-notice"]')`),
+    false,
+  );
 
   const withAttrEvents = JSON.parse(
     await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-role="inspector-listeners-list"] span')].map((s) => s.textContent))`),
   );
-  check("handler via atributo HTML (onclick=\"...\") é detectado de verdade", withAttrEvents.includes("click"), true);
+  check("handler via atributo HTML (onclick=\"...\") é detectado de verdade (via CDP)", withAttrEvents.includes("click"), true);
 
   await selectTreeNodeByText(page, "via propriedade");
   await new Promise((r) => setTimeout(r, 300));
   const withPropEvents = JSON.parse(await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-role="inspector-listeners-list"] span')].map((s) => s.textContent))`));
   check("handler via atribuição direta (el.onmouseenter = fn) também é detectado", withPropEvents.includes("mouseenter"), true);
+
+  // O caso que ERA invisível antes desta fase: um handler registrado via
+  // `addEventListener` puro, sem passar por propriedade IDL nenhuma.
+  await selectTreeNodeByText(page, "via addEventListener");
+  await new Promise((r) => setTimeout(r, 300));
+  const withAddEventListenerEvents = JSON.parse(
+    await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-role="inspector-listeners-list"] span')].map((s) => s.textContent))`),
+  );
+  check(
+    "handler via addEventListener puro é detectado DE VERDADE (lacuna absoluta fechada pela Fase 3, DOMDebugger.getEventListeners)",
+    withAddEventListenerEvents.includes("dblclick"),
+    true,
+  );
 
   await selectTreeNodeByText(page, "sem handler");
   await new Promise((r) => setTimeout(r, 300));
