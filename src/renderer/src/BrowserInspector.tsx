@@ -84,9 +84,19 @@ const WIDTH_RULER = [320, 375, 390, 414, 768, 1024, 1280, 1440];
 // rede de segurança pro que ainda não couber (zoom do board bem baixo,
 // card manualmente encolhido demais). `bottom` não sofre disso (a barra
 // ocupa a largura CHEIA do card ali, não um painel estreito lateral).
-const DOCK_MIN = { right: 600, bottom: 160, left: 600 } as const;
-const DOCK_MAX = { right: 820, bottom: 520, left: 820 } as const;
-const DOCK_DEFAULT = { right: 600, bottom: 280, left: 600 } as const;
+// Achado ao vivo (2026-09-07, depois de mover o toggle de device toolbar
+// pro DENTRO do inspector — ver `onToggleDeviceToolbar` abaixo): o novo
+// botão fixo na barra de abas empurrou `.inspectorTabs` pra 667px de
+// conteúdo contra só 599px de `clientWidth` (600 aqui) — os 68px que
+// sobravam eram exatamente onde os botões de dock/fechar ficavam, então
+// mediam a posição certa via `getBoundingClientRect()` mas um clique real
+// nessas coordenadas caía FORA da área visível/clicável do painel
+// (`.viewport` do board por baixo, confirmado com `elementFromPoint`) —
+// clicável só na teoria, igual o bug documentado no comment de
+// `.inspectorTabs` no CSS. 600→680 dá folga de novo pro caso comum.
+const DOCK_MIN = { right: 680, bottom: 160, left: 680 } as const;
+const DOCK_MAX = { right: 900, bottom: 520, left: 900 } as const;
+const DOCK_DEFAULT = { right: 680, bottom: 280, left: 680 } as const;
 
 // Cada elemento ganha um `data-stellar-el-id` estável (só até o próximo
 // snapshot) — é assim que "clicar num nó da árvore" consegue destacar o
@@ -561,6 +571,7 @@ export function BrowserInspector({
   onEmulationChange,
   onDockChange,
   deviceToolbarOpen,
+  onToggleDeviceToolbar,
   onClose,
 }: {
   id: string;
@@ -588,12 +599,17 @@ export function BrowserInspector({
    * (o frame existia, com a proporção certa, mas invisível, escondido
    * embaixo do dock). */
   onDockChange?: (dock: Dock, size: number) => void;
-  /** DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário: a barra de
-   * dispositivo deixa de ser sempre visível, vira um toggle no address
-   * bar de BrowserCard.tsx (ícone de celular), escondida por padrão. O
-   * estado mora lá (sobrevive ao inspector fechar/reabrir) porque o
-   * BOTÃO que liga isto vive lá, não aqui. */
+  /** DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário (revista ao vivo
+   * em 2026-09-07: o botão morava no address bar de BrowserCard.tsx;
+   * pedido explícito de mover a ferramenta de device-frame pra DENTRO do
+   * inspector, como um ícone na barra de abas). O ESTADO continua morando
+   * em BrowserCard.tsx (sobrevive o inspector fechar/reabrir), só o botão
+   * que troca ele mudou de lugar — por isso o valor chega como prop
+   * (`deviceToolbarOpen`) e a mudança sai por callback
+   * (`onToggleDeviceToolbar`), mesmo padrão de `onDockChange`/
+   * `onEmulationChange` acima. */
   deviceToolbarOpen: boolean;
+  onToggleDeviceToolbar: () => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("elements");
@@ -646,7 +662,7 @@ export function BrowserInspector({
   // replicado aqui em JS só pra saber ONDE desenhar as alças (o CSS
   // continua sendo a fonte de verdade do que aparece na tela).
   const inspectorRootRef = useRef<HTMLDivElement>(null);
-  const [wrapSize, setWrapSize] = useState<{ w: number; h: number } | null>(null);
+  const [wrapSize, setWrapSize] = useState<{ w: number; h: number; padLeft: number; padTop: number } | null>(null);
   const frameResizeRef = useRef<{ axis: "right" | "bottom" | "corner"; startX: number; startY: number; startW: number; startH: number; scaleX: number; scaleY: number } | null>(null);
 
   const [storageArea, setStorageArea] = useState<StorageArea>("local");
@@ -1073,14 +1089,40 @@ export function BrowserInspector({
   // Só existe (e só faz sentido medir) enquanto uma emulação está ativa
   // — sem isso `wrapSize` fica em `null` a maior parte do tempo, sem
   // custo.
+  //
+  // Achado ao vivo (screenshot do usuário: as linhas das alças apareciam
+  // bem longe do frame de verdade, "fora do content"): `wrap.clientWidth/
+  // clientHeight` medem a PADDING BOX (conteúdo + padding) — mas
+  // BrowserCard.tsx aplica `paddingRight`/`paddingLeft`/`paddingBottom`
+  // NELE MESMO (via `onDockChange`) só pra reservar o espaço do dock, e o
+  // canvas (centralizado com `margin:auto` dentro do flex) respeita esse
+  // padding, ficando menor/deslocado pra caber no espaço que SOBRA. Medir
+  // a padding box inteira (ignorando o padding reservado) fazia o cálculo
+  // de "contido" abaixo achar que tinha MAIS espaço livre do que existe de
+  // verdade, desenhando as alças bem fora de onde o frame realmente
+  // aparece. Fix: subtrai o padding de verdade (via `getComputedStyle`) e
+  // guarda o offset (`padLeft`/`padTop`) pra somar de volta na posição das
+  // alças — a mesma caixa de conteúdo que o flexbox já usa por baixo dos
+  // panos.
   useEffect(() => {
     const wrap = inspectorRootRef.current?.parentElement;
     if (!wrap) return;
-    const ro = new ResizeObserver(() => {
-      setWrapSize({ w: wrap.clientWidth, h: wrap.clientHeight });
-    });
+    function measure() {
+      const cs = getComputedStyle(wrap!);
+      const padLeft = parseFloat(cs.paddingLeft) || 0;
+      const padRight = parseFloat(cs.paddingRight) || 0;
+      const padTop = parseFloat(cs.paddingTop) || 0;
+      const padBottom = parseFloat(cs.paddingBottom) || 0;
+      setWrapSize({
+        w: wrap!.clientWidth - padLeft - padRight,
+        h: wrap!.clientHeight - padTop - padBottom,
+        padLeft,
+        padTop,
+      });
+    }
+    const ro = new ResizeObserver(measure);
     ro.observe(wrap);
-    setWrapSize({ w: wrap.clientWidth, h: wrap.clientHeight });
+    measure();
     return () => ro.disconnect();
   }, []);
 
@@ -1100,7 +1142,12 @@ export function BrowserInspector({
           const wrapRatio = wrapSize.w / wrapSize.h;
           const width = wrapRatio > deviceRatio ? wrapSize.h * deviceRatio : wrapSize.w;
           const height = wrapRatio > deviceRatio ? wrapSize.h : wrapSize.w / deviceRatio;
-          return { left: (wrapSize.w - width) / 2, top: (wrapSize.h - height) / 2, width, height };
+          return {
+            left: wrapSize.padLeft + (wrapSize.w - width) / 2,
+            top: wrapSize.padTop + (wrapSize.h - height) / 2,
+            width,
+            height,
+          };
         })()
       : null;
 
@@ -1286,6 +1333,14 @@ export function BrowserInspector({
             <Icon name="reload" size={13} />
           </button>
         )}
+        <button
+          title={deviceToolbarOpen ? "Ocultar barra de dispositivo" : "Mostrar barra de dispositivo (modo responsivo)"}
+          data-role="inspector-device-toolbar-toggle"
+          data-active={deviceToolbarOpen || undefined}
+          onClick={onToggleDeviceToolbar}
+        >
+          <Icon name="viewportMobile" size={13} />
+        </button>
         <div className={styles.dockButtons} data-role="inspector-dock-buttons">
           <button title="Ancorar à direita" data-active={dock === "right" || undefined} onClick={() => setDock("right")}>
             <Icon name="dockRight" size={13} />

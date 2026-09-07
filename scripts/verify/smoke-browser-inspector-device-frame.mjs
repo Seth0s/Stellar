@@ -108,7 +108,7 @@ try {
 
   // Item 4 — a barra de dispositivo agora fica escondida por padrão atrás
   // de um toggle no address bar (ícone de celular), não mais sempre visível.
-  const deviceToggle = await centerOf(page, '[data-role="browser-device-toolbar-toggle"]');
+  const deviceToggle = await centerOf(page, '[data-role="inspector-device-toolbar-toggle"]');
   await page.click(deviceToggle.x, deviceToggle.y);
   await new Promise((r) => setTimeout(r, 300));
 

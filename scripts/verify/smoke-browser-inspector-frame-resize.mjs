@@ -118,7 +118,7 @@ try {
   await page.click(inspectorBtn.x, inspectorBtn.y);
   await new Promise((r) => setTimeout(r, 500));
 
-  const deviceToggle = await centerOf(page, '[data-role="browser-device-toolbar-toggle"]');
+  const deviceToggle = await centerOf(page, '[data-role="inspector-device-toolbar-toggle"]');
   await page.click(deviceToggle.x, deviceToggle.y);
   await new Promise((r) => setTimeout(r, 300));
 

@@ -1,11 +1,17 @@
 // DESIGN-BACKLOG.md §2.1 item 4 (2026-09-07) — decisão do usuário: a
 // barra de dispositivo do inspector (device toolbar) deixa de ser sempre
-// visível (era assim desde o commit `aebc955`) e vira um toggle no
-// address bar do próprio BrowserCard.tsx (ícone de celular), escondida
-// por padrão, igual o protótipo HTML aprovado. O botão vive no address
-// bar (existe mesmo com o inspector FECHADO) porque ligá-lo com o
-// inspector fechado deve abrir o inspector E já mostrar a barra — mesmo
-// fluxo de um clique só do DevTools real ("toggle device toolbar").
+// visível (era assim desde o commit `aebc955`) e vira um toggle,
+// escondida por padrão, igual o protótipo HTML aprovado.
+//
+// Revisto ao vivo em 2026-09-07: o botão morava no address bar do
+// próprio BrowserCard.tsx (existia mesmo com o inspector fechado, pra
+// abrir-e-mostrar num clique só). Pedido explícito do usuário: mover a
+// ferramenta de device-frame pra DENTRO do inspector, como um ícone na
+// barra de abas — agora só existe (e só é clicável) com o inspector já
+// aberto; abrir o inspector continua sendo o fluxo normal do kebab
+// ("Abrir inspector"). O ESTADO (`deviceToolbarOpen`) continua morando em
+// BrowserCard.tsx e sobrevivendo o inspector fechar/reabrir — só o botão
+// mudou de lugar.
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
@@ -57,24 +63,34 @@ try {
   await page.evalJs(`window.browser.navigate(${JSON.stringify(browserId)}, ${JSON.stringify(fixtureUrl)})`);
   await new Promise((r) => setTimeout(r, 700));
 
-  check(
-    "o toggle da barra de dispositivo já existe no address bar SEM o inspector estar aberto",
-    await page.evalJs(`!!document.querySelector('[data-role="browser-device-toolbar-toggle"]')`),
-    true,
-  );
-  check(
-    "...e não aparece 'ativo' antes de qualquer clique",
-    await page.evalJs(`document.querySelector('[data-role="browser-device-toolbar-toggle"]').getAttribute('data-active')`),
-    null,
-  );
+  check("sem o inspector aberto, o ícone de device toolbar nem existe (agora vive DENTRO do inspector, não no address bar)", await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar-toggle"]')`), false);
 
-  const deviceToggle = await centerOf(page, '[data-role="browser-device-toolbar-toggle"]');
-  await page.click(deviceToggle.x, deviceToggle.y);
+  const kebab = await centerOf(page, '[data-role="browser-address"] button[title="Mais opções"]');
+  await page.click(kebab.x, kebab.y);
+  await new Promise((r) => setTimeout(r, 300));
+  const inspectorBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = [...document.querySelectorAll('[data-role="browser-menu"] button')].find((x) => x.textContent.includes('Abrir inspector'));
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  await page.click(inspectorBtn.x, inspectorBtn.y);
   await new Promise((r) => setTimeout(r, 500));
 
-  check("clicar no toggle com o inspector FECHADO abre o inspector sozinho", await page.evalJs(`!!document.querySelector('[data-role="browser-inspector"]')`), true);
-  check("...e já mostra a barra de dispositivo de cara (não precisa de um segundo clique)", await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`), true);
-  check("...e o botão do address bar reflete o estado 'ativo'", await page.evalJs(`document.querySelector('[data-role="browser-device-toolbar-toggle"]').getAttribute('data-active')`), "true");
+  check("com o inspector aberto, o ícone de device toolbar aparece na barra de abas", await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar-toggle"]')`), true);
+  check("...e não aparece 'ativo' antes de qualquer clique (barra escondida por padrão)", await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`), false);
+  check("...e o botão em si não mostra data-active antes de clicar", await page.evalJs(`document.querySelector('[data-role="inspector-device-toolbar-toggle"]').getAttribute('data-active')`), null);
+
+  const deviceToggle = await centerOf(page, '[data-role="inspector-device-toolbar-toggle"]');
+  await page.click(deviceToggle.x, deviceToggle.y);
+  await new Promise((r) => setTimeout(r, 400));
+
+  check("clicar no ícone mostra a barra de dispositivo", await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`), true);
+  check("...e o botão reflete o estado 'ativo'", await page.evalJs(`document.querySelector('[data-role="inspector-device-toolbar-toggle"]').getAttribute('data-active')`), "true");
 
   // Liga emulação de verdade, depois esconde a barra de novo — o
   // device-frame (a emulação em si) não deve ser afetado por isso, só a
@@ -94,7 +110,7 @@ try {
   );
   check("emulação Mobile de verdade ligada antes de esconder a barra", widthEmulating.result, "390");
 
-  const deviceToggle2 = await centerOf(page, '[data-role="browser-device-toolbar-toggle"]');
+  const deviceToggle2 = await centerOf(page, '[data-role="inspector-device-toolbar-toggle"]');
   await page.click(deviceToggle2.x, deviceToggle2.y);
   await new Promise((r) => setTimeout(r, 400));
 
@@ -109,6 +125,40 @@ try {
     await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "window.innerWidth").then((r) => JSON.stringify(r))`),
   );
   check("...a página continua em 390 de innerWidth mesmo com a barra escondida", widthAfterHide.result, "390");
+
+  // Fecha e reabre o inspector — o estado (deviceToolbarOpen mora em
+  // BrowserCard.tsx) deve sobreviver, mesmo o BOTÃO agora vivendo dentro
+  // do inspector que acabou de desmontar.
+  const closeBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = [...document.querySelectorAll('[data-role="browser-inspector"] button')].find((x) => x.title === 'Fechar inspector');
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  await page.click(closeBtn.x, closeBtn.y);
+  await new Promise((r) => setTimeout(r, 300));
+  check("fechar o inspector some com o painel", await page.evalJs(`!!document.querySelector('[data-role="browser-inspector"]')`), false);
+
+  const kebab2 = await centerOf(page, '[data-role="browser-address"] button[title="Mais opções"]');
+  await page.click(kebab2.x, kebab2.y);
+  await new Promise((r) => setTimeout(r, 300));
+  const inspectorBtn2 = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const b = [...document.querySelectorAll('[data-role="browser-menu"] button')].find((x) => x.textContent.includes('Abrir inspector'));
+        if (!b) return JSON.stringify(null);
+        const r = b.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  await page.click(inspectorBtn2.x, inspectorBtn2.y);
+  await new Promise((r) => setTimeout(r, 500));
+  check("...reabrir mantém o estado de antes de fechar (barra continua escondida — deviceToolbarOpen persistiu em BrowserCard.tsx mesmo com o botão dentro do inspector tendo desmontado)", await page.evalJs(`!!document.querySelector('[data-role="inspector-device-toolbar"]')`), false);
 
   page.close();
 } finally {
