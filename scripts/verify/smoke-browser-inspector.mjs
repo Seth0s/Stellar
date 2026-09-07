@@ -179,6 +179,29 @@ try {
   check("preset 'Mobile' muda o innerWidth REAL da página pra 390 (emulação de verdade, não resize do card)", widthAfter.result, "390");
   check("...e era diferente de 390 antes de ativar o preset", widthBefore.result !== "390", true);
 
+  // Achado ao vivo (screenshot do usuário): com emulação ativa (o botão
+  // "Parar emulação" aparece, deixando a barra mais cheia) e o painel na
+  // largura mínima, os controles do device toolbar (DPR/"Parar emulação")
+  // cortavam/quebravam linha dentro do próprio botão em vez de simplesmente
+  // não caber. Encolhe o painel pro `DOCK_MIN` real e confirma que a barra
+  // ROLA (overflow real, `scrollWidth > clientWidth`) sem nenhum controle
+  // quebrando texto internamente.
+  const handle = await centerOf(page, '[data-role="inspector-resize-handle"]');
+  await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: handle.x, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: handle.x + 400, y: handle.y, button: "left", pointerType: "mouse" });
+  await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: handle.x + 400, y: handle.y, button: "left", clickCount: 1, pointerType: "mouse" });
+  await new Promise((r) => setTimeout(r, 300));
+  const toolbarMeasure = JSON.parse(
+    await page.evalJs(`
+      JSON.stringify({
+        overflowing: document.querySelector('[data-role="inspector-device-toolbar"]').scrollWidth > document.querySelector('[data-role="inspector-device-toolbar"]').clientWidth,
+        anyWrapped: [...document.querySelectorAll('[data-role="inspector-device-toolbar"] button, [data-role="inspector-device-toolbar"] select')].some((el) => el.scrollHeight > el.clientHeight + 2),
+      })
+    `),
+  );
+  check("device toolbar cheio (emulação ativa) num painel estreito ROLA de verdade, não corta escondido", toolbarMeasure.overflowing, true);
+  check("...e nenhum controle quebra texto internamente (DPR/'Parar emulação' mantêm o tamanho natural)", toolbarMeasure.anyWrapped, false);
+
   // Fecha o inspector — a emulação de dispositivo deve desligar sozinha
   // (não pode deixar a página presa em viewport mobile sem controle
   // nenhum visível pra desligar).

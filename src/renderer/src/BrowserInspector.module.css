@@ -553,6 +553,15 @@
    (linha 2: atalhos de largura) substituem o antigo conteúdo da aba —
    renderizados incondicionalmente no JSX agora, não mais atrás de
    `tab === "responsive"`. */
+/* Achado ao vivo (screenshot do usuário: "DPR [2x▾] Pa / emu" cortado e
+   quebrando linha) — sem `overflow-x`/`flex-shrink:0`, o flexbox default
+   ESPREME os últimos controles (DPR, "Parar emulação") abaixo do
+   tamanho natural do conteúdo quando a barra não cabe, e o texto quebra
+   dentro do botão em vez de simplesmente não caber. Mesma rede de
+   segurança já aplicada em `.inspectorTabs`/`.widthRulerBar`: a barra
+   rola horizontalmente (scrollbar escondida) em vez de espremer/quebrar
+   o conteúdo, e cada controle mantém seu tamanho natural
+   (`flex-shrink:0`, `white-space:nowrap`). */
 .deviceToolbar {
   flex: none;
   display: flex;
@@ -563,6 +572,12 @@
   background: color-mix(in srgb, var(--foam) 8%, var(--panel));
   border-bottom: 1px solid var(--border);
   font-size: 11.5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.deviceToolbar::-webkit-scrollbar {
+  display: none;
 }
 
 .deviceLabel {
@@ -571,6 +586,7 @@
   text-transform: uppercase;
   letter-spacing: 0.4px;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .deviceToolbar select {
@@ -582,6 +598,7 @@
   border-radius: 5px;
   height: 24px;
   padding: 0 6px;
+  flex-shrink: 0;
 }
 
 .deviceDim {
@@ -595,10 +612,12 @@
   font-family: var(--font-mono);
   font-size: 11.5px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .deviceX {
   color: var(--muted);
+  flex-shrink: 0;
 }
 
 .deviceToolbar button {
@@ -612,6 +631,8 @@
   font-size: 11.5px;
   display: flex;
   align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .deviceToolbar button:hover {
