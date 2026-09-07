@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
-import { BrowserInspector } from "./BrowserInspector";
+import { BrowserInspector, type EmulationZoom } from "./BrowserInspector";
 import type { Rect } from "./board-model";
 import styles from "./BrowserCard.module.css";
 
@@ -162,11 +162,46 @@ const DESIGN_POLL_INTERVAL_MS = 200;
 type DesignPick = { tag: string; className: string; selector: string; width: number; height: number };
 
 /** `"fit"` — o frame do dispositivo cabe no espaço disponível (contido,
- * sem cortar); os outros são zoom fixo em cima do tamanho real do
- * dispositivo, podendo exigir rolagem de verdade (ver `handleEmulationChange`
- * e o CSS de `.browserCardBodyWrap[data-emulating]`). */
-type EmulationZoom = "fit" | "1" | "0.75" | "0.5";
+ * sem cortar); qualquer valor numérico (`"1"`/`"0.75"`/`"0.5"` dos zooms
+ * fixos, ou um valor arbitrário travado durante um arraste de resize —
+ * ver `beginFrameResize` em BrowserInspector.tsx) é zoom fixo em cima do
+ * tamanho real do dispositivo, podendo exigir rolagem de verdade (ver
+ * `handleEmulationChange` e o CSS de `.browserCardBodyWrap[data-emulating]`).
+ * Tipo definido em BrowserInspector.tsx (reusado aqui, não duplicado). */
 type EmulatedFrame = { width: number; height: number; zoom: EmulationZoom };
+
+/** Achado ao vivo (2026-09-07, investigando por que fechar o inspector
+ * deixava o dock permanentemente espremido a ~16px): as alças de resize
+ * do device-frame (`inspector-frame-resize-*`) e a alça de resize do
+ * PAINEL do dock (`inspector-resize-handle`) podem coincidir no espaço de
+ * tela em certas combinações de preset/largura de painel (ex. preset
+ * Tablet 768×1024 com o painel já no `DOCK_MIN`) — um arraste pensado pro
+ * painel acaba dando `mousedown` na alça do frame por baixo, disparando
+ * `beginFrameResize` sem o usuário pedir, mudando `activeEmulation`
+ * (BrowserInspector.tsx) pra uma proporção bem mais larga. A causa raiz de
+ * verdade não é essa distorção em si (sempre foi possível, mesmo antes
+ * desta sessão) — é que `.inspector` (BrowserInspector.module.css) zerava
+ * `min-width`/`min-height` de propósito (pra deixar o dock encolher
+ * abaixo do próprio min-content até `panelSizes[dock]`), removendo
+ * TAMBÉM o piso que impediria o painel de encolher além do que o próprio
+ * `DOCK_MIN` já garante — `%` num item `flex:none` (o `<canvas>` sob
+ * emulação) resolve contra o CONTAINER inteiro, não contra "o que sobra
+ * depois do dock", então um dispositivo largo o bastante podia pedir
+ * quase toda a largura do card, e só o dock (com `flex-shrink` habilitado
+ * e sem piso) absorvia a diferença. Corrigido na RAIZ em
+ * BrowserInspector.tsx (`panelSizeStyle` ganhou `minWidth`/`minHeight`
+ * batendo com `DOCK_MIN[dock]`) — o painel agora tem um piso de verdade
+ * que nenhuma demanda do canvas consegue furar, então esta função não
+ * precisa de nenhuma rede de segurança própria: os 100%/75%/50% oficiais
+ * e o zoom temporário de arraste (`dragDisplayZoom`) usam exatamente o
+ * mesmo modo de pixel explícito sem teto, de propósito (permite ver o
+ * dispositivo em tamanho real com rolagem de verdade). */
+function emulatedFrameCanvasStyle(frame: EmulatedFrame): React.CSSProperties {
+  if (frame.zoom === "fit") {
+    return { maxWidth: "100%", maxHeight: "100%", aspectRatio: `${frame.width} / ${frame.height}` };
+  }
+  return { width: frame.width * Number(frame.zoom), height: frame.height * Number(frame.zoom) };
+}
 
 function designContextText(pick: DesignPick, pageUrl: string): string {
   const opening = pick.className ? `<${pick.tag} class="${pick.className}">` : `<${pick.tag}>`;
@@ -1015,13 +1050,7 @@ function BrowserCardInner({
         <canvas
           ref={canvasRef}
           className={styles.browserCardBody}
-          style={
-            emulatedFrame
-              ? emulatedFrame.zoom === "fit"
-                ? { maxWidth: "100%", maxHeight: "100%", aspectRatio: `${emulatedFrame.width} / ${emulatedFrame.height}` }
-                : { width: emulatedFrame.width * Number(emulatedFrame.zoom), height: emulatedFrame.height * Number(emulatedFrame.zoom) }
-              : undefined
-          }
+          style={emulatedFrame ? emulatedFrameCanvasStyle(emulatedFrame) : undefined}
           data-role="browser-body"
           data-design-mode={designMode || undefined}
           tabIndex={0}
