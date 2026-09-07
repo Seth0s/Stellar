@@ -1,4 +1,4 @@
-import { BrowserWindow, type Session } from "electron";
+import { app, BrowserWindow, type Session } from "electron";
 
 export type BrowserMouseEvent = {
   /** `mouseLeave` — achado ao vivo (2026-08-31): sem sinal explícito de
@@ -1065,6 +1065,25 @@ export function createBrowserRegistry(callbacks: {
     }
   }
 
+  // Aba Performance do mini-inspector (DESIGN-BACKLOG.md §2.1 item 8).
+  // FPS ao vivo já é possível sem nada novo aqui (o próprio `browser:
+  // frame`/`onFrame` que BrowserCard.tsx já escuta pra desenhar — o
+  // inspector escuta o MESMO evento em paralelo e mede o intervalo entre
+  // chegadas, tudo no renderer, ver BrowserInspector.tsx). O que só dá
+  // pra medir aqui no processo MAIN, sem CDP: CPU/memória REAIS do
+  // processo offscreen deste card via `app.getAppMetrics()` (a mesma API
+  // por trás do Task Manager do Chrome/Electron) — não profiling de
+  // verdade (call stacks, flame graph, sample de JS), só o que
+  // `getOSProcessId()` + a tabela de métricas do app já expõem de graça.
+  function getProcessStats(id: string): { ok: true; cpuPercent: number; memoryMB: number } | { ok: false; error: string } {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const pid = entry.win.webContents.getOSProcessId();
+    const metric = app.getAppMetrics().find((m) => m.pid === pid);
+    if (!metric) return { ok: false, error: "métrica de processo ainda não disponível (janela recém-criada)" };
+    return { ok: true, cpuPercent: Math.round(metric.cpu.percentCPUUsage * 10) / 10, memoryMB: Math.round((metric.memory.workingSetSize / 1024) * 10) / 10 };
+  }
+
   function getNetwork(id: string, opts: { status?: number; failedOnly?: boolean; urlContains?: string; limit?: number } = {}) {
     const entry = entries.get(id);
     if (!entry) return { ok: false as const, error: `no browser card with id "${id}"` };
@@ -1311,6 +1330,7 @@ export function createBrowserRegistry(callbacks: {
     getNetwork,
     getCookies,
     fetchSource,
+    getProcessStats,
     waitFor,
     pageSnapshot,
     refSelector,

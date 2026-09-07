@@ -506,6 +506,10 @@ const browser = {
    * sem CORS e sem o teto de 20k chars do round-trip de página. */
   fetchSource: (id: string, url: string): Promise<{ ok: true; content: string; truncated: boolean; totalChars: number } | { ok: false; error: string }> =>
     ipcRenderer.invoke("browser:fetch-source", id, url),
+  /** Aba Performance (DESIGN-BACKLOG.md §2.1 item 8) — `app.getAppMetrics()`
+   * no processo main (browser-registry.ts's `getProcessStats`), sem CDP. */
+  getProcessStats: (id: string): Promise<{ ok: true; cpuPercent: number; memoryMB: number } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("browser:get-process-stats", id),
 };
 
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
