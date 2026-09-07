@@ -110,6 +110,45 @@ try {
     return await page.evalJs(`window.debugBridge.browserContentSize(${JSON.stringify(cardId)})`);
   }
 
+  // Achado ao vivo (2026-09-07, verificando os fixes do item 4.3/sombra do
+  // card-clip/header responsivo do browser) — bug PRÉ-EXISTENTE em
+  // BrowserCard.tsx, exposto (não causado) por esses fixes: `bodyHeightRef`
+  // (altura real do corpo, só deveria vir do `ResizeObserver` do canvas)
+  // começa `null` no mount, e o efeito `[rect.w, rect.h]` roda ANTES desse
+  // observer disparar, caindo no fallback errado (`rect.h`, header+body
+  // JUNTOS). Isso já seria só uma corrida de inicialização comum (o
+  // observer corrigindo pouco depois) -- MAS em parte real das execuções
+  // (reproduzido ao vivo, ~1 em cada 3-4 tentativas) o valor errado NUNCA é
+  // corrigido, nem esperando 15s: `getBoundingClientRect()` do canvas já
+  // mostra a altura CERTA (body-only) o tempo todo, enquanto o content size
+  // real aplicado na janela offscreen (`debugBridge.browserContentSize`)
+  // fica preso no valor errado pra sempre -- ou seja, o `ResizeObserver`
+  // às vezes simplesmente nunca dispara sua correção (não é só lento).
+  // Suspeita (não confirmada/corrigida): a mesma classe de bug de
+  // "observer com dep array `[id]` nunca reagindo a uma troca de nó DOM
+  // que não muda `id`" já visto noutras partes desta base. Registrado em
+  // DESIGN-BACKLOG.md como item separado, não corrigido aqui (fora do
+  // escopo desta rodada — precisa de investigação própria em
+  // BrowserCard.tsx). Antes dos fixes acima, o valor errado (fallback) e o
+  // certo (body-only) coincidiam por sorte o bastante pra nunca estourar
+  // esta asserção mesmo quando a corrida acontecia; agora a diferença é
+  // grande o bastante pra sempre falhar quando o observer não corrige.
+  // Poll de qualquer forma (ajuda a resolução inicial quando a corrida NÃO
+  // acontece, e evita que a corrida contamine as checagens de rajada de
+  // zoom abaixo, que dependem de já começar de um valor assentado) --
+  // mas esta checagem específica pode CONTINUAR falhando de vez em quando
+  // até o bug de verdade em BrowserCard.tsx ser corrigido.
+  async function pollStableContentSize() {
+    let last = JSON.stringify(await contentSize());
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      const next = JSON.stringify(await contentSize());
+      if (next === last) return JSON.parse(next);
+      last = next;
+    }
+    return JSON.parse(last);
+  }
+
   // Revisto ao vivo (2026-09-07, refactor overlay→reflow do dock do
   // inspector): `rectH` (tamanho de MUNDO do card, header+body juntos)
   // não é mais o que vira a altura do CONTEÚDO — desde que o dock passou
@@ -122,8 +161,8 @@ try {
   // nunca sinalizado). A LARGURA não muda (o header não consome espaço
   // horizontal), só a altura precisa vir de uma medição real do corpo
   // do card, não do `rect.h` bruto.
+  const initialSize = await pollStableContentSize();
   const bodyRect = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelector('[data-role="browser-body"]').getBoundingClientRect())`));
-  const initialSize = await contentSize();
   const expectedFactor = Math.min(initialSize.scaleFactor * BROWSER_SUPERSAMPLE, BROWSER_MAX_DENSITY);
   check(
     "resolução inicial do BrowserWindow offscreen bate com a área de body real × factor (scaleFactor × BROWSER_SUPERSAMPLE, capado em BROWSER_MAX_DENSITY) (sem zoom aplicado ainda)",
