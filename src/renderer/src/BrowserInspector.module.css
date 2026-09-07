@@ -292,6 +292,29 @@
   padding: 2px 0;
 }
 
+/* DESIGN-BACKLOG.md §2.1 item 6 — nota honesta de escopo (não um aviso de
+   erro, por isso tons neutros, não --warn): sem CDP, este inspector só
+   enxerga handlers via propriedade/atributo `on*`, nunca
+   `addEventListener`. Fica sempre visível na aba, não só quando a lista
+   vem vazia — uma lista vazia sem isto pareceria "elemento sem nenhum
+   listener", o que normalmente é falso. */
+.listenersNotice {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.listenersNotice code {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
 .decl {
   padding-left: 12px;
 }

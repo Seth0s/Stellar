@@ -26,7 +26,8 @@ type Tab = "elements" | "console" | "network" | "application";
 type NetworkLine = { method: string; url: string; status: number | null; error?: string; at: number };
 type Dock = "right" | "bottom" | "left";
 type StorageArea = "local" | "session" | "cookies";
-type DetailsSubtab = "styles" | "computed";
+type DetailsSubtab = "styles" | "computed" | "listeners";
+type ListenerEntry = { event: string };
 type StyleDecl = { prop: string; value: string; important: boolean };
 type MatchedRule = { selector: string; source: string; decls: StyleDecl[] };
 type BoxModel = {
@@ -269,6 +270,46 @@ function elementStylesScript(elId: string): string {
 `;
 }
 
+// Event Listeners (DESIGN-BACKLOG.md §2.1 item 6) — sem `webContents.
+// debugger`/CDP (decisão explícita deste projeto, ver os doc comments
+// acima de `openDevTools`/`setDeviceEmulation` em browser-registry.ts),
+// não existe jeito de enumerar listeners registrados via
+// `addEventListener` de FORA da página depois do fato — isso é
+// exatamente o que a DevTools real usa o protocolo do V8 Inspector pra
+// fazer, e é a razão de este projeto ter escolhido não depender de CDP
+// em primeiro lugar. O que ESTE script consegue ver honestamente, só com
+// `evalJs` (mesmo mecanismo de todo o resto do inspector): as
+// propriedades IDL `on<evento>` do elemento — cobre handlers via atributo
+// HTML (`onclick="..."`, o navegador compila isso na mesma propriedade)
+// E via atribuição direta (`el.onclick = fn`), mas NUNCA
+// `addEventListener` puro (a forma mais comum em código moderno,
+// inclusive frameworks como React). A UI (`ListenersPanel` abaixo) deixa
+// esse limite explícito — mostrar uma lista vazia sem essa ressalva
+// enganaria o usuário a achar que o elemento não tem NENHUM listener.
+const LISTENER_EVENTS = [
+  "click", "dblclick", "mousedown", "mouseup", "mouseenter", "mouseleave", "mouseover", "mouseout", "mousemove", "contextmenu",
+  "keydown", "keyup", "keypress",
+  "input", "change", "submit", "reset", "focus", "blur", "focusin", "focusout",
+  "dragstart", "dragend", "dragover", "dragenter", "dragleave", "drop",
+  "touchstart", "touchend", "touchmove", "touchcancel",
+  "pointerdown", "pointerup", "pointermove", "pointerenter", "pointerleave",
+  "wheel", "scroll", "load", "error", "animationend", "transitionend", "toggle",
+];
+
+function elementListenersScript(elId: string): string {
+  return `
+(() => {
+  const el = document.querySelector('[data-stellar-el-id="${elId}"]');
+  if (!el) return null;
+  const found = [];
+  for (const event of ${JSON.stringify(LISTENER_EVENTS)}) {
+    if (typeof el["on" + event] === "function") found.push({ event });
+  }
+  return found;
+})()
+`;
+}
+
 async function evalJson<T>(id: string, js: string): Promise<T | null> {
   const res = await window.browser.evalJs(id, js);
   if (!res.ok) return null;
@@ -453,6 +494,28 @@ function ComputedPanel({ es, filter, onFilterChange }: { es: ElementStyles; filt
   );
 }
 
+function ListenersPanel({ entries }: { entries: ListenerEntry[] }) {
+  return (
+    <>
+      <div className={styles.listenersNotice} data-role="inspector-listeners-notice">
+        Só mostra handlers via atributo HTML (<code>onclick=&quot;…&quot;</code>) ou atribuição direta (<code>el.onclick = fn</code>) — listeners
+        registrados via <code>addEventListener</code> exigiriam o protocolo do DevTools (CDP), que este inspector não usa.
+      </div>
+      {entries.length === 0 ? (
+        <div className={styles.ruleEmpty}>Nenhum handler desse tipo neste elemento.</div>
+      ) : (
+        <div className={styles.decl} data-role="inspector-listeners-list">
+          {entries.map((e) => (
+            <div key={e.event}>
+              <span className={styles.prop}>{e.event}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function BrowserInspector({
   id,
   cardSize,
@@ -504,6 +567,8 @@ export function BrowserInspector({
   const [detailsSubtab, setDetailsSubtab] = useState<DetailsSubtab>("styles");
   const [elementStyles, setElementStyles] = useState<ElementStyles | null>(null);
   const [loadingStyles, setLoadingStyles] = useState(false);
+  const [elementListeners, setElementListeners] = useState<ListenerEntry[] | null>(null);
+  const [loadingListeners, setLoadingListeners] = useState(false);
   const [computedFilter, setComputedFilter] = useState("");
   const [consoleEntries, setConsoleEntries] = useState<ConsoleLine[]>([]);
   const [consoleInput, setConsoleInput] = useState("");
@@ -636,6 +701,27 @@ export function BrowserInspector({
       if (cancelled) return;
       setElementStyles(res);
       setLoadingStyles(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, id, selectedId]);
+
+  // Mesma ideia do efeito de Styles/Computed acima, mas pra Event
+  // Listeners — busca separada (não a mesma chamada de `evalJs`) porque
+  // `elementListenersScript` é um instrumento independente, não uma
+  // ampliação de `elementStylesScript`.
+  useEffect(() => {
+    if (tab !== "elements" || !selectedId) {
+      setElementListeners(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingListeners(true);
+    void evalJson<ListenerEntry[]>(id, elementListenersScript(selectedId)).then((res) => {
+      if (cancelled) return;
+      setElementListeners(res);
+      setLoadingListeners(false);
     });
     return () => {
       cancelled = true;
@@ -1000,10 +1086,27 @@ export function BrowserInspector({
                 >
                   Computed
                 </button>
+                <button
+                  className={styles.subtab}
+                  data-role="inspector-subtab"
+                  data-sub="listeners"
+                  data-active={detailsSubtab === "listeners" || undefined}
+                  onClick={() => setDetailsSubtab("listeners")}
+                >
+                  Event Listeners
+                </button>
               </div>
               <div className={styles.subpanel} data-role="inspector-subpanel">
                 {!selectedId ? (
                   <div className={styles.inspectorEmpty}>Selecione um elemento na árvore.</div>
+                ) : detailsSubtab === "listeners" ? (
+                  loadingListeners ? (
+                    <div className={styles.inspectorEmpty}>Carregando listeners…</div>
+                  ) : !elementListeners ? (
+                    <div className={styles.inspectorEmpty}>Elemento não encontrado (a árvore pode ter sido atualizada).</div>
+                  ) : (
+                    <ListenersPanel entries={elementListeners} />
+                  )
                 ) : loadingStyles ? (
                   <div className={styles.inspectorEmpty}>Carregando estilos…</div>
                 ) : !elementStyles ? (
