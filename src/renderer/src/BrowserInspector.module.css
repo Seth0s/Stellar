@@ -225,22 +225,6 @@
   white-space: nowrap;
 }
 
-/* Aviso honesto quando a árvore bate no orçamento global de nós
-   (`SNAPSHOT_NODE_BUDGET`, BrowserInspector.tsx) — sem isso, uma página
-   real grande (achado ao vivo: google.com) fazia o payload do `evalJs`
-   estourar o teto de truncamento e a UI mostrava "não foi possível ler a
-   página" pra QUALQUER site denso o bastante, sem explicar por quê. */
-.treeTruncatedNotice {
-  padding: 6px 8px;
-  margin-bottom: 4px;
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
-  color: var(--warn);
-  border-radius: 6px;
-  font-family: var(--font-ui);
-  font-size: 11px;
-  white-space: normal;
-}
-
 /* DESIGN-BACKLOG.md §2.1 (adoção de CDP) — Electron só permite UM
    consumidor do protocolo de depuração por webContents; se o DevTools
    real já estiver aberto (ou a sessão desanexar no meio do caminho por

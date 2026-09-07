@@ -23,8 +23,20 @@ const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.C
  * paralelo nesta mesma feature (ver `browser:get-network`/`getCookies`
  * já wireados por ele em browser-registry.ts/preload). */
 
-type DomNode = { id: string; tag: string; attrs: Record<string, string>; children: DomNode[]; text: string };
-type SnapshotResult = { root: DomNode; truncated: boolean; nodeCount: number };
+type DomNode = { nodeId: number; tag: string; attrs: Record<string, string>; children: DomNode[]; text: string; hasChildren: boolean };
+/** Node cru devolvido por `DOM.getDocument`/dentro de um evento
+ * `DOM.setChildNodes` — só os campos que este inspector usa (CDP devolve
+ * bem mais: shadow DOM, pseudo-elements, etc., fora de escopo aqui,
+ * igual o `evalJs`-based antigo nunca via shadow DOM nenhum). */
+type CdpRawNode = {
+  nodeId: number;
+  nodeType: number;
+  nodeName: string;
+  nodeValue?: string;
+  childNodeCount?: number;
+  children?: CdpRawNode[];
+  attributes?: string[];
+};
 type ConsoleLine = { level: string; message: string; at: number };
 type Tab = "elements" | "console" | "network" | "application" | "sources" | "performance";
 type SourceEntry = { url: string; kind: "document" | "script" | "stylesheet" };
@@ -110,90 +122,123 @@ const DOCK_MIN = { right: 680, bottom: 160, left: 680 } as const;
 const DOCK_MAX = { right: 900, bottom: 520, left: 900 } as const;
 const DOCK_DEFAULT = { right: 680, bottom: 280, left: 680 } as const;
 
-// Cada elemento ganha um `data-stellar-el-id` estável (só até o próximo
-// snapshot) — é assim que "clicar num nó da árvore" consegue destacar o
-// elemento de VERDADE na página renderizada, sem precisar reconstruir um
-// seletor CSS frágil. Retorna o objeto puro (não uma string) — `evalJs`
-// (browser-registry.ts) já faz o `JSON.stringify` sozinho.
-//
-// Achado ao vivo (relatado pelo usuário com screenshot: "Não foi possível
-// ler a página" em google.com — funcionava só nas fixtures pequenas dos
-// smoke tests) — `depth<=14`/`children<=80` por nó não bastam: um site
-// real com MUITOS ramos rasos (não um único ramo fundo/largo) ainda
-// produz um JSON grande o bastante pra estourar `MAX_EVAL_RESULT_CHARS`
-// (20_000, `evalJs` em browser-registry.ts) — o resultado vem truncado
-// no meio, `JSON.parse` (em `evalJson` abaixo) falha em silêncio, e a UI
-// mostra "não foi possível ler". Confirmado com instrumentação real (não
-// só suspeita): 60 nós reais de `google.com` ocupam 14_595 chars, 60 de
-// um artigo aleatório da Wikipédia ocupam 10_613 — ambos com margem
-// confortável abaixo do teto; 80 nós já ficava em 18_578 (margem
-// apertada demais pra variação real de atributos). `BUDGET` abaixo é um
-// contador GLOBAL (compartilha `n`, já usado pros ids) que para de
-// descer a árvore inteira (não só um ramo) assim que atingido — retorna
-// `{ root, truncated, nodeCount }` em vez do nó cru, pra UI poder avisar
-// honestamente em vez de falhar calada quando uma página é grande demais
-// pra mostrar por completo de uma vez.
-const SNAPSHOT_NODE_BUDGET = 60;
-const SNAPSHOT_SCRIPT = `
-(() => {
-  let n = 0;
-  function walk(el, depth) {
-    if (!el || depth > 14 || n >= ${SNAPSHOT_NODE_BUDGET}) return null;
-    const id = "stellar-el-" + (n++);
-    el.setAttribute("data-stellar-el-id", id);
-    const attrs = {};
-    for (const a of el.attributes) if (a.name !== "data-stellar-el-id") attrs[a.name] = a.value;
-    const children = [];
-    for (const child of el.children) {
-      if (children.length >= 80) break;
-      const s = walk(child, depth + 1);
-      if (s) children.push(s);
-    }
-    const text = children.length === 0 ? (el.textContent || "").trim().slice(0, 160) : "";
-    return { id, tag: el.tagName.toLowerCase(), attrs, children, text };
-  }
-  const root = walk(document.documentElement, 0);
-  return { root, truncated: n >= ${SNAPSHOT_NODE_BUDGET}, nodeCount: n };
-})()
-`;
+// DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 1) — substitui o antigo
+// `SNAPSHOT_SCRIPT`/`SNAPSHOT_NODE_BUDGET` (evalJs, teto GLOBAL de 60 nós
+// — reclamação explícita do usuário: "elements tem limite de 60 linhas e
+// só carrega uma parte"). `DOM.getDocument({depth})` no attach + lazy
+// `DOM.requestChildNodes` sob demanda no expand (ver `toggleNode` abaixo)
+// nunca faz round-trip do subtree inteiro como um blob JSON — cada nível
+// chega de cada vez, direto do protocolo de depuração (sem passar pelo
+// `MAX_EVAL_RESULT_CHARS` de `evalJs`), então não existe budget de nó/
+// profundidade/filhos nenhum pra impor.
 
-function highlightScript(elId: string | null): string {
-  // Achado ao vivo (via smoke test do painel Styles): a versão anterior
-  // escrevia o destaque DIRETO em `el.style` — inofensivo pro destaque em
-  // si, mas poluía o painel "Styles" (aba nova): o `element.style` do
-  // elemento selecionado sempre mostrava o outline vermelho de destaque
-  // como se fosse um estilo inline de verdade da página, escondendo o
-  // inline real. Fix: uma única regra CSS injetada uma vez (`<style
-  // id="stellar-highlight-style">`), o destaque vira só um atributo
-  // (`data-stellar-highlighted`) que não toca `el.style` — `elementStylesScript`
-  // (painel Styles) fica livre pra ler o `element.style` real do autor.
-  return `
-    (() => {
-      if (!document.getElementById("stellar-highlight-style")) {
-        const style = document.createElement("style");
-        style.id = "stellar-highlight-style";
-        style.textContent = '[data-stellar-highlighted] { outline: 2px solid #ff5a5f !important; outline-offset: -1px !important; }';
-        document.head.appendChild(style);
-      }
-      document.querySelectorAll("[data-stellar-highlighted]").forEach((el) => {
-        el.removeAttribute("data-stellar-highlighted");
-      });
-      ${
-        elId
-          ? `const el = document.querySelector('[data-stellar-el-id="${elId}"]');
-      if (el) {
-        el.setAttribute("data-stellar-highlighted", "1");
-        el.scrollIntoView({ block: "center", behavior: "instant" });
-      }`
-          : ""
-      }
-      return true;
-    })()
-  `;
+/** Converte um node cru do CDP (`DOM.getDocument`/dentro de um evento
+ * `DOM.setChildNodes`) pro formato que a árvore da UI já usava. `attrs`
+ * vem de `attributes` (array plano alternando nome/valor, formato
+ * próprio do protocolo). `text`/`hasChildren` só ficam corretos quando o
+ * node cru já tem `children` populado (dentro da profundidade pedida) —
+ * um node na FRONTEIRA da profundidade (children ainda não buscado)
+ * aparece sem preview de texto até ser expandido, igual o DevTools real
+ * — `hasChildren` nesse caso vem de `childNodeCount` bruto SÓ quando
+ * `children` ainda não veio (fronteira de profundidade real — pode
+ * incluir nós de texto que só vão se revelar num fetch futuro). Quando
+ * `children` já veio (mesmo que só com nós de texto — CDP inclui texto
+ * inline mesmo em fetches rasos), o valor real de `elementChildren` já é
+ * conhecido e é ISSO que decide `hasChildren` — do contrário um `<button>
+ * texto</button>` (childNodeCount=1, o nó de texto) ganha uma seta de
+ * expand morta que nunca teria filho ELEMENTO nenhum pra revelar, e pior:
+ * ela intercepta o clique (`stopPropagation` no toggle) antes de chegar
+ * no `onSelect` da linha — nó nunca fica selecionável. */
+function cdpNodeToDomNode(n: CdpRawNode): DomNode {
+  const rawChildren = n.children ?? [];
+  const elementChildren = rawChildren.filter((c) => c.nodeType === 1);
+  const textChildren = rawChildren.filter((c) => c.nodeType === 3);
+  const attrs: Record<string, string> = {};
+  const flat = n.attributes ?? [];
+  for (let i = 0; i + 1 < flat.length; i += 2) attrs[flat[i]] = flat[i + 1];
+  return {
+    nodeId: n.nodeId,
+    tag: (n.nodeName || "").toLowerCase(),
+    attrs,
+    children: elementChildren.map(cdpNodeToDomNode),
+    text: elementChildren.length === 0 ? textChildren.map((c) => c.nodeValue ?? "").join("").trim().slice(0, 160) : "",
+    hasChildren: n.children !== undefined ? elementChildren.length > 0 : (n.childNodeCount ?? 0) > 0,
+  };
 }
 
-function elementAtPointScript(x: number, y: number): string {
-  return `document.elementFromPoint(${Math.round(x)}, ${Math.round(y)})?.getAttribute("data-stellar-el-id") ?? null`;
+/** `parentMap` (nodeId → parentId) é a única forma barata de reconstruir
+ * a cadeia de ancestrais de um node achado por localização (clique com
+ * "Inspecionar elemento") sem mais uma chamada CDP — populada tanto pela
+ * árvore inicial (`DOM.getDocument`) quanto por CADA evento
+ * `DOM.setChildNodes` que chega depois (expand manual ou o cascade
+ * automático que `DOM.pushNodeByBackendIdToFrontend` dispara pros
+ * ancestrais do node revelado). */
+function recordParentLinks(map: Map<number, number>, parentId: number, nodes: CdpRawNode[]) {
+  for (const n of nodes) {
+    map.set(n.nodeId, parentId);
+    if (n.children) recordParentLinks(map, n.nodeId, n.children);
+  }
+}
+
+function ancestorChain(parentMap: Map<number, number>, nodeId: number): number[] {
+  const chain: number[] = [];
+  const seen = new Set<number>();
+  let cur: number | undefined = nodeId;
+  while (cur !== undefined && !seen.has(cur)) {
+    seen.add(cur);
+    chain.unshift(cur);
+    cur = parentMap.get(cur);
+  }
+  return chain;
+}
+
+/** Mescla os filhos recém-buscados (`DOM.requestChildNodes`'s evento
+ * `DOM.setChildNodes`) na árvore local, achando o node certo por
+ * `nodeId` — substitui reconstruir a árvore inteira a cada expand.
+ * `hasChildren` é recalculado pro valor REAL agora que os filhos
+ * chegaram (corrige o caso em que `childNodeCount` bruto incluía só nós
+ * de texto — ver doc comment de `cdpNodeToDomNode`). */
+function mergeChildrenIntoTree(node: DomNode, parentId: number, newChildren: DomNode[]): DomNode {
+  if (node.nodeId === parentId) return { ...node, children: newChildren, hasChildren: newChildren.length > 0 };
+  if (node.children.length === 0) return node;
+  return { ...node, children: node.children.map((c) => mergeChildrenIntoTree(c, parentId, newChildren)) };
+}
+
+function findNodeById(node: DomNode, nodeId: number): DomNode | null {
+  if (node.nodeId === nodeId) return node;
+  for (const child of node.children) {
+    const found = findNodeById(child, nodeId);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Bridge pro elemento selecionado — `DOM.setAttributeValue` marca o
+ * elemento de VERDADE via comando CDP (sem executar JS na página), pra
+ * Styles/Event Listeners (ainda `evalJs`-based até as próprias fases,
+ * ver DESIGN-BACKLOG.md §2.1) continuarem achando o elemento certo por
+ * `document.querySelector('[data-stellar-el-id="…"]')`, exatamente como
+ * antes — só quem escreve o atributo mudou. */
+function tagSelectedNode(cardId: string, nodeId: number) {
+  void window.browser.sendCdp(cardId, "DOM.setAttributeValue", { nodeId, name: "data-stellar-el-id", value: String(nodeId) });
+}
+
+/** `Overlay.highlightNode`/`Overlay.hideHighlight` substituem a injeção
+ * de `<style id="stellar-highlight-style">` + atributo
+ * `data-stellar-highlighted` — o overlay pinta FORA do DOM/CSSOM da
+ * página (não é mais uma mutação observável por um `MutationObserver`
+ * da própria página, estritamente melhor que antes). */
+const HIGHLIGHT_CONFIG = {
+  contentColor: { r: 255, g: 90, b: 95, a: 0.25 },
+  contentOutlineColor: { r: 255, g: 90, b: 95, a: 0.9 },
+};
+function highlightNode(cardId: string, nodeId: number | null) {
+  if (nodeId === null) {
+    void window.browser.sendCdp(cardId, "Overlay.hideHighlight", {});
+  } else {
+    void window.browser.sendCdp(cardId, "Overlay.highlightNode", { highlightConfig: HIGHLIGHT_CONFIG, nodeId });
+    void window.browser.sendCdp(cardId, "DOM.scrollIntoViewIfNeeded", { nodeId });
+  }
 }
 
 // Achado ao vivo escrevendo o smoke test deste painel: devolver TODAS as
@@ -231,7 +276,7 @@ const COMPUTED_PROPS = [
 // aproximação de especificidade real, que exigiria reimplementar o
 // algoritmo de cascata inteiro. Devolve o objeto CRU — `evalJs` já
 // stringifica.
-function elementStylesScript(elId: string): string {
+function elementStylesScript(elId: string | number): string {
   return `
 (() => {
   const el = document.querySelector('[data-stellar-el-id="${elId}"]');
@@ -323,7 +368,7 @@ const LISTENER_EVENTS = [
   "wheel", "scroll", "load", "error", "animationend", "transitionend", "toggle",
 ];
 
-function elementListenersScript(elId: string): string {
+function elementListenersScript(elId: string | number): string {
   return `
 (() => {
   const el = document.querySelector('[data-stellar-el-id="${elId}"]');
@@ -366,19 +411,6 @@ async function evalJson<T>(id: string, js: string): Promise<T | null> {
   }
 }
 
-/** Caminho de ids do nó raiz até `targetId` (inclusive) — usado só pra
- * auto-expandir os ancestrais de um elemento selecionado via botão
- * direito "Inspecionar elemento", sem exigir que o usuário abra a árvore
- * manualmente até achar onde clicou. */
-function findPath(node: DomNode, targetId: string, path: string[] = []): string[] | null {
-  const next = [...path, node.id];
-  if (node.id === targetId) return next;
-  for (const child of node.children) {
-    const found = findPath(child, targetId, next);
-    if (found) return found;
-  }
-  return null;
-}
 
 /** Nome curto pra mostrar na lista da aba Sources — a URL completa fica
  * no `title` (tooltip) do botão. `CodeEditor`'s `loadLanguage` também
@@ -402,13 +434,16 @@ function ElementsTree({
   onSelect,
 }: {
   node: DomNode;
-  selectedId: string | null;
-  expanded: Set<string>;
-  onToggle: (id: string) => void;
-  onSelect: (id: string) => void;
+  selectedId: number | null;
+  expanded: Set<number>;
+  onToggle: (nodeId: number) => void;
+  onSelect: (nodeId: number) => void;
 }) {
-  const isOpen = expanded.has(node.id);
-  const hasChildren = node.children.length > 0;
+  const isOpen = expanded.has(node.nodeId);
+  // `node.hasChildren` (childNodeCount real do CDP), não `node.children.length`
+  // — a árvore agora é lazy (`DOM.requestChildNodes` só no expand), então um
+  // node ainda não expandido tem `children: []` mesmo tendo filhos de verdade.
+  const hasChildren = node.hasChildren;
   const attrPreview = Object.entries(node.attrs)
     .slice(0, 3)
     .map(([k, v]) => ` ${k}="${v.length > 24 ? v.slice(0, 24) + "…" : v}"`)
@@ -418,17 +453,17 @@ function ElementsTree({
       <div
         className={styles.treeLine}
         data-role="inspector-tree-line"
-        data-node-id={node.id}
+        data-node-id={node.nodeId}
         data-tag={node.tag}
-        data-selected={selectedId === node.id || undefined}
-        onClick={() => onSelect(node.id)}
+        data-selected={selectedId === node.nodeId || undefined}
+        onClick={() => onSelect(node.nodeId)}
       >
         {hasChildren ? (
           <button
             className={styles.treeToggle}
             onClick={(e) => {
               e.stopPropagation();
-              onToggle(node.id);
+              onToggle(node.nodeId);
             }}
           >
             <Icon name={isOpen ? "chevronDown" : "chevronRight"} size={11} />
@@ -448,7 +483,7 @@ function ElementsTree({
         <div className={styles.treeChildren}>
           {node.children.map((child) => (
             <ElementsTree
-              key={child.id}
+              key={child.nodeId}
               node={child}
               selectedId={selectedId}
               expanded={expanded}
@@ -630,17 +665,34 @@ export function BrowserInspector({
     };
   }, [id]);
 
+  // `parentMap` (nodeId → parentId) reconstrói a cadeia de ancestrais de
+  // um node achado por localização sem mais uma chamada CDP — ver doc
+  // comment de `recordParentLinks`/`ancestorChain` acima. `requestedChildren`
+  // evita re-pedir `DOM.requestChildNodes` pro mesmo node enquanto o
+  // evento `DOM.setChildNodes` ainda não voltou.
+  const parentMapRef = useRef<Map<number, number>>(new Map());
+  const requestedChildrenRef = useRef<Set<number>>(new Set());
+
   // Desconexão inesperada no meio do caminho (ex: outra coisa forçou
   // attach por fora) chega como o evento sintético "__detached__" de
   // browser-cdp.ts, pelo MESMO canal genérico que toda fase futura vai
   // usar (`onCdpEvent`, um só, sem canal por domínio — CDP já se
-  // autodescreve pelo `method`).
+  // autodescreve pelo `method`). `DOM.setChildNodes` (Fase 1, adoção de
+  // CDP) é a resposta assíncrona de `DOM.requestChildNodes` — o comando
+  // em si não devolve nada útil, os filhos chegam por ESTE evento.
   useEffect(() => {
     const off = window.browser.onCdpEvent((eventId, method, params) => {
       if (eventId !== id) return;
       if (method === "__detached__") {
         const reason = (params as { reason?: string })?.reason;
         setCdpAttachResult({ ok: false, error: `Sessão de depuração desanexada${reason ? ` (${reason})` : ""}.` });
+        return;
+      }
+      if (method === "DOM.setChildNodes") {
+        const { parentId, nodes } = params as { parentId: number; nodes: CdpRawNode[] };
+        recordParentLinks(parentMapRef.current, parentId, nodes);
+        const converted = nodes.filter((n) => n.nodeType === 1).map(cdpNodeToDomNode);
+        setTree((prev) => (prev ? mergeChildrenIntoTree(prev, parentId, converted) : prev));
       }
     });
     return () => {
@@ -655,9 +707,8 @@ export function BrowserInspector({
   const [tab, setTab] = useState<Tab>("elements");
   const [tree, setTree] = useState<DomNode | null>(null);
   const [loadingTree, setLoadingTree] = useState(false);
-  const [treeTruncated, setTreeTruncated] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [detailsSubtab, setDetailsSubtab] = useState<DetailsSubtab>("styles");
   const [elementStyles, setElementStyles] = useState<ElementStyles | null>(null);
   const [loadingStyles, setLoadingStyles] = useState(false);
@@ -781,39 +832,72 @@ export function BrowserInspector({
   // a PRIMEIRA aba aberta, sem ninguém ter visitado Network ainda).
   const [perfNetworkSummary, setPerfNetworkSummary] = useState<{ total: number; failed: number } | null>(null);
 
+  // DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 1) — `depth: 2` alcança
+  // document → html → head/body (um nível a mais que o mínimo, só pra
+  // abrir já mostrando `<html>` com filhos imediatos expansíveis em vez
+  // de nascer com uma única linha fechada). Qualquer coisa além disso é
+  // sempre lazy via `DOM.requestChildNodes` no expand (`toggleNode`).
   async function refreshTree() {
     setLoadingTree(true);
-    const snapshot = await evalJson<SnapshotResult>(id, SNAPSHOT_SCRIPT);
-    setTree(snapshot?.root ?? null);
-    setTreeTruncated(snapshot?.truncated ?? false);
+    parentMapRef.current = new Map();
+    requestedChildrenRef.current = new Set();
+    const doc = await window.browser.sendCdp(id, "DOM.getDocument", { depth: 2, pierce: false });
+    if (!doc.ok) {
+      setTree(null);
+      setLoadingTree(false);
+      return;
+    }
+    const docRoot = (doc.result as { root: CdpRawNode }).root;
+    const htmlRaw = docRoot.children?.find((c) => c.nodeType === 1) ?? null;
+    if (!htmlRaw) {
+      setTree(null);
+      setLoadingTree(false);
+      return;
+    }
+    recordParentLinks(parentMapRef.current, docRoot.nodeId, [htmlRaw]);
+    const root = cdpNodeToDomNode(htmlRaw);
+    setTree(root);
     setLoadingTree(false);
-    if (!snapshot) return;
+
+    // "Inspecionar elemento" (clique com botão direito, antes do
+    // inspector abrir) — `DOM.getNodeForLocation` acha o elemento sob o
+    // ponto, `DOM.pushNodeByBackendIdToFrontend` garante que ele (e toda
+    // a cadeia de ancestrais, via o cascade de eventos `DOM.setChildNodes`
+    // que o próprio Chrome dispara pra revelar um node "empurrado")
+    // ganhe um `nodeId` usável nesta sessão.
     const point = focusPointRef.current;
     focusPointRef.current = null;
     if (point) {
-      const targetId = await evalJson<string | null>(id, elementAtPointScript(point.x, point.y));
-      if (targetId) {
-        const path = findPath(snapshot.root, targetId);
-        if (path) {
-          setExpanded((prev) => new Set([...prev, ...path]));
-          setSelectedId(targetId);
-          void window.browser.evalJs(id, highlightScript(targetId));
+      const loc = await window.browser.sendCdp(id, "DOM.getNodeForLocation", { x: Math.round(point.x), y: Math.round(point.y) });
+      const backendNodeId = loc.ok ? (loc.result as { backendNodeId?: number }).backendNodeId : undefined;
+      if (backendNodeId !== undefined) {
+        const pushed = await window.browser.sendCdp(id, "DOM.pushNodeByBackendIdToFrontend", { backendNodeId });
+        const targetNodeId = pushed.ok ? (pushed.result as { nodeId?: number }).nodeId : undefined;
+        if (targetNodeId !== undefined) {
+          setExpanded((prev) => new Set([...prev, ...ancestorChain(parentMapRef.current, targetNodeId)]));
+          selectNode(targetNodeId);
           return;
         }
       }
     }
     // Sem alvo específico — abre pelo menos a raiz, senão a árvore
     // inteira nasce fechada e parece vazia.
-    setExpanded((prev) => (prev.size > 0 ? prev : new Set([snapshot.root.id])));
+    setExpanded((prev) => (prev.size > 0 ? prev : new Set([root.nodeId])));
   }
 
   useEffect(() => {
+    // Só busca a árvore depois que a sessão CDP anexar de verdade — sem
+    // isso `sendCdp` falharia limpo (ok:false) numa corrida com o efeito
+    // de attach acima (os dois disparam no mesmo mount, mas attach é
+    // assíncrono). Reexecuta a cada novo attach bem-sucedido (inclusive
+    // um retry manual do banner de erro).
+    if (!cdpAttachResult?.ok) return;
     void refreshTree();
     return () => {
-      void window.browser.evalJs(id, highlightScript(null));
+      highlightNode(id, null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, cdpAttachResult]);
 
   useEffect(() => {
     void window.browser.getConsole(id).then((res) => {
@@ -940,10 +1024,11 @@ export function BrowserInspector({
 
   // Painel de detalhes (Styles/Computed) — refaz a busca sempre que a
   // seleção mudar. `selectedId` pode apontar pra um `data-stellar-el-id`
-  // que não existe mais depois de um `refreshTree()` (a numeração
-  // reinicia a cada snapshot novo, ver comentário do `SNAPSHOT_SCRIPT`) —
-  // `elementStylesScript` já devolve `null` nesse caso e a UI mostra um
-  // estado vazio em vez de dado velho/quebrado.
+  // que não existe mais depois de um `refreshTree()` (CDP reatribui
+  // `nodeId`s a cada `DOM.getDocument()` novo, e `tagSelectedNode` só
+  // marca o elemento vivo NA hora da seleção) — `elementStylesScript` já
+  // devolve `null` nesse caso e a UI mostra um estado vazio em vez de
+  // dado velho/quebrado.
   useEffect(() => {
     if (tab !== "elements" || !selectedId) {
       setElementStyles(null);
@@ -988,16 +1073,29 @@ export function BrowserInspector({
     void refreshStorage();
   }
 
-  function selectNode(nodeId: string) {
+  function selectNode(nodeId: number) {
     setSelectedId(nodeId);
-    void window.browser.evalJs(id, highlightScript(nodeId));
+    tagSelectedNode(id, nodeId);
+    highlightNode(id, nodeId);
   }
 
-  function toggleNode(nodeId: string) {
+  function toggleNode(nodeId: number) {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+        return next;
+      }
+      next.add(nodeId);
+      // Lazy-load: só pede filhos se ainda não vieram (evita re-pedir
+      // toda vez que o usuário fecha/reabre o mesmo node já carregado).
+      if (tree && !requestedChildrenRef.current.has(nodeId)) {
+        const node = findNodeById(tree, nodeId);
+        if (node && node.hasChildren && node.children.length === 0) {
+          requestedChildrenRef.current.add(nodeId);
+          void window.browser.sendCdp(id, "DOM.requestChildNodes", { nodeId, depth: 1 });
+        }
+      }
       return next;
     });
   }
@@ -1474,14 +1572,7 @@ export function BrowserInspector({
               {loadingTree ? (
                 <div className={styles.inspectorEmpty}>Carregando árvore…</div>
               ) : tree ? (
-                <>
-                  {treeTruncated && (
-                    <div className={styles.treeTruncatedNotice} data-role="inspector-tree-truncated">
-                      Página grande demais pra mostrar por completo — exibindo os primeiros {SNAPSHOT_NODE_BUDGET} elementos.
-                    </div>
-                  )}
-                  <ElementsTree node={tree} selectedId={selectedId} expanded={expanded} onToggle={toggleNode} onSelect={selectNode} />
-                </>
+                <ElementsTree node={tree} selectedId={selectedId} expanded={expanded} onToggle={toggleNode} onSelect={selectNode} />
               ) : (
                 <div className={styles.inspectorEmpty}>Não foi possível ler a página.</div>
               )}

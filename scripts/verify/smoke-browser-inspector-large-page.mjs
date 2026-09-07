@@ -1,18 +1,21 @@
 // Pendentes #188 — bug real reportado pelo usuário com screenshot: a aba
 // Elements mostrava "Não foi possível ler a página" em google.com, mas
 // funcionava nas fixtures pequenas de todo outro smoke test deste
-// diretório. Causa raiz confirmada com instrumentação real (não só
-// suspeita): `SNAPSHOT_SCRIPT` (BrowserInspector.tsx) serializava a
-// árvore inteira sem orçamento total de nós — uma página real densa o
-// bastante estourava `MAX_EVAL_RESULT_CHARS` (20_000, `evalJs` em
-// browser-registry.ts), o resultado vinha truncado no meio, `JSON.parse`
-// falhava em silêncio (`evalJson`) e a UI mostrava "não foi possível
-// ler" pra QUALQUER site denso o bastante — sem nunca dizer por quê.
+// diretório. Causa raiz original: `SNAPSHOT_SCRIPT` (BrowserInspector.tsx)
+// serializava a árvore inteira sem orçamento total de nós — uma página
+// real densa o bastante estourava `MAX_EVAL_RESULT_CHARS` (20_000, `evalJs`
+// em browser-registry.ts), o resultado vinha truncado no meio, `JSON.parse`
+// falhava em silêncio (`evalJson`) e a UI mostrava "não foi possível ler"
+// pra QUALQUER site denso o bastante — sem nunca dizer por quê.
 //
-// Este teste usa uma fixture SINTÉTICA pesada (não depende de internet
-// real, ao contrário da investigação original que testou contra
-// google.com/wikipedia ao vivo pra calibrar o orçamento de 60 nós) —
-// determinístico pra CI, reproduz a mesma classe de página densa.
+// DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 1) resolveu isso na raiz: a
+// árvore usa `DOM.getDocument`/`DOM.requestChildNodes` — cada nível chega
+// de cada vez, direto do protocolo de depuração, sem NUNCA fazer round-trip
+// do subtree inteiro como blob JSON. Não existe mais orçamento de nó/
+// truncamento nenhum pra impor (`SNAPSHOT_NODE_BUDGET` foi deletado, não
+// repropositado) — este teste virou o OPOSTO do original: prova que uma
+// página densa (300 linhas sintéticas) expande e revela TODOS os nós reais,
+// sem nenhum aviso de truncamento (que não existe mais na UI).
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 import { createServer } from "node:http";
 
@@ -28,15 +31,13 @@ const FIXTURE_HTML = `<!doctype html><html><head><title>Fixture pesada</title></
   <main><ul class="results">${rows}</ul></main>
   <footer class="site-footer"><p>rodapé</p></footer>
 </body></html>`;
-const SMALL_HTML = `<!doctype html><html><body><h1>Fixture pequena</h1><p>Só um parágrafo.</p></body></html>`;
 const httpPort = await pickFreePort();
-const server = createServer((req, res) => {
+const server = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "text/html" });
-  res.end(req.url === "/small" ? SMALL_HTML : FIXTURE_HTML);
+  res.end(FIXTURE_HTML);
 });
 await new Promise((resolve) => server.listen(httpPort, "127.0.0.1", resolve));
 const fixtureUrl = `http://127.0.0.1:${httpPort}/`;
-const smallUrl = `http://127.0.0.1:${httpPort}/small`;
 
 async function centerOf(page, selector) {
   const res = JSON.parse(
@@ -95,26 +96,33 @@ try {
     await page.evalJs(`!!document.querySelector('[data-role="inspector-tree-line"]')`),
     true,
   );
-  check(
-    "...e avisa honestamente que truncou, em vez de simplesmente mostrar uma árvore incompleta calada",
-    await page.evalJs(`!!document.querySelector('[data-role="inspector-tree-truncated"]')`),
-    true,
-  );
 
-  // Uma página pequena (as fixtures de todo outro smoke test deste
-  // diretório) não deve mostrar o aviso — só dispara quando de verdade
-  // bate no orçamento de nós. Navegar de novo NO MESMO card/inspector
-  // também prova que `treeTruncated` reresseta a cada `refreshTree()`,
-  // não fica preso em `true` pra sempre depois da 1ª página densa.
-  await page.evalJs(`window.browser.navigate(${JSON.stringify(browserId)}, ${JSON.stringify(smallUrl)})`);
-  await new Promise((r) => setTimeout(r, 800));
-  const reloadBtn = await centerOf(page, '[data-role="browser-inspector"] button[title="Atualizar árvore"]');
-  await page.click(reloadBtn.x, reloadBtn.y);
-  await new Promise((r) => setTimeout(r, 500));
+  // Expande body -> main -> ul, revelando as 300 <li> reais de uma vez
+  // (`DOM.requestChildNodes({nodeId, depth:1})` num nó com 300 filhos —
+  // sem orçamento nenhum imposto pelo Inspector, o CDP entrega os 300).
+  async function expandByTag(tag) {
+    await page.evalJs(`
+      (() => {
+        const lines = [...document.querySelectorAll('[data-role="inspector-tree-line"]')];
+        const line = lines.find((l) => l.getAttribute('data-tag') === ${JSON.stringify(tag)});
+        const toggle = line && line.querySelector('button');
+        if (toggle) toggle.click();
+      })()
+    `);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  await expandByTag("body");
+  await expandByTag("main");
+  await expandByTag("ul");
+  await new Promise((r) => setTimeout(r, 400));
+
+  const liCount = await page.evalJs(`[...document.querySelectorAll('[data-role="inspector-tree-line"]')].filter((l) => l.getAttribute('data-tag') === 'li').length`);
+  check("expandir <ul> revela TODAS as 300 <li> reais, sem truncar (sem orçamento de nó imposto)", Number(liCount), 300);
+
   check(
-    "página pequena não mostra o aviso de truncamento (só dispara quando bate no orçamento de verdade)",
-    await page.evalJs(`!document.querySelector('[data-role="inspector-tree-truncated"]')`),
-    true,
+    "não existe mais aviso de truncamento nenhum na UI (o mecanismo foi removido, não só desativado)",
+    await page.evalJs(`!!document.querySelector('[data-role="inspector-tree-truncated"]')`),
+    false,
   );
 
   page.close();
