@@ -604,9 +604,18 @@ function BrowserCardInner({
   // not just while it's on. This callback is `BrowserInspector`'s only
   // way to tell this component what's really applied right now, in both
   // directions.
-  function handleEmulationChange(dims: { width: number; height: number; zoom: EmulationZoom } | null) {
-    contentSizeRef.current = dims ? { w: dims.width, h: dims.height } : computeContentSize(rectRef.current.w, rectRef.current.h);
-    setEmulatedFrame(dims);
+  function handleEmulationChange(dims: { width: number; height: number; zoom: EmulationZoom; deviceScaleFactor: number } | null) {
+    // Achado ao vivo (2026-09-07, junto do fix de DPR real em
+    // `setDeviceEmulation`/browser-registry.ts): o paint buffer real agora
+    // é `width/height × deviceScaleFactor`, não mais `width/height` puro —
+    // `contentSizeRef` (espaço de coordenadas de `toCanvasPoint`/`sendMouse`)
+    // precisa bater com o content size REAL aplicado, senão clique/menu de
+    // contexto durante emulação com DPR > 1 mira no ponto errado (dividido
+    // pelo DPR, sempre perto do canto superior esquerdo do alvo real).
+    contentSizeRef.current = dims
+      ? { w: Math.max(1, Math.round(dims.width * dims.deviceScaleFactor)), h: Math.max(1, Math.round(dims.height * dims.deviceScaleFactor)) }
+      : computeContentSize(rectRef.current.w, rectRef.current.h);
+    setEmulatedFrame(dims ? { width: dims.width, height: dims.height, zoom: dims.zoom } : null);
   }
 
   useEffect(() => {
