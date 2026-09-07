@@ -61,6 +61,18 @@ const RESPONSIVE_PRESETS: ResponsivePreset[] = [
   { label: "Desktop (1280×800)", width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
 ];
 
+// Limite de tamanho de dispositivo emulado — antes só existia como `100`/
+// `3000` soltos dentro do clamp do arraste das alças (`onFrameResizePointerMove`),
+// sem bater com NENHUM limite nos campos numéricos de tamanho personalizado
+// (que não tinham `min`/`max` nenhum, então digitar "5" ou "99999" e clicar
+// "Aplicar" não era clampado — só o ARRASTE respeitava um limite). Nomeado e
+// centralizado aqui, aplicado nos dois caminhos (`clampFrameDim` abaixo).
+const FRAME_DIM_MIN = 100;
+const FRAME_DIM_MAX = 3000;
+function clampFrameDim(n: number): number {
+  return Math.max(FRAME_DIM_MIN, Math.min(FRAME_DIM_MAX, Math.round(n)));
+}
+
 // Larguras comuns de breakpoint, mesma "linha horizontal" de presets que
 // o usuário apontou no print do device toolbar real do Chrome — atalho
 // pra preencher o campo de largura personalizada sem digitar.
@@ -974,11 +986,20 @@ export function BrowserInspector({
     void window.browser.resize(id, cardSize.w, cardSize.h);
   }
 
+  // Único funil por onde QUALQUER caminho de mudança de tamanho passa
+  // (presets, tamanho personalizado, ruler, girar, DPR) — clampar aqui,
+  // não em cada chamador, garante o mesmo limite [FRAME_DIM_MIN,
+  // FRAME_DIM_MAX] em todos eles de uma vez só. Antes, só o ARRASTE das
+  // alças respeitava esse limite (`onFrameResizePointerMove`); os campos
+  // numéricos de tamanho personalizado não tinham `min`/`max` nenhum —
+  // digitar "5" ou "99999" e clicar "Aplicar" não era clampado.
   function applyEmulation(width: number, height: number, deviceScaleFactor: number, mobile: boolean, label: string) {
-    setActiveEmulation({ width, height, deviceScaleFactor, mobile, label });
-    setCustomW(width);
-    setCustomH(height);
-    void window.browser.setDeviceEmulation(id, { width, height, deviceScaleFactor, mobile });
+    const clampedWidth = clampFrameDim(width);
+    const clampedHeight = clampFrameDim(height);
+    setActiveEmulation({ width: clampedWidth, height: clampedHeight, deviceScaleFactor, mobile, label });
+    setCustomW(clampedWidth);
+    setCustomH(clampedHeight);
+    void window.browser.setDeviceEmulation(id, { width: clampedWidth, height: clampedHeight, deviceScaleFactor, mobile });
   }
 
   function applyCustomSize() {
@@ -1214,8 +1235,8 @@ export function BrowserInspector({
     if (!r || !activeEmulation) return;
     const dx = (e.clientX - r.startX) * r.scaleX;
     const dy = (e.clientY - r.startY) * r.scaleY;
-    const width = r.axis === "bottom" ? r.startW : Math.round(Math.max(100, Math.min(3000, r.startW + dx)));
-    const height = r.axis === "right" ? r.startH : Math.round(Math.max(100, Math.min(3000, r.startH + dy)));
+    const width = r.axis === "bottom" ? r.startW : clampFrameDim(r.startW + dx);
+    const height = r.axis === "right" ? r.startH : clampFrameDim(r.startH + dy);
     applyEmulation(width, height, activeEmulation.deviceScaleFactor, width < 768, `${width}×${height} (personalizado)`);
   }
   function endFrameResize() {
@@ -1266,6 +1287,8 @@ export function BrowserInspector({
           type="number"
           data-role="inspector-custom-width"
           className={styles.deviceDim}
+          min={FRAME_DIM_MIN}
+          max={FRAME_DIM_MAX}
           value={customW}
           onChange={(e) => setCustomW(Number(e.target.value) || 0)}
         />
@@ -1274,6 +1297,8 @@ export function BrowserInspector({
           type="number"
           data-role="inspector-custom-height"
           className={styles.deviceDim}
+          min={FRAME_DIM_MIN}
+          max={FRAME_DIM_MAX}
           value={customH}
           onChange={(e) => setCustomH(Number(e.target.value) || 0)}
         />
