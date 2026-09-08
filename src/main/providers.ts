@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
+import { effectivePath, isExecutableFile, loginShell } from "./user-env";
 
 export type ProviderId = "bash" | "claude" | "codex" | "cursor" | "antigravity" | "opencode";
 
@@ -261,18 +261,57 @@ export function providerInstallCommand(id: string, platform: NodeJS.Platform = p
 // detecção de binário em si já não dependia de shell nenhum (sempre foi
 // busca de arquivo pura em `process.env.PATH`), só faltava tentar as
 // extensões certas por SO.
+// Extensões que o Windows tenta, em ordem, quando um nome sem extensão é
+// "executado" — mesma lista que o próprio shell do Windows usa (variável
+// `PATHEXT`, com um fallback caso ela não exista por algum motivo). Sem
+// isso, `which(["claude"])` nunca acharia o shim real que `npm install -g`
+// cria lá (`claude.cmd`/`claude.ps1`, nunca um `claude` sem extensão) —
+// achado ao vivo, 2026-09-03.
 const WINDOWS_EXECUTABLE_EXTENSIONS = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD;.PS1")
   .split(";")
   .filter(Boolean);
 
-export function which(names: string[], platform: NodeJS.Platform = process.platform): string | null {
-  const path = process.env.PATH ?? "";
+/** Tudo que `which` precisa saber do mundo, injetável para que o
+ * comportamento de OUTRA plataforma seja testável nesta — é a única forma
+ * honesta de cobrir o caso macOS sem um Mac, e sem fingir um. */
+export type WhichOptions = {
+  platform?: NodeJS.Platform;
+  /** Diretórios a varrer, em ordem. Default: o PATH efetivo do usuário
+   * (`user-env.ts`), NÃO `process.env.PATH` — ver o cabeçalho de lá. */
+  pathDirs?: string[];
+  /** Default: arquivo de verdade com bit de execução. */
+  isExecutable?: (candidate: string) => boolean;
+  /** Só para o Windows; default: `PATHEXT` do processo. */
+  pathExt?: string[];
+};
+
+/**
+ * Acha um binário por nome, varrendo diretórios — sem shell nenhuma, o
+ * que já era verdade aqui antes e continua sendo.
+ *
+ * O que mudou (2026-09-08): a lista de diretórios deixou de ser
+ * `process.env.PATH` cru. Num `.app` aberto pelo Finder no macOS aquele
+ * PATH é o mínimo do launchd e não contém nada que o usuário instalou —
+ * ver `user-env.ts` para o porquê e para o que entra no lugar.
+ *
+ * E o teste de candidato deixou de ser `existsSync`: ele dizia "sim" para
+ * um DIRETÓRIO chamado `agent` no PATH (o nome primário da CLI do Cursor,
+ * nada improvável) e para um arquivo sem bit de execução.
+ */
+export function which(names: string[], platformOrOptions: NodeJS.Platform | WhichOptions = {}): string | null {
+  // Assinatura retrocompatível: os chamadores existentes passam a
+  // plataforma direto como segundo argumento.
+  const opts: WhichOptions = typeof platformOrOptions === "string" ? { platform: platformOrOptions } : platformOrOptions;
+  const platform = opts.platform ?? process.platform;
+  const isExecutable = opts.isExecutable ?? isExecutableFile;
+  const dirs = opts.pathDirs ?? effectivePath().split(delimiter).filter(Boolean);
+  const extensions = opts.pathExt ?? WINDOWS_EXECUTABLE_EXTENSIONS;
   const candidateNames =
-    platform === "win32" ? names.flatMap((name) => [name, ...WINDOWS_EXECUTABLE_EXTENSIONS.map((ext) => name + ext)]) : names;
-  for (const dir of path.split(delimiter)) {
+    platform === "win32" ? names.flatMap((name) => [name, ...extensions.map((ext) => name + ext)]) : names;
+  for (const dir of dirs) {
     for (const name of candidateNames) {
       const candidate = join(dir, name);
-      if (existsSync(candidate)) return candidate;
+      if (isExecutable(candidate)) return candidate;
     }
   }
   return null;
@@ -291,7 +330,12 @@ export function resolveSpawn(providerId: string, opts: SpawnOpts = {}): { binary
     if (process.platform === "win32") {
       return { binary: process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", args: [] };
     }
-    return { binary: process.env.SHELL || "/bin/bash", args: [] };
+    // `loginShell()` (user-env.ts) já é a cadeia certa: $SHELL, depois a
+    // base de usuário do SO via getpwuid(), e só então um caminho fixo —
+    // `/bin/zsh` no macOS, onde é o padrão desde o Catalina, `/bin/sh` no
+    // resto, que é o único POSIX obrigatório (`/bin/bash`, o fallback
+    // anterior, não existe em toda distro).
+    return { binary: loginShell(), args: [] };
   }
   const binary = which(provider.binaryNames);
   if (!binary) return null;

@@ -158,10 +158,160 @@ const BROWSER_SUPERSAMPLE = 3;
 const BROWSER_MAX_DENSITY = 2;
 
 /**
+ * Um endereço que não pode ter certificado TLS público, e por isso recebe
+ * `http` em vez de `https` quando digitado sem esquema.
+ *
+ * Relatado ao vivo (2026-09-08): "o navegador não resolve para http". A
+ * regra anterior era literal — só `localhost` e `127.` ganhavam `http`, e
+ * todo o resto ia para `https`. Então um servidor de desenvolvimento em
+ * `192.168.1.50:8080`, `[::1]:5173`, `10.0.0.5:3000`, `meumac.local:8080`
+ * ou um hostname de rótulo único como `buun:8080` era carregado por
+ * `https://`, falhava no handshake TLS e parecia um bug do navegador.
+ *
+ * O critério não é mais "é o localhost", é "nenhuma autoridade emite
+ * certificado para este nome": loopback, faixas privadas (RFC 1918),
+ * link-local, ULA de IPv6, mDNS `.local` e nome de rótulo único (sem
+ * ponto), que por definição não é resolvível na internet pública.
+ *
+ * Isto não afrouxa segurança nenhuma: a rejeição de `javascript:`/`file:`/
+ * `data:`/`blob:`/`vbscript:` em `normalizeUrl` é o que protege contra uma
+ * navegação virar execução local, e continua idêntica. Um esquema `http://`
+ * explícito sempre foi respeitado; o que mudou é só o palpite para quando
+ * NENHUM esquema foi dado.
+ */
+/**
+ * Canoniza um host IPv4 em qualquer notação que o Chromium aceita e
+ * devolve os 4 octetos, ou `null` se não for um IPv4.
+ *
+ * Existe por causa de um downgrade de segurança real, achado em review e
+ * confirmado medindo (2026-09-08): a regra anterior classificava
+ * "rótulo único, sem ponto" como local, e `16843009` não tem ponto — mas
+ * é `1.1.1.1` em notação inteira, um IP PÚBLICO, que passou a ser
+ * carregado por `http://`. O inverso também errava: `0x7f.1` é
+ * `127.0.0.1` e ia para `https`.
+ *
+ * As regras seguem o parser de host da WHATWG URL, que é o que o
+ * Chromium implementa: 1 a 4 partes separadas por ponto; cada parte é
+ * hexadecimal com prefixo `0x`, octal com `0` à frente, ou decimal; a
+ * ÚLTIMA parte cobre todos os octetos restantes (`1.1` = 1.0.0.1,
+ * `16843009` = 1.1.1.1).
+ */
+export function ipv4Octets(host: string): [number, number, number, number] | null {
+  const parts = host.split(".");
+  if (parts.length > 4) return null;
+
+  const numbers: number[] = [];
+  for (const part of parts) {
+    if (part === "") return null;
+    let value: number;
+    if (/^0[xX][0-9a-fA-F]*$/.test(part)) value = part.length === 2 ? 0 : parseInt(part.slice(2), 16);
+    // Prefixo `0` é octal, e o spec da WHATWG manda FALHAR se o resto
+    // contiver dígito não octal — `09` não é 9, é inválido. Importa
+    // porque esta função decide http vs https.
+    else if (/^0\d*$/.test(part)) {
+      if (!/^0[0-7]*$/.test(part)) return null;
+      value = part === "0" ? 0 : parseInt(part.slice(1), 8);
+    } else if (/^\d+$/.test(part)) value = Number(part);
+    else return null;
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    numbers.push(value);
+  }
+
+  // Toda parte menos a última cabe em um octeto; a última cobre o resto.
+  const last = numbers.pop()!;
+  if (numbers.some((n) => n > 255)) return null;
+  if (last >= 256 ** (4 - numbers.length)) return null;
+
+  let address = last;
+  for (let i = numbers.length - 1; i >= 0; i -= 1) address += numbers[i] * 256 ** (3 - i);
+  return [(address >>> 24) & 255, (address >>> 16) & 255, (address >>> 8) & 255, address & 255];
+}
+
+/**
+ * Um endereço que não pode ter certificado TLS público, e por isso recebe
+ * `http` em vez de `https` quando digitado sem esquema.
+ *
+ * Relatado ao vivo (2026-09-08): "o navegador não resolve para http". A
+ * regra anterior era literal — só `localhost` e `127.` ganhavam `http`, e
+ * todo o resto ia para `https`. Então um servidor de desenvolvimento em
+ * `192.168.1.50:8080`, `[::1]:5173`, `10.0.0.5:3000` ou `meumac.local`
+ * era carregado por `https://`, falhava no handshake TLS e parecia um bug
+ * do navegador.
+ *
+ * O critério não é "é o localhost", é "nenhuma autoridade emite
+ * certificado para este nome": loopback, faixas privadas (RFC 1918),
+ * link-local, ULA de IPv6, mDNS `.local` e nome de rótulo único NÃO
+ * numérico, que por definição não é resolvível na internet pública.
+ *
+ * Isto não afrouxa a segurança da navegação: a rejeição de `javascript:`/
+ * `file:`/`data:`/`blob:`/`vbscript:` em `normalizeUrl` é o que impede uma
+ * navegação de virar execução local, e continua idêntica. Um esquema
+ * explícito sempre foi respeitado; o que mudou é só o palpite para quando
+ * NENHUM esquema foi dado.
+ *
+ * Limite conhecido e aceito: um rótulo único que também é um TLD público
+ * de verdade (`ai`, `dk`) é tratado como local e recebe `http`. Trocar
+ * isso exigiria embutir a lista de public suffixes; o custo real é uma
+ * primeira navegação em claro para um host que o usuário digitou sem
+ * esquema, que o próprio site corrige por redirect ou HSTS.
+ */
+export function isLocalHostname(raw: string): boolean {
+  // Descarta credenciais, porta, caminho, query e fragmento — sobra o host.
+  const authority = raw.replace(/^\/\//, "").split(/[/?#]/)[0];
+  const afterCredentials = authority.includes("@") ? authority.slice(authority.lastIndexOf("@") + 1) : authority;
+  // IPv6 vem entre colchetes (`[::1]:5173`); fora deles, o `:` é a porta.
+  const bracketed = afterCredentials.match(/^\[([^\]]+)\]/);
+  let host = (bracketed ? bracketed[1] : afterCredentials.split(":")[0]).toLowerCase();
+  // Ponto final é um FQDN raiz válido: `localhost.` é o mesmo host que
+  // `localhost`, e sem isto caía no ramo errado.
+  if (host.endsWith(".") && host !== ".") host = host.slice(0, -1);
+  if (host === "") return false;
+
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  // mDNS, e o nome que o Docker publica para o host.
+  if (host.endsWith(".local") || host === "host.docker.internal") return true;
+
+  if (host.includes(":")) {
+    if (host === "::1" || host === "::") return true;
+    // IPv4-mapped/embutido (`::ffff:192.168.0.1`): o que decide é o IPv4
+    // no fim, não o prefixo IPv6.
+    const embedded = host.match(/:((?:\d{1,3}\.){3}\d{1,3})$/);
+    if (embedded) {
+      const octets = ipv4Octets(embedded[1]);
+      if (octets) return isPrivateIpv4(octets);
+    }
+    // ULA (fc00::/7) e link-local (fe80::/10), incluindo o `%zona`.
+    const head = host.split(":")[0];
+    return /^f[cd]/.test(head) || /^fe[89ab]/.test(head);
+  }
+
+  const octets = ipv4Octets(host);
+  // Todo IPv4, em qualquer notação, é decidido pela faixa — e nunca cai
+  // na regra de rótulo único abaixo. É isto que fecha o downgrade de
+  // `16843009` (1.1.1.1, público) para `http`.
+  if (octets) return isPrivateIpv4(octets);
+
+  // Rótulo único não numérico (`buun`, `raspberrypi`): não é resolvível
+  // na internet pública, então só pode ser um host da rede local.
+  return !host.includes(".");
+}
+
+/** Loopback, RFC 1918 e link-local. */
+function isPrivateIpv4([a, b]: [number, number, number, number]): boolean {
+  if (a === 127 || a === 0) return true;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true;
+  return false;
+}
+
+/**
  * Ported from CentralByte's browser.rs::normalize_url — rejects schemes that
  * would let a "navigate to a URL" request turn into local code execution or
- * file access (javascript:/file:/data:/blob:/vbscript:); bare localhost/IP
- * gets http, everything else gets https if no scheme was given.
+ * file access (javascript:/file:/data:/blob:/vbscript:); an address that
+ * cannot hold a public TLS certificate (see `isLocalHostname`) gets http,
+ * everything else gets https if no scheme was given.
  */
 export function normalizeUrl(raw: string): string {
   const t = raw.trim();
@@ -174,8 +324,7 @@ export function normalizeUrl(raw: string): string {
   }
   if (scheme === "about") throw new Error("unsupported url scheme");
   if (scheme && t.includes("://")) throw new Error("unsupported url scheme");
-  if (t.startsWith("localhost") || t.startsWith("127.")) return `http://${t}`;
-  return `https://${t}`;
+  return `${isLocalHostname(t) ? "http" : "https"}://${t}`;
 }
 
 /**

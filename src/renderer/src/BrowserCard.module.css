@@ -56,15 +56,27 @@
   color: var(--text);
 }
 
+/* Achado ao vivo (2026-09-08, pedido do usuário: "está difícil área de
+ * drag" no header do navegador) — antes `flex: 1` fazia o input tomar
+ * praticamente 100% da largura do header, e `CardFrame.tsx`'s
+ * `onHeaderPointerDown` ignora pointerdown em cima de `input` de
+ * propósito (não pode competir com clicar/selecionar texto na URL) — na
+ * prática quase o header inteiro virava não-arrastável. Referência trazida
+ * pelo usuário (barra de endereço real do Chrome): a URL não estica até a
+ * borda, sobra espaço vazio no header pros ícones/margem. `flex: 0 1 320px`
+ * (não mais `flex: 1`) encolhe normalmente em card estreito (mesmo
+ * `flex-shrink` de antes) mas para de ESTICAR além de 320px em card largo
+ * — a sobra vira espaço vazio dentro de `.browserCardAddress`, que não bate
+ * em nenhum dos seletores do `closest()` acima, logo arrasta normal. */
 .browserCardAddress input {
-  flex: 1;
+  flex: 0 1 320px;
   min-width: 0;
   background: var(--ink);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 7px 12px;
-  font-size: 12px;
+  padding: 5px 10px;
+  font-size: 11.5px;
   font-family: var(--font-mono);
 }
 

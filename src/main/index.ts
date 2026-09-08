@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
+import { refreshUserEnv, userEnvSnapshot } from "./user-env";
 import {
   createEntry,
   deletePath,
@@ -353,11 +354,24 @@ function createWindow() {
   const testBounds = !app.isPackaged && process.env.AGENT_CANVAS_TEST_WINDOW_BOUNDS
     ? (JSON.parse(process.env.AGENT_CANVAS_TEST_WINDOW_BOUNDS) as { x: number; y: number; width: number; height: number })
     : null;
+  // Header nativo do Mac (2026-09-08) — `frame: false` (usado nas outras
+  // plataformas pro Titlebar.tsx custom) some com o traffic-light cluster
+  // de vez; `titleBarStyle`/`trafficLightPosition` só fazem efeito com
+  // `frame` NÃO false (confirmado na doc oficial do Electron). `"hidden"`,
+  // não `"hiddenInset"` — a doc atual trata hiddenInset como a variante
+  // antiga, hidden + trafficLightPosition é quem dá controle fino de
+  // posição hoje. Offset (12, 11) estimado pra centralizar visualmente nos
+  // 34px do `--titlebar-h` (tokens.css) — não verificado num Mac de
+  // verdade, ajustar ao testar (Titlebar.tsx esconde os 3 botões próprios
+  // no darwin via `window.platform`, ver preload/index.ts).
+  const isMac = process.platform === "darwin";
   const win = new BrowserWindow({
     width: testBounds?.width ?? 1280,
     height: testBounds?.height ?? 800,
     ...(testBounds ? { x: testBounds.x, y: testBounds.y } : {}),
-    frame: false,
+    ...(isMac
+      ? { titleBarStyle: "hidden" as const, trafficLightPosition: { x: 12, y: 11 } }
+      : { frame: false }),
     backgroundColor: "#0e1014",
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
@@ -1074,7 +1088,8 @@ function createWindow() {
     onQueueChanged: (boardId, queue) => safeSend(win, "spawn-queue:changed", boardId, queue),
     // Regra geral de auto-conector (2026-09-02) — ver message-bus.ts's
     // doc comment na interface de callbacks.
-    onAutoConnect: (fromCardId, toCardId, kind) => safeSend(win, "connector:auto", fromCardId, toCardId, kind),
+    onAutoConnect: (fromCardId, toCardId, kind, label) =>
+      safeSend(win, "connector:auto", fromCardId, toCardId, kind, label),
   });
   ipcMain.handle("browser:get-page-text", (_e, id: string) => browserRegistry.getPageText(id));
   // Achado ao vivo, 2026-09-03 — "aviso antes mesmo de abrir um agente":
@@ -1669,7 +1684,24 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+/**
+ * Resolução do PATH do usuário (user-env.ts), disparada no boot e nunca
+ * esperada por ninguém: o snapshot síncrono já serve desde o import, e
+ * esta chamada só o melhora com o PATH real da login shell. Existe porque
+ * um `.app` aberto pelo Finder no macOS herda o PATH do launchd, onde
+ * nenhuma CLI de agente instalada pelo usuário aparece.
+ *
+ * O aviso ao renderer é o que impede um falso "não instalado" de ficar
+ * congelado na tela: `useAgentAvailability.ts` checa uma vez por vida do
+ * app, e essa vez pode acontecer antes desta resolução terminar.
+ */
+app.whenReady().then(() => {
+  createWindow();
+  void refreshUserEnv().then(() => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) safeSend(win, "agents:availability-stale", userEnvSnapshot().source);
+  });
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

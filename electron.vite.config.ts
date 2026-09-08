@@ -17,6 +17,17 @@ export default defineConfig({
   },
   renderer: {
     root: "src/renderer",
+    // Achado ao vivo (2026-09-07) — nesta máquina "localhost" resolve pra
+    // ::1 primeiro (IPv6), e o Vite por padrão faz bind em "localhost", não
+    // numa família específica. Isso colocava este dev server ouvindo em
+    // [::1]:5173 — a MESMA porta que o container `idy-admin` publica em
+    // 127.0.0.1:5173 (IPv4 só, padrão do publish rootless do podman).
+    // Resultado: `http://localhost:5173` caía silenciosamente aqui, nunca
+    // no Admin, sem erro nenhum pra avisar. Porta própria, fora de 5173,
+    // pra nunca mais competir por ela — `ELECTRON_RENDERER_URL` (lido em
+    // src/main/index.ts) já é dinâmico, então mudar aqui não pede nenhuma
+    // outra mudança no app.
+    server: { port: 5183 },
     plugins: [
       react(),
       ...(visualize

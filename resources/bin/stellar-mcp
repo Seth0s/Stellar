@@ -1,4 +1,28 @@
-#!/usr/bin/env node
+#!/bin/sh
+":" //# ; if [ -n "${AGENT_CANVAS_SHIM_REEXEC-}" ]; then echo "stellar: AGENT_CANVAS_NODE='${AGENT_CANVAS_NODE-}' nao e um interpretador node" >&2; exit 127; fi; AGENT_CANVAS_SHIM_REEXEC=1 ELECTRON_RUN_AS_NODE=1 exec "${AGENT_CANVAS_NODE:-node}" "$0" "$@"
+// Polyglot sh/node deliberado, não um acidente (2026-09-08), e a ORDEM
+// das duas linhas acima é obrigatória. O shebang `#!/usr/bin/env node`
+// que estava aqui exigia `node` no PATH do processo que lança este
+// arquivo — e num `.app` aberto pelo Finder no macOS esse PATH é o que o
+// `path_helper` monta, sem nenhum diretório de usuário. Resultado: este
+// shim morria com "env: node: No such file or directory" antes de
+// responder ao handshake, e quem o lança é a CLI do usuário
+// (cursor/agy/opencode), cujo ambiente o Stellar não controla na hora do
+// lançamento.
+//
+// Como funciona: para o `sh`, a linha 2 é `:` (no-op) seguido de um
+// `exec`, então ele re-executa este mesmo arquivo com o interpretador
+// certo e nunca chega na linha 3. Para o node, a linha 2 é a string ":"
+// seguida de um comentário. Todo comentário explicativo precisa ficar
+// DEPOIS do exec e em `//`: o node só descarta a primeira linha quando
+// ela é um shebang, então um bloco `#` aqui em cima é erro de sintaxe
+// (quebrado e corrigido ao vivo escrevendo isto).
+//
+// `AGENT_CANVAS_NODE` é o binário do próprio Electron, injetado por
+// pty-registry.ts em todo processo spawnado e herdado daí pela CLI que
+// lança este shim; `node` do PATH é o fallback para quando o shim roda
+// fora do Stellar, onde o PATH é rico. `ELECTRON_RUN_AS_NODE` é setado
+// aqui mesmo para não depender de quem lançou; o node normal ignora.
 // Servidor MCP em stdio — um proxy puro pro servidor MCP HTTP que a app já
 // roda (src/main/mcp-server.ts). Não define ferramenta nenhuma: repassa
 // `tools/list`, `tools/call` e tudo mais tal e qual, então a lista de
@@ -38,6 +62,21 @@
 //
 // stdout é EXCLUSIVO do protocolo — uma linha JSON-RPC por mensagem.
 // Qualquer diagnóstico vai pra stderr, senão corrompe o transporte.
+//
+// A sentinela `AGENT_CANVAS_SHIM_REEXEC` fecha um loop infinito real
+// (achado em review, confirmado medindo: exit 124 a 100% de CPU). Se
+// `AGENT_CANVAS_NODE` apontar para um shell em vez de um node — e a
+// variável é herdada por todo processo spawnado, então qualquer agente
+// pode setá-la —, o `exec` re-executa este mesmo arquivo, que re-executa,
+// para sempre. Com a sentinela a segunda passada falha na hora, com
+// mensagem que nomeia a variável culpada. O lado JS a remove do ambiente
+// logo abaixo, para que um processo neto que legitimamente chame um shim
+// não herde a guarda e seja recusado à toa.
+
+
+// Ver a nota da sentinela no topo: fora daqui ela não tem função, e
+// deixá-la no ambiente faria um neto que chame um shim ser recusado.
+delete process.env.AGENT_CANVAS_SHIM_REEXEC;
 
 const mcpUrl = process.env.AGENT_CANVAS_MCP_URL;
 const cardId = process.env.AGENT_CANVAS_CARD_ID || "";

@@ -23,6 +23,13 @@ function ensureInitialized() {
   if (initialized) return;
   initialized = true;
   void recheck();
+  // A primeira checagem pode ter rodado antes de o processo principal
+  // resolver o PATH real da login shell (main/user-env.ts) — num `.app`
+  // aberto pelo Finder no macOS, o PATH até então é o mínimo do launchd e
+  // NENHUMA CLI instalada pelo usuário aparece nele. Sem esta re-checagem,
+  // o aviso "não instalado" ficaria congelado dizendo o contrário do que é
+  // verdade.
+  window.agents.onAvailabilityStale(() => void recheck());
 }
 
 async function recheck() {

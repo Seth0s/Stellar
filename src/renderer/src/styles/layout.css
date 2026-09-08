@@ -96,6 +96,15 @@ body {
   min-width: 0;
 }
 
+/* Header nativo do Mac (2026-09-08) — `trafficLightPosition: {x:12,y:11}`
+ * (main/index.ts) desenha o cluster nativo por cima do canto esquerdo;
+ * sem este respiro o "Stellar" (StellarMark + texto) ficaria embaixo dos
+ * 3 pontinhos. Largura estimada do cluster (~52px) + folga, não medida
+ * num Mac de verdade — ajustar ao testar. */
+[data-platform="darwin"] .titlebar-drag {
+  padding-left: 78px;
+}
+
 .titlebar-title {
   display: flex;
   align-items: center;
@@ -1618,6 +1627,20 @@ select.resume-input {
 .connector-group:hover .connector-line {
   stroke-width: 3;
   opacity: 1;
+}
+
+/* Contexto de tarefa no conector — pill com o "porquê" curto (label em
+   store.ts/card-types.ts), independente do "×" de apagar acima. */
+.connector-label rect {
+  fill: var(--panel);
+  stroke: var(--foam);
+  stroke-width: 1;
+}
+
+.connector-label text {
+  fill: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 .connector-delete {

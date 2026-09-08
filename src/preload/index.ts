@@ -25,7 +25,7 @@ export type CardRow = {
 type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; effort?: "low" | "high"; systemPrompt?: string };
 type SpawnResult =
   | { id: string }
-  | { error: "binary_not_found"; providerId: string; installCommand: string | null }
+  | { error: "binary_not_found"; providerId: string; installCommand: string | null; searchedPath: string }
   | { error: "spawn_failed"; providerId: string };
 
 const pty = {
@@ -130,6 +130,11 @@ export type ConnectorRow = {
    * `'context'` only ever by an external orchestrator's own
    * `set_connector_kind` call. */
   kind?: string | null;
+  /** Contexto de tarefa — trecho curto do que motivou o conector (nota
+   * escrita, texto enviado, seletor clicado…), truncado na origem. Mesma
+   * postura advisory de `kind`: nunca sobrescrito, nunca consumido por
+   * dispatch. */
+  label?: string | null;
 };
 
 export type BoardRow = {
@@ -173,9 +178,9 @@ const store = {
      * MCP cross-card (hoje só `send_to_card`, que nunca passa pelo
      * renderer por outro motivo) identifica quem a pediu. App.tsx's
      * `autoConnect` decide sozinho se já existe conector entre o par. */
-    onAutoConnect: (cb: (fromCardId: string, toCardId: string, kind: string) => void) => {
-      const listener = (_e: unknown, fromCardId: string, toCardId: string, kind: string) =>
-        cb(fromCardId, toCardId, kind);
+    onAutoConnect: (cb: (fromCardId: string, toCardId: string, kind: string, label?: string | null) => void) => {
+      const listener = (_e: unknown, fromCardId: string, toCardId: string, kind: string, label?: string | null) =>
+        cb(fromCardId, toCardId, kind, label);
       ipcRenderer.on("connector:auto", listener);
       return () => ipcRenderer.removeListener("connector:auto", listener);
     },
@@ -685,6 +690,7 @@ export type StickyOp =
   | { op: "set_mode"; mode: "edit" | "preview"; requesterId?: string };
 export type StickyResult =
   | { ok: true; content: string }
+  | { ok: true; content: string; appended: true; totalLines: number }
   | { ok: true; color: string }
   | { ok: true; mode: "edit" | "preview" }
   | { ok: false; error: string };
@@ -781,6 +787,15 @@ export type AgentAvailability = { id: string; label: string; installed: boolean;
  * useAgentAvailability.ts), não mais no meio de um spawn de card. */
 const agents = {
   checkAvailability: (): Promise<AgentAvailability[]> => ipcRenderer.invoke("agents:check-availability"),
+  /** Dispara quando a resolução do PATH da login shell (main/user-env.ts)
+   * termina DEPOIS de uma checagem já ter rodado — sem isto, um "não
+   * instalado" resolvido com o PATH mínimo do launchd (macOS aberto pelo
+   * Finder) ficaria na tela para sempre. */
+  onAvailabilityStale: (cb: (source: string) => void): (() => void) => {
+    const listener = (_e: unknown, source: string) => cb(source);
+    ipcRenderer.on("agents:availability-stale", listener);
+    return () => ipcRenderer.removeListener("agents:availability-stale", listener);
+  },
 };
 
 // Kept in sync with main/secrets.ts's own SecretProvider by hand (preload
@@ -931,6 +946,12 @@ const boardAssets = {
  * `App.tsx` avaliar seus `const` de módulo. */
 const system = {
   homeDir: homedir(),
+  // Header nativo do Mac (2026-09-08) — Titlebar.tsx precisa saber se os
+  // 3 botões próprios (minimize/maximize/close) devem sumir porque o
+  // `titleBarStyle: "hidden"` de main/index.ts já desenha os traffic
+  // lights nativos ali no darwin. `process` já existe neste escopo do
+  // preload (roda em contexto Node, não no sandbox do renderer).
+  platform: process.platform,
 };
 
 contextBridge.exposeInMainWorld("pty", pty);

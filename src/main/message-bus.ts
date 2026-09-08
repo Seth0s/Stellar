@@ -118,6 +118,7 @@ export const STICKY_COLORS = ["yellow", "green", "blue", "pink"] as const;
 
 export type StickyResult =
   | { ok: true; content: string }
+  | { ok: true; content: string; appended: true; totalLines: number }
   | { ok: true; color: string }
   | { ok: true; mode: "edit" | "preview" }
   | { ok: false; error: string };
@@ -374,7 +375,7 @@ export function createMessageBus(
      * outro motivo (o `<textarea>` é a fonte de verdade do conteúdo) e
      * chamam App.tsx's `autoConnect` direto de lá, sem precisar deste
      * push. Dedup/idempotência vivem inteiramente do lado do renderer. */
-    onAutoConnect: (fromCardId: string, toCardId: string, kind: string) => void;
+    onAutoConnect: (fromCardId: string, toCardId: string, kind: string, label?: string | null) => void;
     /** DESIGN-BACKLOG.md item 58, M4 — pty-registry.ts's own `isAlive`,
      * threaded straight through: no round trip needed, main already knows. */
     isCardAlive: (cardId: string) => boolean;
@@ -798,6 +799,31 @@ export function createMessageBus(
     browser_eval: "modified",
   };
 
+  /** Short one-line context for the connector's `label` (store.ts) — the
+   * "why" behind an auto-connect, from whatever text was already in scope
+   * for that mutation. Truncated here, once, so callers never have to
+   * think about length; `null` when the request has no natural short text
+   * (e.g. a scroll with no selector). */
+  function truncateForLabel(text: string, max = 60): string {
+    const flat = text.trim().replace(/\s+/g, " ");
+    return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  }
+  function deriveAutoConnectLabel(req: BusRequest): string | null {
+    switch (req.cmd) {
+      case "send":
+        return req.text ? truncateForLabel(req.text) : null;
+      case "browser_type":
+        return req.text ? truncateForLabel(req.text) : req.selector ? truncateForLabel(req.selector) : null;
+      case "browser_click":
+      case "browser_scroll":
+        return req.selector ? truncateForLabel(req.selector) : null;
+      case "browser_eval":
+        return req.js ? truncateForLabel(req.js) : null;
+      default:
+        return null;
+    }
+  }
+
   /** Shared by both frontends — see the module doc comment. Never throws;
    * every branch resolves to a `BusResponse`, including "unknown cmd".
    * Thin wrapper around `dispatchRequest` — the only thing added here is
@@ -819,7 +845,7 @@ export function createMessageBus(
     const res = await dispatchRequest(req);
     const kind = AUTO_CONNECT_CMDS[req.cmd];
     if (kind && res.ok && "target" in req && req.target && "requesterId" in req && req.requesterId) {
-      callbacks.onAutoConnect(req.requesterId, req.target, kind);
+      callbacks.onAutoConnect(req.requesterId, req.target, kind, deriveAutoConnectLabel(req));
     }
     return res;
   }
@@ -1015,7 +1041,9 @@ export function createMessageBus(
         };
       }
       const result = callbacks.updateStickyContentDirect(target, req.content, mode);
-      if (result.ok && req.requesterId) callbacks.onAutoConnect(req.requesterId, target, "modified");
+      if (result.ok && req.requesterId) {
+        callbacks.onAutoConnect(req.requesterId, target, "modified", truncateForLabel(req.content));
+      }
       return result;
     }
 
@@ -1309,6 +1337,7 @@ export function createMessageBus(
           fromCardId: c.from_card_id,
           toCardId: c.to_card_id,
           kind: c.kind,
+          label: c.label,
         })),
       };
     }

@@ -3,6 +3,17 @@ import { Icon } from "./icons";
 import { StellarMark } from "./StellarMark";
 import { useUpdateStatus } from "./useUpdateStatus";
 
+// Header nativo do Mac (2026-09-08) — `main/index.ts`'s `titleBarStyle:
+// "hidden"` só existe no darwin (`frame:false` nas outras plataformas,
+// window chrome 100% custom como sempre foi). Lido no module scope (não
+// num useEffect) porque precisa valer já no primeiro render, antes de
+// qualquer pintura — o preload já rodou e populou `window.system` antes
+// deste módulo carregar, então não há corrida. `data-platform` no
+// `<html>` é o hook que `layout.css` usa pra abrir espaço pros traffic
+// lights nativos sem duplicar essa checagem em CSS-in-JS.
+const isMac = window.system.platform === "darwin";
+document.documentElement.dataset.platform = window.system.platform;
+
 /** Thin custom titlebar for the frameless window — replaces the OS chrome
  * with something that matches the app's own dark theme.
  *
@@ -79,15 +90,26 @@ export function Titlebar() {
             <span className="titlebar-update-dot-mark" />
           </button>
         )}
-        <button title="Minimizar" onClick={() => window.winControls.minimize()}>
-          <Icon name="winMinimize" size={14} />
-        </button>
-        <button title={maximized ? "Restaurar" : "Maximizar"} onClick={() => window.winControls.toggleMaximize()}>
-          <Icon name={maximized ? "winRestore" : "winMaximize"} size={14} />
-        </button>
-        <button className="titlebar-close" title="Fechar" onClick={() => window.winControls.close()}>
-          <Icon name="close" size={14} />
-        </button>
+        {/* No darwin, os 3 abaixo somem — o traffic-light cluster nativo
+            do `titleBarStyle: "hidden"` (main/index.ts) já minimiza/
+            maximiza/fecha, desenhado pelo próprio macOS no canto superior
+            esquerdo (por isso o espaço reservado em `.titlebar-drag`,
+            layout.css). Duplicar aqui só daria dois jeitos de fazer a
+            mesma coisa, um deles falso (estes não são os controles reais
+            da janela no Mac). */}
+        {!isMac && (
+          <>
+            <button title="Minimizar" onClick={() => window.winControls.minimize()}>
+              <Icon name="winMinimize" size={14} />
+            </button>
+            <button title={maximized ? "Restaurar" : "Maximizar"} onClick={() => window.winControls.toggleMaximize()}>
+              <Icon name={maximized ? "winRestore" : "winMaximize"} size={14} />
+            </button>
+            <button className="titlebar-close" title="Fechar" onClick={() => window.winControls.close()}>
+              <Icon name="close" size={14} />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
