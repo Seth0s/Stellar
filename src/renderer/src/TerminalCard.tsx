@@ -258,10 +258,19 @@ function TerminalCardInner({
     return () => clearTimeout(t);
   }, [hasReceivedOutput, exitCode, spawnError]);
 
-  const reportedRef = useRef(false);
+  // Achado ao vivo (2026-09-07) — isto costumava travar no PRIMEIRO id
+  // descoberto pra sempre (`useRef(false)` virava `true` e nunca voltava),
+  // então um `/resume` dado dentro de um card já aberto (o main process
+  // agora rearma `watchForSession` pra isso — ver pty-registry.ts) nunca
+  // chegava a atualizar o rodapé: o card trocava de sessão de verdade, mas
+  // ninguém além do processo principal ficava sabendo. Guarda o ÚLTIMO id
+  // já reportado em vez de só "já reportei alguma vez" — qualquer id NOVO
+  // (inclusive um resume dentro da sessão) passa; o mesmo id de novo não
+  // reporta duas vezes à toa.
+  const lastReportedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (discoveredResumeId && !reportedRef.current) {
-      reportedRef.current = true;
+    if (discoveredResumeId && discoveredResumeId !== lastReportedRef.current) {
+      lastReportedRef.current = discoveredResumeId;
       onResumeIdDiscovered(discoveredResumeId);
     }
   }, [discoveredResumeId, onResumeIdDiscovered]);

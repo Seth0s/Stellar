@@ -1,7 +1,8 @@
 import { delimiter } from "node:path";
 import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, type SpawnOpts } from "./providers";
-import { watchForSession } from "./session-watch";
+import { effectivePath } from "./user-env";
+import { watchForSession, claimSessionId, RESUME_TRIGGER_COMMANDS } from "./session-watch";
 
 const COALESCE_MS = 16;
 const COALESCE_MAX = 64 * 1024;
@@ -94,6 +95,15 @@ type Entry = {
    * `card_status` distinguir "trabalhando" de "vivo mas parado no
    * prompt" sem precisar entender a UI de nenhum provider específico. */
   lastActivityAt: number;
+  /** Needed to re-arm `watchForSession` from `write()` below on a detected
+   * `/resume` — the original spawn call already has these, but `write()`
+   * runs long after, in a different closure. */
+  providerId: string;
+  cwd: string;
+  /** Acumula bytes de INPUT (não output) até a próxima quebra de linha, só
+   * pra checar se a linha inteira bate com `RESUME_TRIGGER_COMMANDS` —
+   * nunca usado pra mais nada, e nunca cresce sem limite (ver `write`). */
+  inputLineBuffer: string;
 };
 
 /** Achado ao vivo (2026-09-01): "se eu trocar de sessão os terminais e
@@ -215,7 +225,13 @@ export function createPtyRegistry(registryOpts: {
     spawnOpts: SpawnOpts = {},
   ):
     | { id: string }
-    | { error: "binary_not_found"; providerId: string; installCommand: string | null }
+    /** `searchedPath` pedido por nome no depoimento de um usuário de macOS
+     * (2026-09-08): "mensagem de erro atual não informa qual PATH foi
+     * usado na busca — dificulta diagnóstico pelo usuário final". Sem
+     * isto, um `binary_not_found` é indistinguível de uma CLI realmente
+     * ausente, e foi preciso engenharia reversa do `app.asar` para
+     * descobrir que o PATH pesquisado não era o da login shell. */
+    | { error: "binary_not_found"; providerId: string; installCommand: string | null; searchedPath: string }
     | { error: "spawn_failed"; providerId: string } {
     // Carimba a identidade do card na URL do MCP registrada PRA ESTE
     // processo — ver o doc de `buildServer` em mcp-server.ts: sem isso o
@@ -225,7 +241,14 @@ export function createPtyRegistry(registryOpts: {
     // do `AGENT_CANVAS_CARD_ID` logo abaixo, mesma fonte.
     const cardMcpUrl = registryOpts.mcpUrl ? `${registryOpts.mcpUrl}?card=${encodeURIComponent(id)}` : registryOpts.mcpUrl;
     const resolved = resolveSpawn(providerId, { ...spawnOpts, mcpUrl: cardMcpUrl });
-    if (!resolved) return { error: "binary_not_found", providerId, installCommand: providerInstallCommand(providerId) };
+    if (!resolved) {
+      return {
+        error: "binary_not_found",
+        providerId,
+        installCommand: providerInstallCommand(providerId),
+        searchedPath: effectivePath(),
+      };
+    }
 
     const inheritedEnv: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
@@ -254,7 +277,19 @@ export function createPtyRegistry(registryOpts: {
       // `cardMcpUrl` logo acima (que já vai carimbado) é outra coisa — a
       // flag efêmera do claude/codex.
       AGENT_CANVAS_MCP_URL: registryOpts.mcpUrl,
-      PATH: `${registryOpts.binDir}${delimiter}${process.env.PATH ?? ""}`,
+      // O binário do próprio Electron, para os shims de `resources/bin`
+      // (2026-09-08). Os dois são scripts JS e precisam de um
+      // interpretador: `node` no PATH era a única forma, e num `.app`
+      // aberto pelo Finder no macOS não há `node` no PATH do app. Os
+      // shims agora re-executam este caminho com `ELECTRON_RUN_AS_NODE`.
+      // Chega até eles por herança: PTY → CLI do provider → shim.
+      AGENT_CANVAS_NODE: process.execPath,
+      // `effectivePath()` e não `process.env.PATH` (2026-09-08): num
+      // `.app` aberto pelo Finder no macOS, o PATH herdado é o mínimo do
+      // launchd, e era ELE que todo PTY do board recebia — nenhum agente
+      // conseguia rodar `node`, `brew`, `cargo` ou o próprio `acbridge`
+      // (cujo shebang é `#!/usr/bin/env node`). Ver user-env.ts.
+      PATH: `${registryOpts.binDir}${delimiter}${effectivePath()}`,
     };
 
     let proc: pty.IPty;
@@ -282,18 +317,27 @@ export function createPtyRegistry(registryOpts: {
       urlCarry: "",
       killTimer: null,
       lastActivityAt: Date.now(),
+      providerId,
+      cwd,
+      inputLineBuffer: "",
     };
     entries.set(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
 
     // Only watch for a fresh session when the caller didn't already pass a
     // resumeId — a spawn that already targets a known session has nothing
-    // to discover.
+    // to discover. But that known session's id still needs to be claimed
+    // (see claimSessionId's doc comment) — otherwise a fresh watcher for a
+    // different, later-spawned card in the same cwd can "discover" and
+    // steal this restored card's own in-use session file, since nothing
+    // else ever marks it as belonging to someone.
     if (!spawnOpts.resumeId) {
       entry.stopWatch = watchForSession(providerId, cwd, Date.now(), (sessionId) => {
         entry.stopWatch = null;
         registryOpts.onSessionFound(id, sessionId);
       });
+    } else {
+      claimSessionId(spawnOpts.resumeId);
     }
 
     proc.onData((data) => {
@@ -325,8 +369,41 @@ export function createPtyRegistry(registryOpts: {
     return { id };
   }
 
+  // Achado ao vivo (2026-09-07) — ver RESUME_TRIGGER_COMMANDS em
+  // session-watch.ts: cap curto porque um trigger reconhecido é sempre um
+  // slash command curto; nunca deixa entrada binária/colada sem quebra de
+  // linha crescer o buffer pra sempre.
+  const MAX_INPUT_LINE_BUFFER = 64;
+
+  function rearmSessionWatch(id: string, entry: Entry) {
+    // Idempotente mesmo se `entry.stopWatch` já tiver parado sozinho (achou
+    // ou deu timeout) — chamar de novo é um no-op seguro.
+    entry.stopWatch?.();
+    entry.stopWatch = watchForSession(entry.providerId, entry.cwd, Date.now(), (sessionId) => {
+      entry.stopWatch = null;
+      registryOpts.onSessionFound(id, sessionId);
+    });
+  }
+
   function write(id: string, data: string) {
-    entries.get(id)?.proc.write(data);
+    const entry = entries.get(id);
+    if (!entry) return;
+    // Só bufferiza/checa pra providers com um trigger confirmado — ver o
+    // doc de RESUME_TRIGGER_COMMANDS pra por que a maioria não tem um ainda.
+    const trigger = RESUME_TRIGGER_COMMANDS[entry.providerId];
+    if (trigger) {
+      entry.inputLineBuffer += data;
+      let newlineIdx: number;
+      while ((newlineIdx = entry.inputLineBuffer.search(/[\r\n]/)) !== -1) {
+        const line = entry.inputLineBuffer.slice(0, newlineIdx).trim();
+        entry.inputLineBuffer = entry.inputLineBuffer.slice(newlineIdx + 1);
+        if (line === trigger) rearmSessionWatch(id, entry);
+      }
+      if (entry.inputLineBuffer.length > MAX_INPUT_LINE_BUFFER) {
+        entry.inputLineBuffer = entry.inputLineBuffer.slice(-MAX_INPUT_LINE_BUFFER);
+      }
+    }
+    entry.proc.write(data);
   }
 
   function resize(id: string, cols: number, rows: number) {

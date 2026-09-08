@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { providerById, which } from "./providers";
+import { effectivePath } from "./user-env";
 
 const TIMEOUT_MS = 60_000;
 const MAX_BUFFER = 4 * 1024 * 1024;
@@ -21,7 +22,12 @@ function execFileNoStdin(
   options: { cwd: string; timeout: number; maxBuffer: number },
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = execFile(file, args, { ...options, encoding: "utf8" }, (err, stdout, stderr) => {
+    // PATH efetivo explícito (2026-09-08): estas CLIs são scripts com
+    // shebang `#!/usr/bin/env node`, então achar o binário não basta —
+    // sem `node` alcançável o SO falha com "env: node: No such file or
+    // directory". Ver user-env.ts.
+    const env = { ...process.env, PATH: effectivePath() };
+    const child = execFile(file, args, { ...options, env, encoding: "utf8" }, (err, stdout, stderr) => {
       if (err) reject(err);
       else resolve({ stdout, stderr });
     });

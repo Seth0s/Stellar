@@ -1,9 +1,20 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 
 const POLL_MS = 1500;
 const TIMEOUT_MS = 30_000;
+// Achado ao vivo (2026-09-07) — Codex nunca restaurava sessão: o Codex TUI
+// só grava a entrada em `~/.codex/session_index.jsonl` bem depois do início
+// real da sessão (embedded timestamp do rollout vs. mtime do index, medido
+// neste mesmo host): 36s num caso, 211s (3.5min) noutro. Ambos passam do
+// TIMEOUT_MS de 30s compartilhado por todo provider, então o watcher sempre
+// desistia antes do Codex escrever o índice — `resumeId` ficava `null` pra
+// sempre e o próximo launch simplesmente abria uma sessão nova vazia
+// (indistinguível de "falhou a restaurar"). Claude/Cursor gravam quase
+// instantaneamente (~2s) — 30s continua certo pra eles.
+const CODEX_TIMEOUT_MS = 6 * 60_000;
 
 /**
  * DESIGN-BACKLOG.md item 57, ponto 5 — real bug, confirmed live: two
@@ -42,6 +53,38 @@ const TIMEOUT_MS = 30_000;
  * arquivo candidato) — falha ~sempre sem isto, nunca falhou com isto.
  */
 const claimedSessionIds = new Set<string>();
+
+/**
+ * Achado ao vivo (2026-09-07) — 3 cards Claude diferentes exibindo o MESMO
+ * `resume:<id>` no rodapé. Causa: um card restaurado do DB (`spawnOpts.
+ * resumeId` já preenchido) pula `watchForSession` inteiramente (ver o `if
+ * (!spawnOpts.resumeId)` em pty-registry.ts) — logo seu id nunca passava por
+ * `claimedSessionIds.add()`. Pra qualquer watcher de um card novo no mesmo
+ * cwd, esse arquivo de sessão (que pode estar sendo escrito ativamente pelo
+ * card restaurado) parecia livre pra reivindicar. Chame isto assim que um
+ * `resumeId` conhecido é usado pra spawnar/restaurar um card, antes de
+ * qualquer watcher rodar — fecha o gap sem esperar um "found" que nunca vem.
+ */
+export function claimSessionId(id: string): void {
+  claimedSessionIds.add(id);
+}
+
+/**
+ * Pedido ao vivo (2026-09-07) — nada nunca refresca `resumeId` depois do
+ * spawn: quem roda `/resume` DENTRO de um card já aberto troca de sessão
+ * por baixo (o processo passa a escrever num arquivo de sessão diferente,
+ * já existente, escolhido no picker), mas o rodapé do card continua
+ * mostrando o id antigo pra sempre — só o id descoberto no spawn é
+ * reportado (ver `reportedRef` em TerminalCard.tsx). Único trigger
+ * confirmado até agora: o slash command `/resume` do próprio Claude Code
+ * (documentado). Os outros providers podem ter equivalentes, mas não
+ * foram confirmados contra um CLI real rodando — mesmo critério das
+ * lacunas documentadas acima (antigravity) — então ficam de fora até
+ * serem confirmados, não adivinhados.
+ */
+export const RESUME_TRIGGER_COMMANDS: Partial<Record<string, string>> = {
+  claude: "/resume",
+};
 
 let claimQueue: Promise<unknown> = Promise.resolve();
 /** Serializa a seção crítica (achar candidato + `claimedSessionIds.add`)
@@ -145,22 +188,109 @@ async function findCursorSession(cwd: string, spawnedAtMs: number): Promise<stri
   return best?.id ?? null;
 }
 
+async function findOpenCodeSession(cwd: string, spawnedAtMs: number): Promise<string | null> {
+  // opencode (sst/opencode, see providers.ts) keeps its own sessions in a
+  // real sqlite db (`~/.local/share/opencode/opencode.db`, `session` table
+  // — schema confirmed live on this machine via `PRAGMA table_info`), not
+  // in loose files like the others. Opened readonly: this db belongs to a
+  // separate app that may have it open (WAL mode) at the same time.
+  const dbPath = join(homedir(), ".local", "share", "opencode", "opencode.db");
+  let db: Database.Database;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  } catch {
+    return null;
+  }
+  try {
+    const rows = db
+      .prepare("SELECT id, time_updated FROM session WHERE directory = ? AND time_updated > ? ORDER BY time_updated DESC")
+      .all(cwd, spawnedAtMs) as { id: string; time_updated: number }[];
+    for (const row of rows) {
+      if (!claimedSessionIds.has(row.id)) return row.id;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+// Achado ao vivo (2026-09-07) — reverse-engineered `~/.gemini/antigravity-cli/
+// conversations/<id>.db` (one sqlite file per conversation, id = filename)
+// against 8 real conversations on this machine: byte-for-byte, the file's
+// working-directory is stored as a standard protobuf length-delimited string
+// field — tag byte 0x0a or 0x12 (field 1/2, wire type 2), a single-byte
+// varint length, then that many raw UTF-8 bytes of a `file://<cwd>` URI —
+// inside the `trajectory_metadata_blob` row whose id is `main`. Confirmed via
+// the byte immediately preceding "file://" always equalling the exact
+// encoded byte-length of that URI (proper length-prefix, not a guessed
+// delimiter). Always landed within the first ~40KB of the file regardless of
+// total size (one file was 21MB) — same sqlite page every time — so reads
+// are bounded to ANTIGRAVITY_READ_WINDOW_BYTES instead of the whole db.
+const ANTIGRAVITY_READ_WINDOW_BYTES = 128 * 1024;
+
+async function extractAntigravityWorkspaceUri(filePath: string): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(filePath, "r");
+    const buffer = Buffer.alloc(ANTIGRAVITY_READ_WINDOW_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, ANTIGRAVITY_READ_WINDOW_BYTES, 0);
+    const slice = buffer.subarray(0, bytesRead);
+    const needle = Buffer.from("file://");
+    let idx = slice.indexOf(needle);
+    while (idx > 1) {
+      const lenByte = slice[idx - 1];
+      const tagByte = slice[idx - 2];
+      if ((tagByte === 0x0a || tagByte === 0x12) && lenByte > 0 && idx + lenByte <= slice.length) {
+        const candidate = slice.toString("utf8", idx, idx + lenByte);
+        if (Buffer.byteLength(candidate, "utf8") === lenByte && candidate.startsWith("file://")) {
+          return candidate;
+        }
+      }
+      idx = slice.indexOf(needle, idx + 1);
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function findAntigravitySession(cwd: string, spawnedAtMs: number): Promise<string | null> {
+  const dir = join(homedir(), ".gemini", "antigravity-cli", "conversations");
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return null;
+  }
+  const cwdUri = `file://${cwd}`;
+  let best: { id: string; mtimeMs: number } | null = null;
+  for (const name of entries) {
+    if (!name.endsWith(".db")) continue; // skip sqlite's own -wal/-shm siblings
+    const id = name.slice(0, -".db".length);
+    if (claimedSessionIds.has(id)) continue;
+    const full = join(dir, name);
+    const st = await stat(full).catch(() => null);
+    if (!st || st.mtimeMs <= spawnedAtMs) continue;
+    if (best && st.mtimeMs <= best.mtimeMs) continue;
+    const workspaceUri = await extractAntigravityWorkspaceUri(full);
+    if (workspaceUri !== cwdUri) continue;
+    best = { id, mtimeMs: st.mtimeMs };
+  }
+  return best?.id ?? null;
+}
+
 /**
  * Polls the on-disk location each provider (undocumented, reverse-engineered
  * on this machine — see AGENTS.md) writes new sessions to, looking for one
- * created after `spawnedAtMs`. Stops after finding one or after ~30s.
- * `bash` has no session concept — callers should never call this for it.
- *
- * DESIGN-BACKLOG.md item 28 — `antigravity` (formerly `gemini`, swapped
- * 2026-08-31 after Google retired the Gemini CLI) deliberately does NOT
- * get a branch here yet: the other three were reverse-engineered against
- * a real, locally-installed CLI (see AGENTS.md), and antigravity's own
- * on-disk session-file layout hasn't been inspected the same way.
- * Guessing it from docs alone risks silently pointing at the wrong path
- * forever — worse than the honest gap this falls through to (no
- * auto-resume discovery for antigravity cards; `--conversation <id>`
- * itself still works fine if the human passes a session id manually).
- * Revisit once antigravity's real session storage can be inspected.
+ * created after `spawnedAtMs`. Stops after finding one or after ~30s (longer
+ * for codex — see CODEX_TIMEOUT_MS). `bash` has no session concept —
+ * callers should never call this for it. `opencode` also has no branch
+ * needed beyond `findOpenCodeSession` below: unlike the others it keeps a
+ * real sqlite db, not loose files.
  */
 export function watchForSession(
   providerId: string,
@@ -168,7 +298,13 @@ export function watchForSession(
   spawnedAtMs: number,
   onFound: (sessionId: string) => void,
 ): () => void {
-  if (providerId !== "claude" && providerId !== "codex" && providerId !== "cursor") {
+  if (
+    providerId !== "claude" &&
+    providerId !== "codex" &&
+    providerId !== "cursor" &&
+    providerId !== "antigravity" &&
+    providerId !== "opencode"
+  ) {
     return () => {};
   }
 
@@ -206,6 +342,10 @@ export function watchForSession(
           return result.id;
         } else if (providerId === "cursor") {
           return findCursorSession(cwd, spawnedAtMs);
+        } else if (providerId === "antigravity") {
+          return findAntigravitySession(cwd, spawnedAtMs);
+        } else if (providerId === "opencode") {
+          return findOpenCodeSession(cwd, spawnedAtMs);
         }
         return null;
       });
@@ -226,10 +366,13 @@ export function watchForSession(
     }
   }, POLL_MS);
 
-  const timeout = setTimeout(() => {
-    stopped = true;
-    clearInterval(timer);
-  }, TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+    providerId === "codex" ? CODEX_TIMEOUT_MS : TIMEOUT_MS,
+  );
 
   return () => {
     stopped = true;

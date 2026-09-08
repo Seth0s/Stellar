@@ -71,10 +71,12 @@ Os agentes em execução no Stellar podem interagir com o ambiente e coordenar o
 | `get_page_text` | Extrai o texto visível da página aberta num `BrowserCard` | Passivo (Sem prompt) |
 | `send_to_card` | Envia comando/texto com identificação de remetente para um terminal | Moderado |
 | `open_url` | Abre ou navega uma URL num `BrowserCard` | Consentimento humano |
-| `spawn_agent` | Cria um novo card de terminal com provider e prompt especificados | Consentimento humano / Fila autônoma |
+| `spawn_agent` | Cria um novo card de terminal com provider especificado (sem prompt — envie com `send_to_card` depois do card subir) | Consentimento humano / Fila autônoma |
 | `spawn_card` | Cria cards auxiliares (`files`, `changes`, `sticky`, `browser`) | Consentimento humano / Fila autônoma |
 | `report_task_status`| Atualiza status, resultado e desbloqueio de dependentes de uma tarefa | Estrutural |
 | `list_tasks` | Consulta tarefas registradas e seus grafos de dependência | Passivo (Sem prompt) |
+
+Coordenar mais de um agente por estas ferramentas tem mecânica própria — contrato de relatório, briefing por arquivo, polling e sticky como painel — no skill local `orchestrate-on-stellar-board`. A decisão de *o que* delegar (decomposição, modelo, esforço, concorrência) continua no `orchestrate-parallel-agents` do workspace.
 
 ---
 

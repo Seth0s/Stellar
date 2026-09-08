@@ -334,7 +334,12 @@ export function useTerminal(
       if ("error" in result) {
         setSpawnError(
           result.error === "binary_not_found"
-            ? `"${providerId}" não encontrado no PATH`
+            ? // O PATH pesquisado vai junto (pedido de um usuário de
+              // macOS, 2026-09-08): sem ele, "não encontrado no PATH" não
+              // diz QUAL path, e a única forma de descobrir era abrir o
+              // `app.asar`. Em várias linhas porque um PATH real não cabe
+              // numa só.
+              `"${providerId}" não encontrado no PATH.\r\nPATH pesquisado:\r\n  ${result.searchedPath.split(":").join("\r\n  ")}`
             : `falha ao iniciar "${providerId}"`,
         );
         return;

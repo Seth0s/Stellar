@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { which } from "./providers";
+import { effectivePath } from "./user-env";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,11 +99,13 @@ function registerCursor(shim: string): McpRegistrationResult {
   return { status: "ok", changed: true };
 }
 
-/** Ambiente dos subprocessos de CLI — igual ao do processo, exceto sob o
- * override de teste, que redireciona o `~` que as duas CLIs leem. */
+/** Ambiente dos subprocessos de CLI — igual ao do processo, com duas
+ * diferenças: o PATH efetivo (`user-env.ts`) em vez do herdado, porque a
+ * CLI que roda aqui pode precisar de `node` para o próprio shim que ela
+ * chama, e o override de teste, que redireciona o `~` que as CLIs leem. */
 function cliEnv(): NodeJS.ProcessEnv {
   const home = process.env.AGENT_CANVAS_REGISTRATION_HOME;
-  return home ? { ...process.env, HOME: home } : process.env;
+  return { ...process.env, PATH: effectivePath(), ...(home ? { HOME: home } : {}) };
 }
 
 async function approveCursor(binary: string): Promise<void> {

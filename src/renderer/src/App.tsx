@@ -80,6 +80,14 @@ const CONNECTOR_KIND_LABEL: Record<string, string> = {
   context: "contexto (advisory)",
 };
 
+/** Contexto de tarefa no conector — trecho curto que motivou o auto-
+ * connect (`label` em store.ts/card-types.ts), truncado aqui pra nunca
+ * estourar a pill que o renderiza (2627 abaixo). */
+function truncateConnectorLabel(text: string, max = 60): string {
+  const flat = text.trim().replace(/\s+/g, " ");
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
 // agent-canvas/ → Stellar/ mid-session (2026-08-26); updated to match.
 // DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — every kind of agent ask
@@ -849,11 +857,21 @@ export function App() {
         });
         return;
       }
-      const next = op.mode === "append" ? card.content + op.content : op.content;
+      const isAppend = op.mode === "append";
+      const next = isAppend ? card.content + op.content : op.content;
       changeStickyContent(cardId, next);
       commitStickyContent(card, next);
-      autoConnect(op.requesterId, cardId, "modified");
-      window.sticky.reply(requestId, { ok: true, content: next });
+      autoConnect(op.requesterId, cardId, "modified", op.content ? truncateConnectorLabel(op.content) : null);
+      if (isAppend) {
+        window.sticky.reply(requestId, {
+          ok: true,
+          content: op.content,
+          appended: true,
+          totalLines: next.split("\n").length,
+        });
+      } else {
+        window.sticky.reply(requestId, { ok: true, content: next });
+      }
     });
     // DESIGN-BACKLOG.md item 60, peça 1 — one push per board whose queue
     // changed; replaces just that board's entry, leaves every other board
@@ -866,8 +884,8 @@ export function App() {
     // sem round-trip nenhum — só assim consegue fazer o `connectorsRef`
     // dedup check + criar o conector de verdade no board aberto (a única
     // fonte de verdade pro estado `connectors` VISÍVEL é este processo).
-    const offAutoConnect = window.store.connectors.onAutoConnect((fromCardId, toCardId, kind) => {
-      autoConnect(fromCardId, toCardId, kind);
+    const offAutoConnect = window.store.connectors.onAutoConnect((fromCardId, toCardId, kind, label) => {
+      autoConnect(fromCardId, toCardId, kind, label);
     });
     return () => {
       offUrlSeen();
@@ -1104,9 +1122,9 @@ export function App() {
    * real spawn (`spawnAgentFor`'s callers) passes `kind: "spawned"` here
    * to record actual lineage automatically; a human hand-drawing a
    * connector never passes one, staying `null` (purely decorative). */
-  function addConnector(fromCardId: string, toCardId: string, kind?: string) {
+  function addConnector(fromCardId: string, toCardId: string, kind?: string, label?: string | null) {
     const id = String(nextId.current++);
-    const connector = { id, fromCardId, toCardId, kind: kind ?? null };
+    const connector = { id, fromCardId, toCardId, kind: kind ?? null, label: label ?? null };
     setConnectors((prev) => [...prev, connector]);
     void window.store.connectors.upsert({
       id,
@@ -1115,6 +1133,7 @@ export function App() {
       to_card_id: toCardId,
       updated_at: Date.now(),
       kind: kind ?? null,
+      label: label ?? null,
     });
     if (!kind) toast("conector criado");
   }
@@ -1133,7 +1152,7 @@ export function App() {
    * ganha uma 2ª seta a cada nova ação; mesmo carregando `kind` agora, a
    * escolha continua sendo não tocar num conector já existente — nunca
    * sobrescrever um kind que um humano ou outro agente já decidiu. */
-  function autoConnect(requesterId: string | undefined | null, targetId: string, kind: string) {
+  function autoConnect(requesterId: string | undefined | null, targetId: string, kind: string, label?: string | null) {
     if (!requesterId || requesterId === targetId) return;
     const already = connectorsRef.current.some(
       (c) =>
@@ -1141,7 +1160,7 @@ export function App() {
         (c.fromCardId === targetId && c.toCardId === requesterId),
     );
     if (already) return;
-    addConnector(requesterId, targetId, kind);
+    addConnector(requesterId, targetId, kind, label);
   }
 
   const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
@@ -2626,7 +2645,21 @@ export function App() {
             const midX = 0.25 * start.x + 0.5 * control.x + 0.25 * end.x;
             const midY = 0.25 * start.y + 0.5 * control.y + 0.25 * end.y;
             const kindClass = conn.kind ?? "manual";
+            const kindLabel = CONNECTOR_KIND_LABEL[kindClass] ?? kindClass;
             const d = `M${start.x},${start.y} Q${control.x},${control.y} ${end.x},${end.y}`;
+            // Contexto de tarefa (item "conectores" do relatório 2026-09-08)
+            // — pill num ponto diferente do meio (onde já mora o "×" de
+            // apagar), senão as duas se sobrepõem. `conn.label` já vem
+            // truncado a ~60 chars da origem (App.tsx's autoConnect callers/
+            // message-bus.ts's truncateForLabel); aqui só encurta mais ainda
+            // pro que cabe na pill — o `<title>` abaixo carrega a versão
+            // maior pra quem passar o mouse.
+            const labelT = 0.3;
+            const labelOmt = 1 - labelT;
+            const labelX = labelOmt * labelOmt * start.x + 2 * labelOmt * labelT * control.x + labelT * labelT * end.x;
+            const labelY = labelOmt * labelOmt * start.y + 2 * labelOmt * labelT * control.y + labelT * labelT * end.y;
+            const pillText = conn.label ? (conn.label.length > 26 ? `${conn.label.slice(0, 25)}…` : conn.label) : null;
+            const pillWidth = pillText ? Math.min(190, Math.max(70, pillText.length * 6.4 + 22)) : 0;
             return (
               <g key={conn.id} className={`connector-group connector-group--${kindClass}`}>
                 {/* Faixa larga invisível só pra facilitar o clique/hover na
@@ -2642,8 +2675,16 @@ export function App() {
                   onClick={() => jumpToCard(conn.toCardId)}
                 />
                 <path className={`connector-line connector-line--${kindClass}`} d={d} markerEnd="url(#connector-arrow)">
-                  <title>{CONNECTOR_KIND_LABEL[kindClass] ?? kindClass}</title>
+                  <title>{conn.label ? `${kindLabel} — ${conn.label}` : kindLabel}</title>
                 </path>
+                {pillText && (
+                  <g className="connector-label" style={{ pointerEvents: "none" }} transform={`translate(${labelX}, ${labelY})`}>
+                    <rect x={-pillWidth / 2} y={-10} width={pillWidth} height={20} rx={4} />
+                    <text x={0} y={1} textAnchor="middle" dominantBaseline="middle">
+                      {pillText}
+                    </text>
+                  </g>
+                )}
                 <g
                   className="connector-delete"
                   style={{ pointerEvents: "auto" }}

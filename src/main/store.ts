@@ -65,6 +65,15 @@ export type ConnectorRow = {
    * an orchestrator wants it to mean for ITS OWN reading, nothing in
    * this app ever dispatches off it. */
   kind: string | null;
+  /** Short free-text motivation for the connector — "aplicou em queue.ts",
+   * "ctx: nota fixada" — set once at creation time from whatever text was
+   * already in scope for that mutation (sticky content, `send_to_card`
+   * text, …), truncated by the caller before it gets here. `null` for
+   * every connector before this and for `kind`-only auto-connects with no
+   * natural short text (spawn, set_color/set_mode). Same read-only,
+   * advisory posture as `kind` above: never overwritten once set (see
+   * `autoConnect`'s idempotency in App.tsx), never consumed by dispatch. */
+  label: string | null;
 };
 
 /** DESIGN-BACKLOG.md §2.1 "próxima rodada" — favoritos do navegador,
@@ -199,6 +208,11 @@ function migrate(db: Database.Database) {
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
+  try {
+    db.exec(`ALTER TABLE connectors ADD COLUMN label TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
   for (const col of ["retry_count INTEGER NOT NULL DEFAULT 0", "attempted_providers_json TEXT"]) {
     try {
       db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`);
@@ -280,7 +294,8 @@ export function openStore(userDataDir: string) {
       from_card_id TEXT NOT NULL,
       to_card_id TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
-      kind TEXT
+      kind TEXT,
+      label TEXT
     );
   `);
 
@@ -399,18 +414,20 @@ export function openStore(userDataDir: string) {
   const unarchiveCardStmt = db.prepare("UPDATE cards SET archived_at = NULL WHERE id = ?");
 
   const listConnectorsStmt = db.prepare(
-    "SELECT id, board_id, from_card_id, to_card_id, updated_at, kind FROM connectors WHERE board_id = ?",
+    "SELECT id, board_id, from_card_id, to_card_id, updated_at, kind, label FROM connectors WHERE board_id = ?",
   );
   // Item 58, roteiro peça 4 — same "no board scoping" convention as
   // `listAllStmt`/acbridge's `list`: an orchestrating agent reading the
   // DAG has no reason to know which board a connector lives on.
-  const listAllConnectorsStmt = db.prepare("SELECT id, board_id, from_card_id, to_card_id, updated_at, kind FROM connectors");
+  const listAllConnectorsStmt = db.prepare(
+    "SELECT id, board_id, from_card_id, to_card_id, updated_at, kind, label FROM connectors",
+  );
   const upsertConnectorStmt = db.prepare(`
-    INSERT INTO connectors (id, board_id, from_card_id, to_card_id, updated_at, kind)
-    VALUES (@id, @board_id, @from_card_id, @to_card_id, @updated_at, @kind)
+    INSERT INTO connectors (id, board_id, from_card_id, to_card_id, updated_at, kind, label)
+    VALUES (@id, @board_id, @from_card_id, @to_card_id, @updated_at, @kind, @label)
     ON CONFLICT(id) DO UPDATE SET
       board_id = excluded.board_id, from_card_id = excluded.from_card_id, to_card_id = excluded.to_card_id,
-      updated_at = excluded.updated_at, kind = excluded.kind
+      updated_at = excluded.updated_at, kind = excluded.kind, label = excluded.label
   `);
   const deleteConnectorStmt = db.prepare("DELETE FROM connectors WHERE id = ?");
   const deleteConnectorsForCardStmt = db.prepare(
@@ -516,7 +533,7 @@ export function openStore(userDataDir: string) {
     unarchiveCard: (id: string) => unarchiveCardStmt.run(id),
     listConnectors: (boardId: string): ConnectorRow[] => listConnectorsStmt.all(boardId) as ConnectorRow[],
     listAllConnectors: (): ConnectorRow[] => listAllConnectorsStmt.all() as ConnectorRow[],
-    upsertConnector: (row: ConnectorRow) => upsertConnectorStmt.run({ ...row, kind: row.kind ?? null }),
+    upsertConnector: (row: ConnectorRow) => upsertConnectorStmt.run({ ...row, kind: row.kind ?? null, label: row.label ?? null }),
     deleteConnector: (id: string) => deleteConnectorStmt.run(id),
     /** Returns whether a row actually existed to update. */
     setConnectorKind: (id: string, kind: string | null): boolean => setConnectorKindStmt.run(kind, Date.now(), id).changes > 0,
