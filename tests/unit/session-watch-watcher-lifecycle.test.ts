@@ -1,0 +1,166 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// Review adversarial RODADA 8 (2026-09-10) — dois achados que vivem em
+// `session-watch.ts` de verdade, não na decisão pura já coberta por
+// `session-rearm-decision.test.ts`. Nenhum precisa de PTY — `watchForSession`
+// só toca filesystem (readdir/stat) e timers reais, então dá pra exercitar
+// o código de verdade (não uma reimplementação) mockando só `node:fs/promises`
+// e usando fake timers, mesmo padrão de mock por módulo que
+// `message-bus-close-ownership.test.ts` já usa pra `node:fs`.
+//
+// Achado 1 — `stopped` só era checado ANTES do `await runExclusive(...)`
+// dentro do tick do `setInterval`, nunca depois. Se `stop()` (a função que
+// `pty-registry.ts`'s `rearmSessionWatch` chama pra cancelar o watcher
+// VELHO, bem antes de atribuir o novo) for chamada enquanto essa tick
+// ainda está no meio do await (fila do mutex OU, equivalente pro código,
+// I/O genuinamente lento — as duas são "o await resolve DEPOIS de
+// `stopped` já ter virado true", o mesmo caso pro `if` que falta), a tick
+// acordava, achava o arquivo, e comitava mesmo assim — chamando o
+// `onFound` do watcher CANCELADO, que sobrescrevia `entry.stopWatch`
+// (do watcher NOVO) de volta pra `null`. Os testes abaixo simulam a
+// demora com um `readdir` controlável (uma promise que só resolve quando
+// o teste manda), não com múltiplos watchers reais — do ponto de vista
+// do código faltando o recheck, são a mesma classe de corrida.
+//
+// Achado 3 — o `onTimeout` (RODADA 7) dispara numa expiração natural, mas
+// nada em `session-watch.ts` limpa `awaitingResumeAnyInput`
+// (pty-registry.ts) sozinho — é `pty-registry.ts`'s callback que faz isso,
+// um one-liner cuja correção depende inteiramente de `onTimeout` disparar
+// no momento certo (numa expiração de verdade) e NUNCA disparar num
+// cancelamento manual (`stop()`) — é exatamente esse contrato que os
+// testes abaixo travam.
+
+const fsHooks = vi.hoisted(() => ({
+  readdirImpl: null as null | ((dir: string) => Promise<string[]>),
+  statImpl: null as null | ((path: string) => Promise<{ mtimeMs: number }>),
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readdir: (dir: string) => fsHooks.readdirImpl!(dir),
+    stat: (path: string) => fsHooks.statImpl!(path),
+  };
+});
+
+// Espelha session-watch.ts (não exportadas de lá) — POLL_MS/TIMEOUT_MS.
+const POLL_MS = 1500;
+const TIMEOUT_MS = 30_000;
+
+describe("watchForSession — RODADA 8, achado 1: cancelamento durante o await não comita", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("stop() chamado enquanto o readdir da tick ainda está pendente => onFound NUNCA dispara, mesmo achando um candidato real depois", async () => {
+    const { watchForSession } = await import("../../src/main/session-watch");
+
+    let readdirCalled: () => void = () => {};
+    const readdirCalledPromise = new Promise<void>((resolve) => {
+      readdirCalled = resolve;
+    });
+    let resolveReaddir: (names: string[]) => void = () => {};
+    const pendingReaddir = new Promise<string[]>((resolve) => {
+      resolveReaddir = resolve;
+    });
+    fsHooks.readdirImpl = async () => {
+      readdirCalled();
+      return pendingReaddir;
+    };
+    fsHooks.statImpl = async () => ({ mtimeMs: Date.now() + 1_000 });
+
+    const onFound = vi.fn();
+    const onTimeout = vi.fn();
+    const spawnedAtMs = Date.now();
+    const stop = watchForSession("claude", "/tmp/some-project", spawnedAtMs, onFound, onTimeout);
+
+    // Dispara a 1ª tick do poller — ela entra no readdir mockado (via
+    // runExclusive) e fica pendurada lá, aguardando `pendingReaddir`.
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    await readdirCalledPromise; // prova (sem chute de timing) que a tick já está no meio do await
+
+    // Cancela EXATAMENTE agora — o cenário do achado: o watcher morre
+    // enquanto sua própria seção crítica ainda está em voo.
+    stop();
+
+    // Só DEPOIS do cancelamento o readdir resolve com um candidato real
+    // (arquivo de verdade, mtime > spawnedAtMs — bateria o critério se
+    // ninguém tivesse cancelado).
+    resolveReaddir(["sess-real-candidate.jsonl"]);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0); // 2ª rodada de flush — stat() + a continuação do tick
+
+    expect(onFound).not.toHaveBeenCalled();
+    expect(onTimeout).not.toHaveBeenCalled(); // cancelamento explícito não é uma expiração
+  });
+
+  it("SEM cancelamento, o mesmo candidato real É reportado (prova que o teste acima falha por causa do cancelamento, não por engano na mecânica do mock)", async () => {
+    const { watchForSession } = await import("../../src/main/session-watch");
+
+    fsHooks.readdirImpl = async () => ["sess-real-candidate-2.jsonl"];
+    fsHooks.statImpl = async () => ({ mtimeMs: Date.now() + 1_000 });
+
+    const onFound = vi.fn();
+    const spawnedAtMs = Date.now();
+    watchForSession("claude", "/tmp/another-project", spawnedAtMs, onFound);
+
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onFound).toHaveBeenCalledWith("sess-real-candidate-2");
+  });
+});
+
+describe("watchForSession — RODADA 7/8, achado 3 (mecanismo): onTimeout dispara numa expiração de verdade, nunca num cancelamento manual", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("nunca acha nada dentro do prazo => onTimeout dispara exatamente uma vez, onFound nunca", async () => {
+    const { watchForSession } = await import("../../src/main/session-watch");
+
+    fsHooks.readdirImpl = async () => []; // nunca há candidato
+    fsHooks.statImpl = async () => ({ mtimeMs: 0 });
+
+    const onFound = vi.fn();
+    const onTimeout = vi.fn();
+    watchForSession("claude", "/tmp/idle-project", Date.now(), onFound, onTimeout);
+
+    await vi.advanceTimersByTimeAsync(TIMEOUT_MS + POLL_MS);
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onFound).not.toHaveBeenCalled();
+  });
+
+  it("cancelado via stop() ANTES do prazo => onTimeout NUNCA dispara (é isto que garante que rearmar o watcher VELHO não apaga o estado do watcher NOVO)", async () => {
+    const { watchForSession } = await import("../../src/main/session-watch");
+
+    fsHooks.readdirImpl = async () => [];
+    fsHooks.statImpl = async () => ({ mtimeMs: 0 });
+
+    const onFound = vi.fn();
+    const onTimeout = vi.fn();
+    const stop = watchForSession("claude", "/tmp/cancelled-project", Date.now(), onFound, onTimeout);
+
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2);
+    stop();
+    // Avança bem além do que seria o prazo original — se o cancelamento
+    // não tivesse desarmado o setTimeout interno, onTimeout dispararia
+    // aqui.
+    await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(onFound).not.toHaveBeenCalled();
+  });
+});

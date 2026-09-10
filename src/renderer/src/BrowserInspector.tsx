@@ -1914,7 +1914,22 @@ export function BrowserInspector({
       </div>
       {cdpAttachResult && !cdpAttachResult.ok && (
         <div className={styles.cdpErrorBanner} data-role="inspector-cdp-error">
-          <span>{cdpAttachResult.error}</span>
+          <span>
+            {cdpAttachResult.error}
+            {/* Achado do review (2026-09-09): o DevTools real roubando a sessão
+             * (`"__detached__"` em `browser-cdp.ts`) some com touch/client hints
+             * na hora, mas o painel NÃO desmonta — sobrava um estado degradado
+             * SILENCIOSO (viewport mobile de pé, sem touch, sem aviso nenhum).
+             * Decisão do dono do repo: não desligar a emulação pra "consertar"
+             * isso — `setDeviceEmulation(id, null)` chama `wc.reload()`, e o
+             * usuário abriu o DevTools de propósito pra inspecionar aquela
+             * página; recarregar destruiria o estado que ele foi olhar. Só
+             * avisa: `activeEmulation` fica intacto (nenhum `resize`/
+             * `onEmulationChange` disparado aqui), o retry (já comprovado que
+             * restaura touch+hints de verdade — ver `attachInspector` em
+             * browser-registry.ts) continua sendo o único caminho de volta. */}
+            {activeEmulation?.mobile && " Emulação mobile degradada: touch e client hints suspensos até reconectar (o viewport mobile continua ativo)."}
+          </span>
           <button onClick={retryCdpAttach}>Tentar novamente</button>
         </div>
       )}

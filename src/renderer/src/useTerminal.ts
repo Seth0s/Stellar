@@ -232,10 +232,12 @@ export function useTerminal(
   resumeId: string | null,
   continueLast: boolean,
   model: string | null,
-  /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity-only
-   * companion to `model` (`providers.ts`'s `SpawnOpts.effort`), same
-   * one-shot never-persisted spirit as `continueLast`. */
-  effort: "low" | "high" | null,
+  /** Sticky item "spawn_agent effort" (2026-09-03) — companion to `model`
+   * (`providers.ts`'s `SpawnOpts.effort`), persisted exactly like it
+   * since 2026-09-09 (card-types.ts's `TerminalCardData.effort` doc
+   * comment) — widened from "low" | "high" to plain string that same
+   * day, kept in sync here. */
+  effort: string | null,
   systemPrompt: string | null,
   /** DESIGN-BACKLOG.md item 57 ponto 13 — one-shot text typed into the PTY
    * right after a successful spawn, never executed on its own (no `\r`
@@ -471,7 +473,24 @@ export function useTerminal(
       t.loadAddon(f);
       if (withWebgl) {
         try {
-          t.loadAddon(new WebglAddon());
+          const webgl = new WebglAddon();
+          // Bug real (Pop!_OS, 2026-09-09): letra isolada saindo como bloco
+          // cheio ("WHERE TRUE" -> "██ERE TRUE"), e faixas de linha inteiras
+          // idem. O texto no buffer está certo — quem erra é o desenho.
+          // Perder o contexto WebGL em runtime (reset de driver Mesa,
+          // suspend/resume, troca de GPU) NÃO é o mesmo que falhar na
+          // CRIAÇÃO do contexto (isso o catch abaixo e o rebuild dentro do
+          // `term.open()` lá embaixo já cobrem): sem handler nenhum, o xterm
+          // segue desenhando pra sempre com o atlas de textura morto, e o
+          // que sai é exatamente esse bloco cheio. `dispose()` no addon é o
+          // que o próprio @xterm/addon-webgl documenta pra este evento —
+          // solto o addon e o xterm cai no renderer DOM (o default do
+          // @xterm/xterm 6 quando nenhum addon de renderer está carregado),
+          // sem precisar reconstruir a instância inteira. Nada guarda uma
+          // ref pro addon de propósito: o único consumidor dela seria este
+          // callback, que já fecha sobre `webgl`.
+          webgl.onContextLoss(() => webgl.dispose());
+          t.loadAddon(webgl);
         } catch {
           // Some GPU/driver combinations report WebGL2 as available here but
           // only actually fail later, inside open() below — this check still

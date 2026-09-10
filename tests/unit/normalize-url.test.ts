@@ -170,6 +170,49 @@ describe("regressão: FQDN com ponto final e IPv4 embutido em IPv6", () => {
   });
 });
 
+/**
+ * Pergunta do usuário (2026-09-08): "não terá problema em abrir http para
+ * testes locais?". Tinha — só `localhost` e `.local` eram reconhecidos.
+ * Cada sufixo aqui tem fonte, ver o doc de `LOCAL_SUFFIXES`.
+ */
+describe("sufixos internos não delegáveis recebem http", () => {
+  const internos = [
+    "servidor.lan:8080",
+    "nas.home:8080",
+    "box.internal:3000",
+    "api.test:8080",
+    "dev.home.arpa:8080",
+    "maquina.localdomain",
+    "app.intranet:9000",
+    "srv.corp:8080",
+    "host.private",
+    "algo.invalid",
+    "doc.example",
+    "meumac.local:8080",
+    "app.localhost",
+  ];
+
+  for (const alvo of internos) {
+    it(`${alvo} → http`, () => {
+      expect(normalizeUrl(alvo)).toBe(`http://${alvo}`);
+    });
+  }
+
+  it("o sufixo sozinho, sem subdomínio, também conta", () => {
+    expect(normalizeUrl("lan")).toBe("http://lan");
+    expect(normalizeUrl("home.arpa")).toBe("http://home.arpa");
+  });
+
+  it("um domínio público que só TERMINA parecido continua https", () => {
+    // `.lan` é local; `notlan.com` e `mylan.net` não são.
+    expect(normalizeUrl("notlan.com")).toBe("https://notlan.com");
+    expect(normalizeUrl("mylan.net")).toBe("https://mylan.net");
+    expect(normalizeUrl("internal.example.com")).toBe("https://internal.example.com");
+    expect(normalizeUrl("test.com")).toBe("https://test.com");
+    expect(normalizeUrl("corp.google.com")).toBe("https://corp.google.com");
+  });
+});
+
 describe("limite conhecido e aceito, documentado em vez de escondido", () => {
   it("rótulo único que também é TLD público recebe http", () => {
     // Trocar isto exigiria embutir a lista de public suffixes — ver o doc

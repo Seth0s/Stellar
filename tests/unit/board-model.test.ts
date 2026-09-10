@@ -17,6 +17,8 @@ import {
   type Rect,
   type WorldTransform,
   type BoardItem,
+  SPAWN_W,
+  SPAWN_H,
 } from "../../src/renderer/src/board-model";
 
 describe("board-model geometry", () => {
@@ -111,12 +113,12 @@ describe("board-model geometry", () => {
 
     const visible: Rect = { x: 0, y: 0, w: 1000, h: 1000 };
     const centSlot = centeredSlot(visible, 0);
-    expect(centSlot.w).toBe(860);
-    expect(centSlot.h).toBe(660);
+    expect(centSlot.w).toBe(SPAWN_W);
+    expect(centSlot.h).toBe(SPAWN_H);
 
     const ptSlot = pointSlot({ x: 500, y: 500 });
-    expect(ptSlot.x).toBe(500 - 860 / 2);
-    expect(ptSlot.y).toBe(500 - 660 / 2);
+    expect(ptSlot.x).toBe(500 - SPAWN_W / 2);
+    expect(ptSlot.y).toBe(500 - SPAWN_H / 2);
   });
 
   it("computes overlap area between rects, 0 when they don't overlap", () => {
@@ -142,7 +144,12 @@ describe("board-model geometry", () => {
 
   it("centeredSlot keeps the plain slot when nothing collides", () => {
     const visible: Rect = { x: 0, y: 0, w: 1000, h: 1000 };
-    const somewhereElse: Rect = { x: 900, y: 900, w: 50, h: 50 };
+    // Longe o bastante para não tocar o slot base em NENHUM tamanho de card
+    // plausível — derivado de SPAWN_W/H em vez de um número fixo, que foi o
+    // que fez este teste quebrar quando o padrão subiu para 1340x900 (o
+    // (900,900) de antes caía dentro do slot novo, e a premissa "nada
+    // colide" deixou de ser verdade sem ninguém perceber).
+    const somewhereElse: Rect = { x: 500 + SPAWN_W, y: 500 + SPAWN_H, w: 50, h: 50 };
 
     expect(centeredSlot(visible, 0, [somewhereElse])).toEqual(centeredSlot(visible, 0));
   });

@@ -3,33 +3,44 @@ import { Icon, type IconName } from "./icons";
 import { isInView, type Rect } from "./board-model";
 import type { Card } from "./card-types";
 
-/** Largura MÁXIMA da fita quando há espaço de sobra — o valor real usado
- * (`stripWidth`, calculado no componente) encolhe pra caber entre os
- * vizinhos reais da topbar. Antes era uma constante fixa usada direto
- * como `left:50%` no CSS, sem noção nenhuma do que estava ao redor —
- * relatado ao vivo (2026-09-06, screenshot): com um breadcrumb comprido
- * (`.topbar-title`), a fita centralizada na tela invadia o texto à
- * esquerda. */
-const MAX_STRIP_WIDTH = 460;
+/** SEM teto estético de largura (decisão do dono do repo, 2026-09-09,
+ * revertendo uma tentativa anterior de teto "justificado" em 960px): a
+ * fita usa TODO o espaço realmente livre entre os vizinhos da topbar
+ * (`availableRight - availableLeft`, só limitado por `MIN_STRIP_WIDTH`
+ * como piso e pelo clamp contra os vizinhos — nenhum limite superior).
+ * Razão do próprio dono: a fita representa 360° dobrados numa linha, e
+ * largura É resolução angular — mais largo separa melhor rumos parecidos,
+ * que é a razão de existir de uma bússola. Antes disso existiu uma
+ * constante fixa (460, depois 960) que travava a fita mesmo com a topbar
+ * cheia de espaço vazio dos dois lados — era exatamente o sintoma
+ * relatado ao vivo (2026-09-09, screenshot com ~2400px livres).
+ *
+ * Não há teto nem mesmo de SANIDADE (ex. pra telas ultrawide de 5000px+):
+ * o custo de `computeCompassLayout` é O(candidatos mostrados), não O(px)
+ * — os loops de empacotamento abaixo iteram sobre `positioned.length`
+ * (no máximo dezenas de chips), nunca sobre a largura em pixels. Uma fita
+ * de 5000px não custa mais CPU que uma de 500px, então não há cálculo
+ * "absurdo" a evitar; um teto artificial só reintroduziria o problema que
+ * acabou de ser removido. */
 /** Piso pra fita nunca desaparecer de vez numa janela genuinamente
  * apertada — cabe pelo menos ~3 chips compactos + o "+N". */
-const MIN_STRIP_WIDTH = 110;
+export const MIN_STRIP_WIDTH = 110;
 /** Respiro entre a fita e o vizinho mais próximo de cada lado. */
-const OUTER_GAP = 16;
+export const OUTER_GAP = 16;
 /** Respiro mínimo entre as BORDAS reais de dois chips vizinhos (não entre
  * os centros — largura de chip varia com o rótulo, então um respiro fixo
  * de centro-a-centro só funciona por acaso; foi o que colidiu no relato
  * ao vivo, 2026-09-06: 2 chips de rótulo comprido se sobrepunham quase
  * inteiros com um "gap" de centro fixo). */
-const GAP = 6;
+export const GAP = 6;
 /** Teto absoluto de chips no modo completo, mesmo que a soma de larguras
  * ainda coubesse — muitos chips completos ficam ilegíveis bem antes de
  * genuinamente não caberem mais (mesmo espírito de um jogo real: a
  * bússola limita quantos pontos de interesse mostra em detalhe). */
-const FULL_HARD_CAP = 6;
+export const FULL_HARD_CAP = 6;
 /** Modo compacto: chip circular de largura fixa — permite calcular quantos
  * cabem na fita sem depender de medir texto nenhum. */
-const COMPACT_CHIP_W = 26;
+export const COMPACT_CHIP_W = 26;
 /** Espaço reservado pro chip "+N" quando a lista trunca, pra ele nunca
  * ficar em cima do último chip real (ambos são `position: absolute`
  * dentro da mesma fita, ver layout.css). */
@@ -58,6 +69,124 @@ function distanceTier(dist: number, vpDiagonal: number): Tier {
   return 1;
 }
 
+export type Positioned<T> = T & { x: number; w: number };
+
+export interface CompassLayoutOptions {
+  titleRight: number | null;
+  zoomPillLeft: number | null;
+  windowInnerWidth: number;
+}
+
+export interface CompassLayoutResult<T> {
+  stripWidth: number;
+  stripLeft: number;
+  compact: boolean;
+  positioned: Positioned<T>[];
+  hiddenCount: number;
+}
+
+/**
+ * Núcleo PURO da geometria da bússola — sem DOM, sem React. Recebe os
+ * candidatos já ordenados por distância (mais perto primeiro, cada um com
+ * `bearing` e `label` resolvidos) e as bordas livres da topbar, e decide:
+ * largura/posição da fita, modo (completo/compacto), quantos chips cabem,
+ * e a posição X final de cada um já sem sobreposição (empacotamento
+ * "bolinha de gude" com clamps de borda). Extraído do corpo do componente
+ * pra poder testar esse cálculo — inclusive o uso do espaço livre inteiro
+ * (sem teto, ver comentário acima de `MIN_STRIP_WIDTH`) e a decisão de
+ * modo que isso afeta — sem montar React nem abrir o app
+ * (mesmo motivo de `board-model.ts`/`mask-buffer.ts`: `vitest` roda em
+ * `environment: node`, sem DOM).
+ */
+export function computeCompassLayout<T extends { bearing: number; label: string }>(
+  all: T[],
+  { titleRight, zoomPillLeft, windowInnerWidth }: CompassLayoutOptions,
+): CompassLayoutResult<T> {
+  // Espaço realmente livre entre os vizinhos da topbar (ou a janela
+  // inteira, se algum dos dois ainda não montou). `stripWidth` é o teto
+  // que TODO o resto da função usa em vez da constante fixa antiga —
+  // encolhe sozinho quando o breadcrumb ou a área de zoom crescem, em
+  // vez de desenhar por cima deles. `stripLeft` centraliza a fita dentro
+  // desse espaço livre (não mais 50% da JANELA) — o mesmo empacotamento
+  // "bolinha de gude" abaixo (empurra + clampa nas duas pontas) já lida
+  // com acumulação quando `stripWidth` encolhe o bastante pra apertar os
+  // chips, sem nunca invadir o vizinho.
+  const availableLeft = (titleRight ?? 0) + OUTER_GAP;
+  const availableRight = (zoomPillLeft ?? windowInnerWidth) - OUTER_GAP;
+  const stripWidth = Math.max(MIN_STRIP_WIDTH, availableRight - availableLeft);
+  const idealLeft = (windowInnerWidth - stripWidth) / 2;
+  const stripLeft = Math.min(Math.max(idealLeft, availableLeft), Math.max(availableLeft, availableRight - stripWidth));
+
+  // Decide o modo pela largura REAL projetada, não só pela contagem — um
+  // punhado de rótulos compridos pode não caber mesmo sendo "poucos"
+  // (achado ao vivo, 2026-09-06: 4 chips, 2 com rumo próximo, já
+  // colidiam). Testa o modo completo com os `FULL_HARD_CAP` mais
+  // próximos: só usa completo se ELES cabem de verdade lado a lado.
+  const fullCandidates = all.slice(0, FULL_HARD_CAP);
+  const fullTotalWidth =
+    fullCandidates.reduce((sum, c) => sum + estimateFullChipWidth(c.label), 0) + Math.max(0, fullCandidates.length - 1) * GAP;
+  const compact = all.length > FULL_HARD_CAP || fullTotalWidth > stripWidth;
+
+  // Quantos cabem na fita, dado o modo: completo usa os candidatos já
+  // testados acima; compacto tem largura uniforme, então dá pra calcular
+  // direto quantos cabem — os mais próximos entram primeiro (`all` já
+  // ordenado por `dist`).
+  const maxShown = compact ? Math.floor((stripWidth - MORE_CHIP_RESERVED) / (COMPACT_CHIP_W + GAP)) : fullCandidates.length;
+  const shown = all.slice(0, Math.max(1, maxShown));
+  const hiddenCount = all.length - shown.length;
+  const effectiveWidth = hiddenCount > 0 ? stripWidth - MORE_CHIP_RESERVED : stripWidth;
+
+  // `bearing` 0° -> t=0.5 (centro), +180°/-180° -> t=1/t=0 (as duas
+  // pontas, mesma direção física "oeste").
+  const positioned: Positioned<T>[] = shown
+    .map((c) => ({
+      ...c,
+      x: (0.5 + c.bearing / 360) * effectiveWidth,
+      w: compact ? COMPACT_CHIP_W : estimateFullChipWidth(c.label),
+    }))
+    .sort((a, b) => a.x - b.x);
+
+  // Empacotamento em 1D com largura REAL de cada chip (não um espaço fixo
+  // de centro-a-centro, que foi exatamente o bug relatado ao vivo — 2
+  // chips de rótulo comprido se sobrepondo quase inteiros). Duas
+  // varreduras, técnica padrão pra "n itens, respiro mínimo, encaixar num
+  // intervalo": só uma passada (empurra pra direita) resolve a
+  // sobreposição local mas pode estourar a borda direita se os itens
+  // já nasceram perto dela; um clamp por-item DEPOIS disso (a versão
+  // anterior) desfaz o espaçamento e reintroduz a MESMA sobreposição que
+  // deveria evitar — foi o bug real visto ao vivo.
+  //
+  // 1) esquerda -> direita: empurra o de trás quando encostaria no da
+  //    frente.
+  for (let i = 1; i < positioned.length; i++) {
+    const prev = positioned[i - 1];
+    const cur = positioned[i];
+    const minCenter = prev.x + prev.w / 2 + GAP + cur.w / 2;
+    if (cur.x < minCenter) cur.x = minCenter;
+  }
+  // 2) clamp só o ÚLTIMO na borda direita, se a varredura acima o
+  //    empurrou além dela.
+  const lastIdx = positioned.length - 1;
+  if (lastIdx >= 0) positioned[lastIdx].x = Math.min(positioned[lastIdx].x, effectiveWidth - positioned[lastIdx].w / 2);
+  // 3) direita -> esquerda: propaga essa borda de volta pra trás,
+  //    puxando qualquer chip que ainda encostaria no vizinho já
+  //    ajustado — sem isso, um item no meio da fita ficaria colado no
+  //    último em vez de manter o respiro mínimo.
+  for (let i = lastIdx - 1; i >= 0; i--) {
+    const next = positioned[i + 1];
+    const cur = positioned[i];
+    const maxCenter = next.x - next.w / 2 - GAP - cur.w / 2;
+    if (cur.x > maxCenter) cur.x = maxCenter;
+  }
+  // 4) só resta o PRIMEIRO poder ter sido puxado além da borda esquerda —
+  //    acontece apenas se a soma total de larguras genuinamente não
+  //    coubesse na fita (o teste de largura acima deveria ter trocado
+  //    pro modo compacto antes disso; este é só o último resort).
+  if (positioned.length > 0) positioned[0].x = Math.max(positioned[0].x, positioned[0].w / 2);
+
+  return { stripWidth, stripLeft, compact, positioned, hiddenCount };
+}
+
 /**
  * Guia de localização de cards (2026-09-04, ideia do usuário), estilo
  * bússola horizontal de jogo — pedido ao vivo (2026-09-06): "um estilo
@@ -82,12 +211,17 @@ function distanceTier(dist: number, vpDiagonal: number): Tier {
  *   perto, como barras de sinal). Medida sempre a partir do centro da
  *   viewport ATUAL — pedido explícito do usuário, não do centro fixo do
  *   board inteiro.
- * - **Compacto** (muitos cards): só o ícone do tipo de card, num botão
- *   circular de largura FIXA — sem isso, calcular quantos cabem na fita
- *   exigiria medir texto renderizado de verdade (layout em duas
- *   passagens). Distância vira opacidade do ícone (perto = opaco, longe =
- *   apagado) em vez de anéis, pra não gastar largura nenhuma; nome
- *   continua acessível no tooltip (`title`) ao passar o mouse. Mesmo
+ * - **Compacto** (muitos cards): botão circular de largura FIXA — sem
+ *   largura fixa, calcular quantos cabem na fita exigiria medir texto
+ *   renderizado de verdade (layout em duas passagens). Decisão do
+ *   coordenador (2026-09-09, revisão do pedido ao vivo): o conteúdo
+ *   visual é a SETA girada pro rumo exato, mesma convenção de rotação do
+ *   modo completo — antes era só o ícone do tipo de card, sem seta
+ *   nenhuma, o que tira de uma bússola compacta exatamente a informação
+ *   que a define (a direção). O tipo de card sai do visual e vai pro
+ *   `title`/`aria-label` junto do nome — continua acessível, só não ocupa
+ *   espaço no chip. Distância continua opacidade (perto = opaco, longe =
+ *   apagado) em vez de anéis, pra não gastar largura nenhuma. Mesmo
  *   assim, com MUITOS cards (20+) ainda cabe só um tanto — o resto vira
  *   um chip "+N" de resumo, igual ao modo completo.
  */
@@ -148,7 +282,7 @@ export const Compass = memo(function Compass({
   const vpCenterY = visibleRect.y + visibleRect.h / 2;
   const vpDiagonal = Math.hypot(visibleRect.w, visibleRect.h);
 
-  const all: Candidate[] = cards
+  const all = cards
     .filter((c) => !isInView(c.rect, visibleRect))
     .map((card) => {
       const cx = card.rect.x + card.rect.w / 2;
@@ -159,92 +293,19 @@ export const Compass = memo(function Compass({
     })
     // Um card exatamente sob o centro não tem direção pra apontar.
     .filter(({ dx, dy }) => Math.abs(dx) >= 0.001 || Math.abs(dy) >= 0.001)
-    .sort((a, b) => a.dist - b.dist);
+    .sort((a, b) => a.dist - b.dist)
+    // `label` resolvido aqui, uma vez, pra `computeCompassLayout` (função
+    // PURA, sem acesso a `kindLabel`) poder medir largura de chip sem
+    // conhecer a forma de `Card`.
+    .map((c): Candidate & { label: string } => ({ ...c, label: c.card.label ?? kindLabel[c.card.kind] ?? c.card.kind }));
 
   if (all.length === 0) return null;
 
-  // Espaço realmente livre entre os vizinhos da topbar (ou a janela
-  // inteira, se algum dos dois ainda não montou). `stripWidth` é o teto
-  // que TODO o resto da função usa em vez da constante fixa antiga —
-  // encolhe sozinho quando o breadcrumb ou a área de zoom crescem, em
-  // vez de desenhar por cima deles. `stripLeft` centraliza a fita dentro
-  // desse espaço livre (não mais 50% da JANELA) — o mesmo empacotamento
-  // "bolinha de gude" abaixo (empurra + clampa nas duas pontas) já lida
-  // com acumulação quando `stripWidth` encolhe o bastante pra apertar os
-  // chips, sem nunca invadir o vizinho.
-  const availableLeft = (titleRight ?? 0) + OUTER_GAP;
-  const availableRight = (zoomPillLeft ?? window.innerWidth) - OUTER_GAP;
-  const stripWidth = Math.max(MIN_STRIP_WIDTH, Math.min(MAX_STRIP_WIDTH, availableRight - availableLeft));
-  const idealLeft = (window.innerWidth - stripWidth) / 2;
-  const stripLeft = Math.min(Math.max(idealLeft, availableLeft), Math.max(availableLeft, availableRight - stripWidth));
-
-  // Decide o modo pela largura REAL projetada, não só pela contagem — um
-  // punhado de rótulos compridos pode não caber mesmo sendo "poucos"
-  // (achado ao vivo, 2026-09-06: 4 chips, 2 com rumo próximo, já
-  // colidiam). Testa o modo completo com os `FULL_HARD_CAP` mais
-  // próximos: só usa completo se ELES cabem de verdade lado a lado.
-  const fullCandidates = all.slice(0, FULL_HARD_CAP);
-  const fullTotalWidth =
-    fullCandidates.reduce((sum, c) => sum + estimateFullChipWidth(c.card.label ?? kindLabel[c.card.kind] ?? c.card.kind), 0) +
-    Math.max(0, fullCandidates.length - 1) * GAP;
-  const compact = all.length > FULL_HARD_CAP || fullTotalWidth > stripWidth;
-
-  // Quantos cabem na fita, dado o modo: completo usa os candidatos já
-  // testados acima; compacto tem largura uniforme, então dá pra calcular
-  // direto quantos cabem — os mais próximos entram primeiro (`all` já
-  // ordenado por `dist`).
-  const maxShown = compact ? Math.floor((stripWidth - MORE_CHIP_RESERVED) / (COMPACT_CHIP_W + GAP)) : fullCandidates.length;
-  const shown = all.slice(0, Math.max(1, maxShown));
-  const hiddenCount = all.length - shown.length;
-  const effectiveWidth = hiddenCount > 0 ? stripWidth - MORE_CHIP_RESERVED : stripWidth;
-
-  // `bearing` 0° -> t=0.5 (centro), +180°/-180° -> t=1/t=0 (as duas
-  // pontas, mesma direção física "oeste").
-  const positioned = shown
-    .map((c) => ({
-      ...c,
-      x: (0.5 + c.bearing / 360) * effectiveWidth,
-      w: compact ? COMPACT_CHIP_W : estimateFullChipWidth(c.card.label ?? kindLabel[c.card.kind] ?? c.card.kind),
-    }))
-    .sort((a, b) => a.x - b.x);
-
-  // Empacotamento em 1D com largura REAL de cada chip (não um espaço fixo
-  // de centro-a-centro, que foi exatamente o bug relatado ao vivo — 2
-  // chips de rótulo comprido se sobrepondo quase inteiros). Duas
-  // varreduras, técnica padrão pra "n itens, respiro mínimo, encaixar num
-  // intervalo": só uma passada (empurra pra direita) resolve a
-  // sobreposição local mas pode estourar a borda direita se os itens
-  // já nasceram perto dela; um clamp por-item DEPOIS disso (a versão
-  // anterior) desfaz o espaçamento e reintroduz a MESMA sobreposição que
-  // deveria evitar — foi o bug real visto ao vivo.
-  //
-  // 1) esquerda -> direita: empurra o de trás quando encostaria no da
-  //    frente.
-  for (let i = 1; i < positioned.length; i++) {
-    const prev = positioned[i - 1];
-    const cur = positioned[i];
-    const minCenter = prev.x + prev.w / 2 + GAP + cur.w / 2;
-    if (cur.x < minCenter) cur.x = minCenter;
-  }
-  // 2) clamp só o ÚLTIMO na borda direita, se a varredura acima o
-  //    empurrou além dela.
-  const lastIdx = positioned.length - 1;
-  if (lastIdx >= 0) positioned[lastIdx].x = Math.min(positioned[lastIdx].x, effectiveWidth - positioned[lastIdx].w / 2);
-  // 3) direita -> esquerda: propaga essa borda de volta pra trás,
-  //    puxando qualquer chip que ainda encostaria no vizinho já
-  //    ajustado — sem isso, um item no meio da fita ficaria colado no
-  //    último em vez de manter o respiro mínimo.
-  for (let i = lastIdx - 1; i >= 0; i--) {
-    const next = positioned[i + 1];
-    const cur = positioned[i];
-    const maxCenter = next.x - next.w / 2 - GAP - cur.w / 2;
-    if (cur.x > maxCenter) cur.x = maxCenter;
-  }
-  // 4) só resta o PRIMEIRO poder ter sido puxado além da borda esquerda —
-  //    acontece apenas se a soma total de larguras genuinamente não
-  //    coubesse na fita (o teste de largura acima deveria ter trocado
-  //    pro modo compacto antes disso; este é só o último resort).
-  if (positioned.length > 0) positioned[0].x = Math.max(positioned[0].x, positioned[0].w / 2);
+  const { stripWidth, stripLeft, compact, positioned, hiddenCount } = computeCompassLayout(all, {
+    titleRight,
+    zoomPillLeft,
+    windowInnerWidth: window.innerWidth,
+  });
 
   return (
     <div
@@ -254,10 +315,10 @@ export const Compass = memo(function Compass({
       aria-label="Cards fora da tela"
       style={{ left: `${stripLeft}px`, width: `${stripWidth}px` }}
     >
-      {positioned.map(({ card, dist, bearing, x }) => {
-        const label = card.label ?? kindLabel[card.kind] ?? card.kind;
+      {positioned.map(({ card, dist, bearing, x, label }) => {
         const tier = distanceTier(dist, vpDiagonal);
         const icon = kindIcon[card.kind] ?? "terminal";
+        const kindName = kindLabel[card.kind] ?? card.kind;
         return compact ? (
           <button
             key={card.id}
@@ -265,11 +326,13 @@ export const Compass = memo(function Compass({
             className="compass-chip compass-chip-compact"
             data-role="compass-chip"
             style={{ left: `${x}px`, opacity: tier === 3 ? 1 : tier === 2 ? 0.7 : 0.45 }}
-            title={`Focar em ${label}`}
-            aria-label={`Focar em ${label}, fora da tela`}
+            title={`Focar em ${label} (${kindName})`}
+            aria-label={`Focar em ${label} (${kindName}), fora da tela`}
             onClick={() => onFocusCard(card.id)}
           >
-            <Icon name={icon} size={13} />
+            <span className="compass-arrow compass-arrow-compact" style={{ transform: `rotate(${bearing}deg)` }}>
+              <Icon name="chevronRight" size={13} />
+            </span>
           </button>
         ) : (
           <button

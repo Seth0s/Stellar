@@ -70,6 +70,20 @@ export function useBoardStore(
   defaultCwd: string,
   toRow: (card: Card, boardId: string) => CardRow,
   fromRow: (r: CardRow) => Card,
+  /** Achado (review adversarial RODADA 4, 2026-09-09) — App.tsx owns the
+   * connector-label auto-refresh throttle (`connectorLabelThrottleRef`),
+   * this hook doesn't and shouldn't know it exists in general (same
+   * boundary as every other setter above: this hook mutates App.tsx's
+   * state via callbacks, never reaches into its internals directly).
+   * `deleteBoard` below is the one exception that needs a callback of its
+   * own rather than reusing `setConnectors`/`resetLiveStatus`: those clear
+   * RENDER state (irrelevant once the board's gone either way), but a
+   * pending throttled label write for THIS board must be discarded, not
+   * flushed, before `activeBoardId` changes — see App.tsx's own doc
+   * comment on its board-switch flush `useEffect` for why flushing would
+   * be wrong here specifically (the target board no longer exists to
+   * write into). */
+  discardPendingConnectorLabelsForBoard: (boardId: string) => void,
 ) {
   const [loaded, setLoaded] = useState(false);
   const [boards, setBoards] = useState<BoardRow[]>([]);
@@ -77,6 +91,25 @@ export function useBoardStore(
   const [boardCounts, setBoardCounts] = useState<Record<string, BoardCounts>>({});
   const activeBoardIdRef = useRef<string | null>(null);
   activeBoardIdRef.current = activeBoardId;
+  /** Achado (review adversarial RODADA 5, 2026-09-09) — the signal the
+   * reviewer asked to look for before inventing a new one: this hook had
+   * NONE tracking "a board switch is between `setActiveBoardId` and the
+   * end of `loadBoard`" (`loaded` above is a one-time boot flag, unrelated
+   * — checked before adding this). `true` for exactly that window, in
+   * both places it exists today (`switchBoard`, and `deleteBoard`'s own
+   * `loadBoard` call for whatever board comes next) — a `finally` in both
+   * so a rejected/thrown load still clears it. Read by App.tsx's
+   * `scheduleConnectorLabelUpdate` (via `decideConnectorLabelSchedule`)
+   * to refuse to schedule anything while it's true: `activeBoardIdRef`
+   * flips to the incoming board as soon as `setActiveBoardId` is called,
+   * but `connectorsRef` (App.tsx) still holds the OUTGOING board's
+   * connectors until `loadBoard`'s `setConnectors` call lands after its
+   * own `await` — a stale IPC event landing in that gap used to get a
+   * throttle snapshot stamped with the WRONG (new) board id. A plain
+   * `useRef<boolean>`, not `useState`: nothing should ever re-render off
+   * this, it's read synchronously from an event-handling code path, the
+   * same shape as `activeBoardIdRef` right above it. */
+  const boardTransitionRef = useRef(false);
 
   function refreshBoardCounts() {
     void window.store.cardCounts().then(setBoardCounts);
@@ -156,7 +189,17 @@ export function useBoardStore(
     // está sendo desmontada.
     window.store.boards.setActive(id);
     localStorage.setItem(ACTIVE_BOARD_KEY, id);
-    await loadBoard(id, template, seedCwd);
+    // Achado (review adversarial RODADA 5, 2026-09-09) — flips true right
+    // alongside `setActiveBoardId` above (no gap before the `await`), false
+    // again once `loadBoard` settles either way (`finally`, not a plain
+    // statement after `await` — a thrown/rejected load must not leave this
+    // stuck true forever).
+    boardTransitionRef.current = true;
+    try {
+      await loadBoard(id, template, seedCwd);
+    } finally {
+      boardTransitionRef.current = false;
+    }
   }
 
   /** Topbar's home button — leaves the current board back to the home
@@ -235,6 +278,16 @@ export function useBoardStore(
 
   async function deleteBoard(id: string) {
     if (boards.length <= 1) return;
+    // Achado (review adversarial RODADA 4, 2026-09-09) — BEFORE anything
+    // else, and unconditionally (pending entries only ever exist for
+    // whatever board is currently loaded, so this is a no-op for a board
+    // that isn't `id === activeBoardIdRef.current`, but checking that here
+    // would just be one more place to get the condition wrong). Must run
+    // before `setActiveBoardId` below: that's what fires App.tsx's board-
+    // switch flush effect, and this board's rows are being deleted right
+    // here — nothing pending for it should survive to be flushed into a
+    // `board_id` that's about to stop existing.
+    discardPendingConnectorLabelsForBoard(id);
     const remaining = boards.filter((b) => b.id !== id);
     setBoards(remaining);
     void window.store.boards.delete(id);
@@ -243,7 +296,16 @@ export function useBoardStore(
       const next = remaining[0].id;
       setActiveBoardId(next);
       localStorage.setItem(ACTIVE_BOARD_KEY, next);
-      await loadBoard(next);
+      // Achado (review adversarial RODADA 5, 2026-09-09) — same guard as
+      // `switchBoard`'s own `boardTransitionRef` bracket; see its comment
+      // there for why. This is the OTHER of the two places `loadBoard` is
+      // awaited after `activeBoardId` already changed.
+      boardTransitionRef.current = true;
+      try {
+        await loadBoard(next);
+      } finally {
+        boardTransitionRef.current = false;
+      }
     }
     toast("sessão excluída");
   }
@@ -253,6 +315,10 @@ export function useBoardStore(
     boards,
     activeBoardId,
     activeBoardIdRef,
+    // Achado (review adversarial RODADA 5, 2026-09-09) — App.tsx's
+    // `scheduleConnectorLabelUpdate` needs to read this synchronously;
+    // see its own doc comment above for what it means.
+    boardTransitionRef,
     boardCounts,
     refreshBoardCounts,
     loadBoard,

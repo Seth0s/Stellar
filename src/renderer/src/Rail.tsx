@@ -5,10 +5,23 @@ import { PenPanel } from "./PenPanel";
 import { ProviderPicker } from "./ProviderPicker";
 import { CARD_ICON, RAIL_CREATE_ORDER, RAIL_CREATE_TITLE } from "./cards/registry";
 import type { Tool } from "./card-types";
+import { PROVIDER_EFFORT_VALUES } from "./card-types";
 
 type RailCard = { id: string; kind: string; label: string | null };
 
 const RAIL_COLLAPSED_KEY = "ac.railCollapsed";
+
+/** Item 3 — collapsed rail becomes a mini-rail showing the active tool's
+ * icon (RadialMenu.tsx/App.tsx already track `Tool` as this same union;
+ * duplicated here rather than imported to keep this a plain, local
+ * lookup — Rail.tsx already receives `tool` as a prop, no new plumbing). */
+const TOOL_ICON: Record<Tool, IconName> = {
+  pointer: "pointer",
+  pen: "pen",
+  connector: "link",
+  select: "select",
+  export: "exportCrop",
+};
 
 const CARD_DESCRIPTIONS: Record<string, string> = {
   terminal: "Shell local ou agente CLI autônomo",
@@ -43,6 +56,8 @@ export function Rail({
   setNewContinueLast,
   newModel,
   setNewModel,
+  newEffort,
+  setNewEffort,
   newSystemPrompt,
   setNewSystemPrompt,
   onCreateTerminal,
@@ -79,6 +94,8 @@ export function Rail({
   setNewContinueLast: (v: boolean) => void;
   newModel: string;
   setNewModel: (v: string) => void;
+  newEffort: string;
+  setNewEffort: (v: string) => void;
   newSystemPrompt: string;
   setNewSystemPrompt: (v: string) => void;
   onCreateTerminal: () => void;
@@ -125,6 +142,24 @@ export function Rail({
         onClick={() => setCollapsed((c) => !c)}
       >
         <Icon name={collapsed ? "chevronRight" : "chevronLeft"} size={14} />
+      </button>
+
+      {/* Item 3 — collapsed rail used to just vanish (`.rail`'s own
+         translateX+opacity below) leaving only the sliver `.rail-toggle`
+         chevron, which also hid which tool was active. This crossfades in
+         at the same spot the full `.rail` slides out of (both
+         `position: absolute` inside `.rail-container`, so neither affects
+         the container's box — no canvas layout jump), showing the active
+         tool so the user isn't left guessing pointer vs. pen. A full
+         click target on its own (comfortably bigger than the thin
+         `.rail-toggle`), separate from the chevron above. */}
+      <button
+        className="rail-mini"
+        title={`Ferramenta ativa: ${tool} — clique para mostrar a barra lateral`}
+        aria-label="Mostrar barra lateral"
+        onClick={() => setCollapsed(false)}
+      >
+        <Icon name={TOOL_ICON[tool]} size={18} />
       </button>
 
       <div className="rail thin-scroll" aria-label="Barra de ferramentas">
@@ -352,6 +387,29 @@ export function Rail({
                     <label>model (opcional)</label>
                     <input className="resume-input" value={newModel} onChange={(e) => setNewModel(e.target.value)} />
                   </div>
+                  {/* DESIGN-BACKLOG.md §2.1 "effort do card não é
+                      persistido", 2026-09-10 — only offered for providers
+                      that actually read `--effort` (PROVIDER_EFFORT_VALUES,
+                      confirmed live per provider, not guessed). The select
+                      only ever lists values that provider accepts, so this
+                      popover structurally can't hand a value the app
+                      already knows would be refused (message-bus.ts's
+                      spawn_agent handler enforces the same antigravity
+                      range for agent-driven spawns, which never go through
+                      this UI). */}
+                  {PROVIDER_EFFORT_VALUES[newProvider] && (
+                    <div className="popover-field">
+                      <label>effort (opcional)</label>
+                      <select className="resume-input" value={newEffort} onChange={(e) => setNewEffort(e.target.value)}>
+                        <option value="">(padrão do provider)</option>
+                        {PROVIDER_EFFORT_VALUES[newProvider].map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   {newProvider === "claude" && (
                     <div className="popover-field">
                       <label>system prompt (opcional)</label>

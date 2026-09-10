@@ -67,10 +67,33 @@ try {
 
   const boardId = JSON.parse(await page.evalJs(`window.store.boards.list().then((b) => JSON.stringify(b[0].id))`));
 
-  // ---- 15 cards baratos (files/changes/stroke) semeados direto no
-  // banco, num grid bem abaixo da Topbar real, cobrindo uma área grande
-  // de mundo (o board real não é um raster mágico -- espalhar de
-  // verdade importa pro teste de camadas de compositor). ----
+  // ---- 15 cards baratos (files/changes/stroke) + 5 terminais reais,
+  // TODOS semeados direto no banco, num grid bem abaixo da Topbar real,
+  // cobrindo uma área grande de mundo (o board real não é um raster
+  // mágico -- espalhar de verdade importa pro teste de camadas de
+  // compositor). ----
+  //
+  // Atalhos fase A, item 3 (2026-09-09, revisão pós-review, achado 4) —
+  // este loop usava 5x Ctrl+D pra chegar a 5 terminais extras; depois que
+  // Ctrl+D passou a ser escopado por foco real (não mais z-order), deixou
+  // de servir como truque genérico de "criar mais cards". A tentativa
+  // seguinte (spawnar via popover "Adicionar card" da Rail) FOI REVERTIDA
+  // pelo review: 5 sequências de clique real == render de React + churn
+  // de DOM real, carga de CPU que o teste não quer — o propósito
+  // declarado deste arquivo é medir GPU/compositor, não CPU/React.
+  //
+  // Achado: um card de terminal NÃO precisa nascer pela UI pra ganhar um
+  // PTY real — `useTerminal.ts`'s efeito de spawn (`window.pty.spawn(...)`)
+  // roda incondicionalmente no mount de QUALQUER `TerminalCard`, seja ele
+  // criado ao vivo ou restaurado de uma linha do banco (`fromRow`, App.tsx
+  // — mesmo caminho que os 15 cards baratos abaixo já usam pra existir
+  // sem passar pela UI, e que este arquivo já recarrega o board pra
+  // "pegar" via `loadBoard`). Ou seja: semear a LINHA do terminal no banco
+  // (mesma técnica dos 15 cards baratos, só que com `kind: "terminal"` e
+  // um `provider` real) e deixar o reload que já existia abaixo cuidar do
+  // resto é zero UI, zero cliques, e ainda assim um terminal 100% real
+  // (PTY de verdade, mesmo componente, mesmo efeito de mount) — não uma
+  // simulação.
   const seedRows = [];
   const kinds = ["files", "changes", "stroke"];
   let n = 0;
@@ -97,6 +120,18 @@ try {
       n++;
     }
   }
+  for (let t = 0; t < 5; t++) {
+    seedRows.push({
+      id: `stress-terminal-${t}`,
+      board_id: boardId,
+      kind: "terminal",
+      provider: "bash",
+      cwd: process.cwd(),
+      x: 40 + t * 460, y: 300 + 5 * 340, w: 860, h: 660,
+      resume_id: null, model: null, system_prompt: null, group_id: null, label: null,
+      updated_at: Date.now(), messages_json: null, archived_at: null,
+    });
+  }
   await page.evalJs(`
     (async () => {
       const rows = ${JSON.stringify(seedRows)};
@@ -106,7 +141,8 @@ try {
 
   // Reload so React actually picks up the seeded rows (out-of-band DB
   // writes don't touch live in-memory state, same lesson as the render-
-  // memoization test above this commit).
+  // memoization test above this commit) -- this is also what turns the 5
+  // seeded terminal rows into 5 real PTYs (see the finding above).
   await page.evalJs(`document.querySelector('.topbar-home')?.click()`);
   await new Promise((r) => setTimeout(r, 500));
   const target = JSON.parse(
@@ -122,13 +158,6 @@ try {
   if (!target) throw new Error("could not find the seeded session on Home to reopen");
   await page.click(target.x, target.y);
   await new Promise((r) => setTimeout(r, 800));
-
-  // ---- Real terminal cards (Ctrl+D duplicate) ----
-  for (let i = 0; i < 5; i++) {
-    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "d", code: "KeyD", modifiers: 2, windowsVirtualKeyCode: 68 });
-    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "d", code: "KeyD", modifiers: 2, windowsVirtualKeyCode: 68 });
-    await new Promise((r) => setTimeout(r, 400));
-  }
 
   // ---- Real browser cards (offscreen WebContentsView -- the historically
   // fragile GPU path per §0.6) ----

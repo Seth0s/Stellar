@@ -1,8 +1,9 @@
 import { delimiter } from "node:path";
 import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, type SpawnOpts } from "./providers";
-import { effectivePath } from "./user-env";
-import { watchForSession, claimSessionId, RESUME_TRIGGER_COMMANDS } from "./session-watch";
+import { effectivePath, realNodePath } from "./user-env";
+import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS } from "./session-watch";
+import { decideRearmOnLine } from "./session-rearm-decision";
 
 const COALESCE_MS = 16;
 const COALESCE_MAX = 64 * 1024;
@@ -100,10 +101,112 @@ type Entry = {
    * runs long after, in a different closure. */
   providerId: string;
   cwd: string;
-  /** Acumula bytes de INPUT (não output) até a próxima quebra de linha, só
-   * pra checar se a linha inteira bate com `RESUME_TRIGGER_COMMANDS` —
-   * nunca usado pra mais nada, e nunca cresce sem limite (ver `write`). */
+  /** Acumula bytes de INPUT (não output) até a próxima quebra de linha —
+   * usado pra checar se a linha inteira bate com `RESUME_TRIGGER_COMMANDS`
+   * OU (review adversarial RODADA 2/3, 2026-09-09) pra detectar CADA linha
+   * de input de verdade num provider de `REARM_ON_INPUT_PROVIDERS` — nunca
+   * usado pra mais nada, e nunca cresce sem limite (ver `write`). */
   inputLineBuffer: string;
+  /** Review adversarial RODADA 5 (2026-09-10), achado único (os 3 do
+   * reviewer eram sintomas do mesmo problema) — `entry` não guardava
+   * NENHUM estado de "já achei a sessão", então RODADA 3's "rearma em toda
+   * linha não-vazia, pra sempre" rearmava mesmo depois de já resolvido:
+   * (1) poller eterno rodando `readdir`+`stat` a cada 1.5s pelo resto da
+   * vida do card, sempre à toa, já que o id real já está em
+   * `claimedSessionIds`; (2) `entry.stopWatch` ficava ambíguo — `null` no
+   * sucesso, mas também (por outro caminho) numa expiração por timeout,
+   * onde `watchForSession` só para de pollar sem zerar o campo — ninguém
+   * lê esse estado hoje, mas um rearm perpétuo é o tipo de coisa que faz
+   * alguém vir ler; (3) o risco real: um poller rearmado depois de
+   * resolvido pode achar um `.db` NÃO reivindicado (sessão aberta à mão
+   * pelo usuário fora do Stellar, mesmo cwd) e chamar `onSessionFound` de
+   * novo, SOBRESCREVENDO o `resume_id` correto — o mesmo bug de "card 296
+   * restaurou o conteúdo de outra sessão" que esta linha de trabalho
+   * inteira existe pra fechar. `true` já na criação da entry quando
+   * `spawnOpts.resumeId` já é conhecido (ver `spawn` abaixo) — um card
+   * restaurado nunca teve um watcher pra achar nada, mas sem este campo
+   * `write()` ainda rearmava um do ZERO nele a cada linha de input, sendo
+   * esse card restaurado exatamente o alvo mais provável de sobrescrever.
+   * Setado em conjunto com `stopWatch = null` nos DOIS callbacks de
+   * sucesso (spawn inicial e `rearmSessionWatch`) — nunca lido sem também
+   * checar `stopWatch`, mas é este campo, não aquele, que `rearmSessionWatch`
+   * consulta pra decidir se vira no-op (ver seu doc comment).
+   *
+   * RODADA 6 (2026-09-10), achado 1 — regressão da própria RODADA 5: o
+   * trigger EXPLÍCITO de resume (`RESUME_TRIGGER_COMMANDS`, ex.:
+   * `/resume` do claude) existe justamente pro caso "a sessão já foi
+   * achada e o usuário quer TROCAR pra outra" — checar `sessionFound`
+   * ANTES desse ramo (como a RODADA 5 fazia) prendia o card na sessão
+   * velha pra sempre assim que ela era resolvida uma vez, o que pra
+   * `claude` é sempre (não tem `REARM_ON_INPUT_PROVIDERS`, resolve no
+   * spawn). Ver `session-rearm-decision.ts`'s `decideRearmOnLine` — só o
+   * ramo AUTOMÁTICO (`rearmsOnInput`) respeita `sessionFound`; o trigger
+   * explícito sempre rearma E zera este campo (`write()` abaixo faz
+   * `entry.sessionFound = false` quando a decisão pede), porque um
+   * `/resume` de verdade É o usuário dizendo "esqueça a sessão atual". */
+  sessionFound: boolean;
+  /** RODADA 7 (2026-09-10), achado 3 — `true` do momento em que um
+   * trigger explícito de resume dispara até a sessão ser achada de novo
+   * (`sessionFound` voltar a `true`, ver o callback de sucesso de
+   * `rearmSessionWatch`). Enquanto `true`, `decideRearmOnLine` rearma em
+   * QUALQUER linha não-vazia, mesmo num provider fora de
+   * `REARM_ON_INPUT_PROVIDERS` (é exatamente o caso do `claude`: sem
+   * isto, o único watcher que um `/resume` dispara tem uma única chance
+   * de `TIMEOUT_MS` — 30s — e se o usuário levar mais que isso escolhendo
+   * no picker interativo, a troca de sessão se perde silenciosamente). A
+   * tecla de confirmação do picker ainda cruza o PTY como um `\r` real
+   * (o TUI só INTERPRETA os bytes, não os intercepta antes do processo
+   * receber), então ela também conta como "linha" pra este campo manter
+   * o watcher vivo até o arquivo de verdade ser escrito. */
+  awaitingResumeAnyInput: boolean;
+  /** RODADA 7 (2026-09-10), achado 1 — o piso ATUAL de scan, mutável
+   * (ao contrário do que a RODADA 6 assumiu — ver o histórico abaixo).
+   * Setado a `Date.now()` na criação da entry. `rearmSessionWatch` é o
+   * único lugar que o reatribui, sempre com o `floorMs` que
+   * `decideRearmOnLine` calculou (ver `write` abaixo).
+   *
+   * Histórico — RODADA 6 (2026-09-10), achado 2: antes daquela rodada,
+   * `rearmSessionWatch` passava `Date.now()` (o momento do REARM) como
+   * piso a cada chamada — o piso avançava sempre. Cenário real: `POLL_MS`
+   * é 1500ms e o agy só escreve seu `.db` no submit; dois submits rápidos
+   * (send_to_card dirigindo o card) podem cair na mesma janela de 1.5s —
+   * o segundo rearma com um piso (T2, "agora") MAIOR que o mtime do
+   * arquivo que o PRIMEIRO submit já tinha escrito em disco (T1 < T2), e
+   * `findAntigravitySession`'s `st.mtimeMs <= floor` descarta esse
+   * arquivo como "pré-existente" — sessão órfã. A RODADA 6 corrigiu isso
+   * fixando o piso no momento do SPAWN, pra sempre, imutável.
+   *
+   * RODADA 7, achado 1 (reviewer contra a própria recomendação da RODADA
+   * 6) — um piso fixo no spawn é um sequestro de sessão externa esperando
+   * pra acontecer: um card ocioso por 2h, alguém abre um `agy`/`claude`
+   * NUM TERMINAL FORA do Stellar no mesmo cwd, e uma única linha digitada
+   * no card do Stellar depois disso rearma buscando qualquer arquivo com
+   * `mtime > T_spawn` (horas atrás) — a sessão externa, criada há 1h,
+   * bate o critério e é reivindicada na hora. Trocamos uma corrida de
+   * 1.5s por uma de horas. A regra certa distingue os dois casos por UMA
+   * coisa: existe um watcher REALMENTE em voo agora (`entry.stopWatch !==
+   * null`) no momento do rearm? Em voo (os dois submits rápidos — o
+   * anterior ainda está polando, não expirou) → mantém o piso atual, só
+   * estende o PRAZO. Sem nada em voo (expirou de tanto ficar ocioso, ou
+   * nunca existiu) → um piso NOVO em `Date.now()`, porque isto é de fato
+   * uma tentativa nova, e tudo que nasceu durante a ociosidade deve ficar
+   * de fora. Só é possível confiar em `stopWatch !== null` como esse
+   * sinal agora que `watchForSession` (session-watch.ts) tem seu próprio
+   * `onTimeout` — antes, uma expiração por prazo deixava `stopWatch` com
+   * uma função obsoleta, indistinguível de "ainda vivo". */
+  scanFloorMs: number;
+  /** RODADA 7 (2026-09-10), achado 2 — o id de sessão que ESTE card tem
+   * reivindicado agora (`claimSessionId`, session-watch.ts), ou `null`
+   * antes de qualquer claim. `claimSessionId` nunca teve um "pop": um
+   * card que troca de sessão via `/resume` reivindicava a NOVA id (dentro
+   * de `watchForSession`) mas a ANTIGA, agora abandonada, ficava
+   * reivindicada pra sempre neste processo — nenhum card futuro
+   * conseguiria descobrir aquele arquivo de novo. Rastreado por-entry
+   * (não globalmente) porque cada id só pertence a UM card de cada vez —
+   * é exatamente essa exclusividade que deixa seguro liberar SÓ o id que
+   * este mesmo campo guardava antes, no callback de sucesso de um rearm
+   * por trigger (`rearmSessionWatch`), nunca um id arbitrário. */
+  claimedSessionId: string | null;
 };
 
 /** Achado ao vivo (2026-09-01): "se eu trocar de sessão os terminais e
@@ -277,13 +380,25 @@ export function createPtyRegistry(registryOpts: {
       // `cardMcpUrl` logo acima (que já vai carimbado) é outra coisa — a
       // flag efêmera do claude/codex.
       AGENT_CANVAS_MCP_URL: registryOpts.mcpUrl,
-      // O binário do próprio Electron, para os shims de `resources/bin`
-      // (2026-09-08). Os dois são scripts JS e precisam de um
-      // interpretador: `node` no PATH era a única forma, e num `.app`
-      // aberto pelo Finder no macOS não há `node` no PATH do app. Os
-      // shims agora re-executam este caminho com `ELECTRON_RUN_AS_NODE`.
-      // Chega até eles por herança: PTY → CLI do provider → shim.
-      AGENT_CANVAS_NODE: process.execPath,
+      // Interpretador para os shims de `resources/bin` (`stellar-mcp`,
+      // `acbridge`) rodarem (2026-09-08). Preferência (2026-09-09):
+      // `realNodePath()` — um `node` real e JÁ VALIDADO (achado no PATH
+      // efetivo, major >= MIN_REAL_NODE_MAJOR confirmada por execução
+      // real, não só por existência do arquivo; ver
+      // user-env.ts::resolveRealNode e o piso ancorado no que os shims
+      // realmente usam) — porque
+      // reexecutar o binário do Electron como Node custa ~35 MB de RSS a
+      // mais por processo (medido ao vivo nesta máquina: node real 51 MB
+      // vs. Electron+ELECTRON_RUN_AS_NODE 86 MB), e cada card do board
+      // carrega um `stellar-mcp` de longa vida. O fallback para
+      // `process.execPath` continua existindo porque `node` pode
+      // simplesmente não estar no PATH — num `.app` aberto pelo Finder no
+      // macOS não há, o mesmo motivo pelo qual o shebang `#!/usr/bin/env
+      // node` do `acbridge` morre nesse cenário — e é por isso que o
+      // binário do Electron precisa seguir sendo o piso que sempre
+      // funciona. Chega aos shims por herança: PTY → CLI do provider →
+      // shim.
+      AGENT_CANVAS_NODE: realNodePath() ?? process.execPath,
       // `effectivePath()` e não `process.env.PATH` (2026-09-08): num
       // `.app` aberto pelo Finder no macOS, o PATH herdado é o mínimo do
       // launchd, e era ELE que todo PTY do board recebia — nenhum agente
@@ -305,6 +420,13 @@ export function createPtyRegistry(registryOpts: {
       return { error: "spawn_failed", providerId };
     }
 
+    // RODADA 6, achado 2 (nome atualizado na RODADA 7 — ver `scanFloorMs`
+    // no `Entry`) — capturado UMA vez e reaproveitado tanto no piso
+    // inicial da entry quanto na primeira chamada de `watchForSession`
+    // abaixo, pra não ter dois `Date.now()` levemente diferentes fingindo
+    // ser "o mesmo instante do spawn".
+    const spawnedAtMs = Date.now();
+
     const entry: Entry = {
       proc,
       cols,
@@ -316,10 +438,27 @@ export function createPtyRegistry(registryOpts: {
       seenUrls: new Set(),
       urlCarry: "",
       killTimer: null,
-      lastActivityAt: Date.now(),
+      lastActivityAt: spawnedAtMs,
       providerId,
       cwd,
       inputLineBuffer: "",
+      // RODADA 5, achado único — um card restaurado (`resumeId` já
+      // conhecido) nunca teve nada a descobrir: já é "resolvido" desde
+      // antes do primeiro `write()`, então nenhuma linha de input deveria
+      // jamais armar um watcher do zero nele (ver o doc comment do campo
+      // em `Entry` acima). Um card fresco começa `false` e vira `true`
+      // assim que o callback de sucesso abaixo (ou o de
+      // `rearmSessionWatch`) rodar.
+      sessionFound: !!spawnOpts.resumeId,
+      // RODADA 7, achado 3 — nunca começa `true`: o modo "qualquer input
+      // rearma" só liga quando um trigger explícito dispara (write()
+      // abaixo), nunca no spawn.
+      awaitingResumeAnyInput: false,
+      scanFloorMs: spawnedAtMs,
+      // RODADA 7, achado 2 — já preenchido quando o card nasce restaurado
+      // (`spawnOpts.resumeId`), pra `rearmSessionWatch` ter o que liberar
+      // no dia em que este card trocar de sessão via `/resume`.
+      claimedSessionId: spawnOpts.resumeId ?? null,
     };
     entries.set(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
@@ -332,10 +471,31 @@ export function createPtyRegistry(registryOpts: {
     // steal this restored card's own in-use session file, since nothing
     // else ever marks it as belonging to someone.
     if (!spawnOpts.resumeId) {
-      entry.stopWatch = watchForSession(providerId, cwd, Date.now(), (sessionId) => {
-        entry.stopWatch = null;
-        registryOpts.onSessionFound(id, sessionId);
-      });
+      entry.stopWatch = watchForSession(
+        providerId,
+        cwd,
+        spawnedAtMs,
+        (sessionId) => {
+          entry.stopWatch = null;
+          entry.sessionFound = true;
+          entry.awaitingResumeAnyInput = false;
+          entry.claimedSessionId = sessionId;
+          registryOpts.onSessionFound(id, sessionId);
+        },
+        // RODADA 7, achado 1 — sem isto, `entry.stopWatch` ficaria com
+        // uma função obsoleta depois de uma expiração natural, e nenhum
+        // rearm futuro saberia distinguir "ainda em voo" de "já morreu".
+        // RODADA 8, achado 3 — `awaitingResumeAnyInput = false` aqui
+        // também: irrelevante NESTE watch específico (nunca começa
+        // `true` no spawn), mas mantém os dois `onTimeout` (este e o de
+        // `rearmSessionWatch`) simétricos e a garantia igual nos dois
+        // lugares — nenhum caminho de expiração deixa o modo pós-resume
+        // preso.
+        () => {
+          entry.stopWatch = null;
+          entry.awaitingResumeAnyInput = false;
+        },
+      );
     } else {
       claimSessionId(spawnOpts.resumeId);
     }
@@ -358,6 +518,37 @@ export function createPtyRegistry(registryOpts: {
       entry.stopWatch?.();
       if (entry.killTimer) clearTimeout(entry.killTimer);
       entry.killTimer = null;
+      // RODADA 9 (2026-09-10), achado único — a contagem de referências da
+      // RODADA 8 (achado 2) resolvia a troca de sessão via `/resume`, mas
+      // nunca liberava a claim de um card FECHADO: `entries.delete` abaixo
+      // já existia, `releaseSessionId` nunca era chamado aqui — todo card
+      // fechado abandonava sua sessão com a contagem > 0 pra sempre no
+      // Map global, invisível pra qualquer watcher novo pelo resto do
+      // uptime do app. O achado 2 da RODADA 7 (id preso pra sempre)
+      // voltando por uma 3ª porta: 1ª vez sem release nenhum, 2ª vez com
+      // release sem refcount, agora com refcount sem decremento no
+      // caminho de morte.
+      //
+      // `proc.onExit` é o ÚNICO lugar que libera — nunca `kill` (abaixo)
+      // — porque é a ÚNICA notificação que dispara exatamente uma vez por
+      // processo real, não importa qual dos caminhos levou até aqui:
+      // saída natural, escalada de sinais do `kill` gracioso (unmount de
+      // card — o único lugar do renderer que mata um PTY, `useTerminal.ts`
+      // — e por extensão troca de board, que só desmonta os cards da
+      // anterior, mesmo caminho), ou o SIGKILL imediato de `killAll` (saída
+      // do app). `kill(immediate: true)` já faz seu próprio
+      // `entries.delete` síncrono (bookkeeping pro `isAlive` responder na
+      // hora, sem esperar o evento assíncrono) — mas isso NUNCA pula este
+      // callback: node-pty ainda dispara `onExit` de verdade quando o
+      // processo (morto pelo SIGKILL que `kill` acabou de mandar) sai, e é
+      // só aqui, com o `entry` fechado por closure (não um
+      // `entries.get(id)`, que a essa altura já pode estar vazio), que a
+      // claim é liberada. Um único ponto de liberação por processo real —
+      // nunca zero, nunca dois — é o que evita tanto o vazamento (não
+      // chamar) quanto o duplo decremento (chamar duas vezes, que
+      // desprotegeria uma sessão com outro card ainda usando — ver o
+      // comentário de `releaseSessionId`, achado 2 da RODADA 8).
+      if (entry.claimedSessionId) releaseSessionId(entry.claimedSessionId);
       // O ÚNICO lugar que remove uma entrada. `kill` abaixo não remove
       // mais por conta própria: enquanto o processo não sai de verdade,
       // ele continua no registry e `isAlive` continua dizendo a verdade.
@@ -372,32 +563,150 @@ export function createPtyRegistry(registryOpts: {
   // Achado ao vivo (2026-09-07) — ver RESUME_TRIGGER_COMMANDS em
   // session-watch.ts: cap curto porque um trigger reconhecido é sempre um
   // slash command curto; nunca deixa entrada binária/colada sem quebra de
-  // linha crescer o buffer pra sempre.
+  // linha crescer o buffer pra sempre. Reaproveitado pro
+  // REARM_ON_INPUT_PROVIDERS tracking (achado 1, RODADA 2/3) sem
+  // aumentar: uma linha de verdade longa (um briefing inteiro de
+  // `send_to_card`) pode ser truncada aqui, mas o único uso desse caminho
+  // é "esta linha tem algum conteúdo não-vazio?" — um fragmento truncado
+  // ainda serve pra essa checagem, então não precisa de um cap maior.
   const MAX_INPUT_LINE_BUFFER = 64;
 
-  function rearmSessionWatch(id: string, entry: Entry) {
-    // Idempotente mesmo se `entry.stopWatch` já tiver parado sozinho (achou
-    // ou deu timeout) — chamar de novo é um no-op seguro.
+  /** Review adversarial RODADA 3 (2026-09-09), achado 1 — confirmadamente
+   * idempotente e seguro pra chamar em toda linha de input, não só uma
+   * vez: `entry.stopWatch?.()` sempre cancela o watch anterior (seu
+   * `clearInterval`/`clearTimeout` internos, ver `watchForSession`)
+   * ANTES de armar um novo, mesmo se o anterior já tiver parado sozinho
+   * (achou ou deu timeout) — nunca vaza timer, nunca empilha um segundo
+   * poller rodando em paralelo com o novo.
+   *
+   * RODADA 6 (2026-09-10), achado 3 — a RODADA 5 tinha aqui um
+   * `if (entry.sessionFound) return;` como "defesa em profundidade".
+   * Removido: com o fix do achado 1 daquela rodada (`write()`/
+   * `decideRearmOnLine`), o único chamador já GARANTE `entry.sessionFound
+   * === false` em toda chamada — pelo ramo automático (só chama quando já
+   * era `false`) ou pelo trigger explícito (`write()` zera o campo ANTES
+   * de chamar, nunca depois). Um guard que nunca mais executa é comentário
+   * disfarçado de código; se um novo chamador aparecer no futuro violando
+   * essa garantia, é ELE que precisa decidir, não esta função adivinhar.
+   *
+   * `floorMs` — RODADA 7, achado 1 — o piso que `write()`/
+   * `decideRearmOnLine` decidiu pra ESTA chamada (ver o doc comment de
+   * `Entry.scanFloorMs` pro histórico completo: piso fixo no spawn foi a
+   * recomendação da RODADA 6, e sequestrava sessão externa depois de um
+   * card ficar ocioso por horas — a regra certa é "reusa o piso atual só
+   * se um watcher ainda estava em voo, senão recalcula a partir de
+   * agora"). Persistido de volta em `entry.scanFloorMs` AQUI, não em
+   * `write()` — este é o único lugar que de fato liga um watcher novo,
+   * então é o único lugar que sabe com certeza qual piso passou a valer. */
+  function rearmSessionWatch(id: string, entry: Entry, floorMs: number) {
     entry.stopWatch?.();
-    entry.stopWatch = watchForSession(entry.providerId, entry.cwd, Date.now(), (sessionId) => {
-      entry.stopWatch = null;
-      registryOpts.onSessionFound(id, sessionId);
-    });
+    entry.scanFloorMs = floorMs;
+    entry.stopWatch = watchForSession(
+      entry.providerId,
+      entry.cwd,
+      floorMs,
+      (sessionId) => {
+        entry.stopWatch = null;
+        entry.sessionFound = true;
+        entry.awaitingResumeAnyInput = false;
+        // RODADA 7, achado 2 — libera o id ANTIGO deste card (se algum),
+        // só depois de confirmar que um novo já tomou seu lugar, nunca
+        // antes (enquanto o `/resume` ainda está em aberto no picker, o
+        // card continua efetivamente usando a sessão velha, cancelável).
+        if (entry.claimedSessionId && entry.claimedSessionId !== sessionId) {
+          releaseSessionId(entry.claimedSessionId);
+        }
+        entry.claimedSessionId = sessionId;
+        registryOpts.onSessionFound(id, sessionId);
+      },
+      // RODADA 8, achado 3 — sem `awaitingResumeAnyInput = false` aqui,
+      // um `/resume` abandonado (Esc no picker, nunca confirmado) deixava
+      // `awaiting = true` e `sessionFound = false` presos pro resto da
+      // vida do card: TODO input dali em diante (mesmo conversa normal,
+      // nada a ver com resume) cairia no ramo automático de
+      // `decideRearmOnLine` e levantaria um poller de 30s inteiro à toa
+      // — o poller eterno da RODADA 5 reaberto por outra porta. Esta é a
+      // expiração que de fato acontece nesse cenário (o watcher que o
+      // trigger armou simplesmente não achou nada dentro do prazo), então
+      // é aqui, não no `onTimeout` do spawn acima, que o achado realmente
+      // se fecha.
+      () => {
+        entry.stopWatch = null;
+        entry.awaitingResumeAnyInput = false;
+      },
+    );
   }
 
   function write(id: string, data: string) {
     const entry = entries.get(id);
     if (!entry) return;
-    // Só bufferiza/checa pra providers com um trigger confirmado — ver o
-    // doc de RESUME_TRIGGER_COMMANDS pra por que a maioria não tem um ainda.
+    // Bufferiza/checa em dois casos: um trigger de resume confirmado (ver
+    // RESUME_TRIGGER_COMMANDS), ou (review adversarial RODADA 2/3,
+    // 2026-09-09) um provider em REARM_ON_INPUT_PROVIDERS — pra qualquer
+    // outro provider isto não bufferiza nada, mesmo custo zero de antes.
     const trigger = RESUME_TRIGGER_COMMANDS[entry.providerId];
-    if (trigger) {
+    const rearmsOnInput = REARM_ON_INPUT_PROVIDERS.includes(entry.providerId);
+    // RODADA 7, achado 3 — `entry.awaitingResumeAnyInput` (abaixo) faz
+    // QUALQUER linha rearmar, mesmo num provider sem `rearmsOnInput`
+    // próprio (o caso do achado: claude) — mas NÃO precisa entrar neste
+    // `if` como uma 3ª condição: só liga (`decideRearmOnLine`'s
+    // `enterAwaitingResumeAnyInput`) dentro do ramo do trigger explícito,
+    // que já exige `trigger` truthy — e `trigger` é estático por
+    // providerId, então pra QUALQUER entry ele nunca muda de valor entre
+    // chamadas. Ou seja: sempre que `awaitingResumeAnyInput` puder ser
+    // `true`, `trigger` já é (e continua sendo) `true` pra esse mesmo
+    // provider — checá-lo de novo aqui seria uma condição que nunca muda
+    // o resultado, código morto disfarçado de defesa.
+    if (trigger || rearmsOnInput) {
       entry.inputLineBuffer += data;
       let newlineIdx: number;
+      // RODADA 7, achado 1 — um `Date.now()` só, reaproveitado por TODAS
+      // as linhas deste `write()` (um paste multi-linha pode conter
+      // várias) — a diferença de alguns microssegundos entre linhas do
+      // mesmo `write()` é irrelevante pro piso, e usar o MESMO valor
+      // evita qualquer ambiguidade sobre "qual now" uma linha específica
+      // viu.
+      const nowMs = Date.now();
       while ((newlineIdx = entry.inputLineBuffer.search(/[\r\n]/)) !== -1) {
         const line = entry.inputLineBuffer.slice(0, newlineIdx).trim();
         entry.inputLineBuffer = entry.inputLineBuffer.slice(newlineIdx + 1);
-        if (line === trigger) rearmSessionWatch(id, entry);
+        // RODADA 6, achado 1 (correção de regressão da RODADA 5) — a
+        // decisão distingue os DOIS caminhos, que são coisas diferentes:
+        // o trigger EXPLÍCITO (`/resume`) sempre rearma, mesmo com a
+        // sessão já resolvida — é o usuário pedindo pra TROCAR — e por
+        // isso também ZERA `sessionFound` (`resetSessionFound`, aplicado
+        // ANTES de rearmar, nunca depois) e LIGA o modo "qualquer input
+        // rearma" (RODADA 7, achado 3, `enterAwaitingResumeAnyInput`); o
+        // ramo AUTOMÁTICO (`rearmsOnInput` OU já dentro desse modo)
+        // continua obedecendo `sessionFound` como antes.
+        //
+        // Achado 1, RODADA 3 — TODA linha não-vazia rearma, não só a
+        // primeira (pelo ramo automático, enquanto a sessão não tiver
+        // sido achada): uma rodada anterior rearmava uma vez só (guardado
+        // por uma flag por-card), o que reiniciava o relógio cedo demais
+        // numa colagem multi-linha (shift+enter) e podia expirar de novo
+        // antes do submit final — a mesma classe de bug que esta correção
+        // existe pra fechar, só adiada. "A janela conta a partir da
+        // última atividade real do card" é a semântica pedida — barato o
+        // bastante pra rodar em toda linha (`rearmSessionWatch` é
+        // idempotente, ver seu doc comment), sem flag de "já vi a
+        // primeira" nenhuma. `line.length > 0` continua excluindo um
+        // Enter vazio (não conta como atividade real).
+        const decision = decideRearmOnLine({
+          line,
+          trigger,
+          rearmsOnInput,
+          sessionFound: entry.sessionFound,
+          awaitingResumeAnyInput: entry.awaitingResumeAnyInput,
+          watcherInFlight: entry.stopWatch !== null,
+          currentFloorMs: entry.scanFloorMs,
+          nowMs,
+        });
+        if (decision.action === "rearm") {
+          if (decision.resetSessionFound) entry.sessionFound = false;
+          if (decision.enterAwaitingResumeAnyInput) entry.awaitingResumeAnyInput = true;
+          rearmSessionWatch(id, entry, decision.floorMs);
+        }
       }
       if (entry.inputLineBuffer.length > MAX_INPUT_LINE_BUFFER) {
         entry.inputLineBuffer = entry.inputLineBuffer.slice(-MAX_INPUT_LINE_BUFFER);

@@ -79,6 +79,32 @@ type Entry = {
    * entre `attachInspector`/`detachInspector` (mount/unmount do
    * `BrowserInspector.tsx`), nunca durante a vida inteira do card. */
   cdp: CdpSession | null;
+  /** Pendentes #188 (UA+touch) — UA de ORIGEM do `webContents`, guardado
+   * na hora em que a emulação mobile liga pela primeira vez (via
+   * `wc.getUserAgent()`, nunca reconstruído). `null` quando não há
+   * override ativo — dobra como flag de "emulação mobile está ligada
+   * agora" (ver `setDeviceEmulation`), pra restaurar o UA exato de antes
+   * ao desligar em vez de adivinhar um default. */
+  originalUserAgent: string | null;
+  /** Review adversarial, achado 1 (2026-09-09) — contagem de uso do
+   * domínio `Network` na sessão CDP. Dois consumidores independentes
+   * podem querer `Network` habilitado ao mesmo tempo: a aba Network do
+   * inspector embutido (`BrowserInspector.tsx`, liga sob demanda quando a
+   * aba abre, NUNCA desliga — ver doc comment do módulo `browser-cdp.ts`,
+   * "Network/Debugger/Profiler habilitam sob demanda") e o override de
+   * client hints da emulação mobile (`applyMobileCdpOverrides` abaixo,
+   * que também depende de `Network` habilitado). Sem contagem, desligar
+   * a emulação mobile enquanto a aba Network está aberta derrubaria o
+   * monitoramento de rede do usuário por baixo dos panos; SEM desligar
+   * nunca, a sessão fica com eventos de rede atravessando o IPC pro resto
+   * da vida do card, sem ninguém consumindo, sempre que a emulação mobile
+   * ligou pelo menos uma vez — o próprio modelo "sob demanda" que
+   * `EAGER_DOMAINS` estabelece. `sendCdp`/`applyMobileCdpOverrides` são
+   * os dois únicos pontos que tocam `Network.enable`/`Network.disable` —
+   * ambos passam por `trackedNetworkSend` abaixo. Zerado em
+   * `detachInspector` (sessão nova começa sem nenhum domínio habilitado,
+   * a contagem da sessão anterior não faz sentido nela). */
+  networkEnableRefs: number;
 };
 
 // Pre-release audit P2 — every visible browser card painted at the same
@@ -94,6 +120,14 @@ type Entry = {
 // JPEG por frame.
 const FOCUSED_FRAME_RATE = 60;
 const UNFOCUSED_FRAME_RATE = 8;
+
+/** Pendentes #188 (UA+touch) — `maxTouchPoints` reportado a
+ * `navigator.maxTouchPoints` enquanto a emulação mobile está ligada. 5 é
+ * o valor que o próprio device toolbar do Chrome usa pros presets de
+ * celular (não há um "certo" universal; só precisa ser >0 pras media
+ * features `pointer: coarse`/`hover: none` e pro `maxTouchPoints`-sniffing
+ * de sites ligarem o caminho touch). */
+const MOBILE_TOUCH_POINTS = 5;
 
 // Supersample fixo, pedido explícito do usuário (2026-09-02: "mandar
 // renderizar o triplo da resolução e aumentar para escala 1:1") — ver o
@@ -240,8 +274,9 @@ export function ipv4Octets(host: string): [number, number, number, number] | nul
  *
  * O critério não é "é o localhost", é "nenhuma autoridade emite
  * certificado para este nome": loopback, faixas privadas (RFC 1918),
- * link-local, ULA de IPv6, mDNS `.local` e nome de rótulo único NÃO
- * numérico, que por definição não é resolvível na internet pública.
+ * link-local, ULA de IPv6, os sufixos não delegáveis de `LOCAL_SUFFIXES`
+ * e nome de rótulo único NÃO numérico, que por definição não é
+ * resolvível na internet pública.
  *
  * Isto não afrouxa a segurança da navegação: a rejeição de `javascript:`/
  * `file:`/`data:`/`blob:`/`vbscript:` em `normalizeUrl` é o que impede uma
@@ -255,6 +290,45 @@ export function ipv4Octets(host: string): [number, number, number, number] | nul
  * primeira navegação em claro para um host que o usuário digitou sem
  * esquema, que o próprio site corrige por redirect ou HSTS.
  */
+/**
+ * Sufixos que NUNCA podem ser delegados na internet pública e portanto
+ * nunca podem ter certificado TLS público — o que os torna, por
+ * definição, endereços de rede local.
+ *
+ * Pergunta do usuário que expôs o buraco (2026-09-08): "não terá problema
+ * em abrir http para testes locais?". Tinha: a versão anterior só
+ * reconhecia `localhost` e `.local`, então `servidor.lan:8080`,
+ * `nas.home:8080`, `box.internal:3000`, `api.test:8080` e
+ * `dev.home.arpa:8080` iam todos para `https` e falhavam no handshake.
+ * É justamente a categoria "endereço de teste local".
+ *
+ * Isto é uma LISTA, não uma regra derivável, e é por isso que não saiu
+ * junto com a checagem de faixa de IP: cada entrada tem uma fonte.
+ *
+ *   localhost, test, invalid, example  RFC 6761, reservados
+ *   local                              mDNS, RFC 6762
+ *   home.arpa                          RFC 8375, redes domésticas
+ *   internal                           reservado pela ICANN (2024) para
+ *                                      uso privado
+ *   lan, home, localdomain, intranet,  nunca delegáveis; é o que
+ *   corp, private                      roteador e AD entregam na prática
+ */
+const LOCAL_SUFFIXES = [
+  "localhost",
+  "local",
+  "test",
+  "invalid",
+  "example",
+  "home.arpa",
+  "internal",
+  "lan",
+  "home",
+  "localdomain",
+  "intranet",
+  "corp",
+  "private",
+];
+
 export function isLocalHostname(raw: string): boolean {
   // Descarta credenciais, porta, caminho, query e fragmento — sobra o host.
   const authority = raw.replace(/^\/\//, "").split(/[/?#]/)[0];
@@ -267,9 +341,8 @@ export function isLocalHostname(raw: string): boolean {
   if (host.endsWith(".") && host !== ".") host = host.slice(0, -1);
   if (host === "") return false;
 
-  if (host === "localhost" || host.endsWith(".localhost")) return true;
-  // mDNS, e o nome que o Docker publica para o host.
-  if (host.endsWith(".local") || host === "host.docker.internal") return true;
+  if (host === "host.docker.internal") return true;
+  if (LOCAL_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) return true;
 
   if (host.includes(":")) {
     if (host === "::1" || host === "::") return true;
@@ -325,6 +398,47 @@ export function normalizeUrl(raw: string): string {
   if (scheme === "about") throw new Error("unsupported url scheme");
   if (scheme && t.includes("://")) throw new Error("unsupported url scheme");
   return `${isLocalHostname(t) ? "http" : "https"}://${t}`;
+}
+
+/** Pendentes #188, opção intermediária (device emulation UA+touch) —
+ * achado ao vivo (investigação read-only anterior, com teste empírico):
+ * abrir google.com no device frame (390×622, DPR 3x) renderiza o layout
+ * DESKTOP dentro do frame estreito porque o Google decide o HTML pelos
+ * headers `User-Agent`/`Sec-CH-UA-Mobile` — confirmado que, com UA mobile,
+ * o Google entrega o HTML mobile (com `meta viewport`). Redimensionar o
+ * viewport depois disso (o que `setDeviceEmulation` abaixo já faz certo)
+ * não transforma nada — o HTML já veio errado do servidor.
+ *
+ * `buildMobileUserAgent` deriva um UA mobile a PARTIR do UA desktop real
+ * do Chromium embutido (`wc.getUserAgent()`), em vez de um UA mobile fixo
+ * hardcoded — assim o `Chrome/N` sempre bate com a versão de verdade
+ * embutida no Electron desta build, sem precisar acompanhar upgrades de
+ * Electron manualmente. Mesma técnica que o device toolbar do Chrome real
+ * usa: troca o token de plataforma pelo de um Android real e insere
+ * " Mobile" antes do `Safari/537.36` final (é essa palavra "Mobile" no UA
+ * que sites que fazem sniffing por regex geralmente procuram).
+ *
+ * Sozinha, esta função NÃO cobre Client Hints (`Sec-CH-UA-Mobile`/
+ * `Sec-CH-UA-Platform`) — `wc.setUserAgent` só troca o header `User-Agent`,
+ * os hints vêm de metadata interna do embedder, não são parseados da
+ * string (achado inicial desta tarefa, a partir da ausência de qualquer
+ * parâmetro de client hints em `webContents.setUserAgent` no
+ * `electron.d.ts` desta versão). Correção do dono do repo: isso mata o
+ * propósito da mudança se um site priorizar o hint sobre a string — ver
+ * `applyMobileCdpOverrides` abaixo, que fecha essa lacuna via CDP
+ * (`Network.setUserAgentOverride`) quando há sessão CDP anexada. */
+export function buildMobileUserAgent(desktopUserAgent: string): string {
+  const withAndroidPlatform = desktopUserAgent.replace(/\([^)]*\)/, "(Linux; Android 13; Pixel 7)");
+  if (/(^|\s)Mobile(\s|$)/.test(withAndroidPlatform)) return withAndroidPlatform;
+  if (/ Safari\//.test(withAndroidPlatform)) return withAndroidPlatform.replace(/ Safari\//, " Mobile Safari/");
+  // Review adversarial, achado 4 (2026-09-09) — sem `Safari/` no UA (motor
+  // não-WebKit, ou string atípica), o `replace` acima é um no-op e a
+  // palavra "Mobile" nunca aparece em lugar nenhum — existe backend que
+  // decide só por essa palavra estar presente (a mesma premissa que
+  // justifica esta função inteira, ver doc comment acima), então o
+  // fallback PRECISA garanti-la de algum jeito em vez de desistir
+  // silenciosamente: acrescenta no final.
+  return `${withAndroidPlatform} Mobile`;
 }
 
 /**
@@ -561,7 +675,7 @@ export function createBrowserRegistry(callbacks: {
       });
     });
 
-    entries.set(id, { win, visible: true, scaleFactor, console: [], network: [], cdp: null });
+    entries.set(id, { win, visible: true, scaleFactor, console: [], network: [], cdp: null, originalUserAgent: null, networkEnableRefs: 0 });
     // A sessão é a padrão, compartilhada com a janela principal, e o
     // `webRequest` do Electron aceita UM listener por evento por sessão —
     // então o registro é feito uma vez só e despachado por
@@ -627,25 +741,150 @@ export function createBrowserRegistry(callbacks: {
       return { ok: false, error: "Feche o DevTools real antes de abrir o inspector embutido (os dois usam o mesmo protocolo de depuração)." };
     }
     if (!entry.cdp) {
-      entry.cdp = createCdpSession(entry.win.webContents, (method, params) => callbacks.onCdpEvent(id, method, params));
+      entry.cdp = createCdpSession(entry.win.webContents, (method, params) => {
+        // Review adversarial, rodada 3, achado 1 (2026-09-09) — confirmado
+        // no código real (não só por leitura do achado): `browser-cdp.ts`
+        // já escuta `wc.debugger.on("detach", ...)` e forwarda como este
+        // MESMO evento sintético `"__detached__"` por este MESMO callback
+        // (ver doc comment do módulo `browser-cdp.ts`) — a sessão pode
+        // cair por conta PRÓPRIA do Chromium, não só pelo nosso
+        // `detachInspector` (o caso real: DevTools EXTERNO rouba o
+        // protocolo, `browser-cdp.ts`'s doc comment: "abrir DevTools num
+        // webContents com nosso debugger anexado dispara detach sozinho,
+        // não erro"). Ganchado AQUI (no callback que já existe) em vez de
+        // registrar um segundo `wc.debugger.on("detach", ...)` — sem isto,
+        // `entry.networkEnableRefs` ficava preso no valor de antes do
+        // roubo; na reconexão seguinte (`attachInspector` de novo, sessão
+        // NOVA de verdade, domínios todos desabilitados) `trackedNetworkSend`
+        // acharia — errado — que `Network` já estava habilitado por outra
+        // coisa, pularia o `Network.enable` real, e os client hints da
+        // emulação mobile voltariam a não ser aplicados: o bug original da
+        // rodada 1 de volta, sem nenhum sinal de erro.
+        if (method === "__detached__") entry.networkEnableRefs = 0;
+        callbacks.onCdpEvent(id, method, params);
+      });
     }
-    return entry.cdp.attach();
+    const result = await entry.cdp.attach();
+    // Pendentes #188 (UA+touch) — se a emulação mobile já estava ligada
+    // (usuário reabriu o inspector, ou usou "Tentar novamente" depois de
+    // fechar o DevTools real que tinha roubado o debugger), a sessão CDP
+    // nova nasce SEM nada do que uma sessão anterior tinha aplicado —
+    // `Emulation.setTouchEmulationEnabled` E o `Network.setUserAgentOverride`
+    // (client hints) abaixo vivem NA sessão CDP, nenhum dos dois sobrevive
+    // a um attach novo. `entry.originalUserAgent !== null` já É o sinal de
+    // "mobile ativo agora" (ver doc comment do campo), reaproveitado em vez
+    // de duplicar o booleano.
+    if (result.ok && entry.originalUserAgent !== null) {
+      void applyMobileCdpOverrides(entry, entry.originalUserAgent, true);
+    }
+    return result;
   }
 
   /** Chamado no UNMOUNT de `BrowserInspector.tsx` E em `destroy()`/
    * `destroyAll()` abaixo — idempotente nos dois casos, qual dos dois
-   * rodar primeiro não importa. */
-  function detachInspector(id: string): void {
+   * rodar primeiro não importa. Detach sempre INCONDICIONAL de propósito
+   * (achado 2 da rodada 3 cogitou um detach condicional à emulação mobile
+   * pendurada nele e foi revertido): `BrowserInspector.tsx` (~linha 1521)
+   * já desliga UA/dimensões/touch/hints juntos no cleanup de unmount do
+   * painel, comentário no próprio arquivo — sem o painel aberto não sobra
+   * UI pra sair do modo mobile, então a emulação NÃO deve sobreviver ao
+   * fechamento. Não há "zumbi" pra corrigir aqui.
+   *
+   * Ainda assim desliga touch/hints explicitamente ANTES de derrubar a
+   * sessão, em vez de confiar que o Chromium reverte isso sozinho ao
+   * detach (não confirmado) — idempotente com o que `setDeviceEmulation`
+   * já faz pro mesmo card, não importa qual dos dois cleanups roda
+   * primeiro. */
+  async function detachInspector(id: string): Promise<void> {
     const entry = entries.get(id);
     if (!entry?.cdp) return;
+    if (entry.originalUserAgent !== null) {
+      await applyMobileCdpOverrides(entry, entry.originalUserAgent, false);
+    }
     entry.cdp.detach();
     entry.cdp = null;
+    entry.networkEnableRefs = 0;
+  }
+
+  /** Review adversarial, achado 1 (2026-09-09) — `Network.enable` sem um
+   * `Network.disable` correspondente deixava o domínio ligado pro resto da
+   * vida da sessão CDP sempre que a emulação mobile ligasse ao menos uma
+   * vez (eventos de rede atravessando o IPC sem ninguém consumir), E um
+   * `disable` ingênuo ao desligar a emulação derrubaria o monitoramento de
+   * rede do usuário se a aba Network do inspector também tivesse habilitado
+   * o domínio (`BrowserInspector.tsx`, linha ~1146, NUNCA desliga por
+   * conta própria — ver doc comment de `Entry.networkEnableRefs`).
+   * Contagem de uso: incrementa em QUALQUER `Network.enable` (venha da aba
+   * Network ou da emulação mobile), decrementa em `Network.disable`, e só
+   * repassa o comando de verdade pro CDP quando a contagem cruza a
+   * fronteira relevante (0→1 pra habilitar, 1→0 pra desabilitar) — os dois
+   * ÚNICOS pontos deste módulo que tocam esses métodos (`sendCdp`, exposto
+   * ao inspector, e `applyMobileCdpOverrides` abaixo) passam por aqui. */
+  function trackedNetworkSend(entry: Entry, method: "Network.enable" | "Network.disable"): Promise<CdpSendResult> {
+    if (!entry.cdp) return Promise.resolve({ ok: false, error: "CDP session not attached" });
+    if (method === "Network.enable") {
+      entry.networkEnableRefs += 1;
+      if (entry.networkEnableRefs > 1) return Promise.resolve({ ok: true, result: null });
+    } else {
+      entry.networkEnableRefs = Math.max(0, entry.networkEnableRefs - 1);
+      if (entry.networkEnableRefs > 0) return Promise.resolve({ ok: true, result: null });
+    }
+    return entry.cdp.send(method);
   }
 
   async function sendCdp(id: string, method: string, params?: object): Promise<CdpSendResult> {
     const entry = entries.get(id);
     if (!entry?.cdp) return { ok: false, error: "CDP session not attached" };
+    if (method === "Network.enable" || method === "Network.disable") return trackedNetworkSend(entry, method);
     return entry.cdp.send(method, params);
+  }
+
+  /** Pendentes #188 (UA+touch), correção do dono do repo (2026-09-09) —
+   * `wc.setUserAgent` (chamado por `setDeviceEmulation` abaixo, o caminho
+   * BASE, funciona sem CDP nenhum) só troca o header `User-Agent`. Os
+   * client hints de baixa entropia que o Chromium manda em toda requisição
+   * (`Sec-CH-UA-Mobile`, `Sec-CH-UA-Platform`) vêm de metadata interna do
+   * embedder, não da string — um site que priorize o hint sobre a string
+   * (o motivo original desta correção) continuaria vendo `?0`/"Linux" e
+   * serviria desktop mesmo com a string dizendo Android/Mobile. Esta
+   * função é o REFORÇO, só possível com sessão CDP anexada (o inspector
+   * embutido aberto): `Network.setUserAgentOverride` aceita `userAgent`
+   * (mesma string) + `userAgentMetadata`, que é o que de fato ajusta os
+   * client hints (CDP docs, domínio Network — confirmado no protocolo
+   * consultado nesta tarefa, não ao vivo: todo campo de `UserAgentMetadata`
+   * é opcional, "missing optional values will be filled in by the target
+   * with what it would normally use" — por isso só `mobile`/`platform` são
+   * passados, o resto fica a cargo do Chromium).
+   *
+   * `Network.setUserAgentOverride` exige o domínio `Network` habilitado
+   * antes (achado do protocolo consultado nesta tarefa,
+   * ChromeDevTools/devtools-protocol#10: "this is unlike every other
+   * method" — ainda assim true na versão consultada) — por isso passa por
+   * `trackedNetworkSend` (achado 1 acima) em vez de `cdp.send` direto, nos
+   * dois sentidos: habilita ao ligar mobile, desabilita ao desligar (só de
+   * verdade se mais ninguém — a aba Network do inspector — ainda precisar).
+   *
+   * Retorna a Promise (não dispara fire-and-forget) porque `detachInspector`
+   * (achado 2 acima) precisa AGUARDAR o desligamento terminar antes de
+   * derrubar a sessão CDP — `setDeviceEmulation`/`attachInspector` chamam
+   * com `void` quando não precisam esperar.
+   *
+   * Restaurar (`mobile: false`) manda a MESMA `userAgent` de origem sem
+   * `userAgentMetadata` — não confirmado ao vivo que isso reverte os hints
+   * pros valores reais do host (a doc do protocolo não descreve o caminho
+   * de reset explicitamente); é a leitura mais direta da doc consultada,
+   * mas fica registrado como suposição, não fato verificado. */
+  async function applyMobileCdpOverrides(entry: Entry, baseUserAgent: string, mobile: boolean): Promise<void> {
+    if (!entry.cdp?.isAttached()) return;
+    const cdp = entry.cdp;
+    await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: mobile, maxTouchPoints: mobile ? MOBILE_TOUCH_POINTS : 0 });
+    if (mobile) {
+      await trackedNetworkSend(entry, "Network.enable");
+      await cdp.send("Network.setUserAgentOverride", { userAgent: buildMobileUserAgent(baseUserAgent), userAgentMetadata: { mobile: true, platform: "Android" } });
+    } else {
+      await cdp.send("Network.setUserAgentOverride", { userAgent: baseUserAgent });
+      await trackedNetworkSend(entry, "Network.disable");
+    }
   }
 
   /** Pendentes #188 — "modo responsivo real" pro mini-inspector embutido
@@ -681,8 +920,61 @@ export function createBrowserRegistry(callbacks: {
       // abaixo). Restaurar às cegas aqui SEM saber o `w`/`h` atual do
       // card deixaria o content size (mudado abaixo, pro tamanho do
       // preset) sem zoom nenhum compensando.
+      //
+      // Pendentes #188 (UA+touch) — o UA/touch/client-hints, ao contrário
+      // do content size, PRECISAM ser desfeitos aqui: se ninguém desligar,
+      // a página fica presa servida como mobile (UA+hints) e reportando
+      // touch dentro de um card agora desktop. Restaura o UA de ORIGEM
+      // guardado (nunca reconstruído) e recarrega — sem reload a página já
+      // rodando com JS/CSS de layout mobile não vira desktop sozinha,
+      // mesmo o próximo request já saindo com o UA certo. `baseUA` é lido
+      // ANTES de zerar `entry.originalUserAgent` — `applyMobileCdpOverrides`
+      // abaixo precisa da string de origem mesmo depois do campo já
+      // refletir "mobile desligado".
+      if (entry.originalUserAgent !== null) {
+        const baseUA = entry.originalUserAgent;
+        wc.setUserAgent(baseUA);
+        entry.originalUserAgent = null;
+        wc.reload();
+        void applyMobileCdpOverrides(entry, baseUA, false);
+      }
       return;
     }
+    // Pendentes #188 (UA+touch) — `params.mobile` chegava até aqui e era
+    // IGNORADO (achado do doc comment acima, "modo responsivo real"); é o
+    // sinal natural pra decidir UA+touch+hints, então passa a ser usado. Só
+    // troca o UA (e recarrega) numa TRANSIÇÃO real desktop→mobile ou
+    // mobile→desktop — `entry.originalUserAgent !== null` já significa
+    // "mobile ligado agora" (ver doc comment do campo), então trocar
+    // tamanho/DPR dentro do MESMO estado mobile (ex: girar, DPR, Mobile→
+    // Tablet) não deve recarregar a página nem reenviar CDP à toa a cada
+    // clique — touch e client hints já ficam corretos desde a transição.
+    if (params.mobile && entry.originalUserAgent === null) {
+      const baseUA = wc.getUserAgent();
+      entry.originalUserAgent = baseUA;
+      wc.setUserAgent(buildMobileUserAgent(baseUA));
+      wc.reload();
+      void applyMobileCdpOverrides(entry, baseUA, true);
+    } else if (!params.mobile && entry.originalUserAgent !== null) {
+      const baseUA = entry.originalUserAgent;
+      wc.setUserAgent(baseUA);
+      entry.originalUserAgent = null;
+      wc.reload();
+      void applyMobileCdpOverrides(entry, baseUA, false);
+    }
+    // Touch (`setTouchEmulationEnabled`, liga `navigator.maxTouchPoints` e
+    // as media features `pointer: coarse`/`hover: none`) só na TRANSIÇÃO
+    // acima, dentro de `applyMobileCdpOverrides` — DE PROPÓSITO sem
+    // `setEmitTouchEventsForMouse`: esse segundo sintetizaria eventos de
+    // toque a PARTIR do mouse, o que arrisca degradar rolagem por wheel e
+    // seleção de texto no card (ver briefing da tarefa) — risco que só se
+    // prova com o app aberto, e sem ganho aqui: o objetivo é o
+    // layout/servidor mobile, não interação por toque de verdade num card
+    // que só recebe mouse/teclado do host. Se o CDP ainda não tinha anexado
+    // na hora da transição (corrida com `attachInspector`, ou DevTools real
+    // roubou o debugger), `attachInspector` acima reaplica isto assim que
+    // (re)anexar — `entry.originalUserAgent` já reflete o estado mobile
+    // nessa hora.
     // Achado ao vivo (2026-09-07, pedido explícito do usuário: "espero que
     // o size de resolução seja de verdade"): até aqui `deviceScaleFactor`
     // era só um número decorativo no dropdown de DPR — `setContentSize`

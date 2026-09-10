@@ -23,8 +23,19 @@ export type SpawnOpts = {
    * with a warning, never actually running the one asked for). `model`
    * stays a plain string on purpose (every other provider only ever takes
    * one) — this is additive and provider-specific, `undefined` for every
-   * provider whose `buildArgs` doesn't read it. */
-  effort?: "low" | "high";
+   * provider whose `buildArgs` doesn't read it.
+   *
+   * 2026-09-09 (DESIGN-BACKLOG.md §2.1, real cost to the repo's owner) —
+   * `claude`'s `buildArgs` below now reads this too: confirmed live via
+   * `claude --help` (not assumed) that it has its own `--effort <level>`
+   * flag, `low|medium|high|xhigh|max` — a wider range than antigravity's
+   * low/high. Widened from `"low" | "high"` to plain `string` (review
+   * adversarial, same day, achado 2) so a card resumed with a value
+   * outside the app's own low/high write path (e.g. claude's `medium`)
+   * round-trips through here unmolested instead of the type forcing a
+   * lossy coercion somewhere upstream — see card-types.ts's
+   * `TerminalCardData.effort` doc comment for the full reasoning. */
+  effort?: string;
   /** Internal only — never set by the renderer/IPC caller. Injected by
    * `pty-registry.ts::spawn()` from its own closed-over `mcpUrl` so
    * `buildArgs` below can register the MCP server per-provider without
@@ -76,11 +87,20 @@ export const PROVIDERS: ProviderDef[] = [
     label: "Claude",
     binaryNames: ["claude"],
     installCommand: { posix: "npm install -g @anthropic-ai/claude-code", windows: "npm install -g @anthropic-ai/claude-code" },
-    buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl }) => {
+    buildArgs: ({ resumeId, continueLast, model, effort, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
+      // DESIGN-BACKLOG.md §2.1, 2026-09-09 — real cost to the repo's owner
+      // ("a sessão era um opus medium... voltei como high e custou
+      // muito"): confirmed via `claude --help` (not assumed, see
+      // `SpawnOpts.effort`'s own doc comment) that this flag is real —
+      // `--effort <level>` (low/medium/high/xhigh/max). Sent whenever the
+      // card has one, same as `model` right above — the two are always
+      // read from the same `spawnOpts` object built once in
+      // useTerminal.ts, so neither ever reaches here without the other.
+      if (effort) args.push("--effort", effort);
       // claude is the only provider with a system-prompt flag, so it's the
       // only one that gets a real (if best-effort) hint about acbridge —
       // codex/cursor have no equivalent hook and stay undocumented to the
@@ -207,6 +227,16 @@ export const PROVIDERS: ProviderDef[] = [
       posix: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
       windows: "irm https://antigravity.google/cli/install.ps1 | iex",
     },
+    // No `low|high` guard HERE on purpose (2026-09-10, DESIGN-BACKLOG.md
+    // §2.1) — the real refusal for an out-of-range antigravity effort
+    // lives centrally in message-bus.ts's `spawn_agent` handler
+    // (`ANTIGRAVITY_EFFORT_VALUES`'s own comment has the full decision),
+    // the one place that validates BEFORE any card/process gets created.
+    // By the time `buildArgs` runs here, that gate has already passed —
+    // duplicating the check would just be a second copy of the same list
+    // to keep in sync, not a second layer of real safety (`effort` isn't
+    // renderer-writable outside that one path — see providers.ts's
+    // `SpawnOpts.effort` doc comment).
     buildArgs: ({ resumeId, continueLast, model, effort }) => {
       const args: string[] = [];
       if (resumeId) args.push("--conversation", resumeId);

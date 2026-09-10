@@ -25,14 +25,32 @@ const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-browser-inspector-device-
 // marcador pequeno EXATAMENTE no centro do viewport 390×844 do preset
 // Mobile (detecta "o clique chegou nas COORDENADAS certas", não só em
 // algum lugar da página) — o teste real do bug de `contentSizeRef` stale.
-const FIXTURE_HTML = `<!doctype html><html><body style="margin:0" onclick="window.__bodyClicked=true">
-  <div id="marker" style="position:absolute;left:calc(50% - 10px);top:calc(50% - 10px);width:20px;height:20px;background:#0f0"
+//
+// Review adversarial, achado 3 (2026-09-09) — `data-gen` é a correção do
+// falso positivo que o poll por reload introduziu: `#marker` da página
+// ANTIGA já existe no DOM no instante em que o poll começa (`wc.reload()`
+// é assíncrono, a página velha só é destruída quando a nova terminar de
+// carregar), então checar só "o marcador existe" aprovava na hora, antes
+// de qualquer navegação de verdade acontecer — sleep frágil trocado por
+// verificação que sempre passa, pior que o problema original. Como o
+// servidor é NOSSO (`http.createServer` abaixo, só deste teste), cada
+// resposta carimba um número que só avança com uma requisição HTTP NOVA
+// de verdade — um sinal que a página velha, por definição, não pode
+// satisfazer (o gravado nela já é fixo). O poll (mais abaixo) espera o
+// `data-gen` do marcador DIVERGIR do valor capturado antes do reload, não
+// só "existir".
+let fixtureGeneration = 0;
+const FIXTURE_HTML = () => {
+  fixtureGeneration += 1;
+  return `<!doctype html><html><body style="margin:0" onclick="window.__bodyClicked=true">
+  <div id="marker" data-gen="${fixtureGeneration}" style="position:absolute;left:calc(50% - 10px);top:calc(50% - 10px);width:20px;height:20px;background:#0f0"
        onclick="event.stopPropagation();window.__markerClicked=true"></div>
 </body></html>`;
+};
 const httpPort = await pickFreePort();
 const server = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "text/html" });
-  res.end(FIXTURE_HTML);
+  res.end(FIXTURE_HTML());
 });
 await new Promise((resolve) => server.listen(httpPort, "127.0.0.1", resolve));
 const fixtureUrl = `http://127.0.0.1:${httpPort}/`;
@@ -65,6 +83,45 @@ async function wrapMeasure(page) {
       })())
     `),
   );
+}
+
+// Pendentes #188 (UA+touch) — ligar emulação mobile agora dispara
+// `wc.reload()` da página embutida (achado empírico: sem reload, o UA
+// mobile só vale a partir do PRÓXIMO request, e a página já carregada com
+// HTML/JS de layout desktop não vira mobile sozinha). Antes desta mudança,
+// nada nesta transição navegava a página de novo — o `setTimeout` fixo que
+// existia aqui era só folga pro React re-renderizar o dock, nunca precisou
+// esperar uma navegação de verdade. Corrigido no TESTE (não no código de
+// produção, que continua correto): mesmo padrão de poll com timeout já
+// usado em `smoke-files-live-watch.mjs`'s `waitFor` e
+// `smoke-browser-inspector-sources.mjs`'s `waitForContentIncluding`, só
+// que apontando pro `window.browser.evalJs` (a página EMBUTIDA no
+// offscreen `webContents`, não a página externa do app que `page.evalJs`
+// alcança) — poll pelo estado que realmente importa (o marcador da
+// fixture reapareceu no DOM pós-reload / o clique síncrono realmente
+// setou a flag), com timeout, em vez de um sleep fixo cronometrado a
+// olho.
+async function evalInBrowser(page, browserId, expr) {
+  const outer = JSON.parse(
+    await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, ${JSON.stringify(expr)}).then((r) => JSON.stringify(r))`),
+  );
+  if (!outer.ok) throw new Error(`browser evalJs failed: ${outer.error}`);
+  return JSON.parse(outer.result);
+}
+
+async function waitForBrowserJs(page, browserId, expr, timeoutMs = 4000, intervalMs = 100) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if ((await evalInBrowser(page, browserId, expr)) === true) return true;
+    } catch {
+      // transiente — a página embutida pode estar no meio de um reload
+      // (document temporariamente sem o marcador, ou webContents ainda
+      // navegando) quando este poll acerta essa janela.
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
 }
 
 const { check, finish } = makeChecker();
@@ -112,6 +169,12 @@ try {
   await page.click(deviceToggle.x, deviceToggle.y);
   await new Promise((r) => setTimeout(r, 300));
 
+  // Pendentes #188 (UA+touch)/review achado 3 — captura o `data-gen` ANTES
+  // de disparar a transição; é o valor que a página VELHA (ainda no DOM
+  // nesse instante) sempre vai reportar, então o poll abaixo só pode
+  // passar depois que uma navegação de verdade trocar o marcador por um
+  // com `data-gen` diferente.
+  const genBeforeMobile = await evalInBrowser(page, browserId, "document.querySelector('#marker')?.dataset.gen ?? null");
   await page.evalJs(`
     (() => {
       const select = document.querySelector('[data-role="inspector-device-select"]');
@@ -120,7 +183,21 @@ try {
       select.dispatchEvent(new Event('change', { bubbles: true }));
     })()
   `);
-  await new Promise((r) => setTimeout(r, 600));
+  // Pendentes #188 (UA+touch) — esta transição agora recarrega a página
+  // embutida (ver doc comment de `FIXTURE_HTML`/`waitForBrowserJs`); espera
+  // o `data-gen` do marcador MUDAR (não só "existir" — a página antiga
+  // também tem um `#marker`, ver achado 3). Exige `!!m &&` explícito: no
+  // meio da navegação, sem NENHUM `#marker` no DOM, `m?.dataset.gen` seria
+  // `undefined` — e `undefined !== "1"` também é `true`, o mesmo tipo de
+  // falso positivo do achado 3, só que na janela de "página em branco" em
+  // vez da "página velha ainda no DOM". Só conta como sinal um marcador
+  // que EXISTE com um gen diferente do capturado antes do reload.
+  const reloadedAfterMobile = await waitForBrowserJs(
+    page,
+    browserId,
+    `(() => { const m = document.querySelector('#marker'); return !!m && m.dataset.gen !== ${JSON.stringify(genBeforeMobile)}; })()`,
+  );
+  check("a página embutida termina de recarregar (marcador da fixture com um data-gen NOVO) depois de ligar a emulação mobile", reloadedAfterMobile, true);
 
   check("com emulação ativa, o seletor de zoom aparece no device toolbar", await page.evalJs(`!!document.querySelector('[data-role="inspector-zoom-select"]')`), true);
 
@@ -142,14 +219,18 @@ try {
   // emulação, 390×844), este clique cairia fora do marcador de 20×20 no
   // centro exato do viewport emulado.
   await page.click(rect.left + rect.width / 2, rect.top + rect.height / 2);
-  await new Promise((r) => setTimeout(r, 300));
+  // Poll pela flag que o próprio clique seta, em vez de um sleep fixo —
+  // o clique síncrono do Chromium normalmente já refletiria isso quase
+  // instantaneamente, mas nada aqui garante que o dispatch do evento e o
+  // handler inline já rodaram no exato instante de um sleep cronometrado.
+  const markerClicked = await waitForBrowserJs(page, browserId, "!!window.__markerClicked", 2000);
   const clickResult = JSON.parse(
     await page.evalJs(`window.browser.evalJs(${JSON.stringify(browserId)}, "({ marker: !!window.__markerClicked, body: !!window.__bodyClicked })").then((r) => JSON.stringify(r))`),
   );
   const clicked = JSON.parse(clickResult.result);
   check(
     "clique no centro do device-frame chega nas coordenadas CERTAS da página emulada (mapeamento não fica desatualizado)",
-    clicked.marker,
+    markerClicked && clicked.marker,
     true,
   );
 

@@ -874,6 +874,22 @@ function BrowserCardInner({
       return;
     }
 
+    // Atalhos fase A, item 4 (2026-09-09, revisado rodada 3) — só
+    // Ctrl+Plus/Ctrl+Minus nunca chegam até aqui com um card de navegador
+    // focado: main/index.ts's `before-input-event` (na mesma janela
+    // hospedeira — este canvas é DOM real dela, não um WebContentsView
+    // filho) intercepta e dá `preventDefault()` nessas duas ANTES do
+    // keydown ser despachado pra esta página, pra redirecionar o zoom pro
+    // do canvas. Efeito colateral aceito: essas duas deixam de ser
+    // encaminhadas cruas pra dentro da página embutida como qualquer
+    // outro atalho arbitrário (ex.: Ctrl+S, encaminhado normalmente
+    // abaixo) — aceitável porque o card de navegador já tem sua própria
+    // UI de reload/navegação. Ctrl+R/Ctrl+W NÃO são mais interceptados
+    // (rodada 3: um `Menu` próprio em main/index.ts já não tem os roles
+    // que geravam reload/close nativos, então não sobra nada pra
+    // neutralizar em nenhum `before-input-event` — as duas voltaram a
+    // fluir normal pra cá, encaminhadas cruas como qualquer atalho
+    // arbitrário, igual Ctrl+S).
     const keyCode = toElectronKeyCode(e.key);
     if (!keyCode) return;
     e.preventDefault();
@@ -943,106 +959,123 @@ function BrowserCardInner({
       panY={panY}
       headerContent={
         <div className={styles.browserCardAddress} data-role="browser-address">
-          <button onClick={() => window.browser.back(id)}>
-            <Icon name="back" size={12} />
-          </button>
-          <button onClick={() => window.browser.forward(id)}>
-            <Icon name="forward" size={12} />
-          </button>
-          <button onClick={() => window.browser.reload(id)}>
-            <Icon name="reload" size={12} />
-          </button>
-          <input
-            value={bar}
-            onChange={(e) => setBar(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void window.browser.navigate(id, bar);
-            }}
-          />
-          {ownerCardId && (
-            // DESIGN-BACKLOG.md §2.1 Item E — clicável agora: pan/raise
-            // até o card que abriu este navegador (`jumpToCard` via
-            // `onFocusOwner`), não só uma etiqueta informativa.
-            <button
-              className={styles.browserCardOwner}
-              data-role="browser-owner"
-              title={`aberto por card #${ownerCardId} — clique pra ir até lá`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={onFocusOwner}
-            >
-              #{ownerCardId}
+          {/* Pedido ao vivo (2026-09-09, captura em mãos: "os itens
+              poderiam estar espaçados com space-between entre a url e os
+              outros itens, para deixar a url no meio e as ferramentas nos
+              cantos") — `space-between` direto em `.browserCardAddress`
+              NÃO serviria: são 8 filhos diretos hoje (3 nav + input + até
+              4 badges/botões condicionais + 3 fixos), e distribuí-los
+              igualmente não centraliza a URL, só espalha os oito. Os três
+              grupos abaixo (nav / url / tools) são os únicos filhos
+              diretos agora — a URL fica no meio porque o grupo do meio
+              tem `flex: 1`, não porque o container inteiro usa
+              space-between. */}
+          <div className={styles.browserCardNavGroup}>
+            <button onClick={() => window.browser.back(id)}>
+              <Icon name="back" size={12} />
             </button>
-          )}
-          {consoleBadgeCount > 0 && (
-            <span
-              className={styles.browserCardConsoleBadge}
-              data-role="browser-console-badge"
-              data-severity={consoleCounts.error > 0 ? "error" : "warning"}
-              title={`${consoleCounts.error} erro(s), ${consoleCounts.warning} aviso(s) no console`}
-            >
-              {consoleBadgeCount}
-            </span>
-          )}
-          {/* Fecha o Bug E (relatado ao vivo): `emulatedFrame` e
-           * `deviceToolbarOpen` são propositalmente independentes
-           * (esconder a barra ≠ parar a emulação, DESIGN-BACKLOG.md item
-           * 4) — sem isto, não existia NENHUM indicador em lugar nenhum
-           * de que a emulação continuava ativa depois de esconder a
-           * barra ou fechar/reabrir o inspector. Clique reabre o
-           * inspector E revela o device toolbar num clique só (repõe a
-           * descoberta que o botão antigo do address bar dava antes de
-           * mudar de lugar pra dentro do inspector). */}
-          {emulatedFrame && (
-            <button
-              className={styles.browserCardEmulationBadge}
-              data-role="browser-emulation-badge"
-              title={`Emulação de dispositivo ativa (${emulatedFrame.width}×${emulatedFrame.height}) — clique para abrir o inspector`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                if (!inspectorOpen) {
-                  inspectorRequestIdRef.current++;
-                  setInspectorFocusPoint(null);
-                  setInspectorOpen(true);
-                }
-                setDeviceToolbarOpen(true);
+            <button onClick={() => window.browser.forward(id)}>
+              <Icon name="forward" size={12} />
+            </button>
+            <button onClick={() => window.browser.reload(id)}>
+              <Icon name="reload" size={12} />
+            </button>
+          </div>
+          <div className={styles.browserCardUrlGroup}>
+            <input
+              value={bar}
+              onChange={(e) => setBar(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void window.browser.navigate(id, bar);
               }}
+            />
+          </div>
+          <div className={styles.browserCardToolsGroup}>
+            {ownerCardId && (
+              // DESIGN-BACKLOG.md §2.1 Item E — clicável agora: pan/raise
+              // até o card que abriu este navegador (`jumpToCard` via
+              // `onFocusOwner`), não só uma etiqueta informativa.
+              <button
+                className={styles.browserCardOwner}
+                data-role="browser-owner"
+                title={`aberto por card #${ownerCardId} — clique pra ir até lá`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={onFocusOwner}
+              >
+                #{ownerCardId}
+              </button>
+            )}
+            {consoleBadgeCount > 0 && (
+              <span
+                className={styles.browserCardConsoleBadge}
+                data-role="browser-console-badge"
+                data-severity={consoleCounts.error > 0 ? "error" : "warning"}
+                title={`${consoleCounts.error} erro(s), ${consoleCounts.warning} aviso(s) no console`}
+              >
+                {consoleBadgeCount}
+              </span>
+            )}
+            {/* Fecha o Bug E (relatado ao vivo): `emulatedFrame` e
+             * `deviceToolbarOpen` são propositalmente independentes
+             * (esconder a barra ≠ parar a emulação, DESIGN-BACKLOG.md item
+             * 4) — sem isto, não existia NENHUM indicador em lugar nenhum
+             * de que a emulação continuava ativa depois de esconder a
+             * barra ou fechar/reabrir o inspector. Clique reabre o
+             * inspector E revela o device toolbar num clique só (repõe a
+             * descoberta que o botão antigo do address bar dava antes de
+             * mudar de lugar pra dentro do inspector). */}
+            {emulatedFrame && (
+              <button
+                className={styles.browserCardEmulationBadge}
+                data-role="browser-emulation-badge"
+                title={`Emulação de dispositivo ativa (${emulatedFrame.width}×${emulatedFrame.height}) — clique para abrir o inspector`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => {
+                  if (!inspectorOpen) {
+                    inspectorRequestIdRef.current++;
+                    setInspectorFocusPoint(null);
+                    setInspectorOpen(true);
+                  }
+                  setDeviceToolbarOpen(true);
+                }}
+              >
+                <Icon name="viewportMobile" size={12} />
+              </button>
+            )}
+            <button
+              ref={favBtnRef}
+              className={styles.browserCardFavoriteBtn}
+              data-role="browser-favorite-btn"
+              data-active={isFavorited}
+              title={isFavorited ? "Remover dos favoritos" : "Favoritar esta página"}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setFavMenuOpen((v) => !v)}
             >
-              <Icon name="viewportMobile" size={12} />
+              <Icon name="favorite" size={12} />
             </button>
-          )}
-          <button
-            ref={favBtnRef}
-            className={styles.browserCardFavoriteBtn}
-            data-role="browser-favorite-btn"
-            data-active={isFavorited}
-            title={isFavorited ? "Remover dos favoritos" : "Favoritar esta página"}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => setFavMenuOpen((v) => !v)}
-          >
-            <Icon name="favorite" size={12} />
-          </button>
-          <button
-            ref={designBtnRef}
-            className={styles.browserCardDesignBtn}
-            data-role="browser-design-mode-btn"
-            data-active={designMode || undefined}
-            title={designMode ? "Cancelar modo design" : "Modo design — selecionar elemento pra enviar a um agente"}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={toggleDesignMode}
-          >
-            <Icon name="designMode" size={12} />
-          </button>
-          <button
-            ref={menuBtnRef}
-            title="Mais opções"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => setMenuOpen((v) => !v)}
-          >
-            <Icon name="moreVertical" size={12} />
-          </button>
-          <button onClick={onClose}>
-            <Icon name="close" size={12} />
-          </button>
+            <button
+              ref={designBtnRef}
+              className={styles.browserCardDesignBtn}
+              data-role="browser-design-mode-btn"
+              data-active={designMode || undefined}
+              title={designMode ? "Cancelar modo design" : "Modo design — selecionar elemento pra enviar a um agente"}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={toggleDesignMode}
+            >
+              <Icon name="designMode" size={12} />
+            </button>
+            <button
+              ref={menuBtnRef}
+              title="Mais opções"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setMenuOpen((v) => !v)}
+            >
+              <Icon name="moreVertical" size={12} />
+            </button>
+            <button onClick={onClose}>
+              <Icon name="close" size={12} />
+            </button>
+          </div>
         </div>
       }
     >

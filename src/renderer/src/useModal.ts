@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useOccludesChrome } from "./occlusion";
+import { registerModalOpen } from "./modal-scope";
 
 /**
  * D5 — Acessibilidade Padronizada em Modais:
@@ -27,6 +28,10 @@ export function useModal({
 
   useEffect(() => {
     previousActiveElementRef.current = document.activeElement as HTMLElement | null;
+    // Fase B (atalhos) — registra "modal aberto" no MESMO instante do
+    // mount, não no timer de foco abaixo. `modal-scope.ts` explica por que
+    // isso precisa ser síncrono com o efeito, não com o `setTimeout(10)`.
+    const releaseModalScope = registerModalOpen();
 
     const timer = setTimeout(() => {
       if (initialFocusRef?.current) {
@@ -86,6 +91,7 @@ export function useModal({
       clearTimeout(timer);
       window.removeEventListener("keydown", onKeyDown, true);
       previousActiveElementRef.current?.focus?.();
+      releaseModalScope();
     };
   }, [onClose, initialFocusRef, targetContainerRef]);
 
