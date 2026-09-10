@@ -17,6 +17,11 @@ try {
   check("bootIntoFreshSession leaves one bash terminal to work with", initialCount, 1);
 
   // Ctrl+D duplicates the topmost card (the only one there is right now).
+  // Nothing has real keyboard focus yet — a freshly booted terminal never
+  // autofocuses its xterm textarea (useTerminal.ts) — so this exercises
+  // the plain duplicate path; the focus-based EOF-protection guarantee
+  // (item 3) is proven separately right below, after this card exists to
+  // click into.
   await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "d", code: "KeyD", modifiers: 2, windowsVirtualKeyCode: 68 });
   await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "d", code: "KeyD", modifiers: 2, windowsVirtualKeyCode: 68 });
   await new Promise((r) => setTimeout(r, 500));
@@ -32,6 +37,37 @@ try {
     `),
   );
   check("duplicate is also a bash terminal (same provider)", providers.filter((p) => p === "bash").length, 2);
+
+  // Atalhos fase A, item 3 (2026-09-09, revisão pós-review, achado 2) — o
+  // critério NÃO é "existe um card de terminal no topo do z-order" (a
+  // primeira versão fazia isso, e over-bloqueava: até um terminal só
+  // clicado no header, sem foco real de teclado nele, travava Ctrl+D —
+  // achado 2 do review confirmou). É foco REAL: com o textarea interno do
+  // xterm de verdade focado — mesma técnica já validada por
+  // smoke-terminal-copy.mjs, clicar em `[data-role="terminal-body"]`, não
+  // a tag/header — Ctrl+D vira o EOF que o shell recebe (xterm entrega um
+  // `\x04` real pro pty; este clique+Ctrl+D VAI matar aquele shell, o que
+  // é exatamente o comportamento sendo provado, não um efeito colateral
+  // indesejado). O guard genérico de atalho (App.tsx's
+  // `isGlobalShortcutBlocked`, via `document.activeElement`) já trata
+  // TEXTAREA como bloqueado — nenhuma lógica dedicada a "card de
+  // terminal" sobrou no handler de Ctrl+D.
+  const terminalBody = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const el = document.querySelector('[data-role="terminal-body"]');
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + 10, y: r.y + 10 });
+      })()
+    `),
+  );
+  await page.click(terminalBody.x, terminalBody.y);
+  await new Promise((r) => setTimeout(r, 200));
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "d", code: "KeyD", modifiers: 2, windowsVirtualKeyCode: 68 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "d", code: "KeyD", modifiers: 2, windowsVirtualKeyCode: 68 });
+  await new Promise((r) => setTimeout(r, 500));
+  const afterFocusedCtrlD = JSON.parse(await page.evalJs(`JSON.stringify(document.querySelectorAll('.card-frame').length)`));
+  check("Ctrl+D does NOT duplicate while the xterm textarea has real focus (EOF, not a shortcut)", afterFocusedCtrlD, 2);
 
   // 2026-08-27 — "facilitar área de drag, é difícil fazer o drag atual no
   // header": CardTag.tsx's static (non-editing) label used to carry

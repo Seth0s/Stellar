@@ -261,11 +261,14 @@ body {
   border-color: var(--foam);
 }
 
-/* Estado recolhido: sutil e discreto na borda esquerda */
+/* Estado recolhido: sutil e discreto na borda esquerda. Alvo de clique
+   igual ao do estado expandido (18x36) — era 14x30 antes, pequeno demais
+   pro alvo principal de reabrir a rail (item 3); a discrição agora vem só
+   da opacidade reduzida, não do tamanho. */
 .rail-container.is-collapsed .rail-toggle {
   left: 0px;
-  width: 14px;
-  height: 30px;
+  width: 18px;
+  height: 36px;
   border: 1px solid var(--border);
   border-left: none;
   border-radius: 0 6px 6px 0;
@@ -276,12 +279,51 @@ body {
 }
 
 .rail-container.is-collapsed .rail-toggle:hover {
-  width: 18px;
   opacity: 1;
   color: var(--foam);
   border-color: var(--foam);
   background: var(--surface);
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Item 3 — mini-rail: what the collapsed rail becomes instead of just
+   disappearing. Same box as `.rail` (position/size), so it crossfades in
+   exactly where the full rail slides out to, and hides the same way in
+   reverse when expanded — both `position: absolute` inside
+   `.rail-container`, which never changes its own box either way, so the
+   canvas underneath never sees a layout shift. 48px circle: a full,
+   comfortable click target (matches `.rail-btn`'s own row width, not
+   `.rail-toggle`'s much thinner sliver). */
+.rail-mini {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  cursor: pointer;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-70px) scale(0.85);
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease, background-color 0.12s ease, color 0.12s ease;
+}
+
+.rail-container.is-collapsed .rail-mini {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
+}
+
+.rail-mini:hover {
+  background: var(--surface);
+  color: var(--foam);
 }
 
 .popover-header-with-back {
@@ -1590,6 +1632,20 @@ select.resume-input {
   flex: none;
 }
 
+/* Round 3 (fase B, achado 1 do review) — nota de aliases de um atalho
+   (hoje só o par de zoom, `canvas.zoomIn`/`canvas.zoomOut`). Deliberadamente
+   FORA do `<kbd>` acima e da própria `.shortcuts-row` (não texto colado no
+   mesmo `<kbd>`) — ver o doc comment de `formatCombo` em
+   `shortcut-registry.ts` pro porquê: a versão que embutia o alias no `<kbd>`
+   estourava a coluna de ~248px da modal. Prosa comum (não monoespaçada),
+   discreta, sempre visível — nunca um tooltip. */
+.shortcuts-row-alias {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 0 3px 28px;
+  margin-top: -3px;
+}
+
 /* ----------------------------------------------------------- connector */
 
 /* Pendentes #188 — conectores agora carregam `kind` até o render (antes
@@ -1643,9 +1699,38 @@ select.resume-input {
   font-size: 10px;
 }
 
+/* Relatório 2026-09-08 — o × era a ÚNICA forma de apagar um conector
+   (clicar na curva navega pro card de destino; sem menu de contexto nem
+   atalho), então não pode sumir de vez — só fica invisível até o hover do
+   conector, opção escolhida entre as 4 propostas. Puro CSS (hover no
+   `.connector-group` pai, não um estado React) de propósito: efeito
+   visual só, não deve causar re-render a cada movimento do mouse.
+   Achado 4 (review adversarial, 2026-09-09) — CORRIGE uma alegação de
+   qualidade errada da 1ª versão: opacity 0 aqui NÃO desligava hit-test, e
+   `.board-overlay` (topo do arquivo) zera `pointer-events` pra todo esse
+   SVG por padrão — então o × ficava clicável mesmo invisível, apagando um
+   conector à toa num clique acidental no meio da curva. `pointer-events`
+   agora é o que de fato controla isso: `none` enquanto oculto, `auto` só
+   no `:hover` do grupo (via `.connector-hit`, já larga, então o alvo
+   continua alcançável de verdade — hovear a curva já promove o × antes de
+   precisar mirar nele). A prop inline `style={{ pointerEvents: "auto" }}`
+   que o JSX tinha (App.tsx) foi removida — ela vencia qualquer regra CSS
+   por especificidade de inline style, então continuar ali teria anulado
+   esta correção.
+   Lacuna conhecida e não tratada aqui: num ambiente touch (sem :hover de
+   verdade) o × nunca aparece — nenhum toque nesta tela fecha esse buraco;
+   ficaria pra um menu de contexto ou long-press dedicado, fora do escopo
+   deste pedido (app é desktop/mouse hoje, sem card touch-first). */
 .connector-delete {
   cursor: pointer;
-  opacity: 0.5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.connector-group:hover .connector-delete {
+  opacity: 0.6;
+  pointer-events: auto;
 }
 
 .connector-delete:hover {
@@ -1835,12 +1920,20 @@ select.resume-input {
 }
 
 .radial-item {
+  /* Review round 2 — RadialMenu.tsx's `itemSizeFor` sets this (default
+     40px, matching the pre-existing fixed size) when the ring's radius
+     got capped by the viewport near a window edge and the item count no
+     longer fits comfortably at that radius; floored there so it never
+     goes below a still-clickable circle. Width/height/margin all derive
+     from it so the item stays centered on its `--tx`/`--ty` position at
+     any size. */
+  --item-size: 40px;
   position: absolute;
   left: 0;
   top: 0;
-  width: 40px;
-  height: 40px;
-  margin: -20px 0 0 -20px;
+  width: var(--item-size);
+  height: var(--item-size);
+  margin: calc(var(--item-size) / -2) 0 0 calc(var(--item-size) / -2);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1850,7 +1943,7 @@ select.resume-input {
   color: var(--text);
   cursor: pointer;
   box-shadow: var(--shadow-float);
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition: background-color 0.12s ease, color 0.12s ease, width 0.12s ease, height 0.12s ease, margin 0.12s ease;
   transform: translate(var(--tx), var(--ty));
   animation: radial-pop 0.14s ease-out;
 }
@@ -1875,6 +1968,29 @@ select.resume-input {
   border-color: var(--violet);
 }
 
+/* Item 2 — terminal's provider submenu (RadialMenu.tsx): a provider the
+   agent-availability check reports as not installed still shows up (so
+   the ring's shape/count stays predictable), just dimmed and inert
+   rather than removed — same "tell, don't hide" spirit as Topbar.tsx's
+   missing-CLI warning. Kept this way ON PURPOSE against review's own
+   suggestion to hide it for space (RadialMenu.tsx's `renderProviderItems`
+   has the full reasoning): hiding shifts every OTHER provider's angle
+   depending on what's installed on this machine, and a radial menu
+   depends on muscle memory — a dead target beats a moving one. */
+.radial-item--disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.radial-item--disabled:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.radial-item--back {
+  border-color: var(--muted);
+}
+
 .radial-center {
   position: absolute;
   left: -4px;
@@ -1886,19 +2002,22 @@ select.resume-input {
   pointer-events: none;
 }
 
-/* DESIGN-BACKLOG.md item 21, ponto 7 — the arc that tracks the pointer's
-   angle along the ring (RadialMenu.tsx computes the `<path>`). Below the
-   items (z-index-wise, source order) so it reads as a glow along the
-   ring rather than a mark drawn over the buttons; `pointer-events: none`
-   so it never steals a click meant for the item underneath. */
+/* DESIGN-BACKLOG.md item 21, ponto 7 asked for an arc riding the ring
+   (never a straight line to the cursor) — that's what originally shipped
+   here. REVERTED 2026-09-09 (repo owner, see RadialMenu.tsx's file
+   comment for the full history): now a straight line from the center,
+   toward the cursor, clipped at the ring's radius (RadialMenu.tsx
+   computes the `<line>`). Still below the items (z-index-wise, source
+   order) so it reads as a glow rather than a mark drawn over the
+   buttons; `pointer-events: none` so it never steals a click meant for
+   the item underneath. */
 .radial-indicator {
   position: absolute;
   pointer-events: none;
   overflow: visible;
 }
 
-.radial-indicator path {
-  fill: none;
+.radial-indicator line {
   stroke: var(--foam);
   stroke-width: 3px;
   stroke-linecap: round;
@@ -2392,12 +2511,16 @@ select.resume-input {
   scale: 0.96;
 }
 
-/* Modo compacto (Compass.tsx: mais de `COMPACT_THRESHOLD` cards fora da
-   tela ao mesmo tempo) — só o ícone, num botão circular de largura fixa;
-   sem isso, caber muitos chips na mesma fita exigiria medir o rótulo
-   renderizado de verdade. A opacidade (inline, por card) carrega a
-   distância no lugar do selo de anéis, sem gastar largura nenhuma; o
-   nome continua no `title` (tooltip padrão do navegador). */
+/* Modo compacto (Compass.tsx: fita não cabe todos os candidatos no modo
+   completo) — botão circular de largura fixa; sem isso, caber muitos
+   chips na mesma fita exigiria medir o rótulo renderizado de verdade. O
+   conteúdo visual é a SETA girada pro rumo exato (`.compass-arrow-compact`
+   abaixo), decisão do coordenador em 2026-09-09 — antes era só o ícone do
+   tipo de card, sem seta, o que tirava de uma bússola compacta a
+   informação que a define. O tipo de card saiu do visual e foi pro
+   `title`/`aria-label` (tooltip padrão do navegador) junto do nome. A
+   opacidade (inline, por card) continua carregando a distância no lugar
+   do selo de anéis, sem gastar largura nenhuma. */
 .compass-chip-compact {
   width: 26px;
   padding: 0;
@@ -2413,6 +2536,14 @@ select.resume-input {
   align-items: center;
   justify-content: center;
   color: var(--muted);
+}
+
+/* No chip compacto a seta é o ÚNICO conteúdo visual, não um complemento
+   ao lado de ícone+nome como no modo completo — herda a cor de destaque
+   do chip (`--foam`, setada em `.compass-chip-compact`) em vez do
+   `--muted` acima, porque aqui ela É o chip, não um detalhe secundário. */
+.compass-arrow-compact {
+  color: inherit;
 }
 
 .compass-icon {

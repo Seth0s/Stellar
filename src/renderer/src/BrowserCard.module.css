@@ -26,7 +26,13 @@
 .browserCardAddress {
   display: flex;
   align-items: center;
-  gap: 6px;
+  /* Gap ENTRE os três grupos (nav / url / tools) — não mais entre cada
+   * botão individual, já que cada grupo agora tem seu próprio `gap`
+   * interno (ver `.browserCardNavGroup`/`.browserCardToolsGroup` abaixo).
+   * Pedido ao vivo (2026-09-09): URL centralizada, ferramentas nos
+   * cantos — resolvido pelos TRÊS filhos diretos abaixo (não mais os 8
+   * botões/input soltos de antes), com o grupo do meio em `flex: 1`. */
+  gap: 8px;
   width: 100%;
   /* Header responsivo (§2.1) — largura do PRÓPRIO card, não a viewport
    * inteira (um @media normal não serviria: dois cards do mesmo tipo em
@@ -34,6 +40,40 @@
    * 42 já suporta Container Queries nativamente, sem JS/ResizeObserver. */
   container-type: inline-size;
   container-name: browser-header;
+}
+
+/* Grupo de navegação (voltar/avançar/recarregar), à esquerda. `flex: none`
+ * — largura de conteúdo, nunca cresce nem encolhe, igual ao comportamento
+ * de botão individual de antes. */
+.browserCardNavGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* Grupo da URL, no meio — `flex: 1` é quem realmente centraliza a barra
+ * (não um `space-between` no container todo, que com 3+ filhos nunca
+ * colocaria a URL no centro geométrico). O `<input>` em si mantém seu
+ * próprio `flex: 0 1 320px` (ver abaixo) dentro deste grupo, então em
+ * card largo ele para de crescer em 320px e o `justify-content: center`
+ * aqui reparte a sobra igualmente dos dois lados — URL visualmente
+ * centralizada, sem esticar até ficar ilegível/gigante num card grande. */
+.browserCardUrlGroup {
+  display: flex;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Grupo de ferramentas (favoritar/alvo/badges/kebab/fechar), à direita.
+ * Mesma lógica do grupo de navegação — largura de conteúdo, encosta na
+ * ponta direita do header porque o grupo do meio absorve toda a sobra. */
+.browserCardToolsGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
 }
 
 .browserCardAddress button {
@@ -66,8 +106,18 @@
  * borda, sobra espaço vazio no header pros ícones/margem. `flex: 0 1 320px`
  * (não mais `flex: 1`) encolhe normalmente em card estreito (mesmo
  * `flex-shrink` de antes) mas para de ESTICAR além de 320px em card largo
- * — a sobra vira espaço vazio dentro de `.browserCardAddress`, que não bate
- * em nenhum dos seletores do `closest()` acima, logo arrasta normal. */
+ * — a sobra vira espaço vazio, que não bate em nenhum dos seletores do
+ * `closest()` acima, logo arrasta normal.
+ *
+ * Atualizado (2026-09-09, pedido "URL no meio, ferramentas nos cantos") —
+ * o pai imediato agora é `.browserCardUrlGroup` (não mais
+ * `.browserCardAddress` diretamente), com `justify-content: center`. A
+ * sobra de espaço deixou de se acumular só do lado direito (antes do
+ * grupo de ferramentas) e passou a se repartir nos DOIS lados do input,
+ * dentro do grupo do meio — é isso que centraliza a URL visualmente. A
+ * área não-draggable continua sendo só o retângulo do próprio `<input>`
+ * (`closest()` casa no elemento, não no wrapper), então a folga nova dos
+ * dois lados dentro do grupo do meio arrasta normal. */
 .browserCardAddress input {
   flex: 0 1 320px;
   min-width: 0;

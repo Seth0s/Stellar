@@ -13,6 +13,9 @@ export type CardRow = {
   h: number;
   resume_id: string | null;
   model: string | null;
+  /** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" — see
+   * main/store.ts's own `CardRow.effort` doc comment for the full why. */
+  effort: string | null;
   system_prompt: string | null;
   group_id: string | null;
   label: string | null;
@@ -22,7 +25,10 @@ export type CardRow = {
   archived_at: number | null;
 };
 
-type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; effort?: "low" | "high"; systemPrompt?: string };
+// `effort` widened from "low" | "high" to plain string — see
+// main/providers.ts's own `SpawnOpts.effort` doc comment (review
+// adversarial 2026-09-09, achado 2).
+type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; effort?: string; systemPrompt?: string };
 type SpawnResult =
   | { id: string }
   | { error: "binary_not_found"; providerId: string; installCommand: string | null; searchedPath: string }
@@ -183,6 +189,22 @@ const store = {
         cb(fromCardId, toCardId, kind, label);
       ipcRenderer.on("connector:auto", listener);
       return () => ipcRenderer.removeListener("connector:auto", listener);
+    },
+    /** Live push for `set_connector_label` (message-bus.ts) — an agent
+     * updating a connector's label via MCP/acbridge while that board is
+     * open needs the pill to change without a reload. */
+    onConnectorLabelChanged: (cb: (id: string, label: string | null) => void) => {
+      const listener = (_e: unknown, id: string, label: string | null) => cb(id, label);
+      ipcRenderer.on("connector:label-changed", listener);
+      return () => ipcRenderer.removeListener("connector:label-changed", listener);
+    },
+    /** Same for `set_connector_kind` (2026-09-10) — antes disso o cmd
+     * gravava no banco em silêncio e o board aberto só via o kind novo
+     * depois de recarregar. */
+    onConnectorKindChanged: (cb: (id: string, kind: string | null) => void) => {
+      const listener = (_e: unknown, id: string, kind: string | null) => cb(id, kind);
+      ipcRenderer.on("connector:kind-changed", listener);
+      return () => ipcRenderer.removeListener("connector:kind-changed", listener);
     },
   },
   boards: {
@@ -549,9 +571,14 @@ export type SpawnAgentAskParams = {
   depth: number;
   reason?: string;
   model?: string;
-  /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity-only
-   * companion to `model`. */
-  effort?: "low" | "high";
+  /** Sticky item "spawn_agent effort" (2026-09-03) — companion to
+   * `model`. Widened from `"low" | "high"` to plain `string`
+   * (DESIGN-BACKLOG.md §2.1, 2026-09-10) — `claude` has its own wider
+   * range (low/medium/high/xhigh/max); antigravity's narrower `low|high`
+   * range is enforced centrally in message-bus.ts's `spawn_agent`
+   * handler (`ANTIGRAVITY_EFFORT_VALUES`), refused there before this
+   * event ever fires, not re-checked here. */
+  effort?: string;
   /** DESIGN-BACKLOG.md item 62 — names the new card, same free-text
    * field CardTag rename sets. */
   label?: string;
@@ -651,6 +678,16 @@ const winControls = {
     const listener = (_e: unknown, fullscreen: boolean) => cb(fullscreen);
     ipcRenderer.on("win:fullscreen-change", listener);
     return () => ipcRenderer.removeListener("win:fullscreen-change", listener);
+  },
+  /** Atalhos fase A, item 4 — main intercepta Ctrl+Plus/Ctrl+Minus via
+   * `before-input-event` (o zoom NATIVO do Chromium brigava com o zoom
+   * óptico do canvas) e reenvia pra cá em vez de aplicar zoom ele mesmo,
+   * já que só o renderer tem o `zoomBy`/`setZoomAbs` do canvas
+   * (useWorldTransform.ts). Ver main/index.ts's `before-input-event`. */
+  onZoomAccelerator: (cb: (direction: "in" | "out") => void) => {
+    const listener = (_e: unknown, direction: "in" | "out") => cb(direction);
+    ipcRenderer.on("win:zoom-accelerator", listener);
+    return () => ipcRenderer.removeListener("win:zoom-accelerator", listener);
   },
 };
 

@@ -77,6 +77,7 @@ const USAGE =
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "create-task <json> | update-task <taskId> <json> | list-tasks | get-task <taskId> | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
+  "set-connector-label <connectorId> <label...|null> | " +
   "concurrency-status [cap] | board-mode <cardId> | " +
   "spawn-agent <provider> [cwd] [resumeId] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] | " +
@@ -215,6 +216,19 @@ if (cmd === "list") {
   const [connectorId, kindStr] = rest;
   if (!connectorId || !kindStr) fail("usage: acbridge set-connector-kind <connectorId> <context|depends|null>");
   request = { cmd: "set_connector_kind", connectorId, kind: kindStr === "null" ? null : kindStr };
+} else if (cmd === "set-connector-label") {
+  // Espelha set-connector-kind acima (mesmo trio uso/parse/saída), com uma
+  // diferença: `kind` é enum de 1 palavra, `label` é texto livre — junta o
+  // resto dos argumentos com espaço, mesma convenção de `send`/`write-sticky`
+  // acima (`...msgParts`/`...textParts`), em vez de exigir aspas na linha
+  // de comando. Mesma convenção de `null` literal do kind pra limpar, não
+  // uma segunda (2026-09-09, achado do coordenador — paridade MCP/acbridge
+  // é garantia deste repo pra toda ferramenta, `set_connector_label` não é
+  // exceção).
+  const [connectorId, ...labelParts] = rest;
+  if (!connectorId || labelParts.length === 0) fail("usage: acbridge set-connector-label <connectorId> <label...|null>");
+  const labelStr = labelParts.join(" ");
+  request = { cmd: "set_connector_label", connectorId, label: labelStr === "null" ? null : labelStr };
 } else if (cmd === "concurrency-status") {
   const [capStr] = rest;
   const cap = capStr === undefined ? undefined : Number(capStr);
@@ -376,7 +390,7 @@ socket.on("close", () => {
     console.log(JSON.stringify(res.task));
   } else if (cmd === "list-connectors") {
     console.log(JSON.stringify(res.connectors));
-  } else if (cmd === "set-connector-kind") {
+  } else if (cmd === "set-connector-kind" || cmd === "set-connector-label") {
     console.log("updated");
   } else if (cmd === "concurrency-status") {
     console.log(JSON.stringify({ running: res.running, cap: res.cap, atCap: res.atCap }));

@@ -1,7 +1,26 @@
-import { createServer, type Server, type Socket } from "node:net";
-import { existsSync, unlinkSync } from "node:fs";
+import { createServer, createConnection, type Server, type Socket } from "node:net";
+import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { TaskRow, ConnectorRow } from "./store";
+import type { TaskRow, ConnectorRow, ReportRow } from "./store";
+
+export type SockIdentity = { dev: number; ino: number };
+
+/** Achado 2 (review adversarial, 2026-09-09) — a decisão "o que está no
+ * path agora ainda é o MESMO arquivo que eu vi antes?" é usada em dois
+ * lugares deste arquivo (a sonda de EADDRINUSE antes do unlink, e o guard
+ * de ownership de `close()`): mesma pergunta, mesmos dois campos (`dev` +
+ * `ino`, o par que identifica um arquivo de verdade em POSIX — nome/path
+ * não serve, é só onde ele mora agora). Extraída aqui, exportada, pra dar
+ * pra testar a lógica em isolamento: forçar de verdade a corrida real
+ * entre duas instâncias (o cenário que motiva o uso desta função na sonda)
+ * não é reproduzível de forma confiável num teste automatizado — o que dá
+ * pra travar é que ESTA comparação, a peça que decide "seguro apagar" vs.
+ * "não mexe, notifica", está certa. `null` de qualquer lado (sem baseline,
+ * ou path já sumiu) sempre conta como "não é o mesmo arquivo" — o lado que
+ * chama isto trata ambos com a mesma cautela: não tem prova, não apaga. */
+export function sameSockIdentity(a: SockIdentity | null, b: SockIdentity | null): boolean {
+  return a !== null && b !== null && a.dev === b.dev && a.ino === b.ino;
+}
 
 const OPEN_TIMEOUT_MS = 120_000;
 // Shorter than OPEN_TIMEOUT_MS on purpose — a snapshot needs no human
@@ -26,6 +45,23 @@ const IDLE_THRESHOLD_MS = 5_000;
 // How often the idle-watch poller (below) re-checks every terminal card
 // for a running -> idle transition, to notify whoever spawned it.
 const IDLE_WATCH_INTERVAL_MS = 2_000;
+// Correção 2 (revisão adversarial, 2026-09-09) — "report é edge-triggered,
+// dispara uma vez" não é garantia: um card de review pode legitimamente
+// reportar várias rodadas do mesmo diff (observado ao vivo nesta sessão,
+// 4 rodadas). Sem proteção, um agente numa dessas rodadas rápidas — ou
+// preso num loop de retry — martelaria o PTY do spawner com uma linha por
+// relatório. Mitigação simples (leading-edge, por card que REPORTA, não
+// por spawner): o primeiro `report` de um card sempre notifica na hora;
+// qualquer `report` seguinte do MESMO card dentro desta janela é
+// suprimido (nem popup, nem linha no PTY) — mas NUNCA perdido: o slot do
+// relatório (persistido, ver `ReportRow` em store.ts) e a `seq` monotônica
+// avançam de qualquer forma (ver o cmd `report`), então quem estiver
+// esperando com `read_report({wait: true, afterSeq})` recebe o relatório
+// mais novo normalmente, só sem o empurrão. 3s é curto o bastante pra não
+// atrasar um handoff real (rounds de review, mesmo rápidos, são separados
+// por segundos de trabalho de verdade) e longo o bastante pra absorver um
+// loop apertado.
+const REPORT_NOTIFY_MIN_INTERVAL_MS = 3_000;
 // Reading a page's text is exactly as sensitive as a pixel snapshot (an
 // already-open page an agent already has a card reference to) — no human
 // decision needed, same short backstop-only timeout as snapshot.
@@ -94,6 +130,32 @@ const DEFAULT_MAX_RETRIES = 2;
 // modal even shows — asking a human to approve something structurally
 // disallowed is just noise.
 export const MAX_SPAWN_DEPTH = 3;
+
+/** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido", 2026-09-10 —
+ * Antigravity's own real range (confirmed live: `agy --model
+ * gemini-3.1-pro` with no `--effort` falls back silently; passing an
+ * effort outside `low`/`high` fails outright citing "available: low,
+ * high" — see providers.ts's own antigravity comment). `claude` has a
+ * wider range (`low|medium|high|xhigh|max`, its own `--help`) and needs no
+ * equivalent list here — it accepts anything callers send it, so there's
+ * nothing to refuse.
+ *
+ * DECISION (documented here, not just in the session report): a
+ * `spawn_agent` for antigravity with an effort outside this list is
+ * REFUSED (`ok: false`, no card created), never silently remapped to the
+ * nearest supported value. Mapping in silence repeats the exact bug class
+ * this whole fix exists for — the user asked for X, got Y, and the app
+ * never said so ("a sessão era um opus medium... voltei como high e
+ * custou muito" was ITSELF a silent substitution, just one the app didn't
+ * even choose on purpose). A refusal surfaces immediately, in the same
+ * `ok:false` channel every other spawn precondition here already uses
+ * (missing provider, spawn depth limit) — the caller sees exactly why,
+ * before any process or card is created, and can retry with a value that
+ * actually works. The alternative (spawn anyway with the raw value) is
+ * worse than either: it would just move the same silent-substitution
+ * failure one layer down, from this refusal into antigravity's own CLI
+ * output, where nothing in this app surfaces it as an error at all. */
+const ANTIGRAVITY_EFFORT_VALUES = new Set(["low", "high"]);
 
 /** DESIGN-BACKLOG.md item 21 ponto 9 / achado ao vivo (2026-09-01) —
  * `kind` e `label` são novos. Antes esta lista era filtrada para
@@ -207,8 +269,16 @@ export type BusRequest =
    * preenche `cardId` sozinho a partir do próprio `AGENT_CANVAS_CARD_ID`
    * do processo que roda o hook, mesmo padrão de auto-fill de `report`. */
   | { cmd: "turn_complete"; cardId?: string }
-  | { cmd: "report"; requesterId?: string; report?: unknown }
-  | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number }
+  // `verdict` — DESIGN-BACKLOG.md §2.1 decisão 9: campo real e opcional
+  // do protocolo (não mais só uma convenção informal dentro do JSON livre
+  // de `report`), para não quebrar quem já reporta sem mandar nada.
+  | { cmd: "report"; requesterId?: string; report?: unknown; verdict?: "aprovado" | "reprovado" }
+  // `afterSeq` — Parte 2b, "quatro rodadas do mesmo diff, a 4a chamada
+  // devolvia a 3a instantaneamente": com `wait: true` e `afterSeq` dado,
+  // só resolve quando existir um relatório de sequência MAIOR que essa
+  // (nunca o que já estava lá). Omitido, comportamento de sempre: devolve
+  // o último já presente.
+  | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number; afterSeq?: number }
   | {
       cmd: "create_task";
       prompt?: string;
@@ -218,6 +288,11 @@ export type BusRequest =
       deps?: string[];
       maxRetries?: number;
       fallbackProviders?: string[];
+      // DESIGN-BACKLOG.md §2.1 decisão 6 — só o palpite do AGENTE. `order`
+      // (o humano arrastando) não tem parâmetro em nenhum cmd desta fase
+      // — nenhuma UI ainda o escreve, de propósito (ver o relatório
+      // final).
+      suggestedOrder?: number;
     }
   | {
       cmd: "update_task";
@@ -227,11 +302,16 @@ export type BusRequest =
       result?: unknown;
       incrementRetry?: boolean;
       attemptedProvider?: string;
+      suggestedOrder?: number;
     }
-  | { cmd: "list_tasks" }
+  // DESIGN-BACKLOG.md §2.1 item 6 — `boardId` opcional: omitido, devolve
+  // exatamente a lista sem filtro de sempre (nenhum comportamento
+  // existente muda).
+  | { cmd: "list_tasks"; boardId?: string }
   | { cmd: "get_task"; taskId?: string }
   | { cmd: "list_connectors" }
   | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null }
+  | { cmd: "set_connector_label"; connectorId?: string; label?: string | null }
   | { cmd: "concurrency_status"; cap?: number }
   | { cmd: "board_mode"; target?: string }
   | {
@@ -245,8 +325,14 @@ export type BusRequest =
       /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity needs
        * this alongside `model` (`providers.ts`'s `SpawnOpts.effort`) or it
        * silently falls back to a different model with only a warning, no
-       * error. `undefined` for every provider that ignores it. */
-      effort?: "low" | "high";
+       * error. `undefined` for every provider that ignores it.
+       *
+       * Widened from `"low" | "high"` to plain `string` (DESIGN-BACKLOG.md
+       * §2.1, 2026-09-10) — `claude` has its own wider range
+       * (low/medium/high/xhigh/max). See `ANTIGRAVITY_EFFORT_VALUES`
+       * below for where the narrower antigravity-only range is actually
+       * enforced (refused, not silently remapped). */
+      effort?: string;
       /** DESIGN-BACKLOG.md item 62 — same free-text label a human sets via
        * CardTag rename; `describeCardLabel`/the renderer's `describeCard`
        * already prefer it over the "Bash 2°" ordinal when present. */
@@ -389,12 +475,34 @@ export function createMessageBus(
      * was wrong here. `idleThresholdMs` is passed through purely for the
      * notification body text, not used for any timing decision here. */
     notifyIdleCard: (spawnerId: string, idleCardLabel: string, idleThresholdMs: number) => void;
+    /** Achado ao vivo (2026-09-09) — "ja acabou, novamente você não tem
+     * informação, precisamos melhorar o report": o `report` cmd só
+     * guardava o resultado e resolvia quem já estava esperando com
+     * `read_report({wait:true})` — quem não estava esperando (o caso
+     * comum: orquestrador seguiu fazendo outra coisa) nunca sabia que
+     * chegou. Mesmo canal não-invasivo do `notifyIdleCard` acima (OS
+     * `Notification`, nunca o PTY), mas o aviso carrega só o PONTEIRO
+     * (label de quem reportou) — nunca o corpo do relatório: um relatório
+     * grande despejado ali envenenaria o contexto de quem recebe, e o
+     * valor do `report` é justamente ser estruturado, lido sob demanda via
+     * `read_report`. */
+    notifyCardReported: (spawnerId: string, reportingCardLabel: string) => void;
     /** Prototipo (2026-09-06) — ver o comentário de `turn_complete` no
      * `BusRequest` acima. Push fire-and-forget pro renderer, keyed pelo
      * mesmo id unificado card/PTY (pty-registry.ts); `useTerminal.ts`
      * escuta e, só pro provider `claude`, usa isto como o sinal
      * DEFINITIVO de fim de turno em vez do timer de silêncio de 900ms. */
     notifyTurnComplete: (cardId: string) => void;
+    /** Bug real relatado (Pop!_OS, 2026-09-09) — `server.on("error")`
+     * abaixo só fazia `console.error`: uma falha de bind (2ª instância que
+     * já roubou o socket, ver `app.requestSingleInstanceLock()` em
+     * index.ts, ou qualquer outra causa) deixava o acbridge indisponível
+     * de um jeito 100% invisível pro usuário E pro agente — o próximo
+     * sintoma era o Stop hook explodindo com `connect ENOENT` bem depois,
+     * sem nenhum sinal no meio. Mesmo padrão fire-and-forget de
+     * `notifyTurnComplete` acima: relay simples pro renderer, nenhum
+     * estado novo aqui no bus. */
+    notifyBusUnavailable: (message: string) => void;
     /** DESIGN-BACKLOG.md item 59 — which board a card lives on, and
      * whether that board's opt-in autonomous mode is on. Only ever read
      * here, never written — the only write path is a human's toggle in
@@ -439,8 +547,32 @@ export function createMessageBus(
      * pass-through to store.ts (better-sqlite3 is synchronous, no round
      * trip needed here either). */
     listTasks: () => TaskRow[];
+    /** DESIGN-BACKLOG.md §2.1 item 6 — board-scoped counterpart to
+     * `listTasks` above, backed by `store.listTasksByBoard`
+     * (`idx_tasks_board_id`). Lets `list_tasks` (this file) filter by
+     * board at the SQLite layer instead of loading the whole table into
+     * Node just to `.filter()` it. */
+    listTasksByBoard: (boardId: string) => TaskRow[];
     getTask: (id: string) => TaskRow | undefined;
     upsertTask: (task: TaskRow) => void;
+    /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — mesmo
+     * pass-through direto pro store das 3 linhas acima, mesmo motivo. O
+     * cmd `report`/`get_report` (mais abaixo) continua sendo quem faz
+     * JSON.stringify/parse do valor do relatório — a mesma divisão de
+     * responsabilidade que `serializeTask` já usa pra `result_json`, não
+     * uma segunda convenção. Ver o comentário grande de `ReportRow` em
+     * store.ts pro ciclo de vida completo (slot único por card, sem
+     * cascade delete, sem TTL, cap só por contagem). */
+    getReport: (cardId: string) => ReportRow | undefined;
+    upsertReport: (row: ReportRow) => void;
+    /** Seeda `reportSeqCounter` (abaixo) do que já está persistido — sem
+     * isto, um restart zeraria o contador e o PRÓXIMO relatório sairia com
+     * seq baixa (1, 2, ...) enquanto relatórios de ANTES do restart ainda
+     * têm seq alta persistida: o `afterSeq` do `read_report` passaria a
+     * mentir (relatório novo com seq menor que um antigo, consumidor pula
+     * o novo). `0` numa tabela vazia — primeiro `++reportSeqCounter`
+     * continua começando em 1, igual ao contador em memória de sempre. */
+    nextReportSeqSeed: () => number;
     /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 4 — data
      * model only: this exposes the connector graph and lets kind be
      * tagged on an existing connector, but nothing in this app dispatches
@@ -450,6 +582,42 @@ export function createMessageBus(
      * see AGENTS.md's positioning entry on this. */
     listAllConnectors: () => ConnectorRow[];
     setConnectorKind: (id: string, kind: string | null) => boolean;
+    /** Same contract as setConnectorKind, `label` column instead — backs
+     * `set_connector_label` below (2026-09-09, "label em tempo real"). */
+    setConnectorLabel: (id: string, label: string | null) => boolean;
+    /** Achado 2 (review adversarial, 2026-09-09) — the push below needs
+     * the connector's OWN board to let index.ts filter against the
+     * currently open one before `safeSend`ing (same idea as `listCards`'s
+     * `board_id === activeBoardId` filter there); a connector's two card
+     * ids aren't enough on their own without another lookup, and the
+     * connector row already carries `board_id` directly. */
+    getConnectorBoardId: (id: string) => string | undefined;
+    /** Push side of `set_connector_label`: `set_connector_kind` has NO
+     * live push today (confirmed while building this — its doc comment
+     * above implies parity with the render state, but there just isn't
+     * one; an open board only ever sees a `kind` set at creation time via
+     * `onAutoConnect`'s own `addConnector`, never a later change made
+     * through the cmd). `label` needs to actually update the pill on an
+     * OPEN board without reload — that's the whole point of "tempo real"
+     * — so this is new plumbing, not a copy of an existing push. Modeled
+     * directly on `onAutoConnect`'s shape (id + new value, safeSend to the
+     * renderer) since that's the one real precedent for "main pushes a
+     * connector change to the renderer" in this codebase.
+     * `boardId` (achado 2 above) is the connector's own board, `undefined`
+     * only if it vanished between the UPDATE and this lookup — index.ts
+     * decides what to do with it (filter against the open board), this
+     * cmd handler just always passes it along. */
+    onConnectorLabelChanged: (id: string, label: string | null, boardId: string | undefined) => void;
+    /** Same push, `kind` instead of `label`. This one closed the gap the
+     * comment above used to DESCRIBE and leave open (DESIGN-BACKLOG.md
+     * §2.1, "`set_connector_kind` grava no banco e não avisa o board"):
+     * `set_connector_kind` persisted and pushed nothing, so an open board
+     * only ever showed a `kind` set at creation time via `onAutoConnect`,
+     * and a later change through the cmd stayed invisible until reload.
+     * Identical shape and identical `boardId` contract to the label push
+     * on purpose — the two cmds are siblings on the same row, and having
+     * them behave differently is what made the gap easy to miss. */
+    onConnectorKindChanged: (id: string, kind: string | null, boardId: string | undefined) => void;
     onSpawnAgentRequest: (
       requestId: string,
       requesterId: string,
@@ -461,8 +629,8 @@ export function createMessageBus(
         reason?: string;
         model?: string;
         /** Sticky item "spawn_agent effort" — see the `spawn_agent` cmd's
-         * own field above. */
-        effort?: "low" | "high";
+         * own field above. Widened from `"low" | "high"`, same reasoning. */
+        effort?: string;
         /** DESIGN-BACKLOG.md item 62 — same free-text label CardTag
          * rename sets; `undefined` leaves the new card unlabeled (the
          * ordinal "Bash 2°" convention applies), same as before this
@@ -501,14 +669,23 @@ export function createMessageBus(
     ) => void;
   },
 ) {
-  if (existsSync(sockPath)) {
-    try {
-      unlinkSync(sockPath);
-    } catch {
-      // Stale socket from an unclean previous shutdown — best effort.
-    }
-  }
-
+  // Bug real relatado (Pop!_OS, 2026-09-09; achado seguinte do coordenador,
+  // mesmo dia) — este bloco fazia `unlinkSync(sockPath)` INCONDICIONAL
+  // aqui na entrada, antes de sequer tentar bindar. Com o lock de instância
+  // única em index.ts gated em `app.isPackaged` (proteger só o app
+  // instalado sem quebrar o fluxo de dev — ver o comentário lá), o cenário
+  // real é: o Stellar EMPACOTADO está aberto e escutando; o dev roda
+  // `electron-vite dev`, que não pega lock nenhum; o dev chega aqui e
+  // apaga o `.sock` da instância empacotada VIVA só porque o arquivo
+  // existia, binda o seu; quando o dev fecha, `close()` vê (corretamente)
+  // que o socket é dele e remove — sobra a instância empacotada viva e
+  // ZERO `.sock` no filesystem. É o bug original inteiro, reproduzido pelo
+  // próprio fluxo de dev que o gate `isPackaged` foi feito pra proteger.
+  //
+  // A remoção agora só acontece DEPOIS de provar que não tem ninguém do
+  // outro lado — dentro do `server.on("error")` abaixo. `server.listen`
+  // roda direto aqui, sem tocar no filesystem antes.
+  //
   // Achado ao vivo (2026-09-01, relato de um agente): `open_url` devolvia
   // só `{ok:true}` e nunca o id do card que acabou de abrir, então não
   // havia caminho nenhum do `open_url` pro `browser_click`/`get_page_text`
@@ -543,8 +720,36 @@ export function createMessageBus(
   // report a result and keep running, e.g. an interactive session): the
   // last report a card sent (for a caller polling after the fact) plus
   // waiters for one still pending (same shape as pendingCardExits above).
-  const cardReports = new Map<string, unknown>();
-  const pendingReportWaiters = new Map<string, Array<(report: unknown) => void>>();
+  /** Parte 2b (achado ao vivo, depois do briefing inicial) — "um card de
+   * review que revisou 4 rodadas do mesmo diff devolveu o relatório da 3a
+   * rodada instantaneamente na 4a chamada": `cardReports` é um SLOT ÚNICO
+   * por card (o `report` de baixo sempre SOBRESCREVE), e antes disto nada
+   * distinguia "relatório novo" de "o mesmo de sempre" — a volta por cima
+   * foi o próprio agente carimbar um campo `round` no JSON, o chamador
+   * compensando uma lacuna do protocolo. `seq` é atribuída AQUI, pelo bus,
+   * nunca aceita do chamador (que pode mentir ou esquecer) — monotônica
+   * por processo, nunca reiniciada por card.
+   *
+   * DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" (achado ao
+   * vivo, 2026-09-09) — o `Map` que vivia aqui (`cardReports`) e o
+   * contador acima eram 100% em memória: um restart do Electron (update,
+   * crash, relogin, `quitAndInstall`) apagava TODOS os relatórios de TODOS
+   * os cards sem aviso nenhum — foi exatamente isso que mordeu nesta
+   * sessão (um `report` retornou `ok:true`, o Electron reiniciou, e o
+   * relatório sumiu). O slot em si agora é `callbacks.getReport`/
+   * `upsertReport` (store.ts, ver o comentário grande de `ReportRow` lá
+   * pro ciclo de vida completo) — este arquivo só monta/desmonta o JSON
+   * (mesma divisão que `serializeTask` já faz pra `result_json`).
+   * `reportSeqCounter` continua em memória (só um inteiro, sem motivo pra
+   * round-trip no SQLite a cada `report`), mas agora SEEDADO do que já
+   * está persistido (`nextReportSeqSeed()`) em vez de sempre começar em 0
+   * — senão o restart resolveria a perda do relatório e reabriria o outro
+   * bug que motivou `seq` existir: um relatório novo saindo com seq MENOR
+   * que um antigo já persistido, fazendo o `afterSeq` do `read_report`
+   * mentir pro consumidor. */
+  let reportSeqCounter = callbacks.nextReportSeqSeed();
+  type StoredReport = { report: unknown; seq: number; verdict?: string | null };
+  const pendingReportWaiters = new Map<string, Array<{ afterSeq: number; resolve: (stored: StoredReport) => void }>>();
   const pendingSpawnAgents = new Map<string, { resolve: (result: SpawnAgentResult) => void; timer: NodeJS.Timeout }>();
   const pendingSpawnCards = new Map<string, { resolve: (result: SpawnCardResult) => void; timer: NodeJS.Timeout }>();
   // DESIGN-BACKLOG.md item 60, peça 1 — one FIFO queue per autonomous
@@ -565,7 +770,7 @@ export function createMessageBus(
       depth: number;
       reason?: string;
       model?: string;
-      effort?: "low" | "high";
+      effort?: string;
       label?: string;
     };
   };
@@ -609,8 +814,23 @@ export function createMessageBus(
       // board_mode's concurrencyCap.
       maxRetries: row.max_retries ?? DEFAULT_MAX_RETRIES,
       fallbackProviders: row.fallback_providers_json ? JSON.parse(row.fallback_providers_json) : [],
+      order: row.order,
+      suggestedOrder: row.suggested_order,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      // DESIGN-BACKLOG.md §2.1 "no get_task, por exemplo" — só presentes
+      // quando `row` veio de `callbacks.getTask` (que os anexa); ausentes
+      // (undefined, somem do JSON) numa linha de `listTasks`, de
+      // propósito, pra manter a listagem em massa barata.
+      transitions: row.transitions?.map((t) => ({
+        kind: t.kind,
+        from: t.from_value,
+        to: t.to_value,
+        actor: t.actor,
+        cardId: t.card_id,
+        at: t.at,
+      })),
+      cards: row.cards?.map((c) => ({ cardId: c.card_id, role: c.role })),
     };
   }
 
@@ -639,6 +859,52 @@ export function createMessageBus(
       });
       callbacks.onReadCardRequest(requestId, target, lines);
     });
+  }
+
+  /** Extraído do cmd `send` (correção pós-revisão, 2026-09-09) — ANTES
+   * disto `notifySpawnerOfReport` escrevia sua linha via `writeToCard` e
+   * parava aí, sem apertar Enter, achando (errado — apontado em revisão)
+   * que não submeter era mais seguro. É o oposto: `writeToCard` termina em
+   * `entry.proc.write(data)` no PTY (pty-registry.ts) — é digitação
+   * simulada, não uma mensagem de canal programático. Texto NÃO submetido
+   * fica pendurado no buffer de input de quem estiver do outro lado e é
+   * concatenado (ou pior, executado) junto da PRÓXIMA coisa que esse
+   * card digitar — exatamente o dano que se queria evitar. `send_to_card`
+   * já resolve isso corretamente pra mensagem agente-pra-agente: escreve o
+   * texto, aperta Enter, e CONFIRMA que submeteu de verdade (relendo o
+   * card e comparando com um prefixo do que foi escrito — ver
+   * `looksUnsent`), retentando só o Enter (nunca o texto de novo) até
+   * `SEND_ENTER_MAX_ATTEMPTS`. Extraído aqui pra `send` e
+   * `notifySpawnerOfReport` usarem o MESMO mecanismo — nunca uma segunda
+   * variante que "quase" faz a mesma coisa. */
+  async function typeAndSubmit(target: string, text: string): Promise<void> {
+    callbacks.writeToCard(target, text);
+    // Sticky item "send_to_card não confirma envio" (2026-09-03) — a
+    // regex de placeholder sozinha só cobre UM sintoma (CLI que colapsa
+    // um paste grande num chip "[Pasted text ...]"); uma mensagem curta
+    // simplesmente fica CRUA na caixa, nunca colapsa, então checar só o
+    // placeholder deixaria passar como "enviado" um caso que não foi.
+    // Segundo sinal, agnóstico de provider: a própria linha de composer
+    // geralmente continua mostrando o texto literal até ser de fato
+    // submetida (depois disso o que aparece — spinner, novo prompt, linha
+    // ecoada no histórico — é sempre DIFERENTE do que foi digitado).
+    // Prefixo normalizado (não a linha toda: soft-wrap pode quebrar uma
+    // linha longa em várias linhas de tela).
+    const sentPrefix = text.trim().replace(/\s+/g, " ").slice(0, 24);
+    function looksUnsent(checkText: string): boolean {
+      if (/pasted text/i.test(checkText)) return true;
+      if (sentPrefix.length < 8) return false; // curto demais pra significar algo, evita falso positivo
+      return checkText.replace(/\s+/g, " ").includes(sentPrefix);
+    }
+    for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
+      await delay(SEND_ENTER_DELAY_MS);
+      callbacks.writeToCard(target, "\r");
+      await delay(SEND_ENTER_CONFIRM_DELAY_MS);
+      const check = await readCardText(target, 8);
+      // Falha de leitura (timeout, card sumiu) não é evidência de que o
+      // submit falhou — para de retentar em vez de adivinhar.
+      if (!check.ok || !looksUnsent(check.text)) break;
+    }
   }
 
   /** Round-trip de sticky — mesmo timeout e mesma forma do `readCardText`
@@ -703,16 +969,104 @@ export function createMessageBus(
    * padrão usado ao longo desta sessão). Silent no-op se o spawner sumiu
    * ou não há spawner registrado (card aberto por um humano, não por
    * outro agente). */
-  function notifySpawnerOfIdleCard(cardId: string) {
+  /** Extraído de `notifySpawnerOfIdleCard` (2026-09-09) pro `report` reusar
+   * a mesma resolução de linhagem — achar QUEM spawnou `cardId` (conector
+   * `kind === "spawned"` mais recente por `updated_at`) e devolver seu id
+   * só se ele ainda estiver vivo. `null` cobre os dois no-ops silenciosos
+   * que os dois avisos precisam ter: sem conector de spawn (card aberto
+   * por um humano) e spawner já morto — nenhum dos dois é erro, os dois
+   * só significam "ninguém pra avisar". */
+  function resolveLiveSpawner(cardId: string): string | null {
     const spawnedBy = callbacks
       .listAllConnectors()
       .filter((c) => c.kind === "spawned" && c.to_card_id === cardId)
       .sort((a, b) => b.updated_at - a.updated_at)[0];
-    if (!spawnedBy) return;
+    if (!spawnedBy) return null;
     const spawnerId = spawnedBy.from_card_id;
-    if (!callbacks.isCardAlive(spawnerId)) return;
+    if (!callbacks.isCardAlive(spawnerId)) return null;
+    return spawnerId;
+  }
+
+  function notifySpawnerOfIdleCard(cardId: string) {
+    const spawnerId = resolveLiveSpawner(cardId);
+    if (!spawnerId) return;
     const label = callbacks.describeCardLabel(cardId);
     callbacks.notifyIdleCard(spawnerId, label, IDLE_THRESHOLD_MS);
+  }
+
+  // Correção 2 (revisão adversarial, 2026-09-09) — ver o comentário de
+  // `REPORT_NOTIFY_MIN_INTERVAL_MS` acima. Chave é o card que REPORTA
+  // (quem pode estar num loop de rodadas), não o spawner — dois cards
+  // diferentes reportando pro mesmo spawner não devem se suprimir um ao
+  // outro.
+  const lastReportNotifyAt = new Map<string, number>();
+
+  /** Parte 2 do achado "precisamos melhorar o report" (ver o comentário de
+   * `notifyCardReported` no tipo `Callbacks` acima) — mesmo caminho do
+   * idle: resolve o conector de spawn, checa vivo, avisa só com o
+   * PONTEIRO (label). Chamado pelo cmd `report` abaixo, nunca aqui
+   * mesmo sozinho.
+   *
+   * Canal 2 — histórico da correção (revisão adversarial, 2026-09-09,
+   * DUAS rodadas): a 1ª versão só tinha o popup de SO (canal 1 abaixo),
+   * que a Parte 1 desta investigação provou ser invisível pra um agente
+   * rodando dentro de um PTY — resolvia a linhagem toda e jogava o aviso
+   * fora pro mesmo buraco. A 2ª versão acrescentou `writeToCard` mas SEM
+   * apertar Enter, no raciocínio (equivocado, apontado na revisão
+   * seguinte) de que não submeter seria "menos invasivo" — na prática é o
+   * oposto: `writeToCard` termina em `entry.proc.write(data)` no PTY
+   * (pty-registry.ts), digitação simulada de verdade, e texto NÃO
+   * submetido fica pendurado no buffer de input do spawner até ser
+   * concatenado (ou executado) junto da PRÓXIMA coisa que ele digitar —
+   * corrompendo o comando dele. Esta versão usa `typeAndSubmit` (extraído
+   * do cmd `send` acima) — o MESMO mecanismo que já entrega mensagem de
+   * agente pra agente nesta app, texto + Enter + confirmação — em vez de
+   * uma 3ª variante inventada.
+   *
+   * Por que isto NÃO reabre a objeção de 2026-09-04 contra escrever no
+   * PTY (comentário de `notifySpawnerOfIdleCard` acima): aquela troca foi
+   * motivada por IDLE ser LEVEL-TRIGGERED — enquanto o card continuasse
+   * ocioso, cada tick do poll (a cada 2s) reinseriria a mesma linha,
+   * ruído recorrente capaz de destruir uma mensagem longa que um humano
+   * estivesse digitando. `report` não tem essa recorrência automática —
+   * só dispara quando o card de fato chama `report` — mas TAMBÉM não é
+   * garantidamente "uma vez só" (achado da revisão seguinte: um reviewer
+   * pode legitimamente reportar várias rodadas seguidas), daí
+   * `REPORT_NOTIFY_MIN_INTERVAL_MS` abaixo: throttle explícito em vez de
+   * uma suposição de raridade. O cenário concreto que a nota de
+   * 2026-09-04 chamava de "extremamente invasivo" — o spawner ser o card
+   * de CHAT ao vivo do usuário (`ChatCardData`, card-types.ts, que fala
+   * direto com a API, nunca com um PTY) — nem chega aqui: sem PTY nenhum
+   * registrado pra esse kind, `isCardAlive` (já checado dentro de
+   * `resolveLiveSpawner` acima) já é `false`, e o `listTerminalCards()`
+   * abaixo também nunca o inclui.
+   *
+   * PONTEIRO, nunca o corpo (mesma decisão de desenho do popup) — a
+   * MENSAGEM que `typeAndSubmit` entrega é fixa e curta, nunca o JSON do
+   * relatório. */
+  async function notifySpawnerOfReport(cardId: string) {
+    const spawnerId = resolveLiveSpawner(cardId);
+    if (!spawnerId) return;
+
+    // Throttle leading-edge por card que reporta — ver o comentário de
+    // `REPORT_NOTIFY_MIN_INTERVAL_MS`/`lastReportNotifyAt` acima. O
+    // `report` em si (seq, `cardReports`) já rodou antes desta chamada,
+    // então nada se perde aqui, só o empurrão é que é suprimido.
+    const now = Date.now();
+    const last = lastReportNotifyAt.get(cardId) ?? 0;
+    if (now - last < REPORT_NOTIFY_MIN_INTERVAL_MS) return;
+    lastReportNotifyAt.set(cardId, now);
+
+    const label = callbacks.describeCardLabel(cardId);
+    // Canal 1 — o mesmo popup de SO do `notifyIdleCard`. Serve a um humano
+    // de fato olhando a tela; não custa nada avisar os dois.
+    callbacks.notifyCardReported(spawnerId, label);
+    // Canal 2 — mesmo formato do `send_to_card` (prefixo `[de: X]`, depois
+    // Enter com confirmação), único jeito de isto virar uma MENSAGEM de
+    // verdade pro card de destino em vez de texto pendurado no prompt.
+    if (listTerminalCards().some((c) => c.id === spawnerId)) {
+      await typeAndSubmit(spawnerId, `[de: ${label}] relatório disponível — chame read_report para ver o resultado.`);
+    }
   }
 
   /** Sticky item "card_status idle" — polls instead of hooking `onData`
@@ -799,14 +1153,52 @@ export function createMessageBus(
     browser_eval: "modified",
   };
 
+  // Achado 3 (review adversarial, 2026-09-09) — C0/C1 control characters
+  // plus the Unicode bidi override/embedding/isolate controls (LRE/RLE/
+  // PDF/LRO/RLO and the newer LRI/RLI/FSI/PDI, plus the plain LRM/RLM
+  // marks) stripped BEFORE truncation, not after: any of these dropped
+  // into an SVG `<text>` (App.tsx's connector pill) can reorder or corrupt
+  // the rendered line, and a label reaching this function came from
+  // whatever an agent typed — never trusted as plain text before this.
+  // Known, deliberately untreated gap (review adversarial rodada 2,
+  // 2026-09-09) — combining marks (e.g. Zalgo-style stacks) aren't
+  // filtered and can overflow the pill vertically. Low-probability
+  // hostile input, and a filter here risks mangling ordinary accented
+  // text (café, São Paulo) — left alone on purpose, not missed.
+  // eslint-disable-next-line no-control-regex -- deliberate: this IS the sanitizer that strips C0/C1 control characters from an agent-supplied label (achado 3 above).
+  const CONTROL_AND_BIDI_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+
   /** Short one-line context for the connector's `label` (store.ts) — the
    * "why" behind an auto-connect, from whatever text was already in scope
    * for that mutation. Truncated here, once, so callers never have to
    * think about length; `null` when the request has no natural short text
-   * (e.g. a scroll with no selector). */
+   * (e.g. a scroll with no selector).
+   * Achado 3 (review adversarial, 2026-09-09) — truncates by Unicode CODE
+   * POINT (`Array.from`, which iterates a string per code point, not per
+   * UTF-16 code unit), not by `.slice`: a raw `.slice(0, max)` can land
+   * inside a surrogate pair and split an emoji/astral character in half,
+   * leaving a broken/replacement glyph in the pill. This is the single
+   * choke point every label passes through before reaching `store.ts`
+   * (`deriveAutoConnectLabel` below, the `write_sticky` modified-label
+   * call, and `set_connector_label`'s cmd handler all call this — none
+   * truncate on their own), so the fix covers every label an agent can
+   * set, not just spawn's.
+   * Achado 1 (review adversarial RODADA 2, 2026-09-09) — ORDER bug: `\n`/
+   * `\r`/`\t` are C0 controls, so the first version's
+   * `.replace(CONTROL_AND_BIDI_RE, "")` deleted them outright, BEFORE
+   * `/\s+/g` ever got a chance to collapse them into a separator — a
+   * label like "ls -la\n/tmp" came out "ls -la/tmp", words glued
+   * together. Fixed by converting real whitespace controls to a plain
+   * space FIRST (so they survive as a separator), stripping the rest of
+   * the C0/C1/bidi set second, THEN collapsing whitespace runs and
+   * truncating — same final steps as before, just no longer racing the
+   * control-strip against them. */
   function truncateForLabel(text: string, max = 60): string {
-    const flat = text.trim().replace(/\s+/g, " ");
-    return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+    const withRealWhitespace = text.replace(/[\n\r\t]/g, " ");
+    const stripped = withRealWhitespace.replace(CONTROL_AND_BIDI_RE, "");
+    const flat = stripped.trim().replace(/\s+/g, " ");
+    const codePoints = Array.from(flat);
+    return codePoints.length > max ? `${codePoints.slice(0, max - 1).join("")}…` : flat;
   }
   function deriveAutoConnectLabel(req: BusRequest): string | null {
     switch (req.cmd) {
@@ -880,50 +1272,12 @@ export function createMessageBus(
       const targetProvider = cards.find((c) => c.id === target)?.provider;
       const senderLabel = req.requesterId && targetProvider !== "bash" ? callbacks.describeCardLabel(req.requesterId) : null;
       const text = senderLabel ? `[de: ${senderLabel}] ${req.text ?? ""}` : (req.text ?? "");
-      callbacks.writeToCard(target, text);
       // Regra geral de auto-conector (2026-09-02, generalizada a QUALQUER
       // interação entre cards via MCP — ver `AUTO_CONNECT_CMDS` no fim
       // deste arquivo, chamado de dentro do `handleRequest` wrapper) —
       // nada a fazer aqui, o wrapper cuida disso depois que este bloco
       // devolver `{ok:true}`.
-      // DESIGN-BACKLOG.md item 58, M2 follow-up — self-verifying submit:
-      // write the Enter, then read the card back (same round-trip as
-      // read_card) and check whether the composer still shows an
-      // un-submitted paste placeholder. If it does, retry ONLY the
-      // Enter (never the text again, that would duplicate it) — bounded
-      // by SEND_ENTER_MAX_ATTEMPTS so a card that's genuinely just slow
-      // to render can't loop forever.
-      //
-      // Sticky item "send_to_card não confirma envio" (2026-09-03) —
-      // the placeholder regex alone only catches ONE symptom (a CLI that
-      // collapses a big paste into a "[Pasted text ...]" chip). Reported
-      // live: a plain, short message just sat RAW in the input box —
-      // never collapsed, so `check.text` never matched, so the loop broke
-      // immediately on the very first read even though nothing was ever
-      // submitted; `{ok:true}` came back with the message still unsent.
-      // Second, provider-agnostic signal added: the composer's own input
-      // line generally still shows the literal text it was given, until
-      // it's actually submitted (whatever the CLI does after submit —
-      // spinner, new prompt, echoed history line — reliably looks
-      // DIFFERENT from the raw typed line). Checking for a meaningful
-      // prefix of what was just written, not the whole thing (terminal
-      // soft-wrap can split a long line across rows) and normalized for
-      // whitespace (wrapping/redraw can turn a space into a newline).
-      const sentPrefix = text.trim().replace(/\s+/g, " ").slice(0, 24);
-      function looksUnsent(checkText: string): boolean {
-        if (/pasted text/i.test(checkText)) return true;
-        if (sentPrefix.length < 8) return false; // too short to mean anything, avoid false positives
-        return checkText.replace(/\s+/g, " ").includes(sentPrefix);
-      }
-      for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
-        await delay(SEND_ENTER_DELAY_MS);
-        callbacks.writeToCard(target, "\r");
-        await delay(SEND_ENTER_CONFIRM_DELAY_MS);
-        const check = await readCardText(target, 8);
-        // A read failure (timed out, card gone) isn't evidence the
-        // submit failed — stop retrying rather than guess.
-        if (!check.ok || !looksUnsent(check.text)) break;
-      }
+      await typeAndSubmit(target, text);
       return { ok: true };
     }
 
@@ -1220,37 +1574,80 @@ export function createMessageBus(
 
     if (req.cmd === "report") {
       if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
-      cardReports.set(req.requesterId, req.report);
+      const stored: StoredReport = { report: req.report, seq: ++reportSeqCounter, verdict: req.verdict ?? null };
+      // DESIGN-BACKLOG.md §2.1 — persiste ANTES de resolver waiters/avisar
+      // o spawner: se o processo morrer bem aqui no meio (mesma classe de
+      // evento que motivou esta tarefa), o pior caso agora é um waiter que
+      // não foi acordado desta vez — não um relatório que nunca existiu.
+      // `report_json` é o mesmo `JSON.stringify` que `update_task` já faz
+      // pra `result_json` (mesma convenção, não uma nova).
+      callbacks.upsertReport({
+        card_id: req.requesterId,
+        seq: stored.seq,
+        report_json: JSON.stringify(stored.report),
+        verdict: stored.verdict,
+        updated_at: Date.now(),
+      });
+      // Parte 2b — cada waiter carrega o próprio `afterSeq`; só resolve
+      // (e sai da fila) quem esse relatório novo de fato satisfaz. Os que
+      // sobram (raro — normalmente há no máximo um waiter por card)
+      // continuam esperando um `seq` ainda maior.
       const waiters = pendingReportWaiters.get(req.requesterId);
       if (waiters) {
-        pendingReportWaiters.delete(req.requesterId);
-        for (const resolve of waiters) resolve(req.report);
+        const remaining = waiters.filter((w) => {
+          if (stored.seq <= w.afterSeq) return true;
+          w.resolve(stored);
+          return false;
+        });
+        if (remaining.length === 0) pendingReportWaiters.delete(req.requesterId);
+        else pendingReportWaiters.set(req.requesterId, remaining);
       }
-      return { ok: true };
+      // Parte 1/2 — "ja acabou, novamente você não tem informação": mesmo
+      // caminho do idle (resolve conector de spawn, checa vivo), aviso só
+      // com o ponteiro — ver `notifySpawnerOfReport` acima.
+      await notifySpawnerOfReport(req.requesterId);
+      return { ok: true, seq: stored.seq };
     }
 
     if (req.cmd === "get_report") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      if (cardReports.has(req.target)) return { ok: true, report: cardReports.get(req.target) };
-      if (!req.wait) return { ok: false, error: "no report yet" };
       const target = req.target;
+      const afterSeq = req.afterSeq;
+      const storedRow = callbacks.getReport(target);
+      const current: StoredReport | undefined = storedRow
+        ? { report: JSON.parse(storedRow.report_json), seq: storedRow.seq, verdict: storedRow.verdict ?? null }
+        : undefined;
+      // Sem `afterSeq`: comportamento de sempre — devolve o último já
+      // presente, sem olhar pra `wait`. Com `afterSeq`: só serve se for
+      // estritamente mais novo que o informado (Parte 2b).
+      if (current && (afterSeq === undefined || current.seq > afterSeq)) {
+        return { ok: true, report: current.report, seq: current.seq, verdict: current.verdict ?? null };
+      }
+      if (!req.wait) return { ok: false, error: afterSeq === undefined ? "no report yet" : "no report newer than the given sequence yet" };
       const timeoutMs = req.timeoutMs ?? DEFAULT_REPORT_TIMEOUT_MS;
+      // `afterSeq ?? -1`: sem valor informado, qualquer relatório que
+      // chegue (seq sempre >= 1) já satisfaz — mesmo "espera o primeiro
+      // que vier" de sempre.
+      const threshold = afterSeq ?? -1;
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
           const waiters = pendingReportWaiters.get(target);
           if (waiters) {
-            const idx = waiters.indexOf(onReport);
+            const idx = waiters.indexOf(entry);
             if (idx !== -1) waiters.splice(idx, 1);
             if (waiters.length === 0) pendingReportWaiters.delete(target);
           }
           resolve({ ok: false, error: "timed out waiting for report" });
         }, timeoutMs);
-        const onReport = (report: unknown) => {
-          clearTimeout(timer);
-          resolve({ ok: true, report });
+        const entry = {
+          afterSeq: threshold,
+          resolve: (stored: StoredReport) => {
+            clearTimeout(timer);
+            resolve({ ok: true, report: stored.report, seq: stored.seq, verdict: stored.verdict ?? null });
+          },
         };
         const waiters = pendingReportWaiters.get(target) ?? [];
-        waiters.push(onReport);
+        waiters.push(entry);
         pendingReportWaiters.set(target, waiters);
       });
     }
@@ -1279,8 +1676,14 @@ export function createMessageBus(
         attempted_providers_json: req.provider ? JSON.stringify([req.provider]) : null,
         max_retries: req.maxRetries ?? null,
         fallback_providers_json: req.fallbackProviders ? JSON.stringify(req.fallbackProviders) : null,
+        order: null,
+        suggested_order: req.suggestedOrder ?? null,
         created_at: now,
         updated_at: now,
+        // create_task só existe como MCP tool hoje — todo chamador é um
+        // agente. Explícito aqui em vez de deixar pro default do store,
+        // pelo mesmo motivo de "não adivinhar": este ponto SABE quem é.
+        actor: "agent",
       });
       return { ok: true, taskId: id };
     }
@@ -1303,7 +1706,11 @@ export function createMessageBus(
         result_json: req.result !== undefined ? JSON.stringify(req.result) : existing.result_json,
         retry_count: existing.retry_count + (req.incrementRetry ? 1 : 0),
         attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
+        suggested_order: req.suggestedOrder !== undefined ? req.suggestedOrder : existing.suggested_order,
         updated_at: Date.now(),
+        // update_task só existe como MCP tool hoje — mesma justificativa
+        // de create_task acima.
+        actor: "agent",
       };
       callbacks.upsertTask(updated);
       // DESIGN-BACKLOG.md item 60, peça 3 — a task reaching `done` may
@@ -1319,7 +1726,18 @@ export function createMessageBus(
     }
 
     if (req.cmd === "list_tasks") {
-      return { ok: true, tasks: callbacks.listTasks().map(serializeTask) };
+      // DESIGN-BACKLOG.md §2.1 item 6 — review adversarial achado
+      // (2026-09-10): a versão anterior filtrava em JS sobre o resultado
+      // COMPLETO de `callbacks.listTasks()` mesmo quando `boardId` era
+      // passado, carregando a tabela inteira pra memória do Node só pra
+      // descartar a maior parte dela. `index.ts` estava travado por outro
+      // agente quando esse gap foi documentado — agora liberado, a fiação
+      // é ligada de verdade: `callbacks.listTasksByBoard` chama
+      // `store.listTasksByBoard` (usa `idx_tasks_board_id`), o mesmo
+      // statement já coberto por teste direto contra o store. Sem
+      // `boardId`: idêntico a antes (`listTasks()` sem filtro).
+      const tasks = req.boardId ? callbacks.listTasksByBoard(req.boardId) : callbacks.listTasks();
+      return { ok: true, tasks: tasks.map(serializeTask) };
     }
 
     if (req.cmd === "get_task") {
@@ -1352,8 +1770,38 @@ export function createMessageBus(
       if (req.kind !== undefined && !validKinds.includes(req.kind)) {
         return { ok: false, error: `kind must be one of context, depends, spawned, or null` };
       }
-      const found = callbacks.setConnectorKind(req.connectorId, req.kind ?? null);
+      const kind = req.kind ?? null;
+      const found = callbacks.setConnectorKind(req.connectorId, kind);
       if (!found) return { ok: false, error: `no such connector "${req.connectorId}"` };
+      // Ver `onConnectorKindChanged` — mesma ordem do irmão
+      // `set_connector_label` logo abaixo: só empurra DEPOIS de o UPDATE
+      // ter confirmado que a linha existe, senão um id inválido faria o
+      // renderer receber push de um conector que não está lá.
+      callbacks.onConnectorKindChanged(req.connectorId, kind, callbacks.getConnectorBoardId(req.connectorId));
+      return { ok: true };
+    }
+
+    if (req.cmd === "set_connector_label") {
+      // 2026-09-09 — "contextualizar em tempo real": the explicit-update
+      // half of the feature (the automatic half lives in App.tsx's
+      // `autoConnect`, which refreshes an EXISTING connector's label on a
+      // later `send`/etc. between the same pair). This is for a caller
+      // that wants to set it directly — e.g. an orchestrator annotating
+      // what a dependent card is doing right now, same spirit as
+      // `set_connector_kind` letting it tag `depends`/`context` by hand.
+      if (!req.connectorId) return { ok: false, error: "missing connectorId" };
+      const label = req.label ? truncateForLabel(req.label) : null;
+      const found = callbacks.setConnectorLabel(req.connectorId, label);
+      if (!found) return { ok: false, error: `no such connector "${req.connectorId}"` };
+      // Achado 2 (review adversarial, 2026-09-09) — passes the connector's
+      // OWN board along so index.ts can filter against whichever board is
+      // actually open before pushing; this cmd handler doesn't know or
+      // care which board that is, it just always looks the connector's up
+      // and hands it over (`getConnectorBoardId` returns `undefined` in
+      // the unlikely case the row vanished between the UPDATE above and
+      // this lookup — index.ts's filter naturally drops that too, since
+      // `undefined !== activeBoardId`).
+      callbacks.onConnectorLabelChanged(req.connectorId, label, callbacks.getConnectorBoardId(req.connectorId));
       return { ok: true };
     }
 
@@ -1390,6 +1838,16 @@ export function createMessageBus(
 
     if (req.cmd === "spawn_agent") {
       if (!req.provider) return { ok: false, error: "missing provider" };
+      // ANTIGRAVITY_EFFORT_VALUES's own comment above has the full
+      // decision writeup (refuse, never silently remap). Checked before
+      // the spawn-depth budget below is touched — an invalid request
+      // shouldn't cost the caller part of its recursion allowance.
+      if (req.provider === "antigravity" && req.effort !== undefined && !ANTIGRAVITY_EFFORT_VALUES.has(req.effort)) {
+        return {
+          ok: false,
+          error: `antigravity only accepts effort "low" or "high", got "${req.effort}" — refusing to spawn rather than silently substituting a different value`,
+        };
+      }
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
       // Pre-release audit S4 — ignores `req.depth` entirely; see
@@ -1568,7 +2026,7 @@ export function createMessageBus(
     // what exit code accompanied it. A report that DID arrive is not this
     // case — whatever it said is the real outcome, for whoever reads it
     // to call update_task, not this engine to guess.
-    if (!cardReports.has(cardId)) {
+    if (!callbacks.getReport(cardId)) {
       const task = callbacks.listTasks().find((t) => t.card_id === cardId && t.status === "running");
       if (task) markTaskFailed(task, `process exited (code ${exitCode}) without ever calling report`);
     }
@@ -1720,10 +2178,10 @@ export function createMessageBus(
       // can't also see this task as still `pending` and dispatch it
       // twice — same race this guards against as `markWaiting`'s ref-
       // count elsewhere in this file.
-      callbacks.upsertTask({ ...task, status: "running", updated_at: Date.now() });
+      callbacks.upsertTask({ ...task, status: "running", updated_at: Date.now(), actor: "app" });
       autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
         if (result.ok) {
-          callbacks.upsertTask({ ...task, status: "running", card_id: result.cardId, updated_at: Date.now() });
+          callbacks.upsertTask({ ...task, status: "running", card_id: result.cardId, updated_at: Date.now(), actor: "app" });
         } else {
           markTaskFailed(task, result.error);
         }
@@ -1738,7 +2196,7 @@ export function createMessageBus(
    * spawn failure, a card exiting silently below) gets the same
    * auto-retry treatment. */
   function markTaskFailed(task: TaskRow, error: string) {
-    const failed: TaskRow = { ...task, status: "failed", result_json: JSON.stringify({ error }), updated_at: Date.now() };
+    const failed: TaskRow = { ...task, status: "failed", result_json: JSON.stringify({ error }), updated_at: Date.now(), actor: "app" };
     callbacks.upsertTask(failed);
     retryOrFail(failed);
   }
@@ -1782,11 +2240,12 @@ export function createMessageBus(
       retry_count: task.retry_count + 1,
       attempted_providers_json: JSON.stringify(attempted),
       updated_at: Date.now(),
+      actor: "app",
     };
     callbacks.upsertTask(retrying);
     autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
       if (result.ok) {
-        callbacks.upsertTask({ ...retrying, card_id: result.cardId, updated_at: Date.now() });
+        callbacks.upsertTask({ ...retrying, card_id: result.cardId, updated_at: Date.now(), actor: "app" });
       } else {
         markTaskFailed(retrying, result.error);
       }
@@ -1847,8 +2306,140 @@ export function createMessageBus(
   // board, everything, not just acbridge). Only acbridge messaging needs
   // this socket; failing to bind it should never be fatal to the rest of
   // the app.
-  server.on("error", (err) => {
+  // Achado ao vivo (Pop!_OS, 2026-09-09, ponto seguinte do coordenador) —
+  // provado com repro standalone (node -e, fora deste arquivo) antes de
+  // implementar: bindar um `net.createServer()` sobre um `sockPath` já
+  // ocupado falha com EADDRINUSE tanto quando há alguém VIVO escutando lá
+  // quanto quando é um arquivo órfão de um shutdown sujo (socket morto ou
+  // até um arquivo comum) — o código do erro sozinho NÃO distingue os dois
+  // casos. O que distingue é tentar `connect()` nesse mesmo path depois:
+  // `ECONNREFUSED` quando não tem ninguém do outro lado (seguro apagar e
+  // rebindar), conexão aceita quando tem uma instância viva de verdade
+  // (nunca apagar, nunca tentar rebindar — é exatamente o unlink cego que
+  // causava o bug original, incluindo a variante dev-apaga-o-socket-do-
+  // -packaged documentada no comentário da entrada desta função).
+  // `bindRetried` garante no máximo UMA tentativa de rebind — sem isso, um
+  // EADDRINUSE persistente (ex. a sonda de conexão também falhando por
+  // outro motivo, ou uma corrida onde outra instância rebinda de novo entre
+  // o unlink e o `listen` daqui) viraria um loop infinito de unlink/listen.
+  let bindRetried = false;
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE" && !bindRetried) {
+      bindRetried = true;
+      // Achado 2 (review adversarial, 2026-09-09) — baseline pra checar de
+      // novo logo antes do unlink no branch ECONNREFUSED abaixo. Sem isto,
+      // duas instâncias subindo ao mesmo tempo sobre o MESMO socket órfão
+      // tomam ECONNREFUSED as duas; se a primeira já apagou+rebindou antes
+      // da segunda chegar no `unlinkSync`, a segunda apagaria o socket VIVO
+      // da primeira. `null` (path já não existia quando o EADDRINUSE
+      // chegou — improvável mas possível) é tratado como "sem base pra
+      // provar que nada mudou", o mesmo jeito conservador do branch abaixo.
+      let statAtProbeTime: SockIdentity | null = null;
+      try {
+        const st = statSync(sockPath);
+        statAtProbeTime = { dev: st.dev, ino: st.ino };
+      } catch {
+        // Nada em sockPath agora — segue sem baseline.
+      }
+      const probe = createConnection(sockPath);
+      probe.on("connect", () => {
+        probe.end();
+        console.error("message-bus: outro processo já escuta em", sockPath, "— acbridge desta instância fica indisponível (sem rebind, sem unlink).");
+        try {
+          callbacks.notifyBusUnavailable(`outro processo já escuta em ${sockPath}`);
+        } catch {
+          // Nunca deixar o próprio aviso derrubar o processo — mesma
+          // garantia documentada abaixo pro bind em si.
+        }
+      });
+      probe.on("error", (probeErr: NodeJS.ErrnoException) => {
+        if (probeErr.code === "ECONNREFUSED") {
+          // Ninguém do outro lado — socket órfão (ou arquivo comum, mesmo
+          // tratamento: o comentário antigo desta função já cobria "stale
+          // socket from an unclean previous shutdown", só que incondicional
+          // demais).
+          //
+          // Achado 2 (review adversarial, 2026-09-09) — antes de apagar,
+          // reconfirma que o path ainda é o MESMO arquivo sondado
+          // (`statAtProbeTime`). Mitiga, não elimina, a corrida entre duas
+          // instâncias sondando o mesmo órfão ao mesmo tempo: não existe
+          // "unlink condicionado a inode" atômico em POSIX/Node, então
+          // ainda sobra uma janela (bem menor) entre ESTE segundo stat e o
+          // `unlinkSync` logo abaixo onde uma 3ª instância poderia entrar.
+          // Aceito conscientemente — ver a resposta ao coordenador sobre a
+          // alternativa considerada (bind num path temporário + rename
+          // atômico sobre o alvo) e por que não foi essa a escolha aqui.
+          let currentStat: SockIdentity | null = null;
+          try {
+            const st2 = statSync(sockPath);
+            currentStat = { dev: st2.dev, ino: st2.ino };
+          } catch {
+            // Sumiu de novo entre os dois stats — outra instância deve
+            // estar no meio do próprio dance dela agora mesmo.
+          }
+          if (!sameSockIdentity(statAtProbeTime, currentStat)) {
+            console.error(
+              "message-bus:",
+              sockPath,
+              "mudou entre a sonda e o unlink — outra instância deve ter assumido o path; não apago, não rebindo.",
+            );
+            try {
+              callbacks.notifyBusUnavailable(`${sockPath} mudou entre a sonda e o unlink — outra instância assumiu o path`);
+            } catch {
+              // Idem — nunca derruba o processo.
+            }
+            return;
+          }
+          try {
+            unlinkSync(sockPath);
+          } catch {
+            // Já sumiu — outra corrida qualquer resolveu antes da gente.
+          }
+          server.listen(sockPath);
+        } else {
+          console.error("message-bus: sonda de conexão em", sockPath, "falhou com", probeErr.code, "— não sei se é seguro remover, então não removo.");
+          try {
+            callbacks.notifyBusUnavailable(String(probeErr));
+          } catch {
+            // Idem — nunca derruba o processo.
+          }
+        }
+      });
+      return;
+    }
     console.error("message-bus: failed to bind, acbridge will be unavailable:", err);
+    try {
+      callbacks.notifyBusUnavailable(String(err));
+    } catch {
+      // Nunca deixar o próprio aviso de indisponibilidade derrubar o
+      // processo — mesma garantia documentada acima pro bind em si.
+    }
+  });
+  // Bug real relatado (Pop!_OS, 2026-09-09) — o `close()` abaixo fazia
+  // `unlinkSync(sockPath)` cego, sem checar se o arquivo no path ainda era
+  // o socket deste server. Sequência confirmada: 2ª instância sobe (sem
+  // `app.requestSingleInstanceLock()` em index.ts, na época), unlinka o
+  // sock da 1ª (viva) na entrada de `createMessageBus` (linha acima),
+  // binda o seu, a janela da 2ª fecha, `close()` roda e unlinka de novo —
+  // a 1ª instância sobrevive com o server escutando num inode sem nome
+  // nenhum no filesystem, e o Stop hook do Claude Code (`acbridge
+  // turn-complete`) passa a falhar com ENOENT mesmo com o processo do
+  // Stellar vivo. `index.ts` agora recusa a 2ª instância antes de chegar
+  // aqui, mas esta guarda fica como segunda linha de defesa: só sabemos
+  // que o socket é NOSSO se o dev+ino do path, checado no exato momento em
+  // que o bind terminou (`listening`), ainda bater com o que está lá na
+  // hora de fechar.
+  let ownSockStat: SockIdentity | null = null;
+  server.on("listening", () => {
+    try {
+      const st = statSync(sockPath);
+      ownSockStat = { dev: st.dev, ino: st.ino };
+    } catch {
+      // Entre o listen() e este callback o arquivo já pode ter sumido de
+      // novo (outro processo disputando o mesmo path) — sem stat aqui,
+      // `close()` simplesmente não vai conseguir provar posse depois, e
+      // por segurança não vai remover nada.
+    }
   });
   server.listen(sockPath);
 
@@ -1867,8 +2458,15 @@ export function createMessageBus(
     pendingStickyOps.clear();
     pendingCardExits.clear();
     waitingOnConsent.clear();
-    cardReports.clear();
+    // DESIGN-BACKLOG.md §2.1 — `cardReports` (o `Map` em memória) morreu
+    // com esta tarefa; o slot em si agora vive no SQLite (`ReportRow`,
+    // store.ts) e NÃO é limpo aqui — `close()` derruba o socket/timers
+    // deste bus, não apaga histórico persistido. `pendingReportWaiters`
+    // continua em memória de propósito (ver o comentário grande acima de
+    // `reportSeqCounter`) — waiters de UMA execução, corretamente
+    // descartados quando o bus derruba.
     pendingReportWaiters.clear();
+    lastReportNotifyAt.clear();
     for (const { timer } of pendingSpawnAgents.values()) clearTimeout(timer);
     pendingSpawnAgents.clear();
     for (const { timer } of pendingSpawnCards.values()) clearTimeout(timer);
@@ -1877,11 +2475,221 @@ export function createMessageBus(
     spawnQueue.clear();
     clearInterval(idleWatchTimer);
     previousIdleState.clear();
+    // Bug real relatado (Pop!_OS, 2026-09-09) — descoberta ao escrever o
+    // teste desta guarda: `server.close()` ELE MESMO já faz um unlink cego
+    // do que estiver em `sockPath` como parte da limpeza do bind AF_UNIX no
+    // libuv, ANTES de qualquer checagem nossa depois dele rodar (confirmado
+    // empiricamente: `server.close()` removeu até um arquivo comum que
+    // tinha substituído o socket original). Um guard de dev/ino só DEPOIS
+    // do `close()`, como este arquivo tinha antes, chega tarde demais — o
+    // dano já foi feito por dentro do próprio Node. Por isso a checagem
+    // roda ANTES: se o path não for mais o nosso (outra instância já
+    // rebindou por cima), o que está lá é retirado do caminho (rename
+    // atômico, mesmo filesystem) antes do `close()`, e devolvido depois —
+    // o unlink interno do libuv passa a mirar um path vazio (sem efeito)
+    // em vez do arquivo de outra instância viva.
+    //
+    // Achado 1 (review adversarial, 2026-09-09, severidade alta) — a
+    // versão anterior comparava `st` contra `ownSockStat` mesmo quando
+    // `ownSockStat` era `null` (esta instância NUNCA chegou a bindar —
+    // exatamente o caso de uma instância de dev que toma EADDRINUSE porque
+    // o app empacotado está vivo e dono do socket). `isOurs` dava `false`
+    // por vacuidade, e o rename dance MOVIA O SOCKET VIVO DA OUTRA
+    // INSTÂNCIA pra `.foreign-<uuid>` — durante a janela do dance, todo
+    // `acbridge` da instância viva toma ENOENT (o bug reportado, causado
+    // pelo próprio código escrito pra consertá-lo); se este processo morre
+    // no meio do dance (SIGINT/crash/kill), o rename de volta nunca roda e
+    // o bug fica PERMANENTE. A correção original tratava `ownSockStat ===
+    // null` só como "nunca bindei" — errado, ver o achado seguinte.
+    //
+    // Achado seguinte (review adversarial, 2026-09-09, medido antes de
+    // implementar — repro standalone, `node -e`, fora deste arquivo):
+    // `ownSockStat` só é preenchido dentro do handler de `"listening"`, que
+    // o Node dispara via um `process.nextTick` interno agendado DURANTE a
+    // chamada síncrona de `server.listen()`. Medição: logo depois que
+    // `server.listen(sockPath)` RETORNA, no MESMO tick síncrono — antes de
+    // qualquer `nextTick`/`setImmediate`/`setTimeout` rodar — `server
+    // .listening` já é `true` e o arquivo do socket já existe de verdade no
+    // disco, mas o evento `"listening"` ainda não disparou. Ou seja: se
+    // algo chamar `close()` sincronamente logo depois que
+    // `createMessageBus()` retorna (sem `await` no meio — o padrão comum
+    // de `index.ts`), essa instância JÁ bindou de verdade mas
+    // `ownSockStat` ainda é `null`. Não é uma corrida rara — é uma janela
+    // garantida em TODO bind bem-sucedido.
+    //
+    // A pergunta certa, portanto, não é "eu sei qual é o meu socket?"
+    // (`ownSockStat`) sozinha — é duas perguntas separadas: "eu bindei?"
+    // (`server.listening`, o getter síncrono do próprio Node, sempre
+    // correto no instante em que `close()` roda) e, só se a resposta for
+    // sim, "eu sei QUAL arquivo é o meu?" (`ownSockStat`). Três
+    // combinações:
+    //   1. `!server.listening` — nunca bindei (ou já não estou bindado).
+    //      Nada pra proteger, `close()` não toca no filesystem.
+    //   2. `server.listening && ownSockStat !== null` — bindei e sei qual é
+    //      o meu. Dance de sempre: só move se o arquivo no path não for o
+    //      meu.
+    //   3. `server.listening && ownSockStat === null` — a janela nova:
+    //      bindei de verdade, mas ainda não capturei qual arquivo é o meu.
+    //      Sem baseline pra provar nada, ai postura conservadora: PROTEGE
+    //      de qualquer forma, mesmo sem prova — o dance roda incondicional.
+    //      Consequência aceita: se o arquivo no path era mesmo o nosso, o
+    //      rename de volta (o mesmo bloco de restauração que já existe pro
+    //      caso 2, logo depois do `server.close()`) devolve ele pro NOME
+    //      original — só que agora como um socket comum órfão (ninguém
+    //      mais escuta nele, este processo já fechou). Isso é
+    //      autocurável: a sonda de EADDRINUSE da PRÓXIMA inicialização
+    //      (deste ou de outro processo) o acha exatamente em `sockPath`,
+    //      toma ECONNREFUSED contra ele, apaga e rebinda. Órfão que se
+    //      cura sozinho é estritamente melhor que apagar o socket vivo de
+    //      uma instância que não era esta.
+    // Achado (review adversarial, 2026-09-09, encontrado ESCREVENDO o teste
+    // do achado seguinte, não pedido diretamente) — a versão anterior fazia
+    // o "park" com `renameSync(sockPath, parked)`, que REMOVE o nome
+    // original imediatamente, deixando `sockPath` VAZIO pela duração
+    // INTEIRA de "park → server.close() → restaura" — uma janela sob
+    // controle nosso, maior do que precisa ser, durante a qual uma
+    // instância B poderia bindar em `sockPath`. Pior: `server.close()`
+    // ELE MESMO já faz um unlink incondicional de QUALQUER COISA que
+    // esteja em `sockPath` no momento em que roda (achado bem mais antigo
+    // deste arquivo) — então se B bindar nessa janela ampliada, é o
+    // PRÓPRIO `server.close()` que destrói o socket de B, ANTES da nossa
+    // restauração sequer rodar; nenhuma escolha de primitiva no passo de
+    // restauração evita isso, porque o estrago já foi feito mais cedo.
+    //
+    // Provado com repro standalone (`node -e`, fora deste arquivo, antes de
+    // implementar): trocar o park de `renameSync` (destrutivo, remove o
+    // nome original na hora) por `linkSync` (cria um SEGUNDO nome pro
+    // MESMO inode, sem tocar no original) elimina essa janela auto-
+    // infligida por completo — `sockPath` continua com o conteúdo original
+    // até o exato instante em que `server.close()` o remove por conta
+    // própria (o mesmo instante que já existiria de qualquer forma, pra
+    // QUALQUER server AF_UNIX fechando, com ou sem este código). Depois
+    // disso, sobra só a janela residual mínima entre o retorno de
+    // `server.close()` e a chamada de restauração logo abaixo — a MESMA
+    // janela, curtíssima, que o `linkSync`-com-EEXIST da restauração já
+    // protege (ver o comentário grande no bloco de restauração).
+    let parkedForeignPath: string | null = null;
+    // Junto de `parkedForeignPath`, registra QUAL combinação estacionou o
+    // arquivo: decide, lá embaixo, o que fazer com ele se a restauração não
+    // puder devolvê-lo ao nome original (ver o comentário grande antes do
+    // `linkSync` de restauração).
+    //   - Combinação 2: sabemos, por `ownSockStat`, que o arquivo NÃO é
+    //     nosso — é de outra instância qualquer.
+    //   - Combinação 3: não temos prova nenhuma — pode ser nosso.
+    let parkedMightBeOurs = false;
+    if (server.listening) {
+      if (ownSockStat !== null) {
+        // Combinação 2.
+        try {
+          const st = statSync(sockPath);
+          const isOurs = sameSockIdentity(ownSockStat, { dev: st.dev, ino: st.ino });
+          if (!isOurs) {
+            parkedForeignPath = `${sockPath}.foreign-${randomUUID()}`;
+            linkSync(sockPath, parkedForeignPath);
+            parkedMightBeOurs = false;
+          }
+        } catch {
+          // Nada em sockPath (ENOENT) — nada pra proteger, `close()` não
+          // tem o que apagar. Ou o `linkSync` falhou por outro motivo —
+          // segue sem backup, mesma postura conservadora de sempre.
+        }
+      } else {
+        // Combinação 3 — bindei, mas sem baseline ainda. Protege sem
+        // condição nenhuma, mesmo sem prova de que era necessário: o
+        // bloco de restauração logo abaixo tenta devolver este arquivo pro
+        // NOME original (`sockPath`) depois do `server.close()` — de
+        // propósito, é isso que permite o autocura: se o arquivo era mesmo
+        // nosso, ele volta a existir em `sockPath` como um socket comum
+        // órfão (ninguém mais escutando nele), e a sonda de EADDRINUSE da
+        // PRÓXIMA inicialização o acha exatamente lá, toma ECONNREFUSED e
+        // limpa sozinha — ver o comentário grande acima.
+        try {
+          parkedForeignPath = `${sockPath}.foreign-${randomUUID()}`;
+          linkSync(sockPath, parkedForeignPath);
+          parkedMightBeOurs = true;
+        } catch {
+          // Nada em sockPath, ou `linkSync` falhou por outro motivo — nada
+          // mais a fazer aqui.
+        }
+      }
+    }
     server.close();
-    try {
-      unlinkSync(sockPath);
-    } catch {
-      // Already gone — fine.
+    if (parkedForeignPath) {
+      // Achado (review adversarial, 2026-09-09, severidade média) — esta
+      // restauração usava `renameSync(parkedForeignPath, sockPath)`, que
+      // sobrescreve incondicionalmente (`rename()` POSIX clobbera o
+      // destino se existir). Combinado com o park antigo (`renameSync` no
+      // bloco acima, que já deixou de existir — ver o comentário grande
+      // logo antes de `parkedForeignPath` ser declarado), a janela em que
+      // uma instância B podia bindar em `sockPath` e ser destruída por
+      // esta restauração cobria o `server.close()` inteiro. Encolhida a
+      // janela do lado do park (via `linkSync` não-destrutivo), ainda sobra
+      // uma janela residual mínima aqui — entre `server.close()` retornar
+      // e esta restauração rodar — e é ESTA restauração, não o park, que
+      // precisa ser à prova de sobrescrever o que quer que tenha aparecido
+      // nesse intervalo.
+      //
+      // Provado com repro standalone (`node -e`, fora deste arquivo,
+      // rodado antes de implementar) antes de escolher a primitiva:
+      //   (a) `linkSync` cria um segundo nome apontando pro MESMO inode de
+      //       um arquivo de socket AF_UNIX — funciona, o socket original
+      //       não perde nada.
+      //   (b) se `sockPath` já existe (B assumiu), `linkSync` FALHA com
+      //       `EEXIST` em vez de sobrescrever — é o "crie este nome, mas
+      //       nunca substitua" atômico do POSIX, ao contrário de `rename`.
+      //   (c) o nome restaurado via `linkSync` continua servindo `connect()`
+      //       normalmente — não é um link "morto", é o mesmo socket vivo
+      //       sob o nome de volta.
+      // `if (!existsSync(sockPath))` antes de um `rename` (a sugestão
+      // original do reviewer) foi descartado por ser TOCTOU — só encurta a
+      // janela entre o check e o rename, não fecha. `linkSync` não tem essa
+      // janela: o próprio kernel recusa o `link()` atomicamente se o nome
+      // já existir.
+      try {
+        linkSync(parkedForeignPath, sockPath);
+        // Sucesso: `sockPath` agora é um segundo nome pro mesmo inode do
+        // arquivo estacionado. Remove o nome temporário — o arquivo
+        // continua vivo através do link novo criado em `sockPath`.
+        unlinkSync(parkedForeignPath);
+      } catch (linkErr) {
+        const code = (linkErr as NodeJS.ErrnoException).code;
+        if (code === "EEXIST") {
+          // Alguém assumiu `sockPath` durante a janela — exatamente o
+          // cenário que o `linkSync` existe pra recusar. O que fazer com
+          // `parkedForeignPath` agora depende de QUEM ele era
+          // (`parkedMightBeOurs`, registrado lá em cima):
+          if (parkedMightBeOurs) {
+            // Combinação 3: não tínhamos prova de que não era nosso — e
+            // agora que ninguém mais vai reclamar dele (já fechamos),
+            // apagar é só limpeza. Mesmo raciocínio do autocura acima,
+            // adiantado: em vez de deixar um `.foreign-*` órfão pra
+            // sempre, remove direto.
+            try {
+              unlinkSync(parkedForeignPath);
+            } catch {
+              // Já sumiu — tudo bem.
+            }
+          } else {
+            // Combinação 2: SABÍAMOS que não era nosso — é de uma terceira
+            // instância (nem esta, nem a B que assumiu o path agora).
+            // Apagar destruiria dado alheio sem necessidade nenhuma;
+            // deixa o `.foreign-*` no diretório em vez de arriscar.
+            console.error(
+              "message-bus: outra instância assumiu",
+              sockPath,
+              "antes da restauração — preservando o arquivo estacionado em",
+              parkedForeignPath,
+              "em vez de apagar (não era nosso).",
+            );
+          }
+        } else {
+          // Erro de `link()` que não é EEXIST (ex. cross-device, embora
+          // `parkedForeignPath` esteja sempre no mesmo diretório de
+          // `sockPath`) — mesma cautela do resto do arquivo: loga, não
+          // arrisca mexer em mais nada.
+          console.error("message-bus: falha inesperada restaurando", sockPath, "de", parkedForeignPath, ":", linkErr);
+        }
+      }
     }
   }
 

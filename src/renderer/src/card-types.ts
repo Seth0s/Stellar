@@ -13,17 +13,73 @@ export type TerminalCardData = BaseCard & {
   /** One-shot launch preference, never persisted (see AGENTS.md) — always false for a card restored from the store. */
   continueLast: boolean;
   model: string | null;
-  /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity-only
-   * companion to `model` (`providers.ts`'s `SpawnOpts.effort`). Same
-   * one-shot, never-persisted spirit as `continueLast`/`initialInput`
-   * below: it only matters at the exact moment the PTY is spawned, never
-   * re-read afterward — always null for a card restored from the store. */
-  effort: "low" | "high" | null;
+  /** Sticky item "spawn_agent effort" (2026-09-03) — started as an
+   * Antigravity-only companion to `model` (`providers.ts`'s
+   * `SpawnOpts.effort`), one-shot and deliberately NEVER persisted: it
+   * only mattered at the exact moment the PTY was spawned, never re-read
+   * afterward, so a card restored from the store always got `null` here.
+   * That was a fine default while effort only affected which Antigravity
+   * model actually ran (worst case: a cheap silent fallback to Low).
+   *
+   * Reversed 2026-09-09 (DESIGN-BACKLOG.md §2.1, real cost to the repo's
+   * owner — "a sessão era um opus medium, mas após reinício do app
+   * voltei como high e custou muito"): `claude` also takes `--effort`
+   * (confirmed via its own `--help`, low/medium/high/xhigh/max — not
+   * assumed), and there a lost effort doesn't degrade gracefully, it
+   * silently reverts to whatever effort the CLI defaults to, which can
+   * be a MORE expensive one than what was actually chosen. `effort` is
+   * now a real column (store.ts's `CardRow.effort`), round-tripped by
+   * `toRow`/`fromRow` (App.tsx) exactly like `model` — no longer
+   * one-shot.
+   *
+   * Widened to plain `string | null` (review adversarial, 2026-09-09,
+   * achado 2 — SAME class of bug as the one this whole fix is for): a
+   * first pass kept this narrowed to `"low" | "high"` and had
+   * `fromRow` coerce anything else to `null`. That's destructive, not
+   * defensive — a row already holding `"medium"` (claude's real range)
+   * gets read back as `null`, and the very next unrelated `toRow` write
+   * (drag/resize/rename, anything) then persists that `null` right over
+   * the real value, erasing it for good. `model` right above never had
+   * this problem because it was never enum-narrowed in the first place.
+   * The app's own write paths (still only `spawn_agent`, still
+   * low/high-only per its own zod schema — see mcp-server.ts, untouched
+   * here on purpose) don't need the wider range YET; task `a54269c1`
+   * covers actually exposing `medium`/`xhigh`/`max` end to end. This
+   * widening is scoped narrower than that: just stop the round-trip
+   * from destroying a value it doesn't recognize, exactly like `model`
+   * already never destroys anything.
+   *
+   * No live-in-session-change detection, on purpose, same doctrine as
+   * `resumeId`'s own limitation (session-watch.ts's
+   * `RESUME_TRIGGER_COMMANDS` doc comment): running e.g. `/model` or an
+   * effort-changing command INSIDE an already-open session changes that
+   * CLI's live state, but this app has no confirmed hook into it for
+   * effort on ANY provider (only claude's `/resume` trigger is
+   * confirmed-live, and that's a different command). The persisted
+   * value is always the one that was true at SPAWN time, and it wins
+   * silently on restart — a guessed trigger command would be worse than
+   * documenting this, not better. */
+  effort: string | null;
   systemPrompt: string | null;
   /** One-shot text typed into the PTY right after spawn (item 57 ponto
    * 13) — same never-persisted spirit as `continueLast`, always null for
    * a card restored from the store. */
   initialInput: string | null;
+};
+
+/** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido", 2026-09-10 —
+ * per-provider effort ranges, confirmed live against each CLI's own
+ * `--help`/error output (not assumed — see providers.ts's `SpawnOpts.
+ * effort` doc comment). Used by Rail.tsx's terminal-creation popover to
+ * only ever OFFER a value a provider actually accepts, instead of letting
+ * a human pick e.g. "medium" for antigravity and finding out later it was
+ * refused (message-bus.ts's `spawn_agent` handler enforces the same
+ * antigravity range for agent-driven spawns, which don't go through this
+ * popover at all). Every provider not listed here doesn't read `effort`
+ * — no options offered, same as before this map existed. */
+export const PROVIDER_EFFORT_VALUES: Record<string, readonly string[]> = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  antigravity: ["low", "high"],
 };
 
 export type FilesCardData = BaseCard & { kind: "files"; root: string };

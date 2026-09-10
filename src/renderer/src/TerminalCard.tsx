@@ -97,9 +97,11 @@ function TerminalCardInner({
   /** One-shot launch preference, never persisted — see AGENTS.md. */
   continueLast: boolean;
   model: string | null;
-  /** Sticky item "spawn_agent effort" — Antigravity-only companion to
-   * `model`, same one-shot never-persisted spirit. */
-  effort: "low" | "high" | null;
+  /** Sticky item "spawn_agent effort" — companion to `model`, persisted
+   * exactly like it since 2026-09-09 (see card-types.ts's
+   * `TerminalCardData.effort` doc comment) — widened from "low" | "high"
+   * to plain string there too, same day, so this stays in sync. */
+  effort: string | null;
   systemPrompt: string | null;
   /** One-shot text typed into a fresh PTY right after spawn (see
    * useTerminal.ts) — never persisted, only ever set by

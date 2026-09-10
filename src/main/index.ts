@@ -18,6 +18,17 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
+// Fase B (atalhos), round 2 — `matchesCombo`/`getShortcutCombo` vêm de
+// `renderer/src/shortcut-registry.ts` de propósito: é um módulo puro (zero
+// import de React/DOM/Electron, confirmado — só depende de `keyboard-
+// shortcut-guard.ts`, também puro), então importável daqui sem trazer
+// nada do bundle do renderer junto (cada alvo do electron-vite — main/
+// preload/renderer — é compilado separado; um import relativo simples
+// resolve normal). Não existe pasta `shared/` neste repo pra um único
+// arquivo justificar criar; o ponto real é que main usa o MESMO objeto
+// `combo` que o registro declara pro zoom, não uma cópia dos literais —
+// ver o doc comment de `getShortcutCombo`.
+import { matchesCombo, getShortcutCombo, type ShortcutKeyEvent } from "../renderer/src/shortcut-registry";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { refreshUserEnv, userEnvSnapshot } from "./user-env";
@@ -100,6 +111,13 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const isDev = !app.isPackaged;
+
+// Fase B (atalhos), round 2 — os dois combos que `before-input-event`
+// (mais abaixo, `createWindow`) realmente casa contra, lidos direto do
+// registro em vez de literais soltos aqui. `getShortcutCombo` lança se o
+// id sumir do registro — falha no boot, não um zoom quieto e quebrado.
+const ZOOM_IN_COMBO = getShortcutCombo("canvas.zoomIn");
+const ZOOM_OUT_COMBO = getShortcutCombo("canvas.zoomOut");
 
 // Pre-release audit B6 — `handleSnapshotRequest`/`onReadCardRequest`
 // below each register a one-shot `ipcMain` reply listener while waiting
@@ -185,6 +203,57 @@ app.commandLine.appendSwitch("enable-features", "WebRTCPipeWireCapturer");
 // state into ~/.config/Electron instead of ~/.config/agent-canvas. Pin it
 // explicitly so userData is deterministic regardless of launch method.
 app.setName("agent-canvas");
+
+// Bug real relatado (Pop!_OS, 2026-09-09) — sem lock de instância única,
+// nada impedia DUAS instâncias do Stellar coexistindo (ex.: um segundo
+// clique no launcher). `createWindow()`, chamado de `app.whenReady().then()`
+// lá embaixo, é quem abre o store, o socket do acbridge
+// (`message-bus.ts`'s `createMessageBus`) e o servidor MCP — nada disso
+// roda antes de `whenReady`, então barrar a 2ª instância AQUI, antes de
+// qualquer `.then()` rodar, evita o efeito colateral inteiro, não só o
+// socket. Sequência confirmada que isto fecha: 2ª instância sobe, unlinka
+// o `.sock` da 1ª (viva) na entrada de `createMessageBus`, binda o seu, a
+// janela da 2ª fecha, seu `close()` unlinka de novo — sobra a 1ª instância
+// com o server escutando num inode sem nome nenhum no filesystem, e o Stop
+// hook do Claude Code (`acbridge turn-complete`) passa a falhar com
+// `connect ENOENT` mesmo com o processo do Stellar vivo.
+//
+// Posição CORRIGIDA (revisão do coordenador, 2026-09-09) — este bloco
+// tinha ficado ANTES do `app.setName()` acima numa primeira versão desta
+// correção. Errado: `requestSingleInstanceLock()` deriva sua chave da
+// identidade/userData do app (mesmo `app.getPath("userData")` que
+// `sockPath`/`openStore`/`createSecretsStore` usam, linhas abaixo), e o
+// comentário logo acima de `app.setName()` já documenta que, sem ele,
+// `app.name` cai pro default do Electron ("Electron") em vez de
+// "agent-canvas" quando lançado pelo entry point compilado (não `electron
+// .`) — exatamente como electron-vite dev e o binário empacotado rodam.
+// Pegar o lock ANTES do `setName()` adquiria sob a identidade errada, não
+// sob "agent-canvas": tinha que rodar depois, e ainda assim antes de
+// qualquer efeito colateral real (store/socket/mcp/janela), daí ficar bem
+// aqui.
+//
+// Gate em `app.isPackaged` (resposta ao ponto 2 do coordenador) — dev e
+// packaged chamam o MESMO `app.setName("agent-canvas")`, logo
+// compartilhariam o mesmo userData e portanto o mesmo lock se ambos o
+// pedissem. O dono deste repo roda o build de dev com o Stellar instalado
+// já aberto (fluxo de desenvolvimento normal) — sem este gate, a instância
+// de dev perderia a corrida pelo lock, chamaria `app.quit()` e morreria
+// silenciosamente toda vez. O caso real reportado (Pop!_OS) é sempre o app
+// EMPACOTADO; travar a 2ª instância só quando `app.isPackaged` continua
+// fechando esse bug para o usuário final sem quebrar o fluxo de dev.
+// Trade-off aceito: duas instâncias de DEV rodando ao mesmo tempo (bem
+// mais raro, e um cenário que o próprio desenvolvedor controla) não são
+// protegidas por este lock — ficam sujeitas ao mesmo bug de socket que
+// motivou esta correção, mas isso é dev local, não o relato original.
+const gotSingleInstanceLock = app.isPackaged ? app.requestSingleInstanceLock() : true;
+if (app.isPackaged && !gotSingleInstanceLock) {
+  // `app.quit()` é assíncrono — não interrompe a execução síncrona deste
+  // módulo. O guard dentro de `app.whenReady().then()` lá embaixo
+  // (`if (!gotSingleInstanceLock) return;`) é o que garante de verdade que
+  // `createWindow()` nunca roda nesta instância, mesmo se `ready` disparar
+  // antes do quit terminar.
+  app.quit();
+}
 
 /**
  * A PTY/browser-view event can fire after the window has already been torn
@@ -342,6 +411,96 @@ function openExternally(target: string): void {
 }
 
 function createWindow() {
+  // Atalhos fase A, item 4 — revisão pós-review rodada 3 (2026-09-09,
+  // achado único, ALTA): a rodada anterior neutralizava Ctrl+R/Ctrl+W via
+  // `before-input-event` + um cache `terminalFocused` alimentado por IPC
+  // assíncrono do renderer (`focusin`/`focusout`). A CORRIDA real: sair de
+  // um terminal (clicar fora) e teclar Ctrl+R ANTES do `focusout` chegar
+  // ao main fazia o acelerador nativo recarregar a janela — perda de
+  // estado real do usuário. Encurtar a janela de tempo não resolve
+  // corrida nenhuma, só reduz a chance dela se manifestar.
+  //
+  // Solução do reviewer (melhor que a original) — REMOVER o acelerador da
+  // fonte em vez de tentar vencer a corrida: um `Menu` PRÓPRIO,
+  // construído aqui, que simplesmente não inclui os roles que geram
+  // reload/close/zoom/quit/minimize. Sem esses roles, Ctrl+R/Ctrl+W (e
+  // companhia) não têm NENHUM comportamento nativo pra neutralizar —
+  // deixam de existir por construção, não por timing. `Menu.
+  // buildFromTemplate`, não `Menu.setApplicationMenu(null)`: um menu nulo
+  // mataria TAMBÉM o Ctrl+Shift+I (`role: "toggleDevTools"` é um item do
+  // menu default do Electron; sem menu nenhum, o atalho de teclado dele
+  // some junto) — o motivo original de nunca ter usado `null` na rodada 1
+  // continua valendo. O Edit abaixo existe só pra manter Ctrl+A/C/V/X/Z
+  // nativos em campos de texto — cada um desses roles já vem com o
+  // acelerador padrão do Electron, nenhum hardcoded aqui.
+  //
+  // Eliminados de graça (nenhum role correspondente neste menu, logo
+  // nenhum acelerador nativo): Ctrl+Shift+R (`forceReload`), Ctrl+0
+  // (`resetZoom`), Ctrl+W (`close`, já neutralizado na rodada 1 — agora
+  // eliminado na fonte também), Ctrl+Q (`quit`) e Ctrl+M (`minimize`) —
+  // todos roles do menu default do Electron que simplesmente não estão
+  // neste template. `before-input-event` (main/index.ts, mais abaixo)
+  // encolheu pra cuidar só de Ctrl+Plus/Ctrl+Minus (redireciona pro zoom
+  // do canvas) — isso NUNCA teve corrida (não depende de estado do
+  // renderer, só faz `preventDefault` + reenvia um gatilho, nenhum cache
+  // envolvido) e não tinha por que mudar. Ctrl+R/Ctrl+W não são mais
+  // tratados lá: sem role nenhum os alimentando, o keydown flui normal
+  // pro DOM — chega ao xterm (reverse-i-search/apagar-palavra) quando um
+  // terminal está focado, sem cache, sem IPC, sem corrida possível.
+  //
+  // NÃO eliminados por este menu (fora do alcance de qualquer `Menu` do
+  // Electron, confirmado pelo review) — Alt+←/→: navegação de histórico
+  // embutida no `content` layer do Chromium que o Electron usa por baixo,
+  // INDEPENDENTE de menu (gotcha documentado da comunidade Electron — só
+  // dá pra neutralizar via `before-input-event`, que não faz isso hoje).
+  // Registrado, não tratado agora — fase B decide. F5/Ctrl+P/Ctrl+F NUNCA
+  // fizeram parte do menu default do Electron (confirmado pelo review) —
+  // a suspeita da rodada 1 estava errada, não é que "podem nunca ter
+  // feito nada": nunca fizeram mesmo. F5 fica livre por isso — ver abaixo.
+  //
+  // Achado leve da rodada 3 (review aprovou o resto, pediu só isto) — sem
+  // NENHUM role de reload, quem desenvolve com HMR perdeu Ctrl+R/Ctrl+
+  // Shift+R como fluxo de trabalho de verdade (recarregar a janela pra
+  // ver uma mudança), não só uma conveniência de usuário final. Reabrir
+  // via role 'reload'/'forceReload' SEM MAIS mexer no acelerador voltaria
+  // a competir com reverse-i-search/apagar-palavra do xterm (a corrida
+  // que a rodada 3 acabou de eliminar) — mas Electron permite dar um
+  // `accelerator` PRÓPRIO a um `role`, substituindo (não somando) o
+  // default do role: `{ role: "reload", accelerator: "F5" }` só responde
+  // a F5, nunca a Ctrl+R. F5 (não Ctrl+Shift+R) porque a investigação
+  // acima já confirma as duas coisas que importam: não é tecla de
+  // readline/shell, e não colidia com nada neste app antes (nunca foi
+  // acelerador de menu aqui). `Shift+F5` pro forceReload pela mesma razão.
+  // `!app.isPackaged`: só existe em dev — um build empacotado continua
+  // sem NENHUM caminho de reload, exatamente como a rodada 3 deixou.
+  const shortcutSafeMenu = Menu.buildFromTemplate([
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "toggleDevTools" },
+        ...(app.isPackaged
+          ? []
+          : [
+              { role: "reload" as const, accelerator: "F5" },
+              { role: "forceReload" as const, accelerator: "Shift+F5" },
+            ]),
+      ],
+    },
+  ]);
+  Menu.setApplicationMenu(shortcutSafeMenu);
+
   // Test-only (2026-09-02) — mesmo padrão de `!app.isPackaged` já usado
   // por `browser:test-make-editable`/`chat:test-simulate-tool`: sem isso,
   // não existia jeito de abrir a janela principal num monitor específico
@@ -594,6 +753,10 @@ function createWindow() {
    * pattern as every other debug: handler below); never read outside
    * dev builds. */
   let lastIdleNotification: { label: string; idleThresholdMs: number } | null = null;
+  /** Mesmo motivo/padrão de `lastIdleNotification` acima, pro aviso de
+   * `report` (achado ao vivo 2026-09-09, "precisamos melhorar o report") —
+   * exposto via `debug:last-report-notification`. */
+  let lastReportNotification: { label: string } | null = null;
 
   const mcpServer = createMcpServer({
     // Default 0 lets the OS assign a free ephemeral port — the URL is only
@@ -914,12 +1077,52 @@ function createWindow() {
         // derrubar o poller de idle, só não notifica.
       }
     },
+    // Achado ao vivo (2026-09-09) — "ja acabou, novamente você não tem
+    // informação, precisamos melhorar o report": ESTE callback é só a
+    // METADE humana do aviso — mesmo canal do `notifyIdleCard` acima (OS
+    // `Notification`, nunca o PTY), pro caso de alguém estar mesmo olhando
+    // a tela. `_spawnerId` fica sem uso AQUI de propósito (mesmo padrão de
+    // `notifyIdleCard`'s próprio `_spawnerId` acima): a entrega que
+    // alcança um AGENTE de verdade (a que faltava originalmente) é a 2ª
+    // metade, feita direto em `notifySpawnerOfReport` (message-bus.ts) via
+    // `typeAndSubmit` — o MESMO mecanismo de texto+Enter+confirmação que
+    // `send_to_card` já usa pra entregar mensagem de agente pra agente,
+    // reaproveitado lá, não duplicado aqui (2ª revisão, 2026-09-09: a
+    // 1ª correção escrevia sem apertar Enter, achando isso "menos
+    // invasivo" — na prática deixava texto pendurado no buffer de input do
+    // spawner, corrompendo a PRÓXIMA coisa que ele digitasse). Ver o
+    // comentário grande em `notifySpawnerOfReport` pra por que escrever no
+    // PTY aqui não reabre a objeção de 2026-09-04 contra o do IDLE, e por
+    // que há um throttle (`REPORT_NOTIFY_MIN_INTERVAL_MS`) por card que
+    // reporta. O corpo aqui é deliberadamente só o PONTEIRO — nunca o
+    // conteúdo do relatório. Quem recebe chama `read_report` pra ler o
+    // JSON estruturado.
+    notifyCardReported: (_spawnerId, reportingCardLabel) => {
+      lastReportNotification = { label: reportingCardLabel };
+      try {
+        new Notification({
+          title: `"${reportingCardLabel}" reportou`,
+          body: "Chame read_report para ver o resultado.",
+        }).show();
+      } catch {
+        // Mesma postura defensiva de notifyIdleCard: Notification
+        // indisponível nesse ambiente/SO nunca deve derrubar o `report`.
+      }
+    },
     // Prototipo (2026-09-06) — ver message-bus.ts's doc comment no cmd
     // `turn_complete`. Push simples pro renderer, mesmo padrão de
     // `pty:session-found`/`pty:data` abaixo — nenhum estado novo aqui no
     // main, só relay.
     notifyTurnComplete: (cardId) => {
       safeSend(win, "pty:turn-complete", cardId);
+    },
+    // Bug real relatado (Pop!_OS, 2026-09-09) — ver o comentário do
+    // `server.on("error")` em message-bus.ts. Mesmo padrão fire-and-forget
+    // de `notifyTurnComplete` acima: relay simples pro renderer via
+    // `safeSend`, nenhuma UI construída aqui (fora de escopo desta
+    // correção) — só torna o estado observável em vez de silencioso.
+    notifyBusUnavailable: (message) => {
+      safeSend(win, "acbridge:unavailable", message);
     },
     // DESIGN-BACKLOG.md item 61 — same "Bash 2°" convention as App.tsx's
     // `describeCard` (AgentAskModal's requester label), reimplemented
@@ -964,10 +1167,47 @@ function createWindow() {
         .listCards(boardId)
         .filter((c) => c.kind === "terminal" && c.provider !== "bash" && registry.isAlive(c.id)).length,
     listTasks: () => store.listTasks(),
+    // DESIGN-BACKLOG.md §2.1 item 6 — the indexed counterpart, wired now
+    // that this file is no longer locked by another agent's work.
+    listTasksByBoard: (boardId) => store.listTasksByBoard(boardId),
     getTask: (id) => store.getTask(id),
     upsertTask: (task) => store.upsertTask(task),
+    // DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — direct
+    // store pass-through, mesmo padrão das 3 linhas de tasks acima.
+    getReport: (cardId) => store.getReport(cardId),
+    upsertReport: (row) => store.upsertReport(row),
+    nextReportSeqSeed: () => store.nextReportSeqSeed(),
     listAllConnectors: () => store.listAllConnectors(),
+    // A lacuna que este comentário descrevia (2026-09-09: `set_connector_kind`
+    // gravava no banco e não avisava ninguém, então um board aberto só via
+    // o `kind` novo depois de recarregar) foi FECHADA em 2026-09-10 —
+    // `onConnectorKindChanged` logo abaixo, espelhando o push do `label`.
     setConnectorKind: (id, kind) => store.setConnectorKind(id, kind),
+    setConnectorLabel: (id, label) => store.setConnectorLabel(id, label),
+    getConnectorBoardId: (id) => store.getConnectorBoardId(id),
+    // Live push so an already-open board's pill updates without reload.
+    // Achado 2 (review adversarial, 2026-09-09) — scoped to the OPEN board
+    // before sending, same `board_id === activeBoardId` filter `listCards`
+    // above already applies for reads; without it, an agent updating a
+    // connector's label on a background board pushed straight into
+    // whichever board the renderer happens to have open right now, which
+    // just silently drops it by id (harmless-looking, but the wrong
+    // board's IPC traffic for no reason). This is genuinely new here — no
+    // OTHER push in this file (`pty:data` included) filters by
+    // `activeBoardId` today; that's this file's existing pattern for
+    // reads, not an established convention for pushes, so this is the
+    // first one, not a copy of one.
+    onConnectorLabelChanged: (id, label, boardId) => {
+      if (boardId !== activeBoardId) return;
+      safeSend(win, "connector:label-changed", id, label);
+    },
+    // Irmão do push acima, mesmo filtro de board aberto pelo mesmo motivo
+    // (um agente mexendo em conector de board de fundo não deve gerar
+    // tráfego de IPC pro board que está na tela, que só descartaria por id).
+    onConnectorKindChanged: (id, kind, boardId) => {
+      if (boardId !== activeBoardId) return;
+      safeSend(win, "connector:kind-changed", id, kind);
+    },
     onOpenRequest: (requestId, requesterId, url, reason, autoApprove) =>
       safeSend(win, "browser:ask-open", requestId, requesterId, url, reason, autoApprove),
     onCloseCardRequest: (requestId, requesterId, target, reason, autoApprove) =>
@@ -1534,6 +1774,12 @@ function createWindow() {
     return lastIdleNotification;
   });
 
+  // Test-only, same guard — see `lastReportNotification`'s doc comment above.
+  ipcMain.handle("debug:last-report-notification", () => {
+    if (app.isPackaged) return null;
+    return lastReportNotification;
+  });
+
   // DESIGN-BACKLOG.md item 12, Fase B/C.
   ipcMain.handle("secrets:has", (_e, provider: SecretProvider) => secretsStore.has(provider));
   ipcMain.handle("secrets:set", (_e, provider: SecretProvider, value: string, baseURL?: string) =>
@@ -1638,6 +1884,86 @@ function createWindow() {
   win.on("enter-full-screen", () => safeSend(win, "win:fullscreen-change", true));
   win.on("leave-full-screen", () => safeSend(win, "win:fullscreen-change", false));
 
+  // Atalhos fase A, item 4 — revisão pós-review rodada 3 (2026-09-09): o
+  // `Menu` próprio construído no topo de `createWindow()` já elimina
+  // Ctrl+R/Ctrl+W (e Ctrl+Shift+R/Ctrl+0/Ctrl+Q/Ctrl+M) na fonte — sem
+  // role nenhum os alimentando, não sobra comportamento nativo pra
+  // neutralizar aqui, e o keydown flui normal pro DOM (chega ao xterm
+  // quando um terminal está focado). O `terminalFocused`/`win:terminal-
+  // focus`/o efeito de `focusin`/`focusout` da rodada anterior sumiram
+  // inteiros — nenhum cache, nenhuma corrida possível, porque não sobrou
+  // nada de main pra saber sobre foco de terminal.
+  //
+  // O que SOBRA aqui é só Ctrl+Plus/Ctrl+Minus: sem role `zoomIn`/
+  // `zoomOut` no menu, o Chromium não tem mais zoom nativo pra brigar com
+  // o óptico do canvas, mas o REDIRECIONAMENTO pro zoom do canvas
+  // continua sendo uma feature pedida (item 4 original), não só uma
+  // neutralização — só o renderer tem o `zoomBy`/`ZOOM_STEP`
+  // (useWorldTransform.ts), daí o gatilho por IPC. Isso NUNCA teve
+  // corrida (não lê nenhum estado do renderer, só `preventDefault` +
+  // reenvia), não havia motivo pra mexer aqui.
+  //
+  // Investigado (achado do item 4, ainda válido): o card de NAVEGADOR não
+  // é mais um `WebContentsView` filho desta janela — foi reescrito pra
+  // renderização offscreen (ver o doc comment de `createBrowserRegistry`
+  // em browser-registry.ts, 2026-08-26): cada card de navegador é uma
+  // `BrowserWindow` oculta própria, com seu PRÓPRIO `webContents`,
+  // pintando num buffer que o renderer desenha num `<canvas>` dentro do
+  // DOM desta janela (BrowserCard.tsx) — esse `<canvas>` É parte do
+  // webContents desta janela, então uma tecla apertada com ele focado
+  // passa por ESTE `before-input-event` antes de `BrowserCard.tsx`'s
+  // `onCanvasKeyDown` decidir o que encaminhar pro webContents offscreen
+  // separado do card. Efeito colateral real, MENOR agora que só
+  // Ctrl+Plus/Ctrl+Minus passam por aqui (Ctrl+R/Ctrl+W voltaram a fluir
+  // normal, encaminhados crus pro card de navegador focado como qualquer
+  // outro atalho arbitrário — mesmo caminho do Ctrl+S): só essas duas
+  // teclas de zoom deixam de ser encaminhadas cruas pra dentro da página
+  // embutida quando o card de navegador está focado. Não achei nenhum uso
+  // hoje de uma página embutida dependendo disso (o card de navegador já
+  // tem seus próprios botões de reload/navegação), mas é comportamento
+  // observável — não confirmável sem o app aberto (xvfb quebrado aqui).
+  //
+  // Registrado, NÃO tratado agora (fase B decide com o registro central
+  // na mão) — Alt+←/→ (navegação de histórico) é o único item real que
+  // sobrevive a QUALQUER `Menu`: é um comportamento embutido no `content`
+  // layer do Chromium que o Electron usa por baixo, independente de menu
+  // (gotcha documentado da comunidade Electron) — só um
+  // `before-input-event` dedicado neutraliza, e este não faz isso hoje.
+  // F5/Ctrl+P/Ctrl+F estavam nesta lista desde a rodada 1 como supostos
+  // roles do menu default, mas não achei nenhum role padrão do Electron
+  // com acelerador F5/Ctrl+P/Ctrl+F documentado — suspeita herdada, não
+  // fato confirmado; podem nunca ter feito nada de especial nesta app.
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    if (!input.control && !input.meta) return;
+    // Round 2 (achado 1a do review) — casa contra `ZOOM_IN_COMBO`/
+    // `ZOOM_OUT_COMBO` (o MESMO objeto que `shortcut-registry.ts` declara
+    // pra `canvas.zoomIn`/`canvas.zoomOut`) via `matchesCombo`, no lugar
+    // dos literais que existiam aqui antes. `input.key` não precisa de
+    // `.toLowerCase()` manual — `matchesCombo` já faz o case-fold pra
+    // teclas de um caractere. `metaKey` nunca vem `true` aqui (Electron
+    // reporta Cmd como `input.meta`, já lido acima em `!input.control &&
+    // !input.meta`), mas o adaptador inclui os dois campos pra bater com
+    // `ShortcutKeyEvent` (a mesma forma que o despachante do renderer usa).
+    const asShortcutEvent: ShortcutKeyEvent = {
+      key: input.key,
+      code: input.code,
+      ctrlKey: input.control,
+      metaKey: input.meta,
+      shiftKey: input.shift,
+      altKey: input.alt,
+    };
+    if (matchesCombo(asShortcutEvent, ZOOM_IN_COMBO)) {
+      event.preventDefault();
+      safeSend(win, "win:zoom-accelerator", "in");
+      return;
+    }
+    if (matchesCombo(asShortcutEvent, ZOOM_OUT_COMBO)) {
+      event.preventDefault();
+      safeSend(win, "win:zoom-accelerator", "out");
+    }
+  });
+
   // LAN-only mobile control (DESIGN-BACKLOG.md item 2) — per-device
   // pairing (item 2 revisited): each call pairs a NEW phone (fresh id +
   // token + QR), `remote:devices` lists everyone already paired (no
@@ -1695,7 +2021,25 @@ function createWindow() {
  * congelado na tela: `useAgentAvailability.ts` checa uma vez por vida do
  * app, e essa vez pode acontecer antes desta resolução terminar.
  */
+// Foca/restaura a janela existente em vez de deixar a 2ª instância abrir a
+// dela própria — só a instância que DETÉM o lock recebe este evento
+// (Electron: emitido no processo original quando uma 2ª tentativa é
+// barrada pelo `requestSingleInstanceLock()` acima).
+app.on("second-instance", () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+
 app.whenReady().then(() => {
+  // Ver o comentário de `requestSingleInstanceLock()` no topo do arquivo —
+  // `app.quit()` já foi chamado ali pra 2ª instância, mas é assíncrono;
+  // este guard é quem de fato impede `createWindow()` (store, socket do
+  // acbridge, servidor MCP) de rodar aqui numa corrida onde `ready` dispara
+  // antes do quit terminar.
+  if (!gotSingleInstanceLock) return;
   createWindow();
   void refreshUserEnv().then(() => {
     const win = BrowserWindow.getAllWindows()[0];

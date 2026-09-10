@@ -318,10 +318,14 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
               "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: the server already knows which card you are from the MCP URL it registered for your process. Pass it only to report on behalf of a different card.",
             ),
           report: z.unknown().describe("Any JSON value — e.g. {ok: true, result: '...'} or {ok: false, error: '...'}"),
+          verdict: z
+            .enum(["aprovado", "reprovado"])
+            .optional()
+            .describe("Formal verdict for a review report — a real, typed field (not just a convention inside `report`'s free JSON). Omit for a plain non-review report."),
         },
       },
-      async ({ callerCardId, report }) => {
-        const res = await opts.handleRequest({ cmd: "report", requesterId: caller(callerCardId), report });
+      async ({ callerCardId, report, verdict }) => {
+        const res = await opts.handleRequest({ cmd: "report", requesterId: caller(callerCardId), report, verdict });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -329,15 +333,20 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "read_report",
       {
-        description: "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet.",
+        description:
+          "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet. Every report carries a `seq` assigned by the server (never the reporting card) — pass the last `seq` you saw back as `afterSeq` to wait for the NEXT report instead of instantly getting the same one back (e.g. a reviewer that reports once per round). Also returns `verdict` ('aprovado'/'reprovado'/null) when the reporter set one.",
         inputSchema: {
           target: z.string().describe("The reporting card's id (see list_cards)"),
           wait: z.boolean().optional().describe("Block until a report arrives instead of returning ok:false immediately"),
           timeoutMs: z.number().optional().describe("Override the default wait window (10 minutes) when wait is true"),
+          afterSeq: z
+            .number()
+            .optional()
+            .describe("Only accept a report with seq strictly greater than this (the `seq` from a previous read_report call) — otherwise you get the same already-seen report back"),
         },
       },
-      async ({ target, wait, timeoutMs }) => {
-        const res = await opts.handleRequest({ cmd: "get_report", target, wait, timeoutMs });
+      async ({ target, wait, timeoutMs, afterSeq }) => {
+        const res = await opts.handleRequest({ cmd: "get_report", target, wait, timeoutMs, afterSeq });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -360,10 +369,16 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Providers to reassign to, in order, on auto-retry — tries the next untried one each failure, falling back to retrying the original provider once exhausted or if omitted. Only applies inside an autonomous board.",
             ),
+          suggestedOrder: z
+            .number()
+            .optional()
+            .describe(
+              "YOUR priority guess for this task (you know what unblocks what) — shown alongside, never instead of, a human's own drag-set order. There's no agent-facing way to set that human order; it's set only by dragging on the board.",
+            ),
         },
       },
-      async ({ prompt, provider, cardId, boardId, deps, maxRetries, fallbackProviders }) => {
-        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, boardId, deps, maxRetries, fallbackProviders });
+      async ({ prompt, provider, cardId, boardId, deps, maxRetries, fallbackProviders, suggestedOrder }) => {
+        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, boardId, deps, maxRetries, fallbackProviders, suggestedOrder });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -380,10 +395,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           result: z.unknown().optional().describe("Any JSON value — the task's outcome"),
           incrementRetry: z.boolean().optional().describe("Bump the task's retry counter by 1 — e.g. after deciding to retry a task whose agent exited without reporting"),
           attemptedProvider: z.string().optional().describe("Append a provider to the task's attempted-providers list — e.g. when reassigning to a different provider after a failure"),
+          suggestedOrder: z.number().optional().describe("YOUR priority guess for this task — see create_task. Never overwrites a human's own drag-set order, which has no agent-facing setter."),
         },
       },
-      async ({ taskId, status, cardId, result, incrementRetry, attemptedProvider }) => {
-        const res = await opts.handleRequest({ cmd: "update_task", taskId, status, cardId, result, incrementRetry, attemptedProvider });
+      async ({ taskId, status, cardId, result, incrementRetry, attemptedProvider, suggestedOrder }) => {
+        const res = await opts.handleRequest({ cmd: "update_task", taskId, status, cardId, result, incrementRetry, attemptedProvider, suggestedOrder });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -391,11 +407,14 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "list_tasks",
       {
-        description: "List every recorded task — id, prompt, provider, status, current card (if any), result, deps, retryCount, attemptedProviders. Survives card closes and app restarts.",
-        inputSchema: {},
+        description:
+          "List every recorded task — id, prompt, provider, status, current card (if any), result, deps, retryCount, attemptedProviders, order/suggestedOrder. Survives card closes and app restarts.",
+        inputSchema: {
+          boardId: z.string().optional().describe("Only tasks belonging to this board — omit to list every task across every board, same as before this param existed"),
+        },
       },
-      async () => {
-        const res = await opts.handleRequest({ cmd: "list_tasks" });
+      async ({ boardId }) => {
+        const res = await opts.handleRequest({ cmd: "list_tasks", boardId });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -403,7 +422,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "get_task",
       {
-        description: "Read one task's current record by id.",
+        description:
+          "Read one task's current record by id — also includes its full status-transition trail (`transitions`) and every card linked to it with a role (`cards`, e.g. one implementing + one reviewing), unlike list_tasks which stays lean.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
         },
@@ -439,6 +459,22 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
       async ({ connectorId, kind }) => {
         const res = await opts.handleRequest({ cmd: "set_connector_kind", connectorId, kind });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "set_connector_label",
+      {
+        description:
+          "Set (or clear) an existing connector's short label — the styled pill drawn along the arrow, meant to say what the current task between the two cards actually is. Truncated the same way as any auto-generated label. Note: a `send`/`browser_*` action between the same two cards already refreshes an existing connector's label on its own the next time one happens; use this tool for an explicit update instead — e.g. announcing what a dependent card is doing right now — independent of that automatic path.",
+        inputSchema: {
+          connectorId: z.string().describe("The connector's id (see list_connectors)"),
+          label: z.string().nullable().describe("The label text, or null to clear it"),
+        },
+      },
+      async ({ connectorId, label }) => {
+        const res = await opts.handleRequest({ cmd: "set_connector_label", connectorId, label });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -499,11 +535,26 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
           model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default"),
+          // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido",
+          // 2026-09-10 — widened from `["low", "high"]` (Antigravity's own
+          // range) to the union of every provider's real range: `claude`
+          // takes `--effort low|medium|high|xhigh|max` (confirmed via its
+          // own `--help`, see providers.ts's `SpawnOpts.effort` doc
+          // comment), Antigravity only `low|high`. The two enums differ —
+          // NOT unified by picking the narrower one, which would silently
+          // make `medium`/`xhigh`/`max` unreachable for claude again, the
+          // same class of bug this whole fix is for. The provider-specific
+          // half of the validation (an antigravity spawn with an
+          // out-of-range value) happens centrally in message-bus.ts's
+          // `spawn_agent` handler, the one place that has BOTH `provider`
+          // and `effort` together — zod's per-field schema here can't see
+          // across fields without a cross-field refinement that would
+          // duplicate that same provider table.
           effort: z
-            .enum(["low", "high"])
+            .enum(["low", "medium", "high", "xhigh", "max"])
             .optional()
             .describe(
-              "Antigravity ONLY — some of its models (e.g. 'gemini-3.1-pro') require this alongside `model` or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. Ignored by every other provider.",
+              "Reasoning effort. `claude` accepts all five (low/medium/high/xhigh/max, its own --effort range). Antigravity accepts only low/high — some of its models (e.g. 'gemini-3.1-pro') require one of those alongside `model` or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. A value outside a provider's own range is REFUSED (no spawn), not silently remapped — see message-bus.ts's spawn_agent handler. Ignored by every other provider.",
             ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to look up YOUR real spawn depth and whether your board is in autonomous mode. Pass it only to override that."),

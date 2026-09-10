@@ -3,6 +3,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { which } from "./providers";
 
 /**
  * PATH efetivo do usuário — o ambiente que o Stellar precisa ver para
@@ -363,11 +364,158 @@ let refreshing: Promise<UserEnvSnapshot> | null = null;
 /** Uma tentativa por vida do app. Chamada no boot; nunca bloqueia nada. */
 export function refreshUserEnv(): Promise<UserEnvSnapshot> {
   if (refreshing) return refreshing;
-  refreshing = queryShellPath({}).then((shellPath) => {
+  refreshing = queryShellPath({}).then(async (shellPath) => {
     if (shellPath) {
       snapshot = { path: composePath(process.env.PATH, shellPath, knownBinDirs()), source: "shell" };
     }
+    // Revalida junto do PATH, não antes: `which()` (providers.ts) varre
+    // `effectivePath()`, então só faz sentido procurar um `node` real
+    // DEPOIS que o snapshot acima já reflete o que a login shell viu —
+    // resolver antes correria risco de achar um `node` do PATH mínimo do
+    // launchd (se houver) em vez do que o usuário realmente tem.
+    realNode = await resolveRealNode();
     return snapshot;
   });
   return refreshing;
+}
+
+/**
+ * Major mínima de `node` aceitável para os shims de `resources/bin`
+ * rodarem — ancorada no que os dois REALMENTE usam, não num número
+ * redondo:
+ *   - `resources/bin/stellar-mcp:135` — `await fetch(target, ...)`,
+ *     `fetch` global sem flag, estável desde o Node 18.
+ *   - `resources/bin/acbridge` — `import net from "node:net"` (topo do
+ *     arquivo), import ESM estático de builtin com prefixo `node:`,
+ *     suportado desde o Node 14 e estável no 18.
+ * Nenhum dos dois usa nada que exija major mais alta (sem
+ * `structuredClone`, sem `Array.fromAsync`, sem `AbortSignal.timeout`
+ * etc. — checado). Se algum dia um dos shims passar a exigir mais,
+ * suba este número citando o arquivo:linha que exige, não "22 é
+ * moderno".
+ */
+export const MIN_REAL_NODE_MAJOR = 18;
+
+/**
+ * Pura — decide se a SAÍDA já capturada de `node -p
+ * "process.versions.node"` (ou equivalente) é um `node` utilizável.
+ *
+ * A âncora dupla `^...$` contra o output JÁ TRIMADO (não um `.test()`
+ * solto, não uma busca do número em qualquer posição) não é só para ler
+ * a versão — é a proteção do canal. O stdout do `stellar-mcp` É o
+ * transporte JSON-RPC do MCP: um `node` que seja wrapper de verdade
+ * (script de `nvm`/`asdf`/`volta`, ou um shim corporativo) e escreva
+ * QUALQUER coisa no stdout além do número — aviso antes, aviso depois —
+ * tem que ser rejeitado aqui, porque um candidato assim sobe o card sem
+ * falar com o board (silencioso, pior que só perder os ~35 MB do
+ * fallback). Nenhuma I/O aqui de propósito: é o que o teste exercita
+ * para cobrir "aceita 18.x/22.x", "rejeita 16.x", "rejeita saída lixo" e
+ * "rejeita ruído antes/depois do número" sem precisar spawnar nada de
+ * verdade.
+ */
+export function isUsableNodeVersion(output: string | null): boolean {
+  if (!output) return false;
+  const match = /^(\d+)\.\d+\.\d+$/.exec(output.trim());
+  if (!match) return false;
+  return Number(match[1]) >= MIN_REAL_NODE_MAJOR;
+}
+
+/**
+ * Roda `<candidate> -p "process.versions.node"` e devolve a saída crua
+ * do stdout, ou `null` em qualquer falha (ENOENT, timeout, crash, exit
+ * != 0) — mesmo padrão de contenção de `queryShellPath()` (stdio
+ * fechado/descartado nas pontas que não interessam, timeout curto,
+ * `finish` idempotente porque `error` e `close` podem ambos disparar).
+ */
+function runNodeVersionCheck(candidate: string, timeoutMs = 2_000): Promise<string | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (value: string | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(candidate, ["-p", "process.versions.node"], { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      finish(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(null);
+    }, timeoutMs);
+
+    let out = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      out += chunk.toString();
+    });
+    child.on("error", () => finish(null));
+    child.on("close", (code) => finish(code === 0 ? out : null));
+  });
+}
+
+export type RealNodeFinder = (names: string[]) => string | null;
+export type RealNodeChecker = (candidate: string) => Promise<string | null>;
+
+/**
+ * Resolve um `node` real e VALIDADO, para preferir a `AGENT_CANVAS_NODE`
+ * dos PTYs em vez do binário do Electron (ver pty-registry.ts). Achar o
+ * caminho não basta: `find` por si só aceitaria um symlink de `nvm`
+ * quebrado ou uma major velha, e só a execução real cobre isso —
+ * `isExecutableFile` (o default de `which()`) só cobre "existe e tem bit
+ * de exec". `find`/`check` são injetáveis para o teste exercitar a
+ * decisão real sem depender do que está instalado na máquina do CI.
+ * Assíncrona de propósito — nunca é chamada no caminho quente de
+ * `pty-registry.ts::spawn()`, só aqui dentro de `refreshUserEnv()`, que
+ * já segue o mesmo padrão assíncrono-com-snapshot para o PATH.
+ */
+export async function resolveRealNode(opts: { find?: RealNodeFinder; check?: RealNodeChecker } = {}): Promise<string | null> {
+  const find = opts.find ?? ((names: string[]) => which(names));
+  const candidate = find(["node"]);
+  if (!candidate) return null;
+  const check = opts.check ?? runNodeVersionCheck;
+  const output = await check(candidate);
+  return isUsableNodeVersion(output) ? candidate : null;
+}
+
+/**
+ * Snapshot do `node` real, no mesmo padrão de `snapshot`/`effectivePath()`
+ * acima: nasce `null` (nada foi validado ainda no import) e só é
+ * preenchido por `refreshUserEnv()`, em background.
+ *
+ * Considerado e descartado (2026-09-09): resolver de forma síncrona-
+ * bloqueante (`spawnSync`) na PRIMEIRA chamada de `realNodePath()`, para
+ * eliminar a janela em que os primeiros cards caem no fallback. Medido
+ * ao vivo nesta máquina, `spawnSync(node, ["-p",
+ * "process.versions.node"])` custa **~97-104 ms** (5 execuções, node
+ * real do sistema) — isso é MUITO acima de "algumas dezenas de ms", e
+ * "bloqueante" aqui quer dizer travar o processo main inteiro (logo a
+ * UI do board inteira) exatamente no instante em que o primeiro card é
+ * criado, que é o pior momento possível para um freeze perceptível. Não
+ * compensa trocar uma inconsistência silenciosa (fallback ocasional, que
+ * já é o piso que sempre funciona) por um freeze de board garantido.
+ *
+ * Consequência assumida, não implícita: um card criado ANTES de
+ * `refreshUserEnv()` terminar de resolver e validar o `node` real (que
+ * também espera a interrogação da login shell, até `SHELL_TIMEOUT_MS` =
+ * 5s) recebe `AGENT_CANVAS_NODE: process.execPath` — o fallback pesado,
+ * porém correto. Cards criados depois já pegam o `node` real. Isso é
+ * inconsistência de PERFORMANCE entre cards da mesma sessão, nunca de
+ * CORREÇÃO — o fallback sempre funciona.
+ */
+let realNode: string | null = null;
+
+/** O `node` real e validado (major >= {@link MIN_REAL_NODE_MAJOR}), ou
+ * `null` se nenhum foi achado/validado ainda — síncrona pelo mesmo
+ * motivo de `effectivePath()`: nunca pode virar um `await` no caminho de
+ * `pty-registry.ts::spawn()`, e (ver o comentário de `realNode` acima)
+ * deliberadamente não virou um `spawnSync` bloqueante no lugar disso.
+ * Quem chama trata `null` caindo em `process.execPath`. */
+export function realNodePath(): string | null {
+  return realNode;
 }

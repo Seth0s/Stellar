@@ -68,11 +68,57 @@ try {
   await bootIntoFreshSession(page);
   await new Promise((r) => setTimeout(r, 500));
 
-  // Ctrl+D duplicates the auto-seeded bash terminal — two real terminal
-  // cards, same shape as smoke-card-actions.mjs's own duplicate check.
-  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "d", code: "KeyD", modifiers: 2, windowsVirtualKeyCode: 68 });
-  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "d", code: "KeyD", modifiers: 2, windowsVirtualKeyCode: 68 });
-  await new Promise((r) => setTimeout(r, 500));
+  // Atalhos fase A, item 3 (2026-09-09) — Ctrl+D não duplica mais enquanto
+  // um card de TERMINAL está ativo (o atalho passou a pertencer ao
+  // terminal — EOF do shell, ver App.tsx's keydown global); com um único
+  // terminal recém-seedado como único card do board, ele É o card ativo,
+  // então o Ctrl+D que este teste usava pra chegar a dois terminais
+  // simplesmente não dispara mais. Este teste só precisa dos DOIS cards de
+  // terminal existindo pra medir render — cria o segundo pelo caminho
+  // normal de criação (Rail → "Adicionar card" → Terminal → "Criar
+  // terminal"), não mais pelo atalho. Terminal é a única exceção de dois
+  // passos que `spawnCard` (cdp-client.mjs) não cobre — ver seu próprio
+  // comment mais abaixo, "Rail reorg... moved card creation behind an
+  // 'Adicionar card' popover for every kind but terminal".
+  async function spawnSecondTerminal() {
+    const addBtn = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const b = document.querySelector('.rail-btn[title="Adicionar card"]');
+          if (!b) return JSON.stringify(null);
+          const r = b.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()
+      `),
+    );
+    if (!addBtn) throw new Error("rail's 'Adicionar card' button not found");
+    await page.click(addBtn.x, addBtn.y);
+    await new Promise((r) => setTimeout(r, 250));
+    const clickedTerminalRow = await page.evalJs(`
+      (() => {
+        const b = document.querySelector('.popover-row[data-kind="terminal"]');
+        if (!b) return false;
+        b.click();
+        return true;
+      })()
+    `);
+    if (!clickedTerminalRow) throw new Error("'Terminal' row not found in the 'Adicionar card' popover");
+    await new Promise((r) => setTimeout(r, 250));
+    const createBtn = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const b = [...document.querySelectorAll('.popover-actions button.primary')].find((b) => b.textContent.includes('Criar terminal'));
+          if (!b) return JSON.stringify(null);
+          const r = b.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()
+      `),
+    );
+    if (!createBtn) throw new Error("'Criar terminal' button not found in the terminal-config popover (default provider)");
+    await page.click(createBtn.x, createBtn.y);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  await spawnSecondTerminal();
 
   const boardId = JSON.parse(await page.evalJs(`window.store.boards.list().then((b) => JSON.stringify(b[0].id))`));
   const terminalIds = JSON.parse(
@@ -80,7 +126,7 @@ try {
       window.store.list(${JSON.stringify(boardId)}).then((cards) => JSON.stringify(cards.filter((c) => c.kind === 'terminal').map((c) => c.id)))
     `),
   );
-  check("two real terminal cards exist after duplicating", terminalIds.length, 2);
+  check("two real terminal cards exist after spawning the second one", terminalIds.length, 2);
   const [idA, idB] = terminalIds;
 
   await new Promise((r) => setTimeout(r, 500)); // let things settle before the baseline read
@@ -94,14 +140,15 @@ try {
 
   // ---- Drag ONE card's header (at its fresh, un-panned position — clear
   // of any UI chrome) — its sibling must not budge ----
-  // The duplicate (item 7's Ctrl+D) sits only 32px diagonally offset from
-  // its source at zoom 1 — their headers can genuinely overlap on
-  // screen. Click the CARD TAG specifically (not the header's bounding
-  // box center, which can land on the overlapping sibling or an
-  // excluded [data-no-drag] element) — same real-drag element
-  // smoke-card-actions.mjs already proved works — and pick the LAST one
-  // in DOM order (the duplicate, added after the original, and topmost
-  // by z-order) so the click unambiguously lands on ONE specific card.
+  // The second terminal (spawned above via the Rail, `centeredSlot` —
+  // board-model.ts) lands wherever the collision-avoiding ring search
+  // puts it, not necessarily clear of the first — still click the CARD
+  // TAG specifically (not the header's bounding box center, which can
+  // land on an overlapping sibling or an excluded [data-no-drag] element)
+  // — same real-drag element smoke-card-actions.mjs already proved works
+  // — and pick the LAST one in DOM order (the one just spawned, added
+  // after the original, and topmost by z-order) so the click unambiguously
+  // lands on ONE specific card.
   const tagBefore = JSON.parse(
     await page.evalJs(`
       (() => {

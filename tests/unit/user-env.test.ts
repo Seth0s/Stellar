@@ -2,7 +2,18 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { composePath, fallbackShell, isExecutableFile, knownBinDirs, loginShell, mergePathDirs, queryShellPath, shellQuery } from "../../src/main/user-env";
+import {
+  composePath,
+  fallbackShell,
+  isExecutableFile,
+  isUsableNodeVersion,
+  knownBinDirs,
+  loginShell,
+  mergePathDirs,
+  queryShellPath,
+  resolveRealNode,
+  shellQuery,
+} from "../../src/main/user-env";
 import { which } from "../../src/main/providers";
 
 /**
@@ -285,5 +296,123 @@ describe("user-env: queryShellPath contra um shell de verdade", () => {
     const path = await queryShellPath({ shell: bash!, platform: "linux", execPath: "/bin/sleep", timeoutMs: 300 });
     expect(path).toBeNull();
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});
+
+/**
+ * Otimização de RSS (2026-09-09): preferir um `node` real ao invés de
+ * reexecutar o binário do Electron como Node para os shims de
+ * `resources/bin` (`stellar-mcp`, `acbridge`) — ~35 MB a menos de RSS por
+ * card, medido ao vivo nesta máquina. O que faz essa preferência segura,
+ * e não só "achar `node` no PATH", é a VALIDAÇÃO de versão: `isExecutableFile`
+ * já cobre symlink morto, só falta cobrir "existe, executa, mas é
+ * v12/v16" — que um `nvm` com versão ativa velha produziria em silêncio.
+ *
+ * `isUsableNodeVersion` é testada isolada da execução real (pura, só
+ * parsing + comparação de major — piso em `MIN_REAL_NODE_MAJOR` = 18,
+ * ancorado no que `resources/bin/stellar-mcp` e `resources/bin/acbridge`
+ * realmente usam, não escolhido a dedo), e `resolveRealNode` é testada
+ * com `find`/`check` injetados — a função de DECISÃO de produção de
+ * verdade, não um mock do comportamento do SO. A checagem estrita
+ * `^...$` também é a proteção do canal JSON-RPC do MCP contra um `node`
+ * wrapper que imprima ruído no stdout — coberta abaixo com ruído
+ * antes/depois do número.
+ */
+describe("user-env: isUsableNodeVersion", () => {
+  it("aceita uma major >= 18 (piso ancorado no que stellar-mcp/acbridge realmente usam: fetch global e import ESM de node:net, ambos estáveis desde o 18)", () => {
+    expect(isUsableNodeVersion("18.20.4")).toBe(true);
+    expect(isUsableNodeVersion("22.23.1")).toBe(true);
+    expect(isUsableNodeVersion("23.0.0\n")).toBe(true); // saída de `-p` vem com \n
+  });
+
+  it("rejeita uma major abaixo do piso", () => {
+    expect(isUsableNodeVersion("16.20.0")).toBe(false);
+    expect(isUsableNodeVersion("12.22.12")).toBe(false);
+  });
+
+  it("rejeita saída lixo/não-semver", () => {
+    expect(isUsableNodeVersion("not a version")).toBe(false);
+    expect(isUsableNodeVersion("v22.23.1")).toBe(false); // o `v` do `node --version`, não do `process.versions.node`
+    expect(isUsableNodeVersion("")).toBe(false);
+  });
+
+  it("rejeita null (candidato ausente ou falha de exec já resolvida a montante)", () => {
+    expect(isUsableNodeVersion(null)).toBe(false);
+  });
+
+  it("rejeita ruído DEPOIS do número — proteção do canal, não só parsing: o stdout do stellar-mcp É o transporte JSON-RPC do MCP, então um wrapper (nvm/asdf/volta/shim corporativo) que escreva qualquer coisa além da versão tem que cair no fallback", () => {
+    expect(isUsableNodeVersion("22.23.1\nWarning: this node is a wrapper")).toBe(false);
+    expect(isUsableNodeVersion("22.23.1 (compiled with extra flags)")).toBe(false);
+  });
+
+  it("rejeita ruído ANTES do número, pelo mesmo motivo — trim() só remove espaço nas pontas, não separa linhas internas", () => {
+    expect(isUsableNodeVersion("nvm is not compatible with the \"npm_config_prefix\" env variable\n22.23.1")).toBe(false);
+    expect(isUsableNodeVersion("Warning: 22.23.1")).toBe(false);
+  });
+});
+
+describe("user-env: resolveRealNode", () => {
+  it("resolve o candidato quando `find` acha algo e `check` confirma major válida", async () => {
+    const node = await resolveRealNode({
+      find: (names) => (names.includes("node") ? "/usr/bin/node" : null),
+      check: async (candidate) => (candidate === "/usr/bin/node" ? "22.23.1" : null),
+    });
+    expect(node).toBe("/usr/bin/node");
+  });
+
+  it("resolve null quando `find` não acha candidato nenhum — nem tenta executar", async () => {
+    let checked = false;
+    const node = await resolveRealNode({
+      find: () => null,
+      check: async () => {
+        checked = true;
+        return "22.23.1";
+      },
+    });
+    expect(node).toBeNull();
+    expect(checked).toBe(false);
+  });
+
+  it("resolve null quando o candidato existe mas a major é velha", async () => {
+    const node = await resolveRealNode({
+      find: () => "/home/x/.nvm/versions/node/v16.20.0/bin/node",
+      check: async () => "16.20.0",
+    });
+    expect(node).toBeNull();
+  });
+
+  it("resolve null quando a execução falha (symlink morto, ENOENT, crash)", async () => {
+    const node = await resolveRealNode({
+      find: () => "/caminho/quebrado/node",
+      check: async () => null,
+    });
+    expect(node).toBeNull();
+  });
+
+  it("resolve null quando a saída não parseia como versão", async () => {
+    const node = await resolveRealNode({
+      find: () => "/usr/bin/node",
+      check: async () => "command not found",
+    });
+    expect(node).toBeNull();
+  });
+
+  // Oportunista: usa `which()` de providers.ts por padrão (sem injetar
+  // `find`), então depende do PATH de verdade da máquina que roda o
+  // teste. Em CI onde o `node` do próprio vitest não está no PATH
+  // varrido por `effectivePath()`, `which(["node"])` pode não achar nada
+  // — e isso é `resolveRealNode` funcionando corretamente (retorna
+  // `null` em vez de inventar um candidato), não uma falha do teste. Por
+  // isso a asserção cobre só a FORMA do retorno, nunca "achou algo".
+  it("usa `which()` de providers.ts por padrão contra um PATH de verdade — oportunista, aceita null quando a máquina não tem node no PATH varrido", async () => {
+    const preflight = which(["node"]);
+    const node = await resolveRealNode({ check: async () => "22.23.1" });
+    if (preflight === null) {
+      expect(node).toBeNull();
+      return;
+    }
+    expect(typeof node).toBe("string");
+    expect(node).toBe(preflight);
+    expect(existsSync(node!)).toBe(true);
   });
 });

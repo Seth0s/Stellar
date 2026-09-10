@@ -21,6 +21,8 @@ import { SpawnQueuePanel } from "./SpawnQueuePanel";
 import { ConfirmModal } from "./ConfirmModal";
 import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
+import { resolveGlobalShortcut, GLOBAL_SHORTCUTS_BY_ID } from "./shortcut-registry";
+import { isAnyModalOpen } from "./modal-scope";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
 import { Rail } from "./Rail";
@@ -31,13 +33,16 @@ import { UpdateBanner } from "./UpdateBanner";
 import { Home } from "./Home";
 import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
+import { decideConnectorLabelSchedule } from "./connector-label-throttle";
 import {
   anchoredSlot,
   bboxOf,
   cascadeSlot,
   centeredSlot,
   clipLineToRect,
+  hierarchicalLayout,
   isInView,
+  nearestFreeSlot,
   pointSlot,
   quadraticControlPoint,
   rectCenter,
@@ -66,6 +71,7 @@ import type {
   StickyCardData,
   Tool,
 } from "./card-types";
+import { PROVIDER_EFFORT_VALUES } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
 import "./app.css";
@@ -83,9 +89,44 @@ const CONNECTOR_KIND_LABEL: Record<string, string> = {
 /** Contexto de tarefa no conector — trecho curto que motivou o auto-
  * connect (`label` em store.ts/card-types.ts), truncado aqui pra nunca
  * estourar a pill que o renderiza (2627 abaixo). */
+// Achado 3 (review adversarial, 2026-09-09) - mirrors message-bus.ts's
+// truncateForLabel fix, duplicated on purpose (same reasoning as this
+// function's own pre-existing duplication across main/renderer): strips
+// C0/C1 control characters and Unicode bidi override/embedding/isolate
+// controls (LRE/RLE/PDF/LRO/RLO, LRI/RLI/FSI/PDI, LRM/RLM) BEFORE
+// truncating - any of those, left in, can reorder or corrupt this app's
+// SVG <text> connector pill. And truncates by Unicode code point
+// (Array.from), not by .slice's UTF-16 code unit, so a surrogate pair
+// (an emoji/astral character) never gets split in half.
+// Achado 1 (review adversarial RODADA 2, 2026-09-09) - ORDER bug fixed
+// here too, mirroring message-bus.ts: \n/\r/\t are C0 controls, so
+// stripping controls BEFORE collapsing whitespace deleted them outright
+// instead of leaving a separator ("ls -la\n/tmp" -> "ls -la/tmp", words
+// glued together). Real whitespace controls are converted to a plain
+// space FIRST now, then the rest of the C0/C1/bidi set is stripped,
+// then whitespace runs collapse.
+// Known, deliberately untreated gap (review adversarial rodada 2,
+// 2026-09-09) - combining marks (Zalgo-style stacks) aren't filtered
+// and can overflow the pill vertically; low-probability hostile input,
+// and filtering risks mangling ordinary accented text - left alone.
+// eslint-disable-next-line no-control-regex -- deliberate: this IS the sanitizer that strips C0/C1 control characters from an agent-supplied label (mirrors message-bus.ts, achado 3).
+const CONTROL_AND_BIDI_RE = /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 function truncateConnectorLabel(text: string, max = 60): string {
-  const flat = text.trim().replace(/\s+/g, " ");
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  const withRealWhitespace = text.replace(/[\n\r\t]/g, " ");
+  const stripped = withRealWhitespace.replace(CONTROL_AND_BIDI_RE, "");
+  const flat = stripped.trim().replace(/\s+/g, " ");
+  const codePoints = Array.from(flat);
+  return codePoints.length > max ? `${codePoints.slice(0, max - 1).join("")}…` : flat;
+}
+
+/** Review adversarial, 2026-09-09 (achado 2) — todo chamador de
+ * `centeredSlot`/`nearestFreeSlot` precisa marcar quais rects existentes
+ * são de card de navegador (`WebContentsView` nativo — `tryChangeRect`
+ * abaixo recusa arrasto que aumente overlap com ele, então plantar OUTRO
+ * card em cima o deixa permanentemente inarrastável). Um só lugar monta
+ * essa lista pros dois módulos nunca divergirem. */
+function existingRectsFor(cards: Card[]): { rect: Rect; blocking: boolean }[] {
+  return cards.map((c) => ({ rect: c.rect, blocking: c.kind === "browser" }));
 }
 
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
@@ -105,7 +146,10 @@ type PendingAsk =
       resumeId?: string;
       reason?: string;
       model?: string;
-      effort?: "low" | "high";
+      // Widened from "low" | "high" (DESIGN-BACKLOG.md §2.1, 2026-09-10)
+      // — see preload/index.ts's SpawnAgentAskParams.effort doc comment
+      // and card-types.ts's TerminalCardData.effort for the full reasoning.
+      effort?: string;
       label?: string;
     }
   | {
@@ -152,6 +196,30 @@ function rootDisplayName(root: string): string {
   );
 }
 const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor", "antigravity", "opencode"];
+// Achado 1 (review adversarial, 2026-09-09) — throttle window for a
+// connector label's auto-refresh (`scheduleConnectorLabelUpdate`); nobody
+// reads a pill faster than this, so coalescing every write inside one
+// window into a single one loses no real information.
+const CONNECTOR_LABEL_THROTTLE_MS = 2_500;
+/** Achado 2 (review adversarial RODADA 2, 2026-09-09) — the throttle's
+ * per-connector bookkeeping snapshots `boardId`/`fromCardId`/`toCardId`/
+ * `kind` at SCHEDULE time, not just at flush time: a trailing timer (or a
+ * board-switch/unmount cleanup) can fire after the user has already
+ * switched boards, and by then `connectorsRef.current`/`activeBoardIdRef`
+ * reflect the NEW board, not the one this connector actually belongs to.
+ * Flushing through this fixed snapshot instead of re-reading "current"
+ * ambient state means a flush always lands on the connector's real,
+ * original board — never silently mislabeled onto whatever happens to be
+ * open at the moment the timer fires. */
+type ConnectorLabelThrottleEntry = {
+  lastWriteAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  pendingLabel: string | null;
+  boardId: string;
+  fromCardId: string;
+  toCardId: string;
+  kind: string | null;
+};
 const MIN_STROKE_POINTS = 2;
 const MIN_STROKE_DISTANCE = 2;
 const STROKE_PADDING = 8;
@@ -223,6 +291,11 @@ function toRow(card: Card, boardId: string): CardRow {
     // closeCard for chat cards). A normal upsert (drag/resize/rename/
     // message commit) never touches archive state.
     archived_at: null,
+    // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" — same
+    // "null by default, only the one kind that uses it overrides" shape
+    // as `messages_json` above; only "terminal" (below) ever sets this to
+    // something real.
+    effort: null,
     ...card.rect,
   };
   switch (card.kind) {
@@ -234,6 +307,7 @@ function toRow(card: Card, boardId: string): CardRow {
         cwd: card.cwd,
         resume_id: card.resumeId,
         model: card.model,
+        effort: card.effort,
         system_prompt: card.systemPrompt,
       };
     case "files":
@@ -441,7 +515,7 @@ function fromRow(r: CardRow): Card {
         resumeId: r.resume_id,
         continueLast: false,
         model: r.model,
-        effort: null,
+        effort: r.effort,
         systemPrompt: r.system_prompt,
         initialInput: null,
         label,
@@ -465,7 +539,7 @@ function fromRow(r: CardRow): Card {
         resumeId: r.resume_id,
         continueLast: false,
         model: r.model,
-        effort: null,
+        effort: r.effort,
         systemPrompt: r.system_prompt,
         initialInput: null,
         label,
@@ -482,6 +556,18 @@ export function App() {
   const [newResumeId, setNewResumeId] = useState("");
   const [newContinueLast, setNewContinueLast] = useState(false);
   const [newModel, setNewModel] = useState("");
+  // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido", 2026-09-10
+  // — this was the missing write surface: `effort` was persisted and read
+  // back correctly, but a human creating a terminal card by hand (this
+  // popover) had no field to set it at all, only an agent-driven
+  // `spawn_agent` did. "" means "don't pass --effort" (provider default),
+  // same convention as `newModel`/`newResumeId` above. Reset whenever the
+  // provider changes to one that doesn't recognize the current value
+  // (see the effect right below Rail's render) instead of letting a
+  // claude-only value like "medium" silently reach antigravity, where
+  // message-bus.ts's spawn_agent handler would refuse it — the popover
+  // shouldn't hand the user a value it already knows will be rejected.
+  const [newEffort, setNewEffort] = useState("");
   const [newSystemPrompt, setNewSystemPrompt] = useState("");
   const [seenUrls, setSeenUrls] = useState<Record<string, string[]>>({});
   // Pedido ao vivo (2026-08-27): o clique num link visto no terminal
@@ -564,6 +650,17 @@ export function App() {
    * array de conectores vazio pra sempre). */
   const connectorsRef = useRef<Connector[]>([]);
   connectorsRef.current = connectors;
+  /** Achado 1 (review adversarial, 2026-09-09) — `autoConnect`'s label
+   * auto-refresh (below) had no throttle: every distinct `send`/
+   * `browser_*`/etc. between the same pair fired its own SQLite UPDATE
+   * (`updateConnectorLabel`'s `window.store.connectors.upsert`) AND its
+   * own `setConnectors` render, immediately. Two agents chatting in a
+   * burst turned "reflect the current task" into a write storm nobody
+   * could read anyway. Throttle state, keyed by connector id, for
+   * `scheduleConnectorLabelUpdate` below — a `useRef` (not `useState`)
+   * because it's scheduling bookkeeping, not something that should ever
+   * itself trigger a render. */
+  const connectorLabelThrottleRef = useRef<Map<string, ConnectorLabelThrottleEntry>>(new Map());
 
   // Pre-release audit P1 — stable per-card handler references, the
   // prerequisite for `React.memo` on the card components below to
@@ -642,6 +739,12 @@ export function App() {
     boards,
     activeBoardId,
     activeBoardIdRef,
+    // Achado (review adversarial RODADA 5, 2026-09-09) — read by
+    // `scheduleConnectorLabelUpdate` below (via `decideConnectorLabelSchedule`)
+    // to refuse to schedule anything while a board switch/delete is
+    // between `setActiveBoardId` and the end of `loadBoard` — see
+    // useBoardStore.ts's own doc comment on this ref for the full story.
+    boardTransitionRef,
     boardCounts,
     switchBoard,
     goHome,
@@ -660,6 +763,10 @@ export function App() {
     DEFAULT_CWD,
     toRow,
     fromRow,
+    // Achado (review adversarial RODADA 4, 2026-09-09) — see this
+    // function's own doc comment above for why `deleteBoard` needs it
+    // (discard, not flush, for a board that's about to stop existing).
+    discardConnectorLabelThrottleForBoard,
   );
 
   useEffect(() => {
@@ -710,7 +817,14 @@ export function App() {
         // automatically; `requesterId` is "" for the task engine's own
         // dispatches (item 60 peça 3), which have no real requester
         // card to connect from.
-        if (requesterId) addConnector(requesterId, cardId, "spawned");
+        // 2026-09-09 — `reason` (spawn_agent's own param, already carried
+        // for the human-consent modal) is the only text this request
+        // brings describing WHAT the spawned agent is for; says the task,
+        // not just "spawned", same intent as deriveAutoConnectLabel does
+        // for send/browser_* in message-bus.ts (spawn never goes through
+        // that generalized path — see AUTO_CONNECT_CMDS's own comment —
+        // so it needs its own label here).
+        if (requesterId) addConnector(requesterId, cardId, "spawned", params.reason ? truncateConnectorLabel(params.reason) : null);
         void window.spawn.resolveAgent(requestId, { ok: true, cardId });
         return;
       }
@@ -734,7 +848,8 @@ export function App() {
         const cardId = spawnCardFor(params.kind, params.cwd, params.url, requesterId, params.anchorCardId, params.side);
         // Achado ao vivo (2026-09-02) — mesma lacuna do open_url acima:
         // spawn_card nunca registrava lineage, só spawn_agent tinha.
-        if (requesterId) autoConnect(requesterId, cardId, "spawned");
+        // 2026-09-09 — same `reason`-as-label reasoning as spawn_agent above.
+        if (requesterId) autoConnect(requesterId, cardId, "spawned", params.reason ? truncateConnectorLabel(params.reason) : null);
         void window.spawn.resolveCard(requestId, { ok: true, cardId });
         return;
       }
@@ -887,6 +1002,21 @@ export function App() {
     const offAutoConnect = window.store.connectors.onAutoConnect((fromCardId, toCardId, kind, label) => {
       autoConnect(fromCardId, toCardId, kind, label);
     });
+    // Part 2's explicit half — `set_connector_label` (message-bus.ts)
+    // mutated the DB directly (no round trip through this renderer, same
+    // reason `send_to_card` above doesn't either), so the open board only
+    // learns about it through this push. Reflects into local state
+    // in-place instead of a full board reload.
+    const offConnectorLabelChanged = window.store.connectors.onConnectorLabelChanged((id, label) => {
+      setConnectors((prev) => prev.map((c) => (c.id === id ? { ...c, label } : c)));
+    });
+    // DESIGN-BACKLOG.md §2.1 — mesmo caminho para `set_connector_kind`,
+    // que até 2026-09-10 gravava no banco sem avisar ninguém: o kind só
+    // aparecia num board aberto se ele tivesse sido definido na criação
+    // (via `onAutoConnect`/`addConnector`), nunca numa alteração posterior.
+    const offConnectorKindChanged = window.store.connectors.onConnectorKindChanged((id, kind) => {
+      setConnectors((prev) => prev.map((c) => (c.id === id ? { ...c, kind } : c)));
+    });
     return () => {
       offUrlSeen();
       offAskOpen();
@@ -899,6 +1029,8 @@ export function App() {
       offSticky();
       offQueueChanged();
       offAutoConnect();
+      offConnectorLabelChanged();
+      offConnectorKindChanged();
     };
   }, []);
 
@@ -933,72 +1065,103 @@ export function App() {
     navigateWorkspaceRoot(picked);
   }
 
-  // Escape exits pen/connector tool mode. Not required for correctness —
-  // releasing the pointer already ends any in-progress stroke/connector
-  // drag on its own (both are plain pointerdown→window pointermove/up
-  // closures, immune to this component re-rendering) — just a cheap,
-  // obvious way out for anyone who forgets which tool is active.
+  // Fase B (atalhos) — despachante único. A cadeia de `if` que existia
+  // aqui (uma checagem por atalho, guard `typing` copiado em cada uma) virou
+  // UM registro declarativo (`shortcut-registry.ts`) + UMA resolução de
+  // escopo real (`resolveShortcutScope` — soma foco, terminal e modal
+  // aberto, não só "é focável") + UM matcher de combinação. A overlay de
+  // "?" é GERADA do MESMO registro (`ShortcutsOverlay.tsx`), então as duas
+  // coisas não têm mais como divergir (ver o doc comment no topo de
+  // `shortcut-registry.ts` — é o ponto que fecha a causa raiz da fase B).
+  //
+  // `shortcutHandlersRef` existe pelo mesmo motivo do `zoomByRef` mais
+  // abaixo: o listener se inscreve UMA vez (`[]` deps, igual já era antes
+  // desta fase) e só lê a versão mais recente dos handlers via ref — sem
+  // isso, `duplicateCard` (não memoizada) ficaria presa à closure da
+  // primeira montagem, ou o efeito precisaria reassinar o listener a cada
+  // render.
+  const shortcutHandlersRef = useRef<Record<string, () => void>>({});
+  shortcutHandlersRef.current = {
+    "tool.pointer": () => setTool("pointer"),
+    "tool.pen": () => setTool("pen"),
+    "tool.connector": () => setTool("connector"),
+    "tool.select": () => setTool("select"),
+    // Escape exits pen/connector tool mode. Not required for correctness —
+    // releasing the pointer already ends any in-progress stroke/connector
+    // drag on its own (both are plain pointerdown→window pointermove/up
+    // closures, immune to this component re-rendering) — just a cheap,
+    // obvious way out for anyone who forgets which tool is active. Also
+    // closes whatever else is open (this help, close confirmation, radial
+    // menu, remote pairing) — see "tool.escapeReset" in the registry for
+    // why it has no scope restriction.
+    "tool.escapeReset": () => {
+      setTool("pointer");
+      setShowShortcuts(false);
+      setPendingCloseId(null);
+      setRadialMenu(null);
+      setShowRemotePairing(false);
+    },
+    // Achado ao vivo (2026-09-02, fase A) — F11 apertado com foco dentro de
+    // um terminal/navegador embutido bubblava até aqui e ligava o
+    // fullscreen REAL da janela (nenhum desses componentes chama
+    // `stopPropagation` pra F11, só `preventDefault`) — escondia o header
+    // sem o usuário ter pedido. O escopo de "window.fullscreen" (só
+    // "canvas", no registro) é o que impede isso agora.
+    "window.fullscreen": () => {
+      void window.winControls.toggleFullscreen();
+    },
+    "overlay.shortcuts.toggle": () => setShowShortcuts((v) => !v),
+    // Achado 2 da revisão da fase A: o critério certo pra "Ctrl+D duplica
+    // ou é EOF do terminal" é foco REAL (escopo), não "qual card está no
+    // topo do z-order" — um card de terminal no topo mas sem foco de
+    // teclado nele duplica normalmente. "card.duplicate" só dispara em
+    // escopo "canvas" (registro); em escopo "terminal" este mesmo Ctrl+D
+    // nem chega aqui, flui cru pro PTY ("terminal.eof" no registro).
+    "card.duplicate": () => {
+      const topId = orderRef.current[orderRef.current.length - 1];
+      if (topId) duplicateCard(topId);
+    },
+  };
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setTool("pointer");
-        setShowShortcuts(false);
-        setPendingCloseId(null);
-        setRadialMenu(null);
-        setShowRemotePairing(false);
-      }
-      // Achado ao vivo (2026-09-02) — usuário relatou o header sumindo "sem
-      // precedentes" no meio de uma sessão longa. `Titlebar.tsx` esconde o
-      // header inteiro em fullscreen real do SO, e F11 (abaixo) era
-      // verificado ANTES deste guard existir — nenhum `stopPropagation` em
-      // `useTerminal.ts`/`BrowserCard.tsx` (só `preventDefault`, que não
-      // impede bubbling) pra F11 especificamente, então UM F11 apertado com
-      // foco dentro de qualquer terminal ou navegador embutido (uma TUI com
-      // seu próprio bind de F11, uma página web pedindo fullscreen, etc.)
-      // bubblava até aqui e ligava o fullscreen REAL da janela do Stellar
-      // — escondendo o header sem o usuário ter pedido isso do app. Mesmo
-      // guard `typing` que já protege os atalhos de ferramenta abaixo,
-      // movido pra cobrir F11 também.
-      const target = e.target as HTMLElement | null;
-      const typing =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.tagName === "CANVAS" ||
-        target?.isContentEditable;
-      if (e.key === "F11") {
-        if (typing) return;
-        e.preventDefault();
-        void window.winControls.toggleFullscreen();
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
-        if (typing) return;
-        e.preventDefault();
-        const topId = orderRef.current[orderRef.current.length - 1];
-        if (topId) duplicateCard(topId);
-        return;
-      }
-      // Single-letter tool shortcuts (documented in the pen panel, item 3) —
-      // never fire while the user is typing into a real input (sticky note,
-      // files editor, browser address bar, any popover field). A focused
-      // browser card's canvas (BrowserCard.tsx) counts too — every
-      // keystroke there is forwarded into the embedded page, so without
-      // this a page search box that happens to contain "v"/"p"/"c"/"s"
-      // would also swap the app's whole tool mid-type, which then silently
-      // cuts off further input/wheel forwarding (both gate on
-      // interactionMode === "normal").
-      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "v" || e.key === "V") setTool("pointer");
-      if (e.key === "p" || e.key === "P") setTool("pen");
-      if (e.key === "c" || e.key === "C") setTool("connector");
-      if (e.key === "s" || e.key === "S") setTool("select");
-      // "?" (shift+/ on most layouts, but e.key already reports the shifted
-      // character) — see DESIGN-BACKLOG.md item 1: shortcuts existed but
-      // were only discoverable inside the pen panel's own popover.
-      if (e.key === "?") setShowShortcuts((v) => !v);
+      const active = document.activeElement as HTMLElement | null;
+      const id = resolveGlobalShortcut(e, {
+        tagName: active?.tagName ?? "BODY",
+        isContentEditable: active?.isContentEditable ?? false,
+        isTerminalTextarea: active?.classList.contains("xterm-helper-textarea") ?? false,
+        isModalOpen: isAnyModalOpen(),
+      });
+      if (!id) return;
+      if (GLOBAL_SHORTCUTS_BY_ID[id]?.preventDefault) e.preventDefault();
+      shortcutHandlersRef.current[id]?.();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Item 4 (atalhos, fase A) — Ctrl+Plus/Ctrl+Minus eram o zoom NATIVO do
+  // Chromium, brigando com o zoom óptico do próprio canvas. Revisão pós-
+  // review rodada 3 (2026-09-09): main/index.ts's `Menu` próprio já não
+  // tem roles `zoomIn`/`zoomOut`/`resetZoom`, então não sobra zoom nativo
+  // pra neutralizar — o que resta é só a FEATURE de redirecionar essas
+  // duas teclas pro zoom do canvas (pedido original do item 4), via o
+  // `before-input-event` (ainda vivo em main/index.ts, só pra isso —
+  // nunca teve corrida, nada mudou aí). Main intercepta e reenvia pra cá;
+  // usa o MESMO caminho que o botão de zoom do Topbar já usa (`zoomBy`/
+  // `ZOOM_STEP`), nenhum segundo mecanismo de zoom novo. Ref pelo mesmo
+  // motivo do keydown global acima (`zoomBy` é recriada a cada render
+  // pelo `useWorldTransform`; sem isso o efeito reassinaria o listener
+  // IPC a cada render à toa).
+  const zoomByRef = useRef(zoomBy);
+  zoomByRef.current = zoomBy;
+  useEffect(() => {
+    const off = window.winControls.onZoomAccelerator((direction) => {
+      zoomByRef.current(direction === "in" ? ZOOM_STEP : 1 / ZOOM_STEP);
+    });
+    return () => {
+      off();
+    };
   }, []);
 
   // Item 57.9 — sem isso, um drop que escape do `.viewport` (solto sobre
@@ -1154,14 +1317,233 @@ export function App() {
    * sobrescrever um kind que um humano ou outro agente já decidiu. */
   function autoConnect(requesterId: string | undefined | null, targetId: string, kind: string, label?: string | null) {
     if (!requesterId || requesterId === targetId) return;
-    const already = connectorsRef.current.some(
+    const existing = connectorsRef.current.find(
       (c) =>
         (c.fromCardId === requesterId && c.toCardId === targetId) ||
         (c.fromCardId === targetId && c.toCardId === requesterId),
     );
-    if (already) return;
+    if (existing) {
+      // 2026-09-09, "contextualizar em tempo real" (relatório 2026-09-08)
+      // — the automatic half of live-updating a label: a LATER mutation
+      // between the same two cards (another `send`, a `write_sticky`,
+      // etc.) overwrites the existing connector's label with the newest
+      // one, so the pill tracks whatever the two cards are doing right
+      // now instead of freezing at whatever created the connector.
+      // Deliberately narrower than kind's own idempotence rule just above
+      // this function: `kind` is a human/agent's considered semantic
+      // ("depends"/"context") and must never be silently overwritten by a
+      // later auto-connect — but a label is disposable, ambient context,
+      // and going stale forever the moment a 2nd action happens is
+      // exactly the bug being fixed here. Only touches `label`, never
+      // `kind` — an existing "spawned" or hand-set "depends" connector
+      // keeps its kind no matter how many more actions flow across it.
+      // Skipped when the new label is null/empty (e.g. a scroll with no
+      // selector) so a low-information event never blanks out a good
+      // label a previous one set. The "is this actually different from
+      // `existing.label`" dedupe used to live here too — it's now inside
+      // `decideConnectorLabelSchedule` (review adversarial RODADA 5,
+      // 2026-09-09), the single place that question gets answered, so
+      // this only guards against calling the scheduler with no label at
+      // all.
+      if (label) scheduleConnectorLabelUpdate(existing.id, label);
+      return;
+    }
     addConnector(requesterId, targetId, kind, label);
   }
+
+  /** Achado 1 (review adversarial, 2026-09-09) — throttle in front of
+   * `updateConnectorLabel` for the AUTO half only (`autoConnect` above);
+   * `set_connector_label`'s explicit path (`offConnectorLabelChanged`
+   * below) is a deliberate call and stays untouched, same distinction the
+   * finding asked for. Leading-edge-with-trailing-catch-up, keyed by
+   * connector id: the first distinct label in a quiet connector writes
+   * immediately (no reason to delay the FIRST real update); every other
+   * one arriving inside `CONNECTOR_LABEL_THROTTLE_MS` of the last write
+   * only overwrites `pendingLabel` — no SQLite UPDATE, no `setConnectors`
+   * render — and a single trailing timer flushes whatever's pending when
+   * the window closes, so the pill always lands on the LAST real value
+   * instead of silently dropping it (a pure leading-edge throttle, like
+   * `REPORT_NOTIFY_MIN_INTERVAL_MS` elsewhere in this codebase, would
+   * drop it — fine for a one-shot notification, wrong for "what's the
+   * connector doing right now"). Cuts BOTH costs the finding named (the
+   * write and the render) together, since they're the same call
+   * (`updateConnectorLabel` does the `setConnectors` + the `upsert` IPC
+   * in one place) — there's no separate "push" to cut here, this branch
+   * of `autoConnect` never goes over IPC from main, only the explicit
+   * `set_connector_label` path does (see `onConnectorLabelChanged`). The
+   * pre-existing dedupe that used to live in `autoConnect` moved into
+   * `decideConnectorLabelSchedule` (review adversarial RODADA 5,
+   * 2026-09-09) — a repeated IDENTICAL label still never reaches a
+   * `setTimeout`/IPC call, that decision just isn't made HERE anymore. */
+  function scheduleConnectorLabelUpdate(id: string, label: string) {
+    const row = connectorsRef.current.find((c) => c.id === id);
+    const map = connectorLabelThrottleRef.current;
+    const existingState = map.get(id);
+    const now = Date.now();
+
+    // Achado (review adversarial RODADA 5, 2026-09-09) — the actual bug
+    // that round: during the window between `useBoardStore.ts`'s
+    // `setActiveBoardId` and the end of its `loadBoard` (tracked by
+    // `boardTransitionRef`), `activeBoardIdRef.current` already points at
+    // the incoming board while `connectorsRef.current` (read just above,
+    // via `row`) can still hold the OUTGOING board's connectors — so a
+    // stale event landing in that gap used to find a real-looking `row`
+    // and snapshot it with the WRONG (new) `boardId`, a delayed write
+    // eventually landing on a board that connector never belonged to
+    // (worse still after a `deleteBoard`: the board it DID belong to is
+    // gone, and the new board is being credited with someone else's
+    // connector history). `decideConnectorLabelSchedule` is the single,
+    // pure, Node-testable place this and every other "should I even
+    // touch state" question about this throttle gets answered —
+    // everything below this call is pure wiring: `Map` bookkeeping,
+    // `setTimeout`, and the actual IPC/render side effects
+    // (`applyConnectorLabelFlush`), none of which the decision itself
+    // needs to know about.
+    const decision = decideConnectorLabelSchedule({
+      boardTransitionInFlight: boardTransitionRef.current,
+      connectorExists: !!row,
+      currentLabel: row?.label ?? null,
+      nextLabel: label,
+      now,
+      lastWriteAt: existingState?.lastWriteAt ?? 0,
+      hasPendingTimer: !!existingState?.timer,
+      throttleWindowMs: CONNECTOR_LABEL_THROTTLE_MS,
+    });
+    if (decision.action === "ignore") return;
+    // `row` is guaranteed non-null past this point — both "ignore" cases
+    // that don't depend on it (`board-transition`) and the one that does
+    // (`connector-gone`) already returned above.
+    const state: ConnectorLabelThrottleEntry = existingState ?? {
+      lastWriteAt: 0,
+      timer: null,
+      pendingLabel: null,
+      boardId: activeBoardIdRef.current!,
+      fromCardId: row!.fromCardId,
+      toCardId: row!.toCardId,
+      kind: row!.kind ?? null,
+    };
+    // Refresh the snapshot on every call (cheap) — keeps `boardId`/`kind`
+    // accurate if either changed since this connector's last schedule,
+    // without needing a separate invalidation path. Safe now in a way it
+    // wasn't before this fix: `decideConnectorLabelSchedule` already
+    // vetoed this whole call if a board transition was in flight, so
+    // `activeBoardIdRef.current` here is guaranteed to be the SAME board
+    // `row` actually belongs to.
+    state.boardId = activeBoardIdRef.current!;
+    state.fromCardId = row!.fromCardId;
+    state.toCardId = row!.toCardId;
+    state.kind = row!.kind ?? null;
+
+    if (decision.action === "flush-now") {
+      state.lastWriteAt = now;
+      map.set(id, state);
+      applyConnectorLabelFlush(id, state, label);
+      return;
+    }
+    // decision.action === "queue"
+    state.pendingLabel = label;
+    if (!state.timer) {
+      state.timer = setTimeout(() => {
+        const cur = map.get(id);
+        if (!cur) return;
+        cur.timer = null;
+        cur.lastWriteAt = Date.now();
+        const toWrite = cur.pendingLabel;
+        cur.pendingLabel = null;
+        if (toWrite != null) applyConnectorLabelFlush(id, cur, toWrite);
+      }, decision.waitMs);
+    }
+    map.set(id, state);
+  }
+
+  /** Local-state + persisted half of a label change that did NOT come
+   * from `set_connector_label`'s bus push (see `offConnectorLabelChanged`
+   * below for that half) — reused by `scheduleConnectorLabelUpdate` above
+   * (both its immediate and its trailing-timer branch) AND by the board-
+   * switch/unmount cleanup effect below. Achado 2 (review adversarial
+   * RODADA 2, 2026-09-09) — takes the connector's identity as a `snapshot`
+   * parameter (captured at schedule time) instead of re-deriving it from
+   * `connectorsRef.current`/`activeBoardIdRef` here: by the time a
+   * trailing timer or a cleanup runs, those "current" refs may already
+   * point at a DIFFERENT board than the one this connector actually
+   * belongs to (see `ConnectorLabelThrottleEntry`'s own doc comment).
+   * `setConnectors` is still always safe to call unconditionally — ids are
+   * a single global sequence (store.ts) never reused across boards, so
+   * mapping by id either hits the right connector (still on screen) or is
+   * a harmless no-op (a different/no-longer-loaded board). Reuses the
+   * full-row `upsert` plumbing `addConnector` already uses rather than
+   * adding a 2nd IPC round trip for what's already a local mutation. */
+  function applyConnectorLabelFlush(
+    id: string,
+    snapshot: Pick<ConnectorLabelThrottleEntry, "boardId" | "fromCardId" | "toCardId" | "kind">,
+    label: string | null,
+  ) {
+    setConnectors((prev) => prev.map((c) => (c.id === id ? { ...c, label } : c)));
+    void window.store.connectors.upsert({
+      id,
+      board_id: snapshot.boardId,
+      from_card_id: snapshot.fromCardId,
+      to_card_id: snapshot.toCardId,
+      updated_at: Date.now(),
+      kind: snapshot.kind,
+      label,
+    });
+  }
+
+  /** Achado 2 (review adversarial RODADA 2, 2026-09-09) — the throttle
+   * above only got cleared on an explicit connector delete; switching
+   * boards (or unmounting) left trailing timers running for connectors
+   * that were no longer on screen, and `connectorLabelThrottleRef`'s Map
+   * entries leaked for the rest of the frontend session. `useEffect`'s
+   * cleanup fires on BOTH cases this needs (dependency change = board
+   * switch, unmount = closing the app/hot-reload), so one cleanup covers
+   * both without hooking into `useBoardStore.ts`'s own switchBoard/goHome
+   * (out of this task's file scope, and this is a strictly renderer-local
+   * concern — that hook doesn't need to know throttling exists).
+   * FLUSHES pending labels instead of dropping them: a `pendingLabel`
+   * waiting in the queue is the most recent real value for that connector
+   * — the exact thing "reflect the current task" exists to preserve —
+   * dropping it here would silently regress to the label from before the
+   * last burst. Writes through the entry's own SNAPSHOT (`boardId`/
+   * `fromCardId`/`toCardId`/`kind`, captured back when it was scheduled),
+   * not through `activeBoardIdRef`/`connectorsRef.current` — by the time
+   * this cleanup runs, both of those may already reflect the board being
+   * switched TO, not the one this connector belongs to; flushing through
+   * the snapshot means the write correctly lands on the board the user is
+   * LEAVING (accurate, not "stray") instead of risking a mislabel onto
+   * the new one.
+   * THE ASYMMETRY (review adversarial RODADA 4, 2026-09-09, spelled out
+   * here because both cases run through this SAME effect and would
+   * otherwise look inconsistent): this cleanup ALWAYS flushes — that's
+   * only correct when the board being left still exists (an ordinary
+   * `switchBoard`/`goHome`). `deleteBoard` (useBoardStore.ts) is the one
+   * case where it wouldn't be: the board is gone by the time this would
+   * fire, so flushing would `upsert` a phantom connector row pointing at
+   * a `board_id` that no longer exists. That case is handled BEFORE this
+   * effect ever sees it, not by branching in here:
+   * `discardConnectorLabelThrottleForBoard` (below) is called from
+   * `deleteBoard` ahead of its `setActiveBoardId`, removing that board's
+   * entries from the map outright — so by the time THIS cleanup runs for
+   * that same transition, there's nothing of the deleted board's left to
+   * flush. One effect, two outcomes, decided entirely by who empties the
+   * map first. */
+  useEffect(() => {
+    // Captured here, at effect-setup time, rather than read as
+    // `connectorLabelThrottleRef.current` inside the cleanup below — same
+    // Map object either way (this ref is never reassigned), but reading
+    // `.current` directly inside a cleanup trips
+    // `react-hooks/exhaustive-deps`'s "ref value may have changed by the
+    // time this runs" check, which can't know that. Capturing the
+    // reference up here is the idiomatic fix, not a suppression.
+    const throttleMap = connectorLabelThrottleRef.current;
+    return () => {
+      for (const [id, state] of throttleMap) {
+        if (state.timer) clearTimeout(state.timer);
+        if (state.pendingLabel != null) applyConnectorLabelFlush(id, state, state.pendingLabel);
+      }
+      throttleMap.clear();
+    };
+  }, [activeBoardId]);
 
   const { connectorDraft, startConnectorDrag } = useConnectorDrag(clientToWorld, cardsRef, order, addConnector);
   const { selectedIds, setSelectedIds, marquee, startMarqueeSelect, selectCard, groupSelected, ungroupSelected } =
@@ -1175,9 +1557,84 @@ export function App() {
   const getConnectorStartHandler = useStableCardIdHandler(startConnectorDrag);
   const getSelectStartHandler = useStableCardIdHandler(selectCard);
 
+  /** Achado 2 follow-up (found while fixing it, review adversarial RODADA
+   * 2, 2026-09-09) — after `applyConnectorLabelFlush` stopped consulting
+   * `connectorsRef.current` (the fix's whole point: a trailing timer must
+   * flush through its own snapshot, not "current" state that may already
+   * belong to a different board), it lost the free protection that guard
+   * used to give for FREE against a connector that's gone by the time the
+   * timer fires: `window.store.connectors.upsert` is an INSERT-or-UPDATE,
+   * so flushing a pending label for a connector already deleted from the
+   * DB would silently RESURRECT that row. `removeConnector` below already
+   * clears its own entry synchronously on delete, so that path was never
+   * at risk — but `finalizeCloseCard` and the chat-rename path
+   * (`window.store.connectors.deleteForCard`) delete every connector
+   * touching a closed card WITHOUT going through `removeConnector`, and
+   * used to rely on that same now-removed guard. Called at both those
+   * sites, right alongside `deleteForCard`, so a pending timer for a
+   * connector on either side of the closed card is cancelled before it
+   * can fire into a ghost row. */
+  function clearConnectorLabelThrottleForCard(cardId: string) {
+    const map = connectorLabelThrottleRef.current;
+    for (const [connectorId, state] of map) {
+      if (state.fromCardId !== cardId && state.toCardId !== cardId) continue;
+      if (state.timer) clearTimeout(state.timer);
+      map.delete(connectorId);
+    }
+  }
+
+  /** Achado (review adversarial RODADA 4, 2026-09-09) — the SAME
+   * resurrection risk as `clearConnectorLabelThrottleForCard` above, one
+   * level up: `deleteBoard` (useBoardStore.ts) deletes the board and its
+   * cards from the DB, then — if it was the active one — flips
+   * `activeBoardId` to whatever board comes next. That flip is exactly
+   * what the board-switch flush `useEffect` below reacts to, and its
+   * cleanup would happily `upsert` a pending label's connector row with
+   * `board_id` set to the board that JUST got deleted — a phantom row
+   * referencing a board that no longer exists.
+   * THE ASYMMETRY, spelled out because both cases run through the SAME
+   * effect and look inconsistent otherwise: an ordinary `switchBoard`/
+   * `goHome` moves to a board that still exists, so that effect's
+   * snapshot-based flush has somewhere real to land — data isn't lost,
+   * it's correctly written to the board being LEFT. A deleted board has
+   * nowhere for that data to go anymore, so here the right move is to
+   * DISCARD the pending label, not flush it. This function is how: called
+   * from `deleteBoard` BEFORE it changes `activeBoardId`, it removes
+   * every throttle entry that belongs to the board being deleted — by
+   * the time the flush effect's cleanup actually runs for that
+   * transition, there's nothing left of this board's entries for it to
+   * (wrongly) write. The effect itself never needs to know which case
+   * it's in; the asymmetry lives entirely in who gets to run first.
+   * Not-a-bug noted by the reviewer (RODADA 5, 2026-09-09): this plain
+   * `function` is recreated every render and passed straight into
+   * `useBoardStore(...)` below as `discardPendingConnectorLabelsForBoard`
+   * — harmless today since nothing puts it in a dependency array, only
+   * calls it imperatively from inside `deleteBoard`. Left un-memoized on
+   * purpose rather than "for free": `useCallback` needs a `const`, and a
+   * `const`'s TDZ would require moving this whole definition above the
+   * `useBoardStore(...)` call (its point of use) instead of relying on
+   * `function` hoisting the way it does now — a real relocation, not a
+   * free wrap, for a function that costs nothing extra to recreate each
+   * render (no closure over anything but the stable
+   * `connectorLabelThrottleRef`). */
+  function discardConnectorLabelThrottleForBoard(boardId: string) {
+    const map = connectorLabelThrottleRef.current;
+    for (const [connectorId, state] of map) {
+      if (state.boardId !== boardId) continue;
+      if (state.timer) clearTimeout(state.timer);
+      map.delete(connectorId);
+    }
+  }
+
   function removeConnector(id: string) {
     setConnectors((prev) => prev.filter((c) => c.id !== id));
     void window.store.connectors.delete(id);
+    // Achado 1's throttle state is keyed by connector id — drop it here so
+    // a stale trailing timer never fires `applyConnectorLabelFlush` for a
+    // connector that no longer exists.
+    const pending = connectorLabelThrottleRef.current.get(id);
+    if (pending?.timer) clearTimeout(pending.timer);
+    connectorLabelThrottleRef.current.delete(id);
     toast("conector removido");
   }
 
@@ -1210,19 +1667,25 @@ export function App() {
   }
 
   /** `at`: world point to spawn at (radial menu, item 1) — omitted for the
-   * rail's own buttons, which keep centering on the visible viewport. */
-  function addTerminalCard(at?: Point) {
+   * rail's own buttons, which keep centering on the visible viewport.
+   * `provider`: override for the radial's terminal-provider submenu
+   * (item 2) — picking a provider there bypasses the rail's own
+   * `newProvider` state entirely (that state is only for the
+   * terminal-config popover's own "provider" field) rather than calling
+   * `setNewProvider` first and racing this function's read of the stale
+   * pre-update value in the same render. */
+  function addTerminalCard(at?: Point, provider?: string) {
     const id = String(nextId.current++);
-    const rect = at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect));
+    const rect = at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, existingRectsFor(cards));
     addCard({
       id,
       kind: "terminal",
-      provider: newProvider,
+      provider: provider ?? newProvider,
       cwd: activeBoardCwd,
       resumeId: newResumeId.trim() || null,
       continueLast: newResumeId.trim() === "" && newContinueLast,
       model: newModel.trim() || null,
-      effort: null,
+      effort: newEffort || null,
       systemPrompt: newSystemPrompt.trim() || null,
       initialInput: null,
       rect,
@@ -1251,7 +1714,7 @@ export function App() {
    * visible viewport. */
   function addCardOfKind(kind: (typeof RAIL_CREATE_ORDER)[number], at?: Point) {
     const id = String(nextId.current++);
-    const rect = at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, cards.map((c) => c.rect));
+    const rect = at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, existingRectsFor(cards));
     addCard({
       id,
       ...defaultCardFields(kind, activeBoardCwd),
@@ -1375,7 +1838,11 @@ export function App() {
    * human "I just clicked +browser" moment the toasts above are for.
    * Returns the card id — spawn_card's browser variant (below) and the
    * acbridge/MCP "open" ask flow both need to report which card actually
-   * got used back to the caller. */
+   * got used back to the caller. `rectOverride`, when given (anchored
+   * spawn — see `spawnCardFor`), is the IDEAL anchored position, not the
+   * final one: it still goes through `nearestFreeSlot` below so an
+   * anchored browser card doesn't land stacked on whatever already
+   * occupies that spot (2026-09-09 fix, same as the non-browser path). */
   function openBrowserFor(ownerCardId: string | null, url: string, rectOverride?: Rect): string {
     const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
     if (existing) {
@@ -1384,12 +1851,15 @@ export function App() {
       return existing.id;
     }
     const id = String(nextId.current++);
+    const rect = rectOverride
+      ? nearestFreeSlot(rectOverride, existingRectsFor(cardsRef.current), visibleRect)
+      : centeredSlot(visibleRect, cardsRef.current.length, existingRectsFor(cardsRef.current));
     const card: Card = {
       id,
       kind: "browser",
       url,
       ownerCardId,
-      rect: rectOverride ?? centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
+      rect,
       groupId: null,
       label: null,
     };
@@ -1409,7 +1879,7 @@ export function App() {
   // rather than a human. Always through `addCard` (unlike openBrowserFor
   // above) — this IS the "something appeared on the board that a human
   // didn't click" moment the toast exists for.
-  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string, effort?: "low" | "high"): string {
+  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string, effort?: string): string {
     const id = String(nextId.current++);
     addCard({
       id,
@@ -1422,7 +1892,7 @@ export function App() {
       effort: effort || null,
       systemPrompt: null,
       initialInput: null,
-      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
+      rect: centeredSlot(visibleRect, cardsRef.current.length, existingRectsFor(cardsRef.current)),
       groupId: null,
       // DESIGN-BACKLOG.md item 62 — an MCP-driven spawn can name its own
       // child agent, same free-text field CardTag rename already sets;
@@ -1456,7 +1926,7 @@ export function App() {
       effort: null,
       systemPrompt: null,
       initialInput: command,
-      rect: centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect)),
+      rect: centeredSlot(visibleRect, cardsRef.current.length, existingRectsFor(cardsRef.current)),
       groupId: null,
       label: `instalar ${providerId}`,
     });
@@ -1481,10 +1951,17 @@ export function App() {
     // call is the one case still possible here, so fall back to the usual
     // centeredSlot rather than crash on `undefined.rect`.
     const anchor = anchorCardId ? cardsRef.current.find((c) => c.id === anchorCardId) : undefined;
-    const anchoredRect = anchor && side ? anchoredSlot(anchor.rect, side) : undefined;
-    if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank", anchoredRect);
+    // `anchoredBase`: a posição IDEAL perto do card pai — não a final.
+    // `nearestFreeSlot` decide onde plantar de verdade a partir dela (2026-
+    // 09-09 fix: um card ancorado nascia colado no pai mesmo quando esse
+    // ponto já estava ocupado por outro card).
+    const anchoredBase = anchor && side ? anchoredSlot(anchor.rect, side) : undefined;
+    if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank", anchoredBase);
     const id = String(nextId.current++);
-    const rect = anchoredRect ?? centeredSlot(visibleRect, cardsRef.current.length, cardsRef.current.map((c) => c.rect));
+    const existingRects = existingRectsFor(cardsRef.current);
+    const rect = anchoredBase
+      ? nearestFreeSlot(anchoredBase, existingRects, visibleRect)
+      : centeredSlot(visibleRect, cardsRef.current.length, existingRects);
     const card = {
       id,
       ...defaultCardFields(kind, cwd || activeBoardCwd),
@@ -1510,11 +1987,12 @@ export function App() {
       const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort);
       // DESIGN-BACKLOG.md item 62 — same lineage record as the
       // autonomous auto-approve path above, for a human-approved spawn.
-      if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned");
+      // 2026-09-09 — same `reason`-as-label reasoning as the auto-approve path above.
+      if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
     } else if (ask.kind === "spawn-card") {
       const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId, ask.anchorCardId, ask.side);
-      if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
+      if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
       void window.spawn.resolveCard(ask.requestId, { ok: true, cardId });
     } else {
       // "close-card" — see `beginCloseAnimation`'s own note in the
@@ -1555,9 +2033,17 @@ export function App() {
     return { title: "Permissão: fechar card", command: describeCard(ask.target) };
   }
 
-  /** Reuses cascadeSlot (already the grid a new card lands on) — reorganize is just re-running that grid over every existing card. */
+  /** Item 2 (2026-09-09, pedido do dono do repo) — antes era literalmente
+   * uma grade de 3 colunas na ordem de criação, ignorando os conectores por
+   * completo (o próprio comentário antigo admitia isso: "reorganize is just
+   * re-running that grid"). Agora lê o grafo de conectores do board
+   * (`connectorsRef`) e monta um layout hierárquico dirigido — pai em cima,
+   * filho embaixo (ver `hierarchicalLayout` em board-model.ts pra a decisão
+   * completa). Cards sem conector nenhum caem na grade à parte de sempre. */
   function aiReorganize() {
-    const next = cardsRef.current.map((c, i) => ({ ...c, rect: cascadeSlot(i) }));
+    const nodes = cardsRef.current.map((c) => ({ id: c.id, w: c.rect.w, h: c.rect.h }));
+    const positions = hierarchicalLayout(nodes, connectorsRef.current);
+    const next = cardsRef.current.map((c) => ({ ...c, rect: positions.get(c.id) ?? c.rect }));
     setReflowing(true);
     setCards(next);
     next.forEach((c) => void window.store.upsert(toRow(c, activeBoardIdRef.current!)));
@@ -1721,6 +2207,7 @@ export function App() {
       window.chat.notifyCardClosed(id);
     } else void window.store.delete(id);
     void window.store.connectors.deleteForCard(id);
+    clearConnectorLabelThrottleForCard(id);
   }
 
   /** Every card's own onClose calls this, not finalizeCloseCard directly —
@@ -1970,6 +2457,7 @@ export function App() {
     void window.store.archiveCard(cardId);
     window.chat.notifyCardClosed(cardId);
     void window.store.connectors.deleteForCard(cardId);
+    clearConnectorLabelThrottleForCard(cardId);
     void window.store.upsert(toRow(newCard, activeBoardIdRef.current!));
   }
 
@@ -2154,7 +2642,7 @@ export function App() {
     return () => window.removeEventListener("paste", onPaste);
   }, []);
 
-  function selectRadialAction(action: RadialAction) {
+  function selectRadialAction(action: RadialAction, providerId?: string) {
     const at = radialMenu?.world;
     setRadialMenu(null);
     if (action === "tool-pointer") return setTool("pointer");
@@ -2162,7 +2650,7 @@ export function App() {
     if (action === "tool-connector") return setTool("connector");
     if (action === "tool-select") return setTool("select");
     if (!at) return;
-    if (action === "terminal") addTerminalCard(at);
+    if (action === "terminal") addTerminalCard(at, providerId);
     else addCardOfKind(action, at);
   }
 
@@ -2687,7 +3175,12 @@ export function App() {
                 )}
                 <g
                   className="connector-delete"
-                  style={{ pointerEvents: "auto" }}
+                  // Achado 4 (review adversarial, 2026-09-09) — the inline
+                  // `pointerEvents: "auto"` this used to carry beat any CSS
+                  // rule by specificity, which would have silently undone
+                  // layout.css's `.connector-delete`/`.connector-group:hover
+                  // .connector-delete` pair (none while hidden, auto only on
+                  // hover) the moment it ran. CSS alone controls it now.
                   transform={`translate(${midX}, ${midY})`}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
@@ -2758,13 +3251,26 @@ export function App() {
         onUngroup={ungroupSelected}
         providers={PROVIDER_OPTIONS}
         newProvider={newProvider}
-        setNewProvider={setNewProvider}
+        setNewProvider={(p) => {
+          // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido",
+          // 2026-09-10 — a value valid for the PREVIOUS provider (e.g.
+          // claude's "medium") can be meaningless or refused for the new
+          // one (antigravity only takes low/high — see
+          // PROVIDER_EFFORT_VALUES's own comment). Clear it here, at the
+          // one place the provider actually changes, rather than letting
+          // a stale value ride along to a provider that never offered it
+          // as an option in the first place.
+          if (!(PROVIDER_EFFORT_VALUES[p] ?? []).includes(newEffort)) setNewEffort("");
+          setNewProvider(p);
+        }}
         newResumeId={newResumeId}
         setNewResumeId={setNewResumeId}
         newContinueLast={newContinueLast}
         setNewContinueLast={setNewContinueLast}
         newModel={newModel}
         setNewModel={setNewModel}
+        newEffort={newEffort}
+        setNewEffort={setNewEffort}
         newSystemPrompt={newSystemPrompt}
         setNewSystemPrompt={setNewSystemPrompt}
         onCreateTerminal={addTerminalCard}
@@ -2827,6 +3333,7 @@ export function App() {
           x={radialMenu.screen.x}
           y={radialMenu.screen.y}
           tool={tool}
+          providers={PROVIDER_OPTIONS}
           onSelect={selectRadialAction}
           onClose={() => setRadialMenu(null)}
         />
