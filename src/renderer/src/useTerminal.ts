@@ -254,6 +254,15 @@ export function useTerminal(
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [spawnError, setSpawnError] = useState<string | null>(null);
   const [discoveredResumeId, setDiscoveredResumeId] = useState<string | null>(null);
+  /** DESIGN-BACKLOG.md, achado 2 (2026-09-11) — `resumeId` restaurado que
+   * a leitura recusou (`pty:resume-invalid`). Transitório de propósito:
+   * não precisa sobreviver a um reload — se este spawn for válido, um
+   * `resumeId` NOVO chega por `discoveredResumeId` acima e é isso que fica
+   * gravado; este campo é só o aviso de "por que este card começou do
+   * zero", pra vida deste processo. */
+  const [resumeInvalidNotice, setResumeInvalidNotice] = useState<{ reason: "missing" | "empty"; staleResumeId: string } | null>(
+    null,
+  );
   // Achado ao vivo (2026-09-02) -- `--resume` numa sessão real e grande
   // pode passar dezenas de segundos sem imprimir NADA (a CLI resumida
   // carregando/processando o histórico, fora do controle deste app), e
@@ -338,26 +347,6 @@ export function useTerminal(
       effort: effort ?? undefined,
       systemPrompt: systemPrompt ?? undefined,
     };
-    window.pty.spawn(id, providerId, cwd, DEFAULT_COLS, DEFAULT_ROWS, spawnOpts).then((result) => {
-      if (disposed) return;
-      if ("error" in result) {
-        setSpawnError(
-          result.error === "binary_not_found"
-            ? // O PATH pesquisado vai junto (pedido de um usuário de
-              // macOS, 2026-09-08): sem ele, "não encontrado no PATH" não
-              // diz QUAL path, e a única forma de descobrir era abrir o
-              // `app.asar`. Em várias linhas porque um PATH real não cabe
-              // numa só.
-              `"${providerId}" não encontrado no PATH.\r\nPATH pesquisado:\r\n  ${result.searchedPath.split(":").join("\r\n  ")}`
-            : `falha ao iniciar "${providerId}"`,
-        );
-        return;
-      }
-      ptyIdRef.current = result.id;
-      if (initialInput) void window.pty.write(id, initialInput);
-      setPtyId(result.id);
-    });
-
     // Achado ao vivo escrevendo isto: o eco de um path colado pode chegar
     // partido em mais de um chunk de `pty:data` (o TTY não garante um
     // chunk por escrita) — por isso bufferiza em vez de checar `data`
@@ -422,6 +411,37 @@ export function useTerminal(
     const offSessionFound = window.pty.onSessionFound((id, sessionId) => {
       if (id === ptyIdRef.current) setDiscoveredResumeId(sessionId);
     });
+    const offResumeInvalid = window.pty.onResumeInvalid((eventId, reason, staleResumeId) => {
+      // This notification is emitted while the main process is handling the
+      // spawn IPC, before its promise resolves and fills ptyIdRef. Match the
+      // stable card id captured by this effect, not the later PTY id, or the
+      // warning can be lost exactly during the boot race this channel fixes.
+      if (eventId === id) setResumeInvalidNotice({ reason, staleResumeId });
+    });
+
+    // Register every event listener before invoking spawn. Main can emit the
+    // dedicated resume-invalid notification synchronously while it validates
+    // the restored id, so registering after spawn leaves a real one-shot IPC
+    // event with no renderer consumer.
+    window.pty.spawn(id, providerId, cwd, DEFAULT_COLS, DEFAULT_ROWS, spawnOpts).then((result) => {
+      if (disposed) return;
+      if ("error" in result) {
+        setSpawnError(
+          result.error === "binary_not_found"
+            ? // O PATH pesquisado vai junto (pedido de um usuário de
+              // macOS, 2026-09-08): sem ele, "não encontrado no PATH" não
+              // diz QUAL path, e a única forma de descobrir era abrir o
+              // `app.asar`. Em várias linhas porque um PATH real não cabe
+              // numa só.
+              `"${providerId}" não encontrado no PATH.\r\nPATH pesquisado:\r\n  ${result.searchedPath.split(":").join("\r\n  ")}`
+            : `falha ao iniciar "${providerId}"`,
+        );
+        return;
+      }
+      ptyIdRef.current = result.id;
+      if (initialInput) void window.pty.write(id, initialInput);
+      setPtyId(result.id);
+    });
 
     return () => {
       disposed = true;
@@ -429,6 +449,7 @@ export function useTerminal(
       offExit();
       offTurnComplete();
       offSessionFound();
+      offResumeInvalid();
       if (idleTimerRef.current) {
         clearTimeout(idleTimerRef.current);
         idleTimerRef.current = null;
@@ -875,5 +896,5 @@ export function useTerminal(
     setIsActive(false);
   }
 
-  return { ptyId, exitCode, spawnError, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt };
+  return { ptyId, exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, hasReceivedOutput, isActive, fitNow, interrupt };
 }

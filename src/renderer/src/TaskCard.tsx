@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { Fragment, memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
@@ -8,6 +8,7 @@ import type { TaskBoardItem } from "../../preload/index";
 import {
   COLUMN_ORDER,
   COLUMN_TITLE,
+  COLUMN_TO_STATUS,
   groupTasksByColumn,
   originBadge,
   deriveStage,
@@ -15,12 +16,18 @@ import {
   shortTaskId,
   formatTaskAge,
   waitingOnDep,
-  describeWaitingOn,
   resolveConcurrencyCap,
   computeBoardScope,
   computeCycleTime,
+  computeColumnDrop,
+  describeHumanMove,
+  isTaskCardLive,
+  computeMetaPills,
+  describeTransitionTrail,
+  describeHumanMoveNotice,
   msToHours,
   type TaskColumn,
+  type MetaPillKind,
 } from "./task-board-model";
 import styles from "./TaskCard.module.css";
 
@@ -69,48 +76,47 @@ const COLUMN_EMPTY_TEXT: Record<TaskColumn, string> = {
  * inteiro é clipado por `overflow: hidden` (CardFrame.tsx's `.card-clip`),
  * então um dropdown absoluto vazaria pra fora e seria cortado — texto
  * inline que cresce em altura, nunca em posição, é o que sobrevive a esse
- * clip. Boards órfãos (`name === null`, ver `computeBoardScope`) aparecem
- * contados mas NUNCA como botão — decisão 7 já limita isto a alcançar só
- * o que existe de verdade, e um board apagado (o achado desta rodada:
- * `board_id="1"`, deletado, ainda referenciado por 6 tasks) é exatamente
- * esse caso. */
+ * clip.
+ *
+ * FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 11, PEDIDO EXPLÍCITO DO DONO
+ * DO REPO, não estético) — a versão anterior tornava o NOME de cada board
+ * um LINK clicável que trocava de board/sessão com um clique. Removido:
+ * decisão 7 já dizia que tasks de outros boards são CONTADAS, nunca
+ * clicáveis (`jumpToCard`/qualquer navegação só opera sobre o que está
+ * carregado — um chip que às vezes navega e às vezes não é pior que
+ * chip nenhum), e o dono do repo confirmou ao vivo que não quer esse
+ * comportamento. O total agora é texto puro; a navegação (se alguém
+ * quiser) vira um controle SEPARADO e ROTULADO ("trocar de board"), que
+ * não aponta pra um board específico adivinhado — vai pra Home
+ * (`onGoHome`, a mesma tela onde TODO board existente é selecionável),
+ * nunca "o board X porque a contagem disse". O detalhamento por board
+ * (nome + contagem) sobrevive só como `title` (tooltip nativo do
+ * navegador, sem interação nenhuma) — informação sem virar afordância. */
 function TaskScopeFooter({
   activeBoardId,
   boardNames,
   taskCountsByBoard,
-  onSwitchBoard,
+  onGoHome,
 }: {
   activeBoardId: string;
   boardNames: Record<string, string>;
   taskCountsByBoard: Record<string, number>;
-  onSwitchBoard: (boardId: string) => void;
+  onGoHome: () => void;
 }) {
   const scope = computeBoardScope(activeBoardId, taskCountsByBoard, boardNames);
   const ownName = boardNames[activeBoardId] ?? activeBoardId;
+  const otherBoardsTooltip = scope.otherBoards.map((b) => `${b.name ?? `board ${b.boardId} (não existe)`} (${b.count})`).join(", ");
   return (
     <span data-part="board-scope" className={styles.scopeFooter}>
-      <span>
+      <span className={styles.scopeOwn}>
         board {ownName} · {scope.ownCount} tasks
       </span>
-      {scope.otherBoards.length > 0 && (
-        <span className={styles.scopeOthers}>
-          {" "}
-          · {scope.otherTotal} em outros boards:{" "}
-          {scope.otherBoards.map((b, i) => (
-            <span key={b.boardId}>
-              {i > 0 && ", "}
-              {b.name !== null ? (
-                <button type="button" data-no-drag className={styles.scopeLink} onClick={() => onSwitchBoard(b.boardId)}>
-                  {b.name}
-                </button>
-              ) : (
-                <span className={styles.scopeOrphan} title="este board não existe mais na lista de boards">
-                  board {b.boardId} (não existe)
-                </span>
-              )}{" "}
-              ({b.count})
-            </span>
-          ))}
+      {scope.otherTotal > 0 && (
+        <span className={styles.scopeRight}>
+          <span title={otherBoardsTooltip}>{scope.otherTotal} em outros boards</span>
+          <button type="button" data-no-drag data-part="switch-board" className={styles.scopeSwitchButton} onClick={onGoHome}>
+            trocar de board
+          </button>
         </span>
       )}
     </span>
@@ -126,7 +132,16 @@ const ROLE_LABEL: Record<string, string> = { implementer: "implementa", reviewer
 /** DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 4 — o glyph metálico
  * de um chip de card, mesma técnica de `TerminalCard.module.css`
  * (`background-clip: text`, gradiente 125deg). `provider` vem direto do
- * LEFT JOIN com `cards` (store.ts) — funciona mesmo pro card já fechado. */
+ * LEFT JOIN com `cards` (store.ts) — funciona mesmo pro card já fechado.
+ *
+ * FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 3) — o protótipo mostra
+ * glyph + ID (mono, forte) + label + papel maiúsculo alinhado à direita
+ * ("◆ 306 persist-reports IMPLEMENTA"); a versão anterior só mostrava
+ * glyph + label (o id só aparecia como fallback QUANDO não havia label,
+ * nunca junto dela) e o papel saía minúsculo, colado ao lado. `cardId`
+ * agora é SEMPRE mostrado (id de card já é curto por natureza neste app —
+ * inteiros sequenciais, "306"/"288" — nunca precisou de `shortTaskId`); o
+ * uppercase do papel é só CSS (`.chipRole`), sem mudar `ROLE_LABEL`. */
 function CardChip({ cardId, role, provider, label }: { cardId: string; role: string; provider: string | null; label: string | null }) {
   const metal = provider ? PROVIDER_GLYPH[provider] : undefined;
   const roleLabel = ROLE_LABEL[role] ?? role;
@@ -142,23 +157,63 @@ function CardChip({ cardId, role, provider, label }: { cardId: string; role: str
       ) : (
         <Icon name="terminal" size={11} />
       )}
-      <span className={styles.chipLabel}>{label ?? `card #${cardId}`}</span>
+      <span className={styles.chipId}>{cardId}</span>
+      {label && <span className={styles.chipLabel}>{label}</span>}
       <span className={styles.chipRole}>{roleLabel}</span>
     </span>
   );
 }
 
+/** Cor por tipo de pílula de meta (delta 5) — o significado mora na cor,
+ * não no texto; `computeMetaPills` (task-board-model.ts) decide QUAL
+ * pílula aparece, este mapa só decide QUE TOKEN cada `kind` usa.
+ * Dado estático de apresentação, mesmo tratamento que `COLUMN_COLOR`/
+ * `ROLE_LABEL` já recebem — vive no componente, não no módulo puro. */
+const PILL_CLASS: Record<MetaPillKind, string> = {
+  wait: styles.pillWait,
+  "wait-broken": styles.pillBroken,
+  suggestion: styles.pillSuggestion,
+};
+
 /** Um item do quadro — DESIGN-BACKLOG.md §2.1 peça 4, "anatomia da task
- * conforme o protótipo v5": id curto, idade, selo de origem, pílulas,
- * chips de card, varredura de atividade, trilha de etapa, barra de
- * proposta de conclusão. SEM faixa de acento à esquerda (removida do
- * protótipo de propósito). Cada parte carrega `data-part` — contrato de
- * fidelidade contra o protótipo pedido no review da RODADA 2. */
-function TaskItem({ task, now, onApproveCompletion }: { task: TaskBoardItem; now: number; onApproveCompletion: (taskId: string) => void }) {
+ * conforme o protótipo v5": alça de arraste + rank, id curto, idade, selo
+ * de origem, pílulas coloridas, chips de card, trilha de etapa
+ * (controle segmentado), trilha de transição com horários, varredura de
+ * atividade (gated por card vivo, não só status), barra de proposta de
+ * conclusão, marca de movimento humano. SEM faixa de acento à esquerda
+ * (removida do protótipo de propósito). Cada parte carrega `data-part` —
+ * contrato de fidelidade contra o protótipo pedido no review da RODADA 2,
+ * fechado visualmente nesta rodada (comparação lado a lado, dono do
+ * repo). */
+function TaskItem({
+  task,
+  now,
+  rank,
+  onApproveCompletion,
+  onDragPointerDown,
+}: {
+  task: TaskBoardItem;
+  now: number;
+  /** Delta 1 — o NÚMERO da posição na coluna, o que torna a prioridade
+   * legível sem contar linhas. Só a posição no array já ordenado
+   * (`groupTasksByColumn`) — 1-based, calculada por quem itera (`i+1`),
+   * não uma decisão nova: a ORDEM já é testada em `compareTasks`/
+   * `groupTasksByColumn`, isto só numera o que já está certo. */
+  rank: number;
+  onApproveCompletion: (taskId: string) => void;
+  /** FASE 2, peça 3 — inicia o arraste (mesmo gesto pointerdown/move/up
+   * que `CardFrame.tsx`'s `onHeaderPointerDown` já usa pra mover um card
+   * inteiro, reaproveitado aqui pra mover uma TASK dentro do quadro — não
+   * um segundo paradigma). Vive em `TaskCardInner` (não aqui) porque
+   * precisa comparar a posição do ponteiro contra os REFS das 4 colunas
+   * irmãs, algo que um item sozinho não enxerga. */
+  onDragPointerDown: (e: React.PointerEvent) => void;
+}) {
   const badge = originBadge(task.lastActor);
   const stage = deriveStage(task.status, task.report !== null);
   const propose = shouldProposeCompletion(task.status, task.report?.verdict);
   const waitingOn = waitingOnDep(task.deps, task.depStatuses);
+  const pills = computeMetaPills(waitingOn, task.order, task.suggestedOrder);
   // RODADA 2 — "Mais uma rodada" (segundo botão da barra de proposta): a
   // semântica não estava definida em lugar nenhum do briefing. Implementado
   // como o caso mais simples e mais seguro descrito por ele mesmo —
@@ -174,17 +229,33 @@ function TaskItem({ task, now, onApproveCompletion }: { task: TaskBoardItem; now
   // efêmero, não uma decisão que precisa sobreviver a um reload).
   const [dismissedAtReportUpdatedAt, setDismissedAtReportUpdatedAt] = useState<number | null>(null);
   const proposeVisible = propose && task.report?.updatedAt !== dismissedAtReportUpdatedAt;
-  // "Vivo" aqui é "a task está em andamento agora" (status `running`), não
-  // uma leitura real de atividade de PTY por card — essa granularidade
-  // exigiria um sinal por-card que este quadro não tem sem custo de N
-  // chamadas por task (ver o comentário grande de `buildTaskBoard`,
-  // main/index.ts). Documentado, não escondido: é uma aproximação
-  // honesta, não a mesma precisão do `.terminalCardActivity` de um card
-  // de terminal individual.
-  const alive = task.status === "running";
+  // FIDELIDADE VISUAL (delta 4) — "vivo" agora é o CARD por trás estar
+  // vivo de verdade (`task.cardAlive`, `registry.isAlive` do main
+  // process), não só a task estar `running`: uma task pode continuar
+  // `running` por um instante depois do processo já ter morrido (a janela
+  // entre o crash e o Sinal 2 derrubar pra `failed`), e a varredura nesse
+  // intervalo mentiria "isto está acontecendo agora". Antes disto, esta
+  // aproximação era documentada como deliberadamente imprecisa por medo
+  // de custo de N chamadas por task — `registry.isAlive` é um Map em
+  // memória, O(1), então esse medo não se sustentava.
+  const alive = isTaskCardLive(task.status, task.cardAlive);
+  // Delta 6 — trilha de transição com horários, dado que já existe desde
+  // a Fase 1 (`task_transitions`) e agora chega em TODA task, não só
+  // atrás do toggle de gráficos.
+  const trail = describeTransitionTrail(task.statusTransitions);
+  // Delta 8 — marca de movimento humano. `describeHumanMoveNotice` já
+  // decide as DUAS condições (último ator humano + card ainda vivo); este
+  // componente só entrega o resultado.
+  const humanMoveNotice = describeHumanMoveNotice(task.lastActor, task.cardAlive, task.cardId);
   return (
-    <div className={styles.item}>
+    <div className={styles.item} data-task-item-id={task.id} onPointerDown={onDragPointerDown}>
       <div className={styles.itemTop}>
+        <span className={styles.dragHandle} data-part="drag-handle" aria-hidden="true">
+          <Icon name="grip" size={12} />
+        </span>
+        <span className={styles.rank} data-part="task-rank">
+          {rank}
+        </span>
         <span className={styles.taskId} data-part="task-id">
           {shortTaskId(task.id)}
         </span>
@@ -198,24 +269,6 @@ function TaskItem({ task, now, onApproveCompletion }: { task: TaskBoardItem; now
         </span>
       </div>
       <div className={styles.prompt}>{task.prompt || "(sem prompt)"}</div>
-      {(waitingOn || (task.suggestedOrder !== null && task.order !== null && task.suggestedOrder !== task.order)) && (
-        <div className={styles.pills} data-part="task-pills">
-          {waitingOn && (
-            // RODADA 3 (review adversarial, achado B) — status `undefined`
-            // (dependência que não resolve a NENHUMA task, ex.: o board
-            // órfão `board_id="1"` achado nesta mesma rodada) ganha uma
-            // cor de alerta própria: é uma dependência QUEBRADA, não uma
-            // dependência normal ainda em andamento — a mesma pílula pra
-            // ambas escondia exatamente a distinção que o motor precisa.
-            <span className={waitingOn.status === undefined ? styles.pillBroken : styles.pill}>{describeWaitingOn(waitingOn)}</span>
-          )}
-          {task.suggestedOrder !== null && task.order !== null && task.suggestedOrder !== task.order && (
-            // Decisão 6 — a sugestão do agente nunca some, só perde a
-            // disputa: fica visível ao lado do que o humano decidiu.
-            <span className={styles.pill}>sugestão: prioridade {task.suggestedOrder}</span>
-          )}
-        </div>
-      )}
       {task.cards.length > 0 && (
         <div className={styles.chips}>
           {task.cards.map((c) => (
@@ -223,11 +276,28 @@ function TaskItem({ task, now, onApproveCompletion }: { task: TaskBoardItem; now
           ))}
         </div>
       )}
-      {stage && (
+      {pills.length > 0 && (
+        <div className={styles.pills} data-part="task-pills">
+          {pills.map((p, i) => (
+            <span key={i} className={PILL_CLASS[p.kind]}>
+              {p.text}
+            </span>
+          ))}
+        </div>
+      )}
+      {/* Uma vez que a barra de proposta aparece, a trilha de etapa fica
+          redundante (propor conclusão já diz "passou pela review") —
+          comparação lado a lado com o protótipo confirmou que ele nunca
+          mostra as duas juntas. */}
+      {stage && !proposeVisible && (
         <div className={styles.stageTrail} data-part="stage-trail">
-          <span className={stage === "implementar" ? styles.stageActive : styles.stageDone}>implementar</span>
-          <span className={styles.stageArrow}>→</span>
-          <span className={stage === "review" ? styles.stageActive : undefined}>review</span>
+          <span className={`${styles.stageSeg} ${stage === "implementar" ? styles.stageSegActive : ""}`}>implementar</span>
+          <span className={`${styles.stageSeg} ${stage === "review" ? styles.stageSegActive : ""}`}>review</span>
+        </div>
+      )}
+      {trail && (
+        <div className={styles.transitionTrail} data-part="transition-trail">
+          {trail}
         </div>
       )}
       {proposeVisible && (
@@ -240,12 +310,17 @@ function TaskItem({ task, now, onApproveCompletion }: { task: TaskBoardItem; now
           </span>
           <span className={styles.proposeActions}>
             <button type="button" data-no-drag className={styles.proposeSecondary} onClick={() => setDismissedAtReportUpdatedAt(task.report?.updatedAt ?? null)}>
-              mais uma rodada
+              Mais uma rodada
             </button>
             <button type="button" data-no-drag onClick={() => onApproveCompletion(task.id)}>
-              marcar concluído
+              Concluir
             </button>
           </span>
+        </div>
+      )}
+      {humanMoveNotice && (
+        <div className={styles.humanMoveNotice} data-part="human-move-notice">
+          {humanMoveNotice}
         </div>
       )}
       {alive && (
@@ -398,7 +473,7 @@ function TaskCardInner({
   activeBoardId,
   boardNames,
   taskCountsByBoard,
-  onSwitchBoard,
+  onGoHome,
   onChange,
   onCommit,
   onRaise,
@@ -438,7 +513,14 @@ function TaskCardInner({
   activeBoardId: string;
   boardNames: Record<string, string>;
   taskCountsByBoard: Record<string, number>;
-  onSwitchBoard: (boardId: string) => void;
+  /** DESIGN-BACKLOG.md §2.1, decisão 7 — delta 11 (RODADA de fidelidade
+   * visual): substituiu `onSwitchBoard(boardId)`. O rodapé não navega
+   * mais pra um board ESPECÍFICO adivinhado a partir da contagem (era
+   * exatamente o comportamento indesejado que motivou este delta) — o
+   * botão "trocar de board" vai pra Home (`useBoardStore.ts`'s
+   * `goHome`), de onde qualquer board real é alcançável escolhendo à
+   * mão. */
+  onGoHome: () => void;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -448,16 +530,27 @@ function TaskCardInner({
   onRename: (label: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
-  /** DESIGN-BACKLOG.md §2.1 decisões 8/9 — o único caminho de escrita
-   * desta fase: aceitar a proposta de conclusão de um report aprovado.
-   * Arrastar entre colunas (peça 3, escrevendo `status`/`order` e avisando
-   * o agente) fica pra uma próxima rodada — ver o relatório final. */
+  /** DESIGN-BACKLOG.md §2.1 decisões 8/9 — aceita a proposta de conclusão
+   * de um report aprovado. O OUTRO caminho de escrita desta fase —
+   * arrastar entre colunas (peça 3) — é `beginTaskDrag`/`onDropTask`,
+   * dentro deste próprio componente (precisa dos refs das 4 colunas
+   * irmãs, não faz sentido como prop vindo de fora). */
   onApproveCompletion: (taskId: string) => void;
   screenProjected?: boolean;
   panX?: number;
   panY?: number;
 }) {
   const groups = groupTasksByColumn(tasks);
+  // FASE 2, peça 3 — `onDropTask` é chamado de dentro de um listener de
+  // `window` registrado no INÍCIO do arraste (`beginTaskDrag`); se um push
+  // de `task:changed` re-renderizar este componente NO MEIO de um arraste
+  // em andamento (nova `tasks`, novo `groups`), esse listener continua
+  // fechado sobre o `groups` de quando o arraste começou, a menos que leia
+  // de uma ref — mesmo motivo de `CardFrame.tsx`'s `rectRef` existir (lido
+  // dentro de listeners de `window` iguais a este, pelo mesmo risco de
+  // closure velha).
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
   const cap = resolveConcurrencyCap(concurrencyCapRaw);
   // Lido uma vez por render, não num relógio próprio — a idade só precisa
   // de precisão de minuto/hora/dia (formatTaskAge), e qualquer push de
@@ -472,6 +565,149 @@ function TaskCardInner({
   // do que invalidar um cache certo, e a consulta é uma só (JOIN, sem
   // N+1) mesmo assim.
   const [chartsOpen, setChartsOpen] = useState(false);
+
+  // FASE 2, peça 3 — arrastar entre colunas e dentro da coluna. Refs (não
+  // estado) pros 4 corpos de coluna: só precisamos da posição/conteúdo
+  // REAL do DOM no momento do pointermove/pointerup (hit-test de
+  // coordenada de tela), nunca de re-render por causa deles — mesma razão
+  // de `CardFrame.tsx`'s `rectRef` existir como ref e não como estado.
+  const columnBodyRefs = useRef<Partial<Record<TaskColumn, HTMLDivElement | null>>>({});
+  // Estado de fato (precisa re-renderizar): qual task está sendo
+  // arrastada (some da lista normal enquanto isso — ver o filtro abaixo)
+  // e onde ela pousaria se soltasse agora (a "zona fantasma").
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<{ column: TaskColumn; index: number } | null>(null);
+  // ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 2, MÉDIO-ALTO) —
+  // `beginTaskDrag` registrava `pointermove`/`pointerup` no `window` sem
+  // nenhuma garantia de remoção fora do caminho feliz: alt-tab durante o
+  // arraste (o SO nunca entrega `pointerup`), ou o card fechando/o board
+  // trocando NO MEIO do gesto (o componente desmonta), deixavam os dois
+  // listeners vivos pra sempre — um clique comum depois rodava `onUp`
+  // sobre um `task`/`groupsRef` de um render que já não existe mais.
+  // Esta ref guarda a função de limpeza do arraste ATUALMENTE em curso
+  // (no máximo um por vez — um humano só tem um ponteiro), permitindo
+  // encerrá-lo de FORA de `beginTaskDrag`: no início do PRÓXIMO arraste
+  // (rede de segurança caso um anterior tenha escapado) e no unmount do
+  // componente (`useEffect` abaixo).
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  /** Acha em qual coluna (se alguma) e em que índice o ponteiro está —
+   * comparado contra os itens REALMENTE renderizados ali (exclui a própria
+   * task arrastada, que este mesmo componente já tira da lista enquanto
+   * `draggingTaskId` estiver setado — ver o JSX abaixo), pela posição
+   * vertical do meio de cada item (acima da metade de um item = solta
+   * ANTES dele). Mesma técnica de coordenadas de tela que
+   * `CardFrame.tsx`'s `onResizePointerDown`/`onHeaderPointerDown` já usam
+   * (`getBoundingClientRect`/`clientX`/`clientY`), não uma segunda. */
+  function locateDropTarget(taskId: string, clientX: number, clientY: number): { column: TaskColumn; index: number } | null {
+    for (const col of COLUMN_ORDER) {
+      const el = columnBodyRefs.current[col];
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) continue;
+      const items = Array.from(el.querySelectorAll<HTMLElement>("[data-task-item-id]")).filter((n) => n.dataset.taskItemId !== taskId);
+      let index = items.length;
+      for (let i = 0; i < items.length; i++) {
+        const itemRect = items[i].getBoundingClientRect();
+        if (clientY < itemRect.top + itemRect.height / 2) {
+          index = i;
+          break;
+        }
+      }
+      return { column: col, index };
+    }
+    return null;
+  }
+
+  /** DESIGN-BACKLOG.md §2.1, decisão 5 — o drop em si. `destination`
+   * exclui a própria task (mesmo filtro de `locateDropTarget`, mesma
+   * "lista realmente visível" que decidiu o índice) — `computeColumnDrop`
+   * (task-board-model.ts) é quem decide o `order` da arrastada E o
+   * `implicitOrder` de qualquer vizinho que precisou virar comparável,
+   * puro e testado ali.
+   *
+   * ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 1, ALTO) — a rodada 2
+   * gravava `order` real em vizinhos intocados, tornando-os PERMANENTE-
+   * MENTE imunes a um `suggestedOrder` futuro do agente (`order` sempre
+   * vence, sem exceção). Fix: só a task arrastada (`task.id`) recebe
+   * `order`/`status` (`window.tasks.moveTask`'s 1º/2º/3º argumentos);
+   * `result.siblingImplicitOrders` grava `implicitOrder` (terceiro nível,
+   * nunca `order`) pra quem só precisou virar comparável — zero
+   * imunidade, o PRÓXIMO `suggestedOrder` do agente pra essas tasks
+   * ainda vence normalmente.
+   *
+   * Escreve incondicionalmente quando houve movimento de verdade (`onUp`
+   * só chama isto com um `target` não-nulo): decisão 5 é "SEMPRE vale, e
+   * AVISA o agente", não uma otimização de "só grava se mudou de
+   * verdade". */
+  function onDropTask(task: TaskBoardItem, column: TaskColumn, index: number) {
+    const destination = groupsRef.current[column].filter((t) => t.id !== task.id);
+    const result = computeColumnDrop(destination, index);
+    const status = COLUMN_TO_STATUS[column];
+    window.tasks.moveTask(task.id, status, result.order, result.siblingImplicitOrders, describeHumanMove(column));
+  }
+
+  /** Reaproveita o MESMO gesto pointerdown→pointermove→pointerup que
+   * `CardFrame.tsx`'s `onHeaderPointerDown` já usa pra mover um card
+   * inteiro (limiar de 4px pra distinguir click de arraste) — nunca um
+   * segundo paradigma de arraste (HTML5 `draggable`/`dragstart`, por
+   * exemplo) só porque o alvo agora é uma task dentro do quadro em vez do
+   * card inteiro.
+   *
+   * ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 2) — `cleanup` agora é
+   * o ÚNICO caminho que desliga os listeners, chamado de TODA saída
+   * possível do gesto: solto de verdade (`onUp`), cancelado pelo SO
+   * (`onCancel` — `pointercancel`, ex.: alt-tab, o navegador decide que
+   * isto virou outro gesto), e desmontagem do componente (via
+   * `dragCleanupRef`, ver o `useEffect` acima). Também chamada no
+   * INÍCIO deste método, como rede de segurança — se um gesto anterior
+   * por algum motivo não tiver sido encerrado (não deveria acontecer com
+   * as saídas acima cobertas, mas um humano só tem um ponteiro mesmo, um
+   * 2º pointerdown só pode significar que o 1º já deveria ter
+   * terminado). */
+  function beginTaskDrag(task: TaskBoardItem, e: React.PointerEvent) {
+    if ((e.target as HTMLElement).closest("button, select, input, [data-no-drag]")) return;
+    dragCleanupRef.current?.();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let moved = false;
+    function cleanup() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      if (dragCleanupRef.current === cleanup) dragCleanupRef.current = null;
+    }
+    function onMove(ev: PointerEvent) {
+      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) {
+        moved = true;
+        setDraggingTaskId(task.id);
+      }
+      if (!moved) return;
+      setDragOver(locateDropTarget(task.id, ev.clientX, ev.clientY));
+    }
+    function onUp(ev: PointerEvent) {
+      const target = moved ? locateDropTarget(task.id, ev.clientX, ev.clientY) : null;
+      cleanup();
+      setDraggingTaskId(null);
+      setDragOver(null);
+      if (target) onDropTask(task, target.column, target.index);
+    }
+    function onCancel() {
+      // Gesto interrompido pelo SO/navegador antes de um `pointerup` real
+      // chegar — trata como "não moveu": limpa e não escreve nada, nunca
+      // um drop parcial/adivinhado a partir de coordenadas que podem não
+      // refletir mais a intenção do usuário.
+      cleanup();
+      setDraggingTaskId(null);
+      setDragOver(null);
+    }
+    dragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+  }
+
   return (
     <CardFrame
       className=""
@@ -495,7 +731,7 @@ function TaskCardInner({
       panX={panX}
       panY={panY}
       footerContent={
-        <TaskScopeFooter activeBoardId={activeBoardId} boardNames={boardNames} taskCountsByBoard={taskCountsByBoard} onSwitchBoard={onSwitchBoard} />
+        <TaskScopeFooter activeBoardId={activeBoardId} boardNames={boardNames} taskCountsByBoard={taskCountsByBoard} onGoHome={onGoHome} />
       }
       headerContent={
         <>
@@ -507,12 +743,16 @@ function TaskCardInner({
             <button
               type="button"
               data-part="charts-toggle"
-              className={chartsOpen ? styles.chartsToggleActive : undefined}
+              className={`${styles.chartsToggleBtn} ${chartsOpen ? styles.chartsToggleActive : ""}`}
               aria-pressed={chartsOpen}
               title="Gráficos"
               onClick={() => setChartsOpen((v) => !v)}
             >
               <Icon name="charts" size={12} />
+              {/* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 9) — o protótipo
+                  rotula este botão ("Gráficos"), a versão anterior só
+                  tinha o ícone. */}
+              <span>Gráficos</span>
             </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />
@@ -536,15 +776,46 @@ function TaskCardInner({
                 </span>
               )}
             </div>
-            <div className={`${styles.columnBody} thin-scroll`}>
-              {groups[col].length === 0 && (
-                <div className={styles.empty} data-part="column-empty">
-                  {COLUMN_EMPTY_TEXT[col]}
-                </div>
-              )}
-              {groups[col].map((task) => (
-                <TaskItem key={task.id} task={task} now={now} onApproveCompletion={onApproveCompletion} />
-              ))}
+            <div
+              className={`${styles.columnBody} thin-scroll`}
+              ref={(el) => {
+                columnBodyRefs.current[col] = el;
+              }}
+            >
+              {/* FASE 2, peça 3 — a task arrastada some da lista normal
+                  enquanto o gesto dura (mesma lista que `locateDropTarget`
+                  compara pela posição real do DOM); a "zona fantasma"
+                  (`data-part="drop-ghost"`, contrato §2.3 item 7 —
+                  "ausente, peça 3 adiada" — agora presente) aparece no
+                  índice exato onde ela pousaria. */}
+              {(() => {
+                const visible = draggingTaskId ? groups[col].filter((t) => t.id !== draggingTaskId) : groups[col];
+                const overHere = dragOver && dragOver.column === col ? dragOver : null;
+                return (
+                  <>
+                    {visible.length === 0 && !overHere && (
+                      <div className={styles.empty} data-part="column-empty">
+                        {COLUMN_EMPTY_TEXT[col]}
+                      </div>
+                    )}
+                    {visible.map((task, i) => (
+                      <Fragment key={task.id}>
+                        {overHere && overHere.index === i && (
+                          <div className={styles.dropGhost} data-part="drop-ghost">
+                            solta aqui para mover
+                          </div>
+                        )}
+                        <TaskItem task={task} now={now} rank={i + 1} onApproveCompletion={onApproveCompletion} onDragPointerDown={(e) => beginTaskDrag(task, e)} />
+                      </Fragment>
+                    ))}
+                    {overHere && overHere.index === visible.length && (
+                      <div className={styles.dropGhost} data-part="drop-ghost">
+                        solta aqui para mover
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
             {COLUMN_NOTE[col] && (
               <div className={styles.columnNote} data-part="column-note">

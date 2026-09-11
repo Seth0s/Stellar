@@ -50,7 +50,11 @@
 }
 
 /* RODADA 3 (contrato §2.3, item 3) — pílula COM BORDA em `--good`; a
-   rodada 2 era texto azul solto, sem borda nenhuma. */
+   rodada 2 era texto azul solto, sem borda nenhuma.
+   FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 10) — `margin-left: auto`
+   empurra o badge pra ponta DIREITA do cabeçalho da coluna "em
+   andamento", igual ao protótipo; não afeta `.columnCount` (as outras 3
+   colunas), que continua "logo depois do título" (RODADA 3, item 2). */
 .wipBadge {
   background: transparent;
   border: 1px solid var(--good);
@@ -58,6 +62,7 @@
   padding: 0 6px;
   color: var(--good);
   font-variant-numeric: tabular-nums;
+  margin-left: auto;
 }
 
 /* RODADA 3 (contrato §2.3, item 4) — nota de rodapé, só sob "a fazer" e
@@ -103,12 +108,60 @@
   /* SEM faixa de acento à esquerda — removida do protótipo v5 de
      propósito (DESIGN-BACKLOG.md §2.1): a trilha de etapa abaixo já diz
      o que a faixa dizia. */
+  /* FASE 2, peça 3 — o item inteiro é a superfície de arraste (mesmo
+     gesto que `.card-head` já usa pra mover um card, cards.css), exceto
+     os botões próprios (`[data-no-drag]`, ver TaskCard.tsx's
+     `beginTaskDrag`). `touch-action: none` pra o navegador não roubar o
+     pointermove pra rolar `.columnBody` num toque em vez de arrastar. */
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+/* FASE 2, peça 3 — "zona fantasma" (contrato §2.3, item 7: "ausente, peça
+   3 adiada" — agora presente). Mesma família visual do `.pill`/`.empty`
+   acima (nunca uma cor nova só pra isto), mas com borda tracejada — a
+   única pista de que aquilo ali é um espaço RESERVADO, não um item de
+   verdade. */
+.dropGhost {
+  border: 1px dashed var(--foam);
+  border-radius: 8px;
+  padding: 8px;
+  color: var(--foam);
+  font-size: 10.5px;
+  text-align: center;
+  background: color-mix(in srgb, var(--foam) 10%, transparent);
 }
 
 .itemTop {
   display: flex;
   align-items: baseline;
   gap: 6px;
+}
+
+/* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 1) — alça de arraste visível.
+   O arraste em si já funciona a partir de QUALQUER ponto do item (ver
+   `.item`'s `cursor: grab` e `beginTaskDrag`, TaskCard.tsx) — este ícone
+   é só a AFORDÂNCIA, `aria-hidden` (não é um controle próprio, não
+   recebe foco/click distinto do resto do item). `align-self` acompanha a
+   baseline dos textos ao lado sem esticar. */
+.dragHandle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  align-self: center;
+}
+
+/* Delta 1 — número de posição na coluna, a mesma ORDEM que
+   `groupTasksByColumn` já garante, só numerada. `tabular-nums` pra um "10"
+   não empurrar os vizinhos de largura por causa de dígito extra. */
+.rank {
+  flex: none;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  align-self: center;
 }
 
 /* RODADA 2 (review de fidelidade ao protótipo v5) — id curto em mono, o
@@ -154,31 +207,53 @@
    `espera <id>`). Só `espera <id>` (dependência) e a sugestão de
    prioridade do agente têm dado real hoje — ver task-board-model.ts's
    `waitingOnDepId` e o relatório desta rodada pro porquê das outras duas
-   ficarem de fora. */
+   ficarem de fora.
+   FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 5) — "a cor é que carrega o
+   significado": `.pill` genérico virou só a base compartilhada
+   (tamanho/padding/raio); cada `MetaPillKind` (task-board-model.ts's
+   `computeMetaPills`) tem sua PRÓPRIA classe de cor abaixo, nunca o
+   cinza uniforme de antes. */
 .pills {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-.pill {
-  color: var(--muted);
+/* "espera <id>" normal — foam, mesmo token da varredura de atividade e
+   do gráfico 3 (fila). As 3 classes de pílula abaixo repetem a mesma
+   forma (tamanho/raio/padding) em vez de compartilhar via `composes` —
+   este projeto não usa CSS Modules composition em nenhum outro lugar. */
+.pillWait {
   font-size: 10.5px;
-  background: var(--surface);
   border-radius: 4px;
   padding: 1px 6px;
+  color: var(--foam);
+  background: color-mix(in srgb, var(--foam) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--foam) 40%, var(--border));
 }
 
 /* RODADA 3 — dependência que não resolve a task nenhuma (achado B do
    review adversarial): visualmente distinta da pílula "espera <id>"
    normal, mesma cor de alerta que o resto do app usa pra estado quebrado. */
 .pillBroken {
-  color: var(--danger);
   font-size: 10.5px;
-  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
   border-radius: 4px;
   padding: 1px 6px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+/* Decisão 6 — a sugestão do agente nunca some, só perde a disputa: borda
+   TRACEJADA (protótipo: "agente sugere 1º") a distingue de uma pílula
+   "de verdade" (contínua) — ela é um palpite, não um fato decidido. */
+.pillSuggestion {
+  font-size: 10.5px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--violet);
+  background: color-mix(in srgb, var(--violet) 10%, var(--surface));
+  border: 1px dashed color-mix(in srgb, var(--violet) 55%, var(--border));
 }
 
 .chips {
@@ -224,6 +299,16 @@
   color: var(--m-mid);
 }
 
+/* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 3) — id do card em mono forte,
+   sempre presente (ver `CardChip`, TaskCard.tsx — antes só aparecia como
+   fallback quando não havia label). */
+.chipId {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text);
+  flex: none;
+}
+
 .chipLabel {
   color: var(--text);
   overflow: hidden;
@@ -232,30 +317,74 @@
   max-width: 12ch;
 }
 
+/* Delta 3 — papel alinhado à DIREITA do chip, maiúsculo
+   ("IMPLEMENTA"/"REVISA") — `margin-left: auto` dentro do `display:
+   inline-flex` de `.chip` empurra pra ponta; `ROLE_LABEL` (TaskCard.tsx)
+   continua minúsculo, o uppercase é só apresentação. */
 .chipRole {
+  margin-left: auto;
+  padding-left: 4px;
   color: var(--muted);
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  flex: none;
 }
 
+/* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 2) — controle segmentado
+   "IMPLEMENTAR | REVIEW" substituindo o texto solto com seta/tachado. A
+   metade ATIVA ganha fundo+borda em foam; a inativa fica só texto
+   `--muted`, sem tachado (etapa já passada ou ainda não alcançada, não
+   "cancelada"). */
 .stageTrail {
   display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.stageSeg {
+  flex: 1;
+  text-align: center;
+  padding: 3px 0;
   color: var(--muted);
 }
 
-.stageArrow {
-  opacity: 0.6;
+.stageSeg:first-child {
+  border-right: 1px solid var(--border);
 }
 
-.stageActive {
+.stageSegActive {
+  background: color-mix(in srgb, var(--foam) 18%, transparent);
   color: var(--foam);
-  font-weight: 600;
+  font-weight: 700;
 }
 
-.stageDone {
+/* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 6) — trilha de transição com
+   horários ("a fazer 19:02 → em andamento 19:05 → concluído 22:39").
+   Texto puro, mesma cor `--muted` de idade/etapas inativas — informação
+   de apoio, não um destaque. */
+.transitionTrail {
+  font-size: 9.5px;
   color: var(--muted);
-  text-decoration: line-through;
+  font-variant-numeric: tabular-nums;
+}
+
+/* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 8) — marca de movimento
+   humano ("Movida à mão com o card N ainda rodando. O card foi
+   avisado."). Âmbar (`--warn`) — mesmo token que o resto do app usa pra
+   "atenção, mas não é erro" (D8, indicadores acessíveis). */
+.humanMoveNotice {
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
+  color: var(--warn);
+  font-size: 10.5px;
+  line-height: 1.4;
 }
 
 .proposeBar {
@@ -361,34 +490,55 @@
 }
 
 /* RODADA 3, peça 5 — rodapé de escopo (`board X · N tasks · M em outros
-   boards`). Vive em `.card-foot` (cards.css), que já tem padding/altura
-   de uma linha — texto que pode quebrar em telas estreitas, nunca um
-   popover posicionado (o card inteiro é clipado por `overflow: hidden`,
-   ver o doc comment de TaskScopeFooter). */
+   boards`). Vive em `.card-foot` (cards.css) — texto que pode quebrar em
+   telas estreitas, nunca um popover posicionado (o card inteiro é
+   clipado por `overflow: hidden`, ver o doc comment de TaskScopeFooter).
+   FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 11) — layout vira duas
+   metades: nome/contagem própria à ESQUERDA (`.scopeOwn`, pode truncar
+   num card estreito), total de outros boards + botão "trocar de board" à
+   DIREITA (`.scopeRight`, nunca trunca — o botão precisa continuar
+   clicável). `justify-content: space-between` substitui o antigo texto
+   corrido único. */
 .scopeFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.scopeOwn {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.scopeOthers {
+.scopeRight {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--muted);
 }
 
-.scopeLink {
+/* Botão SEPARADO e ROTULADO (nunca o número da contagem virando link —
+   decisão 7, delta 11 pedido explícito do dono do repo). Vai pra Home
+   (`onGoHome`), nunca um board específico adivinhado. */
+.scopeSwitchButton {
   background: none;
-  border: none;
-  padding: 0;
-  color: var(--foam);
-  text-decoration: underline;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--text);
   cursor: pointer;
   font: inherit;
+  font-size: inherit;
 }
 
-/* Board órfão (achado desta rodada — `board_id` sem linha em `boards`):
-   contado, nunca clicável. */
-.scopeOrphan {
-  color: var(--warn);
+.scopeSwitchButton:hover {
+  border-color: var(--foam);
+  color: var(--foam);
 }
 
 /* RODADA 3, peça 6 — painel de gráficos, escondido por padrão (chartsOpen
@@ -458,6 +608,21 @@
 
 .legendSwatchRunning {
   background: var(--foam);
+}
+
+/* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 9) — botão "Gráficos" com
+   RÓTULO visível, não só ícone. `.card-head button` (cards.css, global)
+   é `padding: 4px` quadrado pensado pra ícone sozinho; `!important`
+   sobrescreve deliberadamente só pra ESTE botão (especificidade de
+   `.card-head button` — classe+elemento — empataria com uma classe só
+   deste módulo, e a ordem de import entre CSS global/módulo não é algo
+   pra depender). */
+.chartsToggleBtn {
+  display: flex !important;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px !important;
+  font-size: 10.5px;
 }
 
 /* Botão "Gráficos" (header) — estado pressionado quando o painel está

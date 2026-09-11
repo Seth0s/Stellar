@@ -49,18 +49,36 @@ export function columnForStatus(status: string): TaskColumn {
 
 /** Minimal shape `taskSortKey`/`compareTasks`/`groupTasksByColumn` need —
  * kept local (not imported from `preload/index.ts`) so this module stays
- * independently testable with plain object literals. */
-export type TaskOrderable = { order: number | null; suggestedOrder: number | null; createdAt: number };
+ * independently testable with plain object literals.
+ *
+ * `implicitOrder` — DESIGN-BACKLOG.md §2.1 Fase 2, peça 3, review
+ * adversarial (rodada 3, achado 1, ALTO): o TERCEIRO nível que faltava.
+ * Nem "decisão humana" (`order`) nem "opinião do agente"
+ * (`suggestedOrder`) — uma posição que existe só porque uma task VIZINHA
+ * foi arrastada e precisou de alguém comparável do lado (ver o comentário
+ * grande de `computeColumnDrop` mais abaixo pro porquê isto é necessário).
+ * Nunca escrito por um humano nem por um agente, só pelo próprio app —
+ * `store.ts`'s `TaskRow.implicit_order` tem o comentário completo do
+ * modelo de 3 níveis. */
+export type TaskOrderable = { order: number | null; suggestedOrder: number | null; implicitOrder: number | null; createdAt: number };
 
 /** DESIGN-BACKLOG.md §2.1, decisão 6 — DOIS DONOS deliberadamente
  * separados: `order` só um humano arrastando escreve, `suggestedOrder` só
  * um agente. O humano VENCE na leitura — mas só quando ele de fato
  * decidiu algo; uma task que nenhum humano tocou ainda cai pro palpite do
- * agente, e uma que nenhum dos dois tocou vai pro fim, ordenada só por
- * `createdAt` (nunca as duas prioridades disputando o mesmo número). */
+ * agente. `implicitOrder` (peça 3, review adversarial rodada 3) fica
+ * ABAIXO de `suggestedOrder` na precedência de propósito: é só posição,
+ * nunca decisão de ninguém, então um palpite REAL do agente sempre vence
+ * um número que o app só materializou pra uma vizinha caber num drop —
+ * sem isso, essa vizinha ficaria PERMANENTEMENTE imune a um
+ * `suggestedOrder` futuro (seria o mesmo defeito que motivou nunca
+ * escrever `order` nela). Uma task que NADA dos três tocou ainda vai pro
+ * fim, ordenada só por `createdAt` (nunca as prioridades disputando o
+ * mesmo número). */
 export function taskSortKey(t: TaskOrderable): number {
   if (t.order !== null) return t.order;
   if (t.suggestedOrder !== null) return t.suggestedOrder;
+  if (t.implicitOrder !== null) return t.implicitOrder;
   return Number.POSITIVE_INFINITY;
 }
 
@@ -302,4 +320,255 @@ const MS_PER_HOUR = 3_600_000;
  * barras, some do gráfico sem nenhum aviso. */
 export function msToHours(ms: number): number {
   return ms / MS_PER_HOUR;
+}
+
+/**
+ * FASE 2, peça 3 — arrastar entre colunas e dentro da coluna
+ * (DESIGN-BACKLOG.md §2.1, decisões 5/6/8). Inverso de `STATUS_TO_COLUMN`:
+ * a coluna onde a task foi SOLTA é que decide o novo `status` — nunca o
+ * contrário. Só as 4 colunas reais têm um status conhecido de volta (o
+ * fallback de `columnForStatus` pra um status externo/estranho é só de
+ * LEITURA, uma coluna nunca recebe esse status de volta ao ser arrastada
+ * pra ela). */
+export const COLUMN_TO_STATUS: Record<TaskColumn, string> = { todo: "pending", doing: "running", done: "done", failed: "failed" };
+
+/** Espaço deixado entre a sort key do vizinho e o novo valor quando não há
+ * vizinho de um dos lados (ponta da coluna) — dá folga pra inserções
+ * futuras na MESMA ponta sem colidir já na próxima vez. Mesmo valor nos
+ * dois lados, sem significado especial além de "grande o bastante pra não
+ * colidir com o próximo drop nessa ponta". */
+const ORDER_GAP = 1000;
+
+/** Um vizinho que precisou ganhar uma posição REAL (`implicit_order`,
+ * NUNCA `order`) pra a task arrastada conseguir se encaixar entre
+ * tasks que antes empatavam em `Infinity` — ver o comentário grande de
+ * `computeColumnDrop` logo abaixo pro porquê a distinção entre este
+ * campo e `order` é o próprio ponto do achado que motivou esta função. */
+export type ColumnDropWrite = { id: string; implicitOrder: number };
+
+export type ColumnDropResult = {
+  /** O `order` real — SÓ da task arrastada. É o único jeito de "um
+   * humano decidiu isto" ser gravado (decisões 6/8); nenhum vizinho
+   * jamais aparece aqui. */
+  order: number;
+  /** Vizinhos intocados que precisaram materializar uma posição — ver
+   * `ColumnDropWrite`. Lista vazia é o caso comum (drop entre duas tasks
+   * que já tinham chave finita, ou numa coluna vazia): nada precisa
+   * materializar, só a arrastada escreve. */
+  siblingImplicitOrders: ColumnDropWrite[];
+};
+
+/**
+ * ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 1, ALTO) — a versão
+ * anterior desta função (`computeDropOrder`, interpolava só entre os DOIS
+ * vizinhos imediatos usando `taskSortKey`) tinha um bug real, não um caso
+ * de borda: numa coluna onde NENHUMA task tem `order`/`suggestedOrder`
+ * ainda (o estado normal de um board novo), toda task tem sort key
+ * `Infinity` — soltar em QUALQUER índice fazia `before`/`after` caírem em
+ * `null` do mesmo jeito, sempre devolvendo o mesmo valor, e como um
+ * finito qualquer é sempre `< Infinity`, a task solta saltava pro TOPO da
+ * coluna, não importa se foi solta no início, no meio ou no fim.
+ *
+ * ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 1, ALTO) — a 1ª correção
+ * (materializar `order` real nos vizinhos intocados, não só na
+ * arrastada) resolvia o visual mas quebrava a semântica: `order` significa
+ * "um humano DECIDIU isto", e uma vez setado vence QUALQUER
+ * `suggestedOrder` futuro do agente, pra sempre (`taskSortKey` olha
+ * `order` primeiro, sem exceção). Escrever `order` num vizinho que o
+ * humano nunca tocou o tornava PERMANENTEMENTE imune à repriorização do
+ * agente — exatamente o poder que a decisão 6 nunca concedeu a esta
+ * função. O teste da rodada 2 provava isso sem perceber: afirmava como
+ * certo que vizinhos intocados recebessem `order`.
+ *
+ * A raiz (confirmada nas duas rodadas): um escalar só, onde `Infinity`
+ * significa "sem ordem nenhuma", não consegue exprimir um TERCEIRO
+ * estado — "posicionada, mas ninguém decidiu nada sobre ela". Fix desta
+ * rodada: o modelo ganha esse terceiro estado (`implicit_order`,
+ * `TaskRow`/`TaskOrderable`) — abaixo de `suggestedOrder` na precedência
+ * de leitura, então um agente sempre recupera o direito de opinar. Esta
+ * função passa a devolver DOIS tipos de escrita: `order` (SÓ a
+ * arrastada — a decisão humana em si) e `siblingImplicitOrders`
+ * (vizinhos que precisaram virar comparáveis, escrevem `implicit_order`,
+ * nunca `order`).
+ *
+ * O ALGORITMO em si não mudou (mesmo trecho contíguo de tasks intocadas
+ * ao redor do ponto de solta, mesmo gap/interpolação) — só PRA ONDE cada
+ * valor calculado vai: o slot da arrastada vira `order`; os outros slots
+ * do trecho viram `implicitOrder` de cada vizinho, mapeados de volta pro
+ * `id` deles. A ORDEM relativa de todo mundo no trecho continua
+ * preservada por construção (o array já chegava nessa ordem); nenhuma
+ * task que já tinha `order`/`suggestedOrder` (dentro ou fora do trecho) é
+ * tocada. */
+export function computeColumnDrop<T extends TaskOrderable & { id: string }>(
+  destinationTasks: readonly T[],
+  dropIndex: number,
+): ColumnDropResult {
+  let start = dropIndex;
+  while (start > 0 && !Number.isFinite(taskSortKey(destinationTasks[start - 1]))) start--;
+  let end = dropIndex;
+  while (end < destinationTasks.length && !Number.isFinite(taskSortKey(destinationTasks[end]))) end++;
+
+  // O trecho intocado, SEM a arrastada (ela nunca esteve neste array —
+  // `destinationTasks` é sempre "a coluna de destino menos a task que
+  // está sendo solta", responsabilidade de quem chama). `insertAt` é a
+  // posição dela DENTRO do trecho.
+  const runTasks = destinationTasks.slice(start, end);
+  const insertAt = dropIndex - start;
+  const n = runTasks.length + 1; // vizinhos do trecho + a arrastada
+
+  const beforeKey = start > 0 ? taskSortKey(destinationTasks[start - 1]) : null;
+  const afterKey = end < destinationTasks.length ? taskSortKey(destinationTasks[end]) : null;
+  const before = beforeKey !== null && Number.isFinite(beforeKey) ? beforeKey : null;
+  const after = afterKey !== null && Number.isFinite(afterKey) ? afterKey : null;
+
+  let base: number;
+  let step: number;
+  if (before !== null && after !== null) {
+    // Os dois limites são reais (finitos) — divide o espaço entre eles em
+    // partes iguais, mesma técnica de gap de sempre, só que agora pro
+    // trecho inteiro em vez de uma task só.
+    step = (after - before) / (n + 1);
+    base = before;
+  } else if (before !== null) {
+    step = ORDER_GAP;
+    base = before;
+  } else if (after !== null) {
+    step = ORDER_GAP;
+    base = after - step * (n + 1);
+  } else {
+    // Coluna inteira intocada (o cenário dos dois achados) — sem limite
+    // nenhum dos dois lados, começa de 0 com o mesmo espaçamento de
+    // sempre.
+    step = ORDER_GAP;
+    base = 0;
+  }
+
+  let order = 0;
+  const siblingImplicitOrders: ColumnDropWrite[] = [];
+  for (let i = 0; i < n; i++) {
+    const value = base + step * (i + 1);
+    if (i === insertAt) {
+      order = value;
+    } else {
+      // Mapeia o índice do slot de volta pro índice em `runTasks` — o
+      // slot da arrastada "ocupa" uma posição no meio, então tudo DEPOIS
+      // dela desloca um índice pra trás.
+      const taskIndex = i < insertAt ? i : i - 1;
+      siblingImplicitOrders.push({ id: runTasks[taskIndex].id, implicitOrder: value });
+    }
+  }
+  return { order, siblingImplicitOrders };
+}
+
+/** Decisão 5, textual: "arrastar a mão SEMPRE vale, e AVISA o agente" — o
+ * aviso em si (SE mandar ou não) não é uma decisão condicional desta fase,
+ * é incondicional a todo drop que de fato moveu a task; só o TEXTO do
+ * aviso precisa de uma decisão (qual coluna virou o destino). Separado do
+ * mecanismo de entrega (`typeAndSubmit`, message-bus.ts, main process) pra
+ * manter mensagem e transporte testáveis em separado — mesma divisão que
+ * `describeWaitingOn`/`waitingOnDep` já usa acima. */
+export function describeHumanMove(column: TaskColumn): string {
+  return `[de: você] moveu esta task para "${COLUMN_TITLE[column]}".`;
+}
+
+/**
+ * FIDELIDADE VISUAL AO PROTÓTIPO v5 (DESIGN-BACKLOG.md §2.1, comparação
+ * lado a lado pedida pelo dono do repo) — a fase 2 ficou funcional antes
+ * de ficar fiel; este bloco fecha a distância de anatomia/destaque/
+ * animação. Toda DECISÃO (qual selo, qual cor, quando mostrar o quê) vive
+ * aqui, pura e testável — só o CSS/DOM em si fica sem cobertura
+ * automatizada (`vitest` roda `environment: "node"`, sem jsdom).
+ */
+
+/** Varredura de atividade (delta 4) — o protótipo anima a task cujo CARD
+ * está VIVO, não cuja task está `running`: uma task pode continuar
+ * `running` por um instante depois do processo do card já ter morrido
+ * (entre o crash e o Sinal 2 derrubar pra `failed`), e a varredura nesse
+ * intervalo mentiria "isto está acontecendo agora". `cardAlive` chega
+ * pronto do main process (`registry.isAlive`, já síncrono/O(1), sem custo
+ * de N chamadas — ver `buildTaskBoard`, main/index.ts). */
+export function isTaskCardLive(status: string, cardAlive: boolean): boolean {
+  return status === "running" && cardAlive;
+}
+
+/** Pílulas de meta (delta 5) — a cor é que carrega o significado no
+ * protótipo (espera em foam, sugestão do agente tracejada), então cada
+ * pílula sai com um `kind` que a camada de apresentação (TaskCard.tsx)
+ * traduz em token de cor — nunca uma string de estilo aqui (este módulo
+ * não conhece CSS).
+ *
+ * DELIBERADAMENTE NÃO INCLUÍDO: as pílulas `rodada N`/`reprovada N×`/
+ * `fase X adiada` que o protótipo também mostra. As duas primeiras
+ * dependem do histórico de veredito que este modelo não tem (`reports` é
+ * slot único por card, `ON CONFLICT DO UPDATE` sempre sobrescreve — a
+ * MESMA lacuna já documentada pros gráficos 1/2, `EmptyChart` em
+ * TaskCard.tsx); a terceira ("fase C adiada") é texto livre de um board
+ * real específico, não um conceito do modelo. Inventar qualquer uma
+ * violaria o mesmo princípio de "vazio honesto, nunca número inventado"
+ * já estabelecido pros gráficos — aqui não há nem "vazio" pra declarar,
+ * a pílula inteira só não existe. */
+export type MetaPillKind = "wait" | "wait-broken" | "suggestion";
+export type MetaPill = { kind: MetaPillKind; text: string };
+
+export function computeMetaPills(waitingOn: WaitingOn | null, order: number | null, suggestedOrder: number | null): MetaPill[] {
+  const pills: MetaPill[] = [];
+  if (waitingOn) {
+    pills.push({ kind: waitingOn.status === undefined ? "wait-broken" : "wait", text: describeWaitingOn(waitingOn) });
+  }
+  if (suggestedOrder !== null && order !== null && suggestedOrder !== order) {
+    // Decisão 6 — a sugestão do agente nunca some, só perde a disputa:
+    // fica visível ao lado do que o humano decidiu.
+    pills.push({ kind: "suggestion", text: `sugestão: prioridade ${suggestedOrder}` });
+  }
+  return pills;
+}
+
+/** Trilha de transição com horários (delta 6) — `a fazer 19:02 → em
+ * andamento 19:05 → concluído 22:39`. Dado já existe em
+ * `task_transitions` desde a Fase 1; só nunca tinha chegado até o board
+ * normal (só o gráfico 3, atrás do toggle). `transitions` chega ORDENADA
+ * por `at` (mesma garantia que `computeCycleTime` já depende — ver seu
+ * doc comment), então basta mapear e juntar.
+ *
+ * Rótulo de cada ponto usa `COLUMN_TITLE` (o mesmo nome que a coluna já
+ * exibe), não uma abreviação nova — o protótipo abrevia "andamento" sem
+ * o "em", mas introduzir uma 2ª lista de rótulos só pra isto divergiria
+ * da UI real por nenhum ganho. `null` quando não há NENHUMA transição
+ * (não deveria acontecer — `upsertTask` sempre grava a primeira na
+ * criação — mas o tipo não impede), pra `TaskItem` decidir não renderizar
+ * a trilha nenhuma, nunca uma trilha vazia com "→" solto.
+ *
+ * LIMITAÇÃO CONHECIDA, documentada — `task_transitions.kind` distingue
+ * `status` de `stage`, mas NADA escreve `stage` ainda (reservado, ver
+ * `TaskTransitionRow` em store.ts): o ponto "review 21:40" que o
+ * protótipo mostra não é derivável hoje — só os pontos de STATUS real
+ * aparecem (a fazer/andamento/concluído/falhou), nunca a entrada na
+ * etapa de review. */
+export function describeTransitionTrail(transitions: readonly StatusTransitionPoint[]): string | null {
+  if (transitions.length === 0) return null;
+  return transitions.map((t) => `${COLUMN_TITLE[columnForStatus(t.toValue)]} ${formatClockTime(t.at)}`).join(" → ");
+}
+
+function formatClockTime(at: number): string {
+  const d = new Date(at);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** Marca de movimento humano (delta 8) — "Movida à mão com o card 288
+ * ainda rodando. O card foi avisado." Só aparece quando as DUAS coisas
+ * são verdade: a ÚLTIMA transição foi de um humano (`lastActor`, já
+ * gravado por `upsertTask`/decisão 5), E o card vinculado ainda está
+ * vivo (`cardAlive`, mesmo dado que `isTaskCardLive` usa acima) — as
+ * duas evidências independentes de que "o aviso que a decisão 5 manda
+ * pelo `typeAndSubmit` foi de fato entregue a um processo que ainda
+ * existe", não uma suposição.
+ *
+ * Deliberadamente NÃO travado ao status atual da task: o protótipo
+ * mostra isto sob uma task já em "concluído" — um humano pode arrastar a
+ * task pra `done` enquanto o card que a implementava segue rodando por
+ * conta própria (ex.: fazendo outra coisa, ou ainda escrevendo o
+ * report). "Ainda rodando" descreve o CARD, não a task. */
+export function describeHumanMoveNotice(lastActor: TaskActor | null, cardAlive: boolean, cardId: string | null): string | null {
+  if (lastActor !== "human" || !cardAlive || cardId === null) return null;
+  return `Movida à mão com o card ${cardId} ainda rodando. O card foi avisado.`;
 }

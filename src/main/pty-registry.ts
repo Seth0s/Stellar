@@ -2,8 +2,16 @@ import { delimiter } from "node:path";
 import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, type SpawnOpts } from "./providers";
 import { effectivePath, realNodePath } from "./user-env";
-import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS } from "./session-watch";
+import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
 import { decideRearmOnLine } from "./session-rearm-decision";
+import { decideResumeValidity } from "./session-resume-validation";
+
+// DESIGN-BACKLOG.md, achado 2 (2026-09-11) — encaminhamento 3. Só os
+// providers com conceito de sessão têm onde checar (mesmo conjunto que
+// `watchForSession` já reconhece); `bash` nunca teve `resumeId` de
+// verdade, e validar contra um provider sem noção de sessão não faz
+// sentido nenhum.
+const PROVIDERS_WITH_SESSION_CONCEPT = new Set(["claude", "codex", "cursor", "antigravity", "opencode"]);
 
 const COALESCE_MS = 16;
 const COALESCE_MAX = 64 * 1024;
@@ -96,6 +104,22 @@ type Entry = {
    * `card_status` distinguir "trabalhando" de "vivo mas parado no
    * prompt" sem precisar entender a UI de nenhum provider específico. */
   lastActivityAt: number;
+  /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
+   * caixa sem submeter" — timestamp do SPAWN em si, guardado no próprio
+   * `entry` (antes só existia como `const spawnedAtMs` local, nunca
+   * exposto) porque `typeAndSubmit`'s portão de prontidão
+   * (`type-and-submit-decision.ts`'s `decideWriteReadiness`) precisa dele
+   * bem depois do spawn, de um closure diferente — mesmo motivo de
+   * `providerId`/`cwd` logo abaixo. */
+  spawnedAtMs: number;
+  /** DESIGN-BACKLOG.md §0, mesmo item — `true` assim que o processo
+   * emitir o PRIMEIRO byte de output, nunca mais volta a `false`.
+   * Distinto de `lastActivityAt` de propósito: aquele é atualizado a CADA
+   * chunk (inclusive o primeiro) e reflete só "há quanto tempo desde a
+   * última vez", então sozinho não diz se algum dado já chegou ou se o
+   * processo simplesmente nunca desenhou nada ainda — a pergunta exata
+   * que o portão de prontidão precisa responder antes de digitar. */
+  hasReceivedData: boolean;
   /** Needed to re-arm `watchForSession` from `write()` below on a detected
    * `/resume` — the original spawn call already has these, but `write()`
    * runs long after, in a different closure. */
@@ -253,6 +277,20 @@ export function createPtyRegistry(registryOpts: {
   onData: (id: string, data: string) => void;
   onExit: (id: string, exitCode: number) => void;
   onSessionFound: (id: string, sessionId: string) => void;
+  /** Review adversarial (2026-09-11), achado 4 — o primeiro conserto daqui
+   * escrevia o aviso direto em `onData` (bytes injetados no próprio pty).
+   * PROVADO ruim: TUIs em tela cheia (claude, opencode) mandam clear/redraw
+   * absoluto no boot — o aviso ou é apagado antes de ser lido, ou corrompe
+   * o desenho. Mesma raiz do bug documentado no backlog ("texto entregue a
+   * um card recém-spawnado fica na caixa sem submeter") — escrever no pty
+   * sem saber se o destino está "pronto" pra receber. Canal separado da
+   * saída do processo: chega no rodapé do card (`TerminalCard.tsx`, DOM de
+   * verdade, nunca faz parte do grid de caracteres que a TUI redesenha) —
+   * sobrevive a qualquer clear/redraw porque nunca esteve no buffer do
+   * terminal. `electron.Notification` continua fora de cogitação (já
+   * documentado como estruturalmente invisível pra um agente dentro de um
+   * PTY). */
+  onResumeInvalid: (id: string, reason: "missing" | "empty", staleResumeId: string) => void;
   onUrlSeen: (id: string, url: string) => void;
   /** Path to the acbridge Unix socket, and the dir it lives in — injected into every spawned provider's env/PATH. */
   sockPath: string;
@@ -342,8 +380,30 @@ export function createPtyRegistry(registryOpts: {
     // modelo lembrar de preencher `callerCardId`, e quando ele não
     // lembrava o modo autônomo do board simplesmente não valia. Mesmo id
     // do `AGENT_CANVAS_CARD_ID` logo abaixo, mesma fonte.
+    // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — encaminhamento 3: nunca
+    // honrar um `resumeId` restaurado sem checar primeiro que existe algo
+    // de verdade por trás dele. Achado ao vivo que motivou isto: card 330
+    // restaurou com `resume_id` apontando pro arquivo de um spawn travado
+    // (2550 bytes, nunca cresceu) em vez da sessão de 15.9 MB de fato em
+    // uso — um `--resume` silencioso pra uma sessão vazia, sem AVISO
+    // NENHUM. `resumeInvalidReason` não-nulo é o único sinal que o resto
+    // desta função precisa: dali em diante trata como se `resumeId` nunca
+    // tivesse vindo preenchido (spawn limpo, watcher normal arma sozinho),
+    // e um aviso visível chega pelo canal dedicado `onResumeInvalid` (ver
+    // seu doc comment acima — NÃO é mais escrito no pty do card: uma
+    // primeira versão fazia isso e uma review adversarial provou que uma
+    // TUI em tela cheia apaga ou corrompe qualquer coisa escrita ali antes
+    // do próprio boot dela terminar).
+    let resumeInvalidReason: "missing" | "empty" | null = null;
+    if (spawnOpts.resumeId && PROVIDERS_WITH_SESSION_CONCEPT.has(providerId)) {
+      const evidence = getResumeTargetEvidence(providerId, cwd, spawnOpts.resumeId);
+      const validity = decideResumeValidity(evidence);
+      if (!validity.valid) resumeInvalidReason = validity.reason;
+    }
+    const effectiveSpawnOpts: SpawnOpts = resumeInvalidReason ? { ...spawnOpts, resumeId: undefined } : spawnOpts;
+
     const cardMcpUrl = registryOpts.mcpUrl ? `${registryOpts.mcpUrl}?card=${encodeURIComponent(id)}` : registryOpts.mcpUrl;
-    const resolved = resolveSpawn(providerId, { ...spawnOpts, mcpUrl: cardMcpUrl });
+    const resolved = resolveSpawn(providerId, { ...effectiveSpawnOpts, mcpUrl: cardMcpUrl });
     if (!resolved) {
       return {
         error: "binary_not_found",
@@ -439,6 +499,8 @@ export function createPtyRegistry(registryOpts: {
       urlCarry: "",
       killTimer: null,
       lastActivityAt: spawnedAtMs,
+      spawnedAtMs,
+      hasReceivedData: false,
       providerId,
       cwd,
       inputLineBuffer: "",
@@ -449,28 +511,37 @@ export function createPtyRegistry(registryOpts: {
       // em `Entry` acima). Um card fresco começa `false` e vira `true`
       // assim que o callback de sucesso abaixo (ou o de
       // `rearmSessionWatch`) rodar.
-      sessionFound: !!spawnOpts.resumeId,
+      sessionFound: !!effectiveSpawnOpts.resumeId,
       // RODADA 7, achado 3 — nunca começa `true`: o modo "qualquer input
       // rearma" só liga quando um trigger explícito dispara (write()
       // abaixo), nunca no spawn.
       awaitingResumeAnyInput: false,
       scanFloorMs: spawnedAtMs,
       // RODADA 7, achado 2 — já preenchido quando o card nasce restaurado
-      // (`spawnOpts.resumeId`), pra `rearmSessionWatch` ter o que liberar
-      // no dia em que este card trocar de sessão via `/resume`.
-      claimedSessionId: spawnOpts.resumeId ?? null,
+      // (`effectiveSpawnOpts.resumeId`), pra `rearmSessionWatch` ter o que
+      // liberar no dia em que este card trocar de sessão via `/resume`.
+      claimedSessionId: effectiveSpawnOpts.resumeId ?? null,
     };
     entries.set(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
 
+    // Review adversarial (2026-09-11), achado 4 — isto disparava via
+    // `registryOpts.onData(id, banner)` antes, bytes crus no pty. Trocado
+    // pelo canal dedicado (ver o doc comment de `onResumeInvalid` acima) —
+    // depois de `entries.set` pelo mesmo motivo de sempre (consumidores
+    // reconhecerem o id), mas nunca toca o buffer do terminal.
+    if (resumeInvalidReason) {
+      registryOpts.onResumeInvalid(id, resumeInvalidReason, spawnOpts.resumeId!);
+    }
+
     // Only watch for a fresh session when the caller didn't already pass a
-    // resumeId — a spawn that already targets a known session has nothing
-    // to discover. But that known session's id still needs to be claimed
-    // (see claimSessionId's doc comment) — otherwise a fresh watcher for a
-    // different, later-spawned card in the same cwd can "discover" and
-    // steal this restored card's own in-use session file, since nothing
-    // else ever marks it as belonging to someone.
-    if (!spawnOpts.resumeId) {
+    // (valid) resumeId — a spawn that already targets a known session has
+    // nothing to discover. But that known session's id still needs to be
+    // claimed (see claimSessionId's doc comment) — otherwise a fresh
+    // watcher for a different, later-spawned card in the same cwd can
+    // "discover" and steal this restored card's own in-use session file,
+    // since nothing else ever marks it as belonging to someone.
+    if (!effectiveSpawnOpts.resumeId) {
       entry.stopWatch = watchForSession(
         providerId,
         cwd,
@@ -497,11 +568,12 @@ export function createPtyRegistry(registryOpts: {
         },
       );
     } else {
-      claimSessionId(spawnOpts.resumeId);
+      claimSessionId(effectiveSpawnOpts.resumeId);
     }
 
     proc.onData((data) => {
       entry.lastActivityAt = Date.now();
+      entry.hasReceivedData = true;
       entry.chunks.push(data);
       entry.pending += data.length;
       if (entry.pending >= COALESCE_MAX) {
@@ -598,7 +670,7 @@ export function createPtyRegistry(registryOpts: {
    * agora"). Persistido de volta em `entry.scanFloorMs` AQUI, não em
    * `write()` — este é o único lugar que de fato liga um watcher novo,
    * então é o único lugar que sabe com certeza qual piso passou a valer. */
-  function rearmSessionWatch(id: string, entry: Entry, floorMs: number) {
+  function rearmSessionWatch(id: string, entry: Entry, floorMs: number, rearmAtMs: number) {
     entry.stopWatch?.();
     entry.scanFloorMs = floorMs;
     entry.stopWatch = watchForSession(
@@ -633,6 +705,15 @@ export function createPtyRegistry(registryOpts: {
       () => {
         entry.stopWatch = null;
         entry.awaitingResumeAnyInput = false;
+      },
+      {
+        ownerId: id,
+        rearmAtMs,
+        // The scan floor may intentionally predate this input when another
+        // watcher was still in flight. Ownership, however, starts at THIS
+        // input: a file born before it remains attributable to the earlier
+        // reservation, while a later file belongs to the latest input.
+        matchStartMs: rearmAtMs,
       },
     );
   }
@@ -705,7 +786,7 @@ export function createPtyRegistry(registryOpts: {
         if (decision.action === "rearm") {
           if (decision.resetSessionFound) entry.sessionFound = false;
           if (decision.enterAwaitingResumeAnyInput) entry.awaitingResumeAnyInput = true;
-          rearmSessionWatch(id, entry, decision.floorMs);
+          rearmSessionWatch(id, entry, decision.floorMs, nowMs);
         }
       }
       if (entry.inputLineBuffer.length > MAX_INPUT_LINE_BUFFER) {
@@ -799,6 +880,18 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.lastActivityAt ?? null;
   }
 
+  /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
+   * caixa sem submeter" — o snapshot que `typeAndSubmit` (message-bus.ts)
+   * precisa pra decidir, via `decideWriteReadiness`
+   * (type-and-submit-decision.ts), se já é seguro digitar. `null` com a
+   * mesma convenção de `isAlive`/`getLastActivityAt` — sem entry, não há
+   * o que esperar. */
+  function getWriteReadiness(id: string): { spawnedAtMs: number; hasReceivedData: boolean; lastActivityAtMs: number } | null {
+    const entry = entries.get(id);
+    if (!entry) return null;
+    return { spawnedAtMs: entry.spawnedAtMs, hasReceivedData: entry.hasReceivedData, lastActivityAtMs: entry.lastActivityAt };
+  }
+
   /** Test-only accessor (pre-release audit B7's verify coverage) — the
    * live harness has no other way to observe that `seenUrls` actually
    * stays capped at `MAX_SEEN_URLS` rather than growing forever. */
@@ -806,5 +899,5 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, seenUrlsCount };
+  return { spawn, write, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getWriteReadiness, seenUrlsCount };
 }

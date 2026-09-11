@@ -51,6 +51,25 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
+// DESIGN-BACKLOG.md, achado 2 (2026-09-11), encaminhamento 3 —
+// `pty-registry.ts::spawn` agora valida um `resumeId` restaurado contra
+// disco (`getResumeTargetEvidence`, síncrono, `node:fs` — módulo
+// DIFERENTE do `node:fs/promises` já mockado acima) antes de honrá-lo.
+// Este arquivo testa refcount de claim (RODADA 9), não essa validação —
+// mockado aqui pra sempre reportar "existe e tem conteúdo real", exatamente
+// o comportamento anterior a essa validação existir, senão todo
+// `resumeId: "sess-*"` fake destes testes (nenhum arquivo real por trás)
+// cairia no caminho "spawn limpo" e nunca chamaria `claimSessionId`.
+// `session-resume-validation.test.ts` cobre a validação em si.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    existsSync: () => true,
+    statSync: () => ({ size: 999_999 }) as ReturnType<typeof import("node:fs").statSync>,
+  };
+});
+
 vi.mock("../../src/main/providers", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/main/providers")>();
   return {

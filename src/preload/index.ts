@@ -63,6 +63,19 @@ const pty = {
     ipcRenderer.on("pty:session-found", listener);
     return () => ipcRenderer.removeListener("pty:session-found", listener);
   },
+  /** DESIGN-BACKLOG.md, achado 2 (2026-09-11) — um `resumeId` restaurado
+   * que a leitura recusou (arquivo/registro ausente ou vazio, ver
+   * `pty-registry.ts`'s `getResumeTargetEvidence`/`decideResumeValidity`).
+   * Canal separado de `onData` de propósito: uma review adversarial provou
+   * que escrever o aviso direto no pty é apagado/corrompe TUIs em tela
+   * cheia — este chega no rodapé do card (DOM), nunca no buffer do
+   * terminal. */
+  onResumeInvalid: (cb: (id: string, reason: "missing" | "empty", staleResumeId: string) => void) => {
+    const listener = (_e: unknown, id: string, reason: "missing" | "empty", staleResumeId: string) =>
+      cb(id, reason, staleResumeId);
+    ipcRenderer.on("pty:resume-invalid", listener);
+    return () => ipcRenderer.removeListener("pty:resume-invalid", listener);
+  },
   onUrlSeen: (cb: (id: string, url: string) => void) => {
     const listener = (_e: unknown, id: string, url: string) => cb(id, url);
     ipcRenderer.on("pty:url-seen", listener);
@@ -563,7 +576,7 @@ const browser = {
     ipcRenderer.invoke("browser:get-process-stats", id),
 };
 
-export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
+export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window" | "task";
 export type SpawnAgentAskParams = {
   provider: string;
   cwd?: string;
@@ -672,6 +685,13 @@ export type TaskBoardItem = {
   boardId: string | null;
   order: number | null;
   suggestedOrder: number | null;
+  /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
+   * achado 1). Terceiro nível de prioridade: nem decisão humana (`order`)
+   * nem opinião do agente (`suggestedOrder`) — uma posição que o app
+   * materializou pra uma task vizinha caber num drop (`computeColumnDrop`,
+   * task-board-model.ts). Nunca exposto na UI como se fosse um dos outros
+   * dois (nenhuma pílula própria) — só entra na conta de `taskSortKey`. */
+  implicitOrder: number | null;
   retryCount: number;
   createdAt: number;
   updatedAt: number;
@@ -692,6 +712,21 @@ export type TaskBoardItem = {
    * isso como não-bloqueante, nunca um falso positivo. */
   deps: string[];
   depStatuses: Record<string, string>;
+  /** Fidelidade visual ao protótipo v5, delta 4 (varredura de atividade) —
+   * `registry.isAlive(cardId)` (main/index.ts's `buildTaskBoard`), O(1),
+   * síncrono, sem custo de N chamadas. `false` quando `cardId` é `null`
+   * (nenhum card vinculado) ou o card não tem processo vivo (fechado,
+   * crashado). Também alimenta o delta 8 (marca de movimento humano) —
+   * ver `task-board-model.ts`'s `isTaskCardLive`/`describeHumanMoveNotice`. */
+  cardAlive: boolean;
+  /** Fidelidade visual ao protótipo v5, delta 6 (trilha de transição com
+   * horários) — mesma consulta que o gráfico 3 já usa
+   * (`listStatusTransitionsForBoard`), agora anexada a CADA task no push
+   * normal (não mais só quando o painel de gráficos abre): o dado é
+   * barato (uma consulta por board inteiro) e o delta pede a trilha
+   * sempre visível, não atrás de um toggle. `task-board-model.ts`'s
+   * `describeTransitionTrail` formata. */
+  statusTransitions: { toValue: string; at: number }[];
 };
 /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — mesmo padrão de
  * `spawn.onQueueChanged` acima (carga inicial via `listByBoard`, depois
@@ -705,6 +740,40 @@ const tasks = {
   listByBoard: (boardId: string): Promise<TaskBoardItem[]> => ipcRenderer.invoke("store:tasks:list-by-board", boardId),
   approveCompletion: (taskId: string): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke("store:tasks:approve-completion", taskId),
+  /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — arrastar entre colunas e
+   * dentro da coluna. Tudo já vem PRONTO do renderer
+   * (task-board-model.ts's `COLUMN_TO_STATUS`/`computeColumnDrop` — a
+   * decisão de "pra onde", "que prioridade" e "quem mais precisa
+   * materializar posição" é toda pura e testável lá, não duplicada aqui).
+   *
+   * ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 1, ALTO) — a rodada 2
+   * escrevia `order` real em vizinhos intocados, tornando-os PERMANENTE-
+   * MENTE imunes a um `suggestedOrder` futuro do agente (`order` sempre
+   * vence, sem exceção). Fix: só `draggedTaskId` recebe `order` (e
+   * `status` — decisões 6/8, a decisão humana em si); `siblingImplicitOrders`
+   * são vizinhos que só precisaram virar comparáveis, recebem
+   * `implicitOrder` (terceiro nível, abaixo de `suggestedOrder` na
+   * precedência — ver `TaskBoardItem.implicitOrder`/`store.ts`'s
+   * `TaskRow.implicit_order`), nunca `order`. Zero imunidade: o PRÓXIMO
+   * `update_task({suggestedOrder})` do agente pra um desses vizinhos vence
+   * normalmente.
+   *
+   * ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 2, BAIXO-MÉDIO) — o
+   * lote inteiro (arrastada + vizinhos) é persistido ATOMICAMENTE
+   * (`store.applyColumnDrop`, `db.transaction`) e gera UM push só, não um
+   * por linha.
+   *
+   * `message` é o texto exato que o card da task arrastada (se vivo)
+   * recebe pelo mesmo `typeAndSubmit` do push de report — decidido no
+   * renderer (`describeHumanMove`), main só relaya. */
+  moveTask: (
+    draggedTaskId: string,
+    status: string,
+    order: number,
+    siblingImplicitOrders: { id: string; implicitOrder: number }[],
+    message: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:move", draggedTaskId, status, order, siblingImplicitOrders, message),
   onChanged: (cb: (boardId: string, tasks: TaskBoardItem[]) => void) => {
     const listener = (_e: unknown, boardId: string, tasks: TaskBoardItem[]) => cb(boardId, tasks);
     ipcRenderer.on("task:changed", listener);

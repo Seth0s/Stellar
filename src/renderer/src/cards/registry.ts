@@ -1,6 +1,7 @@
 import type { IconName } from "../icons";
 import type { Card, ChatMessage, ChatProvider } from "../card-types";
 import { DEFAULT_CHAT_MODEL } from "../ChatCard";
+import { CARD_KIND_LABEL } from "../../../shared/card-identity";
 
 /**
  * DESIGN-BACKLOG.md item "4 (deferida)" — adding one card kind used to
@@ -21,20 +22,15 @@ import { DEFAULT_CHAT_MODEL } from "../ChatCard";
  * that TypeScript checks are exhaustive via `assertNeverCardKind` below.
  */
 
-export const CARD_LABEL: Record<Card["kind"], string> = {
-  terminal: "terminal",
-  files: "arquivos",
-  changes: "changes",
-  sticky: "nota adesiva",
-  browser: "navegador",
-  "remote-window": "janela externa",
-  stroke: "desenho",
-  chat: "chatbox",
-  media: "mídia",
-  // DESIGN-BACKLOG.md §2.1 "Card `task`", decisão 1 — "Fila" é o título
-  // pedido pelo dono do repo, não "tarefa"/"task".
-  task: "fila",
-};
+/** DESIGN-BACKLOG.md §2.1 "identidade e descoberta de card", ponto 1 —
+ * dados movidos pra `shared/card-identity.ts` (única fonte, compartilhada
+ * com main/index.ts's `describeCardLabel` e a derivação de nome de card em
+ * geral — ver o doc comment daquele arquivo). Esta atribuição continua
+ * verificando exaustividade contra `Card["kind"]`: se um kind novo entrar
+ * na union sem ganhar entrada em `CARD_KIND_LABEL`, isto vira erro de
+ * compilação aqui, não um `undefined` silencioso em runtime — a mesma
+ * garantia que este arquivo já documenta pro resto de si mesmo. */
+export const CARD_LABEL: Record<Card["kind"], string> = CARD_KIND_LABEL;
 
 export const CARD_ICON: Record<Card["kind"], IconName> = {
   terminal: "terminal",

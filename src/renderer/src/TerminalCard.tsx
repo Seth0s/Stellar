@@ -159,7 +159,7 @@ function TerminalCardInner({
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
     copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
   }
-  const { exitCode, spawnError, discoveredResumeId, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
+  const { exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
     containerRef,
     id,
     providerId,
@@ -435,6 +435,21 @@ function TerminalCardInner({
       }
       footerContent={
         <span className={styles.terminalCardFootRow}>
+          {/* DESIGN-BACKLOG.md, achado 2 (2026-09-11) — DOM de verdade, não
+           * bytes no pty (review adversarial provou que uma TUI em tela
+           * cheia apaga/corrompe qualquer coisa escrita ali antes do boot
+           * dela terminar). Fica pra vida do card — é contexto sobre por
+           * que ele começou vazio, não um toast que precisa desaparecer. */}
+          {resumeInvalidNotice && (
+            <span
+              className={styles.terminalCardResumeWarning}
+              title={`resume_id salvo (${resumeInvalidNotice.staleResumeId}) ${
+                resumeInvalidNotice.reason === "missing" ? "não foi encontrado" : "está vazio (nunca recebeu conteúdo real)"
+              } — iniciando conversa nova nesta sessão.`}
+            >
+              ⚠ {resumeInvalidNotice.reason === "missing" ? "sessão salva não existe mais" : "sessão salva estava vazia"}
+            </span>
+          )}
           <span className={styles.terminalCardFootText}>{footerParts.join(" · ")}</span>
           {seenUrls.length > 0 && (
             <button

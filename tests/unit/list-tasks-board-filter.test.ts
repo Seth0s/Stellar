@@ -44,6 +44,7 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       fallback_providers_json: null,
       order: null,
       suggested_order: null,
+      implicit_order: null,
       created_at: now,
       updated_at: now,
       ...overrides,

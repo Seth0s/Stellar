@@ -42,6 +42,7 @@ function makeTask(id: string, boardId: string | null): TaskRow {
     fallback_providers_json: null,
     order: null,
     suggested_order: null,
+    implicit_order: null,
     created_at: now,
     updated_at: now,
   };
