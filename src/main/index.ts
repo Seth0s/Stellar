@@ -29,6 +29,7 @@ import { createPtyRegistry } from "./pty-registry";
 // `combo` que o registro declara pro zoom, não uma cópia dos literais —
 // ver o doc comment de `getShortcutCombo`.
 import { matchesCombo, getShortcutCombo, type ShortcutKeyEvent } from "../renderer/src/shortcut-registry";
+import { deriveCardDisplayName } from "../shared/card-identity";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { refreshUserEnv, userEnvSnapshot } from "./user-env";
@@ -785,6 +786,12 @@ function createWindow() {
       messageBus?.resolveCardExit(id, exitCode);
     },
     onSessionFound: (id, sessionId) => safeSend(win, "pty:session-found", id, sessionId),
+    // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — canal dedicado pro aviso
+    // de resumeId inválido (ver `pty-registry.ts`'s doc comment em
+    // `onResumeInvalid`): DOM de verdade no rodapé do card
+    // (`TerminalCard.tsx`), nunca bytes no pty — sobrevive a qualquer
+    // clear/redraw de TUI em tela cheia.
+    onResumeInvalid: (id, reason, staleResumeId) => safeSend(win, "pty:resume-invalid", id, reason, staleResumeId),
     onUrlSeen: (id, url) => safeSend(win, "pty:url-seen", id, url),
     sockPath,
     binDir,
@@ -1078,6 +1085,16 @@ function createWindow() {
     const allDepIds = new Set<string>();
     for (const deps of depsByTask.values()) for (const d of deps) allDepIds.add(d);
     const depStatusById = store.getTaskStatusesByIds([...allDepIds]);
+    // Fidelidade visual ao protótipo v5, delta 6 (trilha de transição) —
+    // mesma consulta (uma por board inteiro, `JOIN`, sem N+1) que o
+    // gráfico 3 já usava só quando o painel abria; anexada aqui, em TODA
+    // task, em todo push.
+    const transitionsByTask = new Map<string, { toValue: string; at: number }[]>();
+    for (const row of store.listStatusTransitionsForBoard(boardId)) {
+      const list = transitionsByTask.get(row.task_id) ?? [];
+      list.push({ toValue: row.to_value, at: row.at });
+      transitionsByTask.set(row.task_id, list);
+    }
     return tasks.map((t) => {
       const report = t.card_id ? reportByCardId.get(t.card_id) : undefined;
       const deps = depsByTask.get(t.id) ?? [];
@@ -1095,6 +1112,7 @@ function createWindow() {
         boardId: t.board_id,
         order: t.order,
         suggestedOrder: t.suggested_order,
+        implicitOrder: t.implicit_order,
         retryCount: t.retry_count,
         createdAt: t.created_at,
         updatedAt: t.updated_at,
@@ -1103,6 +1121,14 @@ function createWindow() {
         report: report ? { verdict: (report.verdict ?? null) as "aprovado" | "reprovado" | null, updatedAt: report.updated_at } : null,
         deps,
         depStatuses,
+        // Fidelidade visual ao protótipo v5, delta 4 — `registry.isAlive`
+        // é uma consulta a um Map em memória (pty-registry.ts), O(1),
+        // então uma chamada por task aqui não é o N+1 que o comentário
+        // antigo de `TaskCard.tsx`'s `alive` temia (aquele custo seria
+        // real pra uma leitura de PTY de verdade, não pra uma checagem de
+        // Map). `false` quando não há card vinculado.
+        cardAlive: t.card_id ? registry.isAlive(t.card_id) : false,
+        statusTransitions: transitionsByTask.get(t.id) ?? [],
       };
     });
   }
@@ -1130,6 +1156,19 @@ function createWindow() {
   function persistTask(task: TaskRow) {
     store.upsertTask(task);
     notifyTaskChanged(task.board_id);
+    notifyTaskScopeChanged();
+  }
+  // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
+  // achado 2). Irmão de `persistTask` acima, pro caso em que um único
+  // gesto de arraste precisa gravar MAIS de uma task (a arrastada +
+  // vizinhas que precisaram materializar `implicit_order` — ver
+  // `computeColumnDrop`, task-board-model.ts): `store.applyColumnDrop` é
+  // uma `db.transaction` (tudo-ou-nada), e o push acontece UMA vez só
+  // depois dela — nunca um `notifyTaskChanged`/`notifyTaskScopeChanged`
+  // por linha do lote.
+  function persistColumnDrop(dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]) {
+    store.applyColumnDrop(dragged, siblingImplicitOrders);
+    notifyTaskChanged(dragged.board_id);
     notifyTaskScopeChanged();
   }
 
@@ -1180,6 +1219,7 @@ function createWindow() {
     writeToCard: (id, text) => registry.write(id, text),
     isCardAlive: (id) => registry.isAlive(id),
     getCardLastActivityAt: (id) => registry.getLastActivityAt(id),
+    getCardWriteReadiness: (id) => registry.getWriteReadiness(id),
     // Achado ao vivo (2026-09-04) — main-process `Notification`, não
     // `writeToCard`: a versão anterior digitava o aviso direto no PTY do
     // spawner (sem apertar Enter), o que sentava como texto NÃO ENVIADO
@@ -1234,6 +1274,21 @@ function createWindow() {
         // indisponível nesse ambiente/SO nunca deve derrubar o `report`.
       }
     },
+    // DESIGN-BACKLOG.md §2.1 "SINAL 2 — saída sem relatório" — metade
+    // humana do aviso, mesmo canal/postura de `notifyCardReported` acima
+    // (popup de SO, nunca o PTY). A metade que alcança um agente de
+    // verdade é `notifySpawnerOfUnreportedExit` (message-bus.ts), via
+    // `typeAndSubmit`.
+    notifyCardExitedWithoutReport: (_spawnerId, exitedCardLabel, exitCode) => {
+      try {
+        new Notification({
+          title: `"${exitedCardLabel}" saiu sem reportar`,
+          body: `Código de saída ${exitCode}. Se havia uma task vinculada, ela caiu para "falhou".`,
+        }).show();
+      } catch {
+        // Mesma postura defensiva das outras Notification acima.
+      }
+    },
     // Prototipo (2026-09-06) — ver message-bus.ts's doc comment no cmd
     // `turn_complete`. Push simples pro renderer, mesmo padrão de
     // `pty:session-found`/`pty:data` abaixo — nenhum estado novo aqui no
@@ -1265,6 +1320,18 @@ function createWindow() {
       return `${name} ${ordinal}°`;
     },
     getCardBoardId: (id) => store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id),
+    // DESIGN-BACKLOG.md §2.1 "Fila" — unlike `listCards`, this lookup is
+    // explicitly board-scoped and store-backed, so an MCP request cannot
+    // mistake a queue on another board for the current one. `listCards`
+    // already excludes archived rows; archived task cards therefore do not
+    // occupy the singleton slot.
+    listCardsForBoard: (boardId) =>
+      store.listCards(boardId).map((card) => ({
+        id: card.id,
+        boardId: card.board_id,
+        kind: card.kind,
+        archivedAt: card.archived_at,
+      })),
     isBoardAutonomous: (boardId) => store.getBoard(boardId)?.autonomous ?? false,
     // RODADA 4 — ver o comentário grande da entrada `boardExists` na
     // interface de callbacks (message-bus.ts).
@@ -1275,7 +1342,7 @@ function createWindow() {
     // whichever board is currently loaded.
     getAnyCard: (id) => {
       const row = store.getCard(id);
-      return row ? { boardId: row.board_id, kind: row.kind } : undefined;
+      return row ? { boardId: row.board_id, kind: row.kind, provider: row.provider ?? null } : undefined;
     },
     deleteCardDirect: (id) => {
       store.deleteConnectorsForCard(id);
@@ -1321,6 +1388,14 @@ function createWindow() {
       if (task?.board_id) notifyTaskChanged(task.board_id);
     },
     nextReportSeqSeed: () => store.nextReportSeqSeed(),
+    // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
+    // direct store pass-through, mesmo padrão de `getReport`/`upsertReport`
+    // acima. Sem push pro renderer aqui de propósito: nenhuma UI ainda
+    // consome `task_verdicts` nesta rodada (só schema + choke point +
+    // leitura via `get_task`/MCP) — quando um consumidor visual existir,
+    // ele decide se precisa de `notifyTaskChanged` junto.
+    recordParticipationRound: (cardId, verdict, at) => store.recordParticipationRound(cardId, verdict, at),
+    listTaskCardsForCard: (cardId) => store.listTaskCardsForCard(cardId),
     listAllConnectors: () => store.listAllConnectors(),
     // A lacuna que este comentário descrevia (2026-09-09: `set_connector_kind`
     // gravava no banco e não avisava ninguém, então um board aberto só via
@@ -1649,6 +1724,50 @@ function createWindow() {
     persistTask({ ...existing, status: "done", updated_at: Date.now(), actor: "human" });
     return { ok: true };
   });
+  // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — arrastar entre colunas/dentro
+  // da coluna. Tudo já chega PRONTO do renderer (task-board-model.ts's
+  // `COLUMN_TO_STATUS`/`computeColumnDrop`/`describeHumanMove` — decidir
+  // "pra onde"/"que prioridade"/"quem mais precisa materializar
+  // posição"/"que aviso" é lógica pura, testada lá, nunca duplicada
+  // aqui).
+  //
+  // ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 1, ALTO) — a rodada 2
+  // gravava `order` em TODAS as tasks do lote (arrastada + vizinhas),
+  // tornando as vizinhas PERMANENTEMENTE imunes a um `suggestedOrder`
+  // futuro do agente. Fix: só `draggedTaskId` recebe `order`/`status`
+  // (via `store.applyColumnDrop`'s primeira metade, a MESMA lógica de
+  // `upsertTask`/transição de sempre) — `siblingImplicitOrders` grava
+  // `implicit_order` (terceiro nível, nunca `order`) só pra quem
+  // precisou virar comparável, sem tocar `status`/`order`/`suggested_order`
+  // de ninguém.
+  //
+  // ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 2, BAIXO-MÉDIO) — todo
+  // o lote é atômico (`persistColumnDrop`/`store.applyColumnDrop`,
+  // `db.transaction`) e gera UM push só, não um por linha.
+  ipcMain.handle(
+    "store:tasks:move",
+    (
+      _e,
+      draggedTaskId: string,
+      status: string,
+      order: number,
+      siblingImplicitOrders: { id: string; implicitOrder: number }[],
+      message: string,
+    ) => {
+      const existing = store.getTask(draggedTaskId);
+      if (!existing) return { ok: false, error: `no such task "${draggedTaskId}"` };
+      const dragged: TaskRow = { ...existing, status, order, updated_at: Date.now(), actor: "human" };
+      persistColumnDrop(dragged, siblingImplicitOrders);
+      // O aviso é fire-and-forget (`notifyHumanMovedTask` é async,
+      // `typeAndSubmit` por baixo): nunca atrasa a resposta pro drag,
+      // mesma postura de todo aviso deste app. `.catch` explícito —
+      // achado de review adversarial (rodada 2, achado 5): uma promise
+      // solta sem handler vira `unhandledRejection` se algum dia
+      // rejeitar.
+      if (dragged.card_id) messageBus?.notifyHumanMovedTask(dragged.card_id, message).catch(() => {});
+      return { ok: true };
+    },
+  );
   // RODADA 3, peça 5 — carga inicial do rodapé de escopo; `notifyTaskScopeChanged` acima cobre toda mudança POSTERIOR.
   ipcMain.handle("store:tasks:counts-by-board", () => store.taskCountsByBoard());
   // RODADA 3, peça 6 — gráfico 3 (tempo em cada estado). Deliberadamente

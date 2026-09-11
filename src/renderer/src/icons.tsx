@@ -36,6 +36,7 @@ import {
   GitBranch,
   Globe,
   Grid2x2,
+  GripVertical,
   Group,
   Home as HomeGlyph,
   Image,
@@ -172,7 +173,11 @@ export type IconName =
   | "dockBottom"
   | "dockLeft"
   // DESIGN-BACKLOG.md §2.3, peça 6 — botão "Gráficos" no header do card `task`.
-  | "charts";
+  | "charts"
+  // DESIGN-BACKLOG.md §2.1 "Card `task`" — fidelidade ao protótipo v5, alça
+  // de arraste visível na task (o arraste em si já funcionava, invisível
+  // como afordância).
+  | "grip";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -188,6 +193,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   chat: MessageCircle,
   task: ListTodo,
   charts: BarChart3,
+  grip: GripVertical,
   apiKey: KeyRound,
   sparkle: Sparkles,
   reorganize: LayoutGrid,

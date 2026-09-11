@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import * as z from "zod";
 import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus";
+import { resolveCallerCardId } from "./caller-identity";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface,
@@ -45,10 +46,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
    * `AGENT_CANVAS_CARD_ID` no ambiente — passa a carimbar o mesmo id na URL
    * do MCP que registra pra aquele processo (`/mcp?card=<id>`), então a
    * identidade chega por transporte, não por boa vontade do modelo.
-   * `callerCardId` continua aceito e tem precedência (um agente que
-   * legitimamente fala em nome de outro card não perde nada), e uma URL sem
-   * `?card=` — o smoke test que disca a porta direto, um cliente MCP
-   * externo — se comporta exatamente como antes.
+   * `callerCardId` continua aceito, mas ver `caller-identity.ts` pra
+   * PRECEDÊNCIA: o carimbo agora vence sempre que existe (achado crítico
+   * de escalada de privilégio, card 337, 2026-09-11 — o texto anterior
+   * aqui dizia "`callerCardId` tem precedência", exatamente o buraco).
+   * Uma URL sem `?card=` — o smoke test que disca a porta direto, um
+   * cliente MCP externo — continua caindo pro explícito, como sempre.
    */
   /** Pedido ao vivo (2026-09-02): "toda nova sessão eu preciso dizer o
    * agente está na infraestrutura do stellar... acho que além de dizer no
@@ -87,20 +90,24 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     .string()
     .optional()
     .describe(
-      "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to draw the auto-connector to the card you're acting on.",
+      "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and always uses that when it's present; this is only consulted as a fallback for a connection with no such registration (a raw external MCP client), so passing a DIFFERENT id than your own has no effect if you're a spawned card.",
     );
 
   function buildServer(urlCardId?: string): McpServer {
-    /** `callerCardId` explícito ganha do carimbo da URL; string vazia conta
-     * como ausente (um modelo que preenche `""` não está se identificando). */
-    const caller = (explicit?: string) => (explicit && explicit.trim() ? explicit : urlCardId);
+    // Ver `caller-identity.ts` (achado crítico de escalada de privilégio,
+    // card 337, 2026-09-11) pro modelo completo e o porquê da
+    // precedência: o carimbo da URL vence SEMPRE que existe — fora do
+    // alcance do modelo que chama a tool —, o explícito só serve de
+    // fallback pra uma conexão sem carimbo nenhum (cliente externo
+    // genuíno).
+    const caller = (explicit?: string) => resolveCallerCardId({ urlCardId, explicitCallerCardId: explicit });
     const server = new McpServer({ name: "stellar", version: "1.0.0" }, { instructions: SERVER_INSTRUCTIONS });
 
     server.registerTool(
       "list_cards",
       {
         description:
-          "List every open card on the board — terminals AND non-terminal cards (browser, sticky, files, changes, media, chat, remote-window). Each entry has id, kind, label (the name a human gave the card in its header, null if unnamed), provider (terminal/chat only), cwd (a real path only for terminal/chat/files/changes), and url (browser cards). Anywhere a tool takes a `target`, you can pass either the id or the card's label.",
+          "List every open card on the board — terminals AND non-terminal cards (browser, sticky, files, changes, media, chat, remote-window, task). Each entry has id, kind, label (the name a human gave the card in its header, null if unnamed), provider (terminal/chat only), cwd (a real path only for terminal/chat/files/changes), and url (browser cards). Anywhere a tool takes a `target`, you can pass either the id or the card's label.",
         inputSchema: {},
       },
       async () => {
@@ -315,7 +322,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: the server already knows which card you are from the MCP URL it registered for your process. Pass it only to report on behalf of a different card.",
+              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: the server already knows which card you are from the MCP URL it registered for your process, and always uses that when it's present — this only takes effect as a fallback on a connection with no such registration (a raw external MCP client), so a spawned card can't report as a different card just by naming one here.",
             ),
           report: z.unknown().describe("Any JSON value — e.g. {ok: true, result: '...'} or {ok: false, error: '...'}"),
           verdict: z
@@ -423,7 +430,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "get_task",
       {
         description:
-          "Read one task's current record by id — also includes its full status-transition trail (`transitions`) and every card linked to it with a role (`cards`, e.g. one implementing + one reviewing), unlike list_tasks which stays lean.",
+          "Read one task's current record by id — also includes its full status-transition trail (`transitions`), every card linked to it with a role (`cards`, e.g. one implementing + one reviewing), and its append-only verdict history (`verdicts`: one entry per participation round, `{cardId, role, verdict, at}`, `verdict: null` meaning that round ended without one) — unlike list_tasks which stays lean. Read-only: no tool writes to this history directly, it's derived from `report` calls and unreported exits.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
         },
@@ -438,7 +445,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_connectors",
       {
         description:
-          "List every connector (arrow) on the board — id, fromCardId, toCardId, kind. `kind` is null for a purely decorative connector (hand-drawn via the UI); 'spawned' is set automatically whenever spawn_agent creates a new card — a real record of who spawned whom, not a guess; 'depends'/'context' is meaning an orchestrating agent attached on purpose with set_connector_kind, for THAT ORCHESTRATOR'S OWN reading. Nothing in this app ever dispatches off this graph, including the internal task-auto-dispatch engine (DESIGN-BACKLOG.md item 60 peça 3) — that reads create_task's own `deps` (task ids), a separate mechanism, since a task can exist with no card at all. Connectors link cards, not tasks; the two are deliberately never merged.",
+          "List every connector (arrow) on the board — id, fromCardId, toCardId, kind. `kind` is null for a purely decorative connector (hand-drawn via the UI); 'spawned' is set automatically whenever spawn_agent creates a new card — a real record of who spawned whom, not a guess, and the one kind this app actually acts on: a card's report/idle-card push notification goes to whichever card its live `spawned` connector points at (falling back to whoever last send_to_card'd it, tracked separately, only when no live `spawned` connector exists at all), so hand-editing or clearing a `spawned` connector changes who actually gets notified, not just how the board reads. 'depends'/'context' stay purely advisory — an orchestrating agent attaches them on purpose with set_connector_kind, for THAT ORCHESTRATOR'S OWN reading; nothing in this app acts on either. Task auto-dispatch (DESIGN-BACKLOG.md item 60 peça 3) never reads this graph at all, `spawned` included — it reads create_task's own `deps` (task ids), a separate mechanism, since a task can exist with no card at all. Connectors link cards, not tasks; the two are deliberately never merged.",
         inputSchema: {},
       },
       async () => {
@@ -451,14 +458,20 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "set_connector_kind",
       {
         description:
-          "Tag an existing connector's semantic meaning, for YOUR OWN reading as an external orchestrator — advisory only, nothing in this app acts on it: 'depends' (you've decided the target shouldn't start before the source reports done), 'context' (you've decided the source's result should feed the target's prompt), 'spawned' (a real spawn_agent lineage — usually set automatically, you'd only touch this to annotate one by hand), or null to clear it back to purely decorative. To actually make the app auto-dispatch a dependent task, use create_task's `deps` (task ids) instead — that's the real mechanism (DESIGN-BACKLOG.md item 60 peça 3), separate from this one on purpose.",
+          "Tag an existing connector's semantic meaning. 'depends' (you've decided the target shouldn't start before the source reports done) and 'context' (you've decided the source's result should feed the target's prompt) are advisory only, for YOUR OWN reading as an external orchestrator — nothing in this app acts on either. 'spawned' is different: a real spawn_agent lineage (usually set automatically, you'd only touch this to annotate one by hand), and this app DOES act on it — a card's report/idle-card push notification goes to whichever card its most-recently-updated live `spawned` connector points FROM, ahead of any other card that merely `send_to_card`'d it. Setting 'spawned' on your own connector to a card you're now the one supervising (a deliberate hand-off, not just messaging it) makes you the recognized recipient for its next report; clearing it removes that claim. null clears any kind back to purely decorative. To actually make the app auto-dispatch a dependent task, use create_task's `deps` (task ids) instead — that's the real mechanism (DESIGN-BACKLOG.md item 60 peça 3), separate from this one on purpose.",
         inputSchema: {
           connectorId: z.string().describe("The connector's id (see list_connectors)"),
           kind: z.enum(["context", "depends", "spawned"]).nullable().describe("The semantic to attach, or null to clear it"),
+          callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ connectorId, kind }) => {
-        const res = await opts.handleRequest({ cmd: "set_connector_kind", connectorId, kind });
+      async ({ connectorId, kind, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "set_connector_kind",
+          connectorId,
+          kind,
+          requesterId: caller(callerCardId),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -515,7 +528,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass). Returns the new card's id as `cardId` on approval: pass that straight to get_page_text/browser_click/browser_query/snapshot to act on the page you just opened. list_cards also shows every open browser card (kind: \"browser\", with its url).",
         inputSchema: {
           url: z.string().describe("The URL to open"),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process; this only overrides that."),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and always uses that when it's present; this only takes effect as a fallback when there's no such registration (a raw external MCP client)."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
         },
       },
@@ -557,7 +570,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
               "Reasoning effort. `claude` accepts all five (low/medium/high/xhigh/max, its own --effort range). Antigravity accepts only low/high — some of its models (e.g. 'gemini-3.1-pro') require one of those alongside `model` or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. A value outside a provider's own range is REFUSED (no spawn), not silently remapped — see message-bus.ts's spawn_agent handler. Ignored by every other provider.",
             ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and uses that to look up YOUR real spawn depth and whether your board is in autonomous mode. Pass it only to override that."),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and always uses that to look up YOUR real spawn depth and whether your board is in autonomous mode when it's present; naming a different card here has no effect for a spawned card. Only takes effect as a fallback when there's no such registration (a raw external MCP client)."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
           wait: z
             .boolean()
@@ -587,9 +600,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "spawn_card",
       {
-        description: "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, or remote window) on the board. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind still requires human approval unless the board is in autonomous mode. By default it lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open on the file in question).",
+        description: "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, remote window, or the board's task queue) on the board. `kind: \"task\"` is a singleton per board: when that board already has a live queue card, this call succeeds by returning its cardId instead of creating another. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind still requires human approval unless the board is in autonomous mode. By default it lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open).",
         inputSchema: {
-          kind: z.enum(["files", "changes", "sticky", "browser", "remote-window"]).describe("Which card kind to create"),
+          kind: z.enum(["files", "changes", "sticky", "browser", "remote-window", "task"]).describe("Which card kind to create; task reuses the board's existing live queue card"),
           cwd: z.string().optional().describe("Root path — used by files/changes kinds, defaults to the board's root"),
           url: z.string().optional().describe("URL — used by the browser kind"),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process."),

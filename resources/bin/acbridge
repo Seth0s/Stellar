@@ -215,7 +215,11 @@ if (cmd === "list") {
 } else if (cmd === "set-connector-kind") {
   const [connectorId, kindStr] = rest;
   if (!connectorId || !kindStr) fail("usage: acbridge set-connector-kind <connectorId> <context|depends|null>");
-  request = { cmd: "set_connector_kind", connectorId, kind: kindStr === "null" ? null : kindStr };
+  // `requesterId` (2026-09-11) — `set_connector_kind` passou a exigir
+  // chamador identificado desde que `spawned` decide o roteamento do push
+  // de report; ver connector-kind-authorization.ts. Mesma fonte que todo
+  // outro cmd mutante daqui já usa.
+  request = { cmd: "set_connector_kind", connectorId, kind: kindStr === "null" ? null : kindStr, requesterId: ownCardId };
 } else if (cmd === "set-connector-label") {
   // Espelha set-connector-kind acima (mesmo trio uso/parse/saída), com uma
   // diferença: `kind` é enum de 1 palavra, `label` é texto livre — junta o

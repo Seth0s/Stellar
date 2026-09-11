@@ -178,8 +178,9 @@ export type MediaCardData = BaseCard & {
  * si) já vivem inteiramente em `tasks`/`task_transitions`/`task_cards`
  * (store.ts), escopados por `board_id` — o card é só a VITRINE, sem
  * estado próprio que precise de uma coluna nova em `cards`. Decisão 7 —
- * "um card por board" é uma convenção da UI (só um botão de criação, sem
- * necessidade real de mais de um), não uma restrição estrutural aqui. */
+ * "um card por board" é uma guarda de superfície: Rail e `spawn_card`
+ * reutilizam o primeiro card live existente e não criam um segundo; o schema
+ * continua tolerando dados legados duplicados, que não são apagados. */
 export type TaskCardData = BaseCard & { kind: "task" };
 
 export type Card =

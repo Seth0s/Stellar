@@ -197,6 +197,30 @@ export type TaskRow = {
    * disputados entre si; o humano vence na leitura (Fase 2), não aqui. */
   order: number | null;
   suggested_order: number | null;
+  /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada
+   * 3, achado 1, ALTO). O TERCEIRO nível que faltava no modelo: nem
+   * "decisão humana" (`order`) nem "opinião do agente"
+   * (`suggested_order`) — uma posição que existe só porque OUTRA task
+   * vizinha foi arrastada e precisou de alguém comparável do lado (uma
+   * vizinha intocada, sort key não-finita, não consegue "ficar entre"
+   * duas tasks com chave real sem ganhar uma chave real também). Nunca
+   * escrito por um humano nem por um agente — só pelo próprio app,
+   * dentro do MESMO lote atômico que grava o `order` real da task
+   * arrastada (`store.applyColumnDrop`, nunca solto por fora).
+   *
+   * Precedência de leitura (`taskSortKey`, task-board-model.ts):
+   * `order` (humano, absoluto) > `suggested_order` (agente) >
+   * `implicit_order` (app, só posição) > nada (`Infinity`). Isto é o que
+   * fecha o achado da rodada 3: escrever `order` numa vizinha intocada a
+   * tornava PERMANENTEMENTE imune a um `suggested_order` futuro (`order`
+   * sempre vence, uma vez setado, sem exceção) — `implicit_order` fica
+   * ABAIXO de `suggested_order` na precedência, então o PRÓXIMO
+   * `update_task({suggestedOrder})` de um agente para essa mesma task
+   * simplesmente vence, sem nenhuma proteção especial necessária. Uma
+   * vizinha materializada aqui nunca teve NADA decidido sobre ela — só
+   * ganhou um número comparável, e continua tão aberta a repriorização
+   * quanto estava antes. */
+  implicit_order: number | null;
   created_at: number;
   updated_at: number;
   /** Transiente — NUNCA uma coluna de `tasks`, nunca lido de volta do
@@ -216,6 +240,12 @@ export type TaskRow = {
   /** Transiente, só de LEITURA — mesmo motivo/anexação que `transitions`
    * acima. */
   cards?: TaskCardRow[];
+  /** Transiente, só de LEITURA — mesmo motivo/anexação que `transitions`
+   * acima. "Histórico de veredito por participação": o log append-only
+   * de `task_verdicts` (ver `TaskVerdictRow`'s comentário grande), em
+   * ordem cronológica. Exposto no MCP só por aqui (`get_task`), nunca
+   * por uma tool que escreve — a restrição não-negociável do item. */
+  verdicts?: TaskVerdictRow[];
 };
 
 /** `actor` de `task_transitions` — quem causou a transição. "app" é o
@@ -254,6 +284,48 @@ export type TaskTransitionRow = {
  * trocar de papel é um upsert, não uma segunda linha. */
 export type TaskCardRow = { task_id: string; card_id: string; role: string };
 
+/** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
+ * (levantado 2026-09-11, ao fechar a fidelidade visual do card Fila —
+ * ver o item longo no backlog pro porquê é "um trabalho que paga
+ * quatro"). `reports` (comentário grande logo abaixo) é um SLOT único
+ * por card — bom pro "qual é o relatório mais recente", incapaz de
+ * responder "quantas rodadas até aprovar" ou "quantas reprovações teve
+ * este provider", porque a rodada 1 é apagada pela rodada 2. Esta
+ * tabela é o log APPEND-ONLY que falta: uma linha por RODADA de
+ * participação de um card numa task, nunca sobrescrita — mesmo
+ * princípio de `task_transitions` (log ao lado do estado atual, não em
+ * vez dele), pelo mesmo motivo (o estado atual sozinho só guarda o
+ * último instante).
+ *
+ * `role` é copiado de `task_cards` NO MOMENTO da rodada (não uma
+ * referência viva) — se o papel do card mudar depois via `linkTaskCard`,
+ * as linhas antigas continuam dizendo qual papel ele tinha QUANDO
+ * participou daquela rodada, nunca reescritas.
+ *
+ * `verdict: null` é um valor real aqui, não "ainda sem informação": uma
+ * rodada pode terminar SEM veredito (relatório sem campo `verdict`, ou
+ * o processo saiu sem NUNCA chamar `report` — "Sinal 2", já existente).
+ * As duas causas de `null` são propositalmente indistinguíveis nesta
+ * tabela (nenhuma delas produziu uma decisão), exatamente como
+ * `originBadge`/`deriveStage` (task-board-model.ts) já tratam "sem
+ * selo" e "ator desconhecido" como o mesmo caso.
+ *
+ * SEM PK composta de propósito (ao contrário de `task_cards`): nada
+ * aqui impede duas rodadas do MESMO (task_id, card_id) — é exatamente
+ * o caso mais comum (um reviewer reprova, o mesmo card reporta de novo
+ * na rodada seguinte). `id` é um UUID gerado no INSERT, como
+ * `task_transitions.id` — a ordem real vem de `idx_tv_task(task_id,
+ * at)`. Nunca escrita direto por um chamador: só `store.ts`'s
+ * `recordParticipationRound` (definida perto de `applyColumnDrop`)
+ * grava aqui, dentro do MESMO choke point que já grava `reports`
+ * (`cmd === "report"`, message-bus.ts) e do já existente ramo de
+ * saída-sem-relatório de `resolveCardExit` ("Sinal 2"). MCP só LEITURA
+ * (`get_task`, mesmo padrão de `transitions`/`cards`) — nenhuma tool
+ * escreve aqui, por decisão explícita (ver o comentário grande do
+ * item no DESIGN-BACKLOG: "poder ESCREVER veredito transforma registro
+ * em narrativa"). */
+export type TaskVerdictRow = { id: string; task_id: string; card_id: string; role: string; verdict: string | null; at: number };
+
 /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — achado ao
  * vivo (2026-09-09, sessão real): um card de review chamou `report`, saiu
  * com código 0, o bus respondeu `reported` — e o relatório sumiu. Causa:
@@ -267,9 +339,14 @@ export type TaskCardRow = { task_id: string; card_id: string; role: string };
  *
  * Ciclo de vida — decidido e o que foi DESCARTADO:
  * - Histórico por card (guardar as 4 rodadas em vez de só a última):
- *   DESCARTADO — nada no protocolo (`read_report`) pede histórico, só "o
- *   último" ou "o próximo mais novo que X" (`afterSeq`); guardaria linhas
- *   sem nenhum consumidor.
+ *   DESCARTADO AQUI, mas revisitado sob um eixo diferente: "o protocolo
+ *   `read_report` não pede histórico" continua verdade (esta tabela
+ *   não ganhou linhas), mas "quantas rodadas até aprovar" é uma
+ *   pergunta REAL que apareceu depois (pílulas/gráficos do card Fila) —
+ *   resolvida por `TaskVerdictRow` acima, uma tabela SEPARADA por
+ *   RODADA DE PARTICIPAÇÃO (task+card+papel), nunca por reescrever
+ *   `reports` (que continua slot único, por bom motivo: é "o relatório
+ *   mais recente", não um log).
  * - Cascade delete ao fechar/deletar o card: DESCARTADO — fechar um card
  *   hoje já é independente da entrega do relatório (o `Map` em memória já
  *   sobrevivia ao card fechar NA MESMA sessão, só não a um restart do
@@ -409,6 +486,22 @@ function migrate(db: Database.Database) {
       if (!String(e).includes("duplicate column name")) throw e;
     }
   }
+  // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
+  // achado 1, ALTO): `order`/`suggested_order` sozinhos não conseguem
+  // exprimir "esta task foi POSICIONADA (efeito colateral de arrastar uma
+  // vizinha) sem que um humano tenha DECIDIDO nada sobre ela". Escrever
+  // `order` numa vizinha intocada pra fazer a task arrastada caber entre
+  // duas outras a tornava PERMANENTEMENTE imune a um `suggestedOrder`
+  // futuro do agente (`order` sempre vence, uma vez setado, pra sempre) —
+  // exatamente o que a decisão 6 nunca quis dizer com "arrastar". Ver o
+  // comentário grande de `TaskRow.implicit_order` abaixo pro modelo
+  // completo (3 níveis: `order` > `suggested_order` > `implicit_order` >
+  // nada).
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN implicit_order INTEGER`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
   try {
     db.exec(`ALTER TABLE reports ADD COLUMN verdict TEXT`);
   } catch (e) {
@@ -538,6 +631,25 @@ export function openStore(userDataDir: string) {
     );
   `);
 
+  // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" — ver
+  // o comentário grande de `TaskVerdictRow` acima pro modelo completo.
+  // Tabela NOVA (não coluna em `task_cards`, não reaproveito de
+  // `reports`): `task_cards` tem PK `(task_id, card_id)` de propósito —
+  // é "qual papel este card tem AGORA", presente, upsert; guardar
+  // rodada ali quebraria essa PK (duas rodadas do mesmo par colidiriam)
+  // e mudaria o significado de uma tabela que outro código já lê como
+  // "vínculo atual" (`listTaskCardsStmt`/`taskCardsForBoardStmt`).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_verdicts (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      verdict TEXT,
+      at INTEGER NOT NULL
+    );
+  `);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS browser_favorites (
       url TEXT PRIMARY KEY,
@@ -567,6 +679,7 @@ export function openStore(userDataDir: string) {
     CREATE INDEX IF NOT EXISTS idx_reports_seq ON reports(seq);
     CREATE INDEX IF NOT EXISTS idx_tt_task ON task_transitions(task_id, at);
     CREATE INDEX IF NOT EXISTS idx_task_cards_task ON task_cards(task_id);
+    CREATE INDEX IF NOT EXISTS idx_tv_task ON task_verdicts(task_id, at);
   `);
 
   // DESIGN-BACKLOG.md §2.1 "Migração de dados: as linhas existentes com
@@ -759,7 +872,7 @@ export function openStore(userDataDir: string) {
     )
   `);
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, created_at, updated_at`;
   // RODADA 3 (DESIGN-BACKLOG.md §2.1, decisão 7 / peça 5 do recorte) —
   // rodapé de escopo (`board X · N tasks · M em outros boards`). GLOBAL de
   // propósito (nenhum filtro por board): é exatamente essa visão de
@@ -793,15 +906,69 @@ export function openStore(userDataDir: string) {
   const listTasksByBoardStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE board_id = ? ORDER BY created_at ASC`);
   const getTaskStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`);
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, board_id = excluded.board_id, result_json = excluded.result_json, deps_json = excluded.deps_json,
       retry_count = excluded.retry_count, attempted_providers_json = excluded.attempted_providers_json,
       max_retries = excluded.max_retries, fallback_providers_json = excluded.fallback_providers_json,
-      "order" = excluded."order", suggested_order = excluded.suggested_order, updated_at = excluded.updated_at
+      "order" = excluded."order", suggested_order = excluded.suggested_order, implicit_order = excluded.implicit_order, updated_at = excluded.updated_at
   `);
+  // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
+  // achado 2). `applyColumnDrop` (mais abaixo) precisa gravar isto SEM
+  // passar pelo `upsertTaskStmt` inteiro (que exigiria reconstruir a
+  // linha inteira da vizinha só pra mudar 1 coluna, e re-avaliaria
+  // `upsertTaskCardIfAbsentStmt` à toa) — um `UPDATE` pontual, sem tocar
+  // `status`/`order`/`suggested_order`/nada mais. Nunca dispara transição
+  // (`task_transitions` só grava mudança de `status`, e esta escrita
+  // nunca muda status) — comportamento correto: `implicit_order` não é
+  // uma decisão de ninguém, não tem o que auditar.
+  const setImplicitOrderStmt = db.prepare(`UPDATE tasks SET implicit_order = @implicit_order, updated_at = @updated_at WHERE id = @id`);
+
+  /** Corpo de `upsertTask` (ver seu comentário grande na definição do
+   * método, mais abaixo) extraído pra função nomeada — `applyColumnDrop`
+   * (peça 3, review adversarial rodada 3) precisa chamar EXATAMENTE a
+   * mesma lógica (grava a task arrastada + a transição de status, se
+   * houve) de DENTRO de uma `db.transaction`, sem duplicar o corpo. */
+  function upsertTaskInternal(task: TaskRow) {
+    const { actor, transitions: _transitions, cards: _cards, ...persistable } = task;
+    const existing = getTaskStmt.get(task.id) as TaskRow | undefined;
+    upsertTaskStmt.run(persistable);
+    if (!existing || existing.status !== task.status) {
+      insertTransitionStmt.run({
+        id: randomUUID(),
+        task_id: task.id,
+        kind: "status",
+        from_value: existing ? existing.status : null,
+        to_value: task.status,
+        actor: actor ?? "agent",
+        card_id: task.card_id,
+        at: Date.now(),
+      });
+    }
+    if (task.card_id) {
+      upsertTaskCardIfAbsentStmt.run({ task_id: task.id, card_id: task.card_id, role: "implementer" });
+    }
+  }
+
+  /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
+   * achado 2, BAIXO-MÉDIO): o lote de um drop (a task arrastada + o
+   * `implicit_order` materializado das vizinhas que precisaram virar
+   * comparáveis, ver o comentário grande de `TaskRow.implicit_order`)
+   * precisa ser ATÔMICO — sem isso, um crash no meio deixa o quadro com
+   * ordens relativas parcialmente aplicadas (a arrastada já com `order`
+   * novo, só ALGUMAS vizinhas com `implicit_order`, o resto ainda
+   * `Infinity`). `db.transaction` (better-sqlite3, síncrono) garante
+   * tudo-ou-nada. O chamador (main/index.ts's `persistColumnDrop`) faz UM
+   * push só depois desta função retornar, não um por linha — resolve
+   * também o "barulhento" do mesmo achado. */
+  const applyColumnDrop = db.transaction((dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]) => {
+    upsertTaskInternal(dragged);
+    for (const s of siblingImplicitOrders) {
+      setImplicitOrderStmt.run({ id: s.id, implicit_order: s.implicitOrder, updated_at: dragged.updated_at });
+    }
+  });
 
   // DESIGN-BACKLOG.md §2.1 "Log de transição" — `id` gerado aqui
   // (randomUUID), nunca pelo chamador. `ORDER BY at ASC, rowid ASC`: `at`
@@ -837,6 +1004,58 @@ export function openStore(userDataDir: string) {
     ON CONFLICT(task_id, card_id) DO UPDATE SET role = excluded.role
   `);
   const listTaskCardsStmt = db.prepare("SELECT task_id, card_id, role FROM task_cards WHERE task_id = ?");
+  // "Histórico de veredito por participação" — o outro lado da mesma
+  // junção: `recordParticipationRound` (abaixo) recebe só um `cardId` (é
+  // tudo que o choke point tem à mão — `report`/`resolveCardExit` falam
+  // de UM card saindo/reportando, nunca de uma task específica) e
+  // precisa achar EM QUAIS tasks/papéis esse card participa agora pra
+  // saber onde apendar a rodada. Um card normal só aparece numa linha
+  // (o caso comum, 1 card = 1 task ativa); o schema não impede mais de
+  // uma, então o fan-out cobre isso sem assumir cardinalidade.
+  const listTaskCardsForCardStmt = db.prepare("SELECT task_id, card_id, role FROM task_cards WHERE card_id = ?");
+
+  // Ver o comentário grande de `TaskVerdictRow` acima pro modelo
+  // completo. `ORDER BY at ASC, rowid ASC` — mesmo desempate de
+  // `getTaskTransitionsStmt` (duas rodadas podem cair no mesmo `at`
+  // quando o fan-out grava mais de uma linha na MESMA chamada).
+  const insertTaskVerdictStmt = db.prepare(`
+    INSERT INTO task_verdicts (id, task_id, card_id, role, verdict, at)
+    VALUES (@id, @task_id, @card_id, @role, @verdict, @at)
+  `);
+  const getTaskVerdictsStmt = db.prepare(
+    "SELECT id, task_id, card_id, role, verdict, at FROM task_verdicts WHERE task_id = ? ORDER BY at ASC, rowid ASC",
+  );
+
+  /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" — o
+   * ÚNICO ponto que escreve em `task_verdicts`. Chamado de dois lugares,
+   * os dois já são choke points existentes (nenhum terceiro caminho
+   * escreve verdict hoje, ver o comentário grande de `TaskVerdictRow`):
+   * (1) `message-bus.ts`'s `cmd === "report"`, logo depois de
+   *     `upsertReport` — toda vez que QUALQUER card reporta (com ou sem
+   *     `verdict`), essa é uma rodada de participação terminando.
+   * (2) `resolveCardExit`'s ramo "Sinal 2" (saída sem NUNCA ter
+   *     chamado `report`) — a mesma rodada termina, sem veredito
+   *     nenhum (`verdict: null`), pela causa oposta.
+   *
+   * Fan-out: um `cardId` pode participar de mais de uma task ao mesmo
+   * tempo (schema de `task_cards` permite); `db.transaction` garante
+   * que, se o card estiver em N tasks, ou as N linhas entram todas ou
+   * nenhuma — mesma garantia de atomicidade que `applyColumnDrop` já
+   * tem, mesmo motivo (um crash no meio não pode deixar a rodada
+   * registrada em ALGUMAS tasks e não noutras). Card sem NENHUMA linha
+   * em `task_cards` (nunca esteve vinculado a task nenhuma): 0 linhas
+   * lidas, 0 gravadas — não há rodada de participação nenhuma pra
+   * fechar, silêncio correto, não bug. */
+  const recordParticipationRound = db.transaction((cardId: string, verdict: string | null, at: number): TaskVerdictRow[] => {
+    const links = listTaskCardsForCardStmt.all(cardId) as TaskCardRow[];
+    const written: TaskVerdictRow[] = [];
+    for (const link of links) {
+      const row: TaskVerdictRow = { id: randomUUID(), task_id: link.task_id, card_id: cardId, role: link.role, verdict, at };
+      insertTaskVerdictStmt.run(row);
+      written.push(row);
+    }
+    return written;
+  });
 
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 4 — anatomia da task no quadro
   // precisa, POR BOARD (nunca por task individual — o mesmo N+1 que a
@@ -1000,6 +1219,7 @@ export function openStore(userDataDir: string) {
         ...row,
         transitions: getTaskTransitionsStmt.all(id) as TaskTransitionRow[],
         cards: listTaskCardsStmt.all(id) as TaskCardRow[],
+        verdicts: getTaskVerdictsStmt.all(id) as TaskVerdictRow[],
       };
     },
     // Ver o comentário grande de `getTaskStatusStmt` acima.
@@ -1042,35 +1262,27 @@ export function openStore(userDataDir: string) {
      * dentro do MESMO objeto que já atravessa essa fronteira funciona sem
      * mexer em index.ts. Ausente = "agent" (toda chamada de
      * create_task/update_task hoje é MCP, isto é, um agente). */
-    upsertTask: (task: TaskRow) => {
-      const { actor, transitions: _transitions, cards: _cards, ...persistable } = task;
-      const existing = getTaskStmt.get(task.id) as TaskRow | undefined;
-      upsertTaskStmt.run(persistable);
-      if (!existing || existing.status !== task.status) {
-        insertTransitionStmt.run({
-          id: randomUUID(),
-          task_id: task.id,
-          kind: "status",
-          from_value: existing ? existing.status : null,
-          to_value: task.status,
-          actor: actor ?? "agent",
-          card_id: task.card_id,
-          at: Date.now(),
-        });
-      }
-      // DESIGN-BACKLOG.md §2.1 item 4 — mantém `task_cards` alinhada com
-      // `card_id` pra toda task tocada por `upsertTask` daqui em diante
-      // (não só o backfill de migração acima, que só cobre o que já
-      // existia ANTES desta coluna). `IfAbsent`: nunca sobrescreve um
-      // papel já decidido pra este par (task, card) — só preenche o
-      // palpite óbvio quando ainda não há nenhum.
-      if (task.card_id) {
-        upsertTaskCardIfAbsentStmt.run({ task_id: task.id, card_id: task.card_id, role: "implementer" });
-      }
-    },
+    upsertTask: (task: TaskRow) => upsertTaskInternal(task),
+    // Ver o comentário grande de `applyColumnDrop` acima (definida antes
+    // do `return`, junto dos prepared statements) — exposta aqui como
+    // método do store, mesma convenção de todo o resto deste objeto.
+    applyColumnDrop: (dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]) =>
+      applyColumnDrop(dragged, siblingImplicitOrders),
     getTaskTransitions: (taskId: string): TaskTransitionRow[] => getTaskTransitionsStmt.all(taskId) as TaskTransitionRow[],
     getTaskCards: (taskId: string): TaskCardRow[] => listTaskCardsStmt.all(taskId) as TaskCardRow[],
+    /** Same current-link view as `getTaskCards`, from the card side. The
+     * message bus uses this only to distinguish a secondary task card with a
+     * real participation link from an unrelated support card before asking
+     * `recordParticipationRound` to close the round. */
+    listTaskCardsForCard: (cardId: string): TaskCardRow[] => listTaskCardsForCardStmt.all(cardId) as TaskCardRow[],
     linkTaskCard: (taskId: string, cardId: string, role: string) => linkTaskCardStmt.run({ task_id: taskId, card_id: cardId, role }),
+    // Ver o comentário grande de `recordParticipationRound` acima
+    // (definida antes do `return`, junto dos prepared statements) —
+    // exposta aqui como método do store, mesma convenção de
+    // `applyColumnDrop` logo acima dela.
+    recordParticipationRound: (cardId: string, verdict: string | null, at: number): TaskVerdictRow[] =>
+      recordParticipationRound(cardId, verdict, at),
+    getTaskVerdicts: (taskId: string): TaskVerdictRow[] => getTaskVerdictsStmt.all(taskId) as TaskVerdictRow[],
     // DESIGN-BACKLOG.md §2.1 Fase 2, peça 4 — ver o comentário grande dos
     // três `Stmt` acima. `last_actor` é `null` tanto pra uma task sem
     // NENHUMA transição gravada (predata `task_transitions`) quanto pra

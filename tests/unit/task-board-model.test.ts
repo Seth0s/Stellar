@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   columnForStatus,
   compareTasks,
+  taskSortKey,
   groupTasksByColumn,
   originBadge,
   deriveStage,
@@ -16,7 +17,15 @@ import {
   computeCycleTime,
   msToHours,
   COLUMN_ORDER,
+  COLUMN_TO_STATUS,
+  computeColumnDrop,
+  describeHumanMove,
+  isTaskCardLive,
+  computeMetaPills,
+  describeTransitionTrail,
+  describeHumanMoveNotice,
   type TaskOrderable,
+  type MetaPillKind,
 } from "../../src/renderer/src/task-board-model";
 
 describe("columnForStatus", () => {
@@ -33,7 +42,7 @@ describe("columnForStatus", () => {
 });
 
 describe("compareTasks / taskSortKey — os dois donos da prioridade", () => {
-  const base: TaskOrderable = { order: null, suggestedOrder: null, createdAt: 0 };
+  const base: TaskOrderable = { order: null, suggestedOrder: null, implicitOrder: null, createdAt: 0 };
 
   it("order (humano) manda mesmo quando suggestedOrder (agente) discorda", () => {
     const humanFirst = { ...base, order: 5, suggestedOrder: 99, createdAt: 100 };
@@ -65,17 +74,42 @@ describe("compareTasks / taskSortKey — os dois donos da prioridade", () => {
     // agente quando os dois existem na MESMA task" (teste acima).
     expect(compareTasks(onlySuggested, humanOrdered)).toBeLessThan(0);
   });
+
+  // ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 1, ALTO) — `implicitOrder`
+  // é o TERCEIRO nível (nem decisão humana, nem opinião do agente — só uma
+  // posição que o app materializou pra uma task caber num drop, ver
+  // `computeColumnDrop`). Tem que ficar ABAIXO de `suggestedOrder` na
+  // precedência: senão, uma vizinha materializada ficaria imune a um
+  // `suggestedOrder` real do agente — exatamente o defeito que motivou
+  // parar de escrever `order` nela.
+  it("suggestedOrder do agente vence implicitOrder do app, mesmo com um número maior", () => {
+    const appPositioned = { ...base, implicitOrder: 1000 };
+    const agentSuggested = { ...base, suggestedOrder: 1 }; // número BEM menor, mas vindo do agente
+    expect(compareTasks(agentSuggested, appPositioned)).toBeLessThan(0);
+  });
+
+  it("implicitOrder só entra em jogo quando NEM order NEM suggestedOrder existem", () => {
+    const a = { ...base, implicitOrder: 500 };
+    const b = { ...base, implicitOrder: 1500 };
+    expect(compareTasks(a, b)).toBeLessThan(0);
+  });
+
+  it("sem NENHUM dos três, ainda cai pro createdAt — implicitOrder não é obrigatório existir", () => {
+    const older = { ...base, createdAt: 10 };
+    const newer = { ...base, createdAt: 20 };
+    expect(compareTasks(older, newer)).toBeLessThan(0);
+  });
 });
 
 describe("groupTasksByColumn", () => {
   it("separa por status E ordena cada coluna internamente por compareTasks", () => {
     const tasks = [
-      { id: "a", status: "running", order: 2, suggestedOrder: null, createdAt: 1 },
-      { id: "b", status: "pending", order: null, suggestedOrder: null, createdAt: 5 },
-      { id: "c", status: "running", order: 1, suggestedOrder: null, createdAt: 2 },
-      { id: "d", status: "failed", order: null, suggestedOrder: null, createdAt: 3 },
-      { id: "e", status: "pending", order: null, suggestedOrder: null, createdAt: 1 },
-      { id: "f", status: "done", order: null, suggestedOrder: null, createdAt: 1 },
+      { id: "a", status: "running", order: 2, suggestedOrder: null, implicitOrder: null, createdAt: 1 },
+      { id: "b", status: "pending", order: null, suggestedOrder: null, implicitOrder: null, createdAt: 5 },
+      { id: "c", status: "running", order: 1, suggestedOrder: null, implicitOrder: null, createdAt: 2 },
+      { id: "d", status: "failed", order: null, suggestedOrder: null, implicitOrder: null, createdAt: 3 },
+      { id: "e", status: "pending", order: null, suggestedOrder: null, implicitOrder: null, createdAt: 1 },
+      { id: "f", status: "done", order: null, suggestedOrder: null, implicitOrder: null, createdAt: 1 },
     ];
     const groups = groupTasksByColumn(tasks);
     expect(groups.doing.map((t) => t.id)).toEqual(["c", "a"]); // order 1 antes de order 2
@@ -331,5 +365,234 @@ describe("msToHours", () => {
 
   it("1h exata vira 1", () => {
     expect(msToHours(3_600_000)).toBe(1);
+  });
+});
+
+describe("COLUMN_TO_STATUS — inverso de columnForStatus", () => {
+  it("as 4 colunas reais voltam pro status que columnForStatus leria de volta pra elas mesmas", () => {
+    for (const col of COLUMN_ORDER) expect(columnForStatus(COLUMN_TO_STATUS[col])).toBe(col);
+  });
+});
+
+describe("computeColumnDrop — peça 3 (arrastar), técnica de gap", () => {
+  type Fixture = TaskOrderable & { id: string };
+  const untouched = (id: string, createdAt: number): Fixture => ({ id, order: null, suggestedOrder: null, implicitOrder: null, createdAt });
+  const withOrder = (id: string, order: number): Fixture => ({ id, order, suggestedOrder: null, implicitOrder: null, createdAt: 0 });
+  // `siblingImplicitOrders` é a única lista de escrita pra vizinhos —
+  // `implicitOf` lê de lá, nunca de `result.order` (que é só da
+  // arrastada). Uma task ausente da lista significa "não foi tocada".
+  const implicitOf = (result: { siblingImplicitOrders: { id: string; implicitOrder: number }[] }, id: string): number =>
+    result.siblingImplicitOrders.find((w) => w.id === id)!.implicitOrder;
+
+  it("coluna vazia: a task arrastada recebe o primeiro valor da sequência, não um palpite arbitrário — e NENHUM vizinho (não há nenhum)", () => {
+    const result = computeColumnDrop([], 0);
+    expect(Number.isFinite(result.order)).toBe(true);
+    expect(result.siblingImplicitOrders).toEqual([]);
+  });
+
+  it("solta no INÍCIO entre duas já ordenadas: só a arrastada recebe `order`, NENHUM vizinho é tocado", () => {
+    const dest = [withOrder("a", 100), withOrder("b", 200)];
+    const result = computeColumnDrop(dest, 0);
+    expect(result.siblingImplicitOrders).toEqual([]); // as duas já tinham chave finita — ninguém precisa materializar
+    expect(result.order).toBeLessThan(100);
+  });
+
+  it("solta no FIM entre duas já ordenadas: fica acima da última, sem tocar nenhuma das duas", () => {
+    const dest = [withOrder("a", 100), withOrder("b", 200)];
+    const result = computeColumnDrop(dest, 2);
+    expect(result.siblingImplicitOrders).toEqual([]);
+    expect(result.order).toBeGreaterThan(200);
+  });
+
+  it("solta NO MEIO entre duas já ordenadas: fica estritamente entre as duas, sem tocar nenhuma", () => {
+    const dest = [withOrder("a", 100), withOrder("b", 200)];
+    const result = computeColumnDrop(dest, 1);
+    expect(result.siblingImplicitOrders).toEqual([]);
+    expect(result.order).toBeGreaterThan(100);
+    expect(result.order).toBeLessThan(200);
+  });
+
+  // ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 1, ALTO) — reprodução
+  // EXATA do cenário que o review apontou: 3 tasks nunca tocadas (sort key
+  // Infinity as 3), soltar entre a 2ª e a 3ª. A versão da rodada 1
+  // devolvia sempre o mesmo valor aqui — e como um finito qualquer é
+  // sempre `< Infinity`, a task solta saltava pro TOPO da coluna no
+  // próximo render, ignorando onde o mouse soltou. Isto não é caso de
+  // borda: é o estado NORMAL de um board novo, onde ninguém ordenou nada
+  // ainda.
+  //
+  // ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 1, ALTO) — a correção
+  // da rodada 2 escrevia `order` (não `implicitOrder`) nos 3 vizinhos,
+  // tornando-os imunes a `suggestedOrder` pra sempre. Este teste agora
+  // afirma a coisa CERTA: os vizinhos aparecem em `siblingImplicitOrders`
+  // (nunca ganham `order`), só a arrastada aparece em `result.order`.
+  it("[achados 1×2] 3 tasks intocadas, solta ENTRE a 2ª e a 3ª: fica exatamente ali (nunca no topo), e os vizinhos ganham implicitOrder — NUNCA order", () => {
+    const dest = [untouched("a", 1), untouched("b", 2), untouched("c", 3)];
+    const result = computeColumnDrop(dest, 2);
+    // As 3 vizinhas precisam materializar (nenhuma tinha chave finita) —
+    // a arrastada NUNCA aparece nesta lista (ela é `result.order`).
+    expect(result.siblingImplicitOrders.map((w) => w.id).sort()).toEqual(["a", "b", "c"]);
+    // A ORDEM relativa das 3 intocadas é preservada (createdAt, a mesma
+    // que compareTasks já usava pra desempatá-las) — a arrastada entra
+    // exatamente onde foi solta, nunca no topo.
+    expect(implicitOf(result, "a")).toBeLessThan(implicitOf(result, "b"));
+    expect(implicitOf(result, "b")).toBeLessThan(result.order); // depois da 2ª...
+    expect(result.order).toBeLessThan(implicitOf(result, "c")); // ...e antes da 3ª
+  });
+
+  it("[achados 1×2, pontas] mesmas 3 intocadas, solta ANTES de tudo (índice 0): fica em primeiro de verdade", () => {
+    const dest = [untouched("a", 1), untouched("b", 2), untouched("c", 3)];
+    const result = computeColumnDrop(dest, 0);
+    expect(result.order).toBeLessThan(implicitOf(result, "a"));
+    expect(implicitOf(result, "a")).toBeLessThan(implicitOf(result, "b"));
+    expect(implicitOf(result, "b")).toBeLessThan(implicitOf(result, "c"));
+  });
+
+  it("[achados 1×2, pontas] mesmas 3 intocadas, solta DEPOIS de tudo (índice 3): fica em último de verdade", () => {
+    const dest = [untouched("a", 1), untouched("b", 2), untouched("c", 3)];
+    const result = computeColumnDrop(dest, 3);
+    expect(implicitOf(result, "a")).toBeLessThan(implicitOf(result, "b"));
+    expect(implicitOf(result, "b")).toBeLessThan(implicitOf(result, "c"));
+    expect(implicitOf(result, "c")).toBeLessThan(result.order);
+  });
+
+  it("mistura: uma já ordenada + uma intocada — só a intocada materializa implicitOrder, a já ordenada NUNCA é tocada", () => {
+    const dest = [withOrder("a", 100), untouched("b", 5)]; // b nunca foi tocada
+    const result = computeColumnDrop(dest, 1); // solta entre a e b
+    expect(result.siblingImplicitOrders.map((w) => w.id)).toEqual(["b"]); // "a" NUNCA aparece — seu valor não muda
+    expect(result.order).toBeGreaterThan(100); // depois de "a"
+    expect(result.order).toBeLessThan(implicitOf(result, "b")); // antes de "b", que continua depois
+  });
+
+  it("duas intocadas, solta entre elas: as duas materializam implicitOrder (nunca order), a arrastada fica no meio — mesmo bug dos achados 1×2, coluna de 2", () => {
+    const result = computeColumnDrop([untouched("u1", 1), untouched("u2", 2)], 1);
+    expect(result.siblingImplicitOrders.map((w) => w.id).sort()).toEqual(["u1", "u2"]);
+    expect(implicitOf(result, "u1")).toBeLessThan(result.order);
+    expect(result.order).toBeLessThan(implicitOf(result, "u2"));
+  });
+
+  // ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 1) — a RESTRIÇÃO
+  // INEGOCIÁVEL do master, verificada diretamente: depois de materializar
+  // 3 vizinhas intocadas, um `suggestedOrder` real do agente pra QUALQUER
+  // uma delas ainda vence o `implicitOrder` que o app inventou — nenhuma
+  // imunidade. Ver o teste de `compareTasks`/`taskSortKey` acima pro
+  // mecanismo; este teste é o elo entre o RESULTADO desta função e essa
+  // garantia (não basta a precedência existir — o valor materializado
+  // aqui precisa realmente ser sobreponível).
+  it("depois de materializar, um suggestedOrder real do agente ainda vence o implicitOrder materializado — sem imunidade", () => {
+    const dest = [untouched("a", 1), untouched("b", 2), untouched("c", 3)];
+    const result = computeColumnDrop(dest, 2);
+    const bImplicit = implicitOf(result, "b");
+    // Simula o que a leitura faria depois de um agente chamar
+    // update_task({taskId:"b", suggestedOrder:1}): "b" agora tem AMBOS
+    // implicitOrder (da materialização) e suggestedOrder (do agente) —
+    // taskSortKey precisa ler o suggestedOrder, não o implicitOrder.
+    const bAfterAgentSuggestion: Fixture = { id: "b", order: null, suggestedOrder: 1, implicitOrder: bImplicit, createdAt: 2 };
+    expect(taskSortKey(bAfterAgentSuggestion)).toBe(1);
+    expect(taskSortKey(bAfterAgentSuggestion)).not.toBe(bImplicit);
+  });
+});
+
+describe("describeHumanMove", () => {
+  it("nomeia a coluna de destino pelo título real (COLUMN_TITLE), prefixo '[de: você]' como todo aviso de typeAndSubmit", () => {
+    const msg = describeHumanMove("doing");
+    expect(msg).toContain("em andamento");
+    expect(msg.startsWith("[de: você]")).toBe(true);
+  });
+});
+
+// Fidelidade visual ao protótipo v5 — delta 4 (varredura de atividade).
+describe("isTaskCardLive", () => {
+  it("só é viva quando a task está running E o card por trás está vivo — as duas, nunca uma só", () => {
+    expect(isTaskCardLive("running", true)).toBe(true);
+    expect(isTaskCardLive("running", false)).toBe(false); // running mas o processo já morreu (janela antes do Sinal 2 derrubar)
+    expect(isTaskCardLive("done", true)).toBe(false); // card ainda vivo, mas a task já não está mais em andamento
+    expect(isTaskCardLive("pending", false)).toBe(false);
+  });
+});
+
+// Delta 5 — pílulas de meta coloridas.
+describe("computeMetaPills", () => {
+  it("sem dependência pendente e sem divergência de prioridade: nenhuma pílula", () => {
+    expect(computeMetaPills(null, null, null)).toEqual([]);
+    expect(computeMetaPills(null, 5, 5)).toEqual([]); // order === suggestedOrder: sem divergência
+  });
+
+  it("dependência normal vira pílula 'wait'; dependência quebrada (status desconhecido) vira 'wait-broken'", () => {
+    expect(computeMetaPills({ depId: "a54269c1", status: "running" }, null, null)).toEqual([{ kind: "wait", text: "espera a54269c1" }]);
+    const broken = computeMetaPills({ depId: "a54269c1", status: undefined }, null, null);
+    expect(broken[0].kind).toBe("wait-broken");
+  });
+
+  it("order e suggestedOrder divergindo (decisão 6) vira pílula 'suggestion', SEMPRE visível ao lado, nunca engolida", () => {
+    expect(computeMetaPills(null, 5, 99)).toEqual([{ kind: "suggestion", text: "sugestão: prioridade 99" }]);
+  });
+
+  it("as duas juntas: dependência pendente E divergência de prioridade — duas pílulas, dependência primeiro", () => {
+    const pills = computeMetaPills({ depId: "dep-1", status: "pending" }, 5, 1);
+    expect(pills).toHaveLength(2);
+    expect(pills[0].kind).toBe("wait");
+    expect(pills[1].kind).toBe("suggestion");
+  });
+
+  it("[deliberadamente fora] não existe pílula 'rodada N'/'reprovada N×'/'fase X adiada' — sem histórico de veredito pra sustentar", () => {
+    // Nenhuma combinação de entrada produz um MetaPillKind fora dos 3
+    // documentados — este teste existe só pra tornar essa omissão
+    // deliberada visível na suíte, não pra testar comportamento novo.
+    const allKinds: MetaPillKind[] = ["wait", "wait-broken", "suggestion"];
+    const pills = computeMetaPills({ depId: "d", status: "running" }, 1, 2);
+    for (const p of pills) expect(allKinds).toContain(p.kind);
+  });
+});
+
+// Delta 6 — trilha de transição com horários.
+describe("describeTransitionTrail", () => {
+  it("sem nenhuma transição: null, nunca uma trilha vazia com seta solta", () => {
+    expect(describeTransitionTrail([])).toBeNull();
+  });
+
+  it("junta status real + horário (HH:MM) com seta, na ordem em que chegaram", () => {
+    const d = new Date();
+    d.setHours(19, 2, 0, 0);
+    const t0 = d.getTime();
+    const transitions = [
+      { toValue: "pending", at: t0 },
+      { toValue: "running", at: t0 + 3 * 60_000 },
+      { toValue: "done", at: t0 + 3 * 3_600_000 },
+    ];
+    const trail = describeTransitionTrail(transitions);
+    expect(trail).toBe("a fazer 19:02 → em andamento 19:05 → concluído 22:02");
+  });
+
+  it("nunca inclui um ponto de 'review' — task_transitions não grava kind:'stage' ainda, não inventa o que não existe", () => {
+    const trail = describeTransitionTrail([{ toValue: "running", at: Date.now() }]);
+    expect(trail).not.toContain("review");
+  });
+});
+
+// Delta 8 — marca de movimento humano.
+describe("describeHumanMoveNotice", () => {
+  it("só aparece quando o ÚLTIMO ator foi humano E o card vinculado ainda está vivo — as duas condições", () => {
+    expect(describeHumanMoveNotice("human", true, "288")).toBe("Movida à mão com o card 288 ainda rodando. O card foi avisado.");
+  });
+
+  it("último ator agente ou app: nunca aparece, mesmo com o card vivo", () => {
+    expect(describeHumanMoveNotice("agent", true, "288")).toBeNull();
+    expect(describeHumanMoveNotice("app", true, "288")).toBeNull();
+    expect(describeHumanMoveNotice(null, true, "288")).toBeNull();
+  });
+
+  it("humano moveu, mas o card já não está mais vivo: some — 'ainda rodando' deixou de ser verdade", () => {
+    expect(describeHumanMoveNotice("human", false, "288")).toBeNull();
+  });
+
+  it("sem card vinculado (cardId null): nunca aparece, não há o que descrever como 'ainda rodando'", () => {
+    expect(describeHumanMoveNotice("human", true, null)).toBeNull();
+  });
+
+  it("não trava no status da task — o protótipo mostra isto sob uma task já 'concluído', card ainda rodando por conta própria", () => {
+    // A própria assinatura da função não recebe `status` — reforça que a
+    // decisão é sobre o CARD, não sobre em que coluna a task está.
+    expect(describeHumanMoveNotice("human", true, "288")).not.toBeNull();
   });
 });

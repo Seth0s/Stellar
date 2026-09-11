@@ -1,7 +1,11 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { TaskRow, ConnectorRow, ReportRow } from "./store";
+import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
+import { decideReportNotifyTarget } from "./report-notify-routing";
+import { decideConnectorKindWrite } from "./connector-kind-authorization";
+import { decideWriteReadiness, decideSubmitCheck } from "./type-and-submit-decision";
+import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -97,6 +101,15 @@ const SEND_ENTER_DELAY_MS = 80;
 // render never gets stuck retrying forever.
 const SEND_ENTER_CONFIRM_DELAY_MS = 250;
 const SEND_ENTER_MAX_ATTEMPTS = 4;
+// DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
+// caixa sem submeter" — só o intervalo de poll do portão de prontidão
+// (`waitForWriteReadiness` abaixo); os limiares que de fato decidem
+// "pronto ou não" (quiescência, teto de segurança) vivem em
+// `type-and-submit-decision.ts`, testados puros. Curto de propósito: o
+// caso comum (card já pronto há muito tempo) resolve na 1ª checagem, sem
+// nenhum `delay` — isto só afeta quantas vezes por segundo um card
+// GENUINAMENTE ainda subindo é reconsultado.
+const WRITE_READY_POLL_MS = 40;
 // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 1 — same
 // reasoning as DEFAULT_WAIT_EXIT_TIMEOUT_MS: waiting for a real agent's
 // real result is not a bug-detection backstop, it's the actual point.
@@ -195,7 +208,7 @@ export type StickyOp =
   | { op: "set_color"; color: string; requesterId?: string }
   | { op: "set_mode"; mode: "edit" | "preview"; requesterId?: string };
 export type CardStatusResult = { ok: true; status: "running" | "waiting" | "exited" } | { ok: false; error: string };
-export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window";
+export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window" | "task";
 export type SpawnAgentResult =
   | { ok: true; cardId: string; exited?: boolean; exitCode?: number }
   | { ok: false; error: string };
@@ -310,7 +323,7 @@ export type BusRequest =
   | { cmd: "list_tasks"; boardId?: string }
   | { cmd: "get_task"; taskId?: string }
   | { cmd: "list_connectors" }
-  | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null }
+  | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null; requesterId?: string }
   | { cmd: "set_connector_label"; connectorId?: string; label?: string | null }
   | { cmd: "concurrency_status"; cap?: number }
   | { cmd: "board_mode"; target?: string }
@@ -469,6 +482,12 @@ export function createMessageBus(
      * PTY entry (never spawned/exited/error), matching `isCardAlive`'s
      * own "no entry" convention. */
     getCardLastActivityAt: (cardId: string) => number | null;
+    /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica
+     * na caixa sem submeter" — `typeAndSubmit`'s portão de prontidão
+     * (`type-and-submit-decision.ts`'s `decideWriteReadiness`) precisa dos
+     * 3 campos juntos pra uma decisão só; `null` com a mesma convenção de
+     * `isCardAlive`/`getCardLastActivityAt` (sem entry, nada a esperar). */
+    getCardWriteReadiness: (cardId: string) => { spawnedAtMs: number; hasReceivedData: boolean; lastActivityAtMs: number } | null;
     /** Sticky item "card_status idle" (fix ao vivo, 2026-09-04) — OS
      * notification, never touches any terminal's PTY/input. See the doc
      * comment on `notifySpawnerOfIdleCard` above for why `writeToCard`
@@ -487,6 +506,13 @@ export function createMessageBus(
      * valor do `report` é justamente ser estruturado, lido sob demanda via
      * `read_report`. */
     notifyCardReported: (spawnerId: string, reportingCardLabel: string) => void;
+    /** DESIGN-BACKLOG.md §2.1 "SINAL 2 — saída sem relatório" — a metade
+     * humana do mesmo aviso, mesmo canal/postura de `notifyCardReported`
+     * acima (popup de SO, nunca o PTY): serve a quem estiver mesmo olhando
+     * a tela. A metade que alcança um AGENTE de verdade é a 2ª, feita em
+     * `notifySpawnerOfUnreportedExit` via `typeAndSubmit` — mesmo padrão
+     * de divisão que o sinal 1 (report) já usa. */
+    notifyCardExitedWithoutReport: (spawnerId: string, exitedCardLabel: string, exitCode: number) => void;
     /** Prototipo (2026-09-06) — ver o comentário de `turn_complete` no
      * `BusRequest` acima. Push fire-and-forget pro renderer, keyed pelo
      * mesmo id unificado card/PTY (pty-registry.ts); `useTerminal.ts`
@@ -509,6 +535,11 @@ export function createMessageBus(
      * the UI (App.tsx's session UI → `setBoardAutonomous`), never an
      * MCP/acbridge cmd (see AGENTS.md's architecture entry). */
     getCardBoardId: (cardId: string) => string | undefined;
+    /** Card rows for one board in the store's live-card universe. The
+     * archivedAt field remains explicit in the shared guard input so callers
+     * that do have historical rows can ignore them rather than treating
+     * history as an occupied queue. */
+    listCardsForBoard: (boardId: string) => TaskCardGuardCard[];
     isBoardAutonomous: (boardId: string) => boolean;
     /** RODADA 4 (DESIGN-BACKLOG.md §2.3, fechar a classe do board órfão)
      * — `create_task` valida contra isto antes de gravar: um `boardId`
@@ -521,7 +552,16 @@ export function createMessageBus(
      * `listCards()` (only the currently loaded board's live cards), this
      * reads straight from the store across EVERY board — the only way to
      * even validate a target that isn't on the loaded board at all. */
-    getAnyCard: (cardId: string) => { boardId: string; kind: string } | undefined;
+    /** `provider` — DESIGN-BACKLOG.md §2.1 "SINAL 2", achado de review
+     * adversarial (achado 3): acrescentado a este callback já existente
+     * (não um novo) pra `resolveCardExit` conseguir distinguir um card
+     * `bash` (que nunca chama `report` — não tem MCP/conceito de
+     * relatório, mesma convenção "bash não é agente" de
+     * `countRunningAgentsOnBoard`) de um agente de verdade, mesmo quando
+     * o card já saiu do board carregado. `null` pros kinds sem provider
+     * (files/changes/browser/sticky/etc.) e pra um card sem linha (já
+     * coberto pelo `undefined` do retorno inteiro). */
+    getAnyCard: (cardId: string) => { boardId: string; kind: string; provider: string | null } | undefined;
     /** Direct store mutation, no live renderer/IPC round-trip at all —
      * dispatchRequest only ever calls these for a card whose board ISN'T
      * the one currently loaded (nothing live to keep in sync there; a
@@ -562,6 +602,11 @@ export function createMessageBus(
     listTasksByBoard: (boardId: string) => TaskRow[];
     getTask: (id: string) => TaskRow | undefined;
     upsertTask: (task: TaskRow) => void;
+    /** Current task_cards links from the card side. This is deliberately
+     * separate from `cardWasExpectedToReport`: a secondary reviewer card can
+     * close a participation round without being the principal card whose
+     * failed delivery deserves a spawner notification. */
+    listTaskCardsForCard: (cardId: string) => TaskCardRow[];
     /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — mesmo
      * pass-through direto pro store das 3 linhas acima, mesmo motivo. O
      * cmd `report`/`get_report` (mais abaixo) continua sendo quem faz
@@ -572,6 +617,17 @@ export function createMessageBus(
      * cascade delete, sem TTL, cap só por contagem). */
     getReport: (cardId: string) => ReportRow | undefined;
     upsertReport: (row: ReportRow) => void;
+    /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
+     * pass-through síncrono pro `store.ts`'s `recordParticipationRound`
+     * (ver o comentário grande lá pro modelo completo). Chamado de DOIS
+     * lugares neste arquivo, os dois já choke points existentes: o cmd
+     * `report` abaixo (toda vez que um card reporta, com ou sem
+     * `verdict`) e o ramo "Sinal 2" de `resolveCardExit` (saída sem
+     * NUNCA ter chamado `report` — `verdict: null` pela causa oposta).
+     * Nenhum terceiro lugar chama isto — não existe tool de MCP nem cmd
+     * de bus que escreva aqui além destes dois, por decisão explícita
+     * (MCP só leitura para este dado, via `get_task`). */
+    recordParticipationRound: (cardId: string, verdict: string | null, at: number) => void;
     /** Seeda `reportSeqCounter` (abaixo) do que já está persistido — sem
      * isto, um restart zeraria o contador e o PRÓXIMO relatório sairia com
      * seq baixa (1, 2, ...) enquanto relatórios de ANTES do restart ainda
@@ -838,6 +894,13 @@ export function createMessageBus(
         at: t.at,
       })),
       cards: row.cards?.map((c) => ({ cardId: c.card_id, role: c.role })),
+      // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
+      // — mesma condição de presença que `transitions`/`cards` acima:
+      // só existe quando `row` veio de `getTask`, e é SÓ LEITURA por
+      // aqui (nenhum cmd deste arquivo escreve verdict/rodada a partir
+      // do que um chamador manda de volta — a escrita mora só em
+      // `recordParticipationRound`, chamada pelos dois choke points).
+      verdicts: row.verdicts?.map((v) => ({ cardId: v.card_id, role: v.role, verdict: v.verdict, at: v.at })),
     };
   }
 
@@ -868,6 +931,31 @@ export function createMessageBus(
     });
   }
 
+  /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
+   * caixa sem submeter" — portão de prontidão antes de digitar QUALQUER
+   * coisa. Poll síncrono e barato (`callbacks.getCardWriteReadiness`, sem
+   * round-trip pro renderer) em volta da decisão pura
+   * `decideWriteReadiness` (type-and-submit-decision.ts) — ver o doc
+   * comment daquele arquivo pra por que os dois achados (portão +
+   * confirmação tri-state, em `typeAndSubmit` abaixo) precisam andar
+   * juntos. Card sem entry (já morto, ou nunca existiu) devolve
+   * imediatamente: nada a esperar, `writeToCard`/o resto do fluxo já
+   * lidam com card morto do jeito de sempre. */
+  async function waitForWriteReadiness(target: string): Promise<void> {
+    for (;;) {
+      const snapshot = callbacks.getCardWriteReadiness(target);
+      if (!snapshot) return;
+      const now = Date.now();
+      const decision = decideWriteReadiness({
+        hasReceivedData: snapshot.hasReceivedData,
+        msSinceLastActivity: now - snapshot.lastActivityAtMs,
+        msSinceSpawn: now - snapshot.spawnedAtMs,
+      });
+      if (decision.action === "proceed") return;
+      await delay(WRITE_READY_POLL_MS);
+    }
+  }
+
   /** Extraído do cmd `send` (correção pós-revisão, 2026-09-09) — ANTES
    * disto `notifySpawnerOfReport` escrevia sua linha via `writeToCard` e
    * parava aí, sem apertar Enter, achando (errado — apontado em revisão)
@@ -879,12 +967,25 @@ export function createMessageBus(
    * card digitar — exatamente o dano que se queria evitar. `send_to_card`
    * já resolve isso corretamente pra mensagem agente-pra-agente: escreve o
    * texto, aperta Enter, e CONFIRMA que submeteu de verdade (relendo o
-   * card e comparando com um prefixo do que foi escrito — ver
-   * `looksUnsent`), retentando só o Enter (nunca o texto de novo) até
-   * `SEND_ENTER_MAX_ATTEMPTS`. Extraído aqui pra `send` e
-   * `notifySpawnerOfReport` usarem o MESMO mecanismo — nunca uma segunda
-   * variante que "quase" faz a mesma coisa. */
+   * card e comparando com um prefixo do que foi escrito), retentando só o
+   * Enter (nunca o texto de novo) até `SEND_ENTER_MAX_ATTEMPTS`. Extraído
+   * aqui pra `send` e `notifySpawnerOfReport` usarem o MESMO mecanismo —
+   * nunca uma segunda variante que "quase" faz a mesma coisa.
+   *
+   * DESIGN-BACKLOG.md §0 (2026-09-11, relatado 2x com `codex`) — 2 achados
+   * que se somavam: (1) nada aqui esperava a TUI do CLI terminar de subir
+   * antes de digitar (corrigido acima, `waitForWriteReadiness`); (2) a
+   * confirmação (antiga `looksUnsent`, booleana) tratava "prefixo ausente
+   * da tela" como "enviado", sem distinguir de "tela ainda não desenhou
+   * nada" — durante o boot lento do `codex` isso derrubava o laço inteiro
+   * na 1ª tentativa, exatamente no caso que mais precisava das outras 3.
+   * `decideSubmitCheck` (type-and-submit-decision.ts) resolve isso com um
+   * terceiro estado ("unknown"), gated por `hasNewActivitySinceWrite` —
+   * `activityAtWrite` abaixo é o "antes" contra o qual cada tentativa
+   * compara `getCardLastActivityAt` de novo. */
   async function typeAndSubmit(target: string, text: string): Promise<void> {
+    await waitForWriteReadiness(target);
+    const activityAtWrite = callbacks.getCardLastActivityAt(target);
     callbacks.writeToCard(target, text);
     // Sticky item "send_to_card não confirma envio" (2026-09-03) — a
     // regex de placeholder sozinha só cobre UM sintoma (CLI que colapsa
@@ -898,19 +999,33 @@ export function createMessageBus(
     // Prefixo normalizado (não a linha toda: soft-wrap pode quebrar uma
     // linha longa em várias linhas de tela).
     const sentPrefix = text.trim().replace(/\s+/g, " ").slice(0, 24);
-    function looksUnsent(checkText: string): boolean {
-      if (/pasted text/i.test(checkText)) return true;
-      if (sentPrefix.length < 8) return false; // curto demais pra significar algo, evita falso positivo
-      return checkText.replace(/\s+/g, " ").includes(sentPrefix);
-    }
     for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
       await delay(SEND_ENTER_DELAY_MS);
       callbacks.writeToCard(target, "\r");
       await delay(SEND_ENTER_CONFIRM_DELAY_MS);
       const check = await readCardText(target, 8);
       // Falha de leitura (timeout, card sumiu) não é evidência de que o
-      // submit falhou — para de retentar em vez de adivinhar.
-      if (!check.ok || !looksUnsent(check.text)) break;
+      // submit falhou — para de retentar em vez de adivinhar. Único
+      // `break` fora da decisão pura — inalterado, não regride.
+      if (!check.ok) break;
+      const currentActivity = callbacks.getCardLastActivityAt(target);
+      const result = decideSubmitCheck({
+        screenText: check.text,
+        sentPrefix,
+        // Timestamp ausente (card sumiu entre o write e agora, ou um
+        // callback que não sabe responder) tratado como "houve atividade"
+        // de propósito — não é o caso que este achado existe pra cobrir
+        // (um card genuinamente sumido já morreria em `!check.ok` acima na
+        // prática, já que sem entry não há PTY pra `readCardText` ler), e
+        // travar o laço num "unknown" eterno por causa de um timestamp
+        // ausente seria pior. `typeof === "number"` (não `!== null`) de
+        // propósito — mais permissivo com qualquer valor não-numérico que
+        // apareça aqui, não só `null`.
+        hasNewActivitySinceWrite:
+          typeof activityAtWrite !== "number" || typeof currentActivity !== "number" || currentActivity > activityAtWrite,
+      });
+      if (result === "sent") break;
+      // "unsent" ou "unknown" — ambos retentam o Enter, nunca o texto.
     }
   }
 
@@ -994,8 +1109,75 @@ export function createMessageBus(
     return spawnerId;
   }
 
+  /** DESIGN-BACKLOG.md §0 "Push de report se perde em silencio quando o
+   * orquestrador READOTA um card" — a linhagem `spawned` sozinha (acima)
+   * fica cega assim que um card é readotado (briefado via `send_to_card`
+   * em vez de `spawn_agent`): nunca existiu conector `spawned` pra ele, ou
+   * o que existia sumiu num restart. `lastDirectiveFrom` é a 2ª fonte que
+   * fecha esse buraco — quem foi o ÚLTIMO card a mandar uma diretiva via
+   * `send_to_card` pra `cardId`, gravado direto abaixo (`recordDirectiveSent`,
+   * chamado pelo cmd `send`), de propósito NUNCA lido do grafo de
+   * conectores (esse já é o kind `modified` que `AUTO_CONNECT_CMDS` desenha,
+   * mas ler ELE aqui reabriria a mesma dependência de um campo que um
+   * usuário pode apagar/redesenhar à mão sem saber que está desarmando o
+   * roteamento — ver a divergência de doc do `set_connector_kind`
+   * corrigida abaixo). Em memória, de propósito: reseta a cada restart do
+   * processo main, exatamente como a linhagem de spawn efetivamente reseta
+   * nesse mesmo cenário (o achado ao vivo que motivou isto) — não há nada
+   * pra "recuperar" depois de um restart além de esperar o próximo
+   * `send_to_card` real repovoar a entrada.
+   *
+   * Precedência entre as duas fontes (`decideReportNotifyTarget`,
+   * report-notify-routing.ts, ver o comentário de topo daquele arquivo pra
+   * a rodada 2 completa) — **linhagem de spawn viva ganha sempre**,
+   * diretiva é só FALLBACK pra quando não há spawner vivo registrado.
+   * Invertido na revisão adversarial desta tarefa: a versão anterior dava
+   * preferência cega à diretiva mais recente, o que abre sequestro de
+   * notificação num board multi-agente — card A spawna W, card B qualquer
+   * manda uma mensagem pra W a meio do trabalho (uso normal, não abuso),
+   * e o report de W ia pra B, nunca pra A, que segue vivo esperando. A
+   * linhagem de spawn, quando existe e está viva, é sempre o sinal mais
+   * confiável de quem quer o report — o caso que motivou esta tarefa
+   * nunca dependia de derrubar isso: o que sumiu no restart foi o
+   * CONECTOR `spawned` em si (perda de dado), não a vivacidade do
+   * orquestrador (card 330 sobreviveu ao restart, mesmo id, sempre vivo)
+   * — então `spawnedById` cai pra `null` (não "presente mas morto") e a
+   * resolução cai pro fallback de diretiva de qualquer jeito. O que essa
+   * inversão perde, de propósito: uma troca de responsável DELIBERADA (A
+   * spawna W, depois passa a supervisão pra C, A segue vivo mas não quer
+   * mais saber) continua indo pra A enquanto A não sair e seu conector
+   * `spawned` não for tocado — sem heurística nova pra tentar adivinhar
+   * "isso foi um hand-off ou só uma mensagem". A válvula de escape já
+   * existe e não pede código novo: `set_connector_kind` (mcp-server.ts)
+   * deixa qualquer card retitular o PRÓPRIO conector como `"spawned"` —
+   * `store.ts`'s `setConnectorKind` toca `updated_at` no write, e
+   * `resolveLiveSpawner` acima já pega sempre o `spawned` mais recente —
+   * então C assumir de propósito é uma chamada de tool de distância.
+   * O caso comum (spawn, card reporta, nenhuma diretiva no meio) nunca
+   * povoa este mapa — cai direto na linhagem de spawn, sem nenhuma
+   * mudança de comportamento em nenhuma das duas rodadas. */
+  const lastDirectiveFrom = new Map<string, string>();
+
+  function recordDirectiveSent(fromCardId: string, toCardId: string) {
+    lastDirectiveFrom.set(toCardId, fromCardId);
+  }
+
+  function resolveNotifyTarget(cardId: string): string | null {
+    const spawnedById = resolveLiveSpawner(cardId);
+    const directiveFromId = lastDirectiveFrom.get(cardId) ?? null;
+    return decideReportNotifyTarget({
+      directiveFromId,
+      directiveFromAlive: directiveFromId !== null && callbacks.isCardAlive(directiveFromId),
+      spawnedById,
+      spawnedByAlive: spawnedById !== null,
+    }).targetId;
+  }
+
   function notifySpawnerOfIdleCard(cardId: string) {
-    const spawnerId = resolveLiveSpawner(cardId);
+    // Mesma resolução de 2 fontes do report (ver `resolveNotifyTarget`
+    // acima) — um card readotado também precisa avisar quem o briefou por
+    // último quando fica ocioso, não só quem o spawnou originalmente.
+    const spawnerId = resolveNotifyTarget(cardId);
     if (!spawnerId) return;
     const label = callbacks.describeCardLabel(cardId);
     callbacks.notifyIdleCard(spawnerId, label, IDLE_THRESHOLD_MS);
@@ -1010,7 +1192,8 @@ export function createMessageBus(
 
   /** Parte 2 do achado "precisamos melhorar o report" (ver o comentário de
    * `notifyCardReported` no tipo `Callbacks` acima) — mesmo caminho do
-   * idle: resolve o conector de spawn, checa vivo, avisa só com o
+   * idle: resolve pra quem empurrar (`resolveNotifyTarget`, diretiva mais
+   * recente ou conector de spawn, ambos já checados vivos), avisa só com o
    * PONTEIRO (label). Chamado pelo cmd `report` abaixo, nunca aqui
    * mesmo sozinho.
    *
@@ -1052,8 +1235,20 @@ export function createMessageBus(
    * MENSAGEM que `typeAndSubmit` entrega é fixa e curta, nunca o JSON do
    * relatório. */
   async function notifySpawnerOfReport(cardId: string) {
-    const spawnerId = resolveLiveSpawner(cardId);
-    if (!spawnerId) return;
+    // Mesma resolução de 2 fontes (ver `resolveNotifyTarget`/
+    // report-notify-routing.ts) — diretiva mais recente ganha da linhagem
+    // de spawn, cobrindo o caso de readoção sem regredir o caso comum.
+    const spawnerId = resolveNotifyTarget(cardId);
+    if (!spawnerId) {
+      // DESIGN-BACKLOG.md §0, encaminhamento 3 — a falha que motivou esta
+      // tarefa era 100% silenciosa: nem log, nem erro, só um `return`. O
+      // report em si (`upsertReport`, chamado pelo cmd `report` antes
+      // desta função) já rodou e continua acessível via `read_report` —
+      // isto é só o aviso de que NINGUÉM vai ser empurrado até lá, pra não
+      // levar uma sessão inteira pra alguém notar de novo.
+      console.warn(`[report] ${callbacks.describeCardLabel(cardId)} produziu um relatório mas não há card vivo pra empurrar (sem diretiva recente nem spawner vivo) — use read_report pra consultar manualmente.`);
+      return;
+    }
 
     // Throttle leading-edge por card que reporta — ver o comentário de
     // `REPORT_NOTIFY_MIN_INTERVAL_MS`/`lastReportNotifyAt` acima. O
@@ -1074,6 +1269,80 @@ export function createMessageBus(
     if (listTerminalCards().some((c) => c.id === spawnerId)) {
       await typeAndSubmit(spawnerId, `[de: ${label}] relatório disponível — chame read_report para ver o resultado.`);
     }
+  }
+
+  /** DESIGN-BACKLOG.md §2.1 "SINAL 2 — SAÍDA SEM RELATÓRIO" — mesma
+   * resolução de linhagem que `notifySpawnerOfReport` acima
+   * (`resolveLiveSpawner`), mesmos DOIS canais (popup de SO +
+   * `typeAndSubmit` no PTY do spawner) — só a mensagem muda, não o
+   * mecanismo, exatamente a mesma disciplina de "nunca uma 3ª variante"
+   * que motivou extrair `typeAndSubmit` do cmd `send` em primeiro lugar.
+   *
+   * Chamada por `resolveCardExit` abaixo, sempre que um card sai sem
+   * NUNCA ter chamado `report` — a MESMA condição que já derruba pra
+   * `failed` a task (se houver uma) ligada a este card: "são os MESMOS
+   * três sinais da derivação de status do quadro" (DESIGN-BACKLOG.md,
+   * "Como o orquestrador descobre que um card terminou"), os dois efeitos
+   * nascem do mesmo evento, por isso vivem lado a lado ali, não aqui
+   * dentro (esta função só cuida do AVISO; quem decide `failed` é
+   * `markTaskFailed`, já síncrono e já rodando antes desta chamar).
+   *
+   * Sem throttle — ao contrário do `report` (que um mesmo card pode
+   * disparar várias rodadas seguidas), um card só sai uma vez. Fire-and-
+   * forget: `resolveCardExit` não é `async` (chamada direto do `onExit`
+   * do pty-registry, que também não é), então nada aguarda esta promise —
+   * o pior caso de falha aqui é o aviso não chegar, nunca a marcação de
+   * `failed` deixar de acontecer (já síncrona, antes desta linha). */
+  async function notifySpawnerOfUnreportedExit(cardId: string, exitCode: number) {
+    // Mesma resolução de 2 fontes que `notifySpawnerOfReport` já usa
+    // (`resolveNotifyTarget`/report-notify-routing.ts, achado ao vivo
+    // concorrente a esta tarefa) — diretiva mais recente ganha da
+    // linhagem de spawn quando não há uma viva. Sinal 2 é irmão do sinal
+    // 1 (mesma seção do backlog, "os MESMOS três sinais"); resolver a
+    // linhagem de um jeito e do outro seria a 2ª variante que a própria
+    // `resolveNotifyTarget` foi criada pra evitar.
+    const spawnerId = resolveNotifyTarget(cardId);
+    if (!spawnerId) return;
+    const label = callbacks.describeCardLabel(cardId);
+    callbacks.notifyCardExitedWithoutReport(spawnerId, label, exitCode);
+    if (listTerminalCards().some((c) => c.id === spawnerId)) {
+      await typeAndSubmit(spawnerId, `[de: ${label}] saiu (código ${exitCode}) sem chamar report.`);
+    }
+  }
+
+  /** DESIGN-BACKLOG.md §2.1, decisão 5 — "arrastar a mão SEMPRE vale, e
+   * AVISA o agente". Diferente de `notifySpawnerOfReport`/
+   * `notifySpawnerOfUnreportedExit` acima (que resolvem a LINHAGEM de
+   * spawn pra achar quem avisar), aqui o alvo já é conhecido de saída — o
+   * próprio card vinculado à task que acabou de ser arrastada
+   * (`tasks.card_id`), não o spawner de ninguém. Mesmo mecanismo
+   * (`typeAndSubmit`) que os dois sinais acima já usam, nenhuma 3ª
+   * variante; `message` já vem pronta do renderer (task-board-model.ts's
+   * `describeHumanMove`) — este método só entrega. No-op silencioso se o
+   * card não existe mais ou não é um terminal vivo (mesma postura
+   * "aviso é best-effort, nunca bloqueia a gravação" dos outros dois —
+   * a escrita de `status`/`order` já aconteceu antes desta chamada,
+   * síncrona, em `index.ts`'s `persistTask`).
+   *
+   * ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 4, MÉDIO) — digitar
+   * texto+Enter num PTY sem saber o ESTADO do destinatário é uma
+   * superfície já problemática por si só (bug aberto no backlog, §0:
+   * "texto entregue a um card recém-spawnado fica na caixa sem
+   * submeter" — o mesmo `typeAndSubmit` não sabe se quem está do outro
+   * lado está pronto pra receber). Não é este método que conserta essa
+   * raiz — só não a piora: um card `bash` (provider real, não um kind
+   * diferente) não tem NENHUM agente do outro lado interpretando o
+   * texto — vira comando de shell de verdade, e a resposta previsível é
+   * "command not found" no meio do que quer que o card estivesse
+   * fazendo. Excluído explicitamente (mesma convenção "bash não é
+   * agente" de `countRunningAgentsOnBoard`/`cardWasExpectedToReport`) —
+   * o mínimo que este achado pediu, não uma correção geral de prontidão
+   * do destinatário (fora de escopo aqui). */
+  async function notifyHumanMovedTask(cardId: string, message: string) {
+    if (!callbacks.isCardAlive(cardId)) return;
+    const card = listTerminalCards().find((c) => c.id === cardId);
+    if (!card || card.provider === "bash") return;
+    await typeAndSubmit(cardId, message);
   }
 
   /** Sticky item "card_status idle" — polls instead of hooking `onData`
@@ -1245,6 +1514,17 @@ export function createMessageBus(
     const kind = AUTO_CONNECT_CMDS[req.cmd];
     if (kind && res.ok && "target" in req && req.target && "requesterId" in req && req.requesterId) {
       callbacks.onAutoConnect(req.requesterId, req.target, kind, deriveAutoConnectLabel(req));
+    }
+    // DESIGN-BACKLOG.md §0 "Push de report se perde em silencio quando o
+    // orquestrador READOTA um card" — grava a diretiva DIRETO aqui, nunca
+    // via o conector `modified` que `onAutoConnect` acima desenha (esse é
+    // só visual/decorativo, pode ser apagado ou re-tipado à mão sem
+    // desarmar o roteamento — ver `resolveNotifyTarget`/
+    // report-notify-routing.ts). Só `send` conta como diretiva: é o único
+    // cmd que fala com um card capaz de chamar `report` de volta —
+    // `browser_*` mira cards de navegador, que nunca reportam.
+    if (req.cmd === "send" && res.ok && req.target && req.requesterId) {
+      recordDirectiveSent(req.requesterId, req.target);
     }
     return res;
   }
@@ -1588,13 +1868,22 @@ export function createMessageBus(
       // não foi acordado desta vez — não um relatório que nunca existiu.
       // `report_json` é o mesmo `JSON.stringify` que `update_task` já faz
       // pra `result_json` (mesma convenção, não uma nova).
+      const now = Date.now();
       callbacks.upsertReport({
         card_id: req.requesterId,
         seq: stored.seq,
         report_json: JSON.stringify(stored.report),
         verdict: stored.verdict,
-        updated_at: Date.now(),
+        updated_at: now,
       });
+      // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
+      // todo `report` fecha uma RODADA de participação, tenha `verdict`
+      // ou não (`verdict: null` é "esta rodada terminou sem veredito
+      // nenhum", tão real quanto "aprovado"/"reprovado"). Choke point:
+      // este é o único lugar que grava um report vindo de fora, então é
+      // o único lugar que precisa lembrar de chamar isto — ver o
+      // comentário grande de `recordParticipationRound` no callback.
+      callbacks.recordParticipationRound(req.requesterId, stored.verdict ?? null, now);
       // Parte 2b — cada waiter carrega o próprio `afterSeq`; só resolve
       // (e sai da fila) quem esse relatório novo de fato satisfaz. Os que
       // sobram (raro — normalmente há no máximo um waiter por card)
@@ -1610,8 +1899,8 @@ export function createMessageBus(
         else pendingReportWaiters.set(req.requesterId, remaining);
       }
       // Parte 1/2 — "ja acabou, novamente você não tem informação": mesmo
-      // caminho do idle (resolve conector de spawn, checa vivo), aviso só
-      // com o ponteiro — ver `notifySpawnerOfReport` acima.
+      // caminho do idle (resolve pra quem empurrar via `resolveNotifyTarget`),
+      // aviso só com o ponteiro — ver `notifySpawnerOfReport` acima.
       await notifySpawnerOfReport(req.requesterId);
       return { ok: true, seq: stored.seq };
     }
@@ -1694,6 +1983,7 @@ export function createMessageBus(
         fallback_providers_json: req.fallbackProviders ? JSON.stringify(req.fallbackProviders) : null,
         order: null,
         suggested_order: req.suggestedOrder ?? null,
+        implicit_order: null,
         created_at: now,
         updated_at: now,
         // create_task só existe como MCP tool hoje — todo chamador é um
@@ -1787,6 +2077,27 @@ export function createMessageBus(
         return { ok: false, error: `kind must be one of context, depends, spawned, or null` };
       }
       const kind = req.kind ?? null;
+      // Guarda de autoria — RODADA 2 (card 337, "fila 85975417"):
+      // estreitada pra só se aplicar quando a escrita afeta linhagem
+      // `spawned` (setar `spawned`, ou mexer num conector que JÁ era
+      // `spawned`); qualquer outra (context/depends/null advisory) é
+      // livre — ver `connector-kind-authorization.ts` pro porquê e pro
+      // que isso destrava. Roda ANTES do write: recusar depois de gravar
+      // não recusaria nada. Mesma leitura que `resolveLiveSpawner` já faz
+      // deste conjunto, sem callback novo.
+      const endpoints = callbacks
+        .listAllConnectors()
+        .find((c) => c.id === req.connectorId);
+      // Conector inexistente responde com a MESMA mensagem (id incluso) de
+      // antes desta guarda — quem depura um id errado precisa ver qual id
+      // foi. A guarda de autoria só opina sobre conector que existe.
+      if (!endpoints) return { ok: false, error: `no such connector "${req.connectorId}"` };
+      const decision = decideConnectorKindWrite(
+        req.requesterId,
+        { fromCardId: endpoints.from_card_id, toCardId: endpoints.to_card_id, currentKind: endpoints.kind },
+        kind,
+      );
+      if (!decision.allowed) return { ok: false, error: decision.error };
       const found = callbacks.setConnectorKind(req.connectorId, kind);
       if (!found) return { ok: false, error: `no such connector "${req.connectorId}"` };
       // Ver `onConnectorKindChanged` — mesma ordem do irmão
@@ -1923,7 +2234,7 @@ export function createMessageBus(
     }
 
     if (req.cmd === "spawn_card") {
-      const validKinds: SpawnCardKind[] = ["files", "changes", "sticky", "browser", "remote-window"];
+      const validKinds: SpawnCardKind[] = ["files", "changes", "sticky", "browser", "remote-window", "task"];
       if (!req.kind || !validKinds.includes(req.kind as SpawnCardKind)) {
         return { ok: false, error: `kind must be one of ${validKinds.join(", ")}` };
       }
@@ -1938,11 +2249,21 @@ export function createMessageBus(
       if (req.anchorCardId !== undefined && !callbacks.listCards().some((c) => c.id === req.anchorCardId)) {
         return { ok: false, error: `no open card with id "${req.anchorCardId}"` };
       }
-      const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
+      const requesterBoardId = callbacks.getCardBoardId(requesterId);
+      // A task card is a singleton per board. This main-process check makes
+      // an MCP/acbridge request reuse the live queue immediately, without a
+      // needless consent dialog. The anchor is a useful fallback for a
+      // caller that names no card; the renderer repeats the guard at the
+      // actual creation point to cover two requests approved concurrently.
+      const taskBoardId = requesterBoardId ?? (req.anchorCardId ? callbacks.getCardBoardId(req.anchorCardId) : undefined);
+      if (req.kind === "task" && taskBoardId) {
+        const taskDecision = decideTaskCardSpawn(callbacks.listCardsForBoard(taskBoardId), taskBoardId);
+        if (taskDecision.action === "reuse") return { ok: true, cardId: taskDecision.cardId };
+      }
+      const requestId = randomUUID();
       // DESIGN-BACKLOG.md item 60, peça 5 — same board-scoped auto-approve
       // as `open` above.
-      const requesterBoardId = callbacks.getCardBoardId(requesterId);
       const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
       // Ideia registrada no sticky "Ideias/Brainstorm" (192), verificada e
       // aplicada 2026-09-06 — `spawn_card` de uma sticky é a MESMA classe
@@ -2014,6 +2335,41 @@ export function createMessageBus(
     pendingSpawnAgents.get(requestId)?.resolve(result);
   }
 
+  /** DESIGN-BACKLOG.md §2.1 "SINAL 2", achado de review adversarial
+   * (achado 3, MÉDIO) — a versão anterior avisava o spawner pra QUALQUER
+   * card sem report, mesmo um "card de apoio" que nunca deveria chamar
+   * `report` (um `files`/`browser` spawnado só pra olhar algo, ou um
+   * `bash` — opção real de `provider` do próprio `spawn_agent`, mas sem
+   * MCP/conceito de relatório nenhum, mesma convenção "bash não é
+   * agente" de `countRunningAgentsOnBoard`). Ruído aqui é pior que
+   * silêncio: um orquestrador que aprende a ignorar o aviso porque ele
+   * dispara sempre para de confiar nele exatamente no caso real.
+   *
+   * Qualificação escolhida — DUAS fontes independentes de "havia
+   * trabalho esperado", OR entre elas:
+   * (a) TASK VINCULADA — existe uma task (qualquer status, não só
+   *     `running`) cujo `card_id` é este card. A própria existência do
+   *     vínculo já é o sinal mais forte de que alguém esperava um
+   *     resultado estruturado dele.
+   * (b) LINHAGEM DE AGENTE — o card foi spawnado por um `spawn_agent`
+   *     bem-sucedido (`cardSpawnDepth` só é populado ali, nunca por
+   *     `spawn_card`/`open_url`/um humano abrindo um terminal à mão —
+   *     ver o comentário da própria `cardSpawnDepth`) E não é `bash`
+   *     (excluído via `getAnyCard`, que alcança um card mesmo fora do
+   *     board carregado). O contrato de `spawn_agent` pressupõe um
+   *     agente capaz de eventualmente reportar; qualquer OUTRO caminho
+   *     de criação nunca teve esse contrato.
+   *
+   * Residual conhecido, não fechado agora: se o card já foi DELETADO (não
+   * só saiu — `deleteCard`, que `getAnyCard` também não alcança mais), não
+   * há como checar o provider, e a qualificação (b) por padrão assume
+   * "não é bash" (prefere avisar de mais a silenciar um caso real). */
+  function cardWasExpectedToReport(cardId: string, linkedTask: TaskRow | undefined): boolean {
+    if (linkedTask) return true;
+    if (!cardSpawnDepth.has(cardId)) return false;
+    return callbacks.getAnyCard(cardId)?.provider !== "bash";
+  }
+
   /** DESIGN-BACKLOG.md item 58, M4 — called from pty-registry's own
    * `onExit`, unconditionally, for every card that exits (not just ones
    * with a waiter — cheap Map lookup, no-op when nothing's waiting). */
@@ -2043,8 +2399,34 @@ export function createMessageBus(
     // case — whatever it said is the real outcome, for whoever reads it
     // to call update_task, not this engine to guess.
     if (!callbacks.getReport(cardId)) {
-      const task = callbacks.listTasks().find((t) => t.card_id === cardId && t.status === "running");
-      if (task) markTaskFailed(task, `process exited (code ${exitCode}) without ever calling report`);
+      // `.find` sem filtrar por status: `cardWasExpectedToReport` (achado
+      // 3) considera QUALQUER status principal vinculado como "havia
+      // trabalho esperado"; só `markTaskFailed` abaixo continua exigindo
+      // especificamente `running` (comportamento intocado).
+      const linkedTask = callbacks.listTasks().find((t) => t.card_id === cardId);
+      if (linkedTask?.status === "running") markTaskFailed(linkedTask, `process exited (code ${exitCode}) without ever calling report`);
+      // Fechar histórico e avisar o spawner são critérios diferentes:
+      // qualquer vínculo atual em task_cards fecha a participação, inclusive
+      // um card secundário de review; apenas `cardWasExpectedToReport`
+      // qualifica o aviso de entrega ao spawner. Card de apoio sem vínculo
+      // nenhum não chama recordParticipationRound e não cria linha.
+      const taskCardLinks = callbacks.listTaskCardsForCard(cardId) ?? [];
+      if (taskCardLinks.length > 0) {
+        callbacks.recordParticipationRound(cardId, null, Date.now());
+      }
+      if (cardWasExpectedToReport(cardId, linkedTask)) {
+        // A qualificação do aviso continua separada de propósito: uma
+        // linhagem de agente pode merecer aviso mesmo sem task_cards, mas
+        // nunca cria histórico de participação por si só.
+        // Fire-and-forget — ver o doc comment de `notifySpawnerOfUnreportedExit`
+        // pro porquê de não ser `await`ado aqui. `.catch` explícito (achado
+        // de review adversarial, achado 5): uma promise solta sem handler
+        // vira `unhandledRejection` no processo inteiro se algum dia
+        // rejeitar — `typeAndSubmit`/`readCardText` hoje nunca rejeitam
+        // (resolvem sempre, até no timeout), mas essa garantia vive em
+        // OUTRO arquivo; engolir aqui é não depender dela se um dia mudar.
+        notifySpawnerOfUnreportedExit(cardId, exitCode).catch(() => {});
+      }
     }
   }
 
@@ -2733,6 +3115,7 @@ export function createMessageBus(
     resolveSpawnCard,
     resolveCardExit,
     notifyConcurrencyCapChanged,
+    notifyHumanMovedTask,
     close,
   };
 }

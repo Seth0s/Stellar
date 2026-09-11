@@ -226,6 +226,17 @@
   white-space: nowrap;
 }
 
+/* DESIGN-BACKLOG.md, achado 2 (2026-09-11) — aviso de resumeId inválido.
+ * `flex-shrink: 0`: nunca cede espaço pro cwd/resume truncarem primeiro —
+ * este é o dado mais importante da linha quando presente (o motivo de o
+ * card ter começado vazio), não um extra descartável como o resto do
+ * footer já trata "que sobrar". */
+.terminalCardResumeWarning {
+  flex-shrink: 0;
+  color: var(--danger);
+  white-space: nowrap;
+}
+
 .terminalCardUrlBadge {
   flex: none;
   display: flex;

@@ -76,6 +76,7 @@ import type {
 import { PROVIDER_EFFORT_VALUES } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
+import { decideTaskCardSpawn } from "../../task-card-guard";
 import "./app.css";
 
 // Pendentes #188 — rótulo do tooltip por `kind` de conector (só leitura
@@ -895,12 +896,14 @@ export function App() {
       // DESIGN-BACKLOG.md item 60, peça 5 — same shape as spawn_agent's
       // autoApprove above, extended to non-terminal cards.
       if (params.autoApprove) {
-        const cardId = spawnCardFor(params.kind, params.cwd, params.url, requesterId, params.anchorCardId, params.side);
+        const spawned = spawnCardFor(params.kind, params.cwd, params.url, requesterId, params.anchorCardId, params.side);
         // Achado ao vivo (2026-09-02) — mesma lacuna do open_url acima:
         // spawn_card nunca registrava lineage, só spawn_agent tinha.
         // 2026-09-09 — same `reason`-as-label reasoning as spawn_agent above.
-        if (requesterId) autoConnect(requesterId, cardId, "spawned", params.reason ? truncateConnectorLabel(params.reason) : null);
-        void window.spawn.resolveCard(requestId, { ok: true, cardId });
+        // Reusing the singleton queue is not a new spawn, so do not draw a
+        // misleading `spawned` connector to an existing card.
+        if (requesterId && !spawned.reused) autoConnect(requesterId, spawned.cardId, "spawned", params.reason ? truncateConnectorLabel(params.reason) : null);
+        void window.spawn.resolveCard(requestId, { ok: true, cardId: spawned.cardId });
         return;
       }
       setPendingAsk({
@@ -1290,6 +1293,11 @@ export function App() {
   }
 
   function addCard(card: Card) {
+    // Keep the imperative view current before React renders the queued state
+    // update. The task singleton guard can run twice in the same event turn
+    // (for example, two approvals arriving together), so waiting for the
+    // next render would leave a short duplicate-creation window.
+    cardsRef.current = [...cardsRef.current, card];
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, card.id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
@@ -1823,6 +1831,20 @@ export function App() {
    * omitted for the rail's own buttons, which keep centering on the
    * visible viewport. */
   function addCardOfKind(kind: (typeof RAIL_CREATE_ORDER)[number], at?: Point) {
+    if (kind === "task") {
+      const boardId = activeBoardIdRef.current;
+      const decision = boardId
+        ? decideTaskCardSpawn(
+            cardsRef.current.map((card) => ({ id: card.id, boardId, kind: card.kind, archivedAt: null })),
+            boardId,
+          )
+        : { action: "create" as const };
+      if (decision.action === "reuse") {
+        focusCard(decision.cardId);
+        toast("A fila deste board já existe — focando o card existente");
+        return;
+      }
+    }
     const id = String(nextId.current++);
     const rect = at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, existingRectsFor(cards));
     addCard({
@@ -2047,6 +2069,8 @@ export function App() {
   // delegates straight to openBrowserFor for identical owner-reuse
   // behavior — spawn_card's browser variant and the legacy `open` cmd
   // both end up at one real implementation, not two.
+  type SpawnCardOutcome = { cardId: string; reused: boolean };
+
   function spawnCardFor(
     kind: SpawnCardKind,
     cwd: string | undefined,
@@ -2054,7 +2078,17 @@ export function App() {
     requesterId: string | null,
     anchorCardId?: string,
     side?: AnchorSide,
-  ): string {
+  ): SpawnCardOutcome {
+    if (kind === "task") {
+      const boardId = activeBoardIdRef.current;
+      const decision = boardId
+        ? decideTaskCardSpawn(
+            cardsRef.current.map((card) => ({ id: card.id, boardId, kind: card.kind, archivedAt: null })),
+            boardId,
+          )
+        : { action: "create" as const };
+      if (decision.action === "reuse") return { cardId: decision.cardId, reused: true };
+    }
     // Pendentes #188 ("spawn_card por coordenadas") — anchorCardId's
     // existence was already validated by message-bus.ts against the live
     // card list; a card that closed in the gap between that check and this
@@ -2066,7 +2100,7 @@ export function App() {
     // 09-09 fix: um card ancorado nascia colado no pai mesmo quando esse
     // ponto já estava ocupado por outro card).
     const anchoredBase = anchor && side ? anchoredSlot(anchor.rect, side) : undefined;
-    if (kind === "browser") return openBrowserFor(requesterId, url || "about:blank", anchoredBase);
+    if (kind === "browser") return { cardId: openBrowserFor(requesterId, url || "about:blank", anchoredBase), reused: false };
     const id = String(nextId.current++);
     const existingRects = existingRectsFor(cardsRef.current);
     const rect = anchoredBase
@@ -2080,7 +2114,7 @@ export function App() {
       label: null,
     } as Card;
     addCard(card);
-    return id;
+    return { cardId: id, reused: false };
   }
 
   function allowAsk() {
@@ -2101,9 +2135,9 @@ export function App() {
       if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
     } else if (ask.kind === "spawn-card") {
-      const cardId = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId, ask.anchorCardId, ask.side);
-      if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
-      void window.spawn.resolveCard(ask.requestId, { ok: true, cardId });
+      const spawned = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId, ask.anchorCardId, ask.side);
+      if (ask.requesterId && !spawned.reused) autoConnect(ask.requesterId, spawned.cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
+      void window.spawn.resolveCard(ask.requestId, { ok: true, cardId: spawned.cardId });
     } else {
       // "close-card" — see `beginCloseAnimation`'s own note in the
       // autonomous auto-approve branch above for why this skips
@@ -3256,7 +3290,7 @@ export function App() {
                 activeBoardId={activeBoardId ?? ""}
                 boardNames={boardNames}
                 taskCountsByBoard={taskCountsByBoard}
-                onSwitchBoard={switchBoard}
+                onGoHome={goHome}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}

@@ -1,7 +1,9 @@
 import { open, readdir, readFile, stat } from "node:fs/promises";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import type { ResumeTargetEvidence } from "./session-resume-validation";
 
 const POLL_MS = 1500;
 const TIMEOUT_MS = 30_000;
@@ -12,9 +14,76 @@ const TIMEOUT_MS = 30_000;
 // TIMEOUT_MS de 30s compartilhado por todo provider, então o watcher sempre
 // desistia antes do Codex escrever o índice — `resumeId` ficava `null` pra
 // sempre e o próximo launch simplesmente abria uma sessão nova vazia
-// (indistinguível de "falhou a restaurar"). Claude/Cursor gravam quase
-// instantaneamente (~2s) — 30s continua certo pra eles.
+// (indistinguível de "falhou a restaurar"). Cursor grava quase
+// instantaneamente (~2s) — 30s continua certo pra ele.
+//
+// CORREÇÃO (2026-09-11, investigação do achado 1 abaixo) — "Claude...
+// grava quase instantaneamente" acima estava ERRADO, nunca tinha sido
+// medido contra o CLI real: `claude` deixado ocioso por 40s (pty real,
+// env limpo de CLAUDE_CODE_*/CLAUDECODE/CLAUDE_PID/CLAUDE_EFFORT/AI_AGENT
+// como `pty-registry.ts::isInheritedClaudeSessionEnvKey` já faz — sem
+// isso o processo filho herda `CLAUDE_CODE_CHILD_SESSION` de QUEM RODOU O
+// TESTE e desliga "transcript saving" sozinho, invalidando a medição) não
+// cria arquivo NENHUM em `~/.claude/projects/<slug>/` — nem um stub. O
+// primeiro byte só sai ~0.1s DEPOIS do primeiro prompt ser submetido, não
+// perto do spawn. `opencode` tem o mesmo padrão (zero linha na tabela
+// `session` até o submit). Ver `REARM_ON_INPUT_PROVIDERS` logo abaixo,
+// que essa medição levou a corrigir.
 const CODEX_TIMEOUT_MS = 6 * 60_000;
+
+/**
+ * Review adversarial (2026-09-11), achado 1 (o mais grave) — estender
+ * `REARM_ON_INPUT_PROVIDERS` para claude/opencode (logo abaixo) fecha o
+ * achado 1 original, mas PIORA a corrida que a própria investigação já
+ * tinha provado existir (10/10 rodadas, script isolado fora do board):
+ * `claimedSessionIds` impede RECLAIM do mesmo id por dois watchers, mas
+ * não amarra arquivo nenhum ao PTY que o escreveu — atribuição é "primeiro
+ * watcher a ver". Antes desta rodada, a janela de um card "faminto" (sem
+ * sessão ainda) era fixa: `TIMEOUT_MS` a partir do SPAWN, e morria de vez.
+ * Com rearm-on-input, a janela se RENOVA a cada linha de input — um card A
+ * que recebe input aos 40s e cujo arquivo demora/falha continua com
+ * watcher vivo indefinidamente, pronto pra sequestrar o arquivo que um
+ * card B, mesmo cwd, cria ao receber SEU PRÓPRIO input aos 50s.
+ *
+ * Fix: a medição desta mesma investigação já deu a evidência de posse que
+ * faltava — o arquivo nasce ~0.13s (claude) / ~70ms (opencode) DEPOIS do
+ * input real ser processado, não em qualquer ponto de uma janela de 30s.
+ * Isso é um vínculo TEMPORAL forte entre "um candidato apareceu" e "QUAL
+ * card acabou de receber input". `MATCH_GRACE_MS` é esse vínculo: quando
+ * um watcher é REARMADO por uma linha de input real (nunca no watch
+ * inicial do spawn — ver `rearmSessionWatch`/`write` em `pty-registry.ts`),
+ * um candidato só é aceito se `mtime` cair dentro de
+ * `[floor, momento-deste-rearm + MATCH_GRACE_MS]`, não em qualquer ponto
+ * até o `TIMEOUT_MS` inteiro. Generoso o bastante acima da latência
+ * medida (75×+ pro pior caso, opencode) pra tolerar uma máquina mais lenta
+ * sem virar falso negativo, mas reduz o antigo "qualquer ponto numa janela
+ * de 30s renovada pra sempre" pra "poucos segundos depois do MEU último
+ * input real" — encolhe a corrida por ordens de grandeza, não a elimina
+ * (dois cards recebendo input a menos de `MATCH_GRACE_MS` um do outro, no
+ * mesmo cwd, ainda podem colidir — residual, documentado, não escondido).
+ * Ancorado no momento do REARM (não no `floor`, que RODADA 7 pode manter
+ * pinado por várias linhas seguidas enquanto um watcher já está em voo —
+ * ver o histórico de `scanFloorMs` em `pty-registry.ts`) porque só assim
+ * uma sequência de rearms ao longo de um período longo continua
+ * estendendo a tolerância a partir da atividade mais recente de verdade,
+ * em vez de travar num prazo calculado a partir de uma linha antiga.
+ * `cursor`/`codex` não usam isto — não estão em `REARM_ON_INPUT_PROVIDERS`
+ * e não têm a janela que se renove, então não ganham a exposição nova que
+ * este mecanismo existe pra fechar.
+ */
+export const MATCH_GRACE_MS = 10_000;
+
+/** Pura, testável (mesmo precedente de `decideRearmOnLine`/
+ * `decideResumeValidity`): um candidato é "fresco" se seu `mtime` for mais
+ * novo que o piso E (quando um prazo de correspondência foi passado — só
+ * acontece num watcher rearmado por input real, nunca no watch inicial do
+ * spawn) não mais novo que esse prazo. `matchDeadlineMs` `undefined`
+ * preserva o comportamento de sempre (sem teto, só o piso). */
+export function isFreshCandidate(mtimeMs: number, floorMs: number, matchDeadlineMs?: number): boolean {
+  if (mtimeMs <= floorMs) return false;
+  if (matchDeadlineMs !== undefined && mtimeMs > matchDeadlineMs) return false;
+  return true;
+}
 
 /**
  * DESIGN-BACKLOG.md item 57, ponto 5 — real bug, confirmed live: two
@@ -67,6 +136,83 @@ const CODEX_TIMEOUT_MS = 6 * 60_000;
  * liberar só derruba a proteção quando o ÚLTIMO detentor solta o id.
  */
 const claimedSessionIds = new Map<string, number>();
+
+type SessionCandidate = {
+  id: string;
+  /**
+   * The provider's best cheap timestamp for the candidate's first visible
+   * write. Files use mtime, cursor uses meta.createdAtMs, and opencode uses
+   * session.time_created (not a later turn's time_updated). Codex never enters the rearm path, so its index
+   * candidates do not need a timestamp here.
+   */
+  timestampMs?: number;
+};
+
+type RearmReservation = {
+  ownerId: string;
+  rearmAtMs: number;
+  matchStartMs: number;
+  matchDeadlineMs: number;
+};
+
+/**
+ * One card's watcher must not win merely because it polls first. There is no
+ * provider-independent session-to-PTY id in these on-disk stores, but a
+ * rearm gives us two cheap pieces of ownership evidence: the card id and the
+ * input timestamp that caused the rearm. Keep those reservations by
+ * provider+cwd so a candidate created after two nearby inputs is awarded to
+ * the most recent input, while a candidate created before the newer input is
+ * still available to the earlier watcher. A reservation is removed when its
+ * watcher is cancelled, finds a session, or times out.
+ */
+const rearmReservations = new Map<string, Map<string, RearmReservation>>();
+
+function reservationScope(providerId: string, cwd: string): string {
+  return `${providerId}\u0000${cwd}`;
+}
+
+function registerRearmReservation(
+  providerId: string,
+  cwd: string,
+  reservation: RearmReservation,
+): () => void {
+  const scope = reservationScope(providerId, cwd);
+  let reservations = rearmReservations.get(scope);
+  if (!reservations) {
+    reservations = new Map();
+    rearmReservations.set(scope, reservations);
+  }
+  reservations.set(reservation.ownerId, reservation);
+  return () => {
+    if (reservations?.get(reservation.ownerId) !== reservation) return;
+    reservations.delete(reservation.ownerId);
+    if (reservations.size === 0) rearmReservations.delete(scope);
+  };
+}
+
+function canClaimRearmedCandidate(providerId: string, cwd: string, candidate: SessionCandidate, ownerId?: string): boolean {
+  // A rearm reservation is only meaningful for providers whose candidate has
+  // a creation/update timestamp. The only provider without one (codex) never
+  // enters this path, but keeping the fallback makes the helper conservative
+  // if another index-backed provider is added later.
+  if (!ownerId || candidate.timestampMs === undefined) return true;
+  const reservations = rearmReservations.get(reservationScope(providerId, cwd));
+  if (!reservations) return true;
+
+  let newestMatchingReservation: RearmReservation | null = null;
+  for (const reservation of reservations.values()) {
+    // A candidate that predates a later input cannot belong to that later
+    // input. The deadline is included for clarity and protects this helper
+    // if a caller ever supplies a candidate outside its own find* filter.
+    if (candidate.timestampMs <= reservation.matchStartMs || candidate.timestampMs > reservation.matchDeadlineMs) {
+      continue;
+    }
+    if (!newestMatchingReservation || reservation.rearmAtMs > newestMatchingReservation.rearmAtMs) {
+      newestMatchingReservation = reservation;
+    }
+  }
+  return newestMatchingReservation === null || newestMatchingReservation.ownerId === ownerId;
+}
 
 /**
  * Achado ao vivo (2026-09-07) — 3 cards Claude diferentes exibindo o MESMO
@@ -161,9 +307,44 @@ export const RESUME_TRIGGER_COMMANDS: Partial<Record<string, string>> = {
  * exact same input-buffering/line-detection machinery
  * `RESUME_TRIGGER_COMMANDS` already established, just triggering on any
  * completed line instead of one specific trigger phrase. This list says
- * which providers want that "rearm on input" behavior — just antigravity
- * for now; every other provider's session file already appears close
- * enough to spawn time that a rearm would add nothing.
+ * which providers want that "rearm on input" behavior — originally just
+ * antigravity, on the ASSUMED premise that every other provider's session
+ * file already appears close enough to spawn time that a rearm would add
+ * nothing.
+ *
+ * CORREÇÃO (2026-09-11) — essa premissa nunca tinha sido testada contra
+ * um CLI real, e caiu: DESIGN-BACKLOG.md's "resume_id nao sobrevive ao
+ * restart" achado 1, relatado ao vivo pelo dono do repo, listava 3 cards
+ * `claude` reais (321/323/325/327, spawnados via `spawn_agent` e
+ * briefados só depois via `send_to_card` — exatamente o padrão
+ * "spawnado-e-deixado-ocioso" que a RODADA 2 já tinha documentado pro
+ * antigravity) com `resume_id` NULL depois de trabalharem a noite
+ * inteira. Medido ao vivo (pty real via `pty.fork`, env limpo dos mesmos
+ * `CLAUDE_CODE_*`/`CLAUDECODE`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`
+ * que `pty-registry.ts::isInheritedClaudeSessionEnvKey` já remove antes
+ * de todo spawn real — sem isso o processo filho herda
+ * `CLAUDE_CODE_CHILD_SESSION` de quem RODOU o teste e desliga "transcript
+ * saving" sozinho, invalidando a medição):
+ *   - `claude`: 40s de idle puro (dialog de trust já dispensado) não
+ *     cria NENHUM arquivo em `~/.claude/projects/<slug>/` — nem um stub.
+ *     Um prompt de verdade cria o primeiro arquivo em ~0.1s depois do
+ *     submit, não do spawn. Ou seja, o arquivo nasce no SUBMIT, e este
+ *     provider tem exatamente o mesmo problema que o antigravity: um
+ *     card spawnado e briefado só depois pode facilmente passar de
+ *     `TIMEOUT_MS` (30s) antes do primeiro prompt sequer existir.
+ *   - `opencode`: mesmo padrão — 15s de idle sem NENHUMA linha nova na
+ *     tabela `session` de `~/.local/share/opencode/opencode.db`; a linha
+ *     só aparece ~70ms depois de um prompt real ser enviado. Estava
+ *     ausente desta lista E de `RESUME_TRIGGER_COMMANDS` — pior cobertura
+ *     que claude, que ao menos tinha o gancho explícito de `/resume`.
+ *   - `cursor`: confirmado SEGURO como estava — `meta.json` com o `cwd`
+ *     certo aparece ~0.7s depois de confirmar o dialog de "workspace
+ *     trust", ANTES de qualquer prompt. Continua fora desta lista.
+ * `codex` fica de fora também, mas por razão distinta: já tem
+ * `CODEX_TIMEOUT_MS` (6min) cobrindo a mesma classe de atraso (medido:
+ * 36s–211s pra escrever o índice) — funciona hoje, mas é "esperar mais"
+ * em vez de rearm-on-input; se o pior caso já medido crescer, vale
+ * reconsiderar. `bash` nunca teve conceito de sessão, fora de cogitação.
  *
  * RODADA 3 (review adversarial, 2026-09-09), achado 1 — a first pass
  * here rearmed only on the FIRST such line (once per card, guarded by a
@@ -183,7 +364,7 @@ export const RESUME_TRIGGER_COMMANDS: Partial<Record<string, string>> = {
  * detecting the precise submit moment, just keeping the window's start
  * honest relative to real activity instead of a spawn-time guess.
  */
-export const REARM_ON_INPUT_PROVIDERS: readonly string[] = ["antigravity"];
+export const REARM_ON_INPUT_PROVIDERS: readonly string[] = ["antigravity", "claude", "opencode"];
 
 let claimQueue: Promise<unknown> = Promise.resolve();
 /** Serializa a seção crítica (achar candidato + `claimSessionId`)
@@ -203,7 +384,7 @@ function encodeCwdForClaude(cwd: string): string {
   return cwd.replace(/\//g, "-");
 }
 
-async function findClaudeSession(cwd: string, spawnedAtMs: number): Promise<string | null> {
+async function findClaudeSession(cwd: string, spawnedAtMs: number, matchDeadlineMs?: number): Promise<SessionCandidate | null> {
   const dir = join(homedir(), ".claude", "projects", encodeCwdForClaude(cwd));
   let entries: string[];
   try {
@@ -218,26 +399,26 @@ async function findClaudeSession(cwd: string, spawnedAtMs: number): Promise<stri
     if (claimedSessionIds.has(id)) continue;
     const full = join(dir, name);
     const st = await stat(full).catch(() => null);
-    if (!st || st.mtimeMs <= spawnedAtMs) continue;
+    if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs, matchDeadlineMs)) continue;
     if (!best || st.mtimeMs > best.mtimeMs) {
       best = { id, mtimeMs: st.mtimeMs };
     }
   }
-  return best?.id ?? null;
+  return best ? { id: best.id, timestampMs: best.mtimeMs } : null;
 }
 
 // Codex's session_index.jsonl is append-only — track byte offset at spawn
 // time and only parse what's new, per watcher (module-level, keyed by cwd
 // isn't needed: each watcher tracks its own offset independently).
-async function findCodexSession(sinceOffset: number): Promise<{ id: string | null; newOffset: number }> {
+async function findCodexSession(sinceOffset: number): Promise<{ candidate: SessionCandidate | null; newOffset: number }> {
   const file = join(homedir(), ".codex", "session_index.jsonl");
   let content: string;
   try {
     content = await readFile(file, "utf8");
   } catch {
-    return { id: null, newOffset: sinceOffset };
+    return { candidate: null, newOffset: sinceOffset };
   }
-  if (content.length <= sinceOffset) return { id: null, newOffset: content.length };
+  if (content.length <= sinceOffset) return { candidate: null, newOffset: content.length };
   const added = content.slice(sinceOffset);
   const lines = added.split("\n").filter((l) => l.trim());
   let id: string | null = null;
@@ -249,10 +430,10 @@ async function findCodexSession(sinceOffset: number): Promise<{ id: string | nul
       // partial line (file mid-write) — ignore, next poll will re-read it whole.
     }
   }
-  return { id, newOffset: content.length };
+  return { candidate: id ? { id } : null, newOffset: content.length };
 }
 
-async function findCursorSession(cwd: string, spawnedAtMs: number): Promise<string | null> {
+async function findCursorSession(cwd: string, spawnedAtMs: number, matchDeadlineMs?: number): Promise<SessionCandidate | null> {
   const chatsDir = join(homedir(), ".cursor", "chats");
   let hashDirs: string[];
   try {
@@ -278,16 +459,20 @@ async function findCursorSession(cwd: string, spawnedAtMs: number): Promise<stri
       } catch {
         continue;
       }
-      if (meta.cwd !== cwd || typeof meta.createdAtMs !== "number" || meta.createdAtMs <= spawnedAtMs) continue;
+      if (
+        meta.cwd !== cwd ||
+        typeof meta.createdAtMs !== "number" ||
+        !isFreshCandidate(meta.createdAtMs, spawnedAtMs, matchDeadlineMs)
+      ) continue;
       if (!best || meta.createdAtMs > best.createdAtMs) {
         best = { id: sessionId, createdAtMs: meta.createdAtMs };
       }
     }
   }
-  return best?.id ?? null;
+  return best ? { id: best.id, timestampMs: best.createdAtMs } : null;
 }
 
-async function findOpenCodeSession(cwd: string, spawnedAtMs: number): Promise<string | null> {
+async function findOpenCodeSession(cwd: string, spawnedAtMs: number, matchDeadlineMs?: number): Promise<SessionCandidate | null> {
   // opencode (sst/opencode, see providers.ts) keeps its own sessions in a
   // real sqlite db (`~/.local/share/opencode/opencode.db`, `session` table
   // — schema confirmed live on this machine via `PRAGMA table_info`), not
@@ -301,17 +486,214 @@ async function findOpenCodeSession(cwd: string, spawnedAtMs: number): Promise<st
     return null;
   }
   try {
+    // `time_created`, not `time_updated`: an old session receiving a later
+    // turn is not evidence that this newly rearmed card created it.
     const rows = db
-      .prepare("SELECT id, time_updated FROM session WHERE directory = ? AND time_updated > ? ORDER BY time_updated DESC")
-      .all(cwd, spawnedAtMs) as { id: string; time_updated: number }[];
+      .prepare("SELECT id, time_created FROM session WHERE directory = ? AND time_created > ? ORDER BY time_created DESC")
+      .all(cwd, spawnedAtMs) as { id: string; time_created: number }[];
     for (const row of rows) {
-      if (!claimedSessionIds.has(row.id)) return row.id;
+      if (!claimedSessionIds.has(row.id) && isFreshCandidate(row.time_created, spawnedAtMs, matchDeadlineMs)) {
+        return { id: row.id, timestampMs: row.time_created };
+      }
     }
     return null;
   } catch {
     return null;
   } finally {
     db.close();
+  }
+}
+
+/**
+ * DESIGN-BACKLOG.md, achado 2 (2026-09-11) — encaminhamento 3: validação na
+ * LEITURA, antes de honrar um `resumeId` restaurado (`pty-registry.ts`'s
+ * `spawn`, quando `spawnOpts.resumeId` já vem preenchido do DB). Cada
+ * provider guarda sessão num formato/lugar diferente — este é o único
+ * módulo que já precisa conhecer esses layouts (mesma razão dos `find*`
+ * acima), então a leitura de evidência mora aqui; a DECISÃO pura fica em
+ * `session-resume-validation.ts` (mesmo split que `decideRearmOnLine` já
+ * estabeleceu — I/O de um lado, lógica testável do outro).
+ *
+ * Síncrono de propósito: `pty-registry.ts::spawn` monta os argumentos do
+ * CLI (incluindo `--resume <id>`) e chama `pty.spawn` de forma síncrona;
+ * validar antes precisa terminar antes dessa decisão, e um `stat`/leitura
+ * de índice é barato o bastante (uma vez por spawn, nunca num loop) pra
+ * não justificar reestruturar `spawn` inteiro em async só por isto.
+ *
+ * `hasContent` por provider (guarda de sanidade, NÃO a definição de
+ * "turno completo" do encaminhamento 2 — ver o próprio doc comment de
+ * `decideResumeValidity`). Duas rodadas de review adversarial (2026-09-11)
+ * já provaram furos em versões anteriores desta lista — ver os doc
+ * comments de `findCursorSessionEvidence` e `findOpenCodeSessionEvidence`
+ * pra cada achado específico:
+ *   - claude/antigravity: tamanho do arquivo de sessão. `MIN_CONTENT_BYTES`
+ *     é deliberadamente minúsculo (bem abaixo do menor stub real medido —
+ *     ~268 bytes pro primeiro write do claude) — o objetivo aqui é só
+ *     pegar "não existe conteúdo nenhum" (0 bytes / arquivo truncado),
+ *     nunca arriscar marcar uma conversa real e curta como inválida.
+ *   - cursor: EXISTÊNCIA de `store.db` dentro do diretório da sessão (não
+ *     mais um limiar de bytes — uma versão anterior comparava a soma do
+ *     diretório com `MIN_CONTENT_BYTES`, mas até uma sessão vazia real já
+ *     tem 138-169 bytes só de `meta.json`, sempre acima do limiar: a
+ *     checagem nunca reprovava nada).
+ *   - opencode: pelo menos uma linha na tabela `message` pra este
+ *     `session_id` (não mais `tokens_input`/`tokens_output`/`cost` da
+ *     própria linha — uma versão anterior usava isso, mas essas colunas
+ *     continuam zeradas até o FIM do turno, então um prompt real cujo
+ *     processo morre antes da resposta terminar era descartado como
+ *     "vazio", perdendo conteúdo de verdade).
+ *   - codex: melhor esforço, mais fraco que os outros de propósito
+ *     assumido — o conteúdo real do rollout não foi localizado nesta
+ *     investigação (só o índice `session_index.jsonl`, que não carrega
+ *     nenhum sinal de tamanho/atividade). `exists` aqui só confirma que o
+ *     id aparece no índice; `hasContent` acompanha `exists` sem checagem
+ *     adicional. Não regride nada (codex nunca teve este tipo de
+ *     validação antes), mas não teve a mesma medição ao vivo que
+ *     claude/opencode/cursor tiveram — documentado, não escondido.
+ */
+const MIN_CONTENT_BYTES = 16;
+
+function fileEvidence(path: string): ResumeTargetEvidence {
+  if (!existsSync(path)) return { exists: false, hasContent: false };
+  try {
+    const size = statSync(path).size;
+    return { exists: true, hasContent: size >= MIN_CONTENT_BYTES };
+  } catch {
+    // Achado entre o `existsSync` e o `statSync` (arquivo apagado por
+    // fora bem no meio da checagem) — trata como "não existe", nunca
+    // deixa uma exceção subir e derrubar o spawn inteiro por causa de uma
+    // checagem que é só uma guarda de sanidade.
+    return { exists: false, hasContent: false };
+  }
+}
+
+function findClaudeSessionDirEvidence(cwd: string, resumeId: string): ResumeTargetEvidence {
+  const path = join(homedir(), ".claude", "projects", encodeCwdForClaude(cwd), `${resumeId}.jsonl`);
+  return fileEvidence(path);
+}
+
+function findAntigravitySessionEvidence(resumeId: string): ResumeTargetEvidence {
+  const path = join(homedir(), ".gemini", "antigravity-cli", "conversations", `${resumeId}.db`);
+  return fileEvidence(path);
+}
+
+/**
+ * Review adversarial (2026-09-11), achado 3 — a versão original somava o
+ * tamanho de TODOS os arquivos do diretório e comparava com
+ * `MIN_CONTENT_BYTES` (16). Furo provado pela PRÓPRIA medição desta
+ * investigação: uma sessão cursor vazia (nunca recebeu prompt) já tem
+ * `meta.json` sozinho com 138-169 bytes — bem acima de 16 — então a
+ * checagem sempre devolvia `hasContent: true`, pra QUALQUER sessão,
+ * fantasma ou real. Nunca reprovava nada.
+ *
+ * Investigado ao vivo (fora do board, diretórios de teste limpos depois):
+ * o conteúdo de verdade de uma conversa cursor mora em `store.db` (sqlite,
+ * modo WAL) dentro do diretório da sessão — `meta.json`/
+ * `prompt_history.json` são só metadados, sempre pequenos, presentes
+ * mesmo numa sessão nunca usada. Confirmado com 3 diretórios reais: um
+ * vazio (só `meta.json`, 138-169 bytes, sem `store.db` nenhum) e dois
+ * com conversa de verdade (ambos com `store.db` presente desde a primeira
+ * troca — uma sessão de "say hi" já tinha `store.db-wal` de 230KB). A
+ * EXISTÊNCIA de `store.db` já é um sinal binário limpo — a app cursor só
+ * cria esse arquivo quando uma conversa de fato começa, nunca no spawn da
+ * sessão vazia — então usar tamanho aqui seria reintroduzir o mesmo tipo
+ * de número mágico que acabou de provar furado, sem necessidade.
+ */
+function findCursorSessionEvidence(resumeId: string): ResumeTargetEvidence {
+  const chatsDir = join(homedir(), ".cursor", "chats");
+  let hashDirs: string[];
+  try {
+    hashDirs = readdirSync(chatsDir);
+  } catch {
+    return { exists: false, hasContent: false };
+  }
+  for (const hash of hashDirs) {
+    const sessionDir = join(chatsDir, hash, resumeId);
+    if (!existsSync(sessionDir)) continue;
+    return { exists: true, hasContent: existsSync(join(sessionDir, "store.db")) };
+  }
+  return { exists: false, hasContent: false };
+}
+
+/**
+ * Review adversarial (2026-09-11), achado 2 (falso negativo, o pior tipo)
+ * — a versão original usava `tokens_input > 0 || tokens_output > 0 ||
+ * cost > 0` da própria linha de `session`. Furo real, reproduzido ao vivo
+ * (opencode de verdade, cwd de teste, fora do board): usuário manda um
+ * prompt e o processo morre (kill) ANTES do modelo terminar de responder
+ * — a linha em `session` nasce com `tokens_input=0, tokens_output=0,
+ * cost=0.0` (medido: essas três colunas continuam zeradas mesmo depois de
+ * uma mensagem de usuário real já estar gravada) porque opencode só
+ * atualiza uso/custo no FIM do turno, não incrementalmente. A checagem
+ * antiga descartaria essa sessão como vazia — perda de contexto real, ou
+ * seja, exatamente o dano que o encaminhamento 3 existe pra evitar, só
+ * que causado pela própria validação.
+ *
+ * Fix: `message` é uma tabela separada (`session_id` FK), com uma linha
+ * por turno — confirmado ao vivo que a linha do usuário já existe ali no
+ * mesmo instante em que a sessão nasce, antes de qualquer resposta do
+ * modelo. Existência de PELO MENOS UMA linha em `message` é sinal direto
+ * de "teve conteúdo real", sem depender de uso/custo terem sido
+ * contabilizados.
+ */
+function findOpenCodeSessionEvidence(resumeId: string): ResumeTargetEvidence {
+  const dbPath = join(homedir(), ".local", "share", "opencode", "opencode.db");
+  let db: Database.Database;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  } catch {
+    return { exists: false, hasContent: false };
+  }
+  try {
+    const session = db.prepare("SELECT id FROM session WHERE id = ?").get(resumeId) as { id: string } | undefined;
+    if (!session) return { exists: false, hasContent: false };
+    const messageCount = db.prepare("SELECT COUNT(*) as n FROM message WHERE session_id = ?").get(resumeId) as { n: number };
+    return { exists: true, hasContent: messageCount.n > 0 };
+  } catch {
+    return { exists: false, hasContent: false };
+  } finally {
+    db.close();
+  }
+}
+
+function findCodexSessionEvidence(resumeId: string): ResumeTargetEvidence {
+  const file = join(homedir(), ".codex", "session_index.jsonl");
+  let content: string;
+  try {
+    content = readFileSync(file, "utf8");
+  } catch {
+    return { exists: false, hasContent: false };
+  }
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.id === resumeId) return { exists: true, hasContent: true };
+    } catch {
+      // linha parcial (índice sendo escrito nesse instante) — ignora.
+    }
+  }
+  return { exists: false, hasContent: false };
+}
+
+/** Ponto único chamado por `pty-registry.ts::spawn` antes de honrar um
+ * `resumeId` restaurado. Providers sem conceito de sessão (`bash`) nunca
+ * chegam aqui — o chamador já filtra por isso, mesmo critério de
+ * `watchForSession` abaixo. */
+export function getResumeTargetEvidence(providerId: string, cwd: string, resumeId: string): ResumeTargetEvidence {
+  switch (providerId) {
+    case "claude":
+      return findClaudeSessionDirEvidence(cwd, resumeId);
+    case "antigravity":
+      return findAntigravitySessionEvidence(resumeId);
+    case "cursor":
+      return findCursorSessionEvidence(resumeId);
+    case "opencode":
+      return findOpenCodeSessionEvidence(resumeId);
+    case "codex":
+      return findCodexSessionEvidence(resumeId);
+    default:
+      return { exists: false, hasContent: false };
   }
 }
 
@@ -393,7 +775,7 @@ async function extractAntigravityWorkspaceUri(filePath: string): Promise<string 
 // está de fato prestes a escrever algo, em vez de adivinhar quanto tempo
 // um card vai ficar ocioso.
 
-async function findAntigravitySession(cwd: string, spawnedAtMs: number): Promise<string | null> {
+async function findAntigravitySession(cwd: string, spawnedAtMs: number, matchDeadlineMs?: number): Promise<SessionCandidate | null> {
   const dir = join(homedir(), ".gemini", "antigravity-cli", "conversations");
   let entries: string[];
   try {
@@ -409,13 +791,13 @@ async function findAntigravitySession(cwd: string, spawnedAtMs: number): Promise
     if (claimedSessionIds.has(id)) continue;
     const full = join(dir, name);
     const st = await stat(full).catch(() => null);
-    if (!st || st.mtimeMs <= spawnedAtMs) continue;
+    if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs, matchDeadlineMs)) continue;
     if (best && st.mtimeMs <= best.mtimeMs) continue;
     const workspaceUri = await extractAntigravityWorkspaceUri(full);
     if (workspaceUri !== cwdUri) continue;
     best = { id, mtimeMs: st.mtimeMs };
   }
-  return best?.id ?? null;
+  return best ? { id: best.id, timestampMs: best.mtimeMs } : null;
 }
 
 /**
@@ -449,6 +831,14 @@ export function watchForSession(
   spawnedAtMs: number,
   onFound: (sessionId: string) => void,
   onTimeout?: () => void,
+  options: {
+    /** Card/PTY identity used only for the rearm ownership reservation. */
+    ownerId?: string;
+    /** Exact input timestamp that caused this rearm. */
+    rearmAtMs?: number;
+    /** Ownership lower bound; distinct from the candidate scan floor. */
+    matchStartMs?: number;
+  } = {},
 ): () => void {
   if (
     providerId !== "claude" &&
@@ -463,6 +853,17 @@ export function watchForSession(
   let stopped = false;
   let codexOffset = 0;
   let codexOffsetReady = false;
+  const matchStartMs = options.matchStartMs ?? options.rearmAtMs ?? spawnedAtMs;
+  const matchDeadlineMs = options.rearmAtMs === undefined ? undefined : options.rearmAtMs + MATCH_GRACE_MS;
+  const releaseReservation =
+    options.ownerId !== undefined && options.rearmAtMs !== undefined
+      ? registerRearmReservation(providerId, cwd, {
+          ownerId: options.ownerId,
+          rearmAtMs: options.rearmAtMs,
+          matchStartMs,
+          matchDeadlineMs: options.rearmAtMs + MATCH_GRACE_MS,
+        })
+      : () => {};
   // Establish the starting offset before the first poll so we only ever
   // look at bytes appended after this watcher started — set once, then
   // `findCodexSession` advances it every subsequent tick.
@@ -482,8 +883,10 @@ export function watchForSession(
       // `stat` interleavam podiam computar o mesmo "best" antes de
       // qualquer um dos dois chamar `claimSessionId`.
       const found = await runExclusive(async () => {
+        if (stopped) return null;
+        let candidate: SessionCandidate | null;
         if (providerId === "claude") {
-          return findClaudeSession(cwd, spawnedAtMs);
+          candidate = await findClaudeSession(cwd, spawnedAtMs, matchDeadlineMs);
         } else if (providerId === "codex") {
           if (!codexOffsetReady) {
             codexOffset = await initCodexOffset;
@@ -491,15 +894,25 @@ export function watchForSession(
           }
           const result = await findCodexSession(codexOffset);
           codexOffset = result.newOffset;
-          return result.id;
+          candidate = result.candidate;
         } else if (providerId === "cursor") {
-          return findCursorSession(cwd, spawnedAtMs);
+          candidate = await findCursorSession(cwd, spawnedAtMs, matchDeadlineMs);
         } else if (providerId === "antigravity") {
-          return findAntigravitySession(cwd, spawnedAtMs);
+          candidate = await findAntigravitySession(cwd, spawnedAtMs, matchDeadlineMs);
         } else if (providerId === "opencode") {
-          return findOpenCodeSession(cwd, spawnedAtMs);
+          candidate = await findOpenCodeSession(cwd, spawnedAtMs, matchDeadlineMs);
+        } else {
+          candidate = null;
         }
-        return null;
+        if (stopped || !candidate || !canClaimRearmedCandidate(providerId, cwd, candidate, options.ownerId)) {
+          return null;
+        }
+        // Claim inside the shared critical section, immediately after the
+        // ownership arbitration. This closes the old poller-vs-poller gap:
+        // no second watcher can read the same candidate and pass its own
+        // `claimedSessionIds` check before this watcher marks it claimed.
+        claimSessionId(candidate.id);
+        return candidate.id;
       });
       // RODADA 8 (2026-09-10), achado 1 — `stopped` só era checado ANTES
       // do `await runExclusive(...)` acima, no topo deste tick. Se
@@ -516,17 +929,23 @@ export function watchForSession(
       // de atribuir ali, e reportando uma sessão pro card com a Entry já
       // corrompida. Recheca aqui, depois do único `await` desta seção
       // crítica, antes de tocar em qualquer estado compartilhado.
-      if (stopped) return;
+      if (stopped) {
+        // `stop()` may run in the tiny gap after the critical section
+        // returned. The claim was made atomically there, so release it if
+        // this cancelled watcher must not commit the result.
+        if (found) releaseSessionId(found);
+        return;
+      }
       if (found) {
-        // Claim synchronously, before anything else runs — the narrow
-        // remaining race is two watchers' own filesystem reads
-        // interleaving (see claimedSessionIds' doc comment); this at
-        // least closes the much wider window of "already claimed, but a
-        // later watcher hasn't polled again yet to see that."
-        claimSessionId(found);
+        // The remaining ambiguity is provider storage that only exposes a
+        // coarse/updated timestamp (an old session can be appended to
+        // during the grace interval); there is no portable PTY id in those
+        // stores. The temporal reservation is the strongest cheap evidence
+        // available and is deliberately conservative about that residual.
         stopped = true;
         clearInterval(timer);
         clearTimeout(timeout);
+        releaseReservation();
         onFound(found);
       }
     } catch {
@@ -538,6 +957,7 @@ export function watchForSession(
     () => {
       stopped = true;
       clearInterval(timer);
+      releaseReservation();
       onTimeout?.();
     },
     providerId === "codex" ? CODEX_TIMEOUT_MS : TIMEOUT_MS,
@@ -547,5 +967,6 @@ export function watchForSession(
     stopped = true;
     clearInterval(timer);
     clearTimeout(timeout);
+    releaseReservation();
   };
 }

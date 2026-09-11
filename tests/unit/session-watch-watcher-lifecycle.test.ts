@@ -164,3 +164,67 @@ describe("watchForSession — RODADA 7/8, achado 3 (mecanismo): onTimeout dispar
     expect(onFound).not.toHaveBeenCalled();
   });
 });
+
+describe("watchForSession — atribuição temporal de rearms", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("entrega um candidato compartilhado ao último input, não ao watcher mais antigo", async () => {
+    const { MATCH_GRACE_MS, watchForSession } = await import("../../src/main/session-watch");
+    const firstInputMs = Date.now();
+    const secondInputMs = firstInputMs + 100;
+    const candidateMtimeMs = secondInputMs + 100;
+    const sessionId = "sess-rearm-owner-race";
+
+    fsHooks.readdirImpl = async () => [`${sessionId}.jsonl`];
+    fsHooks.statImpl = async () => ({ mtimeMs: candidateMtimeMs });
+
+    const firstFound = vi.fn();
+    const secondFound = vi.fn();
+    const stopFirst = watchForSession("claude", "/tmp/shared-rearm-project", firstInputMs, firstFound, undefined, {
+      ownerId: "card-first",
+      rearmAtMs: firstInputMs,
+      matchStartMs: firstInputMs,
+    });
+    const stopSecond = watchForSession("claude", "/tmp/shared-rearm-project", firstInputMs, secondFound, undefined, {
+      ownerId: "card-second",
+      rearmAtMs: secondInputMs,
+      matchStartMs: secondInputMs,
+    });
+
+    expect(candidateMtimeMs).toBeLessThanOrEqual(secondInputMs + MATCH_GRACE_MS);
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(firstFound).not.toHaveBeenCalled();
+    expect(secondFound).toHaveBeenCalledWith(sessionId);
+    stopFirst();
+    stopSecond();
+  });
+
+  it("não aceita um arquivo que nasceu depois da janela do input que rearmou o watcher", async () => {
+    const { MATCH_GRACE_MS, watchForSession } = await import("../../src/main/session-watch");
+    const inputMs = Date.now();
+    const sessionId = "sess-rearm-too-late";
+
+    fsHooks.readdirImpl = async () => [`${sessionId}.jsonl`];
+    fsHooks.statImpl = async () => ({ mtimeMs: inputMs + MATCH_GRACE_MS + 1 });
+
+    const found = vi.fn();
+    const stop = watchForSession("claude", "/tmp/late-rearm-project", inputMs, found, undefined, {
+      ownerId: "card-late",
+      rearmAtMs: inputMs,
+      matchStartMs: inputMs,
+    });
+
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(found).not.toHaveBeenCalled();
+    stop();
+  });
+});

@@ -19,7 +19,18 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
   return new Proxy(
     {},
-    { get: (_t, prop: string) => overrides[prop] ?? (() => undefined) },
+    {
+      get: (_t, prop: string) =>
+        overrides[prop] ??
+        // Guarda de autoria de `set_connector_kind` (2026-09-11) lê as
+        // pontas do conector antes de gravar. Default deste arquivo: um
+        // conector `c1` saindo de `orq`, que é quem os testes abaixo se
+        // identificam como. Sem isto o Proxy devolvia `undefined` e o
+        // handler quebrava antes de chegar no que estes testes medem.
+        (prop === "listAllConnectors"
+          ? () => [{ id: "c1", from_card_id: "orq", to_card_id: "alvo" }]
+          : () => undefined),
+    },
   ) as Parameters<typeof createMessageBus>[1];
 }
 
@@ -51,7 +62,7 @@ describe("message-bus: set_connector_kind empurra a mudança pro renderer", () =
       onConnectorKindChanged: (...args: unknown[]) => pushed.push(args),
     });
 
-    const res = (await b.handleRequest({ cmd: "set_connector_kind", connectorId: "c1", kind: "depends" } as BusRequest)) as {
+    const res = (await b.handleRequest({ cmd: "set_connector_kind", connectorId: "c1", kind: "depends", requesterId: "orq" } as BusRequest)) as {
       ok: boolean;
     };
 
@@ -73,7 +84,7 @@ describe("message-bus: set_connector_kind empurra a mudança pro renderer", () =
     // faz `req.kind ?? null`). Se o push só acontecesse para um kind
     // "de verdade", limpar a marcação continuaria invisível até o reload —
     // exatamente meio bug sobrevivendo ao conserto.
-    await b.handleRequest({ cmd: "set_connector_kind", connectorId: "c1" } as BusRequest);
+    await b.handleRequest({ cmd: "set_connector_kind", connectorId: "c1", requesterId: "orq" } as BusRequest);
 
     expect(pushed).toEqual([["c1", null, "board-1"]]);
   });
@@ -85,7 +96,7 @@ describe("message-bus: set_connector_kind empurra a mudança pro renderer", () =
       onConnectorKindChanged: (...args: unknown[]) => pushed.push(args),
     });
 
-    const res = (await b.handleRequest({ cmd: "set_connector_kind", connectorId: "nao-existe", kind: "context" } as BusRequest)) as {
+    const res = (await b.handleRequest({ cmd: "set_connector_kind", connectorId: "nao-existe", kind: "context", requesterId: "orq" } as BusRequest)) as {
       ok: boolean;
       error?: string;
     };
@@ -108,7 +119,7 @@ describe("message-bus: set_connector_kind empurra a mudança pro renderer", () =
       onConnectorKindChanged: (...args: unknown[]) => pushed.push(args),
     });
 
-    const res = (await b.handleRequest({ cmd: "set_connector_kind", connectorId: "c1", kind: "inventado" } as BusRequest)) as {
+    const res = (await b.handleRequest({ cmd: "set_connector_kind", connectorId: "c1", kind: "inventado", requesterId: "orq" } as BusRequest)) as {
       ok: boolean;
     };
 
@@ -128,7 +139,7 @@ describe("message-bus: set_connector_kind empurra a mudança pro renderer", () =
       onConnectorLabelChanged: (...args: unknown[]) => labelPush.push(args),
     });
 
-    await b.handleRequest({ cmd: "set_connector_kind", connectorId: "c1", kind: "context" } as BusRequest);
+    await b.handleRequest({ cmd: "set_connector_kind", connectorId: "c1", kind: "context", requesterId: "orq" } as BusRequest);
     await b.handleRequest({ cmd: "set_connector_label", connectorId: "c1", label: "x" } as BusRequest);
 
     // Este é o teste que de fato protege contra a regressão original: se
@@ -136,5 +147,102 @@ describe("message-bus: set_connector_kind empurra a mudança pro renderer", () =
     // reaparece aqui antes de reaparecer na tela do usuário.
     expect(kindPush).toEqual([["c1", "context", "board-9"]]);
     expect(labelPush).toEqual([["c1", "x", "board-9"]]);
+  });
+
+  // Guarda de autoria no NÍVEL DO BUS (review adversarial da frente de
+  // roteamento, rodada 2, achado 1). O teste puro
+  // (connector-kind-authorization.test.ts) cobre a regra; este prova que
+  // ela está de fato LIGADA aqui — sem ele, o reparo de fixture acima
+  // (dar `listAllConnectors` a todos os testes) poderia esconder uma
+  // guarda desligada.
+  it("recusa um card que não é a origem do conector, e não grava nem empurra nada", async () => {
+    const pushed: unknown[][] = [];
+    let wrote = false;
+    const b = makeBus({
+      setConnectorKind: () => {
+        wrote = true;
+        return true;
+      },
+      onConnectorKindChanged: (...args: unknown[]) => pushed.push(args),
+    });
+
+    const res = (await b.handleRequest({
+      cmd: "set_connector_kind",
+      connectorId: "c1",
+      kind: "spawned",
+      requesterId: "intruso",
+    } as BusRequest)) as { ok: boolean; error?: string };
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("orq");
+    expect(wrote).toBe(false);
+    expect(pushed).toEqual([]);
+  });
+
+  // RODADA 2 da guarda (card 337, "fila 85975417", 2026-09-11) — a recusa
+  // a chamador sem identidade foi ESTREITADA pra só se aplicar quando a
+  // escrita afeta linhagem `spawned` (setar `spawned`, ou mexer num
+  // conector que já era `spawned`). O conector default deste arquivo
+  // (`c1`, sem `kind`) não é `spawned`, e `null` também não é `spawned` —
+  // limpar uma marcação puramente advisory é exatamente o caso que a
+  // síntese nova libera (custo 2 do achado: um orquestrador externo sem
+  // carimbo de URL, ex. Claude Desktop, não pode ser expulso de anotar
+  // conector nenhum). Ver `connector-kind-authorization.test.ts` pra
+  // regra pura; este prova que ela está LIGADA aqui, nos dois sentidos.
+  it("chamador SEM identidade consegue limpar/anotar um conector ADVISORY (não-spawned) — a recusa de identidade não se aplica aqui", async () => {
+    const pushed: unknown[][] = [];
+    const b = makeBus({
+      setConnectorKind: () => true,
+      getConnectorBoardId: () => "board-1",
+      onConnectorKindChanged: (...args: unknown[]) => pushed.push(args),
+    });
+
+    const res = (await b.handleRequest({
+      cmd: "set_connector_kind",
+      connectorId: "c1",
+      kind: null,
+    } as BusRequest)) as { ok: boolean };
+
+    expect(res.ok).toBe(true);
+    expect(pushed).toEqual([["c1", null, "board-1"]]);
+  });
+
+  it("recusa chamador sem identidade quando a escrita AFETA linhagem spawned (setar 'spawned') — cliente externo anônimo não reescreve roteamento", async () => {
+    let wrote = false;
+    const b = makeBus({
+      setConnectorKind: () => {
+        wrote = true;
+        return true;
+      },
+    });
+
+    const res = (await b.handleRequest({
+      cmd: "set_connector_kind",
+      connectorId: "c1",
+      kind: "spawned",
+    } as BusRequest)) as { ok: boolean };
+
+    expect(res.ok).toBe(false);
+    expect(wrote).toBe(false);
+  });
+
+  it("recusa chamador sem identidade limpando (null) um conector cujo kind ATUAL já é 'spawned' — o vetor original, não reaberto pela síntese nova", async () => {
+    let wrote = false;
+    const b = makeBus({
+      listAllConnectors: () => [{ id: "c1", from_card_id: "orq", to_card_id: "alvo", kind: "spawned" }],
+      setConnectorKind: () => {
+        wrote = true;
+        return true;
+      },
+    });
+
+    const res = (await b.handleRequest({
+      cmd: "set_connector_kind",
+      connectorId: "c1",
+      kind: null,
+    } as BusRequest)) as { ok: boolean };
+
+    expect(res.ok).toBe(false);
+    expect(wrote).toBe(false);
   });
 });

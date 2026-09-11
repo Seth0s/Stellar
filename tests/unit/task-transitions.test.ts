@@ -38,6 +38,7 @@ describe("store.ts: task_transitions / order / task_cards", () => {
       fallback_providers_json: null,
       order: null,
       suggested_order: null,
+      implicit_order: null,
       created_at: now,
       updated_at: now,
       ...overrides,
@@ -258,6 +259,129 @@ describe("store.ts: task_transitions / order / task_cards", () => {
       expect(store.listTasksByBoard("board-1").map((t) => t.id)).toEqual(["t7"]);
       expect(store.listTasksByBoard("board-2").map((t) => t.id)).toEqual(["t8"]);
       expect(store.listTasksByBoard("board-3")).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+/**
+ * DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial RODADA 3.
+ * `applyColumnDrop` é o choke point que `store:tasks:move` (main/index.ts)
+ * chama pra gravar um drop inteiro — cobre os DOIS achados desta rodada
+ * no nível do banco de verdade (não só na função pura de
+ * task-board-model.ts): achado 1 (a restrição inegociável — a arrastada
+ * recebe `order`, vizinhos SÓ `implicit_order`, NUNCA `order`) e achado 2
+ * (atomicidade — `db.transaction`, tudo-ou-nada).
+ */
+describe("store.ts: applyColumnDrop (peça 3, review adversarial rodada 3)", () => {
+  let dir: string;
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function baseTaskFields(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
+    const now = Date.now();
+    return {
+      id,
+      prompt: "faz X",
+      provider: "claude",
+      status: "pending",
+      card_id: null,
+      board_id: "default",
+      result_json: null,
+      deps_json: null,
+      retry_count: 0,
+      attempted_providers_json: null,
+      max_retries: null,
+      fallback_providers_json: null,
+      order: null,
+      suggested_order: null,
+      implicit_order: null,
+      created_at: now,
+      updated_at: now,
+      ...overrides,
+    };
+  }
+
+  it("[restrição inegociável, achado 1] arrastada recebe order+status; vizinho recebe SÓ implicit_order — nunca order, nunca suggested_order, nunca muda de status", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-store-drop-"));
+    const store = openStore(dir);
+    try {
+      store.upsertTask(baseTaskFields("dragged", { status: "pending" }));
+      store.upsertTask(baseTaskFields("sib1", { status: "pending" }));
+
+      const dragged = { ...store.getTask("dragged")!, status: "running", order: 500, updated_at: Date.now() + 1 };
+      store.applyColumnDrop(dragged, [{ id: "sib1", implicitOrder: 250 }]);
+
+      const draggedAfter = store.getTask("dragged")!;
+      expect(draggedAfter.status).toBe("running");
+      expect(draggedAfter.order).toBe(500);
+      expect(draggedAfter.implicit_order).toBeNull(); // a arrastada nunca ganha implicit_order — ela já tem order de verdade
+
+      const sibAfter = store.getTask("sib1")!;
+      expect(sibAfter.implicit_order).toBe(250);
+      expect(sibAfter.order).toBeNull(); // A RESTRIÇÃO: nunca order
+      expect(sibAfter.suggested_order).toBeNull(); // nem suggested_order
+      expect(sibAfter.status).toBe("pending"); // nem status — só posição, nada decidido
+    } finally {
+      store.close();
+    }
+  });
+
+  it("[restrição inegociável, achado 1] depois do drop, um suggested_order real do agente (update_task-equivalent) ainda vence o implicit_order materializado — zero imunidade", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-store-drop-"));
+    const store = openStore(dir);
+    try {
+      store.upsertTask(baseTaskFields("dragged2", { status: "pending" }));
+      store.upsertTask(baseTaskFields("sib2", { status: "pending" }));
+      store.applyColumnDrop({ ...store.getTask("dragged2")!, status: "running", order: 500, updated_at: Date.now() + 1 }, [
+        { id: "sib2", implicitOrder: 250 },
+      ]);
+
+      // Um agente chamando update_task({taskId:"sib2", suggestedOrder:1})
+      // depois do drop — mesmo caminho de escrita de sempre (spread +
+      // upsertTask), nada especial precisa acontecer aqui.
+      store.upsertTask({ ...store.getTask("sib2")!, suggested_order: 1, updated_at: Date.now() + 2 });
+
+      const sibAfter = store.getTask("sib2")!;
+      expect(sibAfter.suggested_order).toBe(1);
+      expect(sibAfter.implicit_order).toBe(250); // o implicit_order antigo continua lá...
+      expect(sibAfter.order).toBeNull(); // ...mas nunca teve order pra "travar" a leitura em primeiro lugar
+    } finally {
+      store.close();
+    }
+  });
+
+  it("[achado 2] atômica: uma falha no meio do lote não deixa a arrastada parcialmente gravada", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-store-drop-"));
+    const store = openStore(dir);
+    try {
+      store.upsertTask(baseTaskFields("dragged3", { status: "pending", order: null }));
+
+      let threw = false;
+      try {
+        store.applyColumnDrop(
+          { ...store.getTask("dragged3")!, status: "running", order: 999, updated_at: Date.now() + 1 },
+          // `implicitOrder: {}` força better-sqlite3 a rejeitar o binding
+          // ("SQLite3 can only bind numbers, strings, bigints, buffers,
+          // and null" — confirmado ao vivo, `undefined` sozinho NÃO
+          // lança, vira NULL em silêncio) no MEIO do lote — a arrastada
+          // já foi gravada antes deste laço, dentro da MESMA
+          // `db.transaction`. Simula um erro real a meio caminho.
+          [{ id: "sib3", implicitOrder: {} as unknown as number }],
+        );
+      } catch {
+        threw = true;
+      }
+
+      expect(threw).toBe(true);
+      // Rollback de verdade: a arrastada NÃO ficou com o status/order
+      // novo — `db.transaction` desfez a escrita que já tinha rodado.
+      const draggedAfter = store.getTask("dragged3")!;
+      expect(draggedAfter.status).toBe("pending");
+      expect(draggedAfter.order).toBeNull();
     } finally {
       store.close();
     }
