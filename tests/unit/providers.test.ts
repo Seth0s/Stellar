@@ -27,8 +27,19 @@ describe("providers: antigravity buildArgs effort", () => {
   });
 
   it("combines with --conversation (resumeId) same as --model already did", () => {
-    const args = antigravity.buildArgs({ resumeId: "abc123", model: "gemini-3.1-pro", effort: "high" });
-    expect(args).toEqual(["--conversation", "abc123", "--model", "gemini-3.1-pro", "--effort", "high"]);
+    const args = antigravity.buildArgs({
+      resumeId: "abc123",
+      model: "gemini-3.1-pro",
+      effort: "high",
+    });
+    expect(args).toEqual([
+      "--conversation",
+      "abc123",
+      "--model",
+      "gemini-3.1-pro",
+      "--effort",
+      "high",
+    ]);
   });
 
   it("cursor/codex/opencode ignore effort silently (not plumbed into their buildArgs at all)", () => {
@@ -77,5 +88,52 @@ describe("providers: claude buildArgs effort", () => {
       expect(args).toContain("--effort");
       expect(args[args.indexOf("--effort") + 1]).toBe(level);
     }
+  });
+});
+
+describe("providers: ACBRIDGE_HINT prompt coverage", () => {
+  const claude = providerById("claude")!;
+  const codex = providerById("codex")!;
+
+  function claudeSystemPrompt(args: string[]): string {
+    const index = args.indexOf("--append-system-prompt");
+    expect(index).toBeGreaterThanOrEqual(0);
+    return args[index + 1]!;
+  }
+
+  function codexDeveloperInstructions(args: string[]): string {
+    const config = args.find((arg) => arg.startsWith("developer_instructions="));
+    expect(config).toBeDefined();
+    return JSON.parse(config!.slice("developer_instructions=".length)) as string;
+  }
+
+  it("keeps the environment hint when Claude receives a custom task prompt", () => {
+    const value = claudeSystemPrompt(
+      claude.buildArgs({ systemPrompt: "Implement the requested change." }),
+    );
+
+    expect(value).toMatch(/^Implement the requested change\.\n\n/);
+    expect(value).toContain("agent-canvas");
+    expect(value).not.toBe("Implement the requested change.");
+  });
+
+  it("uses only the environment hint when systemPrompt is absent or whitespace-only", () => {
+    const withoutPrompt = claudeSystemPrompt(claude.buildArgs({}));
+    const withWhitespacePrompt = claudeSystemPrompt(claude.buildArgs({ systemPrompt: " \n\t " }));
+
+    expect(withoutPrompt).toContain("agent-canvas");
+    expect(withWhitespacePrompt).toBe(withoutPrompt);
+  });
+
+  it("uses Codex's real -c flag for additive developer instructions", () => {
+    const withPrompt = codexDeveloperInstructions(
+      codex.buildArgs({ systemPrompt: "Review the task carefully." }),
+    );
+    const withoutPrompt = codexDeveloperInstructions(codex.buildArgs({}));
+
+    expect(withPrompt).toMatch(/^Review the task carefully\.\n\n/);
+    expect(withPrompt).toContain("agent-canvas");
+    expect(withoutPrompt).toContain("agent-canvas");
+    expect(codex.buildArgs({ systemPrompt: "Review the task carefully." })).toContain("-c");
   });
 });
