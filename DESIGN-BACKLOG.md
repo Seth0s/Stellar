@@ -357,6 +357,28 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
   * **Por que foi adiado e nao feito junto**: o codigo alvo inclui SIGINT/EOF/copy do terminal, que levou de 2 a 9 rodadas de review nas fases anteriores. Refatorar isso dentro da rodada que fechava achados de review misturaria frentes; foi decisao consciente do implementador, endossada aqui.
   * **Ao pegar**: o overrides precisa chegar ate os componentes (hoje vive no `App.tsx` via `shortcutOverridesRef`), e cada componente precisa reagir a mudanca sem re-registrar listener a cada tecla — o padrao de ref que o proprio `App.tsx` ja usa (`shortcutHandlersRef`/`zoomByRef`) e o precedente. Atualizar a `rebindBlockedReason` conforme cada um sair da lista, senao a UI passa a mentir na direcao oposta.
 
+* **Identidade e descoberta: card sem nome, e agente que nao sabe que esta dentro do Stellar (levantado pelo dono do repo, 2026-09-11):**
+  * Palavras dele: *"algo que esta me incomodando, eu nao sei qual card e o '321', precisamos formalizar o nome por card para evitar isso para mim e usuarios futuros"* e *"um usuario que em vez de utilizar agentes pelo card (provider) ele fez spawn dele no bash, isso e possivel causa de o agente dele nao saber utilizar?"*.
+  * Quatro lacunas distintas, achadas ao investigar as duas perguntas. Sao independentes e podem ir em levas separadas, mas a 2 e a que corrompe silenciosamente e deveria ir primeiro.
+
+  1. **`list_cards` devolve `label` cru, entao card sem nome nao tem como ser citado.** O gerador de nome legivel JA EXISTE: `describeCardLabel` (`main/index.ts:1270`) devolve o `label` quando ha um e, quando nao ha, deriva `"Claude 2°"` (provider capitalizado + ordinal entre cards do mesmo provider no mesmo board). So que ele e usado **so nas notificacoes** — o `list_cards` do MCP devolve `label: null`, entao o orquestrador nao tem nome nenhum pra usar e cai no id numerico, que nao significa nada pra um humano olhando a tela. Sintoma medido nesta sessao: o orquestrador passou a conversa inteira dizendo "card 321", "card 327", e o dono do repo nao conseguia mapear pra nada.
+     * **Conserto**: `list_cards` (e as demais superficies que devolvem card) passam a incluir o nome derivado de `describeCardLabel`, e o header do card na UI mostra o MESMO texto. Uma fonte, o mesmo nome em todo lugar — se a UI e o MCP derivarem separado, voltam a divergir.
+     * Cuidado: o ordinal de `describeCardLabel` depende da lista de cards do board no momento da chamada, entao fechar um card renumera os outros. Para exibicao serve; se virar identificador estavel em algum lugar, nao serve. Nao usar como chave.
+
+  2. **`ACBRIDGE_HINT` so chega no `claude`, E e SUBSTITUIDO por qualquer system prompt customizado — bug, nao decisao.** `providers.ts:109` faz `args.push("--append-system-prompt", systemPrompt || ACBRIDGE_HINT)`, e essa linha existe **so dentro do `buildArgs` do claude**. Duas consequencias:
+     * Nenhum outro provider (codex, cursor, antigravity, opencode) recebe a dica — dependem inteiramente do `SERVER_INSTRUCTIONS` do MCP, que so cobre quem de fato conecta no MCP.
+     * Um card com `systemPrompt` proprio perde a dica INTEIRA em vez de somar as duas. Quem define prompt customizado deixa o proprio agente cego pro `acbridge`, sem nenhum aviso.
+     * **Conserto**: concatenar em vez de substituir (a dica e sobre o AMBIENTE, o prompt do usuario e sobre a TAREFA — nao competem), e levar o equivalente pra todo provider que aceite injecao de prompt. Para os que nao aceitam, registrar explicitamente que o MCP `instructions` e a unica cobertura.
+
+  3. **Agente lancado a mao dentro de um card `bash` tem a capacidade e nao sabe disso.** Verificado em `pty-registry.ts:344-407`: TODO card, `bash` incluso, recebe no env `AGENT_CANVAS_CARD_ID`, `AGENT_CANVAS_SOCK`, `AGENT_CANVAS_MCP_URL` e o `binDir` no inicio do `PATH`. Entao um `claude` que o usuario digita dentro de um card bash:
+     * **tem** `acbridge` no PATH e um `AGENT_CANVAS_CARD_ID` valido — a capacidade esta toda la;
+     * **nao tem** o `--mcp-config`, que so e montado no `buildArgs` do provider (`providers.ts:117`) — logo nenhuma tool `stellar` e nenhum `SERVER_INSTRUCTIONS`;
+     * **nao tem** o `--append-system-prompt` — logo nunca fica sabendo que o `acbridge` existe.
+     * Resultado: consegue agir no board e nao tem como descobrir. Responde a pergunta do dono do repo — **sim, e causa plausivel** de um agente de usuario nao usar o Stellar.
+     * **Conserto a avaliar** (nao obvio, escolher com cuidado): (a) um arquivo de perfil/rc injetado no shell do card bash que imprima a dica uma vez; (b) `AGENT_CANVAS_*` ja no env e o suficiente pra um wrapper no `binDir` detectar e avisar; (c) documentar e aceitar. Nao inventar deteccao fragil de "esta rodando um agente" por nome de processo.
+
+  4. **Identidade errada pra processo lancado a mao.** No caso acima, `AGENT_CANVAS_CARD_ID` aponta pro **card bash**, nao pro agente — entao toda acao dele no board e atribuida ao card errado, e o auto-conector desenha a linha errada. Mesma classe da lacuna ja conhecida de subagente `fork` do Claude Code herdando a identidade MCP do card pai (registrada em memoria de sessao). Nao ha conserto barato obvio: o processo filho nao tem como reivindicar um card proprio sem um handshake que hoje nao existe. Registrar como lacuna conhecida e decidir se vale um `acbridge claim-card` explicito.
+
 ### 2.2 Design & Acessibilidade (D1–D8)
 
 * **Simplificação e Limpeza da Barra Lateral (Rail):**
