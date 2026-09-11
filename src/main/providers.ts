@@ -59,6 +59,17 @@ const ACBRIDGE_HINT =
   "it, even if you keep running afterward. Use these only when it " +
   "genuinely helps the task at hand.";
 
+/** The custom prompt describes the task; ACBRIDGE_HINT describes the runtime
+ * environment. Keep both, in that order, separated by a blank line so the
+ * task remains the first thing the provider sees while the environment hint
+ * stays legible as a distinct block. Trimming also makes empty or
+ * whitespace-only prompts behave like an omitted prompt instead of creating
+ * a separator with no task text around it. */
+function composeSystemPrompt(systemPrompt?: string): string {
+  const taskPrompt = systemPrompt?.trim();
+  return taskPrompt ? `${taskPrompt}\n\n${ACBRIDGE_HINT}` : ACBRIDGE_HINT;
+}
+
 /** Um comando por família de SO — `npm install -g` já é igual nas duas,
  * mas os installers via `curl | bash` (cursor/antigravity) não existem no
  * Windows (achado ao vivo, 2026-09-03: "no Windows não tem bash"), que
@@ -81,12 +92,19 @@ type ProviderDef = {
 };
 
 export const PROVIDERS: ProviderDef[] = [
+  // Bash has no system-prompt injection flag and no provider-specific MCP
+  // registration. A manually launched agent inherits AGENT_CANVAS_MCP_URL,
+  // but the shell cannot turn that into MCP or show ACBRIDGE_HINT by itself;
+  // this is the real coverage gap recorded in DESIGN-BACKLOG.md §2.1, point 3.
   { id: "bash", label: "Bash", binaryNames: [], buildArgs: () => [], installCommand: null },
   {
     id: "claude",
     label: "Claude",
     binaryNames: ["claude"],
-    installCommand: { posix: "npm install -g @anthropic-ai/claude-code", windows: "npm install -g @anthropic-ai/claude-code" },
+    installCommand: {
+      posix: "npm install -g @anthropic-ai/claude-code",
+      windows: "npm install -g @anthropic-ai/claude-code",
+    },
     buildArgs: ({ resumeId, continueLast, model, effort, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
@@ -101,12 +119,10 @@ export const PROVIDERS: ProviderDef[] = [
       // read from the same `spawnOpts` object built once in
       // useTerminal.ts, so neither ever reaches here without the other.
       if (effort) args.push("--effort", effort);
-      // claude is the only provider with a system-prompt flag, so it's the
-      // only one that gets a real (if best-effort) hint about acbridge —
-      // codex/cursor have no equivalent hook and stay undocumented to the
-      // agent itself via THIS mechanism (codex gets the MCP server
-      // registered below instead, which is self-documenting).
-      args.push("--append-system-prompt", systemPrompt || ACBRIDGE_HINT);
+      // This is a real Claude CLI flag (`claude --help`). The task prompt
+      // and the environment hint are additive; neither should hide the
+      // other, so compose them before passing the single appended block.
+      args.push("--append-system-prompt", composeSystemPrompt(systemPrompt));
       // Ephemeral registration (DESIGN-BACKLOG.md item 21, ponto 9) — a
       // spawn-scoped `--mcp-config` flag, not a written .mcp.json. Never
       // touches the project's own MCP config, never persists past this
@@ -114,7 +130,10 @@ export const PROVIDERS: ProviderDef[] = [
       // this should ADD to whatever the user's own project already
       // configures, not replace it.
       if (mcpUrl) {
-        args.push("--mcp-config", JSON.stringify({ mcpServers: { stellar: { type: "http", url: mcpUrl } } }));
+        args.push(
+          "--mcp-config",
+          JSON.stringify({ mcpServers: { stellar: { type: "http", url: mcpUrl } } }),
+        );
       }
       // Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
       // usuário: `isActive` (useTerminal.ts) hoje é só uma aproximação por
@@ -137,7 +156,9 @@ export const PROVIDERS: ProviderDef[] = [
       // `isActive` vira false, só pra este provider.
       args.push(
         "--settings",
-        JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "acbridge turn-complete" }] }] } }),
+        JSON.stringify({
+          hooks: { Stop: [{ hooks: [{ type: "command", command: "acbridge turn-complete" }] }] },
+        }),
       );
       return args;
     },
@@ -146,17 +167,24 @@ export const PROVIDERS: ProviderDef[] = [
     id: "codex",
     label: "Codex",
     binaryNames: ["codex"],
-    installCommand: { posix: "npm install -g @openai/codex", windows: "npm install -g @openai/codex" },
+    installCommand: {
+      posix: "npm install -g @openai/codex",
+      windows: "npm install -g @openai/codex",
+    },
     // Codex's resume is a subcommand, must come before any other flag.
-    // No documented system-prompt flag — gets the MCP server registered
-    // instead (codex supports an ephemeral `-c key=value` TOML override,
-    // scoped to this one invocation, same non-persisting spirit as
-    // claude's --mcp-config above).
-    buildArgs: ({ resumeId, continueLast, model, mcpUrl }) => {
+    // Codex has no dedicated system-prompt flag, but its real `-c
+    // key=value` CLI option (confirmed via `codex --help`) accepts the
+    // official `developer_instructions` config key. JSON.stringify produces
+    // a valid TOML basic string, including for prompts with quotes/newlines.
+    buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("resume", resumeId);
       else if (continueLast) args.push("resume", "--last");
       if (model) args.push("-m", model);
+      args.push(
+        "-c",
+        `developer_instructions=${JSON.stringify(composeSystemPrompt(systemPrompt))}`,
+      );
       if (mcpUrl) args.push("-c", `mcp_servers.stellar.url=${mcpUrl}`);
       return args;
     },
@@ -181,7 +209,8 @@ export const PROVIDERS: ProviderDef[] = [
       posix: "curl https://cursor.com/install -fsS | bash",
       windows: "irm 'https://cursor.com/install?win32=true' | iex",
     },
-    // Sem flag de system-prompt e, ao contrário de claude/codex acima,
+    // Sem flag de system-prompt: `prompt` é a entrada do usuário, não um
+    // bloco de instruções do sistema. E, ao contrário de claude/codex acima,
     // sem flag efêmera de registro de MCP: a CLI do Cursor só descobre
     // servidor MCP por `.cursor/mcp.json` escrito em disco (do projeto ou
     // global). Escrever no `.cursor/mcp.json` DO PROJETO a cada spawn
@@ -189,7 +218,9 @@ export const PROVIDERS: ProviderDef[] = [
     // usuário. O que mudou (2026-09-01, a pedido): o registro passou a
     // acontecer uma vez só, no config GLOBAL do usuário e apontando pro
     // shim stdio, em `mcp-registration.ts` — fora do `buildArgs`, que é
-    // por invocação. Por isso não há nada de MCP nos args aqui.
+    // por invocação. Por isso não há nada de MCP nos args aqui; o
+    // SERVER_INSTRUCTIONS do MCP é a cobertura de descoberta quando o
+    // registro global conecta.
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
@@ -227,6 +258,10 @@ export const PROVIDERS: ProviderDef[] = [
       posix: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
       windows: "irm https://antigravity.google/cli/install.ps1 | iex",
     },
+    // Sem flag de system-prompt: `--prompt` é o modo de entrada inicial do
+    // usuário, não um canal para acrescentar contexto de ambiente. O
+    // SERVER_INSTRUCTIONS do MCP é a única cobertura desta CLI para essa
+    // descoberta; o registro global já é feito antes do spawn.
     // No `low|high` guard HERE on purpose (2026-09-10, DESIGN-BACKLOG.md
     // §2.1) — the real refusal for an out-of-range antigravity effort
     // lives centrally in message-bus.ts's `spawn_agent` handler
@@ -260,6 +295,10 @@ export const PROVIDERS: ProviderDef[] = [
     label: "OpenCode",
     binaryNames: ["opencode"],
     installCommand: { posix: "npm install -g opencode-ai", windows: "npm install -g opencode-ai" },
+    // Sem flag de system-prompt: `--prompt`/mensagens são entrada do
+    // usuário; instruções de sistema exigem configuração persistente. O
+    // SERVER_INSTRUCTIONS do MCP é a única cobertura desta CLI, via o
+    // registro global existente.
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--session", resumeId);
@@ -276,7 +315,10 @@ export function providerById(id: string): ProviderDef | undefined {
 
 /** Achado ao vivo, 2026-09-03 — "no Windows não tem bash": não existe
  * jeito de sugerir `installCommand.posix` numa máquina sem bash/curl. */
-export function providerInstallCommand(id: string, platform: NodeJS.Platform = process.platform): string | null {
+export function providerInstallCommand(
+  id: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
   const cmd = providerById(id)?.installCommand;
   if (!cmd) return null;
   return platform === "win32" ? cmd.windows : cmd.posix;
@@ -328,16 +370,22 @@ export type WhichOptions = {
  * um DIRETÓRIO chamado `agent` no PATH (o nome primário da CLI do Cursor,
  * nada improvável) e para um arquivo sem bit de execução.
  */
-export function which(names: string[], platformOrOptions: NodeJS.Platform | WhichOptions = {}): string | null {
+export function which(
+  names: string[],
+  platformOrOptions: NodeJS.Platform | WhichOptions = {},
+): string | null {
   // Assinatura retrocompatível: os chamadores existentes passam a
   // plataforma direto como segundo argumento.
-  const opts: WhichOptions = typeof platformOrOptions === "string" ? { platform: platformOrOptions } : platformOrOptions;
+  const opts: WhichOptions =
+    typeof platformOrOptions === "string" ? { platform: platformOrOptions } : platformOrOptions;
   const platform = opts.platform ?? process.platform;
   const isExecutable = opts.isExecutable ?? isExecutableFile;
   const dirs = opts.pathDirs ?? effectivePath().split(delimiter).filter(Boolean);
   const extensions = opts.pathExt ?? WINDOWS_EXECUTABLE_EXTENSIONS;
   const candidateNames =
-    platform === "win32" ? names.flatMap((name) => [name, ...extensions.map((ext) => name + ext)]) : names;
+    platform === "win32"
+      ? names.flatMap((name) => [name, ...extensions.map((ext) => name + ext)])
+      : names;
   for (const dir of dirs) {
     for (const name of candidateNames) {
       const candidate = join(dir, name);
@@ -353,7 +401,10 @@ export function which(names: string[], platformOrOptions: NodeJS.Platform | Whic
  * bash` — resolve via `ComSpec` (sempre presente, aponta pro `cmd.exe`
  * real), mesma convenção que o próprio Windows/outras ferramentas
  * (ex. VS Code) usam como shell padrão quando nada mais foi escolhido. */
-export function resolveSpawn(providerId: string, opts: SpawnOpts = {}): { binary: string; args: string[] } | null {
+export function resolveSpawn(
+  providerId: string,
+  opts: SpawnOpts = {},
+): { binary: string; args: string[] } | null {
   const provider = providerById(providerId);
   if (!provider) return null;
   if (provider.id === "bash") {
@@ -372,7 +423,12 @@ export function resolveSpawn(providerId: string, opts: SpawnOpts = {}): { binary
   return { binary, args: provider.buildArgs(opts) };
 }
 
-export type AgentAvailability = { id: ProviderId; label: string; installed: boolean; installCommand: string | null };
+export type AgentAvailability = {
+  id: ProviderId;
+  label: string;
+  installed: boolean;
+  installCommand: string | null;
+};
 
 /** Checagem proativa (DESIGN-BACKLOG.md — "aviso antes mesmo de abrir um
  * agente", pedido ao vivo 2026-09-03): roda uma vez, fora do fluxo de
