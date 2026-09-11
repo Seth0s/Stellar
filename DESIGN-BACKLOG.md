@@ -174,7 +174,7 @@ Reportados ao vivo pelo usuário em 2026-09-02, ainda não investigados. Priorid
     331 | 330 -> 321 | modified | 08:47
     332 | 330 -> 327 | modified | 08:50
     ```
-    `modified` e o kind que `send_to_card` desenha. Os conectores `spawned` originais desses cards sumiram no restart da manha. Como o orquestrador READOTOU cards que ja existiam (briefando via `send_to_card`) em vez de spawnar novos, nunca houve linhagem `spawned` — `resolveLiveSpawner` devolveu `null` e o `return` da linha 1056 descartou o push sem log, sem erro, sem nada.
+    `modified` e o kind que `send_to_card` desenha. Os conectores `spawned` originais desses cards nao estavam mais la. **CORRECAO (review adversarial, 2026-09-11)**: a primeira versao deste item culpava o restart, e isso e falso — linhas de `connectors` sao SQLite puro e sobrevivem a restart. O mecanismo real e `deleteCardDirect` (`main/index.ts:1329`), que chama `store.deleteConnectorsForCard` antes de apagar o card: fechar o card que spawnou cascateia os conectores DELE, e o worker spawnado fica sem linhagem nenhuma. Um card aberto por humano chega no mesmo estado por nunca ter tido conector. Nos dois casos a linha esta AUSENTE, que e o que o roteamento de fato consulta — entao a correcao nao muda o conserto, so para de documentar uma causa inventada. Como o orquestrador READOTOU cards que ja existiam (briefando via `send_to_card`) em vez de spawnar novos, nunca houve linhagem `spawned` — `resolveLiveSpawner` devolveu `null` e o `return` da linha 1056 descartou o push sem log, sem erro, sem nada.
   * **Por que "antes funcionava"**: nas sessoes anteriores o orquestrador tinha spawnado os cards ele mesmo na mesma sessao, entao o conector `spawned` existia. O caminho de readocao nunca tinha sido exercitado.
   * **A premissa errada**: "quem spawnou e o unico que quer o report". Readocao e um padrao real e recorrente — todo restart que perde sessao produz exatamente isso, e o bug de `resume_id` acima garante que aconteca.
   * **Divergencia doc/comportamento achada de tabela**: a descricao da ferramenta MCP `set_connector_kind` afirma que o kind e *"advisory only, nothing in this app acts on it"*. E falso: `resolveLiveSpawner` age sobre ele, e e a unica coisa que decide se um report chega ou nao. Um dos dois tem que mudar — ou a doc passa a dizer a verdade, ou o roteamento para de depender de um campo anunciado como decorativo.
@@ -395,6 +395,31 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
      * **Conserto a avaliar** (nao obvio, escolher com cuidado): (a) um arquivo de perfil/rc injetado no shell do card bash que imprima a dica uma vez; (b) `AGENT_CANVAS_*` ja no env e o suficiente pra um wrapper no `binDir` detectar e avisar; (c) documentar e aceitar. Nao inventar deteccao fragil de "esta rodando um agente" por nome de processo.
 
   4. **Identidade errada pra processo lancado a mao.** No caso acima, `AGENT_CANVAS_CARD_ID` aponta pro **card bash**, nao pro agente — entao toda acao dele no board e atribuida ao card errado, e o auto-conector desenha a linha errada. Mesma classe da lacuna ja conhecida de subagente `fork` do Claude Code herdando a identidade MCP do card pai (registrada em memoria de sessao). Nao ha conserto barato obvio: o processo filho nao tem como reivindicar um card proprio sem um handshake que hoje nao existe. Registrar como lacuna conhecida e decidir se vale um `acbridge claim-card` explicito.
+
+* **Internacionalizacao — hoje nao existe nenhuma, e o texto esta todo embutido no codigo (pedido do dono do repo, 2026-09-11):**
+  * Palavras dele: *"eu verifiquei o codigo e os textos estao tudo intrinseco nos codigos e nao existe um tipo de localizador para traducao eficiente"*.
+  * **Inventario medido, nao estimado** (contagem excluindo linhas de comentario):
+    * `package.json` nao tem NENHUMA dependencia de i18n (`i18next`, `react-i18next`, `@lingui`, `formatjs` — nenhuma).
+    * `Intl.` nao aparece em lugar nenhum de `src/renderer/src`. Tempo e formatado a mao: `formatTaskAge` devolve `"2d"`, `"18h"`.
+    * Renderer: ~84 strings acentuadas fora de comentario, mais 105 atributos `title`/`placeholder`/`aria-label`, mais texto solto em JSX. Ordem de grandeza real: **300 a 400 strings de UI**.
+    * `src/main`: ~37 strings — menu nativo do Chromium (`"Copiar endereco da imagem"`), dialogos, erros de spawn (`"binario agy nao encontrado"`).
+  * **O ponto que importa mais que a escolha de biblioteca — TRES PUBLICOS de texto, e so um se traduz:**
+    1. **Humano**: renderer, menu nativo, dialogos. Traduz.
+    2. **Agente**: `SERVER_INSTRUCTIONS` (`mcp-server.ts`), descricoes de tool do MCP, `ACBRIDGE_HINT` (`providers.ts`), e o texto que `typeAndSubmit` digita no PTY (`[de: X] relatorio disponivel`). **NUNCA traduzir.** Ja estao em ingles, que e o certo quando o leitor e um modelo, e o prefixo `[de: ...]` e convencao que outro codigo interpreta. Traduzir muda comportamento de agente e quebra parsing, e nenhum teste atual pega isso.
+    3. **Desenvolvedor**: `console.warn`, logs. Nao traduz.
+    * Uma varredura feita sem essa separacao explicita vai levar `mcp-server.ts` junto. Marcar os tres publicos e PRE-REQUISITO da extracao, nao detalhe de implementacao.
+  * **Recomendacao: catalogo tipado + funcao `t()` pura, sem framework.** Razoes especificas deste repo, nao preferencia generica:
+    * `main` e `renderer` compartilham sem provider. Um `react-i18next` resolveria o renderer e deixaria menu nativo e dialogos de fora — metade do problema.
+    * `Record<MessageKey, string>` por locale faz chave faltando virar ERRO DE COMPILACAO, nao fallback silencioso. Mesmo principio do registro de atalhos fechado nesta sessao: divergencia estruturalmente impossivel em vez de testada.
+    * `t()` e funcao pura, testavel no `environment: "node"` do vitest (sem jsdom, componente React nao e montavel) — precedente de `shortcut-config.ts`, `task-board-model.ts`.
+    * Plural de PT e EN e `one`/`other`; `Intl.PluralRules` ja e nativo e cobre. ICU completo so se entrar idioma com regra complexa.
+  * **Contra-argumento honesto, registrado**: se o Stellar Team (§3) incluir traducao por gente de fora, o ecossistema do `i18next` (formato que tradutor conhece, ferramenta de extracao pronta) vale mais que a seguranca de tipo. E a unica razao para mudar de ideia — decidir ANTES de extrair 400 strings, porque trocar depois e refazer tudo.
+  * **Vem junto, nao e opcional:**
+    * Trocar a formatacao de tempo a mao por `Intl.RelativeTimeFormat`, senao `"2d"` continua em portugues em qualquer locale.
+    * Decidir a fonte do locale: `app.getLocale()` do Electron como padrao, mais override persistido — quem roda em maquina inglesa pode querer a UI em portugues.
+  * **Recorte de trabalho, duas fases:**
+    * **FASE 1 — infraestrutura e fronteira.** Tipo `MessageKey`, catalogo `pt-BR` (fonte) e `en`, `t()` puro, deteccao e override de locale, `Intl.RelativeTimeFormat` no lugar do formatador manual. E o mais importante: marcar explicitamente no codigo quais modulos sao AGENT-FACING e ficam fora da traducao, com comentario que diga o porque. Entregar com 2 ou 3 telas ja migradas como prova, nao com as 400.
+    * **FASE 2 — varredura.** Migrar o resto em levas por arquivo. So depois da fase 1 aprovada, porque o custo de mudar a forma no meio da varredura e alto.
 
 ### 2.2 Design & Acessibilidade (D1–D8)
 
