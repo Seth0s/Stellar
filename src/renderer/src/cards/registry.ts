@@ -31,6 +31,9 @@ export const CARD_LABEL: Record<Card["kind"], string> = {
   stroke: "desenho",
   chat: "chatbox",
   media: "mídia",
+  // DESIGN-BACKLOG.md §2.1 "Card `task`", decisão 1 — "Fila" é o título
+  // pedido pelo dono do repo, não "tarefa"/"task".
+  task: "fila",
 };
 
 export const CARD_ICON: Record<Card["kind"], IconName> = {
@@ -43,6 +46,7 @@ export const CARD_ICON: Record<Card["kind"], IconName> = {
   stroke: "pen",
   chat: "chat",
   media: "fileImage",
+  task: "task",
 };
 
 /** Every kind the Rail's linear button strip spawns with a single click —
@@ -59,6 +63,7 @@ export const RAIL_CREATE_ORDER: Exclude<Card["kind"], "terminal" | "stroke" | "m
   "browser",
   "chat",
   "remote-window",
+  "task",
 ];
 
 export const RAIL_CREATE_TITLE: Record<(typeof RAIL_CREATE_ORDER)[number], string> = {
@@ -75,6 +80,7 @@ export const RAIL_CREATE_TITLE: Record<(typeof RAIL_CREATE_ORDER)[number], strin
   browser: "Novo navegador",
   chat: "Novo chatbox",
   "remote-window": "Controlar janela externa",
+  task: "Nova fila de tasks",
 };
 
 /** Throws with a useful message if ever actually reached at runtime — its
@@ -125,6 +131,11 @@ export function defaultCardFields(
       };
     case "remote-window":
       return { kind: "remote-window" };
+    case "task":
+      // Ver TaskCardData's doc comment (card-types.ts) — sem campo próprio
+      // a inicializar, os dados vivem em `tasks`/`task_transitions`/
+      // `task_cards`, não no card.
+      return { kind: "task" };
     default:
       return assertNeverCardKind(kind);
   }

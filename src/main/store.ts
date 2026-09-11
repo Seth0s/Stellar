@@ -584,6 +584,26 @@ export function openStore(userDataDir: string) {
       AND NOT EXISTS (SELECT 1 FROM task_cards WHERE task_cards.task_id = tasks.id)
   `);
 
+  // RODADA 4 (DESIGN-BACKLOG.md §2.3, achado do rodapé de escopo — seis
+  // tasks presas a `board_id = "1"`, um board REAL que existiu e foi
+  // deletado) — `deleteBoard` (abaixo) agora reatribui em vez de
+  // abandonar, então isto é rede de segurança pras órfãs que já existiam
+  // ANTES desse fix (e pra qualquer instalação mais antiga que ainda não
+  // rodou esta versão). Roda em TODO `openStore`, idempotente por
+  // construção: `board_id NOT IN (SELECT id FROM boards)` já não acha
+  // nada pra tocar depois da primeira vez — 0 linhas afetadas nas
+  // chamadas seguintes é o resultado CORRETO, não sinal de bug.
+  // `board_id = NULL` reusa o significado que a coluna já tem desde a
+  // Fase 1 pra uma task criada sem board nenhum ("bookkeeping externo
+  // puro, nunca candidata a auto-dispatch" — ver `TaskRow.board_id`'s
+  // doc comment) — não um valor novo inventado. NÃO presume que o id
+  // órfão é "1": qualquer `board_id` sem correspondência em `boards` é
+  // pego, nunca um board que existe de verdade (ex.: 118/Idyplatform).
+  db.exec(`
+    UPDATE tasks SET board_id = NULL
+    WHERE board_id IS NOT NULL AND board_id NOT IN (SELECT id FROM boards)
+  `);
+
   // Used to auto-INSERT a "Board 1" here when none existed — that was
   // right back when the app always booted straight into a board (there
   // had to be one to load). DESIGN-BACKLOG.md item 8 changed that: the
@@ -627,6 +647,11 @@ export function openStore(userDataDir: string) {
   `);
   const deleteStmt = db.prepare("DELETE FROM cards WHERE id = ?");
   const deleteCardsForBoardStmt = db.prepare("DELETE FROM cards WHERE board_id = ?");
+  // RODADA 4 — ver o comentário grande de `deleteBoard` abaixo. Reatribui
+  // (nunca apaga) as tasks do board deletado: "tasks são imortais por
+  // design" (ReportRow's doc comment já registrava isso) e apagar
+  // destruiria `task_transitions` junto, que é registro de auditoria.
+  const reassignTasksForDeletedBoardStmt = db.prepare("UPDATE tasks SET board_id = NULL WHERE board_id = ?");
   // Item 30 — the sessions sidebar's data source: every chat-kind row,
   // archived or not (an open chat is still a legitimate "session" to
   // jump back to from the sidebar, not just closed ones), newest first.
@@ -735,6 +760,31 @@ export function openStore(userDataDir: string) {
   `);
 
   const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, created_at, updated_at`;
+  // RODADA 3 (DESIGN-BACKLOG.md §2.1, decisão 7 / peça 5 do recorte) —
+  // rodapé de escopo (`board X · N tasks · M em outros boards`). GLOBAL de
+  // propósito (nenhum filtro por board): é exatamente essa visão de
+  // conjunto que teria tornado visível, na tela, o achado desta rodada
+  // (seis tasks presas a um `board_id` órfão) em vez de um quadro
+  // silenciosamente vazio. `WHERE board_id IS NOT NULL` — uma task
+  // puramente de bookkeeping externo (nem `boardId` nem `cardId` no
+  // `create_task`) nunca teve board nenhum pra contar aqui.
+  const taskCountsByBoardStmt = db.prepare(`SELECT board_id, COUNT(*) as n FROM tasks WHERE board_id IS NOT NULL GROUP BY board_id`);
+  // RODADA 3, peça 6 — gráfico 3 (tempo em cada estado), o único dos três
+  // com fonte de dado real (`task_transitions` já grava `status`+`at`).
+  // Fica atrás de um toggle escondido por padrão — carregado SÓ quando o
+  // painel de gráficos é aberto (TaskCard.tsx), nunca junto do
+  // `buildTaskBoard` que roda a cada push. Mesmo cuidado de N+1 que
+  // `taskCardsForBoardStmt` já tem: um JOIN board inteiro, nunca um
+  // `getTaskTransitions` por task. `kind = 'status'` — `'stage'` está no
+  // tipo mas nenhum caminho escreve isso ainda (ver TaskTransitionRow's
+  // doc comment).
+  const transitionsForBoardStmt = db.prepare(`
+    SELECT tt.task_id, tt.to_value, tt.at
+    FROM task_transitions tt
+    JOIN tasks t ON t.id = tt.task_id
+    WHERE t.board_id = ? AND tt.kind = 'status'
+    ORDER BY tt.task_id, tt.at ASC, tt.rowid ASC
+  `);
   const listTasksStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks ORDER BY created_at ASC`);
   // DESIGN-BACKLOG.md §2.1, decisão 7 / item 6 — variante filtrada,
   // usando o mesmo `idx_tasks_board_id` que já existia sem nunca ser
@@ -787,6 +837,43 @@ export function openStore(userDataDir: string) {
     ON CONFLICT(task_id, card_id) DO UPDATE SET role = excluded.role
   `);
   const listTaskCardsStmt = db.prepare("SELECT task_id, card_id, role FROM task_cards WHERE task_id = ?");
+
+  // DESIGN-BACKLOG.md §2.1 Fase 2, peça 4 — anatomia da task no quadro
+  // precisa, POR BOARD (nunca por task individual — o mesmo N+1 que a
+  // Fase 1 já rejeitou pro `list_tasks` sem `boardId`, ver o comentário de
+  // `listTasksByBoardStmt` acima): (1) o ATOR da última transição de
+  // status, pro selo auto/agente/você; (2) os cards vinculados com papel,
+  // pros chips. Cada uma é UMA consulta pro board inteiro, nunca um loop
+  // chamando `getTask` por task — `getTask` continua existindo só pra
+  // leitura pontual (MCP `get_task`), intocado.
+  const lastActorsForBoardStmt = db.prepare(`
+    SELECT t.id as task_id,
+      (SELECT tt.actor FROM task_transitions tt WHERE tt.task_id = t.id AND tt.kind = 'status' ORDER BY tt.at DESC, tt.rowid DESC LIMIT 1) as last_actor
+    FROM tasks t WHERE t.board_id = ?
+  `);
+  // LEFT JOIN cards (não JOIN) — o chip de card do quadro (peça 4) quer o
+  // glyph metálico do provider e o label sem depender do card estar VIVO
+  // no renderer agora: a verdade mora em `cards` mesmo pra um card já
+  // fechado (só `deleteCard`, nunca disparado por fechar um card comum,
+  // apaga a linha — ver `CardRow.archived_at`'s doc comment). `LEFT` pra
+  // nunca sumir com o vínculo task↔card só porque o card raro que FOI
+  // deletado de verdade não existe mais.
+  const taskCardsForBoardStmt = db.prepare(`
+    SELECT tc.task_id, tc.card_id, tc.role, c.kind as card_kind, c.provider as card_provider, c.label as card_label
+    FROM task_cards tc
+    JOIN tasks t ON t.id = tc.task_id
+    LEFT JOIN cards c ON c.id = tc.card_id
+    WHERE t.board_id = ?
+  `);
+  // Relatório do card PRINCIPAL de cada task (`tasks.card_id`, o mesmo que
+  // `upsertTaskCardIfAbsent` já trata como "implementer") — é o dado que
+  // decide a etapa implementar/review e a barra de proposta de conclusão
+  // (decisões 3 e 9). `reports.card_id` é PRIMARY KEY, então o JOIN nunca
+  // duplica linha por task.
+  const reportsForBoardStmt = db.prepare(`
+    SELECT r.card_id, r.seq, r.report_json, r.verdict, r.updated_at FROM reports r
+    JOIN tasks t ON t.card_id = r.card_id WHERE t.board_id = ?
+  `);
 
   const getReportStmt = db.prepare("SELECT card_id, seq, report_json, verdict, updated_at FROM reports WHERE card_id = ?");
   const upsertReportStmt = db.prepare(`
@@ -863,13 +950,37 @@ export function openStore(userDataDir: string) {
       const rows = cardCountsStmt.all() as { board_id: string; agents: number; active: number }[];
       return Object.fromEntries(rows.map((r) => [r.board_id, { agents: r.agents, active: r.active }]));
     },
+    /** RODADA 4 (DESIGN-BACKLOG.md §2.3, diagnóstico do board órfão) —
+     * antes desta rodada, isto deletava conectores e cards do board e a
+     * linha do board, sem tocar em `tasks` — escrito antes de
+     * `tasks.board_id` sequer existir, nunca revisitado depois. Uma task
+     * cujo board acabava de sumir ficava presa a um `board_id` que
+     * nenhuma linha de `boards` mais tinha, PRA SEMPRE (não existe
+     * `deleteTask`). `reassignTasksForDeletedBoardStmt` fecha essa
+     * classe agora: `board_id = NULL` reusa o significado que a coluna
+     * já tem pra "task sem board" (bookkeeping puro, nunca candidata a
+     * auto-dispatch), nunca invés de apagar a task — apagar destruiria
+     * `task_transitions` (registro de auditoria) junto, e contradiria
+     * "tasks são imortais por design". Ordem: reatribui ANTES de apagar
+     * a linha do board (a query de `reassignTasksForDeletedBoardStmt`
+     * não depende da linha existir, mas a leitura fica mais natural
+     * "salva o que precisa sobreviver, depois derruba o resto"). */
     deleteBoard: (id: string) => {
       deleteConnectorsForBoardStmt.run(id);
       deleteCardsForBoardStmt.run(id);
+      reassignTasksForDeletedBoardStmt.run(id);
       deleteBoardStmt.run(id);
     },
     nextIdSeed: (): number => (maxIdStmt.get() as { m: number | null }).m ?? 0,
     listTasks: (): TaskRow[] => listTasksStmt.all() as TaskRow[],
+    // Ver o comentário grande de `taskCountsByBoardStmt` acima.
+    taskCountsByBoard: (): Record<string, number> => {
+      const rows = taskCountsByBoardStmt.all() as { board_id: string; n: number }[];
+      return Object.fromEntries(rows.map((r) => [r.board_id, r.n]));
+    },
+    // Ver o comentário grande de `transitionsForBoardStmt` acima.
+    listStatusTransitionsForBoard: (boardId: string): { task_id: string; to_value: string; at: number }[] =>
+      transitionsForBoardStmt.all(boardId) as { task_id: string; to_value: string; at: number }[],
     // DESIGN-BACKLOG.md §2.1 item 6 — ver TASK_COLUMNS/listTasksByBoardStmt
     // acima. Wired (2026-09-10) through index.ts's `listTasksByBoard`
     // callback into message-bus.ts's `list_tasks` cmd, which now uses this
@@ -890,6 +1001,28 @@ export function openStore(userDataDir: string) {
         transitions: getTaskTransitionsStmt.all(id) as TaskTransitionRow[],
         cards: listTaskCardsStmt.all(id) as TaskCardRow[],
       };
+    },
+    // Ver o comentário grande de `getTaskStatusStmt` acima.
+    // RODADA 3 (review adversarial da rodada 2, achado A, alto) — a versão
+    // anterior (`getTaskStatus`, um id por chamada) era chamada dentro de
+    // um laço por dependência de CADA task do board em `buildTaskBoard`
+    // (main/index.ts), a cada `notifyTaskChanged` — o MESMO N+1 que a
+    // Fase 1 já rejeitou pro `list_tasks` sem `boardId`
+    // (`listLastActorsForBoard` é a prova de que "uma consulta por board"
+    // é sempre possível aqui). Uma única consulta `IN (...)` resolve TODAS
+    // as dependências referenciadas pelo board de uma vez — `buildTaskBoard`
+    // agora chama isto UMA vez por push, não uma vez por dependência.
+    // `ids.length === 0` sai antes do SQL: um board sem nenhuma task com
+    // `deps_json` não deveria gerar `WHERE id IN ()` (SQLite aceita, mas é
+    // trabalho e round-trip à toa pro caso mais comum). Não é um
+    // `db.prepare` cacheado como todo outro statement deste arquivo — o
+    // número de `?` varia por chamada (uma IN de tamanho fixo não serve
+    // aqui), e isto roda no máximo uma vez por push, não em um hot path.
+    getTaskStatusesByIds: (ids: string[]): Record<string, string> => {
+      if (ids.length === 0) return {};
+      const placeholders = ids.map(() => "?").join(",");
+      const rows = db.prepare(`SELECT id, status FROM tasks WHERE id IN (${placeholders})`).all(...ids) as { id: string; status: string }[];
+      return Object.fromEntries(rows.map((r) => [r.id, r.status]));
     },
     /** DESIGN-BACKLOG.md §2.1 "QUEM ESCREVE — o ponto mais importante
      * desta fase". A transição é gravada AQUI, comparando com a linha que
@@ -938,6 +1071,22 @@ export function openStore(userDataDir: string) {
     getTaskTransitions: (taskId: string): TaskTransitionRow[] => getTaskTransitionsStmt.all(taskId) as TaskTransitionRow[],
     getTaskCards: (taskId: string): TaskCardRow[] => listTaskCardsStmt.all(taskId) as TaskCardRow[],
     linkTaskCard: (taskId: string, cardId: string, role: string) => linkTaskCardStmt.run({ task_id: taskId, card_id: cardId, role }),
+    // DESIGN-BACKLOG.md §2.1 Fase 2, peça 4 — ver o comentário grande dos
+    // três `Stmt` acima. `last_actor` é `null` tanto pra uma task sem
+    // NENHUMA transição gravada (predata `task_transitions`) quanto pra
+    // qualquer valor que a subquery correlacionada não encontrou — os dois
+    // casos são "sem selo ainda", nunca um palpite.
+    listLastActorsForBoard: (boardId: string): { task_id: string; last_actor: TaskActor | null }[] =>
+      lastActorsForBoardStmt.all(boardId) as { task_id: string; last_actor: TaskActor | null }[],
+    listTaskCardsForBoard: (
+      boardId: string,
+    ): (TaskCardRow & { card_kind: string | null; card_provider: string | null; card_label: string | null })[] =>
+      taskCardsForBoardStmt.all(boardId) as (TaskCardRow & {
+        card_kind: string | null;
+        card_provider: string | null;
+        card_label: string | null;
+      })[],
+    listReportsForBoard: (boardId: string): ReportRow[] => reportsForBoardStmt.all(boardId) as ReportRow[],
     getReport: (cardId: string): ReportRow | undefined => getReportStmt.get(cardId) as ReportRow | undefined,
     upsertReport: (row: ReportRow) => {
       upsertReportStmt.run({ ...row, verdict: row.verdict ?? null });

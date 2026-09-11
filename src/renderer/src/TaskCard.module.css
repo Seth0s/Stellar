@@ -1,0 +1,467 @@
+/* DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 — quadro de 4 colunas.
+ * Colocalização de CSS, mesmo padrão de ChangesCard.module.css/FilesCard.
+ * module.css: só os elementos exclusivos deste kind moram aqui, o resto
+ * (moldura, header, rename) já vem de cards.css via CardFrame/CardTag. */
+
+.board {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  min-width: 0;
+  min-height: 0;
+  font-size: 12px;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.column:last-child {
+  border-right: none;
+}
+
+/* RODADA 3 (contrato §2.3, item 1) — cor por coluna vem inline
+   (COLUMN_COLOR, TaskCard.tsx: `--muted`/`--foam`/`--good`/`--danger`),
+   `color` NÃO fica fixo aqui. Item 2 — contador logo depois do título,
+   não mais empurrado pro fim da linha: `justify-content: flex-start` +
+   `gap` pequeno entre título e contador, em vez do `space-between` que
+   afastava os dois. */
+.columnHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 10px;
+  flex: none;
+}
+
+.columnCount {
+  background: var(--panel);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--text);
+}
+
+/* RODADA 3 (contrato §2.3, item 3) — pílula COM BORDA em `--good`; a
+   rodada 2 era texto azul solto, sem borda nenhuma. */
+.wipBadge {
+  background: transparent;
+  border: 1px solid var(--good);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--good);
+  font-variant-numeric: tabular-nums;
+}
+
+/* RODADA 3 (contrato §2.3, item 4) — nota de rodapé, só sob "a fazer" e
+   "falhou" (COLUMN_NOTE em TaskCard.tsx decide quais). */
+.columnNote {
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  flex: none;
+}
+
+/* RODADA 3-fix-textos — `retryCount` em mono, do jeito que o protótipo
+   v5 mostra (a nota de "falhou" usa `<code>`, ver TaskCard.tsx). */
+.columnNote code {
+  font-family: var(--font-mono);
+}
+
+.columnBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 8px 0;
+}
+
+.item {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* SEM faixa de acento à esquerda — removida do protótipo v5 de
+     propósito (DESIGN-BACKLOG.md §2.1): a trilha de etapa abaixo já diz
+     o que a faixa dizia. */
+}
+
+.itemTop {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* RODADA 2 (review de fidelidade ao protótipo v5) — id curto em mono, o
+   `a54269c1` do protótipo. */
+.taskId {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  flex: none;
+}
+
+.badge {
+  flex: none;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--surface);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* Empurrada pro fim da linha de topo — `itemTop` não usa
+   `justify-content: space-between` porque teria só 2 itens quando não há
+   selo de origem (task sem transição gravada ainda); `margin-left: auto`
+   funciona nos dois casos sem `if`. */
+.age {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.prompt {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* RODADA 2 — pílulas de meta (protótipo: `rodada N`, `reprovada N×`,
+   `espera <id>`). Só `espera <id>` (dependência) e a sugestão de
+   prioridade do agente têm dado real hoje — ver task-board-model.ts's
+   `waitingOnDepId` e o relatório desta rodada pro porquê das outras duas
+   ficarem de fora. */
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pill {
+  color: var(--muted);
+  font-size: 10.5px;
+  background: var(--surface);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* RODADA 3 — dependência que não resolve a task nenhuma (achado B do
+   review adversarial): visualmente distinta da pílula "espera <id>"
+   normal, mesma cor de alerta que o resto do app usa pra estado quebrado. */
+.pillBroken {
+  color: var(--danger);
+  font-size: 10.5px;
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 7px 2px 5px;
+  font-size: 10.5px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* Glyph metálico — mesma técnica de TerminalCard.module.css's
+   `.terminalCardProviderGlyph`: texto preenchido pelo próprio gradiente
+   diagonal via `background-clip: text`. */
+.chipGlyph {
+  font-family: "PureNerdFont", monospace;
+  font-size: 11px;
+  line-height: 1;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(125deg, var(--m-dark, var(--m-mid)) 0%, var(--m-mid) 48%, var(--m-dark, var(--m-mid)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.chipGlyphFlat {
+  background: none;
+  -webkit-text-fill-color: var(--m-mid);
+  color: var(--m-mid);
+}
+
+.chipLabel {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12ch;
+}
+
+.chipRole {
+  color: var(--muted);
+}
+
+.stageTrail {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.stageArrow {
+  opacity: 0.6;
+}
+
+.stageActive {
+  color: var(--foam);
+  font-weight: 600;
+}
+
+.stageDone {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.proposeBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  background: color-mix(in srgb, var(--good) 14%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--good) 40%, var(--border));
+  border-radius: 6px;
+  padding: 5px 7px;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.proposeText {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* RODADA 2 — chip de veredito próprio (`aprovado`), separado do texto —
+   o protótipo mostra os dois como elementos distintos, não uma frase só. */
+.verdictChip {
+  flex: none;
+  text-transform: uppercase;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--on-accent);
+  background: var(--good);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.proposeActions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.proposeBar button {
+  background: var(--good);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: none;
+}
+
+/* RODADA 2 — "mais uma rodada": segunda ação, deliberadamente menos
+   proeminente que "marcar concluído" (que é a leitura afirmativa do que o
+   relatório já disse) — mesma cor de superfície do resto do card, não a
+   cor de sucesso do botão principal. `.proposeBar .proposeSecondary`
+   (dois seletores de classe) supera `.proposeBar button` (uma classe + um
+   elemento) em especificidade sem precisar de `!important`. */
+.proposeBar .proposeSecondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+/* Varredura de atividade de 2px — mesma técnica de TerminalCard.module.css
+   (`.terminalCardActivity`/`.terminalCardActivitySweep`), reaproveitando o
+   keyframe global `terminal-activity-sweep` já definido em cards.css (não
+   escopado por CSS Modules — é uma referência de nome, não uma segunda
+   declaração). */
+.activity {
+  height: 2px;
+  flex: none;
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+  margin-top: 2px;
+}
+
+.activitySweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  left: -34%;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, var(--accent-task), transparent);
+}
+
+.activity.on .activitySweep {
+  opacity: 1;
+  animation: terminal-activity-sweep 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activitySweep {
+    animation: none !important;
+  }
+  .activity.on .activitySweep {
+    opacity: 0.6;
+  }
+}
+
+/* RODADA 3, peça 5 — rodapé de escopo (`board X · N tasks · M em outros
+   boards`). Vive em `.card-foot` (cards.css), que já tem padding/altura
+   de uma linha — texto que pode quebrar em telas estreitas, nunca um
+   popover posicionado (o card inteiro é clipado por `overflow: hidden`,
+   ver o doc comment de TaskScopeFooter). */
+.scopeFooter {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scopeOthers {
+  color: var(--muted);
+}
+
+.scopeLink {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--foam);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+/* Board órfão (achado desta rodada — `board_id` sem linha em `boards`):
+   contado, nunca clicável. */
+.scopeOrphan {
+  color: var(--warn);
+}
+
+/* RODADA 3, peça 6 — painel de gráficos, escondido por padrão (chartsOpen
+   em TaskCard.tsx). Grade responsiva de 3 — degrada pra 1 coluna em
+   telas estreitas (o card é redimensionável livremente). */
+.chartsPanel {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.chartsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.chartBox {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.chartTitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* Vazio DECLARADO (gráficos 1 e 2, sem fonte de dado; gráfico 3 antes da
+   primeira resposta ou sem nenhuma transição gravada) — nunca uma barra
+   de exemplo, nunca um número inventado. */
+.chartEmpty {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+  padding: 8px 0;
+}
+
+.chartLegend {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 9.5px;
+  color: var(--muted);
+}
+
+.legendSwatchQueued,
+.legendSwatchRunning {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 3px;
+  vertical-align: middle;
+}
+
+.legendSwatchQueued {
+  background: var(--border);
+}
+
+.legendSwatchRunning {
+  background: var(--foam);
+}
+
+/* Botão "Gráficos" (header) — estado pressionado quando o painel está
+   aberto. */
+.chartsToggleActive {
+  color: var(--foam);
+}

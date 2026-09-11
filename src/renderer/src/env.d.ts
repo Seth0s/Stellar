@@ -5,6 +5,7 @@ import type {
   GitApi,
   BrowserApi,
   SpawnApi,
+  TasksApi,
   AiApi,
   WinControlsApi,
   SnapshotApi,
@@ -31,6 +32,7 @@ declare global {
     git: GitApi;
     browser: BrowserApi;
     spawn: SpawnApi;
+    tasks: TasksApi;
     ai: AiApi;
     winControls: WinControlsApi;
     snapshot: SnapshotApi;

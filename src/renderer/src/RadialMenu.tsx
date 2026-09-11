@@ -30,7 +30,8 @@ export type RadialAction =
   | "sticky"
   | "browser"
   | "chat"
-  | "remote-window";
+  | "remote-window"
+  | "task";
 
 const ACTIONS: { action: RadialAction; icon: IconName; label: string; group: "tool" | "spawn"; tool?: Tool }[] = [
   { action: "tool-pointer", icon: "pointer", label: "Ponteiro", group: "tool", tool: "pointer" },
@@ -44,6 +45,8 @@ const ACTIONS: { action: RadialAction; icon: IconName; label: string; group: "to
   { action: "browser", icon: "browser", label: "Navegador", group: "spawn" },
   { action: "chat", icon: "chat", label: "Chatbox", group: "spawn" },
   { action: "remote-window", icon: "remoteWindow", label: "Janela externa", group: "spawn" },
+  // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 1.
+  { action: "task", icon: "task", label: "Fila", group: "spawn" },
 ];
 
 // How wide the ring's "hit band" is on either side of the ring's radius,

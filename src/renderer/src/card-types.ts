@@ -168,6 +168,20 @@ export type MediaCardData = BaseCard & {
   view: { zoom: number; panX: number; panY: number };
 };
 
+/** DESIGN-BACKLOG.md §2.1 "Card `task` — a fila de tasks vira superfície",
+ * decisão 1 — card kind no mesmo molde de sticky/files/changes, não um
+ * painel flutuante: as dependências e o vínculo task↔card usam o mesmo
+ * sistema de CONECTORES que já existe, em vez de um segundo paradigma de
+ * layout. Nenhum campo próprio pra persistir além do que `BaseCard` já
+ * cobre — ao contrário de files/changes (que reaproveitam `cwd` pra um
+ * "root"), o card `task` não tem raiz nenhuma: seus dados (as tasks em
+ * si) já vivem inteiramente em `tasks`/`task_transitions`/`task_cards`
+ * (store.ts), escopados por `board_id` — o card é só a VITRINE, sem
+ * estado próprio que precise de uma coluna nova em `cards`. Decisão 7 —
+ * "um card por board" é uma convenção da UI (só um botão de criação, sem
+ * necessidade real de mais de um), não uma restrição estrutural aqui. */
+export type TaskCardData = BaseCard & { kind: "task" };
+
 export type Card =
   | TerminalCardData
   | FilesCardData
@@ -177,7 +191,8 @@ export type Card =
   | RemoteWindowCardData
   | StrokeCardData
   | ChatCardData
-  | MediaCardData;
+  | MediaCardData
+  | TaskCardData;
 
 export type Connector = { id: string; fromCardId: string; toCardId: string; kind?: string | null; label?: string | null };
 // Item 57.8 — "export" desenha um recorte retangular livre (não snapado a

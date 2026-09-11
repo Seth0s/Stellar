@@ -31,6 +31,8 @@ const CARD_DESCRIPTIONS: Record<string, string> = {
   browser: "Navegador web embutido com snapshots",
   chat: "Assistente conversacional com ferramentas integradas",
   "remote-window": "Espelhamento e controle de janela externa",
+  // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 1.
+  task: "Quadro de tasks — a fazer, em andamento, concluído, falhou",
 };
 
 export function Rail({
@@ -314,6 +316,8 @@ export function Rail({
                       ? "Nota Adesiva"
                       : kind === "remote-window"
                       ? "Janela Externa"
+                      : kind === "task"
+                      ? "Fila"
                       : kind;
                   return (
                     <button

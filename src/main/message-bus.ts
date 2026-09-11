@@ -510,6 +510,13 @@ export function createMessageBus(
      * MCP/acbridge cmd (see AGENTS.md's architecture entry). */
     getCardBoardId: (cardId: string) => string | undefined;
     isBoardAutonomous: (boardId: string) => boolean;
+    /** RODADA 4 (DESIGN-BACKLOG.md §2.3, fechar a classe do board órfão)
+     * — `create_task` valida contra isto antes de gravar: um `boardId`
+     * que não existe é recusado (erro explícito ao chamador), nunca
+     * gravado em silêncio. Mesmo princípio que fechou o bug do `effort`
+     * do antigravity — falhar alto é melhor que gravar lixo quieto, e
+     * falha silenciosa nesta base já custou dinheiro uma vez. */
+    boardExists: (boardId: string) => boolean;
     /** Pendentes #188 ("delete_card"/"update_card_content") — unlike
      * `listCards()` (only the currently loaded board's live cards), this
      * reads straight from the store across EVERY board — the only way to
@@ -1663,6 +1670,15 @@ export function createMessageBus(
       // auto-dispatch, pure external-orchestrator bookkeeping as before
       // this column existed.
       const boardId = req.boardId ?? (req.cardId ? (callbacks.getCardBoardId(req.cardId) ?? null) : null);
+      // RODADA 4 — recusa em vez de gravar em silêncio. Só valida quando
+      // `boardId` acabou não-null: um board inferido de `cardId` que já
+      // não resolveu a card nenhum (card fechado, board dele já
+      // deletado) já cai em `null` pela linha acima, então chega aqui
+      // como bookkeeping puro de propósito, nunca precisando de board
+      // nenhum — não é o caso que este check existe pra pegar.
+      if (boardId !== null && !callbacks.boardExists(boardId)) {
+        return { ok: false, error: `no such board "${boardId}" — check list_tasks/the board list before retrying, or omit boardId for a bookkeeping-only task` };
+      }
       callbacks.upsertTask({
         id,
         prompt: req.prompt ?? null,

@@ -29,7 +29,7 @@ import { createPtyRegistry } from "./pty-registry";
 // `combo` que o registro declara pro zoom, não uma cópia dos literais —
 // ver o doc comment de `getShortcutCombo`.
 import { matchesCombo, getShortcutCombo, type ShortcutKeyEvent } from "../renderer/src/shortcut-registry";
-import { openStore, type CardRow, type ConnectorRow, type BoardRow } from "./store";
+import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { refreshUserEnv, userEnvSnapshot } from "./user-env";
 import {
@@ -1008,6 +1008,131 @@ function createWindow() {
   win.on("moved", recheckBrowserScaleFactors);
   screen.on("display-metrics-changed", recheckBrowserScaleFactors);
 
+  // Espelha `preload/index.ts`'s `TaskBoardItem` (mesmo shape, sem import
+  // cruzado main/preload — nenhum outro tipo IPC deste arquivo importa de
+  // `preload` hoje, ver `onQueueChanged`'s callback logo abaixo, que
+  // declara sua própria forma inline pelo mesmo motivo). Mantidos em
+  // sincronia à mão; um esquecimento aqui só quebra em runtime pro
+  // renderer, nunca silenciosamente — `tsc` no lado do preload aponta o
+  // campo que sumiu.
+  type TaskBoardItem = {
+    id: string;
+    prompt: string | null;
+    provider: string | null;
+    status: string;
+    cardId: string | null;
+    boardId: string | null;
+    order: number | null;
+    suggestedOrder: number | null;
+    retryCount: number;
+    createdAt: number;
+    updatedAt: number;
+    lastActor: "app" | "agent" | "human" | null;
+    cards: { cardId: string; role: string; kind: string | null; provider: string | null; label: string | null }[];
+    report: { verdict: "aprovado" | "reprovado" | null; updatedAt: number } | null;
+    // RODADA 2 (review de fidelidade ao protótipo v5) — pílula "espera
+    // <id>". `deps` é o array cru de `deps_json` (já existia desde a Fase
+    // 1); `depStatuses` só cobre OS ids desta lista (nunca o board
+    // inteiro) — cada um resolvido por `store.getTaskStatus`, uma consulta
+    // dedicada por dep (deps são poucos por task, não é o N+1 que a
+    // listagem em massa evita). Um dep AUSENTE de `depStatuses` (não
+    // "null", ausente mesmo) significa "não sei" — `waitingOnDepId`
+    // (task-board-model.ts) trata isso como não-bloqueante, nunca um
+    // falso positivo.
+    deps: string[];
+    depStatuses: Record<string, string>;
+  };
+  // DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — o quadro de tasks (renderer)
+  // precisa de push ao vivo, espelhando `onConnectorKindChanged`/
+  // `onConnectorLabelChanged` logo abaixo: mesmo filtro por `activeBoardId`
+  // antes de `safeSend`, pro board aberto nunca receber tráfego de IPC de
+  // uma task de OUTRO board. `buildTaskBoard` monta a "anatomia" inteira
+  // (peça 4: selo de origem, chips com papel, relatório do card principal,
+  // status de dependência) com só 5 consultas NO TOTAL por chamada
+  // (`listTasksByBoard` + `listLastActorsForBoard` + `listTaskCardsForBoard`
+  // + `listReportsForBoard` + UMA `getTaskStatusesByIds` cobrindo toda
+  // dependência do board de uma vez, RODADA 3 — a versão da rodada 2 fazia
+  // uma consulta POR DEPENDÊNCIA POR TASK, achado A do review adversarial)
+  // — nunca um `getTask`/`getReport`/`getTaskStatus` por task.
+  function buildTaskBoard(boardId: string): TaskBoardItem[] {
+    const tasks = store.listTasksByBoard(boardId);
+    const lastActorByTask = new Map(store.listLastActorsForBoard(boardId).map((r) => [r.task_id, r.last_actor]));
+    const cardsByTask = new Map<string, { cardId: string; role: string; kind: string | null; provider: string | null; label: string | null }[]>();
+    for (const tc of store.listTaskCardsForBoard(boardId)) {
+      const list = cardsByTask.get(tc.task_id) ?? [];
+      list.push({ cardId: tc.card_id, role: tc.role, kind: tc.card_kind, provider: tc.card_provider, label: tc.card_label });
+      cardsByTask.set(tc.task_id, list);
+    }
+    const reportByCardId = new Map(store.listReportsForBoard(boardId).map((r) => [r.card_id, r]));
+    // RODADA 2 — mesma convenção de parse que message-bus.ts's
+    // onTaskDone/retryOrFail já usam pra este mesmo campo (`deps_json ?
+    // JSON.parse(...) : []`, sem try/catch): só este código escreve essa
+    // coluna, sempre via JSON.stringify, então não há formato estranho a
+    // se defender de.
+    const depsByTask = new Map<string, string[]>(tasks.map((t) => [t.id, t.deps_json ? JSON.parse(t.deps_json) : []]));
+    // RODADA 3 (review adversarial da rodada 2, achado A) — coleta a UNIÃO
+    // de toda dependência referenciada por QUALQUER task do board primeiro,
+    // resolve todas de uma vez (`getTaskStatusesByIds`, uma consulta só),
+    // e só DEPOIS fatia por task (JS puro, sem custo de banco algum) —
+    // nunca mais uma consulta por dependência por task.
+    const allDepIds = new Set<string>();
+    for (const deps of depsByTask.values()) for (const d of deps) allDepIds.add(d);
+    const depStatusById = store.getTaskStatusesByIds([...allDepIds]);
+    return tasks.map((t) => {
+      const report = t.card_id ? reportByCardId.get(t.card_id) : undefined;
+      const deps = depsByTask.get(t.id) ?? [];
+      const depStatuses: Record<string, string> = {};
+      for (const depId of deps) {
+        const s = depStatusById[depId];
+        if (s !== undefined) depStatuses[depId] = s;
+      }
+      return {
+        id: t.id,
+        prompt: t.prompt,
+        provider: t.provider,
+        status: t.status,
+        cardId: t.card_id,
+        boardId: t.board_id,
+        order: t.order,
+        suggestedOrder: t.suggested_order,
+        retryCount: t.retry_count,
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+        lastActor: lastActorByTask.get(t.id) ?? null,
+        cards: cardsByTask.get(t.id) ?? [],
+        report: report ? { verdict: (report.verdict ?? null) as "aprovado" | "reprovado" | null, updatedAt: report.updated_at } : null,
+        deps,
+        depStatuses,
+      };
+    });
+  }
+  function notifyTaskChanged(boardId: string | null) {
+    if (!boardId || boardId !== activeBoardId) return;
+    safeSend(win, "task:changed", boardId, buildTaskBoard(boardId));
+  }
+  // RODADA 3, peça 5 — rodapé de escopo (`board X · N tasks · M em outros
+  // boards`). GLOBAL (nunca filtrado por `activeBoardId`, ao contrário de
+  // `notifyTaskChanged` acima): a contagem de OUTROS boards precisa
+  // atualizar mesmo quando a task que mudou não é do board aberto —
+  // mesma convenção sem filtro que `onQueueChanged` já usa (index.ts, ver
+  // seu próprio comentário). Barato mesmo sem filtro: uma única consulta
+  // `GROUP BY`, chamada no máximo uma vez por gravação de task, nunca por
+  // render.
+  function notifyTaskScopeChanged() {
+    safeSend(win, "task-board-scope:changed", store.taskCountsByBoard());
+  }
+  // Choke point único pra toda gravação de task (agente via MCP/acbridge,
+  // motor interno de retry/auto-dispatch, OU o botão humano de aprovar
+  // conclusão abaixo) — `store.upsertTask` já grava a transição (actor
+  // chega dentro do próprio `task`, ver seu comentário grande em
+  // store.ts); só falta empurrar o board pra quem estiver com ele aberto
+  // e o rodapé de escopo de todo mundo.
+  function persistTask(task: TaskRow) {
+    store.upsertTask(task);
+    notifyTaskChanged(task.board_id);
+    notifyTaskScopeChanged();
+  }
+
   messageBus = createMessageBus(sockPath, {
     // Achado ao vivo (2026-09-01): o `.filter(kind === "terminal")` que
     // ficava aqui é o que fazia um agente responder "list_cards doesn't
@@ -1141,6 +1266,9 @@ function createWindow() {
     },
     getCardBoardId: (id) => store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id),
     isBoardAutonomous: (boardId) => store.getBoard(boardId)?.autonomous ?? false,
+    // RODADA 4 — ver o comentário grande da entrada `boardExists` na
+    // interface de callbacks (message-bus.ts).
+    boardExists: (boardId) => store.getBoard(boardId) !== undefined,
     getBoardConcurrencyCap: (boardId) => store.getBoard(boardId)?.concurrency_cap ?? null,
     // Pendentes #188 ("delete_card"/"update_card_content") — direct store
     // access, same as getCardBoardId above, for a card that may not be on
@@ -1171,11 +1299,27 @@ function createWindow() {
     // that this file is no longer locked by another agent's work.
     listTasksByBoard: (boardId) => store.listTasksByBoard(boardId),
     getTask: (id) => store.getTask(id),
-    upsertTask: (task) => store.upsertTask(task),
+    // Fase 2, peça 2 — era `store.upsertTask(task)` direto; `persistTask`
+    // (acima) é o MESMO efeito mais o push pro board aberto. Cobre TODO
+    // caminho que já passava por aqui: `create_task`/`update_task` (MCP),
+    // o motor de auto-dispatch/retry (`onTaskDone`/`retryOrFail`/
+    // `markTaskFailed`, message-bus.ts) e o botão humano de aprovar
+    // conclusão (`store:tasks:approve-completion` abaixo).
+    upsertTask: (task) => persistTask(task),
     // DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — direct
     // store pass-through, mesmo padrão das 3 linhas de tasks acima.
     getReport: (cardId) => store.getReport(cardId),
-    upsertReport: (row) => store.upsertReport(row),
+    // Fase 2, peça 4 — um relatório novo pode fazer a task PROPOR conclusão
+    // (barra de "aprovado") sem que `status` mude nenhum bit — só gravar
+    // (`store.upsertReport`, intocado) não bastava, o board aberto
+    // também precisa saber. Mesmo scan por `card_id` que
+    // `resolveCardExit` (message-bus.ts) já faz pra achar a task de um
+    // card — não um novo padrão de custo.
+    upsertReport: (row) => {
+      store.upsertReport(row);
+      const task = store.listTasks().find((t) => t.card_id === row.card_id);
+      if (task?.board_id) notifyTaskChanged(task.board_id);
+    },
     nextReportSeqSeed: () => store.nextReportSeqSeed(),
     listAllConnectors: () => store.listAllConnectors(),
     // A lacuna que este comentário descrevia (2026-09-09: `set_connector_kind`
@@ -1477,6 +1621,32 @@ function createWindow() {
   ipcMain.handle("store:list-chat-sessions", () => store.listChatSessions());
   ipcMain.handle("store:archive-card", (_e, id: string) => store.archiveCard(id, Date.now()));
   ipcMain.handle("store:unarchive-card", (_e, id: string) => store.unarchiveCard(id));
+
+  // DESIGN-BACKLOG.md §2.1 Fase 2 — o quadro de tasks é o primeiro
+  // consumidor no renderer de `tasks`/`task_transitions`/`task_cards`
+  // (Fase 1 só tinha MCP/acbridge). Carga inicial/troca de board (o push
+  // `task:changed` acima cobre toda mudança POSTERIOR a este board estar
+  // aberto).
+  ipcMain.handle("store:tasks:list-by-board", (_e, boardId: string) => buildTaskBoard(boardId));
+  // DESIGN-BACKLOG.md §2.1 decisões 8/9 — "o app NUNCA marca concluído
+  // sozinho": isto é o botão que aceita a PROPOSTA que um `report{verdict:
+  // "aprovado"}` já fez (peça 4's barra), nunca um caminho automático —
+  // só existe porque um humano clicou. `actor: "human"` grava a transição
+  // como tal (mesma decisão 8: "quem decide é o humano").
+  ipcMain.handle("store:tasks:approve-completion", (_e, taskId: string) => {
+    const existing = store.getTask(taskId);
+    if (!existing) return { ok: false, error: `no such task "${taskId}"` };
+    persistTask({ ...existing, status: "done", updated_at: Date.now(), actor: "human" });
+    return { ok: true };
+  });
+  // RODADA 3, peça 5 — carga inicial do rodapé de escopo; `notifyTaskScopeChanged` acima cobre toda mudança POSTERIOR.
+  ipcMain.handle("store:tasks:counts-by-board", () => store.taskCountsByBoard());
+  // RODADA 3, peça 6 — gráfico 3 (tempo em cada estado). Deliberadamente
+  // SEM push: fica atrás de um painel escondido por padrão, então buscado
+  // só quando o humano abre o toggle (TaskCard.tsx) — nenhum custo
+  // enquanto o painel não é aberto, ao contrário de `buildTaskBoard`
+  // (rodada a cada gravação de task).
+  ipcMain.handle("store:tasks:transitions-by-board", (_e, boardId: string) => store.listStatusTransitionsForBoard(boardId));
 
   // "mudar pasta raiz" (ProjectPicker.tsx) — the real, navigable OS folder
   // dialog rather than a hand-built in-app tree browser: the user asked
