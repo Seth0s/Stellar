@@ -223,6 +223,8 @@ function BrowserCardInner({
   selected,
   reflowing,
   closing,
+  displayName,
+  onRename,
   sendTargets,
   onChange,
   onCommit,
@@ -254,6 +256,8 @@ function BrowserCardInner({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
+  displayName: string;
+  onRename: (label: string) => void;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -942,6 +946,8 @@ function BrowserCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       interactionMode={interactionMode}
       selected={selected}
       accent="var(--accent-browser)"

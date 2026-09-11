@@ -1,7 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
-import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
@@ -51,7 +50,7 @@ function TerminalCardInner({
   reflowing,
   closing,
   isFocused,
-  label,
+  displayName,
   onChange,
   onCommit,
   onRaise,
@@ -98,8 +97,7 @@ function TerminalCardInner({
   closing?: boolean;
   /** True when this card is on top of the z-order (zIndex === order.length - 1). Used to suppress notifications when the user is actively looking at this card. */
   isFocused?: boolean;
-  /** User-set header name, null = fall back to `providerId`. */
-  label: string | null;
+  displayName: string;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -312,13 +310,13 @@ function TerminalCardInner({
       // Requer "notifications" em MAIN_WINDOW_ONLY_PERMISSIONS
       // (main/index.ts) — sem isso o construtor abaixo nunca mostra nada,
       // silenciosamente (confirmado antes de mexer, ver o comentário lá).
-      new Notification(`${label ?? providerId} terminou o turno`, { body: cwd, silent: false });
+      new Notification(`${displayName} terminou o turno`, { body: cwd, silent: false });
     } catch {
       // Notification API indisponível/negada nesse ambiente — nunca deve
       // quebrar o terminal, só não notifica.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive]);
+  }, [isActive, displayName]);
 
   const statusClass = spawnError !== null ? "danger" : exitCode !== null ? "" : "ok";
   const statusLabel =
@@ -357,6 +355,8 @@ function TerminalCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       interactionMode={interactionMode}
       selected={selected}
       accent={PROVIDER_ACCENT[providerId] ?? PROVIDER_ACCENT.bash}
@@ -408,7 +408,6 @@ function TerminalCardInner({
                 </span>
               );
             })()}
-            <CardTag label={label ?? providerId} onRename={onRename} />
           </span>
           <span className="card-head-actions">
             <button

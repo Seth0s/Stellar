@@ -77,6 +77,7 @@ import { PROVIDER_EFFORT_VALUES } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
 import { decideTaskCardSpawn } from "../../task-card-guard";
+import { deriveCardDisplayName, type CardIdentitySnapshot } from "../../shared/card-identity";
 import "./app.css";
 
 // Pendentes #188 — rótulo do tooltip por `kind` de conector (só leitura
@@ -130,6 +131,21 @@ function truncateConnectorLabel(text: string, max = 60): string {
  * essa lista pros dois módulos nunca divergirem. */
 function existingRectsFor(cards: Card[]): { rect: Rect; blocking: boolean }[] {
   return cards.map((c) => ({ rect: c.rect, blocking: c.kind === "browser" }));
+}
+
+/** The shared identity function is deliberately process-agnostic, but the
+ * two bundles each have to extract their own card-specific fallback hint.
+ * Main does the equivalent for the persisted media JSON; the renderer has
+ * the already-parsed `assetPath`. Everything after this boundary — label
+ * priority, terminal ordinal, and kind fallback — is one shared function. */
+function cardIdentitySnapshot(card: Card): CardIdentitySnapshot {
+  return {
+    id: card.id,
+    kind: card.kind,
+    label: card.label,
+    provider: card.kind === "terminal" ? card.provider : "",
+    fallbackHint: card.kind === "media" ? card.assetPath.split(/[\\/]/).pop() || null : null,
+  };
 }
 
 // DESIGN-BACKLOG.md item 15 — this app's own checkout got renamed
@@ -2270,31 +2286,18 @@ export function App() {
     }
   }
 
-  // Pedido ao vivo (2026-08-27): o card de confirmação mostrava o id
-  // bruto do banco local ("claude #70") — sem significado nenhum pra um
-  // humano, só um número interno de sequência. Prioridade: (1) o `label`
-  // que o humano já deu ao card (CardTag rename) — a fonte mais
-  // confiável de "como isso deveria ser chamado", já existe, só não era
-  // usada aqui; (2) pra terminal sem label, um ordinal por provider
-  // dentro da SESSÃO atual ("Claude 1°", "Bash 2°"), calculado pela
-  // ordem real de criação (ids numéricos crescentes, não a ordem de
-  // z-index/`order`) — não o id bruto do SQLite, que carrega o contador
-  // global do app inteiro, sem relação com "qual card é esse dentro
-  // desta sessão".
+  // DESIGN-BACKLOG.md §2.1, identidade de card — the same pure function
+  // feeds consent/toast prose AND CardFrame's header. `cardsRef` contains
+  // only the currently loaded board, so a terminal on another board cannot
+  // affect this card's ordinal. The derived name is display-only: every
+  // target/key path continues to use `id`.
   function describeCard(id: string): string {
     const c = cardsRef.current.find((x) => x.id === id);
     if (!c) return `card #${id}`;
-    if (c.label) return c.label;
-    if (c.kind === "terminal") {
-      const provider = c.provider;
-      const sameProvider = cardsRef.current
-        .filter((x) => x.kind === "terminal" && x.provider === provider)
-        .sort((a, b) => Number(a.id) - Number(b.id));
-      const ordinal = sameProvider.findIndex((x) => x.id === id) + 1;
-      const name = provider.charAt(0).toUpperCase() + provider.slice(1);
-      return `${name} ${ordinal}°`;
-    }
-    return `${CARD_LABEL[c.kind]} #${id}`;
+    return deriveCardDisplayName(
+      cardIdentitySnapshot(c),
+      cardsRef.current.map(cardIdentitySnapshot),
+    );
   }
 
   /** The actual removal — cards/order/connectors/selection/liveStatus state
@@ -2894,6 +2897,7 @@ export function App() {
           const onConnectorStart = getConnectorStartHandler(c);
           const onSelectStart = getSelectStartHandler(c);
           const selected = selectedIds.has(c.id);
+          const displayName = describeCard(c.id);
           // A `switch` (not the old if/else-if chain) so a card kind this
           // doesn't handle is a compile error via `assertNeverCardKind`,
           // not a silent fall-through into rendering the wrong component —
@@ -2928,7 +2932,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                label={c.label}
+                displayName={displayName}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -2965,7 +2969,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                label={c.label}
+                displayName={displayName}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -2997,7 +3001,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                label={c.label}
+                displayName={displayName}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -3040,7 +3044,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                label={c.label}
+                displayName={displayName}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -3079,11 +3083,13 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
+                displayName={displayName}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
                 onClose={getCloseHandler(c)}
                 onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -3110,7 +3116,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                label={c.label}
+                displayName={displayName}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -3148,7 +3154,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                label={c.label}
+                displayName={displayName}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -3195,7 +3201,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                label={c.label}
+                displayName={displayName}
                 onChange={(r) => tryChangeRect(c.id, r)}
                 onCommit={(r) => commitRect(c, r)}
                 onRaise={() => raise(c.id)}
@@ -3236,6 +3242,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
+                displayName={displayName}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -3243,6 +3250,7 @@ export function App() {
                 onFocusOwner={getFocusOwnerHandler(c)}
                 onClose={getCloseHandler(c)}
                 onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}
@@ -3272,7 +3280,7 @@ export function App() {
                 interactionMode={interactionMode}
                 reflowing={reflowing}
                 closing={closingIds.has(c.id)}
-                label={c.label}
+                displayName={displayName}
                 tasks={activeBoardId ? taskBoards[activeBoardId] ?? [] : []}
                 // RODADA 2 — badge de WIP (peça 4). `boards` já é estado
                 // carregado (useBoardStore.ts), mesma fonte que
@@ -3509,7 +3517,7 @@ export function App() {
         summarizeDisabled={newProvider === "bash"}
         onReorganize={aiReorganize}
         onSummarize={summarizeBoard}
-        cards={cards.map((c) => ({ id: c.id, kind: c.kind, label: c.label }))}
+        cards={cards.map((c) => ({ id: c.id, kind: c.kind, label: describeCard(c.id) }))}
         kindIcon={CARD_ICON}
         kindLabel={CARD_LABEL}
         onJumpToCard={jumpToCard}
@@ -3540,7 +3548,7 @@ export function App() {
         onSetConcurrencyCap={setBoardConcurrencyCap}
         onSuggestInstall={stableSuggestInstall}
       />
-      <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} onFocusCard={jumpToCard} />
+      <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} cardLabel={describeCard} onFocusCard={jumpToCard} />
       <UpdateBanner />
       <ToastHost />
       {showShortcuts && (

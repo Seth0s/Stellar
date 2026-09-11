@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
 import { decideReportNotifyTarget } from "./report-notify-routing";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideWriteReadiness, decideSubmitCheck } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 
 export type SockIdentity = { dev: number; ino: number };
@@ -57,14 +57,12 @@ const IDLE_WATCH_INTERVAL_MS = 2_000;
 // relatório. Mitigação simples (leading-edge, por card que REPORTA, não
 // por spawner): o primeiro `report` de um card sempre notifica na hora;
 // qualquer `report` seguinte do MESMO card dentro desta janela é
-// suprimido (nem popup, nem linha no PTY) — mas NUNCA perdido: o slot do
-// relatório (persistido, ver `ReportRow` em store.ts) e a `seq` monotônica
-// avançam de qualquer forma (ver o cmd `report`), então quem estiver
-// esperando com `read_report({wait: true, afterSeq})` recebe o relatório
-// mais novo normalmente, só sem o empurrão. 3s é curto o bastante pra não
-// atrasar um handoff real (rounds de review, mesmo rápidos, são separados
-// por segundos de trabalho de verdade) e longo o bastante pra absorver um
-// loop apertado.
+// suprimido no popup humano — mas NUNCA perdido: o slot do relatório
+// (persistido, ver `ReportRow` em store.ts), a `seq` monotônica e a entrega
+// ao agente (fila FIFO por PTY) avançam de qualquer forma. 3s é curto o
+// bastante pra não atrasar um handoff real (rounds de review, mesmo
+// rápidos, são separados por segundos de trabalho de verdade) e longo o
+// bastante pra absorver um loop apertado.
 const REPORT_NOTIFY_MIN_INTERVAL_MS = 3_000;
 // Reading a page's text is exactly as sensitive as a pixel snapshot (an
 // already-open page an agent already has a card reference to) — no human
@@ -180,7 +178,24 @@ const ANTIGRAVITY_EFFORT_VALUES = new Set(["low", "high"]);
  * mesmo motivo do outro achado da mesma sessão: renomear o card ("Stellar")
  * era puramente decorativo porque nada no bus sabia do nome. Com ele aqui,
  * `resolveTargetId` abaixo aceita o rótulo como alvo. */
-export type CardSummary = { id: string; kind: string; provider: string; cwd: string; label: string | null; url?: string };
+export type CardSummary = {
+  id: string;
+  kind: string;
+  provider: string;
+  cwd: string;
+  label: string | null;
+  url?: string;
+  /** DESIGN-BACKLOG.md §2.1 "identidade e descoberta de card", ponto 1 —
+   * o nome que um humano veria no header deste card AGORA, mesmo sem
+   * `label`: `label` quando existe, senão a mesma derivação
+   * (`deriveCardDisplayName`, shared/card-identity.ts) que o header do
+   * card usa. Antes disto, um agente sem `label` só tinha o `id` numérico
+   * pra citar o card de volta — reportado ao vivo pelo dono do repo
+   * ("estranho... 'card 321'"). Só pra EXIBIÇÃO: o ordinal embutido nele
+   * (cards `terminal` sem label) muda se outro card do mesmo provider for
+   * fechado — nunca use isto como chave, `id` continua sendo isso. */
+  displayName: string;
+};
 export type SnapshotResult = { ok: true; path: string } | { ok: false; error: string };
 export type PageTextResult = { ok: true; text: string; truncated: boolean } | { ok: false; error: string };
 export type ReadCardResult = { ok: true; text: string } | { ok: false; error: string };
@@ -386,6 +401,16 @@ export function createMessageBus(
   callbacks: {
     listCards: () => CardSummary[];
     writeToCard: (id: string, text: string) => void;
+    /** Internal delivery path: the registry records this write as agent
+     * delivery rather than human keystrokes, so the delivery itself cannot
+     * trip the human-input gate or rearm session discovery. Optional keeps
+     * existing test doubles and external integrations source-compatible. */
+    writeToCardWithOrigin?: (id: string, text: string, origin: "delivery") => void;
+    /** Small critical section around one delivery's text + Enter + check.
+     * Human bytes arriving during it are retained by the PTY registry and
+     * replayed afterward in order. */
+    beginCardDelivery?: (id: string) => boolean;
+    endCardDelivery?: (id: string) => void;
     /** DESIGN-BACKLOG.md item 61 — same "Bash 2°" ordinal-per-provider
      * convention App.tsx's `describeCard` already uses for
      * `AgentAskModal`'s requester label, reimplemented here against
@@ -487,7 +512,13 @@ export function createMessageBus(
      * (`type-and-submit-decision.ts`'s `decideWriteReadiness`) precisa dos
      * 3 campos juntos pra uma decisão só; `null` com a mesma convenção de
      * `isCardAlive`/`getCardLastActivityAt` (sem entry, nada a esperar). */
-    getCardWriteReadiness: (cardId: string) => { spawnedAtMs: number; hasReceivedData: boolean; lastActivityAtMs: number } | null;
+    getCardWriteReadiness: (cardId: string) => {
+      spawnedAtMs: number;
+      hasReceivedData: boolean;
+      lastActivityAtMs: number;
+      hasPendingHumanInput?: boolean;
+      inputLineStartedAtMs?: number | null;
+    } | null;
     /** Sticky item "card_status idle" (fix ao vivo, 2026-09-04) — OS
      * notification, never touches any terminal's PTY/input. See the doc
      * comment on `notifySpawnerOfIdleCard` above for why `writeToCard`
@@ -845,6 +876,10 @@ export function createMessageBus(
   // consent gate open at once. Cleared on resolve AND on the request's own
   // timeout — never left stuck past whichever comes first.
   const waitingOnConsent = new Map<string, number>();
+  /** Every programmatic message to one PTY shares one FIFO. Reports, task
+   * notices, and explicit `send_to_card` calls must not overtake each other,
+   * and none may be dropped just because another delivery is in flight. */
+  const deliveryQueues = new Map<string, Promise<void>>();
   function markWaiting(requesterId: string) {
     if (!requesterId) return;
     waitingOnConsent.set(requesterId, (waitingOnConsent.get(requesterId) ?? 0) + 1);
@@ -956,6 +991,25 @@ export function createMessageBus(
     }
   }
 
+  /** A live PTY can be ready while its human is midway through a line. The
+   * registry exposes that cheap signal without exposing terminal contents;
+   * wait until the line is submitted or the bounded expiry says it is stale.
+   * The latter deliberately lets the queued notice through so delivery is
+   * never lost, while the registry keeps the human bytes intact. */
+  async function waitForHumanInputGate(target: string): Promise<void> {
+    for (;;) {
+      const snapshot = callbacks.getCardWriteReadiness(target);
+      if (!snapshot) return;
+      const decision = decideDeliveryGate({
+        hasPendingHumanInput: snapshot.hasPendingHumanInput === true,
+        pendingHumanInputStartedAtMs: snapshot.inputLineStartedAtMs ?? null,
+        nowMs: Date.now(),
+      });
+      if (decision.action === "proceed") return;
+      await delay(WRITE_READY_POLL_MS);
+    }
+  }
+
   /** Extraído do cmd `send` (correção pós-revisão, 2026-09-09) — ANTES
    * disto `notifySpawnerOfReport` escrevia sua linha via `writeToCard` e
    * parava aí, sem apertar Enter, achando (errado — apontado em revisão)
@@ -983,49 +1037,90 @@ export function createMessageBus(
    * terceiro estado ("unknown"), gated por `hasNewActivitySinceWrite` —
    * `activityAtWrite` abaixo é o "antes" contra o qual cada tentativa
    * compara `getCardLastActivityAt` de novo. */
-  async function typeAndSubmit(target: string, text: string): Promise<void> {
+  async function deliverCard(target: string, text: string): Promise<void> {
     await waitForWriteReadiness(target);
-    const activityAtWrite = callbacks.getCardLastActivityAt(target);
-    callbacks.writeToCard(target, text);
-    // Sticky item "send_to_card não confirma envio" (2026-09-03) — a
-    // regex de placeholder sozinha só cobre UM sintoma (CLI que colapsa
-    // um paste grande num chip "[Pasted text ...]"); uma mensagem curta
-    // simplesmente fica CRUA na caixa, nunca colapsa, então checar só o
-    // placeholder deixaria passar como "enviado" um caso que não foi.
-    // Segundo sinal, agnóstico de provider: a própria linha de composer
-    // geralmente continua mostrando o texto literal até ser de fato
-    // submetida (depois disso o que aparece — spinner, novo prompt, linha
-    // ecoada no histórico — é sempre DIFERENTE do que foi digitado).
-    // Prefixo normalizado (não a linha toda: soft-wrap pode quebrar uma
-    // linha longa em várias linhas de tela).
-    const sentPrefix = text.trim().replace(/\s+/g, " ").slice(0, 24);
-    for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
-      await delay(SEND_ENTER_DELAY_MS);
-      callbacks.writeToCard(target, "\r");
-      await delay(SEND_ENTER_CONFIRM_DELAY_MS);
-      const check = await readCardText(target, 8);
-      // Falha de leitura (timeout, card sumiu) não é evidência de que o
-      // submit falhou — para de retentar em vez de adivinhar. Único
-      // `break` fora da decisão pura — inalterado, não regride.
-      if (!check.ok) break;
-      const currentActivity = callbacks.getCardLastActivityAt(target);
-      const result = decideSubmitCheck({
-        screenText: check.text,
-        sentPrefix,
-        // Timestamp ausente (card sumiu entre o write e agora, ou um
-        // callback que não sabe responder) tratado como "houve atividade"
-        // de propósito — não é o caso que este achado existe pra cobrir
-        // (um card genuinamente sumido já morreria em `!check.ok` acima na
-        // prática, já que sem entry não há PTY pra `readCardText` ler), e
-        // travar o laço num "unknown" eterno por causa de um timestamp
-        // ausente seria pior. `typeof === "number"` (não `!== null`) de
-        // propósito — mais permissivo com qualquer valor não-numérico que
-        // apareça aqui, não só `null`.
-        hasNewActivitySinceWrite:
-          typeof activityAtWrite !== "number" || typeof currentActivity !== "number" || currentActivity > activityAtWrite,
-      });
-      if (result === "sent") break;
-      // "unsent" ou "unknown" — ambos retentam o Enter, nunca o texto.
+    await waitForHumanInputGate(target);
+
+    let deliveryStarted = false;
+    const hasDeliverySection = Object.prototype.hasOwnProperty.call(callbacks, "beginCardDelivery");
+    if (hasDeliverySection && callbacks.beginCardDelivery) {
+      while (!deliveryStarted) {
+        if (!callbacks.isCardAlive(target)) return;
+        const result = callbacks.beginCardDelivery(target);
+        // Existing unit-test doubles use a Proxy that returns a no-op
+        // function for unknown callbacks. `undefined` therefore means the
+        // optional production hook is absent, not "delivery is busy".
+        if (typeof result !== "boolean") break;
+        deliveryStarted = result;
+        if (!deliveryStarted) await delay(WRITE_READY_POLL_MS);
+      }
+    }
+
+    const writeDelivery = (data: string) => {
+      if (Object.prototype.hasOwnProperty.call(callbacks, "writeToCardWithOrigin") && callbacks.writeToCardWithOrigin) {
+        callbacks.writeToCardWithOrigin(target, data, "delivery");
+      }
+      else callbacks.writeToCard(target, data);
+    };
+
+    try {
+      const activityAtWrite = callbacks.getCardLastActivityAt(target);
+      writeDelivery(text);
+      // Sticky item "send_to_card não confirma envio" (2026-09-03) — a
+      // regex de placeholder sozinha só cobre UM sintoma (CLI que colapsa
+      // um paste grande num chip "[Pasted text ...]"); uma mensagem curta
+      // simplesmente fica CRUA na caixa, nunca colapsa, então checar só o
+      // placeholder deixaria passar como "enviado" um caso que não foi.
+      // Segundo sinal, agnóstico de provider: a própria linha de composer
+      // geralmente continua mostrando o texto literal até ser de fato
+      // submetida (depois disso o que aparece — spinner, novo prompt, linha
+      // ecoada no histórico — é sempre DIFERENTE do que foi digitado).
+      // Prefixo normalizado (não a linha toda: soft-wrap pode quebrar uma
+      // linha longa em várias linhas de tela).
+      const sentPrefix = text.trim().replace(/\s+/g, " ").slice(0, 24);
+      for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
+        await delay(SEND_ENTER_DELAY_MS);
+        writeDelivery("\r");
+        await delay(SEND_ENTER_CONFIRM_DELAY_MS);
+        const check = await readCardText(target, 8);
+        // Falha de leitura (timeout, card sumiu) não é evidência de que o
+        // submit falhou — para de retentar em vez de adivinhar. Único
+        // `break` fora da decisão pura — inalterado, não regride.
+        if (!check.ok) break;
+        const currentActivity = callbacks.getCardLastActivityAt(target);
+        const result = decideSubmitCheck({
+          screenText: check.text,
+          sentPrefix,
+          // Timestamp ausente (card sumiu entre o write e agora, ou um
+          // callback que não sabe responder) tratado como "houve atividade"
+          // de propósito — não é o caso que este achado existe pra cobrir
+          // (um card genuinamente sumido já morreria em `!check.ok` acima na
+          // prática, já que sem entry não há PTY pra `readCardText` ler), e
+          // travar o laço num "unknown" eterno por causa de um timestamp
+          // ausente seria pior. `typeof === "number"` (não `!== null`) de
+          // propósito — mais permissivo com qualquer valor não-numérico que
+          // apareça aqui, não só `null`.
+          hasNewActivitySinceWrite:
+            typeof activityAtWrite !== "number" || typeof currentActivity !== "number" || currentActivity > activityAtWrite,
+        });
+        if (result === "sent") break;
+        // "unsent" ou "unknown" — ambos retentam o Enter, nunca o texto.
+      }
+    } finally {
+      if (deliveryStarted) callbacks.endCardDelivery?.(target);
+    }
+  }
+
+  /** Queue all programmatic deliveries per PTY. A rejected delivery does
+   * not poison the next one; the next message still gets its own attempt. */
+  async function typeAndSubmit(target: string, text: string): Promise<void> {
+    const previous = deliveryQueues.get(target) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(() => deliverCard(target, text));
+    deliveryQueues.set(target, current);
+    try {
+      await current;
+    } finally {
+      if (deliveryQueues.get(target) === current) deliveryQueues.delete(target);
     }
   }
 
@@ -1250,19 +1345,18 @@ export function createMessageBus(
       return;
     }
 
-    // Throttle leading-edge por card que reporta — ver o comentário de
-    // `REPORT_NOTIFY_MIN_INTERVAL_MS`/`lastReportNotifyAt` acima. O
-    // `report` em si (seq, `cardReports`) já rodou antes desta chamada,
-    // então nada se perde aqui, só o empurrão é que é suprimido.
+    // Throttle apenas o popup humano. A entrega ao PTY abaixo entra numa
+    // fila FIFO e nunca pode ser suprimida: depois que o porteiro existe,
+    // usar este throttle para o caminho do agente perderia um report real.
     const now = Date.now();
     const last = lastReportNotifyAt.get(cardId) ?? 0;
-    if (now - last < REPORT_NOTIFY_MIN_INTERVAL_MS) return;
-    lastReportNotifyAt.set(cardId, now);
+    const notifyHuman = now - last >= REPORT_NOTIFY_MIN_INTERVAL_MS;
+    if (notifyHuman) lastReportNotifyAt.set(cardId, now);
 
     const label = callbacks.describeCardLabel(cardId);
     // Canal 1 — o mesmo popup de SO do `notifyIdleCard`. Serve a um humano
-    // de fato olhando a tela; não custa nada avisar os dois.
-    callbacks.notifyCardReported(spawnerId, label);
+    // de fato olhando a tela; o throttle não afeta o canal do agente.
+    if (notifyHuman) callbacks.notifyCardReported(spawnerId, label);
     // Canal 2 — mesmo formato do `send_to_card` (prefixo `[de: X]`, depois
     // Enter com confirmação), único jeito de isto virar uma MENSAGEM de
     // verdade pro card de destino em vez de texto pendurado no prompt.

@@ -81,6 +81,12 @@ const ANSI_PATTERN = new RegExp(
   "g",
 );
 
+/** Origem da escrita distingue teclas/bytes humanos de texto que o bus
+ * entrega deliberadamente ao agente. A distinção é necessária tanto para
+ * o porteiro quanto para o rearm de sessão: uma entrega não pode parecer
+ * uma nova linha humana nem bloquear a si própria. */
+export type PtyWriteOrigin = "human" | "delivery";
+
 type Entry = {
   proc: pty.IPty;
   cols: number;
@@ -125,12 +131,21 @@ type Entry = {
    * runs long after, in a different closure. */
   providerId: string;
   cwd: string;
-  /** Acumula bytes de INPUT (não output) até a próxima quebra de linha —
-   * usado pra checar se a linha inteira bate com `RESUME_TRIGGER_COMMANDS`
-   * OU (review adversarial RODADA 2/3, 2026-09-09) pra detectar CADA linha
-   * de input de verdade num provider de `REARM_ON_INPUT_PROVIDERS` — nunca
-   * usado pra mais nada, e nunca cresce sem limite (ver `write`). */
+  /** Acumula bytes de INPUT humano (não output) até a próxima quebra de
+   * linha. Além de checar resume, o porteiro usa a não-vazio como sinal de
+   * que o usuário começou uma linha. Escritas de `typeAndSubmit` são
+   * marcadas como `delivery` e não entram aqui. O buffer existe para TODO
+   * provider, não só os que têm `rearmsOnInput`, e nunca cresce sem limite
+   * (ver `write`). */
   inputLineBuffer: string;
+  /** Momento em que a linha humana atualmente aberta começou. `null` quando
+   * o último input drenou o buffer com Enter. */
+  inputLineStartedAtMs: number | null;
+  /** Se `true`, bytes humanos são retidos brevemente enquanto uma entrega
+   * já iniciada termina o ciclo texto + Enter + confirmação. Assim uma tecla
+   * que chega durante a janela de 80/250ms não entra no mesmo submit. */
+  deliveryActive: boolean;
+  deferredHumanInput: string[];
   /** Review adversarial RODADA 5 (2026-09-10), achado único (os 3 do
    * reviewer eram sintomas do mesmo problema) — `entry` não guardava
    * NENHUM estado de "já achei a sessão", então RODADA 3's "rearma em toda
@@ -504,6 +519,9 @@ export function createPtyRegistry(registryOpts: {
       providerId,
       cwd,
       inputLineBuffer: "",
+      inputLineStartedAtMs: null,
+      deliveryActive: false,
+      deferredHumanInput: [],
       // RODADA 5, achado único — um card restaurado (`resumeId` já
       // conhecido) nunca teve nada a descobrir: já é "resolvido" desde
       // antes do primeiro `write()`, então nenhuma linha de input deveria
@@ -624,6 +642,8 @@ export function createPtyRegistry(registryOpts: {
       // O ÚNICO lugar que remove uma entrada. `kill` abaixo não remove
       // mais por conta própria: enquanto o processo não sai de verdade,
       // ele continua no registry e `isAlive` continua dizendo a verdade.
+      entry.deliveryActive = false;
+      entry.deferredHumanInput = [];
       entries.delete(id);
       if (openOpencodeCardIds.delete(id) && openOpencodeCardIds.size === 0) notifyLastOpencodeCardClosed();
       registryOpts.onExit(id, exitCode);
@@ -718,13 +738,12 @@ export function createPtyRegistry(registryOpts: {
     );
   }
 
-  function write(id: string, data: string) {
-    const entry = entries.get(id);
-    if (!entry) return;
-    // Bufferiza/checa em dois casos: um trigger de resume confirmado (ver
+  function recordHumanInput(id: string, entry: Entry, data: string) {
+    if (data.length === 0) return;
+    // Bufferiza para o porteiro em TODO provider; a decisão de sessão
+    // continua usando apenas os dois caminhos abaixo.
     // RESUME_TRIGGER_COMMANDS), ou (review adversarial RODADA 2/3,
-    // 2026-09-09) um provider em REARM_ON_INPUT_PROVIDERS — pra qualquer
-    // outro provider isto não bufferiza nada, mesmo custo zero de antes.
+    // 2026-09-09) um provider em REARM_ON_INPUT_PROVIDERS.
     const trigger = RESUME_TRIGGER_COMMANDS[entry.providerId];
     const rearmsOnInput = REARM_ON_INPUT_PROVIDERS.includes(entry.providerId);
     // RODADA 7, achado 3 — `entry.awaitingResumeAnyInput` (abaixo) faz
@@ -738,19 +757,20 @@ export function createPtyRegistry(registryOpts: {
     // `true`, `trigger` já é (e continua sendo) `true` pra esse mesmo
     // provider — checá-lo de novo aqui seria uma condição que nunca muda
     // o resultado, código morto disfarçado de defesa.
-    if (trigger || rearmsOnInput) {
-      entry.inputLineBuffer += data;
-      let newlineIdx: number;
+    const nowMs = Date.now();
+    if (entry.inputLineBuffer.length === 0) entry.inputLineStartedAtMs = nowMs;
+    entry.inputLineBuffer += data;
+    let newlineIdx: number;
       // RODADA 7, achado 1 — um `Date.now()` só, reaproveitado por TODAS
       // as linhas deste `write()` (um paste multi-linha pode conter
       // várias) — a diferença de alguns microssegundos entre linhas do
       // mesmo `write()` é irrelevante pro piso, e usar o MESMO valor
       // evita qualquer ambiguidade sobre "qual now" uma linha específica
       // viu.
-      const nowMs = Date.now();
-      while ((newlineIdx = entry.inputLineBuffer.search(/[\r\n]/)) !== -1) {
+    while ((newlineIdx = entry.inputLineBuffer.search(/[\r\n]/)) !== -1) {
         const line = entry.inputLineBuffer.slice(0, newlineIdx).trim();
         entry.inputLineBuffer = entry.inputLineBuffer.slice(newlineIdx + 1);
+        entry.inputLineStartedAtMs = entry.inputLineBuffer.length > 0 ? nowMs : null;
         // RODADA 6, achado 1 (correção de regressão da RODADA 5) — a
         // decisão distingue os DOIS caminhos, que são coisas diferentes:
         // o trigger EXPLÍCITO (`/resume`) sempre rearma, mesmo com a
@@ -789,11 +809,46 @@ export function createPtyRegistry(registryOpts: {
           rearmSessionWatch(id, entry, decision.floorMs, nowMs);
         }
       }
-      if (entry.inputLineBuffer.length > MAX_INPUT_LINE_BUFFER) {
-        entry.inputLineBuffer = entry.inputLineBuffer.slice(-MAX_INPUT_LINE_BUFFER);
-      }
+    if (entry.inputLineBuffer.length > MAX_INPUT_LINE_BUFFER) {
+      entry.inputLineBuffer = entry.inputLineBuffer.slice(-MAX_INPUT_LINE_BUFFER);
     }
+    if (entry.inputLineBuffer.length === 0) entry.inputLineStartedAtMs = null;
+  }
+
+  function write(id: string, data: string, origin: PtyWriteOrigin = "human") {
+    const entry = entries.get(id);
+    if (!entry) return;
+
+    // Uma entrega já começou depois de passar pelo porteiro. Reter bytes
+    // humanos durante o pequeno ciclo texto+Enter+confirmação evita que uma
+    // tecla que chegue na janela de confirmação seja submetida junto com o
+    // aviso. A ordem dos bytes é preservada e eles voltam ao PTY assim que a
+    // entrega termina.
+    if (origin === "human" && entry.deliveryActive) {
+      entry.deferredHumanInput.push(data);
+      return;
+    }
+
+    if (origin === "human") recordHumanInput(id, entry, data);
     entry.proc.write(data);
+  }
+
+  function beginDelivery(id: string): boolean {
+    const entry = entries.get(id);
+    if (!entry || entry.deliveryActive) return false;
+    entry.deliveryActive = true;
+    return true;
+  }
+
+  function endDelivery(id: string) {
+    const entry = entries.get(id);
+    if (!entry) return;
+    entry.deliveryActive = false;
+    const deferred = entry.deferredHumanInput.splice(0);
+    for (const data of deferred) {
+      recordHumanInput(id, entry, data);
+      entry.proc.write(data);
+    }
   }
 
   function resize(id: string, cols: number, rows: number) {
@@ -886,10 +941,22 @@ export function createPtyRegistry(registryOpts: {
    * (type-and-submit-decision.ts), se já é seguro digitar. `null` com a
    * mesma convenção de `isAlive`/`getLastActivityAt` — sem entry, não há
    * o que esperar. */
-  function getWriteReadiness(id: string): { spawnedAtMs: number; hasReceivedData: boolean; lastActivityAtMs: number } | null {
+  function getWriteReadiness(id: string): {
+    spawnedAtMs: number;
+    hasReceivedData: boolean;
+    lastActivityAtMs: number;
+    hasPendingHumanInput: boolean;
+    inputLineStartedAtMs: number | null;
+  } | null {
     const entry = entries.get(id);
     if (!entry) return null;
-    return { spawnedAtMs: entry.spawnedAtMs, hasReceivedData: entry.hasReceivedData, lastActivityAtMs: entry.lastActivityAt };
+    return {
+      spawnedAtMs: entry.spawnedAtMs,
+      hasReceivedData: entry.hasReceivedData,
+      lastActivityAtMs: entry.lastActivityAt,
+      hasPendingHumanInput: entry.inputLineBuffer.length > 0,
+      inputLineStartedAtMs: entry.inputLineStartedAtMs,
+    };
   }
 
   /** Test-only accessor (pre-release audit B7's verify coverage) — the
@@ -899,5 +966,5 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getWriteReadiness, seenUrlsCount };
+  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getWriteReadiness, seenUrlsCount };
 }

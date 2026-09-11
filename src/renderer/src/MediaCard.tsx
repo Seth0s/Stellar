@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
-import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import styles from "./MediaCard.module.css";
@@ -32,7 +31,7 @@ export function MediaCard({
   selected,
   reflowing,
   closing,
-  label,
+  displayName,
   onChange,
   onCommit,
   onRaise,
@@ -61,7 +60,7 @@ export function MediaCard({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
-  label: string | null;
+  displayName: string;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -198,6 +197,8 @@ export function MediaCard({
         rect={rect}
         zoom={zoom}
         zIndex={zIndex}
+        displayName={displayName}
+        onRename={onRename}
         interactionMode={interactionMode}
         selected={selected}
         reflowing={reflowing}
@@ -232,7 +233,6 @@ export function MediaCard({
           <>
             <span className="card-head-label">
               <Icon name="fileImage" size={14} />
-              <CardTag label={label ?? filename} onRename={onRename} />
             </span>
             {/* Para imagem, girar deixa de morar na faixa do header — vira
                 ferramenta solta ao redor da própria imagem

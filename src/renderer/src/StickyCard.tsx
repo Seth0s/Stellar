@@ -1,6 +1,5 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { CardFrame } from "./CardFrame";
-import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
@@ -81,7 +80,7 @@ function StickyCardInner({
   selected,
   reflowing,
   closing,
-  label,
+  displayName,
   onChange,
   onCommit,
   onRaise,
@@ -117,7 +116,7 @@ function StickyCardInner({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
-  label: string | null;
+  displayName: string;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -225,6 +224,8 @@ function StickyCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       interactionMode={interactionMode}
       selected={selected}
       accent={STICKY_ACCENT[color] ?? STICKY_ACCENT.yellow}
@@ -244,7 +245,6 @@ function StickyCardInner({
         <>
           <span className="card-head-label">
             <Icon name={kind.icon} size={14} />
-            <CardTag label={label ?? kind.label} onRename={onRename} />
             <span className="swatches">
               {STICKY_COLORS.map((c) => (
                 <button

@@ -1,6 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
-import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import { keyEventToKeysym } from "./keysyms";
@@ -18,7 +17,7 @@ function RemoteWindowCardInner({
   selected,
   reflowing,
   closing,
-  label,
+  displayName,
   onChange,
   onCommit,
   onRaise,
@@ -39,7 +38,7 @@ function RemoteWindowCardInner({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
-  label: string | null;
+  displayName: string;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -161,6 +160,8 @@ function RemoteWindowCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
@@ -179,7 +180,6 @@ function RemoteWindowCardInner({
         <>
           <span className="card-head-label">
             <Icon name="remoteWindow" size={14} />
-            <CardTag label={label ?? "janela externa"} onRename={onRename} />
           </span>
           {phase === "live" && (
             <button

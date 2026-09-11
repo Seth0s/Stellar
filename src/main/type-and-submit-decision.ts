@@ -70,6 +70,14 @@ export const WRITE_READY_QUIET_MS = 150;
  * time (`codex`'s was the slowest, still well under this). */
 export const WRITE_READY_MAX_WAIT_MS = 8_000;
 
+/** DESIGN-BACKLOG.md §0 "Push de report atropela o humano que está
+ * digitando" — quanto tempo uma linha humana sem Enter pode impedir uma
+ * entrega automática. Depois deste teto a linha é tratada como abandonada:
+ * a entrega prossegue, preservando o aviso na fila, mas o draft que ainda
+ * estiver no composer não é apagado nem pode ser separado magicamente do
+ * texto entregue pelo PTY. O chamador registra esse fallback explícito. */
+export const HUMAN_INPUT_GATE_MAX_AGE_MS = 30_000;
+
 export interface WriteReadinessInput {
   /** Has the card's process emitted at least one chunk of output since it
    * was spawned? `false` for the entire window before the TUI has drawn
@@ -99,6 +107,35 @@ export function decideWriteReadiness(input: WriteReadinessInput): WriteReadiness
     return { action: "proceed", reason: "timeout" };
   }
   return { action: "wait" };
+}
+
+export interface DeliveryGateInput {
+  /** Há uma linha humana iniciada que ainda não atravessou Enter. */
+  hasPendingHumanInput: boolean;
+  /** Momento em que a linha começou, ou `null` quando não há relógio
+   * confiável para ela. */
+  pendingHumanInputStartedAtMs: number | null;
+  nowMs: number;
+}
+
+export type DeliveryGateDecision =
+  | { action: "proceed"; reason: "empty" | "expired" | "unknown-age" }
+  | { action: "wait"; reason: "human-input" };
+
+/** Decide se uma entrega pode atravessar o PTY sem atropelar o composer
+ * humano. A decisão é pura para que o limite e o fallback de relógio sejam
+ * testados sem Electron, PTY ou timers reais. */
+export function decideDeliveryGate(input: DeliveryGateInput): DeliveryGateDecision {
+  if (!input.hasPendingHumanInput) return { action: "proceed", reason: "empty" };
+
+  // Um estado pendente sem timestamp não pode bloquear uma fila para sempre.
+  // A implementação real sempre fornece o timestamp; este fallback também
+  // mantém compatibilidade segura com callers antigos/test doubles.
+  if (input.pendingHumanInputStartedAtMs === null) return { action: "proceed", reason: "unknown-age" };
+
+  const ageMs = Math.max(0, input.nowMs - input.pendingHumanInputStartedAtMs);
+  if (ageMs >= HUMAN_INPUT_GATE_MAX_AGE_MS) return { action: "proceed", reason: "expired" };
+  return { action: "wait", reason: "human-input" };
 }
 
 export type SubmitCheckResult = "sent" | "unsent" | "unknown";

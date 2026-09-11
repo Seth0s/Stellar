@@ -1,6 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
-import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import { Markdown } from "./Markdown";
 import { toast } from "./useToast";
@@ -212,7 +211,7 @@ function ChatCardInner({
   selected,
   reflowing,
   closing,
-  label,
+  displayName,
   onChange,
   onCommit,
   onRaise,
@@ -244,7 +243,7 @@ function ChatCardInner({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
-  label: string | null;
+  displayName: string;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -597,6 +596,8 @@ function ChatCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       screenProjected={screenProjected}
       panX={panX}
       panY={panY}
@@ -635,7 +636,6 @@ function ChatCardInner({
         <>
           <span className="card-head-label">
             <Icon name="chat" size={14} />
-            <CardTag label={label ?? "chatbox"} onRename={onRename} />
             <span className="chat-provider-picker">
               {ALL_PROVIDERS.map((p) => (
                 <button

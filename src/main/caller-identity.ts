@@ -1,6 +1,7 @@
 /**
- * Quem É o chamador de uma tool MCP — o carimbo da URL ou o argumento
- * explícito `callerCardId`, e qual dos dois vence.
+ * Quem É o chamador de uma tool MCP — somente o carimbo da URL pode
+ * estabelecer uma identidade confiável; `callerCardId` é entrada controlada
+ * pelo cliente e não substitui o carimbo.
  *
  * DESIGN-BACKLOG.md §0, review adversarial do card 337 ("fila 85975417",
  * 2026-09-11) — ACHADO CRÍTICO, escalada de privilégio real: a versão
@@ -30,19 +31,14 @@
  * acha que ele é.
  *
  * CASO SEM CARIMBO (`urlCardId` ausente) — decisão explícita, não
- * esquecimento: continua caindo pro explícito, exatamente como hoje.
- * Dois caminhos reais batem nisso: um cliente MCP externo genuíno
- * (Claude Desktop, um smoke test discando a porta HTTP direto) nunca tem
- * `?card=` na própria URL — não é um card desta app, não tem processo
- * spawnado, não tem carimbo pra ter. Recusar o explícito também aí
- * expulsaria esse caminho por inteiro (o próprio `connector-kind-
- * authorization.ts`, mesma rodada de review, achado o custo gêmeo:
- * recusar chamador sem identidade também barra esse mesmo cliente). Isto
- * NÃO reabre o vetor do achado: a vulnerabilidade era especificamente "um
- * card COM carimbo real mentindo sobre qual card ele é" — sem carimbo
- * nenhum, o servidor já não tinha (e continua sem ter) uma verdade
- * verificável pra defender; a garantia nova é "quando existe uma verdade
- * verificável, ela sempre vence", não "toda chamada precisa de uma".
+ * esquecimento: a conexão fica anônima. O `callerCardId` do corpo também
+ * é controlado pelo cliente e, portanto, não pode virar uma identidade
+ * confiável só porque a URL não veio carimbada. Isso é importante para
+ * `isBoardAutonomous`: uma chamada HTTP direta não pode escolher o id de um
+ * card de outro board e herdar consentimento automático. Clientes externos
+ * continuam podendo usar ferramentas que não exigem identidade; operações
+ * privilegiadas seguem o fluxo de consentimento ou são recusadas quando a
+ * identidade é obrigatória.
  *
  * O QUE ISTO REMOVE, deliberadamente — "um agente que legitimamente fala
  * em nome de outro card" (o comentário original de `CALLER_CARD_ID_FIELD`
@@ -73,14 +69,11 @@ export interface CallerIdentityInput {
 }
 
 /** Ver o comentário grande acima pro porquê desta precedência.
- * `urlCardId` vence SEMPRE que presente (não verificável, não
- * sobrescrevível por nenhum argumento de chamada); `explicitCallerCardId`
- * só é consultado como FALLBACK, quando não há carimbo nenhum. String
- * vazia/só espaço conta como ausente nos dois lados — um modelo que
- * preenche `""` não está se identificando. */
+ * Só o carimbo da URL pode estabelecer identidade. O argumento explícito é
+ * mantido na interface por compatibilidade com clientes existentes, mas é
+ * deliberadamente ignorado: sem uma URL carimbada, o chamador é anônimo.
+ * String vazia/só espaço também conta como ausência. */
 export function resolveCallerCardId(input: CallerIdentityInput): string | undefined {
   const stamped = input.urlCardId?.trim();
-  if (stamped) return stamped;
-  const explicit = input.explicitCallerCardId?.trim();
-  return explicit ? explicit : undefined;
+  return stamped || undefined;
 }

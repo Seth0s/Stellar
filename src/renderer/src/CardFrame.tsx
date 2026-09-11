@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import { worldRectToScreen, type Rect } from "./board-model";
 
@@ -41,6 +42,8 @@ export function CardFrame({
   className,
   kind,
   baseStyle = true,
+  displayName,
+  onRename,
   headerContent,
   footerContent,
   onFocus,
@@ -77,6 +80,12 @@ export function CardFrame({
    * todo card) na raiz. `false` pros kinds que já controlam esse visual
    * inteiramente pelo próprio CSS (hoje só Stroke). */
   baseStyle?: boolean;
+  /** Human-facing name computed once by App.tsx from the shared card
+   * identity function. CardFrame owns its rendering so every kind — even
+   * browser's custom address bar and stroke's minimal header — uses the
+   * exact same name and rename affordance. */
+  displayName: string;
+  onRename: (label: string) => void;
   headerContent: React.ReactNode;
   /** One-line strip at the bottom of the card (cwd, root path, URL, ...) —
    * reported live (2026-08-27) as inconsistent: each card kind that
@@ -440,6 +449,13 @@ export function CardFrame({
           `.card-frame`. */}
       <div className="card-clip" onPointerDown={chromeless ? onHeaderPointerDown : undefined}>
         <div className="card-head" onPointerDown={chromeless ? undefined : onHeaderPointerDown}>
+          <div className="card-head-identity">
+            <span className="card-kind-pill" title={`Tipo: ${kind}`} aria-label={`Tipo: ${kind}`}>
+              <span className="card-kind-dot" aria-hidden="true" />
+              <span>{kind}</span>
+            </span>
+            <CardTag label={displayName} onRename={onRename} />
+          </div>
           {/* Wrapping div, not headerContent's own two-item space-between
               row directly — keeps every card kind's own internal layout
               (label ↔ actions) untouched; the focus button below is

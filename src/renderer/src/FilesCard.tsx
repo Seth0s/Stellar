@@ -1,6 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
-import { CardTag } from "./CardTag";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
@@ -318,7 +317,7 @@ function FilesCardInner({
   selected,
   reflowing,
   closing,
-  label,
+  displayName,
   onChange,
   onCommit,
   onRaise,
@@ -340,7 +339,7 @@ function FilesCardInner({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
-  label: string | null;
+  displayName: string;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -797,6 +796,8 @@ function FilesCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       interactionMode={interactionMode}
       selected={selected}
       accent="var(--accent-files)"
@@ -816,7 +817,6 @@ function FilesCardInner({
         <>
           <span className="card-head-label">
             <Icon name="files" size={14} />
-            <CardTag label={label ?? "arquivos"} onRename={onRename} />
           </span>
           <span className="card-head-actions">
             <button onClick={onClose}>
