@@ -226,6 +226,20 @@ Reportados ao vivo pelo usuário em 2026-09-02, ainda não investigados. Priorid
     2. Confirmar submissao por sinal do lado de fora da tela (o precedente existe: a verificacao do Enter usou `~/.codex/history.jsonl`, que so ganha entrada em turno genuino) em vez de reenviar as cegas.
     3. Teto de Enters por provider, se a investigacao mostrar que o comportamento e mesmo por provider.
   * **Custo real do bug**: o agente refaz trabalho ja entregue, ou responde duas vezes ao mesmo briefing — nos dois casos observados ele percebeu e nao refez, mas isso foi sorte de o agente ser cuidadoso, nao garantia do sistema.
+* **Consumo de memoria — 4.97 GiB e 1.36 GiB de VRAM no gerenciador (reportado ao vivo, 2026-09-11):**
+  * Palavras do dono do repo: *"o stellar esta usando 5gb de ram e 1.4gb vram, isso e um absurdo"*.
+  * **O numero do gerenciador e a ARVORE inteira, nao o app.** O gerenciador soma os filhos, e os filhos sao os CLIs de agente que o proprio usuario spawnou. Medicao feita na hora, com 16 cards de terminal vivos:
+    | o que | RSS |
+    |---|---|
+    | **Electron do Stellar (proprio)** | **1305.5 MB** |
+    | `stellar-mcp` (11 processos, media 55.2 MB) | **607.2 MB** |
+    | CLIs de agente (claude 418, agy 842, node/cursor 613, node-22 246) | ~2.1 GB |
+    * Detalhe do Electron: renderer 404.9 MB, gpu-process 392.9 MB, main 251.6 MB, network 82.3 MB, zygotes 130.5 MB, broker 47.9 MB.
+  * **Logo: ~1.9 GB e responsabilidade do Stellar** (proprio + shims que ele spawna) e ~3 GB sao os agentes. Nem "absurdo do app inteiro" nem "nao e nosso problema".
+  * **O alvo mais claro e o `stellar-mcp`: 607 MB em 11 processos node, um por card de agente, so para fazer ponte de MCP.** Isto ja esta registrado como ideia de "bridge compartilhado de subprocesso" e agora tem numero: ~55 MB por card, que e MAIS que o custo de ~35 MB por card ja medido antes para o subprocesso. Um unico processo de ponte servindo todos os cards elimina a maior parte disso.
+  * **Segundo alvo, o gpu-process com 392.9 MB e 1.36 GiB de VRAM**: o app usa xterm com addon WebGL por card e cards de navegador com WebContents proprio. Vale medir quanto cai desligando o WebGL do xterm em card nao focado, ou liberando contexto de card fora da viewport — MEDIR antes de mexer, o WebGL existe por causa de performance de render do terminal.
+  * **Terceiro, o renderer com 404.9 MB**: 16 cards vivos, cada um com buffer de scrollback do xterm. Vale checar se o scrollback tem teto e se card fechado libera o buffer de verdade.
+  * **Como investigar sem chutar**: medir crescimento ao longo do tempo com o MESMO numero de cards (vazamento) e ao abrir/fechar cards em ciclo (liberacao). Numero alto e estavel e custo; numero alto e crescente e vazamento — sao consertos diferentes e a distincao vem so da medicao.
 ---
 
 ## ⏳ 1. Em Andamento / Em Espera
