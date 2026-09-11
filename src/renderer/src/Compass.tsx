@@ -269,12 +269,16 @@ export const Compass = memo(function Compass({
   visibleRect,
   kindIcon,
   kindLabel,
+  cardLabel,
   onFocusCard,
 }: {
   cards: Card[];
   visibleRect: Rect;
   kindIcon: Record<string, IconName>;
   kindLabel: Record<string, string>;
+  /** Same display-only identity shown in CardFrame/Rail. Keeping this as a
+   * callback avoids Compass inventing a third fallback for unnamed cards. */
+  cardLabel?: (id: string) => string;
   onFocusCard: (id: string) => void;
 }) {
   const { titleRight, zoomPillLeft } = useTopbarNeighborBounds();
@@ -297,7 +301,10 @@ export const Compass = memo(function Compass({
     // `label` resolvido aqui, uma vez, pra `computeCompassLayout` (função
     // PURA, sem acesso a `kindLabel`) poder medir largura de chip sem
     // conhecer a forma de `Card`.
-    .map((c): Candidate & { label: string } => ({ ...c, label: c.card.label ?? kindLabel[c.card.kind] ?? c.card.kind }));
+    .map((c): Candidate & { label: string } => ({
+      ...c,
+      label: cardLabel?.(c.card.id) ?? c.card.label ?? kindLabel[c.card.kind] ?? c.card.kind,
+    }));
 
   if (all.length === 0) return null;
 

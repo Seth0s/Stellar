@@ -358,6 +358,40 @@ function handleSnapshotRequest(
   safeSend(win, "snapshot:rect-request", requestId, resolvedTarget);
 }
 
+/** DESIGN-BACKLOG.md §2.1 "identidade e descoberta de card", ponto 1 —
+ * `deriveCardDisplayName`'s `fallbackHint` pra um `media` sem label: o
+ * filename, mais útil que o substantivo genérico "Mídia". `card.cwd`
+ * guarda `{assetPath, rotation, view}` como JSON pra este kind (mesma
+ * convenção de `App.tsx`'s `toRow`/`parseMedia` — main nunca teve motivo
+ * pra ler essa coluna antes disto, então esta é a primeira vez que
+ * precisa saber o formato). Mesma postura defensiva de `parseMedia`: linha
+ * malformada devolve `null` (cai pro substantivo genérico), nunca lança.
+ * `null` pra qualquer outro kind — só `media` tem algo mais específico
+ * que o substantivo a oferecer aqui. */
+function mediaFilenameFallback(card: CardRow): string | null {
+  if (card.kind !== "media") return null;
+  try {
+    const parsed = JSON.parse(card.cwd) as { assetPath?: unknown };
+    const assetPath = typeof parsed?.assetPath === "string" ? parsed.assetPath : "";
+    const filename = assetPath.split(/[\\/]/).pop();
+    return filename || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ponto único, dentro do processo main, que monta o `CardIdentitySnapshot`
+ * pra `deriveCardDisplayName` — `describeCardLabel` (1 card por chamada) e
+ * `listCards` (todos de um board, abaixo) chamam ESTE helper em vez de
+ * cada um montar o snapshot à mão, pra nunca arriscar os dois divergirem
+ * de novo por um detalhe de mapeamento esquecido num dos dois lugares. */
+function cardDisplayName(card: CardRow, sameBoardCards: readonly CardRow[]): string {
+  return deriveCardDisplayName(
+    { id: card.id, kind: card.kind, label: card.label, provider: card.provider, fallbackHint: mediaFilenameFallback(card) },
+    sameBoardCards.map((c) => ({ id: c.id, kind: c.kind, label: c.label, provider: c.provider })),
+  );
+}
+
 /**
  * Pre-release audit S3 — the main window had no navigation guard at all.
  * `Markdown.tsx` renders agent/file-provided markdown with
@@ -818,7 +852,15 @@ function createWindow() {
       store
         .listAllCards()
         .filter((c) => c.kind === "terminal" && registry.isAlive(c.id))
-        .map((c) => ({ id: c.id, label: c.label, provider: c.provider, cwd: c.cwd })),
+        .map((c) => ({
+          id: c.id,
+          // The mobile/remote surface has only this human-facing label
+          // field, so expose the same display-only name as list_cards. The
+          // ordinal is still never used as an id or routing key.
+          label: cardDisplayName(c, store.listCards(c.board_id)),
+          provider: c.provider,
+          cwd: c.cwd,
+        })),
     onWrite: (id, data) => registry.write(id, data),
     onResize: (id, cols, rows) => registry.resize(id, cols, rows),
   });
@@ -1180,8 +1222,8 @@ function createWindow() {
     // (`listTerminalCards`, message-bus.ts), que é onde a restrição de
     // fato existe. `label` vai junto pra `resolveTargetId` poder aceitar o
     // nome que o humano deu ao card como alvo.
-    listCards: () =>
-      store
+    listCards: () => {
+      const cards = store
         .listAllCards()
         // Escopado na sessão aberta (achado ao vivo 2026-09-01): trocar de
         // board encerra os PTYs e desmonta os cards do anterior, mas eles
@@ -1192,9 +1234,9 @@ function createWindow() {
         // do board ativo: `read_card`/`write_sticky`/`snapshot` dependem do
         // renderer ter o card montado, e o PTY já foi morto. Na Home
         // (`activeBoardId === null`) a lista é legitimamente vazia.
-        .filter((c) => c.board_id === activeBoardId)
-        .map((c) => {
-        const base = { id: c.id, kind: c.kind, label: c.label };
+        .filter((c) => c.board_id === activeBoardId);
+      return cards.map((c) => {
+        const base = { id: c.id, kind: c.kind, label: c.label, displayName: cardDisplayName(c, cards) };
         // Só terminal/chat usam `provider` com o significado do nome, e só
         // terminal/chat/files/changes usam `cwd` como caminho de verdade.
         // Todo o resto reaproveita as duas colunas sem migração (App.tsx's
@@ -1215,8 +1257,12 @@ function createWindow() {
           default:
             return { ...base, provider: "", cwd: "" };
         }
-      }),
+      });
+    },
     writeToCard: (id, text) => registry.write(id, text),
+    writeToCardWithOrigin: (id, text, origin) => registry.write(id, text, origin),
+    beginCardDelivery: (id) => registry.beginDelivery(id),
+    endCardDelivery: (id) => registry.endDelivery(id),
     isCardAlive: (id) => registry.isAlive(id),
     getCardLastActivityAt: (id) => registry.getLastActivityAt(id),
     getCardWriteReadiness: (id) => registry.getWriteReadiness(id),
@@ -1304,20 +1350,21 @@ function createWindow() {
     notifyBusUnavailable: (message) => {
       safeSend(win, "acbridge:unavailable", message);
     },
-    // DESIGN-BACKLOG.md item 61 — same "Bash 2°" convention as App.tsx's
-    // `describeCard` (AgentAskModal's requester label), reimplemented
-    // against store.ts directly since this is main-process code.
+    // DESIGN-BACKLOG.md §2.1 "identidade e descoberta de card", ponto 1 —
+    // delega pra `deriveCardDisplayName` (shared/card-identity.ts), a
+    // ÚNICA fonte agora — usada aqui (notificações, prefixo de
+    // `send_to_card`) e por `list_cards` (dispatchRequest's cmd "list",
+    // message-bus.ts) igual, e pelo header de cada card no renderer
+    // (App.tsx's `describeCard`, mesmo módulo). Antes desta unificação,
+    // esta função tinha o próprio ramo de ordinal SEM checar
+    // `kind === "terminal"` primeiro — qualquer card non-terminal
+    // (`card.provider === ""` pra quase todo kind) produzia um `" 1°"`
+    // quebrado; achado ao comparar contra a versão correta que o renderer
+    // já tinha (`describeCard`, que sempre checou o kind).
     describeCardLabel: (cardId) => {
       const card = store.getCard(cardId);
       if (!card) return `card #${cardId}`;
-      if (card.label) return card.label;
-      const sameProvider = store
-        .listCards(card.board_id)
-        .filter((c) => c.kind === "terminal" && c.provider === card.provider)
-        .sort((a, b) => Number(a.id) - Number(b.id));
-      const ordinal = sameProvider.findIndex((c) => c.id === cardId) + 1;
-      const name = card.provider.charAt(0).toUpperCase() + card.provider.slice(1);
-      return `${name} ${ordinal}°`;
+      return cardDisplayName(card, store.listCards(card.board_id));
     },
     getCardBoardId: (id) => store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id),
     // DESIGN-BACKLOG.md §2.1 "Fila" — unlike `listCards`, this lookup is

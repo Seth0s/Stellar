@@ -1,6 +1,5 @@
 import { Fragment, memo, useEffect, useRef, useState } from "react";
 import { CardFrame } from "./CardFrame";
-import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import { PROVIDER_GLYPH } from "./provider-glyph";
 import type { Rect } from "./board-model";
@@ -467,7 +466,7 @@ function TaskCardInner({
   selected,
   reflowing,
   closing,
-  label,
+  displayName,
   tasks,
   concurrencyCapRaw,
   activeBoardId,
@@ -495,7 +494,7 @@ function TaskCardInner({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
-  label: string | null;
+  displayName: string;
   /** Já vem "achatada" com selo/chips/relatório prontos — ver
    * `main/index.ts`'s `buildTaskBoard` e `preload/index.ts`'s
    * `TaskBoardItem`. Empurrada por `window.tasks.onChanged` (App.tsx),
@@ -715,6 +714,8 @@ function TaskCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       interactionMode={interactionMode}
       selected={selected}
       accent="var(--accent-task)"
@@ -737,7 +738,6 @@ function TaskCardInner({
         <>
           <span className="card-head-label">
             <Icon name="task" size={14} />
-            <CardTag label={label ?? "Fila"} onRename={onRename} />
           </span>
           <span className="card-head-actions">
             <button

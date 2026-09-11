@@ -25,6 +25,8 @@ function StrokeCardInner({
   onRaise,
   onClose,
   onCloseAnimationEnd,
+  displayName,
+  onRename,
   onConnectorStart,
   onSelectStart,
   screenProjected,
@@ -48,6 +50,8 @@ function StrokeCardInner({
   onRaise: () => void;
   onClose: () => void;
   onCloseAnimationEnd?: () => void;
+  displayName: string;
+  onRename: (label: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
   /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
@@ -70,6 +74,8 @@ function StrokeCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       interactionMode={interactionMode}
       selected={selected}
       reflowing={reflowing}

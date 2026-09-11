@@ -1,6 +1,5 @@
 import { memo, useEffect, useState } from "react";
 import { CardFrame } from "./CardFrame";
-import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
 import type { GitStatus } from "../../preload/index";
@@ -17,7 +16,7 @@ function ChangesCardInner({
   selected,
   reflowing,
   closing,
-  label,
+  displayName,
   onChange,
   onCommit,
   onRaise,
@@ -39,7 +38,7 @@ function ChangesCardInner({
   selected?: boolean;
   reflowing?: boolean;
   closing?: boolean;
-  label: string | null;
+  displayName: string;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -74,6 +73,8 @@ function ChangesCardInner({
       rect={rect}
       zoom={zoom}
       zIndex={zIndex}
+      displayName={displayName}
+      onRename={onRename}
       interactionMode={interactionMode}
       selected={selected}
       accent="var(--accent-changes)"
@@ -93,7 +94,6 @@ function ChangesCardInner({
         <>
           <span className="card-head-label">
             <Icon name="changes" size={14} />
-            <CardTag label={label ?? "changes"} onRename={onRename} />
           </span>
           <span className="card-head-actions">
             <button onClick={onClose}>

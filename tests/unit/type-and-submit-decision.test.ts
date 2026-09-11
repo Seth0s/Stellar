@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   decideWriteReadiness,
   decideSubmitCheck,
+  decideDeliveryGate,
+  HUMAN_INPUT_GATE_MAX_AGE_MS,
   WRITE_READY_QUIET_MS,
   WRITE_READY_MAX_WAIT_MS,
   type WriteReadinessInput,
@@ -94,5 +96,31 @@ describe("decideSubmitCheck", () => {
 
   it("prefixo curto demais pra confiar (<8 chars) nunca conta como unsent, mesmo presente literalmente na tela", () => {
     expect(decideSubmitCheck({ screenText: "oi", sentPrefix: "oi", hasNewActivitySinceWrite: true })).toBe("sent");
+  });
+});
+
+describe("decideDeliveryGate", () => {
+  it("linha vazia deixa a entrega passar imediatamente", () => {
+    expect(
+      decideDeliveryGate({ hasPendingHumanInput: false, pendingHumanInputStartedAtMs: null, nowMs: 10_000 }),
+    ).toEqual({ action: "proceed", reason: "empty" });
+  });
+
+  it("linha humana recente bloqueia a entrega", () => {
+    expect(
+      decideDeliveryGate({ hasPendingHumanInput: true, pendingHumanInputStartedAtMs: 10_000, nowMs: 10_000 + HUMAN_INPUT_GATE_MAX_AGE_MS - 1 }),
+    ).toEqual({ action: "wait", reason: "human-input" });
+  });
+
+  it("linha abandonada no teto deixa a entrega prosseguir sem ser descartada", () => {
+    expect(
+      decideDeliveryGate({ hasPendingHumanInput: true, pendingHumanInputStartedAtMs: 10_000, nowMs: 10_000 + HUMAN_INPUT_GATE_MAX_AGE_MS }),
+    ).toEqual({ action: "proceed", reason: "expired" });
+  });
+
+  it("estado antigo sem timestamp não bloqueia a fila para sempre", () => {
+    expect(
+      decideDeliveryGate({ hasPendingHumanInput: true, pendingHumanInputStartedAtMs: null, nowMs: 10_000 }),
+    ).toEqual({ action: "proceed", reason: "unknown-age" });
   });
 });

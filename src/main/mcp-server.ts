@@ -46,12 +46,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
    * `AGENT_CANVAS_CARD_ID` no ambiente — passa a carimbar o mesmo id na URL
    * do MCP que registra pra aquele processo (`/mcp?card=<id>`), então a
    * identidade chega por transporte, não por boa vontade do modelo.
-   * `callerCardId` continua aceito, mas ver `caller-identity.ts` pra
-   * PRECEDÊNCIA: o carimbo agora vence sempre que existe (achado crítico
-   * de escalada de privilégio, card 337, 2026-09-11 — o texto anterior
-   * aqui dizia "`callerCardId` tem precedência", exatamente o buraco).
-   * Uma URL sem `?card=` — o smoke test que disca a porta direto, um
-   * cliente MCP externo — continua caindo pro explícito, como sempre.
+   * `callerCardId` continua aceito no schema por compatibilidade, mas ver
+   * `caller-identity.ts`: só o carimbo da URL estabelece identidade. Uma
+   * URL sem `?card=` — smoke test que disca a porta direto ou cliente MCP
+   * externo — fica anônima; o corpo não pode escolher um card autônomo e
+   * pular consentimento.
    */
   /** Pedido ao vivo (2026-09-02): "toda nova sessão eu preciso dizer o
    * agente está na infraestrutura do stellar... acho que além de dizer no
@@ -90,16 +89,15 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     .string()
     .optional()
     .describe(
-      "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and always uses that when it's present; this is only consulted as a fallback for a connection with no such registration (a raw external MCP client), so passing a DIFFERENT id than your own has no effect if you're a spawned card.",
+      "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process. A callerCardId supplied in the request body is never trusted to establish identity when that URL stamp is absent, so a raw external client remains anonymous and cannot inherit an autonomous board's consent.",
     );
 
   function buildServer(urlCardId?: string): McpServer {
     // Ver `caller-identity.ts` (achado crítico de escalada de privilégio,
     // card 337, 2026-09-11) pro modelo completo e o porquê da
-    // precedência: o carimbo da URL vence SEMPRE que existe — fora do
-    // alcance do modelo que chama a tool —, o explícito só serve de
-    // fallback pra uma conexão sem carimbo nenhum (cliente externo
-    // genuíno).
+    // precedência: só o carimbo da URL estabelece identidade — fora do
+    // alcance do modelo que chama a tool. Sem carimbo, uma conexão externa
+    // permanece anônima; o explícito não pode escolher um board autônomo.
     const caller = (explicit?: string) => resolveCallerCardId({ urlCardId, explicitCallerCardId: explicit });
     const server = new McpServer({ name: "stellar", version: "1.0.0" }, { instructions: SERVER_INSTRUCTIONS });
 
@@ -322,7 +320,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: the server already knows which card you are from the MCP URL it registered for your process, and always uses that when it's present — this only takes effect as a fallback on a connection with no such registration (a raw external MCP client), so a spawned card can't report as a different card just by naming one here.",
+              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: a registered MCP process is identified by its URL stamp; this body field is not trusted when that stamp is absent, so an external client cannot report as a different card just by naming one here.",
             ),
           report: z.unknown().describe("Any JSON value — e.g. {ok: true, result: '...'} or {ok: false, error: '...'}"),
           verdict: z
@@ -528,7 +526,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass). Returns the new card's id as `cardId` on approval: pass that straight to get_page_text/browser_click/browser_query/snapshot to act on the page you just opened. list_cards also shows every open browser card (kind: \"browser\", with its url).",
         inputSchema: {
           url: z.string().describe("The URL to open"),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and always uses that when it's present; this only takes effect as a fallback when there's no such registration (a raw external MCP client)."),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — a registered MCP process is identified by its URL stamp; this body field is not trusted to establish identity when the stamp is absent."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
         },
       },
@@ -570,7 +568,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
               "Reasoning effort. `claude` accepts all five (low/medium/high/xhigh/max, its own --effort range). Antigravity accepts only low/high — some of its models (e.g. 'gemini-3.1-pro') require one of those alongside `model` or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. A value outside a provider's own range is REFUSED (no spawn), not silently remapped — see message-bus.ts's spawn_agent handler. Ignored by every other provider.",
             ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
-          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process, and always uses that to look up YOUR real spawn depth and whether your board is in autonomous mode when it's present; naming a different card here has no effect for a spawned card. Only takes effect as a fallback when there's no such registration (a raw external MCP client)."),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the registered MCP URL stamp is the only trusted identity and determines real spawn depth/autonomy; this field is not trusted when that stamp is absent."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
           wait: z
             .boolean()

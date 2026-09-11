@@ -134,6 +134,48 @@
   flex: none;
 }
 
+/* DESIGN-BACKLOG.md §2.1, identidade + header — tipo e nome são duas
+   informações diferentes: o tipo é o contrato técnico (`task`, `browser`,
+   etc.), enquanto o nome é a identidade que o humano cita ("Fila",
+   "Claude 2°", ou um rótulo escolhido). CardFrame owns both slots so a
+   custom header (browser) or a minimal one (stroke) cannot accidentally
+   omit either. The accent is inherited from that card's existing provider/
+   kind token; no new color is introduced here. */
+.card-head-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-width: 0;
+  max-width: 42%;
+}
+
+.card-kind-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent, var(--muted)) 42%, var(--border));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent, var(--muted)) 14%, transparent);
+  color: var(--accent, var(--muted));
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.card-kind-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent, var(--muted));
+}
+
 /* Whatever each card kind's own headerContent renders (label ↔ actions,
    already its own space-between pair) — wrapped so CardFrame.tsx's
    `.card-focus-btn` can sit as a separate, always-last flex item in
@@ -1743,4 +1785,3 @@
   opacity: 1;
   pointer-events: auto;
 }
-
