@@ -421,6 +421,25 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
     * **FASE 1 — infraestrutura e fronteira.** Tipo `MessageKey`, catalogo `pt-BR` (fonte) e `en`, `t()` puro, deteccao e override de locale, `Intl.RelativeTimeFormat` no lugar do formatador manual. E o mais importante: marcar explicitamente no codigo quais modulos sao AGENT-FACING e ficam fora da traducao, com comentario que diga o porque. Entregar com 2 ou 3 telas ja migradas como prova, nao com as 400.
     * **FASE 2 — varredura.** Migrar o resto em levas por arquivo. So depois da fase 1 aprovada, porque o custo de mudar a forma no meio da varredura e alto.
 
+* **Historico de veredito por participacao — o dado que falta destrava QUATRO itens de uma vez (levantado 2026-09-11, ao fechar a fidelidade visual do card Fila):**
+  * O schema hoje e literalmente `task_cards (task_id, card_id, role)` (`store.ts:558`), com `PRIMARY KEY (task_id, card_id)`. `role` e uma string de PRESENTE (`implementa`/`revisa`), sem `ended_at`, sem desfecho por participacao. Nao existe em lugar nenhum o registro de "esta participacao terminou, e com qual resultado".
+  * **O que isso bloqueia, tudo pela mesma causa:**
+    1. **Papel no passado** (`IMPLEMENTOU`/`APROVOU`) nos chips de card — exige saber que a participacao acabou e como.
+    2. **Pilulas de meta `rodada N` / `reprovada N×` / `fase X adiada`** — recusadas de proposito na rodada de fidelidade visual, com o argumento certo: sem fonte de dado, seria numero inventado. Vazio honesto foi preferido.
+    3. **Grafico 1 (reprovacoes por provider)** — hoje vazio honesto.
+    4. **Grafico 2 (rodadas ate aprovar)** — hoje vazio honesto. Este e o que mede a qualidade do BRIEFING, nao a do agente, e era uma das tres perguntas que o dono do repo queria responder com os graficos.
+  * **Por que o `report` atual nao resolve**: `reports` guarda UM slot por card (`card_id` como PRIMARY KEY, `upsertReport` sobrescreve). O veredito da rodada 1 e apagado pela rodada 2 — e "quantas rodadas ate aprovar" e exatamente a contagem que some. `seq` avanca, mas o conteudo anterior nao fica.
+  * **O que precisa existir**: uma linha por RODADA de participacao, nao um slot por card. Minimo: `(task_id, card_id, role, verdict, at)`, apendice, nunca sobrescrita — a mesma decisao ja tomada e aprovada para `task_transitions` na fase 1, e pelo mesmo motivo (o `updatedAt` sozinho guarda so o ultimo instante; ver a medicao registrada no item do card task).
+  * **Restricoes herdadas das decisoes ja tomadas, nao renegociaveis aqui:**
+    * Escrever no CHOKE POINT, nunca numa API que o chamador precise lembrar de invocar — foi assim que `task_transitions` ficou impossivel de divergir do estado, e a razao e empirica (duas tasks desta sessao ficaram com status mentindo porque o orquestrador esqueceu de chamar `update_task`).
+    * Expor no MCP **so leitura**. O agente ver que ja reprovou duas vezes ali e util; poder ESCREVER transicao/veredito transforma registro em narrativa. Mesma regra ja aprovada para `task_transitions`.
+    * **Nao inventar passado** para as participacoes existentes. Linha sintetica a partir de `updatedAt` pareceria dado real e sujaria justamente os graficos que este item existe para alimentar. A trilha comeca vazia.
+  * **Ordem recomendada**: este item ANTES do resto do polimento visual do card Fila — os quatro bloqueios acima sao todos do mesmo dado, entao e um trabalho que paga quatro.
+
+* **Fidelidade visual do card Fila — dois residuos, registrados com o que cada um exige (2026-09-11):**
+  * **Tag `VIVO` por chip de card — barato, falta so confirmacao de que e intencional.** Hoje `cardAlive` (`preload/index.ts`) e por TASK: um booleano vindo do `cardId` principal. Os chips vem de `cards[]`, a juncao `task_cards`, que pode ter varios cards com papeis diferentes ("306 implementa, 304 revisa"). Para o selo aparecer por chip basta `registry.isAlive` por entrada de `cards[]` em vez de uma vez so — chamada O(1) em memoria, ja usada em `buildTaskBoard`. O implementador parou porque o prototipo mostra isso em UM exemplo ambiguo e ele nao quis inventar requisito; decisao certa.
+  * **Pilula `● task` separada do titulo `Fila` no header — decisao de linguagem do app, nao do card.** O header e do `CardFrame` e vale para TODOS os kinds. O prototipo separa TIPO (`● task`) de NOME (`Fila`); hoje ha icone + badge + lapis, misturando os dois. Mudar so no card de fila deixaria o app inconsistente; mudar em todos e decidir como todo card se apresenta. **Fazer junto com o item do nome derivado de card** (secao 2.1, identidade e descoberta, ponto 1), que mexe no MESMO header pelo mesmo motivo — separadas, o header seria reescrito duas vezes.
+
 ### 2.2 Design & Acessibilidade (D1–D8)
 
 * **Simplificação e Limpeza da Barra Lateral (Rail):**
@@ -443,6 +462,24 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
   * [x] Documentar formalmente em `tokens.css` a decisão de suporte exclusivo ao tema escuro para ferramentas voltadas a desenvolvedores.
 * **D8 — Indicadores de Status Acessíveis para Daltonismo:**
   * [x] Adicionar formas geométricas distintas (círculo cheio, diamante, triângulo, anel oco) aos pontos de status além da cor (evitando colapso vermelho-verde).
+
+* **Politica de dependencias — decidida e fechada em 2026-09-11, a pedido do dono do repo ("e melhor resolvermos isso para ser definitivo"):**
+  * Pergunta que originou: *"percebi que o projeto esta sem react e estamos quase sem dependencias bastante utilizadas que poderiam facilitar, acha que estamos indo no caminho certo?"*.
+  * **Correcao de fato, primeiro**: o projeto USA React. `react@^19.0.0` e `react-dom` estao em `devDependencies` (nao em `dependencies`), junto com `@types/react`, `@vitejs/plugin-react` e `eslint-plugin-react-hooks`. Estar em devDeps e CORRETO e deliberado: o electron-vite empacota o renderer, entao o React acaba dentro do JS construido. Move-lo para `dependencies` faria o electron-builder copiar `node_modules/react` para dentro do asar sem necessidade nenhuma.
+  * **Estado medido** (nao estimado): 32 dependencias de runtime, 2 nativas (`better-sqlite3`, `node-pty`, com `electron-rebuild` no postinstall), 158 smoke tests `.mjs` via CDP, 43 arquivos de teste unitario, 52 modulos puros extraidos. Um projeto com 52 modulos puros e 158 smokes nao evita ferramenta — escolheu INFRAESTRUTURA PROPRIA em vez de biblioteca.
+  * **A politica, em tres categorias:**
+    1. **Dependencia dura — adotar sem discussao.** O que nao se escreve a mao: `better-sqlite3`, `node-pty`, xterm, CodeMirror, SDK do MCP, `pdfjs`, `marked`, `dompurify`. Ja e o que o projeto faz.
+    2. **Camada de conveniencia — RECUSAR.** Kit de UI (MUI/shadcn/Radix), framework de CSS (Tailwind), gerenciador de estado (Redux/Zustand/Jotai), biblioteca de data (date-fns/dayjs). O motivo nao e purismo: cada um substituiria algo que JA FUNCIONA E E DIFERENCIAL. `tokens.css` + CSS Modules carregam a identidade visual (glyph metalico, varredura de atividade) que o proprio dono do repo cobra fidelidade; a extracao de funcao pura resolve testabilidade melhor do que um store global resolveria; `Intl` cobre data e tempo. Adotar aqui seria trocar ativo por abstracao.
+       * **Custo especifico de Electron que pesa nesta conta e nao existe em web app**: toda dependencia de runtime entra no asar, e nativa exige `electron-rebuild` por plataforma. Ja ha duas nativas, e o projeto ja apanhou de empacotamento (o `homepage` ausente no `package.json`, que impedia o build em QUALQUER maquina — ver secao 0). Cada dep nova e superficie de build, nao so de codigo.
+    3. **Ferramenta de teste — a UNICA lacuna real, e ela esta cobrando.** Nao existe `jsdom` nem testing-library; `vitest` roda `environment: "node"`. Dano medido em UM dia (2026-09-11):
+       * `computeDropOrder` mandando a task para o TOPO **passou no teste de unidade** — o teste aprovou o retorno `0` como correto — e so caiu quando um revisor raciocinou sobre o DOM. O proprio revisor registrou que um smoke CDP teria pego.
+       * O gesto de arraste foi entregue com "verificado por leitura, nao por teste".
+       * A fidelidade visual foi entregue com "CSS/DOM fora de cobertura por decisao de arquitetura".
+       * Os 158 smokes CDP poderiam cobrir, mas sobem o app inteiro: caros, lentos, e vermelhos no CI desde antes de 2026-08-31 (ver memoria de sessao). Na pratica o meio-termo nao existe — ou e funcao pura em Node, ou e o app inteiro.
+  * **DECISAO (aprovada pelo dono do repo)**: adotar `jsdom` + `@testing-library/react` como devDependency, e **nada mais**. Sem kit de UI, sem Tailwind, sem gerenciador de estado, sem biblioteca de data.
+  * **Criterio permanente, para nao reabrir esta conversa a cada ideia**: *dependencia entra quando substitui infraestrutura que NAO temos; nao entra quando substitui infraestrutura que funciona.*
+  * **Limite declarado do jsdom, para a expectativa nao frustrar**: jsdom MENTE em layout — `getBoundingClientRect` devolve zero, entao o hit-test por coordenada do arraste **nao** fica coberto por ele. Ele cobre montagem, eventos, condicionais de render e acessibilidade; nao cobre geometria. Geometria continua sendo smoke CDP ou olho humano.
+  * **Consequencia de arquitetura, registrada junto**: `App.tsx` tem 3645 linhas e 67 chamadas de hook. Isso NAO se resolve com dependencia — resolve-se continuando a decomposicao em modulo puro que o repo ja faz bem (52 modulos ate agora). Nao virar gerenciador de estado por causa disso.
 
 ### 2.3 Qualidade de Código, CI & Testes
 
