@@ -214,6 +214,18 @@ Reportados ao vivo pelo usuário em 2026-09-02, ainda não investigados. Priorid
     * A opcao 1 (subir o teto) foi descartada: continua sendo numero magico, so empurra o problema para a proxima mensagem mais longa.
     * O teto CONTINUA existindo — comecar a escrever e sair da maquina nao pode segurar aviso para sempre.
   * Vale para os quatro consumidores de `typeAndSubmit`: push de report, aviso de idle, aviso de task movida a mao e `send_to_card` comum.
+* **Card recebe a MESMA task duas vezes — suspeita nos Enters extras do laco de retry (reportado ao vivo, 2026-09-11):**
+  * Palavras do dono do repo: *"parece que no cursor ou e voce que esta enviando duas vezes, mas eles parecem que recebem 2 vezes a mesma task"*.
+  * **Evidencia nos proprios relatorios**, nao so percepcao: o card 360 respondeu `{"status":"already_delivered","note":"Same brief re-received; prior delivery intact"}` e o card 365 respondeu `{"note":"Re-dispatch ack: fix already landed in working tree"}`. Nos dois casos o orquestrador enviou o briefing UMA vez so.
+  * **Descartado — o texto e escrito uma vez.** `deliverCard` (`message-bus.ts:1053`) faz `writeDelivery(text)` numa linha so (`:1081`); o laco seguinte escreve APENAS `"\r"` (`:1096`). Nao ha reescrita do texto em nenhum caminho, nem no retry do portao, nem na fila.
+  * **Suspeita primaria: os Enters EXTRAS.** O laco manda ate `SEND_ENTER_MAX_ATTEMPTS = 4` Enters. Se a CLI ja submeteu no primeiro, os outros tres sao Enters em branco — inofensivos num shell, mas NAO necessariamente numa TUI de agente. Uma CLI que reenvia o ultimo input no Enter vazio, ou que mantem o texto no composer depois do submit, produziria exatamente o sintoma: a mesma task entregue duas vezes.
+  * **Por que isso piorou AGORA, e nao antes**: o conserto do Enter perdido trocou `looksUnsent` booleano por `decideSubmitCheck` tri-state, e o laco passou a RETENTAR tambem em `unknown`, onde antes dava `break` cedo. Ou seja, o numero medio de Enters por entrega SUBIU. O conserto de um bug real (texto sem submeter) provavelmente destravou este outro. Ironia registrada: o review daquela rodada chegou a perguntar se o Enter extra era inofensivo em todos os destinos, e a resposta aceita foi "sim, no maximo linha em branco" — a resposta valia para bash, nao para TUI de agente.
+  * **Investigar antes de codar, contra CLI real:** o Enter em branco reenvia o ultimo prompt no `cursor-agent`? E no `claude`, `codex`, `agy`? O comportamento provavelmente varia por provider, e isso decide o conserto.
+  * **Direcoes possiveis, nenhuma escolhida:**
+    1. Parar de mandar Enter quando `decideSubmitCheck` devolver `sent` — ja e o comportamento; o problema e o `unknown`, que hoje retenta. Talvez `unknown` deva esperar mais em vez de reenviar Enter.
+    2. Confirmar submissao por sinal do lado de fora da tela (o precedente existe: a verificacao do Enter usou `~/.codex/history.jsonl`, que so ganha entrada em turno genuino) em vez de reenviar as cegas.
+    3. Teto de Enters por provider, se a investigacao mostrar que o comportamento e mesmo por provider.
+  * **Custo real do bug**: o agente refaz trabalho ja entregue, ou responde duas vezes ao mesmo briefing — nos dois casos observados ele percebeu e nao refez, mas isso foi sorte de o agente ser cuidadoso, nao garantia do sistema.
 ---
 
 ## ⏳ 1. Em Andamento / Em Espera
@@ -412,9 +424,13 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
      * **nao tem** o `--mcp-config`, que so e montado no `buildArgs` do provider (`providers.ts:117`) — logo nenhuma tool `stellar` e nenhum `SERVER_INSTRUCTIONS`;
      * **nao tem** o `--append-system-prompt` — logo nunca fica sabendo que o `acbridge` existe.
      * Resultado: consegue agir no board e nao tem como descobrir. Responde a pergunta do dono do repo — **sim, e causa plausivel** de um agente de usuario nao usar o Stellar.
-     * **Conserto a avaliar** (nao obvio, escolher com cuidado): (a) um arquivo de perfil/rc injetado no shell do card bash que imprima a dica uma vez; (b) `AGENT_CANVAS_*` ja no env e o suficiente pra um wrapper no `binDir` detectar e avisar; (c) documentar e aceitar. Nao inventar deteccao fragil de "esta rodando um agente" por nome de processo.
+     * **Decisao (2026-09-11, fila `26556955`, card 360):** escolhida a *intencao* da saida (a) — tip humano one-shot — via injecao no scrollback do card bash (`decideBashCardDiscovery` + `onData` em `pty-registry.ts`), **nao** via `--rcfile`/`--init-file` (o provider `bash` sobe `loginShell()`, que pode ser zsh/fish/nu; substituir rc do usuario e exatamente o que se proibiu). `acbridge` sem args tambem imprime a mesma lacuna.
+       * **Descartada (b)** wrapper no `binDir` que "detecta agente": e deteccao por nome de processo sob outro nome — proibida, falha silenciosa, envelhece mal. Um wrapper que nao envolve binario de agente nao cria descoberta.
+       * **Descartada (c) so documentar**: o tip humano e barato e responde a pergunta do dono sem fingir que o agente aninhado foi ensinado.
+       * **Deliberadamente NAO resolvido**: auto-descoberta pelo agente lancado a mao. Sem `buildArgs`, nao ha caminho nao-fragil de injetar MCP/system-prompt depois que o usuario ja digitou o comando.
 
-  4. **Identidade errada pra processo lancado a mao.** No caso acima, `AGENT_CANVAS_CARD_ID` aponta pro **card bash**, nao pro agente — entao toda acao dele no board e atribuida ao card errado, e o auto-conector desenha a linha errada. Mesma classe da lacuna ja conhecida de subagente `fork` do Claude Code herdando a identidade MCP do card pai (registrada em memoria de sessao). Nao ha conserto barato obvio: o processo filho nao tem como reivindicar um card proprio sem um handshake que hoje nao existe. Registrar como lacuna conhecida e decidir se vale um `acbridge claim-card` explicito.
+  4. **Identidade errada pra processo lancado a mao.** No caso acima, `AGENT_CANVAS_CARD_ID` aponta pro **card bash**, nao pro agente — entao toda acao dele no board e atribuida ao card errado, e o auto-conector desenha a linha errada. Mesma classe da lacuna ja conhecida de subagente `fork` do Claude Code herdando a identidade MCP do card pai (registrada em memoria de sessao).
+     * **Decisao (2026-09-11, mesma fila):** `acbridge claim-card` **recusado**. Nao ha handshake barato: reivindicar card proprio exigiria criar card + rewire de conectores + identidade MCP (`main/index.ts` / store / bus), e ainda assim nao injetaria MCP/system-prompt num processo ja em execucao. Registrar como lacuna conhecida; preferir honesty a solucao fragil.
 
 * **Internacionalizacao — hoje nao existe nenhuma, e o texto esta todo embutido no codigo (pedido do dono do repo, 2026-09-11):**
   * Palavras dele: *"eu verifiquei o codigo e os textos estao tudo intrinseco nos codigos e nao existe um tipo de localizador para traducao eficiente"*.
@@ -487,6 +503,24 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
   * **6. Graficos 1 e 2 continuam dizendo "sem historico ainda" com o dado ja existente.** O texto atual chega a explicar a lacuna antiga ("reports guarda so o ULTIMO veredito por card"), o que virou mentira depois do `task_verdicts`. Ligar os dois ao dado novo e corrigir o texto de vazio.
   * **7. Grafico 3 esta cru perto do prototipo.** Falta: barras EMPILHADAS em dois segmentos (parada na fila / executando, cada uma com cor propria), eixo com marcas de hora (`0h`, `9h`, `18h`), e legenda. O atual e barra unica de uma cor so, sem eixo e sem legenda — o numero fica a direita mas nao da para ler proporcao entre espera e execucao, que e a pergunta que o grafico existe para responder.
   * **Ordem sugerida**: 5 (comportamental, trivial), 1 (investigar por que sumiu), 2 e 6 (mesmo dado novo, destravam juntos), 7 (fidelidade), 3 (relogio), 4 (feature nova, maior).
+
+* **Historico de sprints — fechamento EXPLICITO, nunca por dia (pedido do dono do repo, 2026-09-11):**
+  * Palavras dele: *"nao posso definir por dia, pois e relativo, eu queria algo mais controlavel, onde a partir de um botao ou MCP (via agente) mudar a sprint, e ter toda documentacao de dia e hora, comeco e fim, guardando estatisticas de quantos ficaram a fazer, em andamento, concluido e falharam, e claro os que ainda estavam em a fazer e em andamento migram para o proximo sprint, e atraves do card eu possa visualizar o estado de cada sprint"*.
+  * **Isto resolve a objecao que estava aberta desde o prototipo.** Burndown e velocity foram DESCARTADOS na decisao 10 com o argumento de que "nao ha iteracao de duracao fixa — o trabalho nasce de o usuario ver um bug na tela", e que burndown sem sprint e grafico bonito medindo nada. O que faltava era FRONTEIRA, nao duracao: com fechamento declarado por humano ou agente, passa a existir um intervalo com inicio e fim reais. A duracao continua variavel, e isso e proposital.
+  * **Requisitos, como ditos:**
+    1. Fechar/abrir sprint por **botao** (humano) OU por **MCP** (agente). Nunca automatico por data.
+    2. Registrar **dia e hora de inicio e de fim**.
+    3. Guardar **estatisticas por sprint**: quantas ficaram a fazer, em andamento, concluidas e falhadas.
+    4. Tasks ainda em **a fazer** e **em andamento** MIGRAM para o sprint seguinte.
+    5. Visualizar o estado de cada sprint pelo proprio card Fila.
+  * **A decisao de desenho que decide se isso presta ou nao: a estatistica precisa ser SNAPSHOT no fechamento, nao consulta viva.** Como as tasks abertas migram, uma consulta viva reatribuiria o passado: uma task que estava "a fazer" no fim do sprint 1 e foi concluida no sprint 2 faria a estatistica do sprint 1 MUDAR retroativamente. Sprint fechado nao pode mudar de numero depois — senao o historico vira ficcao e a comparacao entre sprints perde sentido. Congelar no fechamento e o unico jeito honesto.
+  * **Consequencia da migracao, a resolver explicitamente**: uma task migrada aparece no sprint 1 (como "ficou aberta") e no sprint 2 (como "veio de tras"). O modelo honesto provavelmente e cada sprint registrar tambem **quantas entraram migradas e quantas sairam migradas**, senao a soma entre sprints conta a mesma task duas vezes sem dizer.
+  * **Perguntas em aberto, para decidir antes de codar:**
+    * Uma task pertence a exatamente UM sprint por vez (coluna `sprint_id` em `tasks`), com o historico vivendo no snapshot? Parece o mais simples e alinhado com o que ja existe.
+    * Task **falhada** migra tambem? A decisao 2 do prototipo diz que "falhou" e vizinha de "a fazer" porque e para la que ela volta, carregando `retryCount` — o que sugere que sim, mas o pedido listou so a fazer e em andamento.
+    * Fechar sprint com a fila vazia, ou fechar duas vezes seguidas, faz o que?
+  * **Nao reabrir velocity sem cuidado**: com sprints de duracao arbitraria, comparar "quantas concluiu" entre sprints e enganoso sem normalizar por tempo. O historico com inicio e fim permite normalizar — mas isso e decisao de produto, nao consequencia automatica de ter sprint.
+  * **Reaproveita o que ja existe**: `task_transitions` (fase 1) tem a trilha de status com `actor` e timestamp, e `task_verdicts` tem uma linha por rodada de participacao. O snapshot de fechamento provavelmente se deriva dai, em vez de instrumentar contagem nova.
 
 ### 2.2 Design & Acessibilidade (D1–D8)
 
