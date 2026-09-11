@@ -451,6 +451,22 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
   * **Tag `VIVO` por chip de card — barato, falta so confirmacao de que e intencional.** Hoje `cardAlive` (`preload/index.ts`) e por TASK: um booleano vindo do `cardId` principal. Os chips vem de `cards[]`, a juncao `task_cards`, que pode ter varios cards com papeis diferentes ("306 implementa, 304 revisa"). Para o selo aparecer por chip basta `registry.isAlive` por entrada de `cards[]` em vez de uma vez so — chamada O(1) em memoria, ja usada em `buildTaskBoard`. O implementador parou porque o prototipo mostra isso em UM exemplo ambiguo e ele nao quis inventar requisito; decisao certa.
   * **Pilula `● task` separada do titulo `Fila` no header — decisao de linguagem do app, nao do card.** O header e do `CardFrame` e vale para TODOS os kinds. O prototipo separa TIPO (`● task`) de NOME (`Fila`); hoje ha icone + badge + lapis, misturando os dois. Mudar so no card de fila deixaria o app inconsistente; mudar em todos e decidir como todo card se apresenta. **Fazer junto com o item do nome derivado de card** (secao 2.1, identidade e descoberta, ponto 1), que mexe no MESMO header pelo mesmo motivo — separadas, o header seria reescrito duas vezes.
 
+* **Decisao 8 (status hibrido com precedencia) esta pela METADE — as tres fontes existem, o algoritmo de precedencia nao (verificado no codigo, 2026-09-11):**
+  * Palavras do dono do repo: *"combinamos no prototipo que definimos logica hibrida entre o stellar considerar concluido ou mudanca de estado e voce ter controle sobre, percebo que nao existe algoritmo para isso atualmente"*. Esta certo.
+  * **O que JA existe** — as tres fontes, isoladas e funcionando:
+    * o app DERIVA: `create_task` com `cardId` nasce `running`; `resolveCardExit` derruba pra `failed`.
+    * o agente DECLARA: `update_task`.
+    * o humano ARRASTA: `store:tasks:move` grava com `actor: "human"`.
+    * e `task_transitions` registra o `actor` de cada transicao (`store.ts:934`, `upsertTaskInternal`).
+  * **O que NAO existe**: qualquer consulta ao ator anterior ANTES de escrever. `upsertTaskInternal` grava o status e insere a transicao; nao le `last_actor` em momento nenhum. O unico leitor de `lastActorsForBoardStmt` (`store.ts:1068`) e o selo *auto/agente/voce* do quadro — ou seja, o ator hoje e ROTULO, nao REGRA.
+  * **Consequencia concreta**: o humano arrasta uma task de "concluido" de volta pra "em andamento", e o proximo `update_task` do agente, ou o proximo `resolveCardExit`, sobrescreve em silencio. A metade da decisao 8 que diz **"o app nunca sobrescreve o que um humano moveu"** nao esta implementada em lugar nenhum.
+  * **Onde o algoritmo tem que morar**: no choke point de escrita, `upsertTaskInternal` — mesma razao empirica de `task_transitions` e do historico de veredito. Precedencia que dependa de o chamador lembrar de checar herda o esquecimento; ja aconteceu duas vezes nesta sessao (tasks com status mentindo).
+  * **Decisoes de produto que este item precisa resolver antes de codar, nao depois:**
+    1. **Precedencia nao pode ser so "humano vence sempre"** — senao uma task que o humano moveu uma vez congela contra a derivacao do app para sempre, inclusive quando o card de fato morre. Provavelmente e "o app nao sobrescreve decisao humana MAIS RECENTE que o evento observado", o que exige comparar timestamps, nao so atores.
+    2. **O agente pode sobrescrever o humano?** A decisao 8 diz que o humano ganha de todos. Entao `update_task` de agente sobre task movida a mao deveria ser RECUSADO, ou aceito com aviso ao humano? Recusar em silencio e a pior das opcoes.
+    3. **O que fazer quando a derivacao do app e obviamente verdade e contradiz o humano** — card morto e task que o humano moveu pra "em andamento". Mentira detectada, nao impedida, e a postura que a decisao 5 ja estabeleceu para o arraste; vale a mesma aqui?
+  * **Nao confundir com o que ja esta feito**: "o app nunca marca concluido sozinho" (decisao 8, ultima frase) JA vale — a conclusao e semi-automatica, com `shouldProposeCompletion` propondo e o humano confirmando por botao. O que falta e a protecao do estado que o humano ja escolheu.
+
 ### 2.2 Design & Acessibilidade (D1–D8)
 
 * **Simplificação e Limpeza da Barra Lateral (Rail):**
