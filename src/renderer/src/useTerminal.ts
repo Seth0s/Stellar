@@ -311,6 +311,13 @@ export function useTerminal(
   // ver `mask-buffer.ts`'s `MaskQueue` pro raciocínio completo e o teste
   // unitário que reproduz o bug sem depender do timing real de um round-
   // trip de clipboard/PTY (que se provou impraticável de forçar via CDP).
+  // Achado ao vivo (2026-09-10) — dois bugs estruturais além daquele: o
+  // path voltava a aparecer cru ao submeter/redesenhar (a máscara era de
+  // uso único) e o texto mascarado deixava um vão em branco (largura
+  // diferente do path real bagunçava a matemática de cursor da própria
+  // CLI). Ambos corrigidos dentro de `MaskQueue` — ver o doc comment da
+  // classe em `mask-buffer.ts` pro raciocínio completo; nada muda aqui,
+  // o `push`/`consume` abaixo continuam com a mesma assinatura.
   const maskQueueRef = useRef(new MaskQueue());
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;

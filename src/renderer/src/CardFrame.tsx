@@ -28,6 +28,10 @@ const KIND_MIN_SIZE: Record<string, { w: number; h: number }> = {
   files: { w: 240, h: 180 },
   changes: { w: 280, h: 200 },
   "remote-window": { w: 320, h: 200 },
+  // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 1 — 4 colunas lado a
+  // lado, cada uma precisa de espaço real pra um chip de card não virar
+  // sopa de letrinhas.
+  task: { w: 560, h: 320 },
 };
 
 export function CardFrame({

@@ -6,6 +6,7 @@
 import {
   ArrowLeft,
   ArrowRight,
+  BarChart3,
   Bell,
   BotMessageSquare,
   Boxes,
@@ -41,6 +42,7 @@ import {
   KeyRound,
   LayoutGrid,
   Link2,
+  ListTodo,
   Maximize,
   MessageCircle,
   Minimize,
@@ -94,6 +96,8 @@ export type IconName =
   | "sticky"
   | "browser"
   | "chat"
+  // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 1.
+  | "task"
   | "apiKey"
   | "sparkle"
   | "reorganize"
@@ -166,7 +170,9 @@ export type IconName =
   | "storage"
   | "dockRight"
   | "dockBottom"
-  | "dockLeft";
+  | "dockLeft"
+  // DESIGN-BACKLOG.md §2.3, peça 6 — botão "Gráficos" no header do card `task`.
+  | "charts";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -180,6 +186,8 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   sticky: StickyNote,
   browser: Globe,
   chat: MessageCircle,
+  task: ListTodo,
+  charts: BarChart3,
   apiKey: KeyRound,
   sparkle: Sparkles,
   reorganize: LayoutGrid,

@@ -79,7 +79,7 @@ const USAGE =
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "set-connector-label <connectorId> <label...|null> | " +
   "concurrency-status [cap] | board-mode <cardId> | " +
-  "spawn-agent <provider> [cwd] [resumeId] | " +
+  "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] | " +
   "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
   "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
@@ -239,9 +239,24 @@ if (cmd === "list") {
   if (!target) fail("usage: acbridge board-mode <cardId>");
   request = { cmd: "board_mode", target };
 } else if (cmd === "spawn-agent") {
-  const [provider, cwd, resumeId] = rest;
-  if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId]");
-  request = { cmd: "spawn_agent", provider, cwd, resumeId, requesterId: ownCardId };
+  // Review adversarial (2026-09-10, card 321) — esta superfície tinha ficado
+  // para trás: o alargamento do enum de `effort` (low/medium/high/xhigh/max)
+  // chegou ao MCP e ao bus, mas o acbridge nem `model` nem `effort` aceitava,
+  // então quem spawna pela CLI não conseguia pedir o que o resto do app já
+  // sabia gravar. Flags opcionais no mesmo padrão de `--anchor`/`--side` do
+  // spawn-card logo abaixo, então chamador antigo (só posicionais) segue
+  // idêntico. A validação por provider (antigravity só low/high) vive no bus,
+  // não aqui — um único lugar que decide, e a CLI recebe o erro dele.
+  const positional = [];
+  let model, effort;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--model") model = rest[++i];
+    else if (rest[i] === "--effort") effort = rest[++i];
+    else positional.push(rest[i]);
+  }
+  const [provider, cwd, resumeId] = positional;
+  if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>]");
+  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, requesterId: ownCardId };
 } else if (cmd === "spawn-card") {
   // Pendentes #188 ("spawn_card por coordenadas") — `--anchor`/`--side` are
   // optional trailing flags, stripped out before the positional kind/

@@ -151,7 +151,11 @@ function matchesModifier(expected: boolean | undefined, actual: boolean): boolea
   return expected === undefined ? true : expected === actual;
 }
 
-function foldKey(k: string): string {
+/** Exportada (fase C, config pela UI) — `shortcut-config.ts` precisa da
+ * MESMA regra de normalização pra comparar combinações capturadas de
+ * verdade contra as do registro (detecção de conflito, checagem de
+ * combinação proibida) sem duplicar a regra em paralelo. */
+export function foldKey(k: string): string {
   return k.length === 1 ? k.toLowerCase() : k;
 }
 
@@ -532,6 +536,15 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     group: "Chat e navegador",
     dispatch: "native",
     combo: { key: "Enter" },
+    // Fase C, round 2 (achado 3 do review) — faltava aqui, e a AUSÊNCIA
+    // não é neutra: `shortcut-config.ts`'s detecção de conflito trata
+    // `scopes` ausente como "qualquer escopo" (postura conservadora,
+    // nunca esconder uma colisão real por falta de dado) — sem isto, um
+    // rebind de atalho de CANVAS pra Enter acusava colisão falsa contra
+    // este Enter do composer, que na prática nunca compete (o composer só
+    // reage com foco REAL nele, escopo "text-input"). O dado que faltava
+    // era do REGISTRO, não da semântica do detector de conflito.
+    scopes: ["text-input"],
     description: "envia a mensagem no chat",
     owner: "ChatCard.tsx onComposerKeyDown",
   },
@@ -540,6 +553,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     group: "Chat e navegador",
     dispatch: "native",
     combo: { key: "Enter", shift: true },
+    scopes: ["text-input"],
     description: "quebra linha no chat",
     owner: "ChatCard.tsx (comportamento nativo do textarea — não interceptado)",
   },
@@ -548,6 +562,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     group: "Chat e navegador",
     dispatch: "native",
     combo: { key: "Enter" },
+    scopes: ["text-input"],
     description: "navega (na barra de endereço do navegador)",
     owner: "BrowserCard.tsx (barra de endereço)",
   },
@@ -608,16 +623,43 @@ export function getShortcutCombo(id: string): ShortcutCombo {
   return found.combo;
 }
 
+/** Fase C (config pela UI) — sobreposição de combinação por atalho
+ * rebindável, chaveada por `id`. O REGISTRO só precisa saber COMO aplicar
+ * uma sobreposição ao resolver qual atalho disparou; onde ela é
+ * persistida, validada, e como é capturada da UI são todas
+ * responsabilidade de `shortcut-config.ts` (fase C), nunca deste arquivo —
+ * mesma separação que já existia entre "o que é um atalho" (aqui) e "onde
+ * ele é implementado" (`dispatch`). Um `Record` simples (não um tipo
+ * próprio por atalho) porque é exatamente o formato que `getShortcutCombo`
+ * já lida por baixo — nenhuma estrutura nova pro registro entender. */
+export type ShortcutOverrides = Record<string, ShortcutCombo>;
+
 /** O despachante único: dado o evento e o contexto real de foco/modal,
  * decide QUAL atalho global dispara (ou `null`). Primeira combinação que
  * casar tanto na tecla quanto no escopo vence — as combinações centrais
  * nunca colidem entre si (cada tecla aparece no máximo uma vez por
- * escopo), então não existe ambiguidade de ordem na prática. */
-export function resolveGlobalShortcut(e: ShortcutKeyEvent, ctx: ShortcutContext): string | null {
+ * escopo), então não existe ambiguidade de ordem na prática.
+ *
+ * `overrides` (fase C) — opcional e `{}` por padrão, então todo chamador
+ * de antes desta fase (e todo teste existente, que passa só 2 argumentos)
+ * continua se comportando IDÊNTICO a antes. Quando presente, uma entrada
+ * pra `shortcut.id` substitui `shortcut.combo` na hora de casar contra o
+ * evento — a MESMA combinação central declarada aqui, só reapontada pra
+ * outra tecla; o `id` que dispara, os `scopes` em que dispara e o handler
+ * que roda continuam vindo inteiramente do registro. Atalhos que não são
+ * rebindáveis (ver `shortcut-config.ts`'s `isRebindable`) nunca aparecem
+ * como chave aqui — quem monta o mapa (a camada de config) é responsável
+ * por essa filtragem, não este despachante. */
+export function resolveGlobalShortcut(
+  e: ShortcutKeyEvent,
+  ctx: ShortcutContext,
+  overrides: ShortcutOverrides = {},
+): string | null {
   const scope = resolveShortcutScope(ctx);
   for (const shortcut of GLOBAL_SHORTCUTS) {
     if (!shortcut.scopes.includes(scope)) continue;
-    if (!matchesCombo(e, shortcut.combo)) continue;
+    const combo = overrides[shortcut.id] ?? shortcut.combo;
+    if (!matchesCombo(e, combo)) continue;
     return shortcut.id;
   }
   return null;

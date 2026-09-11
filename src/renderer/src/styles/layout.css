@@ -1646,6 +1646,139 @@ select.resume-input {
   margin-top: -3px;
 }
 
+/* Fase C (config pela UI) — modo "configurar" da mesma overlay. Só existe
+   nesse modo (a leitura padrão em `.shortcuts-grid`, 2 colunas de 560px,
+   continua idêntica — ver o doc comment de `formatCombo` em
+   `shortcut-registry.ts` pro motivo de nunca espremer controle nenhum
+   nessa coluna estreita). Uma única lista de 1 coluna, modal mais larga,
+   só quando o usuário pediu pra configurar. */
+.shortcuts-modal--config {
+  max-width: 720px;
+  width: 92vw;
+}
+
+.shortcut-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.shortcut-config-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.shortcut-config-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.shortcut-config-row-main kbd {
+  display: inline-block;
+  min-width: 20px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  flex: none;
+}
+
+.shortcut-config-desc {
+  flex: 1;
+}
+
+.shortcut-config-badge {
+  font-size: 10px;
+  color: var(--foam);
+  border: 1px solid var(--foam);
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex: none;
+}
+
+.shortcut-config-blocked {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.shortcut-config-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.shortcut-config-actions button {
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+}
+
+.shortcut-config-actions button:hover {
+  border-color: var(--foam);
+}
+
+.shortcut-config-recording {
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: default;
+  border: 1px dashed var(--signal);
+  background: none;
+  color: var(--signal);
+  text-align: left;
+}
+
+/* `aria-live="polite"` no wrapper — leitor de tela anuncia o prompt de
+   gravação, o erro de tecla proibida, ou o aviso de conflito/reserva sem
+   precisar de foco extra. Nunca depende de hover (D8, herdado da fase A). */
+.shortcut-config-message {
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.shortcut-config-message--error {
+  color: var(--danger);
+}
+
+.shortcut-config-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.shortcut-config-confirm-actions button {
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+}
+
+.shortcut-config-confirm-actions .primary {
+  background: var(--foam);
+  color: var(--on-accent);
+  border-color: var(--foam);
+}
+
 /* ----------------------------------------------------------- connector */
 
 /* Pendentes #188 — conectores agora carregam `kind` até o render (antes

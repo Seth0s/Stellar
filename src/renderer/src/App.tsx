@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { TerminalCard } from "./TerminalCard";
 import { FilesCard } from "./FilesCard";
@@ -8,6 +8,7 @@ import { BrowserCard } from "./BrowserCard";
 import { RemoteWindowCard } from "./RemoteWindowCard";
 import { StrokeCard, STROKE_COLORS } from "./StrokeCard";
 import { MediaCard, type MediaView } from "./MediaCard";
+import { TaskCard } from "./TaskCard";
 import {
   ChatCard,
   DEFAULT_CHAT_MODEL,
@@ -21,7 +22,8 @@ import { SpawnQueuePanel } from "./SpawnQueuePanel";
 import { ConfirmModal } from "./ConfirmModal";
 import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
-import { resolveGlobalShortcut, GLOBAL_SHORTCUTS_BY_ID } from "./shortcut-registry";
+import { resolveGlobalShortcut, GLOBAL_SHORTCUTS_BY_ID, type ShortcutCombo, type ShortcutOverrides } from "./shortcut-registry";
+import { loadShortcutOverrides, saveShortcutOverrides, setShortcutOverride, clearShortcutOverride } from "./shortcut-config";
 import { isAnyModalOpen } from "./modal-scope";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
@@ -54,7 +56,7 @@ import {
   type Point,
   type Rect,
 } from "./board-model";
-import type { BoardCounts, CardRow, SaveBoardAssetResult, SpawnCardKind, SpawnQueueEntry } from "../../preload/index";
+import type { BoardCounts, CardRow, SaveBoardAssetResult, SpawnCardKind, SpawnQueueEntry, TaskBoardItem } from "../../preload/index";
 import { useWorldTransform } from "./useWorldTransform";
 import { useConnectorDrag } from "./useConnectorDrag";
 import { useCardSelection } from "./useCardSelection";
@@ -336,6 +338,10 @@ function toRow(card: Card, boardId: string): CardRow {
       };
     case "remote-window":
       return { ...base, kind: "remote-window", provider: "", cwd: "", resume_id: null, model: null, system_prompt: null };
+    case "task":
+      // Ver TaskCardData's doc comment (card-types.ts) — sem campo próprio,
+      // mesmo tratamento mínimo de remote-window acima.
+      return { ...base, kind: "task", provider: "", cwd: "", resume_id: null, model: null, system_prompt: null };
     case "stroke":
       return {
         ...base,
@@ -456,6 +462,8 @@ function fromRow(r: CardRow): Card {
       return { id: r.id, kind: "browser", url: r.cwd, ownerCardId: r.provider || null, rect, groupId, label };
     case "remote-window":
       return { id: r.id, kind: "remote-window", rect, groupId, label };
+    case "task":
+      return { id: r.id, kind: "task", rect, groupId, label };
     case "stroke": {
       const { points, width, style } = parseStroke(r.cwd);
       return {
@@ -593,6 +601,19 @@ export function App() {
   // via the `onQueueChanged` push (never polled). Keyed by boardId so a
   // board switch never loses another board's queue state.
   const [spawnQueues, setSpawnQueues] = useState<Record<string, SpawnQueueEntry[]>>({});
+  // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 2 — mesmo padrão de
+  // `spawnQueues` acima: keyed por boardId, carga inicial via
+  // `window.tasks.listByBoard` (efeito abaixo, dependente de
+  // `activeBoardId`) e depois só push (`window.tasks.onChanged`) — NUNCA
+  // poll.
+  const [taskBoards, setTaskBoards] = useState<Record<string, TaskBoardItem[]>>({});
+  // RODADA 3, peça 5 — rodapé de escopo (`board X · N tasks · M em outros
+  // boards`). GLOBAL (não keyed por board, ao contrário de `taskBoards`
+  // acima) — é uma contagem por board só, carregada uma vez no boot (não
+  // depende de `activeBoardId`) e atualizada por push
+  // (`window.tasks.onScopeChanged`) toda vez que QUALQUER task em
+  // QUALQUER board é gravada.
+  const [taskCountsByBoard, setTaskCountsByBoard] = useState<Record<string, number>>({});
   const [aiBusy, setAiBusy] = useState(false);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [tool, setTool] = useState<Tool>("pointer");
@@ -608,6 +629,35 @@ export function App() {
     return (BG_STYLE_ORDER as string[]).includes(saved ?? "") ? (saved as BgStyle) : "dots";
   });
   const [showShortcuts, setShowShortcuts] = useState(false);
+  // Fase C (atalhos) — sobreposições de combo por usuário, `ac.
+  // shortcutOverrides` no localStorage (mesma convenção de preferência
+  // renderer-only que `BG_STYLE_KEY`/`WORKSPACE_ROOT_KEY` acima já usam;
+  // ver `shortcut-config.ts` pro porquê disso e não SQLite/`remote-
+  // devices.json`). Só o que o usuário mudou é guardado — `setState` +
+  // `saveShortcutOverrides` sempre juntos, mesmo padrão de `cycleBgStyle`
+  // logo abaixo (setter e persistência lado a lado, não um `useEffect`
+  // separado que reagiria a toda mudança de estado indiscriminadamente).
+  const [shortcutOverrides, setShortcutOverrides] = useState<ShortcutOverrides>(() => loadShortcutOverrides());
+  function rebindShortcut(id: string, combo: ShortcutCombo) {
+    setShortcutOverrides((prev) => {
+      const next = setShortcutOverride(prev, id, combo);
+      saveShortcutOverrides(next);
+      return next;
+    });
+  }
+  function restoreShortcutDefault(id: string) {
+    setShortcutOverrides((prev) => {
+      const next = clearShortcutOverride(prev, id);
+      saveShortcutOverrides(next);
+      return next;
+    });
+  }
+  function restoreAllShortcutDefaults() {
+    setShortcutOverrides(() => {
+      saveShortcutOverrides({});
+      return {};
+    });
+  }
   /** Right-click on empty canvas (item 1's alternate spawn path) — `screen`
    * positions the menu itself, `world` is where the chosen card lands
    * (`pointSlot`), captured once at open time so panning/zooming while the
@@ -1017,6 +1067,21 @@ export function App() {
     const offConnectorKindChanged = window.store.connectors.onConnectorKindChanged((id, kind) => {
       setConnectors((prev) => prev.map((c) => (c.id === id ? { ...c, kind } : c)));
     });
+    // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 2 — mesmo padrão de
+    // `offQueueChanged` acima: um push por board cujas tasks mudaram
+    // (`main/index.ts`'s `notifyTaskChanged`, já filtrado por
+    // `activeBoardId` do lado do main antes de sequer chegar aqui),
+    // substitui só a entrada daquele board.
+    const offTaskChanged = window.tasks.onChanged((boardId, tasks) => {
+      setTaskBoards((prev) => ({ ...prev, [boardId]: tasks }));
+    });
+    // RODADA 3, peça 5 — rodapé de escopo: GLOBAL, substitui o mapa
+    // inteiro a cada push (é um `GROUP BY` sobre todo `tasks`, mais barato
+    // de simplesmente devolver por completo do que fazer o main computar
+    // um diff).
+    const offTaskScopeChanged = window.tasks.onScopeChanged((counts) => {
+      setTaskCountsByBoard(counts);
+    });
     return () => {
       offUrlSeen();
       offAskOpen();
@@ -1031,7 +1096,16 @@ export function App() {
       offAutoConnect();
       offConnectorLabelChanged();
       offConnectorKindChanged();
+      offTaskChanged();
+      offTaskScopeChanged();
     };
+  }, []);
+
+  // RODADA 3, peça 5 — carga inicial do rodapé de escopo. Uma vez só, no
+  // boot (não depende de `activeBoardId` — é dado global, não por board,
+  // ao contrário do efeito de `taskBoards` mais abaixo).
+  useEffect(() => {
+    window.tasks.countsByBoard().then(setTaskCountsByBoard);
   }, []);
 
   /** The active board's real working directory (item 1 revisited — "não
@@ -1043,6 +1117,13 @@ export function App() {
    * DEFAULT_CWD for a board that predates the `cwd` column (empty string
    * in the DB) or before any board is loaded at all. */
   const activeBoardCwd = boards.find((b) => b.id === activeBoardId)?.cwd || DEFAULT_CWD;
+  // RODADA 3, peça 5 — rodapé de escopo do quadro de tasks. `useMemo`
+  // (não um `Object.fromEntries` cru no JSX) pra manter a MESMA
+  // referência entre renders enquanto `boards` não muda de verdade —
+  // sem isso, todo drag de QUALQUER card recriaria este objeto e
+  // derrubaria o `memo()` do TaskCard à toa (ele só precisa mudar
+  // quando um board é criado/renomeado/apagado, não a cada pointermove).
+  const boardNames = useMemo(() => Object.fromEntries(boards.map((b) => [b.id, b.name])), [boards]);
 
   /** Sets the workspace root directly, no dialog — PathPicker's header
    * breadcrumb (item 1, 2nd revisit) walks UP into `root`'s own ancestors
@@ -1123,15 +1204,26 @@ export function App() {
     },
   };
 
+  // Fase C — mesmo motivo de `shortcutHandlersRef`/`zoomByRef`: o listener
+  // se inscreve uma vez só, então precisa ler a sobreposição MAIS RECENTE
+  // via ref, nunca a closure da montagem (sem isso, um rebind feito na
+  // overlay só passaria a valer depois de um remount/reload).
+  const shortcutOverridesRef = useRef(shortcutOverrides);
+  shortcutOverridesRef.current = shortcutOverrides;
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const active = document.activeElement as HTMLElement | null;
-      const id = resolveGlobalShortcut(e, {
-        tagName: active?.tagName ?? "BODY",
-        isContentEditable: active?.isContentEditable ?? false,
-        isTerminalTextarea: active?.classList.contains("xterm-helper-textarea") ?? false,
-        isModalOpen: isAnyModalOpen(),
-      });
+      const id = resolveGlobalShortcut(
+        e,
+        {
+          tagName: active?.tagName ?? "BODY",
+          isContentEditable: active?.isContentEditable ?? false,
+          isTerminalTextarea: active?.classList.contains("xterm-helper-textarea") ?? false,
+          isModalOpen: isAnyModalOpen(),
+        },
+        shortcutOverridesRef.current,
+      );
       if (!id) return;
       if (GLOBAL_SHORTCUTS_BY_ID[id]?.preventDefault) e.preventDefault();
       shortcutHandlersRef.current[id]?.();
@@ -1542,6 +1634,24 @@ export function App() {
         if (state.pendingLabel != null) applyConnectorLabelFlush(id, state, state.pendingLabel);
       }
       throttleMap.clear();
+    };
+  }, [activeBoardId]);
+
+  // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 2 — carga inicial ao
+  // trocar de board (o push acima só cobre mudanças POSTERIORES a este
+  // efeito rodar). Mesmo formato de `TaskBoardItem[]` que o push entrega —
+  // um único `IGNORE` de corrida: se o board mudar de novo antes da
+  // promise resolver, `cancelled` descarta a resposta velha em vez de
+  // pisar no board novo com dado do antigo.
+  useEffect(() => {
+    if (!activeBoardId) return;
+    let cancelled = false;
+    window.tasks.listByBoard(activeBoardId).then((tasks) => {
+      if (cancelled) return;
+      setTaskBoards((prev) => ({ ...prev, [activeBoardId]: tasks }));
+    });
+    return () => {
+      cancelled = true;
     };
   }, [activeBoardId]);
 
@@ -2085,6 +2195,9 @@ export function App() {
         lines.push(`- [chatbox ${c.model}] ${c.messages.length} mensagens`);
       } else if (c.kind === "media") {
         lines.push(`- [mídia ${c.mediaType}] ${c.assetPath}`);
+      } else if (c.kind === "task") {
+        const boardTasks = activeBoardId ? taskBoards[activeBoardId] ?? [] : [];
+        lines.push(`- [fila] ${boardTasks.length} tasks`);
       } else {
         lines.push(`- [terminal ${c.provider}] cwd: ${c.cwd}`);
       }
@@ -2266,6 +2379,20 @@ export function App() {
       const updated = next.find((c) => c.id === id);
       if (updated) void window.store.upsert(toRow(updated, activeBoardIdRef.current!));
       return next;
+    });
+  }
+
+  /** DESIGN-BACKLOG.md §2.1 decisões 8/9 — o único caminho de escrita do
+   * quadro de tasks nesta fase: aceitar a proposta de conclusão de um
+   * report aprovado (`TaskCard`'s barra). Nunca chamado automaticamente —
+   * só o clique do humano no botão dispara isto. A atualização de estado
+   * chega pelo mesmo push de `task:changed` de sempre (main/index.ts's
+   * `persistTask` -> `notifyTaskChanged`), não daqui — este handler só
+   * pede, não otimisticamente aplica.
+   */
+  function approveTaskCompletion(taskId: string) {
+    void window.tasks.approveCompletion(taskId).then((res) => {
+      if (!res.ok) toast(`não deu pra concluir: ${res.error}`);
     });
   }
 
@@ -3093,6 +3220,62 @@ export function App() {
               c.id,
             );
           }
+          case "task": {
+            // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 — mesmo padrão de
+            // portal que "files"/"changes" acima. `tasks` vem do estado
+            // `taskBoards` (alimentado por `window.tasks.onChanged`, push —
+            // ver o efeito logo abaixo do de `spawn.onQueueChanged` — nunca
+            // por poll), escopado pro board deste card (que só pode ser o
+            // board carregado agora, já que cards de outro board nem
+            // montam).
+            if (!cardsLayerEl) return null;
+            return createPortal(
+              <TaskCard
+                key={c.id}
+                rect={c.rect}
+                zoom={world.zoom}
+                zIndex={zIndex}
+                interactionMode={interactionMode}
+                reflowing={reflowing}
+                closing={closingIds.has(c.id)}
+                label={c.label}
+                tasks={activeBoardId ? taskBoards[activeBoardId] ?? [] : []}
+                // RODADA 2 — badge de WIP (peça 4). `boards` já é estado
+                // carregado (useBoardStore.ts), mesma fonte que
+                // `activeBoardCwd` acima já lê — zero consulta nova só
+                // pra isto, `concurrency_cap` já vem junto com o resto do
+                // BoardRow.
+                concurrencyCapRaw={boards.find((b) => b.id === activeBoardId)?.concurrency_cap ?? null}
+                // RODADA 3, peça 5 — rodapé de escopo. `taskCountsByBoard`
+                // é GLOBAL (não escopado por board, ver seu próprio
+                // comentário); `activeBoardId` cai numa string vazia só
+                // no instante teórico em que este card renderiza sem
+                // nenhum board carregado (não deveria acontecer — cards
+                // só montam com um board aberto — mas o tipo é `string |
+                // null` então o fallback existe pra nunca quebrar).
+                activeBoardId={activeBoardId ?? ""}
+                boardNames={boardNames}
+                taskCountsByBoard={taskCountsByBoard}
+                onSwitchBoard={switchBoard}
+                onChange={getChangeHandler(c)}
+                onCommit={getCommitHandler(c)}
+                onRaise={getRaiseHandler(c)}
+                onFocus={getFocusHandler(c)}
+                onClose={getCloseHandler(c)}
+                onCloseAnimationEnd={getCloseAnimationEndHandler(c)}
+                onRename={getRenameHandler(c)}
+                onApproveCompletion={approveTaskCompletion}
+                onConnectorStart={onConnectorStart}
+                onSelectStart={onSelectStart}
+                selected={selected}
+                screenProjected
+                panX={world.panX}
+                panY={world.panY}
+              />,
+              cardsLayerEl,
+              c.id,
+            );
+          }
           default:
             return assertNeverCardKind(c);
           }
@@ -3326,7 +3509,15 @@ export function App() {
       <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} onFocusCard={jumpToCard} />
       <UpdateBanner />
       <ToastHost />
-      {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
+      {showShortcuts && (
+        <ShortcutsOverlay
+          onClose={() => setShowShortcuts(false)}
+          shortcutOverrides={shortcutOverrides}
+          onRebind={rebindShortcut}
+          onRestoreDefault={restoreShortcutDefault}
+          onRestoreAll={restoreAllShortcutDefaults}
+        />
+      )}
       {showRemotePairing && <RemotePairingModal onClose={() => setShowRemotePairing(false)} />}
       {radialMenu && (
         <RadialMenu

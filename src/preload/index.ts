@@ -655,6 +655,82 @@ const spawn = {
   },
 };
 
+/** DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 — o quadro de tasks. Uma
+ * task achatada com a "anatomia" já pronta pro card renderizar sem round-
+ * trip extra: `lastActor` (selo auto/agente/você, última linha de
+ * `task_transitions`), `cards` (chips com papel, de `task_cards`) e
+ * `report` (o relatório do card PRINCIPAL, `cardId` — decide etapa
+ * implementar/review e a barra de proposta de conclusão). Montado em
+ * `main/index.ts`'s `buildTaskBoard`, POR BOARD (nunca uma chamada de
+ * `get_task` por task — ver seu comentário grande). */
+export type TaskBoardItem = {
+  id: string;
+  prompt: string | null;
+  provider: string | null;
+  status: string;
+  cardId: string | null;
+  boardId: string | null;
+  order: number | null;
+  suggestedOrder: number | null;
+  retryCount: number;
+  createdAt: number;
+  updatedAt: number;
+  lastActor: "app" | "agent" | "human" | null;
+  /** `kind`/`provider`/`label` vêm de um LEFT JOIN direto com `cards`
+   * (store.ts) — funcionam mesmo pra um card já fechado (a linha
+   * continua existindo; só `deleteCard`, raro, apaga de vez), sem
+   * depender do card estar entre os cards VIVOS do board carregado.
+   * `null` só quando o card foi mesmo deletado, ou ainda não existe. */
+  cards: { cardId: string; role: string; kind: string | null; provider: string | null; label: string | null }[];
+  report: { verdict: "aprovado" | "reprovado" | null; updatedAt: number } | null;
+  /** RODADA 2 (review de fidelidade ao protótipo v5) — pílula "espera
+   * <id>". `deps` é o array cru de `tasks.deps_json`; `depStatuses` só
+   * cobre os ids QUE APARECEM em `deps` (nunca o board inteiro), cada um
+   * resolvido por `store.getTaskStatus` (main/index.ts's `buildTaskBoard`).
+   * Um id ausente de `depStatuses` significa "não sei" (dep de outro
+   * board, id inválido) — `waitingOnDepId` (task-board-model.ts) trata
+   * isso como não-bloqueante, nunca um falso positivo. */
+  deps: string[];
+  depStatuses: Record<string, string>;
+};
+/** DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — mesmo padrão de
+ * `spawn.onQueueChanged` acima (carga inicial via `listByBoard`, depois
+ * só push — NUNCA poll, ver SpawnQueuePanel.tsx's doc comment). Um card
+ * kind novo, então bridge própria em vez de espremer em `store` (que já é
+ * cards/connectors/boards/favorites genéricos) — `approveCompletion` é o
+ * único caminho de ESCRITA desta fase (decisão 8: só o botão que aceita a
+ * proposta de conclusão de um report aprovado; arrastar entre colunas
+ * fica pra depois, ver DESIGN-BACKLOG.md). */
+const tasks = {
+  listByBoard: (boardId: string): Promise<TaskBoardItem[]> => ipcRenderer.invoke("store:tasks:list-by-board", boardId),
+  approveCompletion: (taskId: string): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:approve-completion", taskId),
+  onChanged: (cb: (boardId: string, tasks: TaskBoardItem[]) => void) => {
+    const listener = (_e: unknown, boardId: string, tasks: TaskBoardItem[]) => cb(boardId, tasks);
+    ipcRenderer.on("task:changed", listener);
+    return () => ipcRenderer.removeListener("task:changed", listener);
+  },
+  /** RODADA 3, peça 5 — rodapé de escopo (`board X · N tasks · M em
+   * outros boards`). GLOBAL, não escopado a um board (é o ponto: contar
+   * tasks em TODO board, inclusive um que nem existe mais na tabela
+   * `boards` — o achado desta rodada). Mesmo padrão carga-inicial +
+   * push-nunca-poll de `listByBoard`/`onChanged` acima. */
+  countsByBoard: (): Promise<Record<string, number>> => ipcRenderer.invoke("store:tasks:counts-by-board"),
+  onScopeChanged: (cb: (counts: Record<string, number>) => void) => {
+    const listener = (_e: unknown, counts: Record<string, number>) => cb(counts);
+    ipcRenderer.on("task-board-scope:changed", listener);
+    return () => ipcRenderer.removeListener("task-board-scope:changed", listener);
+  },
+  /** RODADA 3, peça 6 — gráfico 3 (tempo em cada estado), o único dos
+   * três com fonte real (`task_transitions`). Sem push de propósito: só é
+   * chamado quando o painel de gráficos (escondido por padrão) é aberto —
+   * ver TaskCard.tsx. `to_value`/`at` bastam pra computar quanto tempo
+   * cada task passou em cada status (task-board-model.ts's
+   * `computeCycleTime`). */
+  transitionsByBoard: (boardId: string): Promise<{ task_id: string; to_value: string; at: number }[]> =>
+    ipcRenderer.invoke("store:tasks:transitions-by-board", boardId),
+};
+
 export type OneShotResult = { text: string } | { error: string };
 
 const ai = {
@@ -998,6 +1074,7 @@ contextBridge.exposeInMainWorld("fs", fs);
 contextBridge.exposeInMainWorld("git", git);
 contextBridge.exposeInMainWorld("browser", browser);
 contextBridge.exposeInMainWorld("spawn", spawn);
+contextBridge.exposeInMainWorld("tasks", tasks);
 contextBridge.exposeInMainWorld("ai", ai);
 contextBridge.exposeInMainWorld("winControls", winControls);
 contextBridge.exposeInMainWorld("snapshot", snapshot);
@@ -1047,6 +1124,7 @@ export type FsApi = typeof fs;
 export type GitApi = typeof git;
 export type BrowserApi = typeof browser;
 export type SpawnApi = typeof spawn;
+export type TasksApi = typeof tasks;
 export type AiApi = typeof ai;
 export type WinControlsApi = typeof winControls;
 export type SnapshotApi = typeof snapshot;

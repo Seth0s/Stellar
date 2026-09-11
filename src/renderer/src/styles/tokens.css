@@ -88,4 +88,10 @@
   --accent-sticky-ai: var(--foam);
   /* DESIGN-BACKLOG.md item 12, Fase B */
   --accent-chat: var(--foam);
+  /* DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 1 — nem --good
+     (usado pela coluna "concluído" dentro do quadro) nem --violet/--warn
+     (já são files/changes) — verde já tem outro papel de status dentro do
+     próprio card, então o acento do CARD é o violeta girado pro azul,
+     sem colidir com nenhuma cor de coluna. */
+  --accent-task: #6f8cff;
 }
