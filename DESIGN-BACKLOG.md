@@ -161,6 +161,22 @@ Reportados ao vivo pelo usuário em 2026-09-02, ainda não investigados. Priorid
     2. Achado 2: descobrir se `ae126710` foi reivindicado pelo watcher do spawn travado (provavel — o arquivo nasceu, so ficou vazio) e adicionar invalidacao: sessao com o PTY morto/sem turno completo nao deveria persistir como `resume_id`. Cruzar com `claimSessionId`/`releaseSessionId` e o refcount do epico de rearm.
     3. Considerar validacao na LEITURA tambem (barata e cobre qualquer causa futura): no boot, um `resume_id` cujo arquivo nao existe ou e trivialmente pequeno deveria virar spawn limpo com aviso visivel, nao um `--resume` silencioso pra uma sessao vazia.
   * **Nota de escopo**: antigravity ja tem lacuna propria registrada em memoria ("cards antigravity nao tem `/resume`; apos relogin podem voltar com sessao/modelo errados"). O card 321 estar `NULL` e consistente com isso e nao prova nada sobre o achado 1 sozinho — os tres cards `claude` e que provam.
+* **Push de report se perde em silencio quando o orquestrador READOTA um card em vez de spawnar (observado ao vivo, 2026-09-11, consequencia de segunda ordem do bug de `resume_id` acima):**
+  * Palavras do dono do repo: *"O review fez report mas voce nao recebeu, estranho antes estava funcionando..."*. O report existia de verdade (`read_report` no card 321 devolveu `seq: 16` normalmente) — o que falhou foi so o EMPURRAO.
+  * **Causa raiz confirmada.** `notifySpawnerOfReport` (`message-bus.ts:1054`) descobre o destinatario exclusivamente por `resolveLiveSpawner` (`message-bus.ts:986`), que filtra `kind === "spawned"` entre os conectores que chegam no card. Estado real do banco no momento da falha:
+    ```
+    331 | 330 -> 321 | modified | 08:47
+    332 | 330 -> 327 | modified | 08:50
+    ```
+    `modified` e o kind que `send_to_card` desenha. Os conectores `spawned` originais desses cards sumiram no restart da manha. Como o orquestrador READOTOU cards que ja existiam (briefando via `send_to_card`) em vez de spawnar novos, nunca houve linhagem `spawned` — `resolveLiveSpawner` devolveu `null` e o `return` da linha 1056 descartou o push sem log, sem erro, sem nada.
+  * **Por que "antes funcionava"**: nas sessoes anteriores o orquestrador tinha spawnado os cards ele mesmo na mesma sessao, entao o conector `spawned` existia. O caminho de readocao nunca tinha sido exercitado.
+  * **A premissa errada**: "quem spawnou e o unico que quer o report". Readocao e um padrao real e recorrente — todo restart que perde sessao produz exatamente isso, e o bug de `resume_id` acima garante que aconteca.
+  * **Divergencia doc/comportamento achada de tabela**: a descricao da ferramenta MCP `set_connector_kind` afirma que o kind e *"advisory only, nothing in this app acts on it"*. E falso: `resolveLiveSpawner` age sobre ele, e e a unica coisa que decide se um report chega ou nao. Um dos dois tem que mudar — ou a doc passa a dizer a verdade, ou o roteamento para de depender de um campo anunciado como decorativo.
+  * **Mitigacao usada na hora** (nao e o conserto): `set_connector_kind(332, "spawned")` a mao, pra restaurar o roteamento do card 327 que ainda estava rodando.
+  * **Encaminhamento (escolher um, nao acumular):**
+    1. Rotear pelo ULTIMO card que mandou uma diretiva, nao pela linhagem de spawn — `send_to_card` ja registra origem (`callerCardId`, que vira o prefixo `[de: X]`). Fecha readocao sem depender de conector nenhum. Preferida.
+    2. Fazer `send_to_card` promover/estabelecer a linhagem quando nao existe. Mais barato, mas mantem o roteamento preso a um campo que a doc diz ser decorativo.
+    3. No minimo, LOGAR quando um report e produzido e nao tem pra quem empurrar. Falha silenciosa foi o que fez isso passar despercebido — vale independente da opcao escolhida.
 ---
 
 ## ⏳ 1. Em Andamento / Em Espera

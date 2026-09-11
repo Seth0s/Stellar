@@ -1589,7 +1589,17 @@ function createWindow() {
 
   ipcMain.handle("store:boards:list", () => store.listBoards());
   ipcMain.handle("store:boards:upsert", (_e, board: BoardRow) => store.upsertBoard(board));
-  ipcMain.handle("store:boards:delete", (_e, id: string) => store.deleteBoard(id));
+  // `deleteBoard` reatribui as tasks do board pra `board_id = NULL` antes de
+  // remover a linha (ver seu comentário em store.ts), e isso MUDA as
+  // contagens por board — mas `notifyTaskScopeChanged` só era chamado de
+  // `persistTask`, que não participa deste caminho. Sem o empurrão aqui, o
+  // rodapé de escopo fica com o número velho (contando um board que não
+  // existe mais) até a próxima gravação de task qualquer. Achado de review
+  // adversarial da fase 2 do card task (2026-09-11).
+  ipcMain.handle("store:boards:delete", (_e, id: string) => {
+    store.deleteBoard(id);
+    notifyTaskScopeChanged();
+  });
   // DESIGN-BACKLOG.md item 14 — Home's "último acesso".
   ipcMain.handle("store:boards:touch", (_e, id: string, at: number) => store.touchBoard(id, at));
   // DESIGN-BACKLOG.md item 59 — the only IPC channel that can flip
