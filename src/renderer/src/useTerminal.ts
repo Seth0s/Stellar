@@ -279,21 +279,27 @@ export function useTerminal(
   const [hasReceivedOutput, setHasReceivedOutput] = useState(false);
   /**
    * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — sinal por trás
-   * da barra de atividade do header (TerminalCard.tsx). Aproximação
-   * honesta, não detecção semântica: este PTY não expõe nenhum marcador
-   * de "início/fim de turno" (sem shell-integration/OSC 133 aqui) — o que
-   * dá pra observar de verdade é só "o processo está escrevendo bytes
-   * agora". `true` a cada `pty:data`. Desliga por:
+   * da barra de atividade do header (TerminalCard.tsx). `true` a cada
+   * `pty:data`. Desliga por:
    *   - providers sem sinal real: `ACTIVITY_IDLE_MS` sem bytes novos;
    *   - providers com sinal real (claude hook / TURN_END_PATTERNS): o
    *     sinal (onTurnComplete / pattern / onExit / interrupt) é o
-   *     desligamento primário; `ACTIVITY_TURN_FALLBACK_IDLE_MS` é o
-   *     safety net quando o sinal não chega (barra presa acesa num card
-   *     parado — DESIGN-BACKLOG.md §2.0 item 6). Limiar MEDIDO, ver
-   *     constante abaixo.
+   *     desligamento. Silêncio NÃO é evidência de ociosidade nesses
+   *     providers depois que a capacidade do sinal foi PROVADA neste
+   *     PTY (review §2.0 item 6, 2026-09-12) — ver Effect 1.
    */
   const [isActive, setIsActive] = useState(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Latch por vida deste PTY: o caminho fim-a-fim do sinal de turno já
+   * entregou `onTurnComplete` (ou o pattern-match equivalente) pelo menos
+   * uma vez. Enquanto false, o provider AINDA NÃO PROVOU a capacidade —
+   * silêncio longo é o único escape pro card parado sem sinal (foto do
+   * dono). Assim que true, o fallback por ocioso NUNCA arma de novo:
+   * silêncio legítimo de ferramenta/pensamento não pode apagar a barra.
+   * Reset no teardown do Effect 1 (respawn = nova chance de provar).
+   */
+  const turnSignalSeenRef = useRef(false);
   /** Buffer rolante pro pattern-match de fim de turno (`TURN_END_PATTERNS`
    * acima) — ver Effect 1. Resetado a cada (re)spawn e a cada match, pra
    * nunca acumular além do necessário nem re-disparar num chunk seguinte
@@ -372,29 +378,28 @@ export function useTerminal(
     // escrever". 900ms é deliberadamente apertado — só cobre o debounce
     // entre chunks de um mesmo eco, não uma pausa de pensamento.
     const ACTIVITY_IDLE_MS = 900;
-    // Providers COM sinal real (claude Stop hook / TURN_END_PATTERNS): o
-    // sinal continua mandando quando chega. Este timer é só fallback —
-    // se o sinal não chegar (hook falhou, acbridge ENOENT, pattern mudou),
-    // a barra não fica acesa pra sempre num card parado (§2.0 item 6).
-    // MEDIDO 2026-09-12 em 11.336 tool_use→tool_result de sessões Claude
-    // recentes (AskUserQuestion/ExitPlanMode excluídos — espera humana é
-    // ilimitada): p99 geral 62.4s, Bash p99 97.1s, MCP max 122.7s.
-    // 180s = ceil(1.5×Bash p99) num balde de 30s, cobre o MCP max com
-    // folga. Abaixo disso recria o bug que o sinal de turno veio consertar
-    // (barra apaga com o agente ainda em ferramenta longa / pensando).
-    const ACTIVITY_TURN_FALLBACK_IDLE_MS = 180_000;
+    // Bootstrap-only (§2.0 item 6, review 2026-09-12): silêncio NÃO
+    // distingue "parado" de "ferramenta lenta sem log" — por isso este
+    // timer SÓ arma enquanto `turnSignalSeenRef` é false (capacidade do
+    // sinal ainda não provada neste PTY). Medido 2026-09-12: Stop hook
+    // `acbridge turn-complete` no card MASTER (53fcab93) 279/279 ok
+    // (0% hookErrors, dur_p50 111ms); entre prompts com output de
+    // assistant, 93.6% receberam o Stop antes do próximo prompt. Sessões
+    // do board SEM o hook Stellar (ex. 0b739d65 só hiveterm) nunca
+    // entregam turn_complete — aí o silêncio é o que resta. Limiar
+    // 180s = folga sobre MCP max 122.7s da amostra de tools; residual
+    // aceito: 1º turno longo sem bytes pode apagar a barra UMA vez
+    // antes da primeira prova. Depois da prova, zero fallback.
+    const ACTIVITY_UNPROVEN_SIGNAL_IDLE_MS = 180_000;
     turnEndBufferRef.current = "";
+    turnSignalSeenRef.current = false;
     // Prototipo (2026-09-06) — "unificar detecção de turno": pro provider
     // `claude`, `providers.ts`'s `buildArgs` registra um hook `Stop` real
     // (--settings efêmero) que chama `acbridge turn-complete` no fim de
     // verdade do turno. Estendido no mesmo dia pra qualquer provider com
     // um marcador de texto confirmado em `TURN_END_PATTERNS` (só codex
-    // por enquanto, ver comentário lá) — sinal lido do próprio output em
-    // vez de um hook de verdade, mas com o mesmo efeito prático: o timer
-    // curto de 900ms NÃO desliga esses providers (pensando / ferramenta
-    // sem bytes novos). O fallback longo acima só cobre sinal perdido.
-    // Todo outro provider (cursor, antigravity, opencode, bash) continua
-    // na aproximação por silêncio curto de sempre.
+    // por enquanto, ver comentário lá). Depois que o sinal prova
+    // capacidade neste PTY, silêncio NÃO desliga a barra.
     const turnEndPattern = TURN_END_PATTERNS[providerId];
     const hasRealTurnSignal = providerId === "claude" || turnEndPattern !== undefined;
     function clearIdleTimer() {
@@ -403,9 +408,16 @@ export function useTerminal(
         idleTimerRef.current = null;
       }
     }
+    function markTurnSignalSeen() {
+      turnSignalSeenRef.current = true;
+      clearIdleTimer();
+      setIsActive(false);
+    }
     function armIdleTimer() {
       clearIdleTimer();
-      const ms = hasRealTurnSignal ? ACTIVITY_TURN_FALLBACK_IDLE_MS : ACTIVITY_IDLE_MS;
+      // Capacidade já provada → confiar só no sinal. Sem fallback.
+      if (hasRealTurnSignal && turnSignalSeenRef.current) return;
+      const ms = hasRealTurnSignal ? ACTIVITY_UNPROVEN_SIGNAL_IDLE_MS : ACTIVITY_IDLE_MS;
       idleTimerRef.current = setTimeout(() => {
         idleTimerRef.current = null;
         setIsActive(false);
@@ -420,8 +432,8 @@ export function useTerminal(
         turnEndBufferRef.current = (turnEndBufferRef.current + data).slice(-TURN_END_BUFFER_MAX);
         if (turnEndPattern.test(turnEndBufferRef.current)) {
           turnEndBufferRef.current = "";
-          clearIdleTimer();
-          setIsActive(false);
+          // Pattern-match é o sinal deste provider — prova capacidade.
+          markTurnSignalSeen();
           return;
         }
       }
@@ -438,8 +450,7 @@ export function useTerminal(
     });
     const offTurnComplete = window.pty.onTurnComplete((id) => {
       if (id !== ptyIdRef.current) return;
-      clearIdleTimer();
-      setIsActive(false);
+      markTurnSignalSeen();
     });
     const offSessionFound = window.pty.onSessionFound((id, sessionId) => {
       if (id === ptyIdRef.current) setDiscoveredResumeId(sessionId);
@@ -484,6 +495,7 @@ export function useTerminal(
       offSessionFound();
       offResumeInvalid();
       clearIdleTimer();
+      turnSignalSeenRef.current = false;
       if (ptyIdRef.current) void window.pty.kill(ptyIdRef.current);
       ptyIdRef.current = null;
       setPtyId(null);
