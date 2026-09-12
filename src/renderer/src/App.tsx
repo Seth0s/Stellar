@@ -78,6 +78,7 @@ import { PROVIDER_EFFORT_VALUES } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
 import { decideTaskCardSpawn } from "../../task-card-guard";
+import { decideBrowserReuse } from "../../browser-open-policy";
 import { deriveCardDisplayName, type CardIdentitySnapshot } from "../../shared/card-identity";
 import "./app.css";
 
@@ -2003,9 +2004,12 @@ export function App() {
 
   /** Agent-requested (post-Allow) or a seenUrls chip click confirmed via the
    * `pendingOpenUrl`/ConfirmModal gate below — both are already-consented
-   * by the time this runs. Reuses this owner's existing browser card if
-   * one is open, else opens a new one. No toast here — this path isn't the
-   * human "I just clicked +browser" moment the toasts above are for.
+   * by the time this runs. Reuse is a CALLER choice (DESIGN-BACKLOG.md §2.0
+   * item 5): humans (`ownerCardId === null`) always open a new card; agents
+   * reuse their existing browser by default so repeated `open_url` calls
+   * don't clutter the board — pass `reuse: false` (or use `spawn_card`
+   * kind "browser") for a second window. No toast here — this path isn't
+   * the human "I just clicked +browser" moment the toasts above are for.
    * Returns the card id — spawn_card's browser variant (below) and the
    * acbridge/MCP "open" ask flow both need to report which card actually
    * got used back to the caller. `rectOverride`, when given (anchored
@@ -2013,12 +2017,25 @@ export function App() {
    * final one: it still goes through `nearestFreeSlot` below so an
    * anchored browser card doesn't land stacked on whatever already
    * occupies that spot (2026-09-09 fix, same as the non-browser path). */
-  function openBrowserFor(ownerCardId: string | null, url: string, rectOverride?: Rect): string {
-    const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
-    if (existing) {
-      void window.browser.navigate(existing.id, url);
-      raise(existing.id);
-      return existing.id;
+  function openBrowserFor(
+    ownerCardId: string | null,
+    url: string,
+    rectOverride?: Rect,
+    opts?: { reuse?: boolean },
+  ): string {
+    if (decideBrowserReuse(ownerCardId, opts?.reuse)) {
+      const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
+      if (existing) {
+        void window.browser.navigate(existing.id, url);
+        raise(existing.id);
+        // Achado ao vivo (2026-09-02) + §2.0 item 5 follow-up: reuse used to
+        // only raise() — if the card sat off-screen the navigation happened
+        // invisibly. Same focusCard language the chip ConfirmModal already
+        // used; lifted into this shared path so agent open_url reuse also
+        // moves the camera when needed.
+        if (!isInView(existing.rect, visibleRect)) focusCard(existing.id);
+        return existing.id;
+      }
     }
     const id = String(nextId.current++);
     const rect = rectOverride
@@ -2104,9 +2121,9 @@ export function App() {
 
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 2 — generalizes
   // openBrowserFor above to every non-terminal card kind. `browser`
-  // delegates straight to openBrowserFor for identical owner-reuse
-  // behavior — spawn_card's browser variant and the legacy `open` cmd
-  // both end up at one real implementation, not two.
+  // always opens a NEW card (`reuse: false`) — spawn_card is the explicit
+  // "give me another window" path; open_url keeps the anti-clutter reuse
+  // default (DESIGN-BACKLOG.md §2.0 item 5).
   type SpawnCardOutcome = { cardId: string; reused: boolean };
 
   function spawnCardFor(
@@ -2138,7 +2155,12 @@ export function App() {
     // 09-09 fix: um card ancorado nascia colado no pai mesmo quando esse
     // ponto já estava ocupado por outro card).
     const anchoredBase = anchor && side ? anchoredSlot(anchor.rect, side) : undefined;
-    if (kind === "browser") return { cardId: openBrowserFor(requesterId, url || "about:blank", anchoredBase), reused: false };
+    if (kind === "browser") {
+      return {
+        cardId: openBrowserFor(requesterId, url || "about:blank", anchoredBase, { reuse: false }),
+        reused: false,
+      };
+    }
     const id = String(nextId.current++);
     const existingRects = existingRectsFor(cardsRef.current);
     const rect = anchoredBase
@@ -3640,19 +3662,12 @@ export function App() {
           message={t("app.openUrl.message", { url: pendingOpenUrl })}
           confirmLabel={t("app.openUrl.confirm")}
           onConfirm={() => {
-            const cardId = openBrowserFor(null, pendingOpenUrl);
-            // Achado ao vivo (2026-09-02) — "clico no ícone e não abre":
-            // quando já existe um card de navegador sem dono (aberto antes,
-            // de qualquer terminal), openBrowserFor REUTILIZA esse card em
-            // vez de criar um novo — se ele estiver fora do viewport atual
-            // (usuário deu pan/zoom pra outro canto do board desde então),
-            // a navegação/raise acontece de verdade, só que fora da vista:
-            // pro usuário parece que nada aconteceu. Só centraliza a câmera
-            // quando o card reusado de fato não está visível agora — um
-            // card novo já nasce dentro do visibleRect (centeredSlot), não
-            // precisa de jump nenhum.
-            const card = cardsRef.current.find((c) => c.id === cardId);
-            if (card && !isInView(card.rect, visibleRect)) focusCard(cardId);
+            // DESIGN-BACKLOG.md §2.0 item 5 — human chip clicks always open
+            // a new card (`ownerCardId` null ⇒ decideBrowserReuse false).
+            // Camera-follow on reuse lives inside openBrowserFor itself now
+            // (agent open_url path); a brand-new card lands in visibleRect
+            // via centeredSlot, so no jump here.
+            openBrowserFor(null, pendingOpenUrl);
             setPendingOpenUrl(null);
           }}
           onCancel={() => setPendingOpenUrl(null)}

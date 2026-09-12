@@ -631,15 +631,31 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "open_url",
       {
-        description: "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass). Returns the new card's id as `cardId` on approval: pass that straight to get_page_text/browser_click/browser_query/snapshot to act on the page you just opened. list_cards also shows every open browser card (kind: \"browser\", with its url).",
+        description:
+          "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass). Returns the card's id as `cardId` on approval: pass that straight to get_page_text/browser_click/browser_query/snapshot to act on the page. By default this REUSES your existing browser card (same owner) and navigates it — so repeated open_url calls don't clutter the board. Pass `reuse: false` (or call spawn_card with kind:\"browser\") when you need a SECOND browser open at the same time. list_cards also shows every open browser card (kind: \"browser\", with its url).",
         inputSchema: {
           url: z.string().describe("The URL to open"),
+          reuse: z
+            .boolean()
+            .optional()
+            .describe(
+              "Default true: navigate your existing browser card if you already have one. Set false to open an additional browser card instead (same outcome as spawn_card kind:\"browser\").",
+            ),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — a registered MCP process is identified by its URL stamp; this body field is not trusted to establish identity when the stamp is absent."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
         },
       },
-      async ({ url, callerCardId, reason }) => {
-        const res = await opts.handleRequest({ cmd: "open", url, requesterId: caller(callerCardId), reason });
+      async ({ url, reuse, callerCardId, reason }) => {
+        // DESIGN-BACKLOG.md §2.0 item 5 — reuse:false must open a new card,
+        // but the open/ask IPC path has no reuse flag (message-bus owned
+        // elsewhere this sprint). Route through spawn_card's browser kind,
+        // which App.tsx always creates fresh. reuse:true/omitted keep the
+        // legacy open cmd (renderer defaults to reuse for a non-null owner).
+        const requesterId = caller(callerCardId);
+        const res =
+          reuse === false
+            ? await opts.handleRequest({ cmd: "spawn_card", kind: "browser", url, requesterId, reason })
+            : await opts.handleRequest({ cmd: "open", url, requesterId, reason });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -706,19 +722,36 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "spawn_card",
       {
-        description: "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, remote window, or the board's task queue) on the board. `kind: \"task\"` is a singleton per board: when that board already has a live queue card, this call succeeds by returning its cardId instead of creating another. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind still requires human approval unless the board is in autonomous mode. By default it lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open).",
+        description:
+          "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, remote window, or the board's task queue) on the board. `kind: \"task\"` is a singleton per board: when that board already has a live queue card, this call succeeds by returning its cardId instead of creating another. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind still requires human approval unless the board is in autonomous mode. `kind: \"browser\"` always opens a NEW browser card (never reuses one you already own) — use this when you need a second window alongside one opened via open_url; pass `reuse: true` only if you intentionally want open_url's navigate-existing behavior instead. By default the card lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open).",
         inputSchema: {
-          kind: z.enum(["files", "changes", "sticky", "browser", "remote-window", "task"]).describe("Which card kind to create; task reuses the board's existing live queue card"),
+          kind: z.enum(["files", "changes", "sticky", "browser", "remote-window", "task"]).describe("Which card kind to create; task reuses the board's existing live queue card; browser always creates a new card unless reuse:true"),
           cwd: z.string().optional().describe("Root path — used by files/changes kinds, defaults to the board's root"),
           url: z.string().optional().describe("URL — used by the browser kind"),
+          reuse: z
+            .boolean()
+            .optional()
+            .describe(
+              "Only meaningful for kind:\"browser\". Default false: always create a new browser card. Set true to navigate your existing browser instead (same as open_url's default).",
+            ),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
           anchorCardId: z.string().optional().describe("Place the new card right next to this existing card (see list_cards) instead of the default centered placement"),
           side: z.enum(["left", "right", "top", "bottom"]).optional().describe("Which side of anchorCardId to place the new card on. Defaults to \"right\" when anchorCardId is given. Ignored without anchorCardId."),
         },
       },
-      async ({ kind, cwd, url, callerCardId, reason, anchorCardId, side }) => {
-        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, requesterId: caller(callerCardId), reason, anchorCardId, side });
+      async ({ kind, cwd, url, reuse, callerCardId, reason, anchorCardId, side }) => {
+        const requesterId = caller(callerCardId);
+        // DESIGN-BACKLOG.md §2.0 item 5 — spawn_card browser defaults to a
+        // fresh card; reuse:true opts into open_url's navigate-existing path.
+        if (kind === "browser" && reuse === true) {
+          if (!url) {
+            return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "url is required when reuse:true" }) }] };
+          }
+          const res = await opts.handleRequest({ cmd: "open", url, requesterId, reason });
+          return { content: [{ type: "text", text: JSON.stringify(res) }] };
+        }
+        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, requesterId, reason, anchorCardId, side });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
