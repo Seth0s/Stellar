@@ -24,7 +24,7 @@
 }
 
 .remoteWindowError {
-  color: var(--danger, #e06c75);
+  color: var(--danger);
   font-size: 12px;
   max-width: 220px;
 }

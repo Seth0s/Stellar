@@ -116,9 +116,9 @@ export function CardFrame({
   interactionMode?: "normal" | "connector" | "select";
   /** Outline highlight while multi-selected (item 4) — see cards.css. */
   selected?: boolean;
-  /** CSS color value for the card's left accent bar — unused today (the
-   * bar itself was removed), kept only as the source for .card-tag's
-   * per-provider/kind tint. */
+  /** CSS color applied as `--accent` on the card root. Feeds `.card-tag`
+   * tint and kind-specific chrome that reads `--accent` (today:
+   * StickyCard's `border-left`). CardFrame itself does not draw a bar. */
   accent?: string;
   /** True for ~300ms right after an "organizar automaticamente" — animates the position change instead of jumping. */
   reflowing?: boolean;

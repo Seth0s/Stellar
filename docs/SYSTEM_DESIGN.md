@@ -1,6 +1,6 @@
 # Stellar — Design System (derivado do código)
 
-Este arquivo descreve o que o renderer **faz hoje**. Não é um ideal. Se o código e o que “pareceria certo” divergem, a divergência está na [§7](#7-divergências-o-código-não-segue-o-que-o-próprio-código-afirma), não escondida como regra.
+Este arquivo descreve o que o renderer **faz hoje**. Não é um ideal. Se o código e o que “pareceria certo” divergem, a divergência entra na [§7](#7-divergências-fechadas-ef6f739--esta-revisão) com evidência — não escondida como regra. As 12 que este documento expôs em ef6f739 estão fechadas lá.
 
 Como verificar “está fora do design system”:
 
@@ -37,7 +37,7 @@ O cabeçalho de `tokens.css` afirma contrastes WCAG para esses pares. Isso é co
 | :--- | :--- | :--- |
 | `--foam` | `#45c8ff` | Acento primário: foco, seleção, chat, browser, sweep de task. |
 | `--violet` | `#8f7bff` | Alias de `--accent-files`. |
-| `--signal` | `#e8c547` | Token de aviso amarelo. `--accent-sticky-human` aponta para cá — e **não é lido** pelo StickyCard (ver §7). |
+| `--signal` | `#e8c547` | Token de aviso amarelo. Sticky **não** lê isto: papel e acento da nota vêm de `STICKY_BG` / `STICKY_ACCENT` (§5.4). |
 | `--good` | `#4ad87a` | Sucesso, Cursor, coluna “concluído”, chip `aprovado`. |
 | `--warn` | `#e0a94a` | Alerta, ChangesCard (`--accent-changes`). |
 | `--danger` | `#ef6b6b` | Erro, fechar, falha. |
@@ -55,7 +55,7 @@ O cabeçalho de `tokens.css` afirma contrastes WCAG para esses pares. Isso é co
 
 ### 1.4 Acento por kind / provider
 
-Definidos no segundo bloco `:root` de `tokens.css`. O comentário diz que `PROVIDER_COLOR` / `KIND_COLOR` em `board-model.ts` consomem isso — **esses nomes não existem** em `board-model.ts`. Quem aplica o acento é `CardFrame` via prop `accent` → CSS `--accent`.
+Definidos no segundo bloco `:root` de `tokens.css`. Quem aplica o acento é `CardFrame` via prop `accent` → CSS `--accent`. `board-model.ts` não tem `PROVIDER_COLOR` / `KIND_COLOR`.
 
 | Token | Valor | Quem passa para `accent=` |
 | :--- | :--- | :--- |
@@ -69,8 +69,6 @@ Definidos no segundo bloco `:root` de `tokens.css`. O comentário diz que `PROVI
 | `--accent-browser` | `var(--foam)` | BrowserCard (também lido direto no módulo do browser). |
 | `--accent-chat` | `var(--foam)` | ChatCard. |
 | `--accent-task` | `#6f8cff` | TaskCard. Comentário: escolhido para não colidir com `--good` da coluna “concluído”. |
-| `--accent-sticky-human` | `var(--signal)` | **Nenhum consumidor.** |
-| `--accent-sticky-ai` | `var(--foam)` | **Nenhum consumidor.** |
 
 Pares `*-dark` existem só para o glyph metálico (`background-clip: text`, 125deg) de claude / codex / antigravity. bash e cursor ficam `.flat`.
 
@@ -78,7 +76,7 @@ Pares `*-dark` existem só para o glyph metálico (`background-clip: text`, 125d
 
 ## 2. Regras que já valem (decididas em review)
 
-Não são propostas. O código e os comentários de review já as aplicam — ou, quando não aplicam, a falha está na §7.
+Não são propostas. O código e os comentários de review já as aplicam. A §7 guarda o histórico das 12 que o próprio documento expôs e fechou.
 
 ### 2.1 Scrollbar estilizada é o padrão global
 
@@ -105,7 +103,7 @@ CodeMirror redeclara os **mesmos** valores em [`CodeEditor.tsx`](../src/renderer
 
 CSS Modules hasheia `animation-name`. Apontar para um `@keyframes` global (ex.: `:global(terminal-activity-sweep)` em `cards.css`) já produziu **animação morta duas vezes** neste repo (varredura do TaskCard e a do TerminalCard). Nome local + `@keyframes` no mesmo módulo.
 
-`cards.css` ainda declara `@keyframes terminal-activity-sweep`. Nenhum seletor de módulo o usa. É leftover, não API.
+O `@keyframes terminal-activity-sweep` global que morava em `cards.css` foi removido — não tinha consumidor de módulo. Não reintroduzir.
 
 Keyframes globais em `layout.css` / `animations.css` / `cards.css` (ChatCard, que não é módulo) não entram nesta regra.
 
@@ -120,8 +118,9 @@ Onde a regra está implementada:
 | Chat thinking dots | `animation: none`; opacity 0.7. |
 | `ConstellationBg.tsx` | não chama `start()`. |
 | Menu radial | `@keyframes radial-pop` só em `no-preference`. |
-
-Onde **não** está (divergência, §7): spinner do titlebar, twinkle da Home, spinner de “carregando sessão” do terminal.
+| Titlebar check spin | `animation` só em `no-preference`. |
+| Home star twinkle | `animation` só em `no-preference`; opacity estática 0.85. |
+| Terminal loading spin | `animation` só em `no-preference`. |
 
 ### 2.4 Strings: `t()` vs agente
 
@@ -131,7 +130,11 @@ Três audiências, só a humana traduz ([`agent-facing.ts`](../src/shared/i18n/a
 2. **Agente** — MCP `description`, `ACBRIDGE_HINT`, payloads de `typeAndSubmit`, resultados de tools → inglês estável, **fora do catálogo**.
 3. **Desenvolvedor** — `console.warn`, logs → não traduz.
 
-Módulos marcados como agent-facing: `mcp-server.ts`, `providers.ts` (só `ACBRIDGE_HINT`), `bash-discovery-decision.ts` (tips de agente), `message-bus.ts` (`[de: …]`), `status-write-decision.ts`, `reach-from-hunks.ts`, `reach-across-literals.ts`.
+Módulos marcados como agent-facing: `mcp-server.ts`, `providers.ts` (só `ACBRIDGE_HINT`), `bash-discovery-decision.ts` (tips de agente), `message-bus.ts` (`[de: …]`), `status-write-decision.ts`, `reach-from-hunks.ts`, `reach-across-literals.ts`, **`card-identity.ts`** (`CARD_KIND_LABEL` / `deriveCardDisplayName`).
+
+`CARD_KIND_LABEL` aparece no header e em toasts, mas `list_cards` devolve o mesmo `displayName` e `send_to_card` usa o mesmo prefixo. Traduzir quebra o reconhecimento entre cards. Português estável, fora do catálogo.
+
+`CONNECTOR_KIND_LABEL` em `App.tsx` **não** é essa superfície: só tooltip de hover, quatro chaves, locale do produto (`pt-BR`). Não entra no catálogo e não é lida por `list_cards`.
 
 ---
 
@@ -195,7 +198,7 @@ Todo kind passa por [`CardFrame.tsx`](../src/renderer/src/CardFrame.tsx). `data-
 
 - Selecionado: `outline: 2px solid var(--foam); outline-offset: 2px` no `.card-frame` (fora do clip).
 - Teclado: o mesmo anel via `:focus-visible`.
-- Sweep de atividade: faixa de 2px, 34% de largura, `left: -34%`, gradiente transparente → acento → transparente. Terminal usa `--accent` (provider), 2.4s `ease-in-out`, `translateX(200%)`. Task usa `--foam` (não `--accent-task`), 1s `linear`, `translateX(288%)`. Os dois números **não são iguais** — ver §7.
+- Sweep de atividade: faixa de 2px, 34% de largura, `left: -34%`, `translateX(200%)`, 2.4s `ease-in-out`. Terminal usa `--accent` (provider). Task usa `--foam` (não `--accent-task` — o acento do card colidiria com a coluna “concluído”). Mesma geometria e curva; só a cor do gradiente muda.
 
 **Status (D8)** — geometria + cor, em `.card-status-dot`:
 
@@ -215,7 +218,7 @@ Todo kind passa por [`CardFrame.tsx`](../src/renderer/src/CardFrame.tsx). `data-
 - **Stroke:** `baseStyle={false}`, header 18px transparente, sem `.card-focus-btn` (lutaria com o close que só aparece no hover).
 - **Media:** `chromeless` — o card é a imagem. Header vira overlay em `.chrome-active` (click, não hover). Sem moldura.
 - **Terminal:** anel + glow de `--accent` por cima de `.card-base` (pedido ao vivo: “bem leve”). Scrollbar do xterm **escondida** (§5).
-- **Sticky:** `border-left: 3px solid var(--accent)` por cima de `.card-base`. Cor de papel e acento vêm de mapas hex no TS, não dos tokens `--accent-sticky-*`.
+- **Sticky:** `border-left: 3px solid var(--accent)` por cima de `.card-base`. Cor de papel e acento vêm de mapas hex no TS (`STICKY_BG` / `STICKY_ACCENT`), não de tokens de acento.
 
 ### 4.3 Shells fora do canvas
 
@@ -264,6 +267,11 @@ Pedido ao vivo (2026-08-30): a barra do xterm some por completo (`visibility` / 
 | `StellarMark.tsx` | Logo SVG; hex iguais aos tokens (`#45c8ff`, `#8f7bff`, …) mas não via `var()`. |
 | `RemoteWindowCard` fundo `#000` | Letterbox de vídeo. |
 | Overlay de Design Mode no browser | CSS injetado na página offscreen (`#7c8cf5`); não passa pelo stylesheet do app. |
+| `cards.css` `.chat-diff-line` | Sintaxe de diff (`#b7f0c7` / `#f5c2c2`), mesma classe que identidade de linguagem — não é chrome de painel. |
+| `layout.css` `.swatch.active` | Branco verdadeiro (`#fff`) no anel do swatch colorido; `rgba(255,255,255,…)` no halo. `--text` (#e6e8ec) aqui lia como “sujo”. |
+| `layout.css` `.remote-pairing-qr` | Papel do QR (`#fff`) — precisa ser branco de verdade pra escanear. |
+| `BrowserCard.module.css` canvas `#fff` | Página branca do documento, não chrome do app. |
+| Badge / chip de status `#fff` | Texto branco em `--danger` / `--warn` / overlay de foto (`MediaCard`). `--on-accent` é tinta escura pra acento claro; outro papel. |
 
 ---
 
@@ -280,41 +288,42 @@ Durações e curvas que o CSS realmente usa. Não há `--ease` nem `--duration-*
 | Connector dash | `1.1s linear infinite` |
 | Toast / pill | `150ms` / `120ms ease-out` |
 | Radial menu | `140ms ease-out` |
-| Titlebar check spin | `0.8s linear infinite` |
-| Terminal loading spin | `0.7s linear infinite` |
-| Home star twinkle | `4s ease-in-out infinite` |
+| Titlebar check spin | `0.8s linear infinite` (só em `no-preference`) |
+| Terminal loading spin | `0.7s linear infinite` (só em `no-preference`) |
+| Home star twinkle | `4s ease-in-out infinite` (só em `no-preference`) |
 | Chat pulse | `1.1s ease-in-out infinite` |
+| Terminal / Task sweep | `2.4s ease-in-out`, `translateX(200%)` |
 
 ---
 
-## 7. Divergências (o código não segue o que o próprio código afirma)
+## 7. Divergências fechadas (ef6f739 → esta revisão)
 
-Não documentar o ideal no lugar destas. São o que um revisor pode chamar de “fora do sd” com evidência.
+Nenhuma das 12 que o documento expôs em ef6f739 permanece. Cada uma ou o código passou a cumprir a regra, ou a regra passou a descrever o código. Não reabrir como “fora do sd” sem evidência nova.
 
-| # | Arquivo:linha | O que o código faz | O que o próprio código / comentário afirma | Como verificar |
-| :--- | :--- | :--- | :--- | :--- |
-| 1 | `tokens.css:23-25` | Hex literal em Sticky, Files (extensão), Stroke, StellarMark, xterm brights, `cards.css` `.chat-diff-line` (`#b7f0c7` / `#f5c2c2`), `layout.css` `#fff`, fallbacks. | “É expressamente proibido o uso de valores hexadecimais literais fora deste arquivo.” | `rg '#[0-9a-fA-F]{3,8}' src/renderer/src --glob '!**/tokens.css'` |
-| 2 | `tokens.css:61-63` | `board-model.ts` não define `PROVIDER_COLOR` nem `KIND_COLOR`. | Comentário diz que esses nomes são a fonte de verdade junto com `cards.css`. | `rg 'PROVIDER_COLOR\\|KIND_COLOR' src` |
-| 3 | `tokens.css:87-88` | `--accent-sticky-human` / `--accent-sticky-ai` não têm consumidor. Sticky usa `STICKY_ACCENT` hex. | Tokens de acento de sticky existem como se fossem usados. | `rg 'accent-sticky' src` |
-| 4 | `layout.css:1798-1804` | `var(--text-muted, #9aa3b2)`, `var(--surface-2, #1c2230)`, `var(--border, #2a3344)` no seletor de locale dos atalhos. | Esses nomes não existem em `tokens.css`. O fallback hex é que pinta. | Abrir overlay `?` e inspecionar `.shortcuts-locale`. |
-| 5 | `BrowserCard.module.css` | `var(--warning, #c98a1f)` e `var(--danger, #d9534f)` / `#fff`. | Token real é `--warn` / `--danger` (`#e0a94a` / `#ef6b6b`). `--warning` não existe. | `rg --warning src/renderer` |
-| 6 | `RemoteWindowCard.module.css:27` | `var(--danger, #e06c75)` — fallback ≠ `--danger` (`#ef6b6b`). | Mesmo papel, dois hex. | Comparar os dois valores. |
-| 7 | `cards.css:245-248` | `@keyframes terminal-activity-sweep` (288%) sem consumidor de módulo. | A regra de keyframe local existe porque este global já morreu duas vezes. | `rg 'terminal-activity-sweep' src` — só a definição e comentários. |
-| 8 | `TaskCard.module.css:518-549` vs `TerminalCard.module.css:70-97` | Task: `translateX(288%)`, `1s linear`. Terminal: `translateX(200%)`, `2.4s ease-in-out` (§2.0 item 6). | TaskCard diz “mesma técnica” do terminal. DESIGN-BACKLOG ainda fala em reusar o keyframe global. | Diff dos dois `@keyframes` / `animation`. |
-| 9 | `layout.css:1055-1066`, `2606-2617`; `TerminalCard.module.css:201` | Spin do update, twinkle da Home, spinner de resume **ignoram** `prefers-reduced-motion`. | §2.3 e o comentário do sweep do terminal (regressão real em Xvfb). | `rg 'titlebar-update-check-spin\\|home-star-twinkle\\|terminal-card-loading-spin' src/renderer` |
-| 10 | `card-identity.ts:50-65`; `App.tsx:86-91` | `CARD_KIND_LABEL` (“arquivos”, “nota adesiva”, “fila”, …) e `CONNECTOR_KIND_LABEL` (“conector manual”, …) são literais. | “Toda string humana passa por `t()`.” Esses rótulos aparecem na UI. | `rg 'CARD_KIND_LABEL\\|CONNECTOR_KIND_LABEL' src` — não passam por `catalogs.ts`. |
-| 11 | `TaskCard.module.css:2` | Comentário: “mesmo padrão de ChangesCard.module.css/**FilesCard**”. | FilesCard não tem módulo. | `ls src/renderer/src/*Files*` |
-| 12 | `CardFrame.tsx:119-121` | Prop `accent` só alimenta `--accent` / `.card-tag`. | Comentário ainda fala em “left accent bar” — a barra foi removida (task) / só sticky tem `border-left`. | Grep `accent bar` vs `border-left` nos módulos. |
+| # | Decisão | Verificar que continua fechada |
+| :--- | :--- | :--- |
+| 1 | A proibição absoluta de hex era a regra errada. `tokens.css` agora descreve chrome-vs-isenção; o que resta de hex está na §5.4. Fallbacks fantasmas (`--text-muted`, `--warning`) foram pro código, não pra isenção. | `rg 'É expressamente proibido' src/renderer/src/styles/tokens.css` — sem match. Hex restante tem linha na §5.4. |
+| 2 | Comentário de `tokens.css` deixou de citar `PROVIDER_COLOR` / `KIND_COLOR`. Quem aplica o acento é `CardFrame` via `accent` → `--accent`. | `rg 'PROVIDER_COLOR\\|KIND_COLOR' src` — só este documento, em prosa histórica. |
+| 3 | `--accent-sticky-human` / `--accent-sticky-ai` removidos. Sticky continua em `STICKY_BG` / `STICKY_ACCENT` (§5.4). | `rg 'accent-sticky' src` — sem match no CSS. |
+| 4 | `.shortcuts-locale` era leftover: o seletor de idioma mora em Settings → Geral (`#settings-locale` / `.settings-row select`), já em `--ink` / `--border` / `--text`. As regras com `--text-muted` / `--surface-2` foram removidas, não “consertadas no morto”. | `rg shortcuts-locale src` — sem match. Inspecionar `#settings-locale`. |
+| 5 | Browser passou a `--warn` / `--danger`. `#fff` em badge/canvas ficou na §5.4. | `rg --warning src/renderer` — sem match. |
+| 6 | `RemoteWindowCard` usa `var(--danger)` sem fallback. Letterbox `#000` continua na §5.4. | Comparar com `--danger` em `tokens.css`. |
+| 7 | `@keyframes terminal-activity-sweep` removido de `cards.css`. | `rg 'terminal-activity-sweep' src` — sem match. |
+| 8 | TaskCard alinhou ao Terminal: `translateX(200%)`, `2.4s ease-in-out`. Cor do Task continua `--foam`. | Diff dos dois `@keyframes` / `animation`. |
+| 9 | Titlebar spin, twinkle da Home e spinner de resume só animam em `prefers-reduced-motion: no-preference`. | `rg 'titlebar-update-check-spin\\|home-star-twinkle\\|terminal-card-loading-spin' src/renderer` — cada um dentro (ou atrás) de `no-preference`. |
+| 10 | `CARD_KIND_LABEL` é agent-facing (`list_cards` `displayName`, prefixo de `send_to_card`). Não traduzir. `CONNECTOR_KIND_LABEL` é tooltip em `App.tsx`, quatro chaves, locale do produto — outra superfície. | `rg 'CARD_KIND_LABEL' src/shared/i18n/agent-facing.ts`. |
+| 11 | Comentário do TaskCard cita só `ChangesCard.module.css` e aponta §5.1 pro FilesCard sem módulo. | `ls src/renderer/src/*Files*` — sem `*.module.css`. |
+| 12 | Comentário de `accent` em `CardFrame.tsx`: a prop seta `--accent`; CardFrame não desenha barra; sticky lê `--accent` no `border-left`. | Grep `accent bar` — sem match. |
 
-Itens 1 (parcial), 5.4 e 5.1–5.3 **não** são esta lista: lá o código diz por que foge. Aqui o código afirma uma regra e a viola, ou dois sítios do mesmo padrão discordam sem comentário que assuma a diferença.
+Isenções da §5.1–5.4 **não** são divergência: lá o código diz por que foge.
 
 ---
 
 ## 8. Como um agente usa isto
 
 - **Scrollbar nua do SO** num scroll container nosso (lista de sprints, modal, sticky, files, chat) → fora do padrão, a menos que seja um sítio da §5.2 / §5.3.
-- **Hex novo no CSS de chrome** (botão, borda, fundo de painel) → ou vira token em `tokens.css`, ou entra na §7. Linguagem / tinta / xterm / papel de sticky já têm isenção na §5.4.
+- **Hex novo no CSS de chrome** (botão, borda, fundo de painel) → token em `tokens.css`, ou isenção com motivo na §5.4. Não inventar `--text-muted` / `--surface-2` / `--warning`.
 - **`@keyframes` num `*.module.css` apontando para nome global** → proibido; copiar o keyframe para o módulo.
-- **String de UI hardcoded** → catálogo + `t()`. String que o modelo lê → `agent-facing.ts`, não o catálogo.
-- **Animação contínua sem query `prefers-reduced-motion`** → fora da §2.3 (hoje: titlebar, Home, spinner de resume).
+- **String de UI hardcoded** → catálogo + `t()`. String que o modelo lê (inclui `CARD_KIND_LABEL` / `deriveCardDisplayName`) → `agent-facing.ts`, não o catálogo.
+- **Animação contínua sem query `prefers-reduced-motion`** → fora da §2.3.
 - **Não existe** token `--blur`, `--space-*`, `--font-size-*`, `--ease`. Inventar regra com esses nomes é o erro que este documento existiu para impedir.

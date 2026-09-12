@@ -1051,8 +1051,10 @@ select.resume-input {
  * checagem sob demanda). Reaproveita `.titlebar-controls button`; o
  * ícone gira enquanto `checking` e fica vermelho se a última tentativa
  * falhou, pra falha de rede/rate-limit deixar de ser 100% silenciosa. */
-.titlebar-update-check.is-checking svg {
-  animation: titlebar-update-check-spin 0.8s linear infinite;
+@media (prefers-reduced-motion: no-preference) {
+  .titlebar-update-check.is-checking svg {
+    animation: titlebar-update-check-spin 0.8s linear infinite;
+  }
 }
 
 .titlebar-update-check.has-error {
@@ -1787,23 +1789,6 @@ select.resume-input {
 .modal-actions-right {
   display: flex;
   gap: 8px;
-}
-
-/* i18n fase 1 — locale override sits in the shortcuts overlay chrome. */
-.shortcuts-locale {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted, #9aa3b2);
-}
-
-.shortcuts-locale select {
-  background: var(--surface-2, #1c2230);
-  color: inherit;
-  border: 1px solid var(--border, #2a3344);
-  border-radius: 4px;
-  padding: 2px 6px;
 }
 
 .shortcuts-modal {
@@ -2603,7 +2588,13 @@ select.resume-input {
    `<g>` instances of the same shape, `:nth-of-type(2)` no longer reliably
    picks out "the 2nd hero" the way it did with 2 fixed clusters. */
 .home-star-hero {
-  animation: home-star-twinkle 4s ease-in-out infinite;
+  opacity: 0.85;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .home-star-hero {
+    animation: home-star-twinkle 4s ease-in-out infinite;
+  }
 }
 
 @keyframes home-star-twinkle {

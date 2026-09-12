@@ -168,11 +168,11 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: #fff;
-  background: var(--danger, #d9534f);
+  background: var(--danger);
 }
 
 .browserCardConsoleBadge[data-severity="warning"] {
-  background: var(--warning, #c98a1f);
+  background: var(--warn);
 }
 
 /* Fecha o Bug E — indicador persistente de emulação ativa, independente
@@ -248,11 +248,11 @@
 }
 
 .browserCardMenuInfo[data-severity="error"] {
-  color: var(--danger, #d9534f);
+  color: var(--danger);
 }
 
 .browserCardMenuInfo[data-severity="warning"] {
-  color: var(--warning, #c98a1f);
+  color: var(--warn);
 }
 
 /* Próxima rodada §3 — favoritos globais. Estrela preenchida (cor de
@@ -351,7 +351,7 @@
 }
 
 .browserCardFavRemove:hover {
-  background: var(--danger, #d9534f);
+  background: var(--danger);
   color: #fff;
 }
 

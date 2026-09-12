@@ -33,6 +33,11 @@
  *   (`sem_referencia`, incompleteness.why). Agent-facing English.
  * - `src/main/reach-across-literals.ts` — `reach_across_literals` result
  *   payload (`sem_referencia`, incompleteness.why). Agent-facing English.
+ * - `src/shared/card-identity.ts` — `CARD_KIND_LABEL` and
+ *   `deriveCardDisplayName`. Dual audience (header + toasts AND
+ *   `list_cards` `displayName` / `send_to_card` sender prefix). Agent
+ *   recognition wins: Portuguese nouns stay stable, out of the catalog.
+ *   `CONNECTOR_KIND_LABEL` in App.tsx is NOT this surface (tooltip only).
  *
  * This file exists so a future "extract every string" sweep has a hard
  * checklist instead of relying on memory. Importing it is optional; the
@@ -47,4 +52,5 @@ export const AGENT_FACING_MODULES = [
   "src/main/status-write-decision.ts",
   "src/main/reach-from-hunks.ts",
   "src/main/reach-across-literals.ts",
+  "src/shared/card-identity.ts", // CARD_KIND_LABEL / deriveCardDisplayName — list_cards
 ] as const;

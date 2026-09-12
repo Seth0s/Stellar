@@ -198,7 +198,12 @@
   border-radius: 50%;
   border: 1.5px solid color-mix(in srgb, var(--muted) 40%, transparent);
   border-top-color: var(--muted);
-  animation: terminal-card-loading-spin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .terminalCardLoadingSpinner {
+    animation: terminal-card-loading-spin 0.7s linear infinite;
+  }
 }
 
 @keyframes terminal-card-loading-spin {
