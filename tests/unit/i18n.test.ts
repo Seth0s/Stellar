@@ -109,5 +109,6 @@ describe("AGENT-FACING boundary checklist", () => {
     expect(AGENT_FACING_MODULES).toContain("src/main/providers.ts");
     expect(AGENT_FACING_MODULES).toContain("src/main/bash-discovery-decision.ts");
     expect(AGENT_FACING_MODULES).toContain("src/main/message-bus.ts");
+    expect(AGENT_FACING_MODULES).toContain("src/main/reach-from-hunks.ts");
   });
 });
