@@ -1,5 +1,7 @@
 /* DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 — quadro de 4 colunas.
- * Colocalização de CSS, mesmo padrão de ChangesCard.module.css/FilesCard.
+ * Colocalização de CSS, mesmo padrão de ChangesCard.module.css.
+ * FilesCard não tem módulo — as classes `.files-*` ficam globais em
+ * cards.css de propósito (PathPicker reusa, ver SYSTEM_DESIGN.md §5.1).
  * module.css: só os elementos exclusivos deste kind moram aqui, o resto
  * (moldura, header, rename) já vem de cards.css via CardFrame/CardTag. */
 
@@ -507,20 +509,19 @@
   border: 1px solid var(--border);
 }
 
-/* Varredura de atividade de 2px — mesma técnica de TerminalCard.module.css.
-   Keyframe LOCAL de propósito: CSS Modules hasheia referências a
-   `animation-name`, e `:global(terminal-activity-sweep)` (o keyframe em
-   cards.css) quebra o parser PostCSS deste setup. Nome local + @keyframes
-   no mesmo módulo = hash consistente nos dois lados. Causa raiz da
-   varredura "sumida" (DESIGN-BACKLOG.md §2.1): a regra apontava pra um
-   @keyframes hasheado que não existia; a faixa ficava em left:-34%
-   clipada, opacity 1, zero pixels. */
+/* Activity sweep — same technique AND the same numbers as
+   TerminalCard.module.css (width 34%, left -34%, translateX(200%),
+   2.4s ease-in-out). Color stays `--foam`, not `--accent-task` (the
+   card accent would collide with the "done" column). Keyframe LOCAL:
+   CSS Modules hashes `animation-name`; pointing at a global name in
+   cards.css already produced a dead animation twice in this repo.
+   Nome local + @keyframes no mesmo módulo = hash consistente. */
 @keyframes task-activity-sweep {
   from {
     transform: translateX(0);
   }
   to {
-    transform: translateX(288%);
+    transform: translateX(200%);
   }
 }
 
@@ -546,7 +547,7 @@
 
 .activity.on .activitySweep {
   opacity: 1;
-  animation: task-activity-sweep 1s linear infinite;
+  animation: task-activity-sweep 2.4s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

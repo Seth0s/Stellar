@@ -242,11 +242,6 @@
    `.card-head button` (mesmo padding/tamanho de sino/gota/fechar), nada
    de override próprio mais. */
 
-@keyframes terminal-activity-sweep {
-  from { transform: translateX(0); }
-  to { transform: translateX(288%); } /* atravessa o container inteiro: (100% + 34%*2) / 34% */
-}
-
 .card-head button.active {
   background: var(--foam);
   color: var(--on-accent);

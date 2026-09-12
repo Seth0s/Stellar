@@ -40,13 +40,25 @@
  * sendo isso).
  */
 
-/** Substantivo canônico por `kind`, em português, minúsculo — usado em
- * prosa (toasts: "fila criado") e como base do nome derivado quando não
- * há nada mais específico. `as const` preserva as chaves literais: quem
- * precisa de checagem exaustiva contra `Card["kind"]` (renderer's
- * `cards/registry.ts`) atribui `CARD_KIND_LABEL` a um `Record<Card["kind"],
- * string>` tipado — se um kind novo aparecer em `Card["kind"]` sem entrada
- * aqui, essa atribuição vira erro de compilação, não silêncio. */
+/**
+ * AGENT-FACING — do not put these nouns through `t()` / catalogs.ts.
+ *
+ * `deriveCardDisplayName` is what `list_cards` returns as `displayName`,
+ * what `send_to_card` prefixes as the sender, and what the card header
+ * shows when nobody renamed the card. Agents resolve targets by that
+ * string. Translating it (or swapping "fila" for "task") breaks
+ * recognition between cards — a locale sweep would look like a rename.
+ * Portuguese here is the stable protocol surface, not UI copy.
+ *
+ * CONNECTOR_KIND_LABEL (App.tsx) is a different map: hover tooltips only,
+ * never returned by list_cards. See docs/SYSTEM_DESIGN.md §2.4.
+ *
+ * `as const` preserva as chaves literais: quem precisa de checagem
+ * exaustiva contra `Card["kind"]` (renderer's `cards/registry.ts`)
+ * atribui `CARD_KIND_LABEL` a um `Record<Card["kind"], string>` tipado —
+ * se um kind novo aparecer em `Card["kind"]` sem entrada aqui, essa
+ * atribuição vira erro de compilação, não silêncio.
+ */
 export const CARD_KIND_LABEL = {
   terminal: "terminal",
   files: "arquivos",

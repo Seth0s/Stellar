@@ -20,9 +20,16 @@
  *    - Texto em Superfícies Claras (`--on-accent` #04141c) sobre `--foam`/`--signal`:
  *      Contraste >= 11:1 (Alto contraste e legibilidade máxima em botões ativos).
  * 
- * 3. Princípio de Fonte Única da Verdade:
- *    É expressamente proibido o uso de valores hexadecimais literais ("magic hex")
- *    fora deste arquivo. Todo componente DEVE consumir os tokens semânticos abaixo.
+ * 3. Chrome vs. hex fora deste arquivo:
+ *    Papéis de chrome (superfície, texto, acento, status) vivem aqui.
+ *    Hex literal fora deste arquivo é permitido só nas isenções de
+ *    docs/SYSTEM_DESIGN.md §5.4 — identidade de linguagem, tinta, paleta
+ *    extra do xterm, papel de sticky, logo SVG, letterbox/página branca,
+ *    papel de QR, branco verdadeiro em chip de status / overlay de foto.
+ *    Chrome novo (botão, borda, fundo de painel) ou vira token aqui, ou
+ *    a isenção entra na §5.4 com motivo. Não inventar `--text-muted`,
+ *    `--surface-2`, `--warning`: os nomes reais são `--muted`,
+ *    `--surface`, `--warn`.
  * ============================================================================
  */
 
@@ -58,9 +65,11 @@
   --on-accent: #04141c;
 }
 
-/* Provider/kind accent colors — single source of truth, referenced by
-   PROVIDER_COLOR/KIND_COLOR in board-model.ts and by cards.css. Nothing
-   outside this file should hardcode a hex for these roles. */
+/* Provider/kind accent colors — CardFrame applies these via the `accent`
+   prop as CSS `--accent` on the card root. cards.css and kind modules
+   read `--accent`. Nothing outside this file should hardcode a hex for
+   these roles. Sticky paper/accent are NOT these tokens: see STICKY_BG /
+   STICKY_ACCENT in StickyCard.tsx (SYSTEM_DESIGN.md §5.4). */
 :root {
   --accent-bash: var(--muted);
   /* Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — claude e codex
@@ -84,8 +93,6 @@
   --accent-files: var(--violet);
   --accent-changes: var(--warn);
   --accent-browser: var(--foam);
-  --accent-sticky-human: var(--signal);
-  --accent-sticky-ai: var(--foam);
   /* DESIGN-BACKLOG.md item 12, Fase B */
   --accent-chat: var(--foam);
   /* DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 1 — nem --good
