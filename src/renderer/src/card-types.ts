@@ -84,13 +84,46 @@ export const PROVIDER_EFFORT_VALUES: Record<string, readonly string[]> = {
 
 export type FilesCardData = BaseCard & { kind: "files"; root: string };
 export type ChangesCardData = BaseCard & { kind: "changes"; root: string };
+/** Default body size of `.stickyTextarea` (StickyCard.module.css) — also
+ * the value a pre-fontSize row (`system_prompt` null) restores as. */
+export const STICKY_FONT_SIZE_DEFAULT = 14;
+export const STICKY_FONT_SIZE_MIN = 10;
+export const STICKY_FONT_SIZE_MAX = 28;
+export const STICKY_FONT_SIZE_STEP = 2;
+
+/** Discrete 2px steps in `[MIN, MAX]`. Non-finite input falls back to
+ * the default rather than NaN leaking into CSS/`system_prompt`. */
+export function clampStickyFontSize(n: number): number {
+  if (!Number.isFinite(n)) return STICKY_FONT_SIZE_DEFAULT;
+  const stepped = Math.round(n / STICKY_FONT_SIZE_STEP) * STICKY_FONT_SIZE_STEP;
+  return Math.min(STICKY_FONT_SIZE_MAX, Math.max(STICKY_FONT_SIZE_MIN, stepped));
+}
+
+/** Row restore: `system_prompt` holds the px size as a decimal string
+ * (same unused-column reuse as `mode`→`model`). Legacy null/garbage
+ * becomes the default, never a throw. */
+export function parseStickyFontSize(raw: string | null | undefined): number {
+  if (raw == null || raw === "") return STICKY_FONT_SIZE_DEFAULT;
+  return clampStickyFontSize(Number(raw));
+}
+
 /** `mode` (2026-09-02) — controlável via MCP (`set_sticky_mode`), mesmo
  * padrão de `color` (`set_sticky_color`): persistido, não estado de UI
  * local, pra um agente conseguir alternar a nota sem depender de clique
  * humano. Reaproveita a coluna genérica `model` do row (App.tsx's
  * toRow/fromRow), livre pra este kind — mesmo truque de `content`→`cwd`
- * e `color`→`provider` logo abaixo, sem migração de schema. */
-export type StickyCardData = BaseCard & { kind: "sticky"; content: string; color: string; mode: "edit" | "preview" };
+ * e `color`→`provider` logo abaixo, sem migração de schema.
+ *
+ * `fontSize` (2026-09-12) — per-card body size, same persist path:
+ * unused `system_prompt` column, no schema migration. Discrete 2px
+ * steps (see `STICKY_FONT_SIZE_*` above), not a global setting. */
+export type StickyCardData = BaseCard & {
+  kind: "sticky";
+  content: string;
+  color: string;
+  mode: "edit" | "preview";
+  fontSize: number;
+};
 export type BrowserCardData = BaseCard & { kind: "browser"; url: string; ownerCardId: string | null };
 /** No meaningful state to persist — which window/screen it shows comes
  * from a live OS picker at open time (DESIGN-BACKLOG.md item 3, phase 1),

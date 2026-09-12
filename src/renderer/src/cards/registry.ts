@@ -1,5 +1,6 @@
 import type { IconName } from "../icons";
 import type { Card, ChatMessage, ChatProvider } from "../card-types";
+import { STICKY_FONT_SIZE_DEFAULT } from "../card-types";
 import { DEFAULT_CHAT_MODEL } from "../ChatCard";
 import { CARD_KIND_LABEL } from "../../../shared/card-identity";
 import { t, type MessageKey } from "../../../shared/i18n";
@@ -112,7 +113,7 @@ export function defaultCardFields(
     case "changes":
       return { kind: "changes", root: cwd };
     case "sticky":
-      return { kind: "sticky", content: "", color: "yellow", mode: "edit" };
+      return { kind: "sticky", content: "", color: "yellow", mode: "edit", fontSize: STICKY_FONT_SIZE_DEFAULT };
     case "browser":
       return { kind: "browser", url: "https://google.com", ownerCardId: null };
     case "chat":

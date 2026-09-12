@@ -4,6 +4,12 @@ import { CardFrame } from "./CardFrame";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
+import {
+  STICKY_FONT_SIZE_MAX,
+  STICKY_FONT_SIZE_MIN,
+  STICKY_FONT_SIZE_STEP,
+  clampStickyFontSize,
+} from "./card-types";
 import styles from "./StickyCard.module.css";
 
 export const STICKY_COLORS = ["yellow", "green", "blue", "pink"] as const;
@@ -36,8 +42,8 @@ const STICKY_ACCENT: Record<string, string> = {
  * swatches no header) — em vez de um 5º campo persistido novo, essa
  * mesma escolha passa a carregar um SIGNIFICADO (categoria da nota), não
  * só um tom: o ícone do header e o placeholder do label mudam junto com
- * a cor, sem migração de schema nenhuma (StickyCardData continua só
- * `content`+`color`). */
+ * a cor, sem migração de schema nenhuma (a cor continua só `color`;
+ * `fontSize` é outro campo, persistido em `system_prompt`). */
 const STICKY_KIND: Record<string, { icon: IconName; labelKey: MessageKey }> = {
   yellow: { icon: "pin", labelKey: "sticky.kind.note" },
   green: { icon: "checkCircle", labelKey: "sticky.kind.done" },
@@ -77,6 +83,7 @@ function StickyCardInner({
   content,
   color,
   mode,
+  fontSize,
   interactionMode,
   selected,
   reflowing,
@@ -93,6 +100,7 @@ function StickyCardInner({
   onContentCommit,
   onColorCommit,
   onModeCommit,
+  onFontSizeCommit,
   onConnectorStart,
   onSelectStart,
   screenProjected,
@@ -113,6 +121,9 @@ function StickyCardInner({
    * `StickyCardData.mode`, controlável via MCP `set_sticky_mode` (mesmo
    * caminho que `onModeCommit` abaixo, nenhum atalho paralelo). */
   mode: "edit" | "preview";
+  /** Per-card body size in px. Discrete 2px steps, persisted like
+   * `color`/`mode` (App.tsx's `commitStickyFontSize` → `system_prompt`). */
+  fontSize: number;
   interactionMode?: "normal" | "connector" | "select";
   selected?: boolean;
   reflowing?: boolean;
@@ -129,6 +140,7 @@ function StickyCardInner({
   onContentCommit: (content: string) => void;
   onColorCommit: (color: string) => void;
   onModeCommit: (mode: "edit" | "preview") => void;
+  onFontSizeCommit: (fontSize: number) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
   onSelectStart?: (e: React.PointerEvent) => void;
   /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
@@ -152,6 +164,11 @@ function StickyCardInner({
   // de verdade quando ESTE componente que pediu a mudança (clique
   // explícito), nunca numa transição de `mode` vinda de fora.
   const focusOnEditRef = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+  const onFontSizeCommitRef = useRef(onFontSizeCommit);
+  onFontSizeCommitRef.current = onFontSizeCommit;
   useEffect(() => {
     if (editing && focusOnEditRef.current) {
       textareaRef.current?.focus();
@@ -159,9 +176,33 @@ function StickyCardInner({
     }
   }, [editing]);
 
+  // Ctrl/Cmd+scroll inside THIS card only — same gesture SettingsModal
+  // documents for the terminal (per-card, not a global setting). Native
+  // listener with {passive:false} so preventDefault actually blocks
+  // Chromium page-zoom; React's onWheel on CardFrame is stopPropagation
+  // only and can't cancel a passive wheel.
+  useEffect(() => {
+    const frame = bodyRef.current?.closest<HTMLElement>(".card-frame");
+    if (!frame) return;
+    function onWheel(e: WheelEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dir = e.deltaY > 0 ? -1 : 1;
+      const next = clampStickyFontSize(fontSizeRef.current + dir * STICKY_FONT_SIZE_STEP);
+      if (next !== fontSizeRef.current) onFontSizeCommitRef.current(next);
+    }
+    frame.addEventListener("wheel", onWheel, { passive: false });
+    return () => frame.removeEventListener("wheel", onWheel);
+  }, []);
+
   function enterEditing() {
     focusOnEditRef.current = true;
     onModeCommit("edit");
+  }
+
+  function bumpFont(dir: -1 | 1) {
+    onFontSizeCommit(clampStickyFontSize(fontSize + dir * STICKY_FONT_SIZE_STEP));
   }
 
   // Checklist clicável (item 2) — `Markdown` (marked+DOMPurify) renderiza
@@ -265,6 +306,32 @@ function StickyCardInner({
               apontando pro close em qualquer card com mais de 1 botão. */}
           <span className="card-head-actions">
             <button
+              type="button"
+              className={styles.fontBtn}
+              data-role="sticky-font-decrease"
+              title={t("sticky.fontDecrease", { size: fontSize })}
+              disabled={fontSize <= STICKY_FONT_SIZE_MIN}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => bumpFont(-1)}
+            >
+              <span className={styles.fontGlyphSmall} aria-hidden="true">
+                A−
+              </span>
+            </button>
+            <button
+              type="button"
+              className={styles.fontBtn}
+              data-role="sticky-font-increase"
+              title={t("sticky.fontIncrease", { size: fontSize })}
+              disabled={fontSize >= STICKY_FONT_SIZE_MAX}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => bumpFont(1)}
+            >
+              <span className={styles.fontGlyphLarge} aria-hidden="true">
+                A+
+              </span>
+            </button>
+            <button
               title={editing ? t("sticky.preview") : t("sticky.edit")}
               // Sem isso, o clique aqui primeiro tira o foco do textarea
               // (blur nativo do navegador ao mover foco pro botão) — o
@@ -294,40 +361,48 @@ function StickyCardInner({
         </>
       }
     >
-      {totalCount > 0 && (
-        <div className={styles.stickyProgress} title={t("sticky.progress", { done: doneCount, total: totalCount })}>
-          <div className={styles.stickyProgressFill} style={{ width: `${(doneCount / totalCount) * 100}%` }} />
-        </div>
-      )}
-      {editing ? (
-        <textarea
-          ref={textareaRef}
-          className={styles.stickyTextarea}
-          data-role="sticky-textarea"
-          data-card-id={cardId}
-          style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
-          value={content}
-          onChange={(e) => onContentChange(e.target.value)}
-          onBlur={() => {
-            onContentCommit(content);
-            if (content.trim().length > 0) onModeCommit("preview");
-          }}
-        />
-      ) : (
-        <div
-          ref={previewRef}
-          className={`${styles.stickyPreview}${content.trim().length === 0 ? ` ${styles.empty}` : ""}`}
-          data-role="sticky-preview"
-          style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
-          onClick={onPreviewClick}
-        >
-          {content.trim().length === 0 ? (
-            t("sticky.placeholder")
-          ) : (
-            <Markdown content={content} loadingFallback={content} />
-          )}
-        </div>
-      )}
+      <div
+        ref={bodyRef}
+        className={styles.stickyBody}
+        data-role="sticky-body"
+        data-sticky-font-size={fontSize}
+        style={{ ["--sticky-font-size" as string]: `${fontSize}px` }}
+      >
+        {totalCount > 0 && (
+          <div className={styles.stickyProgress} title={t("sticky.progress", { done: doneCount, total: totalCount })}>
+            <div className={styles.stickyProgressFill} style={{ width: `${(doneCount / totalCount) * 100}%` }} />
+          </div>
+        )}
+        {editing ? (
+          <textarea
+            ref={textareaRef}
+            className={styles.stickyTextarea}
+            data-role="sticky-textarea"
+            data-card-id={cardId}
+            style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
+            value={content}
+            onChange={(e) => onContentChange(e.target.value)}
+            onBlur={() => {
+              onContentCommit(content);
+              if (content.trim().length > 0) onModeCommit("preview");
+            }}
+          />
+        ) : (
+          <div
+            ref={previewRef}
+            className={`${styles.stickyPreview}${content.trim().length === 0 ? ` ${styles.empty}` : ""}`}
+            data-role="sticky-preview"
+            style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
+            onClick={onPreviewClick}
+          >
+            {content.trim().length === 0 ? (
+              t("sticky.placeholder")
+            ) : (
+              <Markdown content={content} loadingFallback={content} />
+            )}
+          </div>
+        )}
+      </div>
     </CardFrame>
   );
 }
