@@ -45,6 +45,8 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       order: null,
       suggested_order: null,
       implicit_order: null,
+      diverged_status: null,
+      diverged_actor: null,
       created_at: now,
       updated_at: now,
       ...overrides,

@@ -6,28 +6,22 @@ import { StellarMark } from "./StellarMark";
 import { groupByProject, StatusDot, type Board, type BoardCounts } from "./sessions";
 import type { SessionTemplate } from "./useBoardStore";
 import type { BoardRow } from "../../preload/index";
+import { t, formatRelativeTime, getLocale } from "../../shared/i18n";
 
 type ModalState = { mode: "create" } | { mode: "edit"; board: Board } | null;
 
 /** DESIGN-BACKLOG.md item 14 — absolute date for "criado em", short
- * relative wording for "último acesso" (a raw timestamp doesn't read at a
- * glance the way "há 2h"/"ontem" does). Falls back to the absolute date
- * past a month — "há 47 dias" stops being useful. */
+ * relative wording for "último acesso". i18n fase 1: relative half uses
+ * `Intl.RelativeTimeFormat` via shared `formatRelativeTime`. Absolute
+ * date follows the active locale. Falls back to absolute past a month. */
 function formatDate(ts: number): string {
-  return new Date(ts).toLocaleDateString("pt-BR");
+  return new Date(ts).toLocaleDateString(getLocale());
 }
 
 function formatRelative(ts: number): string {
   const diffMs = Date.now() - ts;
-  const min = Math.floor(diffMs / 60_000);
-  if (min < 1) return "agora";
-  if (min < 60) return `há ${min}min`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `há ${hr}h`;
-  const day = Math.floor(hr / 24);
-  if (day === 1) return "ontem";
-  if (day < 30) return `há ${day} dias`;
-  return formatDate(ts);
+  if (diffMs >= 30 * 24 * 60 * 60 * 1000) return formatDate(ts);
+  return formatRelativeTime(ts, Date.now());
 }
 
 /**
@@ -132,7 +126,7 @@ export function Home({
                         title={b.cwd || undefined}
                         onClick={() => onOpenBoard(b.id)}
                       >
-                        {b.id === mostRecentId && <span className="home-session-recent">recente</span>}
+                        {b.id === mostRecentId && <span className="home-session-recent">{t("home.recent")}</span>}
                         <span
                           className={`home-session-edit${b.id === mostRecentId ? " home-session-edit--below-badge" : ""}`}
                           data-role="edit-session"
@@ -157,11 +151,15 @@ export function Home({
                         <span
                           className="home-session-dates"
                           title={
-                            `criado ${new Date(b.created_at).toLocaleString("pt-BR")}` +
-                            (b.last_accessed_at ? `\nacessado ${new Date(b.last_accessed_at).toLocaleString("pt-BR")}` : "")
+                            t("home.created", { when: new Date(b.created_at).toLocaleString(getLocale()) }) +
+                            (b.last_accessed_at
+                              ? `\n${t("home.accessed", { when: new Date(b.last_accessed_at).toLocaleString(getLocale()) })}`
+                              : "")
                           }
                         >
-                          {b.last_accessed_at ? `acessado ${formatRelative(b.last_accessed_at)}` : "nunca acessado"}
+                          {b.last_accessed_at
+                            ? t("home.accessed", { when: formatRelative(b.last_accessed_at) })
+                            : t("home.neverAccessed")}
                         </span>
                       </button>
                     );

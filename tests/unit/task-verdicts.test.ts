@@ -54,6 +54,8 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       order: null,
       suggested_order: null,
       implicit_order: null,
+      diverged_status: null,
+      diverged_actor: null,
       created_at: now,
       updated_at: now,
       ...overrides,

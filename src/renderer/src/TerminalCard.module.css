@@ -59,8 +59,17 @@
 
 /* Barra de atividade (2026-09-02) — fina, invisível em repouso; pulsa
    esquerda→direita durante `isActive` (useTerminal.ts) e some ao acabar.
-   `overflow: hidden` no container fixo, a faixa que se move é um filho
-   mais largo que ele mesmo (mesma técnica de "sweep" de loading bar). */
+   Keyframe LOCAL: CSS Modules hasheia animation-name; reusar o global de
+   cards.css via :global() quebra o PostCSS deste setup (ver
+   TaskCard.module.css — mesma causa da varredura sumida). */
+@keyframes terminal-card-activity-sweep {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(288%);
+  }
+}
 .terminalCardActivity {
   height: 2px;
   flex: none;
@@ -79,7 +88,7 @@
 }
 .terminalCardActivity.on .terminalCardActivitySweep {
   opacity: 1;
-  animation: terminal-activity-sweep 1s linear infinite;
+  animation: terminal-card-activity-sweep 1s linear infinite;
 }
 
 /* Achado ao vivo (2026-09-03, migração pra CSS Module): esta regra vivia

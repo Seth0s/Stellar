@@ -1,4 +1,5 @@
 import { useModal } from "./useModal";
+import { t } from "../../shared/i18n";
 
 /** Generic yes/no confirmation, same modal chrome as AgentAskModal — kept
  * separate from it since that one is specifically the agent-navigation
@@ -35,7 +36,7 @@ export function ConfirmModal({
         <p>{message}</p>
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onCancel}>
-            Cancelar
+            {t("confirm.cancel")}
           </button>
           <button type="button" className={danger ? "danger" : "primary"} onClick={onConfirm}>
             {confirmLabel}

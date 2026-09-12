@@ -5,54 +5,23 @@
  * `notifySpawnerOfIdleCard`, and the "task moved by hand" notification.
  *
  * DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
- * caixa sem submeter" (relatado ao vivo 2x, 2026-09-11, com `codex`) —
- * *"ao spawn do codex e dando sua task, ... foi preciso eu fazer o
- * 'enter'"*. Not a retry-count problem: the confirm loop already tries
- * Enter up to `SEND_ENTER_MAX_ATTEMPTS` times. Two compounding root causes:
+ * caixa sem submeter" + "Cards recebem a mesma task duas vezes" +
+ * cursor-agent follow-ups queue (owner 2026-09-11: 5× paste chip → exit 143).
  *
- * 1. No readiness gate before typing at all — `writeToCard` used to fire
- *    the instant the PTY existed, with no wait for the CLI to finish
- *    drawing its TUI. `codex` takes noticeably longer than the ~1.3s the
- *    whole retry window covers, so every attempt could land before there
- *    was even a composer to submit into. `decideWriteReadiness` below
- *    closes this — but see achado 2, which is why closing achado 1 alone
- *    isn't enough.
+ * Screen text is a HISTORY window, not "what just happened". Matching
+ * `Working` / `follow-ups` / `Thinking` by mere presence false-positives
+ * on prose and chrome from the PREVIOUS turn (adversarial review): Enter
+ * swallowed → check reads old words → `"sent"` → text stuck. Same class:
+ * a leftover follow-ups box from an earlier turn must not mark a NEW
+ * paste as submitted.
  *
- * 2. The confirm check couldn't tell "genuinely submitted" from "screen
- *    hasn't rendered anything yet". The old check was a boolean
- *    (`looksUnsent`): true if the typed prefix was still visible on
- *    screen, false otherwise — and "false" was read as "sent". During a
- *    slow boot, the prefix is ABSENT from the screen not because it was
- *    submitted but because nothing has been drawn yet at all — absence of
- *    evidence treated as evidence of success, breaking the retry loop on
- *    attempt 1 in exactly the case that needed the other 3 attempts most.
- *    `decideSubmitCheck` below adds the third state this needs: "unknown"
- *    (keep retrying) — reached only when there's been no NEW pty output at
- *    all since we started, so a missing prefix can't yet be trusted as
- *    real progress. Once the terminal has shown ANY sign of life since we
- *    began (`hasNewActivitySinceWrite`), a missing prefix means the same
- *    thing it always did: genuinely sent.
+ * Anchor: `screenTextBeforeWrite` (same line window, read BEFORE the
+ * delivery write). Submit-started / follow-ups only count as `"sent"` when
+ * their match COUNT increases vs that baseline — "appeared after my
+ * write", not "was already on screen".
  *
- * Why the fix needs BOTH: readiness gating alone still lets a card that
- * becomes quiet-but-not-actually-interactive (rare, but possible) fool the
- * confirm loop the old way; the tri-state check alone still means typing
- * lands too early against a slow boot and the composer may drop or garble
- * keystrokes typed before it existed. Together: don't type until there's
- * real reason to believe a UI exists, and don't declare victory until
- * there's real reason to believe something happened.
- *
- * Cost in the common case (a card that's been alive and quiet for a long
- * time — true for `notifySpawnerOfReport`/idle/task-moved's usual target,
- * and for `send_to_card` between two already-running agents): both
- * decisions resolve on their very first synchronous check, no waiting.
- * `decideWriteReadiness` needs only `hasReceivedData` (true forever after
- * the first byte) and a quiescence window measured against the LAST
- * activity, which for a long-idle card is already far past
- * `WRITE_READY_QUIET_MS`. `decideSubmitCheck` only ever gates on
- * `hasNewActivitySinceWrite`, which a live, responsive terminal satisfies
- * immediately (it echoes/reacts to the write) — the new third state never
- * fires for a healthy target, only for one that's gone truly silent since
- * we started typing.
+ * Paste chip in the composer (no NEW follow-ups / NEW Working) → `"unsent"`
+ * (retry Enter). Order: delta signals first, then chip/needle.
  */
 
 /** Quiescence window after the card's last pty output before typing is
@@ -71,12 +40,28 @@ export const WRITE_READY_QUIET_MS = 150;
 export const WRITE_READY_MAX_WAIT_MS = 8_000;
 
 /** DESIGN-BACKLOG.md §0 "Push de report atropela o humano que está
- * digitando" — quanto tempo uma linha humana sem Enter pode impedir uma
- * entrega automática. Depois deste teto a linha é tratada como abandonada:
- * a entrega prossegue, preservando o aviso na fila, mas o draft que ainda
- * estiver no composer não é apagado nem pode ser separado magicamente do
- * texto entregue pelo PTY. O chamador registra esse fallback explícito. */
+ * digitando" / "O porteiro de entrega libera cedo demais" — quanto tempo
+ * SEM tecla humana nova (não desde o início da linha) uma linha pendente
+ * pode impedir uma entrega automática. Cada tecla humana renova o
+ * relógio; o teto só corre quando o humano de fato para. Depois deste
+ * idle a linha é tratada como abandonada: a entrega prossegue,
+ * preservando o aviso na fila, mas o draft que ainda estiver no composer
+ * não é apagado nem pode ser separado magicamente do texto entregue pelo
+ * PTY. O chamador registra esse fallback explícito. */
 export const HUMAN_INPUT_GATE_MAX_AGE_MS = 30_000;
+
+/** Origin mark threaded through `pty-registry.write` — kept local so this
+ * module stays free of a runtime import from the registry. `"human"` is
+ * a real keystroke (or deferred human bytes flushed after a delivery);
+ * `"delivery"` is programmatic `typeAndSubmit` text/Enter. */
+export type DeliveryWriteOrigin = "human" | "delivery";
+
+/** Only human keystrokes renew the abandoned-line clock. Programmatic
+ * delivery must not — an agent writing continuously into a card would
+ * otherwise hold every other queued notice behind that card forever. */
+export function renewsHumanInputGateClock(origin: DeliveryWriteOrigin): boolean {
+  return origin === "human";
+}
 
 export interface WriteReadinessInput {
   /** Has the card's process emitted at least one chunk of output since it
@@ -112,9 +97,10 @@ export function decideWriteReadiness(input: WriteReadinessInput): WriteReadiness
 export interface DeliveryGateInput {
   /** Há uma linha humana iniciada que ainda não atravessou Enter. */
   hasPendingHumanInput: boolean;
-  /** Momento em que a linha começou, ou `null` quando não há relógio
-   * confiável para ela. */
-  pendingHumanInputStartedAtMs: number | null;
+  /** Momento da ÚLTIMA tecla humana nesta linha pendente, ou `null`
+   * quando não há relógio confiável. Contar do início da linha era o
+   * bug: composição longa (>30s) expirava no meio da digitação. */
+  pendingHumanInputLastAtMs: number | null;
   nowMs: number;
 }
 
@@ -124,16 +110,17 @@ export type DeliveryGateDecision =
 
 /** Decide se uma entrega pode atravessar o PTY sem atropelar o composer
  * humano. A decisão é pura para que o limite e o fallback de relógio sejam
- * testados sem Electron, PTY ou timers reais. */
+ * testados sem Electron, PTY ou timers reais. A idade é idle desde a
+ * última tecla humana — não desde o começo da linha. */
 export function decideDeliveryGate(input: DeliveryGateInput): DeliveryGateDecision {
   if (!input.hasPendingHumanInput) return { action: "proceed", reason: "empty" };
 
   // Um estado pendente sem timestamp não pode bloquear uma fila para sempre.
   // A implementação real sempre fornece o timestamp; este fallback também
   // mantém compatibilidade segura com callers antigos/test doubles.
-  if (input.pendingHumanInputStartedAtMs === null) return { action: "proceed", reason: "unknown-age" };
+  if (input.pendingHumanInputLastAtMs === null) return { action: "proceed", reason: "unknown-age" };
 
-  const ageMs = Math.max(0, input.nowMs - input.pendingHumanInputStartedAtMs);
+  const ageMs = Math.max(0, input.nowMs - input.pendingHumanInputLastAtMs);
   if (ageMs >= HUMAN_INPUT_GATE_MAX_AGE_MS) return { action: "proceed", reason: "expired" };
   return { action: "wait", reason: "human-input" };
 }
@@ -143,32 +130,161 @@ export type SubmitCheckResult = "sent" | "unsent" | "unknown";
 export interface SubmitCheckInput {
   /** The screen text read back after this attempt's Enter (already known
    * to be a successful read — `!check.ok` is handled by the caller before
-   * this function is ever consulted, unchanged from before this fix: a
-   * read failure isn't evidence either way, see this module's top comment
-   * and message-bus.ts's own "NÃO REGREDIR" note on that branch). */
+   * this function is ever consulted). */
   screenText: string;
-  /** Normalized prefix of the text that was typed (message-bus.ts already
-   * computes this once per `typeAndSubmit` call). */
-  sentPrefix: string;
-  /** Has the card emitted any NEW pty output since `typeAndSubmit` wrote
-   * the text (before this specific attempt's Enter)? The one signal that
-   * makes a missing prefix trustworthy — see achado 2 in this module's top
-   * comment. */
+  /**
+   * Same line-window snapshot taken BEFORE the delivery text was written.
+   * Submit-started / follow-ups only fire when match counts rise vs this
+   * baseline — so leftover prose/chrome from the previous turn cannot
+   * mark a swallowed Enter as `"sent"`.
+   */
+  screenTextBeforeWrite: string;
+  /**
+   * Normalized needle to look for on screen. Caller passes the FULL
+   * trimmed text when short (<8 chars — system notices like `ok`), else
+   * a 24-char prefix. Short needles are matched only in the screen tail
+   * so UI chrome can't false-positive them into `"sent"`.
+   */
+  sentNeedle: string;
+  /** Has the card emitted any NEW pty output since BEFORE we wrote the
+   * text? Boot-silence signal only — NOT used to distinguish echo from
+   * a real response (see module doc). */
   hasNewActivitySinceWrite: boolean;
 }
 
-function looksUnsentText(screenText: string, sentPrefix: string): boolean {
-  if (/pasted text/i.test(screenText)) return true;
-  if (sentPrefix.length < 8) return false; // curto demais pra significar algo, evita falso positivo
-  return screenText.replace(/\s+/g, " ").includes(sentPrefix);
+/**
+ * Content signal that the CLI accepted the submit and started a turn.
+ * Deliberately patterns of RESPONSE, not of echo. Shared across
+ * cursor-agent, claude, codex, agy TUIs as observed live.
+ */
+export const SUBMIT_STARTED_PATTERN =
+  /\b(Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Esc to interrupt)\b/i;
+
+/** cursor-agent follow-ups box heading — CLI-specific. */
+export const FOLLOW_UPS_HEADING_PATTERN = /\bfollow-ups\b/i;
+
+/** Rows inside the follow-ups box (○ queued / → processing). */
+export const FOLLOW_UP_ROW_PATTERN = /[○●→]\s*\[Pasted text[^\]]*\]/gi;
+
+export function countPatternMatches(text: string, pattern: RegExp): number {
+  const flags = pattern.global ? pattern.flags : `${pattern.flags}g`;
+  const re = new RegExp(pattern.source, flags);
+  const matches = text.match(re);
+  return matches ? matches.length : 0;
 }
 
-/** Achado 2's decision: given one confirm-loop read, did the text get
- * submitted, is it still visibly sitting unsent, or do we simply not know
- * yet? Only "sent" should ever stop the retry loop — "unsent" AND
- * "unknown" both mean "try the Enter again". */
+/** True when `pattern` matches MORE times in `after` than in `before`. */
+export function appearedSinceBaseline(before: string, after: string, pattern: RegExp): boolean {
+  return countPatternMatches(after, pattern) > countPatternMatches(before, pattern);
+}
+
+export function looksLikeFollowUpsQueued(screenText: string): boolean {
+  return FOLLOW_UPS_HEADING_PATTERN.test(screenText);
+}
+
+export function looksLikeSubmitStarted(screenText: string): boolean {
+  return SUBMIT_STARTED_PATTERN.test(screenText);
+}
+
+/**
+ * New follow-up activity since baseline: heading newly appeared, or more
+ * paste-chip rows under the box (the owner symptom — each extra Enter
+ * adds a row while the turn runs).
+ */
+export function followUpsAppearedSince(before: string, after: string): boolean {
+  if (appearedSinceBaseline(before, after, FOLLOW_UPS_HEADING_PATTERN)) return true;
+  return countPatternMatches(after, FOLLOW_UP_ROW_PATTERN) > countPatternMatches(before, FOLLOW_UP_ROW_PATTERN);
+}
+
+export function submitStartedAppearedSince(before: string, after: string): boolean {
+  return appearedSinceBaseline(before, after, SUBMIT_STARTED_PATTERN);
+}
+
+/** Is `sentNeedle` still visible on screen? Long needles: anywhere.
+ * Short needles (<8): only the last few lines (composer zone) — a short
+ * notice must not be declared `"sent"` just because activity exists. */
+export function needleVisibleOnScreen(screenText: string, sentNeedle: string): boolean {
+  const needle = sentNeedle.trim().replace(/\s+/g, " ");
+  if (!needle) return false;
+  if (needle.length < 8) {
+    const tail = screenText.split(/\r?\n/).slice(-6).join(" ").replace(/\s+/g, " ");
+    return tail.includes(needle);
+  }
+  return screenText.replace(/\s+/g, " ").includes(needle);
+}
+
+/**
+ * Decide whether the typed text has been submitted.
+ *
+ * Caller contract (`deliverCard`):
+ *  - `"unsent"` → press Enter again
+ *  - `"unknown"` → wait/re-read, do NOT press Enter
+ *  - `"sent"` → stop
+ */
 export function decideSubmitCheck(input: SubmitCheckInput): SubmitCheckResult {
-  if (looksUnsentText(input.screenText, input.sentPrefix)) return "unsent";
+  const before = input.screenTextBeforeWrite;
+  const after = input.screenText;
+
+  // NEW since write only — leftover "Working"/"follow-ups" from the prior
+  // turn must not count (review: false positive on prose / stale box).
+  if (followUpsAppearedSince(before, after)) return "sent";
+  if (submitStartedAppearedSince(before, after)) return "sent";
+
+  // Collapsed paste chip still in the COMPOSER (no NEW queue/Working).
+  if (/pasted text/i.test(after)) return "unsent";
+
+  const visible = needleVisibleOnScreen(after, input.sentNeedle);
+
+  if (visible) {
+    // Still on screen and no NEW submit signal — stuck in composer. Retry.
+    return "unsent";
+  }
+
   if (!input.hasNewActivitySinceWrite) return "unknown";
   return "sent";
+}
+
+/** Whether this confirm-loop iteration should press Enter. First attempt
+ * always does; later attempts only on `"unsent"`. `"unknown"` waits. */
+export function shouldPressEnterOnAttempt(attemptIndex: number, previousResult: SubmitCheckResult | null): boolean {
+  if (attemptIndex === 0) return true;
+  return previousResult === "unsent";
+}
+
+/**
+ * Bracketed Paste Mode envelope (CSI 200~ … CSI 201~). cursor-agent (and
+ * other TUIs) collapse large bracketed pastes into a `[Pasted text #N +M
+ * lines]` chip — required to reproduce the follow-ups bug and the right
+ * way to deliver multi-line briefs without the TUI treating mid-text
+ * newlines as submits.
+ */
+export function wrapBracketedPaste(text: string): string {
+  return `\x1b[200~${text}\x1b[201~`;
+}
+
+/** Multi-line or long bodies — short system notices stay raw keystrokes. */
+export function shouldUseBracketedPaste(text: string): boolean {
+  return text.includes("\n") || text.length >= 120;
+}
+
+/** Bytes actually written for the delivery body (Enter stays separate). */
+export function deliveryTextBytes(text: string): string {
+  return shouldUseBracketedPaste(text) ? wrapBracketedPaste(text) : text;
+}
+
+/**
+ * Bytes to clear a leftover composer line when a delivery gives up
+ * without `"sent"`. Ctrl+U (kill-to-start-of-line) twice — works on
+ * readline-style composers and is a no-op on many TUIs that ignore it
+ * when the composer is already empty. Not Ctrl+C: that can abort a live
+ * agent turn. Pure so tests lock the sequence.
+ *
+ * Does NOT undo cursor-agent follow-ups already queued — once an entry
+ * is in that box, clearing the composer cannot dequeue it. Caller only
+ * invokes this on give-up (`previousResult !== "sent"`), so a live turn
+ * that reached `"sent"` never receives Ctrl+U. Kept to stop abandoned
+ * unsent text from concatenating into the next delivery (review achado 4).
+ */
+export function composerClearSequence(): string {
+  return "\x15\x15";
 }

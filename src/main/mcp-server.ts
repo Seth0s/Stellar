@@ -401,10 +401,21 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           incrementRetry: z.boolean().optional().describe("Bump the task's retry counter by 1 — e.g. after deciding to retry a task whose agent exited without reporting"),
           attemptedProvider: z.string().optional().describe("Append a provider to the task's attempted-providers list — e.g. when reassigning to a different provider after a failure"),
           suggestedOrder: z.number().optional().describe("YOUR priority guess for this task — see create_task. Never overwrites a human's own drag-set order, which has no agent-facing setter."),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
         },
       },
-      async ({ taskId, status, cardId, result, incrementRetry, attemptedProvider, suggestedOrder }) => {
-        const res = await opts.handleRequest({ cmd: "update_task", taskId, status, cardId, result, incrementRetry, attemptedProvider, suggestedOrder });
+      async ({ taskId, status, cardId, result, incrementRetry, attemptedProvider, suggestedOrder, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "update_task",
+          taskId,
+          status,
+          cardId,
+          result,
+          incrementRetry,
+          attemptedProvider,
+          suggestedOrder,
+          requesterId: caller(callerCardId),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -435,6 +446,52 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
       async ({ taskId }) => {
         const res = await opts.handleRequest({ cmd: "get_task", taskId });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — fechamento EXPLICITO
+    // (nunca por data). Thin wrappers over message-bus cmds; consent not
+    // required (structural board bookkeeping, same class as update_task).
+    server.registerTool(
+      "list_sprints",
+      {
+        description:
+          "List sprints for a board — active first by number descending. Closed rows carry frozen counts (todo/doing/done/failed + migrated in/out) and timestamps; those numbers never change after close. Active sprint has zeros in count_* until closed.",
+        inputSchema: {
+          boardId: z.string().describe("Board whose sprints to list"),
+        },
+      },
+      async ({ boardId }) => {
+        const res = await opts.handleRequest({ cmd: "list_sprints", boardId });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+    server.registerTool(
+      "open_sprint",
+      {
+        description:
+          "Ensure the board has an active sprint. Idempotent when one is already open (returns that row). Creates Sprint N+1 only when none is open. Never closes.",
+        inputSchema: {
+          boardId: z.string().describe("Board to open a sprint on"),
+        },
+      },
+      async ({ boardId }) => {
+        const res = await opts.handleRequest({ cmd: "open_sprint", boardId });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+    server.registerTool(
+      "close_sprint",
+      {
+        description:
+          "Close the board's active sprint: freeze snapshot counts + board membership, migrate unfinished todo/doing into a newly opened sprint, leave done and failed on the closed sprint. REFUSES an empty sprint or when there is no active sprint (visible error, never silent no-op). Never auto-closes by calendar.",
+        inputSchema: {
+          boardId: z.string().describe("Board whose active sprint to close"),
+        },
+      },
+      async ({ boardId }) => {
+        const res = await opts.handleRequest({ cmd: "close_sprint", boardId });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

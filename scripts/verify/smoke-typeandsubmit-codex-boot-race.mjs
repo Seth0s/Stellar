@@ -70,10 +70,10 @@ const SENT_PREFIX = TASK_TEXT.trim().replace(/\s+/g, " ").slice(0, 24);
 // enviado" isoladamente contra o snapshot real do Cenário 2 — não
 // exportado de lá de propósito (é implementação interna da decisão, não
 // parte da API pública do módulo).
-function looksUnsentText(screenText, sentPrefix) {
+function looksUnsentText(screenText, sentNeedle) {
   if (/pasted text/i.test(screenText)) return true;
-  if (sentPrefix.length < 8) return false;
-  return screenText.replace(/\s+/g, " ").includes(sentPrefix);
+  if (sentNeedle.length < 8) return false;
+  return screenText.replace(/\s+/g, " ").includes(sentNeedle);
 }
 
 function stripAnsi(s) {
@@ -188,7 +188,8 @@ console.log("\n=== Cenário 2: antiga vs nova contra um snapshot real de tela em
   // aconteceu nesta sessão de medição).
   const newResult = decideSubmitCheck({
     screenText: midBootSnapshot,
-    sentPrefix: SENT_PREFIX,
+    screenTextBeforeWrite: midBootSnapshot,
+    sentNeedle: SENT_PREFIX,
     hasNewActivitySinceWrite: false,
   });
   check(
@@ -225,6 +226,7 @@ console.log("\n=== Cenário 3: fluxo NOVO de ponta a ponta contra o codex real =
   }
 
   const activityAtWrite = registry.getLastActivityAt(id);
+  const screenTextBeforeWrite = rawTail();
   registry.write(id, TASK_TEXT);
   let result = "unsent";
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -234,7 +236,8 @@ console.log("\n=== Cenário 3: fluxo NOVO de ponta a ponta contra o codex real =
     const currentActivity = registry.getLastActivityAt(id);
     result = decideSubmitCheck({
       screenText: rawTail(),
-      sentPrefix: SENT_PREFIX,
+      screenTextBeforeWrite,
+      sentNeedle: SENT_PREFIX,
       hasNewActivitySinceWrite: typeof activityAtWrite !== "number" || typeof currentActivity !== "number" || currentActivity > activityAtWrite,
     });
     console.log(`    [fixed] attempt=${attempt} result=${result}`);

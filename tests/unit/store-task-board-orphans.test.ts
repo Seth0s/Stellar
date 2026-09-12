@@ -43,6 +43,8 @@ function makeTask(id: string, boardId: string | null): TaskRow {
     order: null,
     suggested_order: null,
     implicit_order: null,
+      diverged_status: null,
+      diverged_actor: null,
     created_at: now,
     updated_at: now,
   };

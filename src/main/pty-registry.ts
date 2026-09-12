@@ -5,6 +5,8 @@ import { effectivePath, realNodePath } from "./user-env";
 import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
 import { decideRearmOnLine } from "./session-rearm-decision";
 import { decideResumeValidity } from "./session-resume-validation";
+import { decideBashCardDiscovery } from "./bash-discovery-decision";
+import { renewsHumanInputGateClock } from "./type-and-submit-decision";
 
 // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — encaminhamento 3. Só os
 // providers com conceito de sessão têm onde checar (mesmo conjunto que
@@ -138,9 +140,10 @@ type Entry = {
    * provider, não só os que têm `rearmsOnInput`, e nunca cresce sem limite
    * (ver `write`). */
   inputLineBuffer: string;
-  /** Momento em que a linha humana atualmente aberta começou. `null` quando
-   * o último input drenou o buffer com Enter. */
-  inputLineStartedAtMs: number | null;
+  /** Momento da ÚLTIMA tecla humana nesta linha aberta. Cada tecla renova;
+   * o porteiro trata idle desde este instante, não desde o começo da linha.
+   * `null` quando o último input drenou o buffer com Enter. */
+  inputLineLastAtMs: number | null;
   /** Se `true`, bytes humanos são retidos brevemente enquanto uma entrega
    * já iniciada termina o ciclo texto + Enter + confirmação. Assim uma tecla
    * que chega durante a janela de 80/250ms não entra no mesmo submit. */
@@ -519,7 +522,7 @@ export function createPtyRegistry(registryOpts: {
       providerId,
       cwd,
       inputLineBuffer: "",
-      inputLineStartedAtMs: null,
+      inputLineLastAtMs: null,
       deliveryActive: false,
       deferredHumanInput: [],
       // RODADA 5, achado único — um card restaurado (`resumeId` já
@@ -550,6 +553,21 @@ export function createPtyRegistry(registryOpts: {
     // reconhecerem o id), mas nunca toca o buffer do terminal.
     if (resumeInvalidReason) {
       registryOpts.onResumeInvalid(id, resumeInvalidReason, spawnOpts.resumeId!);
+    }
+
+    // DESIGN-BACKLOG.md §2.1 points 3–4 — bash-card discovery tip.
+    // Intent of option (a): one-shot human tip. Delivered through the
+    // renderer's onData path (scrollback), NOT via --rcfile/--init-file
+    // and NOT via shell stdin — loginShell() may be zsh/fish/nu, and
+    // replacing the user's rc is exactly what the task forbids.
+    // Does NOT teach a hand-launched nested agent (no system-prompt/MCP
+    // injection path without wrapping binaries by name — rejected).
+    const bashDiscovery = decideBashCardDiscovery({ providerId });
+    if (bashDiscovery.scrollbackTip) {
+      queueMicrotask(() => {
+        if (!entries.has(id)) return;
+        registryOpts.onData(id, `\r\n${bashDiscovery.scrollbackTip}\r\n`);
+      });
     }
 
     // Only watch for a fresh session when the caller didn't already pass a
@@ -758,7 +776,9 @@ export function createPtyRegistry(registryOpts: {
     // provider — checá-lo de novo aqui seria uma condição que nunca muda
     // o resultado, código morto disfarçado de defesa.
     const nowMs = Date.now();
-    if (entry.inputLineBuffer.length === 0) entry.inputLineStartedAtMs = nowMs;
+    // Renova em CADA tecla humana, não só na primeira da linha — o teto do
+    // porteiro é "parou de digitar há N ms", não "começou a digitar há N ms".
+    entry.inputLineLastAtMs = nowMs;
     entry.inputLineBuffer += data;
     let newlineIdx: number;
       // RODADA 7, achado 1 — um `Date.now()` só, reaproveitado por TODAS
@@ -770,7 +790,7 @@ export function createPtyRegistry(registryOpts: {
     while ((newlineIdx = entry.inputLineBuffer.search(/[\r\n]/)) !== -1) {
         const line = entry.inputLineBuffer.slice(0, newlineIdx).trim();
         entry.inputLineBuffer = entry.inputLineBuffer.slice(newlineIdx + 1);
-        entry.inputLineStartedAtMs = entry.inputLineBuffer.length > 0 ? nowMs : null;
+        entry.inputLineLastAtMs = entry.inputLineBuffer.length > 0 ? nowMs : null;
         // RODADA 6, achado 1 (correção de regressão da RODADA 5) — a
         // decisão distingue os DOIS caminhos, que são coisas diferentes:
         // o trigger EXPLÍCITO (`/resume`) sempre rearma, mesmo com a
@@ -812,7 +832,7 @@ export function createPtyRegistry(registryOpts: {
     if (entry.inputLineBuffer.length > MAX_INPUT_LINE_BUFFER) {
       entry.inputLineBuffer = entry.inputLineBuffer.slice(-MAX_INPUT_LINE_BUFFER);
     }
-    if (entry.inputLineBuffer.length === 0) entry.inputLineStartedAtMs = null;
+    if (entry.inputLineBuffer.length === 0) entry.inputLineLastAtMs = null;
   }
 
   function write(id: string, data: string, origin: PtyWriteOrigin = "human") {
@@ -824,12 +844,14 @@ export function createPtyRegistry(registryOpts: {
     // tecla que chegue na janela de confirmação seja submetida junto com o
     // aviso. A ordem dos bytes é preservada e eles voltam ao PTY assim que a
     // entrega termina.
-    if (origin === "human" && entry.deliveryActive) {
+    if (renewsHumanInputGateClock(origin) && entry.deliveryActive) {
       entry.deferredHumanInput.push(data);
       return;
     }
 
-    if (origin === "human") recordHumanInput(id, entry, data);
+    // Só origem humana alimenta o buffer/relógio do porteiro — `delivery`
+    // (typeAndSubmit) não pode renovar o idle e segurar a fila dos outros.
+    if (renewsHumanInputGateClock(origin)) recordHumanInput(id, entry, data);
     entry.proc.write(data);
   }
 
@@ -946,7 +968,7 @@ export function createPtyRegistry(registryOpts: {
     hasReceivedData: boolean;
     lastActivityAtMs: number;
     hasPendingHumanInput: boolean;
-    inputLineStartedAtMs: number | null;
+    inputLineLastAtMs: number | null;
   } | null {
     const entry = entries.get(id);
     if (!entry) return null;
@@ -955,7 +977,7 @@ export function createPtyRegistry(registryOpts: {
       hasReceivedData: entry.hasReceivedData,
       lastActivityAtMs: entry.lastActivityAt,
       hasPendingHumanInput: entry.inputLineBuffer.length > 0,
-      inputLineStartedAtMs: entry.inputLineStartedAtMs,
+      inputLineLastAtMs: entry.inputLineLastAtMs,
     };
   }
 

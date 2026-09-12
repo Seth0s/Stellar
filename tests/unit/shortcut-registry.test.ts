@@ -6,6 +6,7 @@ import {
   describeComboAliases,
   displayForShortcut,
   resolveGlobalShortcut,
+  findShortcutClaimingKey,
   groupShortcutsForOverlay,
   SHORTCUT_REGISTRY,
   type ShortcutContext,
@@ -222,6 +223,29 @@ describe("resolveGlobalShortcut — the dispatcher", () => {
 
   it("an unrelated key resolves to null", () => {
     expect(resolveGlobalShortcut(key({ key: "z" }), ctx())).toBeNull();
+  });
+});
+
+describe("findShortcutClaimingKey — any dispatch/scope, effective combo from the registry", () => {
+  it("finds a central override even when scope would not fire (terminal focus is irrelevant here)", () => {
+    const overrides = {
+      "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
+      "card.duplicate": { key: "c", ctrlOrCmd: true },
+    };
+    expect(findShortcutClaimingKey(key({ key: "c", ctrlKey: true }), overrides)).toBe("card.duplicate");
+  });
+
+  it("finds a native terminal effective combo", () => {
+    expect(findShortcutClaimingKey(key({ key: "c", ctrlKey: true }), {})).toBe("terminal.sigint");
+    expect(findShortcutClaimingKey(key({ key: "v", ctrlKey: true }), {})).toBe("terminal.paste");
+  });
+
+  it("returns null for a key nobody claims", () => {
+    const overrides = {
+      "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
+    };
+    expect(findShortcutClaimingKey(key({ key: "c", ctrlKey: true }), overrides)).toBeNull();
+    expect(findShortcutClaimingKey(key({ key: "a" }), {})).toBeNull();
   });
 });
 

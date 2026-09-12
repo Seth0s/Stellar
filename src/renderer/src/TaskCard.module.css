@@ -65,22 +65,10 @@
   margin-left: auto;
 }
 
-/* RODADA 3 (contrato §2.3, item 4) — nota de rodapé, só sob "a fazer" e
-   "falhou" (COLUMN_NOTE em TaskCard.tsx decide quais). */
-.columnNote {
-  padding: 6px 8px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.4;
-  flex: none;
-}
-
-/* RODADA 3-fix-textos — `retryCount` em mono, do jeito que o protótipo
-   v5 mostra (a nota de "falhou" usa `<code>`, ver TaskCard.tsx). */
-.columnNote code {
-  font-family: var(--font-mono);
-}
+/* RODADA 4 item 8 — notas explicativas de coluna (`.columnNote` /
+   `data-part="column-note"`) removidas: eram texto de protótipo pra
+   avaliar a proposta, não conteúdo permanente do app. Rodapé de escopo
+   (`board-scope`) é outra coisa e permanece. */
 
 .columnBody {
   flex: 1;
@@ -387,6 +375,20 @@
   line-height: 1.4;
 }
 
+/* DESIGN-BACKLOG.md §2.1 Decisão 8 — divergência app/agente vs status
+   humano. Tracejado (como a pílula de sugestão): é uma DECLARAÇÃO, não
+   o fato autoritativo. Foam pra não competir com o âmbar do movimento
+   humano nem com o danger de estado quebrado. */
+.divergenceNotice {
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--foam) 12%, var(--panel));
+  border: 1px dashed color-mix(in srgb, var(--foam) 50%, var(--border));
+  color: var(--foam);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
 .proposeBar {
   display: flex;
   align-items: center;
@@ -451,11 +453,23 @@
   border: 1px solid var(--border);
 }
 
-/* Varredura de atividade de 2px — mesma técnica de TerminalCard.module.css
-   (`.terminalCardActivity`/`.terminalCardActivitySweep`), reaproveitando o
-   keyframe global `terminal-activity-sweep` já definido em cards.css (não
-   escopado por CSS Modules — é uma referência de nome, não uma segunda
-   declaração). */
+/* Varredura de atividade de 2px — mesma técnica de TerminalCard.module.css.
+   Keyframe LOCAL de propósito: CSS Modules hasheia referências a
+   `animation-name`, e `:global(terminal-activity-sweep)` (o keyframe em
+   cards.css) quebra o parser PostCSS deste setup. Nome local + @keyframes
+   no mesmo módulo = hash consistente nos dois lados. Causa raiz da
+   varredura "sumida" (DESIGN-BACKLOG.md §2.1): a regra apontava pra um
+   @keyframes hasheado que não existia; a faixa ficava em left:-34%
+   clipada, opacity 1, zero pixels. */
+@keyframes task-activity-sweep {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(288%);
+  }
+}
+
 .activity {
   height: 2px;
   flex: none;
@@ -472,12 +486,13 @@
   width: 34%;
   left: -34%;
   opacity: 0;
-  background: linear-gradient(90deg, transparent, var(--accent-task), transparent);
+  /* Contrato §2.3 ANIMAÇÃO — `--foam`, não `--accent-task`. */
+  background: linear-gradient(90deg, transparent, var(--foam), transparent);
 }
 
 .activity.on .activitySweep {
   opacity: 1;
-  animation: terminal-activity-sweep 1s linear infinite;
+  animation: task-activity-sweep 1s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -490,15 +505,8 @@
 }
 
 /* RODADA 3, peça 5 — rodapé de escopo (`board X · N tasks · M em outros
-   boards`). Vive em `.card-foot` (cards.css) — texto que pode quebrar em
-   telas estreitas, nunca um popover posicionado (o card inteiro é
-   clipado por `overflow: hidden`, ver o doc comment de TaskScopeFooter).
-   FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 11) — layout vira duas
-   metades: nome/contagem própria à ESQUERDA (`.scopeOwn`, pode truncar
-   num card estreito), total de outros boards + botão "trocar de board" à
-   DIREITA (`.scopeRight`, nunca trunca — o botão precisa continuar
-   clicável). `justify-content: space-between` substitui o antigo texto
-   corrido único. */
+   boards`). Vive em `.card-foot` (cards.css). RODADA 4 — botão "trocar de
+   board" removido; contagem de outros boards permanece texto puro. */
 .scopeFooter {
   display: flex;
   align-items: center;
@@ -520,25 +528,6 @@
   align-items: center;
   gap: 6px;
   color: var(--muted);
-}
-
-/* Botão SEPARADO e ROTULADO (nunca o número da contagem virando link —
-   decisão 7, delta 11 pedido explícito do dono do repo). Vai pra Home
-   (`onGoHome`), nunca um board específico adivinhado. */
-.scopeSwitchButton {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px 6px;
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: inherit;
-}
-
-.scopeSwitchButton:hover {
-  border-color: var(--foam);
-  color: var(--foam);
 }
 
 /* RODADA 3, peça 6 — painel de gráficos, escondido por padrão (chartsOpen
@@ -610,6 +599,103 @@
   background: var(--foam);
 }
 
+.legendSwatchApproved {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 3px;
+  vertical-align: middle;
+  background: var(--good);
+}
+
+.legendSwatchRejected {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 3px;
+  vertical-align: middle;
+  background: var(--danger);
+}
+
+/* Eixo do gráfico 3 — marcas 0 / meio / máximo sob as barras. */
+.chartAxis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-left: 46px;
+  padding-right: 40px;
+  font-size: 9px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pílulas rodada N / reprovada N× — signal (âmbar) como no protótipo. */
+.pillRound {
+  font-size: 10.5px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--signal);
+  background: color-mix(in srgb, var(--signal) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--signal) 40%, var(--border));
+}
+
+.pillRejection {
+  font-size: 10.5px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--signal);
+  background: color-mix(in srgb, var(--signal) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--signal) 40%, var(--border));
+}
+
+/* Formulário humano — criar task na coluna "a fazer". */
+.createTaskForm {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.createTaskInput {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 7px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.createTaskInput:focus {
+  outline: none;
+  border-color: var(--foam);
+}
+
+.createTaskSubmit {
+  flex: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.createTaskSubmit:hover:not(:disabled) {
+  border-color: var(--foam);
+  color: var(--foam);
+}
+
+.createTaskSubmit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 9) — botão "Gráficos" com
    RÓTULO visível, não só ícone. `.card-head button` (cards.css, global)
    é `padding: 4px` quadrado pensado pra ícone sozinho; `!important`
@@ -629,4 +715,121 @@
    aberto. */
 .chartsToggleActive {
   color: var(--foam);
+}
+
+/* DESIGN-BACKLOG.md §2.1 "Historico de sprints" — painel sob o quadro,
+   mesmo espírito de `.chartsPanel` (sob demanda, tokens só). */
+.sprintsPanel {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px 12px;
+  background: var(--surface);
+}
+
+.sprintsTitle {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: lowercase;
+  margin-bottom: 8px;
+}
+
+.sprintsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.sprintRow {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.sprintRowSelected {
+  border-color: var(--foam);
+}
+
+.sprintFrozenBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--foam);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.sprintBackLive {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 10.5px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.sprintCloseError {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--danger);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.sprintIdHint {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.sprintHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.sprintId {
+  color: var(--text);
+}
+
+.sprintState {
+  color: var(--foam);
+  font-size: 10px;
+}
+
+.sprintRow[data-sprint-open="false"] .sprintState {
+  color: var(--muted);
+}
+
+.sprintDuration {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sprintWhen {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.sprintCounts {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--text);
 }

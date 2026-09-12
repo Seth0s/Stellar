@@ -727,6 +727,18 @@ export type TaskBoardItem = {
    * sempre visível, não atrás de um toggle. `task-board-model.ts`'s
    * `describeTransitionTrail` formata. */
   statusTransitions: { toValue: string; at: number }[];
+  /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo de divergência entre o
+   * status humano autoritativo e o que app/agente declarou. Ambos null =
+   * sem divergência. `task-board-model.ts`'s `describeStatusDivergence`
+   * formata; limpo no choke point quando o humano move de novo ou a
+   * observação se alinha. */
+  divergedStatus: string | null;
+  divergedActor: "app" | "agent" | "human" | null;
+  /** RODADA 4 — `task_verdicts` (append-only). `provider` do card no
+   * momento da leitura (LEFT JOIN); null se o card foi deletado. */
+  verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
+  /** Ator da 1ª transição `kind:'status'` — `human` ⇒ criada pela UI. */
+  firstActor: "app" | "agent" | "human" | null;
 };
 /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — mesmo padrão de
  * `spawn.onQueueChanged` acima (carga inicial via `listByBoard`, depois
@@ -740,6 +752,10 @@ const tasks = {
   listByBoard: (boardId: string): Promise<TaskBoardItem[]> => ipcRenderer.invoke("store:tasks:list-by-board", boardId),
   approveCompletion: (taskId: string): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke("store:tasks:approve-completion", taskId),
+  /** RODADA 4 — criar task pela UI (coluna "a fazer"). `actor: "human"`
+   * no main — ver `store:tasks:create` em index.ts. */
+  create: (boardId: string, prompt: string): Promise<{ ok: true; taskId: string } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:create", boardId, prompt),
   /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — arrastar entre colunas e
    * dentro da coluna. Tudo já vem PRONTO do renderer
    * (task-board-model.ts's `COLUMN_TO_STATUS`/`computeColumnDrop` — a
@@ -798,6 +814,105 @@ const tasks = {
    * `computeCycleTime`). */
   transitionsByBoard: (boardId: string): Promise<{ task_id: string; to_value: string; at: number }[]> =>
     ipcRenderer.invoke("store:tasks:transitions-by-board", boardId),
+  /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — fechamento explícito
+   * (botão no card Fila). Snapshot congelado no main; este bridge só
+   * relaya. */
+  listSprints: (
+    boardId: string,
+  ): Promise<
+    {
+      id: string;
+      boardId: string;
+      number: number;
+      name: string | null;
+      startedAt: number;
+      closedAt: number | null;
+      countTodo: number;
+      countDoing: number;
+      countDone: number;
+      countFailed: number;
+      migratedIn: number;
+      migratedOut: number;
+      hasSnapshot: boolean;
+    }[]
+  > => ipcRenderer.invoke("store:tasks:list-sprints", boardId),
+  /** Frozen board of a closed sprint — never live task status. */
+  sprintSnapshot: (
+    sprintId: string,
+  ): Promise<
+    | {
+        ok: true;
+        sprint: {
+          id: string;
+          boardId: string;
+          number: number;
+          name: string | null;
+          startedAt: number;
+          closedAt: number | null;
+          countTodo: number;
+          countDoing: number;
+          countDone: number;
+          countFailed: number;
+          migratedIn: number;
+          migratedOut: number;
+          hasSnapshot: boolean;
+        };
+        tasks: {
+          id: string;
+          prompt: string | null;
+          status: string;
+          order: number | null;
+          suggestedOrder: number | null;
+          implicitOrder: number | null;
+          createdAt: number;
+          updatedAt: number;
+        }[];
+      }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke("store:tasks:sprint-snapshot", sprintId),
+  closeSprint: (
+    boardId: string,
+  ): Promise<
+    | {
+        ok: true;
+        closed: {
+          id: string;
+          boardId: string;
+          number: number;
+          name: string | null;
+          startedAt: number;
+          closedAt: number | null;
+          countTodo: number;
+          countDoing: number;
+          countDone: number;
+          countFailed: number;
+          migratedIn: number;
+          migratedOut: number;
+          hasSnapshot: boolean;
+        };
+        opened: {
+          id: string;
+          boardId: string;
+          number: number;
+          name: string | null;
+          startedAt: number;
+          closedAt: number | null;
+          countTodo: number;
+          countDoing: number;
+          countDone: number;
+          countFailed: number;
+          migratedIn: number;
+          migratedOut: number;
+          hasSnapshot: boolean;
+        };
+      }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke("store:tasks:close-sprint", boardId),
+  onSprintsChanged: (cb: (boardId: string) => void) => {
+    const listener = (_e: unknown, boardId: string) => cb(boardId);
+    ipcRenderer.on("task-sprints:changed", listener);
+    return () => ipcRenderer.removeListener("task-sprints:changed", listener);
+  },
 };
 
 export type OneShotResult = { text: string } | { error: string };

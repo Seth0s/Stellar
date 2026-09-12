@@ -48,6 +48,11 @@ export type SpawnOpts = {
 // acbridge stays as the CLI fallback (see its own header comment). Kept
 // short — MCP tool descriptions are self-documenting, this is just a
 // nudge to look for them, not a manual.
+//
+// AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+// Reader is a model, not a human. English is correct. Listed in
+// `src/shared/i18n/agent-facing.ts`. A phase-2 string sweep that pulls
+// this into `t()` would change agent behaviour with no test catching it.
 const ACBRIDGE_HINT =
   "You're running inside agent-canvas, a board of cards. If an MCP server " +
   "named `stellar` is connected, prefer its tools (list/send/open/spawn/" +
@@ -93,9 +98,13 @@ type ProviderDef = {
 
 export const PROVIDERS: ProviderDef[] = [
   // Bash has no system-prompt injection flag and no provider-specific MCP
-  // registration. A manually launched agent inherits AGENT_CANVAS_MCP_URL,
-  // but the shell cannot turn that into MCP or show ACBRIDGE_HINT by itself;
-  // this is the real coverage gap recorded in DESIGN-BACKLOG.md §2.1, point 3.
+  // registration. A manually launched agent inherits AGENT_CANVAS_* and
+  // `acbridge` on PATH, but the shell cannot turn that into MCP or show
+  // ACBRIDGE_HINT by itself — DESIGN-BACKLOG.md §2.1 point 3. Coverage
+  // chosen: human tip via `decideBashCardDiscovery` (pty-registry), not a
+  // binary wrapper (forbidden process-name detection) and not --rcfile
+  // (would risk clobbering the user's shell rc). Point 4 nested identity
+  // stays a known gap — `acbridge claim-card` declined (no cheap handshake).
   { id: "bash", label: "Bash", binaryNames: [], buildArgs: () => [], installCommand: null },
   {
     id: "claude",

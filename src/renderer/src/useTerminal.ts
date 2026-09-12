@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -6,6 +6,8 @@ import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { toast } from "./useToast";
 import { registerTerminal, unregisterTerminal } from "./terminal-registry";
 import { MaskQueue } from "./mask-buffer";
+import { resolveTerminalShortcutKeydown } from "./terminal-shortcut-dispatch";
+import type { ShortcutOverrides } from "./shortcut-registry";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -249,6 +251,10 @@ export function useTerminal(
   initialInput: string | null,
   visible: boolean,
   zoom: number,
+  /** Follow-up fase C — ref estável (App → TerminalCard → aqui). O
+   * listener de keydown se registra uma vez; lê `.current` a cada tecla
+   * (mesmo padrão de `zoomRef` / `shortcutOverridesRef` em App.tsx). */
+  shortcutOverridesRef: MutableRefObject<ShortcutOverrides>,
 ) {
   const [ptyId, setPtyId] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -737,47 +743,57 @@ export function useTerminal(
       // normalização que ele já faz.
       function onKeyDown(e: KeyboardEvent) {
         // Pedido ao vivo (2026-08-31) — "não consigo copiar textos".
-        // xterm.js renderiza em canvas/WebGL — não existe seleção de
-        // texto real do DOM/navegador ali, só a seleção LÓGICA que o
-        // próprio xterm rastreia (`term.getSelection()`); sem esse
-        // handler não existia NENHUM jeito de tirar texto selecionado do
-        // terminal. Ctrl+Shift+C (não Ctrl+C sozinho) — convenção de
-        // todo terminal Linux de verdade (GNOME Terminal, Konsole,
-        // xterm), já que Ctrl+C sozinho continua reservado pro SIGINT
-        // (`interrupt()` abaixo, também o botão "Ctrl+C" do header) —
-        // sobrecarregar Ctrl+C pra copiar quando há seleção mudaria esse
-        // comportamento já estabelecido, arriscado sem necessidade.
-        if (e.ctrlKey && e.shiftKey && (e.key === "c" || e.key === "C")) {
-          const selection = term.getSelection();
-          if (selection) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            void navigator.clipboard.writeText(selection).then(() => toast("copiado"));
-          }
-          return;
+        // Combo efetivo via registro + overrides (follow-up fase C).
+        // Decisão pura em `resolveTerminalShortcutKeydown` — matched ⇒
+        // consume SEMPRE (inclusive copy sem seleção), senão Ctrl+C
+        // rebound como copy vaza `\x03` pro PTY (review adversarial).
+        // SIGINT escreve `\x03` no stream (não `pty.interrupt`) pra raw-mode
+        // (vim/nano/REPL) continuar recebendo o byte, não um sinal do SO.
+        const overrides = shortcutOverridesRef.current;
+        const dispatch = resolveTerminalShortcutKeydown(e, overrides, term.getSelection());
+        if (dispatch.consume) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
         }
-        if (!e.ctrlKey || (e.key !== "v" && e.key !== "V")) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        void (async () => {
-          try {
-            const items = await navigator.clipboard.read();
-            const hasImage = items.some((item) => item.types.some((t) => t.startsWith("image/")));
-            if (hasImage) {
-              if (Date.now() - lastHandledAt < 500) return;
-              writeImagePathToPty();
-              return;
+        switch (dispatch.action) {
+          case "copy":
+            void navigator.clipboard.writeText(dispatch.text).then(() => toast("copiado"));
+            return;
+          case "copy-noop":
+          case "swallow":
+          case "none":
+            return;
+          case "sigint":
+            if (ptyIdRef.current) {
+              void window.pty.write(ptyIdRef.current, "\x03");
+              setIsActive(false);
             }
-          } catch {
-            // sem permissão/API pra `read()` — ainda tenta o fallback de texto abaixo
-          }
-          try {
-            const text = await navigator.clipboard.readText();
-            if (text) term.paste(text);
-          } catch {
-            // clipboard genuinely inacessível aqui — nada mais a fazer
-          }
-        })();
+            return;
+          case "paste":
+            void (async () => {
+              try {
+                const items = await navigator.clipboard.read();
+                const hasImage = items.some((item) => item.types.some((t) => t.startsWith("image/")));
+                if (hasImage) {
+                  if (Date.now() - lastHandledAt < 500) return;
+                  writeImagePathToPty();
+                  return;
+                }
+              } catch {
+                // sem permissão/API pra `read()` — ainda tenta o fallback de texto abaixo
+              }
+              try {
+                const text = await navigator.clipboard.readText();
+                if (text) term.paste(text);
+              } catch {
+                // clipboard genuinely inacessível aqui — nada mais a fazer
+              }
+            })();
+            return;
+          case "eof":
+            if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, "\x04");
+            return;
+        }
       }
       el.addEventListener("keydown", onKeyDown, { capture: true });
 

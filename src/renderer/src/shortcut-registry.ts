@@ -424,16 +424,13 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
 
   // ---- Terminal ------------------------------------------------------
   {
-    // Round 2 (achado 1b do review, O bug original desta fase inteira) —
-    // a overlay ANTIGA (antes da fase A) dizia que Ctrl+C copiava; quem
-    // tentava copiar assim matava o próprio processo (SIGINT). A fase A
-    // consertou a MENTIRA removendo a linha errada; a fase B round 1
-    // consertou o REGISTRO mas esqueceu de pôr a VERDADE no lugar —
-    // `terminal.eof` (Ctrl+D) já tinha o precedente exato pra isso
-    // (`dispatch: "native"`, pass-through de PTY), Ctrl+C só não tinha
-    // ganho a entrada irmã. Sem handler dedicado nenhum: o keydown flui
-    // cru pro xterm → `term.onData` → PTY, e o shell interpreta como
-    // SIGINT normalmente, igual qualquer terminal de verdade faria.
+    // Follow-up fase C — deixou de ser pass-through puro: `useTerminal`
+    // intercepta o combo EFETIVO, escreve `\x03` via `pty.write` (byte no
+    // stream — raw-mode/vim/REPL; NÃO `pty.interrupt`/sinal do SO), e
+    // engole o Ctrl+C default quando rebindado. Copy matched consome
+    // sempre (mesmo sem seleção) pra Ctrl+C rebound como copy não vazar
+    // `\x03` pelo early-return. `shift: false` explícito — com Shift é
+    // `terminal.copySelection` (checado ANTES).
     id: "terminal.sigint",
     group: "Terminal",
     dispatch: "native",
@@ -444,7 +441,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     combo: { key: "c", ctrlOrCmd: true, shift: false },
     scopes: ["terminal"],
     description: "interrompe o processo (SIGINT do shell) — NÃO copia; pra copiar a seleção use Ctrl+Shift+C",
-    owner: "useTerminal.ts (nenhum handler dedicado — fluxo cru pro PTY)",
+    owner: "useTerminal.ts (keydown capture → pty.write \\x03)",
   },
   {
     id: "terminal.copySelection",
@@ -455,7 +452,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     description: "copiar a seleção",
     // `useTerminal.ts`'s listener de captura chama `stopImmediatePropagation`
     // — nunca chega ao xterm/PTY como SIGBREAK ou qualquer outra coisa.
-    owner: "useTerminal.ts (keydown, capture phase)",
+    owner: "useTerminal.ts (keydown capture, matchesShortcut)",
   },
   {
     id: "terminal.paste",
@@ -464,20 +461,21 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     combo: { key: "v", ctrlOrCmd: true },
     scopes: ["terminal"],
     description: "colar (texto ou imagem)",
-    owner: "useTerminal.ts (keydown, capture phase)",
+    owner: "useTerminal.ts (keydown capture, matchesShortcut)",
   },
   {
+    // Follow-up fase C — sintetiza `\x04` no combo efetivo e engole o
+    // Ctrl+D default quando rebindado. O despachante central (App.tsx)
+    // continua bloqueando `card.duplicate` em escopo terminal.
     id: "terminal.eof",
     group: "Terminal",
     dispatch: "native",
-    combo: { key: "d", ctrlOrCmd: true },
+    // `shift: false` explícito — mesmo cuidado de `terminal.sigint` vs
+    // copy: modificador indefinido faria Ctrl+Shift+D casar sem querer.
+    combo: { key: "d", ctrlOrCmd: true, shift: false },
     scopes: ["terminal"],
     description: "com o terminal focado: EOF do shell, não duplica o card",
-    // Não existe handler dedicado — é a AUSÊNCIA de handler: o despachante
-    // central vê escopo "terminal" (não "canvas") pra este mesmo Ctrl+D e
-    // não dispara `card.duplicate`, então o keydown flui cru pro xterm →
-    // PTY, e o shell interpreta como EOF normalmente.
-    owner: "App.tsx (escopo bloqueia card.duplicate) + PTY cru",
+    owner: "useTerminal.ts (keydown capture, matchesShortcut → pty.write \\x04)",
   },
 
   // ---- Canvas --------------------------------------------------------
@@ -535,7 +533,12 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     id: "chat.send",
     group: "Chat e navegador",
     dispatch: "native",
-    combo: { key: "Enter" },
+    // `shift: false` explícito — com Shift é `chat.newline`. Sem isto,
+    // `matchesCombo` (shift indefinido = "não importa") faria Shift+Enter
+    // disparar send em vez de quebra de linha, e `combosOverlap` acusaria
+    // colisão falsa entre os dois no mesmo escopo text-input. Mesmo
+    // precedente de `terminal.sigint` vs `terminal.copySelection`.
+    combo: { key: "Enter", shift: false },
     // Fase C, round 2 (achado 3 do review) — faltava aqui, e a AUSÊNCIA
     // não é neutra: `shortcut-config.ts`'s detecção de conflito trata
     // `scopes` ausente como "qualquer escopo" (postura conservadora,
@@ -546,7 +549,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     // era do REGISTRO, não da semântica do detector de conflito.
     scopes: ["text-input"],
     description: "envia a mensagem no chat",
-    owner: "ChatCard.tsx onComposerKeyDown",
+    owner: "ChatCard.tsx onComposerKeyDown (matchesShortcut)",
   },
   {
     id: "chat.newline",
@@ -555,7 +558,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     combo: { key: "Enter", shift: true },
     scopes: ["text-input"],
     description: "quebra linha no chat",
-    owner: "ChatCard.tsx (comportamento nativo do textarea — não interceptado)",
+    owner: "ChatCard.tsx onComposerKeyDown (matchesShortcut; Enter nativo ou insert manual)",
   },
   {
     id: "browser.navigate",
@@ -564,7 +567,7 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     combo: { key: "Enter" },
     scopes: ["text-input"],
     description: "navega (na barra de endereço do navegador)",
-    owner: "BrowserCard.tsx (barra de endereço)",
+    owner: "BrowserCard.tsx (barra de endereço, matchesShortcut)",
   },
 
   // ---- Mouse -----------------------------------------------------------
@@ -661,6 +664,30 @@ export function resolveGlobalShortcut(
     const combo = overrides[shortcut.id] ?? shortcut.combo;
     if (!matchesCombo(e, combo)) continue;
     return shortcut.id;
+  }
+  return null;
+}
+
+/**
+ * Quem no registro reivindica `e` agora — combo EFETIVO (`overrides[id]`
+ * quando presente, senão o default), qualquer `dispatch` (`central` /
+ * `native` / …) e qualquer escopo. Primeira entrada com `combo` que
+ * casar vence; gestos de mouse (sem `combo`) são ignorados.
+ *
+ * Fonte única: caminha `SHORTCUT_REGISTRY`, nunca uma lista paralela de
+ * ids. O despachante do terminal pergunta isto antes de engolir uma
+ * tecla "stale" — se alguém (central ou nativo fora dos quatro atalhos
+ * de terminal já checados) reivindicou o combo, a tecla NÃO é órfã e
+ * o evento deve passar (`none`) em vez de `swallow`.
+ */
+export function findShortcutClaimingKey(
+  e: ShortcutKeyEvent,
+  overrides: ShortcutOverrides = {},
+): string | null {
+  for (const def of SHORTCUT_REGISTRY) {
+    if (!def.combo) continue;
+    const combo = overrides[def.id] ?? def.combo;
+    if (matchesCombo(e, combo)) return def.id;
   }
   return null;
 }
