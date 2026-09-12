@@ -986,9 +986,7 @@ function createWindow() {
       callback(false);
       return;
     }
-    askHumanForBrowserPermission(
-      "Uma página aberta num card de navegador quer acessar câmera/microfone, ou compartilhar sua tela. Permitir?",
-    ).then(callback);
+    askHumanForBrowserPermission(t("dialog.mediaPermission")).then(callback);
   });
   // Synchronous by API contract (`navigator.permissions.query` and
   // similar immediate checks) — can't defer to a human here, so this only
@@ -1013,8 +1011,8 @@ function createWindow() {
   // confirmations for screen-share on that platform: the generic media
   // prompt above, this specific one, and the OS's own portal dialog.
   session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    const sourceUrl = request.frame?.url || "página desconhecida";
-    const allowed = await askHumanForBrowserPermission(`A página "${sourceUrl}" quer capturar sua tela. Permitir?`);
+    const sourceUrl = request.frame?.url || t("dialog.unknownPage");
+    const allowed = await askHumanForBrowserPermission(t("dialog.displayCapture", { url: sourceUrl }));
     if (!allowed) {
       callback({});
       return;
@@ -1351,8 +1349,8 @@ function createWindow() {
       lastIdleNotification = { label: idleCardLabel, idleThresholdMs };
       try {
         new Notification({
-          title: `"${idleCardLabel}" ficou ocioso`,
-          body: `Sem atividade por ${idleThresholdMs / 1000}s — pode estar esperando você.`,
+          title: t("notify.idleTitle", { label: idleCardLabel }),
+          body: t("notify.idleBody", { seconds: idleThresholdMs / 1000 }),
         }).show();
       } catch {
         // Notification indisponível nesse ambiente/SO — nunca deve
@@ -1383,8 +1381,8 @@ function createWindow() {
       lastReportNotification = { label: reportingCardLabel };
       try {
         new Notification({
-          title: `"${reportingCardLabel}" reportou`,
-          body: "Chame read_report para ver o resultado.",
+          title: t("notify.reportTitle", { label: reportingCardLabel }),
+          body: t("notify.reportBody"),
         }).show();
       } catch {
         // Mesma postura defensiva de notifyIdleCard: Notification
@@ -1399,8 +1397,8 @@ function createWindow() {
     notifyCardExitedWithoutReport: (_spawnerId, exitedCardLabel, exitCode) => {
       try {
         new Notification({
-          title: `"${exitedCardLabel}" saiu sem reportar`,
-          body: `Código de saída ${exitCode}. Se havia uma task vinculada, ela caiu para "falhou".`,
+          title: t("notify.exitTitle", { label: exitedCardLabel }),
+          body: t("notify.exitBody", { code: exitCode }),
         }).show();
       } catch {
         // Mesma postura defensiva das outras Notification acima.
@@ -1510,7 +1508,7 @@ function createWindow() {
     },
     // DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — direct
     // store pass-through, mesmo padrão das 3 linhas de tasks acima.
-    getReport: (cardId) => store.getReport(cardId),
+    getReport: (cardId, afterSeq) => store.getReport(cardId, afterSeq),
     // Fase 2, peça 4 — um relatório novo pode fazer a task PROPOR conclusão
     // (barra de "aprovado") sem que `status` mude nenhum bit — só gravar
     // (`store.upsertReport`, intocado) não bastava, o board aberto
@@ -1756,7 +1754,7 @@ function createWindow() {
   const MAX_CHAT_ATTACHMENT_BASE64_CHARS = 10 * 1024 * 1024 * 1.4; // ~10MB de bytes reais
   ipcMain.handle("chat:save-attachment-image", (_e, base64: string, mediaType: string) => {
     if (base64.length > MAX_CHAT_ATTACHMENT_BASE64_CHARS) {
-      return { ok: false, error: "imagem grande demais (limite ~10MB)" };
+      return { ok: false, error: t("error.imageTooLarge") };
     }
     return saveImageBytes(base64, mediaType);
   });
@@ -2065,7 +2063,7 @@ function createWindow() {
   async function performExport(rect: Electron.Rectangle, format: "png" | "jpeg" | "pdf", filePath: string) {
     const image = await win.webContents.capturePage(rect);
     const { width, height } = image.getSize();
-    if (width === 0 || height === 0) return { ok: false, error: "área vazia (nada capturado)" };
+    if (width === 0 || height === 0) return { ok: false, error: t("error.emptyCapture") };
     try {
       const bytes =
         format === "png" ? image.toPNG() : format === "jpeg" ? image.toJPEG(92) : wrapJpegAsPdf(image.toJPEG(92), width, height);
@@ -2379,7 +2377,7 @@ function createWindow() {
       params: { provider: SecretProvider; model: string; systemPrompt: string | null; messages: ChatMessage[]; cwd: string },
     ) => {
       const apiKey = secretsStore.get(params.provider);
-      if (!apiKey) return { ok: false, error: `nenhuma API key configurada pra ${params.provider}` };
+      if (!apiKey) return { ok: false, error: t("error.noApiKey", { provider: params.provider }) };
       if (params.provider === "anthropic") {
         anthropicClient.send(cardId, {
           apiKey,
@@ -2395,7 +2393,7 @@ function createWindow() {
       // generic gets whatever the user configured in the key form
       // (secrets.ts), openai stays undefined (SDK's own default).
       if (params.provider === "generic" && !secretsStore.getBaseURL(params.provider)) {
-        return { ok: false, error: "provider genérico sem endpoint (baseURL) configurado" };
+        return { ok: false, error: t("error.genericNoEndpoint") };
       }
       const baseURL =
         params.provider === "gemini" ? GEMINI_OPENAI_BASE_URL : (secretsStore.getBaseURL(params.provider) ?? undefined);

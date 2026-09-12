@@ -56,15 +56,15 @@ describe("store.ts: tabela reports", () => {
 
       // Chamador que não manda verdict (todo `report` de antes desta
       // coluna) continua funcionando, e o campo lê null, não undefined
-      // nem uma string vazia.
-      store.upsertReport({ card_id: "reviewer-3", seq: 1, report_json: JSON.stringify({ ok: true }), updated_at: Date.now() });
+      // nem uma string vazia. seq é PK global — não reusa 1.
+      store.upsertReport({ card_id: "reviewer-3", seq: 2, report_json: JSON.stringify({ ok: true }), updated_at: Date.now() });
       expect(store.getReport("reviewer-3")?.verdict).toBeNull();
     } finally {
       store.close();
     }
   });
 
-  it("é um SLOT ÚNICO por card_id — reportar de novo SOBRESCREVE, nunca acumula linha", () => {
+  it("append-only por card_id — reportar de novo ACUMULA linhas; getReport sem afterSeq devolve o mais recente", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-store-reports-"));
     const store = openStore(dir);
     try {
@@ -72,14 +72,20 @@ describe("store.ts: tabela reports", () => {
       store.upsertReport({ card_id: "reviewer-1", seq: 2, report_json: JSON.stringify({ round: 2 }), updated_at: Date.now() });
       store.upsertReport({ card_id: "reviewer-1", seq: 3, report_json: JSON.stringify({ round: 3 }), updated_at: Date.now() });
 
-      const back = store.getReport("reviewer-1");
-      expect(back!.seq).toBe(3);
-      expect(JSON.parse(back!.report_json)).toEqual({ round: 3 });
+      const latest = store.getReport("reviewer-1");
+      expect(latest!.seq).toBe(3);
+      expect(JSON.parse(latest!.report_json)).toEqual({ round: 3 });
 
       const count = (new Database(join(dir, "agent-canvas.db")).prepare("SELECT COUNT(*) as n FROM reports WHERE card_id = ?").get("reviewer-1") as {
         n: number;
       }).n;
-      expect(count).toBe(1);
+      expect(count).toBe(3);
+
+      // afterSeq caminha o histórico na ordem — não pula pra última.
+      expect(JSON.parse(store.getReport("reviewer-1", 0)!.report_json)).toEqual({ round: 1 });
+      expect(JSON.parse(store.getReport("reviewer-1", 1)!.report_json)).toEqual({ round: 2 });
+      expect(JSON.parse(store.getReport("reviewer-1", 2)!.report_json)).toEqual({ round: 3 });
+      expect(store.getReport("reviewer-1", 3)).toBeUndefined();
     } finally {
       store.close();
     }
@@ -172,13 +178,12 @@ describe("store.ts: tabela reports", () => {
     }
   });
 
-  it("cap de contagem (MAX_STORED_REPORTS = 1000): passar do limite descarta só os relatórios mais ANTIGOS, preservando os mais novos", () => {
+  it("cap de contagem (MAX_STORED_REPORTS = 1000): passar do limite descarta só as linhas mais ANTIGAS, preservando as mais novas", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-store-reports-cap-"));
     const store = openStore(dir);
     try {
-      // 1010 cards distintos (slot único por card_id — 1010 linhas reais,
-      // não 1010 upserts sobre o mesmo card) — 10 além do cap de produção,
-      // seq crescente na ordem de escrita.
+      // 1010 linhas (cards distintos, seq crescente) — 10 além do cap.
+      // Com append-only o prune corta por LINHA/seq, não por card_id.
       const total = 1010;
       for (let i = 1; i <= total; i++) {
         store.upsertReport({ card_id: `card-${i}`, seq: i, report_json: JSON.stringify({ i }), updated_at: Date.now() });
@@ -188,7 +193,7 @@ describe("store.ts: tabela reports", () => {
       const count = (raw.prepare("SELECT COUNT(*) as n FROM reports").get() as { n: number }).n;
       expect(count).toBe(1000);
 
-      // Os 10 mais ANTIGos (seq 1..10) foram descartados...
+      // Os 10 mais ANTIGOS (seq 1..10) foram descartados...
       for (let i = 1; i <= 10; i++) {
         expect(store.getReport(`card-${i}`)).toBeUndefined();
       }
@@ -196,6 +201,54 @@ describe("store.ts: tabela reports", () => {
       expect(store.getReport(`card-11`)).toBeDefined();
       expect(store.getReport(`card-${total}`)).toBeDefined();
       expect(JSON.parse(store.getReport(`card-${total}`)!.report_json)).toEqual({ i: total });
+      raw.close();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("migração de slot→append-only: banco com card_id PK preserva linhas e passa a acumular", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-store-reports-slot-mig-"));
+    const dbPath = join(dir, "agent-canvas.db");
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE reports (
+        card_id TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        report_json TEXT NOT NULL,
+        verdict TEXT,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    raw
+      .prepare("INSERT INTO reports (card_id, seq, report_json, verdict, updated_at) VALUES (?, ?, ?, ?, ?)")
+      .run("legacy-card", 7, JSON.stringify({ legacy: true }), null, Date.now());
+    raw.close();
+
+    const store = openStore(dir);
+    try {
+      const legacy = store.getReport("legacy-card");
+      expect(legacy?.seq).toBe(7);
+      expect(JSON.parse(legacy!.report_json)).toEqual({ legacy: true });
+
+      store.upsertReport({
+        card_id: "legacy-card",
+        seq: 8,
+        report_json: JSON.stringify({ round: 2 }),
+        updated_at: Date.now(),
+      });
+      expect(store.getReport("legacy-card")!.seq).toBe(8);
+      expect(JSON.parse(store.getReport("legacy-card", 7)!.report_json)).toEqual({ round: 2 });
+
+      const count = (new Database(dbPath).prepare("SELECT COUNT(*) as n FROM reports WHERE card_id = ?").get("legacy-card") as {
+        n: number;
+      }).n;
+      expect(count).toBe(2);
+
+      const pk = (
+        new Database(dbPath).prepare(`SELECT name FROM pragma_table_info('reports') WHERE pk > 0`).all() as { name: string }[]
+      ).map((r) => r.name);
+      expect(pk).toEqual(["seq"]);
     } finally {
       store.close();
     }
@@ -225,7 +278,7 @@ describe("message-bus + store: seq monotônica e relatório sobrevivem a um rest
       {},
       {
         get: (_target, prop: string) => {
-          if (prop === "getReport") return (cardId: string) => store.getReport(cardId);
+          if (prop === "getReport") return (cardId: string, afterSeq?: number) => store.getReport(cardId, afterSeq);
           if (prop === "upsertReport") return (row: ReportRow) => store.upsertReport(row);
           if (prop === "nextReportSeqSeed") return () => store.nextReportSeqSeed();
           if (prop === "listAllConnectors") return () => [];
