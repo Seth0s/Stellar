@@ -1421,6 +1421,13 @@ function createWindow() {
     notifyTurnComplete: (cardId) => {
       safeSend(win, "pty:turn-complete", cardId);
     },
+    // Activity bar — send_to_card writes the body from main, outside
+    // the renderer's xterm onData hook. Same channel shape as
+    // `pty:turn-complete`: fire-and-forget, keyed by card/PTY id.
+    // `useTerminal.ts` applies the existing `"input"` event.
+    notifyCardInput: (cardId) => {
+      safeSend(win, "pty:turn-input", cardId);
+    },
     // Bug real relatado (Pop!_OS, 2026-09-09) — ver o comentário do
     // `server.on("error")` em message-bus.ts. Mesmo padrão fire-and-forget
     // de `notifyTurnComplete` acima: relay simples pro renderer via

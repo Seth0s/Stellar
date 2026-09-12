@@ -295,7 +295,9 @@ export function useTerminal(
    *
    * NÃO é `true` a cada `pty:data`. Depois do primeiro sinal, um byte
    * solto entre turnos (prompt, spinner, toast da CLI) não reacende —
-   * só entrada nova abre a janela (`terminal-activity-decision.ts`).
+   * só entrada nova abre a janela (`terminal-activity-decision.ts`) —
+   * tecla, colar, ou o aviso `pty:turn-input` quando o main entrega
+   * o corpo via `send_to_card`. Eco / retry Enter não abrem.
    */
   const [isActive, setIsActive] = useState(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -472,6 +474,14 @@ export function useTerminal(
       if (id !== ptyIdRef.current) return;
       markTurnSignalSeen();
     });
+    // send_to_card writes the body from main, outside xterm onData.
+    // Same `"input"` event as a keystroke — do not invent a second
+    // activity decision. Echo still arrives as `"data"` and must not
+    // reopen the window after turn_complete.
+    const offTurnInput = window.pty.onTurnInput((id) => {
+      if (id !== ptyIdRef.current) return;
+      applyActivity("input");
+    });
     const offSessionFound = window.pty.onSessionFound((id, sessionId) => {
       if (id === ptyIdRef.current) setDiscoveredResumeId(sessionId);
     });
@@ -510,6 +520,7 @@ export function useTerminal(
       offData();
       offExit();
       offTurnComplete();
+      offTurnInput();
       offSessionFound();
       offResumeInvalid();
       clearIdleTimer();

@@ -91,6 +91,18 @@ const pty = {
     ipcRenderer.on("pty:turn-complete", listener);
     return () => ipcRenderer.removeListener("pty:turn-complete", listener);
   },
+  /**
+   * Programmatic delivery body (`send_to_card` / `typeAndSubmit`) just
+   * landed in this PTY. Same semantic as a keystroke: `useTerminal.ts`
+   * applies `"input"` and opens the turn window. Retry Enter and
+   * composer clear never emit this — they share the main-process write
+   * but are not a new turn (see `deliveryWriteOpensTurn`).
+   */
+  onTurnInput: (cb: (id: string) => void) => {
+    const listener = (_e: unknown, id: string) => cb(id);
+    ipcRenderer.on("pty:turn-input", listener);
+    return () => ipcRenderer.removeListener("pty:turn-input", listener);
+  },
 };
 
 export type SaveClipboardImageResult = { ok: true; path: string } | { ok: false; error: string };

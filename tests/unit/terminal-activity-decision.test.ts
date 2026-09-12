@@ -56,6 +56,19 @@ describe("decideTerminalActivity — barra depois do fim do turno", () => {
     expect(midTool.armIdleMs).toBeNull();
   });
 
+  it("send_to_card (mesmo evento input) acende; eco e chrome sem janela não", () => {
+    // Permanent: the common board path starts by send_to_card, which
+    // main reports as the existing `"input"` event — not a second
+    // activity source. Echo / process output stay `"data"`.
+    const idle = apply(apply(initialTerminalActivity(), "data").next, "turn_complete").next;
+    expect(apply(idle, "data").next.isActive).toBe(false);
+
+    const opened = apply(idle, "input");
+    expect(opened.next.isActive).toBe(true);
+    expect(opened.next.turnOpen).toBe(true);
+    expect(apply(opened.next, "data").next.isActive).toBe(true);
+  });
+
   it("turno reaberto só apaga no próximo turn_complete, não em byte de eco", () => {
     let state = apply(apply(initialTerminalActivity(), "data").next, "turn_complete").next;
     state = apply(state, "input").next;
