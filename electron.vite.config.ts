@@ -34,5 +34,27 @@ export default defineConfig({
         ? [visualizer({ filename: "bundle-stats.html", gzipSize: true, brotliSize: true, template: "treemap" })]
         : []),
     ],
+    build: {
+      rollupOptions: {
+        output: {
+          // DESIGN-BACKLOG §2.3 — Vite warns that @codemirror/language is both
+          // statically and dynamically imported (lang-* + StreamLanguage).
+          // Measured: it already lives only in the lazy CodeEditor chunk, not
+          // the main bundle. Declaring the shared CodeMirror/@lezer group here
+          // makes that intentional split explicit and silences the cosmetic
+          // warning — no size win claimed or expected.
+          manualChunks(id) {
+            if (
+              id.includes("node_modules/@codemirror/") ||
+              id.includes("node_modules/@lezer/") ||
+              id.includes("node_modules/codemirror/") ||
+              id.includes("node_modules/@replit/codemirror-")
+            ) {
+              return "codemirror";
+            }
+          },
+        },
+      },
+    },
   },
 });
