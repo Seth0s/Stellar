@@ -538,6 +538,22 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
   * **Nao reabrir velocity sem cuidado**: com sprints de duracao arbitraria, comparar "quantas concluiu" entre sprints e enganoso sem normalizar por tempo. O historico com inicio e fim permite normalizar — mas isso e decisao de produto, nao consequencia automatica de ter sprint.
   * **Reaproveita o que ja existe**: `task_transitions` (fase 1) tem a trilha de status com `actor` e timestamp, e `task_verdicts` tem uma linha por rodada de participacao. O snapshot de fechamento provavelmente se deriva dai, em vez de instrumentar contagem nova.
 
+* **Falha TIPADA: `julgada` vs `interrompida` — decidido em 2026-09-11, sem coluna nova:**
+  * Motivo: tres falhas reais apareceram no board no mesmo dia e a coluna tratava as tres igual, sendo que so UMA era o que o dono do repo definiu como falha ("desistencia documentada, task que nao pode ser concluida"):
+    | task | o que aconteceu | natureza |
+    |---|---|---|
+    | `cdf5da00` | prompt gravado corrompido, `provider` nulo | erro de quem CRIOU a task (o orquestrador) |
+    | `e8bbb4ca` | `process exited (code 129) without ever calling report` | infraestrutura — o card morreu |
+    | `1f581c52` | exit 143, mais 2 retentativas mortas pelo mesmo bug de entrega | infraestrutura, com retry queimado contra parede |
+    Em duas o agente **nunca chegou a trabalhar**; na outra o defeito estava no enunciado. Nenhuma foi julgamento sobre o trabalho.
+  * **NAO se cria coluna nova.** A decisao 2 do prototipo fixou quatro colunas, com "falhou" vizinha de "a fazer" por motivo proprio. Uma quinta reabriria isso. O que faltava nao era lugar, era **saber por que falhou**.
+  * **A distincao:**
+    * **`julgada`** — alguem, humano ou agente, olhou o trabalho e concluiu que nao da. E a desistencia documentada que o dono do repo definiu. Fica em "falhou", **nao migra**, e **conta como falha na estatistica do sprint**.
+    * **`interrompida`** — o trabalho **nunca aconteceu**: card morreu, entrega quebrou, limite de uso, enunciado corrompido. **Volta para "a fazer"** carregando o motivo visivel, **nao ocupa a coluna de falha**, e **nao conta como falha no snapshot** — nunca foi falha de trabalho.
+  * **O app DERIVA, ninguem preenche campo**: saida sem report e sem veredito e interrupcao; `update_task status=failed` vindo de agente, ou arraste humano para a coluna, e julgamento. Mesma postura da decisao 8 — o app deriva o que observa, o agente declara o que so ele sabe, o humano decide.
+  * **O retry muda de regra**: hoje gasta o orcamento inteiro sem olhar o motivo, e queimou duas tentativas contra um canal quebrado. Passa a valer **nao repetir a mesma causa** — se a falha nova tem a mesma assinatura da anterior, para imediatamente em vez de consumir o budget. Retry serve para falha transitoria, nao para parede.
+  * **Prazo, e por isso entrou junto do card de sprints**: o snapshot de fechamento congela a contagem de falhas. Se a definicao mudar depois, os sprints ja fechados carregam a contagem antiga e o historico passa a ter dois significados — exatamente o que o snapshot existe para evitar.
+
 ### 2.2 Design & Acessibilidade (D1–D8)
 
 * **Simplificação e Limpeza da Barra Lateral (Rail):**
