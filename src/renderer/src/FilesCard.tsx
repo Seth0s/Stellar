@@ -624,7 +624,15 @@ function FilesCardInner({
       else next.delete(path);
       return next;
     });
-    if (willOpen && !kids[path]) void refreshDir(path);
+    // Sempre refetch ao expandir, mesmo com `kids[path]` populado. O
+    // observador só cobre a raiz e as pastas EXPANDIDAS (efeito acima),
+    // então enquanto uma pasta fica colapsada nada do que acontece dentro
+    // dela gera evento — e `reloadAll`, que é quem purga entradas
+    // colapsadas de `kids`, só roda por evento. Sem nenhuma mudança em
+    // outro diretório observado nesse intervalo, a listagem antiga
+    // sobrevive e o re-expandir mostrava o disco de antes (review do
+    // 01420e9). Uma listagem por expansão é o mesmo custo da primeira.
+    if (willOpen) void refreshDir(path);
   }
 
   function selectFile(path: string, jumpToLine?: number) {
