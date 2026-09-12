@@ -741,6 +741,19 @@ export function useTerminal(
       // método que o handler nativo do próprio xterm.js usaria por baixo
       // dos panos — pra não perder bracketed-paste-mode nem qualquer outra
       // normalização que ele já faz.
+      // Rodada 5 (medido em tests/dom/xterm-ctrlc-suppress.test.tsx):
+      // `preventDefault` sozinho NÃO impede o xterm de emitir `\x03` no
+      // onData; `attachCustomKeyEventHandler` → `false` impede E deixa o
+      // evento bubblar até App.tsx. `stopImmediatePropagation` também
+      // impede `\x03`, mas mata o central — só usar em `consume: true`.
+      term.attachCustomKeyEventHandler((ev) => {
+        if (ev.type !== "keydown") return true;
+        const d = resolveTerminalShortcutKeydown(ev, shortcutOverridesRef.current, term.getSelection());
+        if (d.action === "defer-central") return false;
+        if (d.consume) return false;
+        return true;
+      });
+
       function onKeyDown(e: KeyboardEvent) {
         // Pedido ao vivo (2026-08-31) — "não consigo copiar textos".
         // Combo efetivo via registro + overrides (follow-up fase C).
@@ -755,12 +768,15 @@ export function useTerminal(
           e.preventDefault();
           e.stopImmediatePropagation();
         }
+        // defer-central: sem stopImmediate — App.tsx precisa do bubble.
+        // Bloqueio do xterm fica no attachCustomKeyEventHandler acima.
         switch (dispatch.action) {
           case "copy":
             void navigator.clipboard.writeText(dispatch.text).then(() => toast("copiado"));
             return;
           case "copy-noop":
           case "swallow":
+          case "defer-central":
           case "none":
             return;
           case "sigint":
