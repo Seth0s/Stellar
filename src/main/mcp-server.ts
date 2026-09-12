@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import * as z from "zod";
 import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus";
 import { resolveCallerCardId } from "./caller-identity";
+import { reachFromHunks } from "./reach-from-hunks";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface,
@@ -398,7 +399,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "update_task",
       {
         description:
-          "Update a task's status/card/result — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. incrementRetry/attemptedProvider are bookkeeping for your own retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — this app doesn't retry or reassign anything itself.",
+          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for your own retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — this app doesn't retry or reassign anything itself.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
           status: z.string().optional().describe("New status — e.g. 'running', 'done', 'failed'"),
@@ -414,10 +415,20 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           incrementRetry: z.boolean().optional().describe("Bump the task's retry counter by 1 — e.g. after deciding to retry a task whose agent exited without reporting"),
           attemptedProvider: z.string().optional().describe("Append a provider to the task's attempted-providers list — e.g. when reassigning to a different provider after a failure"),
           suggestedOrder: z.number().optional().describe("YOUR priority guess for this task — see create_task. Never overwrites a human's own drag-set order, which has no agent-facing setter."),
+          prompt: z
+            .string()
+            .optional()
+            .describe(
+              "Text to add to (default) or replace the task briefing. Omit to leave the stored prompt unchanged. Append keeps the original statement and marks this addition so a later 'read your task' can tell them apart.",
+            ),
+          promptMode: z
+            .enum(["append", "replace"])
+            .optional()
+            .describe("How to write prompt. Default append. replace is explicit overwrite of the whole briefing."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
         },
       },
-      async ({ taskId, status, cardId, cwd, result, incrementRetry, attemptedProvider, suggestedOrder, callerCardId }) => {
+      async ({ taskId, status, cardId, cwd, result, incrementRetry, attemptedProvider, suggestedOrder, prompt, promptMode, callerCardId }) => {
         const res = await opts.handleRequest({
           cmd: "update_task",
           taskId,
@@ -428,6 +439,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           incrementRetry,
           attemptedProvider,
           suggestedOrder,
+          prompt,
+          promptMode,
           requesterId: caller(callerCardId),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
@@ -972,6 +985,36 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
       async ({ target, js, callerCardId }) => {
         const res = await opts.handleRequest({ cmd: "browser_eval", target, js, requesterId: caller(callerCardId) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    // DESIGN-BACKLOG.md §3.0 fatia 1 — intra-repo reach from hunks.
+    // Runs in this process (no bus cmd, no persist, no UI). Do not route
+    // through handleRequest: this does not touch board/task state, and
+    // another change is in flight on update_task in this same file.
+    server.registerTool(
+      "reach_from_hunks",
+      {
+        description:
+          "Given diff hunks (added AND removed lines), search the same repository for other textual occurrences of the identifiers and string literals those hunks touched. The seed is the hunk text, never the file — \"who consumes store.ts\" is almost the whole repo and is the wrong question. Removed hunks count the same as added ones: that is how \"someone deleted the call and the other side stayed open\" lights up. Runs on the dirty working tree (no HEAD cache). Read-only; nothing is persisted. " +
+          "Returns three blocks: (1) evidence — file:line hits, not a complete set of affected sites; (2) scanned — root, files walked, seeds extracted; (3) incompleteness — mandatory and query-specific: what this scan could not resolve and why. A list here does NOT mean \"these are the affected\" — aliases, re-exports, computed names, and concatenated/interpolated strings are not followed. Always read incompleteness before acting. " +
+          "Empty evidence is status `sem_referencia`, never success. Do not read that as \"nothing is affected\"; it means this scan found no textual reference it could resolve.",
+        inputSchema: {
+          cwd: z.string().describe("Absolute path of the repository root to search (the dirty working tree, not HEAD)"),
+          hunks: z
+            .array(
+              z.object({
+                file: z.string().describe("Path of the changed file, relative to cwd — metadata only; it is never turned into a seed"),
+                added: z.array(z.string()).optional().describe("Added lines from the hunk (with or without a leading +)"),
+                removed: z.array(z.string()).optional().describe("Removed lines from the hunk (with or without a leading -). Count equally with added lines."),
+              }),
+            )
+            .describe("Hunks from the diff. Seed extraction uses these lines only, not the rest of each file."),
+        },
+      },
+      async ({ cwd, hunks }) => {
+        const res = await reachFromHunks({ cwd, hunks });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
