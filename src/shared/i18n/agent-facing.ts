@@ -21,9 +21,15 @@
  *   `[de: X] saiu (código N) sem chamar report.`). The `[de: …]` prefix
  *   is a convention other code interprets; translating it breaks routing
  *   / recognition. Marked at each call site.
- * - `src/main/bash-discovery-decision.ts` — human tip is HUMAN-facing
- *   (scrollback tip for the user), but keep agent-bound copy in English
- *   if any is added later.
+ * NOT on the list, and deliberately so — `src/main/bash-discovery-decision.ts`.
+ * `BASH_CARD_DISCOVERY_TIP` is HUMAN-facing (a tip printed into scrollback
+ * for the person), so it is not protocol surface and the array must not
+ * claim it is. It stays in English anyway because an agent may happen to
+ * read the same scrollback — same reasoning as `ACBRIDGE_HINT`, written at
+ * the constant itself. Listing it here as agent-facing would have been a
+ * lie a phase-2 sweep would then honour; a review of this file read it that
+ * way and filed the omission as a hole, which is exactly the confusion this
+ * paragraph removes.
  * - `src/main/status-write-decision.ts` — strings delivered to the writing
  *   agent via `typeAndSubmit` / MCP response. Agent-facing.
  *
