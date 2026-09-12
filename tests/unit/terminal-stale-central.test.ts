@@ -68,6 +68,18 @@ describe("terminal-shortcut-dispatch", () => {
       expect(d).toEqual({ consume: false, action: "defer-central" });
     });
 
+    // Rodada 6 — mesma classe do buraco da rodada 5, um nível abaixo:
+    // dono native (não central) também precisa de defer-central; none
+    // deixava o xterm emitir \x03.
+    it("tecla reivindicada por atalho native fora do terminal: defer-central (não none)", () => {
+      const overrides: ShortcutOverrides = {
+        "terminal.sigint": { key: "q", ctrlOrCmd: true, shift: false },
+        "browser.navigate": { key: "c", ctrlOrCmd: true, shift: false },
+      };
+      const d = resolveTerminalShortcutKeydown(key({ key: "c", ctrlKey: true }), overrides, "");
+      expect(d).toEqual({ consume: false, action: "defer-central" });
+    });
+
     it("tecla comum: none (passa)", () => {
       expect(resolveTerminalShortcutKeydown(key({ key: "a" }), {}, "").action).toBe("none");
       expect(resolveTerminalShortcutKeydown(key({ key: "z", ctrlKey: true }), {}, "").action).toBe("none");

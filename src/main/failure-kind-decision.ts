@@ -1,23 +1,42 @@
 /**
  * DESIGN-BACKLOG.md §2.1 "Falha TIPADA: julgada vs interrompida".
  *
- * No new kanban column — four columns stay. The app DERIVES the kind:
- *   - exit without report/verdict → interrompida (work never happened)
- *   - update_task status=failed (agent) or human drag to "falhou" → julgada
+ * No new kanban column — four columns stay. The app DERIVES the kind from
+ * a typed *cause* (never assumed inside the write choke point):
+ *   - exit_without_report → interrompida (work never happened)
+ *   - explicit_failed → julgada (agent update_task / human drag)
+ *   - spawn_failed / retry_spawn_failed → interrompida *unless* the task
+ *     already carries julgada — a judged failure is never downgraded
+ *     when a later spawn/retry fails (that would erase the judgment and
+ *     bounce the task back to "a fazer" alone).
  *
  * Write mapping:
- *   - interrompida → status pending ("a fazer") + visible reason; does NOT
- *     occupy the failed column and does NOT count as a sprint failure.
- *   - julgada → status failed; stays, does not migrate, counts in snapshot.
+ *   - interrompida → status pending ("a fazer") + visible reason
+ *   - julgada → status failed; stays, does not migrate, counts in snapshot
  */
 
 export type FailureKind = "julgada" | "interrompida";
 
-/** How the app observed the failure — never a free-form field from the model. */
-export type FailureSource = "exit_without_report" | "explicit_failed";
+/**
+ * Typed cause for `markTaskFailed` / explicit fail paths.
+ * Distinct causes stay distinct — `retry_spawn_failed` is NOT
+ * `exit_without_report` (same infra class for the default mapping, but
+ * a different signature when cause-aware retry lands later).
+ */
+export type FailureSource = "exit_without_report" | "explicit_failed" | "spawn_failed" | "retry_spawn_failed";
 
+/** Default kind for a cause, ignoring any prior stamp on the task. */
 export function decideFailureKind(source: FailureSource): FailureKind {
-  return source === "exit_without_report" ? "interrompida" : "julgada";
+  return source === "explicit_failed" ? "julgada" : "interrompida";
+}
+
+/**
+ * Effective kind for a mark/write: never downgrade julgada to interrompida.
+ * A task already judged stays judged even if a later spawn/retry fails.
+ */
+export function resolveFailureKind(existing: FailureKind | null | undefined, source: FailureSource): FailureKind {
+  if (existing === "julgada") return "julgada";
+  return decideFailureKind(source);
 }
 
 export type FailureWrite = {

@@ -8,7 +8,7 @@ import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPres
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
 import { describeStatusHeldWarning } from "./status-write-decision";
-import { decideFailureKind, decideFailureWrite, stampFailureKindJson } from "./failure-kind-decision";
+import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, type FailureSource } from "./failure-kind-decision";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -532,6 +532,8 @@ export function createMessageBus(
       lastActivityAtMs: number;
       hasPendingHumanInput?: boolean;
       inputLineLastAtMs?: number | null;
+      /** Peer requested DECSET 2004h. Absent/false → deliver raw bytes. */
+      bracketedPasteMode?: boolean;
     } | null;
     /** Sticky item "card_status idle" (fix ao vivo, 2026-09-04) — OS
      * notification, never touches any terminal's PTY/input. See the doc
@@ -1100,16 +1102,21 @@ export function createMessageBus(
 
     try {
       // Screen + activity baselines BEFORE the write. Content signals
-      // (Working / follow-ups) only count when their match count rises vs
-      // screenTextBeforeWrite — leftover prose/chrome from the prior turn
-      // must not mark a swallowed Enter as "sent".
+      // (Working / follow-ups) only count when a match's neighborhood is
+      // new vs screenTextBeforeWrite — leftover prose/chrome from the
+      // prior turn must not mark a swallowed Enter as "sent", and a
+      // sliding 8-line window that swaps one Working for another must
+      // not flatten the delta into a false "unsent".
       const activityAtWrite = callbacks.getCardLastActivityAt(target);
       const beforeSnap = await readCardText(target, 8);
       const screenTextBeforeWrite = beforeSnap.ok ? beforeSnap.text : "";
-      // Bracketed Paste for multi-line / long briefs so TUIs collapse to a
-      // paste chip instead of treating mid-text newlines as submits. Short
-      // system notices stay raw (see shouldUseBracketedPaste).
-      writeDelivery(deliveryTextBytes(text));
+      // Bracketed Paste only when the peer requested DECSET 2004h
+      // (tracked on the PTY stream). Blind CSI 200~/201~ poisons CLIs
+      // that never asked — they echo the escapes as text. Short notices
+      // stay raw regardless (see shouldUseBracketedPaste).
+      const readinessForPaste = callbacks.getCardWriteReadiness(target);
+      const bracketedPasteMode = readinessForPaste?.bracketedPasteMode === true;
+      writeDelivery(deliveryTextBytes(text, bracketedPasteMode));
       // Sticky item "send_to_card não confirma envio" (2026-09-03) — a
       // regex de placeholder sozinha só cobre UM sintoma (CLI que colapsa
       // um paste grande num chip "[Pasted text ...]"); uma mensagem curta
@@ -2613,7 +2620,9 @@ export function createMessageBus(
       // trabalho esperado"; só `markTaskFailed` abaixo continua exigindo
       // especificamente `running` (comportamento intocado).
       const linkedTask = callbacks.listTasks().find((t) => t.card_id === cardId);
-      if (linkedTask?.status === "running") markTaskFailed(linkedTask, `process exited (code ${exitCode}) without ever calling report`);
+      if (linkedTask?.status === "running") {
+        markTaskFailed(linkedTask, `process exited (code ${exitCode}) without ever calling report`, "exit_without_report");
+      }
       // Fechar histórico e avisar o spawner são critérios diferentes:
       // qualquer vínculo atual em task_cards fecha a participação, inclusive
       // um card secundário de review; apenas `cardWasExpectedToReport`
@@ -2796,40 +2805,32 @@ export function createMessageBus(
         if (result.ok) {
           callbacks.upsertTask({ ...task, status: "running", card_id: result.cardId, updated_at: Date.now(), actor: "app" });
         } else {
-          markTaskFailed(task, result.error);
+          markTaskFailed(task, result.error, "spawn_failed");
         }
       });
     }
   }
 
-  /** DESIGN-BACKLOG.md item 60, peça 4 — marks a task `failed` and,
-   * unless bookkeeping-only (no board, or board not autonomous),
-   * immediately tries `retryOrFail` on it. Single choke point so every
-   * path that can fail a task (explicit `update_task`, onTaskDone's own
-   * spawn failure, a card exiting silently below) gets the same
-   * auto-retry treatment.
-   *
-   * Decisão 8 / review adversarial achado 2 — only call `retryOrFail`
-   * when the fail write actually landed (`statusChanged`). A human who
-   * dragged the task away must not get a fresh agent spawned because
-   * `resolveCardExit` tried to mark `failed`. */
-  /** DESIGN-BACKLOG.md item 60, peça 4 + "Falha TIPADA" — exit without
-   * report is interrompida: work never happened → back to "a fazer" with
-   * the reason visible, not a judged failure. Still triggers retryOrFail
-   * on autonomous boards (infra blip may be transient). */
-  function markTaskFailed(task: TaskRow, error: string) {
-    const kind = decideFailureKind("exit_without_report");
+  /** DESIGN-BACKLOG.md item 60, peça 4 + "Falha TIPADA" — cause is an
+   * argument, never assumed. `exit_without_report` → interrompida (back
+   * to "a fazer"); `retry_spawn_failed` / `spawn_failed` are their own
+   * causes (also default interrompida). A task that already carries
+   * `failureKind: julgada` is NEVER downgraded — the judgment survives a
+   * later spawn/retry failure. */
+  function markTaskFailed(task: TaskRow, error: string, source: FailureSource) {
+    const existingKind = failureKindFromResultJson(task.result_json);
+    const kind = resolveFailureKind(existingKind, source);
     const write = decideFailureWrite(kind);
-    const interrupted: TaskRow = {
+    const next: TaskRow = {
       ...task,
       status: write.status,
       result_json: stampFailureKindJson(task.result_json, write.failureKind, error),
       updated_at: Date.now(),
       actor: "app",
     };
-    const decision = callbacks.upsertTask(interrupted);
+    const decision = callbacks.upsertTask(next);
     if (!decision.statusChanged) return;
-    retryOrFail({ ...interrupted, status: decision.status });
+    retryOrFail({ ...next, status: decision.status });
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 4 — called on a task that just
@@ -2881,7 +2882,7 @@ export function createMessageBus(
       if (result.ok) {
         callbacks.upsertTask({ ...retrying, card_id: result.cardId, updated_at: Date.now(), actor: "app" });
       } else {
-        markTaskFailed(retrying, result.error);
+        markTaskFailed(retrying, result.error, "retry_spawn_failed");
       }
     });
   }

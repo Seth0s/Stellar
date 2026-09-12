@@ -12,9 +12,14 @@ import {
   deliveryTextBytes,
   followUpsAppearedSince,
   submitStartedAppearedSince,
+  appearedSinceBaseline,
+  updateBracketedPasteMode,
+  initialBracketedPasteModeState,
+  incompletePrivateModeSuffix,
   HUMAN_INPUT_GATE_MAX_AGE_MS,
   WRITE_READY_QUIET_MS,
   WRITE_READY_MAX_WAIT_MS,
+  SUBMIT_STARTED_PATTERN,
   type WriteReadinessInput,
   type SubmitCheckInput,
 } from "../../src/main/type-and-submit-decision";
@@ -88,6 +93,64 @@ describe("looksLikeSubmitStarted / needleVisibleOnScreen / delta", () => {
         "follow-ups\n  ○ [Pasted text #1 +2 lines]\n  ○ [Pasted text #2 +14 lines]",
       ),
     ).toBe(true);
+  });
+
+  it("rodada 4: scroll troca Working velho por novo (contagem flat) → ainda é appeared", () => {
+    // Measured failure mode: 8-line window drops old Working as new enters;
+    // count stays 1, count-only delta was false → false "unsent" → duplicate.
+    const before = [
+      "prose Working yesterday",
+      "follow-ups",
+      "  ○ [Pasted text #1 +3 lines]",
+      "enter steer · ↑ select",
+      "ready",
+      "ready",
+      "ready",
+      "> ",
+    ].join("\n");
+    const after = [
+      "follow-ups",
+      "  ○ [Pasted text #1 +3 lines]",
+      "enter steer · ↑ select",
+      "ready",
+      "ready",
+      "→ brief was submitted",
+      "  Working",
+      "[Pasted text #2 +14 lines]",
+    ].join("\n");
+    expect(appearedSinceBaseline(before, after, SUBMIT_STARTED_PATTERN)).toBe(true);
+    expect(submitStartedAppearedSince(before, after)).toBe(true);
+    expect(
+      decideSubmitCheck({
+        screenTextBeforeWrite: before,
+        screenText: after,
+        sentNeedle: "Task briefing long enough",
+        hasNewActivitySinceWrite: true,
+      }),
+    ).toBe("sent");
+  });
+
+  it("rodada 4: scroll + needle no histórico não vira unsent (não reenvia Enter)", () => {
+    const before = ["  Working", "old", "old", "old", "old", "old", "old", "> "].join("\n");
+    const after = [
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "Task briefing long enough is here",
+      "  Working",
+      "> ",
+    ].join("\n");
+    expect(submitStartedAppearedSince(before, after)).toBe(true);
+    expect(
+      decideSubmitCheck({
+        screenTextBeforeWrite: before,
+        screenText: after,
+        sentNeedle: "Task briefing long enough",
+        hasNewActivitySinceWrite: true,
+      }),
+    ).toBe("sent");
   });
 });
 
@@ -246,15 +309,47 @@ describe("wrapBracketedPaste / deliveryTextBytes / composerClearSequence", () =>
     expect(wrapBracketedPaste("hello")).toBe("\x1b[200~hello\x1b[201~");
   });
 
-  it("só envelopa multi-linha ou texto longo — avisos curtos ficam crus", () => {
+  it("só envelopa quando o peer pediu 2004h — na dúvida manda cru", () => {
     expect(deliveryTextBytes("ok")).toBe("ok");
     expect(deliveryTextBytes("[de: X] aviso curto")).toBe("[de: X] aviso curto");
-    expect(deliveryTextBytes("line1\nline2")).toBe("\x1b[200~line1\nline2\x1b[201~");
-    expect(deliveryTextBytes("x".repeat(120))).toBe(`\x1b[200~${"x".repeat(120)}\x1b[201~`);
+    // Blind wrap was the rodada-4 poison: multi/long without DECSET → raw.
+    expect(deliveryTextBytes("line1\nline2")).toBe("line1\nline2");
+    expect(deliveryTextBytes("x".repeat(120))).toBe("x".repeat(120));
+    expect(deliveryTextBytes("line1\nline2", false)).toBe("line1\nline2");
+    expect(deliveryTextBytes("line1\nline2", true)).toBe("\x1b[200~line1\nline2\x1b[201~");
+    expect(deliveryTextBytes("x".repeat(120), true)).toBe(`\x1b[200~${"x".repeat(120)}\x1b[201~`);
+    expect(deliveryTextBytes("ok", true)).toBe("ok");
   });
 
   it("é Ctrl+U duas vezes — limpa linha pendente sem Ctrl+C", () => {
     expect(composerClearSequence()).toBe("\x15\x15");
+  });
+});
+
+describe("updateBracketedPasteMode (DECSET 2004)", () => {
+  it("liga com 2004h, desliga com 2004l, inclusive em modos combinados", () => {
+    let state = initialBracketedPasteModeState();
+    expect(state.enabled).toBe(false);
+    state = updateBracketedPasteMode(state, "boot\x1b[?2004h");
+    expect(state.enabled).toBe(true);
+    state = updateBracketedPasteMode(state, "\x1b[?1000;2004l");
+    expect(state.enabled).toBe(false);
+    state = updateBracketedPasteMode(state, "\x1b[?1;2004;1000h");
+    expect(state.enabled).toBe(true);
+  });
+
+  it("recompõe sequência partida entre chunks via carry", () => {
+    let state = initialBracketedPasteModeState();
+    state = updateBracketedPasteMode(state, "hello\x1b[?");
+    expect(state.enabled).toBe(false);
+    expect(incompletePrivateModeSuffix(state.carry + "")).toBeTruthy();
+    state = updateBracketedPasteMode(state, "2004hworld");
+    expect(state.enabled).toBe(true);
+  });
+
+  it("ignora outros DECSET e começa desligado (na dúvida, cru)", () => {
+    const state = updateBracketedPasteMode(initialBracketedPasteModeState(), "\x1b[?25l\x1b[?1000h");
+    expect(state.enabled).toBe(false);
   });
 });
 

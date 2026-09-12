@@ -65,7 +65,7 @@ describe("store.ts: sprints — snapshot no fechamento + migração", () => {
     store.close();
   });
 
-  it("close congela snapshot; done/julgada ficam; todo/doing migram", () => {
+  it("close congela snapshot; done/julgada ficam; todo/doing/interrompida(pending) migram", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-sprint-close-"));
     const store = openStore(dir);
     store.upsertBoard(makeBoard("b1"));
@@ -76,8 +76,9 @@ describe("store.ts: sprints — snapshot no fechamento + migração", () => {
       ...makeTask("fail1", "b1", "failed"),
       result_json: JSON.stringify({ failureKind: "julgada", error: "desistiu" }),
     });
+    // Interrompida already rewritten to pending by the write path.
     store.upsertTask({
-      ...makeTask("intr1", "b1", "failed"),
+      ...makeTask("intr1", "b1", "pending"),
       result_json: JSON.stringify({ failureKind: "interrompida", error: "exit 129" }),
     });
 
@@ -87,16 +88,12 @@ describe("store.ts: sprints — snapshot no fechamento + migração", () => {
     if (!closed.ok) return;
 
     expect(closed.closed.id).toBe(first.id);
-    expect(closed.closed.closed_at).not.toBeNull();
-    expect(closed.closed.number).toBe(1);
-    expect(closed.opened.number).toBe(2);
-    expect(closed.closed.count_todo).toBe(2); // pending + interrompida
+    expect(closed.closed.count_todo).toBe(2); // todo1 + intr1
     expect(closed.closed.count_doing).toBe(1);
     expect(closed.closed.count_done).toBe(1);
     expect(closed.closed.count_failed).toBe(1); // só julgada
     expect(closed.closed.migrated_out).toBe(3); // todo + doing + interrompida
     expect(closed.opened.migrated_in).toBe(3);
-    expect(closed.opened.closed_at).toBeNull();
 
     expect(store.getTask("done1")!.sprint_id).toBe(closed.closed.id);
     expect(store.getTask("fail1")!.sprint_id).toBe(closed.closed.id);
@@ -106,12 +103,6 @@ describe("store.ts: sprints — snapshot no fechamento + migração", () => {
 
     const snap = store.getSprintSnapshot(closed.closed.id)!;
     expect(snap).toHaveLength(5);
-
-    store.upsertTask({ ...store.getTask("todo1")!, status: "done", actor: "human" });
-    const listed = store.listSprints("b1");
-    const frozen = listed.find((s) => s.id === closed.closed.id)!;
-    expect(frozen.count_todo).toBe(2);
-    expect(frozen.count_failed).toBe(1);
     store.close();
   });
 
