@@ -61,13 +61,18 @@
    esquerda→direita durante `isActive` (useTerminal.ts) e some ao acabar.
    Keyframe LOCAL: CSS Modules hasheia animation-name; reusar o global de
    cards.css via :global() quebra o PostCSS deste setup (ver
-   TaskCard.module.css — mesma causa da varredura sumida). */
+   TaskCard.module.css — mesma causa da varredura sumida). Duas vezes já
+   produziu animação morta neste repo — não globalizar.
+   Sweep (§2.0 item 6): width 34%, começa em left:-34%. translateX é % da
+   PRÓPRIA faixa, então deslocamento em % do card = translate × 0.34.
+   288% andava ~98% do card (borda direita quase saindo). 200% anda 68%
+   — a borda direita da faixa para em ~68% do card, antes do fim. */
 @keyframes terminal-card-activity-sweep {
   from {
     transform: translateX(0);
   }
   to {
-    transform: translateX(288%);
+    transform: translateX(200%);
   }
 }
 .terminalCardActivity {
@@ -88,7 +93,8 @@
 }
 .terminalCardActivity.on .terminalCardActivitySweep {
   opacity: 1;
-  animation: terminal-card-activity-sweep 1s linear infinite;
+  /* Mais suave que 1s linear (§2.0 item 6): duração maior + easing. */
+  animation: terminal-card-activity-sweep 2.4s ease-in-out infinite;
 }
 
 /* Achado ao vivo (2026-09-03, migração pra CSS Module): esta regra vivia

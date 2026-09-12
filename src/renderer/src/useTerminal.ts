@@ -278,16 +278,19 @@ export function useTerminal(
   // ok, PTY rodando, zero bytes recebidos ainda).
   const [hasReceivedOutput, setHasReceivedOutput] = useState(false);
   /**
-   * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — sinal real por
-   * trás da barra de atividade do header (TerminalCard.tsx). Aproximação
+   * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — sinal por trás
+   * da barra de atividade do header (TerminalCard.tsx). Aproximação
    * honesta, não detecção semântica: este PTY não expõe nenhum marcador
    * de "início/fim de turno" (sem shell-integration/OSC 133 aqui) — o que
    * dá pra observar de verdade é só "o processo está escrevendo bytes
-   * agora". `true` a cada `pty:data`, `false` depois de
-   * `ACTIVITY_IDLE_MS` sem nenhum byte novo — mesma doutrina de debounce
-   * já usada nesta função pro zoom de fonte (150ms) e pro badge de "
-   * carregando sessão" (1200ms), só que aqui o "silêncio" É o sinal
-   * (idle), não o inverso.
+   * agora". `true` a cada `pty:data`. Desliga por:
+   *   - providers sem sinal real: `ACTIVITY_IDLE_MS` sem bytes novos;
+   *   - providers com sinal real (claude hook / TURN_END_PATTERNS): o
+   *     sinal (onTurnComplete / pattern / onExit / interrupt) é o
+   *     desligamento primário; `ACTIVITY_TURN_FALLBACK_IDLE_MS` é o
+   *     safety net quando o sinal não chega (barra presa acesa num card
+   *     parado — DESIGN-BACKLOG.md §2.0 item 6). Limiar MEDIDO, ver
+   *     constante abaixo.
    */
   const [isActive, setIsActive] = useState(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -365,7 +368,21 @@ export function useTerminal(
       if (out) termRef.current?.write(out);
     }
 
+    // Providers sem sinal de fim de turno: silêncio curto = "parou de
+    // escrever". 900ms é deliberadamente apertado — só cobre o debounce
+    // entre chunks de um mesmo eco, não uma pausa de pensamento.
     const ACTIVITY_IDLE_MS = 900;
+    // Providers COM sinal real (claude Stop hook / TURN_END_PATTERNS): o
+    // sinal continua mandando quando chega. Este timer é só fallback —
+    // se o sinal não chegar (hook falhou, acbridge ENOENT, pattern mudou),
+    // a barra não fica acesa pra sempre num card parado (§2.0 item 6).
+    // MEDIDO 2026-09-12 em 11.336 tool_use→tool_result de sessões Claude
+    // recentes (AskUserQuestion/ExitPlanMode excluídos — espera humana é
+    // ilimitada): p99 geral 62.4s, Bash p99 97.1s, MCP max 122.7s.
+    // 180s = ceil(1.5×Bash p99) num balde de 30s, cobre o MCP max com
+    // folga. Abaixo disso recria o bug que o sinal de turno veio consertar
+    // (barra apaga com o agente ainda em ferramenta longa / pensando).
+    const ACTIVITY_TURN_FALLBACK_IDLE_MS = 180_000;
     turnEndBufferRef.current = "";
     // Prototipo (2026-09-06) — "unificar detecção de turno": pro provider
     // `claude`, `providers.ts`'s `buildArgs` registra um hook `Stop` real
@@ -374,16 +391,26 @@ export function useTerminal(
     // um marcador de texto confirmado em `TURN_END_PATTERNS` (só codex
     // por enquanto, ver comentário lá) — sinal lido do próprio output em
     // vez de um hook de verdade, mas com o mesmo efeito prático: o timer
-    // de silêncio de 900ms é dispensado por completo pra esses
-    // providers, `isActive` só desliga via um sinal real (hook, pattern-
-    // match, ou `onExit`/`interrupt` abaixo), nunca por um mero intervalo
-    // sem bytes novos (que fazia a barra sumir com o agente ainda
-    // pensando/chamando ferramenta). Todo outro provider (cursor,
-    // antigravity, opencode, bash) continua na aproximação por silêncio
-    // de sempre, sem nenhuma mudança de comportamento — nenhum padrão
-    // confirmado pra eles ainda.
+    // curto de 900ms NÃO desliga esses providers (pensando / ferramenta
+    // sem bytes novos). O fallback longo acima só cobre sinal perdido.
+    // Todo outro provider (cursor, antigravity, opencode, bash) continua
+    // na aproximação por silêncio curto de sempre.
     const turnEndPattern = TURN_END_PATTERNS[providerId];
     const hasRealTurnSignal = providerId === "claude" || turnEndPattern !== undefined;
+    function clearIdleTimer() {
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
+    }
+    function armIdleTimer() {
+      clearIdleTimer();
+      const ms = hasRealTurnSignal ? ACTIVITY_TURN_FALLBACK_IDLE_MS : ACTIVITY_IDLE_MS;
+      idleTimerRef.current = setTimeout(() => {
+        idleTimerRef.current = null;
+        setIsActive(false);
+      }, ms);
+    }
     const offData = window.pty.onData((id, data) => {
       if (id !== ptyIdRef.current) return;
       writeMasked(data);
@@ -393,15 +420,12 @@ export function useTerminal(
         turnEndBufferRef.current = (turnEndBufferRef.current + data).slice(-TURN_END_BUFFER_MAX);
         if (turnEndPattern.test(turnEndBufferRef.current)) {
           turnEndBufferRef.current = "";
+          clearIdleTimer();
           setIsActive(false);
+          return;
         }
       }
-      if (hasRealTurnSignal) return;
-      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-      idleTimerRef.current = setTimeout(() => {
-        idleTimerRef.current = null;
-        setIsActive(false);
-      }, ACTIVITY_IDLE_MS);
+      armIdleTimer();
     });
     const offExit = window.pty.onExit((id, code) => {
       if (id !== ptyIdRef.current) return;
@@ -409,10 +433,13 @@ export function useTerminal(
       // Processo pode morrer no meio de um turno (crash, kill externo) sem
       // nunca disparar o hook Stop — sem isto a barra ficaria "ligada" pra
       // sempre num card cujo processo nem existe mais.
+      clearIdleTimer();
       setIsActive(false);
     });
     const offTurnComplete = window.pty.onTurnComplete((id) => {
-      if (id === ptyIdRef.current) setIsActive(false);
+      if (id !== ptyIdRef.current) return;
+      clearIdleTimer();
+      setIsActive(false);
     });
     const offSessionFound = window.pty.onSessionFound((id, sessionId) => {
       if (id === ptyIdRef.current) setDiscoveredResumeId(sessionId);
@@ -456,10 +483,7 @@ export function useTerminal(
       offTurnComplete();
       offSessionFound();
       offResumeInvalid();
-      if (idleTimerRef.current) {
-        clearTimeout(idleTimerRef.current);
-        idleTimerRef.current = null;
-      }
+      clearIdleTimer();
       if (ptyIdRef.current) void window.pty.kill(ptyIdRef.current);
       ptyIdRef.current = null;
       setPtyId(null);
@@ -782,6 +806,10 @@ export function useTerminal(
           case "sigint":
             if (ptyIdRef.current) {
               void window.pty.write(ptyIdRef.current, "\x03");
+              if (idleTimerRef.current) {
+                clearTimeout(idleTimerRef.current);
+                idleTimerRef.current = null;
+              }
               setIsActive(false);
             }
             return;
@@ -925,6 +953,10 @@ export function useTerminal(
     // provider `claude` (sinal real via hook Stop, ver Effect 1 acima), um
     // turno abortado no meio pode nunca disparar o Stop; sem isto a barra
     // ficaria "ligada" indefinidamente.
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
     setIsActive(false);
   }
 
