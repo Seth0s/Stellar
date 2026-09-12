@@ -153,31 +153,39 @@ const DEFAULT_MAX_RETRIES = 2;
 // disallowed is just noise.
 export const MAX_SPAWN_DEPTH = 3;
 
-/** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido", 2026-09-10 —
- * Antigravity's own real range (confirmed live: `agy --model
- * gemini-3.1-pro` with no `--effort` falls back silently; passing an
- * effort outside `low`/`high` fails outright citing "available: low,
- * high" — see providers.ts's own antigravity comment). `claude` has a
- * wider range (`low|medium|high|xhigh|max`, its own `--help`) and needs no
- * equivalent list here — it accepts anything callers send it, so there's
- * nothing to refuse.
+/** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" — per-provider
+ * ranges re-measured 2026-09-12 against the live CLIs (not the comments):
+ *
+ * - `claude --help` (v2.1.269): `--effort <level>` is
+ *   `low, medium, high, xhigh, max`. An unknown value is NOT rejected —
+ *   the CLI prints `Warning: Unknown --effort value '…' — ignoring it and
+ *   using the default effort` and continues. That is the same silent-
+ *   substitution class this gate exists for, so claude NOW has a list
+ *   here (the 2026-09-10 comment that it "accepts anything callers send
+ *   it, so there's nothing to refuse" was empirically false).
+ * - `agy --help` (v1.2.2): `--effort` is `low|medium|high`. Passing
+ *   `xhigh`/`max` fails with `invalid --effort "…" (valid: low, medium,
+ *   high)` — confirmed via `agy --effort xhigh --model <fake>
+ *   --print='x'`. The older "available: low, high" error (gemini-3.1-pro
+ *   without `--effort`, 2026-09-10) is no longer the CLI's range.
  *
  * DECISION (documented here, not just in the session report): a
- * `spawn_agent` for antigravity with an effort outside this list is
- * REFUSED (`ok: false`, no card created), never silently remapped to the
- * nearest supported value. Mapping in silence repeats the exact bug class
- * this whole fix exists for — the user asked for X, got Y, and the app
- * never said so ("a sessão era um opus medium... voltei como high e
- * custou muito" was ITSELF a silent substitution, just one the app didn't
- * even choose on purpose). A refusal surfaces immediately, in the same
- * `ok:false` channel every other spawn precondition here already uses
- * (missing provider, spawn depth limit) — the caller sees exactly why,
- * before any process or card is created, and can retry with a value that
- * actually works. The alternative (spawn anyway with the raw value) is
- * worse than either: it would just move the same silent-substitution
- * failure one layer down, from this refusal into antigravity's own CLI
- * output, where nothing in this app surfaces it as an error at all. */
-const ANTIGRAVITY_EFFORT_VALUES = new Set(["low", "high"]);
+ * `spawn_agent` whose provider has a known range, with an effort outside
+ * that range, is REFUSED (`ok: false`, no card created), never silently
+ * remapped to the nearest supported value. Mapping in silence repeats the
+ * exact bug class this whole fix exists for — the user asked for X, got
+ * Y, and the app never said so ("a sessão era um opus medium... voltei
+ * como high e custou muito" was ITSELF a silent substitution, just one
+ * the app didn't even choose on purpose). A refusal surfaces immediately,
+ * in the same `ok:false` channel every other spawn precondition here
+ * already uses (missing provider, spawn depth limit) — the caller sees
+ * exactly why, before any process or card is created, and can retry with
+ * a value that actually works. The alternative (spawn anyway with the raw
+ * value) is worse than either: it would just move the same silent-
+ * substitution failure one layer down, into the CLI's own warning/error,
+ * where nothing in this app surfaces it as an error at all. */
+const CLAUDE_EFFORT_VALUES = new Set(["low", "medium", "high", "xhigh", "max"]);
+const ANTIGRAVITY_EFFORT_VALUES = new Set(["low", "medium", "high"]);
 
 /** DESIGN-BACKLOG.md item 21 ponto 9 / achado ao vivo (2026-09-01) —
  * `kind` e `label` são novos. Antes esta lista era filtrada para
@@ -401,10 +409,11 @@ export type BusRequest =
        * error. `undefined` for every provider that ignores it.
        *
        * Widened from `"low" | "high"` to plain `string` (DESIGN-BACKLOG.md
-       * §2.1, 2026-09-10) — `claude` has its own wider range
-       * (low/medium/high/xhigh/max). See `ANTIGRAVITY_EFFORT_VALUES`
-       * below for where the narrower antigravity-only range is actually
-       * enforced (refused, not silently remapped). */
+       * §2.1, 2026-09-10) — each provider that reads `--effort` has its
+       * own range (claude: five values; antigravity: low/medium/high,
+       * re-measured 2026-09-12). See `CLAUDE_EFFORT_VALUES` /
+       * `ANTIGRAVITY_EFFORT_VALUES` for where an out-of-range value is
+       * actually enforced (refused, not silently remapped). */
       effort?: string;
       /** DESIGN-BACKLOG.md item 62 — same free-text label a human sets via
        * CardTag rename; `describeCardLabel`/the renderer's `describeCard`
@@ -2491,14 +2500,21 @@ export function createMessageBus(
 
     if (req.cmd === "spawn_agent") {
       if (!req.provider) return { ok: false, error: "missing provider" };
-      // ANTIGRAVITY_EFFORT_VALUES's own comment above has the full
-      // decision writeup (refuse, never silently remap). Checked before
-      // the spawn-depth budget below is touched — an invalid request
-      // shouldn't cost the caller part of its recursion allowance.
+      // CLAUDE_EFFORT_VALUES / ANTIGRAVITY_EFFORT_VALUES's own comment
+      // above has the full decision writeup (refuse, never silently
+      // remap). Checked before the spawn-depth budget below is touched —
+      // an invalid request shouldn't cost the caller part of its
+      // recursion allowance.
       if (req.provider === "antigravity" && req.effort !== undefined && !ANTIGRAVITY_EFFORT_VALUES.has(req.effort)) {
         return {
           ok: false,
-          error: `antigravity only accepts effort "low" or "high", got "${req.effort}" — refusing to spawn rather than silently substituting a different value`,
+          error: `antigravity only accepts effort "low", "medium", or "high", got "${req.effort}" — refusing to spawn rather than silently substituting a different value`,
+        };
+      }
+      if (req.provider === "claude" && req.effort !== undefined && !CLAUDE_EFFORT_VALUES.has(req.effort)) {
+        return {
+          ok: false,
+          error: `claude only accepts effort "low", "medium", "high", "xhigh", or "max", got "${req.effort}" — refusing to spawn rather than silently substituting a different value`,
         };
       }
       const requestId = randomUUID();

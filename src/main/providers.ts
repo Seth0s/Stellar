@@ -18,20 +18,22 @@ export type SpawnOpts = {
    * modal even shows. */
   spawnDepth?: number;
   /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity's CLI
-   * requires `--effort <low|high>` alongside certain models (`--model
+   * requires `--effort` alongside certain models (`--model
    * gemini-3.1-pro` on its own falls back silently to a different model
-   * with a warning, never actually running the one asked for). `model`
-   * stays a plain string on purpose (every other provider only ever takes
-   * one) — this is additive and provider-specific, `undefined` for every
+   * with a warning, never actually running the one asked for). Range
+   * re-measured 2026-09-12 against `agy --help` (v1.2.2):
+   * `low|medium|high` (was documented as only `low|high`). `model` stays
+   * a plain string on purpose (every other provider only ever takes one)
+   * — this is additive and provider-specific, `undefined` for every
    * provider whose `buildArgs` doesn't read it.
    *
    * 2026-09-09 (DESIGN-BACKLOG.md §2.1, real cost to the repo's owner) —
    * `claude`'s `buildArgs` below now reads this too: confirmed live via
-   * `claude --help` (not assumed) that it has its own `--effort <level>`
-   * flag, `low|medium|high|xhigh|max` — a wider range than antigravity's
-   * low/high. Widened from `"low" | "high"` to plain `string` (review
-   * adversarial, same day, achado 2) so a card resumed with a value
-   * outside the app's own low/high write path (e.g. claude's `medium`)
+   * `claude --help` (v2.1.269, re-checked 2026-09-12) that it has its own
+   * `--effort <level>` flag, `low|medium|high|xhigh|max` — a wider range
+   * than antigravity's. Widened from `"low" | "high"` to plain `string`
+   * (review adversarial, same day, achado 2) so a card resumed with a
+   * value outside the app's own write-path enum (e.g. claude's `xhigh`)
    * round-trips through here unmolested instead of the type forcing a
    * lossy coercion somewhere upstream — see card-types.ts's
    * `TerminalCardData.effort` doc comment for the full reasoning. */
@@ -383,10 +385,11 @@ export const PROVIDERS: ProviderDef[] = [
     // usuário, não um canal para acrescentar contexto de ambiente.
     // Report discovery → scrollback (derived). MCP registered via
     // `agy mcp add` in mcp-registration.ts (global-config).
-    // No `low|high` guard HERE on purpose (2026-09-10, DESIGN-BACKLOG.md
-    // §2.1) — the real refusal for an out-of-range antigravity effort
-    // lives centrally in message-bus.ts's `spawn_agent` handler
-    // (`ANTIGRAVITY_EFFORT_VALUES`'s own comment has the full decision),
+    // No `low|medium|high` guard HERE on purpose (2026-09-10,
+    // DESIGN-BACKLOG.md §2.1; range re-measured 2026-09-12) — the real
+    // refusal for an out-of-range antigravity effort lives centrally in
+    // message-bus.ts's `spawn_agent` handler (`ANTIGRAVITY_EFFORT_VALUES`'s
+    // own comment has the full decision),
     // the one place that validates BEFORE any card/process gets created.
     // By the time `buildArgs` runs here, that gate has already passed —
     // duplicating the check would just be a second copy of the same list

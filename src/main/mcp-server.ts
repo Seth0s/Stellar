@@ -711,17 +711,17 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
           model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default"),
-          // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido",
-          // 2026-09-10 — widened from `["low", "high"]` (Antigravity's own
-          // range) to the union of every provider's real range: `claude`
-          // takes `--effort low|medium|high|xhigh|max` (confirmed via its
-          // own `--help`, see providers.ts's `SpawnOpts.effort` doc
-          // comment), Antigravity only `low|high`. The two enums differ —
-          // NOT unified by picking the narrower one, which would silently
-          // make `medium`/`xhigh`/`max` unreachable for claude again, the
-          // same class of bug this whole fix is for. The provider-specific
-          // half of the validation (an antigravity spawn with an
-          // out-of-range value) happens centrally in message-bus.ts's
+          // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" —
+          // union of every provider's real range, re-measured 2026-09-12
+          // against the live CLIs (not the comments): `claude --help`
+          // (v2.1.269) is `--effort low|medium|high|xhigh|max`; `agy
+          // --help` (v1.2.2) is `low|medium|high` (was documented as
+          // only `low|high`). The two ranges differ — NOT unified by
+          // picking the narrower one, which would silently make
+          // `xhigh`/`max` unreachable for claude, the same class of bug
+          // this whole fix is for. The provider-specific half of the
+          // validation (a spawn with an out-of-range value for THAT
+          // provider) happens centrally in message-bus.ts's
           // `spawn_agent` handler, the one place that has BOTH `provider`
           // and `effort` together — zod's per-field schema here can't see
           // across fields without a cross-field refinement that would
@@ -730,7 +730,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(["low", "medium", "high", "xhigh", "max"])
             .optional()
             .describe(
-              "Reasoning effort. `claude` accepts all five (low/medium/high/xhigh/max, its own --effort range). Antigravity accepts only low/high — some of its models (e.g. 'gemini-3.1-pro') require one of those alongside `model` or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. A value outside a provider's own range is REFUSED (no spawn), not silently remapped — see message-bus.ts's spawn_agent handler. Ignored by every other provider.",
+              "Reasoning effort. `claude` accepts all five (low/medium/high/xhigh/max, its own --effort range). Antigravity accepts low/medium/high (its own --effort range) — some of its models (e.g. 'gemini-3.1-pro') require one of those alongside `model` or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. A value outside a provider's own range is REFUSED (no spawn), not silently remapped. Ignored by every other provider.",
             ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the registered MCP URL stamp is the only trusted identity and determines real spawn depth/autonomy; this field is not trusted when that stamp is absent."),

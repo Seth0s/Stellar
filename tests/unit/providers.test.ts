@@ -61,7 +61,7 @@ describe("providers: antigravity buildArgs effort", () => {
 // presumido, o pedido explícito era não assumir que é `--effort` só
 // porque é o nome usado pelo antigravity) que a CLI do claude TEM sua
 // própria flag `--effort <level>` (low/medium/high/xhigh/max, um
-// conjunto mais largo que o low/high do antigravity).
+// conjunto mais largo que o low/medium/high do antigravity).
 describe("providers: claude buildArgs effort", () => {
   const claude = providerById("claude")!;
 

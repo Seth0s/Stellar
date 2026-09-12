@@ -72,14 +72,18 @@ export type TerminalCardData = BaseCard & {
  * `--help`/error output (not assumed — see providers.ts's `SpawnOpts.
  * effort` doc comment). Used by Rail.tsx's terminal-creation popover to
  * only ever OFFER a value a provider actually accepts, instead of letting
- * a human pick e.g. "medium" for antigravity and finding out later it was
+ * a human pick e.g. "xhigh" for antigravity and finding out later it was
  * refused (message-bus.ts's `spawn_agent` handler enforces the same
- * antigravity range for agent-driven spawns, which don't go through this
+ * per-provider range for agent-driven spawns, which don't go through this
  * popover at all). Every provider not listed here doesn't read `effort`
- * — no options offered, same as before this map existed. */
+ * — no options offered, same as before this map existed.
+ *
+ * 2026-09-12: antigravity widened from `low|high` to `low|medium|high`
+ * after a live re-measure of `agy --help` (v1.2.2) — the older range was
+ * a stale comment, not the CLI. */
 export const PROVIDER_EFFORT_VALUES: Record<string, readonly string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
-  antigravity: ["low", "high"],
+  antigravity: ["low", "medium", "high"],
 };
 
 export type FilesCardData = BaseCard & { kind: "files"; root: string };
