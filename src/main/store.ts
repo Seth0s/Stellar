@@ -1086,13 +1086,14 @@ export function openStore(userDataDir: string) {
     `SELECT actor FROM task_transitions WHERE task_id = ? AND kind = 'status' ORDER BY at DESC, rowid DESC LIMIT 1`,
   );
   // RODADA 3 (DESIGN-BACKLOG.md §2.1, decisão 7 / peça 5 do recorte) —
-  // rodapé de escopo (`board X · N tasks · M em outros boards`). GLOBAL de
-  // propósito (nenhum filtro por board): é exatamente essa visão de
-  // conjunto que teria tornado visível, na tela, o achado desta rodada
-  // (seis tasks presas a um `board_id` órfão) em vez de um quadro
-  // silenciosamente vazio. `WHERE board_id IS NOT NULL` — uma task
-  // puramente de bookkeeping externo (nem `boardId` nem `cardId` no
-  // `create_task`) nunca teve board nenhum pra contar aqui.
+  // contagem GLOBAL por board (todos os sprints). Alimenta o rodapé de
+  // escopo em DOIS papéis só: (1) "N em outros boards" e (2) o dado
+  // secundário rotulado "total N" do board ativo. NÃO é o número
+  // principal do rodapé — esse é o sprint em foco (quadro vivo /
+  // `snapshot_json` quando se vê um fechado). Contar `COUNT(*)` sem
+  // filtro de sprint aqui é intencional pro "total"; reusar esse mapa
+  // como "N tasks" do card Fila foi o bug de §0 (2026-09-12).
+  // `WHERE board_id IS NOT NULL` — bookkeeping externo sem board não entra.
   const taskCountsByBoardStmt = db.prepare(`SELECT board_id, COUNT(*) as n FROM tasks WHERE board_id IS NOT NULL GROUP BY board_id`);
   // RODADA 3, peça 6 — gráfico 3 (tempo em cada estado), o único dos três
   // com fonte de dado real (`task_transitions` já grava `status`+`at`).
@@ -1719,7 +1720,9 @@ export function openStore(userDataDir: string) {
     },
     nextIdSeed: (): number => (maxIdStmt.get() as { m: number | null }).m ?? 0,
     listTasks: (): TaskRow[] => listTasksStmt.all() as TaskRow[],
-    // Ver o comentário grande de `taskCountsByBoardStmt` acima.
+    // Board-wide totals (every sprint). Footer uses this for "outros boards"
+    // + labeled "total N" only — never as the primary sprint count. See
+    // `taskCountsByBoardStmt` comment above.
     taskCountsByBoard: (): Record<string, number> => {
       const rows = taskCountsByBoardStmt.all() as { board_id: string; n: number }[];
       return Object.fromEntries(rows.map((r) => [r.board_id, r.n]));
