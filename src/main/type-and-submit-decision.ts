@@ -1,3 +1,9 @@
+/* eslint-disable no-control-regex -- este arquivo interpreta sequencias de
+ * escape de terminal (ESC, CSI, DECSET 2004h/l, RIS, DECSTR). O caractere de
+ * controle DENTRO da expressao regular e o objeto do trabalho, nao um
+ * descuido: e exatamente o byte que precisamos reconhecer no fluxo do PTY.
+ * Desligado no arquivo inteiro, e nao linha a linha, porque toda a familia de
+ * padroes aqui tem o mesmo motivo. */
 /**
  * Pure decisions behind `typeAndSubmit` (message-bus.ts) — the mechanism
  * that types text into a terminal card and confirms Enter actually

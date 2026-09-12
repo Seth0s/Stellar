@@ -99,7 +99,7 @@ export const MAX_JOINS_RETURNED = 200;
 const WILDCARD = "{_}";
 
 const QUOTED_RE = /(["'])(?:\\.|(?!\1)[^\\])*?\1|`(?:\\.|[^`\\])*?`/g;
-const PATH_TOKEN_RE = /\/[A-Za-z0-9._{}$-][A-Za-z0-9._/{}$\-]{2,}/g;
+const PATH_TOKEN_RE = /\/[A-Za-z0-9._{}$-][A-Za-z0-9._/{}$-]{2,}/g;
 
 const ALWAYS_INCOMPLETENESS: ReachIncompleteness[] = [
   {

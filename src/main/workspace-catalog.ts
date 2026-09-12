@@ -60,7 +60,7 @@ export function parseCatalogJson(raw: string, catalogPath: string): Omit<Workspa
     data = JSON.parse(stripHashComments(raw));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Invalid catalog at ${catalogPath}: use the JSON subset of YAML (${msg}).`);
+    throw new Error(`Invalid catalog at ${catalogPath}: use the JSON subset of YAML (${msg}).`, { cause: err });
   }
   if (!isRecord(data) || data.schema_version !== 1) {
     throw new Error("Catalog must be an object with schema_version equal to 1.");
