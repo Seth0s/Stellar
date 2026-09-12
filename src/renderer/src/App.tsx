@@ -72,7 +72,7 @@ import type {
   StickyCardData,
   Tool,
 } from "./card-types";
-import { PROVIDER_EFFORT_VALUES } from "./card-types";
+import { PROVIDER_EFFORT_VALUES, STICKY_FONT_SIZE_DEFAULT, clampStickyFontSize, parseStickyFontSize } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
 import { decideTaskCardSpawn } from "../../task-card-guard";
@@ -341,7 +341,9 @@ function toRow(card: Card, boardId: string): CardRow {
         cwd: card.content,
         resume_id: null,
         model: card.mode,
-        system_prompt: null,
+        // Per-card font size — unused column, same reuse as mode→model
+        // (card-types.ts's StickyCardData). Stringified px, never JSON.
+        system_prompt: String(clampStickyFontSize(card.fontSize)),
       };
     case "browser":
       return {
@@ -471,6 +473,7 @@ function fromRow(r: CardRow): Card {
         // "preview" — condizente com uma nota que já tem conteúdo salvo,
         // não a abrir em edição do nada a cada boot.
         mode: r.model === "edit" ? "edit" : "preview",
+        fontSize: parseStickyFontSize(r.system_prompt),
         rect,
         groupId,
         label,
@@ -781,6 +784,7 @@ export function App() {
   const getContentCommitHandler = useStableCardHandler(commitStickyContent);
   const getColorCommitHandler = useStableCardHandler(commitStickyColor);
   const getModeCommitHandler = useStableCardHandler(commitStickyMode);
+  const getFontSizeCommitHandler = useStableCardHandler(commitStickyFontSize);
   const getMessagesCommitHandler = useStableCardHandler(commitChatMessages);
   const getModelCommitHandler = useStableCardHandler(commitChatModel);
   const getProviderCommitHandler = useStableCardHandler(commitChatProvider);
@@ -2318,6 +2322,7 @@ export function App() {
         content,
         color: "blue",
         mode: "preview",
+        fontSize: STICKY_FONT_SIZE_DEFAULT,
         rect: cascadeSlot(cardsRef.current.length),
         groupId: null,
         label: null,
@@ -2577,6 +2582,17 @@ export function App() {
   function commitStickyMode(card: StickyCardData, mode: "edit" | "preview") {
     setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, mode } : c)));
     void window.store.upsert(toRow({ ...card, mode }, activeBoardIdRef.current!));
+  }
+
+  /** Per-card body size — same persist path as commitStickyColor/Mode
+   * (setCards + upsert via toRow). `system_prompt` holds the px string;
+   * clamp lives in card-types.ts so a stale click at the min/max is a
+   * no-op write, not a NaN in the row. */
+  function commitStickyFontSize(card: StickyCardData, fontSize: number) {
+    const next = clampStickyFontSize(fontSize);
+    if (next === card.fontSize) return;
+    setCards((prev) => prev.map((c) => (c.id === card.id && c.kind === "sticky" ? { ...c, fontSize: next } : c)));
+    void window.store.upsert(toRow({ ...card, fontSize: next }, activeBoardIdRef.current!));
   }
 
   /** Rotação (item 57.9) — clique discreto, sempre atualiza+persiste
@@ -3097,6 +3113,8 @@ export function App() {
                 onContentCommit={getContentCommitHandler(c)}
                 onColorCommit={getColorCommitHandler(c)}
                 onModeCommit={getModeCommitHandler(c)}
+                onFontSizeCommit={getFontSizeCommitHandler(c)}
+                fontSize={c.fontSize}
                 onConnectorStart={onConnectorStart}
                 onSelectStart={onSelectStart}
                 selected={selected}

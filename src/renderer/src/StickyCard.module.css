@@ -10,6 +10,39 @@
   border-left: 3px solid var(--accent);
 }
 
+/* Fills the clip below the header so textarea/preview keep flex:1 the
+   way they did as direct CardFrame children. `--sticky-font-size` is
+   set inline from the persisted per-card value (default 14px). */
+.stickyBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fontBtn {
+  min-width: 22px;
+  min-height: 22px;
+}
+.fontBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.fontGlyphSmall {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.fontGlyphLarge {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
 .stickyTextarea {
   flex: 1;
   border: none;
@@ -25,7 +58,7 @@
      of the 4 dark STICKY_BG tints. */
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--sticky-font-size, 14px);
   padding: 10px;
 }
 
@@ -37,14 +70,37 @@
   overflow: auto;
   padding: 10px;
   cursor: text;
+  font-size: var(--sticky-font-size, 14px);
 }
 .stickyPreview.empty {
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.93em;
   font-style: italic;
+}
+
+/* markdown.css hard-codes heading/code/table px against a 14px body.
+   Scale those with the card's own size so preview and edit stay in
+   proportion — em of THIS preview, not a second global scale. */
+.stickyPreview :global(.md-content) h1 {
+  font-size: 1.21em;
+}
+.stickyPreview :global(.md-content) h2 {
+  font-size: 1.11em;
+}
+.stickyPreview :global(.md-content) h3,
+.stickyPreview :global(.md-content) h4,
+.stickyPreview :global(.md-content) h5,
+.stickyPreview :global(.md-content) h6 {
+  font-size: 0.96em;
+}
+.stickyPreview :global(.md-content) code {
+  font-size: 0.86em;
+}
+.stickyPreview :global(.md-content) table {
+  font-size: 0.89em;
 }
 
 /* Checklist GFM (`- [ ]`/`- [x]`) — marked renderiza `<input disabled>`;
