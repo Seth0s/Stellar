@@ -1589,6 +1589,23 @@ select.resume-input {
   gap: 8px;
 }
 
+/* i18n fase 1 — locale override sits in the shortcuts overlay chrome. */
+.shortcuts-locale {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted, #9aa3b2);
+}
+
+.shortcuts-locale select {
+  background: var(--surface-2, #1c2230);
+  color: inherit;
+  border: 1px solid var(--border, #2a3344);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
 .shortcuts-modal {
   max-width: 560px;
 }

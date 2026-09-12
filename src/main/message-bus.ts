@@ -8,6 +8,7 @@ import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPres
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
 import { describeStatusHeldWarning } from "./status-write-decision";
+import { decideFailureKind, decideFailureWrite, stampFailureKindJson } from "./failure-kind-decision";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -2159,11 +2160,17 @@ export function createMessageBus(
       // `existing.status` as if it were an alignment proposal (that used
       // to clear a live divergence in silence). Other fields still update.
       const statusProposed = req.status !== undefined;
+      let result_json = req.result !== undefined ? JSON.stringify(req.result) : existing.result_json;
+      // DESIGN-BACKLOG.md §2.1 "Falha TIPADA" — explicit agent fail is
+      // julgada (stays in "falhou", counts in sprint snapshot).
+      if (statusProposed && req.status === "failed") {
+        result_json = stampFailureKindJson(result_json, decideFailureKind("explicit_failed"));
+      }
       const updated: TaskRow = {
         ...existing,
         status: statusProposed ? req.status! : existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
-        result_json: req.result !== undefined ? JSON.stringify(req.result) : existing.result_json,
+        result_json,
         retry_count: existing.retry_count + (req.incrementRetry ? 1 : 0),
         attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
         suggested_order: req.suggestedOrder !== undefined ? req.suggestedOrder : existing.suggested_order,
@@ -2806,11 +2813,23 @@ export function createMessageBus(
    * when the fail write actually landed (`statusChanged`). A human who
    * dragged the task away must not get a fresh agent spawned because
    * `resolveCardExit` tried to mark `failed`. */
+  /** DESIGN-BACKLOG.md item 60, peça 4 + "Falha TIPADA" — exit without
+   * report is interrompida: work never happened → back to "a fazer" with
+   * the reason visible, not a judged failure. Still triggers retryOrFail
+   * on autonomous boards (infra blip may be transient). */
   function markTaskFailed(task: TaskRow, error: string) {
-    const failed: TaskRow = { ...task, status: "failed", result_json: JSON.stringify({ error }), updated_at: Date.now(), actor: "app" };
-    const decision = callbacks.upsertTask(failed);
+    const kind = decideFailureKind("exit_without_report");
+    const write = decideFailureWrite(kind);
+    const interrupted: TaskRow = {
+      ...task,
+      status: write.status,
+      result_json: stampFailureKindJson(task.result_json, write.failureKind, error),
+      updated_at: Date.now(),
+      actor: "app",
+    };
+    const decision = callbacks.upsertTask(interrupted);
     if (!decision.statusChanged) return;
-    retryOrFail({ ...failed, status: decision.status });
+    retryOrFail({ ...interrupted, status: decision.status });
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 4 — called on a task that just

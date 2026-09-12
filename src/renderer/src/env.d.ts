@@ -21,6 +21,7 @@ import type {
   CanvasExportApi,
   BoardAssetsApi,
   SystemApi,
+  I18nApi,
 } from "../../preload/index";
 
 declare global {
@@ -47,5 +48,6 @@ declare global {
     canvasExport: CanvasExportApi;
     boardAssets: BoardAssetsApi;
     system: SystemApi;
+    i18n: I18nApi;
   }
 }

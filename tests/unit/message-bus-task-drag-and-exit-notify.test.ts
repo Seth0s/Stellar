@@ -269,7 +269,7 @@ describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card
     expect(popups).toHaveLength(0);
   });
 
-  it("task running vinculada a este card cai para 'failed' no mesmo evento que avisa o spawner — os dois efeitos nascem da mesma condição", async () => {
+  it("task running vinculada a este card volta pra 'pending' (interrompida) no mesmo evento que avisa o spawner", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-e4", to_card_id: "child-e4", updated_at: Date.now() }];
     const upserted: FakeTaskRow[] = [];
     const b = makeBus({
@@ -285,7 +285,9 @@ describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(upserted).toHaveLength(1);
-    expect(upserted[0].status).toBe("failed");
+    expect(upserted[0].status).toBe("pending");
+    const result = JSON.parse(String((upserted[0] as { result_json?: string }).result_json ?? "{}")) as { failureKind?: string };
+    expect(result.failureKind).toBe("interrompida");
   });
 });
 
