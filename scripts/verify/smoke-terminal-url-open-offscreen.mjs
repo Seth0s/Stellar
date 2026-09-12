@@ -10,16 +10,14 @@
 // sem abertura correspondente ANTES dele no mesmo match (preserva URL
 // legítima com parênteses balanceados, ex. Wikipedia).
 //
-// (2) "Não abre": não é bem isso — `openBrowserFor` REUSA um card de
-// navegador já existente sem dono (ownerCardId null, aberto de QUALQUER
-// terminal antes) em vez de criar um novo. Se esse card reusado estiver
-// fora do viewport atual (usuário deu pan pra outro canto do board desde
-// a última vez que abriu um link), a navegação acontece de verdade — só
-// que fora da vista, parecendo que nada aconteceu. Corrigido: o confirm
-// modal agora chama `focusCard` (pan+zoom pro card, mesmo idioma já usado
-// por `jumpToCard` noutros lugares do app) quando o card reusado não está
-// visível — só nesse caso, pra não mexer na câmera à toa quando o card
-// reusado já estava visível.
+// (2) "Não abre" (histórico 2026-09-02): `openBrowserFor` reusava o card
+// sem dono e só raise()-ava — off-screen parecia "não abriu". A câmera no
+// caminho de reuse ficou em openBrowserFor (também cobre agentes).
+//
+// DESIGN-BACKLOG.md §2.0 item 5 (2026-09-12): humano (`ownerCardId` null)
+// SEMPRE abre card novo — a trava "um navegador por dono" saiu. Este smoke
+// agora confirma o parser + que o 2º clique humano cria um SEGUNDO card
+// (não sequestra o primeiro).
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
@@ -159,11 +157,10 @@ try {
       })()
     `),
   );
-  check("o card de navegador reusável realmente saiu da vista depois do pan", browserVisible, false);
+  check("o card de navegador antigo realmente saiu da vista depois do pan", browserVisible, false);
 
-  // --- achado 2 de verdade: reabrir o MESMO link reusa o card (sem dono)
-  // agora fora da vista — antes da correção, isso navegava/raise()ava sem
-  // trazer a câmera de volta, indistinguível de "não abriu nada" ---
+  // --- §2.0 item 5: 2º clique humano abre um NOVO card (não sequestra o
+  // primeiro). O card novo nasce em centeredSlot (dentro da vista). ---
   const badgeCoords2 = await elCenter(page, '[data-role="terminal-url-badge"]');
   await page.click(badgeCoords2.x, badgeCoords2.y);
   await new Promise((r) => setTimeout(r, 250));
@@ -187,20 +184,22 @@ try {
   const cardsAfterSecond = JSON.parse(
     await page.evalJs(`window.store.list(${JSON.stringify(boardId)}).then((cards) => JSON.stringify(cards.filter((c) => c.kind === 'browser')))`),
   );
-  check("continua sendo o MESMO card reusado (não duplicou)", cardsAfterSecond.length, 1);
+  check("2º clique humano criou um SEGUNDO card (não reusou o off-screen)", cardsAfterSecond.length, 2);
 
-  const browserVisibleAfterReopen = JSON.parse(
+  const visibleBrowserCount = JSON.parse(
     await page.evalJs(`
       (() => {
-        const b = document.querySelector('[data-kind="browser"]');
-        if (!b) return JSON.stringify(null);
-        const r = b.getBoundingClientRect();
         const vw = window.innerWidth, vh = window.innerHeight;
-        return JSON.stringify(r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh);
+        let n = 0;
+        for (const b of document.querySelectorAll('[data-kind="browser"]')) {
+          const r = b.getBoundingClientRect();
+          if (r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh) n++;
+        }
+        return JSON.stringify(n);
       })()
     `),
   );
-  check("...e a câmera trouxe o card reusado de volta pra vista (não parece mais 'não abriu nada')", browserVisibleAfterReopen, true);
+  check("...e o card novo está na vista (centeredSlot)", visibleBrowserCount >= 1, true);
 
   page.close();
 } finally {
