@@ -24,6 +24,12 @@ Este documento consolida o estado atual de design, produto e arquitetura do proj
 ---
 
 ## 🐛 0. Bugs Urgentes (Recém-Reportados)
+* **Dois avisos de relatorio do mesmo card — o que apurei, e o defeito de verdade que apareceu no caminho (2026-09-12).**
+  * **O caminho de aviso nao duplica.** `notifySpawnerOfReport` (`message-bus.ts:1386`) tem **um unico** ponto de envio, a entrega vai por fila FIFO, e o throttle existente so afeta o popup do SO — o canal do PTY nunca e suprimido, de proposito, para nao perder um report real. Uma chamada de `report` produz exatamente um aviso.
+  * **Os dois avisos eram dois `report` de verdade.** O card `defer-central-escopo` chamou `acbridge report '{"help":true}'` (seq 130) tentando descobrir o formato do comando, e depois o relatorio real (seq 132). Causa: eu abreviei o id da task no briefing, o card nao achou a task e foi sondar a CLI. Briefing com id truncado e armadilha — id completo ou nenhum.
+  * **O defeito real, achado ao investigar**: a tabela `reports` tem `card_id` como PRIMARY KEY e o `upsertReport` faz `ON CONFLICT DO UPDATE` — **um slot por card**. Entao o segundo relatorio **apaga o primeiro**. No caso acima isso foi inofensivo (o primeiro era lixo), mas a perda e real e silenciosa: um card que reporta por rodada — um revisor que entrega rodada 1, rodada 2, rodada 3 — so tem a ultima preservada, e quem le com `afterSeq` depois do fato nunca ve as anteriores. O `seq` avanca e o conteudo some. Compare com `task_verdicts`, que e append-only exatamente por isso.
+  * **Ainda em aberto, precisa de medicao**: antes do restart, o card `entrega-dup-r4` gravou quatro relatorios seguidos (seq 111-114) com conteudo praticamente igual, sem que eu pedisse quatro vezes. Isso NAO se explica pela sondagem acima. As duas hipoteses: a mensagem do orquestrador chegou duplicada ao card (o residuo conhecido e aceito do item da entrega duplicada — "ler um envio real como unsent custa um Enter extra"), ou a CLI do cursor reenvia o ultimo input num Enter vazio, que era justamente a pergunta original daquela investigacao e nunca foi respondida contra CLI real.
+
 
 * **Nenhum provider deveria ficar sem `report` — falta um CONTRATO DE CAPACIDADE por provider (levantado pelo dono do repo em 2026-09-12, depois de dois cards `cursor` entregarem sem reportar).**
   * O sintoma: dois cards `cursor` terminaram a task, escreveram "sem tools Stellar neste host Cursor" no proprio scrollback, e nenhum chamou `report`. O trabalho ficou preso na tela, e quem orquestra so descobriu porque o dono olhou.
