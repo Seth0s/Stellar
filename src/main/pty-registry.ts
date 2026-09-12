@@ -881,8 +881,9 @@ export function createPtyRegistry(registryOpts: {
     // Uma entrega já começou depois de passar pelo porteiro. Reter bytes
     // humanos durante o pequeno ciclo texto+Enter+confirmação evita que uma
     // tecla que chegue na janela de confirmação seja submetida junto com o
-    // aviso. A ordem dos bytes é preservada e eles voltam ao PTY assim que a
-    // entrega termina.
+    // aviso. A ordem dos bytes é preservada; `endDelivery` devolve-os via
+    // `write(..., "human")` e o bus emite o aviso de entrada — eram
+    // humanas ao adiar, continuam humanas ao despejar.
     if (renewsHumanInputGateClock(origin) && entry.deliveryActive) {
       entry.deferredHumanInput.push(data);
       return;
@@ -901,15 +902,20 @@ export function createPtyRegistry(registryOpts: {
     return true;
   }
 
-  function endDelivery(id: string) {
+  function endDelivery(id: string): { flushedHumanInput: boolean } {
     const entry = entries.get(id);
-    if (!entry) return;
+    if (!entry) return { flushedHumanInput: false };
     entry.deliveryActive = false;
     const deferred = entry.deferredHumanInput.splice(0);
+    // Replay through `write` so the bytes stay origin `"human"` — same
+    // gate clock, same line buffer. The caller (deliverCard) emits the
+    // turn-input notice: these keys were human before they were held,
+    // and they are still human after. `proc.write` alone would land in
+    // the PTY with the previous turn already closed and no window.
     for (const data of deferred) {
-      recordHumanInput(id, entry, data);
-      entry.proc.write(data);
+      write(id, data, "human");
     }
+    return { flushedHumanInput: deferred.length > 0 };
   }
 
   function resize(id: string, cols: number, rows: number) {

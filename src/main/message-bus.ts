@@ -464,7 +464,14 @@ export function createMessageBus(
      * Human bytes arriving during it are retained by the PTY registry and
      * replayed afterward in order. */
     beginCardDelivery?: (id: string) => boolean;
-    endCardDelivery?: (id: string) => void;
+    /**
+     * Closes the delivery critical section and replays any human bytes
+     * that arrived while it was held. When those bytes flushed, the
+     * return says so — deliverCard then emits `notifyCardInput`, the
+     * same notice as a live keystroke. `void` keeps older test doubles
+     * source-compatible (no flush signal → no extra notice).
+     */
+    endCardDelivery?: (id: string) => void | { flushedHumanInput: boolean };
     /** DESIGN-BACKLOG.md item 61 — same "Bash 2°" ordinal-per-provider
      * convention App.tsx's `describeCard` already uses for
      * `AgentAskModal`'s requester label, reimplemented here against
@@ -1222,7 +1229,17 @@ export function createMessageBus(
         writeDelivery(composerClearSequence(), "composer_clear");
       }
     } finally {
-      if (deliveryStarted) callbacks.endCardDelivery?.(target);
+      if (deliveryStarted) {
+        const ended = callbacks.endCardDelivery?.(target);
+        // Deferred human keys are still human. The previous turn may
+        // already have closed; without this notice the flush lands as
+        // bare PTY bytes, echo arrives as `"data"`, and the bar stays
+        // off while the shell works. Body notify already fired above —
+        // this is a different turn, the one the human typed.
+        if (ended && typeof ended === "object" && ended.flushedHumanInput) {
+          callbacks.notifyCardInput?.(target);
+        }
+      }
     }
   }
 
