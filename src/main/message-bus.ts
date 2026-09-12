@@ -19,6 +19,7 @@ import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKin
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
+import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -287,7 +288,7 @@ export type BusRequest =
   // só produza erro de uso (não há Enter, não há scrollback, `lines` não
   // significa nada). Decidido com o usuário.
   | { cmd: "read_sticky"; target?: string }
-  | { cmd: "write_sticky"; target?: string; content?: string; mode?: string; requesterId?: string }
+  | { cmd: "write_sticky"; target?: string; content?: string; path?: string; mode?: string; requesterId?: string }
   // Regra geral de auto-conector (2026-09-02) — controle de cor/categoria
   // e modo edição/preview, mesma identidade de chamador que write_sticky
   // já carrega.
@@ -305,7 +306,7 @@ export type BusRequest =
   // loop, but explicitly told this is fine" contract spawn_card/open_url
   // already use.
   | { cmd: "delete_card"; target?: string; requesterId?: string; reason?: string }
-  | { cmd: "update_card_content"; target?: string; content?: string; mode?: string; requesterId?: string }
+  | { cmd: "update_card_content"; target?: string; content?: string; path?: string; mode?: string; requesterId?: string }
   | { cmd: "card_status"; target?: string }
   /** Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
    * usuário: hoje `isActive` (useTerminal.ts) é só uma aproximação por
@@ -1280,6 +1281,49 @@ export function createMessageBus(
     });
   }
 
+  /**
+   * Inline `content` stays the default. `path` is the alternative that
+   * keeps a large roster/PII block out of the tool-call itself: main
+   * reads the file the agent already had on disk. Same access policy as
+   * FilesCard and chat `read_file` — `readFileAllowingAbsolute` →
+   * `asRootRelativePath` + `confine` + `MAX_FILE_BYTES`. Root is the
+   * caller's card cwd (terminal/chat/files/changes); no cwd means no
+   * root, so path form is refused rather than reading an unbounded
+   * absolute path.
+   */
+  async function resolveStickyWriteContent(req: {
+    content?: string;
+    path?: string;
+    requesterId?: string;
+  }): Promise<{ ok: true; content: string } | { ok: false; error: string }> {
+    const hasContent = req.content !== undefined;
+    const path = typeof req.path === "string" ? req.path.trim() : "";
+    const hasPath = path.length > 0;
+    if (hasContent && hasPath) return { ok: false, error: "pass content or path, not both" };
+    if (hasContent) return { ok: true, content: req.content as string };
+    if (!hasPath) return { ok: false, error: "missing content or path" };
+    const root = (req.requesterId && callbacks.listCards().find((c) => c.id === req.requesterId)?.cwd?.trim()) || "";
+    if (!root) {
+      return {
+        ok: false,
+        error:
+          "path form requires a caller card with a project root (cwd); pass content inline instead, or call from a terminal/chat/files/changes card",
+      };
+    }
+    try {
+      const res = await readFileAllowingAbsolute(root, path);
+      if ("tooLarge" in res) {
+        return { ok: false, error: `file larger than ${MAX_FILE_BYTES / 1024}KB, not read` };
+      }
+      return { ok: true, content: res.content };
+    } catch (err) {
+      if (err instanceof PathEscapeError) {
+        return { ok: false, error: `path escapes the caller's project root: ${path}` };
+      }
+      return { ok: false, error: `could not read path: ${String(err)}` };
+    }
+  }
+
   /** Só os cards que têm um PTY vivo por trás — o subconjunto que
    * `writeToCard`/`readCardText`/`isCardAlive` sabem operar. `listCards()`
    * passou a devolver TODOS os cards (ver `CardSummary`), então cada
@@ -1872,12 +1916,19 @@ export function createMessageBus(
 
     if (req.cmd === "update_card_content") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      if (req.content === undefined) return { ok: false, error: "missing content" };
       const mode = req.mode ?? "replace";
       if (mode !== "replace" && mode !== "append") return { ok: false, error: `mode must be "replace" or "append"` };
+      const resolved = await resolveStickyWriteContent(req);
+      if (!resolved.ok) return resolved;
       const target = req.target;
       if (callbacks.listCards().some((c) => c.id === target)) {
-        return handleRequest({ cmd: "write_sticky", target, content: req.content, mode, requesterId: req.requesterId });
+        return handleRequest({
+          cmd: "write_sticky",
+          target,
+          content: resolved.content,
+          mode,
+          requesterId: req.requesterId,
+        });
       }
       const any = callbacks.getAnyCard(target);
       if (!any) return { ok: false, error: `no card with id "${target}"` };
@@ -1890,9 +1941,14 @@ export function createMessageBus(
           error: `card "${target}" is on board "${any.boardId}", which isn't currently loaded — load that board and use write_sticky, or turn on autonomous mode for it first`,
         };
       }
-      const result = callbacks.updateStickyContentDirect(target, req.content, mode);
+      const result = callbacks.updateStickyContentDirect(target, resolved.content, mode);
       if (result.ok && req.requesterId) {
-        callbacks.onAutoConnect(req.requesterId, target, "modified", truncateForLabel(req.content));
+        callbacks.onAutoConnect(
+          req.requesterId,
+          target,
+          "modified",
+          truncateForLabel(req.path?.trim() ? req.path : resolved.content),
+        );
       }
       return result;
     }
@@ -1975,10 +2031,11 @@ export function createMessageBus(
         }
         return stickyOp(req.target, { op: "set_mode", mode: req.mode, requesterId: req.requesterId });
       }
-      if (req.content === undefined) return { ok: false, error: "missing content" };
       const mode = req.mode ?? "replace";
       if (mode !== "replace" && mode !== "append") return { ok: false, error: `mode must be "replace" or "append"` };
-      return stickyOp(req.target, { op: "write", content: req.content, mode, requesterId: req.requesterId });
+      const resolved = await resolveStickyWriteContent(req);
+      if (!resolved.ok) return resolved;
+      return stickyOp(req.target, { op: "write", content: resolved.content, mode, requesterId: req.requesterId });
     }
 
     // DESIGN-BACKLOG.md §2.1 — the 5 browser control cmds. Unlike

@@ -15,6 +15,8 @@
 //     pra nunca apagar o que a pessoa está digitando. Essa é a única
 //     proteção da escrita, então ela é checada com um foco de verdade
 //     (clique real no textarea), não simulado.
+import { writeFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
@@ -40,6 +42,21 @@ async function callTool(name, args) {
 }
 async function toolJson(name, args) {
   return JSON.parse((await callTool(name, args)).content[0].text);
+}
+async function mcpCallAs(cardId, method, params) {
+  const res = await fetch(`${MCP_URL}?card=${encodeURIComponent(cardId)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: nextRpcId++, method, params }),
+  });
+  const text = await res.text();
+  const jsonLine = text.split("\n").find((l) => l.startsWith("data:"))?.slice(5).trim() ?? text;
+  return JSON.parse(jsonLine);
+}
+async function toolJsonAs(cardId, name, args) {
+  const rpc = await mcpCallAs(cardId, "tools/call", { name, arguments: args });
+  if (rpc.error) throw new Error(`MCP error calling ${name}: ${JSON.stringify(rpc.error)}`);
+  return JSON.parse(rpc.result.content[0].text);
 }
 async function hasModal(page) {
   return JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector('.modal'))`));
@@ -94,6 +111,44 @@ try {
   check("mode:append acrescenta em vez de substituir", appended.content, "linha 1\nlinha 2");
   check("...refletido no textarea real", await textareaValue(page), "linha 1\nlinha 2");
   check("read_sticky devolve o mesmo que a escrita afirmou", (await toolJson("read_sticky", { target: stickyId })).content, "linha 1\nlinha 2");
+
+  // path form — main reads the file (same confine + 512KB as FilesCard /
+  // chat read_file). The smoke client is otherwise anonymous, so these
+  // calls stamp `?card=` the way a real provider MCP URL does.
+  const bashCwd = (await toolJson("list_cards", {})).cards.find((c) => c.id === bashId)?.cwd;
+  check("o card bash tem cwd de verdade (pré-condição da forma path)", typeof bashCwd === "string" && bashCwd.length > 0, true);
+  if (typeof bashCwd === "string" && bashCwd.length > 0) {
+    const fromFileName = `smoke-write-sticky-from-file-${CDP_PORT}.md`;
+    const fromFileAbs = join(bashCwd, fromFileName);
+    writeFileSync(fromFileAbs, "from file\nAna 001");
+    try {
+      const fromFile = await toolJsonAs(bashId, "write_sticky", { target: stickyId, path: fromFileName });
+      check("write_sticky path form lê o arquivo no main", fromFile.content, "from file\nAna 001");
+      writeFileSync(fromFileAbs, "\nappended from file");
+      const fromFileAppend = await toolJsonAs(bashId, "write_sticky", {
+        target: stickyId,
+        path: fromFileName,
+        mode: "append",
+      });
+      check("write_sticky path form honra append", fromFileAppend.content, "from file\nAna 001\nappended from file");
+      const both = await toolJsonAs(bashId, "write_sticky", {
+        target: stickyId,
+        content: "x",
+        path: fromFileName,
+      });
+      check("content e path juntos são recusados", both.ok, false);
+      const escaped = await toolJsonAs(bashId, "write_sticky", { target: stickyId, path: "/etc/passwd" });
+      check("path fora do cwd do card é recusado", escaped.ok, false);
+      const restored = await toolJson("write_sticky", { target: stickyId, content: "linha 1\nlinha 2" });
+      check("inline continua válido depois da forma path", restored.content, "linha 1\nlinha 2");
+    } finally {
+      try {
+        unlinkSync(fromFileAbs);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
 
   // --- a proteção: humano editando a nota AGORA ---
   const ta = JSON.parse(
