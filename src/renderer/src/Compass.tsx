@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from "react";
+import { t } from "../../shared/i18n";
 import { Icon, type IconName } from "./icons";
 import { isInView, type Rect } from "./board-model";
 import type { Card } from "./card-types";
@@ -319,7 +320,7 @@ export const Compass = memo(function Compass({
       className="compass-strip"
       data-role="compass"
       data-compact={compact}
-      aria-label="Cards fora da tela"
+      aria-label={t("compass.offscreen")}
       style={{ left: `${stripLeft}px`, width: `${stripWidth}px` }}
     >
       {positioned.map(({ card, dist, bearing, x, label }) => {
@@ -333,8 +334,8 @@ export const Compass = memo(function Compass({
             className="compass-chip compass-chip-compact"
             data-role="compass-chip"
             style={{ left: `${x}px`, opacity: tier === 3 ? 1 : tier === 2 ? 0.7 : 0.45 }}
-            title={`Focar em ${label} (${kindName})`}
-            aria-label={`Focar em ${label} (${kindName}), fora da tela`}
+            title={t("compass.focus", { label, kind: kindName })}
+            aria-label={t("compass.focusOff", { label, kind: kindName })}
             onClick={() => onFocusCard(card.id)}
           >
             <span className="compass-arrow compass-arrow-compact" style={{ transform: `rotate(${bearing}deg)` }}>
@@ -348,8 +349,8 @@ export const Compass = memo(function Compass({
             className="compass-chip"
             data-role="compass-chip"
             style={{ left: `${x}px` }}
-            title={`Focar em ${label}`}
-            aria-label={`Focar em ${label}, fora da tela`}
+            title={t("compass.focusSimple", { label })}
+            aria-label={t("compass.focusSimpleOff", { label })}
             onClick={() => onFocusCard(card.id)}
           >
             <span className="compass-arrow" style={{ transform: `rotate(${bearing}deg)` }}>
@@ -368,7 +369,7 @@ export const Compass = memo(function Compass({
         );
       })}
       {hiddenCount > 0 && (
-        <span className="compass-more" title={`+${hiddenCount} card(s) fora da tela, não mostrados`}>
+        <span className="compass-more" title={t("compass.moreHidden", { count: hiddenCount })}>
           +{hiddenCount}
         </span>
       )}

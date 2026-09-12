@@ -1,4 +1,5 @@
 import { isGlobalShortcutBlocked } from "./keyboard-shortcut-guard";
+import { t, type MessageKey } from "../../shared/i18n";
 
 /**
  * Fase B do trabalho de atalhos (fase A: overlay/guard/Ctrl+D/aceleradores
@@ -255,17 +256,17 @@ export function describeComboAliases(combo: ShortcutCombo): string | undefined {
     ...(combo.keyAliases ?? []).map((k) => withMods(formatKey(k))),
     ...(combo.codes ?? []).map((c) => withMods(formatCode(c))),
   ];
-  return `também: ${aliasLabels.join(", ")}`;
+  return t("shortcuts.also", { aliases: aliasLabels.join(", ") });
 }
 
 export type ShortcutGroupName =
-  | "Ferramentas"
-  | "Janela"
-  | "Card"
-  | "Terminal"
-  | "Canvas"
-  | "Chat e navegador"
-  | "Mouse";
+  | "shortcuts.group.tools"
+  | "shortcuts.group.window"
+  | "shortcuts.group.card"
+  | "shortcuts.group.terminal"
+  | "shortcuts.group.canvas"
+  | "shortcuts.group.chatBrowser"
+  | "shortcuts.group.mouse";
 
 interface ShortcutBase {
   /** Id estável — usado pelo despachante (App.tsx) pra mapear pro handler
@@ -275,8 +276,8 @@ interface ShortcutBase {
    * "Ctrl+D", diferindo só pelo escopo — ver as duas abaixo). */
   id: string;
   group: ShortcutGroupName;
-  /** Texto em pt-BR mostrado na overlay ao lado do `<kbd>`. */
-  description: string;
+  /** Chave i18n mostrada na overlay ao lado do `<kbd>`. */
+  description: MessageKey;
   /** Referência arquivo:linha/área pra quem for ler o registro — nunca
    * mostrado na UI, só documentação para humanos. */
   owner: string;
@@ -286,8 +287,8 @@ interface ShortcutBase {
    * despachante central. Ausente só para os poucos gestos de mouse puro
    * (`"mouse"`) que não têm combinação de tecla nenhuma. */
   combo?: ShortcutCombo;
-  /** Só usado quando `combo` está ausente (gestos de mouse). */
-  display?: string;
+  /** Só usado quando `combo` está ausente (gestos de mouse). MessageKey ou literal técnico. */
+  display?: MessageKey | string;
 }
 
 export interface CentralShortcut extends ShortcutBase {
@@ -323,284 +324,226 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
   // ---- Ferramentas ----------------------------------------------------
   {
     id: "tool.pointer",
-    group: "Ferramentas",
+    group: "shortcuts.group.tools",
     dispatch: "central",
     combo: { key: "v", ctrlOrCmd: false, alt: false },
     scopes: ["canvas"],
-    description: "ponteiro",
+    description: "shortcuts.desc.pointer",
     owner: "App.tsx (atalhos de ferramenta)",
   },
   {
     id: "tool.pen",
-    group: "Ferramentas",
+    group: "shortcuts.group.tools",
     dispatch: "central",
     combo: { key: "p", ctrlOrCmd: false, alt: false },
     scopes: ["canvas"],
-    description: "caneta",
+    description: "shortcuts.desc.pen",
     owner: "App.tsx (atalhos de ferramenta)",
   },
   {
     id: "tool.connector",
-    group: "Ferramentas",
+    group: "shortcuts.group.tools",
     dispatch: "central",
     combo: { key: "c", ctrlOrCmd: false, alt: false },
     scopes: ["canvas"],
-    description: "conector",
+    description: "shortcuts.desc.connector",
     owner: "App.tsx (atalhos de ferramenta)",
   },
   {
     id: "tool.select",
-    group: "Ferramentas",
+    group: "shortcuts.group.tools",
     dispatch: "central",
     combo: { key: "s", ctrlOrCmd: false, alt: false },
     scopes: ["canvas"],
-    description: "seleção",
+    description: "shortcuts.desc.select",
     owner: "App.tsx (atalhos de ferramenta)",
   },
   {
     id: "tool.escapeReset",
-    group: "Ferramentas",
+    group: "shortcuts.group.tools",
     dispatch: "central",
-    // Sem restrição de modificador OU escopo — dispara em qualquer
-    // contexto que o despachante chegue a ver (quando um modal está
-    // aberto, o Escape CAPTURE-phase de `useModal.ts` já rodou e chamou
-    // `stopPropagation`, então este bubble-phase nem chega a ser
-    // avaliado — nenhuma duplicação de comportamento, só duas camadas
-    // independentes que nunca disparam pro mesmo Escape ao mesmo tempo).
     combo: { key: "Escape" },
     scopes: ["modal", "terminal", "browser", "text-input", "canvas"],
-    description: "fecha o que estiver aberto (esta ajuda, fechar card, radial, pareamento) e volta a ferramenta ao ponteiro",
+    description: "shortcuts.desc.escape",
     owner: "App.tsx (atalhos de ferramenta)",
   },
 
   // ---- Janela ----------------------------------------------------------
   {
     id: "window.fullscreen",
-    group: "Janela",
+    group: "shortcuts.group.window",
     dispatch: "central",
     combo: { key: "F11" },
     scopes: ["canvas"],
     preventDefault: true,
-    description: "tela cheia",
-    // Achado ao vivo (fase A): F11 apertado com foco dentro de um terminal/
-    // navegador embutido bubblava até aqui e ligava o fullscreen REAL da
-    // janela (nenhum `stopPropagation` nesses componentes, só
-    // `preventDefault`) — daí o escopo restrito a "canvas".
+    description: "shortcuts.desc.fullscreen",
     owner: "App.tsx (atalhos de ferramenta)",
   },
   {
     id: "overlay.shortcuts.toggle",
-    group: "Janela",
+    group: "shortcuts.group.window",
     dispatch: "central",
     combo: { key: "?", ctrlOrCmd: false, alt: false },
     scopes: ["canvas"],
-    description: "esta tela",
+    description: "shortcuts.desc.help",
     owner: "App.tsx (atalhos de ferramenta)",
   },
 
   // ---- Card --------------------------------------------------------------
   {
     id: "card.rename",
-    group: "Card",
+    group: "shortcuts.group.card",
     dispatch: "mouse",
-    display: "2×clique",
-    description: "renomear (na tag do header)",
+    display: "shortcuts.gesture.doubleClick",
+    description: "shortcuts.desc.rename",
     owner: "CardTag.tsx",
   },
   {
     id: "card.duplicate",
-    group: "Card",
+    group: "shortcuts.group.card",
     dispatch: "central",
     combo: { key: "d", ctrlOrCmd: true },
     scopes: ["canvas"],
     preventDefault: true,
-    description: "duplica o card no topo (mesmo provider/cwd/etc) — exceto com um terminal focado, ver Terminal",
-    // A outra metade real deste MESMO Ctrl+D é `terminal.eof` abaixo — o
-    // escopo (não uma checagem de "é um card de terminal") é quem decide
-    // qual das duas dispara (achado 2 da revisão da fase A: o critério
-    // certo é foco REAL, não "qual card está no topo").
+    description: "shortcuts.desc.duplicate",
     owner: "App.tsx:duplicateCard",
   },
 
   // ---- Terminal ------------------------------------------------------
   {
-    // Follow-up fase C — deixou de ser pass-through puro: `useTerminal`
-    // intercepta o combo EFETIVO, escreve `\x03` via `pty.write` (byte no
-    // stream — raw-mode/vim/REPL; NÃO `pty.interrupt`/sinal do SO), e
-    // engole o Ctrl+C default quando rebindado. Copy matched consome
-    // sempre (mesmo sem seleção) pra Ctrl+C rebound como copy não vazar
-    // `\x03` pelo early-return. `shift: false` explícito — com Shift é
-    // `terminal.copySelection` (checado ANTES).
     id: "terminal.sigint",
-    group: "Terminal",
+    group: "shortcuts.group.terminal",
     dispatch: "native",
-    // `shift: false` explícito (não "não importa") — com Shift junto é
-    // Ctrl+Shift+C, capturado ANTES por `terminal.copySelection` (`stop
-    // ImmediatePropagation` em `useTerminal.ts`, nunca chega no xterm/PTY
-    // como este atalho). As duas entradas nunca disputam o mesmo evento.
     combo: { key: "c", ctrlOrCmd: true, shift: false },
     scopes: ["terminal"],
-    description: "interrompe o processo (SIGINT do shell) — NÃO copia; pra copiar a seleção use Ctrl+Shift+C",
+    description: "shortcuts.desc.sigint",
     owner: "useTerminal.ts (keydown capture → pty.write \\x03)",
   },
   {
     id: "terminal.copySelection",
-    group: "Terminal",
+    group: "shortcuts.group.terminal",
     dispatch: "native",
     combo: { key: "c", ctrlOrCmd: true, shift: true },
     scopes: ["terminal"],
-    description: "copiar a seleção",
-    // `useTerminal.ts`'s listener de captura chama `stopImmediatePropagation`
-    // — nunca chega ao xterm/PTY como SIGBREAK ou qualquer outra coisa.
+    description: "shortcuts.desc.copySelection",
     owner: "useTerminal.ts (keydown capture, matchesShortcut)",
   },
   {
     id: "terminal.paste",
-    group: "Terminal",
+    group: "shortcuts.group.terminal",
     dispatch: "native",
     combo: { key: "v", ctrlOrCmd: true },
     scopes: ["terminal"],
-    description: "colar (texto ou imagem)",
+    description: "shortcuts.desc.paste",
     owner: "useTerminal.ts (keydown capture, matchesShortcut)",
   },
   {
-    // Follow-up fase C — sintetiza `\x04` no combo efetivo e engole o
-    // Ctrl+D default quando rebindado. O despachante central (App.tsx)
-    // continua bloqueando `card.duplicate` em escopo terminal.
     id: "terminal.eof",
-    group: "Terminal",
+    group: "shortcuts.group.terminal",
     dispatch: "native",
-    // `shift: false` explícito — mesmo cuidado de `terminal.sigint` vs
-    // copy: modificador indefinido faria Ctrl+Shift+D casar sem querer.
     combo: { key: "d", ctrlOrCmd: true, shift: false },
     scopes: ["terminal"],
-    description: "com o terminal focado: EOF do shell, não duplica o card",
+    description: "shortcuts.desc.eof",
     owner: "useTerminal.ts (keydown capture, matchesShortcut → pty.write \\x04)",
   },
 
   // ---- Canvas --------------------------------------------------------
   {
     id: "canvas.pasteMedia",
-    group: "Canvas",
+    group: "shortcuts.group.canvas",
     dispatch: "native",
     combo: { key: "v", ctrlOrCmd: true },
     scopes: ["canvas"],
-    description: "cola imagem/PDF do clipboard como card novo",
+    description: "shortcuts.desc.pasteMedia",
     owner: "App.tsx (evento `paste` do DOM)",
   },
   {
     id: "canvas.multiSelect",
-    group: "Canvas",
+    group: "shortcuts.group.canvas",
     dispatch: "mouse",
     display: "Shift/Ctrl/Cmd+clique",
-    description: "soma à seleção (ferramenta seleção)",
+    description: "shortcuts.desc.addToSelection",
     owner: "useCardSelection.ts",
   },
   {
-    // Não documentado na overlay antes da fase B (achado ao formalizar o
-    // registro) — real e disparável hoje, só nunca tinha virado texto de
-    // ajuda. `before-input-event` intercepta no processo main (não tem
-    // como o renderer ver o keydown cru primeiro) e reenvia por IPC.
-    //
-    // Round 2 (achado 1a do review) — este `combo` não é só documentação:
-    // `main/index.ts` importa ESTE objeto direto (`ZOOM_IN_COMBO`) e casa
-    // contra ele via `matchesCombo`, no lugar dos literais que tinha antes
-    // (`key === "+" || key === "=" || input.code === "NumpadAdd"`). Mudar
-    // os aliases aqui muda o que main realmente intercepta — não tem como
-    // os dois divergirem de novo, é o MESMO objeto em runtime.
     id: "canvas.zoomIn",
-    group: "Canvas",
+    group: "shortcuts.group.canvas",
     dispatch: "native",
     combo: { key: "+", keyAliases: ["="], codes: ["NumpadAdd"], ctrlOrCmd: true },
     scopes: ["canvas"],
-    description: "zoom do canvas (in) — via tecla, além do scroll",
+    description: "shortcuts.desc.zoomIn",
     owner: "main/index.ts before-input-event (ZOOM_IN_COMBO) → App.tsx onZoomAccelerator",
   },
   {
-    // Mesmo mecanismo de `canvas.zoomIn` acima — `main/index.ts` importa
-    // este `combo` como `ZOOM_OUT_COMBO`.
     id: "canvas.zoomOut",
-    group: "Canvas",
+    group: "shortcuts.group.canvas",
     dispatch: "native",
     combo: { key: "-", keyAliases: ["_"], codes: ["NumpadSubtract"], ctrlOrCmd: true },
     scopes: ["canvas"],
-    description: "zoom do canvas (out) — via tecla, além do scroll",
+    description: "shortcuts.desc.zoomOut",
     owner: "main/index.ts before-input-event (ZOOM_OUT_COMBO) → App.tsx onZoomAccelerator",
   },
 
   // ---- Chat e navegador -------------------------------------------------
   {
     id: "chat.send",
-    group: "Chat e navegador",
+    group: "shortcuts.group.chatBrowser",
     dispatch: "native",
-    // `shift: false` explícito — com Shift é `chat.newline`. Sem isto,
-    // `matchesCombo` (shift indefinido = "não importa") faria Shift+Enter
-    // disparar send em vez de quebra de linha, e `combosOverlap` acusaria
-    // colisão falsa entre os dois no mesmo escopo text-input. Mesmo
-    // precedente de `terminal.sigint` vs `terminal.copySelection`.
     combo: { key: "Enter", shift: false },
-    // Fase C, round 2 (achado 3 do review) — faltava aqui, e a AUSÊNCIA
-    // não é neutra: `shortcut-config.ts`'s detecção de conflito trata
-    // `scopes` ausente como "qualquer escopo" (postura conservadora,
-    // nunca esconder uma colisão real por falta de dado) — sem isto, um
-    // rebind de atalho de CANVAS pra Enter acusava colisão falsa contra
-    // este Enter do composer, que na prática nunca compete (o composer só
-    // reage com foco REAL nele, escopo "text-input"). O dado que faltava
-    // era do REGISTRO, não da semântica do detector de conflito.
     scopes: ["text-input"],
-    description: "envia a mensagem no chat",
+    description: "shortcuts.desc.chatSend",
     owner: "ChatCard.tsx onComposerKeyDown (matchesShortcut)",
   },
   {
     id: "chat.newline",
-    group: "Chat e navegador",
+    group: "shortcuts.group.chatBrowser",
     dispatch: "native",
     combo: { key: "Enter", shift: true },
     scopes: ["text-input"],
-    description: "quebra linha no chat",
+    description: "shortcuts.desc.chatNewline",
     owner: "ChatCard.tsx onComposerKeyDown (matchesShortcut; Enter nativo ou insert manual)",
   },
   {
     id: "browser.navigate",
-    group: "Chat e navegador",
+    group: "shortcuts.group.chatBrowser",
     dispatch: "native",
     combo: { key: "Enter" },
     scopes: ["text-input"],
-    description: "navega (na barra de endereço do navegador)",
+    description: "shortcuts.desc.browserNavigate",
     owner: "BrowserCard.tsx (barra de endereço, matchesShortcut)",
   },
 
   // ---- Mouse -----------------------------------------------------------
   {
     id: "mouse.zoom",
-    group: "Mouse",
+    group: "shortcuts.group.mouse",
     dispatch: "mouse",
     display: "scroll",
-    description: "zoom",
+    description: "shortcuts.desc.mouseZoom",
     owner: "useWorldTransform.ts",
   },
   {
     id: "mouse.panBackground",
-    group: "Mouse",
+    group: "shortcuts.group.mouse",
     dispatch: "mouse",
-    display: "arrastar fundo",
-    description: "mover a tela (ponteiro)",
+    display: "shortcuts.gesture.dragBg",
+    description: "shortcuts.desc.pan",
     owner: "App.tsx (viewport)",
   },
   {
     id: "mouse.moveCard",
-    group: "Mouse",
+    group: "shortcuts.group.mouse",
     dispatch: "mouse",
-    display: "arrastar header",
-    description: "mover um card",
+    display: "shortcuts.gesture.dragHeader",
+    description: "shortcuts.desc.moveCard",
     owner: "CardTag.tsx / card frame",
   },
   {
     id: "mouse.resizeCard",
-    group: "Mouse",
+    group: "shortcuts.group.mouse",
     dispatch: "mouse",
-    display: "arrastar canto",
-    description: "redimensionar um card",
+    display: "shortcuts.gesture.dragCorner",
+    description: "shortcuts.desc.resizeCard",
     owner: "card frame (resize handles)",
   },
 ];
@@ -695,8 +638,14 @@ export function resolveGlobalShortcut(
   return findShortcutClaimingKey(e, overrides, resolveShortcutScope(ctx));
 }
 
+function isMessageKey(value: string): value is MessageKey {
+  return value.startsWith("shortcuts.");
+}
+
 export function displayForShortcut(def: ShortcutDefinition): string {
-  return def.combo ? formatCombo(def.combo) : (def.display ?? "");
+  if (def.combo) return formatCombo(def.combo);
+  if (!def.display) return "";
+  return isMessageKey(def.display) ? t(def.display) : def.display;
 }
 
 export interface ShortcutOverlayRow {
@@ -734,7 +683,7 @@ export function groupShortcutsForOverlay(
       id: def.id,
       display: displayForShortcut(def),
       aliasNote: def.combo ? describeComboAliases(def.combo) : undefined,
-      description: def.description,
+      description: t(def.description),
     });
   }
   return groups;

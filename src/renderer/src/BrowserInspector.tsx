@@ -1,4 +1,5 @@
 import { Fragment, lazy, Suspense, useEffect, useRef, useState } from "react";
+import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
 import styles from "./BrowserInspector.module.css";
 
@@ -615,7 +616,7 @@ function StylesPanel({ es }: { es: ElementStyles }) {
           </div>
         </div>
       ))}
-      {es.matched.length === 0 && <div className={styles.ruleEmpty}>Nenhuma regra de CSS externa corresponde a este elemento.</div>}
+      {es.matched.length === 0 && <div className={styles.ruleEmpty}>{t("inspector.noExternalRules")}</div>}
     </>
   );
 }
@@ -654,7 +655,7 @@ function ComputedPanel({ es, filter, onFilterChange }: { es: ElementStyles; filt
       <input
         className={styles.computedFilter}
         data-role="inspector-computed-filter"
-        placeholder="Filtrar propriedades…"
+        placeholder={t("inspector.filterProps")}
         value={filter}
         onChange={(e) => onFilterChange(e.target.value)}
       />
@@ -662,7 +663,7 @@ function ComputedPanel({ es, filter, onFilterChange }: { es: ElementStyles; filt
         {rows.map((d) => (
           <DeclRow key={d.prop} d={d} />
         ))}
-        {rows.length === 0 && <div className={styles.ruleEmpty}>Nenhuma propriedade encontrada.</div>}
+        {rows.length === 0 && <div className={styles.ruleEmpty}>{t("inspector.noProperties")}</div>}
       </div>
     </>
   );
@@ -672,7 +673,7 @@ function ListenersPanel({ entries }: { entries: ListenerEntry[] }) {
   return (
     <>
       {entries.length === 0 ? (
-        <div className={styles.ruleEmpty}>Nenhum handler desse tipo neste elemento.</div>
+        <div className={styles.ruleEmpty}>{t("inspector.noHandlers")}</div>
       ) : (
         <div className={styles.decl} data-role="inspector-listeners-list">
           {entries.map((e) => (
@@ -766,7 +767,10 @@ export function BrowserInspector({
       if (eventId !== id) return;
       if (method === "__detached__") {
         const reason = (params as { reason?: string })?.reason;
-        setCdpAttachResult({ ok: false, error: `Sessão de depuração desanexada${reason ? ` (${reason})` : ""}.` });
+        setCdpAttachResult({
+          ok: false,
+          error: t("inspector.detached", { reason: reason ? ` (${reason})` : "" }),
+        });
         return;
       }
       if (method === "DOM.setChildNodes") {
@@ -1270,7 +1274,7 @@ export function BrowserInspector({
     const hotspots: ProfileHotspot[] = profile.nodes
       .filter((n) => (n.hitCount ?? 0) > 0)
       .map((n) => ({
-        functionName: n.callFrame.functionName || "(anônima)",
+        functionName: n.callFrame.functionName || t("inspector.anonymous"),
         url: n.callFrame.url,
         lineNumber: n.callFrame.lineNumber,
         hitCount: n.hitCount ?? 0,
@@ -1753,19 +1757,19 @@ export function BrowserInspector({
       />
       {deviceToolbarOpen && (
       <div className={styles.deviceToolbar} data-role="inspector-device-toolbar">
-        <span className={styles.deviceLabel}>Dispositivo</span>
+        <span className={styles.deviceLabel}>{t("inspector.device")}</span>
         <select
           data-role="inspector-device-select"
           value={deviceSelectValue}
           onChange={(e) => onDeviceSelectChange(e.target.value)}
         >
-          <option value="none">Sem emulação</option>
+          <option value="none">{t("inspector.noEmulation")}</option>
           {RESPONSIVE_PRESETS.map((preset) => (
             <option key={preset.label} value={preset.label}>
               {preset.label}
             </option>
           ))}
-          <option value="custom">Personalizado</option>
+          <option value="custom">{t("inspector.custom")}</option>
         </select>
         <input
           type="number"
@@ -1787,12 +1791,12 @@ export function BrowserInspector({
           onChange={(e) => setCustomH(Number(e.target.value) || 0)}
         />
         <button data-role="inspector-apply-custom-size" onClick={applyCustomSize}>
-          Aplicar
+          {t("common.apply")}
         </button>
-        <button title="Girar (trocar largura/altura)" data-role="inspector-rotate" onClick={rotateSize}>
+        <button title={t("inspector.rotate")} data-role="inspector-rotate" onClick={rotateSize}>
           <Icon name="rotate" size={13} />
         </button>
-        <span className={styles.deviceLabel}>DPR</span>
+        <span className={styles.deviceLabel}>{t("inspector.dpr")}</span>
         <select data-role="inspector-dpr-select" value={activeEmulation?.deviceScaleFactor ?? 2} onChange={(e) => applyDpr(Number(e.target.value))}>
           <option value={1}>1x</option>
           <option value={2}>2x</option>
@@ -1800,13 +1804,13 @@ export function BrowserInspector({
         </select>
         {activeEmulation && (
           <>
-            <span className={styles.deviceLabel}>Zoom</span>
+            <span className={styles.deviceLabel}>{t("inspector.zoom")}</span>
             <select
               data-role="inspector-zoom-select"
               value={frameZoom}
               onChange={(e) => setFrameZoom(e.target.value as typeof frameZoom)}
             >
-              <option value="fit">Ajustar</option>
+              <option value="fit">{t("inspector.fit")}</option>
               <option value="1">100%</option>
               <option value="0.75">75%</option>
               <option value="0.5">50%</option>
@@ -1823,7 +1827,7 @@ export function BrowserInspector({
               disableEmulation();
             }}
           >
-            Parar emulação
+            {t("inspector.stopEmulation")}
           </button>
         )}
       </div>
@@ -1858,13 +1862,13 @@ export function BrowserInspector({
         </button>
         <div className={styles.inspectorTabsSpacer} />
         {tab === "elements" && (
-          <button title="Atualizar árvore" onClick={() => void refreshTree()}>
+          <button title={t("inspector.refreshTree")} onClick={() => void refreshTree()}>
             <Icon name="reload" size={13} />
           </button>
         )}
         {tab === "network" && (
           <button
-            title="Limpar requisições"
+            title={t("inspector.clearRequests")}
             onClick={() => {
               setNetworkEntries([]);
               setNetworkBodies({});
@@ -1875,22 +1879,22 @@ export function BrowserInspector({
           </button>
         )}
         {tab === "sources" && (
-          <button title="Atualizar lista de arquivos" onClick={() => void refreshSources()}>
+          <button title={t("inspector.refreshSources")} onClick={() => void refreshSources()}>
             <Icon name="reload" size={13} />
           </button>
         )}
         {tab === "performance" && (
-          <button title="Atualizar CPU/memória" onClick={() => void refreshProcessStats()}>
+          <button title={t("inspector.refreshCpu")} onClick={() => void refreshProcessStats()}>
             <Icon name="reload" size={13} />
           </button>
         )}
         {tab === "application" && (
-          <button title="Atualizar" onClick={() => void refreshStorage()}>
+          <button title={t("inspector.refresh")} onClick={() => void refreshStorage()}>
             <Icon name="reload" size={13} />
           </button>
         )}
         <button
-          title={deviceToolbarOpen ? "Ocultar barra de dispositivo" : "Mostrar barra de dispositivo (modo responsivo)"}
+          title={deviceToolbarOpen ? t("inspector.hideDeviceBar") : t("inspector.showDeviceBar")}
           data-role="inspector-device-toolbar-toggle"
           data-active={deviceToolbarOpen || undefined}
           onClick={onToggleDeviceToolbar}
@@ -1898,17 +1902,17 @@ export function BrowserInspector({
           <Icon name="viewportMobile" size={13} />
         </button>
         <div className={styles.dockButtons} data-role="inspector-dock-buttons">
-          <button title="Ancorar à direita" data-active={dock === "right" || undefined} onClick={() => setDock("right")}>
+          <button title={t("inspector.dockRight")} data-active={dock === "right" || undefined} onClick={() => setDock("right")}>
             <Icon name="dockRight" size={13} />
           </button>
-          <button title="Ancorar embaixo" data-active={dock === "bottom" || undefined} onClick={() => setDock("bottom")}>
+          <button title={t("inspector.dockBottom")} data-active={dock === "bottom" || undefined} onClick={() => setDock("bottom")}>
             <Icon name="dockBottom" size={13} />
           </button>
-          <button title="Ancorar à esquerda" data-active={dock === "left" || undefined} onClick={() => setDock("left")}>
+          <button title={t("inspector.dockLeft")} data-active={dock === "left" || undefined} onClick={() => setDock("left")}>
             <Icon name="dockLeft" size={13} />
           </button>
         </div>
-        <button title="Fechar inspector" onClick={onClose}>
+        <button title={t("inspector.close")} onClick={onClose}>
           <Icon name="close" size={13} />
         </button>
       </div>
@@ -1928,9 +1932,9 @@ export function BrowserInspector({
              * `onEmulationChange` disparado aqui), o retry (já comprovado que
              * restaura touch+hints de verdade — ver `attachInspector` em
              * browser-registry.ts) continua sendo o único caminho de volta. */}
-            {activeEmulation?.mobile && " Emulação mobile degradada: touch e client hints suspensos até reconectar (o viewport mobile continua ativo)."}
+            {activeEmulation?.mobile && t("inspector.mobileDegraded")}
           </span>
-          <button onClick={retryCdpAttach}>Tentar novamente</button>
+          <button onClick={retryCdpAttach}>{t("inspector.retry")}</button>
         </div>
       )}
       <div className={styles.inspectorBody}>
@@ -1938,11 +1942,11 @@ export function BrowserInspector({
           <div className={styles.elementsSplit}>
             <div className={styles.tree} data-role="inspector-tree">
               {loadingTree ? (
-                <div className={styles.inspectorEmpty}>Carregando árvore…</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.loadingTree")}</div>
               ) : tree ? (
                 <ElementsTree node={tree} selectedId={selectedId} expanded={expanded} onToggle={toggleNode} onSelect={selectNode} />
               ) : (
-                <div className={styles.inspectorEmpty}>Não foi possível ler a página.</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.pageUnreadable")}</div>
               )}
             </div>
             <div className={styles.detailsPane} data-role="inspector-details-pane">
@@ -1977,19 +1981,19 @@ export function BrowserInspector({
               </div>
               <div className={styles.subpanel} data-role="inspector-subpanel">
                 {!selectedId ? (
-                  <div className={styles.inspectorEmpty}>Selecione um elemento na árvore.</div>
+                  <div className={styles.inspectorEmpty}>{t("inspector.selectElement")}</div>
                 ) : detailsSubtab === "listeners" ? (
                   loadingListeners ? (
-                    <div className={styles.inspectorEmpty}>Carregando listeners…</div>
+                    <div className={styles.inspectorEmpty}>{t("inspector.loadingListeners")}</div>
                   ) : !elementListeners ? (
-                    <div className={styles.inspectorEmpty}>Elemento não encontrado (a árvore pode ter sido atualizada).</div>
+                    <div className={styles.inspectorEmpty}>{t("inspector.elementNotFound")}</div>
                   ) : (
                     <ListenersPanel entries={elementListeners} />
                   )
                 ) : loadingStyles ? (
-                  <div className={styles.inspectorEmpty}>Carregando estilos…</div>
+                  <div className={styles.inspectorEmpty}>{t("inspector.loadingStyles")}</div>
                 ) : !elementStyles ? (
-                  <div className={styles.inspectorEmpty}>Elemento não encontrado (a árvore pode ter sido atualizada).</div>
+                  <div className={styles.inspectorEmpty}>{t("inspector.elementNotFound")}</div>
                 ) : detailsSubtab === "styles" ? (
                   <StylesPanel es={elementStyles} />
                 ) : (
@@ -2002,7 +2006,7 @@ export function BrowserInspector({
         {tab === "console" && (
           <div className={styles.console}>
             <div className={styles.consoleLog} data-role="inspector-console-log">
-              {consoleEntries.length === 0 && <div className={styles.inspectorEmpty}>Sem mensagens ainda.</div>}
+              {consoleEntries.length === 0 && <div className={styles.inspectorEmpty}>{t("inspector.noConsoleMessages")}</div>}
               {consoleEntries.map((entry, i) => (
                 <div key={i} className={styles.consoleLine} data-role="inspector-console-line" data-level={entry.level}>
                   {entry.level === "input" ? "› " : entry.level === "result" ? "‹ " : ""}
@@ -2018,7 +2022,7 @@ export function BrowserInspector({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void runConsoleInput();
                 }}
-                placeholder="Avaliar JS na página…"
+                placeholder={t("inspector.evalPh")}
               />
               <button data-role="inspector-console-submit" onClick={() => void runConsoleInput()}>
                 <Icon name="forward" size={13} />
@@ -2038,16 +2042,16 @@ export function BrowserInspector({
             </div>
             <div className={styles.storageTableWrap}>
               {networkEntries.length === 0 ? (
-                <div className={styles.inspectorEmpty}>Nenhuma requisição registrada ainda.</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.noRequests")}</div>
               ) : (
                 <table className={styles.storageTable} data-role="inspector-network-table">
                   <thead>
                     <tr>
-                      <th>Método</th>
-                      <th>URL</th>
-                      <th>Status</th>
-                      <th>Tipo</th>
-                      <th>Tempo</th>
+                      <th>{t("inspector.method")}</th>
+                      <th>{t("inspector.url")}</th>
+                      <th>{t("inspector.status")}</th>
+                      <th>{t("inspector.type")}</th>
+                      <th>{t("inspector.time")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2104,12 +2108,12 @@ export function BrowserInspector({
                                     <div className={styles.networkDetailSection} data-role="inspector-network-body">
                                       <div className={styles.ruleSelector}>Body</div>
                                       {!body ? (
-                                        <div className={styles.ruleEmpty}>Carregando…</div>
+                                        <div className={styles.ruleEmpty}>{t("inspector.loading")}</div>
                                       ) : "error" in body ? (
                                         <div className={styles.ruleEmpty}>{body.error}</div>
                                       ) : (
                                         <pre className={styles.networkBody} data-role="inspector-network-body-content">
-                                          {body.base64Encoded ? "(binário, base64)" : body.content}
+                                          {body.base64Encoded ? t("inspector.binary") : body.content}
                                         </pre>
                                       )}
                                     </div>
@@ -2129,7 +2133,7 @@ export function BrowserInspector({
         {tab === "application" && (
           <div className={styles.application} data-role="inspector-application">
             <div className={styles.storageNav}>
-              <div className={styles.storageGroupTitle}>Local Storage</div>
+              <div className={styles.storageGroupTitle}>{t("inspector.localStorage")}</div>
               <button
                 className={styles.storageItem}
                 data-role="inspector-storage-item"
@@ -2139,7 +2143,7 @@ export function BrowserInspector({
               >
                 {localItems.length} {localItems.length === 1 ? "item" : "itens"}
               </button>
-              <div className={styles.storageGroupTitle}>Session Storage</div>
+              <div className={styles.storageGroupTitle}>{t("inspector.sessionStorage")}</div>
               <button
                 className={styles.storageItem}
                 data-role="inspector-storage-item"
@@ -2149,7 +2153,7 @@ export function BrowserInspector({
               >
                 {sessionItems.length} {sessionItems.length === 1 ? "item" : "itens"}
               </button>
-              <div className={styles.storageGroupTitle}>Cookies</div>
+              <div className={styles.storageGroupTitle}>{t("inspector.cookies")}</div>
               <button
                 className={styles.storageItem}
                 data-role="inspector-storage-item"
@@ -2162,15 +2166,15 @@ export function BrowserInspector({
             </div>
             <div className={styles.storageTableWrap}>
               {loadingStorage ? (
-                <div className={styles.inspectorEmpty}>Carregando…</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.loading")}</div>
               ) : storageArea === "cookies" ? (
                 <table className={styles.storageTable} data-role="inspector-storage-table">
                   <thead>
                     <tr>
-                      <th>Nome</th>
-                      <th>Valor</th>
-                      <th>Domínio</th>
-                      <th>Caminho</th>
+                      <th>{t("inspector.key")}</th>
+                      <th>{t("inspector.value")}</th>
+                      <th>{t("inspector.domain")}</th>
+                      <th>{t("inspector.pathCol")}</th>
                       <th>HttpOnly</th>
                       <th>Secure</th>
                     </tr>
@@ -2189,7 +2193,7 @@ export function BrowserInspector({
                     {cookieItems.length === 0 && (
                       <tr>
                         <td colSpan={6} className={styles.inspectorEmpty}>
-                          Sem cookies pra esta página.
+                          {t("inspector.noCookies")}
                         </td>
                       </tr>
                     )}
@@ -2200,7 +2204,7 @@ export function BrowserInspector({
                   <thead>
                     <tr>
                       <th>Chave</th>
-                      <th>Valor</th>
+                      <th>{t("inspector.value")}</th>
                       <th />
                     </tr>
                   </thead>
@@ -2210,7 +2214,7 @@ export function BrowserInspector({
                         <td className={styles.storageKey}>{k}</td>
                         <td>{v}</td>
                         <td>
-                          <button title="Remover" onClick={() => void deleteStorageRow(k)}>
+                          <button title={t("inspector.remove")} onClick={() => void deleteStorageRow(k)}>
                             <Icon name="trash" size={12} />
                           </button>
                         </td>
@@ -2233,9 +2237,9 @@ export function BrowserInspector({
           <div className={styles.sources} data-role="inspector-sources">
             <div className={styles.sourcesList} data-role="inspector-sources-list">
               {loadingSourceList ? (
-                <div className={styles.inspectorEmpty}>Carregando…</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.loading")}</div>
               ) : sourceList.length === 0 ? (
-                <div className={styles.inspectorEmpty}>Nenhum arquivo encontrado.</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.noFiles")}</div>
               ) : (
                 sourceList.map((s) => (
                   <button
@@ -2255,13 +2259,13 @@ export function BrowserInspector({
             </div>
             <div className={styles.sourceViewer} data-role="inspector-source-viewer">
               {!selectedSourceUrl ? (
-                <div className={styles.inspectorEmpty}>Selecione um arquivo na lista.</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.selectFile")}</div>
               ) : loadingSourceContent ? (
-                <div className={styles.inspectorEmpty}>Carregando arquivo…</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.loadingFile")}</div>
               ) : !sourceContent ? (
                 <div className={styles.inspectorEmpty}>—</div>
               ) : "error" in sourceContent ? (
-                <div className={styles.inspectorEmpty}>Não foi possível buscar o arquivo: {sourceContent.error}</div>
+                <div className={styles.inspectorEmpty}>{t("inspector.fileFetchFail", { error: sourceContent.error })}</div>
               ) : (
                 <>
                   {/* DESIGN-BACKLOG.md §2.1 (adoção de CDP, Fase 6) — o
@@ -2277,23 +2281,27 @@ export function BrowserInspector({
                       neles. */}
                   {debuggerPaused && (
                     <div className={styles.sourceBreakpointNotice} data-role="inspector-debugger-paused" data-severity="paused">
-                      Execução pausada num breakpoint.
-                      <button onClick={resumeDebugger}>Continuar</button>
+                      {t("inspector.debuggerPaused")}
+                      <button onClick={resumeDebugger}>{t("inspector.continue")}</button>
                     </div>
                   )}
                   {selectedSourceKind !== "script" && (
                     <div className={styles.sourceBreakpointNotice} data-role="inspector-breakpoint-notice">
-                      Breakpoints só em arquivos JS — {selectedSourceKind === "document" ? "isto é o documento principal" : "isto é uma folha de estilo"},
-                      somente leitura.
+                      {t("inspector.breakpointsHint", {
+                        hint: selectedSourceKind === "document" ? t("inspector.mainDocHint") : t("inspector.stylesheetHint"),
+                      })}{" "}
+                      {t("inspector.readOnly")}
                     </div>
                   )}
                   {sourceContent.truncated && (
                     <div className={styles.sourceTruncatedNotice} data-role="inspector-source-truncated">
-                      Arquivo grande demais pra mostrar por completo — exibindo os primeiros {sourceContent.content.length.toLocaleString("pt-BR")} de{" "}
-                      {sourceContent.totalChars.toLocaleString("pt-BR")} caracteres.
+                      {t("inspector.sourceTruncated", {
+                        shown: sourceContent.content.length.toLocaleString(),
+                        total: sourceContent.totalChars.toLocaleString(),
+                      })}
                     </div>
                   )}
-                  <Suspense fallback={<div className={styles.inspectorEmpty}>Carregando editor…</div>}>
+                  <Suspense fallback={<div className={styles.inspectorEmpty}>{t("inspector.loadingEditor")}</div>}>
                     <CodeEditor
                       key={selectedSourceUrl}
                       value={sourceContent.content}
@@ -2324,43 +2332,48 @@ export function BrowserInspector({
             </div>
             <div className={styles.perfGrid} data-role="inspector-perf-grid">
               <div className={styles.perfStat} data-role="inspector-perf-fps">
-                <div className={styles.perfStatLabel}>FPS ao vivo</div>
+                <div className={styles.perfStatLabel}>{t("inspector.liveFps")}</div>
                 <div className={styles.perfStatValue}>{liveFps ?? "—"}</div>
               </div>
               <div className={styles.perfStat}>
-                <div className={styles.perfStatLabel}>Frames capturados</div>
+                <div className={styles.perfStatLabel}>{t("inspector.framesCaptured")}</div>
                 <div className={styles.perfStatValue}>{totalFrames}</div>
               </div>
               <div className={styles.perfStat} data-role="inspector-perf-cpu">
-                <div className={styles.perfStatLabel}>CPU do processo</div>
+                <div className={styles.perfStatLabel}>{t("inspector.processCpu")}</div>
                 <div className={styles.perfStatValue}>
                   {loadingProcessStats ? "…" : !processStats ? "—" : "error" in processStats ? "—" : `${processStats.cpuPercent}%`}
                 </div>
               </div>
               <div className={styles.perfStat} data-role="inspector-perf-memory">
-                <div className={styles.perfStatLabel}>Memória do processo</div>
+                <div className={styles.perfStatLabel}>{t("inspector.processMemory")}</div>
                 <div className={styles.perfStatValue}>
                   {loadingProcessStats ? "…" : !processStats ? "—" : "error" in processStats ? "—" : `${processStats.memoryMB} MB`}
                 </div>
               </div>
               <div className={styles.perfStat}>
-                <div className={styles.perfStatLabel}>Console</div>
+                <div className={styles.perfStatLabel}>{t("inspector.consoleLabel")}</div>
                 <div className={styles.perfStatValue}>
-                  {consoleEntries.filter((e) => e.level === "error").length} erro(s), {consoleEntries.filter((e) => e.level === "warning").length} aviso(s)
+                  {t("inspector.perfConsoleSummary", {
+                    errors: consoleEntries.filter((e) => e.level === "error").length,
+                    warnings: consoleEntries.filter((e) => e.level === "warning").length,
+                  })}
                 </div>
               </div>
               <div className={styles.perfStat}>
-                <div className={styles.perfStatLabel}>Network</div>
+                <div className={styles.perfStatLabel}>{t("inspector.networkLabel")}</div>
                 <div className={styles.perfStatValue}>
-                  {perfNetworkSummary ? `${perfNetworkSummary.total} requisição(ões), ${perfNetworkSummary.failed} falha(s)` : "—"}
+                  {perfNetworkSummary
+                    ? t("inspector.networkSummary", { total: perfNetworkSummary.total, failed: perfNetworkSummary.failed })
+                    : "—"}
                 </div>
               </div>
             </div>
             <div className={styles.perfTimeline} data-role="inspector-perf-timeline">
-              <div className={styles.perfTimelineLabel}>FPS nos últimos {fpsTimeline.length}s</div>
+              <div className={styles.perfTimelineLabel}>{t("inspector.fpsTimeline", { seconds: fpsTimeline.length })}</div>
               <div className={styles.perfTimelineBars}>
                 {fpsTimeline.length === 0 ? (
-                  <div className={styles.inspectorEmpty}>Aguardando frames…</div>
+                  <div className={styles.inspectorEmpty}>{t("inspector.waitingFrames")}</div>
                 ) : (
                   fpsTimeline.map((v, i) => (
                     <div key={i} className={styles.perfBar} data-role="inspector-perf-bar" data-fps={v} style={{ height: `${Math.min(100, (v / 60) * 100)}%` }} />
@@ -2369,30 +2382,34 @@ export function BrowserInspector({
               </div>
             </div>
             <div className={styles.perfProfiler} data-role="inspector-perf-profiler">
-              <div className={styles.perfTimelineLabel}>Profiling de CPU</div>
+              <div className={styles.perfTimelineLabel}>{t("inspector.cpuProfiling")}</div>
               <button
                 data-role="inspector-perf-profile-toggle"
                 data-active={profiling || undefined}
                 onClick={() => void (profiling ? stopProfiling() : startProfiling())}
               >
-                {profiling ? "Parar profiling" : "Iniciar profiling"}
+                {profiling ? t("inspector.stopProfiling") : t("inspector.startProfiling")}
               </button>
-              {profiling && <div className={styles.inspectorEmpty}>Coletando amostras…</div>}
+              {profiling && <div className={styles.inspectorEmpty}>{t("inspector.collectingSamples")}</div>}
               {!profiling && profileResult && "error" in profileResult && <div className={styles.ruleEmpty}>{profileResult.error}</div>}
               {!profiling && profileResult && !("error" in profileResult) && (
                 <div data-role="inspector-perf-profile-result">
                   <div className={styles.perfProfileSummary}>
                     {profileResult.hotspots.length === 0
-                      ? `Nenhuma amostra coletada em ${Math.round(profileResult.durationMs)}ms (função inativa nesse intervalo).`
-                      : `${profileResult.totalHitCount} amostra(s) em ${Math.round(profileResult.durationMs)}ms — top ${profileResult.hotspots.length} função(ões) por tempo próprio:`}
+                      ? t("inspector.profileEmpty", { ms: Math.round(profileResult.durationMs) })
+                      : t("inspector.profileSummary", {
+                          hits: profileResult.totalHitCount,
+                          ms: Math.round(profileResult.durationMs),
+                          n: profileResult.hotspots.length,
+                        })}
                   </div>
                   {profileResult.hotspots.length > 0 && (
                     <table className={styles.storageTable} data-role="inspector-perf-profile-table">
                       <thead>
                         <tr>
-                          <th>Função</th>
-                          <th>Local</th>
-                          <th>Amostras</th>
+                          <th>{t("inspector.function")}</th>
+                          <th>{t("inspector.location")}</th>
+                          <th>{t("inspector.samples")}</th>
                           <th>%</th>
                         </tr>
                       </thead>

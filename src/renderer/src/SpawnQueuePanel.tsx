@@ -1,4 +1,5 @@
 import type { SpawnQueueEntry } from "../../preload/index";
+import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
 
 /**
@@ -22,14 +23,14 @@ export function SpawnQueuePanel({
     <div className="spawn-queue-panel">
       <div className="spawn-queue-heading">
         <Icon name="clock" size={13} />
-        fila de spawn — {queue.length} aguardando
+        {t("queue.heading", { count: queue.length })}
       </div>
       <ul className="spawn-queue-list">
         {queue.map((entry, i) => (
           <li key={entry.id} className="spawn-queue-item">
             <span className="spawn-queue-position">{i + 1}</span>
             <span className="spawn-queue-provider">{entry.provider}</span>
-            <span className="spawn-queue-requester">de {describeRequester(entry.requesterId)}</span>
+            <span className="spawn-queue-requester">{t("queue.from", { who: describeRequester(entry.requesterId) })}</span>
             {entry.reason && <span className="spawn-queue-reason">{entry.reason}</span>}
           </li>
         ))}

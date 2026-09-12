@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "../../shared/i18n";
 import { CardTag } from "./CardTag";
 import { Icon } from "./icons";
 import { worldRectToScreen, type Rect } from "./board-model";
@@ -450,7 +451,7 @@ export function CardFrame({
       <div className="card-clip" onPointerDown={chromeless ? onHeaderPointerDown : undefined}>
         <div className="card-head" onPointerDown={chromeless ? undefined : onHeaderPointerDown}>
           <div className="card-head-identity">
-            <span className="card-kind-pill" title={`Tipo: ${kind}`} aria-label={`Tipo: ${kind}`}>
+            <span className="card-kind-pill" title={t("card.type", { kind })} aria-label={t("card.type", { kind })}>
               <span className="card-kind-dot" aria-hidden="true" />
               <span>{kind}</span>
             </span>
@@ -466,7 +467,7 @@ export function CardFrame({
             <button
               type="button"
               className="card-focus-btn"
-              title="Focar nesse card (ajustar zoom pra ele)"
+              title={t("card.focus")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={onFocus}
             >

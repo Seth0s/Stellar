@@ -2,6 +2,7 @@ import type { IconName } from "../icons";
 import type { Card, ChatMessage, ChatProvider } from "../card-types";
 import { DEFAULT_CHAT_MODEL } from "../ChatCard";
 import { CARD_KIND_LABEL } from "../../../shared/card-identity";
+import { t, type MessageKey } from "../../../shared/i18n";
 
 /**
  * DESIGN-BACKLOG.md item "4 (deferida)" — adding one card kind used to
@@ -62,22 +63,20 @@ export const RAIL_CREATE_ORDER: Exclude<Card["kind"], "terminal" | "stroke" | "m
   "task",
 ];
 
-export const RAIL_CREATE_TITLE: Record<(typeof RAIL_CREATE_ORDER)[number], string> = {
-  // Pedido ao vivo (2026-08-29, item 57 ponto 11) — "Nova pasta de
-  // arquivos" como legenda do botão do Rail lia estranho/impreciso;
-  // "Explorador" é o termo que o próprio VSCode usa pro mesmo conceito
-  // (árvore de arquivos do projeto). Só a legenda deste botão — o
-  // rótulo do card em si (CARD_LABEL, acima) continua "arquivos" (toast
-  // de criação, popover de localizar card, etc. — não era o que foi
-  // reportado).
-  files: "Explorador",
-  changes: "Novo card de changes",
-  sticky: "Nova nota adesiva",
-  browser: "Novo navegador",
-  chat: "Novo chatbox",
-  "remote-window": "Controlar janela externa",
-  task: "Nova fila de tasks",
+const RAIL_CREATE_TITLE_KEYS: Record<(typeof RAIL_CREATE_ORDER)[number], MessageKey> = {
+  files: "rail.create.files",
+  changes: "rail.create.changes",
+  sticky: "rail.create.sticky",
+  browser: "rail.create.browser",
+  chat: "rail.create.chat",
+  "remote-window": "rail.create.remote-window",
+  task: "rail.create.task",
 };
+
+/** Button `title` for one-click Rail card creation — localized via i18n. */
+export function railCreateTitle(kind: (typeof RAIL_CREATE_ORDER)[number]): string {
+  return t(RAIL_CREATE_TITLE_KEYS[kind]);
+}
 
 /** Throws with a useful message if ever actually reached at runtime — its
  * real job is the `never` parameter type, which makes every `default:`

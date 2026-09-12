@@ -1,4 +1,5 @@
 import { memo, useEffect, useState } from "react";
+import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
@@ -105,8 +106,8 @@ function ChangesCardInner({
       footerContent={root}
     >
       <div className={styles.changesCardBody}>
-        {!status && <div className={styles.changesMsg}>carregando…</div>}
-        {status && !status.repo && <div className={styles.changesMsg}>não é um repositório git</div>}
+        {!status && <div className={styles.changesMsg}>{t("common.loading")}</div>}
+        {status && !status.repo && <div className={styles.changesMsg}>{t("changes.notGit")}</div>}
         {status && status.repo && (
           <>
             <div className={styles.changesHeader}>
@@ -115,10 +116,10 @@ function ChangesCardInner({
                 <span className={styles.changesIns}>+{status.insertions}</span>{" "}
                 <span className={styles.changesDel}>−{status.deletions}</span>
               </span>
-              <button onClick={refresh}>atualizar</button>
+              <button onClick={refresh}>{t("changes.refresh")}</button>
             </div>
             <div className={styles.changesList}>
-              {status.entries.length === 0 && <div className={styles.changesMsg}>sem alterações</div>}
+              {status.entries.length === 0 && <div className={styles.changesMsg}>{t("changes.clean")}</div>}
               {status.entries.map((entry) => (
                 <div key={entry.path} className={styles.changesEntry}>
                   <span className={styles.changesEntryStatus}>{entry.status}</span>

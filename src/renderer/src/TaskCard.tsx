@@ -6,7 +6,6 @@ import type { Rect } from "./board-model";
 import type { TaskBoardItem } from "../../preload/index";
 import {
   COLUMN_ORDER,
-  COLUMN_TITLE,
   COLUMN_TO_STATUS,
   groupTasksByColumn,
   originBadge,
@@ -43,6 +42,7 @@ import {
   type SprintView,
 } from "./task-board-model";
 import styles from "./TaskCard.module.css";
+import { t } from "../../shared/i18n";
 
 /** RODADA 3 (contrato de partes §2.3, item 1) — "a diferença visual mais
  * gritante das duas telas": cada cabeçalho de coluna tem cor própria no
@@ -57,16 +57,21 @@ const COLUMN_COLOR: Record<TaskColumn, string> = {
   failed: "var(--danger)",
 };
 
-/** RODADA 3 (contrato §2.3, item 8) — "o protótipo nunca mostra coluna
- * vazia"; o `—` genérico da rodada 1/2 foi substituído por um vazio
- * DECLARADO, contextual por coluna (nunca o mesmo texto reciclado nas
- * quatro). */
-const COLUMN_EMPTY_TEXT: Record<TaskColumn, string> = {
-  todo: "nada esperando",
-  doing: "nada em andamento",
-  done: "nada concluído ainda",
-  failed: "nenhuma falha",
-};
+/** RODADA 3 (contrato §2.3, item 8) — empty column messages via i18n. */
+const COLUMN_EMPTY_KEY = {
+  todo: "task.empty.todo",
+  doing: "task.empty.doing",
+  done: "task.empty.done",
+  failed: "task.empty.failed",
+} as const satisfies Record<TaskColumn, "task.empty.todo" | "task.empty.doing" | "task.empty.done" | "task.empty.failed">;
+
+/** Column header keys — JSX only; `describeHumanMove` keeps hardcoded COLUMN_TITLE. */
+const COLUMN_HEADER_KEY = {
+  todo: "task.column.todo",
+  doing: "task.column.doing",
+  done: "task.column.done",
+  failed: "task.column.failed",
+} as const satisfies Record<TaskColumn, "task.column.todo" | "task.column.doing" | "task.column.done" | "task.column.failed">;
 
 /** DESIGN-BACKLOG.md §2.1, decisão 7 / peça 5 — rodapé de escopo. Vive no
  * `footerContent` do `CardFrame`. Contagem "N em outros boards" é texto
@@ -95,12 +100,12 @@ function TaskScopeFooter({
   return (
     <span data-part="board-scope" className={styles.scopeFooter}>
       <span className={styles.scopeOwn}>
-        board {ownName} · {scope.ownCount} tasks
+        {t("task.scope.board", { name: ownName })} · {t("task.scope.tasks", { n: scope.ownCount })}
         {showBoardTotal ? ` · total ${scope.boardTotal}` : ""}
       </span>
       {scope.otherTotal > 0 && (
         <span className={styles.scopeRight} title={otherBoardsTooltip}>
-          {scope.otherTotal} em outros boards
+          {t("task.scope.others", { n: scope.otherTotal })}
         </span>
       )}
     </span>
@@ -279,8 +284,8 @@ function TaskItem({
           mostra as duas juntas. */}
       {stage && !proposeVisible && (
         <div className={styles.stageTrail} data-part="stage-trail">
-          <span className={`${styles.stageSeg} ${stage === "implementar" ? styles.stageSegActive : ""}`}>implementar</span>
-          <span className={`${styles.stageSeg} ${stage === "review" ? styles.stageSegActive : ""}`}>review</span>
+          <span className={`${styles.stageSeg} ${stage === "implementar" ? styles.stageSegActive : ""}`}>{t("task.stage.implement")}</span>
+          <span className={`${styles.stageSeg} ${stage === "review" ? styles.stageSegActive : ""}`}>{t("task.stage.review")}</span>
         </div>
       )}
       {trail && (
@@ -357,12 +362,12 @@ function CreateTaskForm({ boardId, onCreated }: { boardId: string; onCreated: (t
         className={styles.createTaskInput}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
-        placeholder="nova task…"
+        placeholder={t("task.createPlaceholder")}
         disabled={busy}
-        aria-label="Criar task"
+        aria-label={t("task.create")}
       />
       <button type="submit" data-no-drag data-part="create-task-submit" className={styles.createTaskSubmit} disabled={busy || !prompt.trim()}>
-        criar
+        {t("common.create").toLowerCase()}
       </button>
     </form>
   );
@@ -380,12 +385,12 @@ function VerdictsByProviderChart({ data }: { data: { provider: string; approved:
   const height = Math.max(ROW_H, data.length * ROW_H) + PAD * 2;
   return (
     <div className={styles.chartBox} data-part="chart-verdicts">
-      <div className={styles.chartTitle}>reprovações por provider</div>
+      <div className={styles.chartTitle}>{t("task.charts.rejections")}</div>
       {data.length === 0 ? (
-        <div className={styles.chartEmpty}>sem histórico ainda — nenhuma participação com veredito neste board</div>
+        <div className={styles.chartEmpty}>{t("task.charts.rejectionsEmpty")}</div>
       ) : (
         <>
-          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label="Reprovações por provider">
+          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label={t("task.charts.rejectionsAria")}>
             {data.map((d, i) => {
               const y = PAD + i * ROW_H;
               const approvedW = (d.approved / maxTotal) * barAreaW;
@@ -431,12 +436,12 @@ function RoundsToApproveChart({ data }: { data: { taskId: string; label: string;
   const axisMid = maxRounds / 2;
   return (
     <div className={styles.chartBox} data-part="chart-rounds">
-      <div className={styles.chartTitle}>rodadas até aprovar</div>
+      <div className={styles.chartTitle}>{t("task.charts.rounds")}</div>
       {data.length === 0 ? (
-        <div className={styles.chartEmpty}>sem histórico ainda — nenhuma task aprovada com rodadas neste board</div>
+        <div className={styles.chartEmpty}>{t("task.charts.roundsEmpty")}</div>
       ) : (
         <>
-          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label="Rodadas até aprovar">
+          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label={t("task.charts.roundsAria")}>
             {data.map((d, i) => {
               const y = PAD + i * ROW_H;
               const w = (d.rounds / maxRounds) * barAreaW;
@@ -482,14 +487,14 @@ function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: nu
   const height = Math.max(ROW_H, data.length * ROW_H) + PAD * 2;
   return (
     <div className={styles.chartBox} data-part="chart-cycle">
-      <div className={styles.chartTitle}>tempo em cada estado (horas)</div>
+      <div className={styles.chartTitle}>{t("task.charts.cycle")}</div>
       {loading ? (
-        <div className={styles.chartEmpty}>carregando…</div>
+        <div className={styles.chartEmpty}>{t("common.loading")}</div>
       ) : data.length === 0 ? (
-        <div className={styles.chartEmpty}>sem histórico ainda — nenhuma task com transição gravada neste board</div>
+        <div className={styles.chartEmpty}>{t("task.charts.cycleEmpty")}</div>
       ) : (
         <>
-          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label="Tempo em fila e em execução por task">
+          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label={t("task.charts.cycle")}>
             {data.map((d, i) => {
               const y = PAD + i * ROW_H;
               const queuedW = (d.queuedHours / maxTotal) * barAreaW;
@@ -714,13 +719,13 @@ function SprintsPanel({
 
   return (
     <div className={styles.sprintsPanel} data-part="sprints-panel">
-      <div className={styles.sprintsTitle}>sprints — ver, renomear, fechar ou excluir</div>
+      <div className={styles.sprintsTitle}>{t("task.sprintsTitle")}</div>
       {sprints === null ? (
-        <div className={styles.chartEmpty}>carregando…</div>
+        <div className={styles.chartEmpty}>{t("common.loading")}</div>
       ) : sprints.length === 0 ? (
-        <div className={styles.chartEmpty}>nenhum sprint ainda — feche o atual pra abrir o histórico</div>
+        <div className={styles.chartEmpty}>{t("task.sprintsEmpty")}</div>
       ) : (
-        <ul className={styles.sprintsList} role="listbox" aria-label="Sprints">
+        <ul className={styles.sprintsList} role="listbox" aria-label={t("task.sprints")}>
           {sprints.map((s) => {
             const open = s.closedAt === null;
             const selected = selectedId === s.id || (selectedId === null && open);
@@ -747,8 +752,8 @@ function SprintsPanel({
                         className={styles.sprintRenameInput}
                         value={editDraft}
                         autoFocus
-                        aria-label="Nome do sprint"
-                        placeholder={`Sprint ${s.number}`}
+                        aria-label={t("task.sprintName")}
+                        placeholder={t("task.sprintDefault", { number: s.number })}
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => setEditDraft(e.target.value)}
                         onKeyDown={(e) => {
@@ -806,7 +811,7 @@ function SprintsPanel({
                     data-part="sprint-rename"
                     data-no-drag
                     className={styles.sprintActionBtn}
-                    title="Renomear"
+                    title={t("common.rename")}
                     onClick={(e) => {
                       e.stopPropagation();
                       setEditingId(s.id);
@@ -823,7 +828,7 @@ function SprintsPanel({
                         data-part="sprint-close-action"
                         data-no-drag
                         className={`${styles.sprintActionBtn} ${styles.sprintActionQuiet}`}
-                        title="Fechar sprint e abrir o próximo"
+                        title={t("task.sprintClose")}
                         disabled={closingSprint || viewingFrozen || busy}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -838,7 +843,7 @@ function SprintsPanel({
                         data-part="sprint-delete-action"
                         data-no-drag
                         className={`${styles.sprintActionBtn} ${styles.sprintActionDanger}`}
-                        title="Excluir sprint ativo — tasks voltam ao anterior"
+                        title={t("task.sprintDelete")}
                         disabled={busy || viewingFrozen}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -865,8 +870,8 @@ function SprintsPanel({
         <div className={styles.sprintConfirm} data-part="sprint-confirm" role="alertdialog">
           <p>
             {pendingAction.kind === "close"
-              ? `Fechar ${active ? sprintLabel(active) : "o sprint atual"}? Congela o histórico e abre o próximo.`
-              : `Excluir ${active ? sprintLabel(active) : "o sprint atual"}? As tasks voltam ao sprint anterior (que reabre).`}
+              ? t("task.sprintCloseConfirm", { label: active ? sprintLabel(active) : t("task.sprintCurrent") })
+              : t("task.sprintDeleteConfirm", { label: active ? sprintLabel(active) : t("task.sprintCurrent") })}
           </p>
           <div className={styles.sprintConfirmActions}>
             <button
@@ -876,7 +881,7 @@ function SprintsPanel({
               disabled={busy}
               onClick={() => setPendingAction(null)}
             >
-              cancelar
+              {t("common.cancel").toLowerCase()}
             </button>
             <button
               type="button"
@@ -886,7 +891,7 @@ function SprintsPanel({
               disabled={busy || closingSprint}
               onClick={() => void confirmPending()}
             >
-              {pendingAction.kind === "close" ? "fechar agora" : "excluir agora"}
+              {pendingAction.kind === "close" ? t("task.sprintCloseNow") : t("task.sprintDeleteNow")}
             </button>
           </div>
         </div>
@@ -1105,13 +1110,13 @@ function TaskCardInner({
   useEffect(() => {
     const prev = prevClaimSnapRef.current;
     const next = new Map<string, { cardId: string | null; status: string }>();
-    for (const t of tasks) {
-      const snap = { cardId: t.cardId, status: t.status };
-      next.set(t.id, snap);
-      if (!isHumanCreatedTask(t.firstActor)) continue;
-      if (didHumanTaskGetClaimed(prev.get(t.id), snap)) {
+    for (const taskItem of tasks) {
+      const snap = { cardId: taskItem.cardId, status: taskItem.status };
+      next.set(taskItem.id, snap);
+      if (!isHumanCreatedTask(taskItem.firstActor)) continue;
+      if (didHumanTaskGetClaimed(prev.get(taskItem.id), snap)) {
         try {
-          new Notification("Task pega", { body: t.prompt?.slice(0, 120) || shortTaskId(t.id), silent: false });
+          new Notification(t("task.dragGhost"), { body: taskItem.prompt?.slice(0, 120) || shortTaskId(taskItem.id), silent: false });
         } catch {
           // Notification API indisponível/negada — nunca deve quebrar o quadro.
         }
@@ -1307,24 +1312,21 @@ function TaskCardInner({
               data-no-drag
               className={`${styles.chartsToggleBtn} ${sprintsOpen ? styles.chartsToggleActive : ""}`}
               aria-pressed={sprintsOpen}
-              title="Gerenciar sprints — ver histórico, renomear, fechar ou excluir"
+              title={t("task.sprintsManage")}
               onClick={() => setSprintsOpen((v) => !v)}
             >
-              <span>{activeSprintLabel ?? "Sprints"}</span>
+              <span>{activeSprintLabel ?? t("task.sprints")}</span>
             </button>
             <button
               type="button"
               data-part="charts-toggle"
               className={`${styles.chartsToggleBtn} ${chartsOpen ? styles.chartsToggleActive : ""}`}
               aria-pressed={chartsOpen}
-              title="Gráficos"
+              title={t("task.charts")}
               onClick={() => setChartsOpen((v) => !v)}
             >
               <Icon name="charts" size={12} />
-              {/* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 9) — o protótipo
-                  rotula este botão ("Gráficos"), a versão anterior só
-                  tinha o ícone. */}
-              <span>Gráficos</span>
+              <span>{t("task.charts")}</span>
             </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />
@@ -1354,10 +1356,10 @@ function TaskCardInner({
         {COLUMN_ORDER.map((col) => (
           <div key={col} className={styles.column}>
             <div className={styles.columnHeader} data-part="column-header" style={{ color: COLUMN_COLOR[col] }}>
-              <span>{COLUMN_TITLE[col]}</span>
+              <span>{t(COLUMN_HEADER_KEY[col])}</span>
               {col === "doing" ? (
                 <span className={styles.wipBadge} data-part="wip-badge">
-                  WIP {groups.doing.length}/{cap}
+                  {t("task.wip", { current: groups.doing.length, cap })}
                 </span>
               ) : (
                 <span className={styles.columnCount} data-part="column-count">
@@ -1385,7 +1387,7 @@ function TaskCardInner({
                   <>
                     {visible.length === 0 && !overHere && (
                       <div className={styles.empty} data-part="column-empty">
-                        {COLUMN_EMPTY_TEXT[col]}
+                        {t(COLUMN_EMPTY_KEY[col])}
                       </div>
                     )}
                     {visible.map((task, i) => (

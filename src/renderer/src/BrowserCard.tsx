@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
@@ -1016,7 +1017,7 @@ function BrowserCardInner({
               <button
                 className={styles.browserCardOwner}
                 data-role="browser-owner"
-                title={`aberto por card #${ownerCardId} — clique pra ir até lá`}
+                title={t("browser.openedByCardTitle", { id: ownerCardId })}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={onFocusOwner}
               >
@@ -1028,7 +1029,7 @@ function BrowserCardInner({
                 className={styles.browserCardConsoleBadge}
                 data-role="browser-console-badge"
                 data-severity={consoleCounts.error > 0 ? "error" : "warning"}
-                title={`${consoleCounts.error} erro(s), ${consoleCounts.warning} aviso(s) no console`}
+                title={t("browser.consoleSummary", { errors: consoleCounts.error, warnings: consoleCounts.warning })}
               >
                 {consoleBadgeCount}
               </span>
@@ -1046,7 +1047,7 @@ function BrowserCardInner({
               <button
                 className={styles.browserCardEmulationBadge}
                 data-role="browser-emulation-badge"
-                title={`Emulação de dispositivo ativa (${emulatedFrame.width}×${emulatedFrame.height}) — clique para abrir o inspector`}
+                title={t("browser.emulationBadge", { w: emulatedFrame.width, h: emulatedFrame.height })}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => {
                   if (!inspectorOpen) {
@@ -1065,7 +1066,7 @@ function BrowserCardInner({
               className={styles.browserCardFavoriteBtn}
               data-role="browser-favorite-btn"
               data-active={isFavorited}
-              title={isFavorited ? "Remover dos favoritos" : "Favoritar esta página"}
+              title={isFavorited ? t("browser.removeFavorite") : t("browser.favoritePage")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setFavMenuOpen((v) => !v)}
             >
@@ -1076,7 +1077,7 @@ function BrowserCardInner({
               className={styles.browserCardDesignBtn}
               data-role="browser-design-mode-btn"
               data-active={designMode || undefined}
-              title={designMode ? "Cancelar modo design" : "Modo design — selecionar elemento pra enviar a um agente"}
+              title={designMode ? t("browser.designModeOn") : t("browser.designModeOff")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={toggleDesignMode}
             >
@@ -1084,7 +1085,7 @@ function BrowserCardInner({
             </button>
             <button
               ref={menuBtnRef}
-              title="Mais opções"
+              title={t("browser.more")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setMenuOpen((v) => !v)}
             >
@@ -1147,12 +1148,12 @@ function BrowserCardInner({
             }}
           >
             <Icon name="link" size={14} />
-            Aberto por card #{ownerCardId}
+            {t("browser.openedByCard", { id: ownerCardId })}
           </button>
         )}
         {consoleBadgeCount > 0 && (
           <div className={styles.browserCardMenuInfo} data-severity={consoleCounts.error > 0 ? "error" : "warning"}>
-            {consoleCounts.error} erro(s), {consoleCounts.warning} aviso(s) no console
+            {t("browser.consoleSummary", { errors: consoleCounts.error, warnings: consoleCounts.warning })}
           </div>
         )}
         {emulatedFrame && (
@@ -1168,7 +1169,7 @@ function BrowserCardInner({
             }}
           >
             <Icon name="viewportMobile" size={14} />
-            Emulação ativa ({emulatedFrame.width}×{emulatedFrame.height})
+            {t("browser.emulationActive", { w: emulatedFrame.width, h: emulatedFrame.height })}
           </button>
         )}
         {(ownerCardId || consoleBadgeCount > 0 || emulatedFrame) && <div className={styles.browserCardFavDivider} />}
@@ -1180,7 +1181,7 @@ function BrowserCardInner({
           }}
         >
           <Icon name="inspector" size={14} />
-          {inspectorOpen ? "Fechar inspector" : "Abrir inspector"}
+          {inspectorOpen ? t("browser.closeInspector") : t("browser.openInspector")}
         </button>
         <button
           onClick={() => {
@@ -1199,7 +1200,7 @@ function BrowserCardInner({
           }}
         >
           <Icon name="devTools" size={14} />
-          Abrir DevTools (janela separada)
+          {t("browser.openDevTools")}
         </button>
         {VIEWPORT_PRESETS.map((preset) => (
           <button
@@ -1217,7 +1218,7 @@ function BrowserCardInner({
       <Popover anchorRef={favBtnRef} open={favMenuOpen} onClose={() => setFavMenuOpen(false)} className={`${styles.browserCardMenu} ${styles.browserCardFavoritesMenu}`} dataRole="browser-favorites-menu">
         <button onClick={toggleFavorite}>
           <Icon name="favorite" size={14} />
-          {isFavorited ? "Remover dos favoritos" : "Favoritar esta página"}
+          {isFavorited ? t("browser.removeFavorite") : t("browser.favoritePage")}
         </button>
         {favorites.length > 0 && (
           <>
@@ -1228,7 +1229,7 @@ function BrowserCardInner({
                   <span className={styles.browserCardFavTitle} title={fav.url}>
                     {fav.title || fav.url}
                   </span>
-                  <button className={styles.browserCardFavRemove} data-role="browser-fav-remove" title="Remover" onClick={(e) => void removeFavoriteRow(fav.url, e)}>
+                  <button className={styles.browserCardFavRemove} data-role="browser-fav-remove" title={t("browser.removeFav")} onClick={(e) => void removeFavoriteRow(fav.url, e)}>
                     <Icon name="close" size={11} />
                   </button>
                 </div>
@@ -1255,7 +1256,7 @@ function BrowserCardInner({
             </div>
             <div className={styles.browserCardFavDivider} />
             {sendTargets.length === 0 ? (
-              <div className={styles.browserCardMenuInfo}>Nenhum terminal no board pra enviar.</div>
+              <div className={styles.browserCardMenuInfo}>{t("browser.noTerminalTarget")}</div>
             ) : (
               sendTargets.map((t) => (
                 <button key={t.id} onClick={() => sendDesignPickTo(t.id)}>

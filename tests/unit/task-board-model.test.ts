@@ -258,6 +258,10 @@ describe("waitingOnDep", () => {
 });
 
 describe("describeWaitingOn", () => {
+  beforeEach(() => {
+    setLocale("pt-BR");
+  });
+
   it("dependência com status conhecido: pílula simples 'espera <id>'", () => {
     expect(describeWaitingOn({ depId: "a54269c1-dead-beef", status: "running" })).toBe("espera a54269c1");
   });
@@ -555,6 +559,10 @@ describe("isTaskCardLive", () => {
 
 // Delta 5 — pílulas de meta coloridas.
 describe("computeMetaPills", () => {
+  beforeEach(() => {
+    setLocale("pt-BR");
+  });
+
   it("sem dependência pendente e sem divergência de prioridade: nenhuma pílula", () => {
     expect(computeMetaPills(null, null, null)).toEqual([]);
     expect(computeMetaPills(null, 5, 5)).toEqual([]); // order === suggestedOrder: sem divergência
@@ -594,6 +602,10 @@ describe("computeMetaPills", () => {
 });
 
 describe("computeVerdictsByProvider / computeRoundsToApprove", () => {
+  beforeEach(() => {
+    setLocale("pt-BR");
+  });
+
   it("agrupa aprovado/reprovado por provider; null não conta", () => {
     const stats = computeVerdictsByProvider([
       { verdict: "aprovado", provider: "claude", at: 1 },
@@ -677,6 +689,10 @@ describe("describeTransitionTrail", () => {
 
 // Delta 8 — marca de movimento humano.
 describe("describeHumanMoveNotice", () => {
+  beforeEach(() => {
+    setLocale("pt-BR");
+  });
+
   it("só aparece quando o ÚLTIMO ator foi humano E o card vinculado ainda está vivo — as duas condições", () => {
     expect(describeHumanMoveNotice("human", true, "288")).toBe("Movida à mão com o card 288 ainda rodando. O card foi avisado.");
   });
@@ -704,6 +720,10 @@ describe("describeHumanMoveNotice", () => {
 
 // DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal legível no card Fila.
 describe("describeStatusDivergence", () => {
+  beforeEach(() => {
+    setLocale("pt-BR");
+  });
+
   it("formata app e agente com o título da coluna, nunca o status cru", () => {
     expect(describeStatusDivergence("failed", "app")).toBe('o app declarou "falhou" — status humano mantido');
     expect(describeStatusDivergence("done", "agent")).toBe('o agente declarou "concluído" — status humano mantido');
@@ -718,6 +738,10 @@ describe("describeStatusDivergence", () => {
 });
 
 describe("sprint history helpers (fechamento explícito)", () => {
+  beforeEach(() => {
+    setLocale("pt-BR");
+  });
+
   it("shortSprintId corta em 8 chars", () => {
     expect(shortSprintId("abcdef0123456789")).toBe("abcdef01");
   });

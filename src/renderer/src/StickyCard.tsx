@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef } from "react";
+import { t, type MessageKey } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
@@ -37,11 +38,11 @@ const STICKY_ACCENT: Record<string, string> = {
  * só um tom: o ícone do header e o placeholder do label mudam junto com
  * a cor, sem migração de schema nenhuma (StickyCardData continua só
  * `content`+`color`). */
-const STICKY_KIND: Record<string, { icon: IconName; label: string }> = {
-  yellow: { icon: "pin", label: "nota" },
-  green: { icon: "checkCircle", label: "feito" },
-  blue: { icon: "wrench", label: "em andamento" },
-  pink: { icon: "bug", label: "bug" },
+const STICKY_KIND: Record<string, { icon: IconName; labelKey: MessageKey }> = {
+  yellow: { icon: "pin", labelKey: "sticky.kind.note" },
+  green: { icon: "checkCircle", labelKey: "sticky.kind.done" },
+  blue: { icon: "wrench", labelKey: "sticky.kind.progress" },
+  pink: { icon: "bug", labelKey: "sticky.kind.bug" },
 };
 
 /** GFM task list item — `- [ ] texto` / `- [x] texto`, mesmo o `marked`
@@ -251,7 +252,7 @@ function StickyCardInner({
                   key={c}
                   className={`swatch${c === color ? " active" : ""}`}
                   style={{ background: STICKY_ACCENT[c] }}
-                  title={STICKY_KIND[c]?.label}
+                  title={STICKY_KIND[c] ? t(STICKY_KIND[c].labelKey) : undefined}
                   onClick={() => onColorCommit(c)}
                 />
               ))}
@@ -264,7 +265,7 @@ function StickyCardInner({
               apontando pro close em qualquer card com mais de 1 botão. */}
           <span className="card-head-actions">
             <button
-              title={editing ? "ver preview" : "editar"}
+              title={editing ? t("sticky.preview") : t("sticky.edit")}
               // Sem isso, o clique aqui primeiro tira o foco do textarea
               // (blur nativo do navegador ao mover foco pro botão) — o
               // `onBlur` já chama `onModeCommit("preview")`, e o `onClick`
@@ -294,7 +295,7 @@ function StickyCardInner({
       }
     >
       {totalCount > 0 && (
-        <div className={styles.stickyProgress} title={`${doneCount}/${totalCount} concluído`}>
+        <div className={styles.stickyProgress} title={t("sticky.progress", { done: doneCount, total: totalCount })}>
           <div className={styles.stickyProgressFill} style={{ width: `${(doneCount / totalCount) * 100}%` }} />
         </div>
       )}
@@ -321,7 +322,7 @@ function StickyCardInner({
           onClick={onPreviewClick}
         >
           {content.trim().length === 0 ? (
-            "clique para escrever…"
+            t("sticky.placeholder")
           ) : (
             <Markdown content={content} loadingFallback={content} />
           )}

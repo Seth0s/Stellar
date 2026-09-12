@@ -9,6 +9,7 @@ import {
   type ShortcutOverrides,
   type ShortcutScope,
 } from "./shortcut-registry";
+import { t, type MessageKey } from "../../shared/i18n";
 
 /**
  * Fase C dos atalhos (config pela UI) — este módulo é a camada de
@@ -110,17 +111,17 @@ export function rebindBlockedReason(def: ShortcutDefinition): string | undefined
   // entradas — ver `ShortcutsOverlay.tsx`).
   if (!def.combo) return undefined;
   if (REBIND_PROTECTED_IDS.has(def.id)) {
-    return "reservado — fecha esta e outras telas; não pode ser reatribuído";
+    return t("shortcuts.blocked.reserved");
   }
   if (def.dispatch === "central") return undefined;
   if (MAIN_PROCESS_BOUND_IDS.has(def.id)) {
-    return "nativo — o combo é usado pelo processo main do Electron (main/index.ts, before-input-event); reatribuir aqui não mudaria o que main realmente intercepta";
+    return t("shortcuts.blocked.mainNative");
   }
   if (CLIPBOARD_PASTE_EVENT_BOUND_IDS.has(def.id)) {
-    return "nativo — amarrado ao evento DOM paste do navegador/SO (Ctrl/Cmd+V); o app não escolhe a tecla que dispara esse evento, então reatribuir aqui nunca mudaria o que cola";
+    return t("shortcuts.blocked.domPaste");
   }
   if (RENDERER_WIRED_NATIVE_IDS.has(def.id)) return undefined;
-  return "nativo — implementado dentro do próprio card (terminal, chat ou navegador embutido); esse componente ainda não lê a configuração de atalhos, então reatribuir aqui não mudaria o que dispara (candidato a follow-up)";
+  return t("shortcuts.blocked.component");
 }
 
 /** Casa `e` contra o combo EFETIVO de `id` (default do registro +
@@ -334,7 +335,7 @@ function scopesOverlap(a: readonly ShortcutScope[] | undefined, b: readonly Shor
 export interface ShortcutConflict {
   id: string;
   group: ShortcutGroupName;
-  description: string;
+  description: MessageKey;
 }
 
 /** Acha o primeiro atalho (que não seja `id`) cujo combo EFETIVO hoje
@@ -373,15 +374,15 @@ export function findShortcutConflict(
 
 interface OsReservedPattern {
   combo: ShortcutCombo;
-  label: string;
+  label: MessageKey;
 }
 
 const OS_RESERVED_COMBOS: OsReservedPattern[] = [
-  { combo: { key: "F4", alt: true }, label: "fechar janela (Alt+F4 — Windows/Linux)" },
-  { combo: { key: "q", ctrlOrCmd: true }, label: "sair do aplicativo (comum no macOS)" },
-  { combo: { key: "w", ctrlOrCmd: true }, label: "fechar aba/janela (comum em várias plataformas)" },
-  { combo: { key: "m", ctrlOrCmd: true }, label: "minimizar (comum no macOS)" },
-  { combo: { key: "PrintScreen" }, label: "captura de tela do sistema operacional" },
+  { combo: { key: "F4", alt: true }, label: "shortcuts.os.closeWindow" },
+  { combo: { key: "q", ctrlOrCmd: true }, label: "shortcuts.os.closeTab" },
+  { combo: { key: "w", ctrlOrCmd: true }, label: "shortcuts.os.closeTab" },
+  { combo: { key: "m", ctrlOrCmd: true }, label: "shortcuts.os.minimize" },
+  { combo: { key: "PrintScreen" }, label: "shortcuts.os.screenshot" },
 ];
 
 function isFunctionKey(key: string): boolean {
@@ -392,10 +393,10 @@ function isFunctionKey(key: string): boolean {
  * app, ou `undefined` se não bate com nenhum padrão conhecido. */
 export function describeOsReservedCombo(combo: ShortcutCombo): string | undefined {
   if (combo.ctrlOrCmd && combo.alt && isFunctionKey(combo.key)) {
-    return `trocar de terminal virtual no Linux (Ctrl+Alt+${combo.key})`;
+    return t("shortcuts.os.switchTty", { key: combo.key });
   }
   for (const reserved of OS_RESERVED_COMBOS) {
-    if (combosOverlap(combo, reserved.combo)) return reserved.label;
+    if (combosOverlap(combo, reserved.combo)) return t(reserved.label);
   }
   return undefined;
 }

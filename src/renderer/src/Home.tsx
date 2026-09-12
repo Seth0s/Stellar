@@ -93,7 +93,7 @@ export function Home({
           {rootName}
         </h1>
         <button className="primary" onClick={() => setModal({ mode: "create" })}>
-          + nova sessão
+          {t("home.newSession")}
         </button>
       </div>
       {/* item 2 (DESIGN-BACKLOG.md) — the session list used to have no
@@ -105,9 +105,9 @@ export function Home({
       <div className="home-scroll">
         {boards.length === 0 ? (
           <div className="home-empty">
-            <p>nenhuma sessão ainda</p>
+            <p>{t("home.noSessions")}</p>
             <button className="primary" onClick={() => setModal({ mode: "create" })}>
-              criar a primeira
+              {t("home.createFirst")}
             </button>
           </div>
         ) : (
@@ -129,7 +129,7 @@ export function Home({
                         <span
                           className={`home-session-edit${b.id === mostRecentId ? " home-session-edit--below-badge" : ""}`}
                           data-role="edit-session"
-                          title="Editar sessão"
+                          title={t("home.editSession")}
                           onClick={(e) => {
                             e.stopPropagation();
                             setModal({ mode: "edit", board: b });
@@ -140,7 +140,9 @@ export function Home({
                         <span className="home-session-name">{b.name}</span>
                         <span className="home-session-counts">
                           <StatusDot counts={counts} />
-                          {counts ? `${counts.agents} agentes · ${counts.active} ativos` : "0 agentes"}
+                          {counts
+                            ? t("home.agentsCount", { agents: counts.agents, active: counts.active })
+                            : t("home.agentsZero")}
                         </span>
                         {/* item 2 — "tirar as datas pra fora do card": only
                             the relative "último acesso" stays on the card

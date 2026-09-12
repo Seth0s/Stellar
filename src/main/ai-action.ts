@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { t } from "../shared/i18n";
 import { providerById, which } from "./providers";
 import { effectivePath } from "./user-env";
 
@@ -64,9 +65,9 @@ function extractJsonResult(stdout: string): string {
  */
 export async function runOneShotSummary(providerId: string, cwd: string, prompt: string): Promise<OneShotResult> {
   const provider = providerById(providerId);
-  if (!provider || provider.id === "bash") return { error: "provider inválido para ação de IA" };
+  if (!provider || provider.id === "bash") return { error: t("error.invalidAiProvider") };
   const binary = which(provider.binaryNames);
-  if (!binary) return { error: `"${providerId}" não encontrado no PATH` };
+  if (!binary) return { error: t("error.providerNotInPath", { provider: providerId }) };
 
   try {
     if (provider.id === "codex") {
@@ -88,7 +89,7 @@ export async function runOneShotSummary(providerId: string, cwd: string, prompt:
     // three below — parsing it right needs its own extractor, not built
     // here yet. Fails explicit and fast instead of sending it `-p`/
     // `--output-format`, flags it doesn't have, and silently misbehaving.
-    if (provider.id === "opencode") return { error: "ação de IA em um clique ainda não suporta opencode — use o card de terminal diretamente" };
+    if (provider.id === "opencode") return { error: t("error.opencodeUnsupported") };
 
     // claude, cursor-agent, and antigravity (agy) all share the same
     // -p/--output-format flags (see extractJsonResult's doc comment).

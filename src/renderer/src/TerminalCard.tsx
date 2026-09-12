@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { t } from "../../shared/i18n";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
@@ -315,7 +316,7 @@ function TerminalCardInner({
       // Requer "notifications" em MAIN_WINDOW_ONLY_PERMISSIONS
       // (main/index.ts) — sem isso o construtor abaixo nunca mostra nada,
       // silenciosamente (confirmado antes de mexer, ver o comentário lá).
-      new Notification(`${displayName} terminou o turno`, { body: cwd, silent: false });
+      new Notification(t("terminal.turnCompleteNotify", { name: displayName }), { body: cwd, silent: false });
     } catch {
       // Notification API indisponível/negada nesse ambiente — nunca deve
       // quebrar o terminal, só não notifica.
@@ -326,10 +327,10 @@ function TerminalCardInner({
   const statusClass = spawnError !== null ? "danger" : exitCode !== null ? "" : "ok";
   const statusLabel =
     spawnError !== null
-      ? `Erro: ${spawnError}`
+      ? t("terminal.errorLabel", { error: spawnError })
       : exitCode !== null
-      ? `Processo encerrado (código ${exitCode})`
-      : "Processo em execução";
+      ? t("terminal.processExited", { code: exitCode })
+      : t("terminal.processRunning");
   useEffect(() => {
     onStatusChange?.(spawnError !== null ? "error" : exitCode !== null ? "exited" : "ok");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -418,14 +419,14 @@ function TerminalCardInner({
             <button
               className={`${styles.terminalCardBell}${bellEnabled ? ` ${styles.on}` : ""}`}
               data-no-drag
-              title={bellEnabled ? "Notificação ao concluir um turno: ligada" : "Notificação ao concluir um turno: desligada"}
+              title={bellEnabled ? t("terminal.bellOn") : t("terminal.bellOff")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setBellEnabled((v) => !v)}
             >
               <Icon name="bell" size={12} />
             </button>
             <button
-              title="Interromper o processo (Ctrl+C)"
+              title={t("terminal.sigint")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={interrupt}
             >
@@ -447,11 +448,13 @@ function TerminalCardInner({
           {resumeInvalidNotice && (
             <span
               className={styles.terminalCardResumeWarning}
-              title={`resume_id salvo (${resumeInvalidNotice.staleResumeId}) ${
-                resumeInvalidNotice.reason === "missing" ? "não foi encontrado" : "está vazio (nunca recebeu conteúdo real)"
-              } — iniciando conversa nova nesta sessão.`}
+              title={
+                resumeInvalidNotice.reason === "missing"
+                  ? t("terminal.resumeTitleMissing", { id: resumeInvalidNotice.staleResumeId })
+                  : t("terminal.resumeTitleEmpty", { id: resumeInvalidNotice.staleResumeId })
+              }
             >
-              ⚠ {resumeInvalidNotice.reason === "missing" ? "sessão salva não existe mais" : "sessão salva estava vazia"}
+              ⚠ {resumeInvalidNotice.reason === "missing" ? t("terminal.resumeMissing") : t("terminal.resumeEmpty")}
             </span>
           )}
           <span className={styles.terminalCardFootText}>{footerParts.join(" · ")}</span>
@@ -460,7 +463,7 @@ function TerminalCardInner({
               ref={urlBadgeRef}
               className={styles.terminalCardUrlBadge}
               data-role="terminal-url-badge"
-              title={`${seenUrls.length} link${seenUrls.length > 1 ? "s" : ""} vistos no output`}
+              title={t("terminal.linksSeen", { count: seenUrls.length })}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setUrlPopoverOpen((v) => !v)}
             >
@@ -490,7 +493,7 @@ function TerminalCardInner({
       {showLoadingHint && (
         <div className={styles.terminalCardLoading} data-role="terminal-loading" role="status">
           <span className={styles.terminalCardLoadingSpinner} aria-hidden="true" />
-          carregando sessão…
+          {t("terminal.loadingSession")}
         </div>
       )}
       {/* Achado ao vivo, 2026-09-03 — o botão "instalar {provider}" que
@@ -506,7 +509,7 @@ function TerminalCardInner({
       )}
       {exitCode !== null && (
         <div className={styles.terminalCardExited} data-role="terminal-exited">
-          processo encerrado ({exitCode})
+          {t("terminal.processExitedShort", { code: exitCode })}
         </div>
       )}
       <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className={styles.terminalCardUrlPopover}>
@@ -525,7 +528,7 @@ function TerminalCardInner({
                 {feedback ? (
                   <>
                     <Icon name={feedback.ok ? "check" : "close"} size={11} />
-                    {feedback.ok ? "copiado pro clipboard" : "falha ao copiar"}
+                    {feedback.ok ? t("terminal.copiedClipboard") : t("terminal.copyFail")}
                   </>
                 ) : (
                   <>
@@ -537,7 +540,7 @@ function TerminalCardInner({
               <button
                 className={styles.terminalCardUrlOpen}
                 data-role="terminal-url-open"
-                title="Abrir no navegador interno (pede confirmação)"
+                title={t("terminal.openUrl")}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => onOpenUrl(url)}
               >

@@ -1,4 +1,5 @@
 import { useModal } from "./useModal";
+import { t } from "../../shared/i18n";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — the generic permission-
@@ -44,20 +45,20 @@ export function AgentAskModal({
       <div className="modal" {...modalProps} aria-labelledby="agent-ask-title">
         <h3 id="agent-ask-title">{title}</h3>
         <p>
-          <strong>{requesterLabel}</strong> pede:
+          <strong>{requesterLabel}</strong> {t("agentAsk.pedes")}
         </p>
         <code className="agent-ask-command">{command}</code>
         {reason && (
           <p className="agent-ask-reason">
-            <span className="agent-ask-reason-label">motivo:</span> {reason}
+            <span className="agent-ask-reason-label">{t("agentAsk.reason")}</span> {reason}
           </p>
         )}
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onDeny}>
-            Negar
+            {t("agentAsk.deny")}
           </button>
           <button type="button" className="primary" onClick={onAllow}>
-            Permitir
+            {t("agentAsk.allow")}
           </button>
         </div>
       </div>

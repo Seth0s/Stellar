@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
@@ -240,7 +241,7 @@ export function MediaCard({
                 mantém o header fixo de sempre, sem toolbar flutuante
                 equivalente. */}
             {mediaType === "pdf" && (
-              <button onClick={cycleRotation} title="Girar 90°">
+              <button onClick={cycleRotation} title={t("media.rotate")}>
                 <Icon name="rotate" size={12} />
               </button>
             )}
@@ -289,7 +290,7 @@ export function MediaCard({
             {mediaType === "image" ? (
               <img src={assetUrl} draggable={false} alt={filename} />
             ) : (
-              <Suspense fallback={<div className={styles.mediaPdfLoading}>carregando PDF…</div>}>
+              <Suspense fallback={<div className={styles.mediaPdfLoading}>{t("media.loadingPdf")}</div>}>
                 <PdfViewer url={assetUrl} page={pdfPage} onDocInfo={setPdfNumPages} />
               </Suspense>
             )}
@@ -301,7 +302,7 @@ export function MediaCard({
               do card (ver o doc de `chromeless` em CardFrame.tsx). */}
           {mediaType === "image" && (
             <div className={`${styles.mediaToolbar}${chromeOpen ? ` ${styles.visible}` : ""}`} data-no-drag>
-              <button onClick={cycleRotation} title="Girar 90°">
+              <button onClick={cycleRotation} title={t("media.rotate")}>
                 <Icon name="rotate" size={14} />
               </button>
             </div>

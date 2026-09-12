@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import type { Rect } from "./board-model";
@@ -184,7 +185,7 @@ function RemoteWindowCardInner({
           {phase === "live" && (
             <button
               className={controlling ? "active" : ""}
-              title={controlling ? "Parar controle" : "Iniciar controle"}
+              title={controlling ? t("remote.stopControl") : t("remote.startControl")}
               onClick={toggleControl}
             >
               <Icon name={controlling ? "controlOn" : "controlOff"} size={12} />
@@ -201,14 +202,14 @@ function RemoteWindowCardInner({
           <div className={styles.remoteWindowPlaceholder}>
             {phase === "error" ? (
               <>
-                <span className={styles.remoteWindowError}>{error || "não foi possível capturar"}</span>
+                <span className={styles.remoteWindowError}>{error || t("remote.captureFail")}</span>
                 <button className="primary" onClick={start}>
-                  tentar de novo
+                  {t("remote.tryAgain")}
                 </button>
               </>
             ) : (
               <button className="primary" onClick={start} disabled={phase === "requesting"}>
-                {phase === "requesting" ? "aguardando escolha…" : "escolher janela/tela"}
+                {phase === "requesting" ? t("remote.awaitingChoice") : t("remote.chooseWindow")}
               </button>
             )}
           </div>
@@ -226,7 +227,7 @@ function RemoteWindowCardInner({
           onKeyDown={onVideoKeyDown}
           onKeyUp={onVideoKeyUp}
         />
-        {phase === "live" && !controlling && <div className={styles.remoteWindowHint}>clique em ▶ para controlar</div>}
+        {phase === "live" && !controlling && <div className={styles.remoteWindowHint}>{t("remote.clickToControl")}</div>}
       </div>
     </CardFrame>
   );

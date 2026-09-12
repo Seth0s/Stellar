@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { t } from "../shared/i18n";
 import { which } from "./providers";
 import { effectivePath } from "./user-env";
 
@@ -94,7 +95,7 @@ function registerCursor(shim: string): McpRegistrationResult {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   } catch (err) {
-    return { status: "failed", error: `não consegui escrever ${file}: ${String(err)}` };
+    return { status: "failed", error: t("error.agyWrite", { file, error: String(err) }) };
   }
   return { status: "ok", changed: true };
 }
@@ -145,7 +146,7 @@ function registerOpencode(shim: string): McpRegistrationResult {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   } catch (err) {
-    return { status: "failed", error: `não consegui escrever ${file}: ${String(err)}` };
+    return { status: "failed", error: t("error.agyWrite", { file, error: String(err) }) };
   }
   return { status: "ok", changed: true };
 }
@@ -166,7 +167,7 @@ async function registerAntigravity(binary: string, shim: string): Promise<McpReg
   try {
     await execFileAsync(binary, ["mcp", "add", "--type", "stdio", SERVER_NAME, shim], { timeout: 15_000, env: cliEnv() });
   } catch (err) {
-    return { status: "failed", error: `agy mcp add falhou: ${String(err)}` };
+    return { status: "failed", error: t("error.agyAddFailed", { error: String(err) }) };
   }
   return { status: "ok", changed: true };
 }
@@ -182,7 +183,7 @@ export function ensureMcpRegistered(providerId: string, binDir: string): Promise
 
   const run = (async (): Promise<McpRegistrationResult> => {
     if (providerId !== "cursor" && providerId !== "antigravity" && providerId !== "opencode") {
-      return { status: "skipped", reason: "provider registra MCP por invocação" };
+      return { status: "skipped", reason: t("error.mcpInvoked") };
     }
     const shim = shimPath(binDir);
     if (providerId === "cursor") {
@@ -193,7 +194,7 @@ export function ensureMcpRegistered(providerId: string, binDir: string): Promise
     }
     if (providerId === "opencode") return registerOpencode(shim);
     const binary = which(["agy"]);
-    if (!binary) return { status: "skipped", reason: "binário agy não encontrado" };
+    if (!binary) return { status: "skipped", reason: t("error.agyBinaryMissing") };
     return registerAntigravity(binary, shim);
   })();
 

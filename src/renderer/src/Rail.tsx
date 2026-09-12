@@ -3,9 +3,10 @@ import { Icon, type IconName } from "./icons";
 import { Popover } from "./Popover";
 import { PenPanel } from "./PenPanel";
 import { ProviderPicker } from "./ProviderPicker";
-import { CARD_ICON, RAIL_CREATE_ORDER, RAIL_CREATE_TITLE } from "./cards/registry";
+import { CARD_ICON, RAIL_CREATE_ORDER, railCreateTitle } from "./cards/registry";
 import type { Tool } from "./card-types";
 import { PROVIDER_EFFORT_VALUES } from "./card-types";
+import { t, type MessageKey } from "../../shared/i18n";
 
 type RailCard = { id: string; kind: string; label: string | null };
 
@@ -23,16 +24,25 @@ const TOOL_ICON: Record<Tool, IconName> = {
   export: "exportCrop",
 };
 
-const CARD_DESCRIPTIONS: Record<string, string> = {
-  terminal: "Shell local ou agente CLI autônomo",
-  files: "Navegação na árvore do projeto e edição de código",
-  changes: "Status do repositório git, branch e diffs",
-  sticky: "Anotações rápidas, lembretes e notas",
-  browser: "Navegador web embutido com snapshots",
-  chat: "Assistente conversacional com ferramentas integradas",
-  "remote-window": "Espelhamento e controle de janela externa",
-  // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 1.
-  task: "Quadro de tasks — a fazer, em andamento, concluído, falhou",
+const RAIL_TITLE_KEYS: Record<(typeof RAIL_CREATE_ORDER)[number], MessageKey> = {
+  files: "rail.title.files",
+  changes: "rail.title.changes",
+  sticky: "rail.title.sticky",
+  browser: "rail.title.browser",
+  chat: "rail.title.chat",
+  "remote-window": "rail.title.remote-window",
+  task: "rail.title.task",
+};
+
+const RAIL_DESC_KEYS: Record<(typeof RAIL_CREATE_ORDER)[number] | "terminal", MessageKey> = {
+  terminal: "rail.desc.terminal",
+  files: "rail.desc.files",
+  changes: "rail.desc.changes",
+  sticky: "rail.desc.sticky",
+  browser: "rail.desc.browser",
+  chat: "rail.desc.chat",
+  "remote-window": "rail.desc.remote-window",
+  task: "rail.desc.task",
 };
 
 export function Rail({
@@ -139,8 +149,8 @@ export function Rail({
     >
       <button
         className={`rail-toggle${collapsed ? " is-collapsed" : ""}`}
-        title={collapsed ? "Mostrar barra lateral" : "Ocultar barra lateral"}
-        aria-label={collapsed ? "Mostrar barra lateral" : "Ocultar barra lateral"}
+        title={collapsed ? t("rail.show") : t("rail.hide")}
+        aria-label={collapsed ? t("rail.show") : t("rail.hide")}
         onClick={() => setCollapsed((c) => !c)}
       >
         <Icon name={collapsed ? "chevronRight" : "chevronLeft"} size={14} />
@@ -157,19 +167,19 @@ export function Rail({
          `.rail-toggle`), separate from the chevron above. */}
       <button
         className="rail-mini"
-        title={`Ferramenta ativa: ${tool} — clique para mostrar a barra lateral`}
-        aria-label="Mostrar barra lateral"
+        title={t("rail.activeTool", { tool })}
+        aria-label={t("rail.show")}
         onClick={() => setCollapsed(false)}
       >
         <Icon name={TOOL_ICON[tool]} size={18} />
       </button>
 
-      <div className="rail" aria-label="Barra de ferramentas">
+      <div className="rail" aria-label={t("rail.toolbar")}>
         {/* Grupo 1: Ferramentas de manipulação do canvas */}
         <button
           className={`rail-btn${tool === "pointer" ? " active" : ""}`}
-          title="Ponteiro (V)"
-          aria-label="Ponteiro (V)"
+          title={t("rail.pointer")}
+          aria-label={t("rail.pointer")}
           onClick={() => setTool("pointer")}
         >
           <Icon name="pointer" />
@@ -177,32 +187,32 @@ export function Rail({
         <button
           ref={penBtnRef}
           className={`rail-btn${tool === "pen" ? " active" : ""}`}
-          title="Caneta (P)"
-          aria-label="Caneta (P)"
+          title={t("rail.pen")}
+          aria-label={t("rail.pen")}
           onClick={() => toggleTool("pen")}
         >
           <Icon name="pen" />
         </button>
         <button
           className={`rail-btn${tool === "connector" ? " active" : ""}`}
-          title="Conector (C)"
-          aria-label="Conector (C)"
+          title={t("rail.connector")}
+          aria-label={t("rail.connector")}
           onClick={() => toggleTool("connector")}
         >
           <Icon name="link" />
         </button>
         <button
           className={`rail-btn${tool === "select" ? " active" : ""}`}
-          title="Selecionar (S)"
-          aria-label="Selecionar (S)"
+          title={t("rail.select")}
+          aria-label={t("rail.select")}
           onClick={() => toggleTool("select")}
         >
           <Icon name="select" />
         </button>
         <button
           className={`rail-btn${tool === "export" ? " active" : ""}`}
-          title="Exportar recorte do canvas"
-          aria-label="Exportar recorte do canvas"
+          title={t("rail.export")}
+          aria-label={t("rail.export")}
           onClick={() => toggleTool("export")}
         >
           <Icon name="exportCrop" />
@@ -211,12 +221,12 @@ export function Rail({
         {tool === "select" && (canGroup || canUngroup) && (
           <>
             {canGroup && (
-              <button className="rail-btn" title="Agrupar" aria-label="Agrupar cards selecionados" onClick={onGroup}>
+              <button className="rail-btn" title={t("rail.group")} aria-label={t("rail.groupAria")} onClick={onGroup}>
                 <Icon name="group" size={16} />
               </button>
             )}
             {canUngroup && (
-              <button className="rail-btn" title="Desagrupar" aria-label="Desagrupar cards selecionados" onClick={onUngroup}>
+              <button className="rail-btn" title={t("rail.ungroup")} aria-label={t("rail.ungroupAria")} onClick={onUngroup}>
                 <Icon name="ungroup" size={16} />
               </button>
             )}
@@ -243,8 +253,8 @@ export function Rail({
           ref={addCardBtnRef}
           className={`rail-btn${isAddCardOpen ? " active" : ""}`}
           data-role="rail-add-card"
-          title="Adicionar card"
-          aria-label="Adicionar card"
+          title={t("rail.addCard")}
+          aria-label={t("rail.addCard")}
           onClick={() => setOpenPopover((p) => (p === "cards" || p === "terminal-config" ? null : "cards"))}
         >
           <Icon name="plus" />
@@ -256,8 +266,8 @@ export function Rail({
         <button
           ref={findBtnRef}
           className={`rail-btn${openPopover === "find" ? " active" : ""}`}
-          title="Localizar card"
-          aria-label="Localizar card"
+          title={t("rail.findCard")}
+          aria-label={t("rail.findCard")}
           onClick={() => setOpenPopover((p) => (p === "find" ? null : "find"))}
         >
           <Icon name="findCard" />
@@ -265,13 +275,13 @@ export function Rail({
         <button
           ref={aiBtnRef}
           className={`rail-btn${openPopover === "ai" ? " active" : ""}`}
-          title="Ações de IA"
-          aria-label="Ações de IA"
+          title={t("rail.aiActions")}
+          aria-label={t("rail.aiActions")}
           onClick={() => setOpenPopover((p) => (p === "ai" ? null : "ai"))}
         >
           <Icon name="sparkle" />
         </button>
-        <button className="rail-btn" title="Configurações" aria-label="Configurações de chaves e segredos" onClick={onOpenSecretsSettings}>
+        <button className="rail-btn" title={t("rail.settings")} aria-label={t("rail.settingsAria")} onClick={onOpenSecretsSettings}>
           <Icon name="settings" />
         </button>
 
@@ -283,63 +293,45 @@ export function Rail({
         >
           {openPopover === "cards" && (
             <>
-              <div className="board-list-heading">ADICIONAR AO CANVAS</div>
+              <div className="board-list-heading">{t("rail.addToCanvas")}</div>
               <div className="board-list" style={{ maxHeight: "min(60vh, 380px)" }}>
                 {/* Terminal */}
                 <button
                   className="popover-row"
                   data-kind="terminal"
-                  title="Novo terminal"
+                  title={t("rail.newTerminal")}
                   onClick={() => setOpenPopover("terminal-config")}
                 >
                   <span className="popover-row-icon">
                     <Icon name="terminal" size={18} />
                   </span>
                   <span>
-                    <span className="popover-row-title">Terminal</span>
-                    <span className="popover-row-desc">{CARD_DESCRIPTIONS.terminal}</span>
+                    <span className="popover-row-title">{t("rail.title.terminal")}</span>
+                    <span className="popover-row-desc">{t("rail.desc.terminal")}</span>
                   </span>
                 </button>
 
                 {/* Cards adicionais ordenados */}
-                {RAIL_CREATE_ORDER.map((kind) => {
-                  const title =
-                    kind === "files"
-                      ? "Explorador de Arquivos"
-                      : kind === "chat"
-                      ? "Chatbox IA"
-                      : kind === "browser"
-                      ? "Navegador Web"
-                      : kind === "changes"
-                      ? "Git / Mudanças"
-                      : kind === "sticky"
-                      ? "Nota Adesiva"
-                      : kind === "remote-window"
-                      ? "Janela Externa"
-                      : kind === "task"
-                      ? "Fila"
-                      : kind;
-                  return (
-                    <button
-                      key={kind}
-                      className="popover-row"
-                      data-kind={kind}
-                      title={RAIL_CREATE_TITLE[kind]}
-                      onClick={() => {
-                        onCreate(kind);
-                        setOpenPopover(null);
-                      }}
-                    >
-                      <span className="popover-row-icon">
-                        <Icon name={CARD_ICON[kind]} size={18} />
-                      </span>
-                      <span>
-                        <span className="popover-row-title">{title}</span>
-                        <span className="popover-row-desc">{CARD_DESCRIPTIONS[kind]}</span>
-                      </span>
-                    </button>
-                  );
-                })}
+                {RAIL_CREATE_ORDER.map((kind) => (
+                  <button
+                    key={kind}
+                    className="popover-row"
+                    data-kind={kind}
+                    title={railCreateTitle(kind)}
+                    onClick={() => {
+                      onCreate(kind);
+                      setOpenPopover(null);
+                    }}
+                  >
+                    <span className="popover-row-icon">
+                      <Icon name={CARD_ICON[kind]} size={18} />
+                    </span>
+                    <span>
+                      <span className="popover-row-title">{t(RAIL_TITLE_KEYS[kind])}</span>
+                      <span className="popover-row-desc">{t(RAIL_DESC_KEYS[kind])}</span>
+                    </span>
+                  </button>
+                ))}
               </div>
             </>
           )}
@@ -350,24 +342,24 @@ export function Rail({
                 <button
                   className="popover-back-btn"
                   onClick={() => setOpenPopover("cards")}
-                  title="Voltar para lista de cards"
+                  title={t("rail.backToCards")}
                 >
                   <Icon name="back" size={14} />
                 </button>
                 <div className="board-list-heading" style={{ margin: 0 }}>
-                  NOVO TERMINAL
+                  {t("rail.newTerminalHeading")}
                 </div>
               </div>
 
               <div className="popover-field">
-                <label>provider</label>
+                <label>{t("rail.label.provider")}</label>
                 <ProviderPicker providers={providers} value={newProvider} onChange={setNewProvider} />
               </div>
 
               {showAgentFields && (
                 <>
                   <div className="popover-field">
-                    <label>resume id (opcional)</label>
+                    <label>{t("rail.label.resumeId")}</label>
                     <input
                       className="resume-input"
                       value={newResumeId}
@@ -385,10 +377,10 @@ export function Rail({
                       disabled={newResumeId.trim() !== ""}
                       onChange={(e) => setNewContinueLast(e.target.checked)}
                     />
-                    continuar última
+                    {t("rail.label.continueLast")}
                   </label>
                   <div className="popover-field">
-                    <label>model (opcional)</label>
+                    <label>{t("rail.label.model")}</label>
                     <input className="resume-input" value={newModel} onChange={(e) => setNewModel(e.target.value)} />
                   </div>
                   {/* DESIGN-BACKLOG.md §2.1 "effort do card não é
@@ -403,9 +395,9 @@ export function Rail({
                       this UI). */}
                   {PROVIDER_EFFORT_VALUES[newProvider] && (
                     <div className="popover-field">
-                      <label>effort (opcional)</label>
+                      <label>{t("rail.label.effort")}</label>
                       <select className="resume-input" value={newEffort} onChange={(e) => setNewEffort(e.target.value)}>
-                        <option value="">(padrão do provider)</option>
+                        <option value="">{t("rail.providerDefault")}</option>
                         {PROVIDER_EFFORT_VALUES[newProvider].map((v) => (
                           <option key={v} value={v}>
                             {v}
@@ -416,7 +408,7 @@ export function Rail({
                   )}
                   {newProvider === "claude" && (
                     <div className="popover-field">
-                      <label>system prompt (opcional)</label>
+                      <label>{t("rail.label.systemPrompt")}</label>
                       <input
                         className="resume-input"
                         value={newSystemPrompt}
@@ -435,7 +427,7 @@ export function Rail({
                     setOpenPopover(null);
                   }}
                 >
-                  Criar terminal
+                  {t("rail.createTerminalBtn")}
                 </button>
               </div>
             </>
@@ -444,9 +436,9 @@ export function Rail({
 
         {/* Popover: Localizar card */}
         <Popover anchorRef={findBtnRef} open={openPopover === "find"} onClose={() => setOpenPopover(null)}>
-          <div className="board-list-heading">CARDS NESTA SESSÃO</div>
+          <div className="board-list-heading">{t("rail.cardsInSession")}</div>
           {cards.length === 0 ? (
-            <div className="popover-empty">nenhum card ainda</div>
+            <div className="popover-empty">{t("rail.noCardsYet")}</div>
           ) : (
             <div className="board-list">
               {cards.map((c) => (
@@ -481,8 +473,8 @@ export function Rail({
               <Icon name="reorganize" size={18} />
             </span>
             <span>
-              <span className="popover-row-title">Organizar automaticamente</span>
-              <span className="popover-row-desc">Arruma os cards soltos numa grade limpa</span>
+              <span className="popover-row-title">{t("rail.autoArrange")}</span>
+              <span className="popover-row-desc">{t("rail.autoArrangeDesc")}</span>
             </span>
           </button>
           <button
@@ -497,9 +489,9 @@ export function Rail({
               <Icon name="sparkle" size={18} />
             </span>
             <span>
-              <span className="popover-row-title">{aiBusy ? "Resumindo…" : "Resumir sessão numa nota"}</span>
+              <span className="popover-row-title">{aiBusy ? t("rail.summarizing") : t("rail.summarize")}</span>
               <span className="popover-row-desc">
-                {summarizeDisabled ? "Escolha um provider de agente (não bash)" : "Cria uma nota com o estado do board"}
+                {summarizeDisabled ? t("rail.summarizeNeedProvider") : t("rail.summarizeDesc")}
               </span>
             </span>
           </button>
@@ -508,4 +500,3 @@ export function Rail({
     </div>
   );
 }
-

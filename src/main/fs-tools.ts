@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { t } from "../shared/i18n";
 import { promises as fs, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -167,7 +168,7 @@ export async function renamePath(root: string, path: string, newName: string): P
   // kernel's mood. Neither is a legal filename on any filesystem here, so
   // rejecting them costs nothing.
   if (!newName || newName === "." || newName === ".." || newName.includes("/") || newName.includes("\\")) {
-    throw new Error("nome inválido");
+    throw new Error(t("error.invalidName"));
   }
   const from = confine(root, path);
   const to = confine(root, join(relative(root, dirname(from)), newName));
@@ -189,7 +190,7 @@ export async function createEntry(
   // check, identical reason; "." / ".." resolve the new entry onto a
   // directory that already exists instead of creating anything.
   if (!name || name === "." || name === ".." || name.includes("/") || name.includes("\\")) {
-    throw new Error("nome inválido");
+    throw new Error(t("error.invalidName"));
   }
   const parent = confine(root, parentPath);
   const target = confine(root, join(parentPath, name));

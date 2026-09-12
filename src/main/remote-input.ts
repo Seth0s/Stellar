@@ -1,4 +1,5 @@
 import * as dbus from "dbus-next";
+import { t } from "../shared/i18n";
 import { randomBytes } from "node:crypto";
 
 // evdev button codes (linux/input-event-codes.h) — what
@@ -81,7 +82,8 @@ export function createRemoteInputSession() {
           clearTimeout(timer);
           b.removeListener("message", onMsg);
           const [code, results] = msg.body as [number, Record<string, dbus.Variant>];
-          if (code !== 0) reject(new Error(code === 1 ? "cancelado pelo usuário" : `portal recusou (code ${code})`));
+          if (code !== 0)
+            reject(new Error(code === 1 ? t("error.portalCancelled") : t("error.portalRefused", { code })));
           else resolve(results);
         }
       }

@@ -1,4 +1,5 @@
 import { app, clipboard, nativeImage } from "electron";
+import { t } from "../shared/i18n";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -68,7 +69,7 @@ export function saveClipboardImage(): SaveClipboardImageResult {
   try {
     const image = clipboard.readImage();
     if (image.isEmpty()) {
-      return { ok: false, error: "clipboard não tem imagem no momento" };
+      return { ok: false, error: t("error.clipboardNoImage") };
     }
     return writeImageBuffer(image.toPNG(), "png");
   } catch (err) {
@@ -85,7 +86,7 @@ export function saveClipboardImage(): SaveClipboardImageResult {
  * grava, mesmo diretório/convenção de nome que `saveClipboardImage`. */
 export function saveImageBytes(base64: string, mediaType: string): SaveClipboardImageResult {
   const ext = EXT_BY_MEDIA_TYPE[mediaType];
-  if (!ext) return { ok: false, error: `tipo de imagem não suportado: ${mediaType}` };
+  if (!ext) return { ok: false, error: t("error.unsupportedImage", { type: mediaType }) };
   try {
     return writeImageBuffer(Buffer.from(base64, "base64"), ext);
   } catch (err) {
@@ -108,7 +109,7 @@ export type ReadAttachmentImageResult = { ok: true; base64: string } | { ok: fal
  * deixaria `stellar-pastes-outra-coisa/` passar. */
 export function readAttachmentImage(path: string): ReadAttachmentImageResult {
   const dir = ensureTmpDir();
-  if (!path.startsWith(dir + sep)) return { ok: false, error: "path fora do diretório de anexos" };
+  if (!path.startsWith(dir + sep)) return { ok: false, error: t("error.attachmentPathEscape") };
   try {
     return { ok: true, base64: readFileSync(path).toString("base64") };
   } catch (err) {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
 import { StellarMark } from "./StellarMark";
 import { useUpdateStatus } from "./useUpdateStatus";
@@ -72,10 +73,10 @@ export function Titlebar() {
           className={`titlebar-update-check${updateChecking ? " is-checking" : ""}${updateCheckError ? " has-error" : ""}`}
           title={
             updateChecking
-              ? "Checando atualização..."
+              ? t("titlebar.checkingUpdate")
               : updateCheckError
-                ? `Falha ao checar atualização: ${updateCheckError}`
-                : "Checar atualização"
+                ? t("titlebar.checkUpdateFail", { error: updateCheckError })
+                : t("titlebar.checkUpdate")
           }
           onClick={checkNow}
         >
@@ -84,7 +85,7 @@ export function Titlebar() {
         {updateVersion && (
           <button
             className="titlebar-update-dot"
-            title={`Atualização v${updateVersion} disponível — clique pra ver`}
+            title={t("titlebar.updateAvailable", { version: updateVersion })}
             onClick={undismiss}
           >
             <span className="titlebar-update-dot-mark" />
@@ -99,13 +100,13 @@ export function Titlebar() {
             da janela no Mac). */}
         {!isMac && (
           <>
-            <button title="Minimizar" onClick={() => window.winControls.minimize()}>
+            <button title={t("titlebar.minimize")} onClick={() => window.winControls.minimize()}>
               <Icon name="winMinimize" size={14} />
             </button>
-            <button title={maximized ? "Restaurar" : "Maximizar"} onClick={() => window.winControls.toggleMaximize()}>
+            <button title={maximized ? t("titlebar.restore") : t("titlebar.maximize")} onClick={() => window.winControls.toggleMaximize()}>
               <Icon name={maximized ? "winRestore" : "winMaximize"} size={14} />
             </button>
-            <button className="titlebar-close" title="Fechar" onClick={() => window.winControls.close()}>
+            <button className="titlebar-close" title={t("titlebar.close")} onClick={() => window.winControls.close()}>
               <Icon name="close" size={14} />
             </button>
           </>

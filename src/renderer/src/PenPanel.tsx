@@ -1,9 +1,10 @@
+import { t } from "../../shared/i18n";
 import { Popover } from "./Popover";
 
-const WIDTH_PRESETS: { value: number; label: string }[] = [
-  { value: 1.5, label: "fino" },
-  { value: 3, label: "médio" },
-  { value: 6, label: "grosso" },
+const WIDTH_PRESETS: { value: number; labelKey: "pen.thin" | "pen.medium" | "pen.thick" }[] = [
+  { value: 1.5, labelKey: "pen.thin" },
+  { value: 3, labelKey: "pen.medium" },
+  { value: 6, labelKey: "pen.thick" },
 ];
 
 /**
@@ -38,13 +39,13 @@ export function PenPanel({
   return (
     <Popover anchorRef={anchorRef} open={open} onClose={onClose}>
       <div className="popover-field">
-        <label>tamanho</label>
+        <label>{t("pen.size")}</label>
         <div className="pen-size-row">
           {WIDTH_PRESETS.map((p) => (
             <button
               key={p.value}
               className={`pen-size-btn${width === p.value ? " active" : ""}`}
-              title={p.label}
+              title={t(p.labelKey)}
               onClick={() => setWidth(p.value)}
             >
               <span className="pen-size-dot" style={{ width: 3 + p.value * 1.6, height: 3 + p.value * 1.6 }} />
@@ -53,18 +54,18 @@ export function PenPanel({
         </div>
       </div>
       <div className="popover-field">
-        <label>tipo</label>
+        <label>{t("pen.typeLabel")}</label>
         <div className="pen-type-row">
           <button className={`pen-type-btn${style === "solid" ? " active" : ""}`} onClick={() => setStyle("solid")}>
-            traço
+            {t("pen.stroke")}
           </button>
           <button className={`pen-type-btn${style === "marker" ? " active" : ""}`} onClick={() => setStyle("marker")}>
-            marcador
+            {t("pen.marker")}
           </button>
         </div>
       </div>
       <div className="popover-field">
-        <label>cor</label>
+        <label>{t("pen.colorLabel")}</label>
         <span className="swatches">
           {colors.map((c) => (
             <button
@@ -78,19 +79,19 @@ export function PenPanel({
       </div>
       <div className="pen-shortcuts">
         <span>
-          <kbd>V</kbd> ponteiro
+          <kbd>V</kbd> {t("shortcuts.desc.pointer")}
         </span>
         <span>
-          <kbd>P</kbd> caneta
+          <kbd>P</kbd> {t("shortcuts.desc.pen")}
         </span>
         <span>
-          <kbd>C</kbd> conector
+          <kbd>C</kbd> {t("shortcuts.desc.connector")}
         </span>
         <span>
-          <kbd>S</kbd> seleção
+          <kbd>S</kbd> {t("shortcuts.desc.select")}
         </span>
         <span>
-          <kbd>Esc</kbd> sair
+          <kbd>Esc</kbd> {t("pen.exit")}
         </span>
       </div>
     </Popover>

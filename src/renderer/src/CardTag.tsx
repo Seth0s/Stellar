@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
 
 /**
@@ -55,7 +56,7 @@ export function CardTag({ label, onRename }: { label: string; onRename: (next: s
   // active `<input>` above, which genuinely must not start a drag.
   return (
     <span className="card-tag-group">
-      <span className="card-tag" title="clique duas vezes para renomear" onDoubleClick={startEditing}>
+      <span className="card-tag" title={t("card.renameHint")} onDoubleClick={startEditing}>
         {label}
       </span>
       {/* Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — o
@@ -73,7 +74,7 @@ export function CardTag({ label, onRename }: { label: string; onRename: (next: s
         type="button"
         className="card-tag-rename-hint"
         data-no-drag
-        title="Renomeável (clique duas vezes no nome) — vira o nome que ferramentas MCP usam pra mirar este card"
+        title={t("card.renameableTitle")}
         onClick={startEditing}
         tabIndex={-1}
       >
