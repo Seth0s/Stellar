@@ -50,7 +50,7 @@ import {
   writeFile,
 } from "./fs-tools";
 import { gitStatus } from "./git-tools";
-import { startWatching, stopWatching, stopAllWatchers } from "./file-watcher";
+import { startWatching, stopWatching, stopAllWatchers, setWatchedDirs, getWatchStats } from "./file-watcher";
 import { saveClipboardImage, saveImageBytes, readAttachmentImage, testWriteClipboardImage } from "./clipboard-image";
 import { wrapJpegAsPdf } from "./pdf-export";
 import { saveBoardAssetBytes, copyBoardAssetFromPath, resolveBoardAsset } from "./board-assets";
@@ -2189,8 +2189,12 @@ function createWindow() {
     createEntry(root, parentPath, name, kind),
   );
   ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
-  ipcMain.handle("fs:watch-start", (_e, root: string) => startWatching(root));
-  ipcMain.handle("fs:watch-stop", (_e, root: string) => stopWatching(root));
+  ipcMain.handle("fs:watch-start", (_e, root: string, clientId: string) => startWatching(root, clientId));
+  ipcMain.handle("fs:watch-set-dirs", (_e, root: string, clientId: string, dirs: string[]) =>
+    setWatchedDirs(root, clientId, dirs),
+  );
+  ipcMain.handle("fs:watch-stop", (_e, root: string, clientId: string) => stopWatching(root, clientId));
+  ipcMain.handle("fs:watch-stats", () => getWatchStats());
 
   ipcMain.handle("browser:create", (_e, id: string, url: string) => browserRegistry.create(id, url));
   ipcMain.handle("browser:navigate", (_e, id: string, url: string) => browserRegistry.navigate(id, url));

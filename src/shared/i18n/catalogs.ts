@@ -543,6 +543,9 @@ export const ptBR = {
   "files.tokensApprox": "~{count} tokens",
   "files.loadingPreview": "carregando preview…",
   "files.loadingEditor": "carregando editor…",
+  "files.diskChangedDirty":
+    "O arquivo mudou no disco. As edições não salvas foram mantidas — salvar sobrescreve o disco.",
+  "files.diskGone": "Este arquivo foi removido no disco. O buffer local foi mantido.",
   "chat.sessions": "Sessões de chat",
   "chat.sessionsTitle": "SESSÕES DE CHAT",
   "chat.newSession": "Nova sessão ({provider})",
@@ -1267,6 +1270,9 @@ export const en: Record<MessageKey, string> = {
   "files.tokensApprox": "~{count} tokens",
   "files.loadingPreview": "loading preview…",
   "files.loadingEditor": "loading editor…",
+  "files.diskChangedDirty":
+    "This file changed on disk. Unsaved edits were kept — saving will overwrite the disk copy.",
+  "files.diskGone": "This file was removed on disk. The local buffer was kept.",
   "chat.sessions": "Chat sessions",
   "chat.sessionsTitle": "CHAT SESSIONS",
   "chat.newSession": "New session ({provider})",
