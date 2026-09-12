@@ -288,36 +288,54 @@ describe("computeBoardScope", () => {
   // board 118 real com 1 task, e um board "1" que TEM tasks (6) mas NÃO
   // aparece em boardNames — porque foi deletado e `deleteBoard` nunca
   // limpou `tasks.board_id` (nenhum `deleteTask`/cascade existe).
-  const counts = { "238": 2, "118": 1, "1": 6 };
-  const names = { "238": "sdadsasd", "118": "Idyplatform" };
+  const counts = { "238": 29, "118": 1, "1": 6 };
+  const names = { "238": "Maestro", "118": "Idyplatform" };
 
-  it("ownCount é a contagem do board ATIVO", () => {
-    expect(computeBoardScope("238", counts, names).ownCount).toBe(2);
+  it("ownCount é o sprint em foco — NÃO o total histórico do board (bug §0)", () => {
+    // Quadro mostra 5 do sprint corrente; mapa global ainda tem 29.
+    const scope = computeBoardScope("238", counts, names, 5);
+    expect(scope.ownCount).toBe(5);
+    expect(scope.boardTotal).toBe(29);
   });
 
-  it("board ativo sem NENHUMA task ainda (não aparece em counts) dá ownCount 0, não undefined/NaN", () => {
-    expect(computeBoardScope("999", counts, names).ownCount).toBe(0);
+  it("board ativo sem task no sprint em foco dá ownCount 0 mesmo com boardTotal > 0", () => {
+    const scope = computeBoardScope("238", counts, names, 0);
+    expect(scope.ownCount).toBe(0);
+    expect(scope.boardTotal).toBe(29);
   });
 
-  it("otherBoards exclui o board ativo e soma certo em otherTotal", () => {
-    const scope = computeBoardScope("238", counts, names);
+  it("board sem entrada em counts dá boardTotal 0; ownCount segue o sprint passado", () => {
+    const scope = computeBoardScope("999", counts, names, 3);
+    expect(scope.ownCount).toBe(3);
+    expect(scope.boardTotal).toBe(0);
+  });
+
+  it("sprint congelado: ownCount vem do tamanho do snapshot passado, nunca do mapa vivo", () => {
+    // Snapshot fechado com 12 tasks; tabela viva do board ainda soma 29.
+    const scope = computeBoardScope("238", counts, names, 12);
+    expect(scope.ownCount).toBe(12);
+    expect(scope.boardTotal).toBe(29);
+  });
+
+  it("otherBoards exclui o board ativo e soma certo em otherTotal (significado inalterado)", () => {
+    const scope = computeBoardScope("238", counts, names, 5);
     expect(scope.otherBoards.map((b) => b.boardId)).toEqual(["1", "118"]); // ordenado por contagem desc
     expect(scope.otherTotal).toBe(7); // 6 + 1
   });
 
   it("ordena por contagem decrescente, não pela ordem de inserção do mapa", () => {
-    const scope = computeBoardScope("238", counts, names);
+    const scope = computeBoardScope("238", counts, names, 5);
     expect(scope.otherBoards[0].count).toBeGreaterThanOrEqual(scope.otherBoards[1].count);
   });
 
   it("um board sem entrada em boardNames (o caso órfão real) vem com name:null — nunca um palpite de nome, nunca omitido da contagem", () => {
-    const scope = computeBoardScope("238", counts, names);
+    const scope = computeBoardScope("238", counts, names, 5);
     const orphan = scope.otherBoards.find((b) => b.boardId === "1");
     expect(orphan).toEqual({ boardId: "1", name: null, count: 6 });
   });
 
   it("board conhecido vem com o nome real", () => {
-    const scope = computeBoardScope("238", counts, names);
+    const scope = computeBoardScope("238", counts, names, 5);
     const known = scope.otherBoards.find((b) => b.boardId === "118");
     expect(known?.name).toBe("Idyplatform");
   });

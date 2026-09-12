@@ -72,23 +72,31 @@ const COLUMN_EMPTY_TEXT: Record<TaskColumn, string> = {
  * `footerContent` do `CardFrame`. Contagem "N em outros boards" é texto
  * puro (nunca link). O botão "trocar de board" da rodada anterior foi
  * REMOVIDO a pedido do dono do repo (2ª rodada de fidelidade) — a Home
- * continua alcançável pelo fluxo normal do app, não por este rodapé. */
+ * continua alcançável pelo fluxo normal do app, não por este rodapé.
+ *
+ * §0 (2026-09-12) — o número principal é o sprint em foco (`focusedSprintCount`:
+ * comprimento do quadro vivo ou do snapshot congelado). O total histórico
+ * do board, quando diverge, aparece só como "total N" rotulado. */
 function TaskScopeFooter({
   activeBoardId,
   boardNames,
   taskCountsByBoard,
+  focusedSprintCount,
 }: {
   activeBoardId: string;
   boardNames: Record<string, string>;
   taskCountsByBoard: Record<string, number>;
+  focusedSprintCount: number;
 }) {
-  const scope = computeBoardScope(activeBoardId, taskCountsByBoard, boardNames);
+  const scope = computeBoardScope(activeBoardId, taskCountsByBoard, boardNames, focusedSprintCount);
   const ownName = boardNames[activeBoardId] ?? activeBoardId;
   const otherBoardsTooltip = scope.otherBoards.map((b) => `${b.name ?? `board ${b.boardId} (não existe)`} (${b.count})`).join(", ");
+  const showBoardTotal = scope.boardTotal !== scope.ownCount;
   return (
     <span data-part="board-scope" className={styles.scopeFooter}>
       <span className={styles.scopeOwn}>
         board {ownName} · {scope.ownCount} tasks
+        {showBoardTotal ? ` · total ${scope.boardTotal}` : ""}
       </span>
       {scope.otherTotal > 0 && (
         <span className={styles.scopeRight} title={otherBoardsTooltip}>
@@ -1280,7 +1288,12 @@ function TaskCardInner({
       panX={panX}
       panY={panY}
       footerContent={
-        <TaskScopeFooter activeBoardId={activeBoardId} boardNames={boardNames} taskCountsByBoard={taskCountsByBoard} />
+        <TaskScopeFooter
+          activeBoardId={activeBoardId}
+          boardNames={boardNames}
+          taskCountsByBoard={taskCountsByBoard}
+          focusedSprintCount={boardTasks.length}
+        />
       }
       headerContent={
         <>

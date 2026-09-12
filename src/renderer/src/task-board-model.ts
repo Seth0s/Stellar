@@ -227,9 +227,20 @@ export function resolveConcurrencyCap(raw: number | null): number {
  * ficar "quadro vazio" sem explicação), mas nunca oferece um botão de
  * troca pra um destino que não existe. Ordenado por contagem decrescente
  * — o board órfão com mais tasks aparece primeiro, não por acidente de
- * iteração de `Object.entries`. */
+ * iteração de `Object.entries`.
+ *
+ * DESIGN-BACKLOG.md §0 (2026-09-12) — `ownCount` é o sprint EM FOCO, não
+ * o total histórico do board. `focusedSprintCount` vem do quadro vivo
+ * (`buildTaskBoard` já filtra o sprint ativo) ou do `snapshot_json`
+ * quando se visualiza um sprint fechado — NUNCA recontar a tabela viva
+ * pra um fechado (mesmo contrato do painel de gráficos). `boardTotal`
+ * continua saindo de `taskCountsByBoard` (todos os sprints) e só aparece
+ * na UI como dado secundário explicitamente rotulado "total". */
 export type BoardTaskScope = {
+  /** Tasks do sprint em foco (vivo ou snapshot congelado). */
   ownCount: number;
+  /** Todas as tasks do board ativo, todos os sprints — rótulo "total". */
+  boardTotal: number;
   otherTotal: number;
   otherBoards: { boardId: string; name: string | null; count: number }[];
 };
@@ -238,13 +249,15 @@ export function computeBoardScope(
   activeBoardId: string,
   taskCountsByBoard: Readonly<Record<string, number>>,
   boardNames: Readonly<Record<string, string>>,
+  focusedSprintCount: number,
 ): BoardTaskScope {
   const otherBoards = Object.entries(taskCountsByBoard)
     .filter(([boardId]) => boardId !== activeBoardId)
     .map(([boardId, count]) => ({ boardId, name: boardNames[boardId] ?? null, count }))
     .sort((a, b) => b.count - a.count);
   return {
-    ownCount: taskCountsByBoard[activeBoardId] ?? 0,
+    ownCount: focusedSprintCount,
+    boardTotal: taskCountsByBoard[activeBoardId] ?? 0,
     otherTotal: otherBoards.reduce((sum, b) => sum + b.count, 0),
     otherBoards,
   };
