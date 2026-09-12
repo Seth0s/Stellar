@@ -918,6 +918,38 @@ arvore suja), coluna nova.
 * **Bugs de Lógica:** Limite de tamanho em visualizações de diff; resolução e limpeza de consentimentos pendentes no fechamento de cards ou reload; tratamento de framing em sockets TCP; e limitação de buffers e URLs em memória.
 * **Otimizações de Performance:** Memoização e estabilização de handlers no React para todos os 8 tipos de card; redução de taxa de quadros (8 FPS) para navegadores em segundo plano; banco SQLite com modo WAL e índices estruturais; e lazy-loading de pacotes pesados no bundle.
 
+#### `requesterId` não é autenticado no socket do acbridge (levantado 2026-09-12, review do 6f9559b)
+
+O servidor do socket (`message-bus.ts:3128-3156`) faz `JSON.parse(line)` e
+passa direto pro `handleRequest`, sem carimbar nem sobrescrever
+`requesterId`. Qualquer processo que abra o socket pode se declarar
+qualquer card. O caminho MCP **não** tem esse problema:
+`caller-identity.ts:76` ignora o argumento e só aceita o carimbo da URL
+(correção da auditoria pré-release S4) — a discrepância é entre os dois
+transportes, não no dispatcher.
+
+**Por que não é urgente hoje, e o que muda isso.** Quem chama o acbridge é
+um processo do mesmo usuário *com shell* — já pode ler qualquer arquivo do
+usuário direto, então forjar identidade não dá acesso novo. O que depende
+de `requesterId` hoje é a atribuição do auto-conector: o pior caso atual é
+uma seta desenhada saindo do card errado.
+
+**O gatilho para consertar:** a primeira capacidade que use `requesterId`
+como *gate* e não como *rótulo*. A forma `path` do `write_sticky` chegou
+perto (o root do confinamento é o cwd do card chamador), mas não conta:
+a forma `content` inline nunca teve confinamento nenhum, então `--file` é
+estritamente mais restrito do que já era possível. No dia em que uma
+capacidade só existir para o card X, o conserto é no transporte — derivar
+a identidade da conexão, nunca do payload —, não em cada comando.
+
+#### Renomear a raiz de um FilesCard aberto (levantado 2026-09-12, review do 01420e9)
+
+`reloadAll` falha ao listar a raiz que não existe mais, `setError` pinta a
+tela e o card para de refletir mudanças. Não consertado de propósito:
+"o card mostra erro porque a raiz dele não existe mais" é defensável, e
+qual *deveria* ser o comportamento (seguir o inode? fechar o card? oferecer
+reapontar?) é decisão de produto, não bug com resposta óbvia.
+
 ---
 
 ## 🎯 5. Próxima Rodada Recomendada
