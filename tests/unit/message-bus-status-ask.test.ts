@@ -140,4 +140,36 @@ describe("message-bus: request_task_status (terceiro caminho)", () => {
     expect(String(res.warning)).toContain("prevalece");
     expect(String(res.warning)).toContain("request_task_status");
   });
+
+  it("update_task que aplica o status pedido encerra o pedido e diz isso", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-status-ask-bus-"));
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        getTask: () =>
+          humanLocked({
+            requested_status: "running",
+            requested_reason: "feito",
+            requested_by: "416",
+            requested_at: 2,
+            diverged_status: null,
+            diverged_actor: null,
+          }),
+        upsertTask: () => ({
+          status: "running",
+          statusChanged: true,
+          divergedStatus: null,
+          divergedActor: null,
+          recordDeclaration: false,
+          warnAgent: false,
+          declaredStatus: null,
+        }),
+      }),
+    );
+
+    const res = await bus.handleRequest({ cmd: "update_task", taskId: "t-locked", status: "running" } as BusRequest);
+    expect(res).toMatchObject({ ok: true, status: "running" });
+    expect(String(res.message)).toContain("encerrado");
+    expect(String(res.message)).toContain("running");
+  });
 });

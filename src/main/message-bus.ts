@@ -10,8 +10,10 @@ import type { StatusWriteDecision } from "./status-write-decision";
 import {
   decideStatusAsk,
   describeStatusAskAlready,
+  describeStatusAskApplied,
   describeStatusAskParked,
   describeStatusHeldWarning,
+  retainStatusAsk,
 } from "./status-write-decision";
 import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, type FailureSource } from "./failure-kind-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
@@ -2273,6 +2275,23 @@ export function createMessageBus(
         // → MCP `warning` field alone; never notify the wrong card.
         if (req.requesterId) notifyHumanMovedTask(req.requesterId, warning).catch(() => {});
         return { ok: true, warning, status: decision.status, divergedStatus: decision.divergedStatus, ...promptWritten };
+      }
+      // Same retainStatusAsk the store already ran: a live request for X
+      // plus a write that made X authoritative closes the question.
+      // Tell the writer so get_task is not the only place the orphan dies.
+      const askAfter = retainStatusAsk({
+        existing: {
+          requestedStatus: existing.requested_status ?? null,
+          requestedReason: existing.requested_reason ?? null,
+          requestedBy: existing.requested_by ?? null,
+          requestedAt: existing.requested_at ?? null,
+        },
+        newActor: "agent",
+        proposedStatus: statusProposed ? (req.status ?? null) : null,
+        resultingStatus: decision.status,
+      });
+      if (askAfter.resolvedBy === "applied-ask" && existing.requested_status) {
+        return { ok: true, message: describeStatusAskApplied(existing.requested_status), status: decision.status, ...promptWritten };
       }
       return { ok: true, ...promptWritten };
     }

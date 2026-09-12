@@ -267,20 +267,53 @@ export function decideStatusAsk(input: {
  * What an ordinary upsert does to a live ask. Dedicated `setStatusAsk`
  * is the only writer of a NEW ask; this only retains or clears.
  *
- * Human decided a status (drag, conclude, allow) → ask is stale, clear.
- * Everything else (agent/app write, bookkeeping, human prompt edit)
- * keeps the pending ask. Decision 8 is not involved: we never refuse
- * the status write itself.
+ * The ask is a question: "may this task become X?" It ends when that
+ * question is no longer open, not when a particular actor speaks:
+ *   - Human wrote a status (any) — they answered (allow, drag, conclude).
+ *   - Any writer proposed X and X is now authoritative — the write
+ *     applied or aligned with the asked status. An agent that parks a
+ *     request and then `update_task`s the same value must not leave an
+ *     orphan prompt waiting for a decision that already happened.
+ *
+ * Held writes (decision 8) do not apply, so they do not resolve the
+ * ask: status is still not X. Bookkeeping (`proposedStatus === null`)
+ * never touches the ask. We never refuse the status write itself.
  */
+export type StatusAskResolvedBy = "human-status" | "applied-ask";
+
+export type StatusAskRetainResult = {
+  ask: StatusAskFields;
+  resolvedBy: StatusAskResolvedBy | null;
+};
+
+const CLEARED_STATUS_ASK: StatusAskFields = {
+  requestedStatus: null,
+  requestedReason: null,
+  requestedBy: null,
+  requestedAt: null,
+};
+
 export function retainStatusAsk(input: {
   existing: StatusAskFields;
   newActor: StatusWriteActor;
   proposedStatus: string | null;
-}): StatusAskFields {
-  if (input.newActor === "human" && input.proposedStatus !== null) {
-    return { requestedStatus: null, requestedReason: null, requestedBy: null, requestedAt: null };
+  /** Authoritative status after `decideStatusWrite`. Distinguishes a
+   * held declaration (ask stays) from a write that made X true. */
+  resultingStatus: string;
+}): StatusAskRetainResult {
+  if (!input.existing.requestedStatus || input.proposedStatus === null) {
+    return { ask: input.existing, resolvedBy: null };
   }
-  return input.existing;
+  if (input.newActor === "human") {
+    return { ask: CLEARED_STATUS_ASK, resolvedBy: "human-status" };
+  }
+  if (
+    input.proposedStatus === input.existing.requestedStatus &&
+    input.resultingStatus === input.existing.requestedStatus
+  ) {
+    return { ask: CLEARED_STATUS_ASK, resolvedBy: "applied-ask" };
+  }
+  return { ask: input.existing, resolvedBy: null };
 }
 
 /** AGENT-FACING — DO NOT TRANSLATE. Immediate return of request_task_status. */
@@ -296,4 +329,9 @@ export function describeStatusAskResolved(requestedStatus: string, allowed: bool
   return allowed
     ? `[de: stellar] humano aceitou o pedido de status "${requestedStatus}".`
     : `[de: stellar] humano recusou o pedido de status "${requestedStatus}".`;
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. Ask closed because a write made it true. */
+export function describeStatusAskApplied(requestedStatus: string): string {
+  return `[de: stellar] pedido de status "${requestedStatus}" encerrado — o status já é "${requestedStatus}".`;
 }

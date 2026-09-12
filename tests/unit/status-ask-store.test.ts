@@ -111,6 +111,27 @@ describe("store.ts: pedido de status (terceiro caminho)", () => {
     }
   });
 
+  it("escrita direta que APLICA o status pedido: limpa o pedido e grava request_resolved", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-status-ask-"));
+    const store = openStore(dir);
+    try {
+      store.upsertTask(base("t-apply", { actor: "agent", status: "running" }));
+      store.setStatusAsk("t-apply", { status: "done", reason: "feito", requesterId: "9", at: Date.now() + 1 });
+      const decision = store.upsertTask(base("t-apply", { status: "done", actor: "agent", updated_at: Date.now() + 2 }));
+      expect(decision).toMatchObject({ status: "done", statusChanged: true });
+
+      const t = store.getTask("t-apply")!;
+      expect(t.status).toBe("done");
+      expect(t.requested_status).toBeNull();
+      expect(t.requested_reason).toBeNull();
+      expect(t.transitions!.some((x) => x.kind === "request_resolved" && x.to_value === "done" && x.actor === "agent")).toBe(
+        true,
+      );
+    } finally {
+      store.close();
+    }
+  });
+
   it("escrita direta de agente (decisão 8) com pedido vivo: hold + divergência, pedido permanece", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-status-ask-"));
     const store = openStore(dir);
