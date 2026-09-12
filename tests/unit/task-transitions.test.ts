@@ -66,6 +66,58 @@ describe("store.ts: task_transitions / order / task_cards", () => {
     }
   });
 
+  it("upsertTask grava kind:'prompt' quando o enunciado muda, sem linha de status extra, e last_actor de status não muda", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-store-tt-"));
+    const store = openStore(dir);
+    try {
+      store.upsertTask(baseTaskFields("t-prompt", { status: "running", actor: "human" }));
+      expect(store.getTask("t-prompt")!.transitions).toHaveLength(1);
+
+      store.upsertTask(
+        baseTaskFields("t-prompt", {
+          status: "running",
+          prompt: "faz X\n\n---\n[stellar:added 2026-09-12T13:24:00.000Z]\nmais contexto",
+          actor: "agent",
+          statusProposed: false,
+          updated_at: Date.now() + 1,
+        }),
+      );
+      const transitions = store.getTask("t-prompt")!.transitions!;
+      expect(transitions.filter((x) => x.kind === "status")).toHaveLength(1);
+      expect(transitions.filter((x) => x.kind === "prompt")).toHaveLength(1);
+      expect(transitions.find((x) => x.kind === "prompt")).toMatchObject({
+        from_value: "faz X",
+        to_value: "faz X\n\n---\n[stellar:added 2026-09-12T13:24:00.000Z]\nmais contexto",
+        actor: "agent",
+      });
+      const last = store.listLastActorsForBoard("default").find((r) => r.task_id === "t-prompt");
+      expect(last?.last_actor).toBe("human");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("upsertTask NÃO grava kind:'prompt' na criação nem quando o prompt fica igual", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-store-tt-"));
+    const store = openStore(dir);
+    try {
+      store.upsertTask(baseTaskFields("t-same", { status: "pending" }));
+      expect(store.getTask("t-same")!.transitions!.every((x) => x.kind === "status")).toBe(true);
+
+      store.upsertTask(
+        baseTaskFields("t-same", {
+          status: "pending",
+          result_json: JSON.stringify({ progress: 0.5 }),
+          statusProposed: false,
+          updated_at: Date.now() + 1,
+        }),
+      );
+      expect(store.getTask("t-same")!.transitions).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
   it("upsertTask NÃO grava transição quando o upsert não muda o status", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-store-tt-"));
     const store = openStore(dir);

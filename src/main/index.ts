@@ -34,6 +34,7 @@ import { t, setLocale, resolveLocale, isLocale, type Locale } from "../shared/i1
 import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
 import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
+import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { refreshUserEnv, userEnvSnapshot } from "./user-env";
 import {
@@ -1900,6 +1901,32 @@ function createWindow() {
     });
     return { ok: true, taskId: id };
   });
+  // Human edit of the stored briefing (Fila modal). Same append-default
+  // / explicit-replace contract as MCP `update_task`, but `actor: "human"`
+  // so a prompt write never looks like an agent status move. persistTask
+  // pushes the board; it does not type into a live card.
+  ipcMain.handle(
+    "store:tasks:update-prompt",
+    (_e, taskId: string, prompt: string, mode?: TaskPromptWriteMode) => {
+      const existing = store.getTask(taskId);
+      if (!existing) return { ok: false, error: `no such task "${taskId}"` };
+      const resolved = mode ?? "append";
+      if (resolved !== "append" && resolved !== "replace") {
+        return { ok: false, error: `mode must be "append" or "replace"` };
+      }
+      const now = Date.now();
+      const applied = applyTaskPromptWrite({ existing: existing.prompt, incoming: prompt, mode: resolved, at: now });
+      if (!applied.ok) return applied;
+      persistTask({
+        ...existing,
+        prompt: applied.prompt,
+        updated_at: now,
+        actor: "human",
+        statusProposed: false,
+      });
+      return { ok: true, prompt: applied.prompt };
+    },
+  );
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — arrastar entre colunas/dentro
   // da coluna. Tudo já chega PRONTO do renderer (task-board-model.ts's
   // `COLUMN_TO_STATUS`/`computeColumnDrop`/`describeHumanMove` — decidir

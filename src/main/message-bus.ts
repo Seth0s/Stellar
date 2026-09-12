@@ -10,6 +10,7 @@ import type { StatusWriteDecision } from "./status-write-decision";
 import { describeStatusHeldWarning } from "./status-write-decision";
 import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, type FailureSource } from "./failure-kind-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
+import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -342,6 +343,13 @@ export type BusRequest =
       incrementRetry?: boolean;
       attemptedProvider?: string;
       suggestedOrder?: number;
+      /** Briefing text. Omitted = leave the stored prompt unchanged.
+       * Default write is append (original statement stays); `promptMode:
+       * "replace"` is required to overwrite. Does NOT type into a live
+       * card — spawn is the only path that delivers `prompt` to a PTY. */
+      prompt?: string;
+      /** Default `"append"`. `"replace"` is explicit intent only. */
+      promptMode?: TaskPromptWriteMode;
       /** DESIGN-BACKLOG.md §2.1 Decisão 8 — quem chamou, pra o aviso de
        * status retido (typeAndSubmit) chegar no PTY certo. Ausente em
        * chamadas antigas / bookkeeping externo: o aviso ainda volta no
@@ -2158,15 +2166,27 @@ export function createMessageBus(
       if (statusProposed && req.status === "failed") {
         result_json = stampFailureKindJson(result_json, decideFailureKind("explicit_failed"));
       }
+      const now = Date.now();
+      let prompt = existing.prompt;
+      if (req.prompt !== undefined) {
+        const mode = req.promptMode ?? "append";
+        if (mode !== "append" && mode !== "replace") {
+          return { ok: false, error: `promptMode must be "append" or "replace"` };
+        }
+        const applied = applyTaskPromptWrite({ existing: existing.prompt, incoming: req.prompt, mode, at: now });
+        if (!applied.ok) return applied;
+        prompt = applied.prompt;
+      }
       const updated: TaskRow = {
         ...existing,
+        prompt,
         status: statusProposed ? req.status! : existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
         result_json,
         retry_count: existing.retry_count + (req.incrementRetry ? 1 : 0),
         attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
         suggested_order: req.suggestedOrder !== undefined ? req.suggestedOrder : existing.suggested_order,
-        updated_at: Date.now(),
+        updated_at: now,
         actor: "agent",
         statusProposed,
       };
@@ -2180,6 +2200,7 @@ export function createMessageBus(
       if (decision.statusChanged && decision.status === "failed" && existing.status !== "failed") {
         retryOrFail({ ...updated, status: decision.status });
       }
+      const promptWritten = req.prompt !== undefined ? { prompt } : {};
       if (decision.warnAgent) {
         const warning = describeStatusHeldWarning(decision.status, decision.declaredStatus ?? req.status ?? decision.status);
         // Review adversarial achado 4 — typeAndSubmit ONLY to requesterId.
@@ -2187,9 +2208,9 @@ export function createMessageBus(
         // implementer's PTY (corrupting an innocent session). No requester
         // → MCP `warning` field alone; never notify the wrong card.
         if (req.requesterId) notifyHumanMovedTask(req.requesterId, warning).catch(() => {});
-        return { ok: true, warning, status: decision.status, divergedStatus: decision.divergedStatus };
+        return { ok: true, warning, status: decision.status, divergedStatus: decision.divergedStatus, ...promptWritten };
       }
-      return { ok: true };
+      return { ok: true, ...promptWritten };
     }
 
     if (req.cmd === "list_tasks") {

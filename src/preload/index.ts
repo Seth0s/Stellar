@@ -678,6 +678,10 @@ const spawn = {
  * `get_task` por task — ver seu comentário grande). */
 export type TaskBoardItem = {
   id: string;
+  /** Stored briefing. Appends after create are concatenated here with a
+   * visible `[stellar:added …]` marker (`parseTaskPrompt` in
+   * `src/task-prompt-decision.ts`) so the Fila edit modal can split
+   * original vs later text without a second column. */
   prompt: string | null;
   provider: string | null;
   status: string;
@@ -758,6 +762,15 @@ const tasks = {
    * no main — ver `store:tasks:create` em index.ts. */
   create: (boardId: string, prompt: string): Promise<{ ok: true; taskId: string } | { ok: false; error: string }> =>
     ipcRenderer.invoke("store:tasks:create", boardId, prompt),
+  /** Fila modal — same append-default / explicit-replace contract as
+   * MCP `update_task`. `actor: "human"` on the main side. Does not type
+   * into a running card. */
+  updatePrompt: (
+    taskId: string,
+    prompt: string,
+    mode?: "append" | "replace",
+  ): Promise<{ ok: true; prompt: string } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:update-prompt", taskId, prompt, mode),
   /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — arrastar entre colunas e
    * dentro da coluna. Tudo já vem PRONTO do renderer
    * (task-board-model.ts's `COLUMN_TO_STATUS`/`computeColumnDrop` — a

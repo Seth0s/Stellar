@@ -307,16 +307,19 @@ export type TaskActor = "app" | "agent" | "human";
  * `declaration` (Decisão 8: escrita de app/agente que NÃO deslocou o
  * status humano — auditada aqui sem virar `kind:'status'`, senão
  * `last_actor` deixaria de ser `"human"` e a próxima escrita passaria
- * por cima). Guardado pra sempre, podado só junto com a task (nenhuma
- * função de deleteTask existe ainda neste código — nada a podar por
- * enquanto). Nunca inventar histórico sintético pra tasks que já
- * existiam antes desta tabela: a trilha delas começa vazia, de propósito
- * (decisão explícita do dono do repo — pareceria dado real e sujaria os
- * gráficos futuros). */
+ * por cima) de `prompt` (o enunciado mudou de verdade — acréscimo ou
+ * replace explícito; NÃO é `declaration`, porque a escrita pegou, e NÃO
+ * é `status`, senão `last_actor` / o gráfico de ciclo leria um
+ * acréscimo de briefing como se fosse mudança de coluna). Guardado pra
+ * sempre, podado só junto com a task (nenhuma função de deleteTask
+ * existe ainda neste código — nada a podar por enquanto). Nunca inventar
+ * histórico sintético pra tasks que já existiam antes desta tabela: a
+ * trilha delas começa vazia, de propósito (decisão explícita do dono do
+ * repo — pareceria dado real e sujaria os gráficos futuros). */
 export type TaskTransitionRow = {
   id: string;
   task_id: string;
-  kind: "status" | "stage" | "declaration";
+  kind: "status" | "stage" | "declaration" | "prompt";
   from_value: string | null;
   to_value: string;
   actor: TaskActor;
@@ -1090,9 +1093,10 @@ export function openStore(userDataDir: string) {
 
   const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at`;
   // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
-  // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` de
-  // propósito: uma declaração estacionada NÃO pode virar o last_actor,
-  // senão o lock humano se desfaz na próxima escrita.
+  // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` e
+  // `prompt` de propósito: uma declaração estacionada ou um acréscimo de
+  // briefing NÃO pode virar o last_actor, senão o lock humano se desfaz
+  // na próxima escrita.
   const lastStatusActorStmt = db.prepare(
     `SELECT actor FROM task_transitions WHERE task_id = ? AND kind = 'status' ORDER BY at DESC, rowid DESC LIMIT 1`,
   );
@@ -1452,6 +1456,22 @@ export function openStore(userDataDir: string) {
         kind: "declaration",
         from_value: existing.status,
         to_value: decision.declaredStatus,
+        actor: newActor,
+        card_id: task.card_id,
+        at,
+      });
+    }
+    // Prompt write is information, not noise — same choke point as
+    // status/declaration, so no caller has to remember to log it.
+    // Create (`!existing`) is the original statement, not a change.
+    // `to_value` is NOT NULL; a cleared prompt persists as "".
+    if (existing && existing.prompt !== persistable.prompt) {
+      insertTransitionStmt.run({
+        id: randomUUID(),
+        task_id: task.id,
+        kind: "prompt",
+        from_value: existing.prompt,
+        to_value: persistable.prompt ?? "",
         actor: newActor,
         card_id: task.card_id,
         at,
