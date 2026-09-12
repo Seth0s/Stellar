@@ -735,131 +735,65 @@ Tudo aqui saiu do primeiro dia de uso do painel de sprints e dos terminais, com 
 ---
 
 ## 💡 3. Ideias & Brainstorms
-### 3.0 Raio de alcance — DECIDIDO NAO CONSTRUIR AGORA (2026-09-12)
+### 3.0 Raio de alcance — infraestrutura no Stellar, derivada do codigo (recorte fechado 2026-09-12)
 
-Tres rodadas de desenho, com dois criticos de providers diferentes lendo a proposta e depois
-lendo um ao outro. **Os dois convergiram em nao construir**, partindo de posicoes opostas.
+**O proposito, na frase do dono do repo:** o implementador A mexe no arquivo C, C alimenta 3
+clientes, a task dele so olhava 1, e ele nunca vai lembrar de checar os outros porque estao fora
+do escopo dele.
 
-**O que matou, e e um numero, nao uma opiniao.** A ferramenta dependeria das fontes de contrato
-ja escritas. Medido no IdyPlatform: `vhosts/Backend/routes/api.php` declara **313 paths
-distintos** (460 chamadas `Route::`); `docs/contracts/` tem **15 arquivos**; a cobertura e de
-**38% com casamento estrito** do path completo e 68% com casamento generoso por prefixo — e
-prefixo e justamente o casamento que mente. A matriz Endpoint x Admin x Mobile x conecta x
-Portal (`docs/contracts/backend/recurring-planning.md:1430`) tem **82 linhas**. `portal/` e
-`frontend/` contem so `.gitkeep`. O contrato do resend existe so do lado admin — `mobile/eventos.md`
-tem zero mencao a `resend`/`delivery_mode`.
-Com 38%, a resposta mais comum da ferramenta seria "nao sei". Uma lista vazia que o leitor
-interpreta como "nenhum cliente afetado" e pior que ferramenta nenhuma, porque carimba.
+**O recorte foi reescrito tres vezes. O erro que custou as tres rodadas foi meu**: o Idy tem uma
+matriz escrita a mao excepcionalmente boa (`docs/contracts/backend/recurring-planning.md:1430`,
+82 linhas com `arquivo:linha` dos dois lados), eu vi aquilo e desenhei um LEITOR DE MATRIZ. So
+que nenhum outro repositorio tem isso, e nenhum vai ter sem alguem escrever a mao. Um recurso do
+Stellar que exige curadoria manual no repositorio alvo nao e infraestrutura — e um leitor de um
+documento que existe num lugar so. O dono corrigiu: *"pensei que ia criar uma infraestrutura no
+Stellar para aceitar qualquer repositorio alheio; se for algo desse estilo de melhorar o Idy, nao
+faz sentido"*.
 
-**As duas concessoes que fecharam a discussao:**
-* O critico que defendia a versao minima concedeu: *"a versao minima que eu vendi e a v2 com nome
-  melhor"*, e *"eu rebatizei leitura de codigo como lookup de declaracao para preservar a pureza
-  da fatia 1"* — os tres detectores de apodrecimento (K de N, citacao viva, arvore suja) leem
-  codigo, entao o "e impossivel detectar matriz velha sem ler o codigo" do outro fica de pe.
-* O critico que defendia OpenAPI concedeu: o Idy **nao tem spec nem gerador**, entao a proposta
-  dele comecava por manter uma especificacao a mao — a mesma disciplina humana que ele condenava.
+**Consequencia: extrair do codigo nao e opcional, e a unica saida.** Os 38% de cobertura de
+contrato no Idy mataram o desenho de *lookup*, nao a ideia de extrair — eu misturei as duas e
+joguei fora a errada. Isso reencontra o que o critico `antigravity` disse na primeira rodada
+("a menor versao util volta a ler o codigo, nao a documentacao") e o que o `cursor` concedeu na
+ultima ("eu rebatizei leitura de codigo como lookup para preservar a pureza da fatia 1").
 
-**O que fazer antes, e os dois propuseram a MESMA coisa sem combinar:** subir o corpus, com a
-semente gerada **do codigo**, uma vez. Uma linha por path do `api.php` na matriz — Endpoint x
-Admin x Mobile x conecta x Portal, celula = `arquivo:linha`, traco, ou `?`. 313 linhas, mesmo com
-muitas celulas vazias: **`?` e classificacao, silencio nao e**. A maquina garante o esqueleto, o
-humano preenche as conexoes. Prioridade: fechar os buracos da superficie ja documentada (resend
-no Mobile, Conecta, portal vazio) e classificar auth e portal, que sao multi-cliente e hoje caem
-em "sem fonte". **Isso e task do Idy, nao do Stellar.**
+**O que a infraestrutura e:**
+* **Dentro de um repositorio, sem configuracao nenhuma** — quem referencia o simbolo que o diff
+  mudou. Sempre derivavel, em qualquer repositorio, inclusive nos que nao tem documentacao.
+* **Entre repositorios, com o catalogo dizendo apenas quais existem** — literais compartilhados
+  atravessando a fronteira, **ordenados por especificidade**: `/plans/{plan}/coverage/reconcile`
+  cruzando dois repositorios e sinal forte, `status` e ruido. Regra mecanica, nao curadoria.
+* **Contrato declarado, quando existir, vira REFORCO DE CONFIANCA — nunca pre-requisito.** Quem
+  tem documentacao ganha precisao; quem nao tem ainda recebe o essencial. A dependencia se
+  inverte.
+* **Nada e persistido e nada e alimentado.** A lista e derivada na consulta e descartada. O unico
+  dado escrito por humano e o **ponto cego declarado**: quando a extracao nao enxerga (URL
+  montada por concatenacao, despacho dinamico), quem escreveu aquela linha marca ali mesmo, ao
+  lado do codigo — nunca num documento central.
 
-**Limiar para reabrir**: 50% de cobertura estrita. Abaixo disso a ferramenta tem "nao sei" como
-modo. A partir de ~70% o "sem fonte" vira alarme em vez de ruido, e a interseccao no Stellar
-passa a fazer sentido.
+**A matriz do Idy muda de papel: vira GABARITO, nao fonte.** 82 linhas conferidas por humano, com
+os dois lados, sao um conjunto rotulado para medir precisao e cobertura do extrator antes de
+alguem confiar nele. Nenhum teste de aceitacao anterior tinha essa qualidade.
 
-**Fica decidido junto, e vale por si:** `update_task` ganha a capacidade de escrever no prompt da
-task (decisao do dono do repo). Isso resolve uma objecao estrutural real — o prompt era
-write-once no `create_task`, entao um enunciado nao podia evoluir — e serve a qualquer briefing
-que precise crescer, independente de raio de alcance.
+**Onde aparece para as pessoas:** o bloco de verificacao entra no proprio enunciado da task (por
+isso `update_task` precisa escrever no prompt), o implementador le a propria task, e o revisor
+rederiva do diff real — nunca da copia velha. Gate e veredito do revisor, **nunca** `refuse` no
+`update_task`: a decisao 8 diz que escrita de agente e aceita com aviso, e isso continua valendo.
 
-**Nao voltar ao grafo.** Nem card, nem desenho, nem extrator de acoplamento informal
-(IPC/CSS/coluna-fantasma). Isso nunca foi o proposito; o proposito era lembrar quem esquece, e o
-que falta para lembrar nao e mecanismo, e dado.
+**Duas direcoes:** produtor→clientes (a task nao e aprovada enquanto cada cliente listado nao
+tiver resposta) e cliente→produtor, que acende pelos **hunks REMOVIDOS** — e o caso real do Idy,
+onde o botao saiu do Mobile e o endpoint continuou aceitando o modo antigo.
 
+**Riscos ja nomeados, nao resolvidos:**
+* **Falsa seguranca** (achado do `antigravity`): uma lista IMPLICA completude. Por isso o bloco de
+  incompletude e obrigatorio e especifico da consulta, e resultado vazio e status proprio, nunca
+  sucesso.
+* **Nao da para provar por dogfooding aqui.** O Stellar nao tem superficie de contrato HTTP, nao
+  tem clientes e nem esta no `ai/workspace.yaml`. Tudo que deu certo hoje deu certo por ser medido
+  contra uso real NESTE repositorio; esta funcionalidade nao tem esse ciclo. E por isso que o
+  gabarito do Idy importa tanto — e o unico substituto disponivel.
 
-* **Card de grafo de fluxo com observer — raio de alcance de uma mudanca (ideia do dono do repo, 2026-09-11):**
-  * O caso que ele descreveu, literal: *"implementador A esta mexendo no arquivo C, e esse arquivo C faz parte do backend que responde a 3 projetos diferentes (clientes). A task dele mexia so na parte especifica de C que afeta 1 desses clientes. Ele verifica, fica tudo ok — mas nunca vai lembrar de verificar os outros clientes que tambem se alimentam dele, porque esta fora do escopo dele. Ou seja, ele poderia verificar sempre inicialmente quem afeta quem, e sempre verificar se tudo ligante com o grafo esta ok"*.
-  * **Nao e hipotetico. Ha duas evidencias no proprio historico do usuario:**
-    1. Registrado em memoria de sessao: *"Idy: envio forcado ainda aberto no Backend — o botao saiu do Mobile, mas o endpoint de resend ainda aceita `delivery_mode immediate` de coordenador"*. Consertado num consumidor, deixado aberto no produtor que alimenta os outros. E exatamente a classe.
-    2. Aconteceu DENTRO do Stellar em 2026-09-11: o card 325 migrou o sinal 2 para o `resolveNotifyTarget` que pertencia ao card 323. Ele percebeu **por acaso**, investigando outra coisa, e relatou. Se nao tivesse percebido, nasceriam duas variantes divergentes do mesmo mecanismo. Raio de alcance dentro de UM repo, com dois agentes.
-  * **A pergunta de desenho que decide tudo: de onde vem o grafo?** Sao tres fontes com custo e alcance MUITO diferentes, e misturar sem dizer produziria confianca falsa:
-    1. **Imports do mesmo repo** — barato e exato. Analise estatica resolve. Cobre o caso Stellar (dois agentes no mesmo modulo), nao cobre o caso que ele descreveu.
-    2. **Contrato entre repos** — o caso REAL dele (Backend servindo Admin, Conecta, Mobile). Import estatico NAO atravessa repo: a aresta e endpoint de API, evento, schema. Precisa de fonte declarada ou de inferencia por chamada HTTP/nome de rota, e as duas erram diferente.
-    3. **Grafo de conhecimento** — o workspace ja tem `graphify` instalado, e ja existe uma decisao registrada de estrategia: grafo por vhost mais um grafo fino de contratos cross-repo, em vez de um unificado. Isso foi decidido antes e deveria ser reaproveitado, nao reinventado.
-  * **QUANDO o observer dispara importa mais que o desenho do grafo.** O premissa da ideia e que o implementador NAO vai olhar fora do escopo dele — entao avisar durante a edicao chega tarde e no lugar errado. Os dois momentos de valor real:
-    * **No briefing**: a task ja nasce dizendo "isto toca C, que alimenta A, B e D — verifique B e D tambem". Quem monta o briefing e o orquestrador, e e ele quem tem o grafo na mao.
-    * **No review**: o gate pergunta "voce verificou os consumidores que o grafo lista?" antes de aprovar. Vira parte do contrato de aceite, nao lembrete opcional.
-    * Terceiro momento, mais fraco: alerta ao vivo na UI. Bonito, e o menos util dos tres.
-  * **Ja existe infraestrutura relacionada que precisa ser considerada antes de construir**: o workspace tem o papel `contract-impact-reviewer` e o skill `review-api-contract-impact`, feitos para avaliar impacto produtor/consumidor. O card de grafo deveria ALIMENTAR esses, nao competir com eles.
-  * **DECISOES DO DONO DO REPO (2026-09-11), ja fechadas:**
-    1. **Sem processo MCP novo.** Objecao dele: *"seria mais um processo MCP so para isso, eu queria algo mais eficiente"* — coerente com a medicao de 607 MB em 11 shims. A saida existe e nao custa processo: o `mcp-server.ts` JA roda dentro do processo main do Electron (os `stellar-mcp` sao pontes stdio->http para CLIs que so falam stdio, nao instancias do servidor). Acrescentar uma tool ao servidor existente custa ZERO processo. O dado mora no store que ja existe (`better-sqlite3` no main), e o `file-watcher.ts` — o mesmo que foi de 6307ms para 304ms podando `node_modules` antes de registrar — ja sabe o que mudou, o que torna a reparsagem incremental em vez de varredura por consulta.
-       * `graphify` continua util **offline**: semear o grafo uma vez ou conferir se a varredura barata esta perdendo aresta. Ferramenta de bancada, nunca dependencia em runtime.
-    2. **Grafo POR REPOSITORIO, com conexoes entre grafos.** Cada repo tem o seu; as arestas que atravessam repo sao sinalizadas como tal. **A distincao entre os dois tipos de aresta e obrigatoria, nao cosmetica**: intra-repo vem de import (derivada, exata) e inter-repo vem de contrato — endpoint, evento, schema — que e declarada ou inferida e erra diferente. Um grafo que mistura as duas sem dizer qual e qual produz confianca falsa, que e a armadilha registrada logo abaixo.
-    3. **Varredura em BACKGROUND com aviso de carregamento na UI.** Nao no boot (atrasaria a abertura), nao sob demanda (atrasaria a primeira consulta). E enquanto estiver incompleto, **dizer que esta incompleto** em vez de responder como se fosse completo.
-    4. **O ORQUESTRADOR consulta o grafo antes de escrever a task, e cobra depois.** Palavras dele: *"o orquestrador deve fazer a consulta no grafo, pois voce deve ter a minima nocao de projeto e escrever uma task melhor com essa informacao, e depois poder cobrar se ele fez as observacoes de verificacao de multiplos clientes afetados, caso tenha"*.
-       * E um contrato de DOIS LADOS: o briefing nasce carregando o raio de alcance ("isto toca C, que alimenta A, B e D — verifique B e D"), e o aceite pergunta se o implementador de fato verificou. Sem o segundo lado, o primeiro vira decoracao.
-       * O `caso tenha` importa: so cobra quando ha de fato consumidor fora do escopo. Cobranca ritual em task sem raio de alcance treina todo mundo a ignorar.
-       * **Isto muda o fluxo do orquestrador, nao so o codigo**: consultar a tool passa a ser passo obrigatorio antes de cada briefing de implementacao.
-  * **Primeira fatia sugerida, pequena e verificavel**: grafo de imports do repo aberto, exposto por tool no servidor MCP existente, alimentando o briefing. Prova o valor no caso que ja mordeu em 2026-09-11 (dois agentes no mesmo modulo) sem depender de resolver contrato cross-repo, que e o problema dificil. Cross-repo entra na fatia 2, com fonte declarada explicita — o `ai/workspace.yaml` ja tem `canonical_sources` por projeto e ja e um arquivo que o dono mantem.
-  * **Armadilha a evitar**: um grafo que parece completo e nao e produz pior resultado que grafo nenhum — o implementador confia, verifica os tres que o grafo mostrou e ignora o quarto que ele nao sabia existir. Qualquer versao precisa dizer com clareza o que ela NAO enxerga.
-
-* **Controle remoto via servidor próprio (VPS) + UI mobile web — parte da vertente paga (ideia do dono do repo, 2026-09-10, AINDA EM BRAINSTORM):**
-  * Palavras dele: *"remote control via servidor (nosso/VPS) para produto pago e fazer UI para mobile (sem ser app nativo)"*.
-  * **Isto é a Fase C do Item 2, que já estava registrada em §3 como fora de escopo** ("Acesso Remoto Hospedado via Relay & Magic Link"). Deixa de ser "algum dia" e passa a ter motivo comercial: é infraestrutura da vertente paga, junto do Stellar Team abaixo.
-  * **O que já existe e não precisa ser refeito**: o mecanismo cliente/servidor com `wss://` da Fase B está IMPLEMENTADO (ver §1) — o que trava lá é depender do *Tailscale Funnel* ser habilitado à mão na máquina do usuário. Um relay próprio em VPS remove exatamente esse bloqueio: em vez de cada usuário configurar túnel, a conexão sai da máquina para o relay. Ou seja, o trabalho aqui é de INFRA e pareamento, não de protocolo do zero.
-  * **UI mobile sem app nativo** — decisão dele, e ela tem consequência técnica boa: sendo web, a superfície é o mesmo renderer servido por outro caminho, não uma segunda base de código para manter em paridade. Precisa de um recorte honesto do que faz sentido no telefone: ler card e scrollback, mandar prompt, aprovar/negar consentimento de spawn e `open_url`, ver a fila de tasks. O canvas espacial com pan/zoom, arraste de card e menu radial NÃO se traduz para tela pequena e não deveria ser tentado.
-  * **Aprovação de consentimento é o caso de uso mais forte do mobile**: hoje um `spawn_agent`/`open_url`/`close_card` fica esperando o humano no modal, e se você não está na frente da máquina o board para. Do telefone isso vira um toque.
-  * **Segurança é o item que precisa de mais cuidado, não a UI**: um relay hospedado transporta scrollback de terminal, conteúdo de arquivo e prompt — dado sensível de verdade. Autenticação, escopo por board, expiração de pareamento e criptografia em trânsito precisam de decisão explícita antes de qualquer linha. O `remote-devices.json` já usa `safeStorage` para o token de pareamento local; um relay muda o modelo de ameaça inteiro.
-  * **Não despachar** — falta a conversa de produto junto do Stellar Team.
-
-* **Stellar Team — vertente paga com sprints e tasks compartilháveis (ideia do dono do repo, 2026-09-10, AINDA EM BRAINSTORM):**
-  * Palavras dele: *"STELLAR TEAM, SPRINT COMPARTILHÁVEIS, TASK E ETC (produto pago, com serviço, mesmo app, mas outra vertente (mais funcionalidades), vai precisar de login)"*.
-  * Forma: **mesmo aplicativo, outra vertente** — não um fork nem um produto separado. Camada paga por cima do que já existe, com login, sprints e tasks compartilhadas entre pessoas.
-  * **Por que isto encosta direto no card `task` que está sendo construído agora**: a fila de tasks (§2.1) foi desenhada como local e por board, com `jumpToCard` só alcançando card carregado e as tasks de outros boards apenas CONTADAS. Compartilhar task entre pessoas muda a premissa — `actor` deixa de ser `app|agent|human` e passa a precisar de identidade de QUEM; `order` vira campo disputado entre humanos, não só entre humano e agente; e o log de transição vira registro de auditoria multiusuário. Nada disso invalida a fase 2, mas quem pegar este item precisa reler as dez decisões daquele com "e se houver duas pessoas?" na cabeça.
-  * O que este item NÃO decidiu ainda (é brainstorm, não escopo): modelo de sincronização (relay? servidor próprio? o túnel Tailscale que já existe na §1?), autenticação, o que fica grátis vs. pago, e se sprint é conceito novo ou agrupamento de tasks. **Não despachar** — falta a conversa de produto.
-
-
-Conceitos arquiteturais e melhorias futuras registradas para avaliação:
-
-* ~~Ideias de design pro terminal, inspiradas na config de Kitty~~ (2026-09-02) — mapeadas, viraram um artifact de proposta ("Terminal, Revisitado"), aprovado pelo usuário e **implementado de verdade em seguida na mesma sessão, incluindo o item de trade-off (transparência + blur)** — ver §4.2. Todos os itens do artifact foram implementados.
-  * *Bloqueio*: usuário pediu só o mapeamento por ora, sem escolher o que implementar — nenhuma das 3 ideias acima foi codificada ainda.
-* **Custo de subprocesso por card de agente — `stellar-mcp` rodando o binário do Electron como Node (medido 2026-09-09):**
-  * Pergunta do usuário ao ver a árvore de processos do Stellar em 1,49 GiB: "por que tanto subprocesso, isso é falta de otimização?". Medição ao vivo (`ps -eo pid,ppid,rss,args`) com 3 cards de agente abertos: main 260 MB, `--type=gpu-process` 341 MB (+884 MiB de VRAM, wayland), `--type=renderer` 336 MB, `NetworkService` 84 MB, zygote 61+12 MB, broker 49 MB — ~1,14 GB só de arquitetura multi-processo do Chromium, que não é otimizável sem deixar de ser Electron (e um renderer único pra todos os cards é o lado bom do desenho).
-  * O que É gordura: **um `stellar-mcp` por card de agente, ~100 MB de RSS cada** (medidos 3, um por card). O shim é um bridge stdio→HTTP fininho — o servidor MCP de verdade roda dentro do main. Custa 100 MB porque `pty-registry.ts` passa `AGENT_CANVAS_NODE: process.execPath`, então o shim re-executa o **binário do Electron** com `ELECTRON_RUN_AS_NODE=1` em vez de um `node` de verdade.
-  * A razão do desenho atual é legítima e está documentada (`user-env.ts`, `queryShellPath`): `node` pode simplesmente não existir no PATH, sobretudo num launch pelo Finder/launcher — é o mesmo motivo pelo qual o shebang `#!/usr/bin/env node` do `acbridge` morre nesse cenário.
-  * Otimização proposta (não implementada): preferir um `node` real quando o PATH resolvido da login shell (que o Stellar já descobre via `queryShellPath`) tiver um, caindo no binário do Electron só como fallback — da ordem de 50 MB por card de agente, sem mudança de comportamento. Passo além, mais invasivo: um único bridge compartilhado em vez de um por card, já que a identidade do card já viaja por env (`AGENT_CANVAS_CARD_ID`).
-
-* **Spawn por Coordenadas e Abertura em Linha Exata (Item 23):**
-  * Permitir que agentes criem cards especificando coordenadas absolutas no board ou relativas a um card âncora (`anchorCardId` + `side`), com desvio inteligente de colisões.
-  * Extensão do comando `spawn_card(files)` para aceitar `path` e `line`, abrindo o editor já focado na linha exata mencionada pelo agente.
-* **Ferramentas MCP Adicionais para Agentes (Item 24):**
-  * `close_card` / `delete_card`: permitir que agentes solicitem o fechamento de cards não mais necessários (com confirmação humana).
-  * `update_card_content`: permitir que agentes editem o conteúdo textual de notas adesivas (*Sticky Cards*) com visualização prévia de diff.
-* **Comunicação Inter-Agentes e Bidirecional (Item 57.6):**
-  * Permitir que agentes em execução CLI abram ou enviem mensagens para cards de Chatbox, além de canal direto de troca de eventos e mensagens entre múltiplos agentes no mesmo board.
-* **Otimização do Histórico de Conversas (Item 63 - P5):**
-  * Avaliar transição do blob JSON único em `messages_json` para uma tabela relacional de mensagens em padrão *append-only* caso o volume de turnos longos aumente.
-* **Acesso Remoto Hospedado via Relay & Magic Link (Item 2 - Fase C):**
-  * Criação de infraestrutura gerenciada de relay para pareamento sem necessidade de túnel próprio do usuário (mantido fora de escopo no momento).
-* **Espaçar Spawn de Terminais de Agente num Board com Vários (achado ao vivo, 2026-09-02):**
-  * Boards com 2+ cards `claude`/`codex` disparam todos os `window.pty.spawn` no mesmo tick (Effect 1 de `useTerminal.ts`, independente de visibilidade — de propósito, pra não perder output de agente fora de tela). Cada launch de agente paga o próprio custo de startup de MCP dele (ver item resolvido em §0, "reabrir sessão trava"); com 2+ simultâneos isso soma em vez de diluir. Não necessário agora (causa raiz do freeze relatado era config de MCP externa, já resolvida), mas vale se um board com muitos cards de agente voltar a travar.
-* **`spawn_card` de Sticky Sem Gate Humano (achado ao vivo, 2026-09-02):**
-  * `write_sticky`/`read_sticky` já não pedem aprovação (conteúdo de board, não side-effect de disco/processo), mas criar o card sticky em si passa por `spawn_card`, que pede aprovação pra todo `kind` (files/changes/sticky/browser/remote-window) igual. Em sessão remota sem humano no PC pra decidir o dialog, o pedido expira (`"timed out waiting for a decision"`) e trava o fluxo de status/goal do agente.
-  * Avaliar isentar `kind: "sticky"` do gate — mesma classe de risco de `write_sticky` (nota de board, reversível, sem side-effect de disco/processo), diferente de `browser`/`remote-window` que abrem superfícies novas de execução.
-* **Header do Navegador — Restante da Paridade com CentralByte (§2.1, deliberadamente fora do escopo do plano de controle MCP + Trilha A):**
-  * Checado ao vivo (grep no código, 2026-08-31): não existe HOJE nenhuma captura de `console-message`/`debugger` fora da que acabou de entrar, e `Connector` (`fromCardId`/`toCardId`, `kind`) é 100% decorativo — não existe mecanismo nenhum de "mandar algo de um card pro outro através de uma linha conectada". Cada item abaixo é arquitetura nova, não um ajuste pontual.
-  * **Design Mode:** picker de elemento na página embutida → captura tag/seletor/HTML → envia pro chat conectado. Depende do item de conectores funcionais abaixo — sem plumbing de tempo de execução, não tem pra onde mandar.
-  * **Conectores com comportamento em tempo de execução:** hoje só existem como dado decorativo. Precisa de design próprio — não é só do navegador, é uma decisão de arquitetura que outros tipos de card (sticky, files) também vão querer usar depois.
-  * ~~**Drawer de Rede/Scripts** via `webContents.debugger` — uma sessão CDP por card de navegador aberto, mais uma superfície de estado/custo por card.~~ **Decisão revertida (2026-09-07):** a premissa (custo por CARD aberto) não se sustentava mais depois do refactor do dock (§4.1) — o inspector embutido já desmonta de verdade no fechar, não só esconde; anexar/desanexar CDP no mount/unmount desse componente restringe o custo ao caso raro (inspector aberto), não ao comum (qualquer card aberto). Usuário autorizou adoção completa; em andamento — ver §4.4/§4.5.
-  * ~~Favoritos/bookmark bar~~ e ~~Header responsivo por breakpoint de largura~~ — implementados em 2026-08-31 (ver §4.2), não dependiam da arquitetura de conectores acima. Risco aceito explicitamente pelo usuário: o conjunto final de botões do header (pós Design Mode) pode mudar o breakpoint escolhido mais tarde.
-
----
-
-## ✅ 4. Concluído (Resumo Consolidado)
+**Nao construir:** grafo, card, desenho, indice persistido, cache por HEAD (a consulta e sobre a
+arvore suja), coluna nova.
 
 ### 4.1 Interface, Canvas & Gestos
 * **Menu Radial & Atalhos:** Menu contextual circular via botão direito e long-press (segurar), suportando criação de cards e seleção de ferramentas (`pointer`, `pen`, `connector`, `select`). Modal de atalhos completo (`?`).
