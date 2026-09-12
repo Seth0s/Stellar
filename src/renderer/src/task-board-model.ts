@@ -152,24 +152,11 @@ export function shortTaskId(id: string): string {
   return id.slice(0, 8);
 }
 
-const MINUTE_MS = 60_000;
-const HOUR_MS = 60 * MINUTE_MS;
-const DAY_MS = 24 * HOUR_MS;
-
-/** Idade relativa (`18h`, `2d`, `agora`) — `now` é parâmetro explícito (nunca
- * `Date.now()` lido aqui dentro) pra ficar testável sem mockar relógio,
- * mesma convenção que `evaluateRebindCandidate`/`shortcut-config.ts` já
- * usa pra qualquer função que dependeria da hora atual. Granularidade
- * decrescente: minutos abaixo de 1h, horas abaixo de 1d, dias daí em
- * diante — nunca combina duas unidades ("1d 3h"), o protótipo só mostra
- * uma. */
-export function formatTaskAge(createdAt: number, now: number): string {
-  const diff = Math.max(0, now - createdAt);
-  if (diff < MINUTE_MS) return "agora";
-  if (diff < HOUR_MS) return `${Math.floor(diff / MINUTE_MS)}min`;
-  if (diff < DAY_MS) return `${Math.floor(diff / HOUR_MS)}h`;
-  return `${Math.floor(diff / DAY_MS)}d`;
-}
+/** Idade relativa — DESIGN-BACKLOG.md §2.1 i18n fase 1: delega a
+ * `formatRelativeTime` (`Intl.RelativeTimeFormat`) em vez de literais
+ * `"2d"`/`"18h"` que ficavam em português em qualquer locale. `now` continua
+ * parâmetro explícito (testável sem mockar relógio). */
+export { formatRelativeTime as formatTaskAge } from "../../shared/i18n";
 
 /** RODADA 3 (review adversarial da rodada 2, achado B, alto) — a versão da
  * rodada 2 tratava um dep AUSENTE de `depStatuses` (status desconhecido)
@@ -264,17 +251,12 @@ export function computeBoardScope(
 }
 
 /**
- * RODADA 3, peça 6 — gráficos atrás de toggle (DESIGN-BACKLOG.md §2.3,
- * "PARTES DOS GRÁFICOS"). Três gráficos no contrato; só o 3º (tempo em
- * cada estado) tem fonte de dado real hoje. Os outros dois (reprovações
- * por provider, rodadas até aprovar) dependem do MESMO histórico de
- * veredito que a rodada 2 já confirmou não existir (`reports` é slot
- * único por card, `ON CONFLICT DO UPDATE` sempre sobrescreve — sem tabela
- * de histórico append-only, não há "quantas vezes reprovou" nem "quantas
- * rodadas até aprovar" pra computar). Não há função pura pra eles aqui —
- * "vazio honesto" pra esses dois é a UI renderizar um estado declarado
- * sem NENHUM dado de entrada, não uma função que finge calcular algo de
- * uma fonte que não existe.
+ * RODADA 4 (segunda rodada de fidelidade, DESIGN-BACKLOG.md §2.1) —
+ * gráficos 1 e 2 agora têm fonte: `task_verdicts` (append-only, uma linha
+ * por rodada de participação). O vazio DECLARADO continua valendo quando
+ * o board ainda não tem participação com veredito/`aprovado` — nunca
+ * número inventado. O texto de vazio NÃO pode mais citar a lacuna antiga
+ * de `reports` (slot único): mentiria.
  */
 
 /** Uma transição de status, na forma mínima que `computeCycleTime`
@@ -320,6 +302,75 @@ const MS_PER_HOUR = 3_600_000;
  * barras, some do gráfico sem nenhum aviso. */
 export function msToHours(ms: number): number {
   return ms / MS_PER_HOUR;
+}
+
+/** Marcas do eixo do gráfico 3 (`0h` / meio / máximo). `maxHours` é o
+ * maior total (fila+execução) do conjunto — o protótipo fixava 0/9/18
+ * porque o dado de exemplo ia até ~18h; aqui as marcas acompanham o dado
+ * real, senão barras curtas ficam esmagadas num eixo mentiroso. */
+export function cycleAxisMarks(maxHours: number): { hours: number; label: string }[] {
+  const max = Math.max(maxHours, 1e-6);
+  const mid = max / 2;
+  return [
+    { hours: 0, label: "0h" },
+    { hours: mid, label: `${formatAxisHour(mid)}h` },
+    { hours: max, label: `${formatAxisHour(max)}h` },
+  ];
+}
+
+function formatAxisHour(h: number): string {
+  if (h >= 10) return String(Math.round(h));
+  const rounded = Math.round(h * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+/** Forma mínima de uma linha de `task_verdicts` pro quadro (provider vem
+ * do LEFT JOIN com `cards` em `listVerdictsForBoard`). */
+export type VerdictPoint = { verdict: string | null; provider: string | null; at: number };
+
+export type ProviderVerdictStats = { provider: string; approved: number; rejected: number };
+
+/** Gráfico 1 — reprovações por provider. Só conta linhas com veredito
+ * real (`aprovado`/`reprovado`); `null` (saída sem report / report sem
+ * verdict) não entra em nenhum segmento — não é "reprovado". Provider
+ * ausente (card deletado) vira `"desconhecido"`, nunca some do gráfico. */
+export function computeVerdictsByProvider(verdicts: readonly VerdictPoint[]): ProviderVerdictStats[] {
+  const map = new Map<string, { approved: number; rejected: number }>();
+  for (const v of verdicts) {
+    if (v.verdict !== "aprovado" && v.verdict !== "reprovado") continue;
+    const provider = v.provider ?? "desconhecido";
+    const cur = map.get(provider) ?? { approved: 0, rejected: 0 };
+    if (v.verdict === "aprovado") cur.approved += 1;
+    else cur.rejected += 1;
+    map.set(provider, cur);
+  }
+  return [...map.entries()]
+    .map(([provider, s]) => ({ provider, ...s }))
+    .sort((a, b) => b.approved + b.rejected - (a.approved + a.rejected));
+}
+
+export type RoundsToApprove = { taskId: string; label: string; rounds: number };
+
+/** Gráfico 2 — rodadas até o PRIMEIRO `aprovado` (contagem inclusiva da
+ * linha aprovada). Tasks sem nenhum `aprovado` ficam de fora — ainda não
+ * há "até aprovar" pra medir. `verdicts` por task já ordenados por `at`
+ * (mesma garantia de `listVerdictsForBoard`). */
+export function computeRoundsToApprove(
+  tasks: readonly { taskId: string; label: string; verdicts: readonly VerdictPoint[] }[],
+): RoundsToApprove[] {
+  const out: RoundsToApprove[] = [];
+  for (const t of tasks) {
+    const idx = t.verdicts.findIndex((v) => v.verdict === "aprovado");
+    if (idx < 0) continue;
+    out.push({ taskId: t.taskId, label: t.label, rounds: idx + 1 });
+  }
+  return out.sort((a, b) => b.rounds - a.rounds || a.taskId.localeCompare(b.taskId));
+}
+
+/** Cor da barra do gráfico 2: 4+ rodadas é caro (`--signal`), abaixo é
+ * barato (`--foam`) — contrato do protótipo. */
+export function roundsBarTone(rounds: number): "expensive" | "cheap" {
+  return rounds >= 4 ? "expensive" : "cheap";
 }
 
 /**
@@ -491,29 +542,34 @@ export function isTaskCardLive(status: string, cardAlive: boolean): boolean {
   return status === "running" && cardAlive;
 }
 
-/** Pílulas de meta (delta 5) — a cor é que carrega o significado no
- * protótipo (espera em foam, sugestão do agente tracejada), então cada
- * pílula sai com um `kind` que a camada de apresentação (TaskCard.tsx)
- * traduz em token de cor — nunca uma string de estilo aqui (este módulo
- * não conhece CSS).
+/** Pílulas de meta (delta 5 + rodada 4) — a cor é que carrega o
+ * significado no protótipo, então cada pílula sai com um `kind` que a
+ * camada de apresentação (TaskCard.tsx) traduz em token de cor — nunca
+ * uma string de estilo aqui (este módulo não conhece CSS).
  *
- * DELIBERADAMENTE NÃO INCLUÍDO: as pílulas `rodada N`/`reprovada N×`/
- * `fase X adiada` que o protótipo também mostra. As duas primeiras
- * dependem do histórico de veredito que este modelo não tem (`reports` é
- * slot único por card, `ON CONFLICT DO UPDATE` sempre sobrescreve — a
- * MESMA lacuna já documentada pros gráficos 1/2, `EmptyChart` em
- * TaskCard.tsx); a terceira ("fase C adiada") é texto livre de um board
- * real específico, não um conceito do modelo. Inventar qualquer uma
- * violaria o mesmo princípio de "vazio honesto, nunca número inventado"
- * já estabelecido pros gráficos — aqui não há nem "vazio" pra declarar,
- * a pílula inteira só não existe. */
-export type MetaPillKind = "wait" | "wait-broken" | "suggestion";
+ * `rodada N` / `reprovada N×` agora leem `task_verdicts` (passado pelo
+ * chamador). `fase X adiada` continua de fora — texto livre de um board
+ * real, não um conceito do modelo. */
+export type MetaPillKind = "wait" | "wait-broken" | "suggestion" | "round" | "rejection";
 export type MetaPill = { kind: MetaPillKind; text: string };
 
-export function computeMetaPills(waitingOn: WaitingOn | null, order: number | null, suggestedOrder: number | null): MetaPill[] {
+export function computeMetaPills(
+  waitingOn: WaitingOn | null,
+  order: number | null,
+  suggestedOrder: number | null,
+  verdicts: readonly { verdict: string | null }[] = [],
+): MetaPill[] {
   const pills: MetaPill[] = [];
   if (waitingOn) {
     pills.push({ kind: waitingOn.status === undefined ? "wait-broken" : "wait", text: describeWaitingOn(waitingOn) });
+  }
+  const rounds = verdicts.length;
+  if (rounds > 0) {
+    pills.push({ kind: "round", text: `rodada ${rounds}` });
+  }
+  const rejections = verdicts.reduce((n, v) => n + (v.verdict === "reprovado" ? 1 : 0), 0);
+  if (rejections > 0) {
+    pills.push({ kind: "rejection", text: `reprovada ${rejections}×` });
   }
   if (suggestedOrder !== null && order !== null && suggestedOrder !== order) {
     // Decisão 6 — a sugestão do agente nunca some, só perde a disputa:
@@ -521,6 +577,25 @@ export function computeMetaPills(waitingOn: WaitingOn | null, order: number | nu
     pills.push({ kind: "suggestion", text: `sugestão: prioridade ${suggestedOrder}` });
   }
   return pills;
+}
+
+/** Task criada pelo humano na UI (`actor: "human"` na 1ª transição de
+ * status) — usado pro aviso "foi pega" sem inventar coluna nova. */
+export function isHumanCreatedTask(firstStatusActor: TaskActor | null | undefined): boolean {
+  return firstStatusActor === "human";
+}
+
+/** Dispara o aviso de "pega" quando uma task criada por humano ganha um
+ * card (spawn/claim) ou entra em `running` (drag humano / status que
+ * prevaleceu). Compara snapshot anterior × atual — puro, testável. */
+export function didHumanTaskGetClaimed(
+  prev: { cardId: string | null; status: string } | undefined,
+  next: { cardId: string | null; status: string },
+): boolean {
+  if (!prev) return false;
+  const gainedCard = prev.cardId === null && next.cardId !== null;
+  const becameRunning = prev.status !== "running" && next.status === "running";
+  return gainedCard || becameRunning;
 }
 
 /** Trilha de transição com horários (delta 6) — `a fazer 19:02 → em
@@ -571,4 +646,136 @@ function formatClockTime(at: number): string {
 export function describeHumanMoveNotice(lastActor: TaskActor | null, cardAlive: boolean, cardId: string | null): string | null {
   if (lastActor !== "human" || !cardAlive || cardId === null) return null;
   return `Movida à mão com o card ${cardId} ainda rodando. O card foi avisado.`;
+}
+
+/** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal LEGÍVEL no card Fila. `null`
+ * quando não há divergência viva. Usa `COLUMN_TITLE` (mesmo vocabulário
+ * das colunas) pra o humano ler "o app declarou falhou" sem decodificar
+ * o status cru do banco. */
+export function describeStatusDivergence(
+  divergedStatus: string | null | undefined,
+  divergedActor: TaskActor | null | undefined,
+): string | null {
+  if (!divergedStatus || !divergedActor) return null;
+  const who = divergedActor === "app" ? "o app" : divergedActor === "agent" ? "o agente" : "alguém";
+  const label = COLUMN_TITLE[columnForStatus(divergedStatus)];
+  return `${who} declarou "${label}" — status humano mantido`;
+}
+
+/** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — shape the Fila card
+ * needs to render one sprint row (active or closed). Kept local so this
+ * module stays free of Electron/preload imports. */
+export type SprintView = {
+  id: string;
+  number: number;
+  name: string | null;
+  startedAt: number;
+  closedAt: number | null;
+  countTodo: number;
+  countDoing: number;
+  countDone: number;
+  countFailed: number;
+  migratedIn: number;
+  migratedOut: number;
+  hasSnapshot: boolean;
+};
+
+/** Display label: editable name wins; otherwise "Sprint N". */
+export function sprintLabel(s: Pick<SprintView, "number" | "name">): string {
+  const trimmed = s.name?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : `Sprint ${s.number}`;
+}
+
+/** Short id for sprint rows — same 8-char convention as `shortTaskId`. */
+export function shortSprintId(id: string): string {
+  return id.slice(0, 8);
+}
+
+/** Format sprint start/end for the history panel. Uses local wall clock
+ * (the owner asked for day+hour documentation, not relative "3d ago"). */
+export function formatSprintTimestamp(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Duration label between start and end (or "now" when still open). */
+export function formatSprintDuration(startedAt: number, closedAt: number | null, now: number): string {
+  const end = closedAt ?? now;
+  const ms = Math.max(0, end - startedAt);
+  const hours = ms / 3_600_000;
+  if (hours < 1) return `${Math.max(1, Math.round(ms / 60_000))}min`;
+  if (hours < 48) return `${hours.toFixed(1)}h`;
+  return `${(hours / 24).toFixed(1)}d`;
+}
+
+/** One-line summary of a frozen (or live-preview) sprint snapshot. */
+export function describeSprintCounts(s: Pick<SprintView, "countTodo" | "countDoing" | "countDone" | "countFailed" | "migratedIn" | "migratedOut">): string {
+  return `a fazer ${s.countTodo} · andamento ${s.countDoing} · concluído ${s.countDone} · falhou ${s.countFailed} · migrou −${s.migratedOut}/+${s.migratedIn}`;
+}
+
+/** Build a read-only TaskBoardItem stub from a frozen sprint snapshot
+ * entry — enough for TaskItem columns without inventing live cards/reports. */
+export function snapshotTaskToBoardItem(
+  t: {
+    id: string;
+    prompt: string | null;
+    status: string;
+    order: number | null;
+    suggestedOrder: number | null;
+    implicitOrder: number | null;
+    createdAt: number;
+    updatedAt: number;
+  },
+  boardId: string,
+): {
+  id: string;
+  prompt: string | null;
+  provider: string | null;
+  status: string;
+  cardId: string | null;
+  boardId: string | null;
+  order: number | null;
+  suggestedOrder: number | null;
+  implicitOrder: number | null;
+  retryCount: number;
+  createdAt: number;
+  updatedAt: number;
+  lastActor: null;
+  cards: [];
+  report: null;
+  deps: [];
+  depStatuses: Record<string, string>;
+  cardAlive: false;
+  statusTransitions: [];
+  divergedStatus: null;
+  divergedActor: null;
+  verdicts: [];
+  firstActor: null;
+} {
+  return {
+    id: t.id,
+    prompt: t.prompt,
+    provider: null,
+    status: t.status,
+    cardId: null,
+    boardId,
+    order: t.order,
+    suggestedOrder: t.suggestedOrder,
+    implicitOrder: t.implicitOrder,
+    retryCount: 0,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+    lastActor: null,
+    cards: [],
+    report: null,
+    deps: [],
+    depStatuses: {},
+    cardAlive: false,
+    statusTransitions: [],
+    divergedStatus: null,
+    divergedActor: null,
+    verdicts: [],
+    firstActor: null,
+  };
 }

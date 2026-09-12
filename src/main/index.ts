@@ -30,6 +30,8 @@ import { createPtyRegistry } from "./pty-registry";
 // ver o doc comment de `getShortcutCombo`.
 import { matchesCombo, getShortcutCombo, type ShortcutKeyEvent } from "../renderer/src/shortcut-registry";
 import { deriveCardDisplayName } from "../shared/card-identity";
+import { t, setLocale, resolveLocale, isLocale, type Locale } from "../shared/i18n";
+import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { refreshUserEnv, userEnvSnapshot } from "./user-env";
@@ -446,6 +448,48 @@ function openExternally(target: string): void {
 }
 
 function createWindow() {
+  // DESIGN-BACKLOG.md §2.1 i18n fase 1 — resolve locale before any HUMAN-
+  // facing string is read (application menu + browser context menu below).
+  // Override lives in locale.json under userData (not store.ts — board DB
+  // is a different concern). Agent-facing strings never call `t()`.
+  const localePrefs = createLocalePrefs(app.getPath("userData"));
+  const systemLocale = app.getLocale();
+  setLocale(resolveLocale(systemLocale, localePrefs.getOverride()));
+
+  function applyLocale(next: Locale): void {
+    setLocale(next);
+    Menu.setApplicationMenu(buildShortcutSafeMenu());
+  }
+
+  function buildShortcutSafeMenu(): Electron.Menu {
+    return Menu.buildFromTemplate([
+      {
+        label: t("menu.edit"),
+        submenu: [
+          { role: "undo" },
+          { role: "redo" },
+          { type: "separator" },
+          { role: "cut" },
+          { role: "copy" },
+          { role: "paste" },
+          { role: "selectAll" },
+        ],
+      },
+      {
+        label: t("menu.view"),
+        submenu: [
+          { role: "toggleDevTools" },
+          ...(app.isPackaged
+            ? []
+            : [
+                { role: "reload" as const, accelerator: "F5" },
+                { role: "forceReload" as const, accelerator: "Shift+F5" },
+              ]),
+        ],
+      },
+    ]);
+  }
+
   // Atalhos fase A, item 4 — revisão pós-review rodada 3 (2026-09-09,
   // achado único, ALTA): a rodada anterior neutralizava Ctrl+R/Ctrl+W via
   // `before-input-event` + um cache `terminalFocused` alimentado por IPC
@@ -1073,6 +1117,7 @@ function createWindow() {
     boardId: string | null;
     order: number | null;
     suggestedOrder: number | null;
+    implicitOrder: number | null;
     retryCount: number;
     createdAt: number;
     updatedAt: number;
@@ -1090,6 +1135,18 @@ function createWindow() {
     // falso positivo.
     deps: string[];
     depStatuses: Record<string, string>;
+    cardAlive: boolean;
+    statusTransitions: { toValue: string; at: number }[];
+    /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo de divergência.
+     * Ambos null = sem divergência. Espelha `tasks.diverged_status` /
+     * `diverged_actor`. */
+    divergedStatus: string | null;
+    divergedActor: "app" | "agent" | "human" | null;
+    /** RODADA 4 — histórico de participação (`task_verdicts`), com
+     * provider do card pra gráfico 1 / pílulas. */
+    verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
+    /** Ator da 1ª transição de status — `human` ⇒ criada pela UI do quadro. */
+    firstActor: "app" | "agent" | "human" | null;
   };
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — o quadro de tasks (renderer)
   // precisa de push ao vivo, espelhando `onConnectorKindChanged`/
@@ -1104,7 +1161,14 @@ function createWindow() {
   // uma consulta POR DEPENDÊNCIA POR TASK, achado A do review adversarial)
   // — nunca um `getTask`/`getReport`/`getTaskStatus` por task.
   function buildTaskBoard(boardId: string): TaskBoardItem[] {
-    const tasks = store.listTasksByBoard(boardId);
+    // DESIGN-BACKLOG.md §2.1 — live Fila shows the ACTIVE sprint only.
+    // Closed-sprint done/failed stay on their old sprint_id; the selector
+    // renders those from `snapshot_json`, never by re-querying live status.
+    const activeSprint = store.getActiveSprint(boardId);
+    const allOnBoard = store.listTasksByBoard(boardId);
+    const tasks = activeSprint
+      ? allOnBoard.filter((t) => t.sprint_id === activeSprint.id || !t.sprint_id)
+      : allOnBoard;
     const lastActorByTask = new Map(store.listLastActorsForBoard(boardId).map((r) => [r.task_id, r.last_actor]));
     const cardsByTask = new Map<string, { cardId: string; role: string; kind: string | null; provider: string | null; label: string | null }[]>();
     for (const tc of store.listTaskCardsForBoard(boardId)) {
@@ -1137,6 +1201,24 @@ function createWindow() {
       list.push({ toValue: row.to_value, at: row.at });
       transitionsByTask.set(row.task_id, list);
     }
+    // RODADA 4 — vereditos + firstActor (pílulas / gráficos / aviso de
+    // task humana pega). Duas consultas por board, mesmo padrão do resto.
+    const verdictsByTask = new Map<
+      string,
+      { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[]
+    >();
+    for (const row of store.listVerdictsForBoard(boardId)) {
+      const list = verdictsByTask.get(row.task_id) ?? [];
+      list.push({
+        cardId: row.card_id,
+        role: row.role,
+        verdict: row.verdict,
+        at: row.at,
+        provider: row.card_provider,
+      });
+      verdictsByTask.set(row.task_id, list);
+    }
+    const firstActorByTask = new Map(store.listFirstActorsForBoard(boardId).map((r) => [r.task_id, r.first_actor]));
     return tasks.map((t) => {
       const report = t.card_id ? reportByCardId.get(t.card_id) : undefined;
       const deps = depsByTask.get(t.id) ?? [];
@@ -1171,6 +1253,13 @@ function createWindow() {
         // Map). `false` quando não há card vinculado.
         cardAlive: t.card_id ? registry.isAlive(t.card_id) : false,
         statusTransitions: transitionsByTask.get(t.id) ?? [],
+        // DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo no push
+        // `task:changed` (canal do quadro; o aviso ao agente vai por
+        // typeAndSubmit + envelope MCP).
+        divergedStatus: t.diverged_status,
+        divergedActor: t.diverged_actor,
+        verdicts: verdictsByTask.get(t.id) ?? [],
+        firstActor: firstActorByTask.get(t.id) ?? null,
       };
     });
   }
@@ -1196,9 +1285,10 @@ function createWindow() {
   // store.ts); só falta empurrar o board pra quem estiver com ele aberto
   // e o rodapé de escopo de todo mundo.
   function persistTask(task: TaskRow) {
-    store.upsertTask(task);
+    const decision = store.upsertTask(task);
     notifyTaskChanged(task.board_id);
     notifyTaskScopeChanged();
+    return decision;
   }
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
   // achado 2). Irmão de `persistTask` acima, pro caso em que um único
@@ -1420,6 +1510,17 @@ function createWindow() {
     // `markTaskFailed`, message-bus.ts) e o botão humano de aprovar
     // conclusão (`store:tasks:approve-completion` abaixo).
     upsertTask: (task) => persistTask(task),
+    listSprints: (boardId) => store.listSprints(boardId),
+    openSprint: (boardId) => store.openSprint(boardId),
+    closeSprint: (boardId) => {
+      const result = store.closeSprint(boardId);
+      if (result.ok) notifyTaskChanged(boardId);
+      return result;
+    },
+    onSprintsChanged: (boardId) => {
+      if (!win || boardId !== activeBoardId) return;
+      safeSend(win, "task-sprints:changed", boardId);
+    },
     // DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — direct
     // store pass-through, mesmo padrão das 3 linhas de tasks acima.
     getReport: (cardId) => store.getReport(cardId),
@@ -1436,12 +1537,20 @@ function createWindow() {
     },
     nextReportSeqSeed: () => store.nextReportSeqSeed(),
     // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
-    // direct store pass-through, mesmo padrão de `getReport`/`upsertReport`
-    // acima. Sem push pro renderer aqui de propósito: nenhuma UI ainda
-    // consome `task_verdicts` nesta rodada (só schema + choke point +
-    // leitura via `get_task`/MCP) — quando um consumidor visual existir,
-    // ele decide se precisa de `notifyTaskChanged` junto.
-    recordParticipationRound: (cardId, verdict, at) => store.recordParticipationRound(cardId, verdict, at),
+    // UI do quadro agora consome `task_verdicts` (pílulas + gráficos 1/2),
+    // então o push precisa rodar DEPOIS da gravação — o `upsertReport`
+    // logo acima notifica ANTES desta linha no fluxo de `report`, e
+    // sem este notify o push sai sem a rodada nova.
+    recordParticipationRound: (cardId, verdict, at) => {
+      const written = store.recordParticipationRound(cardId, verdict, at);
+      const seen = new Set<string>();
+      for (const row of written) {
+        if (seen.has(row.task_id)) continue;
+        seen.add(row.task_id);
+        const task = store.getTask(row.task_id);
+        if (task?.board_id) notifyTaskChanged(task.board_id);
+      }
+    },
     listTaskCardsForCard: (cardId) => store.listTaskCardsForCard(cardId),
     listAllConnectors: () => store.listAllConnectors(),
     // A lacuna que este comentário descrevia (2026-09-09: `set_connector_kind`
@@ -1771,6 +1880,40 @@ function createWindow() {
     persistTask({ ...existing, status: "done", updated_at: Date.now(), actor: "human" });
     return { ok: true };
   });
+  // RODADA 4 — criar task pela UI do quadro (coluna "a fazer"). NÃO passa
+  // por message-bus/`create_task` de propósito: aquele caminho força
+  // `actor: "agent"`. Aqui `actor: "human"` é deliberado — decisão 8 faz
+  // o status nascer autoritativo (travado contra sobrescrita app/agente).
+  ipcMain.handle("store:tasks:create", (_e, boardId: string, prompt: string) => {
+    const trimmed = prompt.trim();
+    if (!trimmed) return { ok: false, error: "empty prompt" };
+    if (!store.getBoard(boardId)) return { ok: false, error: `no such board "${boardId}"` };
+    const now = Date.now();
+    const id = randomUUID();
+    persistTask({
+      id,
+      prompt: trimmed,
+      provider: null,
+      status: "pending",
+      card_id: null,
+      board_id: boardId,
+      result_json: null,
+      deps_json: null,
+      retry_count: 0,
+      attempted_providers_json: null,
+      max_retries: null,
+      fallback_providers_json: null,
+      order: null,
+      suggested_order: null,
+      implicit_order: null,
+      diverged_status: null,
+      diverged_actor: null,
+      created_at: now,
+      updated_at: now,
+      actor: "human",
+    });
+    return { ok: true, taskId: id };
+  });
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — arrastar entre colunas/dentro
   // da coluna. Tudo já chega PRONTO do renderer (task-board-model.ts's
   // `COLUMN_TO_STATUS`/`computeColumnDrop`/`describeHumanMove` — decidir
@@ -1823,6 +1966,66 @@ function createWindow() {
   // enquanto o painel não é aberto, ao contrário de `buildTaskBoard`
   // (rodada a cada gravação de task).
   ipcMain.handle("store:tasks:transitions-by-board", (_e, boardId: string) => store.listStatusTransitionsForBoard(boardId));
+  // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — botão humano no card
+  // Fila. `closeSprint` congela o snapshot no store; push avisa o card
+  // pra recarregar a lista (não embute o payload — o painel já busca sob
+  // demanda, mesmo padrão do gráfico 3).
+  function serializeSprint(s: import("./store").SprintRow) {
+    return {
+      id: s.id,
+      boardId: s.board_id,
+      number: s.number,
+      name: s.name,
+      startedAt: s.started_at,
+      closedAt: s.closed_at,
+      countTodo: s.count_todo,
+      countDoing: s.count_doing,
+      countDone: s.count_done,
+      countFailed: s.count_failed,
+      migratedIn: s.migrated_in,
+      migratedOut: s.migrated_out,
+      hasSnapshot: s.snapshot_json != null,
+    };
+  }
+  function notifySprintsChanged(boardId: string) {
+    if (!win || boardId !== activeBoardId) return;
+    safeSend(win, "task-sprints:changed", boardId);
+  }
+  ipcMain.handle("store:tasks:list-sprints", (_e, boardId: string) => store.listSprints(boardId).map(serializeSprint));
+  ipcMain.handle("store:tasks:sprint-snapshot", (_e, sprintId: string) => {
+    const row = store.getSprint(sprintId);
+    if (!row) return { ok: false as const, error: `no such sprint "${sprintId}"` };
+    if (row.closed_at == null) return { ok: false as const, error: "active sprint has no frozen snapshot — use the live board" };
+    const tasks = store.getSprintSnapshot(sprintId);
+    if (!tasks) return { ok: false as const, error: "sprint has no snapshot" };
+    return {
+      ok: true as const,
+      sprint: serializeSprint(row),
+      tasks: tasks.map((t) => ({
+        id: t.id,
+        prompt: t.prompt,
+        status: t.status,
+        order: t.order,
+        suggestedOrder: t.suggested_order,
+        implicitOrder: t.implicit_order,
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+      })),
+    };
+  });
+  ipcMain.handle("store:tasks:close-sprint", (_e, boardId: string) => {
+    const result = store.closeSprint(boardId);
+    if (!result.ok) return result;
+    notifyTaskChanged(boardId);
+    notifySprintsChanged(boardId);
+    return { ok: true as const, closed: serializeSprint(result.closed), opened: serializeSprint(result.opened) };
+  });
+  ipcMain.handle("store:tasks:open-sprint", (_e, boardId: string) => {
+    const result = store.openSprint(boardId);
+    if (!result.ok) return result;
+    notifySprintsChanged(boardId);
+    return { ok: true as const, sprint: serializeSprint(result.sprint) };
+  });
 
   // "mudar pasta raiz" (ProjectPicker.tsx) — the real, navigable OS folder
   // dialog rather than a hand-built in-app tree browser: the user asked

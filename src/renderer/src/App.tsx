@@ -24,6 +24,7 @@ import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { resolveGlobalShortcut, GLOBAL_SHORTCUTS_BY_ID, type ShortcutCombo, type ShortcutOverrides } from "./shortcut-registry";
 import { loadShortcutOverrides, saveShortcutOverrides, setShortcutOverride, clearShortcutOverride } from "./shortcut-config";
+import { t, setLocale, getLocale, type Locale } from "../../shared/i18n";
 import { isAnyModalOpen } from "./modal-scope";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
 import { RemotePairingModal } from "./RemotePairingModal";
@@ -655,6 +656,27 @@ export function App() {
   // logo abaixo (setter e persistência lado a lado, não um `useEffect`
   // separado que reagiria a toda mudança de estado indiscriminadamente).
   const [shortcutOverrides, setShortcutOverrides] = useState<ShortcutOverrides>(() => loadShortcutOverrides());
+  // DESIGN-BACKLOG.md §2.1 i18n fase 1 — locale lives in shared module state
+  // (`setLocale`) so `t()` / `formatRelativeTime` work from main+renderer
+  // without a React provider. React state here only forces a re-render when
+  // the user overrides it (ShortcutsOverlay selector).
+  const [locale, setLocaleState] = useState<Locale>(() => getLocale());
+  useEffect(() => {
+    let cancelled = false;
+    void window.i18n.get().then((info) => {
+      if (cancelled) return;
+      setLocale(info.locale);
+      setLocaleState(info.locale);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  async function changeLocaleOverride(next: Locale | null) {
+    const info = await window.i18n.setOverride(next);
+    setLocale(info.locale);
+    setLocaleState(info.locale);
+  }
   function rebindShortcut(id: string, combo: ShortcutCombo) {
     setShortcutOverrides((prev) => {
       const next = setShortcutOverride(prev, id, combo);
@@ -2950,6 +2972,7 @@ export function App() {
                 isFocused={zIndex === order.length - 1}
                 panX={world.panX}
                 panY={world.panY}
+                shortcutOverridesRef={shortcutOverridesRef}
               />,
               cardsLayerEl,
               c.id,
@@ -3173,6 +3196,7 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
+                shortcutOverridesRef={shortcutOverridesRef}
               />,
               cardsLayerEl,
               c.id,
@@ -3257,6 +3281,7 @@ export function App() {
                 screenProjected
                 panX={world.panX}
                 panY={world.panY}
+                shortcutOverridesRef={shortcutOverridesRef}
               />,
               cardsLayerEl,
               c.id,
@@ -3298,7 +3323,6 @@ export function App() {
                 activeBoardId={activeBoardId ?? ""}
                 boardNames={boardNames}
                 taskCountsByBoard={taskCountsByBoard}
-                onGoHome={goHome}
                 onChange={getChangeHandler(c)}
                 onCommit={getCommitHandler(c)}
                 onRaise={getRaiseHandler(c)}
@@ -3558,6 +3582,8 @@ export function App() {
           onRebind={rebindShortcut}
           onRestoreDefault={restoreShortcutDefault}
           onRestoreAll={restoreAllShortcutDefaults}
+          locale={locale}
+          onLocaleOverrideChange={changeLocaleOverride}
         />
       )}
       {showRemotePairing && <RemotePairingModal onClose={() => setShowRemotePairing(false)} />}
@@ -3581,7 +3607,7 @@ export function App() {
               <button onClick={() => runExportSelection("png")}>PNG</button>
               <button onClick={() => runExportSelection("jpeg")}>JPEG</button>
               <button onClick={() => runExportSelection("pdf")}>PDF</button>
-              <button className="export-selection-cancel" onClick={() => setExportSelection(null)} title="Cancelar">
+              <button className="export-selection-cancel" onClick={() => setExportSelection(null)} title={t("app.export.cancel")}>
                 ×
               </button>
             </div>
@@ -3591,9 +3617,9 @@ export function App() {
       <SpawnQueuePanel queue={spawnQueues[activeBoardId] ?? []} describeRequester={describeCard} />
       {pendingCloseId && (
         <ConfirmModal
-          title="Fechar terminal?"
-          message={`${describeCard(pendingCloseId)} ainda está rodando — fechar encerra o processo agora, sem como desfazer.`}
-          confirmLabel="Fechar"
+          title={t("app.closeTerminal.title")}
+          message={t("app.closeTerminal.message", { name: describeCard(pendingCloseId) })}
+          confirmLabel={t("app.closeTerminal.confirm")}
           danger
           onConfirm={confirmCloseCard}
           onCancel={cancelCloseCard}
@@ -3610,9 +3636,9 @@ export function App() {
       )}
       {pendingOpenUrl && (
         <ConfirmModal
-          title="Abrir link no navegador"
-          message={`Abrir "${pendingOpenUrl}" no navegador interno deste agente?`}
-          confirmLabel="Abrir"
+          title={t("app.openUrl.title")}
+          message={t("app.openUrl.message", { url: pendingOpenUrl })}
+          confirmLabel={t("app.openUrl.confirm")}
           onConfirm={() => {
             const cardId = openBrowserFor(null, pendingOpenUrl);
             // Achado ao vivo (2026-09-02) — "clico no ícone e não abre":
@@ -3634,9 +3660,9 @@ export function App() {
       )}
       {pendingBrowserPermission && (
         <ConfirmModal
-          title="Permissão do navegador"
+          title={t("app.browserPermission.title")}
           message={pendingBrowserPermission.message}
-          confirmLabel="Permitir"
+          confirmLabel={t("app.browserPermission.confirm")}
           onConfirm={() => {
             window.browser.resolvePermissionAsk(pendingBrowserPermission.requestId, true);
             setPendingBrowserPermission(null);

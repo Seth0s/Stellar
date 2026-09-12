@@ -117,7 +117,7 @@ describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card
         onReadCardRequest: (requestId: string) => bus?.resolveReadCard(requestId, { ok: true, text: "" }),
         getReport: () => undefined,
         listTasks: () => [] as FakeTaskRow[],
-        upsertTask: () => undefined,
+        upsertTask: () => ({ status: "failed", statusChanged: true, divergedStatus: null, divergedActor: null, recordDeclaration: false, warnAgent: false, declaredStatus: null }),
         getCardBoardId: () => undefined,
         ...overrides,
       }),
@@ -278,7 +278,7 @@ describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card
       describeCardLabel: (id: string) => id,
       listCards: () => [],
       listTasks: () => [{ id: "task-1", card_id: "child-e4", status: "running" }] as FakeTaskRow[],
-      upsertTask: (task: unknown) => upserted.push(task as FakeTaskRow),
+      upsertTask: (task: unknown) => { upserted.push(task as FakeTaskRow); return { status: (task as FakeTaskRow).status, statusChanged: true, divergedStatus: null, divergedActor: null, recordDeclaration: false, warnAgent: false, declaredStatus: null }; },
     });
 
     b.resolveCardExit("child-e4", 1);

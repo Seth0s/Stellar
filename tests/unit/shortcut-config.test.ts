@@ -15,6 +15,8 @@ import {
   describeOsReservedCombo,
   evaluateRebindCandidate,
   needsConfirmation,
+  matchesShortcut,
+  isStaleDefaultShortcut,
 } from "../../src/renderer/src/shortcut-config";
 import { SHORTCUT_REGISTRY, GLOBAL_SHORTCUTS_BY_ID, resolveGlobalShortcut } from "../../src/renderer/src/shortcut-registry";
 
@@ -47,27 +49,23 @@ describe("isRebindable / rebindBlockedReason — a única resposta pra duas perg
     expect(rebindBlockedReason(def)).toMatch(/reservado/);
   });
 
-  it("um atalho `dispatch: \"native\"` com combo real não é rebindável, com motivo explicando por quê", () => {
-    const def = SHORTCUT_REGISTRY.find((d) => d.id === "terminal.copySelection")!;
+  it("um atalho amarrado ao evento DOM paste não é rebindável, com motivo honesto (não 'ainda não lê')", () => {
+    const def = SHORTCUT_REGISTRY.find((d) => d.id === "canvas.pasteMedia")!;
     expect(isRebindable(def)).toBe(false);
-    expect(rebindBlockedReason(def)).toMatch(/nativo/);
+    const reason = rebindBlockedReason(def)!;
+    expect(reason).toMatch(/paste/i);
+    expect(reason).not.toMatch(/não lê|follow-up/);
   });
 
-  // Round 2 do review (achado 4) — as duas categorias "nativo" têm motivos
-  // REAIS e diferentes: zoom in/out têm o combo importado direto por
-  // `main/index.ts` (mudar aqui não mudaria o que main intercepta); as
-  // outras entradas nativas vivem inteiras no componente dono, que ainda
-  // não lê `shortcutOverrides` nenhum (mudar aqui não mudaria o que
-  // dispara, por um motivo BEM diferente). A UI não pode amontoar as duas
-  // sob o mesmo texto genérico — seria a mesma mentira que este item
-  // inteiro existe pra evitar, só com outra cara.
-  it("zoom in/out (combo importado por main/index.ts) e um atalho nativo de card têm motivos DIFERENTES de bloqueio", () => {
+  // Round 2 do review (achado 4) + review do follow-up — zoom (main) e
+  // pasteMedia (evento DOM paste) têm motivos REAIS e diferentes.
+  it("zoom in/out (main) e canvas.pasteMedia (evento paste do SO) têm motivos DIFERENTES de bloqueio", () => {
     const zoomReason = rebindBlockedReason(SHORTCUT_REGISTRY.find((d) => d.id === "canvas.zoomIn")!);
-    const cardOwnedReason = rebindBlockedReason(SHORTCUT_REGISTRY.find((d) => d.id === "chat.send")!);
+    const pasteReason = rebindBlockedReason(SHORTCUT_REGISTRY.find((d) => d.id === "canvas.pasteMedia")!);
     expect(zoomReason).toMatch(/main/);
-    expect(cardOwnedReason).not.toMatch(/main/);
-    expect(cardOwnedReason).toMatch(/não lê/);
-    expect(zoomReason).not.toBe(cardOwnedReason);
+    expect(pasteReason).toMatch(/paste/i);
+    expect(pasteReason).not.toMatch(/main/);
+    expect(zoomReason).not.toBe(pasteReason);
   });
 
   it("um gesto de mouse (sem combo) não é bloqueado nem oferecido — a pergunta não se aplica", () => {
@@ -353,5 +351,86 @@ describe("integração com resolveGlobalShortcut — o rebind realmente muda o q
     const overrides = { "tool.pointer": { key: "j", ctrlOrCmd: false, shift: false, alt: false } };
     expect(resolveGlobalShortcut(key({ key: "j" }), ctx(), overrides)).toBe("tool.pointer");
     expect(resolveGlobalShortcut(key({ key: "v" }), ctx(), overrides)).toBeNull();
+  });
+});
+
+// Follow-up da fase C — atalhos de componente passam a ler o registro.
+describe("matchesShortcut / rebindBlockedReason — follow-up componente (7 wireados)", () => {
+  function key(partial: Partial<Parameters<typeof matchesShortcut>[0]> & { key: string }) {
+    return { ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...partial };
+  }
+
+  const WIRED = [
+    "chat.send",
+    "chat.newline",
+    "browser.navigate",
+    "terminal.copySelection",
+    "terminal.paste",
+    "terminal.sigint",
+    "terminal.eof",
+  ] as const;
+
+  it("os 7 atalhos de componente saem do bloqueio", () => {
+    for (const id of WIRED) {
+      const def = SHORTCUT_REGISTRY.find((d) => d.id === id)!;
+      expect(isRebindable(def)).toBe(true);
+      expect(rebindBlockedReason(def)).toBeUndefined();
+    }
+  });
+
+  it("combo padrão: chat.send casa Enter sem Shift e NÃO casa Shift+Enter (newline)", () => {
+    expect(matchesShortcut(key({ key: "Enter" }), "chat.send", {})).toBe(true);
+    expect(matchesShortcut(key({ key: "Enter", shiftKey: true }), "chat.send", {})).toBe(false);
+    expect(matchesShortcut(key({ key: "Enter", shiftKey: true }), "chat.newline", {})).toBe(true);
+  });
+
+  it("combo padrão: copy é Ctrl+Shift+C; sigint é Ctrl+C sem Shift — nunca o mesmo evento", () => {
+    expect(matchesShortcut(key({ key: "c", ctrlKey: true, shiftKey: true }), "terminal.copySelection", {})).toBe(true);
+    expect(matchesShortcut(key({ key: "c", ctrlKey: true }), "terminal.copySelection", {})).toBe(false);
+    expect(matchesShortcut(key({ key: "c", ctrlKey: true }), "terminal.sigint", {})).toBe(true);
+    expect(matchesShortcut(key({ key: "c", ctrlKey: true, shiftKey: true }), "terminal.sigint", {})).toBe(false);
+  });
+
+  it("combo padrão: terminal.paste casa Ctrl+V (e Ctrl+Shift+V — shift 'não importa')", () => {
+    expect(matchesShortcut(key({ key: "v", ctrlKey: true }), "terminal.paste", {})).toBe(true);
+    expect(matchesShortcut(key({ key: "v", ctrlKey: true, shiftKey: true }), "terminal.paste", {})).toBe(true);
+  });
+
+  it("combo padrão: browser.navigate casa Enter; terminal.eof casa Ctrl+D sem Shift", () => {
+    expect(matchesShortcut(key({ key: "Enter" }), "browser.navigate", {})).toBe(true);
+    expect(matchesShortcut(key({ key: "d", ctrlKey: true }), "terminal.eof", {})).toBe(true);
+    expect(matchesShortcut(key({ key: "d", ctrlKey: true, shiftKey: true }), "terminal.eof", {})).toBe(false);
+  });
+
+  it("com override, a NOVA tecla dispara e a antiga do mesmo id não", () => {
+    const overrides = {
+      "chat.send": { key: "Enter", ctrlOrCmd: true, shift: false, alt: false },
+      "terminal.copySelection": { key: "c", ctrlOrCmd: true, shift: false, alt: true },
+      "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false, alt: false },
+    };
+    expect(matchesShortcut(key({ key: "Enter", ctrlKey: true }), "chat.send", overrides)).toBe(true);
+    expect(matchesShortcut(key({ key: "Enter" }), "chat.send", overrides)).toBe(false);
+    expect(matchesShortcut(key({ key: "c", ctrlKey: true, altKey: true }), "terminal.copySelection", overrides)).toBe(true);
+    expect(matchesShortcut(key({ key: "c", ctrlKey: true, shiftKey: true }), "terminal.copySelection", overrides)).toBe(false);
+    expect(matchesShortcut(key({ key: "x", ctrlKey: true }), "terminal.sigint", overrides)).toBe(true);
+    expect(matchesShortcut(key({ key: "c", ctrlKey: true }), "terminal.sigint", overrides)).toBe(false);
+  });
+
+  it("isStaleDefaultShortcut: depois de rebindar sigint, Ctrl+C default fica stale (pra ser engolido)", () => {
+    const overrides = { "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false, alt: false } };
+    const ctrlC = key({ key: "c", ctrlKey: true });
+    expect(isStaleDefaultShortcut(ctrlC, "terminal.sigint", overrides)).toBe(true);
+    expect(isStaleDefaultShortcut(key({ key: "x", ctrlKey: true }), "terminal.sigint", overrides)).toBe(false);
+    expect(isStaleDefaultShortcut(ctrlC, "terminal.sigint", {})).toBe(false);
+  });
+
+  it("override em atalho que conflita com outro no mesmo escopo é detectado por findShortcutConflict", () => {
+    const conflict = findShortcutConflict("chat.send", { key: "Enter", shift: true }, {});
+    expect(conflict?.id).toBe("chat.newline");
+  });
+
+  it("rebind de sigint pra Ctrl+Shift+C colide com copySelection (mesmo escopo terminal)", () => {
+    const conflict = findShortcutConflict("terminal.sigint", { key: "c", ctrlOrCmd: true, shift: true }, {});
+    expect(conflict?.id).toBe("terminal.copySelection");
   });
 });

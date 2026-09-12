@@ -37,7 +37,7 @@ describe("message-bus: create_task valida boardId", () => {
       sockPath,
       callbacksWithOverrides({
         boardExists: (id: string) => existingBoardIds.includes(id),
-        upsertTask: (task: unknown) => upserted.push(task),
+        upsertTask: (task: unknown) => { upserted.push(task); return { status: (task as {status:string}).status, statusChanged: true, divergedStatus: null, divergedActor: null, recordDeclaration: false, warnAgent: false, declaredStatus: null }; },
         getCardBoardId: () => undefined,
       }),
     );
@@ -85,7 +85,7 @@ describe("message-bus: create_task valida boardId", () => {
       sockPath,
       callbacksWithOverrides({
         boardExists: () => false, // nenhum board "existe" neste teste — não deveria nem ser consultado
-        upsertTask: (task: unknown) => upserted.push(task as { board_id: string | null }),
+        upsertTask: (task: unknown) => { upserted.push(task as { board_id: string | null }); return { status: "pending", statusChanged: true, divergedStatus: null, divergedActor: null, recordDeclaration: false, warnAgent: false, declaredStatus: null }; },
         getCardBoardId: () => undefined, // card não resolve a nenhum board (fechado/nunca existiu)
       }),
     );

@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { setLocale } from "../../src/shared/i18n";
 import {
   columnForStatus,
   compareTasks,
@@ -16,6 +17,12 @@ import {
   computeBoardScope,
   computeCycleTime,
   msToHours,
+  cycleAxisMarks,
+  computeVerdictsByProvider,
+  computeRoundsToApprove,
+  roundsBarTone,
+  isHumanCreatedTask,
+  didHumanTaskGetClaimed,
   COLUMN_ORDER,
   COLUMN_TO_STATUS,
   computeColumnDrop,
@@ -24,6 +31,13 @@ import {
   computeMetaPills,
   describeTransitionTrail,
   describeHumanMoveNotice,
+  describeStatusDivergence,
+  formatSprintTimestamp,
+  formatSprintDuration,
+  describeSprintCounts,
+  shortSprintId,
+  sprintLabel,
+  snapshotTaskToBoardItem,
   type TaskOrderable,
   type MetaPillKind,
 } from "../../src/renderer/src/task-board-model";
@@ -176,27 +190,37 @@ describe("shortTaskId", () => {
 describe("formatTaskAge", () => {
   const T0 = 1_000_000_000_000; // época arbitrária fixa, só pra ter um "agora" determinístico
 
-  it("abaixo de 1min é 'agora', não '0min'", () => {
+  beforeEach(() => {
+    setLocale("pt-BR");
+  });
+
+  it("abaixo de 1min é 'agora' via Intl.RelativeTimeFormat", () => {
     expect(formatTaskAge(T0 - 30_000, T0)).toBe("agora");
     expect(formatTaskAge(T0, T0)).toBe("agora");
   });
 
-  it("entre 1min e 1h usa minutos", () => {
-    expect(formatTaskAge(T0 - 5 * 60_000, T0)).toBe("5min");
+  it("entre 1min e 1h usa minutos (locale-aware)", () => {
+    expect(formatTaskAge(T0 - 5 * 60_000, T0)).toMatch(/5/);
   });
 
-  it("entre 1h e 1d usa horas — o exemplo '18h' do protótipo", () => {
-    expect(formatTaskAge(T0 - 18 * 3_600_000, T0)).toBe("18h");
+  it("entre 1h e 1d usa horas — o exemplo '18h' do protótipo, agora via Intl", () => {
+    expect(formatTaskAge(T0 - 18 * 3_600_000, T0)).toMatch(/18/);
   });
 
-  it("1d ou mais usa dias — o exemplo '2d' do protótipo", () => {
-    expect(formatTaskAge(T0 - 2 * 86_400_000, T0)).toBe("2d");
+  it("1d ou mais usa dias — o exemplo '2d' do protótipo, agora via Intl", () => {
+    expect(formatTaskAge(T0 - 2 * 86_400_000, T0)).toMatch(/2|anteontem/);
   });
 
   it("nunca combina duas unidades (ex.: '1d 3h') — só a mais grosseira que ainda cabe", () => {
     const age = formatTaskAge(T0 - (25 * 3_600_000 + 30 * 60_000), T0); // 1 dia, 1h30 e pouco
-    expect(age).toBe("1d");
-    expect(age).not.toContain(" ");
+    expect(age).toMatch(/1|ontem/);
+    expect(age).not.toMatch(/\d+\D+\d+/);
+  });
+
+  it("em inglês troca o wording, não só o número", () => {
+    setLocale("en");
+    expect(formatTaskAge(T0 - 30_000, T0)).toBe("now");
+    expect(formatTaskAge(T0 - 5 * 60_000, T0)).toMatch(/5/);
   });
 });
 
@@ -535,13 +559,76 @@ describe("computeMetaPills", () => {
     expect(pills[1].kind).toBe("suggestion");
   });
 
-  it("[deliberadamente fora] não existe pílula 'rodada N'/'reprovada N×'/'fase X adiada' — sem histórico de veredito pra sustentar", () => {
-    // Nenhuma combinação de entrada produz um MetaPillKind fora dos 3
-    // documentados — este teste existe só pra tornar essa omissão
-    // deliberada visível na suíte, não pra testar comportamento novo.
-    const allKinds: MetaPillKind[] = ["wait", "wait-broken", "suggestion"];
+  it("verdicts → pílulas rodada N / reprovada N× (task_verdicts, rodada 4)", () => {
+    const pills = computeMetaPills(null, null, null, [{ verdict: "reprovado" }, { verdict: null }, { verdict: "aprovado" }]);
+    expect(pills).toEqual([
+      { kind: "round", text: "rodada 3" },
+      { kind: "rejection", text: "reprovada 1×" },
+    ]);
+  });
+
+  it("sem verdicts: não inventa rodada/reprovação; 'fase X adiada' continua fora do modelo", () => {
+    const allKinds: MetaPillKind[] = ["wait", "wait-broken", "suggestion", "round", "rejection"];
     const pills = computeMetaPills({ depId: "d", status: "running" }, 1, 2);
     for (const p of pills) expect(allKinds).toContain(p.kind);
+    expect(pills.some((p) => p.kind === "round" || p.kind === "rejection")).toBe(false);
+  });
+});
+
+describe("computeVerdictsByProvider / computeRoundsToApprove", () => {
+  it("agrupa aprovado/reprovado por provider; null não conta", () => {
+    const stats = computeVerdictsByProvider([
+      { verdict: "aprovado", provider: "claude", at: 1 },
+      { verdict: "reprovado", provider: "claude", at: 2 },
+      { verdict: null, provider: "claude", at: 3 },
+      { verdict: "aprovado", provider: null, at: 4 },
+    ]);
+    expect(stats).toEqual([
+      { provider: "claude", approved: 1, rejected: 1 },
+      { provider: "desconhecido", approved: 1, rejected: 0 },
+    ]);
+  });
+
+  it("rodadas até o primeiro aprovado, inclusivo; task sem aprovado fica de fora", () => {
+    const rows = computeRoundsToApprove([
+      {
+        taskId: "t1",
+        label: "t1",
+        verdicts: [
+          { verdict: "reprovado", provider: "claude", at: 1 },
+          { verdict: "aprovado", provider: "claude", at: 2 },
+        ],
+      },
+      {
+        taskId: "t2",
+        label: "t2",
+        verdicts: [{ verdict: "reprovado", provider: "codex", at: 1 }],
+      },
+    ]);
+    expect(rows).toEqual([{ taskId: "t1", label: "t1", rounds: 2 }]);
+    expect(roundsBarTone(4)).toBe("expensive");
+    expect(roundsBarTone(3)).toBe("cheap");
+  });
+});
+
+describe("cycleAxisMarks", () => {
+  it("marca 0, meio e máximo em horas", () => {
+    expect(cycleAxisMarks(18).map((m) => m.label)).toEqual(["0h", "9h", "18h"]);
+  });
+});
+
+describe("isHumanCreatedTask / didHumanTaskGetClaimed", () => {
+  it("só firstActor human conta como criada pela UI", () => {
+    expect(isHumanCreatedTask("human")).toBe(true);
+    expect(isHumanCreatedTask("agent")).toBe(false);
+    expect(isHumanCreatedTask(null)).toBe(false);
+  });
+
+  it("pega = ganhou card OU virou running; primeiro snapshot não dispara", () => {
+    expect(didHumanTaskGetClaimed(undefined, { cardId: "1", status: "pending" })).toBe(false);
+    expect(didHumanTaskGetClaimed({ cardId: null, status: "pending" }, { cardId: "9", status: "pending" })).toBe(true);
+    expect(didHumanTaskGetClaimed({ cardId: null, status: "pending" }, { cardId: null, status: "running" })).toBe(true);
+    expect(didHumanTaskGetClaimed({ cardId: "9", status: "running" }, { cardId: "9", status: "running" })).toBe(false);
   });
 });
 
@@ -594,5 +681,78 @@ describe("describeHumanMoveNotice", () => {
     // A própria assinatura da função não recebe `status` — reforça que a
     // decisão é sobre o CARD, não sobre em que coluna a task está.
     expect(describeHumanMoveNotice("human", true, "288")).not.toBeNull();
+  });
+});
+
+// DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal legível no card Fila.
+describe("describeStatusDivergence", () => {
+  it("formata app e agente com o título da coluna, nunca o status cru", () => {
+    expect(describeStatusDivergence("failed", "app")).toBe('o app declarou "falhou" — status humano mantido');
+    expect(describeStatusDivergence("done", "agent")).toBe('o agente declarou "concluído" — status humano mantido');
+  });
+
+  it("null/ausente: sem sinal (divergência limpa ou inexistente)", () => {
+    expect(describeStatusDivergence(null, null)).toBeNull();
+    expect(describeStatusDivergence("failed", null)).toBeNull();
+    expect(describeStatusDivergence(null, "app")).toBeNull();
+    expect(describeStatusDivergence(undefined, undefined)).toBeNull();
+  });
+});
+
+describe("sprint history helpers (fechamento explícito)", () => {
+  it("shortSprintId corta em 8 chars", () => {
+    expect(shortSprintId("abcdef0123456789")).toBe("abcdef01");
+  });
+
+  it("sprintLabel usa nome editável ou Sprint N", () => {
+    expect(sprintLabel({ number: 3, name: null })).toBe("Sprint 3");
+    expect(sprintLabel({ number: 3, name: "  " })).toBe("Sprint 3");
+    expect(sprintLabel({ number: 3, name: "Alpha" })).toBe("Alpha");
+  });
+
+  it("formatSprintTimestamp documenta dia e hora locais", () => {
+    const ms = Date.UTC(2026, 8, 11, 18, 5); // fixed instant
+    // Result includes YYYY-MM-DD and HH:MM (local offset may shift the day).
+    expect(formatSprintTimestamp(ms)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  });
+
+  it("formatSprintDuration cobre min/h/d", () => {
+    const start = 1_000_000;
+    expect(formatSprintDuration(start, start + 90_000, start)).toBe("2min");
+    expect(formatSprintDuration(start, start + 3_600_000 * 2, start)).toBe("2.0h");
+    expect(formatSprintDuration(start, start + 3_600_000 * 72, start)).toBe("3.0d");
+  });
+
+  it("describeSprintCounts inclui buckets e migração in/out", () => {
+    expect(
+      describeSprintCounts({
+        countTodo: 1,
+        countDoing: 2,
+        countDone: 3,
+        countFailed: 4,
+        migratedIn: 5,
+        migratedOut: 6,
+      }),
+    ).toBe("a fazer 1 · andamento 2 · concluído 3 · falhou 4 · migrou −6/+5");
+  });
+
+  it("snapshotTaskToBoardItem monta stub read-only", () => {
+    const item = snapshotTaskToBoardItem(
+      {
+        id: "t1",
+        prompt: "hello",
+        status: "pending",
+        order: 1,
+        suggestedOrder: null,
+        implicitOrder: null,
+        createdAt: 10,
+        updatedAt: 20,
+      },
+      "b1",
+    );
+    expect(item.id).toBe("t1");
+    expect(item.boardId).toBe("b1");
+    expect(item.cards).toEqual([]);
+    expect(item.cardAlive).toBe(false);
   });
 });

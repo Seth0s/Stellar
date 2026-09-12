@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import { Markdown } from "./Markdown";
@@ -7,6 +7,9 @@ import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, PROVIDER_MODELS, keyFormatWa
 import type { Rect } from "./board-model";
 import type { ChatContentBlock, ChatImageBlock, ChatMessage, ChatProvider } from "./card-types";
 import type { WriteConsentRequest, BashConsentRequest, CardRow } from "../../preload/index";
+import { matchesShortcut } from "./shortcut-config";
+import type { ShortcutOverrides } from "./shortcut-registry";
+import { formatRelativeTime } from "../../shared/i18n";
 
 const ALL_PROVIDERS: ChatProvider[] = ["anthropic", "openai", "gemini", "generic"];
 
@@ -89,15 +92,10 @@ function sessionPreview(s: ChatSessionRow): string {
   return "conversa vazia";
 }
 
-/** Coarse, matches this app's other relative-time spots — no need for a
- * real i18n library over three buckets. */
+/** Coarse relative time — DESIGN-BACKLOG.md §2.1 i18n fase 1: shared
+ * `Intl.RelativeTimeFormat` helper (same as Home / formatTaskAge). */
 function relativeTime(ms: number): string {
-  const diffMin = Math.round((Date.now() - ms) / 60_000);
-  if (diffMin < 1) return "agora";
-  if (diffMin < 60) return `${diffMin}min atrás`;
-  const diffH = Math.round(diffMin / 60);
-  if (diffH < 24) return `${diffH}h atrás`;
-  return `${Math.round(diffH / 24)}d atrás`;
+  return formatRelativeTime(ms, Date.now());
 }
 
 function formatTokenCount(n: number): string {
@@ -229,6 +227,7 @@ function ChatCardInner({
   screenProjected,
   panX,
   panY,
+  shortcutOverridesRef,
 }: {
   id: string;
   rect: Rect;
@@ -270,6 +269,10 @@ function ChatCardInner({
   screenProjected?: boolean;
   panX?: number;
   panY?: number;
+  /** Follow-up fase C — ref estável (App.tsx mantém `.current`); o
+   * handler de tecla lê o override mais recente sem re-render / sem
+   * re-registrar listener. */
+  shortcutOverridesRef: MutableRefObject<ShortcutOverrides>;
 }) {
   // Pre-release audit P1 — same render-count counter as TerminalCard.tsx
   // (see its doc comment) — lets the verify harness prove `React.memo`
@@ -576,9 +579,34 @@ function ChatCardInner({
   }
 
   function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    const overrides = shortcutOverridesRef.current;
+    const ev = e.nativeEvent;
+    if (matchesShortcut(ev, "chat.send", overrides)) {
       e.preventDefault();
       send();
+      return;
+    }
+    if (matchesShortcut(ev, "chat.newline", overrides)) {
+      // Default é Shift+Enter — o textarea já insere a quebra. Se o
+      // usuário rebindou pra outra tecla, inserimos manualmente.
+      if (e.key !== "Enter") {
+        e.preventDefault();
+        const ta = e.currentTarget;
+        const start = ta.selectionStart;
+        const end = ta.selectionEnd;
+        setDraft((d) => d.slice(0, start) + "\n" + d.slice(end));
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = start + 1;
+        });
+      }
+      return;
+    }
+    // Shift+Enter (ou outro Enter+shift) que JÁ NÃO é o newline efetivo —
+    // bloqueia a inserção nativa pra o atalho antigo não continuar
+    // funcionando além do que a UI mostra. Enter solto (send rebindado
+    // pra longe) continua inserindo linha nativamente de propósito.
+    if (e.key === "Enter" && e.shiftKey) {
+      e.preventDefault();
     }
   }
 

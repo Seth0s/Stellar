@@ -36,7 +36,7 @@ describe("message-bus: entrega programática FIFO por card", () => {
         hasReceivedData: true,
         lastActivityAtMs: readySince,
         hasPendingHumanInput: false,
-        inputLineStartedAtMs: null,
+        inputLineLastAtMs: null,
       }),
       onReadCardRequest: (requestId: string) => bus?.resolveReadCard(requestId, { ok: true, text: "" }),
       nextReportSeqSeed: () => 0,

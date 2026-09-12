@@ -87,6 +87,15 @@ const USAGE =
   "browser-network <cardId> [failed] | browser-wait-for <cardId> <text|selector> <value...> | " +
   "browser-eval <cardId> <js...>>";
 
+// DESIGN-BACKLOG.md §2.1 points 3–4 — printed with bare `acbridge` usage.
+// Capability without MCP/system-prompt is real on bash cards; identity of
+// a hand-launched nested agent is a known gap (claim-card declined).
+const BASH_CARD_NOTE =
+  "note: inside a bash card, this CLI is on PATH but hand-launched agents " +
+  "do not get `stellar` MCP tools or the environment system-prompt — prefer " +
+  "a provider card. Actions here are attributed to AGENT_CANVAS_CARD_ID " +
+  "(the bash card); nested-agent identity is a known gap.";
+
 const [, , cmd, ...rest] = process.argv;
 
 let request;
@@ -203,7 +212,7 @@ if (cmd === "list") {
   } catch {
     fail("update-task: argument must be valid JSON");
   }
-  request = { cmd: "update_task", taskId, ...fields };
+  request = { cmd: "update_task", taskId, ...fields, ...(ownCardId ? { requesterId: ownCardId } : {}) };
 } else if (cmd === "list-tasks") {
   request = { cmd: "list_tasks" };
 } else if (cmd === "get-task") {
@@ -329,7 +338,7 @@ if (cmd === "list") {
   if (!target || jsParts.length === 0) fail("usage: acbridge browser-eval <cardId> <js...>");
   request = { cmd: "browser_eval", target, js: jsParts.join(" ") };
 } else {
-  fail(USAGE);
+  fail(`${USAGE}\n${BASH_CARD_NOTE}`);
 }
 
 const socket = net.connect({ path: sockPath }, () => {

@@ -1,9 +1,11 @@
 import {
   SHORTCUT_REGISTRY,
   foldKey,
+  matchesCombo,
   type ShortcutCombo,
   type ShortcutDefinition,
   type ShortcutGroupName,
+  type ShortcutKeyEvent,
   type ShortcutOverrides,
   type ShortcutScope,
 } from "./shortcut-registry";
@@ -65,26 +67,34 @@ export function isForbiddenRebindCombo(combo: ShortcutCombo): boolean {
   return keys.some((k) => FORBIDDEN_REBIND_KEYS.has(k));
 }
 
-/** Round 2 do review (achado 4) — só `canvas.zoomIn`/`canvas.zoomOut` têm
- * uma razão REAL pra ficar de fora agora: `main/index.ts:119-120` importa
- * `ShortcutCombo` deles DIRETO (`ZOOM_IN_COMBO`/`ZOOM_OUT_COMBO`) e casa
- * contra isso no `before-input-event`; pra esses serem rebindáveis de
- * verdade, o override precisaria atravessar pro processo main (IPC
- * síncrono no boot da janela), fora do escopo desta fase. As outras
- * entradas `dispatch: "native"` (`chat.send`/`chat.newline`,
- * `browser.navigate`, `terminal.*`) vivem inteiras no componente dono
- * (`ChatCard.tsx`, `BrowserCard.tsx`, `useTerminal.ts`) — confirmado lendo
- * o código de cada uma: nenhuma delas usa `matchesCombo`/`shortcut-
- * registry.ts` hoje, só `if (e.key === "Enter" && !e.shiftKey)` e
- * equivalentes, literais soltos que nem o combo do registro consultam,
- * quanto mais uma sobreposição. Não são candidatas a "só ler o override" —
- * cada uma exigiria trocar esse literal solto por `matchesCombo`/
- * `getEffectiveCombo`, um refactor por componente, com o mesmo risco de
- * regressão que levou o SIGINT/EOF do terminal a 2-9 rodadas de review na
- * fase A/B. Motivo real e diferente do das duas de zoom — a UI precisa
- * dizer qual é qual, não amontoar as duas categorias sob "nativo" genérico
- * (a mentira que este item inteiro existe pra evitar). */
+/** Follow-up fase C — `canvas.zoomIn`/`canvas.zoomOut` ficam de fora
+ * de verdade: `main/index.ts` importa o combo DIRETO e casa no
+ * `before-input-event`; rebind exigiria IPC renderer→main no boot da
+ * janela. Motivo distinto de qualquer atalho que viva só no renderer. */
 const MAIN_PROCESS_BOUND_IDS: ReadonlySet<string> = new Set(["canvas.zoomIn", "canvas.zoomOut"]);
+
+/** `canvas.pasteMedia` escuta o evento DOM `paste`, que o Chromium/SO
+ * só dispara pro gesto nativo de colar (Ctrl/Cmd+V). Não é "componente
+ * ainda não lê o registro" nem candidato a follow-up — reatribuir a tecla
+ * na UI nunca faria o browser emitir `paste` sob outro combo. Motivo
+ * próprio pra a overlay não mentir na direção oposta (review adversarial,
+ * achado médio). */
+const CLIPBOARD_PASTE_EVENT_BOUND_IDS: ReadonlySet<string> = new Set(["canvas.pasteMedia"]);
+
+/** Follow-up da fase C — atalhos de card cujo componente DONO agora lê
+ * `getEffectiveCombo`/`matchesCombo` (não mais literais soltos). Inclui
+ * `terminal.sigint`/`terminal.eof`: sintetizam `\x03`/`\x04` no stream
+ * (`pty.write`, não sinal do SO) e engolem o encoding antigo quando
+ * rebindado. Copy matched ⇒ consume sempre (mesmo sem seleção). */
+const RENDERER_WIRED_NATIVE_IDS: ReadonlySet<string> = new Set([
+  "chat.send",
+  "chat.newline",
+  "browser.navigate",
+  "terminal.copySelection",
+  "terminal.paste",
+  "terminal.sigint",
+  "terminal.eof",
+]);
 
 /** Por que (ou se) `def` NÃO pode ser reatribuído pela UI — `undefined`
  * quando pode. Único lugar que decide isso: tanto `isRebindable` quanto o
@@ -106,7 +116,37 @@ export function rebindBlockedReason(def: ShortcutDefinition): string | undefined
   if (MAIN_PROCESS_BOUND_IDS.has(def.id)) {
     return "nativo — o combo é usado pelo processo main do Electron (main/index.ts, before-input-event); reatribuir aqui não mudaria o que main realmente intercepta";
   }
+  if (CLIPBOARD_PASTE_EVENT_BOUND_IDS.has(def.id)) {
+    return "nativo — amarrado ao evento DOM paste do navegador/SO (Ctrl/Cmd+V); o app não escolhe a tecla que dispara esse evento, então reatribuir aqui nunca mudaria o que cola";
+  }
+  if (RENDERER_WIRED_NATIVE_IDS.has(def.id)) return undefined;
   return "nativo — implementado dentro do próprio card (terminal, chat ou navegador embutido); esse componente ainda não lê a configuração de atalhos, então reatribuir aqui não mudaria o que dispara (candidato a follow-up)";
+}
+
+/** Casa `e` contra o combo EFETIVO de `id` (default do registro +
+ * override do usuário quando rebindável). Único caminho que ChatCard /
+ * BrowserCard / useTerminal devem usar — a mesma fonte que a overlay
+ * mostra, nunca um literal paralelo. */
+export function matchesShortcut(e: ShortcutKeyEvent, id: string, overrides: ShortcutOverrides): boolean {
+  const def = SHORTCUT_REGISTRY.find((d) => d.id === id);
+  if (!def) return false;
+  const effective = getEffectiveCombo(def, overrides);
+  return effective !== undefined && matchesCombo(e, effective);
+}
+
+/** Casa `e` contra o combo DEFAULT do registro (ignora overrides). Usado
+ * pra detectar a tecla "antiga" depois de um rebind — ex.: Ctrl+C ainda
+ * produz `\x03` via xterm se não for engolida. */
+export function matchesDefaultCombo(e: ShortcutKeyEvent, id: string): boolean {
+  const def = SHORTCUT_REGISTRY.find((d) => d.id === id);
+  return def?.combo !== undefined && matchesCombo(e, def.combo);
+}
+
+/** `true` quando `e` ainda casa com o default do registro, mas NÃO com o
+ * combo efetivo (usuário rebindou pra longe). O componente deve engolir
+ * o evento pra o encoding antigo do terminal não continuar disparando. */
+export function isStaleDefaultShortcut(e: ShortcutKeyEvent, id: string, overrides: ShortcutOverrides): boolean {
+  return matchesDefaultCombo(e, id) && !matchesShortcut(e, id, overrides);
 }
 
 export function isRebindable(def: ShortcutDefinition): boolean {

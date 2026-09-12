@@ -1,10 +1,12 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import { BrowserInspector, type EmulationZoom } from "./BrowserInspector";
 import type { Rect } from "./board-model";
 import styles from "./BrowserCard.module.css";
+import { matchesShortcut } from "./shortcut-config";
+import type { ShortcutOverrides } from "./shortcut-registry";
 
 // DESIGN-BACKLOG.md §2.1 Item E — Mobile/Tablet mirroring the real
 // devices CentralByte's own presets target. "Fluido" (free resize) has
@@ -238,6 +240,7 @@ function BrowserCardInner({
   screenProjected,
   panX,
   panY,
+  shortcutOverridesRef,
 }: {
   id: string;
   rect: Rect;
@@ -279,6 +282,9 @@ function BrowserCardInner({
   screenProjected?: boolean;
   panX?: number;
   panY?: number;
+  /** Follow-up fase C — ref estável; address-bar lê o override atual sem
+   * re-render do card. */
+  shortcutOverridesRef: MutableRefObject<ShortcutOverrides>;
 }) {
   // Pre-release audit P1 — same render-count counter as TerminalCard.tsx
   // (see its doc comment) — lets the verify harness prove `React.memo`
@@ -992,7 +998,13 @@ function BrowserCardInner({
               value={bar}
               onChange={(e) => setBar(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void window.browser.navigate(id, bar);
+                // Rodada 3 review — matched ⇒ preventDefault. Sem isto,
+                // rebindar navigate pra Ctrl+P (etc.) navega E abre o
+                // diálogo nativo do Chromium (Imprimir) no mesmo keydown.
+                if (matchesShortcut(e.nativeEvent, "browser.navigate", shortcutOverridesRef.current)) {
+                  e.preventDefault();
+                  void window.browser.navigate(id, bar);
+                }
               }}
             />
           </div>

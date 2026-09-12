@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { decideStatusWrite, type StatusWriteDecision } from "./status-write-decision";
+import { decideSprintClose } from "./sprint-close-decision";
 
 export type CardRow = {
   id: string;
@@ -221,6 +223,20 @@ export type TaskRow = {
    * ganhou um número comparável, e continua tão aberta a repriorização
    * quanto estava antes. */
   implicit_order: number | null;
+  /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal VIVO de divergência (não
+   * histórico). Quando o humano é o último ator de status e um app/agente
+   * tenta outro status, o status humano fica; estes dois campos guardam
+   * o que foi declarado. `null`/`null` = sem divergência ativa. Limpos
+   * quando o humano escreve de novo ou quando uma escrita posterior
+   * propõe exatamente o status humano (alinhamento). Persistidos — o
+   * quadro precisa deles depois de um restart, não só em memória. */
+  diverged_status: string | null;
+  diverged_actor: TaskActor | null;
+  /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — exatamente UM sprint
+   * vivo por vez. Histórico de sprints fechados vive na tabela `sprints`
+   * (snapshot congelado), nunca reconsultando status vivo. `null`/ausente
+   * na escrita = atribuir ao sprint ativo do board (upsertTaskInternal). */
+  sprint_id?: string | null;
   created_at: number;
   updated_at: number;
   /** Transiente — NUNCA uma coluna de `tasks`, nunca lido de volta do
@@ -231,6 +247,15 @@ export type TaskRow = {
    * justificativa completa. Ausente = "agent" (toda chamada de
    * create_task/update_task de hoje vem de um agente via MCP). */
   actor?: TaskActor;
+  /**
+   * Transient — like `actor`. When `false`, the caller did NOT propose a
+   * status change (e.g. `update_task` without a `status` field). Absent
+   * or `true` = `status` on this object is an intentional proposal.
+   * Distinguishes legitimate alignment (explicit same status → clear
+   * divergence) from bookkeeping-only writes (must keep divergence).
+   * Adversarial review 2026-09-11, finding 3.
+   */
+  statusProposed?: boolean;
   /** Transiente, só de LEITURA — anexado só por `getTask` (nunca por
    * `listTasks`, de propósito: manter a listagem em massa barata).
    * DESIGN-BACKLOG.md §2.1 "MCP: exponha a trilha em LEITURA (no
@@ -259,16 +284,20 @@ export type TaskActor = "app" | "agent" | "human";
  * `status` (o que esta fase efetivamente grava, de dentro de
  * `upsertTask`) de `stage` (reservado pra quando o modelo ganhar um
  * conceito de etapa/review — ver DESIGN-BACKLOG decisão 3, "review é
- * etapa, não coluna" — nada aqui inventa essa coluna agora). Guardado
- * pra sempre, podado só junto com a task (nenhuma função de deleteTask
- * existe ainda neste código — nada a podar por enquanto). Nunca
- * inventar histórico sintético pra tasks que já existiam antes desta
- * tabela: a trilha delas começa vazia, de propósito (decisão explícita
- * do dono do repo — pareceria dado real e sujaria os gráficos futuros). */
+ * etapa, não coluna" — nada aqui inventa essa coluna agora) de
+ * `declaration` (Decisão 8: escrita de app/agente que NÃO deslocou o
+ * status humano — auditada aqui sem virar `kind:'status'`, senão
+ * `last_actor` deixaria de ser `"human"` e a próxima escrita passaria
+ * por cima). Guardado pra sempre, podado só junto com a task (nenhuma
+ * função de deleteTask existe ainda neste código — nada a podar por
+ * enquanto). Nunca inventar histórico sintético pra tasks que já
+ * existiam antes desta tabela: a trilha delas começa vazia, de propósito
+ * (decisão explícita do dono do repo — pareceria dado real e sujaria os
+ * gráficos futuros). */
 export type TaskTransitionRow = {
   id: string;
   task_id: string;
-  kind: "status" | "stage";
+  kind: "status" | "stage" | "declaration";
   from_value: string | null;
   to_value: string;
   actor: TaskActor;
@@ -325,6 +354,45 @@ export type TaskCardRow = { task_id: string; card_id: string; role: string };
  * item no DESIGN-BACKLOG: "poder ESCREVER veredito transforma registro
  * em narrativa"). */
 export type TaskVerdictRow = { id: string; task_id: string; card_id: string; role: string; verdict: string | null; at: number };
+
+/** Lean task row frozen into `sprints.snapshot_json` at close — enough
+ * for the Fila card to render a read-only board of that sprint without
+ * consulting live `tasks` (migrated rows left; live status would lie). */
+export type SprintSnapshotTask = {
+  id: string;
+  prompt: string | null;
+  status: string;
+  order: number | null;
+  suggested_order: number | null;
+  implicit_order: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
+/** DESIGN-BACKLOG.md §2.1 "Historico de sprints — fechamento EXPLICITO".
+ * Uma linha por sprint de um board. `closed_at IS NULL` = sprint ativo.
+ * Contagens e migrated_* em sprint FECHADO são SNAPSHOT do instante do
+ * close (`decideSprintClose`) — nunca recalculadas depois. No sprint
+ * ativo, count_* ficam 0 até o fechamento; `migrated_in` já nasce no
+ * open (quantas tasks vieram do sprint anterior).
+ * `number` = identidade automática por board; `name` editável depois
+ * (null → UI mostra "Sprint N"). `snapshot_json` = quadro congelado. */
+export type SprintRow = {
+  id: string;
+  board_id: string;
+  number: number;
+  name: string | null;
+  started_at: number;
+  closed_at: number | null;
+  count_todo: number;
+  count_doing: number;
+  count_done: number;
+  count_failed: number;
+  migrated_in: number;
+  migrated_out: number;
+  /** JSON of `SprintSnapshotTask[]` — set only on close; null while open. */
+  snapshot_json: string | null;
+};
 
 /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — achado ao
  * vivo (2026-09-09, sessão real): um card de review chamou `report`, saiu
@@ -502,6 +570,21 @@ function migrate(db: Database.Database) {
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
+  // DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo de divergência. Ver
+  // `TaskRow.diverged_status` / `diverged_actor` acima.
+  for (const col of ["diverged_status TEXT", "diverged_actor TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
+  }
+  // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — membership vivo.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN sprint_id TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
   try {
     db.exec(`ALTER TABLE reports ADD COLUMN verdict TEXT`);
   } catch (e) {
@@ -650,6 +733,51 @@ export function openStore(userDataDir: string) {
     );
   `);
 
+  // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — ver SprintRow.
+  // Snapshot columns default 0; filled only on close (active rows keep
+  // zeros in count_* until then). Exactly one row per board may have
+  // closed_at IS NULL (enforced in closeSprint/ensureActiveSprint, not
+  // by a partial UNIQUE — SQLite partial indexes work, but the write
+  // path already serializes this in a transaction).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sprints (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL,
+      number INTEGER NOT NULL DEFAULT 1,
+      name TEXT,
+      started_at INTEGER NOT NULL,
+      closed_at INTEGER,
+      count_todo INTEGER NOT NULL DEFAULT 0,
+      count_doing INTEGER NOT NULL DEFAULT 0,
+      count_done INTEGER NOT NULL DEFAULT 0,
+      count_failed INTEGER NOT NULL DEFAULT 0,
+      migrated_in INTEGER NOT NULL DEFAULT 0,
+      migrated_out INTEGER NOT NULL DEFAULT 0,
+      snapshot_json TEXT
+    );
+  `);
+  // Additive columns for DBs that already had the thinner sprints table.
+  for (const col of ["number INTEGER NOT NULL DEFAULT 1", "name TEXT", "snapshot_json TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE sprints ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
+  }
+  // Backfill sequential `number` per board when rows still share the
+  // DEFAULT 1 from ALTER (idempotent: only rewrites boards where two
+  // rows collide on the same number).
+  {
+    const boards = db.prepare(`SELECT DISTINCT board_id FROM sprints`).all() as { board_id: string }[];
+    const rowsFor = db.prepare(`SELECT id FROM sprints WHERE board_id = ? ORDER BY started_at ASC, id ASC`);
+    const setNum = db.prepare(`UPDATE sprints SET number = ? WHERE id = ?`);
+    for (const { board_id } of boards) {
+      const rows = rowsFor.all(board_id) as { id: string }[];
+      let n = 1;
+      for (const r of rows) setNum.run(n++, r.id);
+    }
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS browser_favorites (
       url TEXT PRIMARY KEY,
@@ -676,6 +804,8 @@ export function openStore(userDataDir: string) {
     CREATE INDEX IF NOT EXISTS idx_connectors_from_card_id ON connectors(from_card_id);
     CREATE INDEX IF NOT EXISTS idx_connectors_to_card_id ON connectors(to_card_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_board_id ON tasks(board_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_sprint_id ON tasks(sprint_id);
+    CREATE INDEX IF NOT EXISTS idx_sprints_board_id ON sprints(board_id);
     CREATE INDEX IF NOT EXISTS idx_reports_seq ON reports(seq);
     CREATE INDEX IF NOT EXISTS idx_tt_task ON task_transitions(task_id, at);
     CREATE INDEX IF NOT EXISTS idx_task_cards_task ON task_cards(task_id);
@@ -716,6 +846,40 @@ export function openStore(userDataDir: string) {
     UPDATE tasks SET board_id = NULL
     WHERE board_id IS NOT NULL AND board_id NOT IN (SELECT id FROM boards)
   `);
+
+  // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — backfill: every board
+  // that already has tasks gets an active sprint (if none), and every
+  // task with a board but no sprint_id joins that sprint. Idempotent:
+  // boards that already have an open sprint / tasks already assigned are
+  // left alone. Done BEFORE prepared statements so the first list/get of
+  // this process already sees membership.
+  {
+    const boardsWithTasks = db
+      .prepare(`SELECT DISTINCT board_id FROM tasks WHERE board_id IS NOT NULL`)
+      .all() as { board_id: string }[];
+    const activeForBoard = db.prepare(
+      `SELECT id FROM sprints WHERE board_id = ? AND closed_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+    );
+    const maxNumberStmt = db.prepare(`SELECT COALESCE(MAX(number), 0) AS m FROM sprints WHERE board_id = ?`);
+    const insertSprint = db.prepare(`
+      INSERT INTO sprints (id, board_id, number, name, started_at, closed_at, count_todo, count_doing, count_done, count_failed, migrated_in, migrated_out, snapshot_json)
+      VALUES (@id, @board_id, @number, NULL, @started_at, NULL, 0, 0, 0, 0, 0, 0, NULL)
+    `);
+    const assignOrphans = db.prepare(
+      `UPDATE tasks SET sprint_id = ? WHERE board_id = ? AND (sprint_id IS NULL OR sprint_id = '')`,
+    );
+    const now = Date.now();
+    for (const { board_id } of boardsWithTasks) {
+      let active = activeForBoard.get(board_id) as { id: string } | undefined;
+      if (!active) {
+        const id = randomUUID();
+        const next = ((maxNumberStmt.get(board_id) as { m: number }).m ?? 0) + 1;
+        insertSprint.run({ id, board_id, number: next, started_at: now });
+        active = { id };
+      }
+      assignOrphans.run(active.id, board_id);
+    }
+  }
 
   // Used to auto-INSERT a "Board 1" here when none existed — that was
   // right back when the app always booted straight into a board (there
@@ -872,7 +1036,14 @@ export function openStore(userDataDir: string) {
     )
   `);
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at`;
+  // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
+  // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` de
+  // propósito: uma declaração estacionada NÃO pode virar o last_actor,
+  // senão o lock humano se desfaz na próxima escrita.
+  const lastStatusActorStmt = db.prepare(
+    `SELECT actor FROM task_transitions WHERE task_id = ? AND kind = 'status' ORDER BY at DESC, rowid DESC LIMIT 1`,
+  );
   // RODADA 3 (DESIGN-BACKLOG.md §2.1, decisão 7 / peça 5 do recorte) —
   // rodapé de escopo (`board X · N tasks · M em outros boards`). GLOBAL de
   // propósito (nenhum filtro por board): é exatamente essa visão de
@@ -906,14 +1077,16 @@ export function openStore(userDataDir: string) {
   const listTasksByBoardStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE board_id = ? ORDER BY created_at ASC`);
   const getTaskStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`);
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @sprint_id, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, board_id = excluded.board_id, result_json = excluded.result_json, deps_json = excluded.deps_json,
       retry_count = excluded.retry_count, attempted_providers_json = excluded.attempted_providers_json,
       max_retries = excluded.max_retries, fallback_providers_json = excluded.fallback_providers_json,
-      "order" = excluded."order", suggested_order = excluded.suggested_order, implicit_order = excluded.implicit_order, updated_at = excluded.updated_at
+      "order" = excluded."order", suggested_order = excluded.suggested_order, implicit_order = excluded.implicit_order,
+      diverged_status = excluded.diverged_status, diverged_actor = excluded.diverged_actor,
+      sprint_id = excluded.sprint_id, updated_at = excluded.updated_at
   `);
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
   // achado 2). `applyColumnDrop` (mais abaixo) precisa gravar isto SEM
@@ -925,31 +1098,245 @@ export function openStore(userDataDir: string) {
   // nunca muda status) — comportamento correto: `implicit_order` não é
   // uma decisão de ninguém, não tem o que auditar.
   const setImplicitOrderStmt = db.prepare(`UPDATE tasks SET implicit_order = @implicit_order, updated_at = @updated_at WHERE id = @id`);
+  // Sprint membership migration on close — same posture as
+  // setImplicitOrderStmt: dedicated UPDATE, never touches status, so
+  // Decisão 8's human lock cannot block (and must not — migration is app
+  // bookkeeping of which sprint owns the row, not a status write).
+  const setTaskSprintStmt = db.prepare(`UPDATE tasks SET sprint_id = @sprint_id, updated_at = @updated_at WHERE id = @id`);
+
+  const SPRINT_COLUMNS =
+    `id, board_id, number, name, started_at, closed_at, count_todo, count_doing, count_done, count_failed, migrated_in, migrated_out, snapshot_json`;
+  const getActiveSprintStmt = db.prepare(
+    `SELECT ${SPRINT_COLUMNS} FROM sprints WHERE board_id = ? AND closed_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+  );
+  const getSprintStmt = db.prepare(`SELECT ${SPRINT_COLUMNS} FROM sprints WHERE id = ?`);
+  const listSprintsStmt = db.prepare(
+    `SELECT ${SPRINT_COLUMNS} FROM sprints WHERE board_id = ? ORDER BY number DESC, started_at DESC`,
+  );
+  const maxSprintNumberStmt = db.prepare(`SELECT COALESCE(MAX(number), 0) AS m FROM sprints WHERE board_id = ?`);
+  const insertSprintStmt = db.prepare(`
+    INSERT INTO sprints (id, board_id, number, name, started_at, closed_at, count_todo, count_doing, count_done, count_failed, migrated_in, migrated_out, snapshot_json)
+    VALUES (@id, @board_id, @number, @name, @started_at, @closed_at, @count_todo, @count_doing, @count_done, @count_failed, @migrated_in, @migrated_out, @snapshot_json)
+  `);
+  const freezeSprintStmt = db.prepare(`
+    UPDATE sprints SET
+      closed_at = @closed_at,
+      count_todo = @count_todo,
+      count_doing = @count_doing,
+      count_done = @count_done,
+      count_failed = @count_failed,
+      migrated_out = @migrated_out,
+      snapshot_json = @snapshot_json
+    WHERE id = @id
+  `);
+  const tasksForSprintStmt = db.prepare(
+    `SELECT id, prompt, status, "order", suggested_order, implicit_order, created_at, updated_at FROM tasks WHERE sprint_id = ?`,
+  );
+  const getBoardExistsStmt = db.prepare(`SELECT id FROM boards WHERE id = ?`);
+
+  /** Ensure the board has exactly one open sprint. Creates one if missing.
+   * Idempotent when an active sprint already exists. */
+  function ensureActiveSprintInternal(boardId: string, at: number, migratedIn = 0): SprintRow {
+    const existing = getActiveSprintStmt.get(boardId) as SprintRow | undefined;
+    if (existing) return existing;
+    const nextNumber = ((maxSprintNumberStmt.get(boardId) as { m: number }).m ?? 0) + 1;
+    const row: SprintRow = {
+      id: randomUUID(),
+      board_id: boardId,
+      number: nextNumber,
+      name: null,
+      started_at: at,
+      closed_at: null,
+      count_todo: 0,
+      count_doing: 0,
+      count_done: 0,
+      count_failed: 0,
+      migrated_in: migratedIn,
+      migrated_out: 0,
+      snapshot_json: null,
+    };
+    insertSprintStmt.run(row);
+    return row;
+  }
+
+  /**
+   * Close the active sprint: freeze snapshot counts + board JSON, migrate
+   * unfinished todo/doing via setTaskSprintStmt (NOT upsertTask — status
+   * lock must not block membership), open the next sprint with migrated_in.
+   *
+   * Product answer 3: empty queue and already-closed are REFUSED with a
+   * visible reason — never silent no-op / never invent an empty boundary.
+   */
+  const closeSprintInternal = db.transaction((boardId: string, at: number): { closed: SprintRow; opened: SprintRow } => {
+    const active = getActiveSprintStmt.get(boardId) as SprintRow | undefined;
+    if (!active) {
+      throw Object.assign(new Error(`no active sprint on board "${boardId}" — already closed or never opened`), {
+        code: "sprint_already_closed",
+      });
+    }
+    const members = tasksForSprintStmt.all(active.id) as {
+      id: string;
+      prompt: string | null;
+      status: string;
+      order: number | null;
+      suggested_order: number | null;
+      implicit_order: number | null;
+      created_at: number;
+      updated_at: number;
+    }[];
+    if (members.length === 0) {
+      throw Object.assign(new Error(`sprint ${active.number} is empty — add tasks before closing`), {
+        code: "sprint_empty",
+      });
+    }
+    const decision = decideSprintClose(members);
+    const snapshot: SprintSnapshotTask[] = members.map((m) => ({
+      id: m.id,
+      prompt: m.prompt,
+      status: m.status,
+      order: m.order,
+      suggested_order: m.suggested_order,
+      implicit_order: m.implicit_order,
+      created_at: m.created_at,
+      updated_at: m.updated_at,
+    }));
+    const snapshotJson = JSON.stringify(snapshot);
+    freezeSprintStmt.run({
+      id: active.id,
+      closed_at: at,
+      count_todo: decision.countTodo,
+      count_doing: decision.countDoing,
+      count_done: decision.countDone,
+      count_failed: decision.countFailed,
+      migrated_out: decision.migratedOut,
+      snapshot_json: snapshotJson,
+    });
+    const opened: SprintRow = {
+      id: randomUUID(),
+      board_id: boardId,
+      number: active.number + 1,
+      name: null,
+      started_at: at,
+      closed_at: null,
+      count_todo: 0,
+      count_doing: 0,
+      count_done: 0,
+      count_failed: 0,
+      migrated_in: decision.migratedOut,
+      migrated_out: 0,
+      snapshot_json: null,
+    };
+    // If a higher number already exists (rare race / renumber), bump.
+    const maxExisting = (maxSprintNumberStmt.get(boardId) as { m: number }).m ?? 0;
+    if (opened.number <= maxExisting) opened.number = maxExisting + 1;
+    insertSprintStmt.run(opened);
+    for (const id of decision.migrateIds) {
+      setTaskSprintStmt.run({ id, sprint_id: opened.id, updated_at: at });
+    }
+    const closed: SprintRow = {
+      ...active,
+      closed_at: at,
+      count_todo: decision.countTodo,
+      count_doing: decision.countDoing,
+      count_done: decision.countDone,
+      count_failed: decision.countFailed,
+      migrated_out: decision.migratedOut,
+      snapshot_json: snapshotJson,
+    };
+    return { closed, opened };
+  });
 
   /** Corpo de `upsertTask` (ver seu comentário grande na definição do
    * método, mais abaixo) extraído pra função nomeada — `applyColumnDrop`
    * (peça 3, review adversarial rodada 3) precisa chamar EXATAMENTE a
    * mesma lógica (grava a task arrastada + a transição de status, se
-   * houve) de DENTRO de uma `db.transaction`, sem duplicar o corpo. */
-  function upsertTaskInternal(task: TaskRow) {
-    const { actor, transitions: _transitions, cards: _cards, ...persistable } = task;
+   * houve) de DENTRO de uma `db.transaction`, sem duplicar o corpo.
+   *
+   * DESIGN-BACKLOG.md §2.1 Decisão 8 — AQUI mora o algoritmo de
+   * precedência (`decideStatusWrite`): consulta o last_actor de
+   * `kind:'status'` ANTES de gravar. Retorna a decisão pra o chamador
+   * (message-bus / persistTask) poder avisar o agente e empurrar o
+   * sinal no quadro — a decisão em si nunca depende do chamador lembrar. */
+  function upsertTaskInternal(task: TaskRow): StatusWriteDecision {
+    const {
+      actor,
+      statusProposed,
+      transitions: _transitions,
+      cards: _cards,
+      verdicts: _verdicts,
+      ...rest
+    } = task;
     const existing = getTaskStmt.get(task.id) as TaskRow | undefined;
+    const newActor = actor ?? "agent";
+    const previousActor = existing
+      ? ((lastStatusActorStmt.get(task.id) as { actor: TaskActor } | undefined)?.actor ?? null)
+      : null;
+    // `statusProposed !== false` — absent/true means the status on the
+    // row is intentional (create, drag, markFailed, explicit update_task
+    // status). Only an explicit `false` (update_task omitting status)
+    // becomes `proposedStatus: null` for the decision.
+    const decision = decideStatusWrite({
+      previousActor,
+      previousStatus: existing ? existing.status : null,
+      proposedStatus: statusProposed === false ? null : task.status,
+      newActor,
+      existingDivergedStatus: existing?.diverged_status ?? null,
+      existingDivergedActor: existing?.diverged_actor ?? null,
+    });
+    // Sprint membership: assign to the board's active sprint when the
+    // caller left sprint_id empty (create paths, legacy rows). Never
+    // steals an explicit sprint_id. Does NOT go through status
+    // precedence — membership ≠ status.
+    //
+    // Product answer 1 (failed NÃO migra): when a task LEAVES `failed`
+    // (human drag back to "a fazer", or any resume), it joins the
+    // CURRENT active sprint — the closed sprint's frozen counts stay put.
+    let sprintId = rest.sprint_id ?? existing?.sprint_id ?? null;
+    const boardId = rest.board_id ?? existing?.board_id ?? null;
+    const previousStatus = existing ? existing.status : null;
+    const leavingFailed = previousStatus === "failed" && decision.status !== "failed";
+    if (leavingFailed && boardId) {
+      sprintId = ensureActiveSprintInternal(boardId, Date.now()).id;
+    } else if (!sprintId && boardId) {
+      sprintId = ensureActiveSprintInternal(boardId, Date.now()).id;
+    }
+    const persistable = {
+      ...rest,
+      status: decision.status,
+      diverged_status: decision.divergedStatus,
+      diverged_actor: decision.divergedActor,
+      sprint_id: sprintId,
+    };
     upsertTaskStmt.run(persistable);
-    if (!existing || existing.status !== task.status) {
+    const at = Date.now();
+    if (decision.statusChanged) {
       insertTransitionStmt.run({
         id: randomUUID(),
         task_id: task.id,
         kind: "status",
         from_value: existing ? existing.status : null,
-        to_value: task.status,
-        actor: actor ?? "agent",
+        to_value: decision.status,
+        actor: newActor,
         card_id: task.card_id,
-        at: Date.now(),
+        at,
+      });
+    }
+    if (decision.recordDeclaration && existing && decision.declaredStatus) {
+      insertTransitionStmt.run({
+        id: randomUUID(),
+        task_id: task.id,
+        kind: "declaration",
+        from_value: existing.status,
+        to_value: decision.declaredStatus,
+        actor: newActor,
+        card_id: task.card_id,
+        at,
       });
     }
     if (task.card_id) {
       upsertTaskCardIfAbsentStmt.run({ task_id: task.id, card_id: task.card_id, role: "implementer" });
     }
+    return decision;
   }
 
   /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
@@ -1092,6 +1479,28 @@ export function openStore(userDataDir: string) {
   const reportsForBoardStmt = db.prepare(`
     SELECT r.card_id, r.seq, r.report_json, r.verdict, r.updated_at FROM reports r
     JOIN tasks t ON t.card_id = r.card_id WHERE t.board_id = ?
+  `);
+
+  // RODADA 4 — histórico de veredito por board (pílulas + gráficos 1/2).
+  // LEFT JOIN cards pro provider (mesmo motivo de taskCardsForBoardStmt:
+  // card fechado/deletado não pode apagar a rodada). Ordenado por task +
+  // at — o chamador agrupa em JS sem reordenar.
+  const verdictsForBoardStmt = db.prepare(`
+    SELECT tv.task_id, tv.card_id, tv.role, tv.verdict, tv.at, c.provider as card_provider
+    FROM task_verdicts tv
+    JOIN tasks t ON t.id = tv.task_id
+    LEFT JOIN cards c ON c.id = tv.card_id
+    WHERE t.board_id = ?
+    ORDER BY tv.task_id, tv.at ASC, tv.rowid ASC
+  `);
+
+  // Ator da PRIMEIRA transição de status — distingue task criada por
+  // humano (UI) de task criada por agente, sem coluna nova. Filtra
+  // `declaration` pelo mesmo motivo de lastStatusActorStmt.
+  const firstActorsForBoardStmt = db.prepare(`
+    SELECT t.id as task_id,
+      (SELECT tt.actor FROM task_transitions tt WHERE tt.task_id = t.id AND tt.kind = 'status' ORDER BY tt.at ASC, tt.rowid ASC LIMIT 1) as first_actor
+    FROM tasks t WHERE t.board_id = ?
   `);
 
   const getReportStmt = db.prepare("SELECT card_id, seq, report_json, verdict, updated_at FROM reports WHERE card_id = ?");
@@ -1262,7 +1671,7 @@ export function openStore(userDataDir: string) {
      * dentro do MESMO objeto que já atravessa essa fronteira funciona sem
      * mexer em index.ts. Ausente = "agent" (toda chamada de
      * create_task/update_task hoje é MCP, isto é, um agente). */
-    upsertTask: (task: TaskRow) => upsertTaskInternal(task),
+    upsertTask: (task: TaskRow): StatusWriteDecision => upsertTaskInternal(task),
     // Ver o comentário grande de `applyColumnDrop` acima (definida antes
     // do `return`, junto dos prepared statements) — exposta aqui como
     // método do store, mesma convenção de todo o resto deste objeto.
@@ -1299,12 +1708,71 @@ export function openStore(userDataDir: string) {
         card_label: string | null;
       })[],
     listReportsForBoard: (boardId: string): ReportRow[] => reportsForBoardStmt.all(boardId) as ReportRow[],
+    /** RODADA 4 — vereditos do board inteiro (uma consulta), com provider
+     * do card pra o gráfico 1. Mesmo padrão de `listStatusTransitionsForBoard`. */
+    listVerdictsForBoard: (
+      boardId: string,
+    ): { task_id: string; card_id: string; role: string; verdict: string | null; at: number; card_provider: string | null }[] =>
+      verdictsForBoardStmt.all(boardId) as {
+        task_id: string;
+        card_id: string;
+        role: string;
+        verdict: string | null;
+        at: number;
+        card_provider: string | null;
+      }[],
+    /** Ator da 1ª transição `kind:'status'` — `human` ⇒ criada pela UI. */
+    listFirstActorsForBoard: (boardId: string): { task_id: string; first_actor: TaskActor | null }[] =>
+      firstActorsForBoardStmt.all(boardId) as { task_id: string; first_actor: TaskActor | null }[],
     getReport: (cardId: string): ReportRow | undefined => getReportStmt.get(cardId) as ReportRow | undefined,
     upsertReport: (row: ReportRow) => {
       upsertReportStmt.run({ ...row, verdict: row.verdict ?? null });
       pruneReportsStmt.run(MAX_STORED_REPORTS);
     },
     nextReportSeqSeed: (): number => (nextReportSeqStmt.get() as { m: number | null }).m ?? 0,
+    // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — open/close never by
+    // calendar. Snapshot is frozen inside closeSprintInternal; listSprints
+    // returns the frozen rows as stored (closed) plus the live open row.
+    getActiveSprint: (boardId: string): SprintRow | undefined => getActiveSprintStmt.get(boardId) as SprintRow | undefined,
+    getSprint: (sprintId: string): SprintRow | undefined => getSprintStmt.get(sprintId) as SprintRow | undefined,
+    listSprints: (boardId: string): SprintRow[] => listSprintsStmt.all(boardId) as SprintRow[],
+    /** Parse frozen board for a closed sprint. Null while open / missing. */
+    getSprintSnapshot: (sprintId: string): SprintSnapshotTask[] | null => {
+      const row = getSprintStmt.get(sprintId) as SprintRow | undefined;
+      if (!row?.snapshot_json) return null;
+      try {
+        const parsed = JSON.parse(row.snapshot_json) as SprintSnapshotTask[];
+        return Array.isArray(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    },
+    /** Create an active sprint if the board has none. No-op (returns the
+     * existing row) when one is already open. */
+    openSprint: (boardId: string): { ok: true; sprint: SprintRow } | { ok: false; error: string } => {
+      if (!getBoardExistsStmt.get(boardId)) return { ok: false, error: `no such board "${boardId}"` };
+      return { ok: true, sprint: ensureActiveSprintInternal(boardId, Date.now()) };
+    },
+    /** Freeze the active sprint's snapshot, migrate unfinished todo/doing,
+     * open the next. Refuses empty queue and already-closed (no active). */
+    closeSprint: (boardId: string): { ok: true; closed: SprintRow; opened: SprintRow } | { ok: false; error: string } => {
+      if (!getBoardExistsStmt.get(boardId)) return { ok: false, error: `no such board "${boardId}"` };
+      try {
+        const result = closeSprintInternal(boardId, Date.now());
+        return { ok: true, ...result };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { ok: false, error: msg };
+      }
+    },
+    /** Optional rename surface (identity is still `number`). */
+    renameSprint: (sprintId: string, name: string | null): { ok: true; sprint: SprintRow } | { ok: false; error: string } => {
+      const existing = getSprintStmt.get(sprintId) as SprintRow | undefined;
+      if (!existing) return { ok: false, error: `no such sprint "${sprintId}"` };
+      const trimmed = name === null ? null : name.trim() || null;
+      db.prepare(`UPDATE sprints SET name = ? WHERE id = ?`).run(trimmed, sprintId);
+      return { ok: true, sprint: { ...existing, name: trimmed } };
+    },
     listFavorites: (): FavoriteRow[] => listFavoritesStmt.all() as FavoriteRow[],
     addFavorite: (url: string, title: string) => addFavoriteStmt.run({ url, title, created_at: Date.now() }),
     removeFavorite: (url: string) => removeFavoriteStmt.run(url),

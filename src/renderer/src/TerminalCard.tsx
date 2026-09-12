@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { useTerminal } from "./useTerminal";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
@@ -6,6 +6,7 @@ import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
 import { PROVIDER_GLYPH } from "./provider-glyph";
 import styles from "./TerminalCard.module.css";
+import type { ShortcutOverrides } from "./shortcut-registry";
 
 export type { Rect };
 
@@ -66,6 +67,7 @@ function TerminalCardInner({
   screenProjected,
   panX,
   panY,
+  shortcutOverridesRef,
 }: {
   /** The card's own persisted id — also the PTY id and AGENT_CANVAS_CARD_ID, so acbridge/store/registry all speak the same id. */
   id: string;
@@ -125,6 +127,8 @@ function TerminalCardInner({
   screenProjected?: boolean;
   panX?: number;
   panY?: number;
+  /** Follow-up fase C — repassado pra useTerminal (copy/paste rebindáveis). */
+  shortcutOverridesRef: MutableRefObject<ShortcutOverrides>;
 }) {
   // Pre-release audit P1 — a render-count counter, not gated behind any
   // dev-only flag (this renderer has none to gate on), but as cheap as a
@@ -170,6 +174,7 @@ function TerminalCardInner({
     initialInput,
     visible,
     zoom,
+    shortcutOverridesRef,
   );
 
   // Achado ao vivo (resize "quebra e volta") — `fitNow()` (real

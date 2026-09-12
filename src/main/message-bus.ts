@@ -4,8 +4,10 @@ import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
 import { decideReportNotifyTarget } from "./report-notify-routing";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
+import type { StatusWriteDecision } from "./status-write-decision";
+import { describeStatusHeldWarning } from "./status-write-decision";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -331,12 +333,23 @@ export type BusRequest =
       incrementRetry?: boolean;
       attemptedProvider?: string;
       suggestedOrder?: number;
+      /** DESIGN-BACKLOG.md §2.1 Decisão 8 — quem chamou, pra o aviso de
+       * status retido (typeAndSubmit) chegar no PTY certo. Ausente em
+       * chamadas antigas / bookkeeping externo: o aviso ainda volta no
+       * envelope MCP (`warning`), e cai no `card_id` da task se houver. */
+      requesterId?: string;
     }
   // DESIGN-BACKLOG.md §2.1 item 6 — `boardId` opcional: omitido, devolve
   // exatamente a lista sem filtro de sempre (nenhum comportamento
   // existente muda).
   | { cmd: "list_tasks"; boardId?: string }
   | { cmd: "get_task"; taskId?: string }
+  // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — fechamento explícito
+  // por agente (MCP). Nunca por data. `boardId` obrigatório: sprint é
+  // por board, não global.
+  | { cmd: "close_sprint"; boardId?: string }
+  | { cmd: "open_sprint"; boardId?: string }
+  | { cmd: "list_sprints"; boardId?: string }
   | { cmd: "list_connectors" }
   | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null; requesterId?: string }
   | { cmd: "set_connector_label"; connectorId?: string; label?: string | null }
@@ -517,7 +530,7 @@ export function createMessageBus(
       hasReceivedData: boolean;
       lastActivityAtMs: number;
       hasPendingHumanInput?: boolean;
-      inputLineStartedAtMs?: number | null;
+      inputLineLastAtMs?: number | null;
     } | null;
     /** Sticky item "card_status idle" (fix ao vivo, 2026-09-04) — OS
      * notification, never touches any terminal's PTY/input. See the doc
@@ -632,7 +645,18 @@ export function createMessageBus(
      * Node just to `.filter()` it. */
     listTasksByBoard: (boardId: string) => TaskRow[];
     getTask: (id: string) => TaskRow | undefined;
-    upsertTask: (task: TaskRow) => void;
+    upsertTask: (task: TaskRow) => StatusWriteDecision;
+    /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — pass-through pro
+     * store (snapshot congelado no close). O renderer usa IPC próprio;
+     * estes callbacks existem só pro MCP/acbridge. */
+    listSprints: (boardId: string) => import("./store").SprintRow[];
+    openSprint: (boardId: string) => { ok: true; sprint: import("./store").SprintRow } | { ok: false; error: string };
+    closeSprint: (boardId: string) =>
+      | { ok: true; closed: import("./store").SprintRow; opened: import("./store").SprintRow }
+      | { ok: false; error: string };
+    /** Notify the Fila card after an MCP close/open so the history panel
+     * refreshes. Optional — tests that don't mount a window omit it. */
+    onSprintsChanged?: (boardId: string) => void;
     /** Current task_cards links from the card side. This is deliberately
      * separate from `cardWasExpectedToReport`: a secondary reviewer card can
      * close a participation round without being the principal card whose
@@ -916,6 +940,13 @@ export function createMessageBus(
       suggestedOrder: row.suggested_order,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      // DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo (não histórico).
+      // Presente em list/get pra o agente ver a mesma divergência que o
+      // quadro Fila mostra.
+      divergedStatus: row.diverged_status,
+      divergedActor: row.diverged_actor,
+      // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — membership vivo.
+      sprintId: row.sprint_id ?? null,
       // DESIGN-BACKLOG.md §2.1 "no get_task, por exemplo" — só presentes
       // quando `row` veio de `callbacks.getTask` (que os anexa); ausentes
       // (undefined, somem do JSON) numa linha de `listTasks`, de
@@ -993,16 +1024,17 @@ export function createMessageBus(
 
   /** A live PTY can be ready while its human is midway through a line. The
    * registry exposes that cheap signal without exposing terminal contents;
-   * wait until the line is submitted or the bounded expiry says it is stale.
-   * The latter deliberately lets the queued notice through so delivery is
-   * never lost, while the registry keeps the human bytes intact. */
+   * wait until the line is submitted or idle since the last human keystroke
+   * exceeds the bounded expiry. The latter deliberately lets the queued
+   * notice through so delivery is never lost, while the registry keeps the
+   * human bytes intact. */
   async function waitForHumanInputGate(target: string): Promise<void> {
     for (;;) {
       const snapshot = callbacks.getCardWriteReadiness(target);
       if (!snapshot) return;
       const decision = decideDeliveryGate({
         hasPendingHumanInput: snapshot.hasPendingHumanInput === true,
-        pendingHumanInputStartedAtMs: snapshot.inputLineStartedAtMs ?? null,
+        pendingHumanInputLastAtMs: snapshot.inputLineLastAtMs ?? null,
         nowMs: Date.now(),
       });
       if (decision.action === "proceed") return;
@@ -1035,8 +1067,10 @@ export function createMessageBus(
    * na 1ª tentativa, exatamente no caso que mais precisava das outras 3.
    * `decideSubmitCheck` (type-and-submit-decision.ts) resolve isso com um
    * terceiro estado ("unknown"), gated por `hasNewActivitySinceWrite` —
-   * `activityAtWrite` abaixo é o "antes" contra o qual cada tentativa
-   * compara `getCardLastActivityAt` de novo. */
+   * `activityAtWrite` abaixo é o baseline ANTES da escrita (sinal de
+   * silêncio de boot apenas). Eco vs resposta real NÃO usam esse
+   * timestamp: a distinção é por conteúdo (`looksLikeSubmitStarted`).
+   * Entrega que desiste limpa o composer (`composerClearSequence`). */
   async function deliverCard(target: string, text: string): Promise<void> {
     await waitForWriteReadiness(target);
     await waitForHumanInputGate(target);
@@ -1064,23 +1098,36 @@ export function createMessageBus(
     };
 
     try {
+      // Screen + activity baselines BEFORE the write. Content signals
+      // (Working / follow-ups) only count when their match count rises vs
+      // screenTextBeforeWrite — leftover prose/chrome from the prior turn
+      // must not mark a swallowed Enter as "sent".
       const activityAtWrite = callbacks.getCardLastActivityAt(target);
-      writeDelivery(text);
+      const beforeSnap = await readCardText(target, 8);
+      const screenTextBeforeWrite = beforeSnap.ok ? beforeSnap.text : "";
+      // Bracketed Paste for multi-line / long briefs so TUIs collapse to a
+      // paste chip instead of treating mid-text newlines as submits. Short
+      // system notices stay raw (see shouldUseBracketedPaste).
+      writeDelivery(deliveryTextBytes(text));
       // Sticky item "send_to_card não confirma envio" (2026-09-03) — a
       // regex de placeholder sozinha só cobre UM sintoma (CLI que colapsa
       // um paste grande num chip "[Pasted text ...]"); uma mensagem curta
       // simplesmente fica CRUA na caixa, nunca colapsa, então checar só o
       // placeholder deixaria passar como "enviado" um caso que não foi.
-      // Segundo sinal, agnóstico de provider: a própria linha de composer
-      // geralmente continua mostrando o texto literal até ser de fato
-      // submetida (depois disso o que aparece — spinner, novo prompt, linha
-      // ecoada no histórico — é sempre DIFERENTE do que foi digitado).
-      // Prefixo normalizado (não a linha toda: soft-wrap pode quebrar uma
-      // linha longa em várias linhas de tela).
-      const sentPrefix = text.trim().replace(/\s+/g, " ").slice(0, 24);
+      // Needle: full trimmed text when short (<8 — system notices), else
+      // a 24-char prefix. Short needles are matched in the screen tail
+      // only (see needleVisibleOnScreen).
+      const normalized = text.trim().replace(/\s+/g, " ");
+      const sentNeedle = normalized.length < 8 ? normalized : normalized.slice(0, 24);
+      // Previous confirm result drives whether the NEXT iteration presses
+      // Enter. `null` before attempt 0 → always press once. `"unknown"`
+      // never presses (wait/re-read only).
+      let previousResult: ReturnType<typeof decideSubmitCheck> | null = null;
       for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
         await delay(SEND_ENTER_DELAY_MS);
-        writeDelivery("\r");
+        if (shouldPressEnterOnAttempt(attempt, previousResult)) {
+          writeDelivery("\r");
+        }
         await delay(SEND_ENTER_CONFIRM_DELAY_MS);
         const check = await readCardText(target, 8);
         // Falha de leitura (timeout, card sumiu) não é evidência de que o
@@ -1088,23 +1135,23 @@ export function createMessageBus(
         // `break` fora da decisão pura — inalterado, não regride.
         if (!check.ok) break;
         const currentActivity = callbacks.getCardLastActivityAt(target);
-        const result = decideSubmitCheck({
+        previousResult = decideSubmitCheck({
           screenText: check.text,
-          sentPrefix,
-          // Timestamp ausente (card sumiu entre o write e agora, ou um
-          // callback que não sabe responder) tratado como "houve atividade"
-          // de propósito — não é o caso que este achado existe pra cobrir
-          // (um card genuinamente sumido já morreria em `!check.ok` acima na
-          // prática, já que sem entry não há PTY pra `readCardText` ler), e
-          // travar o laço num "unknown" eterno por causa de um timestamp
-          // ausente seria pior. `typeof === "number"` (não `!== null`) de
-          // propósito — mais permissivo com qualquer valor não-numérico que
-          // apareça aqui, não só `null`.
+          screenTextBeforeWrite,
+          sentNeedle,
+          // Timestamp ausente tratado como "houve atividade" de propósito —
+          // não travar o laço num "unknown" eterno por timestamp ausente.
           hasNewActivitySinceWrite:
             typeof activityAtWrite !== "number" || typeof currentActivity !== "number" || currentActivity > activityAtWrite,
         });
-        if (result === "sent") break;
-        // "unsent" ou "unknown" — ambos retentam o Enter, nunca o texto.
+        if (previousResult === "sent") break;
+        // "unsent" → next iteration presses Enter again.
+        // "unknown" → next iteration waits/re-reads only (no Enter).
+      }
+      // Achado 4 — delivery that gave up must not leave text in the
+      // composer for the next delivery to concatenate with. Ctrl+U×2.
+      if (previousResult !== "sent") {
+        writeDelivery(composerClearSequence());
       }
     } finally {
       if (deliveryStarted) callbacks.endCardDelivery?.(target);
@@ -1361,6 +1408,10 @@ export function createMessageBus(
     // Enter com confirmação), único jeito de isto virar uma MENSAGEM de
     // verdade pro card de destino em vez de texto pendurado no prompt.
     if (listTerminalCards().some((c) => c.id === spawnerId)) {
+      // AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+      // Typed into a PTY for another agent via typeAndSubmit. The `[de: …]`
+      // prefix is a convention other code interprets; translating breaks
+      // recognition. See `src/shared/i18n/agent-facing.ts`.
       await typeAndSubmit(spawnerId, `[de: ${label}] relatório disponível — chame read_report para ver o resultado.`);
     }
   }
@@ -1400,6 +1451,8 @@ export function createMessageBus(
     const label = callbacks.describeCardLabel(cardId);
     callbacks.notifyCardExitedWithoutReport(spawnerId, label, exitCode);
     if (listTerminalCards().some((c) => c.id === spawnerId)) {
+      // AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+      // Same [de: …] convention as the report-available notify above.
       await typeAndSubmit(spawnerId, `[de: ${label}] saiu (código ${exitCode}) sem chamar report.`);
     }
   }
@@ -2078,6 +2131,8 @@ export function createMessageBus(
         order: null,
         suggested_order: req.suggestedOrder ?? null,
         implicit_order: null,
+        diverged_status: null,
+        diverged_actor: null,
         created_at: now,
         updated_at: now,
         // create_task só existe como MCP tool hoje — todo chamador é um
@@ -2099,29 +2154,42 @@ export function createMessageBus(
       // additive, never overwritten wholesale like the other fields).
       const attemptedProviders: string[] = existing.attempted_providers_json ? JSON.parse(existing.attempted_providers_json) : [];
       if (req.attemptedProvider) attemptedProviders.push(req.attemptedProvider);
+      // Decisão 8 / review adversarial achado 3 — `statusProposed: false`
+      // when the agent omitted `status`: the bus must NOT inject
+      // `existing.status` as if it were an alignment proposal (that used
+      // to clear a live divergence in silence). Other fields still update.
+      const statusProposed = req.status !== undefined;
       const updated: TaskRow = {
         ...existing,
-        status: req.status ?? existing.status,
+        status: statusProposed ? req.status! : existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
         result_json: req.result !== undefined ? JSON.stringify(req.result) : existing.result_json,
         retry_count: existing.retry_count + (req.incrementRetry ? 1 : 0),
         attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
         suggested_order: req.suggestedOrder !== undefined ? req.suggestedOrder : existing.suggested_order,
         updated_at: Date.now(),
-        // update_task só existe como MCP tool hoje — mesma justificativa
-        // de create_task acima.
         actor: "agent",
+        statusProposed,
       };
-      callbacks.upsertTask(updated);
-      // DESIGN-BACKLOG.md item 60, peça 3 — a task reaching `done` may
-      // unblock dependents; check right after persisting, using the NEW
-      // status (existing.status is stale by now). Never on `failed` — a
-      // dependent shouldn't start on top of a failed prerequisite.
-      if (req.status === "done" && existing.status !== "done") onTaskDone(req.taskId);
-      // DESIGN-BACKLOG.md item 60, peça 4 — a task reaching `failed` may
-      // be eligible for auto-retry (bookkeeping-only outside an
-      // autonomous board — retryOrFail itself checks that).
-      if (req.status === "failed" && existing.status !== "failed") retryOrFail(updated);
+      // DESIGN-BACKLOG.md §2.1 Decisão 8 — a precedência mora no choke
+      // point (`upsertTask` → `decideStatusWrite`). Side effects abaixo
+      // (onTaskDone / retryOrFail) só disparam quando o status de fato
+      // MUDOU — um hold humano NÃO pode desbloquear dependentes nem
+      // auto-retentar como se a task tivesse chegado em done/failed.
+      const decision = callbacks.upsertTask(updated);
+      if (decision.statusChanged && decision.status === "done" && existing.status !== "done") onTaskDone(req.taskId);
+      if (decision.statusChanged && decision.status === "failed" && existing.status !== "failed") {
+        retryOrFail({ ...updated, status: decision.status });
+      }
+      if (decision.warnAgent) {
+        const warning = describeStatusHeldWarning(decision.status, decision.declaredStatus ?? req.status ?? decision.status);
+        // Review adversarial achado 4 — typeAndSubmit ONLY to requesterId.
+        // Falling back to `updated.card_id` typed the warning into the
+        // implementer's PTY (corrupting an innocent session). No requester
+        // → MCP `warning` field alone; never notify the wrong card.
+        if (req.requesterId) notifyHumanMovedTask(req.requesterId, warning).catch(() => {});
+        return { ok: true, warning, status: decision.status, divergedStatus: decision.divergedStatus };
+      }
       return { ok: true };
     }
 
@@ -2145,6 +2213,46 @@ export function createMessageBus(
       const task = callbacks.getTask(req.taskId);
       if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
       return { ok: true, task: serializeTask(task) };
+    }
+
+    function serializeSprint(s: import("./store").SprintRow) {
+      return {
+        id: s.id,
+        boardId: s.board_id,
+        number: s.number,
+        name: s.name,
+        startedAt: s.started_at,
+        closedAt: s.closed_at,
+        countTodo: s.count_todo,
+        countDoing: s.count_doing,
+        countDone: s.count_done,
+        countFailed: s.count_failed,
+        migratedIn: s.migrated_in,
+        migratedOut: s.migrated_out,
+        hasSnapshot: s.snapshot_json != null,
+      };
+    }
+
+    if (req.cmd === "list_sprints") {
+      if (!req.boardId) return { ok: false, error: "missing boardId" };
+      if (!callbacks.boardExists(req.boardId)) return { ok: false, error: `no such board "${req.boardId}"` };
+      return { ok: true, sprints: callbacks.listSprints(req.boardId).map(serializeSprint) };
+    }
+
+    if (req.cmd === "open_sprint") {
+      if (!req.boardId) return { ok: false, error: "missing boardId" };
+      const result = callbacks.openSprint(req.boardId);
+      if (!result.ok) return result;
+      callbacks.onSprintsChanged?.(req.boardId);
+      return { ok: true, sprint: serializeSprint(result.sprint) };
+    }
+
+    if (req.cmd === "close_sprint") {
+      if (!req.boardId) return { ok: false, error: "missing boardId" };
+      const result = callbacks.closeSprint(req.boardId);
+      if (!result.ok) return result;
+      callbacks.onSprintsChanged?.(req.boardId);
+      return { ok: true, closed: serializeSprint(result.closed), opened: serializeSprint(result.opened) };
     }
 
     if (req.cmd === "list_connectors") {
@@ -2670,7 +2778,13 @@ export function createMessageBus(
       // can't also see this task as still `pending` and dispatch it
       // twice — same race this guards against as `markWaiting`'s ref-
       // count elsewhere in this file.
-      callbacks.upsertTask({ ...task, status: "running", updated_at: Date.now(), actor: "app" });
+      //
+      // Decisão 8 / review adversarial achado 1 — the store may HOLD this
+      // write when a human locked the dependent. Spawning after a held
+      // upsert is the decorative-lock bug: observe `statusChanged`
+      // before `autonomousSpawn`. Divergence is already signaled.
+      const decision = callbacks.upsertTask({ ...task, status: "running", updated_at: Date.now(), actor: "app" });
+      if (!decision.statusChanged) continue;
       autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
         if (result.ok) {
           callbacks.upsertTask({ ...task, status: "running", card_id: result.cardId, updated_at: Date.now(), actor: "app" });
@@ -2686,11 +2800,17 @@ export function createMessageBus(
    * immediately tries `retryOrFail` on it. Single choke point so every
    * path that can fail a task (explicit `update_task`, onTaskDone's own
    * spawn failure, a card exiting silently below) gets the same
-   * auto-retry treatment. */
+   * auto-retry treatment.
+   *
+   * Decisão 8 / review adversarial achado 2 — only call `retryOrFail`
+   * when the fail write actually landed (`statusChanged`). A human who
+   * dragged the task away must not get a fresh agent spawned because
+   * `resolveCardExit` tried to mark `failed`. */
   function markTaskFailed(task: TaskRow, error: string) {
     const failed: TaskRow = { ...task, status: "failed", result_json: JSON.stringify({ error }), updated_at: Date.now(), actor: "app" };
-    callbacks.upsertTask(failed);
-    retryOrFail(failed);
+    const decision = callbacks.upsertTask(failed);
+    if (!decision.statusChanged) return;
+    retryOrFail({ ...failed, status: decision.status });
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 4 — called on a task that just
@@ -2734,7 +2854,10 @@ export function createMessageBus(
       updated_at: Date.now(),
       actor: "app",
     };
-    callbacks.upsertTask(retrying);
+    // Same class as onTaskDone/markTaskFailed: do not spawn if the store
+    // held the transition back to `running` under a human lock.
+    const decision = callbacks.upsertTask(retrying);
+    if (!decision.statusChanged) return;
     autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
       if (result.ok) {
         callbacks.upsertTask({ ...retrying, card_id: result.cardId, updated_at: Date.now(), actor: "app" });

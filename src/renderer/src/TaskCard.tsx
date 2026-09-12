@@ -24,9 +24,23 @@ import {
   computeMetaPills,
   describeTransitionTrail,
   describeHumanMoveNotice,
+  describeStatusDivergence,
   msToHours,
+  cycleAxisMarks,
+  computeVerdictsByProvider,
+  computeRoundsToApprove,
+  roundsBarTone,
+  isHumanCreatedTask,
+  didHumanTaskGetClaimed,
+  shortSprintId,
+  formatSprintTimestamp,
+  formatSprintDuration,
+  describeSprintCounts,
+  sprintLabel,
+  snapshotTaskToBoardItem,
   type TaskColumn,
   type MetaPillKind,
+  type SprintView,
 } from "./task-board-model";
 import styles from "./TaskCard.module.css";
 
@@ -43,21 +57,6 @@ const COLUMN_COLOR: Record<TaskColumn, string> = {
   failed: "var(--danger)",
 };
 
-/** RODADA 3-fix-textos — texto LITERAL do protótipo v5 (confirmado pelo
- * autor do protótipo, substituindo a reconstrução da rodada 3 — o
- * artefato nunca abriu nesta sessão pra conferir ao vivo). Ênfase do
- * protótipo reproduzida: "A fazer" em itálico e `retryCount` em mono, na
- * nota de "falhou". */
-const COLUMN_NOTE: Partial<Record<TaskColumn, React.ReactNode>> = {
-  todo: "O agente sugere a ordem pelo que desbloqueia; você arrasta pela alça e o seu palpite vence. A sugestão dele não some — fica ao lado.",
-  failed: (
-    <>
-      Vizinha de <em>A fazer</em> de propósito: é para lá que uma task falhada volta, carregando <code>retryCount</code> e os providers já
-      tentados.
-    </>
-  ),
-};
-
 /** RODADA 3 (contrato §2.3, item 8) — "o protótipo nunca mostra coluna
  * vazia"; o `—` genérico da rodada 1/2 foi substituído por um vazio
  * DECLARADO, contextual por coluna (nunca o mesmo texto reciclado nas
@@ -70,37 +69,18 @@ const COLUMN_EMPTY_TEXT: Record<TaskColumn, string> = {
 };
 
 /** DESIGN-BACKLOG.md §2.1, decisão 7 / peça 5 — rodapé de escopo. Vive no
- * `footerContent` do `CardFrame` (o mesmo slot que já dá uma linha final
- * "de graça" pra files/changes) em vez de um popover flutuante: o card
- * inteiro é clipado por `overflow: hidden` (CardFrame.tsx's `.card-clip`),
- * então um dropdown absoluto vazaria pra fora e seria cortado — texto
- * inline que cresce em altura, nunca em posição, é o que sobrevive a esse
- * clip.
- *
- * FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 11, PEDIDO EXPLÍCITO DO DONO
- * DO REPO, não estético) — a versão anterior tornava o NOME de cada board
- * um LINK clicável que trocava de board/sessão com um clique. Removido:
- * decisão 7 já dizia que tasks de outros boards são CONTADAS, nunca
- * clicáveis (`jumpToCard`/qualquer navegação só opera sobre o que está
- * carregado — um chip que às vezes navega e às vezes não é pior que
- * chip nenhum), e o dono do repo confirmou ao vivo que não quer esse
- * comportamento. O total agora é texto puro; a navegação (se alguém
- * quiser) vira um controle SEPARADO e ROTULADO ("trocar de board"), que
- * não aponta pra um board específico adivinhado — vai pra Home
- * (`onGoHome`, a mesma tela onde TODO board existente é selecionável),
- * nunca "o board X porque a contagem disse". O detalhamento por board
- * (nome + contagem) sobrevive só como `title` (tooltip nativo do
- * navegador, sem interação nenhuma) — informação sem virar afordância. */
+ * `footerContent` do `CardFrame`. Contagem "N em outros boards" é texto
+ * puro (nunca link). O botão "trocar de board" da rodada anterior foi
+ * REMOVIDO a pedido do dono do repo (2ª rodada de fidelidade) — a Home
+ * continua alcançável pelo fluxo normal do app, não por este rodapé. */
 function TaskScopeFooter({
   activeBoardId,
   boardNames,
   taskCountsByBoard,
-  onGoHome,
 }: {
   activeBoardId: string;
   boardNames: Record<string, string>;
   taskCountsByBoard: Record<string, number>;
-  onGoHome: () => void;
 }) {
   const scope = computeBoardScope(activeBoardId, taskCountsByBoard, boardNames);
   const ownName = boardNames[activeBoardId] ?? activeBoardId;
@@ -111,11 +91,8 @@ function TaskScopeFooter({
         board {ownName} · {scope.ownCount} tasks
       </span>
       {scope.otherTotal > 0 && (
-        <span className={styles.scopeRight}>
-          <span title={otherBoardsTooltip}>{scope.otherTotal} em outros boards</span>
-          <button type="button" data-no-drag data-part="switch-board" className={styles.scopeSwitchButton} onClick={onGoHome}>
-            trocar de board
-          </button>
+        <span className={styles.scopeRight} title={otherBoardsTooltip}>
+          {scope.otherTotal} em outros boards
         </span>
       )}
     </span>
@@ -172,6 +149,8 @@ const PILL_CLASS: Record<MetaPillKind, string> = {
   wait: styles.pillWait,
   "wait-broken": styles.pillBroken,
   suggestion: styles.pillSuggestion,
+  round: styles.pillRound,
+  rejection: styles.pillRejection,
 };
 
 /** Um item do quadro — DESIGN-BACKLOG.md §2.1 peça 4, "anatomia da task
@@ -212,7 +191,7 @@ function TaskItem({
   const stage = deriveStage(task.status, task.report !== null);
   const propose = shouldProposeCompletion(task.status, task.report?.verdict);
   const waitingOn = waitingOnDep(task.deps, task.depStatuses);
-  const pills = computeMetaPills(waitingOn, task.order, task.suggestedOrder);
+  const pills = computeMetaPills(waitingOn, task.order, task.suggestedOrder, task.verdicts);
   // RODADA 2 — "Mais uma rodada" (segundo botão da barra de proposta): a
   // semântica não estava definida em lugar nenhum do briefing. Implementado
   // como o caso mais simples e mais seguro descrito por ele mesmo —
@@ -246,6 +225,7 @@ function TaskItem({
   // decide as DUAS condições (último ator humano + card ainda vivo); este
   // componente só entrega o resultado.
   const humanMoveNotice = describeHumanMoveNotice(task.lastActor, task.cardAlive, task.cardId);
+  const divergenceNotice = describeStatusDivergence(task.divergedStatus, task.divergedActor);
   return (
     <div className={styles.item} data-task-item-id={task.id} onPointerDown={onDragPointerDown}>
       <div className={styles.itemTop}>
@@ -322,6 +302,11 @@ function TaskItem({
           {humanMoveNotice}
         </div>
       )}
+      {divergenceNotice && (
+        <div className={styles.divergenceNotice} data-part="status-divergence">
+          {divergenceNotice}
+        </div>
+      )}
       {alive && (
         <div className={`${styles.activity} ${styles.on}`} data-part="activity-sweep">
           <div className={styles.activitySweep} />
@@ -331,26 +316,146 @@ function TaskItem({
   );
 }
 
-/** DESIGN-BACKLOG.md §2.3 "PARTES DOS GRÁFICOS" — gráfico 1 (reprovações
- * por provider) e gráfico 2 (rodadas até aprovar) NÃO têm fonte de dado
- * real hoje (ver o doc comment de `computeCycleTime` em
- * task-board-model.ts pro porquê) — vazio DECLARADO, nunca uma barra de
- * exemplo nem número inventado. Mesmo componente pros dois, o motivo
- * muda. */
-function EmptyChart({ title, dataPart, reason }: { title: string; dataPart: string; reason: string }) {
+/** Formulário pra o humano criar task na coluna "a fazer". */
+function CreateTaskForm({ boardId, onCreated }: { boardId: string; onCreated: (taskId: string) => void }) {
+  const [prompt, setPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = prompt.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try {
+      const res = await window.tasks.create(boardId, trimmed);
+      if (res.ok) {
+        setPrompt("");
+        onCreated(res.taskId);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
-    <div className={styles.chartBox} data-part={dataPart}>
-      <div className={styles.chartTitle}>{title}</div>
-      <div className={styles.chartEmpty}>sem histórico ainda — {reason}</div>
+    <form data-part="create-task-form" className={styles.createTaskForm} onSubmit={submit} onPointerDown={(e) => e.stopPropagation()}>
+      <input
+        data-part="create-task-input"
+        data-no-drag
+        className={styles.createTaskInput}
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="nova task…"
+        disabled={busy}
+        aria-label="Criar task"
+      />
+      <button type="submit" data-no-drag data-part="create-task-submit" className={styles.createTaskSubmit} disabled={busy || !prompt.trim()}>
+        criar
+      </button>
+    </form>
+  );
+}
+
+/** Gráfico 1 — reprovações por provider (barras empilhadas). */
+function VerdictsByProviderChart({ data }: { data: { provider: string; approved: number; rejected: number }[] }) {
+  const W = 280;
+  const ROW_H = 20;
+  const PAD = 6;
+  const LABEL_W = 72;
+  const VALUE_W = 40;
+  const barAreaW = W - LABEL_W - VALUE_W - PAD * 2;
+  const maxTotal = Math.max(1, ...data.map((d) => d.approved + d.rejected));
+  const height = Math.max(ROW_H, data.length * ROW_H) + PAD * 2;
+  return (
+    <div className={styles.chartBox} data-part="chart-verdicts">
+      <div className={styles.chartTitle}>reprovações por provider</div>
+      {data.length === 0 ? (
+        <div className={styles.chartEmpty}>sem histórico ainda — nenhuma participação com veredito neste board</div>
+      ) : (
+        <>
+          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label="Reprovações por provider">
+            {data.map((d, i) => {
+              const y = PAD + i * ROW_H;
+              const approvedW = (d.approved / maxTotal) * barAreaW;
+              const rejectedW = (d.rejected / maxTotal) * barAreaW;
+              return (
+                <g key={d.provider}>
+                  <text x={0} y={y + ROW_H / 2 + 3} fontFamily="var(--font-mono)" fontSize="9" fill="var(--muted)">
+                    {d.provider}
+                  </text>
+                  <rect x={LABEL_W} y={y + 3} width={Math.max(0, approvedW)} height={ROW_H - 8} fill="var(--good)" />
+                  <rect x={LABEL_W + approvedW} y={y + 3} width={Math.max(0, rejectedW)} height={ROW_H - 8} fill="var(--danger)" />
+                  <text x={LABEL_W + barAreaW + 4} y={y + ROW_H / 2 + 3} fontSize="9" fill="var(--text)">
+                    {d.approved} / {d.rejected}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+          <div className={styles.chartLegend}>
+            <span>
+              <span className={styles.legendSwatchApproved} /> aprovado
+            </span>
+            <span>
+              <span className={styles.legendSwatchRejected} /> reprovado
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-/** Gráfico 3 (tempo em cada estado) — o único com fonte real
- * (`task_transitions`). Uma barra empilhada por task: fila em
- * `--border`, executando em `--foam`. `viewBox` com margem nos dois lados
- * (`PAD`) pra o rótulo mais externo — o id à esquerda, o total de horas à
- * direita — nunca cortar. */
+/** Gráfico 2 — rodadas até aprovar. */
+function RoundsToApproveChart({ data }: { data: { taskId: string; label: string; rounds: number }[] }) {
+  const W = 280;
+  const ROW_H = 20;
+  const PAD = 6;
+  const LABEL_W = 72;
+  const VALUE_W = 28;
+  const barAreaW = W - LABEL_W - VALUE_W - PAD * 2;
+  const maxRounds = Math.max(1, ...data.map((d) => d.rounds));
+  const height = Math.max(ROW_H, data.length * ROW_H) + PAD * 2 + 14;
+  const axisMid = maxRounds / 2;
+  return (
+    <div className={styles.chartBox} data-part="chart-rounds">
+      <div className={styles.chartTitle}>rodadas até aprovar</div>
+      {data.length === 0 ? (
+        <div className={styles.chartEmpty}>sem histórico ainda — nenhuma task aprovada com rodadas neste board</div>
+      ) : (
+        <>
+          <svg viewBox={`0 0 ${W} ${height}`} width="100%" role="img" aria-label="Rodadas até aprovar">
+            {data.map((d, i) => {
+              const y = PAD + i * ROW_H;
+              const w = (d.rounds / maxRounds) * barAreaW;
+              const fill = roundsBarTone(d.rounds) === "expensive" ? "var(--signal)" : "var(--foam)";
+              return (
+                <g key={d.taskId}>
+                  <text x={0} y={y + ROW_H / 2 + 3} fontFamily="var(--font-mono)" fontSize="9" fill="var(--muted)">
+                    {d.label}
+                  </text>
+                  <rect x={LABEL_W} y={y + 3} width={Math.max(0, w)} height={ROW_H - 8} fill={fill} />
+                  <text x={LABEL_W + barAreaW + 4} y={y + ROW_H / 2 + 3} fontSize="9" fill="var(--text)">
+                    {d.rounds}
+                  </text>
+                </g>
+              );
+            })}
+            <text x={LABEL_W} y={height - 2} fontSize="9" fill="var(--muted)">
+              0
+            </text>
+            <text x={LABEL_W + barAreaW / 2} y={height - 2} fontSize="9" fill="var(--muted)" textAnchor="middle">
+              {axisMid % 1 === 0 ? axisMid : axisMid.toFixed(1)}
+            </text>
+            <text x={LABEL_W + barAreaW} y={height - 2} fontSize="9" fill="var(--muted)" textAnchor="end">
+              {maxRounds} rodadas
+            </text>
+          </svg>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Gráfico 3 — tempo em cada estado, barras empilhadas + eixo + legenda. */
 function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: number; runningHours: number }[]; loading: boolean }) {
   const W = 280;
   const ROW_H = 20;
@@ -359,6 +464,7 @@ function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: nu
   const VALUE_W = 40;
   const barAreaW = W - LABEL_W - VALUE_W - PAD * 2;
   const maxTotal = Math.max(1e-6, ...data.map((d) => d.queuedHours + d.runningHours));
+  const axis = cycleAxisMarks(maxTotal);
   const height = Math.max(ROW_H, data.length * ROW_H) + PAD * 2;
   return (
     <div className={styles.chartBox} data-part="chart-cycle">
@@ -379,8 +485,9 @@ function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: nu
                   <text x={0} y={y + ROW_H / 2 + 3} fontFamily="var(--font-mono)" fontSize="9" fill="var(--muted)">
                     {shortTaskId(d.id)}
                   </text>
-                  <rect x={LABEL_W} y={y + 3} width={queuedW} height={ROW_H - 8} fill="var(--border)" />
-                  <rect x={LABEL_W + queuedW} y={y + 3} width={runningW} height={ROW_H - 8} fill="var(--foam)" />
+                  <rect x={LABEL_W} y={y + 3} width={barAreaW} height={ROW_H - 8} fill="var(--surface)" />
+                  <rect x={LABEL_W} y={y + 3} width={Math.max(0, queuedW)} height={ROW_H - 8} fill="var(--border)" />
+                  <rect x={LABEL_W + queuedW} y={y + 3} width={Math.max(0, runningW)} height={ROW_H - 8} fill="var(--foam)" />
                   <text x={LABEL_W + barAreaW + 4} y={y + ROW_H / 2 + 3} fontSize="9" fill="var(--text)">
                     {(d.queuedHours + d.runningHours).toFixed(1)}h
                   </text>
@@ -388,9 +495,14 @@ function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: nu
               );
             })}
           </svg>
+          <div className={styles.chartAxis} data-part="chart-cycle-axis">
+            {axis.map((m) => (
+              <span key={m.label}>{m.label}</span>
+            ))}
+          </div>
           <div className={styles.chartLegend}>
             <span>
-              <span className={styles.legendSwatchQueued} /> fila
+              <span className={styles.legendSwatchQueued} /> parada na fila
             </span>
             <span>
               <span className={styles.legendSwatchRunning} /> executando
@@ -402,11 +514,8 @@ function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: nu
   );
 }
 
-/** Painel de gráficos — escondido por padrão (`chartsOpen`), aberto pelo
- * toggle do header. Busca as transições SÓ quando aberto (nunca junto do
- * push normal de `tasks` — ver `preload/index.ts`'s `transitionsByBoard`
- * doc comment): o custo desta consulta só existe pra quem realmente abre
- * o painel. */
+/** Painel de gráficos — escondido por padrão. Vereditos vêm do push do
+ * quadro (`task.verdicts`); transições do gráfico 3 ainda sob demanda. */
 function ChartsPanel({ boardId, tasks }: { boardId: string; tasks: TaskBoardItem[] }) {
   const [transitionsByTask, setTransitionsByTask] = useState<Record<string, { toValue: string; at: number }[]> | null>(null);
 
@@ -428,6 +537,16 @@ function ChartsPanel({ boardId, tasks }: { boardId: string; tasks: TaskBoardItem
     };
   }, [boardId]);
 
+  const allVerdicts = tasks.flatMap((t) => t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })));
+  const verdictsByProvider = computeVerdictsByProvider(allVerdicts);
+  const roundsData = computeRoundsToApprove(
+    tasks.map((t) => ({
+      taskId: t.id,
+      label: shortTaskId(t.id),
+      verdicts: t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })),
+    })),
+  );
+
   const now = Date.now();
   const cycleData =
     transitionsByTask === null
@@ -442,18 +561,115 @@ function ChartsPanel({ boardId, tasks }: { boardId: string; tasks: TaskBoardItem
   return (
     <div className={styles.chartsPanel} data-part="charts-panel">
       <div className={styles.chartsGrid}>
-        <EmptyChart
-          title="reprovações por provider"
-          dataPart="chart-verdicts"
-          reason="reports guarda só o ÚLTIMO veredito por card, nunca o histórico das rodadas anteriores"
-        />
-        <EmptyChart
-          title="rodadas até aprovar"
-          dataPart="chart-rounds"
-          reason="contagem de rodada não existe no modelo — mesma lacuna do gráfico anterior"
-        />
+        <VerdictsByProviderChart data={verdictsByProvider} />
+        <RoundsToApproveChart data={roundsData} />
         <CycleTimeChart data={cycleData} loading={transitionsByTask === null} />
       </div>
+    </div>
+  );
+}
+
+/** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — seletor de sprint.
+ * Contagens de sprint FECHADO vêm do snapshot congelado (nunca recalculadas).
+ * Clicar numa linha alterna o quadro entre vivo (ativo) e congelado (fechado). */
+function SprintsPanel({
+  boardId,
+  reloadKey,
+  selectedId,
+  onSelect,
+}: {
+  boardId: string;
+  reloadKey: number;
+  selectedId: string | null;
+  onSelect: (sprint: SprintView) => void;
+}) {
+  const [sprints, setSprints] = useState<SprintView[] | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    let cancelled = false;
+    setSprints(null);
+    window.tasks.listSprints(boardId).then((rows) => {
+      if (cancelled) return;
+      setSprints(
+        rows.map((r) => ({
+          id: r.id,
+          number: r.number,
+          name: r.name,
+          startedAt: r.startedAt,
+          closedAt: r.closedAt,
+          countTodo: r.countTodo,
+          countDoing: r.countDoing,
+          countDone: r.countDone,
+          countFailed: r.countFailed,
+          migratedIn: r.migratedIn,
+          migratedOut: r.migratedOut,
+          hasSnapshot: r.hasSnapshot,
+        })),
+      );
+      setNow(Date.now());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [boardId, reloadKey]);
+
+  return (
+    <div className={styles.sprintsPanel} data-part="sprints-panel">
+      <div className={styles.sprintsTitle}>sprints — clique pra ver o quadro</div>
+      {sprints === null ? (
+        <div className={styles.chartEmpty}>carregando…</div>
+      ) : sprints.length === 0 ? (
+        <div className={styles.chartEmpty}>nenhum sprint ainda — feche o atual pra abrir o histórico</div>
+      ) : (
+        <ul className={styles.sprintsList} role="listbox" aria-label="Sprints">
+          {sprints.map((s) => {
+            const open = s.closedAt === null;
+            const selected = selectedId === s.id || (selectedId === null && open);
+            return (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  data-part="sprint-row"
+                  data-sprint-open={open ? "true" : "false"}
+                  data-sprint-selected={selected ? "true" : "false"}
+                  className={`${styles.sprintRow} ${selected ? styles.sprintRowSelected : ""}`}
+                  aria-pressed={selected}
+                  onClick={() => onSelect(s)}
+                >
+                  <div className={styles.sprintHead}>
+                    <span className={styles.sprintId} data-part="sprint-id">
+                      {sprintLabel(s)}
+                    </span>
+                    <span className={styles.sprintState} data-part="sprint-state">
+                      {open ? "em curso" : "fechado"}
+                    </span>
+                    <span className={styles.sprintDuration} data-part="sprint-duration">
+                      {formatSprintDuration(s.startedAt, s.closedAt, now)}
+                    </span>
+                  </div>
+                  <div className={styles.sprintWhen} data-part="sprint-when">
+                    {formatSprintTimestamp(s.startedAt)}
+                    {" → "}
+                    {s.closedAt ? formatSprintTimestamp(s.closedAt) : "agora"}
+                    <span className={styles.sprintIdHint}> · {shortSprintId(s.id)}</span>
+                  </div>
+                  {!open && (
+                    <div className={styles.sprintCounts} data-part="sprint-counts">
+                      {describeSprintCounts(s)}
+                    </div>
+                  )}
+                  {open && s.migratedIn > 0 && (
+                    <div className={styles.sprintCounts} data-part="sprint-counts">
+                      veio migrado: {s.migratedIn}
+                    </div>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -472,7 +688,6 @@ function TaskCardInner({
   activeBoardId,
   boardNames,
   taskCountsByBoard,
-  onGoHome,
   onChange,
   onCommit,
   onRaise,
@@ -512,14 +727,6 @@ function TaskCardInner({
   activeBoardId: string;
   boardNames: Record<string, string>;
   taskCountsByBoard: Record<string, number>;
-  /** DESIGN-BACKLOG.md §2.1, decisão 7 — delta 11 (RODADA de fidelidade
-   * visual): substituiu `onSwitchBoard(boardId)`. O rodapé não navega
-   * mais pra um board ESPECÍFICO adivinhado a partir da contagem (era
-   * exatamente o comportamento indesejado que motivou este delta) — o
-   * botão "trocar de board" vai pra Home (`useBoardStore.ts`'s
-   * `goHome`), de onde qualquer board real é alcançável escolhendo à
-   * mão. */
-  onGoHome: () => void;
   onChange: (rect: Rect) => void;
   onCommit: (rect: Rect) => void;
   onRaise: () => void;
@@ -539,7 +746,19 @@ function TaskCardInner({
   panX?: number;
   panY?: number;
 }) {
-  const groups = groupTasksByColumn(tasks);
+  const [chartsOpen, setChartsOpen] = useState(false);
+  const [sprintsOpen, setSprintsOpen] = useState(false);
+  const [sprintsReloadKey, setSprintsReloadKey] = useState(0);
+  const [closingSprint, setClosingSprint] = useState(false);
+  const [closeSprintError, setCloseSprintError] = useState<string | null>(null);
+  /** null = live active sprint (default). Closed id → frozen snapshot board. */
+  const [viewingSprintId, setViewingSprintId] = useState<string | null>(null);
+  const [viewingSprintMeta, setViewingSprintMeta] = useState<SprintView | null>(null);
+  const [frozenTasks, setFrozenTasks] = useState<TaskBoardItem[] | null>(null);
+
+  const viewingFrozen = viewingSprintId !== null && frozenTasks !== null;
+  const boardTasks = viewingFrozen ? frozenTasks : tasks;
+  const groups = groupTasksByColumn(boardTasks);
   // FASE 2, peça 3 — `onDropTask` é chamado de dentro de um listener de
   // `window` registrado no INÍCIO do arraste (`beginTaskDrag`); se um push
   // de `task:changed` re-renderizar este componente NO MEIO de um arraste
@@ -551,10 +770,14 @@ function TaskCardInner({
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
   const cap = resolveConcurrencyCap(concurrencyCapRaw);
-  // Lido uma vez por render, não num relógio próprio — a idade só precisa
-  // de precisão de minuto/hora/dia (formatTaskAge), e qualquer push de
-  // `task:changed` já re-renderiza isto quando algo de fato muda.
-  const now = Date.now();
+  // RODADA 4 — relógio ÚNICO do card (nunca um setInterval por task).
+  // Granularidade de `formatTaskAge` é minuto; 15s basta pra "agora"→"1min"
+  // sem acordar o renderer à toa.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(id);
+  }, []);
   // DESIGN-BACKLOG.md §2.3, peça 6 — "painel escondido por padrão":
   // `false` na montagem, `ChartsPanel` só monta (e só então busca as
   // transições, ver seu próprio `useEffect`) quando isto vira `true` —
@@ -563,7 +786,106 @@ function TaskCardInner({
   // (não cacheado): dado fresco a cada abertura é mais barato de garantir
   // do que invalidar um cache certo, e a consulta é uma só (JOIN, sem
   // N+1) mesmo assim.
-  const [chartsOpen, setChartsOpen] = useState(false);
+
+  useEffect(() => {
+    // Chaves em volta de propósito: `onSprintsChanged` devolve um cleanup
+    // que por sua vez devolve o `IpcRenderer` do `removeListener`, e o
+    // `EffectCallback` do React exige `void | Destructor`. Sem as chaves o
+    // tipo vaza e o tsc recusa. Mesmo formato usado nos outros listeners
+    // deste arquivo.
+    const off = window.tasks.onSprintsChanged((id) => {
+      if (id === activeBoardId) setSprintsReloadKey((k) => k + 1);
+    });
+    return () => {
+      off();
+    };
+  }, [activeBoardId]);
+
+  useEffect(() => {
+    if (!viewingSprintId) {
+      setFrozenTasks(null);
+      setViewingSprintMeta(null);
+      return;
+    }
+    let cancelled = false;
+    window.tasks.sprintSnapshot(viewingSprintId).then((res) => {
+      if (cancelled) return;
+      if (!res.ok) {
+        setViewingSprintId(null);
+        setFrozenTasks(null);
+        setViewingSprintMeta(null);
+        return;
+      }
+      setViewingSprintMeta({
+        id: res.sprint.id,
+        number: res.sprint.number,
+        name: res.sprint.name,
+        startedAt: res.sprint.startedAt,
+        closedAt: res.sprint.closedAt,
+        countTodo: res.sprint.countTodo,
+        countDoing: res.sprint.countDoing,
+        countDone: res.sprint.countDone,
+        countFailed: res.sprint.countFailed,
+        migratedIn: res.sprint.migratedIn,
+        migratedOut: res.sprint.migratedOut,
+        hasSnapshot: res.sprint.hasSnapshot,
+      });
+      setFrozenTasks(res.tasks.map((t) => snapshotTaskToBoardItem(t, activeBoardId)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewingSprintId, activeBoardId, sprintsReloadKey]);
+
+  function onSelectSprint(s: SprintView) {
+    if (s.closedAt === null) {
+      setViewingSprintId(null);
+      setFrozenTasks(null);
+      setViewingSprintMeta(null);
+      return;
+    }
+    setViewingSprintId(s.id);
+  }
+
+  async function onCloseSprint() {
+    if (closingSprint || viewingFrozen) return;
+    setClosingSprint(true);
+    setCloseSprintError(null);
+    try {
+      const res = await window.tasks.closeSprint(activeBoardId);
+      if (res.ok) {
+        setSprintsOpen(true);
+        setSprintsReloadKey((k) => k + 1);
+        setViewingSprintId(null);
+      } else {
+        setCloseSprintError(res.error);
+      }
+    } finally {
+      setClosingSprint(false);
+    }
+  }
+
+  // RODADA 4 — aviso quando task criada por humano é pega (ganha card ou
+  // vira running). Snapshot anterior × atual; também cobre tasks humanas
+  // já no board ao montar (firstActor), não só as criadas nesta sessão.
+  const prevClaimSnapRef = useRef<Map<string, { cardId: string | null; status: string }>>(new Map());
+  useEffect(() => {
+    const prev = prevClaimSnapRef.current;
+    const next = new Map<string, { cardId: string | null; status: string }>();
+    for (const t of tasks) {
+      const snap = { cardId: t.cardId, status: t.status };
+      next.set(t.id, snap);
+      if (!isHumanCreatedTask(t.firstActor)) continue;
+      if (didHumanTaskGetClaimed(prev.get(t.id), snap)) {
+        try {
+          new Notification("Task pega", { body: t.prompt?.slice(0, 120) || shortTaskId(t.id), silent: false });
+        } catch {
+          // Notification API indisponível/negada — nunca deve quebrar o quadro.
+        }
+      }
+    }
+    prevClaimSnapRef.current = next;
+  }, [tasks]);
 
   // FASE 2, peça 3 — arrastar entre colunas e dentro da coluna. Refs (não
   // estado) pros 4 corpos de coluna: só precisamos da posição/conteúdo
@@ -666,6 +988,7 @@ function TaskCardInner({
    * 2º pointerdown só pode significar que o 1º já deveria ter
    * terminado). */
   function beginTaskDrag(task: TaskBoardItem, e: React.PointerEvent) {
+    if (viewingFrozen) return;
     if ((e.target as HTMLElement).closest("button, select, input, [data-no-drag]")) return;
     dragCleanupRef.current?.();
     const startX = e.clientX;
@@ -732,7 +1055,7 @@ function TaskCardInner({
       panX={panX}
       panY={panY}
       footerContent={
-        <TaskScopeFooter activeBoardId={activeBoardId} boardNames={boardNames} taskCountsByBoard={taskCountsByBoard} onGoHome={onGoHome} />
+        <TaskScopeFooter activeBoardId={activeBoardId} boardNames={boardNames} taskCountsByBoard={taskCountsByBoard} />
       }
       headerContent={
         <>
@@ -740,6 +1063,27 @@ function TaskCardInner({
             <Icon name="task" size={14} />
           </span>
           <span className="card-head-actions">
+            <button
+              type="button"
+              data-part="sprint-close"
+              data-no-drag
+              className={styles.chartsToggleBtn}
+              title="Fechar sprint atual e abrir o próximo"
+              disabled={closingSprint || viewingFrozen}
+              onClick={() => void onCloseSprint()}
+            >
+              <span>Fechar sprint</span>
+            </button>
+            <button
+              type="button"
+              data-part="sprints-toggle"
+              className={`${styles.chartsToggleBtn} ${sprintsOpen ? styles.chartsToggleActive : ""}`}
+              aria-pressed={sprintsOpen}
+              title="Histórico de sprints"
+              onClick={() => setSprintsOpen((v) => !v)}
+            >
+              <span>Sprints</span>
+            </button>
             <button
               type="button"
               data-part="charts-toggle"
@@ -761,7 +1105,29 @@ function TaskCardInner({
         </>
       }
     >
-      <div className={styles.board}>
+      {viewingFrozen && viewingSprintMeta && (
+        <div className={styles.sprintFrozenBanner} data-part="sprint-frozen-banner">
+          visualizando {sprintLabel(viewingSprintMeta)} (congelado)
+          <button
+            type="button"
+            data-no-drag
+            className={styles.sprintBackLive}
+            onClick={() => {
+              setViewingSprintId(null);
+              setFrozenTasks(null);
+              setViewingSprintMeta(null);
+            }}
+          >
+            voltar ao atual
+          </button>
+        </div>
+      )}
+      {closeSprintError && (
+        <div className={styles.sprintCloseError} data-part="sprint-close-error" role="alert">
+          {closeSprintError}
+        </div>
+      )}
+      <div className={styles.board} data-sprint-frozen={viewingFrozen ? "true" : "false"}>
         {COLUMN_ORDER.map((col) => (
           <div key={col} className={styles.column}>
             <div className={styles.columnHeader} data-part="column-header" style={{ color: COLUMN_COLOR[col] }}>
@@ -782,6 +1148,7 @@ function TaskCardInner({
                 columnBodyRefs.current[col] = el;
               }}
             >
+              {col === "todo" && !viewingFrozen && <CreateTaskForm boardId={activeBoardId} onCreated={() => {}} />}
               {/* FASE 2, peça 3 — a task arrastada some da lista normal
                   enquanto o gesto dura (mesma lista que `locateDropTarget`
                   compara pela posição real do DOM); a "zona fantasma"
@@ -790,7 +1157,7 @@ function TaskCardInner({
                   índice exato onde ela pousaria. */}
               {(() => {
                 const visible = draggingTaskId ? groups[col].filter((t) => t.id !== draggingTaskId) : groups[col];
-                const overHere = dragOver && dragOver.column === col ? dragOver : null;
+                const overHere = !viewingFrozen && dragOver && dragOver.column === col ? dragOver : null;
                 return (
                   <>
                     {visible.length === 0 && !overHere && (
@@ -805,7 +1172,13 @@ function TaskCardInner({
                             solta aqui para mover
                           </div>
                         )}
-                        <TaskItem task={task} now={now} rank={i + 1} onApproveCompletion={onApproveCompletion} onDragPointerDown={(e) => beginTaskDrag(task, e)} />
+                        <TaskItem
+                          task={task}
+                          now={now}
+                          rank={i + 1}
+                          onApproveCompletion={viewingFrozen ? () => {} : onApproveCompletion}
+                          onDragPointerDown={(e) => beginTaskDrag(task, e)}
+                        />
                       </Fragment>
                     ))}
                     {overHere && overHere.index === visible.length && (
@@ -817,14 +1190,17 @@ function TaskCardInner({
                 );
               })()}
             </div>
-            {COLUMN_NOTE[col] && (
-              <div className={styles.columnNote} data-part="column-note">
-                {COLUMN_NOTE[col]}
-              </div>
-            )}
           </div>
         ))}
       </div>
+      {sprintsOpen && (
+        <SprintsPanel
+          boardId={activeBoardId}
+          reloadKey={sprintsReloadKey}
+          selectedId={viewingSprintId}
+          onSelect={onSelectSprint}
+        />
+      )}
       {chartsOpen && <ChartsPanel boardId={activeBoardId} tasks={tasks} />}
     </CardFrame>
   );

@@ -9,6 +9,7 @@ import {
   type ShortcutOverrides,
 } from "./shortcut-registry";
 import { getEffectiveCombo, rebindBlockedReason, evaluateRebindCandidate, needsConfirmation, type RebindEvaluation } from "./shortcut-config";
+import { t, SUPPORTED_LOCALES, type Locale } from "../../shared/i18n";
 
 /**
  * `?` opens this from anywhere (App.tsx's global keydown, same guard as the
@@ -41,6 +42,10 @@ import { getEffectiveCombo, rebindBlockedReason, evaluateRebindCandidate, needsC
  * `tests/unit/shortcut-config.test.ts`. Este componente só orquestra
  * estado de UI (qual linha está gravando, mensagem pendente) — nenhuma
  * decisão de negócio mora aqui.
+ *
+ * i18n fase 1 — chrome strings via `t()`; also hosts the locale override
+ * selector (persisted in main via `window.i18n`) so the phase-1 proof
+ * includes detection + override, not just catalogs.
  */
 const MODIFIER_ONLY_KEYS = new Set(["Control", "Shift", "Alt", "Meta", "OS", "AltGraph", "CapsLock"]);
 
@@ -56,12 +61,16 @@ export function ShortcutsOverlay({
   onRebind,
   onRestoreDefault,
   onRestoreAll,
+  locale,
+  onLocaleOverrideChange,
 }: {
   onClose: () => void;
   shortcutOverrides: ShortcutOverrides;
   onRebind: (id: string, combo: ShortcutCombo) => void;
   onRestoreDefault: (id: string) => void;
   onRestoreAll: () => void;
+  locale: Locale;
+  onLocaleOverrideChange: (next: Locale | null) => void;
 }) {
   const [mode, setMode] = useState<"view" | "configure">("view");
   const [recordingId, setRecordingId] = useState<string | null>(null);
@@ -160,7 +169,7 @@ export function ShortcutsOverlay({
       // `useModal` antes do nosso botão); esta mensagem só apareceria se
       // `FORBIDDEN_REBIND_KEYS` ganhasse uma tecla nova sem um
       // tratamento equivalente aqui.
-      setRecordingError("Esta tecla é reservada e não pode ser reatribuída.");
+      setRecordingError(t("shortcuts.recordingError.reserved"));
       return; // continua gravando, deixa tentar outra tecla
     }
     if (needsConfirmation(evaluation)) {
@@ -196,7 +205,7 @@ export function ShortcutsOverlay({
         {...modalProps}
         aria-labelledby="shortcuts-title"
       >
-        <h3 id="shortcuts-title">Atalhos</h3>
+        <h3 id="shortcuts-title">{t("shortcuts.title")}</h3>
         {mode === "view" ? (
           <div className="shortcuts-grid">
             {groups.map(({ group, rows }) => (
@@ -236,7 +245,7 @@ export function ShortcutsOverlay({
                       <div className="shortcut-config-row-main">
                         <kbd>{formatCombo(effective)}</kbd>
                         <span className="shortcut-config-desc">{def.description}</span>
-                        {hasOverride && <span className="shortcut-config-badge">personalizado</span>}
+                        {hasOverride && <span className="shortcut-config-badge">{t("shortcuts.customized")}</span>}
                       </div>
                       {describeComboAliases(effective) && (
                         <div className="shortcuts-row-alias">{describeComboAliases(effective)}</div>
@@ -260,10 +269,10 @@ export function ShortcutsOverlay({
                           )}
                           <div className="shortcut-config-confirm-actions">
                             <button type="button" className="primary" onClick={confirmPending}>
-                              Usar mesmo assim
+                              {t("shortcuts.confirm.rebind")}
                             </button>
                             <button type="button" onClick={cancelRecording}>
-                              Cancelar
+                              {t("confirm.cancel")}
                             </button>
                           </div>
                         </>
@@ -275,7 +284,7 @@ export function ShortcutsOverlay({
                             className="shortcut-config-recording"
                             onKeyDown={(e) => handleRecordingKeyDown(def.id, e)}
                           >
-                            Pressione uma combinação de tecla… (Esc fecha esta tela)
+                            {t("shortcuts.recording")}
                           </button>
                           {recordingError && (
                             <div className="shortcut-config-message shortcut-config-message--error" role="alert">
@@ -284,18 +293,18 @@ export function ShortcutsOverlay({
                           )}
                           <div className="shortcut-config-actions">
                             <button type="button" onClick={cancelRecording}>
-                              Cancelar
+                              {t("confirm.cancel")}
                             </button>
                           </div>
                         </>
                       ) : (
                         <div className="shortcut-config-actions">
                           <button type="button" onClick={() => startRecording(def.id)}>
-                            Regravar
+                            {t("shortcuts.confirm.rebind")}
                           </button>
                           {hasOverride && (
                             <button type="button" onClick={() => onRestoreDefault(def.id)}>
-                              Restaurar padrão
+                              {t("shortcuts.restoreDefault")}
                             </button>
                           )}
                         </div>
@@ -308,18 +317,32 @@ export function ShortcutsOverlay({
           </div>
         )}
         <div className="modal-actions modal-actions-split">
+          <label className="shortcuts-locale">
+            <span>{t("shortcuts.locale")}</span>
+            <select
+              value={locale}
+              onChange={(e) => onLocaleOverrideChange(e.target.value as Locale)}
+              aria-label={t("shortcuts.locale")}
+            >
+              {SUPPORTED_LOCALES.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="modal-actions-right">
             {mode === "configure" && (
               <button type="button" className="ghost" onClick={onRestoreAll}>
-                Restaurar tudo
+                {t("shortcuts.restoreAll")}
               </button>
             )}
             <button type="button" className="ghost" onClick={() => setMode(mode === "view" ? "configure" : "view")}>
-              {mode === "view" ? "Configurar atalhos" : "Voltar"}
+              {mode === "view" ? t("shortcuts.mode.configure") : t("shortcuts.mode.view")}
             </button>
           </div>
           <button type="button" className="primary" onClick={onClose}>
-            Fechar
+            {t("app.closeTerminal.confirm")}
           </button>
         </div>
       </div>
