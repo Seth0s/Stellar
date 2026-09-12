@@ -2321,38 +2321,37 @@ select.resume-input {
   padding-bottom: 48px;
 }
 
-/* DESIGN-BACKLOG.md item 21, ponto 5 — reusable SD (sistema de design)
-   utility, born here (first done for `.home-scroll`) then generalized
-   after `.path-picker-tree` shipped with the OS's own thick default
-   scrollbar instead of reusing this. Add `thin-scroll` to the className
-   of ANY element that scrolls (`overflow`/`overflow-y: auto` or
-   `scroll`) instead of reinventing this block per component — every
-   scrollable area in the app (`.home-scroll`, `.files-tree`/
-   `.path-picker-tree`, `.board-list`, `.changes-card-body`,
-   `.update-banner-notes`, `.rail`) composes it this way now. Chromium
-   (this is Electron) honors `::-webkit-scrollbar`; `scrollbar-width`/
-   `-color` cover the same intent for any Gecko-based tooling that
-   touches this CSS. */
-.thin-scroll {
+/* DESIGN-BACKLOG.md §2.0 item 4 — styled scrollbar is the APP DEFAULT,
+   not an opt-in class. Applied via `*` (not only `html`): Chromium's
+   computed `scrollbar-width` does not reliably surface an inherited
+   `thin` from the root on every scroll container (verified live — a
+   child with no own declaration reported `auto` while `html` was
+   `thin`). `::-webkit-scrollbar*` have no inheritance either, so the
+   bare pseudo form covers every element.
+   Intentional HIDE sites keep winning on specificity (class + optional
+   `!important`): BrowserInspector `.inspectorTabs` / `.deviceToolbar` /
+   `.widthRulerBar`, and TerminalCard `.xterm-viewport` (untouched —
+   separate open card). Do not reintroduce a `.thin-scroll` marker. */
+* {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-.thin-scroll::-webkit-scrollbar {
+::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.thin-scroll::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.thin-scroll::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 999px;
 }
 
-.thin-scroll::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
 

@@ -903,7 +903,7 @@ function FilesCardInner({
             </div>
           )}
           {searchQuery.trim() && searchMode === "content" ? (
-            <div className="files-tree thin-scroll">
+            <div className="files-tree">
               {searching && <div className="files-search-msg">buscando…</div>}
               {!searching && contentResults.length === 0 && <div className="files-search-msg">nenhum trecho encontrado</div>}
               {!searching &&
@@ -928,7 +928,7 @@ function FilesCardInner({
                 ))}
             </div>
           ) : searchQuery.trim() ? (
-            <div className="files-tree thin-scroll">
+            <div className="files-tree">
               {searching && <div className="files-search-msg">buscando…</div>}
               {!searching && searchResults.length === 0 && <div className="files-search-msg">nenhum arquivo encontrado</div>}
               {!searching &&
@@ -952,7 +952,7 @@ function FilesCardInner({
                 ))}
             </div>
           ) : (
-            <div className="files-tree thin-scroll">
+            <div className="files-tree">
               {(kids[""] ?? []).map((entry) => (
                 <TreeNode
                   key={entry.path}
@@ -979,7 +979,7 @@ function FilesCardInner({
               a tree row) — silently discarding an unsaved edit here would
               be a real regression this feature must not introduce. */}
           {openTabs.length > 0 && (
-            <div className="files-tabs-bar thin-scroll">
+            <div className="files-tabs-bar">
               {openTabs.map((tab) => (
                 <div
                   key={tab.path}
@@ -1039,7 +1039,7 @@ function FilesCardInner({
           {tooLarge && <div className="files-editor-msg">arquivo maior que 512KB, sem preview</div>}
           {error && <div className="files-editor-msg">{error}</div>}
           {activePath && !tooLarge && mediaKind(activePath) === "image" && imageDataUrl && (
-            <div className="files-editor-image thin-scroll">
+            <div className="files-editor-image">
               <img src={imageDataUrl} alt={activePath} />
             </div>
           )}
@@ -1049,7 +1049,7 @@ function FilesCardInner({
             ) : (
               <Markdown
                 content={content}
-                className="files-editor-preview thin-scroll"
+                className="files-editor-preview"
                 loadingFallback={<div className="files-editor-preview files-editor-msg">carregando preview…</div>}
               />
             )

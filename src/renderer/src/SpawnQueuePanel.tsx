@@ -19,7 +19,7 @@ export function SpawnQueuePanel({
 }) {
   if (queue.length === 0) return null;
   return (
-    <div className="spawn-queue-panel thin-scroll">
+    <div className="spawn-queue-panel">
       <div className="spawn-queue-heading">
         <Icon name="clock" size={13} />
         fila de spawn — {queue.length} aguardando

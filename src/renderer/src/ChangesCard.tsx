@@ -104,7 +104,7 @@ function ChangesCardInner({
       }
       footerContent={root}
     >
-      <div className={`${styles.changesCardBody} thin-scroll`}>
+      <div className={styles.changesCardBody}>
         {!status && <div className={styles.changesMsg}>carregando…</div>}
         {status && !status.repo && <div className={styles.changesMsg}>não é um repositório git</div>}
         {status && status.repo && (

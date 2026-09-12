@@ -301,7 +301,7 @@ function StickyCardInner({
       {editing ? (
         <textarea
           ref={textareaRef}
-          className={`${styles.stickyTextarea} thin-scroll`}
+          className={styles.stickyTextarea}
           data-role="sticky-textarea"
           data-card-id={cardId}
           style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
@@ -315,7 +315,7 @@ function StickyCardInner({
       ) : (
         <div
           ref={previewRef}
-          className={`${styles.stickyPreview} thin-scroll${content.trim().length === 0 ? ` ${styles.empty}` : ""}`}
+          className={`${styles.stickyPreview}${content.trim().length === 0 ? ` ${styles.empty}` : ""}`}
           data-role="sticky-preview"
           style={{ background: STICKY_BG[color] ?? STICKY_BG.yellow }}
           onClick={onPreviewClick}

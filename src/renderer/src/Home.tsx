@@ -99,11 +99,10 @@ export function Home({
       {/* item 2 (DESIGN-BACKLOG.md) — the session list used to have no
           scroll container of its own, so a long list scrolled `.home`
           itself, dragging the fixed background layers above along with
-          it ("quebra o background") and only ever showing the OS's
-          default full-width scrollbar. This is the one thing that
-          scrolls now — background/header stay put, and its own thin
-          scrollbar (styles/layout.css) sits right against the grid. */}
-      <div className="home-scroll thin-scroll">
+          it ("quebra o background"). This is the one thing that scrolls
+          now — background/header stay put; the thin scrollbar is the
+          app default from layout.css (no per-element marker). */}
+      <div className="home-scroll">
         {boards.length === 0 ? (
           <div className="home-empty">
             <p>nenhuma sessão ainda</p>

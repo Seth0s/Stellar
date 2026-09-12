@@ -509,7 +509,7 @@ function TerminalCardInner({
           processo encerrado ({exitCode})
         </div>
       )}
-      <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className={`${styles.terminalCardUrlPopover} thin-scroll`}>
+      <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className={styles.terminalCardUrlPopover}>
         {[...seenUrls].reverse().map((url) => {
           const feedback = copyFeedback?.url === url ? copyFeedback : null;
           return (
