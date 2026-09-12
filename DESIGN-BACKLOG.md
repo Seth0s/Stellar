@@ -24,6 +24,39 @@ Este documento consolida o estado atual de design, produto e arquitetura do proj
 ---
 
 ## 🐛 0. Bugs Urgentes (Recém-Reportados)
+* **Acentuacao sai corrompida no macOS — relato de usuario de Mac (2026-09-12).** O texto vem com mojibake:
+  "nao consegui" aparece como `n√£o consegui`, "permissao" como `permiss√£o`. O padrao identifica a causa: os
+  bytes UTF-8 de `ã` (C3 A3) estao sendo interpretados como **MacRoman** (`√` = C3, `£` = A3). Ou seja, em algum
+  ponto o fluxo e lido com charset legado em vez de UTF-8.
+  * **Hipotese principal, NAO medida (nao temos Mac aqui)**: `pty-registry.ts` monta o env do processo filho a
+    partir de `process.env` (linha 465) e **nunca define `LANG`, `LC_ALL` nem `LC_CTYPE`**. No macOS, um app
+    aberto pelo Finder ou pelo Dock recebe um ambiente minimo, tipicamente **sem `LANG`** — comportamento
+    conhecido do sistema, diferente de um processo iniciado por shell de terminal. Sem locale, libc e varias CLIs
+    caem no locale "C"/POSIX e param de tratar a saida como UTF-8. No Linux o `LANG` quase sempre existe, que e
+    por que isto nunca apareceu aqui.
+  * Consequencia pratica: o buffer do terminal ja guarda o texto corrompido, entao copiar e colar propaga o
+    estrago — o relato chegou justamente por copia de um card.
+  * **Correcao provavel**: definir um locale UTF-8 no env do PTY quando faltar, em vez de herdar a ausencia.
+    Precisa ser MEDIDO num Mac real antes e depois; e falta decidir o que fazer quando o sistema nao tem o
+    locale pedido instalado.
+  * Verificar tambem, no mesmo passo, se o caminho de colar (`term.paste`) e o de copiar (`getSelection` →
+    `clipboard.writeText`) preservam UTF-8 — se o buffer ja esta corrompido, os dois ficam inocentes, e isso
+    precisa ser confirmado em vez de suposto.
+
+* **Classificador de permissao do modo automatico bloqueia escrita legitima em sticky — relato do mesmo usuario.**
+  Um agente tentou atualizar a nota de um card e foi bloqueado pelo proprio classificador de permissao do modo
+  automatico, com motivo "manuseio de PII", por o conteudo trazer muitos nomes e matriculas reais de uma vez. O
+  trabalho nao se perdeu (estava no repositorio), mas o card ficou desatualizado e o agente precisou pedir
+  aprovacao explicita.
+  * **Isto NAO e o gate de consentimento do Stellar** — e o classificador do cliente que roda o agente. O
+    Stellar nao tem como desligar isso, e nem deveria.
+  * O que E do Stellar: `write_sticky` manda o conteudo inteiro **inline** na chamada de ferramenta, entao um
+    bloco grande de dado pessoal passa pelo classificador de uma vez so. Vale avaliar se aceitar um CAMINHO DE
+    ARQUIVO como alternativa ao conteudo inline reduz a superficie — o agente ja leu o arquivo de qualquer
+    forma, e o classificador julgaria uma chamada pequena em vez de um despejo.
+  * Sem medicao ainda; registrado porque o sintoma (card que nao reflete o trabalho feito) e invisivel para quem
+    olha so o board.
+
 * **Dois avisos de relatorio do mesmo card — o que apurei, e o defeito de verdade que apareceu no caminho (2026-09-12).**
   * **O caminho de aviso nao duplica.** `notifySpawnerOfReport` (`message-bus.ts:1386`) tem **um unico** ponto de envio, a entrega vai por fila FIFO, e o throttle existente so afeta o popup do SO — o canal do PTY nunca e suprimido, de proposito, para nao perder um report real. Uma chamada de `report` produz exatamente um aviso.
   * **Os dois avisos eram dois `report` de verdade.** O card `defer-central-escopo` chamou `acbridge report '{"help":true}'` (seq 130) tentando descobrir o formato do comando, e depois o relatorio real (seq 132). Causa: eu abreviei o id da task no briefing, o card nao achou a task e foi sondar a CLI. Briefing com id truncado e armadilha — id completo ou nenhum.
