@@ -293,6 +293,22 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
 ---
 
 ## 📋 2. Pendente
+### 2.0 Rodada de UX aberta pelo dono do repo (2026-09-12, primeiro uso real dos sprints)
+
+Tudo aqui saiu do primeiro dia de uso do painel de sprints e dos terminais, com print. Os quatro primeiros sao a mesma historia: a feature de sprint foi entregue sem a superficie de gerenciar sprint.
+
+* **1. Nao da para renomear um sprint.** A coluna `sprints.name` existe e o modelo ja preve `null = Sprint N`, mas nenhuma superficie escreve nela — foi deixada de fora de proposito ("UI de rename e superficie separada") e a superficie nunca veio. O painel mostra so "Sprint 1", "Sprint 2".
+* **2. Nao existe excluir sprint.** Sem isso, um clique errado e permanente. Aconteceu de verdade: o dono abriu um sprint sem querer e precisou que eu apagasse **direto no banco**, movendo as 4 tasks de volta e reabrindo o sprint anterior na mao. Excluir precisa decidir o que acontece com as tasks do sprint apagado (voltar para o anterior, como fiz a mao) e provavelmente so deve valer para sprint sem historico util.
+* **3. Dois botoes ambiguos, "fechar sprint" e "sprints".** Um age (fecha, irreversivel hoje) e o outro so mostra, e nada no rotulo diz isso. Pedido literal: *"quero algo mais simples, mas organizado"*. O caminho provavel e um controle so — o sprint corrente com as acoes dentro dele — em vez de dois botoes lado a lado com peso visual igual, sendo que um deles e destrutivo.
+* **4. Scrollbar fora do design system, aqui e em outros lugares.** `layout.css` tem `.thin-scroll` (thumb, track e `scrollbar-width: thin`), mas e **opt-in por elemento**: quem esquece de por a classe herda a barra do sistema, que e o caso da lista de sprints no print. Corrigir o sprint sozinho so adia — o certo e a barra estilizada ser o padrao da aplicacao e `.thin-scroll` deixar de existir como marcador manual.
+
+* **5. Um dono so pode ter UM card de navegador.** `openBrowserFor` (`App.tsx:2017`) procura `c.kind === "browser" && c.ownerCardId === ownerCardId` e, achando, **navega o card existente** em vez de abrir outro. Nao e trava por URL igual, e mais forte: o mesmo agente nunca consegue dois navegadores abertos, qualquer URL — o segundo `open_url` sequestra o primeiro. E como um humano abre com `ownerCardId = null`, **todos** os cards abertos a mao compartilham o mesmo dono e portanto o mesmo card. Pedido: remover a trava. Cuidado ao remover: a reutilizacao existe para o agente nao entulhar o board a cada `open_url`, entao o substituto precisa ser uma escolha de quem chama (reutilizar vs abrir novo), nao a ausencia de qualquer limite.
+
+* **6. A barra de atividade do terminal mente, e a animacao esta agressiva.** Tres coisas no mesmo lugar:
+  * *Mente*: para `claude`, `hasRealTurnSignal` e `true`, entao `isActive` so desliga no `onTurnComplete` — o `if (hasRealTurnSignal) return;` (`useTerminal.ts:399`) pula o timer de ocioso de proposito. Se esse sinal nao chega, a barra fica acesa para sempre num card parado, que e exatamente o print. Falta um fallback por ocioso mesmo para quem tem sinal de turno: o sinal continua mandando quando chega, e o silencio longo desliga quando ele nao chega.
+  * *Rapida demais*: `animation: terminal-card-activity-sweep 1s linear infinite`. Pedido: mais suave — duracao maior e curva de easing em vez de `linear`.
+  * *Passa do fim*: o sweep tem `width: 34%`, comeca em `left: -34%` e anda ate `translateX(288%)`, ou seja atravessa a largura inteira e sai. Pedido: terminar antes de chegar ao fim do card.
+
 
 ### 2.1 Funcionalidades & Gaps de Produto
 
