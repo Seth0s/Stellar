@@ -107,6 +107,7 @@ describe("AGENT-FACING boundary checklist", () => {
   it("lists the modules that must stay out of translation sweeps", () => {
     expect(AGENT_FACING_MODULES).toContain("src/main/mcp-server.ts");
     expect(AGENT_FACING_MODULES).toContain("src/main/providers.ts");
+    expect(AGENT_FACING_MODULES).toContain("src/main/bash-discovery-decision.ts");
     expect(AGENT_FACING_MODULES).toContain("src/main/message-bus.ts");
   });
 });

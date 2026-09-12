@@ -43,6 +43,76 @@ export type SpawnOpts = {
   mcpUrl?: string;
 };
 
+// ---------------------------------------------------------------------------
+// Capacity contract (DESIGN-BACKLOG.md §0, 2026-09-12)
+//
+// One declaration per provider — system-prompt injection? MCP registration
+// (which mechanism)? acbridge on PATH? — with report-discovery DELIVERY
+// derived from that declaration (`deriveReportDiscovery`), not chosen
+// case-by-case at call sites. A provider that cannot teach an agent to
+// report by any path must fail visibly at spawn (see
+// bash-discovery-decision.ts), never silently at report time.
+//
+// Measurement that shaped this (2026-09-12): Cursor's headless CLI (`agent`)
+// DOES read `~/.cursor/mcp.json` — confirmed by pointing HOME at a temp
+// dir with a probe server and seeing `agent mcp list` pick it up. The
+// global registration, shim binary, and HTTP endpoint can all be healthy
+// and `agent mcp list` still say `stellar: ready`, yet live cursor cards
+// reported "sem tools Stellar" and never called report. MCP alone is
+// therefore declared as a capacity but is NOT treated as a sufficient
+// report-discovery path; without a system-prompt flag the derived delivery
+// is scrollback (acbridge tip), matching the owner's "flag → scrollback →
+// fail spawn" rule.
+// ---------------------------------------------------------------------------
+
+/** How (if at all) this provider accepts an injected system/developer prompt. */
+export type SystemPromptCapability =
+  | { mechanism: "append-system-prompt" }
+  | { mechanism: "developer_instructions" }
+  | { mechanism: "none" };
+
+/** How the stellar MCP server is registered for this provider. */
+export type McpRegistrationCapability =
+  | { mechanism: "ephemeral-flag" }
+  | { mechanism: "global-config" }
+  | { mechanism: "none" };
+
+export type ProviderRole = "agent" | "shell";
+
+export type ProviderCapacity = {
+  role: ProviderRole;
+  systemPrompt: SystemPromptCapability;
+  mcp: McpRegistrationCapability;
+  /**
+   * Every card gets `binDir` prepended to PATH in `pty-registry.ts`, so
+   * this is `true` for every current provider. Declared (not assumed) so
+   * derivation reads one field instead of a second handwritten list.
+   */
+  acbridgeOnPath: boolean;
+};
+
+/**
+ * How an agent learns it must call `report` / `acbridge report`.
+ * Derived from `ProviderCapacity` — never stored as a parallel fact.
+ */
+export type ReportDiscovery =
+  | "system_prompt"
+  | "scrollback"
+  | "not_applicable"
+  | "unreachable";
+
+/**
+ * Derive report-discovery delivery from a capacity declaration.
+ * Order: system-prompt flag → scrollback (if acbridge on PATH) →
+ * unreachable (spawn must refuse). Shell cards are not agents.
+ */
+export function deriveReportDiscovery(capacity: ProviderCapacity): ReportDiscovery {
+  if (capacity.role === "shell") return "not_applicable";
+  if (capacity.systemPrompt.mechanism !== "none") return "system_prompt";
+  if (capacity.acbridgeOnPath) return "scrollback";
+  return "unreachable";
+}
+
 // DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface
 // is now the MCP server (mcp-server.ts) for providers that speak MCP;
 // acbridge stays as the CLI fallback (see its own header comment). Kept
@@ -53,7 +123,7 @@ export type SpawnOpts = {
 // Reader is a model, not a human. English is correct. Listed in
 // `src/shared/i18n/agent-facing.ts`. A phase-2 string sweep that pulls
 // this into `t()` would change agent behaviour with no test catching it.
-const ACBRIDGE_HINT =
+export const ACBRIDGE_HINT =
   "You're running inside agent-canvas, a board of cards. If an MCP server " +
   "named `stellar` is connected, prefer its tools (list/send/open/spawn/" +
   "close_card/snapshot/page-text/read_card/card_status/report/read_report — read " +
@@ -70,7 +140,7 @@ const ACBRIDGE_HINT =
  * stays legible as a distinct block. Trimming also makes empty or
  * whitespace-only prompts behave like an omitted prompt instead of creating
  * a separator with no task text around it. */
-function composeSystemPrompt(systemPrompt?: string): string {
+export function composeSystemPrompt(systemPrompt?: string): string {
   const taskPrompt = systemPrompt?.trim();
   return taskPrompt ? `${taskPrompt}\n\n${ACBRIDGE_HINT}` : ACBRIDGE_HINT;
 }
@@ -87,6 +157,9 @@ type ProviderDef = {
   label: string;
   binaryNames: string[];
   buildArgs: (opts: SpawnOpts) => string[];
+  /** Declared capabilities — report discovery is DERIVED from this
+   * (`deriveReportDiscovery`), never chosen ad hoc in buildArgs / tips. */
+  capacity: ProviderCapacity;
   /** DESIGN-BACKLOG.md item 57 ponto 13 — real, current install command
    * per provider (confirmed live against each provider's own docs/npm
    * package, `windows` variant confirmed 2026-09-03): `binary_not_found`
@@ -105,11 +178,29 @@ export const PROVIDERS: ProviderDef[] = [
   // binary wrapper (forbidden process-name detection) and not --rcfile
   // (would risk clobbering the user's shell rc). Point 4 nested identity
   // stays a known gap — `acbridge claim-card` declined (no cheap handshake).
-  { id: "bash", label: "Bash", binaryNames: [], buildArgs: () => [], installCommand: null },
+  {
+    id: "bash",
+    label: "Bash",
+    binaryNames: [],
+    buildArgs: () => [],
+    installCommand: null,
+    capacity: {
+      role: "shell",
+      systemPrompt: { mechanism: "none" },
+      mcp: { mechanism: "none" },
+      acbridgeOnPath: true,
+    },
+  },
   {
     id: "claude",
     label: "Claude",
     binaryNames: ["claude"],
+    capacity: {
+      role: "agent",
+      systemPrompt: { mechanism: "append-system-prompt" },
+      mcp: { mechanism: "ephemeral-flag" },
+      acbridgeOnPath: true,
+    },
     installCommand: {
       posix: "npm install -g @anthropic-ai/claude-code",
       windows: "npm install -g @anthropic-ai/claude-code",
@@ -176,6 +267,12 @@ export const PROVIDERS: ProviderDef[] = [
     id: "codex",
     label: "Codex",
     binaryNames: ["codex"],
+    capacity: {
+      role: "agent",
+      systemPrompt: { mechanism: "developer_instructions" },
+      mcp: { mechanism: "ephemeral-flag" },
+      acbridgeOnPath: true,
+    },
     installCommand: {
       posix: "npm install -g @openai/codex",
       windows: "npm install -g @openai/codex",
@@ -211,6 +308,15 @@ export const PROVIDERS: ProviderDef[] = [
     id: "cursor",
     label: "Cursor",
     binaryNames: ["agent", "cursor-agent"],
+    capacity: {
+      role: "agent",
+      systemPrompt: { mechanism: "none" },
+      // Global ~/.cursor/mcp.json — headless `agent` DOES read it
+      // (measured 2026-09-12). Still insufficient alone for report
+      // discovery; see deriveReportDiscovery / capacity-contract header.
+      mcp: { mechanism: "global-config" },
+      acbridgeOnPath: true,
+    },
     // Windows confirmado contra cursor.com/docs/cli/installation
     // (2026-09-03) — instalador PowerShell nativo, mesmo endpoint com
     // um query param a mais, sem WSL.
@@ -227,9 +333,9 @@ export const PROVIDERS: ProviderDef[] = [
     // usuário. O que mudou (2026-09-01, a pedido): o registro passou a
     // acontecer uma vez só, no config GLOBAL do usuário e apontando pro
     // shim stdio, em `mcp-registration.ts` — fora do `buildArgs`, que é
-    // por invocação. Por isso não há nada de MCP nos args aqui; o
-    // SERVER_INSTRUCTIONS do MCP é a cobertura de descoberta quando o
-    // registro global conecta.
+    // por invocação. Por isso não há nada de MCP nos args aqui.
+    // Report discovery is DERIVED as scrollback (capacity.systemPrompt
+    // none + acbridgeOnPath) — see decideBashCardDiscovery.
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
@@ -259,6 +365,12 @@ export const PROVIDERS: ProviderDef[] = [
     id: "antigravity",
     label: "Antigravity",
     binaryNames: ["agy"],
+    capacity: {
+      role: "agent",
+      systemPrompt: { mechanism: "none" },
+      mcp: { mechanism: "global-config" },
+      acbridgeOnPath: true,
+    },
     // Windows confirmado contra a documentação real do Antigravity CLI
     // (2026-09-03) — instalador PowerShell nativo, sem WSL (há também uma
     // variante `.cmd` pro prompt puro, mas o PowerShell já cobre o caso
@@ -268,9 +380,9 @@ export const PROVIDERS: ProviderDef[] = [
       windows: "irm https://antigravity.google/cli/install.ps1 | iex",
     },
     // Sem flag de system-prompt: `--prompt` é o modo de entrada inicial do
-    // usuário, não um canal para acrescentar contexto de ambiente. O
-    // SERVER_INSTRUCTIONS do MCP é a única cobertura desta CLI para essa
-    // descoberta; o registro global já é feito antes do spawn.
+    // usuário, não um canal para acrescentar contexto de ambiente.
+    // Report discovery → scrollback (derived). MCP registered via
+    // `agy mcp add` in mcp-registration.ts (global-config).
     // No `low|high` guard HERE on purpose (2026-09-10, DESIGN-BACKLOG.md
     // §2.1) — the real refusal for an out-of-range antigravity effort
     // lives centrally in message-bus.ts's `spawn_agent` handler
@@ -303,11 +415,16 @@ export const PROVIDERS: ProviderDef[] = [
     id: "opencode",
     label: "OpenCode",
     binaryNames: ["opencode"],
+    capacity: {
+      role: "agent",
+      systemPrompt: { mechanism: "none" },
+      mcp: { mechanism: "global-config" },
+      acbridgeOnPath: true,
+    },
     installCommand: { posix: "npm install -g opencode-ai", windows: "npm install -g opencode-ai" },
     // Sem flag de system-prompt: `--prompt`/mensagens são entrada do
-    // usuário; instruções de sistema exigem configuração persistente. O
-    // SERVER_INSTRUCTIONS do MCP é a única cobertura desta CLI, via o
-    // registro global existente.
+    // usuário; instruções de sistema exigem configuração persistente.
+    // Report discovery → scrollback (derived). MCP via global opencode.json.
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--session", resumeId);
@@ -320,6 +437,10 @@ export const PROVIDERS: ProviderDef[] = [
 
 export function providerById(id: string): ProviderDef | undefined {
   return PROVIDERS.find((p) => p.id === id);
+}
+
+export function providerCapacity(id: string): ProviderCapacity | undefined {
+  return providerById(id)?.capacity;
 }
 
 /** Achado ao vivo, 2026-09-03 — "no Windows não tem bash": não existe

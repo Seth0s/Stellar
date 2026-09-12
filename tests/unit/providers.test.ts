@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { providerById } from "../../src/main/providers";
+import {
+  ACBRIDGE_HINT,
+  PROVIDERS,
+  deriveReportDiscovery,
+  providerById,
+  providerCapacity,
+} from "../../src/main/providers";
 
 // Sticky item "spawn_agent effort" (2026-09-03) — reported live: asking
 // spawn_agent for `gemini-3.1-pro` via Antigravity silently fell back to
@@ -135,5 +141,44 @@ describe("providers: ACBRIDGE_HINT prompt coverage", () => {
     expect(withPrompt).toContain("agent-canvas");
     expect(withoutPrompt).toContain("agent-canvas");
     expect(codex.buildArgs({ systemPrompt: "Review the task carefully." })).toContain("-c");
+  });
+});
+
+describe("providers: capacity contract (§0)", () => {
+  it("every provider declares capacity; delivery matches buildArgs", () => {
+    for (const p of PROVIDERS) {
+      expect(p.capacity).toBeDefined();
+      const discovery = deriveReportDiscovery(p.capacity);
+      const args = p.buildArgs({ systemPrompt: "task", mcpUrl: "http://127.0.0.1:9" });
+      const argsText = args.join("\0");
+      if (discovery === "system_prompt") {
+        expect(argsText).toContain(ACBRIDGE_HINT.slice(0, 40));
+      } else {
+        expect(argsText).not.toContain("agent-canvas");
+      }
+    }
+  });
+
+  it("cursor/antigravity/opencode: no system-prompt, global MCP, scrollback discovery", () => {
+    for (const id of ["cursor", "antigravity", "opencode"] as const) {
+      const c = providerCapacity(id)!;
+      expect(c.systemPrompt.mechanism).toBe("none");
+      expect(c.mcp.mechanism).toBe("global-config");
+      expect(c.acbridgeOnPath).toBe(true);
+      expect(deriveReportDiscovery(c)).toBe("scrollback");
+    }
+  });
+
+  it("claude/codex: system-prompt + ephemeral MCP", () => {
+    expect(providerCapacity("claude")!.systemPrompt.mechanism).toBe("append-system-prompt");
+    expect(providerCapacity("claude")!.mcp.mechanism).toBe("ephemeral-flag");
+    expect(providerCapacity("codex")!.systemPrompt.mechanism).toBe("developer_instructions");
+    expect(providerCapacity("codex")!.mcp.mechanism).toBe("ephemeral-flag");
+    expect(deriveReportDiscovery(providerCapacity("claude")!)).toBe("system_prompt");
+    expect(deriveReportDiscovery(providerCapacity("codex")!)).toBe("system_prompt");
+  });
+
+  it("ACBRIDGE_HINT never contains a URL scheme (pty URL sighting)", () => {
+    expect(ACBRIDGE_HINT).not.toMatch(/https?:\/\//);
   });
 });
