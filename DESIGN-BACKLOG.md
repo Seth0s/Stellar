@@ -648,6 +648,23 @@ Itens já implementados ou arquitetados que aguardam validação do usuário em 
 
 ## 💡 3. Ideias & Brainstorms
 
+* **Card de grafo de fluxo com observer — raio de alcance de uma mudanca (ideia do dono do repo, 2026-09-11):**
+  * O caso que ele descreveu, literal: *"implementador A esta mexendo no arquivo C, e esse arquivo C faz parte do backend que responde a 3 projetos diferentes (clientes). A task dele mexia so na parte especifica de C que afeta 1 desses clientes. Ele verifica, fica tudo ok — mas nunca vai lembrar de verificar os outros clientes que tambem se alimentam dele, porque esta fora do escopo dele. Ou seja, ele poderia verificar sempre inicialmente quem afeta quem, e sempre verificar se tudo ligante com o grafo esta ok"*.
+  * **Nao e hipotetico. Ha duas evidencias no proprio historico do usuario:**
+    1. Registrado em memoria de sessao: *"Idy: envio forcado ainda aberto no Backend — o botao saiu do Mobile, mas o endpoint de resend ainda aceita `delivery_mode immediate` de coordenador"*. Consertado num consumidor, deixado aberto no produtor que alimenta os outros. E exatamente a classe.
+    2. Aconteceu DENTRO do Stellar em 2026-09-11: o card 325 migrou o sinal 2 para o `resolveNotifyTarget` que pertencia ao card 323. Ele percebeu **por acaso**, investigando outra coisa, e relatou. Se nao tivesse percebido, nasceriam duas variantes divergentes do mesmo mecanismo. Raio de alcance dentro de UM repo, com dois agentes.
+  * **A pergunta de desenho que decide tudo: de onde vem o grafo?** Sao tres fontes com custo e alcance MUITO diferentes, e misturar sem dizer produziria confianca falsa:
+    1. **Imports do mesmo repo** — barato e exato. Analise estatica resolve. Cobre o caso Stellar (dois agentes no mesmo modulo), nao cobre o caso que ele descreveu.
+    2. **Contrato entre repos** — o caso REAL dele (Backend servindo Admin, Conecta, Mobile). Import estatico NAO atravessa repo: a aresta e endpoint de API, evento, schema. Precisa de fonte declarada ou de inferencia por chamada HTTP/nome de rota, e as duas erram diferente.
+    3. **Grafo de conhecimento** — o workspace ja tem `graphify` instalado, e ja existe uma decisao registrada de estrategia: grafo por vhost mais um grafo fino de contratos cross-repo, em vez de um unificado. Isso foi decidido antes e deveria ser reaproveitado, nao reinventado.
+  * **QUANDO o observer dispara importa mais que o desenho do grafo.** O premissa da ideia e que o implementador NAO vai olhar fora do escopo dele — entao avisar durante a edicao chega tarde e no lugar errado. Os dois momentos de valor real:
+    * **No briefing**: a task ja nasce dizendo "isto toca C, que alimenta A, B e D — verifique B e D tambem". Quem monta o briefing e o orquestrador, e e ele quem tem o grafo na mao.
+    * **No review**: o gate pergunta "voce verificou os consumidores que o grafo lista?" antes de aprovar. Vira parte do contrato de aceite, nao lembrete opcional.
+    * Terceiro momento, mais fraco: alerta ao vivo na UI. Bonito, e o menos util dos tres.
+  * **Ja existe infraestrutura relacionada que precisa ser considerada antes de construir**: o workspace tem o papel `contract-impact-reviewer` e o skill `review-api-contract-impact`, feitos para avaliar impacto produtor/consumidor. O card de grafo deveria ALIMENTAR esses, nao competir com eles.
+  * **Primeira fatia sugerida, pequena e verificavel**: grafo de imports do proprio repo aberto, alimentando o briefing de task. Prova o valor no caso que ja mordeu hoje (dois agentes no mesmo modulo) sem depender de resolver contrato cross-repo, que e o problema dificil. Cross-repo entra depois, com fonte declarada explicita e dizendo que e declarada.
+  * **Armadilha a evitar**: um grafo que parece completo e nao e produz pior resultado que grafo nenhum — o implementador confia, verifica os tres que o grafo mostrou e ignora o quarto que ele nao sabia existir. Qualquer versao precisa dizer com clareza o que ela NAO enxerga.
+
 * **Controle remoto via servidor próprio (VPS) + UI mobile web — parte da vertente paga (ideia do dono do repo, 2026-09-10, AINDA EM BRAINSTORM):**
   * Palavras dele: *"remote control via servidor (nosso/VPS) para produto pago e fazer UI para mobile (sem ser app nativo)"*.
   * **Isto é a Fase C do Item 2, que já estava registrada em §3 como fora de escopo** ("Acesso Remoto Hospedado via Relay & Magic Link"). Deixa de ser "algum dia" e passa a ter motivo comercial: é infraestrutura da vertente paga, junto do Stellar Team abaixo.
