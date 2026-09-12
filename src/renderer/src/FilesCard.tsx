@@ -5,6 +5,7 @@ import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
 import type { Rect } from "./board-model";
 import type { ContentMatch, DirEntry, GitStatus } from "../../preload/index";
+import { decideOpenFileOnDiskChange, type DiskConflictFlag } from "../../shared/file-reload-decision";
 
 // DESIGN-BACKLOG.md item 21, ponto 11 — `React.lazy`, not a plain static
 // import: CodeEditor.tsx pulls in CodeMirror's core (state/view/commands/
@@ -173,6 +174,19 @@ type OpenTab = {
   view: "code" | "preview";
   dirty: boolean;
   tooLarge: boolean;
+  /**
+   * Disk diverged while this tab had unsaved edits (or the file vanished).
+   * Never used as a license to overwrite `content` — see
+   * `decideOpenFileOnDiskChange`. Cleared on a successful save.
+   */
+  diskConflict: DiskConflictFlag | null;
+  /**
+   * Bumps when a clean tab takes new bytes from disk. CodeEditor reads
+   * `value` once at mount (it owns the document after that), so a live
+   * disk reload has to remount — FilesCard keys the editor on this,
+   * without touching CodeEditor.tsx.
+   */
+  contentEpoch: number;
   /** DESIGN-BACKLOG.md item 51 — set only when this tab was opened from
    * a content-search match; consumed once by `CodeEditor`'s own mount
    * effect (never re-read after, same "read once" contract as its
@@ -476,33 +490,78 @@ function FilesCardInner({
       // Ignore git status errors
     }
 
-    // Refresh non-dirty open tabs if their content changed on disk
+    // Open-file policy: never overwrite a dirty buffer. Clean tabs
+    // take disk; dirty tabs keep what was typed and grow a notice.
+    // Justification lives on `decideOpenFileOnDiskChange`. Awaited so
+    // the in-flight lock covers the reads, not just the tree listing.
     const tabs = openTabsRef.current;
-    for (const tab of tabs) {
-      if (!tab.dirty) {
+    await Promise.all(
+      tabs.map(async (tab) => {
         const kind = mediaKind(tab.path);
         if (kind === "image") {
-          window.fs
-            .readImage(root, tab.path)
-            .then((result) => {
-              if ("dataUrl" in result && result.dataUrl !== tab.imageDataUrl) {
-                updateTab(tab.path, { imageDataUrl: result.dataUrl });
-              }
-            })
-            .catch(() => {});
-        } else {
-          window.fs
-            .read(root, tab.path)
-            .then((result) => {
-              if ("content" in result && result.content !== tab.content) {
-                updateTab(tab.path, { content: result.content });
-              }
-            })
-            .catch(() => {});
+          let disk: string | null = null;
+          try {
+            const result = await window.fs.readImage(root, tab.path);
+            disk = "dataUrl" in result ? result.dataUrl : null;
+          } catch {
+            disk = null;
+          }
+          const decision = decideOpenFileOnDiskChange({
+            dirty: tab.dirty,
+            diskContent: disk,
+            editorContent: tab.imageDataUrl,
+          });
+          if (decision.action === "reload" && disk) {
+            updateTab(tab.path, { imageDataUrl: disk, diskConflict: null });
+          } else if (decision.action === "keep-and-flag") {
+            updateTab(tab.path, { diskConflict: decision.flag });
+          }
+          return;
         }
-      }
-    }
+        let disk: string | null = null;
+        try {
+          const result = await window.fs.read(root, tab.path);
+          disk = "content" in result ? result.content : null;
+        } catch {
+          disk = null;
+        }
+        const decision = decideOpenFileOnDiskChange({
+          dirty: tab.dirty,
+          diskContent: disk,
+          editorContent: tab.content,
+        });
+        if (decision.action === "reload" && disk !== null) {
+          updateTab(tab.path, { content: disk, diskConflict: null, contentEpoch: tab.contentEpoch + 1 });
+        } else if (decision.action === "keep-and-flag") {
+          updateTab(tab.path, { diskConflict: decision.flag });
+        }
+      }),
+    );
   }, [root]);
+
+  // One FilesCard mount = one watcher client. Stable across root
+  // changes so a remount is the only thing that mints a new id —
+  // unmount of THIS card must drop THIS client (care 4).
+  const watchClientIdRef = useRef(
+    `files-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`,
+  );
+  const reloadInFlightRef = useRef(false);
+  const reloadAgainRef = useRef(false);
+
+  const scheduleReload = useCallback(() => {
+    if (reloadInFlightRef.current) {
+      reloadAgainRef.current = true;
+      return;
+    }
+    reloadInFlightRef.current = true;
+    void reloadAll().finally(() => {
+      reloadInFlightRef.current = false;
+      if (reloadAgainRef.current) {
+        reloadAgainRef.current = false;
+        scheduleReload();
+      }
+    });
+  }, [reloadAll]);
 
   useEffect(() => {
     setKids({});
@@ -519,19 +578,24 @@ function FilesCardInner({
     );
     window.git.status(root).then(setGitStatus).catch(() => {});
 
-    // DESIGN-BACKLOG.md item 67 — Live file watching
-    void window.fs.watch(root);
+    const clientId = watchClientIdRef.current;
+    void window.fs.watch(root, clientId);
     const unlisten = window.fs.onChanged((changedRoot) => {
-      if (changedRoot === root) {
-        void reloadAll();
-      }
+      if (changedRoot === root) scheduleReload();
     });
 
     return () => {
       unlisten();
-      void window.fs.unwatch(root);
+      void window.fs.unwatch(root, clientId);
     };
-  }, [root, reloadAll]);
+  }, [root, scheduleReload]);
+
+  // Care 2: only directories the tree is showing (root + expanded).
+  // Ignored names are dropped again in main, so expanding `out` still
+  // does not register an inotify watch.
+  useEffect(() => {
+    void window.fs.setWatchedDirs(root, watchClientIdRef.current, ["", ...expanded]);
+  }, [root, expanded]);
 
   // Every armed "click again to confirm" delete/close-tab auto-disarms
   // after a few seconds — an armed trash icon or tab left sitting there is
@@ -583,6 +647,8 @@ function FilesCardInner({
         view: kind === "markdown" ? "preview" : "code",
         dirty: false,
         tooLarge: false,
+        diskConflict: null,
+        contentEpoch: 0,
         pendingJumpLine: jumpToLine ?? null,
       },
     ]);
@@ -632,7 +698,7 @@ function FilesCardInner({
   function save() {
     if (!activePath || content === null) return;
     window.fs.write(root, activePath, content).then(
-      () => updateTab(activePath, { dirty: false }),
+      () => updateTab(activePath, { dirty: false, diskConflict: null }),
       (e) => setError(String(e)),
     );
   }
@@ -1045,6 +1111,10 @@ function FilesCardInner({
           )}
           {tooLarge && <div className="files-editor-msg">{t("files.tooLarge")}</div>}
           {error && <div className="files-editor-msg">{error}</div>}
+          {activeTab?.diskConflict === "modified" && (
+            <div className="files-editor-msg">{t("files.diskChangedDirty")}</div>
+          )}
+          {activeTab?.diskConflict === "gone" && <div className="files-editor-msg">{t("files.diskGone")}</div>}
           {activePath && !tooLarge && mediaKind(activePath) === "image" && imageDataUrl && (
             <div className="files-editor-image">
               <img src={imageDataUrl} alt={activePath} />
@@ -1079,7 +1149,7 @@ function FilesCardInner({
               // tab's CodeMirror state independent of the others).
               <Suspense fallback={<div className="files-editor-msg">{t("files.loadingEditor")}</div>}>
                 <CodeEditor
-                  key={activePath}
+                  key={`${activePath}:${activeTab?.contentEpoch ?? 0}`}
                   value={content}
                   filename={activePath}
                   jumpToLine={activeTab?.pendingJumpLine}

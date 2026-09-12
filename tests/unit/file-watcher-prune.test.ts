@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isIgnoredDirName } from "../../src/main/file-watcher";
+import { isIgnoredDirName, pathHasIgnoredSegment } from "../../src/main/file-watcher";
 
 // DESIGN-BACKLOG.md §0 — "Abrir o explorador de arquivos quase derruba o
 // app": `startWatching` used to hand a whole real cwd (`node_modules`,
@@ -40,5 +40,21 @@ describe("isIgnoredDirName", () => {
   it("is case-sensitive, matching the Linux filesystem it runs against", () => {
     expect(isIgnoredDirName("Node_Modules")).toBe(false);
     expect(isIgnoredDirName(".Git")).toBe(false);
+  });
+});
+
+describe("pathHasIgnoredSegment", () => {
+  it("refuses a watch path that goes through node_modules, .git, out, or dist", () => {
+    expect(pathHasIgnoredSegment("node_modules")).toBe(true);
+    expect(pathHasIgnoredSegment("src/node_modules/foo")).toBe(true);
+    expect(pathHasIgnoredSegment(".git/objects")).toBe(true);
+    expect(pathHasIgnoredSegment("out")).toBe(true);
+    expect(pathHasIgnoredSegment("dist/index.js")).toBe(true);
+  });
+
+  it("does not treat the empty root path as ignored", () => {
+    expect(pathHasIgnoredSegment("")).toBe(false);
+    expect(pathHasIgnoredSegment("src/renderer")).toBe(false);
+    expect(pathHasIgnoredSegment("distribution")).toBe(false);
   });
 });

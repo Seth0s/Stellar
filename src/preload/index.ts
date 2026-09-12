@@ -300,11 +300,19 @@ const fs = {
   /** DESIGN-BACKLOG.md item 51 — full-text search across file contents. */
   searchContents: (root: string, query: string): Promise<ContentMatch[]> =>
     ipcRenderer.invoke("fs:search-contents", root, query),
-  /** DESIGN-BACKLOG.md item 67 — Live file watching for FilesCard. */
-  watch: (root: string): Promise<void> => ipcRenderer.invoke("fs:watch-start", root),
-  unwatch: (root: string): Promise<void> => ipcRenderer.invoke("fs:watch-stop", root),
-  onChanged: (cb: (root: string, eventPath?: string) => void) => {
-    const listener = (_e: unknown, data: { root: string; path?: string }) => cb(data.root, data.path);
+  /** DESIGN-BACKLOG.md item 67 — Live file watching for FilesCard.
+   * `clientId` is per-mount so two cards on the same root can expand
+   * different folders without one collapsing the other's watches, and
+   * so unmount of one card cannot drop the other's observer. */
+  watch: (root: string, clientId: string): Promise<void> => ipcRenderer.invoke("fs:watch-start", root, clientId),
+  setWatchedDirs: (root: string, clientId: string, dirs: string[]): Promise<void> =>
+    ipcRenderer.invoke("fs:watch-set-dirs", root, clientId, dirs),
+  unwatch: (root: string, clientId: string): Promise<void> => ipcRenderer.invoke("fs:watch-stop", root, clientId),
+  watchStats: (): Promise<{ roots: number; clients: number; dirWatchers: number }> =>
+    ipcRenderer.invoke("fs:watch-stats"),
+  onChanged: (cb: (root: string, eventPath?: string, paths?: string[]) => void) => {
+    const listener = (_e: unknown, data: { root: string; path?: string; paths?: string[] }) =>
+      cb(data.root, data.path, data.paths);
     ipcRenderer.on("fs:changed", listener);
     return () => ipcRenderer.removeListener("fs:changed", listener);
   },
