@@ -242,6 +242,11 @@ Reportados ao vivo pelo usuário em 2026-09-02, ainda não investigados. Priorid
   * **Como investigar sem chutar**: medir crescimento ao longo do tempo com o MESMO numero de cards (vazamento) e ao abrir/fechar cards em ciclo (liberacao). Numero alto e estavel e custo; numero alto e crescente e vazamento — sao consertos diferentes e a distincao vem so da medicao.
 ---
 
+* **Entrega duplicada (`49ae26b7`) — rodada 4, os dois achados que faltam corrigir:**
+  * **Bracketed paste CEGO envenena CLI.** A rodada 3 passou a envelopar toda mensagem multi-linha ou >=120 chars em `\x1b[200~ ... \x1b[201~`. Um terminal de verdade so manda esses bytes depois que a aplicacao PEDE, via DECSET `2004h`. Quem nunca pediu recebe os bytes crus no stdin e os interpreta como texto — o review confirmou o vazamento intacto. Correcao: so envelopar quando o modo foi realmente pedido; rastrear o `2004h`/`2004l` no stream do PTY, e na duvida mandar cru.
+  * **A ancora de delta quebra com scroll.** `countPatternMatches` conta ocorrencias de `Working` / `follow-ups` numa janela de 8 linhas e decide `sent` se a contagem subiu. Com a tela rolando, um `Working` antigo sai da janela no mesmo instante em que o novo entra: a contagem fica em 1, `1 > 1` e falso, e o envio bem-sucedido e lido como `unsent` — que e exatamente o caminho que dispara o reenvio duplicado. Contar dentro de uma janela movel nao e uma ancora. Precisa de uma marca posicional estavel (ou um `unknown` honesto), nao de aritmetica sobre uma janela que escorrega.
+  * *Estado*: o card `precedencia-d8` (cursor) travou com esse briefing preso na caixa de composicao, sem nunca submeter — a propria falha que o item descreve. Trabalho das rodadas 1-3 ja esta commitado; a rodada 4 nao comecou.
+
 ## ⏳ 1. Em Andamento / Em Espera
 
 Itens já implementados ou arquitetados que aguardam validação do usuário em hardware real, aprovação de permissões de infraestrutura ou resolução de limitações de plataforma:
