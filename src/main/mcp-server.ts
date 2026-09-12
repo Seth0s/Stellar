@@ -509,6 +509,43 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
+    server.registerTool(
+      "rename_sprint",
+      {
+        description:
+          "Set or clear the display name of a sprint (active or closed). Identity stays the auto number — empty/null clears the name so the UI falls back to 'Sprint N'. Does not close, open, or move tasks.",
+        inputSchema: {
+          sprintId: z.string().describe("Sprint id to rename"),
+          name: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("New display name; omit or null/empty to clear back to Sprint N"),
+        },
+      },
+      async ({ sprintId, name }) => {
+        const res = await opts.handleRequest({
+          cmd: "rename_sprint",
+          sprintId,
+          name: name === undefined ? null : name,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+    server.registerTool(
+      "delete_sprint",
+      {
+        description:
+          "Delete the ACTIVE sprint only (undo accidental open/close). Moves its tasks to the previous closed sprint and REOPENS that previous (discards its frozen snapshot — board is live again). Closed sprints refuse — history stays. Sole sprint with tasks refuses; sole empty sprint just deletes the row.",
+        inputSchema: {
+          sprintId: z.string().describe("Active sprint id to delete"),
+        },
+      },
+      async ({ sprintId }) => {
+        const res = await opts.handleRequest({ cmd: "delete_sprint", sprintId });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
 
     server.registerTool(
       "list_connectors",

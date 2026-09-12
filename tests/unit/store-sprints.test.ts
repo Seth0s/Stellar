@@ -179,4 +179,93 @@ describe("store.ts: sprints — snapshot no fechamento + migração", () => {
     expect(store.listSprints("b1")).toHaveLength(1);
     store.close();
   });
+
+  it("renameSprint grava name; null/vazio volta pro fallback Sprint N", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-sprint-rename-"));
+    const store = openStore(dir);
+    store.upsertBoard(makeBoard("b1"));
+    store.upsertTask(makeTask("t1", "b1", "pending"));
+    const active = store.getActiveSprint("b1")!;
+    const renamed = store.renameSprint(active.id, "  Maestro  ");
+    expect(renamed.ok).toBe(true);
+    if (!renamed.ok) return;
+    expect(renamed.sprint.name).toBe("Maestro");
+    expect(store.getSprint(active.id)!.name).toBe("Maestro");
+    const cleared = store.renameSprint(active.id, "   ");
+    expect(cleared.ok).toBe(true);
+    if (!cleared.ok) return;
+    expect(cleared.sprint.name).toBeNull();
+    store.close();
+  });
+
+  it("deleteSprint move tasks pro anterior e reabre o fechado (undo do close)", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-sprint-delete-"));
+    const store = openStore(dir);
+    store.upsertBoard(makeBoard("b1"));
+    store.upsertTask(makeTask("todo1", "b1", "pending"));
+    store.upsertTask(makeTask("done1", "b1", "done"));
+    const first = store.getActiveSprint("b1")!;
+    const closed = store.closeSprint("b1");
+    expect(closed.ok).toBe(true);
+    if (!closed.ok) return;
+    expect(store.getTask("todo1")!.sprint_id).toBe(closed.opened.id);
+    expect(store.getTask("done1")!.sprint_id).toBe(closed.closed.id);
+
+    const deleted = store.deleteSprint(closed.opened.id);
+    expect(deleted.ok).toBe(true);
+    if (!deleted.ok) return;
+    expect(deleted.movedTaskCount).toBe(1);
+    expect(deleted.restored!.id).toBe(first.id);
+    expect(deleted.restored!.closed_at).toBeNull();
+    expect(deleted.restored!.snapshot_json).toBeNull();
+    expect(store.getSprint(closed.opened.id)).toBeUndefined();
+    expect(store.getActiveSprint("b1")!.id).toBe(first.id);
+    expect(store.getTask("todo1")!.sprint_id).toBe(first.id);
+    expect(store.getTask("done1")!.sprint_id).toBe(first.id);
+    store.close();
+  });
+
+  it("deleteSprint recusa sprint fechado; recusa único com tasks; apaga vazio sem anterior", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-sprint-delete-refuse-"));
+    const store = openStore(dir);
+    store.upsertBoard(makeBoard("b1"));
+    store.upsertTask(makeTask("t1", "b1", "pending"));
+    const only = store.getActiveSprint("b1")!;
+    const refuseOnly = store.deleteSprint(only.id);
+    expect(refuseOnly.ok).toBe(false);
+    if (refuseOnly.ok) return;
+    expect(refuseOnly.error).toMatch(/only sprint/i);
+
+    // Close with a done-only board so the NEW active sprint is empty —
+    // pending t1 must be finished first so nothing migrates.
+    store.upsertTask({ ...store.getTask("t1")!, status: "done", actor: "human" });
+    const closed = store.closeSprint("b1");
+    expect(closed.ok).toBe(true);
+    if (!closed.ok) return;
+    expect(closed.opened.migrated_in).toBe(0);
+    const refuseClosed = store.deleteSprint(closed.closed.id);
+    expect(refuseClosed.ok).toBe(false);
+    if (refuseClosed.ok) return;
+    expect(refuseClosed.error).toMatch(/closed/i);
+
+    const emptyActive = store.getActiveSprint("b1")!;
+    expect(emptyActive.id).toBe(closed.opened.id);
+    const delEmpty = store.deleteSprint(emptyActive.id);
+    expect(delEmpty.ok).toBe(true);
+    if (!delEmpty.ok) return;
+    expect(delEmpty.movedTaskCount).toBe(0);
+    expect(store.getActiveSprint("b1")!.id).toBe(closed.closed.id);
+
+    // Sole empty active (no previous): just delete the row.
+    store.upsertBoard(makeBoard("b2"));
+    const openB2 = store.openSprint("b2");
+    expect(openB2.ok).toBe(true);
+    if (!openB2.ok) return;
+    const delSole = store.deleteSprint(openB2.sprint.id);
+    expect(delSole.ok).toBe(true);
+    if (!delSole.ok) return;
+    expect(delSole.restored).toBeNull();
+    expect(store.getActiveSprint("b2")).toBeUndefined();
+    store.close();
+  });
 });

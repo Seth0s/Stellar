@@ -910,6 +910,69 @@ const tasks = {
       }
     | { ok: false; error: string }
   > => ipcRenderer.invoke("store:tasks:close-sprint", boardId),
+  renameSprint: (
+    sprintId: string,
+    name: string | null,
+  ): Promise<
+    | {
+        ok: true;
+        sprint: {
+          id: string;
+          boardId: string;
+          number: number;
+          name: string | null;
+          startedAt: number;
+          closedAt: number | null;
+          countTodo: number;
+          countDoing: number;
+          countDone: number;
+          countFailed: number;
+          migratedIn: number;
+          migratedOut: number;
+          hasSnapshot: boolean;
+        };
+      }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke("store:tasks:rename-sprint", sprintId, name),
+  deleteSprint: (
+    sprintId: string,
+  ): Promise<
+    | {
+        ok: true;
+        deleted: {
+          id: string;
+          boardId: string;
+          number: number;
+          name: string | null;
+          startedAt: number;
+          closedAt: number | null;
+          countTodo: number;
+          countDoing: number;
+          countDone: number;
+          countFailed: number;
+          migratedIn: number;
+          migratedOut: number;
+          hasSnapshot: boolean;
+        };
+        restored: {
+          id: string;
+          boardId: string;
+          number: number;
+          name: string | null;
+          startedAt: number;
+          closedAt: number | null;
+          countTodo: number;
+          countDoing: number;
+          countDone: number;
+          countFailed: number;
+          migratedIn: number;
+          migratedOut: number;
+          hasSnapshot: boolean;
+        } | null;
+        movedTaskCount: number;
+      }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke("store:tasks:delete-sprint", sprintId),
   onSprintsChanged: (cb: (boardId: string) => void) => {
     const listener = (_e: unknown, boardId: string) => cb(boardId);
     ipcRenderer.on("task-sprints:changed", listener);

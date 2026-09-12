@@ -359,6 +359,8 @@ export type BusRequest =
   | { cmd: "close_sprint"; boardId?: string }
   | { cmd: "open_sprint"; boardId?: string }
   | { cmd: "list_sprints"; boardId?: string }
+  | { cmd: "rename_sprint"; sprintId?: string; name?: string | null }
+  | { cmd: "delete_sprint"; sprintId?: string }
   | { cmd: "list_connectors" }
   | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null; requesterId?: string }
   | { cmd: "set_connector_label"; connectorId?: string; label?: string | null }
@@ -664,6 +666,13 @@ export function createMessageBus(
     openSprint: (boardId: string) => { ok: true; sprint: import("./store").SprintRow } | { ok: false; error: string };
     closeSprint: (boardId: string) =>
       | { ok: true; closed: import("./store").SprintRow; opened: import("./store").SprintRow }
+      | { ok: false; error: string };
+    renameSprint: (
+      sprintId: string,
+      name: string | null,
+    ) => { ok: true; sprint: import("./store").SprintRow } | { ok: false; error: string };
+    deleteSprint: (sprintId: string) =>
+      | { ok: true; deleted: import("./store").SprintRow; restored: import("./store").SprintRow | null; movedTaskCount: number }
       | { ok: false; error: string };
     /** Notify the Fila card after an MCP close/open so the history panel
      * refreshes. Optional — tests that don't mount a window omit it. */
@@ -2282,6 +2291,28 @@ export function createMessageBus(
       if (!result.ok) return result;
       callbacks.onSprintsChanged?.(req.boardId);
       return { ok: true, closed: serializeSprint(result.closed), opened: serializeSprint(result.opened) };
+    }
+
+    if (req.cmd === "rename_sprint") {
+      if (!req.sprintId) return { ok: false, error: "missing sprintId" };
+      const name = req.name === undefined ? null : req.name;
+      const result = callbacks.renameSprint(req.sprintId, name);
+      if (!result.ok) return result;
+      callbacks.onSprintsChanged?.(result.sprint.board_id);
+      return { ok: true, sprint: serializeSprint(result.sprint) };
+    }
+
+    if (req.cmd === "delete_sprint") {
+      if (!req.sprintId) return { ok: false, error: "missing sprintId" };
+      const result = callbacks.deleteSprint(req.sprintId);
+      if (!result.ok) return result;
+      callbacks.onSprintsChanged?.(result.deleted.board_id);
+      return {
+        ok: true,
+        deleted: serializeSprint(result.deleted),
+        restored: result.restored ? serializeSprint(result.restored) : null,
+        movedTaskCount: result.movedTaskCount,
+      };
     }
 
     if (req.cmd === "list_connectors") {

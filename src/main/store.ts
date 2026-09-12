@@ -1143,6 +1143,27 @@ export function openStore(userDataDir: string) {
       snapshot_json = @snapshot_json
     WHERE id = @id
   `);
+  const renameSprintStmt = db.prepare(`UPDATE sprints SET name = ? WHERE id = ?`);
+  /** Undo accidental open/close: clear freeze so the previous sprint is
+   * live again. Snapshot + count_* are discarded — the board is live, not
+   * a frozen history view. migrated_in is kept (how the sprint started). */
+  const reopenSprintStmt = db.prepare(`
+    UPDATE sprints SET
+      closed_at = NULL,
+      count_todo = 0,
+      count_doing = 0,
+      count_done = 0,
+      count_failed = 0,
+      migrated_out = 0,
+      snapshot_json = NULL
+    WHERE id = ?
+  `);
+  const deleteSprintRowStmt = db.prepare(`DELETE FROM sprints WHERE id = ?`);
+  const previousClosedSprintStmt = db.prepare(
+    `SELECT ${SPRINT_COLUMNS} FROM sprints
+     WHERE board_id = ? AND id != ? AND closed_at IS NOT NULL
+     ORDER BY number DESC, started_at DESC LIMIT 1`,
+  );
   const tasksForSprintStmt = db.prepare(
     `SELECT id, prompt, status, result_json, "order", suggested_order, implicit_order, created_at, updated_at FROM tasks WHERE sprint_id = ?`,
   );
@@ -1265,6 +1286,50 @@ export function openStore(userDataDir: string) {
     };
     return { closed, opened };
   });
+
+  /**
+   * DESIGN-BACKLOG.md §2.0 item 2 — delete recovers from an accidental
+   * open/close. Only the ACTIVE sprint may be deleted (closed rows keep
+   * frozen history). Tasks move to the previous closed sprint, which is
+   * reopened (snapshot discarded — live board again). No previous + still
+   * has tasks → refuse. No previous + empty → just delete the row.
+   */
+  const deleteSprintInternal = db.transaction(
+    (
+      sprintId: string,
+      at: number,
+    ): { deleted: SprintRow; restored: SprintRow | null; movedTaskCount: number } => {
+      const target = getSprintStmt.get(sprintId) as SprintRow | undefined;
+      if (!target) {
+        throw Object.assign(new Error(`no such sprint "${sprintId}"`), { code: "sprint_missing" });
+      }
+      if (target.closed_at != null) {
+        throw Object.assign(
+          new Error(`sprint ${target.number} is closed — frozen history cannot be deleted`),
+          { code: "sprint_closed" },
+        );
+      }
+      const members = tasksForSprintStmt.all(target.id) as { id: string }[];
+      const previous = previousClosedSprintStmt.get(target.board_id, target.id) as SprintRow | undefined;
+      if (!previous) {
+        if (members.length > 0) {
+          throw Object.assign(
+            new Error(`cannot delete the only sprint while it still has ${members.length} task(s)`),
+            { code: "sprint_only_with_tasks" },
+          );
+        }
+        deleteSprintRowStmt.run(target.id);
+        return { deleted: target, restored: null, movedTaskCount: 0 };
+      }
+      for (const m of members) {
+        setTaskSprintStmt.run({ id: m.id, sprint_id: previous.id, updated_at: at });
+      }
+      reopenSprintStmt.run(previous.id);
+      deleteSprintRowStmt.run(target.id);
+      const restored = getSprintStmt.get(previous.id) as SprintRow;
+      return { deleted: target, restored, movedTaskCount: members.length };
+    },
+  );
 
   /** Corpo de `upsertTask` (ver seu comentário grande na definição do
    * método, mais abaixo) extraído pra função nomeada — `applyColumnDrop`
@@ -1785,13 +1850,28 @@ export function openStore(userDataDir: string) {
         return { ok: false, error: msg };
       }
     },
-    /** Optional rename surface (identity is still `number`). */
+    /** Optional rename surface (identity is still `number`). Empty/null clears to "Sprint N". */
     renameSprint: (sprintId: string, name: string | null): { ok: true; sprint: SprintRow } | { ok: false; error: string } => {
       const existing = getSprintStmt.get(sprintId) as SprintRow | undefined;
       if (!existing) return { ok: false, error: `no such sprint "${sprintId}"` };
       const trimmed = name === null ? null : name.trim() || null;
-      db.prepare(`UPDATE sprints SET name = ? WHERE id = ?`).run(trimmed, sprintId);
+      renameSprintStmt.run(trimmed, sprintId);
       return { ok: true, sprint: { ...existing, name: trimmed } };
+    },
+    /** Delete the active sprint: move its tasks to the previous closed
+     * sprint and reopen that previous (DESIGN-BACKLOG.md §2.0 item 2).
+     * Closed sprints refuse — history stays frozen. */
+    deleteSprint: (
+      sprintId: string,
+    ):
+      | { ok: true; deleted: SprintRow; restored: SprintRow | null; movedTaskCount: number }
+      | { ok: false; error: string } => {
+      try {
+        return { ok: true, ...deleteSprintInternal(sprintId, Date.now()) };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { ok: false, error: msg };
+      }
     },
     listFavorites: (): FavoriteRow[] => listFavoritesStmt.all() as FavoriteRow[],
     addFavorite: (url: string, title: string) => addFavoriteStmt.run({ url, title, created_at: Date.now() }),

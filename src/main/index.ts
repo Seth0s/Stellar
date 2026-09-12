@@ -1498,6 +1498,12 @@ function createWindow() {
       if (result.ok) notifyTaskChanged(boardId);
       return result;
     },
+    renameSprint: (sprintId, name) => store.renameSprint(sprintId, name),
+    deleteSprint: (sprintId) => {
+      const result = store.deleteSprint(sprintId);
+      if (result.ok) notifyTaskChanged(result.deleted.board_id);
+      return result;
+    },
     onSprintsChanged: (boardId) => {
       if (!win || boardId !== activeBoardId) return;
       safeSend(win, "task-sprints:changed", boardId);
@@ -2013,6 +2019,24 @@ function createWindow() {
     if (!result.ok) return result;
     notifySprintsChanged(boardId);
     return { ok: true as const, sprint: serializeSprint(result.sprint) };
+  });
+  ipcMain.handle("store:tasks:rename-sprint", (_e, sprintId: string, name: string | null) => {
+    const result = store.renameSprint(sprintId, name);
+    if (!result.ok) return result;
+    notifySprintsChanged(result.sprint.board_id);
+    return { ok: true as const, sprint: serializeSprint(result.sprint) };
+  });
+  ipcMain.handle("store:tasks:delete-sprint", (_e, sprintId: string) => {
+    const result = store.deleteSprint(sprintId);
+    if (!result.ok) return result;
+    notifyTaskChanged(result.deleted.board_id);
+    notifySprintsChanged(result.deleted.board_id);
+    return {
+      ok: true as const,
+      deleted: serializeSprint(result.deleted),
+      restored: result.restored ? serializeSprint(result.restored) : null,
+      movedTaskCount: result.movedTaskCount,
+    };
   });
 
   // "mudar pasta raiz" (ProjectPicker.tsx) — the real, navigable OS folder
