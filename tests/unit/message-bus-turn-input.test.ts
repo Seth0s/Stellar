@@ -73,6 +73,46 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
     expect(inputs).toEqual(["target"]);
   });
 
+  it("despejo de entrada humana adiada avisa o turno, como a tecla avisaria", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-bus-turn-input-"));
+    const writes: string[] = [];
+    const inputs: string[] = [];
+    const readySince = Date.now() - 1_000;
+    let lastActivity = readySince;
+    let confirmAttempt = 0;
+    const callbacks = {
+      listCards: () => [{ id: "target", kind: "terminal", provider: "claude", cwd: "", label: null, displayName: "Claude" }],
+      writeToCard: () => undefined,
+      writeToCardWithOrigin: (_id: string, text: string) => {
+        writes.push(text);
+        lastActivity = Math.max(Date.now(), lastActivity + 1);
+      },
+      beginCardDelivery: () => true,
+      endCardDelivery: () => ({ flushedHumanInput: true }),
+      isCardAlive: () => true,
+      getCardLastActivityAt: () => lastActivity,
+      getCardWriteReadiness: () => ({
+        spawnedAtMs: readySince,
+        hasReceivedData: true,
+        lastActivityAtMs: readySince,
+        hasPendingHumanInput: false,
+        inputLineLastAtMs: null,
+      }),
+      notifyCardInput: (id: string) => inputs.push(id),
+      onReadCardRequest: (requestId: string) => {
+        bus?.resolveReadCard(requestId, { ok: true, text: confirmAttempt++ === 0 ? "Working" : "Working" });
+      },
+      nextReportSeqSeed: () => 0,
+    } as unknown as Parameters<typeof createMessageBus>[1];
+
+    bus = createMessageBus(join(dir, "agent-canvas.sock"), callbacks);
+    await bus.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest);
+    // Body opens the delivered turn; flushed keys open THEIRS. Two
+    // notices, not one — the flush is not chrome of the body.
+    expect(inputs).toEqual(["target", "target"]);
+    expect(writes[0]).toBe("brief the worker");
+  });
+
   it("Enter de retentativa e limpeza do composer não avisam de novo", async () => {
     const brief = "brief the worker";
     const { writes, inputs } = makeBus({
