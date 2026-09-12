@@ -1,0 +1,103 @@
+<!doctype html><meta charset="utf-8">
+<title>Protótipo — modal de configurações</title>
+<style>
+:root{--bg:#0f1115;--panel:#161a21;--panel2:#1b2029;--line:#262d38;--text:#e6e9ef;--mid:#8b94a3;--dim:#5c6472;--accent:#4da3ff;--warn:#e0a13a;--danger:#e05a5a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 ui-sans-serif,system-ui,sans-serif;padding:24px}
+h1{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:0 0 12px;font-weight:600}
+.wrap{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start;max-width:1500px}
+@media(max-width:1100px){.wrap{grid-template-columns:1fr}}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 18px 60px #0009}
+.mh{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.mh b{font-size:14px;font-weight:600}.mh .sp{flex:1}
+.x{color:var(--dim);cursor:pointer}
+/* A: sidebar */
+.bodyA{display:grid;grid-template-columns:190px 1fr;min-height:430px}
+.nav{border-right:1px solid var(--line);padding:8px;background:var(--panel2)}
+.nav div{padding:7px 10px;border-radius:7px;color:var(--mid);cursor:pointer;display:flex;gap:8px;align-items:center}
+.nav div.on{background:#243040;color:var(--text)}
+.nav .sec{padding:10px 10px 4px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);cursor:default}
+.pane{padding:16px 18px;overflow:auto}
+/* B: single scroll */
+.bodyB{padding:6px 18px 16px;max-height:460px;overflow:auto}
+.grp{padding:14px 0;border-bottom:1px solid var(--line)}
+.grp:last-child{border-bottom:0}
+.gt{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
+.row{display:flex;align-items:center;gap:12px;padding:7px 0}
+.row label{flex:1;color:var(--text)}
+.row small{display:block;color:var(--dim);font-size:11.5px;margin-top:1px}
+input[type=text],input[type=number],select{background:#0d1015;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 8px;font:inherit;min-width:90px}
+.sw{width:34px;height:19px;border-radius:99px;background:#2b3441;position:relative;flex:none;cursor:pointer}
+.sw i{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:99px;background:var(--mid);transition:.15s}
+.sw.on{background:#1f4a72}.sw.on i{left:17px;background:var(--accent)}
+kbd{font:11px ui-monospace,monospace;background:#0d1015;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:2px 6px;color:var(--text)}
+.scope{font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px;border-radius:99px;border:1px solid;flex:none}
+.g{color:#7fc6a0;border-color:#2f5c46;background:#16281f}
+.b{color:#e0a13a;border-color:#5c4a2f;background:#281f16}
+.note{display:flex;gap:9px;padding:9px 11px;border-radius:8px;background:#1a1f14;border:1px solid #3d4a28;color:#c8d6a8;font-size:12px;margin:12px 0 4px}
+.mf{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel2)}
+.mf .sp{flex:1}
+button{background:#222a36;border:1px solid var(--line);color:var(--text);border-radius:7px;padding:6px 13px;font:inherit;cursor:pointer}
+button.p{background:#1f4a72;border-color:#2d6fa8}
+.cap{color:var(--mid);font-size:12px;margin:10px 2px 0}
+.cap b{color:var(--text)}
+.badge{font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:99px;padding:1px 7px}
+</style>
+<div class="wrap">
+
+<div>
+<h1>A — navegação lateral, escopo por página</h1>
+<div class="modal">
+  <div class="mh"><b>Configurações</b><span class="sp"></span><span class="badge">Maestro</span><span class="x">✕</span></div>
+  <div class="bodyA">
+    <div class="nav">
+      <div class="sec">Aplicativo</div>
+      <div class="on">⚙︎ Geral</div>
+      <div>⌨︎ Atalhos</div>
+      <div>🔑 Chaves de API</div>
+      <div>📱 Dispositivos</div>
+      <div class="sec">Este board</div>
+      <div>▦ Maestro</div>
+      <div>🤖 Agentes</div>
+    </div>
+    <div class="pane">
+      <div class="row"><label>Idioma<small>Detectado do sistema; a escolha fica salva</small></label><select><option>Português (Brasil)</option><option>English</option></select></div>
+      <div class="row"><label>Tema<small>Acompanha o sistema por padrão</small></label><select><option>Escuro</option><option>Sistema</option></select></div>
+      <div class="row"><label>Cards translúcidos<small>Padrão para cards novos; cada card ainda decide o seu</small></label><div class="sw"><i></i></div></div>
+      <div class="row"><label>Tamanho da fonte do terminal<small>Ctrl+scroll dentro do card muda só aquele card</small></label><input type="number" value="13" style="width:70px"></div>
+      <div class="note">🛈 Esta página vale para o aplicativo inteiro. O que muda só neste board está em <b>Este board</b>.</div>
+    </div>
+  </div>
+  <div class="mf"><span class="sp"></span><button>Fechar</button></div>
+</div>
+<p class="cap"><b>Separa por escopo na navegação.</b> Duas seções: o que vale para o app e o que vale só para o board aberto. O nome do board fica no cabeçalho, então nunca se edita o board errado.</p>
+</div>
+
+<div>
+<h1>B — rolagem única, escopo etiquetado por linha</h1>
+<div class="modal">
+  <div class="mh"><b>Configurações</b><span class="sp"></span><input type="text" placeholder="filtrar…" style="width:150px"><span class="x">✕</span></div>
+  <div class="bodyB">
+    <div class="grp"><div class="gt">Geral</div>
+      <div class="row"><label>Idioma</label><span class="scope g">app</span><select><option>Português (Brasil)</option><option>English</option></select></div>
+      <div class="row"><label>Tema</label><span class="scope g">app</span><select><option>Escuro</option><option>Sistema</option></select></div>
+    </div>
+    <div class="grp"><div class="gt">Atalhos <span class="badge">3 personalizados</span></div>
+      <div class="row"><label>Copiar seleção no terminal</label><span class="scope g">app</span><kbd>Ctrl+Shift+C</kbd></div>
+      <div class="row"><label>Interromper (SIGINT)</label><span class="scope g">app</span><kbd>Ctrl+C</kbd></div>
+      <div class="row"><label>Duplicar card</label><span class="scope g">app</span><kbd>Ctrl+D</kbd></div>
+    </div>
+    <div class="grp"><div class="gt">Chaves de API</div>
+      <div class="row"><label>Anthropic<small>Guardada no chaveiro do sistema</small></label><span class="scope g">app</span><button>Substituir</button></div>
+      <div class="row"><label>OpenAI</label><span class="scope g">app</span><button>Adicionar</button></div>
+    </div>
+    <div class="grp"><div class="gt">Board · Maestro</div>
+      <div class="row"><label>Agentes simultâneos<small>Fila segura o excedente</small></label><span class="scope b">board</span><input type="number" value="5" style="width:64px"></div>
+      <div class="row"><label>Modo autônomo<small>Dispensa confirmação para spawn e abrir URL</small></label><span class="scope b">board</span><div class="sw on"><i></i></div></div>
+    </div>
+  </div>
+  <div class="mf"><span class="sp"></span><button>Fechar</button></div>
+</div>
+<p class="cap"><b>Tudo numa tela, com filtro.</b> Cada linha diz se é do app ou do board. Acha mais rápido quando se sabe o nome; exige ler a etiqueta para não errar o escopo.</p>
+</div>
+
+</div>
