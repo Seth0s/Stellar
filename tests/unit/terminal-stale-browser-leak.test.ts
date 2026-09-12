@@ -3,11 +3,35 @@ import { resolveTerminalShortcutKeydown } from "../../src/renderer/src/terminal-
 import { findShortcutClaimingKey } from "../../src/renderer/src/shortcut-registry";
 import type { ShortcutKeyEvent, ShortcutOverrides } from "../../src/renderer/src/shortcut-registry";
 
-describe("stale + dono native (não central)", () => {
-  // Rodada 6 — mesma classe do buraco da rodada 5: filtrar só
-  // GLOBAL_SHORTCUTS_BY_ID deixava browser.* no Ctrl+C livre cair em
-  // none → xterm emitia \x03. Qualquer dono → defer-central.
-  it("browser.navigate no Ctrl+C liberado por sigint: defer-central (não none, não swallow)", () => {
+describe("stale + dono fora do escopo terminal → swallow (mata nativo)", () => {
+  // Rodada 7 — Ctrl+D stale: card.duplicate (default, escopo canvas) NÃO
+  // seria despachado com foco no terminal; defer-central deixava o
+  // Chromium abrir "adicionar favorito".
+  it("Ctrl+D stale com card.duplicate default: swallow (não defer-central)", () => {
+    const e: ShortcutKeyEvent = {
+      ctrlKey: true,
+      shiftKey: false,
+      altKey: false,
+      metaKey: false,
+      key: "d",
+    };
+    const overrides: ShortcutOverrides = {
+      "terminal.eof": { key: "e", ctrlOrCmd: true, shift: false },
+    };
+
+    // Sem escopo: o registro ainda vê card.duplicate no Ctrl+D.
+    expect(findShortcutClaimingKey(e, overrides)).toBe("card.duplicate");
+    // Com escopo terminal: ninguém que rodaria aqui.
+    expect(findShortcutClaimingKey(e, overrides, "terminal")).toBeNull();
+
+    expect(resolveTerminalShortcutKeydown(e, overrides, "")).toEqual({
+      consume: true,
+      action: "swallow",
+    });
+  });
+
+  // Mesma classe: dono de escopo browser/text-input (browser.navigate).
+  it("browser.navigate no Ctrl+C liberado por sigint: swallow (não defer-central)", () => {
     const e: ShortcutKeyEvent = {
       ctrlKey: true,
       shiftKey: false,
@@ -23,9 +47,12 @@ describe("stale + dono native (não central)", () => {
     };
 
     expect(findShortcutClaimingKey(e, overrides)).toBe("browser.navigate");
+    expect(findShortcutClaimingKey(e, overrides, "terminal")).toBeNull();
 
-    const dispatch = resolveTerminalShortcutKeydown(e, overrides, "");
-    // none = xterm manda \x03; swallow = mata o bubble do dono.
-    expect(dispatch).toEqual({ consume: false, action: "defer-central" });
+    // none = xterm manda \x03; defer-central = nativo do Chromium vaza.
+    expect(resolveTerminalShortcutKeydown(e, overrides, "")).toEqual({
+      consume: true,
+      action: "swallow",
+    });
   });
 });

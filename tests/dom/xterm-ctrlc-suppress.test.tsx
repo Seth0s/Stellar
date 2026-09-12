@@ -130,9 +130,10 @@ describe("xterm Ctrl+C suppress — medição que decide defer-central", () => {
   });
 
   it("contrato defer-central: customHandler consulta o dispatch e barra \\x03 sem stopImmediate", async () => {
+    // Dono COM escopo terminal — card.duplicate (canvas) cairia em swallow.
     const overrides: ShortcutOverrides = {
       "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
-      "card.duplicate": { key: "c", ctrlOrCmd: true },
+      "tool.escapeReset": { key: "c", ctrlOrCmd: true },
     };
     const { term, host, ta, seen, cleanup } = await openTerm();
     let bubbleSaw = false;

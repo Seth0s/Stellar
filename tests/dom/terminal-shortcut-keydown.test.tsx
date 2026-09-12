@@ -123,14 +123,52 @@ describe("terminal shortcut keydown (jsdom) — copy vazio não vaza Ctrl+C", ()
     el.remove();
   });
 
-  // Rodada 4 — stale + central: defer-central (sem consume/stopImmediate).
-  it("Ctrl+C reivindicado por card.duplicate depois de liberar sigint: defer-central, evento sobe", () => {
+  // Rodada 7 — stale + card.duplicate (canvas): swallow (preventDefault).
+  it("Ctrl+C reivindicado por card.duplicate depois de liberar sigint: swallow, mata nativo", () => {
     const el = document.createElement("div");
     document.body.appendChild(el);
 
     const overrides: ShortcutOverrides = {
       "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false, alt: false },
       "card.duplicate": { key: "c", ctrlOrCmd: true },
+    };
+    let lastAction: string | undefined;
+    function onKeyDown(e: KeyboardEvent) {
+      const dispatch = resolveTerminalShortcutKeydown(e, overrides, "");
+      lastAction = dispatch.action;
+      if (dispatch.consume) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    }
+    el.addEventListener("keydown", onKeyDown, { capture: true });
+    const bubbleSaw = vi.fn();
+    el.addEventListener("keydown", bubbleSaw);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "c",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    el.dispatchEvent(event);
+
+    expect(lastAction).toBe("swallow");
+    expect(event.defaultPrevented).toBe(true);
+    expect(bubbleSaw).not.toHaveBeenCalled();
+
+    el.removeEventListener("keydown", onKeyDown, { capture: true });
+    el.remove();
+  });
+
+  // Rodada 7 — defer-central só quando o dono TEM escopo terminal.
+  it("Ctrl+C reivindicado por tool.escapeReset (escopo terminal): defer-central, evento sobe", () => {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+
+    const overrides: ShortcutOverrides = {
+      "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false, alt: false },
+      "tool.escapeReset": { key: "c", ctrlOrCmd: true },
     };
     let lastAction: string | undefined;
     function onKeyDown(e: KeyboardEvent) {

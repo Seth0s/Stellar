@@ -30,36 +30,33 @@ export type TerminalShortcutDispatch =
   | { consume: true; action: "paste" }
   | { consume: true; action: "eof" }
   /** Default do registro ainda casa, mas o efetivo não (rebindou pra
-   * longe) E nenhum outro atalho no registro reivindicou a tecla —
-   * engole pra o encoding antigo do xterm não disparar. Rodada 3: stale
-   * vai NO FIM; se viesse antes de paste/eof, reutilizar Ctrl+C liberado
-   * virava buraco negro (engolia paste válido). Rodada 4: "ninguém
-   * reivindicou" consulta o REGISTRO inteiro (`findShortcutClaimingKey`),
-   * não só os quatro atalhos de terminal — senão um central (ex.:
-   * `card.duplicate` no Ctrl+C livre) era engolido e nunca bubblava. */
+   * longe) E ninguém que RODARIA no escopo terminal reivindicou a tecla
+   * — engole pra o encoding antigo do xterm não disparar E pra o
+   * Chromium não executar o atalho nativo (Ctrl+D = favorito). Rodada 3:
+   * stale no FIM. Rodada 7: dono de outro escopo (ex. `card.duplicate`
+   * canvas) NÃO conta — `resolveGlobalShortcut` o rejeitaria no bubble e
+   * o nativo vazava. */
   | { consume: true; action: "swallow" }
   /**
-   * Rodada 5–6: stale + QUALQUER dono no registro (central OU native
-   * fora dos quatro de terminal já checados). `consume: false` de
-   * propósito — NÃO chamar `stopImmediatePropagation` (senão o bubble
-   * morre e o atalho do dono nunca dispara). O xterm é barrado à parte
-   * via `attachCustomKeyEventHandler` → `false` (medido: `preventDefault`
-   * sozinho NÃO impede `onData("\x03")`). Rodada 6: filtrar só
-   * `GLOBAL_SHORTCUTS_BY_ID` vazava `\x03` quando o dono era native
-   * (ex.: browser.* no Ctrl+C livre) — mesma classe do buraco da rodada 5.
+   * Stale + dono que `resolveGlobalShortcut` DESPACHARIA com foco no
+   * terminal (`scopes` inclui `"terminal"`). `consume: false` de
+   * propósito — sem `stopImmediatePropagation` (o bubble precisa chegar
+   * em App.tsx). O xterm é barrado à parte via
+   * `attachCustomKeyEventHandler` → `false`. Dono fora de escopo cai em
+   * `swallow`, não aqui (rodada 7).
    */
   | { consume: false; action: "defer-central" }
   | { consume: false; action: "none" };
 
 /**
- * Ordem final da sequência (rodadas 3–6 do review):
+ * Ordem final da sequência (rodadas 3–7 do review):
  * 1. copy efetivo (antes de sigint — Ctrl+Shift+C vs Ctrl+C)
  * 2. sigint efetivo
  * 3. paste efetivo
  * 4. eof efetivo
  * 5. stale sigint / stale eof:
- *    - ninguém reivindica → swallow
- *    - alguém reivindica (qualquer dispatch/escopo) → defer-central
+ *    - ninguém que rodaria no escopo terminal → swallow
+ *    - dono que `resolveGlobalShortcut` despacharia aqui → defer-central
  *      (bubbla; xterm barrado no handler)
  * 6. none
  *
@@ -84,15 +81,16 @@ export function resolveTerminalShortcutKeydown(
   if (matchesShortcut(e, "terminal.eof", overrides)) {
     return { consume: true, action: "eof" };
   }
-  // Stale por último: engole encoding antigo só quando a tecla ficou órfã
-  // de verdade — `findShortcutClaimingKey` pergunta ao registro (qualquer
-  // dispatch/escopo), sem lista paralela de ids. Qualquer dono →
-  // defer-central (não none: senão o xterm emite `\x03`).
+  // Stale por último: engole encoding antigo / nativo do Chromium quando
+  // a tecla ficou órfã NO ESCOPO TERMINAL — `findShortcutClaimingKey` com
+  // `"terminal"` é a mesma caminhada de `resolveGlobalShortcut` (fonte
+  // única). Dono de outro escopo → swallow (não defer-central: o bubble
+  // seria rejeitado e o Ctrl+D nativo abriria "adicionar favorito").
   if (
     isStaleDefaultShortcut(e, "terminal.sigint", overrides) ||
     isStaleDefaultShortcut(e, "terminal.eof", overrides)
   ) {
-    if (findShortcutClaimingKey(e, overrides) === null) {
+    if (findShortcutClaimingKey(e, overrides, "terminal") === null) {
       return { consume: true, action: "swallow" };
     }
     return { consume: false, action: "defer-central" };

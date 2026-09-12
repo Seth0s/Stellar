@@ -18,14 +18,23 @@ describe("thesis test", () => {
       "terminal.copySelection": { key: "c", ctrlOrCmd: true, shift: false },
     };
     const res1 = resolveTerminalShortcutKeydown(e, overrides1, "");
-    expect(res1.action).toBe("copy-noop"); // It's caught by copySelection!
+    expect(res1.action).toBe("copy-noop");
 
-    // Sigint rebound to Ctrl+X. card.duplicate rebound to Ctrl+C.
+    // Sigint rebound; card.duplicate (canvas) on Ctrl+C — fora de escopo
+    // terminal → swallow (mata nativo; não defer-central).
     const overrides2: ShortcutOverrides = {
       "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
       "card.duplicate": { key: "c", ctrlOrCmd: true },
     };
     const res2 = resolveTerminalShortcutKeydown(e, overrides2, "");
-    expect(res2.action).toBe("defer-central"); // Caught by defer-central!
+    expect(res2.action).toBe("swallow");
+
+    // Dono central COM escopo terminal → defer-central.
+    const overrides3: ShortcutOverrides = {
+      "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
+      "tool.escapeReset": { key: "c", ctrlOrCmd: true },
+    };
+    const res3 = resolveTerminalShortcutKeydown(e, overrides3, "");
+    expect(res3.action).toBe("defer-central");
   });
 });

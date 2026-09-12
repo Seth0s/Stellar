@@ -637,11 +637,45 @@ export function getShortcutCombo(id: string): ShortcutCombo {
  * já lida por baixo — nenhuma estrutura nova pro registro entender. */
 export type ShortcutOverrides = Record<string, ShortcutCombo>;
 
+/**
+ * Quem no registro reivindica `e` agora — combo EFETIVO (`overrides[id]`
+ * quando presente, senão o default).
+ *
+ * Com `scope` (o caminho do despachante central e do stale do terminal):
+ * só `GLOBAL_SHORTCUTS` cujo `scopes` inclui o escopo. Assim "alguém
+ * reivindica" significa "alguém que RODARIA aqui", não "alguém no
+ * registro tem o combo".
+ *
+ * Sem `scope`: qualquer `dispatch` / qualquer escopo em
+ * `SHORTCUT_REGISTRY` (overlay, diagnóstico). Gestos de mouse (sem
+ * `combo`) são ignorados nos dois modos.
+ */
+export function findShortcutClaimingKey(
+  e: ShortcutKeyEvent,
+  overrides: ShortcutOverrides = {},
+  scope?: ShortcutScope,
+): string | null {
+  if (scope !== undefined) {
+    for (const shortcut of GLOBAL_SHORTCUTS) {
+      if (!shortcut.scopes.includes(scope)) continue;
+      const combo = overrides[shortcut.id] ?? shortcut.combo;
+      if (!matchesCombo(e, combo)) continue;
+      return shortcut.id;
+    }
+    return null;
+  }
+  for (const def of SHORTCUT_REGISTRY) {
+    if (!def.combo) continue;
+    const combo = overrides[def.id] ?? def.combo;
+    if (matchesCombo(e, combo)) return def.id;
+  }
+  return null;
+}
+
 /** O despachante único: dado o evento e o contexto real de foco/modal,
- * decide QUAL atalho global dispara (ou `null`). Primeira combinação que
- * casar tanto na tecla quanto no escopo vence — as combinações centrais
- * nunca colidem entre si (cada tecla aparece no máximo uma vez por
- * escopo), então não existe ambiguidade de ordem na prática.
+ * decide QUAL atalho global dispara (ou `null`). Delega a caminhada
+ * escopada a `findShortcutClaimingKey` — uma só fonte de verdade sobre
+ * quem dispara em cada escopo.
  *
  * `overrides` (fase C) — opcional e `{}` por padrão, então todo chamador
  * de antes desta fase (e todo teste existente, que passa só 2 argumentos)
@@ -658,38 +692,7 @@ export function resolveGlobalShortcut(
   ctx: ShortcutContext,
   overrides: ShortcutOverrides = {},
 ): string | null {
-  const scope = resolveShortcutScope(ctx);
-  for (const shortcut of GLOBAL_SHORTCUTS) {
-    if (!shortcut.scopes.includes(scope)) continue;
-    const combo = overrides[shortcut.id] ?? shortcut.combo;
-    if (!matchesCombo(e, combo)) continue;
-    return shortcut.id;
-  }
-  return null;
-}
-
-/**
- * Quem no registro reivindica `e` agora — combo EFETIVO (`overrides[id]`
- * quando presente, senão o default), qualquer `dispatch` (`central` /
- * `native` / …) e qualquer escopo. Primeira entrada com `combo` que
- * casar vence; gestos de mouse (sem `combo`) são ignorados.
- *
- * Fonte única: caminha `SHORTCUT_REGISTRY`, nunca uma lista paralela de
- * ids. O despachante do terminal pergunta isto antes de engolir uma
- * tecla "stale" — se alguém (central ou nativo fora dos quatro atalhos
- * de terminal já checados) reivindicou o combo, a tecla NÃO é órfã e
- * o evento deve passar (`none`) em vez de `swallow`.
- */
-export function findShortcutClaimingKey(
-  e: ShortcutKeyEvent,
-  overrides: ShortcutOverrides = {},
-): string | null {
-  for (const def of SHORTCUT_REGISTRY) {
-    if (!def.combo) continue;
-    const combo = overrides[def.id] ?? def.combo;
-    if (matchesCombo(e, combo)) return def.id;
-  }
-  return null;
+  return findShortcutClaimingKey(e, overrides, resolveShortcutScope(ctx));
 }
 
 export function displayForShortcut(def: ShortcutDefinition): string {
