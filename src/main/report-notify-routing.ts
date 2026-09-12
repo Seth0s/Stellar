@@ -18,9 +18,7 @@
  *
  * RODADA 1 (this fix's first version): add a 2nd source — the last card
  * that sent this card a directive via `send_to_card`, tracked directly by
- * `recordDirectiveSent` (message-bus.ts's `send` cmd handler) rather than
- * inferred from the connector graph at all ("fecha o caso de readoção sem
- * depender de conector nenhum" — the backlog's own wording) — with
+ * an in-memory `lastDirectiveFrom` Map in message-bus.ts — with
  * `directiveFrom` winning over `spawnedBy` unconditionally whenever it was
  * present and alive, on the argument that a directive can only ever be sent
  * to a card that already exists, so any recorded directive is causally
@@ -93,13 +91,65 @@
  * rodada. That path is unaffected by any of the above: same source (the
  * `spawned` connector lookup, still in message-bus.ts, still checking
  * `isCardAlive`), same result.
+ *
+ * RODADA 3 (DESIGN-BACKLOG.md §0 "Relatorio nao chega ao orquestrador
+ * depois de um restart", 2026-09-12) — RODADA 1's in-memory Map died on
+ * every main-process restart, so a card that was ONLY ever directed (never
+ * spawned — connector `kind: "modified"`, not `"spawned"`) reported into
+ * `{ targetId: null, source: "none" }` the morning after: report on disk,
+ * nobody notified. The `connectors` row already held the edge, the
+ * directive label, and `updated_at` across the restart; it just wasn't
+ * read as a route. Directive fallback now comes from
+ * `pickLatestDirectiveSender` below (most recent `kind === "modified"`
+ * edge INTO the reporting card) — same SQLite table the spawned path
+ * already trusts, no second volatile source of truth. Precedence from
+ * RODADA 2 is unchanged: live spawner still wins unconditionally;
+ * `modified` is never promoted to lineage.
  */
+
+/** Minimal connector shape this module needs — matches store.ts's
+ * `ConnectorRow` fields used for routing, without importing the store. */
+export type DirectiveConnectorEdge = {
+  kind: string | null;
+  from_card_id: string;
+  to_card_id: string;
+  updated_at: number;
+};
+
+/**
+ * Who last directed `cardId` via `send_to_card`, as persisted on the
+ * connector graph (`kind === "modified"`, written by AUTO_CONNECT_CMDS
+ * for `send` — never inferred from label text).
+ *
+ * Multiple `modified` edges into the same target (A briefed W, then B
+ * briefed W later): pick the highest `updated_at`. Same rule
+ * `resolveLiveSpawner` already uses for competing `spawned` edges, and
+ * the same "last writer wins" semantics the old in-memory Map had —
+ * subsequent `send`s bump `updated_at` via `setConnectorLabel`, so a
+ * later brief from the same pair still wins without creating a second
+ * row. Only inbound edges count (`to_card_id === cardId`); an outbound
+ * `modified` from the reporting card is someone ELSE's directive, not
+ * ours. `browser_*` also auto-connects as `modified`, but those edges
+ * point at browser cards, which never call `report` — so filtering by
+ * the reporting card's id keeps them out without a second kind.
+ */
+export function pickLatestDirectiveSender(
+  connectors: readonly DirectiveConnectorEdge[],
+  cardId: string,
+): string | null {
+  const latest = connectors
+    .filter((c) => c.kind === "modified" && c.to_card_id === cardId)
+    .sort((a, b) => b.updated_at - a.updated_at)[0];
+  return latest?.from_card_id ?? null;
+}
 
 export interface ReportRoutingInput {
   /** The card id that last sent this card a directive via `send_to_card`
-   * (message-bus.ts's `lastDirectiveFrom` map), or `null` if none ever did
-   * (or the map was reset, e.g. by a main-process restart). Consulted only
-   * as a FALLBACK — see this module's RODADA 2 doc comment above. */
+   * (resolved from the most recent `kind === "modified"` connector into
+   * this card — see `pickLatestDirectiveSender`), or `null` if none.
+   * Consulted only as a FALLBACK — see this module's RODADA 2 doc
+   * comment above. Survives main-process restarts because the connector
+   * row lives in SQLite (RODADA 3). */
   directiveFromId: string | null;
   /** Whether `directiveFromId` is still a live card (`isCardAlive`).
    * Meaningless when `directiveFromId` is `null`. */

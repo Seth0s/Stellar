@@ -167,6 +167,55 @@ describe("message-bus: report avisa o spawner (ponteiro, não conteúdo)", () =>
     await b.handleRequest({ cmd: "report", requesterId: "child-4", report: { ok: true } } as BusRequest);
     expect(notified).toHaveLength(0);
   });
+
+  // DESIGN-BACKLOG.md §0 "Relatorio nao chega ao orquestrador depois de
+  // um restart" — card sem spawner, só diretiva (`modified`), processo
+  // main "reiniciado" (bus novo, Map antigo nascendo vazio). A aresta já
+  // está no disco/`listAllConnectors`; o report ainda tem que rotear.
+  it("RODADA 3 — card sem spawner + modified persistido + bus novo (restart) => ainda avisa quem briefou", async () => {
+    const connectors: ConnectorRow[] = [
+      { kind: "modified", from_card_id: "orch-readopt", to_card_id: "human-opened-worker", updated_at: Date.now() },
+    ];
+    const notified: unknown[][] = [];
+    // Bus fresco: nenhum `send` neste processo — prova que a rota NÃO
+    // depende mais de memória volátil.
+    const b = makeBus({
+      listAllConnectors: () => connectors,
+      isCardAlive: (id: string) => id === "orch-readopt",
+      describeCardLabel: (id: string) => (id === "human-opened-worker" ? "Worker" : id),
+      notifyCardReported: (...args: unknown[]) => notified.push(args),
+      listCards: () => [],
+    });
+
+    const res = (await b.handleRequest({
+      cmd: "report",
+      requesterId: "human-opened-worker",
+      report: { ok: true, result: "done after restart" },
+    } as BusRequest)) as { ok: boolean };
+
+    expect(res.ok).toBe(true);
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toEqual(["orch-readopt", "Worker"]);
+  });
+
+  it("RODADA 2 + 3 — modified de terceiro NÃO sequestra quando há spawned vivo", async () => {
+    const connectors: ConnectorRow[] = [
+      { kind: "spawned", from_card_id: "spawner-alive", to_card_id: "child-hijack", updated_at: 1 },
+      { kind: "modified", from_card_id: "terceiro", to_card_id: "child-hijack", updated_at: 999 },
+    ];
+    const notified: unknown[][] = [];
+    const b = makeBus({
+      listAllConnectors: () => connectors,
+      isCardAlive: () => true,
+      describeCardLabel: () => "Child",
+      notifyCardReported: (...args: unknown[]) => notified.push(args),
+      listCards: () => [],
+    });
+
+    await b.handleRequest({ cmd: "report", requesterId: "child-hijack", report: { ok: true } } as BusRequest);
+    expect(notified).toHaveLength(1);
+    expect(notified[0]![0]).toBe("spawner-alive");
+  });
 });
 
 describe("message-bus: report entrega uma MENSAGEM ao spawner (2º canal, correção pós-revisão)", () => {
