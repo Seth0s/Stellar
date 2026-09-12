@@ -6,6 +6,7 @@ import * as z from "zod";
 import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus";
 import { resolveCallerCardId } from "./caller-identity";
 import { reachFromHunks } from "./reach-from-hunks";
+import { reachAcrossLiterals } from "./reach-across-literals";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface,
@@ -1015,6 +1016,39 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
       async ({ cwd, hunks }) => {
         const res = await reachFromHunks({ cwd, hunks });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    // DESIGN-BACKLOG.md §3.0 fatia 2 — cross-repo join of normalized literals.
+    // Same process-local pattern as reach_from_hunks: no bus cmd, no persist, no UI.
+    server.registerTool(
+      "reach_across_literals",
+      {
+        description:
+          "Given diff hunks (added AND removed lines), extract the STRING LITERALS those hunks touched and look for the same literals — after normalization — in the other repositories listed by ai/workspace.yaml (found by walking up from cwd). No symbol crosses a repository boundary; what crosses is a literal written on both sides (the Laravel route written again in the client). " +
+          "Normalization collapses `{plan}`, `${planId}`, `{$id}`, `:plan` to a common `{_}` so `/plans/{plan}/coverage/reconcile` joins `/plans/${planId}/coverage/reconcile`. Results are ORDERED BY SPECIFICITY: a long path shared across two trees is a strong signal; a short field name like `status` matching two payloads is noise, not a denylist drop. Mechanical, never curated per repository. " +
+          "A declared contract (docs/contracts, canonical_sources) is a confidence reinforcement on an already-found join (`contractReinforced`) and NEVER a prerequisite — the tool has to work on a repository with no documentation. " +
+          "Returns three blocks: (1) joins — file:line hits, most specific first, not a complete set of consumers; (2) scanned — catalog, projects walked, seeds; (3) incompleteness — mandatory. Known gaps that are always declared: a URL built by concatenation disappears (false negative); a generic field name matches unrelated payloads (false positive). Empty joins is status `sem_referencia`, never success.",
+        inputSchema: {
+          cwd: z.string().describe("Absolute path of the repository the hunks came from. Used to find ai/workspace.yaml by walking up, and to skip the producer file. Dirty tree, not HEAD."),
+          hunks: z
+            .array(
+              z.object({
+                file: z.string().describe("Path of the changed file, relative to cwd — metadata only; used to skip that file as a hit, never turned into a seed"),
+                added: z.array(z.string()).optional().describe("Added lines from the hunk (with or without a leading +)"),
+                removed: z.array(z.string()).optional().describe("Removed lines from the hunk (with or without a leading -). Count equally with added lines."),
+              }),
+            )
+            .describe("Hunks from the diff. Only literals from these lines are seeded; identifiers are ignored."),
+          catalogPath: z
+            .string()
+            .optional()
+            .describe("Absolute path to ai/workspace.yaml. Omit to discover it by walking up from cwd."),
+        },
+      },
+      async ({ cwd, hunks, catalogPath }) => {
+        const res = await reachAcrossLiterals({ cwd, hunks, catalogPath });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

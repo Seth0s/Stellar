@@ -31,6 +31,8 @@
  *   agent via `typeAndSubmit` / MCP response. Agent-facing.
  * - `src/main/reach-from-hunks.ts` — `reach_from_hunks` result payload
  *   (`sem_referencia`, incompleteness.why). Agent-facing English.
+ * - `src/main/reach-across-literals.ts` — `reach_across_literals` result
+ *   payload (`sem_referencia`, incompleteness.why). Agent-facing English.
  *
  * This file exists so a future "extract every string" sweep has a hard
  * checklist instead of relying on memory. Importing it is optional; the
@@ -44,4 +46,5 @@ export const AGENT_FACING_MODULES = [
   "src/main/message-bus.ts", // typeAndSubmit PTY payloads with [de: …]
   "src/main/status-write-decision.ts",
   "src/main/reach-from-hunks.ts",
+  "src/main/reach-across-literals.ts",
 ] as const;
