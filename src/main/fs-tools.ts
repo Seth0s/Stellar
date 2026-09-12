@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { t } from "../shared/i18n";
 import { promises as fs, realpathSync } from "node:fs";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const execFileP = promisify(execFile);
@@ -127,6 +127,29 @@ export async function readFile(root: string, path: string): Promise<ReadFileResu
   const stat = await fs.stat(target);
   if (stat.size > MAX_FILE_BYTES) return { tooLarge: true };
   return { content: await fs.readFile(target, "utf8") };
+}
+
+/**
+ * Agents naturally hand back the absolute path of a file they already
+ * read or wrote. `confine`/`readFile` treat every path as relative to
+ * `root` — they strip a leading slash — so `/home/proj/note.md` would
+ * otherwise become `<root>/home/proj/note.md`. This only remaps an
+ * absolute path onto the root-relative form those functions already
+ * expect. Escape still fails inside `confine` (`relative()` yields
+ * `../...` and the startsWith gate rejects it). Not a second access
+ * policy: same `confine` + `MAX_FILE_BYTES` as FilesCard and chat
+ * `read_file`.
+ */
+export function asRootRelativePath(root: string, path: string): string {
+  const trimmed = path.trim();
+  if (!isAbsolute(trimmed)) return trimmed;
+  return relative(resolve(root), resolve(trimmed));
+}
+
+/** `readFile` after `asRootRelativePath` — one call site for "a path the
+ * caller already had on disk, confined to this root". */
+export async function readFileAllowingAbsolute(root: string, path: string): Promise<ReadFileResult> {
+  return readFile(root, asRootRelativePath(root, path));
 }
 
 /**

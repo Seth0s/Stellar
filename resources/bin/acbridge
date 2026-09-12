@@ -73,7 +73,7 @@ const USAGE =
   "close-card <cardId> [reason...] | delete-card <cardId> [reason...] | " +
   "update-card-content [--append] <cardId> <text...> | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
-  "read-sticky <cardId> | write-sticky [--append] <cardId> <text...> | " +
+  "read-sticky <cardId> | write-sticky [--append] [--file <path>] <cardId> [text...] | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "create-task <json> | update-task <taskId> <json> | request-task-status <taskId> <status> [reason...] | list-tasks | get-task <taskId> | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
@@ -156,13 +156,43 @@ if (cmd === "list") {
   if (!target) fail("usage: acbridge read-sticky <cardId>");
   request = { cmd: "read_sticky", target };
 } else if (cmd === "write-sticky") {
-  // `--append` como PRIMEIRO argumento, antes do alvo: o texto é
-  // `...rest` até o fim (pode conter qualquer coisa, inclusive algo que
-  // pareça uma flag), então uma flag posicional no fim seria ambígua.
-  const append = rest[0] === "--append";
-  const [target, ...textParts] = append ? rest.slice(1) : rest;
-  if (!target || textParts.length === 0) fail("usage: acbridge write-sticky [--append] <cardId> <text...>");
-  request = { cmd: "write_sticky", target, content: textParts.join(" "), mode: append ? "append" : "replace" };
+  // Flags SÓ no começo, antes do alvo: o texto é `...rest` até o fim
+  // (pode conter qualquer coisa, inclusive algo que pareça uma flag),
+  // então uma flag posicional no fim seria ambígua.
+  //
+  // `--file` é a mesma escolha content-ou-path que o MCP expõe, e aqui
+  // ela pesa mais: sem ela o texto inteiro vira argv de um comando de
+  // shell — aspas, limite de tamanho e o classificador de permissão do
+  // host olhando o bloco cru. Com ela o main lê o arquivo (mesmo
+  // confine + 512KB), e o comando carrega só o caminho.
+  let args = rest;
+  let append = false;
+  let filePath = null;
+  for (;;) {
+    if (args[0] === "--append") {
+      append = true;
+      args = args.slice(1);
+    } else if (args[0] === "--file") {
+      if (args[1] === undefined) fail("write-sticky: --file needs a path");
+      filePath = args[1];
+      args = args.slice(2);
+    } else break;
+  }
+  const [target, ...textParts] = args;
+  const usage = "usage: acbridge write-sticky [--append] [--file <path>] <cardId> [text...]";
+  if (!target) fail(usage);
+  if (filePath === null && textParts.length === 0) fail(usage);
+  if (filePath !== null && textParts.length > 0) fail("write-sticky: pass --file or text, not both");
+  const mode = append ? "append" : "replace";
+  // `requesterId` faltava aqui e está presente em `update-card-content`,
+  // que DELEGA pra este mesmo comando: sem ele o auto-conector nunca era
+  // desenhado por esta via, e `--file` não teria root nenhum contra o
+  // qual confinar o caminho (o cwd sai do card chamador).
+  const stickyBase = { cmd: "write_sticky", target, mode, ...(ownCardId ? { requesterId: ownCardId } : {}) };
+  if (filePath !== null && !ownCardId) {
+    fail("write-sticky --file: AGENT_CANVAS_CARD_ID is not set — no card root to confine the path against; pass the text inline instead");
+  }
+  request = filePath !== null ? { ...stickyBase, path: filePath } : { ...stickyBase, content: textParts.join(" ") };
 } else if (cmd === "card-status") {
   const [target] = rest;
   if (!target) fail("usage: acbridge card-status <cardId>");

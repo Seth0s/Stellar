@@ -176,14 +176,25 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "write_sticky",
       {
         description:
-          "Write a sticky note's text — no human approval needed, this is board content, not a disk/process side effect. Refused while a human has that note focused for editing, so it can never overwrite what someone is typing; retry after. Returns the note's resulting content. A connector automatically links your own card to this note (no duplicate on repeated writes to the same note).",
+          "Write a sticky note's text — no human approval needed, this is board content, not a disk/process side effect. Refused while a human has that note focused for editing, so it can never overwrite what someone is typing; retry after. Returns the note's resulting content. A connector automatically links your own card to this note (no duplicate on repeated writes to the same note). " +
+          "Pass `content` for a short inline note. Pass `path` instead when the text is already on disk (you just read or wrote that file) — the main process reads it, so a large block of names/ids/PII does not have to travel in the tool call. `path` is relative to your card's project root, or an absolute path still inside that root. Use one of `content` or `path`, not both. `mode` works the same for either form. " +
+          "This only shrinks the tool-call surface; it does not hide the text from the card itself, and a client-side permission classifier can still flag the write.",
         inputSchema: {
           target: z.string().describe("The sticky card's id or label (see list_cards)"),
-          content: z.string().describe("The text to write"),
+          content: z
+            .string()
+            .optional()
+            .describe("Short note text to write inline. Prefer this for a few lines. Omit when using `path`."),
+          path: z
+            .string()
+            .optional()
+            .describe(
+              "File to read as the note text, relative to your card's project root (or absolute still inside that root). Use this when the payload is already a file you read or wrote — keeps the tool call small. Same confine + 512KB cap as the app's other file reads. Omit when using `content`.",
+            ),
           mode: z
             .enum(["replace", "append"])
             .optional()
-            .describe("replace (default) swaps the whole note; append adds to the end — prefer append for a running log so a human's own lines survive"),
+            .describe("replace (default) swaps the whole note; append adds to the end — prefer append for a running log so a human's own lines survive. Works with both `content` and `path`."),
           callerCardId: z
             .string()
             .optional()
@@ -192,8 +203,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ),
         },
       },
-      async ({ target, content, mode, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "write_sticky", target, content, mode, requesterId: caller(callerCardId) });
+      async ({ target, content, path, mode, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "write_sticky", target, content, path, mode, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -202,19 +213,29 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "update_card_content",
       {
         description:
-          "Write a sticky note's text even on a board that isn't currently loaded (write_sticky only reaches the board that's actually open). For a sticky on the loaded board this behaves exactly like write_sticky (same human-focus guard, same auto-connector). For any other board this only works if THAT board is in autonomous mode — no live UI there to ever refuse a conflicting human edit, so it's the same contract spawn_card/open_url use for a board explicitly told this is fine.",
+          "Write a sticky note's text even on a board that isn't currently loaded (write_sticky only reaches the board that's actually open). For a sticky on the loaded board this behaves exactly like write_sticky (same human-focus guard, same auto-connector). For any other board this only works if THAT board is in autonomous mode — no live UI there to ever refuse a conflicting human edit, so it's the same contract spawn_card/open_url use for a board explicitly told this is fine. " +
+          "Same content-or-path choice as write_sticky: pass `content` for a short inline note; pass `path` when the text is already a file you read or wrote, so the large block does not travel in the tool call. Use one, not both. `mode` works for either form. This only shrinks the tool-call surface — the text still lands on the card.",
         inputSchema: {
           target: z.string().describe("The sticky card's id (list_cards only shows the loaded board's cards, so a cross-board target must be a real id you already have, not a label)"),
-          content: z.string().describe("The text to write"),
+          content: z
+            .string()
+            .optional()
+            .describe("Short note text to write inline. Omit when using `path`."),
+          path: z
+            .string()
+            .optional()
+            .describe(
+              "File to read as the note text, relative to your card's project root (or absolute still inside that root). Use when the payload is already on disk. Same confine + 512KB cap as write_sticky. Omit when using `content`.",
+            ),
           mode: z
             .enum(["replace", "append"])
             .optional()
-            .describe("replace (default) swaps the whole note; append adds to the end"),
+            .describe("replace (default) swaps the whole note; append adds to the end. Works with both `content` and `path`."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it."),
         },
       },
-      async ({ target, content, mode, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "update_card_content", target, content, mode, requesterId: caller(callerCardId) });
+      async ({ target, content, path, mode, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "update_card_content", target, content, path, mode, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
