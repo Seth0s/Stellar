@@ -219,22 +219,46 @@ describe("retainStatusAsk", () => {
     requestedBy: "416",
     requestedAt: 10,
   };
+  const cleared = {
+    requestedStatus: null,
+    requestedReason: null,
+    requestedBy: null,
+    requestedAt: null,
+  };
 
   it("humano escreve status: limpa o pedido (decidiu)", () => {
-    expect(retainStatusAsk({ existing: parked, newActor: "human", proposedStatus: "done" })).toEqual({
-      requestedStatus: null,
-      requestedReason: null,
-      requestedBy: null,
-      requestedAt: null,
-    });
+    expect(
+      retainStatusAsk({ existing: parked, newActor: "human", proposedStatus: "done", resultingStatus: "done" }),
+    ).toEqual({ ask: cleared, resolvedBy: "human-status" });
   });
 
   it("humano edita prompt (sem status): mantém o pedido", () => {
-    expect(retainStatusAsk({ existing: parked, newActor: "human", proposedStatus: null })).toEqual(parked);
+    expect(
+      retainStatusAsk({ existing: parked, newActor: "human", proposedStatus: null, resultingStatus: "pending" }),
+    ).toEqual({ ask: parked, resolvedBy: null });
   });
 
-  it("agente/app escrevem (decisão 8 intacta): mantém o pedido", () => {
-    expect(retainStatusAsk({ existing: parked, newActor: "agent", proposedStatus: "done" })).toEqual(parked);
-    expect(retainStatusAsk({ existing: parked, newActor: "app", proposedStatus: "failed" })).toEqual(parked);
+  it("agente/app com hold (status não virou o pedido): mantém o pedido", () => {
+    expect(
+      retainStatusAsk({ existing: parked, newActor: "agent", proposedStatus: "done", resultingStatus: "pending" }),
+    ).toEqual({ ask: parked, resolvedBy: null });
+    expect(
+      retainStatusAsk({ existing: parked, newActor: "app", proposedStatus: "failed", resultingStatus: "pending" }),
+    ).toEqual({ ask: parked, resolvedBy: null });
+  });
+
+  it("agente/app aplicam o mesmo status pedido: encerra, resolvedBy applied-ask", () => {
+    expect(
+      retainStatusAsk({ existing: parked, newActor: "agent", proposedStatus: "done", resultingStatus: "done" }),
+    ).toEqual({ ask: cleared, resolvedBy: "applied-ask" });
+    expect(
+      retainStatusAsk({ existing: parked, newActor: "app", proposedStatus: "done", resultingStatus: "done" }),
+    ).toEqual({ ask: cleared, resolvedBy: "applied-ask" });
+  });
+
+  it("agente aplica outro status: não resolve ESTE pedido", () => {
+    expect(
+      retainStatusAsk({ existing: parked, newActor: "agent", proposedStatus: "failed", resultingStatus: "failed" }),
+    ).toEqual({ ask: parked, resolvedBy: null });
   });
 });

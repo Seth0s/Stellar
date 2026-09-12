@@ -330,7 +330,7 @@ export type TaskActor = "app" | "agent" | "human";
 export type TaskTransitionRow = {
   id: string;
   task_id: string;
-  kind: "status" | "stage" | "declaration" | "prompt" | "request" | "request_denied";
+  kind: "status" | "stage" | "declaration" | "prompt" | "request" | "request_denied" | "request_resolved";
   from_value: string | null;
   to_value: string;
   actor: TaskActor;
@@ -1462,7 +1462,7 @@ export function openStore(userDataDir: string) {
     } else if (!sprintId && boardId) {
       sprintId = ensureActiveSprintInternal(boardId, Date.now()).id;
     }
-    const ask = retainStatusAsk({
+    const retained = retainStatusAsk({
       existing: {
         requestedStatus: existing?.requested_status ?? null,
         requestedReason: existing?.requested_reason ?? null,
@@ -1471,7 +1471,9 @@ export function openStore(userDataDir: string) {
       },
       newActor,
       proposedStatus: statusProposed === false ? null : task.status,
+      resultingStatus: decision.status,
     });
+    const ask = retained.ask;
     const persistable = {
       ...rest,
       status: decision.status,
@@ -1504,6 +1506,21 @@ export function openStore(userDataDir: string) {
         kind: "declaration",
         from_value: existing.status,
         to_value: decision.declaredStatus,
+        actor: newActor,
+        card_id: task.card_id,
+        at,
+      });
+    }
+    // Ask closed because this write made the requested status true —
+    // not a human Allow (that is kind:status). Without this row the
+    // ask would just vanish from the live columns with no trail.
+    if (retained.resolvedBy === "applied-ask" && existing?.requested_status) {
+      insertTransitionStmt.run({
+        id: randomUUID(),
+        task_id: task.id,
+        kind: "request_resolved",
+        from_value: existing.requested_status,
+        to_value: decision.status,
         actor: newActor,
         card_id: task.card_id,
         at,
