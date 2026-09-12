@@ -57,8 +57,9 @@ export type ReachResult = {
 };
 
 /** Same names file-watcher prunes. Local copy so this module does not
- * import Electron (file-watcher.ts pulls `BrowserWindow`). */
-const IGNORE_DIR_NAMES = new Set([
+ * import Electron (file-watcher.ts pulls `BrowserWindow`). Exported so
+ * the cross-repo walker reuses the same prune set instead of drifting. */
+export const REACH_IGNORE_DIR_NAMES = new Set([
   "node_modules",
   ".git",
   "dist",
@@ -69,7 +70,9 @@ const IGNORE_DIR_NAMES = new Set([
   ".cache",
 ]);
 
-const BINARY_EXTS = new Set([
+const IGNORE_DIR_NAMES = REACH_IGNORE_DIR_NAMES;
+
+export const REACH_BINARY_EXTS = new Set([
   ".png",
   ".jpg",
   ".jpeg",
@@ -94,6 +97,8 @@ const BINARY_EXTS = new Set([
   ".class",
   ".o",
 ]);
+
+const BINARY_EXTS = REACH_BINARY_EXTS;
 
 export const MAX_FILES_SCANNED = 8_000;
 export const MAX_HITS_PER_SEED = 40;
