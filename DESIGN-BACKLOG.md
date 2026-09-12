@@ -24,6 +24,12 @@ Este documento consolida o estado atual de design, produto e arquitetura do proj
 ---
 
 ## 🐛 0. Bugs Urgentes (Recém-Reportados)
+* **Navegador aberto por agente nasce travado — nem o humano nem o agente conseguem usar (relatado ao vivo 2026-09-12).**
+  * O que ja esta descartado por leitura: **nao e permissao por dono**. `ownerCardId` em `BrowserCard.tsx` so alimenta o cracha "#aberto por card N" e o pulo pra origem; nao ha nenhum gate de interacao por dono em lugar nenhum. E o envio de input (`sendMouseEvent`/`sendWheelEvent`) **nao** consulta `entry.visible`, entao o clique sai mesmo com o card pausado.
+  * **Hipotese principal, ainda NAO medida** — a pintura, nao a entrada. Cada card de navegador e uma `BrowserWindow` oculta com `offscreen: true`, e o renderer desenha o buffer do evento `paint` num `<canvas>`. `visible` e puro `isInView(rect, visibleRect)` (`App.tsx:2952`), e `setVisible` chama `stopPainting()`/`startPainting()` de verdade. Chromium offscreen so emite `paint` quando ha dano na pagina: se o card e criado enquanto esta fora da viewport (o agente abre com o humano olhando outra regiao, ou o board com zoom-out), ele pausa **antes do primeiro frame**, a pagina termina de carregar durante a pausa, e ao voltar a ser visivel nao ha mais dano nenhum para pintar. `startPainting()` sozinho nao forca frame — **nao existe nenhuma chamada a `webContents.invalidate()` no arquivo inteiro**. Resultado: canvas em branco para sempre, que e exatamente a sensacao de "travado", com os cliques indo para uma pagina que o usuario nao consegue ver.
+  * Isso tambem explica por que aparece mais em card aberto por agente: o humano abre o card olhando pra ele (nasce visivel), o agente abre onde o humano nao esta.
+  * **Antes de codar, medir**: confirmar se o card nasce com `visible: false`, se `stopPainting` corre antes do primeiro `paint`, e se um `invalidate()` ao voltar a ficar visivel resolve. Se resolver, a correcao provavelmente e forcar um frame no `startPainting` — e nao mexer no criterio de visibilidade, que existe por custo.
+
 
 Reportados ao vivo pelo usuário em 2026-09-02, ainda não investigados. Prioridade sobre o resto do backlog — foco atual é otimização de performance/código, provável causa raiz comum dos três.
 
