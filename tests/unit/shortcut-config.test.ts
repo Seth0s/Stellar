@@ -433,4 +433,24 @@ describe("matchesShortcut / rebindBlockedReason — follow-up componente (7 wire
     const conflict = findShortcutConflict("terminal.sigint", { key: "c", ctrlOrCmd: true, shift: true }, {});
     expect(conflict?.id).toBe("terminal.copySelection");
   });
+
+  // Achado 1 da rodada 5 (review): copy e sigint no mesmo Ctrl+C — copy-noop
+  // interceptaria e o sigint nunca rodaria. findShortcutConflict JÁ bloqueia
+  // esse par no rebind (mesmo escopo terminal) — por design, uma tecla uma ação.
+  it("rebind de copySelection pra Ctrl+C colide com sigint (mesmo escopo terminal)", () => {
+    const conflict = findShortcutConflict(
+      "terminal.copySelection",
+      { key: "c", ctrlOrCmd: true, shift: false },
+      {},
+    );
+    expect(conflict?.id).toBe("terminal.sigint");
+    const evaluation = evaluateRebindCandidate(
+      "terminal.copySelection",
+      { key: "c", ctrlOrCmd: true, shift: false },
+      {},
+    );
+    expect(evaluation.forbidden).toBe(false);
+    expect(evaluation.conflict?.id).toBe("terminal.sigint");
+    expect(needsConfirmation(evaluation)).toBe(true);
+  });
 });

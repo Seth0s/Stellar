@@ -13,7 +13,7 @@ function key(partial: Partial<ShortcutKeyEvent> & { key: string }): ShortcutKeyE
 }
 
 describe("terminal-shortcut-dispatch", () => {
-  it("swallows central shortcuts bound to stale keys", () => {
+  it("defers to central when central shortcut claims a stale key", () => {
     const overrides = {
       "terminal.sigint": { key: "x", ctrlOrCmd: true },
       "card.duplicate": { key: "c", ctrlOrCmd: true }
@@ -28,15 +28,19 @@ describe("terminal-shortcut-dispatch", () => {
     };
 
     const res = resolveTerminalShortcutKeydown(fakeEvent, overrides as any, "");
-    expect(res.action).toBe("none"); // If it's none, the event bubbles to App.tsx. If it's swallow, it's a bug!
+    // Rodada 5: defer-central (não none, não swallow). none deixava o
+    // xterm emitir \x03; swallow engolia o central. defer-central bubbla
+    // sem stopImmediate e o customKeyEventHandler barra o xterm.
+    expect(res.action).toBe("defer-central");
+    expect(res.consume).toBe(false);
   });
 
-  // Matriz completa (rodada 4): stale só engole tecla órfã de verdade;
-  // dono no terminal / no central / tecla comum têm cada um o seu destino.
+  // Matriz completa (rodadas 4–5): stale só engole tecla órfã; dono
+  // terminal / central / tecla comum têm cada um o seu destino.
   describe("stale ownership matrix", () => {
     it("tecla órfã de verdade (sigint/eof rebindados, ninguém pegou o default): swallow", () => {
       // card.duplicate default é Ctrl+D — sem afastá-lo, Ctrl+D ainda tem
-      // dono central e o stale corretamente devolve none (não é órfã).
+      // dono central e o stale corretamente devolve defer-central.
       const overrides: ShortcutOverrides = {
         "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
         "terminal.eof": { key: "e", ctrlOrCmd: true, shift: false },
@@ -55,12 +59,13 @@ describe("terminal-shortcut-dispatch", () => {
       expect(resolveTerminalShortcutKeydown(key({ key: "x", ctrlKey: true }), overrides, "").action).toBe("sigint");
     });
 
-    it("tecla reivindicada por atalho central: none (passa / bubbla)", () => {
+    it("tecla reivindicada por atalho central: defer-central (bubbla, sem consume)", () => {
       const overrides: ShortcutOverrides = {
         "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
         "card.duplicate": { key: "c", ctrlOrCmd: true },
       };
-      expect(resolveTerminalShortcutKeydown(key({ key: "c", ctrlKey: true }), overrides, "").action).toBe("none");
+      const d = resolveTerminalShortcutKeydown(key({ key: "c", ctrlKey: true }), overrides, "");
+      expect(d).toEqual({ consume: false, action: "defer-central" });
     });
 
     it("tecla comum: none (passa)", () => {

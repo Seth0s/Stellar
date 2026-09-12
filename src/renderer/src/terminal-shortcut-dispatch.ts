@@ -7,7 +7,8 @@
  * vive fora do hook cheio de xterm.
  *
  * `vitest` unit (`environment: "node"`) exercita isto direto; `tests/dom/`
- * monta um listener mínimo que aplica o mesmo contrato consume→stop.
+ * monta um listener mínimo que aplica o mesmo contrato consume→stop, e
+ * mede o gancho do xterm pra `defer-central`.
  */
 import {
   isStaleDefaultShortcut,
@@ -15,6 +16,7 @@ import {
 } from "./shortcut-config";
 import {
   findShortcutClaimingKey,
+  GLOBAL_SHORTCUTS_BY_ID,
   type ShortcutKeyEvent,
   type ShortcutOverrides,
 } from "./shortcut-registry";
@@ -37,16 +39,26 @@ export type TerminalShortcutDispatch =
    * não só os quatro atalhos de terminal — senão um central (ex.:
    * `card.duplicate` no Ctrl+C livre) era engolido e nunca bubblava. */
   | { consume: true; action: "swallow" }
+  /**
+   * Rodada 5: stale + dono CENTRAL. `consume: false` de propósito —
+   * NÃO chamar `stopImmediatePropagation` (senão App.tsx nunca vê o
+   * bubble). O xterm é barrado à parte via
+   * `attachCustomKeyEventHandler` → `false` (medido: `preventDefault`
+   * sozinho NÃO impede `onData("\x03")`).
+   */
+  | { consume: false; action: "defer-central" }
   | { consume: false; action: "none" };
 
 /**
- * Ordem final da sequência (rodadas 3–4 do review):
+ * Ordem final da sequência (rodadas 3–5 do review):
  * 1. copy efetivo (antes de sigint — Ctrl+Shift+C vs Ctrl+C)
  * 2. sigint efetivo
  * 3. paste efetivo
  * 4. eof efetivo
- * 5. stale sigint / stale eof — SÓ se ninguém no registro (qualquer
- *    dispatch/escopo) reivindica o combo efetivo
+ * 5. stale sigint / stale eof:
+ *    - órfã → swallow
+ *    - dono central → defer-central (bubbla; xterm barrado no handler)
+ *    - outro dono → none
  * 6. none
  *
  * Qualquer ramo matched devolve `consume: true` — inclusive copy sem
@@ -77,8 +89,12 @@ export function resolveTerminalShortcutKeydown(
     isStaleDefaultShortcut(e, "terminal.sigint", overrides) ||
     isStaleDefaultShortcut(e, "terminal.eof", overrides)
   ) {
-    if (findShortcutClaimingKey(e, overrides) === null) {
+    const claimedId = findShortcutClaimingKey(e, overrides);
+    if (claimedId === null) {
       return { consume: true, action: "swallow" };
+    }
+    if (claimedId in GLOBAL_SHORTCUTS_BY_ID) {
+      return { consume: false, action: "defer-central" };
     }
   }
   return { consume: false, action: "none" };

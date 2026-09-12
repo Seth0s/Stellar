@@ -123,8 +123,8 @@ describe("terminal shortcut keydown (jsdom) — copy vazio não vaza Ctrl+C", ()
     el.remove();
   });
 
-  // Rodada 4 — central reivindica a tecla stale: NÃO engolir (bubbla).
-  it("Ctrl+C reivindicado por card.duplicate depois de liberar sigint: não consome (passa)", () => {
+  // Rodada 4 — stale + central: defer-central (sem consume/stopImmediate).
+  it("Ctrl+C reivindicado por card.duplicate depois de liberar sigint: defer-central, evento sobe", () => {
     const el = document.createElement("div");
     document.body.appendChild(el);
 
@@ -153,7 +153,7 @@ describe("terminal shortcut keydown (jsdom) — copy vazio não vaza Ctrl+C", ()
     });
     el.dispatchEvent(event);
 
-    expect(lastAction).toBe("none");
+    expect(lastAction).toBe("defer-central");
     expect(event.defaultPrevented).toBe(false);
     expect(bubbleSaw).toHaveBeenCalled();
 
