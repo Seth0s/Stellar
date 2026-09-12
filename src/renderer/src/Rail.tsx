@@ -82,7 +82,7 @@ export function Rail({
   kindIcon,
   kindLabel,
   onJumpToCard,
-  onOpenSecretsSettings,
+  onOpenSettings,
 }: {
   tool: Tool;
   setTool: (t: Tool) => void;
@@ -120,7 +120,7 @@ export function Rail({
   kindIcon: Record<string, IconName>;
   kindLabel: Record<string, string>;
   onJumpToCard: (id: string) => void;
-  onOpenSecretsSettings: () => void;
+  onOpenSettings: () => void;
 }) {
   const [openPopover, setOpenPopover] = useState<"cards" | "terminal-config" | "ai" | "find" | null>(null);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_COLLAPSED_KEY) === "1");
@@ -281,7 +281,7 @@ export function Rail({
         >
           <Icon name="sparkle" />
         </button>
-        <button className="rail-btn" title={t("rail.settings")} aria-label={t("rail.settingsAria")} onClick={onOpenSecretsSettings}>
+        <button className="rail-btn" title={t("rail.settings")} aria-label={t("rail.settingsAria")} onClick={onOpenSettings}>
           <Icon name="settings" />
         </button>
 

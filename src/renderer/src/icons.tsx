@@ -40,6 +40,7 @@ import {
   Group,
   Home as HomeGlyph,
   Image,
+  Keyboard,
   KeyRound,
   LayoutGrid,
   Link2,
@@ -150,6 +151,7 @@ export type IconName =
   | "newFolder"
   | "trash"
   | "settings"
+  | "keyboard"
   | "eye"
   | "eyeOff"
   | "clock"
@@ -252,6 +254,7 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   newFolder: FolderPlus,
   trash: Trash2,
   settings: Settings,
+  keyboard: Keyboard,
   eye: Eye,
   eyeOff: EyeOff,
   clock: Clock,

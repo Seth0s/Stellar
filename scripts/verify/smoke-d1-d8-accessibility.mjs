@@ -65,7 +65,7 @@ try {
   check("D8: Indicador card-status-dot possui role='status'", statusDot?.role, "status");
   check("D8: Indicador card-status-dot possui aria-label descritivo", !!statusDot?.ariaLabel, true);
 
-  // 4. D5 — Verifica useModal com ShortcutsOverlay (?)
+  // 4. D5 — Verifica useModal com SettingsModal (`?` abre já em Atalhos)
   await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "?", text: "?" });
   await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "?", text: "?" });
   await new Promise((r) => setTimeout(r, 400));
@@ -73,25 +73,27 @@ try {
   const modalA11y = JSON.parse(
     await page.evalJs(`
       (() => {
-        const modal = document.querySelector('.modal.shortcuts-modal');
+        const modal = document.querySelector('.modal.settings-modal');
         if (!modal) return JSON.stringify(null);
         return JSON.stringify({
           role: modal.getAttribute('role'),
           ariaModal: modal.getAttribute('aria-modal'),
-          ariaLabelledby: modal.getAttribute('aria-labelledby')
+          ariaLabelledby: modal.getAttribute('aria-labelledby'),
+          shortcutsCurrent: document.querySelector('[data-settings-page="shortcuts"]')?.getAttribute('aria-current') === 'page',
         });
       })()
     `)
   );
   check("D5: Modal possui role='dialog'", modalA11y?.role, "dialog");
   check("D5: Modal possui aria-modal='true'", modalA11y?.ariaModal, "true");
+  check("D5: ? abre o modal já na página Atalhos", modalA11y?.shortcutsCurrent, true);
 
   // Testa fechar modal via tecla Escape
   await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
   await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
   await new Promise((r) => setTimeout(r, 400));
 
-  const modalClosed = JSON.parse(await page.evalJs(`JSON.stringify(!document.querySelector('.modal.shortcuts-modal'))`));
+  const modalClosed = JSON.parse(await page.evalJs(`JSON.stringify(!document.querySelector('.modal.settings-modal'))`));
   check("D5: Modal fecha ao pressionar tecla Escape", modalClosed, true);
 
   // 5. D2 — Verifica compensação de borda em baixo zoom

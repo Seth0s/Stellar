@@ -6,7 +6,7 @@ import { required, useFieldValidation } from "./validation";
 import type { SessionTemplate } from "./useBoardStore";
 import { t } from "../../shared/i18n";
 
-type Board = { id: string; name: string; cwd: string; autonomous: boolean; concurrency_cap: number | null };
+type Board = { id: string; name: string; cwd: string };
 
 const TEMPLATES: { value: SessionTemplate; labelKey: "session.template.empty" | "session.template.claude"; descKey: "session.template.emptyDesc" | "session.template.claudeDesc" }[] = [
   { value: "empty", labelKey: "session.template.empty", descKey: "session.template.emptyDesc" },
@@ -46,13 +46,6 @@ type SessionModalProps =
       canDelete: boolean;
       onSave: (id: string, name: string, cwd: string) => void;
       onDelete: (id: string) => void;
-      /** DESIGN-BACKLOG.md item 59 — fires immediately on toggle, not
-       * staged behind "Salvar": a safety-relevant setting shouldn't
-       * depend on the user remembering to also click save. */
-      onToggleAutonomous: (id: string, autonomous: boolean) => void;
-      /** DESIGN-BACKLOG.md item 60, peça 2 — same immediate-fire pattern
-       * as onToggleAutonomous. `null` resets to the app-wide default. */
-      onSetConcurrencyCap: (id: string, cap: number | null) => void;
       onClose: () => void;
     };
 
@@ -134,40 +127,6 @@ export function SessionModal(props: SessionModalProps) {
                 </button>
               ))}
             </div>
-          </div>
-        )}
-        {props.mode === "edit" && (
-          <div className="popover-field">
-            <label className="autonomous-toggle-label">
-              <input
-                type="checkbox"
-                checked={props.board.autonomous}
-                onChange={(e) => props.onToggleAutonomous(props.board.id, e.target.checked)}
-              />
-              {t("session.autonomous")} — {t("session.autonomousHint")}
-            </label>
-            {props.board.autonomous && (
-              <span className="field-error-msg">{t("session.autonomousWarning")}</span>
-            )}
-          </div>
-        )}
-        {props.mode === "edit" && props.board.autonomous && (
-          <div className="popover-field">
-            <label className="concurrency-cap-label">
-              {t("session.concurrency")}
-              <input
-                className="resume-input concurrency-cap-input"
-                type="number"
-                min={1}
-                max={50}
-                placeholder={t("session.concurrencyPlaceholder")}
-                value={props.board.concurrency_cap ?? ""}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  props.onSetConcurrencyCap(props.board.id, raw === "" ? null : Math.max(1, Number(raw)));
-                }}
-              />
-            </label>
           </div>
         )}
         <div className={props.mode === "edit" ? "modal-actions modal-actions-split" : "modal-actions"}>
