@@ -1,12 +1,16 @@
 import { Fragment, memo, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import { PROVIDER_GLYPH } from "./provider-glyph";
+import { useModal } from "./useModal";
 import type { Rect } from "./board-model";
 import type { TaskBoardItem } from "../../preload/index";
+import { parseTaskPrompt } from "../../task-prompt-decision";
 import {
   COLUMN_ORDER,
   COLUMN_TO_STATUS,
+  columnForStatus,
   groupTasksByColumn,
   originBadge,
   deriveStage,
@@ -42,7 +46,7 @@ import {
   type SprintView,
 } from "./task-board-model";
 import styles from "./TaskCard.module.css";
-import { t } from "../../shared/i18n";
+import { getLocale, t } from "../../shared/i18n";
 
 /** RODADA 3 (contrato de partes §2.3, item 1) — "a diferença visual mais
  * gritante das duas telas": cada cabeçalho de coluna tem cor própria no
@@ -116,7 +120,24 @@ function TaskScopeFooter({
  * "implementer" é escrito automaticamente hoje (nenhuma tool de MCP expõe
  * `linkTaskCard` ainda, ver DESIGN-BACKLOG.md §2.1), mas o campo é uma
  * string livre — qualquer outro valor cai no fallback (o próprio texto). */
-const ROLE_LABEL: Record<string, string> = { implementer: "implementa", reviewer: "revisa" };
+function describeCardRole(role: string): string {
+  if (role === "implementer") return t("task.role.implementer");
+  if (role === "reviewer") return t("task.role.reviewer");
+  return role;
+}
+
+function describeLinkedCard(card: { cardId: string; label: string | null; role: string }): string {
+  const name = card.label ? `${card.cardId} ${card.label}` : card.cardId;
+  return `${name} ${describeCardRole(card.role)}`;
+}
+
+function statusLabel(status: string): string {
+  return t(COLUMN_HEADER_KEY[columnForStatus(status)]);
+}
+
+function formatPromptWhen(at: number): string {
+  return new Intl.DateTimeFormat(getLocale(), { dateStyle: "short", timeStyle: "short" }).format(new Date(at));
+}
 
 /** DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 4 — o glyph metálico
  * de um chip de card, mesma técnica de `TerminalCard.module.css`
@@ -133,7 +154,7 @@ const ROLE_LABEL: Record<string, string> = { implementer: "implementa", reviewer
  * uppercase do papel é só CSS (`.chipRole`), sem mudar `ROLE_LABEL`. */
 function CardChip({ cardId, role, provider, label }: { cardId: string; role: string; provider: string | null; label: string | null }) {
   const metal = provider ? PROVIDER_GLYPH[provider] : undefined;
-  const roleLabel = ROLE_LABEL[role] ?? role;
+  const roleLabel = describeCardRole(role);
   return (
     <span className={styles.chip} data-part="card-chip" title={`${label ?? cardId} — ${roleLabel}`}>
       {metal ? (
@@ -240,6 +261,7 @@ function TaskItem({
   const humanMoveNotice = describeHumanMoveNotice(task.lastActor, task.cardAlive, task.cardId);
   const divergenceNotice = describeStatusDivergence(task.divergedStatus, task.divergedActor);
   const interruptNotice = task.interruptionReason;
+  const parsedPrompt = parseTaskPrompt(task.prompt);
   return (
     <div className={styles.item} data-task-item-id={task.id} onPointerDown={onDragPointerDown}>
       <div className={styles.itemTop}>
@@ -261,7 +283,7 @@ function TaskItem({
           {formatTaskAge(task.createdAt, now)}
         </span>
       </div>
-      <div className={styles.prompt}>{task.prompt || "(sem prompt)"}</div>
+      <div className={styles.prompt}>{parsedPrompt.original || t("task.noPrompt")}</div>
       {task.cards.length > 0 && (
         <div className={styles.chips}>
           {task.cards.map((c) => (
@@ -299,14 +321,14 @@ function TaskItem({
             <span className={styles.verdictChip} data-part="verdict-chip">
               {task.report?.verdict}
             </span>
-            propor conclusão
+            {t("task.propose")}
           </span>
           <span className={styles.proposeActions}>
             <button type="button" data-no-drag className={styles.proposeSecondary} onClick={() => setDismissedAtReportUpdatedAt(task.report?.updatedAt ?? null)}>
-              Mais uma rodada
+              {t("task.anotherRound")}
             </button>
             <button type="button" data-no-drag onClick={() => onApproveCompletion(task.id)}>
-              Concluir
+              {t("task.conclude")}
             </button>
           </span>
         </div>
@@ -323,7 +345,7 @@ function TaskItem({
       )}
       {interruptNotice && (
         <div className={styles.interruptNotice} data-part="interruption-reason">
-          interrompida: {interruptNotice}
+          {t("task.interrupted", { reason: interruptNotice })}
         </div>
       )}
       {alive && (
@@ -332,6 +354,203 @@ function TaskItem({
         </div>
       )}
     </div>
+  );
+}
+
+/** Fila click — all task fields, prompt edit via `updatePrompt`, and the
+ * live divergence that a board row can otherwise hide in a clamp. Portaled
+ * to `document.body` so screen-projected card transform never clips it.
+ * Does not go through App.tsx (settings modal lives there). */
+function TaskDetailModal({
+  task,
+  now,
+  readOnly,
+  onClose,
+}: {
+  task: TaskBoardItem;
+  now: number;
+  readOnly: boolean;
+  onClose: () => void;
+}) {
+  const { modalProps } = useModal({ onClose });
+  const parsed = parseTaskPrompt(task.prompt);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const creator = originBadge(task.firstActor);
+  const creatorCard = task.cards.find((c) => c.role === "implementer") ?? task.cards[0] ?? null;
+  const trail = describeTransitionTrail(task.statusTransitions);
+  const divergenceNotice = describeStatusDivergence(task.divergedStatus, task.divergedActor);
+  const humanMoveNotice = describeHumanMoveNotice(task.lastActor, task.cardAlive, task.cardId);
+  const waitingOn = waitingOnDep(task.deps, task.depStatuses);
+
+  async function submitPrompt(mode: "append" | "replace") {
+    const trimmed = draft.trim();
+    if (!trimmed || busy || readOnly) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await window.tasks.updatePrompt(task.id, trimmed, mode);
+      if (!res.ok) {
+        setError(t("task.detail.error", { error: res.error }));
+        return;
+      }
+      setDraft("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return createPortal(
+    <div
+      className="modal-root"
+      data-part="task-detail-modal"
+      onWheel={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    >
+      <div className="modal-backdrop" onClick={onClose} />
+      <div className={`modal ${styles.detailModal}`} {...modalProps} aria-labelledby="task-detail-title">
+        <div className={styles.detailHead}>
+          <h3 id="task-detail-title">{t("task.detail.title", { id: shortTaskId(task.id) })}</h3>
+          <button type="button" className={styles.detailClose} onClick={onClose}>
+            {t("common.close")}
+          </button>
+        </div>
+        <div className={styles.detailBody}>
+          <div className={styles.detailMeta}>
+            <span>
+              {t("task.detail.status")}: {statusLabel(task.status)}
+            </span>
+            <span data-part="task-age">{formatTaskAge(task.createdAt, now)}</span>
+            {task.provider && (
+              <span>
+                {t("task.detail.provider")}: {task.provider}
+              </span>
+            )}
+            {task.retryCount > 0 && <span>{t("task.detail.retry", { n: task.retryCount })}</span>}
+          </div>
+          <div className={styles.detailCreator} data-part="task-detail-creator">
+            {creator ? t("task.detail.createdBy", { actor: creator }) : t("task.detail.createdUnknown")}
+            {creatorCard && (
+              <span className={styles.detailCreatorCard}>{t("task.detail.creatorCard", { card: describeLinkedCard(creatorCard) })}</span>
+            )}
+          </div>
+          {readOnly && (
+            <div className={styles.detailHint} data-part="task-detail-frozen">
+              {t("task.detail.frozen")}
+            </div>
+          )}
+          {divergenceNotice && (
+            <div className={styles.divergenceNotice} data-part="status-divergence">
+              {divergenceNotice}
+            </div>
+          )}
+          {humanMoveNotice && (
+            <div className={styles.humanMoveNotice} data-part="human-move-notice">
+              {humanMoveNotice}
+            </div>
+          )}
+          {task.interruptionReason && (
+            <div className={styles.interruptNotice} data-part="interruption-reason">
+              {t("task.interrupted", { reason: task.interruptionReason })}
+            </div>
+          )}
+
+          <section>
+            <div className={styles.detailSectionTitle}>{t("task.detail.prompt")}</div>
+            <div className={styles.detailPromptBlock} data-part="task-detail-prompt-original">
+              <span className={styles.detailPromptLabel}>{t("task.detail.promptOriginal")}</span>
+              {parsed.original || t("task.noPrompt")}
+            </div>
+            {parsed.additions.map((addition, i) => (
+              <div key={`${addition.at}-${i}`} className={styles.detailPromptBlock} data-part="task-detail-prompt-added">
+                <span className={styles.detailPromptLabel}>{t("task.detail.promptAdded", { when: formatPromptWhen(addition.at) })}</span>
+                {addition.text}
+              </div>
+            ))}
+            {!readOnly && (
+              <>
+                <textarea
+                  data-part="task-detail-prompt-draft"
+                  data-no-drag
+                  className={styles.detailDraft}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder={t("task.detail.promptPlaceholder")}
+                  disabled={busy}
+                  aria-label={t("task.detail.prompt")}
+                />
+                <p className={styles.detailHint}>{t("task.detail.replaceHint")}</p>
+                {error && (
+                  <p className={styles.detailError} data-part="task-detail-error" role="alert">
+                    {error}
+                  </p>
+                )}
+                <div className="modal-actions">
+                  <button type="button" className="ghost" data-part="task-detail-replace" disabled={busy || !draft.trim()} onClick={() => void submitPrompt("replace")}>
+                    {t("task.detail.replace")}
+                  </button>
+                  <button type="button" className="primary" data-part="task-detail-append" disabled={busy || !draft.trim()} onClick={() => void submitPrompt("append")}>
+                    {t("task.detail.append")}
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+
+          <section>
+            <div className={styles.detailSectionTitle}>{t("task.detail.cards")}</div>
+            {task.cards.length === 0 ? (
+              <div className={styles.detailEmpty}>{t("task.detail.noCards")}</div>
+            ) : (
+              <div className={styles.chips}>
+                {task.cards.map((c) => (
+                  <CardChip key={c.cardId} cardId={c.cardId} role={c.role} provider={c.provider} label={c.label} />
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <div className={styles.detailSectionTitle}>{t("task.detail.verdicts")}</div>
+            {task.verdicts.length === 0 ? (
+              <div className={styles.detailEmpty}>{t("task.detail.noVerdicts")}</div>
+            ) : (
+              <div className={styles.detailList}>
+                {task.verdicts.map((v, i) => (
+                  <div key={`${v.cardId}-${v.at}-${i}`} className={styles.detailVerdict} data-part="task-detail-verdict">
+                    <span>{t("task.detail.verdictRound", { n: i + 1 })}</span>
+                    <span className={styles.chipId}>{v.cardId}</span>
+                    <span className={styles.chipRole}>{describeCardRole(v.role)}</span>
+                    <span className={styles.verdictChip}>{v.verdict ?? t("task.detail.verdictNone")}</span>
+                    {v.provider && <span className={styles.age}>{v.provider}</span>}
+                    <span className={styles.detailVerdictWhen}>{formatPromptWhen(v.at)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <div className={styles.detailSectionTitle}>{t("task.detail.history")}</div>
+            {trail ? <div className={styles.transitionTrail}>{trail}</div> : <div className={styles.detailEmpty}>{t("task.detail.noHistory")}</div>}
+          </section>
+
+          <section>
+            <div className={styles.detailSectionTitle}>{t("task.detail.deps")}</div>
+            {task.deps.length === 0 ? (
+              <div className={styles.detailEmpty}>{t("task.detail.noDeps")}</div>
+            ) : waitingOn ? (
+              <div className={styles.detailEmpty}>{waitingOn.status === undefined ? t("task.waitUnknown", { id: shortTaskId(waitingOn.depId) }) : t("task.wait", { id: shortTaskId(waitingOn.depId) })}</div>
+            ) : (
+              <div className={styles.detailEmpty}>{task.deps.map((id) => shortTaskId(id)).join(" · ")}</div>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -977,6 +1196,7 @@ function TaskCardInner({
   panX?: number;
   panY?: number;
 }) {
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [chartsOpen, setChartsOpen] = useState(false);
   const [sprintsOpen, setSprintsOpen] = useState(false);
   const [sprintsReloadKey, setSprintsReloadKey] = useState(0);
@@ -989,6 +1209,10 @@ function TaskCardInner({
 
   const viewingFrozen = viewingSprintId !== null && frozenTasks !== null;
   const boardTasks = viewingFrozen ? frozenTasks : tasks;
+  const openTask = openTaskId ? (boardTasks.find((item) => item.id === openTaskId) ?? null) : null;
+  useEffect(() => {
+    if (openTaskId && !openTask) setOpenTaskId(null);
+  }, [openTaskId, openTask]);
   const groups = groupTasksByColumn(boardTasks);
   // FASE 2, peça 3 — `onDropTask` é chamado de dentro de um listener de
   // `window` registrado no INÍCIO do arraste (`beginTaskDrag`); se um push
@@ -1226,8 +1450,7 @@ function TaskCardInner({
    * 2º pointerdown só pode significar que o 1º já deveria ter
    * terminado). */
   function beginTaskDrag(task: TaskBoardItem, e: React.PointerEvent) {
-    if (viewingFrozen) return;
-    if ((e.target as HTMLElement).closest("button, select, input, [data-no-drag]")) return;
+    if ((e.target as HTMLElement).closest("button, select, input, textarea, [data-no-drag]")) return;
     dragCleanupRef.current?.();
     const startX = e.clientX;
     const startY = e.clientY;
@@ -1241,17 +1464,18 @@ function TaskCardInner({
     function onMove(ev: PointerEvent) {
       if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) {
         moved = true;
-        setDraggingTaskId(task.id);
+        if (!viewingFrozen) setDraggingTaskId(task.id);
       }
-      if (!moved) return;
+      if (!moved || viewingFrozen) return;
       setDragOver(locateDropTarget(task.id, ev.clientX, ev.clientY));
     }
     function onUp(ev: PointerEvent) {
-      const target = moved ? locateDropTarget(task.id, ev.clientX, ev.clientY) : null;
+      const target = !viewingFrozen && moved ? locateDropTarget(task.id, ev.clientX, ev.clientY) : null;
       cleanup();
       setDraggingTaskId(null);
       setDragOver(null);
       if (target) onDropTask(task, target.column, target.index);
+      else if (!moved) setOpenTaskId(task.id);
     }
     function onCancel() {
       // Gesto interrompido pelo SO/navegador antes de um `pointerup` real
@@ -1433,6 +1657,9 @@ function TaskCardInner({
         />
       )}
       {chartsOpen && <ChartsPanel boardId={activeBoardId} tasks={boardTasks} liveTransitions={!viewingFrozen} />}
+      {openTask && (
+        <TaskDetailModal task={openTask} now={now} readOnly={viewingFrozen} onClose={() => setOpenTaskId(null)} />
+      )}
     </CardFrame>
   );
 }
