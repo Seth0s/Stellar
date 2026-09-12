@@ -72,6 +72,35 @@ export function renewsHumanInputGateClock(origin: DeliveryWriteOrigin): boolean 
   return origin === "human";
 }
 
+/**
+ * Kind of byte `deliverCard` writes through the shared PTY write.
+ * `"body"` is the one new turn. `"enter"` is the submit / retry.
+ * `"composer_clear"` is give-up Ctrl+U — leftover text, not a turn.
+ */
+export type DeliveryWriteKind = "body" | "enter" | "composer_clear";
+
+/**
+ * Which programmatic writes open the activity-bar turn window.
+ *
+ * Why this is not `pty-registry.write` and not `typeAndSubmit`:
+ *   `write()` is the sink for human keys, the delivery body, retry Enter,
+ *   composer clear, interrupt, and deferred human flush. Even filtered
+ *   to origin `"delivery"`, retry Enter and composer clear would fire.
+ *   After `turn_complete`, that reopens the window; the next chrome
+ *   byte (`data`) then keeps the bar on — the 1fcd36b stuck-on class.
+ *   `typeAndSubmit` is only the FIFO: notifying on enqueue lights the
+ *   bar during readiness/human-input gates; notifying after await is
+ *   too late (the agent may already have finished).
+ *
+ * `deliverCard` is the only caller that knows the body from the retries.
+ * The renderer still has one activity truth: this maps to the existing
+ * `"input"` event in `terminal-activity-decision.ts`, same as a keystroke.
+ * Echo and process output never go through here — they arrive as `data`.
+ */
+export function deliveryWriteOpensTurn(kind: DeliveryWriteKind): boolean {
+  return kind === "body";
+}
+
 export interface WriteReadinessInput {
   /** Has the card's process emitted at least one chunk of output since it
    * was spawned? `false` for the entire window before the TUI has drawn

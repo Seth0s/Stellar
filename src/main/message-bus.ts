@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
 import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, type DeliveryWriteKind } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
 import {
@@ -597,6 +597,14 @@ export function createMessageBus(
      * escuta e, só pro provider `claude`, usa isto como o sinal
      * DEFINITIVO de fim de turno em vez do timer de silêncio de 900ms. */
     notifyTurnComplete: (cardId: string) => void;
+    /**
+     * Activity bar (1fcd36b limit): a programmatic delivery just wrote
+     * the BODY into this card. Same semantic as a keystroke — the
+     * renderer applies `"input"` and opens the turn window. Optional:
+     * test doubles stay source-compatible. Must NOT be invoked on
+     * retry Enter or composer clear — see `deliveryWriteOpensTurn`.
+     */
+    notifyCardInput?: (cardId: string) => void;
     /** Bug real relatado (Pop!_OS, 2026-09-09) — `server.on("error")`
      * abaixo só fazia `console.error`: uma falha de bind (2ª instância que
      * já roubou o socket, ver `app.requestSingleInstanceLock()` em
@@ -1131,11 +1139,16 @@ export function createMessageBus(
       }
     }
 
-    const writeDelivery = (data: string) => {
+    const writeDelivery = (data: string, kind: DeliveryWriteKind) => {
       if (Object.prototype.hasOwnProperty.call(callbacks, "writeToCardWithOrigin") && callbacks.writeToCardWithOrigin) {
         callbacks.writeToCardWithOrigin(target, data, "delivery");
       }
       else callbacks.writeToCard(target, data);
+      // Body only — retry Enter / composer clear share this write path
+      // but must not reopen the turn window (1fcd36b). Not
+      // `pty-registry.write` (too low: every delivery byte) and not
+      // `typeAndSubmit` (too early/late: the FIFO, not the body).
+      if (deliveryWriteOpensTurn(kind)) callbacks.notifyCardInput?.(target);
     };
 
     try {
@@ -1154,7 +1167,7 @@ export function createMessageBus(
       // stay raw regardless (see shouldUseBracketedPaste).
       const readinessForPaste = callbacks.getCardWriteReadiness(target);
       const bracketedPasteMode = readinessForPaste?.bracketedPasteMode === true;
-      writeDelivery(deliveryTextBytes(text, bracketedPasteMode));
+      writeDelivery(deliveryTextBytes(text, bracketedPasteMode), "body");
       // Sticky item "send_to_card não confirma envio" (2026-09-03) — a
       // regex de placeholder sozinha só cobre UM sintoma (CLI que colapsa
       // um paste grande num chip "[Pasted text ...]"); uma mensagem curta
@@ -1172,7 +1185,7 @@ export function createMessageBus(
       for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
         await delay(SEND_ENTER_DELAY_MS);
         if (shouldPressEnterOnAttempt(attempt, previousResult)) {
-          writeDelivery("\r");
+          writeDelivery("\r", "enter");
         }
         await delay(SEND_ENTER_CONFIRM_DELAY_MS);
         const check = await readCardText(target, 8);
@@ -1197,7 +1210,7 @@ export function createMessageBus(
       // Achado 4 — delivery that gave up must not leave text in the
       // composer for the next delivery to concatenate with. Ctrl+U×2.
       if (previousResult !== "sent") {
-        writeDelivery(composerClearSequence());
+        writeDelivery(composerClearSequence(), "composer_clear");
       }
     } finally {
       if (deliveryStarted) callbacks.endCardDelivery?.(target);

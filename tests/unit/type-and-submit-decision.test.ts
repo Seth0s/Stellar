@@ -5,6 +5,7 @@ import {
   decideDeliveryGate,
   renewsHumanInputGateClock,
   shouldPressEnterOnAttempt,
+  deliveryWriteOpensTurn,
   looksLikeSubmitStarted,
   needleVisibleOnScreen,
   composerClearSequence,
@@ -285,6 +286,14 @@ enter steer`;
         hasNewActivitySinceWrite: true,
       }),
     ).toBe("sent");
+  });
+});
+
+describe("deliveryWriteOpensTurn", () => {
+  it("só o corpo da entrega abre o turno; Enter de retentativa e limpeza não", () => {
+    expect(deliveryWriteOpensTurn("body")).toBe(true);
+    expect(deliveryWriteOpensTurn("enter")).toBe(false);
+    expect(deliveryWriteOpensTurn("composer_clear")).toBe(false);
   });
 });
 

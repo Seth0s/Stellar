@@ -23,8 +23,10 @@
  *   - `signalProven` — this PTY has delivered a real end-of-turn at
  *     least once. Unlocks "trust the signal, never the silence timer".
  *   - `turnOpen` — a new turn has been opened by INPUT (keystroke,
- *     paste) since the last end-of-turn. Output that arrives while the
- *     window is closed is chrome, not work, and must not relight.
+ *     paste, or a `send_to_card` body delivered from main) since the
+ *     last end-of-turn. Output that arrives while the window is closed
+ *     is chrome, not work, and must not relight. Echo, process output,
+ *     and deliverCard's retry Enter are not INPUT.
  *
  * Cards that never prove the signal (the photographed board session
  * had only another tool's on-session-end, never the Stellar Stop hook)
@@ -59,7 +61,7 @@ export type TerminalActivityState = {
   isActive: boolean;
   /** Latch for the life of this PTY — reset on respawn. */
   signalProven: boolean;
-  /** Opened by input, closed by turn_complete / exit / interrupt. */
+  /** Opened by input (keystroke / paste / send_to_card body), closed by turn_complete / exit / interrupt. */
   turnOpen: boolean;
 };
 
