@@ -79,7 +79,20 @@ export type ConnectorRow = {
    * granularities, kept deliberately separate rather than merged into
    * one fragile dual-source-of-truth graph — `kind` here stays whatever
    * an orchestrator wants it to mean for ITS OWN reading, nothing in
-   * this app ever dispatches off it. */
+   * this app ever dispatches off it.
+   *
+   * Two kinds THIS app does act on for report/idle push routing
+   * (message-bus.ts / report-notify-routing.ts), still never for task
+   * auto-dispatch:
+   * - `'spawned'` — lineage from `spawn_agent` (primary route; live
+   *   spawner wins unconditionally).
+   * - `'modified'` — auto-connect from `send_to_card` (and other
+   *   mutation cmds). For report notify this is ONLY the directive
+   *   FALLBACK when no live `spawned` edge exists — picked by highest
+   *   `updated_at` into the reporting card (`pickLatestDirectiveSender`).
+   *   Persists across main-process restarts; do not reintroduce an
+   *   in-memory shadow of this edge. Never promote `modified` to
+   *   `spawned` just because it was used as a route. */
   kind: string | null;
   /** Short free-text motivation for the connector — "aplicou em queue.ts",
    * "ctx: nota fixada" — set once at creation time from whatever text was
@@ -968,6 +981,20 @@ export function openStore(userDataDir: string) {
   const listAllConnectorsStmt = db.prepare(
     "SELECT id, board_id, from_card_id, to_card_id, updated_at, kind, label FROM connectors",
   );
+  // DESIGN-BACKLOG.md §0 "Relatorio nao chega ao orquestrador depois de
+  // um restart" — the directive fallback for report/idle notify. Same
+  // selection rule as `pickLatestDirectiveSender` (report-notify-
+  // routing.ts): inbound `modified` only, highest `updated_at` wins.
+  // Exposed for callers that already hold a store handle and don't want
+  // to pull the full connector list; message-bus keeps using
+  // `listAllConnectors` + the pure picker so unit tests can inject edges
+  // without a real DB.
+  const findLatestDirectiveSenderStmt = db.prepare(`
+    SELECT from_card_id FROM connectors
+    WHERE to_card_id = ? AND kind = 'modified'
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `);
   const upsertConnectorStmt = db.prepare(`
     INSERT INTO connectors (id, board_id, from_card_id, to_card_id, updated_at, kind, label)
     VALUES (@id, @board_id, @from_card_id, @to_card_id, @updated_at, @kind, @label)
@@ -1638,6 +1665,12 @@ export function openStore(userDataDir: string) {
     unarchiveCard: (id: string) => unarchiveCardStmt.run(id),
     listConnectors: (boardId: string): ConnectorRow[] => listConnectorsStmt.all(boardId) as ConnectorRow[],
     listAllConnectors: (): ConnectorRow[] => listAllConnectorsStmt.all() as ConnectorRow[],
+    /** Most recent `send_to_card` auto-connect into `toCardId`, or null.
+     * Same rule as `pickLatestDirectiveSender` — see stmt comment above. */
+    findLatestDirectiveSender: (toCardId: string): string | null => {
+      const row = findLatestDirectiveSenderStmt.get(toCardId) as { from_card_id: string } | undefined;
+      return row?.from_card_id ?? null;
+    },
     upsertConnector: (row: ConnectorRow) => upsertConnectorStmt.run({ ...row, kind: row.kind ?? null, label: row.label ?? null }),
     deleteConnector: (id: string) => deleteConnectorStmt.run(id),
     /** Returns whether a row actually existed to update. */

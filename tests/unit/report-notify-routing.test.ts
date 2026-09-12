@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { decideReportNotifyTarget, type ReportRoutingInput } from "../../src/main/report-notify-routing";
+import {
+  decideReportNotifyTarget,
+  pickLatestDirectiveSender,
+  type ReportRoutingInput,
+  type DirectiveConnectorEdge,
+} from "../../src/main/report-notify-routing";
 
 // DESIGN-BACKLOG.md §0 "Push de report se perde em silencio quando o
 // orquestrador READOTA um card" (achado ao vivo, 2026-09-11) — a causa raiz
@@ -13,9 +18,13 @@ import { decideReportNotifyTarget, type ReportRoutingInput } from "../../src/mai
 // pra W (uso normal num board multi-agente, não abuso) — a diretiva de B
 // vencia e o report de W ia pra B, nunca pra A, que segue vivo esperando.
 // Corrigido invertendo a precedência: linhagem de spawn viva ganha sempre;
-// diretiva só serve de fallback pra quando NÃO há spawner vivo registrado
-// (exatamente o caso que motivou a tarefa original — o que sumiu no
-// restart foi o CONECTOR, não a vivacidade do spawner).
+// diretiva só serve de fallback pra quando NÃO há spawner vivo registrado.
+//
+// RODADA 3 (DESIGN-BACKLOG.md §0 "Relatorio nao chega ao orquestrador
+// depois de um restart") — a diretiva deixa de viver num Map em memória e
+// passa a ser lida do conector `modified` já persistido. `pickLatestDirectiveSender`
+// cobre a escolha entre várias arestas; o teste de restart em
+// message-bus-report-notify.test.ts prova o ciclo completo.
 
 const noOne: ReportRoutingInput = {
   directiveFromId: null,
@@ -127,5 +136,54 @@ describe("decideReportNotifyTarget", () => {
         spawnedByAlive: true,
       }),
     ).toEqual({ targetId: "card-c-novo-responsavel", source: "spawned" });
+  });
+});
+
+describe("pickLatestDirectiveSender", () => {
+  const edge = (
+    partial: Partial<DirectiveConnectorEdge> & Pick<DirectiveConnectorEdge, "from_card_id" | "to_card_id" | "updated_at">,
+  ): DirectiveConnectorEdge => ({
+    kind: "modified",
+    ...partial,
+  });
+
+  it("sem aresta modified inbound => null", () => {
+    expect(pickLatestDirectiveSender([], "worker")).toBeNull();
+    expect(
+      pickLatestDirectiveSender([edge({ kind: "spawned", from_card_id: "a", to_card_id: "worker", updated_at: 1 })], "worker"),
+    ).toBeNull();
+  });
+
+  it("uma aresta modified inbound => o from_card_id dela", () => {
+    expect(pickLatestDirectiveSender([edge({ from_card_id: "orch", to_card_id: "worker", updated_at: 10 })], "worker")).toBe("orch");
+  });
+
+  it("várias arestas modified pro mesmo alvo => maior updated_at ganha (último que briefou)", () => {
+    // Justificativa: espelha resolveLiveSpawner (spawned mais recente) e o
+    // Map antigo (último send_to_card). Um brief posterior de B não vira
+    // linhagem spawned — só displace A no FALLBACK de diretiva.
+    expect(
+      pickLatestDirectiveSender(
+        [
+          edge({ from_card_id: "orch-a", to_card_id: "worker", updated_at: 100 }),
+          edge({ from_card_id: "orch-b", to_card_id: "worker", updated_at: 200 }),
+          edge({ from_card_id: "orch-c", to_card_id: "worker", updated_at: 150 }),
+        ],
+        "worker",
+      ),
+    ).toBe("orch-b");
+  });
+
+  it("ignora modified outbound e arestas pra outros cards", () => {
+    expect(
+      pickLatestDirectiveSender(
+        [
+          edge({ from_card_id: "worker", to_card_id: "orch", updated_at: 999 }),
+          edge({ from_card_id: "orch", to_card_id: "other", updated_at: 999 }),
+          edge({ from_card_id: "orch", to_card_id: "worker", updated_at: 1 }),
+        ],
+        "worker",
+      ),
+    ).toBe("orch");
   });
 });

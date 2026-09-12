@@ -2,7 +2,7 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
-import { decideReportNotifyTarget } from "./report-notify-routing";
+import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
@@ -1278,22 +1278,18 @@ export function createMessageBus(
   }
 
   /** DESIGN-BACKLOG.md §0 "Push de report se perde em silencio quando o
-   * orquestrador READOTA um card" — a linhagem `spawned` sozinha (acima)
-   * fica cega assim que um card é readotado (briefado via `send_to_card`
-   * em vez de `spawn_agent`): nunca existiu conector `spawned` pra ele, ou
-   * o que existia sumiu num restart. `lastDirectiveFrom` é a 2ª fonte que
-   * fecha esse buraco — quem foi o ÚLTIMO card a mandar uma diretiva via
-   * `send_to_card` pra `cardId`, gravado direto abaixo (`recordDirectiveSent`,
-   * chamado pelo cmd `send`), de propósito NUNCA lido do grafo de
-   * conectores (esse já é o kind `modified` que `AUTO_CONNECT_CMDS` desenha,
-   * mas ler ELE aqui reabriria a mesma dependência de um campo que um
-   * usuário pode apagar/redesenhar à mão sem saber que está desarmando o
-   * roteamento — ver a divergência de doc do `set_connector_kind`
-   * corrigida abaixo). Em memória, de propósito: reseta a cada restart do
-   * processo main, exatamente como a linhagem de spawn efetivamente reseta
-   * nesse mesmo cenário (o achado ao vivo que motivou isto) — não há nada
-   * pra "recuperar" depois de um restart além de esperar o próximo
-   * `send_to_card` real repovoar a entrada.
+   * orquestrador READOTA um card" + "Relatorio nao chega ao orquestrador
+   * depois de um restart" — a linhagem `spawned` sozinha (acima) fica
+   * cega assim que um card é readotado (briefado via `send_to_card` em
+   * vez de `spawn_agent`): nunca existiu conector `spawned` pra ele. A
+   * 2ª fonte fecha esse buraco lendo o conector `kind === "modified"`
+   * que `AUTO_CONNECT_CMDS` já grava no SQLite em todo `send` bem-
+   * sucedido (`pickLatestDirectiveSender` em report-notify-routing.ts) —
+   * a mesma tabela, o mesmo `updated_at`, sem um Map em memória do
+   * processo que nascia vazio depois de um restart (RODADA 3: report
+   * gravado, `targetId` null, ninguém avisado). Não promove `modified`
+   * a linhagem: a aresta continua decorativa/auto-connect no grafo; só
+   * passa a ser consultada como FALLBACK de rota.
    *
    * Precedência entre as duas fontes (`decideReportNotifyTarget`,
    * report-notify-routing.ts, ver o comentário de topo daquele arquivo pra
@@ -1305,34 +1301,19 @@ export function createMessageBus(
    * manda uma mensagem pra W a meio do trabalho (uso normal, não abuso),
    * e o report de W ia pra B, nunca pra A, que segue vivo esperando. A
    * linhagem de spawn, quando existe e está viva, é sempre o sinal mais
-   * confiável de quem quer o report — o caso que motivou esta tarefa
-   * nunca dependia de derrubar isso: o que sumiu no restart foi o
-   * CONECTOR `spawned` em si (perda de dado), não a vivacidade do
-   * orquestrador (card 330 sobreviveu ao restart, mesmo id, sempre vivo)
-   * — então `spawnedById` cai pra `null` (não "presente mas morto") e a
-   * resolução cai pro fallback de diretiva de qualquer jeito. O que essa
-   * inversão perde, de propósito: uma troca de responsável DELIBERADA (A
-   * spawna W, depois passa a supervisão pra C, A segue vivo mas não quer
-   * mais saber) continua indo pra A enquanto A não sair e seu conector
-   * `spawned` não for tocado — sem heurística nova pra tentar adivinhar
-   * "isso foi um hand-off ou só uma mensagem". A válvula de escape já
-   * existe e não pede código novo: `set_connector_kind` (mcp-server.ts)
-   * deixa qualquer card retitular o PRÓPRIO conector como `"spawned"` —
-   * `store.ts`'s `setConnectorKind` toca `updated_at` no write, e
-   * `resolveLiveSpawner` acima já pega sempre o `spawned` mais recente —
-   * então C assumir de propósito é uma chamada de tool de distância.
+   * confiável de quem quer o report — o caso que motivou a readoção
+   * nunca dependia de derrubar isso: o que faltava era o CONECTOR
+   * `spawned` em si (ausência), não a vivacidade do orquestrador — então
+   * `spawnedById` cai pra `null` (não "presente mas morto") e a
+   * resolução cai pro fallback de diretiva de qualquer jeito. Várias
+   * arestas `modified` pro mesmo alvo: a de maior `updated_at` ganha
+   * (espelha `resolveLiveSpawner` e o "último que mandou" do Map antigo).
    * O caso comum (spawn, card reporta, nenhuma diretiva no meio) nunca
-   * povoa este mapa — cai direto na linhagem de spawn, sem nenhuma
-   * mudança de comportamento em nenhuma das duas rodadas. */
-  const lastDirectiveFrom = new Map<string, string>();
-
-  function recordDirectiveSent(fromCardId: string, toCardId: string) {
-    lastDirectiveFrom.set(toCardId, fromCardId);
-  }
-
+   * acha `modified` inbound — cai direto na linhagem de spawn. */
   function resolveNotifyTarget(cardId: string): string | null {
+    const connectors = callbacks.listAllConnectors();
     const spawnedById = resolveLiveSpawner(cardId);
-    const directiveFromId = lastDirectiveFrom.get(cardId) ?? null;
+    const directiveFromId = pickLatestDirectiveSender(connectors, cardId);
     return decideReportNotifyTarget({
       directiveFromId,
       directiveFromAlive: directiveFromId !== null && callbacks.isCardAlive(directiveFromId),
@@ -1686,18 +1667,10 @@ export function createMessageBus(
     const res = await dispatchRequest(req);
     const kind = AUTO_CONNECT_CMDS[req.cmd];
     if (kind && res.ok && "target" in req && req.target && "requesterId" in req && req.requesterId) {
+      // `send` → kind "modified" is also the persisted directive route
+      // (`pickLatestDirectiveSender` / resolveNotifyTarget). No separate
+      // in-memory Map: the connector row is the single source of truth.
       callbacks.onAutoConnect(req.requesterId, req.target, kind, deriveAutoConnectLabel(req));
-    }
-    // DESIGN-BACKLOG.md §0 "Push de report se perde em silencio quando o
-    // orquestrador READOTA um card" — grava a diretiva DIRETO aqui, nunca
-    // via o conector `modified` que `onAutoConnect` acima desenha (esse é
-    // só visual/decorativo, pode ser apagado ou re-tipado à mão sem
-    // desarmar o roteamento — ver `resolveNotifyTarget`/
-    // report-notify-routing.ts). Só `send` conta como diretiva: é o único
-    // cmd que fala com um card capaz de chamar `report` de volta —
-    // `browser_*` mira cards de navegador, que nunca reportam.
-    if (req.cmd === "send" && res.ok && req.target && req.requesterId) {
-      recordDirectiveSent(req.requesterId, req.target);
     }
     return res;
   }
