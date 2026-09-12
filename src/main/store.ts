@@ -161,6 +161,12 @@ export type TaskRow = {
    * board to check for autonomous mode) — pure external-orchestrator
    * bookkeeping only, same as before this column existed. */
   board_id: string | null;
+  /** Working directory for auto-dispatch / auto-retry spawns. Set at
+   * `create_task` (or later via `update_task`); `null` means "use the
+   * board root" — the same fallback `App.tsx` already applied when spawn
+   * params omitted cwd, now declared on the task instead of hardcoded
+   * `undefined` in `onTaskDone`/`retryOrFail`. No repo-heuristic fill-in. */
+  cwd: string | null;
   result_json: string | null;
   deps_json: string | null;
   /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 — started
@@ -582,6 +588,14 @@ function migrate(db: Database.Database) {
   // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — membership vivo.
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN sprint_id TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  // Auto-dispatch cwd — without this, onTaskDone/retryOrFail hardcoded
+  // `cwd: undefined` and the agent opened at the board root (often $HOME),
+  // stuck on "trust this folder" until exit 129 + another identical card.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN cwd TEXT`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -1036,7 +1050,7 @@ export function openStore(userDataDir: string) {
     )
   `);
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at`;
   // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
   // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` de
   // propósito: uma declaração estacionada NÃO pode virar o last_actor,
@@ -1077,11 +1091,11 @@ export function openStore(userDataDir: string) {
   const listTasksByBoardStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE board_id = ? ORDER BY created_at ASC`);
   const getTaskStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`);
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @sprint_id, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @sprint_id, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
-      card_id = excluded.card_id, board_id = excluded.board_id, result_json = excluded.result_json, deps_json = excluded.deps_json,
+      card_id = excluded.card_id, board_id = excluded.board_id, cwd = excluded.cwd, result_json = excluded.result_json, deps_json = excluded.deps_json,
       retry_count = excluded.retry_count, attempted_providers_json = excluded.attempted_providers_json,
       max_retries = excluded.max_retries, fallback_providers_json = excluded.fallback_providers_json,
       "order" = excluded."order", suggested_order = excluded.suggested_order, implicit_order = excluded.implicit_order,

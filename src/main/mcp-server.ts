@@ -366,6 +366,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           provider: z.string().optional().describe("Which provider is meant to run it"),
           cardId: z.string().optional().describe("The card currently working on it, if one already exists — status starts 'running' when given, 'pending' otherwise"),
           boardId: z.string().optional().describe("Which board this task belongs to — required for auto-dispatch (peça 3) if the task has no cardId yet; inferred from cardId's board when omitted"),
+          cwd: z
+            .string()
+            .optional()
+            .describe(
+              "Working directory for auto-dispatch/auto-retry of this task. Omit to keep the board-root fallback (same as before). Pass the repo path when the task must NOT open at the board root — otherwise a dependent spawn can land on 'trust this folder' and exit 129.",
+            ),
           deps: z.array(z.string()).optional().describe("Ids of other tasks this one depends on — auto-dispatched once all are 'done', but only if this task's board is autonomous"),
           maxRetries: z.number().optional().describe("Auto-retry budget (DESIGN-BACKLOG.md item 60 peça 4) — only applies inside an autonomous board; default 2 when omitted"),
           fallbackProviders: z
@@ -382,8 +388,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ),
         },
       },
-      async ({ prompt, provider, cardId, boardId, deps, maxRetries, fallbackProviders, suggestedOrder }) => {
-        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, boardId, deps, maxRetries, fallbackProviders, suggestedOrder });
+      async ({ prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder }) => {
+        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -397,6 +403,13 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
           status: z.string().optional().describe("New status — e.g. 'running', 'done', 'failed'"),
           cardId: z.string().nullable().optional().describe("New card working on it, or null to detach once its own card closed — omit to leave unchanged"),
+          cwd: z
+            .string()
+            .nullable()
+            .optional()
+            .describe(
+              "Set or clear this task's working directory for auto-dispatch/retry. null clears back to the board-root fallback; omit leaves unchanged.",
+            ),
           result: z.unknown().optional().describe("Any JSON value — the task's outcome"),
           incrementRetry: z.boolean().optional().describe("Bump the task's retry counter by 1 — e.g. after deciding to retry a task whose agent exited without reporting"),
           attemptedProvider: z.string().optional().describe("Append a provider to the task's attempted-providers list — e.g. when reassigning to a different provider after a failure"),
@@ -404,12 +417,13 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
         },
       },
-      async ({ taskId, status, cardId, result, incrementRetry, attemptedProvider, suggestedOrder, callerCardId }) => {
+      async ({ taskId, status, cardId, cwd, result, incrementRetry, attemptedProvider, suggestedOrder, callerCardId }) => {
         const res = await opts.handleRequest({
           cmd: "update_task",
           taskId,
           status,
           cardId,
+          cwd,
           result,
           incrementRetry,
           attemptedProvider,
@@ -424,7 +438,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_tasks",
       {
         description:
-          "List every recorded task — id, prompt, provider, status, current card (if any), result, deps, retryCount, attemptedProviders, order/suggestedOrder. Survives card closes and app restarts.",
+          "List every recorded task — id, prompt, provider, status, current card (if any), cwd, result, deps, retryCount, attemptedProviders, order/suggestedOrder. Survives card closes and app restarts.",
         inputSchema: {
           boardId: z.string().optional().describe("Only tasks belonging to this board — omit to list every task across every board, same as before this param existed"),
         },

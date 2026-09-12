@@ -6,6 +6,7 @@ import {
   stampFailureKindJson,
   failureKindFromResultJson,
   interruptionReasonFromResultJson,
+  mergeAgentResultJson,
 } from "../../src/main/failure-kind-decision";
 import { bucketForStatus, decideSprintClose } from "../../src/main/sprint-close-decision";
 
@@ -62,6 +63,18 @@ describe("result_json helpers", () => {
     expect(failureKindFromResultJson('{"failureKind":"julgada"}')).toBe("julgada");
     expect(interruptionReasonFromResultJson('{"failureKind":"interrompida","error":"exit 129"}')).toBe("exit 129");
     expect(interruptionReasonFromResultJson('{"failureKind":"julgada","error":"nope"}')).toBeNull();
+  });
+
+  it("mergeAgentResultJson ignora failureKind do agente e preserva julgada existente", () => {
+    const existing = JSON.stringify({ failureKind: "julgada", error: "desistiu" });
+    const merged = mergeAgentResultJson({ failureKind: "interrompida", note: "try forge" }, existing);
+    expect(JSON.parse(merged)).toEqual({ note: "try forge", failureKind: "julgada" });
+  });
+
+  it("mergeAgentResultJson sem kind prévio: agente não consegue plantar failureKind", () => {
+    const merged = mergeAgentResultJson({ failureKind: "interrompida", error: "x" }, null);
+    expect(JSON.parse(merged)).toEqual({ error: "x" });
+    expect(failureKindFromResultJson(merged)).toBeNull();
   });
 });
 

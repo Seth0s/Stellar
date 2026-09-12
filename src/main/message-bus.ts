@@ -8,7 +8,8 @@ import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPres
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
 import { describeStatusHeldWarning } from "./status-write-decision";
-import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, type FailureSource } from "./failure-kind-decision";
+import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, type FailureSource } from "./failure-kind-decision";
+import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -316,6 +317,10 @@ export type BusRequest =
       provider?: string;
       cardId?: string;
       boardId?: string;
+      /** Working directory for auto-dispatch/retry. Omit/`undefined` =
+       * task carries `cwd: null` and spawn falls back to the board root
+       * (same as before — declared, not inferred from a repo heuristic). */
+      cwd?: string;
       deps?: string[];
       maxRetries?: number;
       fallbackProviders?: string[];
@@ -330,6 +335,9 @@ export type BusRequest =
       taskId?: string;
       status?: string;
       cardId?: string | null;
+      /** Set/clear the task's own cwd for later auto-dispatch. `null`
+       * clears back to board-root fallback; omit leaves unchanged. */
+      cwd?: string | null;
       result?: unknown;
       incrementRetry?: boolean;
       attemptedProvider?: string;
@@ -930,6 +938,7 @@ export function createMessageBus(
       status: row.status,
       cardId: row.card_id,
       boardId: row.board_id,
+      cwd: row.cwd,
       result: row.result_json ? JSON.parse(row.result_json) : null,
       deps: row.deps_json ? JSON.parse(row.deps_json) : [],
       retryCount: row.retry_count,
@@ -2130,6 +2139,9 @@ export function createMessageBus(
         status: req.cardId ? "running" : "pending",
         card_id: req.cardId ?? null,
         board_id: boardId,
+        // Explicit only — never inferred from card/board/repo. Empty string
+        // collapses to null (same as omitted): board-root fallback at dispatch.
+        cwd: resolveTaskDispatchCwd(req.cwd) ?? null,
         result_json: null,
         deps_json: req.deps ? JSON.stringify(req.deps) : null,
         retry_count: 0,
@@ -2167,9 +2179,12 @@ export function createMessageBus(
       // `existing.status` as if it were an alignment proposal (that used
       // to clear a live divergence in silence). Other fields still update.
       const statusProposed = req.status !== undefined;
-      let result_json = req.result !== undefined ? JSON.stringify(req.result) : existing.result_json;
-      // DESIGN-BACKLOG.md §2.1 "Falha TIPADA" — explicit agent fail is
-      // julgada (stays in "falhou", counts in sprint snapshot).
+      // DESIGN-BACKLOG.md §2.1 "Falha TIPADA" — failureKind is always
+      // derived by the app, never accepted from an agent's `result`.
+      // Strip forged kinds; keep any server stamp already on the row.
+      let result_json =
+        req.result !== undefined ? mergeAgentResultJson(req.result, existing.result_json) : existing.result_json;
+      // Explicit agent fail is julgada (stays in "falhou", counts in sprint).
       if (statusProposed && req.status === "failed") {
         result_json = stampFailureKindJson(result_json, decideFailureKind("explicit_failed"));
       }
@@ -2783,11 +2798,15 @@ export function createMessageBus(
       const requestId = randomUUID();
       const params = {
         provider: task.provider ?? "claude",
-        cwd: undefined,
+        // Task's own cwd when set; `undefined` keeps App.tsx's
+        // `cwd || activeBoardCwd` board-root fallback (declared, not
+        // a hardcoded omission). See task-dispatch-decision.ts.
+        cwd: resolveTaskDispatchCwd(task.cwd),
         resumeId: undefined,
         depth: 0,
         reason: `auto-dispatch: task ${task.id} (deps satisfied)`,
         model: undefined,
+        label: resolveTaskDispatchLabel(task),
       };
       // Mark `running` right away (not after the promise settles) so a
       // second, near-simultaneous `onTaskDone` call for a sibling dep
@@ -2860,11 +2879,12 @@ export function createMessageBus(
     const requestId = randomUUID();
     const params = {
       provider,
-      cwd: undefined,
+      cwd: resolveTaskDispatchCwd(task.cwd),
       resumeId: undefined,
       depth: 0,
       reason: `auto-retry: task ${task.id} (tentativa ${task.retry_count + 1} de ${maxRetries})`,
       model: undefined,
+      label: resolveTaskDispatchLabel(task),
     };
     const retrying: TaskRow = {
       ...task,

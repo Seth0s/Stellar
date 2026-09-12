@@ -96,3 +96,26 @@ export function interruptionReasonFromResultJson(resultJson: string | null | und
     return null;
   }
 }
+
+/**
+ * Serialize an agent-supplied `update_task.result` for storage.
+ * `failureKind` is NEVER accepted from outside — stripped if present —
+ * and any server-derived kind already on the row is preserved so an
+ * agent cannot downgrade julgada→interrompida (or wipe the stamp) by
+ * sending `result: { failureKind: "interrompida" }` without `status`.
+ */
+export function mergeAgentResultJson(agentResult: unknown, existingJson: string | null | undefined): string {
+  const existingKind = failureKindFromResultJson(existingJson);
+  if (agentResult !== null && typeof agentResult === "object" && !Array.isArray(agentResult)) {
+    const copy: Record<string, unknown> = { ...(agentResult as Record<string, unknown>) };
+    delete copy.failureKind;
+    if (existingKind) copy.failureKind = existingKind;
+    return JSON.stringify(copy);
+  }
+  // Scalar/array: no place for a forged failureKind. Keep prior kind via
+  // a thin envelope so a result rewrite cannot erase a julgada stamp.
+  if (existingKind) {
+    return JSON.stringify({ value: agentResult, failureKind: existingKind });
+  }
+  return JSON.stringify(agentResult);
+}
