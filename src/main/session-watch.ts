@@ -554,16 +554,16 @@ async function findOpenCodeSession(cwd: string, spawnedAtMs: number, matchDeadli
 const MIN_CONTENT_BYTES = 16;
 
 function fileEvidence(path: string): ResumeTargetEvidence {
-  if (!existsSync(path)) return { exists: false, hasContent: false };
+  if (!existsSync(path)) return { exists: false, hasContent: false, mtimeMs: null };
   try {
-    const size = statSync(path).size;
-    return { exists: true, hasContent: size >= MIN_CONTENT_BYTES };
+    const st = statSync(path);
+    return { exists: true, hasContent: st.size >= MIN_CONTENT_BYTES, mtimeMs: st.mtimeMs };
   } catch {
     // Achado entre o `existsSync` e o `statSync` (arquivo apagado por
     // fora bem no meio da checagem) — trata como "não existe", nunca
     // deixa uma exceção subir e derrubar o spawn inteiro por causa de uma
     // checagem que é só uma guarda de sanidade.
-    return { exists: false, hasContent: false };
+    return { exists: false, hasContent: false, mtimeMs: null };
   }
 }
 
@@ -605,14 +605,24 @@ function findCursorSessionEvidence(resumeId: string): ResumeTargetEvidence {
   try {
     hashDirs = readdirSync(chatsDir);
   } catch {
-    return { exists: false, hasContent: false };
+    return { exists: false, hasContent: false, mtimeMs: null };
   }
   for (const hash of hashDirs) {
     const sessionDir = join(chatsDir, hash, resumeId);
     if (!existsSync(sessionDir)) continue;
-    return { exists: true, hasContent: existsSync(join(sessionDir, "store.db")) };
+    const storePath = join(sessionDir, "store.db");
+    if (!existsSync(storePath)) {
+      // Diretório da sessão existe, mas sem conversa real — meta.json
+      // sozinho não carrega mtime útil pra stale (sempre presente).
+      return { exists: true, hasContent: false, mtimeMs: null };
+    }
+    try {
+      return { exists: true, hasContent: true, mtimeMs: statSync(storePath).mtimeMs };
+    } catch {
+      return { exists: true, hasContent: true, mtimeMs: null };
+    }
   }
-  return { exists: false, hasContent: false };
+  return { exists: false, hasContent: false, mtimeMs: null };
 }
 
 /**
@@ -642,15 +652,22 @@ function findOpenCodeSessionEvidence(resumeId: string): ResumeTargetEvidence {
   try {
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
   } catch {
-    return { exists: false, hasContent: false };
+    return { exists: false, hasContent: false, mtimeMs: null };
   }
   try {
-    const session = db.prepare("SELECT id FROM session WHERE id = ?").get(resumeId) as { id: string } | undefined;
-    if (!session) return { exists: false, hasContent: false };
+    // `time_updated` (ms) é o sinal de atividade da própria linha de
+    // sessão — medido como presente no schema local; se a coluna não
+    // existir numa versão mais velha, o catch devolve mtime null e o
+    // ramo stale simplesmente não dispara pra esse provider.
+    const session = db
+      .prepare("SELECT id, time_updated FROM session WHERE id = ?")
+      .get(resumeId) as { id: string; time_updated: number | null } | undefined;
+    if (!session) return { exists: false, hasContent: false, mtimeMs: null };
     const messageCount = db.prepare("SELECT COUNT(*) as n FROM message WHERE session_id = ?").get(resumeId) as { n: number };
-    return { exists: true, hasContent: messageCount.n > 0 };
+    const mtimeMs = typeof session.time_updated === "number" && session.time_updated > 0 ? session.time_updated : null;
+    return { exists: true, hasContent: messageCount.n > 0, mtimeMs };
   } catch {
-    return { exists: false, hasContent: false };
+    return { exists: false, hasContent: false, mtimeMs: null };
   } finally {
     db.close();
   }
@@ -662,18 +679,20 @@ function findCodexSessionEvidence(resumeId: string): ResumeTargetEvidence {
   try {
     content = readFileSync(file, "utf8");
   } catch {
-    return { exists: false, hasContent: false };
+    return { exists: false, hasContent: false, mtimeMs: null };
   }
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line);
-      if (parsed.id === resumeId) return { exists: true, hasContent: true };
+      // Índice não carrega tamanho/atividade do rollout (documentado no
+      // cabecalho de getResumeTargetEvidence) — mtime null de propósito.
+      if (parsed.id === resumeId) return { exists: true, hasContent: true, mtimeMs: null };
     } catch {
       // linha parcial (índice sendo escrito nesse instante) — ignora.
     }
   }
-  return { exists: false, hasContent: false };
+  return { exists: false, hasContent: false, mtimeMs: null };
 }
 
 /** Ponto único chamado por `pty-registry.ts::spawn` antes de honrar um

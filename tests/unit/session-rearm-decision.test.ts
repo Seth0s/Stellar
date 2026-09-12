@@ -62,6 +62,8 @@ const baseInput: RearmLineInput = {
   watcherInFlight: false,
   currentFloorMs: 1_000,
   nowMs: 5_000,
+  claimedSessionMtimeMs: null,
+  claimedSessionStaleMs: 5 * 60_000,
 };
 
 describe("decideRearmOnLine — caminho automático (REARM_ON_INPUT_PROVIDERS)", () => {
@@ -78,9 +80,18 @@ describe("decideRearmOnLine — caminho automático (REARM_ON_INPUT_PROVIDERS)",
     });
   });
 
-  it("DEPOIS de resolvido (sessionFound: true): linha não-vazia NÃO rearma por este caminho", () => {
+  it("DEPOIS de resolvido (sessionFound: true): linha não-vazia NÃO rearma por este caminho quando o carimbo ainda é fresco", () => {
     expect(
-      decideRearmOnLine({ ...baseInput, line: "qualquer coisa não-vazia", rearmsOnInput: true, sessionFound: true, watcherInFlight: true }),
+      decideRearmOnLine({
+        ...baseInput,
+        line: "qualquer coisa não-vazia",
+        rearmsOnInput: true,
+        sessionFound: true,
+        watcherInFlight: true,
+        // mtime recente frente a nowMs — não é stale
+        claimedSessionMtimeMs: 4_000,
+        claimedSessionStaleMs: 5 * 60_000,
+      }),
     ).toEqual({ action: "none" });
   });
 
@@ -185,5 +196,86 @@ describe("decideRearmOnLine — RODADA 7, achado 3: janela 'qualquer input rearm
     expect(decideRearmOnLine({ ...baseInput, line: "", rearmsOnInput: true, awaitingResumeAnyInput: false, sessionFound: false })).toEqual({
       action: "none",
     });
+  });
+});
+
+describe("decideRearmOnLine — resume_id envelhece sozinho: carimbo stale rearma mesmo com sessionFound", () => {
+  // Medido 2026-09-12: `claude --fork-session` cria id novo e congela o
+  // mtime do pai; o ramo automático clássico (`!sessionFound`) nunca
+  // renovava o carimbo. Este caminho é a renovação.
+
+  it("sessionFound + arquivo carimbado parado além do limiar + linha não-vazia => rearma e reseta sessionFound", () => {
+    const decision = decideRearmOnLine({
+      ...baseInput,
+      line: "continua o trabalho",
+      rearmsOnInput: true,
+      sessionFound: true,
+      watcherInFlight: false,
+      nowMs: 1_000_000,
+      claimedSessionMtimeMs: 1_000_000 - 5 * 60_000 - 1,
+      claimedSessionStaleMs: 5 * 60_000,
+    });
+    expect(decision).toEqual({
+      action: "rearm",
+      resetSessionFound: true,
+      enterAwaitingResumeAnyInput: false,
+      floorMs: 1_000_000,
+    });
+  });
+
+  it("sessionFound + carimbo AINDA fresco => none (não reabre o poller eterno da RODADA 5)", () => {
+    expect(
+      decideRearmOnLine({
+        ...baseInput,
+        line: "continua",
+        rearmsOnInput: true,
+        sessionFound: true,
+        nowMs: 1_000_000,
+        claimedSessionMtimeMs: 1_000_000 - 1_000,
+        claimedSessionStaleMs: 5 * 60_000,
+      }),
+    ).toEqual({ action: "none" });
+  });
+
+  it("carimbo stale MAS sem mtime conhecido (null) => none — sem sinal não inventa renovação", () => {
+    expect(
+      decideRearmOnLine({
+        ...baseInput,
+        line: "continua",
+        rearmsOnInput: true,
+        sessionFound: true,
+        nowMs: 1_000_000,
+        claimedSessionMtimeMs: null,
+        claimedSessionStaleMs: 5 * 60_000,
+      }),
+    ).toEqual({ action: "none" });
+  });
+
+  it("carimbo stale em provider SEM rearmsOnInput ainda rearma — a renovação não depende da lista de nascimento", () => {
+    // Cursor/codex fora de REARM_ON_INPUT ainda podem ter claim errado;
+    // atividade + arquivo parado é sinal suficiente.
+    const decision = decideRearmOnLine({
+      ...baseInput,
+      line: "oi",
+      rearmsOnInput: false,
+      sessionFound: true,
+      nowMs: 1_000_000,
+      claimedSessionMtimeMs: 0,
+      claimedSessionStaleMs: 5 * 60_000,
+    });
+    expect(decision).toMatchObject({ action: "rearm", resetSessionFound: true });
+  });
+
+  it("linha vazia com carimbo stale FORA do modo pós-resume => none (Enter cru não é atividade)", () => {
+    expect(
+      decideRearmOnLine({
+        ...baseInput,
+        line: "",
+        sessionFound: true,
+        nowMs: 1_000_000,
+        claimedSessionMtimeMs: 0,
+        claimedSessionStaleMs: 5 * 60_000,
+      }),
+    ).toEqual({ action: "none" });
   });
 });
