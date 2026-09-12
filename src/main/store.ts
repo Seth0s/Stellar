@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { decideStatusWrite, type StatusWriteDecision } from "./status-write-decision";
+import { decideStatusWrite, retainStatusAsk, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
 
 export type CardRow = {
@@ -251,6 +251,17 @@ export type TaskRow = {
    * quadro precisa deles depois de um restart, não só em memória. */
   diverged_status: string | null;
   diverged_actor: TaskActor | null;
+  /** Third path (status-write-decision.ts `decideStatusAsk`): a live
+   * request that the human has not answered yet. Independent of
+   * `diverged_*` — an ask coexists with a held-write signal. `null` on
+   * every field = no pending ask. Written only by `setStatusAsk`;
+   * ordinary upserts retain or clear via `retainStatusAsk`. Optional on
+   * the type so existing TaskRow constructors (tests, create_task) stay
+   * valid; SQL always persists explicit nulls. */
+  requested_status?: string | null;
+  requested_reason?: string | null;
+  requested_by?: string | null;
+  requested_at?: number | null;
   /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — exatamente UM sprint
    * vivo por vez. Histórico de sprints fechados vive na tabela `sprints`
    * (snapshot congelado), nunca reconsultando status vivo. `null`/ausente
@@ -319,7 +330,7 @@ export type TaskActor = "app" | "agent" | "human";
 export type TaskTransitionRow = {
   id: string;
   task_id: string;
-  kind: "status" | "stage" | "declaration" | "prompt";
+  kind: "status" | "stage" | "declaration" | "prompt" | "request" | "request_denied";
   from_value: string | null;
   to_value: string;
   actor: TaskActor;
@@ -598,6 +609,19 @@ function migrate(db: Database.Database) {
     db.exec(`ALTER TABLE tasks ADD COLUMN cwd TEXT`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
+  }
+  // Third path — agent asks, human decides. Independent of diverged_*.
+  for (const col of [
+    "requested_status TEXT",
+    "requested_reason TEXT",
+    "requested_by TEXT",
+    "requested_at INTEGER",
+  ]) {
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
   }
   try {
     db.exec(`ALTER TABLE reports ADD COLUMN verdict TEXT`);
@@ -1091,7 +1115,7 @@ export function openStore(userDataDir: string) {
     )
   `);
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
   // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
   // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` e
   // `prompt` de propósito: uma declaração estacionada ou um acréscimo de
@@ -1134,8 +1158,8 @@ export function openStore(userDataDir: string) {
   const listTasksByBoardStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE board_id = ? ORDER BY created_at ASC`);
   const getTaskStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`);
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, sprint_id, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @sprint_id, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, board_id = excluded.board_id, cwd = excluded.cwd, result_json = excluded.result_json, deps_json = excluded.deps_json,
@@ -1143,6 +1167,8 @@ export function openStore(userDataDir: string) {
       max_retries = excluded.max_retries, fallback_providers_json = excluded.fallback_providers_json,
       "order" = excluded."order", suggested_order = excluded.suggested_order, implicit_order = excluded.implicit_order,
       diverged_status = excluded.diverged_status, diverged_actor = excluded.diverged_actor,
+      requested_status = excluded.requested_status, requested_reason = excluded.requested_reason,
+      requested_by = excluded.requested_by, requested_at = excluded.requested_at,
       sprint_id = excluded.sprint_id, updated_at = excluded.updated_at
   `);
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
@@ -1160,6 +1186,14 @@ export function openStore(userDataDir: string) {
   // Decisão 8's human lock cannot block (and must not — migration is app
   // bookkeeping of which sprint owns the row, not a status write).
   const setTaskSprintStmt = db.prepare(`UPDATE tasks SET sprint_id = @sprint_id, updated_at = @updated_at WHERE id = @id`);
+  // Third path — dedicated writer. Must NOT go through upsertTaskInternal:
+  // that path decides status/divergence, and a request never touches either.
+  const setStatusAskStmt = db.prepare(`
+    UPDATE tasks
+    SET requested_status = @requested_status, requested_reason = @requested_reason,
+        requested_by = @requested_by, requested_at = @requested_at, updated_at = @updated_at
+    WHERE id = @id
+  `);
 
   const SPRINT_COLUMNS =
     `id, board_id, number, name, started_at, closed_at, count_todo, count_doing, count_done, count_failed, migrated_in, migrated_out, snapshot_json`;
@@ -1428,11 +1462,25 @@ export function openStore(userDataDir: string) {
     } else if (!sprintId && boardId) {
       sprintId = ensureActiveSprintInternal(boardId, Date.now()).id;
     }
+    const ask = retainStatusAsk({
+      existing: {
+        requestedStatus: existing?.requested_status ?? null,
+        requestedReason: existing?.requested_reason ?? null,
+        requestedBy: existing?.requested_by ?? null,
+        requestedAt: existing?.requested_at ?? null,
+      },
+      newActor,
+      proposedStatus: statusProposed === false ? null : task.status,
+    });
     const persistable = {
       ...rest,
       status: decision.status,
       diverged_status: decision.divergedStatus,
       diverged_actor: decision.divergedActor,
+      requested_status: ask.requestedStatus,
+      requested_reason: ask.requestedReason,
+      requested_by: ask.requestedBy,
+      requested_at: ask.requestedAt,
       sprint_id: sprintId,
     };
     upsertTaskStmt.run(persistable);
@@ -1835,6 +1883,52 @@ export function openStore(userDataDir: string) {
      * mexer em index.ts. Ausente = "agent" (toda chamada de
      * create_task/update_task hoje é MCP, isto é, um agente). */
     upsertTask: (task: TaskRow): StatusWriteDecision => upsertTaskInternal(task),
+    /**
+     * Park or clear a status ask without touching `status` / `diverged_*`.
+     * `ask === null` is a human deny (or an explicit cancel). Latest ask
+     * wins — one pending request per task.
+     */
+    setStatusAsk: (
+      taskId: string,
+      ask: { status: string; reason: string | null; requesterId: string | null; at: number } | null,
+    ): { ok: true } | { ok: false; error: string } => {
+      const existing = getTaskStmt.get(taskId) as TaskRow | undefined;
+      if (!existing) return { ok: false, error: `no such task "${taskId}"` };
+      const at = ask?.at ?? Date.now();
+      const previousRequested = existing.requested_status ?? null;
+      setStatusAskStmt.run({
+        id: taskId,
+        requested_status: ask?.status ?? null,
+        requested_reason: ask?.reason ?? null,
+        requested_by: ask?.requesterId ?? null,
+        requested_at: ask?.at ?? null,
+        updated_at: at,
+      });
+      if (ask) {
+        insertTransitionStmt.run({
+          id: randomUUID(),
+          task_id: taskId,
+          kind: "request",
+          from_value: existing.status,
+          to_value: ask.status,
+          actor: "agent",
+          card_id: ask.requesterId,
+          at,
+        });
+      } else if (previousRequested) {
+        insertTransitionStmt.run({
+          id: randomUUID(),
+          task_id: taskId,
+          kind: "request_denied",
+          from_value: existing.status,
+          to_value: previousRequested,
+          actor: "human",
+          card_id: existing.requested_by ?? null,
+          at,
+        });
+      }
+      return { ok: true };
+    },
     // Ver o comentário grande de `applyColumnDrop` acima (definida antes
     // do `return`, junto dos prepared statements) — exposta aqui como
     // método do store, mesma convenção de todo o resto deste objeto.

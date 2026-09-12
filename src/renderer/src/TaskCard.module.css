@@ -396,6 +396,41 @@
   line-height: 1.4;
 }
 
+/* Third path — agent asked, human has not answered. Same foam family as
+   divergence (a declaration, not the authoritative fact) but solid so it
+   reads as actionable. Allow/Deny reuse AgentAskModal's modal-actions. */
+.statusAskNotice,
+.statusAsk {
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--foam) 16%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--foam) 45%, var(--border));
+  color: var(--foam);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.statusAskTitle {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.statusAskCommand {
+  display: block;
+  margin: 6px 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.statusAskReason {
+  margin: 4px 0 0;
+}
+
+.statusAskReasonLabel {
+  opacity: 0.7;
+  margin-right: 4px;
+}
+
 /* DESIGN-BACKLOG.md "Falha TIPADA" — motivo de interrupção na coluna a fazer. */
 .interruptNotice {
   padding: 5px 7px;

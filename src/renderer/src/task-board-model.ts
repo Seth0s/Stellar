@@ -685,6 +685,15 @@ export function describeStatusDivergence(
   return t("task.divergence.other", { label });
 }
 
+/** Live ask on a Fila row — null when nothing is pending. Same column
+ * vocabulary as divergence so the human reads "agente pede concluído"
+ * without decoding the raw status. */
+export function describeStatusAskNotice(requestedStatus: string | null | undefined): string | null {
+  if (!requestedStatus) return null;
+  const label = t(COLUMN_I18N[columnForStatus(requestedStatus)]);
+  return t("task.statusAsk.notice", { label });
+}
+
 /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — shape the Fila card
  * needs to render one sprint row (active or closed). Kept local so this
  * module stays free of Electron/preload imports. */
@@ -779,6 +788,10 @@ export function snapshotTaskToBoardItem(
   statusTransitions: [];
   divergedStatus: null;
   divergedActor: null;
+  requestedStatus: null;
+  requestedReason: null;
+  requestedBy: null;
+  requestedAt: null;
   verdicts: [];
   firstActor: null;
   interruptionReason: null;
@@ -805,6 +818,10 @@ export function snapshotTaskToBoardItem(
     statusTransitions: [],
     divergedStatus: null,
     divergedActor: null,
+    requestedStatus: null,
+    requestedReason: null,
+    requestedBy: null,
+    requestedAt: null,
     verdicts: [],
     firstActor: null,
     interruptionReason: null,

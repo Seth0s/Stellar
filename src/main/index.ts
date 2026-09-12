@@ -34,6 +34,7 @@ import { t, setLocale, resolveLocale, isLocale, type Locale } from "../shared/i1
 import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
 import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
+import { describeStatusAskResolved } from "./status-write-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { refreshUserEnv, userEnvSnapshot } from "./user-env";
@@ -1118,6 +1119,10 @@ function createWindow() {
      * `diverged_actor`. */
     divergedStatus: string | null;
     divergedActor: "app" | "agent" | "human" | null;
+    requestedStatus: string | null;
+    requestedReason: string | null;
+    requestedBy: string | null;
+    requestedAt: number | null;
     /** RODADA 4 — histórico de participação (`task_verdicts`), com
      * provider do card pra gráfico 1 / pílulas. */
     verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
@@ -1237,6 +1242,10 @@ function createWindow() {
         // typeAndSubmit + envelope MCP).
         divergedStatus: t.diverged_status,
         divergedActor: t.diverged_actor,
+        requestedStatus: t.requested_status ?? null,
+        requestedReason: t.requested_reason ?? null,
+        requestedBy: t.requested_by ?? null,
+        requestedAt: t.requested_at ?? null,
         verdicts: verdictsByTask.get(t.id) ?? [],
         firstActor: firstActorByTask.get(t.id) ?? null,
         interruptionReason: interruptionReasonFromResultJson(t.result_json),
@@ -1490,6 +1499,12 @@ function createWindow() {
     // `markTaskFailed`, message-bus.ts) e o botão humano de aprovar
     // conclusão (`store:tasks:approve-completion` abaixo).
     upsertTask: (task) => persistTask(task),
+    setStatusAsk: (taskId, ask) => {
+      const result = store.setStatusAsk(taskId, ask);
+      const row = store.getTask(taskId);
+      if (row) notifyTaskChanged(row.board_id);
+      return result;
+    },
     listSprints: (boardId) => store.listSprints(boardId),
     openSprint: (boardId) => store.openSprint(boardId),
     closeSprint: (boardId) => {
@@ -1864,6 +1879,30 @@ function createWindow() {
     const existing = store.getTask(taskId);
     if (!existing) return { ok: false, error: `no such task "${taskId}"` };
     persistTask({ ...existing, status: "done", updated_at: Date.now(), actor: "human" });
+    return { ok: true };
+  });
+  // Third path — human Allow/Deny on the Fila task-detail modal. Allow is
+  // a human status write (decision 8 rule 4: apply + clear divergence +
+  // retainStatusAsk clears the ask). Deny drops only the ask.
+  ipcMain.handle("store:tasks:respond-status-ask", (_e, taskId: string, allowed: boolean) => {
+    const existing = store.getTask(taskId);
+    if (!existing) return { ok: false, error: `no such task "${taskId}"` };
+    const requested = existing.requested_status;
+    if (!requested) return { ok: false, error: "no pending status ask" };
+    const requesterId = existing.requested_by;
+    if (allowed) {
+      let result_json = existing.result_json;
+      if (requested === "failed" && existing.status !== "failed") {
+        result_json = stampFailureKindJson(result_json, decideFailureKind("explicit_failed"));
+      }
+      persistTask({ ...existing, status: requested, result_json, updated_at: Date.now(), actor: "human" });
+    } else {
+      store.setStatusAsk(taskId, null);
+      notifyTaskChanged(existing.board_id);
+    }
+    if (requesterId) {
+      messageBus?.notifyHumanMovedTask(requesterId, describeStatusAskResolved(requested, allowed)).catch(() => {});
+    }
     return { ok: true };
   });
   // RODADA 4 — criar task pela UI do quadro (coluna "a fazer"). NÃO passa

@@ -198,5 +198,102 @@ export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision 
  * AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
  * See `src/shared/i18n/agent-facing.ts`. */
 export function describeStatusHeldWarning(authoritativeStatus: string, proposedStatus: string): string {
-  return `[de: stellar] update_task pediu status "${proposedStatus}" mas o status humano "${authoritativeStatus}" prevalece — divergência sinalizada no quadro Fila.`;
+  return `[de: stellar] update_task pediu status "${proposedStatus}" mas o status humano "${authoritativeStatus}" prevalece — divergência sinalizada no quadro Fila. Para pedir a mudança (humano decide no quadro), use request_task_status.`;
+}
+
+/**
+ * Third path between "silent accept" and "held forever": the agent ASKS,
+ * the human decides. This module does not invent a consent machine —
+ * spawn_agent / open_url / close_card already ask with a reason on
+ * screen. The four product decisions live here so callers cannot drift:
+ *
+ *  1. The RPC NEVER blocks. spawn hangs because the agent cannot continue
+ *     without the resource (new process, URL, closed card). A status ask
+ *     is bookkeeping after work already done — parking an MCP call (and
+ *     marking the card `waiting`) just to close a kanban cell is the
+ *     waste the owner named. Decision happens later on the Fila.
+ *  2. The human answers on the Fila task-detail modal (not AgentAskModal).
+ *     That modal already shows divergence; the ask is the actionable
+ *     sibling, with the same reason + deny/allow chrome.
+ *  3. A live ask COEXISTS with `diverged_*`. Divergence is the held-write
+ *     signal (decision 8). An ask is a different verb. Recording one
+ *     never clears or replaces the other. Human allow is a human status
+ *     write (rule 4 → clears divergence). Human deny drops only the ask.
+ *  4. Autonomous mode does NOT auto-apply. spawn skip is "I opted into
+ *     creating processes without asking". The human status lock is a
+ *     different axis — it exists so a lying agent cannot mark done —
+ *     and autonomous boards are exactly where a silent done would
+ *     auto-dispatch dependents. `autoApply` is always false.
+ *
+ * Direct `update_task` is UNCHANGED (decision 8): accepted with a
+ * warning, never refused. This is a new path, not a removal of the old.
+ */
+export type StatusAskFields = {
+  requestedStatus: string | null;
+  requestedReason: string | null;
+  requestedBy: string | null;
+  requestedAt: number | null;
+};
+
+export type StatusAskDecision = {
+  outcome: "already" | "park";
+  /** Always the incoming live divergence — an ask never touches it. */
+  divergedStatus: string | null;
+  divergedActor: StatusWriteActor | null;
+  /** Always false, including on autonomous boards (decision 4). */
+  autoApply: boolean;
+};
+
+export function decideStatusAsk(input: {
+  currentStatus: string;
+  requestedStatus: string;
+  existingDivergedStatus: string | null;
+  existingDivergedActor: StatusWriteActor | null;
+  /** Consulted so a future reader cannot "forget" decision 4. The
+   * result ignores it: autoApply stays false either way. */
+  boardAutonomous: boolean;
+}): StatusAskDecision {
+  const { currentStatus, requestedStatus, existingDivergedStatus, existingDivergedActor } = input;
+  void input.boardAutonomous;
+  return {
+    outcome: requestedStatus === currentStatus ? "already" : "park",
+    divergedStatus: existingDivergedStatus,
+    divergedActor: existingDivergedActor,
+    autoApply: false,
+  };
+}
+
+/**
+ * What an ordinary upsert does to a live ask. Dedicated `setStatusAsk`
+ * is the only writer of a NEW ask; this only retains or clears.
+ *
+ * Human decided a status (drag, conclude, allow) → ask is stale, clear.
+ * Everything else (agent/app write, bookkeeping, human prompt edit)
+ * keeps the pending ask. Decision 8 is not involved: we never refuse
+ * the status write itself.
+ */
+export function retainStatusAsk(input: {
+  existing: StatusAskFields;
+  newActor: StatusWriteActor;
+  proposedStatus: string | null;
+}): StatusAskFields {
+  if (input.newActor === "human" && input.proposedStatus !== null) {
+    return { requestedStatus: null, requestedReason: null, requestedBy: null, requestedAt: null };
+  }
+  return input.existing;
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. Immediate return of request_task_status. */
+export function describeStatusAskParked(requestedStatus: string, authoritativeStatus: string): string {
+  return `[de: stellar] pedido de status "${requestedStatus}" registrado — o status humano "${authoritativeStatus}" permanece até alguém decidir no quadro Fila.`;
+}
+
+export function describeStatusAskAlready(status: string): string {
+  return `[de: stellar] status já é "${status}" — nada a pedir.`;
+}
+
+export function describeStatusAskResolved(requestedStatus: string, allowed: boolean): string {
+  return allowed
+    ? `[de: stellar] humano aceitou o pedido de status "${requestedStatus}".`
+    : `[de: stellar] humano recusou o pedido de status "${requestedStatus}".`;
 }

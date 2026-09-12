@@ -738,6 +738,11 @@ export type TaskBoardItem = {
    * observação se alinha. */
   divergedStatus: string | null;
   divergedActor: "app" | "agent" | "human" | null;
+  /** Third path — live ask the human has not answered. All null = none. */
+  requestedStatus: string | null;
+  requestedReason: string | null;
+  requestedBy: string | null;
+  requestedAt: number | null;
   /** RODADA 4 — `task_verdicts` (append-only). `provider` do card no
    * momento da leitura (LEFT JOIN); null se o card foi deletado. */
   verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
@@ -758,6 +763,8 @@ const tasks = {
   listByBoard: (boardId: string): Promise<TaskBoardItem[]> => ipcRenderer.invoke("store:tasks:list-by-board", boardId),
   approveCompletion: (taskId: string): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke("store:tasks:approve-completion", taskId),
+  respondStatusAsk: (taskId: string, allowed: boolean): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:respond-status-ask", taskId, allowed),
   /** RODADA 4 — criar task pela UI (coluna "a fazer"). `actor: "human"`
    * no main — ver `store:tasks:create` em index.ts. */
   create: (boardId: string, prompt: string): Promise<{ ok: true; taskId: string } | { ok: false; error: string }> =>

@@ -75,7 +75,7 @@ const USAGE =
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
   "read-sticky <cardId> | write-sticky [--append] <cardId> <text...> | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
-  "create-task <json> | update-task <taskId> <json> | list-tasks | get-task <taskId> | " +
+  "create-task <json> | update-task <taskId> <json> | request-task-status <taskId> <status> [reason...] | list-tasks | get-task <taskId> | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "set-connector-label <connectorId> <label...|null> | " +
   "concurrency-status [cap] | board-mode <cardId> | " +
@@ -213,6 +213,16 @@ if (cmd === "list") {
     fail("update-task: argument must be valid JSON");
   }
   request = { cmd: "update_task", taskId, ...fields, ...(ownCardId ? { requesterId: ownCardId } : {}) };
+} else if (cmd === "request-task-status") {
+  const [taskId, status, ...reasonParts] = rest;
+  if (!taskId || !status) fail("usage: acbridge request-task-status <taskId> <status> [reason...]");
+  request = {
+    cmd: "request_task_status",
+    taskId,
+    status,
+    reason: reasonParts.length > 0 ? reasonParts.join(" ") : undefined,
+    ...(ownCardId ? { requesterId: ownCardId } : {}),
+  };
 } else if (cmd === "list-tasks") {
   request = { cmd: "list_tasks" };
 } else if (cmd === "get-task") {
@@ -412,6 +422,8 @@ socket.on("close", () => {
     console.log(res.taskId);
   } else if (cmd === "update-task") {
     console.log("updated");
+  } else if (cmd === "request-task-status") {
+    console.log(JSON.stringify({ pending: res.pending, already: res.already, status: res.status, requestedStatus: res.requestedStatus, message: res.message }));
   } else if (cmd === "list-tasks") {
     console.log(JSON.stringify(res.tasks));
   } else if (cmd === "get-task") {

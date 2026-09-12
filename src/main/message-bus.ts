@@ -7,7 +7,12 @@ import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
-import { describeStatusHeldWarning } from "./status-write-decision";
+import {
+  decideStatusAsk,
+  describeStatusAskAlready,
+  describeStatusAskParked,
+  describeStatusHeldWarning,
+} from "./status-write-decision";
 import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, type FailureSource } from "./failure-kind-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
@@ -362,6 +367,13 @@ export type BusRequest =
   // existente muda).
   | { cmd: "list_tasks"; boardId?: string }
   | { cmd: "get_task"; taskId?: string }
+  | {
+      cmd: "request_task_status";
+      taskId?: string;
+      status?: string;
+      reason?: string;
+      requesterId?: string;
+    }
   // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — fechamento explícito
   // por agente (MCP). Nunca por data. `boardId` obrigatório: sprint é
   // por board, não global.
@@ -668,6 +680,12 @@ export function createMessageBus(
     listTasksByBoard: (boardId: string) => TaskRow[];
     getTask: (id: string) => TaskRow | undefined;
     upsertTask: (task: TaskRow) => StatusWriteDecision;
+    /** Third path — park/clear a status ask without touching status.
+     * Optional so existing test doubles stay source-compatible. */
+    setStatusAsk?: (
+      taskId: string,
+      ask: { status: string; reason: string | null; requesterId: string | null; at: number } | null,
+    ) => { ok: true } | { ok: false; error: string };
     /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — pass-through pro
      * store (snapshot congelado no close). O renderer usa IPC próprio;
      * estes callbacks existem só pro MCP/acbridge. */
@@ -964,6 +982,10 @@ export function createMessageBus(
       // quadro Fila mostra.
       divergedStatus: row.diverged_status,
       divergedActor: row.diverged_actor,
+      requestedStatus: row.requested_status ?? null,
+      requestedReason: row.requested_reason ?? null,
+      requestedBy: row.requested_by ?? null,
+      requestedAt: row.requested_at ?? null,
       // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — membership vivo.
       sprintId: row.sprint_id ?? null,
       // DESIGN-BACKLOG.md §2.1 "no get_task, por exemplo" — só presentes
@@ -2236,6 +2258,50 @@ export function createMessageBus(
       const task = callbacks.getTask(req.taskId);
       if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
       return { ok: true, task: serializeTask(task) };
+    }
+
+    if (req.cmd === "request_task_status") {
+      if (!req.taskId) return { ok: false, error: "missing taskId" };
+      if (!req.status) return { ok: false, error: "missing status" };
+      const existing = callbacks.getTask(req.taskId);
+      if (!existing) return { ok: false, error: `no such task "${req.taskId}"` };
+      const requesterBoardId = req.requesterId ? callbacks.getCardBoardId(req.requesterId) : undefined;
+      const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
+      const decision = decideStatusAsk({
+        currentStatus: existing.status,
+        requestedStatus: req.status,
+        existingDivergedStatus: existing.diverged_status,
+        existingDivergedActor: existing.diverged_actor,
+        boardAutonomous: autonomous,
+      });
+      if (decision.outcome === "already") {
+        return {
+          ok: true,
+          pending: false,
+          already: true,
+          status: existing.status,
+          message: describeStatusAskAlready(existing.status),
+        };
+      }
+      if (!callbacks.setStatusAsk) {
+        return { ok: false, error: "status ask is unavailable in this session" };
+      }
+      const parked = callbacks.setStatusAsk(req.taskId, {
+        status: req.status,
+        reason: req.reason?.trim() ? req.reason.trim() : null,
+        requesterId: req.requesterId ?? null,
+        at: Date.now(),
+      });
+      if (!parked.ok) return parked;
+      return {
+        ok: true,
+        pending: true,
+        already: false,
+        status: existing.status,
+        requestedStatus: req.status,
+        divergedStatus: decision.divergedStatus,
+        message: describeStatusAskParked(req.status, existing.status),
+      };
     }
 
     function serializeSprint(s: import("./store").SprintRow) {

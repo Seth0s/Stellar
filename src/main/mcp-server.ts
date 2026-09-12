@@ -400,7 +400,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "update_task",
       {
         description:
-          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for your own retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — this app doesn't retry or reassign anything itself.",
+          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. Writing status when a human last moved the task is ACCEPTED WITH A WARNING and never refused — the human status stays, divergence is signaled. To ASK the human to accept your status (they decide on the Fila card), use request_task_status instead; this tool is the direct write. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for your own retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — this app doesn't retry or reassign anything itself.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
           status: z.string().optional().describe("New status — e.g. 'running', 'done', 'failed'"),
@@ -442,6 +442,33 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           suggestedOrder,
           prompt,
           promptMode,
+          requesterId: caller(callerCardId),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "request_task_status",
+      {
+        description:
+          "Ask the human to change a task's status. Returns immediately — this does NOT block like spawn_agent/open_url/close_card. The ask (with your reason) appears on the Fila task-detail modal; the human Allow/Deny there. Does not write status itself. Unlike spawn_agent, autonomous mode does NOT auto-approve: a human-locked status stays locked until a human clicks. Direct update_task still works as before (accepted with a warning, never refused). If the task is already at the requested status, returns pending:false / already:true.",
+        inputSchema: {
+          taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
+          status: z.string().describe("Status you want the human to accept — e.g. 'done', 'failed', 'running'"),
+          reason: z
+            .string()
+            .optional()
+            .describe("Why the change should happen — shown on the Fila modal, same as spawn_agent/open_url's reason"),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
+        },
+      },
+      async ({ taskId, status, reason, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "request_task_status",
+          taskId,
+          status,
+          reason,
           requesterId: caller(callerCardId),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
