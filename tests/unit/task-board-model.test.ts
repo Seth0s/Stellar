@@ -32,6 +32,7 @@ import {
   describeTransitionTrail,
   describeHumanMoveNotice,
   describeStatusDivergence,
+  describeStatusAskNotice,
   formatSprintTimestamp,
   formatSprintDuration,
   describeSprintCounts,
@@ -734,6 +735,22 @@ describe("describeStatusDivergence", () => {
     expect(describeStatusDivergence("failed", null)).toBeNull();
     expect(describeStatusDivergence(null, "app")).toBeNull();
     expect(describeStatusDivergence(undefined, undefined)).toBeNull();
+  });
+});
+
+describe("describeStatusAskNotice", () => {
+  beforeEach(() => {
+    setLocale("pt-BR");
+  });
+
+  it("formata o pedido com o título da coluna", () => {
+    expect(describeStatusAskNotice("done")).toBe('agente pede "concluído"');
+  });
+
+  it("null/ausente: sem pedido", () => {
+    expect(describeStatusAskNotice(null)).toBeNull();
+    expect(describeStatusAskNotice(undefined)).toBeNull();
+    expect(describeStatusAskNotice("")).toBeNull();
   });
 });
 

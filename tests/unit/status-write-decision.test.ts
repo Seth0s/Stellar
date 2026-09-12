@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { decideStatusWrite } from "../../src/main/status-write-decision";
+import {
+  decideStatusWrite,
+  decideStatusAsk,
+  retainStatusAsk,
+  describeStatusHeldWarning,
+} from "../../src/main/status-write-decision";
 
 const noDivergence = { existingDivergedStatus: null, existingDivergedActor: null } as const;
 
@@ -151,5 +156,85 @@ describe("decideStatusWrite (decisão 8 — status híbrido com precedência)", 
         ...noDivergence,
       }),
     ).toMatchObject({ status: "failed", statusChanged: true, divergedStatus: null, warnAgent: false });
+  });
+});
+
+describe("decideStatusAsk (terceiro caminho — agente pede, humano decide)", () => {
+  const liveDivergence = { existingDivergedStatus: "done", existingDivergedActor: "agent" as const };
+
+  it("pedido igual ao status atual: already, sem autoApply, divergência intacta", () => {
+    expect(
+      decideStatusAsk({
+        currentStatus: "pending",
+        requestedStatus: "pending",
+        ...liveDivergence,
+        boardAutonomous: false,
+      }),
+    ).toEqual({
+      outcome: "already",
+      divergedStatus: "done",
+      divergedActor: "agent",
+      autoApply: false,
+    });
+  });
+
+  it("pedido diferente: park imediato, divergência convive, autoApply false", () => {
+    expect(
+      decideStatusAsk({
+        currentStatus: "pending",
+        requestedStatus: "done",
+        ...liveDivergence,
+        boardAutonomous: false,
+      }),
+    ).toEqual({
+      outcome: "park",
+      divergedStatus: "done",
+      divergedActor: "agent",
+      autoApply: false,
+    });
+  });
+
+  it("board autônomo NÃO dispensa — autoApply continua false (decisão 4)", () => {
+    expect(
+      decideStatusAsk({
+        currentStatus: "pending",
+        requestedStatus: "done",
+        existingDivergedStatus: null,
+        existingDivergedActor: null,
+        boardAutonomous: true,
+      }),
+    ).toMatchObject({ outcome: "park", autoApply: false, divergedStatus: null });
+  });
+
+  it("aviso de hold aponta o caminho novo sem recusar a escrita direta", () => {
+    expect(describeStatusHeldWarning("pending", "done")).toContain("request_task_status");
+    expect(describeStatusHeldWarning("pending", "done")).toContain("prevalece");
+  });
+});
+
+describe("retainStatusAsk", () => {
+  const parked = {
+    requestedStatus: "done",
+    requestedReason: "protótipo aceito",
+    requestedBy: "416",
+    requestedAt: 10,
+  };
+
+  it("humano escreve status: limpa o pedido (decidiu)", () => {
+    expect(retainStatusAsk({ existing: parked, newActor: "human", proposedStatus: "done" })).toEqual({
+      requestedStatus: null,
+      requestedReason: null,
+      requestedBy: null,
+      requestedAt: null,
+    });
+  });
+
+  it("humano edita prompt (sem status): mantém o pedido", () => {
+    expect(retainStatusAsk({ existing: parked, newActor: "human", proposedStatus: null })).toEqual(parked);
+  });
+
+  it("agente/app escrevem (decisão 8 intacta): mantém o pedido", () => {
+    expect(retainStatusAsk({ existing: parked, newActor: "agent", proposedStatus: "done" })).toEqual(parked);
+    expect(retainStatusAsk({ existing: parked, newActor: "app", proposedStatus: "failed" })).toEqual(parked);
   });
 });

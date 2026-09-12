@@ -28,6 +28,7 @@ import {
   describeTransitionTrail,
   describeHumanMoveNotice,
   describeStatusDivergence,
+  describeStatusAskNotice,
   msToHours,
   cycleAxisMarks,
   computeVerdictsByProvider,
@@ -260,6 +261,7 @@ function TaskItem({
   // componente só entrega o resultado.
   const humanMoveNotice = describeHumanMoveNotice(task.lastActor, task.cardAlive, task.cardId);
   const divergenceNotice = describeStatusDivergence(task.divergedStatus, task.divergedActor);
+  const statusAskNotice = describeStatusAskNotice(task.requestedStatus);
   const interruptNotice = task.interruptionReason;
   const parsedPrompt = parseTaskPrompt(task.prompt);
   return (
@@ -343,6 +345,11 @@ function TaskItem({
           {divergenceNotice}
         </div>
       )}
+      {statusAskNotice && (
+        <div className={styles.statusAskNotice} data-part="status-ask-notice">
+          {statusAskNotice}
+        </div>
+      )}
       {interruptNotice && (
         <div className={styles.interruptNotice} data-part="interruption-reason">
           {t("task.interrupted", { reason: interruptNotice })}
@@ -381,6 +388,7 @@ function TaskDetailModal({
   const creatorCard = task.cards.find((c) => c.role === "implementer") ?? task.cards[0] ?? null;
   const trail = describeTransitionTrail(task.statusTransitions);
   const divergenceNotice = describeStatusDivergence(task.divergedStatus, task.divergedActor);
+  const statusAskNotice = describeStatusAskNotice(task.requestedStatus);
   const humanMoveNotice = describeHumanMoveNotice(task.lastActor, task.cardAlive, task.cardId);
   const waitingOn = waitingOnDep(task.deps, task.depStatuses);
 
@@ -396,6 +404,18 @@ function TaskDetailModal({
         return;
       }
       setDraft("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function respondAsk(allowed: boolean) {
+    if (busy || readOnly || !task.requestedStatus) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await window.tasks.respondStatusAsk(task.id, allowed);
+      if (!res.ok) setError(t("task.detail.error", { error: res.error }));
     } finally {
       setBusy(false);
     }
@@ -444,6 +464,32 @@ function TaskDetailModal({
           {divergenceNotice && (
             <div className={styles.divergenceNotice} data-part="status-divergence">
               {divergenceNotice}
+            </div>
+          )}
+          {statusAskNotice && task.requestedStatus && (
+            <div className={styles.statusAsk} data-part="status-ask">
+              <div className={styles.statusAskTitle}>{t("task.statusAsk.title")}</div>
+              <p>
+                <strong>{task.requestedBy ?? t("task.badge.agent")}</strong> {t("agentAsk.pedes")}
+              </p>
+              <code className={styles.statusAskCommand}>
+                {t("task.statusAsk.command", { from: statusLabel(task.status), to: statusLabel(task.requestedStatus) })}
+              </code>
+              {task.requestedReason && (
+                <p className={styles.statusAskReason}>
+                  <span className={styles.statusAskReasonLabel}>{t("agentAsk.reason")}</span> {task.requestedReason}
+                </p>
+              )}
+              {!readOnly && (
+                <div className="modal-actions">
+                  <button type="button" className="ghost" data-part="status-ask-deny" disabled={busy} onClick={() => void respondAsk(false)}>
+                    {t("agentAsk.deny")}
+                  </button>
+                  <button type="button" className="primary" data-part="status-ask-allow" disabled={busy} onClick={() => void respondAsk(true)}>
+                    {t("agentAsk.allow")}
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {humanMoveNotice && (
