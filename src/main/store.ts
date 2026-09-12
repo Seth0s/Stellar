@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { decideStatusWrite, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
+import { failureKindFromResultJson } from "./failure-kind-decision";
 
 export type CardRow = {
   id: string;
@@ -1130,7 +1131,7 @@ export function openStore(userDataDir: string) {
     WHERE id = @id
   `);
   const tasksForSprintStmt = db.prepare(
-    `SELECT id, prompt, status, "order", suggested_order, implicit_order, created_at, updated_at FROM tasks WHERE sprint_id = ?`,
+    `SELECT id, prompt, status, result_json, "order", suggested_order, implicit_order, created_at, updated_at FROM tasks WHERE sprint_id = ?`,
   );
   const getBoardExistsStmt = db.prepare(`SELECT id FROM boards WHERE id = ?`);
 
@@ -1178,6 +1179,7 @@ export function openStore(userDataDir: string) {
       id: string;
       prompt: string | null;
       status: string;
+      result_json: string | null;
       order: number | null;
       suggested_order: number | null;
       implicit_order: number | null;
@@ -1189,7 +1191,13 @@ export function openStore(userDataDir: string) {
         code: "sprint_empty",
       });
     }
-    const decision = decideSprintClose(members);
+    const decision = decideSprintClose(
+      members.map((m) => ({
+        id: m.id,
+        status: m.status,
+        failureKind: failureKindFromResultJson(m.result_json),
+      })),
+    );
     const snapshot: SprintSnapshotTask[] = members.map((m) => ({
       id: m.id,
       prompt: m.prompt,

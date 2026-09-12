@@ -1,5 +1,6 @@
 /**
- * DESIGN-BACKLOG.md §2.1 "Historico de sprints — fechamento EXPLICITO".
+ * DESIGN-BACKLOG.md §2.1 "Historico de sprints — fechamento EXPLICITO"
+ * + "Falha TIPADA: julgada vs interrompida".
  *
  * Pure decision for what a sprint close freezes and who migrates.
  * Snapshot counts MUST be computed here at close time — never re-derived
@@ -7,14 +8,17 @@
  * rewrite the past).
  *
  * Closed product answers (dono do repo, 2026-09-11) — do not reopen:
- *  1. Failed does NOT migrate (stays documented on the closed sprint;
- *     human drag back to "a fazer" resumes into the CURRENT sprint).
+ *  1. Julgada (status failed) does NOT migrate — documented where it
+ *     happened; counts in countFailed. Interrompida migrates like todo
+ *     and does NOT count as a sprint failure (work never happened).
  *  2. One live `sprint_id` per task; history lives in the frozen row +
  *     `snapshot_json` (board view of closed sprints).
  *  3. Empty queue / already-closed are REFUSED with a visible reason
  *     (enforced in store.closeSprint, not here — this module only
  *     freezes whatever members it is given).
  */
+
+import type { FailureKind } from "./failure-kind-decision";
 
 /** Status strings that appear on the Fila board today. Unknown statuses
  * count as `todo` (same fallback as `columnForStatus` in the renderer). */
@@ -31,7 +35,18 @@ export function bucketForStatus(status: string): SprintBucket {
   return STATUS_TO_BUCKET[status] ?? "todo";
 }
 
-export type SprintTaskInput = { id: string; status: string };
+export type SprintTaskInput = {
+  id: string;
+  status: string;
+  /**
+   * Typed failure (DESIGN-BACKLOG.md "Falha TIPADA"). Only consulted when
+   * `status` buckets to failed. Missing/null on a failed row defaults to
+   * `julgada` (explicit fail). `interrompida` still status=failed is the
+   * rare race before the write path rewrites to pending — treated as todo
+   * for counts + migration.
+   */
+  failureKind?: FailureKind | null;
+};
 
 export type SprintSnapshotCounts = {
   countTodo: number;
@@ -49,10 +64,12 @@ export type SprintCloseDecision = SprintSnapshotCounts & {
 };
 
 /**
- * Freeze the board state at close. Counts come from current statuses;
- * migrate set is todo + doing only (pending/running + unknown→todo).
- * `done` and `failed` stay attributed to the closed sprint via
- * `tasks.sprint_id` — failed is documented where it happened.
+ * Freeze the board state at close.
+ *
+ * - todo / doing / unknown→todo → count + migrate
+ * - done → countDone, stay
+ * - failed + julgada (default) → countFailed, stay
+ * - failed + interrompida → countTodo (never a work failure), migrate
  */
 export function decideSprintClose(tasks: readonly SprintTaskInput[]): SprintCloseDecision {
   const counts: SprintSnapshotCounts = {
@@ -64,12 +81,19 @@ export function decideSprintClose(tasks: readonly SprintTaskInput[]): SprintClos
   const migrateIds: string[] = [];
   for (const t of tasks) {
     const bucket = bucketForStatus(t.status);
+    if (bucket === "failed") {
+      const kind: FailureKind = t.failureKind === "interrompida" ? "interrompida" : "julgada";
+      if (kind === "interrompida") {
+        counts.countTodo += 1;
+        migrateIds.push(t.id);
+      } else {
+        counts.countFailed += 1;
+      }
+      continue;
+    }
     if (bucket === "todo") counts.countTodo += 1;
     else if (bucket === "doing") counts.countDoing += 1;
-    else if (bucket === "done") counts.countDone += 1;
-    else counts.countFailed += 1;
-    // Only unfinished open work migrates. Failed stays on the closed
-    // sprint (product answer 1); done stays as always.
+    else counts.countDone += 1;
     if (bucket === "todo" || bucket === "doing") migrateIds.push(t.id);
   }
   return {

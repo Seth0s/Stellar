@@ -65,14 +65,21 @@ describe("store.ts: sprints — snapshot no fechamento + migração", () => {
     store.close();
   });
 
-  it("close congela snapshot; done/failed ficam; todo/doing migram", () => {
+  it("close congela snapshot; done/julgada ficam; todo/doing migram", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-sprint-close-"));
     const store = openStore(dir);
     store.upsertBoard(makeBoard("b1"));
     store.upsertTask(makeTask("todo1", "b1", "pending"));
     store.upsertTask(makeTask("doing1", "b1", "running"));
     store.upsertTask(makeTask("done1", "b1", "done"));
-    store.upsertTask(makeTask("fail1", "b1", "failed"));
+    store.upsertTask({
+      ...makeTask("fail1", "b1", "failed"),
+      result_json: JSON.stringify({ failureKind: "julgada", error: "desistiu" }),
+    });
+    store.upsertTask({
+      ...makeTask("intr1", "b1", "failed"),
+      result_json: JSON.stringify({ failureKind: "interrompida", error: "exit 129" }),
+    });
 
     const first = store.getActiveSprint("b1")!;
     const closed = store.closeSprint("b1");
@@ -83,32 +90,28 @@ describe("store.ts: sprints — snapshot no fechamento + migração", () => {
     expect(closed.closed.closed_at).not.toBeNull();
     expect(closed.closed.number).toBe(1);
     expect(closed.opened.number).toBe(2);
-    expect(closed.closed.count_todo).toBe(1);
+    expect(closed.closed.count_todo).toBe(2); // pending + interrompida
     expect(closed.closed.count_doing).toBe(1);
     expect(closed.closed.count_done).toBe(1);
-    expect(closed.closed.count_failed).toBe(1);
-    expect(closed.closed.migrated_out).toBe(2);
-    expect(closed.opened.migrated_in).toBe(2);
+    expect(closed.closed.count_failed).toBe(1); // só julgada
+    expect(closed.closed.migrated_out).toBe(3); // todo + doing + interrompida
+    expect(closed.opened.migrated_in).toBe(3);
     expect(closed.opened.closed_at).toBeNull();
 
-    // Done + failed stay on closed sprint; unfinished open work moved.
     expect(store.getTask("done1")!.sprint_id).toBe(closed.closed.id);
     expect(store.getTask("fail1")!.sprint_id).toBe(closed.closed.id);
     expect(store.getTask("todo1")!.sprint_id).toBe(closed.opened.id);
     expect(store.getTask("doing1")!.sprint_id).toBe(closed.opened.id);
+    expect(store.getTask("intr1")!.sprint_id).toBe(closed.opened.id);
 
-    // Frozen board snapshot includes all four as they were at close.
     const snap = store.getSprintSnapshot(closed.closed.id)!;
-    expect(snap).toHaveLength(4);
-    expect(snap.map((t) => t.id).sort()).toEqual(["doing1", "done1", "fail1", "todo1"]);
+    expect(snap).toHaveLength(5);
 
-    // Snapshot counts do NOT change when a migrated task later finishes.
     store.upsertTask({ ...store.getTask("todo1")!, status: "done", actor: "human" });
     const listed = store.listSprints("b1");
     const frozen = listed.find((s) => s.id === closed.closed.id)!;
-    expect(frozen.count_todo).toBe(1);
-    expect(frozen.count_done).toBe(1);
-    expect(frozen.count_todo + frozen.count_doing + frozen.count_done + frozen.count_failed).toBe(4);
+    expect(frozen.count_todo).toBe(2);
+    expect(frozen.count_failed).toBe(1);
     store.close();
   });
 

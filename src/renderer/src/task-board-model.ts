@@ -752,6 +752,7 @@ export function snapshotTaskToBoardItem(
   divergedActor: null;
   verdicts: [];
   firstActor: null;
+  interruptionReason: null;
 } {
   return {
     id: t.id,
@@ -777,5 +778,6 @@ export function snapshotTaskToBoardItem(
     divergedActor: null,
     verdicts: [],
     firstActor: null,
+    interruptionReason: null,
   };
 }

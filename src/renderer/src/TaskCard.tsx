@@ -226,6 +226,7 @@ function TaskItem({
   // componente só entrega o resultado.
   const humanMoveNotice = describeHumanMoveNotice(task.lastActor, task.cardAlive, task.cardId);
   const divergenceNotice = describeStatusDivergence(task.divergedStatus, task.divergedActor);
+  const interruptNotice = task.interruptionReason;
   return (
     <div className={styles.item} data-task-item-id={task.id} onPointerDown={onDragPointerDown}>
       <div className={styles.itemTop}>
@@ -305,6 +306,11 @@ function TaskItem({
       {divergenceNotice && (
         <div className={styles.divergenceNotice} data-part="status-divergence">
           {divergenceNotice}
+        </div>
+      )}
+      {interruptNotice && (
+        <div className={styles.interruptNotice} data-part="interruption-reason">
+          interrompida: {interruptNotice}
         </div>
       )}
       {alive && (

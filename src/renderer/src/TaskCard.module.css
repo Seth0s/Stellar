@@ -389,6 +389,18 @@
   line-height: 1.4;
 }
 
+/* DESIGN-BACKLOG.md "Falha TIPADA" — motivo de interrupção na coluna a fazer. */
+.interruptNotice {
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 10%, var(--panel));
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+  font-family: var(--font-mono);
+}
+
 .proposeBar {
   display: flex;
   align-items: center;

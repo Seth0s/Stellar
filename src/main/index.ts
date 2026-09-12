@@ -33,6 +33,7 @@ import { deriveCardDisplayName } from "../shared/card-identity";
 import { t, setLocale, resolveLocale, isLocale, type Locale } from "../shared/i18n";
 import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
+import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { refreshUserEnv, userEnvSnapshot } from "./user-env";
 import {
@@ -552,33 +553,9 @@ function createWindow() {
   // acelerador de menu aqui). `Shift+F5` pro forceReload pela mesma razão.
   // `!app.isPackaged`: só existe em dev — um build empacotado continua
   // sem NENHUM caminho de reload, exatamente como a rodada 3 deixou.
-  const shortcutSafeMenu = Menu.buildFromTemplate([
-    {
-      label: "Edit",
-      submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        { role: "toggleDevTools" },
-        ...(app.isPackaged
-          ? []
-          : [
-              { role: "reload" as const, accelerator: "F5" },
-              { role: "forceReload" as const, accelerator: "Shift+F5" },
-            ]),
-      ],
-    },
-  ]);
-  Menu.setApplicationMenu(shortcutSafeMenu);
+  // Menu labels: `buildShortcutSafeMenu()` / `t()` (i18n fase 1) — built
+  // once here and again when the locale override changes.
+  Menu.setApplicationMenu(buildShortcutSafeMenu());
 
   // Test-only (2026-09-02) — mesmo padrão de `!app.isPackaged` já usado
   // por `browser:test-make-editable`/`chat:test-simulate-tool`: sem isso,
@@ -1147,6 +1124,9 @@ function createWindow() {
     verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
     /** Ator da 1ª transição de status — `human` ⇒ criada pela UI do quadro. */
     firstActor: "app" | "agent" | "human" | null;
+    /** DESIGN-BACKLOG.md "Falha TIPADA" — motivo visível quando a task
+     * voltou pra "a fazer" por interrupção (não julgamento). */
+    interruptionReason: string | null;
   };
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — o quadro de tasks (renderer)
   // precisa de push ao vivo, espelhando `onConnectorKindChanged`/
@@ -1260,6 +1240,7 @@ function createWindow() {
         divergedActor: t.diverged_actor,
         verdicts: verdictsByTask.get(t.id) ?? [],
         firstActor: firstActorByTask.get(t.id) ?? null,
+        interruptionReason: interruptionReasonFromResultJson(t.result_json),
       };
     });
   }
@@ -1946,7 +1927,13 @@ function createWindow() {
     ) => {
       const existing = store.getTask(draggedTaskId);
       if (!existing) return { ok: false, error: `no such task "${draggedTaskId}"` };
-      const dragged: TaskRow = { ...existing, status, order, updated_at: Date.now(), actor: "human" };
+      // DESIGN-BACKLOG.md "Falha TIPADA" — human drag into "falhou" is
+      // julgada (explicit judgment), never an interruption.
+      let result_json = existing.result_json;
+      if (status === "failed" && existing.status !== "failed") {
+        result_json = stampFailureKindJson(result_json, decideFailureKind("explicit_failed"));
+      }
+      const dragged: TaskRow = { ...existing, status, order, result_json, updated_at: Date.now(), actor: "human" };
       persistColumnDrop(dragged, siblingImplicitOrders);
       // O aviso é fire-and-forget (`notifyHumanMovedTask` é async,
       // `typeAndSubmit` por baixo): nunca atrasa a resposta pro drag,
@@ -2134,30 +2121,30 @@ function createWindow() {
     (_e, id: string, x: number, y: number, params: BrowserContextMenuParams) => {
       const template: Electron.MenuItemConstructorOptions[] = [];
       template.push(
-        { label: "Voltar", enabled: params.canGoBack, click: () => browserRegistry.back(id) },
-        { label: "Avançar", enabled: params.canGoForward, click: () => browserRegistry.forward(id) },
-        { label: "Recarregar", click: () => browserRegistry.reload(id) },
+        { label: t("menu.back"), enabled: params.canGoBack, click: () => browserRegistry.back(id) },
+        { label: t("menu.forward"), enabled: params.canGoForward, click: () => browserRegistry.forward(id) },
+        { label: t("menu.reload"), click: () => browserRegistry.reload(id) },
       );
       if (params.linkURL) {
         template.push(
           { type: "separator" },
-          { label: "Abrir link", click: () => browserRegistry.navigate(id, params.linkURL) },
-          { label: "Copiar endereço do link", click: () => clipboard.writeText(params.linkURL) },
+          { label: t("menu.openLink"), click: () => browserRegistry.navigate(id, params.linkURL) },
+          { label: t("menu.copyLinkAddress"), click: () => clipboard.writeText(params.linkURL) },
         );
       }
       if (params.mediaType === "image" && params.srcURL) {
         template.push(
           { type: "separator" },
-          { label: "Copiar endereço da imagem", click: () => clipboard.writeText(params.srcURL) },
+          { label: t("menu.copyImageAddress"), click: () => clipboard.writeText(params.srcURL) },
         );
       }
       if (params.selectionText || params.isEditable) {
         template.push({ type: "separator" });
-        if (params.selectionText) template.push({ label: "Copiar", click: () => browserRegistry.copyText(id) });
+        if (params.selectionText) template.push({ label: t("menu.copy"), click: () => browserRegistry.copyText(id) });
         if (params.isEditable) {
           template.push(
-            { label: "Recortar", click: () => browserRegistry.cutText(id) },
-            { label: "Colar", click: () => browserRegistry.pasteText(id) },
+            { label: t("menu.cut"), click: () => browserRegistry.cutText(id) },
+            { label: t("menu.paste"), click: () => browserRegistry.pasteText(id) },
           );
         }
       }
@@ -2170,7 +2157,7 @@ function createWindow() {
       // inspector espera.
       template.push(
         { type: "separator" },
-        { label: "Inspecionar elemento", click: () => safeSend(win, "browser:open-inspector", id, params.x, params.y) },
+        { label: t("menu.inspectElement"), click: () => safeSend(win, "browser:open-inspector", id, params.x, params.y) },
       );
       Menu.buildFromTemplate(template).popup({ window: win, x, y });
     },
@@ -2339,6 +2326,25 @@ function createWindow() {
   // Item 28 — only "generic" ever has one set; used by ChatCard.tsx to
   // prefill the endpoint field when reopening the key form.
   ipcMain.handle("secrets:get-base-url", (_e, provider: SecretProvider) => secretsStore.getBaseURL(provider));
+
+  // DESIGN-BACKLOG.md §2.1 i18n fase 1 — locale detection + persisted override.
+  ipcMain.handle("i18n:get", () => {
+    const override = localePrefs.getOverride();
+    const locale = resolveLocale(systemLocale, override);
+    return { locale, override, systemLocale };
+  });
+  ipcMain.handle("i18n:set-override", (_e, override: unknown) => {
+    const next =
+      override === null || override === undefined ? null : isLocale(override) ? override : null;
+    if (override !== null && override !== undefined && next === null) {
+      const current = localePrefs.getOverride();
+      return { locale: resolveLocale(systemLocale, current), override: current, systemLocale };
+    }
+    localePrefs.setOverride(next);
+    const locale = resolveLocale(systemLocale, next);
+    applyLocale(locale);
+    return { locale, override: next, systemLocale };
+  });
 
   ipcMain.handle(
     "chat:send",

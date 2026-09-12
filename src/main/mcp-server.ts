@@ -485,7 +485,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "close_sprint",
       {
         description:
-          "Close the board's active sprint: freeze snapshot counts + board membership, migrate unfinished todo/doing into a newly opened sprint, leave done and failed on the closed sprint. REFUSES an empty sprint or when there is no active sprint (visible error, never silent no-op). Never auto-closes by calendar.",
+          "Close the board's active sprint: freeze snapshot counts + board membership, migrate unfinished todo/doing AND interrupted (failureKind=interrompida) into a newly opened sprint, leave done and judged failures (julgada) on the closed sprint. countFailed only counts julgada. REFUSES an empty sprint or when there is no active sprint. Never auto-closes by calendar.",
         inputSchema: {
           boardId: z.string().describe("Board whose active sprint to close"),
         },

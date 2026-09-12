@@ -112,7 +112,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
     expect(spawnRequests).toHaveLength(0);
   });
 
-  it("achado 2: markTaskFailed NÃO chama retry/spawn quando upsert pra failed é hold", async () => {
+  it("achado 2: markTaskFailed NÃO chama retry/spawn quando upsert de interrupção é hold", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-hold-retry-"));
     const spawnRequests: unknown[] = [];
     const running: TaskRow = {
@@ -148,8 +148,9 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         getCardBoardId: () => "b1",
-        // Fail write held (human last_actor) — must not proceed to retryOrFail→spawn.
-        upsertTask: (task: TaskRow) => (task.status === "failed" ? held("running", "failed") : applied(task.status)),
+        // Interrompida write held (human last_actor) — must not proceed to retryOrFail→spawn.
+        // Falha tipada: saída sem report grava pending, não failed.
+        upsertTask: (task: TaskRow) => (task.status !== "running" ? held("running", task.status) : applied(task.status)),
         onSpawnAgentRequest: (requestId: string, ...rest: unknown[]) => {
           spawnRequests.push([requestId, ...rest]);
         },

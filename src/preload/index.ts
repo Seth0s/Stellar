@@ -739,6 +739,8 @@ export type TaskBoardItem = {
   verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
   /** Ator da 1ª transição `kind:'status'` — `human` ⇒ criada pela UI. */
   firstActor: "app" | "agent" | "human" | null;
+  /** Motivo visível de interrupção (falha tipada → voltou pra a fazer). */
+  interruptionReason: string | null;
 };
 /** DESIGN-BACKLOG.md §2.1 Fase 2, peça 2 — mesmo padrão de
  * `spawn.onQueueChanged` acima (carga inicial via `listByBoard`, depois
@@ -1251,6 +1253,15 @@ const system = {
   platform: process.platform,
 };
 
+/** DESIGN-BACKLOG.md §2.1 i18n fase 1 — locale from `app.getLocale()` with
+ * a persisted override (`locale.json` in userData, main/locale-prefs.ts). */
+type I18nInfo = { locale: "pt-BR" | "en"; override: ("pt-BR" | "en") | null; systemLocale: string };
+const i18n = {
+  get: (): Promise<I18nInfo> => ipcRenderer.invoke("i18n:get"),
+  setOverride: (override: ("pt-BR" | "en") | null): Promise<I18nInfo> =>
+    ipcRenderer.invoke("i18n:set-override", override),
+};
+
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("clipboardImage", clipboardImage);
 contextBridge.exposeInMainWorld("store", store);
@@ -1273,6 +1284,7 @@ contextBridge.exposeInMainWorld("chat", chat);
 contextBridge.exposeInMainWorld("canvasExport", canvasExport);
 contextBridge.exposeInMainWorld("boardAssets", boardAssets);
 contextBridge.exposeInMainWorld("system", system);
+contextBridge.exposeInMainWorld("i18n", i18n);
 
 /** Test-only, dev builds only — DESIGN-BACKLOG.md item 37's crash-safety
  * net (main/index.ts's `process.on("uncaughtException", ...)`). */
@@ -1303,6 +1315,7 @@ export type ClipboardImageApi = typeof clipboardImage;
 export type CanvasExportApi = typeof canvasExport;
 export type BoardAssetsApi = typeof boardAssets;
 export type SystemApi = typeof system;
+export type I18nApi = typeof i18n;
 export type StoreApi = typeof store;
 export type FsApi = typeof fs;
 export type GitApi = typeof git;
