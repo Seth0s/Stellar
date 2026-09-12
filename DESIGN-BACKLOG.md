@@ -735,6 +735,51 @@ Tudo aqui saiu do primeiro dia de uso do painel de sprints e dos terminais, com 
 ---
 
 ## 💡 3. Ideias & Brainstorms
+### 3.0 Raio de alcance — DECIDIDO NAO CONSTRUIR AGORA (2026-09-12)
+
+Tres rodadas de desenho, com dois criticos de providers diferentes lendo a proposta e depois
+lendo um ao outro. **Os dois convergiram em nao construir**, partindo de posicoes opostas.
+
+**O que matou, e e um numero, nao uma opiniao.** A ferramenta dependeria das fontes de contrato
+ja escritas. Medido no IdyPlatform: `vhosts/Backend/routes/api.php` declara **313 paths
+distintos** (460 chamadas `Route::`); `docs/contracts/` tem **15 arquivos**; a cobertura e de
+**38% com casamento estrito** do path completo e 68% com casamento generoso por prefixo — e
+prefixo e justamente o casamento que mente. A matriz Endpoint x Admin x Mobile x conecta x
+Portal (`docs/contracts/backend/recurring-planning.md:1430`) tem **82 linhas**. `portal/` e
+`frontend/` contem so `.gitkeep`. O contrato do resend existe so do lado admin — `mobile/eventos.md`
+tem zero mencao a `resend`/`delivery_mode`.
+Com 38%, a resposta mais comum da ferramenta seria "nao sei". Uma lista vazia que o leitor
+interpreta como "nenhum cliente afetado" e pior que ferramenta nenhuma, porque carimba.
+
+**As duas concessoes que fecharam a discussao:**
+* O critico que defendia a versao minima concedeu: *"a versao minima que eu vendi e a v2 com nome
+  melhor"*, e *"eu rebatizei leitura de codigo como lookup de declaracao para preservar a pureza
+  da fatia 1"* — os tres detectores de apodrecimento (K de N, citacao viva, arvore suja) leem
+  codigo, entao o "e impossivel detectar matriz velha sem ler o codigo" do outro fica de pe.
+* O critico que defendia OpenAPI concedeu: o Idy **nao tem spec nem gerador**, entao a proposta
+  dele comecava por manter uma especificacao a mao — a mesma disciplina humana que ele condenava.
+
+**O que fazer antes, e os dois propuseram a MESMA coisa sem combinar:** subir o corpus, com a
+semente gerada **do codigo**, uma vez. Uma linha por path do `api.php` na matriz — Endpoint x
+Admin x Mobile x conecta x Portal, celula = `arquivo:linha`, traco, ou `?`. 313 linhas, mesmo com
+muitas celulas vazias: **`?` e classificacao, silencio nao e**. A maquina garante o esqueleto, o
+humano preenche as conexoes. Prioridade: fechar os buracos da superficie ja documentada (resend
+no Mobile, Conecta, portal vazio) e classificar auth e portal, que sao multi-cliente e hoje caem
+em "sem fonte". **Isso e task do Idy, nao do Stellar.**
+
+**Limiar para reabrir**: 50% de cobertura estrita. Abaixo disso a ferramenta tem "nao sei" como
+modo. A partir de ~70% o "sem fonte" vira alarme em vez de ruido, e a interseccao no Stellar
+passa a fazer sentido.
+
+**Fica decidido junto, e vale por si:** `update_task` ganha a capacidade de escrever no prompt da
+task (decisao do dono do repo). Isso resolve uma objecao estrutural real — o prompt era
+write-once no `create_task`, entao um enunciado nao podia evoluir — e serve a qualquer briefing
+que precise crescer, independente de raio de alcance.
+
+**Nao voltar ao grafo.** Nem card, nem desenho, nem extrator de acoplamento informal
+(IPC/CSS/coluna-fantasma). Isso nunca foi o proposito; o proposito era lembrar quem esquece, e o
+que falta para lembrar nao e mecanismo, e dado.
+
 
 * **Card de grafo de fluxo com observer — raio de alcance de uma mudanca (ideia do dono do repo, 2026-09-11):**
   * O caso que ele descreveu, literal: *"implementador A esta mexendo no arquivo C, e esse arquivo C faz parte do backend que responde a 3 projetos diferentes (clientes). A task dele mexia so na parte especifica de C que afeta 1 desses clientes. Ele verifica, fica tudo ok — mas nunca vai lembrar de verificar os outros clientes que tambem se alimentam dele, porque esta fora do escopo dele. Ou seja, ele poderia verificar sempre inicialmente quem afeta quem, e sempre verificar se tudo ligante com o grafo esta ok"*.
