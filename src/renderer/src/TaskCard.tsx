@@ -595,22 +595,41 @@ function ChartsPanel({
   );
 }
 
-/** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — seletor de sprint.
+/** DESIGN-BACKLOG.md §2.0 — um painel só: ver, renomear, fechar, excluir.
  * Contagens de sprint FECHADO vêm do snapshot congelado (nunca recalculadas).
- * Clicar numa linha alterna o quadro entre vivo (ativo) e congelado (fechado). */
+ * Fechar/excluir moram aqui (não no header) — peso destrutivo separado do toggle. */
 function SprintsPanel({
   boardId,
   reloadKey,
   selectedId,
+  viewingFrozen,
   onSelect,
+  onClosed,
+  onRenamed,
+  onDeleted,
+  closingSprint,
+  setClosingSprint,
 }: {
   boardId: string;
   reloadKey: number;
   selectedId: string | null;
+  viewingFrozen: boolean;
   onSelect: (sprint: SprintView) => void;
+  onClosed: () => void;
+  onRenamed: () => void;
+  onDeleted: () => void;
+  closingSprint: boolean;
+  setClosingSprint: (v: boolean) => void;
 }) {
   const [sprints, setSprints] = useState<SprintView[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<null | { kind: "close" | "delete"; sprintId: string }>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const skipRenameBlurRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -640,9 +659,54 @@ function SprintsPanel({
     };
   }, [boardId, reloadKey]);
 
+  async function commitRename(sprintId: string) {
+    setRenameError(null);
+    const res = await window.tasks.renameSprint(sprintId, editDraft);
+    if (!res.ok) {
+      setRenameError(res.error);
+      return;
+    }
+    setEditingId(null);
+    onRenamed();
+  }
+
+  async function confirmPending() {
+    if (!pendingAction || busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      if (pendingAction.kind === "close") {
+        setClosingSprint(true);
+        try {
+          const res = await window.tasks.closeSprint(boardId);
+          if (!res.ok) {
+            setActionError(res.error);
+            return;
+          }
+          setPendingAction(null);
+          onClosed();
+        } finally {
+          setClosingSprint(false);
+        }
+      } else {
+        const res = await window.tasks.deleteSprint(pendingAction.sprintId);
+        if (!res.ok) {
+          setActionError(res.error);
+          return;
+        }
+        setPendingAction(null);
+        onDeleted();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const active = sprints?.find((s) => s.closedAt === null) ?? null;
+
   return (
     <div className={styles.sprintsPanel} data-part="sprints-panel">
-      <div className={styles.sprintsTitle}>sprints — clique pra ver o quadro</div>
+      <div className={styles.sprintsTitle}>sprints — ver, renomear, fechar ou excluir</div>
       {sprints === null ? (
         <div className={styles.chartEmpty}>carregando…</div>
       ) : sprints.length === 0 ? (
@@ -652,8 +716,9 @@ function SprintsPanel({
           {sprints.map((s) => {
             const open = s.closedAt === null;
             const selected = selectedId === s.id || (selectedId === null && open);
+            const editing = editingId === s.id;
             return (
-              <li key={s.id}>
+              <li key={s.id} className={styles.sprintItem}>
                 <button
                   type="button"
                   data-part="sprint-row"
@@ -661,12 +726,48 @@ function SprintsPanel({
                   data-sprint-selected={selected ? "true" : "false"}
                   className={`${styles.sprintRow} ${selected ? styles.sprintRowSelected : ""}`}
                   aria-pressed={selected}
-                  onClick={() => onSelect(s)}
+                  onClick={() => {
+                    if (editing) return;
+                    onSelect(s);
+                  }}
                 >
                   <div className={styles.sprintHead}>
-                    <span className={styles.sprintId} data-part="sprint-id">
-                      {sprintLabel(s)}
-                    </span>
+                    {editing ? (
+                      <input
+                        data-part="sprint-rename-input"
+                        data-no-drag
+                        className={styles.sprintRenameInput}
+                        value={editDraft}
+                        autoFocus
+                        aria-label="Nome do sprint"
+                        placeholder={`Sprint ${s.number}`}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void commitRename(s.id);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            skipRenameBlurRef.current = true;
+                            setEditingId(null);
+                            setRenameError(null);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (skipRenameBlurRef.current) {
+                            skipRenameBlurRef.current = false;
+                            return;
+                          }
+                          void commitRename(s.id);
+                        }}
+                      />
+                    ) : (
+                      <span className={styles.sprintId} data-part="sprint-id">
+                        {sprintLabel(s)}
+                      </span>
+                    )}
                     <span className={styles.sprintState} data-part="sprint-state">
                       {open ? "em curso" : "fechado"}
                     </span>
@@ -691,10 +792,101 @@ function SprintsPanel({
                     </div>
                   )}
                 </button>
+                <div className={styles.sprintActions} data-part="sprint-actions">
+                  <button
+                    type="button"
+                    data-part="sprint-rename"
+                    data-no-drag
+                    className={styles.sprintActionBtn}
+                    title="Renomear"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingId(s.id);
+                      setEditDraft(s.name ?? "");
+                      setRenameError(null);
+                    }}
+                  >
+                    renomear
+                  </button>
+                  {open && (
+                    <>
+                      <button
+                        type="button"
+                        data-part="sprint-close-action"
+                        data-no-drag
+                        className={`${styles.sprintActionBtn} ${styles.sprintActionQuiet}`}
+                        title="Fechar sprint e abrir o próximo"
+                        disabled={closingSprint || viewingFrozen || busy}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingAction({ kind: "close", sprintId: s.id });
+                          setActionError(null);
+                        }}
+                      >
+                        fechar
+                      </button>
+                      <button
+                        type="button"
+                        data-part="sprint-delete-action"
+                        data-no-drag
+                        className={`${styles.sprintActionBtn} ${styles.sprintActionDanger}`}
+                        title="Excluir sprint ativo — tasks voltam ao anterior"
+                        disabled={busy || viewingFrozen}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingAction({ kind: "delete", sprintId: s.id });
+                          setActionError(null);
+                        }}
+                      >
+                        excluir
+                      </button>
+                    </>
+                  )}
+                </div>
               </li>
             );
           })}
         </ul>
+      )}
+      {renameError && (
+        <div className={styles.sprintCloseError} data-part="sprint-rename-error" role="alert">
+          {renameError}
+        </div>
+      )}
+      {pendingAction && (
+        <div className={styles.sprintConfirm} data-part="sprint-confirm" role="alertdialog">
+          <p>
+            {pendingAction.kind === "close"
+              ? `Fechar ${active ? sprintLabel(active) : "o sprint atual"}? Congela o histórico e abre o próximo.`
+              : `Excluir ${active ? sprintLabel(active) : "o sprint atual"}? As tasks voltam ao sprint anterior (que reabre).`}
+          </p>
+          <div className={styles.sprintConfirmActions}>
+            <button
+              type="button"
+              data-no-drag
+              className={styles.sprintActionBtn}
+              disabled={busy}
+              onClick={() => setPendingAction(null)}
+            >
+              cancelar
+            </button>
+            <button
+              type="button"
+              data-no-drag
+              data-part="sprint-confirm-go"
+              className={`${styles.sprintActionBtn} ${styles.sprintActionDanger}`}
+              disabled={busy || closingSprint}
+              onClick={() => void confirmPending()}
+            >
+              {pendingAction.kind === "close" ? "fechar agora" : "excluir agora"}
+            </button>
+          </div>
+        </div>
+      )}
+      {actionError && (
+        <div className={styles.sprintCloseError} data-part="sprint-action-error" role="alert">
+          {actionError}
+        </div>
       )}
     </div>
   );
@@ -776,10 +968,10 @@ function TaskCardInner({
   const [sprintsOpen, setSprintsOpen] = useState(false);
   const [sprintsReloadKey, setSprintsReloadKey] = useState(0);
   const [closingSprint, setClosingSprint] = useState(false);
-  const [closeSprintError, setCloseSprintError] = useState<string | null>(null);
   /** null = live active sprint (default). Closed id → frozen snapshot board. */
   const [viewingSprintId, setViewingSprintId] = useState<string | null>(null);
   const [viewingSprintMeta, setViewingSprintMeta] = useState<SprintView | null>(null);
+  const [activeSprintLabel, setActiveSprintLabel] = useState<string | null>(null);
   const [frozenTasks, setFrozenTasks] = useState<TaskBoardItem[] | null>(null);
 
   const viewingFrozen = viewingSprintId !== null && frozenTasks !== null;
@@ -828,6 +1020,18 @@ function TaskCardInner({
   }, [activeBoardId]);
 
   useEffect(() => {
+    let cancelled = false;
+    window.tasks.listSprints(activeBoardId).then((rows) => {
+      if (cancelled) return;
+      const active = rows.find((r) => r.closedAt === null);
+      setActiveSprintLabel(active ? sprintLabel(active) : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBoardId, sprintsReloadKey]);
+
+  useEffect(() => {
     if (!viewingSprintId) {
       setFrozenTasks(null);
       setViewingSprintMeta(null);
@@ -873,24 +1077,19 @@ function TaskCardInner({
     setViewingSprintId(s.id);
   }
 
-  async function onCloseSprint() {
-    if (closingSprint || viewingFrozen) return;
-    setClosingSprint(true);
-    setCloseSprintError(null);
-    try {
-      const res = await window.tasks.closeSprint(activeBoardId);
-      if (res.ok) {
-        setSprintsOpen(true);
-        setSprintsReloadKey((k) => k + 1);
-        setViewingSprintId(null);
-      } else {
-        setCloseSprintError(res.error);
-      }
-    } finally {
-      setClosingSprint(false);
-    }
+  function onSprintClosed() {
+    setSprintsReloadKey((k) => k + 1);
+    setViewingSprintId(null);
+    setFrozenTasks(null);
+    setViewingSprintMeta(null);
   }
 
+  function onSprintDeleted() {
+    setSprintsReloadKey((k) => k + 1);
+    setViewingSprintId(null);
+    setFrozenTasks(null);
+    setViewingSprintMeta(null);
+  }
   // RODADA 4 — aviso quando task criada por humano é pega (ganha card ou
   // vira running). Snapshot anterior × atual; também cobre tasks humanas
   // já no board ao montar (firstActor), não só as criadas nesta sessão.
@@ -1091,24 +1290,14 @@ function TaskCardInner({
           <span className="card-head-actions">
             <button
               type="button"
-              data-part="sprint-close"
-              data-no-drag
-              className={styles.chartsToggleBtn}
-              title="Fechar sprint atual e abrir o próximo"
-              disabled={closingSprint || viewingFrozen}
-              onClick={() => void onCloseSprint()}
-            >
-              <span>Fechar sprint</span>
-            </button>
-            <button
-              type="button"
               data-part="sprints-toggle"
+              data-no-drag
               className={`${styles.chartsToggleBtn} ${sprintsOpen ? styles.chartsToggleActive : ""}`}
               aria-pressed={sprintsOpen}
-              title="Histórico de sprints"
+              title="Gerenciar sprints — ver histórico, renomear, fechar ou excluir"
               onClick={() => setSprintsOpen((v) => !v)}
             >
-              <span>Sprints</span>
+              <span>{activeSprintLabel ?? "Sprints"}</span>
             </button>
             <button
               type="button"
@@ -1146,11 +1335,6 @@ function TaskCardInner({
           >
             voltar ao atual
           </button>
-        </div>
-      )}
-      {closeSprintError && (
-        <div className={styles.sprintCloseError} data-part="sprint-close-error" role="alert">
-          {closeSprintError}
         </div>
       )}
       <div className={styles.board} data-sprint-frozen={viewingFrozen ? "true" : "false"}>
@@ -1224,7 +1408,13 @@ function TaskCardInner({
           boardId={activeBoardId}
           reloadKey={sprintsReloadKey}
           selectedId={viewingSprintId}
+          viewingFrozen={viewingFrozen}
           onSelect={onSelectSprint}
+          onClosed={onSprintClosed}
+          onRenamed={() => setSprintsReloadKey((k) => k + 1)}
+          onDeleted={onSprintDeleted}
+          closingSprint={closingSprint}
+          setClosingSprint={setClosingSprint}
         />
       )}
       {chartsOpen && <ChartsPanel boardId={activeBoardId} tasks={boardTasks} liveTransitions={!viewingFrozen} />}

@@ -751,8 +751,14 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 220px;
+  max-height: 280px;
   overflow: auto;
+}
+
+.sprintItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .sprintRow {
@@ -769,6 +775,81 @@
 
 .sprintRowSelected {
   border-color: var(--foam);
+}
+
+.sprintActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+
+.sprintActionBtn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sprintActionBtn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.sprintActionBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sprintActionQuiet {
+  color: var(--muted);
+}
+
+.sprintActionDanger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.sprintActionDanger:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.sprintRenameInput {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--foam);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+}
+
+.sprintConfirm {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  font-size: 11px;
+  color: var(--text);
+}
+
+.sprintConfirm p {
+  margin: 0 0 8px;
+}
+
+.sprintConfirmActions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .sprintFrozenBanner {
