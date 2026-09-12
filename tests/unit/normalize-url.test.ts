@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ipv4Octets, isLocalHostname, normalizeUrl } from "../../src/main/browser-registry";
+import { ipv4Octets, isLocalHostname, navigationUrlError, normalizeUrl } from "../../src/main/browser-registry";
 
 /**
  * Relatado ao vivo (2026-09-08): "o navegador não resolve para http".
@@ -67,20 +67,33 @@ describe("normalizeUrl: esquema explícito é respeitado tal e qual", () => {
 });
 
 describe("normalizeUrl: a fronteira de segurança não mudou", () => {
-  for (const perigoso of [
-    "javascript:alert(1)",
-    "JavaScript:alert(1)",
-    "file:///etc/passwd",
-    "data:text/html,<script>alert(1)</script>",
-    "blob:https://example.com/abc",
-    "vbscript:msgbox",
-    "about:config",
-    "ftp://example.com",
-  ]) {
+  for (const [perigoso, scheme] of [
+    ["javascript:alert(1)", "javascript"],
+    ["JavaScript:alert(1)", "javascript"],
+    ["file:///etc/passwd", "file"],
+    ["data:text/html,<script>alert(1)</script>", "data"],
+    ["blob:https://example.com/abc", "blob"],
+    ["vbscript:msgbox", "vbscript"],
+    ["about:config", "about"],
+    ["ftp://example.com", "ftp"],
+  ] as const) {
     it(`recusa ${perigoso.slice(0, 28)}`, () => {
-      expect(() => normalizeUrl(perigoso)).toThrow();
+      expect(() => normalizeUrl(perigoso)).toThrow(new RegExp(`unsupported url scheme: ${scheme}:`));
     });
   }
+});
+
+describe("navigationUrlError: o recusado vira string, o válido não", () => {
+  it("devolve o erro nomeando o esquema, sem lançar", () => {
+    expect(navigationUrlError("file:///tmp/x.html")).toMatch(/unsupported url scheme: file:/);
+    expect(navigationUrlError("javascript:alert(1)")).toMatch(/unsupported url scheme: javascript:/);
+  });
+
+  it("http(s) e about:blank passam", () => {
+    expect(navigationUrlError("https://example.com")).toBeNull();
+    expect(navigationUrlError("http://127.0.0.1:8080/out/index.html")).toBeNull();
+    expect(navigationUrlError("about:blank")).toBeNull();
+  });
 });
 
 describe("isLocalHostname: partes que não são o host não confundem a decisão", () => {
