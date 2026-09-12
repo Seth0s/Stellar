@@ -6,7 +6,8 @@
  *
  * DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
  * caixa sem submeter" + "Cards recebem a mesma task duas vezes" +
- * cursor-agent follow-ups queue (owner 2026-09-11: 5× paste chip → exit 143).
+ * cursor-agent follow-ups queue (owner 2026-09-11: 5× paste chip → exit 143)
+ * + rodada 4 (`49ae26b7`): bracketed paste cego + âncora que escorrega.
  *
  * Screen text is a HISTORY window, not "what just happened". Matching
  * `Working` / `follow-ups` / `Thinking` by mere presence false-positives
@@ -17,11 +18,17 @@
  *
  * Anchor: `screenTextBeforeWrite` (same line window, read BEFORE the
  * delivery write). Submit-started / follow-ups only count as `"sent"` when
- * their match COUNT increases vs that baseline — "appeared after my
- * write", not "was already on screen".
+ * a match's local NEIGHBORHOOD is new vs that baseline (or the raw count
+ * rises). Count-only arithmetic fails when an 8-line window drops an old
+ * `Working` in the same tick a new one enters — flat count → false
+ * `"unsent"` → extra Enter → duplicate delivery.
  *
  * Paste chip in the composer (no NEW follow-ups / NEW Working) → `"unsent"`
  * (retry Enter). Order: delta signals first, then chip/needle.
+ *
+ * Bracketed Paste (CSI 200~/201~): only when the PTY peer requested
+ * DECSET `2004h`. Blind wrapping poisons CLIs that never asked — they
+ * echo the raw escapes as text. When unknown, send raw.
  */
 
 /** Quiescence window after the card's last pty output before typing is
@@ -173,9 +180,39 @@ export function countPatternMatches(text: string, pattern: RegExp): number {
   return matches ? matches.length : 0;
 }
 
-/** True when `pattern` matches MORE times in `after` than in `before`. */
+/** Chars of context BEFORE a match that identify WHICH occurrence it is.
+ * Prefix-only on purpose: appending below an already-visible hit (paste
+ * chip, prompt chrome, `> new`) must not rewrite that hit's identity and
+ * false-positive `"sent"`. Scroll-swap still changes the left context
+ * (`prose Working yesterday` → `  Working` under a new brief). */
+export const MATCH_NEIGHBORHOOD_PREFIX = 24;
+
+/** Local slice around a match used as a positional identity — the match
+ * itself plus left context. No right context: a suffix would treat any
+ * append below the hit as a "new" occurrence. */
+export function matchNeighborhood(text: string, matchIndex: number, matchLength: number): string {
+  const left = Math.max(0, matchIndex - MATCH_NEIGHBORHOOD_PREFIX);
+  return text.slice(left, matchIndex + matchLength);
+}
+
+/**
+ * True when `after` shows a `pattern` hit that was not already on screen
+ * in `before`. Prefers count increase (cheap, unambiguous). When the
+ * count is flat — the sliding-window scroll case — falls back to
+ * neighborhood identity: a match whose surroundings are absent from
+ * `before` is a NEW hit, not the old one that scrolled away.
+ */
 export function appearedSinceBaseline(before: string, after: string, pattern: RegExp): boolean {
-  return countPatternMatches(after, pattern) > countPatternMatches(before, pattern);
+  if (countPatternMatches(after, pattern) > countPatternMatches(before, pattern)) return true;
+
+  const flags = pattern.global ? pattern.flags : `${pattern.flags}g`;
+  const re = new RegExp(pattern.source, flags);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(after)) !== null) {
+    const neighborhood = matchNeighborhood(after, m.index, m[0].length);
+    if (!before.includes(neighborhood)) return true;
+  }
+  return false;
 }
 
 export function looksLikeFollowUpsQueued(screenText: string): boolean {
@@ -193,7 +230,7 @@ export function looksLikeSubmitStarted(screenText: string): boolean {
  */
 export function followUpsAppearedSince(before: string, after: string): boolean {
   if (appearedSinceBaseline(before, after, FOLLOW_UPS_HEADING_PATTERN)) return true;
-  return countPatternMatches(after, FOLLOW_UP_ROW_PATTERN) > countPatternMatches(before, FOLLOW_UP_ROW_PATTERN);
+  return appearedSinceBaseline(before, after, FOLLOW_UP_ROW_PATTERN);
 }
 
 export function submitStartedAppearedSince(before: string, after: string): boolean {
@@ -252,11 +289,11 @@ export function shouldPressEnterOnAttempt(attemptIndex: number, previousResult: 
 }
 
 /**
- * Bracketed Paste Mode envelope (CSI 200~ … CSI 201~). cursor-agent (and
- * other TUIs) collapse large bracketed pastes into a `[Pasted text #N +M
- * lines]` chip — required to reproduce the follow-ups bug and the right
- * way to deliver multi-line briefs without the TUI treating mid-text
- * newlines as submits.
+ * Bracketed Paste Mode envelope (CSI 200~ … CSI 201~). TUIs that requested
+ * DECSET 2004 collapse large pastes into a `[Pasted text #N +M lines]`
+ * chip — the right way to deliver multi-line briefs without mid-text
+ * newlines being treated as submits. Never send this envelope unless the
+ * peer asked (`bracketedPasteMode === true`).
  */
 export function wrapBracketedPaste(text: string): string {
   return `\x1b[200~${text}\x1b[201~`;
@@ -267,9 +304,58 @@ export function shouldUseBracketedPaste(text: string): boolean {
   return text.includes("\n") || text.length >= 120;
 }
 
-/** Bytes actually written for the delivery body (Enter stays separate). */
-export function deliveryTextBytes(text: string): string {
+/**
+ * Bytes actually written for the delivery body (Enter stays separate).
+ * `bracketedPasteMode` must reflect a real DECSET `2004h` from the PTY
+ * stream. Default / unknown → raw (never invent the envelope).
+ */
+export function deliveryTextBytes(text: string, bracketedPasteMode = false): string {
+  if (!bracketedPasteMode) return text;
   return shouldUseBracketedPaste(text) ? wrapBracketedPaste(text) : text;
+}
+
+/** Tracked DECSET 2004 state, updated from raw PTY output chunks. */
+export interface BracketedPasteModeState {
+  enabled: boolean;
+  /** Incomplete CSI private-mode prefix split across chunks. */
+  carry: string;
+}
+
+export function initialBracketedPasteModeState(): BracketedPasteModeState {
+  return { enabled: false, carry: "" };
+}
+
+/** Incomplete `\x1b[?…` suffix that may continue in the next chunk. */
+export function incompletePrivateModeSuffix(text: string): string {
+  const idx = text.lastIndexOf("\x1b");
+  if (idx < 0) return "";
+  const tail = text.slice(idx);
+  // Complete private-mode CSI ending in h/l — nothing to carry from this start.
+  if (/^\x1b\[\?[0-9;]+[hl]/.test(tail)) {
+    const done = /^\x1b\[\?[0-9;]+[hl]/.exec(tail)!;
+    return incompletePrivateModeSuffix(tail.slice(done[0].length));
+  }
+  // Partial private-mode CSI (or bare ESC / ESC [ / ESC [?).
+  if (/^\x1b(?:\[\??[0-9;]*)?$/.test(tail)) return tail;
+  return "";
+}
+
+/**
+ * Fold one PTY output chunk into DECSET 2004 state. Handles combined
+ * modes (`\x1b[?1000;2004h`) and sequences split across chunks via
+ * `carry`. Pure — the registry just stores the returned state.
+ */
+export function updateBracketedPasteMode(state: BracketedPasteModeState, chunk: string): BracketedPasteModeState {
+  const text = state.carry + chunk;
+  let enabled = state.enabled;
+  const re = /\x1b\[\?([0-9;]+)([hl])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m[1]!.split(";").includes("2004")) {
+      enabled = m[2] === "h";
+    }
+  }
+  return { enabled, carry: incompletePrivateModeSuffix(text) };
 }
 
 /**

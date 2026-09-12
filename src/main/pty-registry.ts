@@ -6,7 +6,12 @@ import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMA
 import { decideRearmOnLine } from "./session-rearm-decision";
 import { decideResumeValidity } from "./session-resume-validation";
 import { decideBashCardDiscovery } from "./bash-discovery-decision";
-import { renewsHumanInputGateClock } from "./type-and-submit-decision";
+import {
+  renewsHumanInputGateClock,
+  initialBracketedPasteModeState,
+  updateBracketedPasteMode,
+  type BracketedPasteModeState,
+} from "./type-and-submit-decision";
 
 // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — encaminhamento 3. Só os
 // providers com conceito de sessão têm onde checar (mesmo conjunto que
@@ -144,6 +149,10 @@ type Entry = {
    * o porteiro trata idle desde este instante, não desde o começo da linha.
    * `null` quando o último input drenou o buffer com Enter. */
   inputLineLastAtMs: number | null;
+  /** DESIGN-BACKLOG.md §0 entrega duplicada rodada 4 — DECSET 2004
+   * pedido pelo peer no stream de output. `typeAndSubmit` só envelopa
+   * bracketed paste quando isto está `enabled`; na dúvida manda cru. */
+  bracketedPasteMode: BracketedPasteModeState;
   /** Se `true`, bytes humanos são retidos brevemente enquanto uma entrega
    * já iniciada termina o ciclo texto + Enter + confirmação. Assim uma tecla
    * que chega durante a janela de 80/250ms não entra no mesmo submit. */
@@ -523,6 +532,7 @@ export function createPtyRegistry(registryOpts: {
       cwd,
       inputLineBuffer: "",
       inputLineLastAtMs: null,
+      bracketedPasteMode: initialBracketedPasteModeState(),
       deliveryActive: false,
       deferredHumanInput: [],
       // RODADA 5, achado único — um card restaurado (`resumeId` já
@@ -610,6 +620,9 @@ export function createPtyRegistry(registryOpts: {
     proc.onData((data) => {
       entry.lastActivityAt = Date.now();
       entry.hasReceivedData = true;
+      // Rodada 4 (`49ae26b7`) — track DECSET 2004h/l so deliveries only
+      // wrap bracketed paste when the peer asked. Pure update; no I/O.
+      entry.bracketedPasteMode = updateBracketedPasteMode(entry.bracketedPasteMode, data);
       entry.chunks.push(data);
       entry.pending += data.length;
       if (entry.pending >= COALESCE_MAX) {
@@ -969,6 +982,8 @@ export function createPtyRegistry(registryOpts: {
     lastActivityAtMs: number;
     hasPendingHumanInput: boolean;
     inputLineLastAtMs: number | null;
+    /** Peer requested DECSET 2004h (Bracketed Paste Mode). */
+    bracketedPasteMode: boolean;
   } | null {
     const entry = entries.get(id);
     if (!entry) return null;
@@ -978,6 +993,7 @@ export function createPtyRegistry(registryOpts: {
       lastActivityAtMs: entry.lastActivityAt,
       hasPendingHumanInput: entry.inputLineBuffer.length > 0,
       inputLineLastAtMs: entry.inputLineLastAtMs,
+      bracketedPasteMode: entry.bracketedPasteMode.enabled,
     };
   }
 

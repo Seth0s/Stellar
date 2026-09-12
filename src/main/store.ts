@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { decideStatusWrite, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
-import { failureKindFromResultJson } from "./failure-kind-decision";
 
 export type CardRow = {
   id: string;
@@ -1195,7 +1194,6 @@ export function openStore(userDataDir: string) {
       members.map((m) => ({
         id: m.id,
         status: m.status,
-        failureKind: failureKindFromResultJson(m.result_json),
       })),
     );
     const snapshot: SprintSnapshotTask[] = members.map((m) => ({

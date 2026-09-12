@@ -520,13 +520,33 @@ function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: nu
   );
 }
 
-/** Painel de gráficos — escondido por padrão. Vereditos vêm do push do
- * quadro (`task.verdicts`); transições do gráfico 3 ainda sob demanda. */
-function ChartsPanel({ boardId, tasks }: { boardId: string; tasks: TaskBoardItem[] }) {
+/** Painel de gráficos — escondido por padrão. Vereditos vêm das tasks
+ * passadas (quadro vivo ou snapshot congelado). Transições do gráfico 3:
+ * ao vivo só quando `liveTransitions` — nunca consultar o board ativo
+ * enquanto se visualiza um sprint fechado. */
+function ChartsPanel({
+  boardId,
+  tasks,
+  liveTransitions,
+}: {
+  boardId: string;
+  tasks: TaskBoardItem[];
+  liveTransitions: boolean;
+}) {
   const [transitionsByTask, setTransitionsByTask] = useState<Record<string, { toValue: string; at: number }[]> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    if (!liveTransitions) {
+      // Frozen view: use trails already on the snapshot stubs (usually
+      // empty) — never `transitionsByBoard` of the live sprint.
+      const grouped: Record<string, { toValue: string; at: number }[]> = {};
+      for (const t of tasks) {
+        if (t.statusTransitions.length > 0) grouped[t.id] = t.statusTransitions;
+      }
+      setTransitionsByTask(grouped);
+      return;
+    }
     setTransitionsByTask(null);
     window.tasks.transitionsByBoard(boardId).then((rows) => {
       if (cancelled) return;
@@ -541,7 +561,7 @@ function ChartsPanel({ boardId, tasks }: { boardId: string; tasks: TaskBoardItem
     return () => {
       cancelled = true;
     };
-  }, [boardId]);
+  }, [boardId, liveTransitions, tasks]);
 
   const allVerdicts = tasks.flatMap((t) => t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })));
   const verdictsByProvider = computeVerdictsByProvider(allVerdicts);
@@ -569,7 +589,7 @@ function ChartsPanel({ boardId, tasks }: { boardId: string; tasks: TaskBoardItem
       <div className={styles.chartsGrid}>
         <VerdictsByProviderChart data={verdictsByProvider} />
         <RoundsToApproveChart data={roundsData} />
-        <CycleTimeChart data={cycleData} loading={transitionsByTask === null} />
+        <CycleTimeChart data={cycleData} loading={liveTransitions && transitionsByTask === null} />
       </div>
     </div>
   );
@@ -1207,7 +1227,7 @@ function TaskCardInner({
           onSelect={onSelectSprint}
         />
       )}
-      {chartsOpen && <ChartsPanel boardId={activeBoardId} tasks={tasks} />}
+      {chartsOpen && <ChartsPanel boardId={activeBoardId} tasks={boardTasks} liveTransitions={!viewingFrozen} />}
     </CardFrame>
   );
 }

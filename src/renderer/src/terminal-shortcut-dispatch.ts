@@ -16,7 +16,6 @@ import {
 } from "./shortcut-config";
 import {
   findShortcutClaimingKey,
-  GLOBAL_SHORTCUTS_BY_ID,
   type ShortcutKeyEvent,
   type ShortcutOverrides,
 } from "./shortcut-registry";
@@ -40,25 +39,28 @@ export type TerminalShortcutDispatch =
    * `card.duplicate` no Ctrl+C livre) era engolido e nunca bubblava. */
   | { consume: true; action: "swallow" }
   /**
-   * Rodada 5: stale + dono CENTRAL. `consume: false` de propósito —
-   * NÃO chamar `stopImmediatePropagation` (senão App.tsx nunca vê o
-   * bubble). O xterm é barrado à parte via
-   * `attachCustomKeyEventHandler` → `false` (medido: `preventDefault`
-   * sozinho NÃO impede `onData("\x03")`).
+   * Rodada 5–6: stale + QUALQUER dono no registro (central OU native
+   * fora dos quatro de terminal já checados). `consume: false` de
+   * propósito — NÃO chamar `stopImmediatePropagation` (senão o bubble
+   * morre e o atalho do dono nunca dispara). O xterm é barrado à parte
+   * via `attachCustomKeyEventHandler` → `false` (medido: `preventDefault`
+   * sozinho NÃO impede `onData("\x03")`). Rodada 6: filtrar só
+   * `GLOBAL_SHORTCUTS_BY_ID` vazava `\x03` quando o dono era native
+   * (ex.: browser.* no Ctrl+C livre) — mesma classe do buraco da rodada 5.
    */
   | { consume: false; action: "defer-central" }
   | { consume: false; action: "none" };
 
 /**
- * Ordem final da sequência (rodadas 3–5 do review):
+ * Ordem final da sequência (rodadas 3–6 do review):
  * 1. copy efetivo (antes de sigint — Ctrl+Shift+C vs Ctrl+C)
  * 2. sigint efetivo
  * 3. paste efetivo
  * 4. eof efetivo
  * 5. stale sigint / stale eof:
- *    - órfã → swallow
- *    - dono central → defer-central (bubbla; xterm barrado no handler)
- *    - outro dono → none
+ *    - ninguém reivindica → swallow
+ *    - alguém reivindica (qualquer dispatch/escopo) → defer-central
+ *      (bubbla; xterm barrado no handler)
  * 6. none
  *
  * Qualquer ramo matched devolve `consume: true` — inclusive copy sem
@@ -83,19 +85,17 @@ export function resolveTerminalShortcutKeydown(
     return { consume: true, action: "eof" };
   }
   // Stale por último: engole encoding antigo só quando a tecla ficou órfã
-  // de verdade — `findShortcutClaimingKey` pergunta ao registro (central,
-  // native, qualquer escopo), sem lista paralela de ids.
+  // de verdade — `findShortcutClaimingKey` pergunta ao registro (qualquer
+  // dispatch/escopo), sem lista paralela de ids. Qualquer dono →
+  // defer-central (não none: senão o xterm emite `\x03`).
   if (
     isStaleDefaultShortcut(e, "terminal.sigint", overrides) ||
     isStaleDefaultShortcut(e, "terminal.eof", overrides)
   ) {
-    const claimedId = findShortcutClaimingKey(e, overrides);
-    if (claimedId === null) {
+    if (findShortcutClaimingKey(e, overrides) === null) {
       return { consume: true, action: "swallow" };
     }
-    if (claimedId in GLOBAL_SHORTCUTS_BY_ID) {
-      return { consume: false, action: "defer-central" };
-    }
+    return { consume: false, action: "defer-central" };
   }
   return { consume: false, action: "none" };
 }
