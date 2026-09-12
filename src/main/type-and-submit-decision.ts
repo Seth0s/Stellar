@@ -18,10 +18,12 @@
  *
  * Anchor: `screenTextBeforeWrite` (same line window, read BEFORE the
  * delivery write). Submit-started / follow-ups only count as `"sent"` when
- * a match's local NEIGHBORHOOD is new vs that baseline (or the raw count
- * rises). Count-only arithmetic fails when an 8-line window drops an old
- * `Working` in the same tick a new one enters — flat count → false
- * `"unsent"` → extra Enter → duplicate delivery.
+ * a match's stabilized left neighborhood is new vs that baseline (or the
+ * raw count rises). Digit runs in the prefix are collapsed so a ticking
+ * timer (`[10s]` → `[11s]`) cannot rewrite an old hit as new. Count-only
+ * arithmetic still fails when an 8-line window drops an old `Working` in
+ * the same tick a new one with an identical non-digit prefix enters —
+ * known limit, see `appearedSinceBaseline`.
  *
  * Paste chip in the composer (no NEW follow-ups / NEW Working) → `"unsent"`
  * (retry Enter). Order: delta signals first, then chip/needle.
@@ -196,21 +198,43 @@ export function matchNeighborhood(text: string, matchIndex: number, matchLength:
 }
 
 /**
+ * Collapse self-updating chrome so neighborhood identity survives a
+ * redraw that only retimes the same hit. cursor-agent prints elapsed
+ * time beside Working (`[10s]` → `[11s]`); without this, the 24-char
+ * prefix changes, `!before.includes(neighborhood)` fires, and an OLD
+ * match is judged new → `"sent"` while Enter is still needed (review
+ * rodada 4, achado A). Digits are the measured volatile; anything
+ * non-numeric in the prefix still distinguishes scroll-swap.
+ */
+export function stabilizeNeighborhood(text: string): string {
+  return text.replace(/\d+/g, "#");
+}
+
+/**
  * True when `after` shows a `pattern` hit that was not already on screen
  * in `before`. Prefers count increase (cheap, unambiguous). When the
  * count is flat — the sliding-window scroll case — falls back to
- * neighborhood identity: a match whose surroundings are absent from
- * `before` is a NEW hit, not the old one that scrolled away.
+ * stabilized neighborhood identity: a match whose (digit-collapsed) left
+ * context is absent from `before` is a NEW hit, not the old one that
+ * scrolled away, and not the same hit with a ticking timer.
+ *
+ * KNOWN LIMIT (review rodada 4, achado C — do not invent a defense):
+ * when a new turn's match has the same stabilized 24-char prefix as the
+ * hit that just scrolled off, count stays flat and the prefix is still
+ * "present" → we read a real submit as not-appeared → `"unsent"` → an
+ * Extra Enter. Symmetric false negative; accepting it is cheaper than
+ * guessing `"sent"`.
  */
 export function appearedSinceBaseline(before: string, after: string, pattern: RegExp): boolean {
   if (countPatternMatches(after, pattern) > countPatternMatches(before, pattern)) return true;
 
+  const beforeStable = stabilizeNeighborhood(before);
   const flags = pattern.global ? pattern.flags : `${pattern.flags}g`;
   const re = new RegExp(pattern.source, flags);
   let m: RegExpExecArray | null;
   while ((m = re.exec(after)) !== null) {
-    const neighborhood = matchNeighborhood(after, m.index, m[0].length);
-    if (!before.includes(neighborhood)) return true;
+    const neighborhood = stabilizeNeighborhood(matchNeighborhood(after, m.index, m[0].length));
+    if (!beforeStable.includes(neighborhood)) return true;
   }
   return false;
 }
@@ -325,36 +349,65 @@ export function initialBracketedPasteModeState(): BracketedPasteModeState {
   return { enabled: false, carry: "" };
 }
 
-/** Incomplete `\x1b[?…` suffix that may continue in the next chunk. */
+/** Incomplete ESC suffix that may continue in the next chunk — private
+ * mode CSI (`\x1b[?…`), RIS (`\x1bc`), or DECSTR (`\x1b[!p`). */
 export function incompletePrivateModeSuffix(text: string): string {
   const idx = text.lastIndexOf("\x1b");
   if (idx < 0) return "";
   const tail = text.slice(idx);
-  // Complete private-mode CSI ending in h/l — nothing to carry from this start.
+  // Complete sequences we care about — consume and look further.
+  if (/^\x1bc/.test(tail)) return incompletePrivateModeSuffix(tail.slice(2));
+  if (/^\x1b\[!p/.test(tail)) return incompletePrivateModeSuffix(tail.slice(4));
   if (/^\x1b\[\?[0-9;]+[hl]/.test(tail)) {
     const done = /^\x1b\[\?[0-9;]+[hl]/.exec(tail)!;
     return incompletePrivateModeSuffix(tail.slice(done[0].length));
   }
-  // Partial private-mode CSI (or bare ESC / ESC [ / ESC [?).
-  if (/^\x1b(?:\[\??[0-9;]*)?$/.test(tail)) return tail;
+  // Partial: bare ESC, ESC [, ESC [?, ESC [! , ESC [?digits, ESC [!
+  if (/^\x1b(?:\[(?:\?|[!]?)?[0-9;]*)?$/.test(tail)) return tail;
   return "";
 }
 
 /**
  * Fold one PTY output chunk into DECSET 2004 state. Handles combined
- * modes (`\x1b[?1000;2004h`) and sequences split across chunks via
- * `carry`. Pure — the registry just stores the returned state.
+ * modes (`\x1b[?1000;2004h`), sequences split across chunks via `carry`,
+ * and terminal resets that clear private modes: RIS (`\x1bc`) and
+ * DECSTR (`\x1b[!p`). Without the resets, a soft/hard reset leaves
+ * `enabled` stuck true and the next bracketed envelope is echoed as
+ * garbage (review rodada 4, achado B). Events are applied in stream
+ * order so `RIS` then `2004h` correctly re-enables. Pure — the registry
+ * just stores the returned state.
+ *
+ * Resume/restart of a card spawns a NEW PTY process that re-announces
+ * 2004h if it wants it — there is no inherited mode to preserve. Default
+ * remains disabled (raw), the safe side.
  */
 export function updateBracketedPasteMode(state: BracketedPasteModeState, chunk: string): BracketedPasteModeState {
   const text = state.carry + chunk;
   let enabled = state.enabled;
-  const re = /\x1b\[\?([0-9;]+)([hl])/g;
+
+  type Ev = { index: number; kind: "reset" | "on" | "off" };
+  const events: Ev[] = [];
+
+  for (const m of text.matchAll(/\x1bc/g)) {
+    events.push({ index: m.index!, kind: "reset" });
+  }
+  for (const m of text.matchAll(/\x1b\[!p/g)) {
+    events.push({ index: m.index!, kind: "reset" });
+  }
+  const modeRe = /\x1b\[\?([0-9;]+)([hl])/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = modeRe.exec(text)) !== null) {
     if (m[1]!.split(";").includes("2004")) {
-      enabled = m[2] === "h";
+      events.push({ index: m.index, kind: m[2] === "h" ? "on" : "off" });
     }
   }
+
+  events.sort((a, b) => a.index - b.index);
+  for (const ev of events) {
+    if (ev.kind === "on") enabled = true;
+    else enabled = false; // reset or 2004l
+  }
+
   return { enabled, carry: incompletePrivateModeSuffix(text) };
 }
 

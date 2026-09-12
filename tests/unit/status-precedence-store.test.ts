@@ -26,6 +26,7 @@ describe("store.ts: status híbrido com precedência (decisão 8)", () => {
       status: "pending",
       card_id: null,
       board_id: "default",
+      cwd: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,

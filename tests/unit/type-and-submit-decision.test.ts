@@ -152,6 +152,23 @@ describe("looksLikeSubmitStarted / needleVisibleOnScreen / delta", () => {
       }),
     ).toBe("sent");
   });
+
+  it("review A: timer [10s]→[11s] no mesmo Working NÃO é appeared (não marca sent)", () => {
+    // Measured failure: raw neighborhood differs only in digits → false
+    // "appeared" → "sent" while Enter still needed. Digit-stabilize holds.
+    const before = "task running\n[10s] Working\n> ";
+    const after = "task running\n[11s] Working\n[Pasted text #2 +14 lines]";
+    expect(appearedSinceBaseline(before, after, SUBMIT_STARTED_PATTERN)).toBe(false);
+    expect(submitStartedAppearedSince(before, after)).toBe(false);
+    expect(
+      decideSubmitCheck({
+        screenTextBeforeWrite: before,
+        screenText: after,
+        sentNeedle: "Task briefing long enough",
+        hasNewActivitySinceWrite: true,
+      }),
+    ).toBe("unsent"); // paste chip still in composer — retry Enter
+  });
 });
 
 describe("decideSubmitCheck", () => {
@@ -350,6 +367,23 @@ describe("updateBracketedPasteMode (DECSET 2004)", () => {
   it("ignora outros DECSET e começa desligado (na dúvida, cru)", () => {
     const state = updateBracketedPasteMode(initialBracketedPasteModeState(), "\x1b[?25l\x1b[?1000h");
     expect(state.enabled).toBe(false);
+  });
+
+  it("review B: RIS (ESC c) e DECSTR (CSI ! p) desligam o modo", () => {
+    let state = updateBracketedPasteMode(initialBracketedPasteModeState(), "\x1b[?2004h");
+    expect(state.enabled).toBe(true);
+    state = updateBracketedPasteMode(state, "redraw\x1bc");
+    expect(state.enabled).toBe(false);
+    state = updateBracketedPasteMode(state, "\x1b[?2004h");
+    expect(state.enabled).toBe(true);
+    state = updateBracketedPasteMode(state, "soft\x1b[!p");
+    expect(state.enabled).toBe(false);
+  });
+
+  it("review B: RIS depois 2004h no mesmo chunk reabilita (ordem do stream)", () => {
+    let state = updateBracketedPasteMode(initialBracketedPasteModeState(), "\x1b[?2004h");
+    state = updateBracketedPasteMode(state, "\x1bc\x1b[?2004h");
+    expect(state.enabled).toBe(true);
   });
 });
 

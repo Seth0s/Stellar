@@ -66,6 +66,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       status: "running",
       card_id: null,
       board_id: "b1",
+      cwd: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -122,6 +123,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       status: "running",
       card_id: "card-impl",
       board_id: "b1",
+      cwd: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -174,6 +176,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       status: "running",
       card_id: "impl",
       board_id: "b1",
+      cwd: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
@@ -218,6 +221,54 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
     expect(upserted[0].statusProposed).toBe(false);
   });
 
+  it("falha tipada: update_task com result.failureKind forjado SEM status não rebaixa julgada", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-forge-kind-"));
+    const upserted: TaskRow[] = [];
+    const existing: TaskRow = {
+      id: "t-judged",
+      prompt: "x",
+      provider: "claude",
+      status: "failed",
+      card_id: "impl",
+      board_id: "b1",
+      cwd: null,
+      result_json: JSON.stringify({ failureKind: "julgada", error: "desistiu" }),
+      deps_json: null,
+      retry_count: 0,
+      attempted_providers_json: null,
+      max_retries: null,
+      fallback_providers_json: null,
+      order: null,
+      suggested_order: null,
+      implicit_order: null,
+      diverged_status: null,
+      diverged_actor: null,
+      created_at: 1,
+      updated_at: 1,
+    };
+
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        getTask: () => existing,
+        upsertTask: (task: TaskRow) => {
+          upserted.push(task);
+          return applied(task.status);
+        },
+      }),
+    );
+
+    await bus.handleRequest({
+      cmd: "update_task",
+      taskId: "t-judged",
+      result: { failureKind: "interrompida", note: "forge" },
+    } as BusRequest);
+
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0].status).toBe("failed");
+    expect(JSON.parse(upserted[0].result_json!)).toEqual({ note: "forge", failureKind: "julgada" });
+  });
+
   it("achado 4: warnAgent sem requesterId NÃO digita no card_id do implementador", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-hold-warn-"));
     const writes: string[] = [];
@@ -228,6 +279,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       status: "running",
       card_id: "impl-innocent",
       board_id: "b1",
+      cwd: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,

@@ -45,6 +45,7 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       status: "running",
       card_id: null,
       board_id: "default",
+      cwd: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,

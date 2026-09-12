@@ -36,6 +36,7 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
       status: "pending",
       card_id: null,
       board_id: "default",
+      cwd: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,

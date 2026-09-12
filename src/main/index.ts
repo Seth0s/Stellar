@@ -1878,6 +1878,7 @@ function createWindow() {
       status: "pending",
       card_id: null,
       board_id: boardId,
+      cwd: null,
       result_json: null,
       deps_json: null,
       retry_count: 0,
