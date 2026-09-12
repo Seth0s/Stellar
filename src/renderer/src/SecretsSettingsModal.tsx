@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
 import { toast } from "./useToast";
-import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, keyFormatWarning } from "./secretsUi";
+import { PROVIDER_LABELS, providerKeyPlaceholder, keyFormatWarning } from "./secretsUi";
 import { useModal } from "./useModal";
 import type { ChatProvider } from "./card-types";
 
@@ -17,13 +18,6 @@ type RowState = {
 
 const EMPTY_ROW: RowState = { hasKey: null, baseUrl: "", keyInput: "", reveal: false, saving: false };
 
-/**
- * DESIGN-BACKLOG.md item 29 — a central place to see/manage every
- * provider's API key at once, instead of only from inside an open
- * ChatCard's own inline form (still there too — this doesn't replace it,
- * both write to the exact same `window.secrets` store). Opened from the
- * rail's "Configurações" button, not scoped to any one card.
- */
 export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
   const { modalProps } = useModal({ onClose });
   const [rows, setRows] = useState<Record<ChatProvider, RowState>>({
@@ -62,7 +56,7 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
     void window.secrets.setKey(p, trimmed, p === "generic" ? row.baseUrl.trim() : undefined).then((result) => {
       if (!result.ok) {
         patchRow(p, { saving: false });
-        toast(`falha ao salvar a key de ${PROVIDER_LABELS[p]}: ${result.error}`);
+        toast(t("secrets.saveFail", { provider: PROVIDER_LABELS[p], error: result.error }));
         return;
       }
       patchRow(p, { saving: false, hasKey: true, keyInput: "", reveal: false });
@@ -74,7 +68,7 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
     void window.secrets.clearKey(p).then((result) => {
       if (!result.ok) {
         patchRow(p, { saving: false });
-        toast(`falha ao remover a key de ${PROVIDER_LABELS[p]}: ${result.error}`);
+        toast(t("secrets.removeFail", { provider: PROVIDER_LABELS[p], error: result.error }));
         return;
       }
       patchRow(p, { saving: false, hasKey: false, baseUrl: p === "generic" ? "" : rows[p].baseUrl });
@@ -91,12 +85,8 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
     >
       <div className="modal-backdrop" onClick={onClose} />
       <div className="modal secrets-settings-modal" {...modalProps} aria-labelledby={titleId}>
-        <h3 id={titleId}>API keys</h3>
-        {!encryptionAvailable && (
-          <p className="chat-key-warn">
-            este sistema não tem um keychain disponível — toda key aqui será salva sem criptografia.
-          </p>
-        )}
+        <h3 id={titleId}>{t("secrets.title")}</h3>
+        {!encryptionAvailable && <p className="chat-key-warn">{t("secrets.noKeychain")}</p>}
         <div className="secrets-provider-list">
           {ALL_PROVIDERS.map((p) => {
             const row = rows[p];
@@ -107,14 +97,14 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
                   <span className={`chat-provider-dot${row.hasKey ? " has-key" : ""}`} />
                   <span className="secrets-provider-name">{PROVIDER_LABELS[p]}</span>
                   <span className="secrets-provider-status">
-                    {row.hasKey === null ? "carregando…" : row.hasKey ? "configurada" : "sem key"}
+                    {row.hasKey === null ? t("common.loading") : row.hasKey ? t("secrets.configured") : t("secrets.noKey")}
                   </span>
                 </div>
                 {p === "generic" && (
                   <div className="chat-key-row">
                     <input
                       type="text"
-                      placeholder="https://seu-endpoint/v1 (Ollama, vLLM, etc.)"
+                      placeholder={t("secrets.endpointPlaceholder")}
                       value={row.baseUrl}
                       onChange={(e) => patchRow(p, { baseUrl: e.target.value })}
                     />
@@ -123,12 +113,17 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
                 <div className="chat-key-row">
                   <input
                     type={row.reveal ? "text" : "password"}
-                    placeholder={row.hasKey ? "trocar a key atual…" : PROVIDER_KEY_PLACEHOLDER[p]}
+                    placeholder={row.hasKey ? t("secrets.replaceKey") : providerKeyPlaceholder(p)}
                     value={row.keyInput}
                     onChange={(e) => patchRow(p, { keyInput: e.target.value })}
                     onKeyDown={(e) => e.key === "Enter" && save(p)}
                   />
-                  <button type="button" className="chat-key-reveal" title={row.reveal ? "ocultar" : "mostrar"} onClick={() => patchRow(p, { reveal: !row.reveal })}>
+                  <button
+                    type="button"
+                    className="chat-key-reveal"
+                    title={row.reveal ? t("common.hide") : t("common.show")}
+                    onClick={() => patchRow(p, { reveal: !row.reveal })}
+                  >
                     <Icon name={row.reveal ? "eyeOff" : "eye"} size={14} />
                   </button>
                   <button
@@ -136,10 +131,10 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
                     disabled={!row.keyInput.trim() || (p === "generic" && !row.baseUrl.trim()) || row.saving}
                     onClick={() => save(p)}
                   >
-                    salvar
+                    {row.saving ? t("common.saving") : t("common.save")}
                   </button>
                   {row.hasKey && (
-                    <button type="button" className="chat-key-reveal secrets-remove-btn" title="remover key salva" onClick={() => remove(p)}>
+                    <button type="button" className="chat-key-reveal secrets-remove-btn" title={t("secrets.removeKey")} onClick={() => remove(p)}>
                       <Icon name="trash" size={14} />
                     </button>
                   )}
@@ -151,7 +146,7 @@ export function SecretsSettingsModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="modal-actions">
           <button type="button" className="primary" onClick={onClose}>
-            Fechar
+            {t("common.close")}
           </button>
         </div>
       </div>

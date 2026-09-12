@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { t } from "../../shared/i18n";
 
 /** A validator returns an error message for an invalid value, or `null`
  * when the value is fine. */
@@ -37,4 +38,4 @@ export function useFieldValidation(value: string, validate: Validator) {
 
 /** Common validator: value must be non-empty after trimming whitespace. */
 export const required: (label: string) => Validator = (label) => (value) =>
-  value.trim() ? null : `${label} é obrigatório`;
+  value.trim() ? null : t("validation.required", { label });

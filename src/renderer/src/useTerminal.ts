@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
+import { t } from "../../shared/i18n";
 import { toast } from "./useToast";
 import { registerTerminal, unregisterTerminal } from "./terminal-registry";
 import { MaskQueue } from "./mask-buffer";
@@ -472,13 +473,11 @@ export function useTerminal(
       if ("error" in result) {
         setSpawnError(
           result.error === "binary_not_found"
-            ? // O PATH pesquisado vai junto (pedido de um usuário de
-              // macOS, 2026-09-08): sem ele, "não encontrado no PATH" não
-              // diz QUAL path, e a única forma de descobrir era abrir o
-              // `app.asar`. Em várias linhas porque um PATH real não cabe
-              // numa só.
-              `"${providerId}" não encontrado no PATH.\r\nPATH pesquisado:\r\n  ${result.searchedPath.split(":").join("\r\n  ")}`
-            : `falha ao iniciar "${providerId}"`,
+            ? t("terminal.notInPath", {
+                provider: providerId,
+                path: result.searchedPath.split(":").join("\n  "),
+              })
+            : t("terminal.spawnFail", { provider: providerId }),
         );
         return;
       }
@@ -690,7 +689,7 @@ export function useTerminal(
         lastHandledAt = Date.now();
         void window.clipboardImage.save().then((result) => {
           if (!result.ok) {
-            toast(`falha ao colar imagem: ${result.error}`);
+            toast(t("terminal.pasteImageFail", { error: result.error }));
             return;
           }
           // Caminho absoluto, entre aspas (evita quebrar em espaço), com um
@@ -738,9 +737,9 @@ export function useTerminal(
           // Empilha — nunca sobrescreve um item pendente de uma colagem
           // anterior ainda não resolvida (ver o comentário de
           // `maskQueueRef` acima / `mask-buffer.ts`).
-          maskQueueRef.current.push({ needle: quotedPath, replacement: `[imagem #${pastedImageCount}]` });
+          maskQueueRef.current.push({ needle: quotedPath, replacement: t("terminal.imageTag", { n: pastedImageCount }) });
           void window.pty.write(ptyIdRef.current!, typed);
-          toast("imagem colada — caminho inserido no terminal");
+          toast(t("terminal.imagePasted"));
         });
       }
 
@@ -808,7 +807,7 @@ export function useTerminal(
         // Bloqueio do xterm fica no attachCustomKeyEventHandler acima.
         switch (dispatch.action) {
           case "copy":
-            void navigator.clipboard.writeText(dispatch.text).then(() => toast("copiado"));
+            void navigator.clipboard.writeText(dispatch.text).then(() => toast(t("common.copied")));
             return;
           case "copy-noop":
           case "swallow":

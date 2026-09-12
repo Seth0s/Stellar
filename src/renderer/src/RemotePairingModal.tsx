@@ -1,20 +1,10 @@
 import { useEffect, useState } from "react";
+import { t } from "../../shared/i18n";
 import { useModal } from "./useModal";
 import type { RemoteDevice, RemoteDevicePairing } from "../../preload/index";
 
 const POLL_MS = 4000;
 
-/** LAN-only mobile control (DESIGN-BACKLOG.md item 2) — QR + fallback URL
- * to pair a phone, per-device connection status, and per-device revoke
- * (item 2 revisited — was one shared token/one revoke-everything button;
- * each pairing now gets its own device id, so a stale/lost phone can be
- * dropped without booting every other one). Same modal chrome as
- * ConfirmModal/AgentAskModal.
- *
- * First open with no devices paired yet auto-pairs one right away (same
- * "see a QR immediately" feel the single-token version had) — every
- * pairing after that is an explicit click on "parear novo dispositivo".
- */
 export function RemotePairingModal({ onClose }: { onClose: () => void }) {
   const { modalProps } = useModal({ onClose });
   const [devices, setDevices] = useState<RemoteDevice[] | null>(null);
@@ -76,55 +66,47 @@ export function RemotePairingModal({ onClose }: { onClose: () => void }) {
     >
       <div className="modal-backdrop" onClick={onClose} />
       <div className="modal remote-pairing-modal" {...modalProps} aria-labelledby="remote-title">
-        <h3 id="remote-title">Controle remoto (celular)</h3>
+        <h3 id="remote-title">{t("remote.title")}</h3>
         {devices === null ? (
-          <p>carregando…</p>
+          <p>{t("common.loading")}</p>
         ) : noNetwork && !pending ? (
-          <p>
-            Nenhum endereço de rede local encontrado — conecte este PC a uma rede Wi-Fi/Ethernet pra parear um
-            celular.
-          </p>
+          <p>{t("remote.noLan")}</p>
         ) : (
           <>
             {pending?.url && (
               <>
-                <p className="remote-pairing-hint">
-                  Escaneie com a câmera do celular (mesma rede Wi-Fi). Mostra terminais rodando agora — sem
-                  scrollback, só o que sair a partir da conexão.
-                </p>
-                {pending.qrDataUrl && (
-                  <img className="remote-pairing-qr" src={pending.qrDataUrl} alt="QR de pareamento" />
-                )}
+                <p className="remote-pairing-hint">{t("remote.scanHint")}</p>
+                {pending.qrDataUrl && <img className="remote-pairing-qr" src={pending.qrDataUrl} alt={t("remote.qrAlt")} />}
                 <code className="remote-pairing-url">{pending.url}</code>
               </>
             )}
             {devices.length > 0 && (
               <div className="remote-device-list">
-                <div className="remote-device-list-heading">DISPOSITIVOS PAREADOS</div>
+                <div className="remote-device-list-heading">{t("remote.devices")}</div>
                 {devices.map((d) => (
                   <div key={d.id} className="remote-device-row">
                     <span className="remote-device-name">
-                      {d.connections > 0 && <span className="remote-device-online" title="conectado agora" />}
+                      {d.connections > 0 && <span className="remote-device-online" title={t("remote.online")} />}
                       {d.label}
                     </span>
                     <button type="button" className="remote-device-revoke" onClick={() => revokeOne(d.id)}>
-                      revogar
+                      {t("remote.revoke")}
                     </button>
                   </div>
                 ))}
               </div>
             )}
             <button type="button" className="remote-pair-new" onClick={pairNew}>
-              + parear novo dispositivo
+              {t("remote.pairNew")}
             </button>
           </>
         )}
         <div className="modal-actions">
           <button type="button" className="danger" onClick={revokeAll} disabled={!devices?.length}>
-            Revogar tudo
+            {t("remote.revokeAll")}
           </button>
           <button type="button" className="primary" onClick={onClose}>
-            Fechar
+            {t("common.close")}
           </button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { t } from "../../shared/i18n";
 import { useUpdateStatus } from "./useUpdateStatus";
 
 /**
@@ -27,10 +28,10 @@ export function UpdateBanner() {
   return (
     <div className="update-banner">
       <div className="update-banner-row">
-        <span>Atualização v{version} disponível</span>
+        <span>{t("update.available", { version })}</span>
         {releaseNotes && (
           <button className="update-banner-notes-toggle" onClick={() => setShowNotes((v) => !v)}>
-            {showNotes ? "ocultar novidades" : "ver novidades"}
+            {showNotes ? t("update.hideNotes") : t("update.showNotes")}
           </button>
         )}
         <button
@@ -41,17 +42,17 @@ export function UpdateBanner() {
             window.updater.install().then((result) => {
               if (!result.ok) {
                 setInstalling(false);
-                setError(result.error ?? "falha ao instalar");
+                setError(result.error ?? t("update.installFail"));
               }
               // On success the app quits+relaunches on its own
               // (autoUpdater.quitAndInstall) — nothing left to do here.
             });
           }}
         >
-          {installing ? "instalando…" : "instalar e reiniciar"}
+          {installing ? t("update.installing") : t("update.installRestart")}
         </button>
-        <button className="update-banner-later" disabled={installing} onClick={dismiss} title="Some por algumas horas — o ícone na barra de título continua avisando">
-          lembrar depois
+        <button className="update-banner-later" disabled={installing} onClick={dismiss} title={t("update.laterTitle")}>
+          {t("update.remindLater")}
         </button>
       </div>
       {error && <span className="update-banner-error">{error}</span>}

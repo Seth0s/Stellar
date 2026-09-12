@@ -210,7 +210,7 @@ export function ShortcutsOverlay({
           <div className="shortcuts-grid">
             {groups.map(({ group, rows }) => (
               <div className="shortcuts-group" key={group}>
-                <div className="shortcuts-group-label">{group}</div>
+                <div className="shortcuts-group-label">{t(group)}</div>
                 {rows.map((row) => (
                   <Fragment key={row.id}>
                     <div className="shortcuts-row">
@@ -233,7 +233,7 @@ export function ShortcutsOverlay({
           <div className="shortcut-config-list">
             {configGroups.map(({ group, defs }) => (
               <div className="shortcuts-group" key={group}>
-                <div className="shortcuts-group-label">{group}</div>
+                <div className="shortcuts-group-label">{t(group)}</div>
                 {defs.map((def) => {
                   const effective = getEffectiveCombo(def, shortcutOverrides)!;
                   const blocked = rebindBlockedReason(def);
@@ -244,7 +244,7 @@ export function ShortcutsOverlay({
                     <div className="shortcut-config-row" key={def.id}>
                       <div className="shortcut-config-row-main">
                         <kbd>{formatCombo(effective)}</kbd>
-                        <span className="shortcut-config-desc">{def.description}</span>
+                        <span className="shortcut-config-desc">{t(def.description)}</span>
                         {hasOverride && <span className="shortcut-config-badge">{t("shortcuts.customized")}</span>}
                       </div>
                       {describeComboAliases(effective) && (
@@ -256,15 +256,15 @@ export function ShortcutsOverlay({
                         <>
                           {pendingConfirm.evaluation.conflict && (
                             <div className="shortcut-config-message" role="status">
-                              Colide com &ldquo;{pendingConfirm.evaluation.conflict.description}&rdquo; (grupo{" "}
-                              {pendingConfirm.evaluation.conflict.group}). Sobrescrever mesmo assim vai fazer as duas
-                              combinações disputarem a mesma tecla nesse escopo.
+                              {t("shortcuts.conflict", {
+                                description: t(pendingConfirm.evaluation.conflict.description),
+                                group: t(pendingConfirm.evaluation.conflict.group),
+                              })}
                             </div>
                           )}
                           {pendingConfirm.evaluation.osReservedLabel && (
                             <div className="shortcut-config-message" role="status">
-                              Esta combinação costuma ser reservada fora do app: {pendingConfirm.evaluation.osReservedLabel}.
-                              Pode não funcionar de forma confiável dependendo do sistema.
+                              {t("shortcuts.osReserved", { label: pendingConfirm.evaluation.osReservedLabel })}
                             </div>
                           )}
                           <div className="shortcut-config-confirm-actions">

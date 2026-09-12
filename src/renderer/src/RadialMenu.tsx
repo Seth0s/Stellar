@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { t, type MessageKey } from "../../shared/i18n";
 import type { Tool } from "./card-types";
 import { Icon, type IconName } from "./icons";
 import { useAgentAvailability } from "./useAgentAvailability";
@@ -33,20 +34,19 @@ export type RadialAction =
   | "remote-window"
   | "task";
 
-const ACTIONS: { action: RadialAction; icon: IconName; label: string; group: "tool" | "spawn"; tool?: Tool }[] = [
-  { action: "tool-pointer", icon: "pointer", label: "Ponteiro", group: "tool", tool: "pointer" },
-  { action: "tool-pen", icon: "pen", label: "Caneta", group: "tool", tool: "pen" },
-  { action: "tool-connector", icon: "link", label: "Conector", group: "tool", tool: "connector" },
-  { action: "tool-select", icon: "select", label: "Selecionar", group: "tool", tool: "select" },
-  { action: "terminal", icon: "terminal", label: "Terminal", group: "spawn" },
-  { action: "files", icon: "files", label: "Arquivos", group: "spawn" },
-  { action: "changes", icon: "changes", label: "Changes", group: "spawn" },
-  { action: "sticky", icon: "sticky", label: "Nota", group: "spawn" },
-  { action: "browser", icon: "browser", label: "Navegador", group: "spawn" },
-  { action: "chat", icon: "chat", label: "Chatbox", group: "spawn" },
-  { action: "remote-window", icon: "remoteWindow", label: "Janela externa", group: "spawn" },
-  // DESIGN-BACKLOG.md §2.1 "Card `task`", Fase 2 peça 1.
-  { action: "task", icon: "task", label: "Fila", group: "spawn" },
+const ACTIONS: { action: RadialAction; icon: IconName; labelKey: MessageKey; group: "tool" | "spawn"; tool?: Tool }[] = [
+  { action: "tool-pointer", icon: "pointer", labelKey: "radial.pointer", group: "tool", tool: "pointer" },
+  { action: "tool-pen", icon: "pen", labelKey: "radial.pen", group: "tool", tool: "pen" },
+  { action: "tool-connector", icon: "link", labelKey: "radial.connector", group: "tool", tool: "connector" },
+  { action: "tool-select", icon: "select", labelKey: "radial.select", group: "tool", tool: "select" },
+  { action: "terminal", icon: "terminal", labelKey: "radial.terminal", group: "spawn" },
+  { action: "files", icon: "files", labelKey: "radial.files", group: "spawn" },
+  { action: "changes", icon: "changes", labelKey: "radial.changes", group: "spawn" },
+  { action: "sticky", icon: "sticky", labelKey: "radial.sticky", group: "spawn" },
+  { action: "browser", icon: "browser", labelKey: "radial.browser", group: "spawn" },
+  { action: "chat", icon: "chat", labelKey: "radial.chat", group: "spawn" },
+  { action: "remote-window", icon: "remoteWindow", labelKey: "radial.remoteWindow", group: "spawn" },
+  { action: "task", icon: "task", labelKey: "radial.task", group: "spawn" },
 ];
 
 // How wide the ring's "hit band" is on either side of the ring's radius,
@@ -199,7 +199,7 @@ export function RadialMenu({
   }
 
   function renderRootItems() {
-    return ACTIONS.map(({ action, icon, label, group, tool: itemTool }, i) => {
+    return ACTIONS.map(({ action, icon, labelKey, group, tool: itemTool }, i) => {
       const angle = itemAngle(i, ACTIONS.length);
       const dx = Math.cos(angle) * radius;
       const dy = Math.sin(angle) * radius;
@@ -208,7 +208,7 @@ export function RadialMenu({
         <button
           key={action}
           className={`radial-item radial-item--${group}${isActiveTool ? " active" : ""}`}
-          title={label}
+          title={t(labelKey)}
           // Custom properties, not a plain `transform` — the open
           // animation (layout.css) also animates `transform` (a scale
           // pop), and setting the position via `transform` directly
@@ -249,7 +249,7 @@ export function RadialMenu({
           <button
             key="back"
             className="radial-item radial-item--back"
-            title="Voltar"
+            title={t("radial.back")}
             style={{ "--tx": `${dx}px`, "--ty": `${dy}px`, "--item-size": `${itemSize}px` } as React.CSSProperties}
             onClick={() => goToLevel("root")}
           >
@@ -261,7 +261,7 @@ export function RadialMenu({
         <button
           key={item.id}
           className={`radial-item radial-item--spawn${item.installed ? "" : " radial-item--disabled"}`}
-          title={item.installed ? item.id : `${item.id} (não instalado)`}
+          title={item.installed ? item.id : t("radial.notInstalled", { id: item.id })}
           disabled={!item.installed}
           style={{ "--tx": `${dx}px`, "--ty": `${dy}px`, "--item-size": `${itemSize}px` } as React.CSSProperties}
           onClick={() => item.installed && onSelect("terminal", item.id)}

@@ -1,4 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { t } from "../../shared/i18n";
 import { CardFrame } from "./CardFrame";
 import { Icon, type IconName } from "./icons";
 import { Markdown } from "./Markdown";
@@ -248,7 +249,7 @@ function TreeNode({
             {entry.isDir && (
               <>
                 <button
-                  title="Novo arquivo aqui"
+                  title={t("files.newFileHere")}
                   onClick={(e) => {
                     e.stopPropagation();
                     actions.onCreateFile(entry.path);
@@ -257,7 +258,7 @@ function TreeNode({
                   <Icon name="newFile" size={12} />
                 </button>
                 <button
-                  title="Nova pasta aqui"
+                  title={t("files.newFolderHere")}
                   onClick={(e) => {
                     e.stopPropagation();
                     actions.onCreateFolder(entry.path);
@@ -268,7 +269,7 @@ function TreeNode({
               </>
             )}
             <button
-              title="Renomear"
+              title={t("files.rename")}
               onClick={(e) => {
                 e.stopPropagation();
                 actions.onStartRename(entry.path, entry.name);
@@ -277,7 +278,7 @@ function TreeNode({
               <Icon name="pen" size={12} />
             </button>
             <button
-              title={isDeleteArmed ? "Clique de novo pra confirmar" : "Excluir"}
+              title={isDeleteArmed ? t("files.deleteConfirm") : t("files.delete")}
               className={isDeleteArmed ? "files-node-delete-armed" : ""}
               onClick={(e) => {
                 e.stopPropagation();
@@ -829,7 +830,7 @@ function FilesCardInner({
         <span className="files-card-foot-row">
           <span className="files-card-foot-text">{root}</span>
           {gitStatus?.repo && (
-            <span className="files-card-branch" title={`branch: ${gitStatus.branch}`}>
+            <span className="files-card-branch" title={t("files.branchTitle", { branch: gitStatus.branch })}>
               <Icon name="changes" size={11} />
               {gitStatus.branch}
             </span>
@@ -840,10 +841,10 @@ function FilesCardInner({
       <div className="files-card-body">
         <div className="files-tree-panel" style={{ width: treeWidth }}>
           <div className="files-tree-toolbar">
-            <button title="Novo arquivo na raiz" onClick={() => startCreate("", "file")}>
+            <button title={t("files.newFileRoot")} onClick={() => startCreate("", "file")}>
               <Icon name="newFile" size={13} />
             </button>
-            <button title="Nova pasta na raiz" onClick={() => startCreate("", "folder")}>
+            <button title={t("files.newFolderRoot")} onClick={() => startCreate("", "folder")}>
               <Icon name="newFolder" size={13} />
             </button>
           </div>
@@ -855,7 +856,7 @@ function FilesCardInner({
             <Icon name="findCard" size={12} />
             <input
               className="files-search-input"
-              placeholder={searchMode === "name" ? "buscar arquivo…" : "buscar no conteúdo…"}
+              placeholder={searchMode === "name" ? t("files.searchFilePh") : t("files.searchContentPh")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -863,7 +864,7 @@ function FilesCardInner({
               }}
             />
             {searchQuery && (
-              <button className="files-search-clear" title="Limpar busca" onClick={() => setSearchQuery("")}>
+              <button className="files-search-clear" title={t("files.clearSearch")} onClick={() => setSearchQuery("")}>
                 <Icon name="close" size={11} />
               </button>
             )}
@@ -871,23 +872,26 @@ function FilesCardInner({
           <div className="files-search-mode-toggle">
             <button
               className={searchMode === "name" ? "files-search-mode-active" : ""}
-              title="Buscar por nome de arquivo"
+              title={t("files.searchByName")}
               onClick={() => setSearchMode("name")}
             >
-              nome
+              {t("files.searchNameShort")}
             </button>
             <button
               className={searchMode === "content" ? "files-search-mode-active" : ""}
-              title="Buscar no conteúdo dos arquivos"
+              title={t("files.searchInContent")}
               onClick={() => setSearchMode("content")}
             >
-              conteúdo
+              {t("files.searchContentShort")}
             </button>
           </div>
           {creating && (
             <div className="files-create-row">
               <span className="files-create-hint">
-                {creating.kind === "file" ? "arquivo" : "pasta"} em /{creating.parentPath}
+                {t("files.createIn", {
+                  kind: creating.kind === "file" ? t("files.createKindFile") : t("files.createKindFolder"),
+                  path: creating.parentPath,
+                })}
               </span>
               <input
                 className="files-node-rename-input"
@@ -904,8 +908,8 @@ function FilesCardInner({
           )}
           {searchQuery.trim() && searchMode === "content" ? (
             <div className="files-tree">
-              {searching && <div className="files-search-msg">buscando…</div>}
-              {!searching && contentResults.length === 0 && <div className="files-search-msg">nenhum trecho encontrado</div>}
+              {searching && <div className="files-search-msg">{t("files.searching")}</div>}
+              {!searching && contentResults.length === 0 && <div className="files-search-msg">{t("files.noContentMatch")}</div>}
               {!searching &&
                 contentResults.map((match) => (
                   <div
@@ -929,8 +933,8 @@ function FilesCardInner({
             </div>
           ) : searchQuery.trim() ? (
             <div className="files-tree">
-              {searching && <div className="files-search-msg">buscando…</div>}
-              {!searching && searchResults.length === 0 && <div className="files-search-msg">nenhum arquivo encontrado</div>}
+              {searching && <div className="files-search-msg">{t("files.searching")}</div>}
+              {!searching && searchResults.length === 0 && <div className="files-search-msg">{t("files.noFileMatch")}</div>}
               {!searching &&
                 searchResults.map((entry) => (
                   <div
@@ -991,7 +995,13 @@ function FilesCardInner({
                   <span className="files-tab-name">{nameOf(tab.path)}</span>
                   <button
                     className={`files-tab-close${closeArmedPath === tab.path ? " files-tab-close-armed" : ""}`}
-                    title={closeArmedPath === tab.path ? "Clique de novo pra descartar e fechar" : tab.dirty ? "Não salvo — fechar mesmo assim" : "Fechar"}
+                    title={
+                      closeArmedPath === tab.path
+                        ? t("files.closeDiscard")
+                        : tab.dirty
+                          ? t("files.closeUnsaved")
+                          : t("files.closeTab")
+                    }
                     onClick={(e) => {
                       e.stopPropagation();
                       closeTab(tab.path);
@@ -1008,35 +1018,32 @@ function FilesCardInner({
               <span className="files-editor-head-path">
                 <span className="files-editor-head-path-text">{activePath}</span>
                 {mediaKind(activePath) !== "image" && content !== null && (
-                  <span className="files-editor-token-count" title="Estimativa de tokens (chars/4) — aproximada, não é o tokenizer real de nenhum provider">
-                    ~{formatTokenCount(estimateTokens(content))} tokens
+                  <span className="files-editor-token-count" title={t("files.tokenEstimate")}>
+                    {t("files.tokensApprox", { count: formatTokenCount(estimateTokens(content)) })}
                   </span>
                 )}
               </span>
               <div className="files-editor-head-actions">
                 {mediaKind(activePath) === "markdown" && (
                   <button onClick={() => updateTab(activePath, { view: view === "code" ? "preview" : "code" })}>
-                    {view === "code" ? "preview" : "código"}
+                    {view === "code" ? t("files.viewPreview") : t("files.viewCode")}
                   </button>
                 )}
                 {mediaKind(activePath) !== "image" && (
-                  <label
-                    className="files-editor-autosave-toggle"
-                    title="Salvar automaticamente ~1s depois de parar de digitar"
-                  >
+                  <label className="files-editor-autosave-toggle" title={t("files.autosave")}>
                     <input type="checkbox" checked={autoSave} onChange={(e) => setAutoSave(e.target.checked)} />
-                    auto-save
+                    {t("files.autoSaveLabel")}
                   </label>
                 )}
                 {mediaKind(activePath) !== "image" && (
                   <button disabled={!dirty} onClick={save}>
-                    {autoSave && dirty ? "salvando…" : "salvar"}
+                    {autoSave && dirty ? t("common.saving") : t("common.save")}
                   </button>
                 )}
               </div>
             </div>
           )}
-          {tooLarge && <div className="files-editor-msg">arquivo maior que 512KB, sem preview</div>}
+          {tooLarge && <div className="files-editor-msg">{t("files.tooLarge")}</div>}
           {error && <div className="files-editor-msg">{error}</div>}
           {activePath && !tooLarge && mediaKind(activePath) === "image" && imageDataUrl && (
             <div className="files-editor-image">
@@ -1045,12 +1052,12 @@ function FilesCardInner({
           )}
           {activePath && !tooLarge && mediaKind(activePath) === "markdown" && view === "preview" && (
             content === null ? (
-              <div className="files-editor-msg">carregando…</div>
+              <div className="files-editor-msg">{t("common.loading")}</div>
             ) : (
               <Markdown
                 content={content}
                 className="files-editor-preview"
-                loadingFallback={<div className="files-editor-preview files-editor-msg">carregando preview…</div>}
+                loadingFallback={<div className="files-editor-preview files-editor-msg">{t("files.loadingPreview")}</div>}
               />
             )
           )}
@@ -1059,7 +1066,7 @@ function FilesCardInner({
             mediaKind(activePath) !== "image" &&
             !(mediaKind(activePath) === "markdown" && view === "preview") &&
             (content === null ? (
-              <div className="files-editor-msg">carregando…</div>
+              <div className="files-editor-msg">{t("common.loading")}</div>
             ) : (
               // DESIGN-BACKLOG.md item 21, ponto 11 — real editor
               // (CodeEditor.tsx, CodeMirror 6) instead of a bare
@@ -1070,7 +1077,7 @@ function FilesCardInner({
               // comment on why `value` is read only once, not kept in
               // sync live — item 50: this is exactly what makes each
               // tab's CodeMirror state independent of the others).
-              <Suspense fallback={<div className="files-editor-msg">carregando editor…</div>}>
+              <Suspense fallback={<div className="files-editor-msg">{t("files.loadingEditor")}</div>}>
                 <CodeEditor
                   key={activePath}
                   value={content}

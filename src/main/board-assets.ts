@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { t } from "../shared/i18n";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, extname, join, sep } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -41,7 +42,7 @@ function writeUniqueFile(dir: string, ext: string, write: (path: string) => void
  * nunca um path real de SO pra copiar direto. */
 export function saveBoardAssetBytes(boardId: string, base64: string, mediaType: string): SaveBoardAssetResult {
   const ext = EXT_BY_MEDIA_TYPE[mediaType];
-  if (!ext) return { ok: false, error: `tipo de mídia não suportado: ${mediaType}` };
+  if (!ext) return { ok: false, error: t("error.unsupportedMedia", { type: mediaType }) };
   const dir = boardAssetsDir(boardId);
   return writeUniqueFile(dir, ext, (path) => writeFileSync(path, Buffer.from(base64, "base64")));
 }

@@ -1340,7 +1340,7 @@ export function App() {
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, card.id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
-    toast(`${CARD_LABEL[card.kind]} criado${card.kind === "sticky" ? "a" : ""}`);
+    toast(card.kind === "sticky" ? t("toast.cardCreatedF", { kind: CARD_LABEL[card.kind] }) : t("toast.cardCreated", { kind: CARD_LABEL[card.kind] }));
     // Pendentes #188 — every spawn path (rail, MCP spawn_card/spawn_agent,
     // open_url's auto-connect, duplicate) funnels through here, so this is
     // the one place that fixes "nasce no zoom atual do usuário" for all of
@@ -1437,7 +1437,7 @@ export function App() {
       kind: kind ?? null,
       label: label ?? null,
     });
-    if (!kind) toast("conector criado");
+    if (!kind) toast(t("toast.connectorCreated"));
   }
 
   /** Regra geral pedida ao vivo (2026-09-02): "se um agente faz
@@ -1792,7 +1792,7 @@ export function App() {
     const pending = connectorLabelThrottleRef.current.get(id);
     if (pending?.timer) clearTimeout(pending.timer);
     connectorLabelThrottleRef.current.delete(id);
-    toast("conector removido");
+    toast(t("toast.connectorRemoved"));
   }
 
   /** Finalizes a pen stroke into a real `kind:"stroke"` card — its rect is the drawn bounding box, not the toolbar-button cascade slot. */
@@ -1880,7 +1880,7 @@ export function App() {
         : { action: "create" as const };
       if (decision.action === "reuse") {
         focusCard(decision.cardId);
-        toast("A fila deste board já existe — focando o card existente");
+        toast(t("toast.queueExists"));
         return;
       }
     }
@@ -1972,11 +1972,11 @@ export function App() {
     } else if (mediaType === "image") {
       saveResult = await window.boardAssets.saveBytes(boardId, await fileToBase64(file), file.type);
     } else {
-      toast("PDF precisa ser arrastado (drop) — colar do clipboard não é suportado");
+      toast(t("toast.pdfDropOnly"));
       return;
     }
     if (!saveResult.ok) {
-      toast(`falha ao salvar mídia: ${saveResult.error}`);
+      toast(t("toast.mediaSaveFail", { error: saveResult.error }));
       return;
     }
 
@@ -2219,10 +2219,10 @@ export function App() {
 
   /** title/command text for whichever AgentAskModal is currently pending — kept out of the JSX below for readability. */
   function describeAsk(ask: PendingAsk): { title: string; command: string } {
-    if (ask.kind === "open") return { title: "Permissão do navegador", command: ask.url };
+    if (ask.kind === "open") return { title: t("app.browserPermission.title"), command: ask.url };
     if (ask.kind === "spawn-agent") {
       return {
-        title: "Permissão: spawnar agente",
+        title: t("app.perm.spawnAgent"),
         // DESIGN-BACKLOG.md item 62 — mostra o nome pedido pro agente
         // novo, se algum, antes do humano aprovar.
         command: `${ask.provider}${ask.label ? ` "${ask.label}"` : ""}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.resumeId ? ` (retomar ${ask.resumeId})` : ""}`,
@@ -2230,11 +2230,11 @@ export function App() {
     }
     if (ask.kind === "spawn-card") {
       return {
-        title: "Permissão: criar card",
+        title: t("app.perm.spawnCard"),
         command: `${ask.cardKind}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.url ? ` (${ask.url})` : ""}`,
       };
     }
-    return { title: "Permissão: fechar card", command: describeCard(ask.target) };
+    return { title: t("app.perm.closeCard"), command: describeCard(ask.target) };
   }
 
   /** Item 2 (2026-09-09, pedido do dono do repo) — antes era literalmente
@@ -2251,7 +2251,7 @@ export function App() {
     setReflowing(true);
     setCards(next);
     next.forEach((c) => void window.store.upsert(toRow(c, activeBoardIdRef.current!)));
-    toast("Cards organizados");
+    toast(t("toast.cardsArranged"));
     window.setTimeout(() => setReflowing(false), REFLOW_MS);
   }
 
@@ -2324,7 +2324,7 @@ export function App() {
         groupId: null,
         label: null,
       });
-      toast("Nota de resumo criada");
+      toast(t("toast.summaryCreated"));
     } finally {
       setAiBusy(false);
     }
@@ -2473,7 +2473,7 @@ export function App() {
    */
   function approveTaskCompletion(taskId: string) {
     void window.tasks.approveCompletion(taskId).then((res) => {
-      if (!res.ok) toast(`não deu pra concluir: ${res.error}`);
+      if (!res.ok) toast(t("toast.concludeFail", { error: res.error }));
     });
   }
 
@@ -2743,10 +2743,10 @@ export function App() {
     );
     setExportBusy(false);
     if (!result.ok) {
-      if (result.error !== "cancelled") toast(`falha ao exportar: ${result.error}`);
+      if (result.error !== "cancelled") toast(t("toast.exportFail", { error: result.error }));
       return;
     }
-    toast(`exportado: ${result.path}`);
+    toast(t("toast.exported", { path: result.path }));
   }
 
   function onBackgroundPointerDown(e: React.PointerEvent) {

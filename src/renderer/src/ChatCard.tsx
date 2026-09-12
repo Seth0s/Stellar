@@ -3,13 +3,13 @@ import { CardFrame } from "./CardFrame";
 import { Icon } from "./icons";
 import { Markdown } from "./Markdown";
 import { toast } from "./useToast";
-import { PROVIDER_LABELS, PROVIDER_KEY_PLACEHOLDER, PROVIDER_MODELS, keyFormatWarning } from "./secretsUi";
+import { PROVIDER_LABELS, providerKeyPlaceholder, PROVIDER_MODELS, keyFormatWarning } from "./secretsUi";
 import type { Rect } from "./board-model";
 import type { ChatContentBlock, ChatImageBlock, ChatMessage, ChatProvider } from "./card-types";
 import type { WriteConsentRequest, BashConsentRequest, CardRow } from "../../preload/index";
 import { matchesShortcut } from "./shortcut-config";
 import type { ShortcutOverrides } from "./shortcut-registry";
-import { formatRelativeTime } from "../../shared/i18n";
+import { formatRelativeTime, t } from "../../shared/i18n";
 
 const ALL_PROVIDERS: ChatProvider[] = ["anthropic", "openai", "gemini", "generic"];
 
@@ -55,9 +55,9 @@ function ChatImageThumb({ block }: { block: ChatImageBlock }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.path]);
-  if (failed) return <span className="chat-msg-image-failed">[imagem não pôde ser carregada]</span>;
+  if (failed) return <span className="chat-msg-image-failed">{t("chat.imageLoadFail")}</span>;
   if (!dataUrl) return <span className="chat-msg-image-loading" />;
-  return <img className="chat-msg-image" src={dataUrl} alt="imagem anexada" />;
+  return <img className="chat-msg-image" src={dataUrl} alt={t("chat.attachedAlt")} />;
 }
 
 /** DESIGN-BACKLOG.md item 38 — correção de escopo do item 30: a lista de
@@ -80,7 +80,7 @@ function sessionPreview(s: ChatSessionRow): string {
     if (firstUser) {
       const text = textOf(firstUser.content).trim();
       const hasImage = typeof firstUser.content !== "string" && firstUser.content.some((b) => b.type === "image");
-      const label = text || (hasImage ? "📎 imagem" : "");
+      const label = text || (hasImage ? t("chat.imageAttachment") : "");
       if (label) {
         const prefix = hasImage && text ? "📎 " : "";
         return prefix + (label.length > 60 ? label.slice(0, 60) + "…" : label);
@@ -89,7 +89,7 @@ function sessionPreview(s: ChatSessionRow): string {
   } catch {
     // Malformed/legacy row — fall through to the generic placeholder.
   }
-  return "conversa vazia";
+  return t("chat.emptySession");
 }
 
 /** Coarse relative time — DESIGN-BACKLOG.md §2.1 i18n fase 1: shared
@@ -166,9 +166,9 @@ function ToolLine({ activity }: { activity: ToolActivity }) {
       <Icon name="apiKey" size={11} />
       <span className="chat-tool-line-label">{label}</span>
       {activity.status === "running" ? (
-        <span className="chat-tool-line-status">rodando…</span>
+        <span className="chat-tool-line-status">{t("chat.toolRunning")}</span>
       ) : (
-        <span className="chat-tool-line-status">{activity.ok === false ? "erro" : "ok"}</span>
+        <span className="chat-tool-line-status">{activity.ok === false ? t("chat.toolError") : t("chat.toolOk")}</span>
       )}
     </div>
   );
@@ -448,7 +448,7 @@ function ChatCardInner({
       // failure (disk full, keychain rejection) left the button stuck in
       // "salvando…" with zero feedback. Now surfaced.
       if (!result.ok) {
-        toast(`falha ao salvar a key: ${result.error}`);
+        toast(t("secrets.saveFail", { provider: PROVIDER_LABELS[provider], error: result.error }));
         return;
       }
       setKeyInput("");
@@ -467,11 +467,11 @@ function ChatCardInner({
   // faz sentido pedir pra CLI/modelo olhar de uma vez").
   async function addImageFile(file: File) {
     if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-      toast(`máximo de ${MAX_ATTACHMENTS_PER_MESSAGE} imagens por mensagem`);
+      toast(t("chat.maxAttachments", { n: MAX_ATTACHMENTS_PER_MESSAGE }));
       return;
     }
     if (!ALLOWED_IMAGE_TYPES.includes(file.type as ChatImageBlock["mediaType"])) {
-      toast(`tipo de imagem não suportado: ${file.type || "desconhecido"}`);
+      toast(t("chat.unsupportedImage", { type: file.type || t("common.unknown") }));
       return;
     }
     const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -483,7 +483,7 @@ function ChatCardInner({
     const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
     const result = await window.clipboardImage.saveBytes(base64, file.type);
     if (!result.ok) {
-      toast(`falha ao anexar imagem: ${result.error}`);
+      toast(t("chat.attachFail", { error: result.error }));
       return;
     }
     setAttachments((prev) => [
@@ -645,14 +645,18 @@ function ChatCardInner({
         <span className="chat-foot-row">
           <span className="chat-foot-cwd">{cwd}</span>
           {streaming !== null ? (
-            <span className="chat-foot-status" title="tempo decorrido nesta resposta">
+            <span className="chat-foot-status" title={t("chat.elapsed")}>
               {formatDuration(elapsedMs)}
             </span>
           ) : (
             lastTurn && (
               <span
                 className="chat-foot-status"
-                title={`última resposta: ${formatDuration(lastTurn.durationMs)} · ${lastTurn.inputTokens} tokens de contexto enviados · ${lastTurn.outputTokens} tokens de resposta`}
+                title={t("chat.lastTurn", {
+                  duration: formatDuration(lastTurn.durationMs),
+                  input: lastTurn.inputTokens,
+                  output: lastTurn.outputTokens,
+                })}
               >
                 {formatDuration(lastTurn.durationMs)} · {formatTokenCount(lastTurn.inputTokens)} in / {formatTokenCount(lastTurn.outputTokens)} out
               </span>
@@ -669,7 +673,7 @@ function ChatCardInner({
                 <button
                   key={p}
                   className={provider === p ? "active" : ""}
-                  title={keyStatus[p] ? `${PROVIDER_LABELS[p]} — key configurada` : `${PROVIDER_LABELS[p]} — sem key`}
+                  title={keyStatus[p] ? t("chat.providerHasKey", { provider: PROVIDER_LABELS[p] }) : t("chat.providerMissingKey", { provider: PROVIDER_LABELS[p] })}
                   onClick={() => onProviderCommit(p)}
                 >
                   {PROVIDER_LABELS[p]}
@@ -692,8 +696,8 @@ function ChatCardInner({
                 className="chat-model-input"
                 value={model}
                 onChange={(e) => onModelCommit(e.target.value)}
-                placeholder="id do modelo do seu endpoint"
-                title="Id do modelo — qualquer um que seu endpoint OpenAI-compatible aceite"
+                placeholder={t("chat.modelPh")}
+                title={t("chat.modelTitle")}
               />
             )}
           </span>
@@ -701,12 +705,12 @@ function ChatCardInner({
             <button
               className={sessionsOpen ? "active" : ""}
               data-role="chat-sessions-toggle"
-              title="Sessões de chat"
+              title={t("chat.sessions")}
               onClick={() => setSessionsOpen((v) => !v)}
             >
               <Icon name="chatSessionsPanel" size={12} />
             </button>
-            <button title="API key" onClick={() => setShowKeyForm((v) => !v)}>
+            <button title={t("chat.apiKey")} onClick={() => setShowKeyForm((v) => !v)}>
               <Icon name="apiKey" size={12} />
             </button>
             <button onClick={onClose}>
@@ -720,10 +724,10 @@ function ChatCardInner({
         {sessionsOpen && (
           <div className="chat-sessions-panel">
             <div className="chat-sessions-panel-heading">
-              SESSÕES DE CHAT
+              {t("chat.sessionsTitle")}
               <button
                 className="chat-sessions-new-btn"
-                title={`Nova sessão (${provider})`}
+                title={t("chat.newSession", { provider })}
                 onClick={() => onNewSession(id, provider)}
               >
                 <Icon name="plus" size={12} />
@@ -736,7 +740,7 @@ function ChatCardInner({
                 guarda TODAS (buscadas uma vez ao abrir o painel) — o
                 filtro é só na renderização, sem round-trip extra. */}
             {sessionsForProvider.length === 0 ? (
-              <div className="popover-empty">nenhuma conversa ainda com {provider}</div>
+              <div className="popover-empty">{t("chat.noSessionsForProvider", { provider })}</div>
             ) : (
               sessionsForProvider.map((s) => (
                 <button
@@ -748,8 +752,8 @@ function ChatCardInner({
                     <Icon name="chat" size={13} />
                     {s.label ?? sessionPreview(s)}
                     {s.archived_at !== null && (
-                      <span className="chat-session-archived-badge" title="conversa fechada — clique pra reabrir">
-                        arquivada
+                      <span className="chat-session-archived-badge" title={t("chat.archived")}>
+                        {t("chat.archivedBadge")}
                       </span>
                     )}
                   </span>
@@ -766,19 +770,15 @@ function ChatCardInner({
         <div className="chat-key-form">
           <p>
             {hasKey
-              ? `Trocar a API key da ${PROVIDER_LABELS[provider]}:`
-              : `Configure sua API key da ${PROVIDER_LABELS[provider]} pra usar o chatbox:`}
+              ? t("chat.replaceKeyTitle", { provider: PROVIDER_LABELS[provider] })
+              : t("chat.configureKey", { provider: PROVIDER_LABELS[provider] })}
           </p>
-          {!encryptionAvailable && (
-            <p className="chat-key-warn">
-              este sistema não tem um keychain disponível — a key será salva sem criptografia.
-            </p>
-          )}
+          {!encryptionAvailable && <p className="chat-key-warn">{t("chat.noKeychain")}</p>}
           {provider === "generic" && (
             <div className="chat-key-row">
               <input
                 type="text"
-                placeholder="https://seu-endpoint/v1 (Ollama, vLLM, etc.)"
+                placeholder={t("chat.endpointPh")}
                 value={baseUrlInput}
                 onChange={(e) => setBaseUrlInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && saveKey()}
@@ -788,7 +788,7 @@ function ChatCardInner({
           <div className="chat-key-row">
             <input
               type={revealKey ? "text" : "password"}
-              placeholder={PROVIDER_KEY_PLACEHOLDER[provider]}
+              placeholder={providerKeyPlaceholder(provider)}
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && saveKey()}
@@ -796,7 +796,7 @@ function ChatCardInner({
             <button
               type="button"
               className="chat-key-reveal"
-              title={revealKey ? "ocultar" : "mostrar"}
+              title={revealKey ? t("common.hide") : t("common.show")}
               onClick={() => setRevealKey((v) => !v)}
             >
               <Icon name={revealKey ? "eyeOff" : "eye"} size={14} />
@@ -806,7 +806,7 @@ function ChatCardInner({
               disabled={!keyInput.trim() || (provider === "generic" && !baseUrlInput.trim()) || savingKey}
               onClick={saveKey}
             >
-              salvar
+              {savingKey ? t("common.saving") : t("common.save")}
             </button>
           </div>
           {keyFormatWarning(provider, keyInput) && <p className="chat-key-warn">{keyFormatWarning(provider, keyInput)}</p>}
@@ -816,7 +816,7 @@ function ChatCardInner({
               onClick={() => {
                 void window.secrets.clearKey(provider).then((result) => {
                   if (!result.ok) {
-                    toast(`falha ao remover a key: ${result.error}`);
+                    toast(t("secrets.removeFail", { provider: PROVIDER_LABELS[provider], error: result.error }));
                     return;
                   }
                   setHasKey(false);
@@ -824,14 +824,14 @@ function ChatCardInner({
                 });
               }}
             >
-              remover key salva
+              {t("secrets.removeKey")}
             </button>
           )}
         </div>
       ) : (
         <>
           <div className="chat-messages" ref={scrollRef}>
-            {messages.length === 0 && streaming === null && <div className="chat-empty">peça algo ao chatbox…</div>}
+            {messages.length === 0 && streaming === null && <div className="chat-empty">{t("chat.composerEmpty")}</div>}
             {messages.map((m, i) => (
               <div key={i} className={`chat-msg ${m.role}`}>
                 {m.role === "assistant" ? (
@@ -870,7 +870,7 @@ function ChatCardInner({
                   <div key={i} className={`chat-tool-line done${d.allowed ? "" : " error"}`}>
                     <Icon name="apiKey" size={11} />
                     <span className="chat-tool-line-label">write_file({d.path})</span>
-                    <span className="chat-tool-line-status">{d.allowed ? "aplicado" : "negado"}</span>
+                    <span className="chat-tool-line-status">{d.allowed ? t("chat.writeApplied") : t("chat.writeDenied")}</span>
                   </div>
                 ))}
                 {pendingWrite && (
@@ -878,16 +878,16 @@ function ChatCardInner({
                     <div className="chat-diff-head">
                       <Icon name="apiKey" size={12} />
                       <span>{pendingWrite.path}</span>
-                      {pendingWrite.isNewFile && <span className="chat-diff-new">novo arquivo</span>}
+                      {pendingWrite.isNewFile && <span className="chat-diff-new">{t("chat.newFile")}</span>}
                     </div>
                     <DiffView hunks={pendingWrite.hunks} />
                     <div className="chat-diff-actions">
-                      <span className="chat-diff-hint">pedido de escrita — precisa da sua aprovação</span>
+                      <span className="chat-diff-hint">{t("chat.writeAsk")}</span>
                       <button className="chat-diff-deny" onClick={() => resolveWrite(false)}>
-                        negar
+                        {t("chat.deny")}
                       </button>
                       <button className="chat-diff-allow" onClick={() => resolveWrite(true)}>
-                        permitir
+                        {t("chat.allow")}
                       </button>
                     </div>
                   </div>
@@ -896,23 +896,23 @@ function ChatCardInner({
                   <div key={i} className={`chat-tool-line done${d.allowed ? "" : " error"}`}>
                     <Icon name="apiKey" size={11} />
                     <span className="chat-tool-line-label">bash({d.command})</span>
-                    <span className="chat-tool-line-status">{d.allowed ? "executado" : "negado"}</span>
+                    <span className="chat-tool-line-status">{d.allowed ? t("chat.bashExecuted") : t("chat.writeDenied")}</span>
                   </div>
                 ))}
                 {pendingBash && (
                   <div className="chat-bash-block">
                     <div className="chat-bash-head">
                       <Icon name="apiKey" size={12} />
-                      <span>comando sandboxed (bubblewrap)</span>
+                      <span>{t("chat.bashSandboxed")}</span>
                     </div>
                     <pre className="chat-bash-command">{pendingBash.command}</pre>
                     <div className="chat-diff-actions">
-                      <span className="chat-diff-hint">pedido de execução — precisa da sua aprovação</span>
+                      <span className="chat-diff-hint">{t("chat.bashExecAsk")}</span>
                       <button className="chat-diff-deny" onClick={() => resolveBash(false)}>
-                        negar
+                        {t("chat.deny")}
                       </button>
                       <button className="chat-diff-allow" onClick={() => resolveBash(true)}>
-                        permitir
+                        {t("chat.allow")}
                       </button>
                     </div>
                   </div>
@@ -933,17 +933,17 @@ function ChatCardInner({
                   ))}
               </div>
             )}
-            {error && <div className="chat-error">erro: {error}</div>}
+            {error && <div className="chat-error">{t("chat.errorPrefix", { error })}</div>}
           </div>
           <div className="chat-composer-wrap">
             {attachments.length > 0 && (
               <div className="chat-attachments-strip">
                 {attachments.map((a) => (
                   <div key={a.id} className="chat-attachment-thumb">
-                    <img src={a.previewUrl} alt="anexo pendente" />
+                    <img src={a.previewUrl} alt={t("chat.pendingAlt")} />
                     <button
                       className="chat-attachment-remove"
-                      title="Remover anexo"
+                      title={t("chat.removeAttachment")}
                       onClick={() => removeAttachment(a.id)}
                     >
                       <Icon name="close" size={10} />
@@ -955,7 +955,7 @@ function ChatCardInner({
             <div className="chat-composer">
               <textarea
                 rows={1}
-                placeholder="Peça algo ao chatbox… (cole ou arraste uma imagem)"
+                placeholder={t("chat.composerPh")}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onComposerKeyDown}
@@ -964,7 +964,7 @@ function ChatCardInner({
                 onDrop={onComposerDrop}
               />
               {streaming !== null ? (
-                <button className="chat-send-btn chat-stop-btn" title="Parar" onClick={stop}>
+                <button className="chat-send-btn chat-stop-btn" title={t("chat.stop")} onClick={stop}>
                   <Icon name="interrupt" size={16} />
                 </button>
               ) : (

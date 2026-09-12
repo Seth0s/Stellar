@@ -1,3 +1,5 @@
+import { t, type MessageKey } from "../../shared/i18n";
+
 /**
  * DESIGN-BACKLOG.md §2.1 "Card `task`" — pure, React-free view-model logic
  * for the kanban board (Fase 2, peças 2 e 4). Extracted for the same reason
@@ -28,6 +30,13 @@ export const COLUMN_TITLE: Record<TaskColumn, string> = {
   doing: "em andamento",
   done: "concluído",
   failed: "falhou",
+};
+
+const COLUMN_I18N: Record<TaskColumn, MessageKey> = {
+  todo: "task.column.todo",
+  doing: "task.column.doing",
+  done: "task.column.done",
+  failed: "task.column.failed",
 };
 
 const STATUS_TO_COLUMN: Record<string, TaskColumn> = {
@@ -101,7 +110,7 @@ export function groupTasksByColumn<T extends TaskOrderable & { status: string }>
  * qualquer dependência do lado Electron. */
 export type TaskActor = "app" | "agent" | "human";
 
-const ACTOR_BADGE: Record<TaskActor, string> = { app: "auto", agent: "agente", human: "você" };
+const ACTOR_BADGE: Record<TaskActor, MessageKey> = { app: "task.badge.app", agent: "task.badge.agent", human: "task.badge.human" };
 
 /** Selo de origem (DESIGN-BACKLOG.md §2.1, "lido da última linha do log de
  * transição") — `lastActor` já chega pronto do main process (uma
@@ -111,7 +120,7 @@ const ACTOR_BADGE: Record<TaskActor, string> = { app: "auto", agent: "agente", h
  * explícita de não inventar passado) quanto qualquer ator desconhecido:
  * os dois casos rendem "sem selo", nunca um palpite. */
 export function originBadge(lastActor: TaskActor | null): string | null {
-  return lastActor ? ACTOR_BADGE[lastActor] : null;
+  return lastActor ? t(ACTOR_BADGE[lastActor]) : null;
 }
 
 export type TaskStage = "implementar" | "review";
@@ -192,7 +201,7 @@ export function waitingOnDep(deps: readonly string[], depStatuses: Readonly<Reco
  * só mais uma dependência normal ainda rodando. */
 export function describeWaitingOn(waiting: WaitingOn): string {
   const id = shortTaskId(waiting.depId);
-  return waiting.status === undefined ? `espera ${id} (dependência desconhecida)` : `espera ${id}`;
+  return waiting.status === undefined ? t("task.waitUnknown", { id }) : t("task.wait", { id });
 }
 
 /** RODADA 2 — badge de WIP da coluna "em andamento" (`WIP 2/5`). O
@@ -351,7 +360,7 @@ export function computeVerdictsByProvider(verdicts: readonly VerdictPoint[]): Pr
   const map = new Map<string, { approved: number; rejected: number }>();
   for (const v of verdicts) {
     if (v.verdict !== "aprovado" && v.verdict !== "reprovado") continue;
-    const provider = v.provider ?? "desconhecido";
+    const provider = v.provider ?? t("task.providerUnknown");
     const cur = map.get(provider) ?? { approved: 0, rejected: 0 };
     if (v.verdict === "aprovado") cur.approved += 1;
     else cur.rejected += 1;
@@ -578,16 +587,16 @@ export function computeMetaPills(
   }
   const rounds = verdicts.length;
   if (rounds > 0) {
-    pills.push({ kind: "round", text: `rodada ${rounds}` });
+    pills.push({ kind: "round", text: t("task.round", { n: rounds }) });
   }
   const rejections = verdicts.reduce((n, v) => n + (v.verdict === "reprovado" ? 1 : 0), 0);
   if (rejections > 0) {
-    pills.push({ kind: "rejection", text: `reprovada ${rejections}×` });
+    pills.push({ kind: "rejection", text: t("task.rejected", { n: rejections }) });
   }
   if (suggestedOrder !== null && order !== null && suggestedOrder !== order) {
     // Decisão 6 — a sugestão do agente nunca some, só perde a disputa:
     // fica visível ao lado do que o humano decidiu.
-    pills.push({ kind: "suggestion", text: `sugestão: prioridade ${suggestedOrder}` });
+    pills.push({ kind: "suggestion", text: t("task.suggestion", { n: suggestedOrder }) });
   }
   return pills;
 }
@@ -658,7 +667,7 @@ function formatClockTime(at: number): string {
  * report). "Ainda rodando" descreve o CARD, não a task. */
 export function describeHumanMoveNotice(lastActor: TaskActor | null, cardAlive: boolean, cardId: string | null): string | null {
   if (lastActor !== "human" || !cardAlive || cardId === null) return null;
-  return `Movida à mão com o card ${cardId} ainda rodando. O card foi avisado.`;
+  return t("task.humanMoveNotice", { cardId });
 }
 
 /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal LEGÍVEL no card Fila. `null`
@@ -670,9 +679,10 @@ export function describeStatusDivergence(
   divergedActor: TaskActor | null | undefined,
 ): string | null {
   if (!divergedStatus || !divergedActor) return null;
-  const who = divergedActor === "app" ? "o app" : divergedActor === "agent" ? "o agente" : "alguém";
-  const label = COLUMN_TITLE[columnForStatus(divergedStatus)];
-  return `${who} declarou "${label}" — status humano mantido`;
+  const label = t(COLUMN_I18N[columnForStatus(divergedStatus)]);
+  if (divergedActor === "app") return t("task.divergence.app", { label });
+  if (divergedActor === "agent") return t("task.divergence.agent", { label });
+  return t("task.divergence.other", { label });
 }
 
 /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — shape the Fila card
@@ -696,7 +706,7 @@ export type SprintView = {
 /** Display label: editable name wins; otherwise "Sprint N". */
 export function sprintLabel(s: Pick<SprintView, "number" | "name">): string {
   const trimmed = s.name?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : `Sprint ${s.number}`;
+  return trimmed && trimmed.length > 0 ? trimmed : t("task.sprintDefault", { number: s.number });
 }
 
 /** Short id for sprint rows — same 8-char convention as `shortTaskId`. */
@@ -724,7 +734,13 @@ export function formatSprintDuration(startedAt: number, closedAt: number | null,
 
 /** One-line summary of a frozen (or live-preview) sprint snapshot. */
 export function describeSprintCounts(s: Pick<SprintView, "countTodo" | "countDoing" | "countDone" | "countFailed" | "migratedIn" | "migratedOut">): string {
-  return `a fazer ${s.countTodo} · andamento ${s.countDoing} · concluído ${s.countDone} · falhou ${s.countFailed} · migrou −${s.migratedOut}/+${s.migratedIn}`;
+  const counts = t("task.footer.counts", {
+    todo: s.countTodo,
+    doing: s.countDoing,
+    done: s.countDone,
+    failed: s.countFailed,
+  });
+  return `${counts} · migrou −${s.migratedOut}/+${s.migratedIn}`;
 }
 
 /** Build a read-only TaskBoardItem stub from a frozen sprint snapshot

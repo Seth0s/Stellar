@@ -4,12 +4,13 @@ import { useModal } from "./useModal";
 import { toast } from "./useToast";
 import { required, useFieldValidation } from "./validation";
 import type { SessionTemplate } from "./useBoardStore";
+import { t } from "../../shared/i18n";
 
 type Board = { id: string; name: string; cwd: string; autonomous: boolean; concurrency_cap: number | null };
 
-const TEMPLATES: { value: SessionTemplate; label: string; desc: string }[] = [
-  { value: "empty", label: "Vazio", desc: "nenhum card" },
-  { value: "claude-bash-files", label: "Claude + bash + arquivos", desc: "3 cards já arrumados" },
+const TEMPLATES: { value: SessionTemplate; labelKey: "session.template.empty" | "session.template.claude"; descKey: "session.template.emptyDesc" | "session.template.claudeDesc" }[] = [
+  { value: "empty", labelKey: "session.template.empty", descKey: "session.template.emptyDesc" },
+  { value: "claude-bash-files", labelKey: "session.template.claude", descKey: "session.template.claudeDesc" },
 ];
 
 /**
@@ -66,7 +67,7 @@ export function SessionModal(props: SessionModalProps) {
   // (validation.ts). Was: submitting an empty name silently did nothing
   // — no red border, no message, easy to miss why "Criar"/"Salvar" isn't
   // doing anything.
-  const nameField = useFieldValidation(name, required("nome"));
+  const nameField = useFieldValidation(name, required(t("session.nameLabel")));
 
   function submit() {
     const trimmed = name.trim();
@@ -89,14 +90,14 @@ export function SessionModal(props: SessionModalProps) {
     >
       <div className="modal-backdrop" onClick={props.onClose} />
       <div className="modal" {...modalProps} aria-labelledby={titleId}>
-        <h3 id={titleId}>{props.mode === "create" ? "Nova sessão" : "Editar sessão"}</h3>
+        <h3 id={titleId}>{props.mode === "create" ? t("session.new") : t("session.edit")}</h3>
         <div className="popover-field">
-          <label>nome</label>
+          <label>{t("session.nameLabel")}</label>
           <input
             className={`resume-input${nameField.invalid ? " invalid" : ""}`}
             autoFocus
             value={name}
-            placeholder="nome da sessão"
+            placeholder={t("session.namePlaceholder")}
             onChange={(e) => setName(e.target.value)}
             onBlur={nameField.onBlur}
             onKeyDown={(e) => {
@@ -107,7 +108,7 @@ export function SessionModal(props: SessionModalProps) {
           {nameField.invalid && <span className="field-error-msg">{nameField.error}</span>}
         </div>
         <div className="popover-field">
-          <label>caminho do projeto</label>
+          <label>{t("session.path")}</label>
           <PathPicker
             root={props.workspaceRoot}
             value={cwd}
@@ -119,17 +120,17 @@ export function SessionModal(props: SessionModalProps) {
         </div>
         {props.mode === "create" && (
           <div className="popover-field">
-            <label>template</label>
+            <label>{t("session.template")}</label>
             <div className="template-picker">
-              {TEMPLATES.map((t) => (
+              {TEMPLATES.map((tpl) => (
                 <button
-                  key={t.value}
+                  key={tpl.value}
                   type="button"
-                  className={`template-option${template === t.value ? " active" : ""}`}
-                  onClick={() => setTemplate(t.value)}
+                  className={`template-option${template === tpl.value ? " active" : ""}`}
+                  onClick={() => setTemplate(tpl.value)}
                 >
-                  <span className="template-option-label">{t.label}</span>
-                  <span className="template-option-desc">{t.desc}</span>
+                  <span className="template-option-label">{t(tpl.labelKey)}</span>
+                  <span className="template-option-desc">{t(tpl.descKey)}</span>
                 </button>
               ))}
             </div>
@@ -143,26 +144,23 @@ export function SessionModal(props: SessionModalProps) {
                 checked={props.board.autonomous}
                 onChange={(e) => props.onToggleAutonomous(props.board.id, e.target.checked)}
               />
-              modo autônomo — agentes deste board podem spawnar outros
-              agentes sem pedir permissão
+              {t("session.autonomous")} — {t("session.autonomousHint")}
             </label>
             {props.board.autonomous && (
-              <span className="field-error-msg">
-                ⚠ ativo: qualquer agente aqui pode criar outros agentes sem confirmação, até o teto de concorrência
-              </span>
+              <span className="field-error-msg">{t("session.autonomousWarning")}</span>
             )}
           </div>
         )}
         {props.mode === "edit" && props.board.autonomous && (
           <div className="popover-field">
             <label className="concurrency-cap-label">
-              limite de agentes simultâneos
+              {t("session.concurrency")}
               <input
                 className="resume-input concurrency-cap-input"
                 type="number"
                 min={1}
                 max={50}
-                placeholder="3 (padrão)"
+                placeholder={t("session.concurrencyPlaceholder")}
                 value={props.board.concurrency_cap ?? ""}
                 onChange={(e) => {
                   const raw = e.target.value;
@@ -178,7 +176,7 @@ export function SessionModal(props: SessionModalProps) {
               type="button"
               className={`danger${props.canDelete ? "" : " is-disabled"}`}
               aria-disabled={!props.canDelete}
-              title={props.canDelete ? "Excluir sessão" : "não é possível excluir a última sessão"}
+              title={props.canDelete ? t("session.delete") : t("session.cannotDeleteLast")}
               onClick={() => {
                 // Real `disabled` never fires onClick at all — clicking did
                 // nothing visible, no toast, nothing (DESIGN-BACKLOG.md
@@ -186,22 +184,22 @@ export function SessionModal(props: SessionModalProps) {
                 // clickable so this guard can explain why, instead of a
                 // silent no-op.
                 if (!props.canDelete) {
-                  toast("não é possível excluir a última sessão — precisa haver pelo menos uma");
+                  toast(t("session.cannotDeleteLastToast"));
                   return;
                 }
                 props.onDelete(props.board.id);
                 props.onClose();
               }}
             >
-              Excluir
+              {t("common.delete")}
             </button>
           )}
           <div className="modal-actions-right">
             <button type="button" className="ghost" onClick={props.onClose}>
-              Cancelar
+              {t("common.cancel")}
             </button>
             <button type="button" className="primary" onClick={submit}>
-              {props.mode === "create" ? "Criar" : "Salvar"}
+              {props.mode === "create" ? t("common.create") : t("common.save")}
             </button>
           </div>
         </div>

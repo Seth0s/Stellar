@@ -4,7 +4,8 @@ import { Popover } from "./Popover";
 import { SessionModal } from "./SessionModal";
 import { useAgentAvailability } from "./useAgentAvailability";
 import type { SessionTemplate } from "./useBoardStore";
-import { groupByProject, StatusDot, UNGROUPED_LABEL, type Board, type BoardCounts as Counts } from "./sessions";
+import { groupByProject, StatusDot, type Board, type BoardCounts as Counts } from "./sessions";
+import { t } from "../../shared/i18n";
 
 type ModalState = { mode: "create" } | { mode: "edit"; board: Board } | null;
 
@@ -113,32 +114,31 @@ export function Topbar({
           centerline (`left: 12px`, 48px wide). This stacks directly above
           the rail instead, same left/width, reading as one floating column
           instead of two disconnected pieces (bug reported live). */}
-      <button className="topbar-home" title="Voltar pra home" aria-label="Voltar para a página inicial (Home)" onClick={onGoHome}>
+      <button className="topbar-home" title={t("topbar.home")} aria-label={t("topbar.homeAria")} onClick={onGoHome}>
         <Icon name="home" size={17} />
       </button>
       <div className="topbar">
         <button
           ref={titleBtnRef}
           className="topbar-title"
-          aria-label={`Sessão atual: ${activeBoard?.name ?? "sessão"}`}
+          aria-label={t("topbar.sessionCurrent", { name: activeBoard?.name ?? t("topbar.sessionFallback") })}
           onClick={() => setOpen((o) => !o)}
         >
           📁 {rootName}
           <Icon name="chevronDown" size={11} />
           <span className="topbar-crumb-sep">›</span>
-          {activeBoard?.project || UNGROUPED_LABEL}
+          {activeBoard?.project || t("session.ungrouped")}
           <span className="topbar-crumb-sep">›</span>
-          <strong>{activeBoard?.name ?? "sessão"}</strong>
+          <strong>{activeBoard?.name ?? t("topbar.sessionFallback")}</strong>
           {activeBoard?.autonomous && (
-            <span className="topbar-autonomous-badge" title="Modo autônomo ativo — agentes deste board podem spawnar outros sem pedir permissão">
-              autônomo
+            <span className="topbar-autonomous-badge" title={t("topbar.autonomousTitle")}>
+              {t("topbar.autonomous")}
             </span>
           )}
           {activeCounts && (
             <span className="topbar-counts">
               <StatusDot counts={activeCounts} />
-              {activeCounts.agents} agente{activeCounts.agents === 1 ? "" : "s"} · {activeCounts.active} ativo
-              {activeCounts.active === 1 ? "" : "s"}
+              {t("home.agentsCount", { agents: activeCounts.agents, active: activeCounts.active })}
             </span>
           )}
         </button>
@@ -149,7 +149,7 @@ export function Topbar({
           fields/layout as create. */}
       <Popover anchorRef={titleBtnRef} open={open} onClose={() => setOpen(false)}>
         <div className="board-list">
-          <div className="board-list-heading">SESSÕES</div>
+          <div className="board-list-heading">{t("topbar.sessions")}</div>
           {groupByProject(boards).map(([project, group]) => (
             <div key={project} className="board-project-group">
               <div className="board-project-label">{project.toUpperCase()}</div>
@@ -171,10 +171,12 @@ export function Topbar({
                       </span>
                       <span className="board-row-counts">
                         <StatusDot counts={counts} />
-                        {counts ? `${counts.agents} agentes · ${counts.active} ativos` : "0 agentes"}
+                        {counts
+                          ? t("home.agentsCount", { agents: counts.agents, active: counts.active })
+                          : t("home.agentsZero")}
                       </span>
                     </button>
-                    <button data-role="edit-session" title="Editar sessão" onClick={() => setModal({ mode: "edit", board: b })}>
+                    <button data-role="edit-session" title={t("topbar.editSession")} onClick={() => setModal({ mode: "edit", board: b })}>
                       <Icon name="pen" size={13} />
                     </button>
                   </div>
@@ -191,7 +193,7 @@ export function Topbar({
               setModal({ mode: "create" });
             }}
           >
-            + nova sessão
+            {t("topbar.newSession")}
           </button>
         </div>
       </Popover>
@@ -235,14 +237,17 @@ export function Topbar({
           <button
             ref={agentsBtnRef}
             className="topbar-agents-warn"
-            title={`${missingAgents.length} CLI${missingAgents.length === 1 ? "" : "s"} de agente não encontrada${missingAgents.length === 1 ? "" : "s"} — clique para instalar`}
+            title={t("topbar.missingCli", {
+              count: missingAgents.length,
+              s: missingAgents.length === 1 ? "" : "s",
+            })}
             onClick={() => setAgentsOpen((o) => !o)}
           >
             <Icon name="warning" size={16} />
           </button>
         )}
         <Popover anchorRef={agentsBtnRef} open={agentsOpen} onClose={() => setAgentsOpen(false)}>
-          <div className="board-list-heading">CLIs NÃO ENCONTRADAS</div>
+          <div className="board-list-heading">{t("topbar.missingCliTitle")}</div>
           <div className="agent-availability-list">
             {missingAgents.map((a) => (
               <div key={a.id} className="agent-availability-row">
@@ -250,28 +255,28 @@ export function Topbar({
                 {a.installCommand && (
                   <button
                     className="agent-availability-install-btn"
-                    title={`Abre um terminal com o comando pré-preenchido — nada é executado sozinho, você confirma com Enter: ${a.installCommand}`}
+                    title={t("topbar.installHint", { cmd: a.installCommand! })}
                     onClick={() => {
                       onSuggestInstall(a.id, a.installCommand!);
                       setAgentsOpen(false);
                     }}
                   >
                     <Icon name="terminal" size={12} />
-                    instalar
+                    {t("topbar.install")}
                   </button>
                 )}
               </div>
             ))}
           </div>
         </Popover>
-        <button onClick={onZoomOut} title="Diminuir zoom" aria-label="Diminuir zoom">
+        <button onClick={onZoomOut} title={t("topbar.zoomOut")} aria-label={t("topbar.zoomOut")}>
           <Icon name="zoomOut" size={16} />
         </button>
         <button
           ref={zoomBtnRef}
           className="zoom-readout"
-          title="Digitar zoom ou arrastar"
-          aria-label={`Zoom atual: ${Math.round(zoom * 100)}%`}
+          title={t("topbar.zoomDrag")}
+          aria-label={t("topbar.zoomCurrent", { pct: Math.round(zoom * 100) })}
           onClick={() => {
             setZoomDraft(String(Math.round(zoom * 100)));
             setZoomOpen((o) => !o);
@@ -320,27 +325,27 @@ export function Topbar({
             />
           </div>
         </Popover>
-        <button onClick={onZoomIn} title="Aumentar zoom" aria-label="Aumentar zoom">
+        <button onClick={onZoomIn} title={t("topbar.zoomIn")} aria-label={t("topbar.zoomIn")}>
           <Icon name="zoomIn" size={16} />
         </button>
         <button
           onClick={() => void window.winControls.toggleFullscreen()}
-          title={fullscreen ? "Sair da tela cheia" : "Tela cheia de verdade (esconde a barra de título, F11)"}
-          aria-label={fullscreen ? "Sair da tela cheia" : "Tela cheia (F11)"}
+          title={fullscreen ? t("topbar.fullscreenExit") : t("topbar.fullscreenEnter")}
+          aria-label={fullscreen ? t("topbar.fullscreenExit") : t("topbar.fullscreen")}
         >
           <Icon name={fullscreen ? "fullscreenExit" : "fullscreenEnter"} size={16} />
         </button>
         <button
           onClick={onCycleBgStyle}
-          title={`Fundo do canvas: ${bgStyleLabel} (clique para trocar)`}
-          aria-label={`Fundo do canvas: ${bgStyleLabel}`}
+          title={t("topbar.bgTitle", { style: bgStyleLabel })}
+          aria-label={t("topbar.bgAria", { style: bgStyleLabel })}
         >
           <Icon name="bgStyle" size={16} />
         </button>
         <button
           onClick={onOpenRemote}
-          title="Controle remoto (celular, mesma rede local)"
-          aria-label="Controle remoto (celular, mesma rede local)"
+          title={t("topbar.remote")}
+          aria-label={t("topbar.remote")}
         >
           <Icon name="remoteControl" size={16} />
         </button>

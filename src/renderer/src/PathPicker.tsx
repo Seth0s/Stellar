@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "../../shared/i18n";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import type { DirEntry } from "../../preload/index";
@@ -193,7 +194,7 @@ export function PathPicker({
           className="files-node-rename-input"
           autoFocus
           value={createDraft}
-          placeholder="nome da pasta"
+          placeholder={t("path.namePlaceholder")}
           onChange={(e) => setCreateDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") void commitCreate();
@@ -228,7 +229,7 @@ export function PathPicker({
           <span className="files-node-actions">
             <button
               type="button"
-              title="Nova pasta aqui"
+              title={t("path.newFolder")}
               onClick={(e) => {
                 e.stopPropagation();
                 startCreate(nodeRel);
@@ -263,7 +264,7 @@ export function PathPicker({
             <button
               type="button"
               className="path-picker-root-btn"
-              title="Escolher outra pasta raiz…"
+              title={t("path.chooseRoot")}
               onClick={onChangeRoot}
             >
               <Icon name="folderOpen" size={12} />
@@ -294,7 +295,7 @@ export function PathPicker({
           <div className="files-tree path-picker-tree">
             {(kids[""] ?? []).map((entry) => renderNode(entry, "", 0))}
             {kids[""] && kids[""].length === 0 && creating !== "" && (
-              <div className="path-picker-empty">nenhuma subpasta</div>
+              <div className="path-picker-empty">{t("path.noSubfolders")}</div>
             )}
           </div>
           {createRow("", 0)}
@@ -302,11 +303,11 @@ export function PathPicker({
           <div className="path-picker-footer">
             <button type="button" className="path-picker-footer-btn" onClick={() => startCreate("")}>
               <Icon name="newFolder" size={13} />
-              nova pasta
+              {t("path.newFolderFooter")}
             </button>
             <button type="button" className="path-picker-footer-btn path-picker-footer-btn--primary" onClick={() => setOpen(false)}>
               <Icon name="check" size={13} />
-              usar esta pasta
+              {t("path.useFolder")}
             </button>
           </div>
         </div>

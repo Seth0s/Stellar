@@ -3,6 +3,7 @@ import { cascadeSlot, type WorldTransform } from "./board-model";
 import type { Card, Connector } from "./card-types";
 import { toast } from "./useToast";
 import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
+import { t } from "../../shared/i18n";
 
 const ACTIVE_BOARD_KEY = "ac.activeBoardId";
 
@@ -234,7 +235,7 @@ export function useBoardStore(
     // `cwd` passed explicitly — see loadBoard's comment on why a `boards`
     // state lookup can't be trusted for a board this fresh.
     await switchBoard(id, template, cwd);
-    toast(`sessão "${name}" criada`);
+    toast(t("toast.sessionCreated", { name }));
   }
 
   /** Session name + path, saved together — SessionModal's edit form
@@ -264,7 +265,7 @@ export function useBoardStore(
   function setBoardAutonomous(id: string, autonomous: boolean) {
     setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, autonomous } : b)));
     void window.store.boards.setAutonomous(id, autonomous);
-    toast(autonomous ? "modo autônomo ativado" : "modo autônomo desativado");
+    toast(autonomous ? t("toast.autonomousOn") : t("toast.autonomousOff"));
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 2 — same immediate-fire pattern as
@@ -273,7 +274,7 @@ export function useBoardStore(
   function setBoardConcurrencyCap(id: string, cap: number | null) {
     setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, concurrency_cap: cap } : b)));
     void window.store.boards.setConcurrencyCap(id, cap);
-    toast(cap === null ? "limite de agentes simultâneos: padrão" : `limite de agentes simultâneos: ${cap}`);
+    toast(cap === null ? t("toast.concurrencyDefault") : t("toast.concurrencyCap", { cap }));
   }
 
   async function deleteBoard(id: string) {
@@ -307,7 +308,7 @@ export function useBoardStore(
         boardTransitionRef.current = false;
       }
     }
-    toast("sessão excluída");
+    toast(t("toast.sessionDeleted"));
   }
 
   return {

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, type Session } from "electron";
+import { t } from "../shared/i18n";
 import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
 
 export type BrowserMouseEvent = {
@@ -723,7 +724,7 @@ export function createBrowserRegistry(callbacks: {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: "card not found" };
     if (entry.cdp?.isAttached()) {
-      return { ok: false, error: "Feche o inspector embutido antes de abrir o DevTools real (os dois usam o mesmo protocolo de depuração)." };
+      return { ok: false, error: t("error.closeInspectorFirst") };
     }
     entry.win.webContents.openDevTools({ mode: "detach" });
     return { ok: true };
@@ -738,7 +739,7 @@ export function createBrowserRegistry(callbacks: {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: "card not found" };
     if (entry.win.webContents.isDevToolsOpened()) {
-      return { ok: false, error: "Feche o DevTools real antes de abrir o inspector embutido (os dois usam o mesmo protocolo de depuração)." };
+      return { ok: false, error: t("error.closeDevtoolsFirst") };
     }
     if (!entry.cdp) {
       entry.cdp = createCdpSession(entry.win.webContents, (method, params) => {
@@ -1599,7 +1600,7 @@ export function createBrowserRegistry(callbacks: {
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
     const pid = entry.win.webContents.getOSProcessId();
     const metric = app.getAppMetrics().find((m) => m.pid === pid);
-    if (!metric) return { ok: false, error: "métrica de processo ainda não disponível (janela recém-criada)" };
+    if (!metric) return { ok: false, error: t("error.processMetric") };
     return { ok: true, cpuPercent: Math.round(metric.cpu.percentCPUUsage * 10) / 10, memoryMB: Math.round((metric.memory.workingSetSize / 1024) * 10) / 10 };
   }
 
