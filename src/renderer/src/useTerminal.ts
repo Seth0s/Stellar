@@ -9,6 +9,11 @@ import { registerTerminal, unregisterTerminal } from "./terminal-registry";
 import { MaskQueue } from "./mask-buffer";
 import { resolveTerminalShortcutKeydown } from "./terminal-shortcut-dispatch";
 import type { ShortcutOverrides } from "./shortcut-registry";
+import {
+  decideTerminalActivity,
+  initialTerminalActivity,
+  type TerminalActivityEvent,
+} from "./terminal-activity-decision";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -280,14 +285,17 @@ export function useTerminal(
   const [hasReceivedOutput, setHasReceivedOutput] = useState(false);
   /**
    * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — sinal por trás
-   * da barra de atividade do header (TerminalCard.tsx). `true` a cada
-   * `pty:data`. Desliga por:
+   * da barra de atividade do header (TerminalCard.tsx). Desliga por:
    *   - providers sem sinal real: `ACTIVITY_IDLE_MS` sem bytes novos;
    *   - providers com sinal real (claude hook / TURN_END_PATTERNS): o
    *     sinal (onTurnComplete / pattern / onExit / interrupt) é o
    *     desligamento. Silêncio NÃO é evidência de ociosidade nesses
    *     providers depois que a capacidade do sinal foi PROVADA neste
    *     PTY (review §2.0 item 6, 2026-09-12) — ver Effect 1.
+   *
+   * NÃO é `true` a cada `pty:data`. Depois do primeiro sinal, um byte
+   * solto entre turnos (prompt, spinner, toast da CLI) não reacende —
+   * só entrada nova abre a janela (`terminal-activity-decision.ts`).
    */
   const [isActive, setIsActive] = useState(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -301,6 +309,12 @@ export function useTerminal(
    * Reset no teardown do Effect 1 (respawn = nova chance de provar).
    */
   const turnSignalSeenRef = useRef(false);
+  /** Espelho de `decideTerminalActivity` — janela do turno aberta por
+   * input, fechada pelo sinal. Sem isto, `onData` não distingue "ainda
+   * trabalhando" de "chrome depois do fim". */
+  const turnOpenRef = useRef(false);
+  const isActiveRef = useRef(false);
+  const applyActivityRef = useRef<(event: TerminalActivityEvent) => void>(() => {});
   /** Buffer rolante pro pattern-match de fim de turno (`TURN_END_PATTERNS`
    * acima) — ver Effect 1. Resetado a cada (re)spawn e a cada match, pra
    * nunca acumular além do necessário nem re-disparar num chunk seguinte
@@ -375,25 +389,21 @@ export function useTerminal(
       if (out) termRef.current?.write(out);
     }
 
-    // Providers sem sinal de fim de turno: silêncio curto = "parou de
-    // escrever". 900ms é deliberadamente apertado — só cobre o debounce
-    // entre chunks de um mesmo eco, não uma pausa de pensamento.
-    const ACTIVITY_IDLE_MS = 900;
-    // Bootstrap-only (§2.0 item 6, review 2026-09-12): silêncio NÃO
-    // distingue "parado" de "ferramenta lenta sem log" — por isso este
-    // timer SÓ arma enquanto `turnSignalSeenRef` é false (capacidade do
-    // sinal ainda não provada neste PTY). Medido 2026-09-12: Stop hook
-    // `acbridge turn-complete` no card MASTER (53fcab93) 279/279 ok
-    // (0% hookErrors, dur_p50 111ms); entre prompts com output de
-    // assistant, 93.6% receberam o Stop antes do próximo prompt. Sessões
-    // do board SEM o hook Stellar (ex. 0b739d65 só hiveterm) nunca
-    // entregam turn_complete — aí o silêncio é o que resta. Limiar
-    // 180s = folga sobre MCP max 122.7s da amostra de tools; residual
-    // aceito: 1º turno longo sem bytes pode apagar a barra UMA vez
-    // antes da primeira prova. Depois da prova, zero fallback.
-    const ACTIVITY_UNPROVEN_SIGNAL_IDLE_MS = 180_000;
+    // Constantes de timer e a máquina de estados da barra vivem em
+    // `terminal-activity-decision.ts` — este efeito só aplica. Medido
+    // 2026-09-12: Stop hook `acbridge turn-complete` no card MASTER
+    // (53fcab93) 279/279 ok (0% hookErrors, dur_p50 111ms); entre
+    // prompts com output de assistant, 93.6% receberam o Stop antes do
+    // próximo prompt. Sessões do board SEM o hook Stellar (ex. 0b739d65
+    // só hiveterm) nunca entregam turn_complete — aí o silêncio de
+    // bootstrap (180s) é o que resta. Residual aceito: 1º turno longo
+    // sem bytes pode apagar a barra UMA vez antes da primeira prova.
+    // Depois da prova, zero fallback; byte solto pós-turno não reacende.
     turnEndBufferRef.current = "";
-    turnSignalSeenRef.current = false;
+    const reset = initialTerminalActivity();
+    turnSignalSeenRef.current = reset.signalProven;
+    turnOpenRef.current = reset.turnOpen;
+    isActiveRef.current = reset.isActive;
     // Prototipo (2026-09-06) — "unificar detecção de turno": pro provider
     // `claude`, `providers.ts`'s `buildArgs` registra um hook `Stop` real
     // (--settings efêmero) que chama `acbridge turn-complete` no fim de
@@ -409,26 +419,36 @@ export function useTerminal(
         idleTimerRef.current = null;
       }
     }
-    function markTurnSignalSeen() {
-      turnSignalSeenRef.current = true;
+    function applyActivity(event: TerminalActivityEvent) {
+      const decided = decideTerminalActivity(
+        {
+          isActive: isActiveRef.current,
+          signalProven: turnSignalSeenRef.current,
+          turnOpen: turnOpenRef.current,
+        },
+        event,
+        hasRealTurnSignal,
+      );
+      isActiveRef.current = decided.next.isActive;
+      turnSignalSeenRef.current = decided.next.signalProven;
+      turnOpenRef.current = decided.next.turnOpen;
+      setIsActive(decided.next.isActive);
       clearIdleTimer();
-      setIsActive(false);
+      if (decided.armIdleMs !== null) {
+        idleTimerRef.current = setTimeout(() => {
+          idleTimerRef.current = null;
+          applyActivity("idle_timeout");
+        }, decided.armIdleMs);
+      }
     }
-    function armIdleTimer() {
-      clearIdleTimer();
-      // Capacidade já provada → confiar só no sinal. Sem fallback.
-      if (hasRealTurnSignal && turnSignalSeenRef.current) return;
-      const ms = hasRealTurnSignal ? ACTIVITY_UNPROVEN_SIGNAL_IDLE_MS : ACTIVITY_IDLE_MS;
-      idleTimerRef.current = setTimeout(() => {
-        idleTimerRef.current = null;
-        setIsActive(false);
-      }, ms);
+    applyActivityRef.current = applyActivity;
+    function markTurnSignalSeen() {
+      applyActivity("turn_complete");
     }
     const offData = window.pty.onData((id, data) => {
       if (id !== ptyIdRef.current) return;
       writeMasked(data);
       setHasReceivedOutput(true);
-      setIsActive(true);
       if (turnEndPattern) {
         turnEndBufferRef.current = (turnEndBufferRef.current + data).slice(-TURN_END_BUFFER_MAX);
         if (turnEndPattern.test(turnEndBufferRef.current)) {
@@ -438,7 +458,7 @@ export function useTerminal(
           return;
         }
       }
-      armIdleTimer();
+      applyActivity("data");
     });
     const offExit = window.pty.onExit((id, code) => {
       if (id !== ptyIdRef.current) return;
@@ -446,8 +466,7 @@ export function useTerminal(
       // Processo pode morrer no meio de um turno (crash, kill externo) sem
       // nunca disparar o hook Stop — sem isto a barra ficaria "ligada" pra
       // sempre num card cujo processo nem existe mais.
-      clearIdleTimer();
-      setIsActive(false);
+      applyActivity("exit");
     });
     const offTurnComplete = window.pty.onTurnComplete((id) => {
       if (id !== ptyIdRef.current) return;
@@ -494,7 +513,10 @@ export function useTerminal(
       offSessionFound();
       offResumeInvalid();
       clearIdleTimer();
+      applyActivityRef.current = () => {};
       turnSignalSeenRef.current = false;
+      turnOpenRef.current = false;
+      isActiveRef.current = false;
       if (ptyIdRef.current) void window.pty.kill(ptyIdRef.current);
       ptyIdRef.current = null;
       setPtyId(null);
@@ -584,6 +606,10 @@ export function useTerminal(
     fitRef.current = fit;
     registerTerminal(id, term);
     const onTermData = term.onData((data) => {
+      // Keystroke / xterm input — abre a janela do turno. Sem isto, um
+      // byte de eco depois do turn_complete seria chrome e a barra
+      // ficaria apagada no turno seguinte (o humano acabou de digitar).
+      applyActivityRef.current("input");
       if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, data);
     });
     return () => {
@@ -738,6 +764,7 @@ export function useTerminal(
           // anterior ainda não resolvida (ver o comentário de
           // `maskQueueRef` acima / `mask-buffer.ts`).
           maskQueueRef.current.push({ needle: quotedPath, replacement: t("terminal.imageTag", { n: pastedImageCount }) });
+          applyActivityRef.current("input");
           void window.pty.write(ptyIdRef.current!, typed);
           toast(t("terminal.imagePasted"));
         });
@@ -817,11 +844,7 @@ export function useTerminal(
           case "sigint":
             if (ptyIdRef.current) {
               void window.pty.write(ptyIdRef.current, "\x03");
-              if (idleTimerRef.current) {
-                clearTimeout(idleTimerRef.current);
-                idleTimerRef.current = null;
-              }
-              setIsActive(false);
+              applyActivityRef.current("interrupt");
             }
             return;
           case "paste":
@@ -964,11 +987,7 @@ export function useTerminal(
     // provider `claude` (sinal real via hook Stop, ver Effect 1 acima), um
     // turno abortado no meio pode nunca disparar o Stop; sem isto a barra
     // ficaria "ligada" indefinidamente.
-    if (idleTimerRef.current) {
-      clearTimeout(idleTimerRef.current);
-      idleTimerRef.current = null;
-    }
-    setIsActive(false);
+    applyActivityRef.current("interrupt");
   }
 
   return { ptyId, exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, hasReceivedOutput, isActive, fitNow, interrupt };
