@@ -71,20 +71,12 @@ const editorTheme = EditorView.theme(
       borderRadius: "50%",
       backgroundColor: "var(--danger)",
     },
-    // DESIGN-BACKLOG.md item 45 — `.cm-scroller` is CodeMirror's OWN
-    // internal scroll container (see the `.code-editor` comment in
-    // cards.css), not an element this app renders directly, so the
-    // app-wide `.thin-scroll` utility class can't be applied to it via
-    // className — it has to be replicated here instead, in the one place
-    // that already owns this editor's look and feel. Same values as
-    // `.thin-scroll` (layout.css) — every other scrollable area in the
-    // app used it, this one was missed when CodeMirror replaced the old
-    // textarea. Both the standardized properties AND the webkit
-    // pseudo-elements, matching `.thin-scroll` exactly — Chromium honors
-    // `::-webkit-scrollbar` for the actual rendering, but leaving
-    // `scrollbar-width`/`-color` unset here (unlike every other
-    // scrollable area) would read wrong on `getComputedStyle` even if
-    // the visual result happened to match.
+    // DESIGN-BACKLOG.md §2.0 item 4 — app default scrollbar lives on
+    // `*` + bare `::-webkit-scrollbar*` in layout.css. `.cm-scroller`
+    // is CodeMirror's internal scroll container (not a DOM node we own),
+    // and the theme injects styles that can outrank the global webkit
+    // pseudos — keep the same values here so the editor matches the
+    // app default even when CM's own rules would otherwise win.
     ".cm-scroller": { overflow: "auto", scrollbarWidth: "thin", scrollbarColor: "var(--border) transparent" },
     ".cm-scroller::-webkit-scrollbar": { width: "6px", height: "6px" },
     ".cm-scroller::-webkit-scrollbar-track": { background: "transparent" },

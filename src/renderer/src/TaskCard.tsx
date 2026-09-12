@@ -1353,7 +1353,7 @@ function TaskCardInner({
               )}
             </div>
             <div
-              className={`${styles.columnBody} thin-scroll`}
+              className={styles.columnBody}
               ref={(el) => {
                 columnBodyRefs.current[col] = el;
               }}

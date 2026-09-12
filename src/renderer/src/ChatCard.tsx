@@ -718,7 +718,7 @@ function ChatCardInner({
     >
       <div className="chat-card-body">
         {sessionsOpen && (
-          <div className="chat-sessions-panel thin-scroll">
+          <div className="chat-sessions-panel">
             <div className="chat-sessions-panel-heading">
               SESSÕES DE CHAT
               <button
@@ -830,7 +830,7 @@ function ChatCardInner({
         </div>
       ) : (
         <>
-          <div className="chat-messages thin-scroll" ref={scrollRef}>
+          <div className="chat-messages" ref={scrollRef}>
             {messages.length === 0 && streaming === null && <div className="chat-empty">peça algo ao chatbox…</div>}
             {messages.map((m, i) => (
               <div key={i} className={`chat-msg ${m.role}`}>

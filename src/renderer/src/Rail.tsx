@@ -164,7 +164,7 @@ export function Rail({
         <Icon name={TOOL_ICON[tool]} size={18} />
       </button>
 
-      <div className="rail thin-scroll" aria-label="Barra de ferramentas">
+      <div className="rail" aria-label="Barra de ferramentas">
         {/* Grupo 1: Ferramentas de manipulação do canvas */}
         <button
           className={`rail-btn${tool === "pointer" ? " active" : ""}`}
@@ -284,7 +284,7 @@ export function Rail({
           {openPopover === "cards" && (
             <>
               <div className="board-list-heading">ADICIONAR AO CANVAS</div>
-              <div className="board-list thin-scroll" style={{ maxHeight: "min(60vh, 380px)" }}>
+              <div className="board-list" style={{ maxHeight: "min(60vh, 380px)" }}>
                 {/* Terminal */}
                 <button
                   className="popover-row"
@@ -448,7 +448,7 @@ export function Rail({
           {cards.length === 0 ? (
             <div className="popover-empty">nenhum card ainda</div>
           ) : (
-            <div className="board-list thin-scroll">
+            <div className="board-list">
               {cards.map((c) => (
                 <button
                   key={c.id}
