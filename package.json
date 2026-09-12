@@ -25,7 +25,10 @@
     "format": "prettier --write src",
     "format:check": "prettier --check src",
     "test:unit": "vitest run",
-    "verify": "npx tsc --noEmit && npm run test:unit && npm run build && for f in scripts/verify/smoke-*.mjs; do node \"$f\" || exit 1; done"
+    "check:tokens": "node scripts/verify/check-design-tokens.mjs",
+    "verify:ci": "npx tsc --noEmit && npm run lint && npm run test:unit && npm run check:tokens && npm run build",
+    "verify:smoke": "for f in scripts/verify/smoke-*.mjs; do node \"$f\" || exit 1; done",
+    "verify": "npm run verify:ci && npm run verify:smoke"
   },
   "build": {
     "appId": "com.stellar.app",

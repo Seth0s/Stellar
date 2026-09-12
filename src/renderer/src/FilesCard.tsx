@@ -499,7 +499,7 @@ function FilesCardInner({
       tabs.map(async (tab) => {
         const kind = mediaKind(tab.path);
         if (kind === "image") {
-          let disk: string | null = null;
+          let disk: string | null;
           try {
             const result = await window.fs.readImage(root, tab.path);
             disk = "dataUrl" in result ? result.dataUrl : null;
@@ -518,7 +518,7 @@ function FilesCardInner({
           }
           return;
         }
-        let disk: string | null = null;
+        let disk: string | null;
         try {
           const result = await window.fs.read(root, tab.path);
           disk = "content" in result ? result.content : null;

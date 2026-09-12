@@ -10,12 +10,20 @@ dev` session) and drives it over the Chrome DevTools Protocol.
 ## Run
 
 ```bash
-npm run verify          # build, then run every smoke-*.mjs
+npm run verify:ci       # tsc, vitest, check:tokens, build — what CI runs
+npm run verify          # verify:ci, then every smoke-*.mjs (needs a display)
+npm run verify:smoke    # smoke only; requires `out/` already built
+npm run check:tokens    # SYSTEM_DESIGN §1: var() vs tokens.css (no Electron)
 node scripts/verify/smoke-boot.mjs               # just one
 ```
 
+CI (`.github/workflows/ci.yml`) runs `verify:ci` only. Smoke needs a
+real Electron window and is **declared** as local-only until someone
+demonstrates a scripted boot on xvfb — a permanently-red xvfb job
+trained everyone to ignore red.
+
 Requires `npm run build` (or `electron-vite build`) to have produced
-`out/` first — `npm run verify` does that for you.
+`out/` first before any `smoke-*.mjs` — `npm run verify` does that.
 
 ## Why not Playwright
 

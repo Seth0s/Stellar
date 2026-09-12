@@ -60,10 +60,11 @@ jobs:
 
       - run: npx tsc --noEmit
 
-      # Full `npm run verify` (the CDP/Electron smoke suite) needs a
-      # display and isn't wired for headless CI yet (would need
-      # `xvfb-run` at minimum) — `tsc` above is the only gate here.
-      # Documented as a known gap, not silently skipped.
+      # Electron smoke is local-only (`npm run verify`). Declared in
+      # ci.yml — the xvfb job was red on every run since before
+      # 2026-08-31 because the app never comes up on GitHub-hosted
+      # runners. Do not re-add xvfb-run here until a scripted boot is
+      # demonstrated. This job's gate is tsc + the package build.
       - run: npm run build
 
       # `--publish never` — build only, no network call to the Releases
