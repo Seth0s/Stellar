@@ -20,7 +20,7 @@
     "package:linux": "electron-vite build && electron-builder --linux",
     "package:mac": "electron-vite build && electron-builder --mac",
     "package:win": "electron-vite build && electron-builder --win",
-    "postinstall": "electron-rebuild -f -w node-pty -w better-sqlite3",
+    "postinstall": "electron-builder install-app-deps",
     "lint": "eslint .",
     "format": "prettier --write src",
     "format:check": "prettier --check src",
@@ -135,7 +135,6 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@electron/rebuild": "4.0.4",
     "@eslint/js": "^10.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/better-sqlite3": "^9.6.0",
