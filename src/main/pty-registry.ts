@@ -3,7 +3,7 @@ import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, type SpawnOpts } from "./providers";
 import { effectivePath, realNodePath } from "./user-env";
 import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
-import { decideRearmOnLine } from "./session-rearm-decision";
+import { decideRearmOnLine, CLAIMED_SESSION_STALE_MS } from "./session-rearm-decision";
 import { decideResumeValidity } from "./session-resume-validation";
 import { decideBashCardDiscovery } from "./bash-discovery-decision";
 import {
@@ -424,8 +424,22 @@ export function createPtyRegistry(registryOpts: {
     let resumeInvalidReason: "missing" | "empty" | null = null;
     if (spawnOpts.resumeId && PROVIDERS_WITH_SESSION_CONCEPT.has(providerId)) {
       const evidence = getResumeTargetEvidence(providerId, cwd, spawnOpts.resumeId);
+      // Stale-vs-wall-clock is NOT applied here on purpose: a legitimate
+      // overnight `--resume` has an old mtime and must still load. Cause 2
+      // of "envelhece sozinho" is handled by (1) `decideResumeValidity`'s
+      // optional `referenceActivityMs` when a caller actually has card
+      // activity, and (2) `decideRearmOnLine`'s stale-claim path which
+      // renews the stamp while the card is alive — so the next restart
+      // already points at the live file. Spawning with Date.now() as the
+      // reference would refuse every idle-but-correct session.
       const validity = decideResumeValidity(evidence);
-      if (!validity.valid) resumeInvalidReason = validity.reason;
+      if (!validity.valid) {
+        // `stale` cannot appear without referenceActivityMs; narrow for
+        // the onResumeInvalid channel (missing | empty only).
+        if (validity.reason === "missing" || validity.reason === "empty") {
+          resumeInvalidReason = validity.reason;
+        }
+      }
     }
     const effectiveSpawnOpts: SpawnOpts = resumeInvalidReason ? { ...spawnOpts, resumeId: undefined } : spawnOpts;
 
@@ -826,6 +840,9 @@ export function createPtyRegistry(registryOpts: {
         // idempotente, ver seu doc comment), sem flag de "já vi a
         // primeira" nenhuma. `line.length > 0` continua excluindo um
         // Enter vazio (não conta como atividade real).
+        const claimedSessionMtimeMs = entry.claimedSessionId
+          ? (getResumeTargetEvidence(entry.providerId, entry.cwd, entry.claimedSessionId).mtimeMs ?? null)
+          : null;
         const decision = decideRearmOnLine({
           line,
           trigger,
@@ -835,6 +852,8 @@ export function createPtyRegistry(registryOpts: {
           watcherInFlight: entry.stopWatch !== null,
           currentFloorMs: entry.scanFloorMs,
           nowMs,
+          claimedSessionMtimeMs,
+          claimedSessionStaleMs: CLAIMED_SESSION_STALE_MS,
         });
         if (decision.action === "rearm") {
           if (decision.resetSessionFound) entry.sessionFound = false;

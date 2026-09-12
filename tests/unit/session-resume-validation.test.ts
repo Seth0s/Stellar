@@ -13,11 +13,12 @@ import { decideResumeValidity, type ResumeTargetEvidence } from "../../src/main/
 // pro rearm), decide se um `resumeId` restaurado merece confiança.
 //
 // Deliberadamente NÃO testa "turno completo" (encaminhamento 2, adiado
-// por decisão de escopo) — só as duas perguntas baratas da leitura:
-// existe alguma coisa aqui, e não está vazia?
+// por decisão de escopo) — só as perguntas baratas da leitura:
+// existe alguma coisa aqui, não está vazia, e (causa 2 do item
+// "envelhece sozinho") o mtime ainda casa com a atividade do card.
 
 function evidence(overrides: Partial<ResumeTargetEvidence>): ResumeTargetEvidence {
-  return { exists: true, hasContent: true, ...overrides };
+  return { exists: true, hasContent: true, mtimeMs: 1_000, ...overrides };
 }
 
 describe("decideResumeValidity", () => {
@@ -44,5 +45,43 @@ describe("decideResumeValidity", () => {
     // aqui só prova que a função não olha esse campo quando exists é
     // false, não que os dois sinais sejam contraditórios na prática.
     expect(decideResumeValidity({ exists: false, hasContent: true })).toEqual({ valid: false, reason: "missing" });
+  });
+
+  it("sem referenceActivityMs o ramo stale NÃO dispara — idle overnight continua válido", () => {
+    // Cause 2 precisa de atividade conhecida do card; relógio de parede
+    // sozinho confundiria resume legítimo depois de horas parado.
+    expect(
+      decideResumeValidity(evidence({ mtimeMs: 1 }), {
+        // sem referenceActivityMs
+        staleAfterMs: 5_000,
+      }),
+    ).toEqual({ valid: true });
+  });
+
+  it("mtime velho demais frente à atividade do card => inválido com motivo 'stale'", () => {
+    expect(
+      decideResumeValidity(evidence({ mtimeMs: 1_000 }), {
+        referenceActivityMs: 1_000 + 5 * 60_000 + 1,
+        staleAfterMs: 5 * 60_000,
+      }),
+    ).toEqual({ valid: false, reason: "stale" });
+  });
+
+  it("mtime ainda dentro do limiar frente à atividade do card => válido", () => {
+    expect(
+      decideResumeValidity(evidence({ mtimeMs: 1_000 }), {
+        referenceActivityMs: 1_000 + 5 * 60_000,
+        staleAfterMs: 5 * 60_000,
+      }),
+    ).toEqual({ valid: true });
+  });
+
+  it("mtime null com referenceActivityMs => válido (sem sinal de tempo, não inventa stale)", () => {
+    expect(
+      decideResumeValidity(evidence({ mtimeMs: null }), {
+        referenceActivityMs: 999_999,
+        staleAfterMs: 1,
+      }),
+    ).toEqual({ valid: true });
   });
 });
