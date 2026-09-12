@@ -30,8 +30,6 @@ export function Topbar({
   onCreateBoard,
   onUpdateBoard,
   onDeleteBoard,
-  onToggleAutonomous,
-  onSetConcurrencyCap,
   onSuggestInstall,
 }: {
   boards: Board[];
@@ -63,11 +61,6 @@ export function Topbar({
   onCreateBoard: (name: string, cwd: string, template: SessionTemplate) => void;
   onUpdateBoard: (id: string, name: string, cwd: string) => void;
   onDeleteBoard: (id: string) => void;
-  /** DESIGN-BACKLOG.md item 59 — separate from onUpdateBoard on purpose:
-   * fires immediately, not staged behind the modal's "Salvar". */
-  onToggleAutonomous: (id: string, autonomous: boolean) => void;
-  /** DESIGN-BACKLOG.md item 60, peça 2. */
-  onSetConcurrencyCap: (id: string, cap: number | null) => void;
   /** Achado ao vivo, 2026-09-03 — botão "abrir terminal" do aviso de CLI
    * ausente abaixo. Mesma ação que já existia (App.tsx's
    * `openInstallTerminal`), só que disparada daqui em vez de um botão que
@@ -211,10 +204,6 @@ export function Topbar({
       {modal?.mode === "edit" && (
         <SessionModal
           mode="edit"
-          // Looked up fresh from the live `boards` array, not the stale
-          // snapshot captured when the pencil was clicked — otherwise
-          // toggling `autonomous` while the modal is still open would
-          // visually revert on the next re-render (item 59).
           board={boards.find((b) => b.id === modal.board.id) ?? modal.board}
           workspaceRoot={workspaceRoot}
           onChangeRoot={onChangeRoot}
@@ -222,8 +211,6 @@ export function Topbar({
           canDelete={boards.length > 1}
           onSave={onUpdateBoard}
           onDelete={onDeleteBoard}
-          onToggleAutonomous={onToggleAutonomous}
-          onSetConcurrencyCap={onSetConcurrencyCap}
           onClose={() => setModal(null)}
         />
       )}

@@ -79,6 +79,9 @@ try {
   await page.click(settingsBtn.x, settingsBtn.y);
   await new Promise((r) => setTimeout(r, 400));
 
+  await page.evalJs(`document.querySelector('[data-settings-page="keys"]')?.click()`);
+  await new Promise((r) => setTimeout(r, 400));
+
   check("painel central abre com os 4 providers", await page.evalJs(`document.querySelectorAll('.secrets-provider-row').length`), 4);
   const geminiHasKeyBefore = await page.evalJs(`window.secrets.hasKey('gemini')`);
   check("gemini começa sem key", geminiHasKeyBefore, false);
@@ -107,7 +110,7 @@ try {
 
   // Fecha o painel, abre um chatbox — o dot do provider picker deve
   // refletir a key real que acabou de ser salva.
-  const closeBtn = await centerOf(page, ".secrets-settings-modal .modal-actions button.primary");
+  const closeBtn = await centerOf(page, "[data-settings-close]");
   await page.click(closeBtn.x, closeBtn.y);
   await spawnCard(page, "chat");
   await new Promise((r) => setTimeout(r, 500));

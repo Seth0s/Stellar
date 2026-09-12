@@ -20,14 +20,12 @@ import {
 import { AgentAskModal } from "./AgentAskModal";
 import { SpawnQueuePanel } from "./SpawnQueuePanel";
 import { ConfirmModal } from "./ConfirmModal";
-import { SecretsSettingsModal } from "./SecretsSettingsModal";
-import { ShortcutsOverlay } from "./ShortcutsOverlay";
+import { SettingsModal, type SettingsPage } from "./SettingsModal";
 import { resolveGlobalShortcut, GLOBAL_SHORTCUTS_BY_ID, type ShortcutCombo, type ShortcutOverrides } from "./shortcut-registry";
 import { loadShortcutOverrides, saveShortcutOverrides, setShortcutOverride, clearShortcutOverride } from "./shortcut-config";
 import { t, setLocale, getLocale, type Locale } from "../../shared/i18n";
 import { isAnyModalOpen } from "./modal-scope";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
-import { RemotePairingModal } from "./RemotePairingModal";
 import { Rail } from "./Rail";
 import { Compass } from "./Compass";
 import { Topbar } from "./Topbar";
@@ -609,8 +607,11 @@ export function App() {
   // own agent flow) called `getDisplayMedia()`; main/index.ts holds the
   // request open until this resolves.
   const [pendingBrowserPermission, setPendingBrowserPermission] = useState<{ requestId: string; message: string } | null>(null);
-  // Item 29 — central API-key management panel, not scoped to any card.
-  const [showSecretsSettings, setShowSecretsSettings] = useState(false);
+  // Settings modal — one chrome, pages reuse SecretsSettingsModal /
+  // ShortcutsOverlay / RemotePairingModal. `null` is closed; a page id
+  // is which door opened it (`?` → shortcuts, rail → general, QR → devices).
+  const [settingsPage, setSettingsPage] = useState<SettingsPage | null>(null);
+  const closeSettings = useCallback(() => setSettingsPage(null), []);
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 6 — one union covers every
   // kind of agent ask (open URL, spawn agent, spawn non-terminal card);
   // AgentAskModal.tsx renders whichever is pending, allowAsk/denyAsk below
@@ -647,7 +648,6 @@ export function App() {
     const saved = localStorage.getItem(BG_STYLE_KEY);
     return (BG_STYLE_ORDER as string[]).includes(saved ?? "") ? (saved as BgStyle) : "dots";
   });
-  const [showShortcuts, setShowShortcuts] = useState(false);
   // Fase C (atalhos) — sobreposições de combo por usuário, `ac.
   // shortcutOverrides` no localStorage (mesma convenção de preferência
   // renderer-only que `BG_STYLE_KEY`/`WORKSPACE_ROOT_KEY` acima já usam;
@@ -660,7 +660,7 @@ export function App() {
   // DESIGN-BACKLOG.md §2.1 i18n fase 1 — locale lives in shared module state
   // (`setLocale`) so `t()` / `formatRelativeTime` work from main+renderer
   // without a React provider. React state here only forces a re-render when
-  // the user overrides it (ShortcutsOverlay selector).
+  // the user overrides it (SettingsModal → General).
   const [locale, setLocaleState] = useState<Locale>(() => getLocale());
   useEffect(() => {
     let cancelled = false;
@@ -711,7 +711,6 @@ export function App() {
    * arraste. */
   const [exportSelection, setExportSelection] = useState<{ x: number; y: number; w: number; h: number; dragging: boolean } | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
-  const [showRemotePairing, setShowRemotePairing] = useState(false);
   /** Set only when closeCard needs confirmation first (a terminal card
    * whose process is still live) — see closeCard/confirmCloseCard below. */
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
@@ -1219,10 +1218,9 @@ export function App() {
     // why it has no scope restriction.
     "tool.escapeReset": () => {
       setTool("pointer");
-      setShowShortcuts(false);
+      setSettingsPage(null);
       setPendingCloseId(null);
       setRadialMenu(null);
-      setShowRemotePairing(false);
     },
     // Achado ao vivo (2026-09-02, fase A) — F11 apertado com foco dentro de
     // um terminal/navegador embutido bubblava até aqui e ligava o
@@ -1233,7 +1231,7 @@ export function App() {
     "window.fullscreen": () => {
       void window.winControls.toggleFullscreen();
     },
-    "overlay.shortcuts.toggle": () => setShowShortcuts((v) => !v),
+    "overlay.shortcuts.toggle": () => setSettingsPage((p) => (p === "shortcuts" ? null : "shortcuts")),
     // Achado 2 da revisão da fase A: o critério certo pra "Ctrl+D duplica
     // ou é EOF do terminal" é foco REAL (escopo), não "qual card está no
     // topo do z-order" — um card de terminal no topo mas sem foco de
@@ -2884,8 +2882,6 @@ export function App() {
           onCreateBoard={createBoard}
           onUpdateBoard={updateBoard}
           onDeleteBoard={deleteBoard}
-          onToggleAutonomous={setBoardAutonomous}
-          onSetConcurrencyCap={setBoardConcurrencyCap}
         />
       </div>
     );
@@ -3567,7 +3563,7 @@ export function App() {
         kindIcon={CARD_ICON}
         kindLabel={CARD_LABEL}
         onJumpToCard={jumpToCard}
-        onOpenSecretsSettings={() => setShowSecretsSettings(true)}
+        onOpenSettings={() => setSettingsPage("general")}
       />
       <Topbar
         boards={boards}
@@ -3584,31 +3580,33 @@ export function App() {
         onZoomTo={(pct) => setZoomAbs(pct / 100)}
         bgStyleLabel={BG_STYLE_LABEL[bgStyle]}
         onCycleBgStyle={cycleBgStyle}
-        onOpenRemote={() => setShowRemotePairing(true)}
+        onOpenRemote={() => setSettingsPage("devices")}
         onGoHome={goHome}
         onSwitchBoard={switchBoard}
         onCreateBoard={createBoard}
         onUpdateBoard={updateBoard}
         onDeleteBoard={deleteBoard}
-        onToggleAutonomous={setBoardAutonomous}
-        onSetConcurrencyCap={setBoardConcurrencyCap}
         onSuggestInstall={stableSuggestInstall}
       />
       <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} cardLabel={describeCard} onFocusCard={jumpToCard} />
       <UpdateBanner />
       <ToastHost />
-      {showShortcuts && (
-        <ShortcutsOverlay
-          onClose={() => setShowShortcuts(false)}
+      {settingsPage && (
+        <SettingsModal
+          page={settingsPage}
+          onPageChange={setSettingsPage}
+          onClose={closeSettings}
+          board={boards.find((b) => b.id === activeBoardId) ?? null}
           shortcutOverrides={shortcutOverrides}
           onRebind={rebindShortcut}
           onRestoreDefault={restoreShortcutDefault}
           onRestoreAll={restoreAllShortcutDefaults}
           locale={locale}
           onLocaleOverrideChange={changeLocaleOverride}
+          onToggleAutonomous={setBoardAutonomous}
+          onSetConcurrencyCap={setBoardConcurrencyCap}
         />
       )}
-      {showRemotePairing && <RemotePairingModal onClose={() => setShowRemotePairing(false)} />}
       {radialMenu && (
         <RadialMenu
           x={radialMenu.screen.x}
@@ -3688,7 +3686,6 @@ export function App() {
           }}
         />
       )}
-      {showSecretsSettings && <SecretsSettingsModal onClose={() => setShowSecretsSettings(false)} />}
     </div>
   );
 }
