@@ -22,11 +22,13 @@
  * The two constraints together force a turn window, not a byte latch:
  *   - `signalProven` — this PTY has delivered a real end-of-turn at
  *     least once. Unlocks "trust the signal, never the silence timer".
- *   - `turnOpen` — a new turn has been opened by INPUT (keystroke,
- *     paste, or a `send_to_card` body delivered from main) since the
- *     last end-of-turn. Output that arrives while the window is closed
- *     is chrome, not work, and must not relight. Echo, process output,
- *     and deliverCard's retry Enter are not INPUT.
+ *   - `turnOpen` — a new turn has been opened by INPUT (keystroke via
+ *     xterm `onKey`, paste, or a `send_to_card` body delivered from
+ *     main) since the last end-of-turn. Output that arrives while the
+ *     window is closed is chrome, not work, and must not relight.
+ *     Echo, process output, deliverCard's retry Enter, and xterm's
+ *     automatic replies (CPR / DSR on `onData` without `onKey`) are
+ *     not INPUT.
  *
  * Cards that never prove the signal (the photographed board session
  * had only another tool's on-session-end, never the Stellar Stop hook)
@@ -61,9 +63,28 @@ export type TerminalActivityState = {
   isActive: boolean;
   /** Latch for the life of this PTY — reset on respawn. */
   signalProven: boolean;
-  /** Opened by input (keystroke / paste / send_to_card body), closed by turn_complete / exit / interrupt. */
+  /** Opened by input (onKey / paste / send_to_card body), closed by turn_complete / exit / interrupt. */
   turnOpen: boolean;
 };
+
+/**
+ * Where an xterm outgoing chunk came from. The public API already
+ * splits this — do not classify by payload bytes:
+ *   - `onKey` fires only for a keystroke (has a DOM KeyboardEvent).
+ *   - `input(data, wasUserInput)` documents the same split: automatic
+ *     replies pass `false` (xterm's InputHandler default).
+ *   - `onData` fires for keys, paste, AND those automatic replies
+ *     (Cursor Position Report, Device Status Report, DA). Treating
+ *     every `onData` as INPUT is the third incarnation of lighting
+ *     the bar on any byte: the agent prints a query, xterm answers,
+ *     the window reopens with no key, the next output byte sticks.
+ *   - Paste is a separate DOM / `term.paste` path, not `onKey`.
+ */
+export type XtermOutgoingSource = "key" | "paste" | "auto";
+
+export function xtermOutgoingOpensTurn(source: XtermOutgoingSource): boolean {
+  return source === "key" || source === "paste";
+}
 
 export type TerminalActivityDecision = {
   next: TerminalActivityState;

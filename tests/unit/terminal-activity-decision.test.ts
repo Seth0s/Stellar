@@ -4,6 +4,7 @@ import {
   ACTIVITY_UNPROVEN_SIGNAL_IDLE_MS,
   decideTerminalActivity,
   initialTerminalActivity,
+  xtermOutgoingOpensTurn,
   type TerminalActivityState,
 } from "../../src/renderer/src/terminal-activity-decision";
 
@@ -120,6 +121,30 @@ describe("decideTerminalActivity — provider sem sinal real (bash)", () => {
     const echo = apply(ended.next, "data", NO_SIGNAL);
     expect(echo.next.isActive).toBe(true);
     expect(echo.armIdleMs).toBe(ACTIVITY_IDLE_MS);
+  });
+});
+
+describe("xtermOutgoingOpensTurn — tecla vs resposta automática", () => {
+  it("onKey e colar abrem o turno; resposta automática do xterm não", () => {
+    expect(xtermOutgoingOpensTurn("key")).toBe(true);
+    expect(xtermOutgoingOpensTurn("paste")).toBe(true);
+    expect(xtermOutgoingOpensTurn("auto")).toBe(false);
+  });
+
+  it("resposta automática depois do fim não reabre; tecla reabre", () => {
+    const idle = apply(apply(initialTerminalActivity(), "data").next, "turn_complete").next;
+    expect(idle.turnOpen).toBe(false);
+
+    // CPR / DSR travel on onData. They must stay "data" (or be ignored),
+    // never the "input" event — that is the photographed stuck-on path.
+    expect(xtermOutgoingOpensTurn("auto")).toBe(false);
+    expect(apply(idle, "data").next.turnOpen).toBe(false);
+    expect(apply(idle, "data").next.isActive).toBe(false);
+
+    expect(xtermOutgoingOpensTurn("key")).toBe(true);
+    const opened = apply(idle, "input");
+    expect(opened.next.turnOpen).toBe(true);
+    expect(opened.next.isActive).toBe(true);
   });
 });
 

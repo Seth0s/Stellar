@@ -12,7 +12,9 @@ import type { ShortcutOverrides } from "./shortcut-registry";
 import {
   decideTerminalActivity,
   initialTerminalActivity,
+  xtermOutgoingOpensTurn,
   type TerminalActivityEvent,
+  type XtermOutgoingSource,
 } from "./terminal-activity-decision";
 
 const DEFAULT_COLS = 80;
@@ -296,8 +298,9 @@ export function useTerminal(
    * NÃO é `true` a cada `pty:data`. Depois do primeiro sinal, um byte
    * solto entre turnos (prompt, spinner, toast da CLI) não reacende —
    * só entrada nova abre a janela (`terminal-activity-decision.ts`) —
-   * tecla, colar, ou o aviso `pty:turn-input` quando o main entrega
-   * o corpo via `send_to_card`. Eco / retry Enter não abrem.
+   * tecla (`onKey`), colar, ou o aviso `pty:turn-input` quando o main
+   * entrega o corpo via `send_to_card`. Eco, retry Enter e resposta
+   * automática do xterm (CPR/DSR em `onData` sem `onKey`) não abrem.
    */
   const [isActive, setIsActive] = useState(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -616,15 +619,23 @@ export function useTerminal(
     termRef.current = term;
     fitRef.current = fit;
     registerTerminal(id, term);
+    // xterm's public split, not a payload heuristic: `onKey` is a
+    // keystroke (DOM event); `onData` is that PLUS automatic replies
+    // (CPR / DSR / DA — InputHandler `triggerDataEvent` with
+    // wasUserInput default false). Opening the turn on every `onData`
+    // is the third incarnation of lighting the bar on any byte.
+    const noteOutgoing = (source: XtermOutgoingSource) => {
+      if (xtermOutgoingOpensTurn(source)) applyActivityRef.current("input");
+    };
+    const onTermKey = term.onKey(() => {
+      noteOutgoing("key");
+    });
     const onTermData = term.onData((data) => {
-      // Keystroke / xterm input — abre a janela do turno. Sem isto, um
-      // byte de eco depois do turn_complete seria chrome e a barra
-      // ficaria apagada no turno seguinte (o humano acabou de digitar).
-      applyActivityRef.current("input");
       if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, data);
     });
     return () => {
       unregisterTerminal(id);
+      onTermKey.dispose();
       onTermData.dispose();
       term.dispose();
       termRef.current = null;
@@ -775,7 +786,7 @@ export function useTerminal(
           // anterior ainda não resolvida (ver o comentário de
           // `maskQueueRef` acima / `mask-buffer.ts`).
           maskQueueRef.current.push({ needle: quotedPath, replacement: t("terminal.imageTag", { n: pastedImageCount }) });
-          applyActivityRef.current("input");
+          if (xtermOutgoingOpensTurn("paste")) applyActivityRef.current("input");
           void window.pty.write(ptyIdRef.current!, typed);
           toast(t("terminal.imagePasted"));
         });
@@ -785,7 +796,12 @@ export function useTerminal(
         const items = e.clipboardData?.items;
         if (!items) return;
         const hasImage = Array.from(items).some((item) => item.type.startsWith("image/"));
-        if (!hasImage) return;
+        // Text paste is human input (xterm `onData` will carry the bytes
+        // but must not open the turn by itself — that's the CPR path).
+        if (!hasImage) {
+          if (xtermOutgoingOpensTurn("paste")) applyActivityRef.current("input");
+          return;
+        }
         e.preventDefault();
         e.stopImmediatePropagation();
         if (Date.now() - lastHandledAt < 500) return;
@@ -873,7 +889,10 @@ export function useTerminal(
               }
               try {
                 const text = await navigator.clipboard.readText();
-                if (text) term.paste(text);
+                if (text) {
+                  if (xtermOutgoingOpensTurn("paste")) applyActivityRef.current("input");
+                  term.paste(text);
+                }
               } catch {
                 // clipboard genuinely inacessível aqui — nada mais a fazer
               }
