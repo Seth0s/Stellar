@@ -11,6 +11,7 @@ import { describeStatusHeldWarning } from "./status-write-decision";
 import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, type FailureSource } from "./failure-kind-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
+import { navigationUrlError } from "./browser-registry";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -1713,6 +1714,8 @@ export function createMessageBus(
 
     if (req.cmd === "open") {
       if (!req.url) return { ok: false, error: "missing url" };
+      const openUrlError = navigationUrlError(req.url);
+      if (openUrlError) return { ok: false, error: openUrlError };
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
       // DESIGN-BACKLOG.md item 60, peça 5 — modo autônomo completo:
@@ -2504,6 +2507,10 @@ export function createMessageBus(
       if (req.kind === "task" && taskBoardId) {
         const taskDecision = decideTaskCardSpawn(callbacks.listCardsForBoard(taskBoardId), taskBoardId);
         if (taskDecision.action === "reuse") return { ok: true, cardId: taskDecision.cardId };
+      }
+      if (req.kind === "browser" && req.url) {
+        const spawnUrlError = navigationUrlError(req.url);
+        if (spawnUrlError) return { ok: false, error: spawnUrlError };
       }
       const requestId = randomUUID();
       // DESIGN-BACKLOG.md item 60, peça 5 — same board-scoped auto-approve

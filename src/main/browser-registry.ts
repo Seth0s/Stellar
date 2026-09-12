@@ -386,6 +386,15 @@ function isPrivateIpv4([a, b]: [number, number, number, number]): boolean {
  * file access (javascript:/file:/data:/blob:/vbscript:); an address that
  * cannot hold a public TLS certificate (see `isLocalHostname`) gets http,
  * everything else gets https if no scheme was given.
+ *
+ * `file:` stays rejected on purpose, not as leftover caution. Human-in-the-
+ * loop `open_url` shows the URL on the consent dialog, but an autonomous
+ * board auto-approves that same call — and a browser card is unsandboxed
+ * Chromium with the Electron process's filesystem. `file:` + `get_page_text`
+ * would then be an arbitrary local-file read that bypasses the bwrap mask
+ * on `$HOME` / secrets. `data:`/`blob:`/`javascript:`/`vbscript:` stay
+ * rejected as execution vectors regardless. Serve a local HTML artifact
+ * over `http://` instead.
  */
 export function normalizeUrl(raw: string): string {
   const t = raw.trim();
@@ -394,11 +403,27 @@ export function normalizeUrl(raw: string): string {
   const scheme = schemeMatch?.[1]?.toLowerCase();
   if (scheme === "http" || scheme === "https") return t;
   if (scheme === "javascript" || scheme === "file" || scheme === "data" || scheme === "blob" || scheme === "vbscript") {
-    throw new Error("unsupported url scheme");
+    throw unsupportedUrlScheme(scheme);
   }
-  if (scheme === "about") throw new Error("unsupported url scheme");
-  if (scheme && t.includes("://")) throw new Error("unsupported url scheme");
+  if (scheme === "about") throw unsupportedUrlScheme("about");
+  if (scheme && t.includes("://")) throw unsupportedUrlScheme(scheme);
   return `${isLocalHostname(t) ? "http" : "https"}://${t}`;
+}
+
+function unsupportedUrlScheme(scheme: string): Error {
+  return new Error(`unsupported url scheme: ${scheme}: — the embedded browser only opens http(s) URLs`);
+}
+
+/** Error string if `raw` is a scheme we refuse to navigate, else null.
+ * Call this BEFORE creating a card or asking for consent — a rejected
+ * scheme must not spend a human approval or leave a blank window. */
+export function navigationUrlError(raw: string): string | null {
+  try {
+    normalizeUrl(raw);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : "unsupported url scheme";
+  }
 }
 
 /** Pendentes #188, opção intermediária (device emulation UA+touch) —
@@ -547,6 +572,10 @@ export function createBrowserRegistry(callbacks: {
   }
 
   function create(id: string, url: string): { scaleFactor: number } {
+    // Normalize first: the throw used to happen after `entries.set` and
+    // inside `void loadURL(...)`, so a refused scheme left a blank card
+    // and the error never reached the caller.
+    const normalized = normalizeUrl(url);
     const scaleFactor = callbacks.getScaleFactor();
     const win = new BrowserWindow({
       show: false,
@@ -684,12 +713,15 @@ export function createBrowserRegistry(callbacks: {
     // silenciosamente desligaria o primeiro).
     wcIdToCardId.set(wc.id, id);
     ensureNetworkTap(wc.session);
-    void wc.loadURL(normalizeUrl(url));
+    void wc.loadURL(normalized);
     return { scaleFactor };
   }
 
   function navigate(id: string, url: string) {
-    void entries.get(id)?.win.webContents.loadURL(normalizeUrl(url));
+    const normalized = normalizeUrl(url);
+    const wc = entries.get(id)?.win.webContents;
+    if (!wc) return;
+    void wc.loadURL(normalized);
   }
 
   function back(id: string) {
