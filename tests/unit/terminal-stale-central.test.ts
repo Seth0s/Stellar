@@ -13,10 +13,12 @@ function key(partial: Partial<ShortcutKeyEvent> & { key: string }): ShortcutKeyE
 }
 
 describe("terminal-shortcut-dispatch", () => {
-  it("defers to central when central shortcut claims a stale key", () => {
+  // Rodada 7: card.duplicate é canvas — resolveGlobalShortcut rejeitaria
+  // no bubble; defer-central deixava o Ctrl+D/C nativo do Chromium vazar.
+  it("stale + card.duplicate (escopo canvas): swallow (não defer-central)", () => {
     const overrides = {
       "terminal.sigint": { key: "x", ctrlOrCmd: true },
-      "card.duplicate": { key: "c", ctrlOrCmd: true }
+      "card.duplicate": { key: "c", ctrlOrCmd: true },
     };
 
     const fakeEvent: ShortcutKeyEvent = {
@@ -24,23 +26,18 @@ describe("terminal-shortcut-dispatch", () => {
       ctrlKey: true,
       shiftKey: false,
       altKey: false,
-      metaKey: false
+      metaKey: false,
     };
 
-    const res = resolveTerminalShortcutKeydown(fakeEvent, overrides as any, "");
-    // Rodada 5: defer-central (não none, não swallow). none deixava o
-    // xterm emitir \x03; swallow engolia o central. defer-central bubbla
-    // sem stopImmediate e o customKeyEventHandler barra o xterm.
-    expect(res.action).toBe("defer-central");
-    expect(res.consume).toBe(false);
+    const res = resolveTerminalShortcutKeydown(fakeEvent, overrides as ShortcutOverrides, "");
+    expect(res.action).toBe("swallow");
+    expect(res.consume).toBe(true);
   });
 
-  // Matriz completa (rodadas 4–5): stale só engole tecla órfã; dono
-  // terminal / central / tecla comum têm cada um o seu destino.
   describe("stale ownership matrix", () => {
     it("tecla órfã de verdade (sigint/eof rebindados, ninguém pegou o default): swallow", () => {
-      // card.duplicate default é Ctrl+D — sem afastá-lo, Ctrl+D ainda tem
-      // dono central e o stale corretamente devolve defer-central.
+      // card.duplicate default é Ctrl+D (canvas) — mesmo sem afastá-lo o
+      // escopo terminal não o despacha; afastamos só pra órfã total.
       const overrides: ShortcutOverrides = {
         "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
         "terminal.eof": { key: "e", ctrlOrCmd: true, shift: false },
@@ -59,25 +56,35 @@ describe("terminal-shortcut-dispatch", () => {
       expect(resolveTerminalShortcutKeydown(key({ key: "x", ctrlKey: true }), overrides, "").action).toBe("sigint");
     });
 
-    it("tecla reivindicada por atalho central: defer-central (bubbla, sem consume)", () => {
+    it("tecla reivindicada por atalho central COM escopo terminal: defer-central", () => {
+      // tool.escapeReset inclui "terminal" — resolveGlobalShortcut
+      // despacharia com foco no terminal; defer-central é correto.
       const overrides: ShortcutOverrides = {
         "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
-        "card.duplicate": { key: "c", ctrlOrCmd: true },
+        "tool.escapeReset": { key: "c", ctrlOrCmd: true },
       };
       const d = resolveTerminalShortcutKeydown(key({ key: "c", ctrlKey: true }), overrides, "");
       expect(d).toEqual({ consume: false, action: "defer-central" });
     });
 
-    // Rodada 6 — mesma classe do buraco da rodada 5, um nível abaixo:
-    // dono native (não central) também precisa de defer-central; none
-    // deixava o xterm emitir \x03.
-    it("tecla reivindicada por atalho native fora do terminal: defer-central (não none)", () => {
+    it("tecla reivindicada por atalho central fora do escopo terminal: swallow", () => {
+      const overrides: ShortcutOverrides = {
+        "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
+        "card.duplicate": { key: "c", ctrlOrCmd: true },
+      };
+      const d = resolveTerminalShortcutKeydown(key({ key: "c", ctrlKey: true }), overrides, "");
+      expect(d).toEqual({ consume: true, action: "swallow" });
+    });
+
+    // Rodada 7 — dono native de outro escopo (browser.navigate = text-input)
+    // NÃO é despachado no terminal; defer-central vazava o nativo.
+    it("tecla reivindicada por atalho native fora do terminal: swallow (não defer-central)", () => {
       const overrides: ShortcutOverrides = {
         "terminal.sigint": { key: "q", ctrlOrCmd: true, shift: false },
         "browser.navigate": { key: "c", ctrlOrCmd: true, shift: false },
       };
       const d = resolveTerminalShortcutKeydown(key({ key: "c", ctrlKey: true }), overrides, "");
-      expect(d).toEqual({ consume: false, action: "defer-central" });
+      expect(d).toEqual({ consume: true, action: "swallow" });
     });
 
     it("tecla comum: none (passa)", () => {

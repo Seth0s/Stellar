@@ -226,8 +226,8 @@ describe("resolveGlobalShortcut — the dispatcher", () => {
   });
 });
 
-describe("findShortcutClaimingKey — any dispatch/scope, effective combo from the registry", () => {
-  it("finds a central override even when scope would not fire (terminal focus is irrelevant here)", () => {
+describe("findShortcutClaimingKey — effective combo from the registry", () => {
+  it("unscoped: finds a central override even when that scope would not fire", () => {
     const overrides = {
       "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
       "card.duplicate": { key: "c", ctrlOrCmd: true },
@@ -235,7 +235,29 @@ describe("findShortcutClaimingKey — any dispatch/scope, effective combo from t
     expect(findShortcutClaimingKey(key({ key: "c", ctrlKey: true }), overrides)).toBe("card.duplicate");
   });
 
-  it("finds a native terminal effective combo", () => {
+  it("scoped to terminal: card.duplicate (canvas) does not claim — same as resolveGlobalShortcut", () => {
+    const overrides = {
+      "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
+      "card.duplicate": { key: "c", ctrlOrCmd: true },
+    };
+    expect(findShortcutClaimingKey(key({ key: "c", ctrlKey: true }), overrides, "terminal")).toBeNull();
+    expect(
+      resolveGlobalShortcut(key({ key: "c", ctrlKey: true }), ctx({ tagName: "TEXTAREA", isTerminalTextarea: true }), overrides),
+    ).toBeNull();
+  });
+
+  it("scoped to terminal: tool.escapeReset (includes terminal) does claim", () => {
+    const overrides = {
+      "terminal.sigint": { key: "x", ctrlOrCmd: true, shift: false },
+      "tool.escapeReset": { key: "c", ctrlOrCmd: true },
+    };
+    expect(findShortcutClaimingKey(key({ key: "c", ctrlKey: true }), overrides, "terminal")).toBe("tool.escapeReset");
+    expect(
+      resolveGlobalShortcut(key({ key: "c", ctrlKey: true }), ctx({ tagName: "TEXTAREA", isTerminalTextarea: true }), overrides),
+    ).toBe("tool.escapeReset");
+  });
+
+  it("unscoped: finds a native terminal effective combo", () => {
     expect(findShortcutClaimingKey(key({ key: "c", ctrlKey: true }), {})).toBe("terminal.sigint");
     expect(findShortcutClaimingKey(key({ key: "v", ctrlKey: true }), {})).toBe("terminal.paste");
   });
