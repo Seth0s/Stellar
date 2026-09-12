@@ -444,6 +444,14 @@ export function createPtyRegistry(registryOpts: {
     const effectiveSpawnOpts: SpawnOpts = resumeInvalidReason ? { ...spawnOpts, resumeId: undefined } : spawnOpts;
 
     const cardMcpUrl = registryOpts.mcpUrl ? `${registryOpts.mcpUrl}?card=${encodeURIComponent(id)}` : registryOpts.mcpUrl;
+    // DESIGN-BACKLOG.md §0 — capacity-derived report discovery. Refuse
+    // before resolveSpawn when the provider has no path to teach report
+    // (spawnBlock). Scrollback tip is applied after a successful spawn.
+    const discovery = decideBashCardDiscovery({ providerId });
+    if (discovery.spawnBlock) {
+      return { error: "spawn_failed", providerId };
+    }
+
     const resolved = resolveSpawn(providerId, { ...effectiveSpawnOpts, mcpUrl: cardMcpUrl });
     if (!resolved) {
       return {
@@ -579,18 +587,17 @@ export function createPtyRegistry(registryOpts: {
       registryOpts.onResumeInvalid(id, resumeInvalidReason, spawnOpts.resumeId!);
     }
 
-    // DESIGN-BACKLOG.md §2.1 points 3–4 — bash-card discovery tip.
-    // Intent of option (a): one-shot human tip. Delivered through the
-    // renderer's onData path (scrollback), NOT via --rcfile/--init-file
-    // and NOT via shell stdin — loginShell() may be zsh/fish/nu, and
-    // replacing the user's rc is exactly what the task forbids.
-    // Does NOT teach a hand-launched nested agent (no system-prompt/MCP
-    // injection path without wrapping binaries by name — rejected).
-    const bashDiscovery = decideBashCardDiscovery({ providerId });
-    if (bashDiscovery.scrollbackTip) {
+    // DESIGN-BACKLOG.md §0 / §2.1 — capacity-derived discovery tip.
+    // Intent: one-shot tip in scrollback when deriveReportDiscovery says
+    // scrollback (or the bash nested-agent tip). Delivered through the
+    // renderer's onData path, NOT via --rcfile/--init-file and NOT via
+    // shell stdin. Does NOT teach a hand-launched nested agent inside
+    // bash (no system-prompt/MCP injection without wrapping binaries —
+    // rejected).
+    if (discovery.scrollbackTip) {
       queueMicrotask(() => {
         if (!entries.has(id)) return;
-        registryOpts.onData(id, `\r\n${bashDiscovery.scrollbackTip}\r\n`);
+        registryOpts.onData(id, `\r\n${discovery.scrollbackTip}\r\n`);
       });
     }
 

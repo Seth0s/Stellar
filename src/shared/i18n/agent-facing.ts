@@ -16,20 +16,17 @@
  *   `description:` string. Protocol surface for models.
  * - `src/main/providers.ts` — `ACBRIDGE_HINT` (system-prompt nudge injected
  *   into provider CLIs). Marked at the constant itself.
+ * - `src/main/bash-discovery-decision.ts` — `AGENT_SCROLLBACK_DISCOVERY_TIP`
+ *   and `REPORT_DISCOVERY_UNREACHABLE_TIP` (capacity-derived scrollback /
+ *   spawn refusal for providers without a system-prompt flag). AGENT-facing.
+ *   `BASH_CARD_DISCOVERY_TIP` is HUMAN-facing (tip for the person about
+ *   nested agents) and stays English because agents may read the same
+ *   scrollback — listed here only for the agent tips above.
  * - `src/main/message-bus.ts` — text that `typeAndSubmit` types into a
  *   PTY for another agent (`[de: X] relatório disponível…`,
  *   `[de: X] saiu (código N) sem chamar report.`). The `[de: …]` prefix
  *   is a convention other code interprets; translating it breaks routing
  *   / recognition. Marked at each call site.
- * NOT on the list, and deliberately so — `src/main/bash-discovery-decision.ts`.
- * `BASH_CARD_DISCOVERY_TIP` is HUMAN-facing (a tip printed into scrollback
- * for the person), so it is not protocol surface and the array must not
- * claim it is. It stays in English anyway because an agent may happen to
- * read the same scrollback — same reasoning as `ACBRIDGE_HINT`, written at
- * the constant itself. Listing it here as agent-facing would have been a
- * lie a phase-2 sweep would then honour; a review of this file read it that
- * way and filed the omission as a hole, which is exactly the confusion this
- * paragraph removes.
  * - `src/main/status-write-decision.ts` — strings delivered to the writing
  *   agent via `typeAndSubmit` / MCP response. Agent-facing.
  *
@@ -41,6 +38,7 @@
 export const AGENT_FACING_MODULES = [
   "src/main/mcp-server.ts",
   "src/main/providers.ts", // ACBRIDGE_HINT only — provider labels are HUMAN
+  "src/main/bash-discovery-decision.ts", // AGENT_SCROLLBACK_* / UNREACHABLE tips
   "src/main/message-bus.ts", // typeAndSubmit PTY payloads with [de: …]
   "src/main/status-write-decision.ts",
 ] as const;
