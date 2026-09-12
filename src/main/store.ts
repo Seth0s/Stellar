@@ -335,15 +335,11 @@ export type TaskCardRow = { task_id: string; card_id: string; role: string };
 /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
  * (levantado 2026-09-11, ao fechar a fidelidade visual do card Fila —
  * ver o item longo no backlog pro porquê é "um trabalho que paga
- * quatro"). `reports` (comentário grande logo abaixo) é um SLOT único
- * por card — bom pro "qual é o relatório mais recente", incapaz de
- * responder "quantas rodadas até aprovar" ou "quantas reprovações teve
- * este provider", porque a rodada 1 é apagada pela rodada 2. Esta
- * tabela é o log APPEND-ONLY que falta: uma linha por RODADA de
- * participação de um card numa task, nunca sobrescrita — mesmo
- * princípio de `task_transitions` (log ao lado do estado atual, não em
- * vez dele), pelo mesmo motivo (o estado atual sozinho só guarda o
- * último instante).
+ * quatro"). `reports` era um SLOT único por card — bom pro "qual é o
+ * relatório mais recente", incapaz de responder "quantas rodadas até
+ * aprovar". Em 2026-09-12 `reports` passou a append-only por `seq` (mesmo
+ * princípio); esta tabela continua sendo o log por RODADA DE PARTICIPAÇÃO
+ * (task+card+papel) com `verdict`, distinto do payload JSON do relatório.
  *
  * `role` é copiado de `task_cards` NO MOMENTO da rodada (não uma
  * referência viva) — se o papel do card mudar depois via `linkTaskCard`,
@@ -417,44 +413,33 @@ export type SprintRow = {
  * vivo (2026-09-09, sessão real): um card de review chamou `report`, saiu
  * com código 0, o bus respondeu `reported` — e o relatório sumiu. Causa:
  * `cardReports` (message-bus.ts) era um `Map` puro em memória, apagado em
- * TODO restart (update, crash, relogin, `quitAndInstall`), de TODOS os
- * cards, não só o que disparou o achado. `card_id` é a PRIMARY KEY (não um
- * id próprio da tabela) de propósito — preserva exatamente a semântica que
- * já existia no `Map`: um relatório novo do MESMO card SOBRESCREVE o
- * anterior, nunca acumula por card (um reviewer que reporta 4 rodadas do
- * mesmo diff tem sempre 1 linha, não 4).
+ * TODO restart. Persistência resolveu o restart; o schema ORIGINAL era
+ * ainda um SLOT (`card_id` PRIMARY KEY + `ON CONFLICT DO UPDATE`) — um
+ * reviewer que reportava rodada 1, 2, 3 só preservava a última, e
+ * `afterSeq` depois do fato nunca recuperava o conteúdo das anteriores
+ * (DESIGN-BACKLOG.md §0 "Dois avisos de relatorio do mesmo card",
+ * 2026-09-12). Agora é APPEND-ONLY por `seq` (PK global monotônica), no
+ * mesmo espírito de `task_verdicts`: cada `report` é uma linha, nunca
+ * sobrescrita. `getReport(cardId)` sem `afterSeq` continua devolvendo só
+ * o mais recente — quem lê "o relatório atual" não muda de contrato.
  *
- * Ciclo de vida — decidido e o que foi DESCARTADO:
- * - Histórico por card (guardar as 4 rodadas em vez de só a última):
- *   DESCARTADO AQUI, mas revisitado sob um eixo diferente: "o protocolo
- *   `read_report` não pede histórico" continua verdade (esta tabela
- *   não ganhou linhas), mas "quantas rodadas até aprovar" é uma
- *   pergunta REAL que apareceu depois (pílulas/gráficos do card Fila) —
- *   resolvida por `TaskVerdictRow` acima, uma tabela SEPARADA por
- *   RODADA DE PARTICIPAÇÃO (task+card+papel), nunca por reescrever
- *   `reports` (que continua slot único, por bom motivo: é "o relatório
- *   mais recente", não um log).
+ * Ciclo de vida — o que ficou e o que foi DESCARTADO:
+ * - Histórico por card (guardar as N rodadas): MANTIDO agora (append-only
+ *   por `seq`). `read_report` sem `afterSeq` ainda é "o mais recente";
+ *   com `afterSeq` devolve o PRÓXIMO (`seq` estritamente maior), para
+ *   caminhar o histórico depois do fato sem pular rodadas.
  * - Cascade delete ao fechar/deletar o card: DESCARTADO — fechar um card
- *   hoje já é independente da entrega do relatório (o `Map` em memória já
- *   sobrevivia ao card fechar NA MESMA sessão, só não a um restart do
- *   processo); o padrão real é "spawna, espera o relatório, fecha o card,
- *   segue trabalhando" — apagar o relatório junto destruiria exatamente o
- *   caso que esta tabela existe pra resolver.
- * - TTL por tempo (relatório "expira" depois de N dias): DESCARTADO —
- *   decidir que um relatório "não importa mais" é uma garantia forte que
- *   este código não tem informação pra fazer; um board pode ficar dias sem
- *   ser reaberto e o relatório de um card já fechado continua sendo
- *   exatamente o resultado que um orquestrador foi buscar.
- * - Limite de TAMANHO por relatório: DESCARTADO — os relatórios reais desta
- *   sessão têm alguns KB, SQLite lida bem com uma coluna TEXT de MBs, e
- *   truncar/rejeitar destruiria dado real — a mesma classe de bug ao
- *   contrário do que esta tabela existe pra consertar.
- * - Limite de CONTAGEM total (`MAX_STORED_REPORTS` abaixo): MANTIDO — a
- *   única fonte de crescimento sem fim aqui é `card_id` novo a cada spawn
- *   (contador global de ids), então um corte por contagem — descartando só
- *   os relatórios mais ANTIGOS quando o total passa do cap — é o jeito de
- *   nunca crescer pra sempre sem inventar uma regra de "relevância" que
- *   ninguém pediu. Roda a cada `upsertReport` (`pruneReports` abaixo).
+ *   hoje já é independente da entrega do relatório; o padrão real é
+ *   "spawna, espera o relatório, fecha o card, segue trabalhando".
+ * - TTL por tempo: DESCARTADO — um board pode ficar dias fechado e o
+ *   relatório continua sendo o resultado que o orquestrador foi buscar.
+ * - Limite de TAMANHO por relatório: DESCARTADO — truncar destruiria dado
+ *   real.
+ * - Limite de CONTAGEM total (`MAX_STORED_REPORTS` abaixo): MANTIDO — agora
+ *   o crescimento vem de `card_id` novo E de múltiplas rodadas por card;
+ *   o mesmo corte por contagem (descarta as linhas de `seq` mais antigas
+ *   quando o total passa do cap) impede crescimento ilimitado sem inventar
+ *   regra de "relevância". Roda a cada `upsertReport` (`pruneReports`).
  */
 /** `verdict` — DESIGN-BACKLOG.md §2.1 decisão 9: hoje `{"verdict":
  * "aprovado"|"reprovado"}` dentro de `report_json` é só convenção dos
@@ -469,11 +454,10 @@ export type SprintRow = {
  * em `upsertCard`. */
 export type ReportRow = { card_id: string; seq: number; report_json: string; verdict?: string | null; updated_at: number };
 
-// Ver o comentário grande de `ReportRow` acima — cap de contagem total,
-// não por card (que já é 1:1 por construção). Generoso o bastante pra
-// nunca disparar em uso normal (um relatório de alguns KB * 1000 ainda é
-// só alguns MB, trivial pro SQLite) e existir só como rede de segurança
-// contra crescimento sem fim ao longo de meses/anos de uso real.
+// Cap de contagem TOTAL de LINHAS (não "um por card"). Generoso o bastante
+// pra uso normal (KB * 1000 ainda é trivial pro SQLite) e existir só como
+// rede de segurança contra crescimento sem fim — o append-only por card
+// não vira crescimento ilimitado.
 const MAX_STORED_REPORTS = 1000;
 
 const DEFAULT_BOARD_ID = "default";
@@ -617,6 +601,35 @@ function migrate(db: Database.Database) {
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
+  // DESIGN-BACKLOG.md §0 "Dois avisos de relatorio do mesmo card" — o
+  // schema original tinha `card_id` PRIMARY KEY (slot único). Instalações
+  // novas já nascem append-only (`seq` PK) no CREATE TABLE IF NOT EXISTS
+  // abaixo; bancos antigos ainda têm o slot e precisam de rebuild. Detecta
+  // pelo PK real (`pragma_table_info`), nunca por "a tabela existe".
+  const reportCols = db.prepare(`SELECT name, pk FROM pragma_table_info('reports')`).all() as {
+    name: string;
+    pk: number;
+  }[];
+  if (reportCols.length > 0) {
+    const pkCols = reportCols.filter((c) => c.pk > 0).map((c) => c.name);
+    if (pkCols.length === 1 && pkCols[0] === "card_id") {
+      db.exec(`ALTER TABLE reports RENAME TO reports_slot_legacy`);
+      db.exec(`
+        CREATE TABLE reports (
+          seq INTEGER PRIMARY KEY,
+          card_id TEXT NOT NULL,
+          report_json TEXT NOT NULL,
+          verdict TEXT,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+      db.exec(`
+        INSERT INTO reports (seq, card_id, report_json, verdict, updated_at)
+        SELECT seq, card_id, report_json, verdict, updated_at FROM reports_slot_legacy
+      `);
+      db.exec(`DROP TABLE reports_slot_legacy`);
+    }
+  }
 }
 
 export function openStore(userDataDir: string) {
@@ -726,15 +739,13 @@ export function openStore(userDataDir: string) {
     );
   `);
 
-  // Ver o comentário grande de `ReportRow` acima pro ciclo de vida
-  // completo. `card_id` como PRIMARY KEY (não um id de linha próprio) é o
-  // que dá o slot único por card — `upsertReport` abaixo faz
-  // INSERT ... ON CONFLICT(card_id) DO UPDATE, nunca acumula linha por
-  // relatório.
+  // Ver o comentário grande de `ReportRow` acima. `seq` (monotônica global,
+  // atribuída pelo bus) é a PRIMARY KEY — append-only, uma linha por
+  // `report`. Bancos antigos com `card_id` PK são reescritos em `migrate()`.
   db.exec(`
     CREATE TABLE IF NOT EXISTS reports (
-      card_id TEXT PRIMARY KEY,
-      seq INTEGER NOT NULL,
+      seq INTEGER PRIMARY KEY,
+      card_id TEXT NOT NULL,
       report_json TEXT NOT NULL,
       verdict TEXT,
       updated_at INTEGER NOT NULL
@@ -833,7 +844,7 @@ export function openStore(userDataDir: string) {
     CREATE INDEX IF NOT EXISTS idx_tasks_board_id ON tasks(board_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_sprint_id ON tasks(sprint_id);
     CREATE INDEX IF NOT EXISTS idx_sprints_board_id ON sprints(board_id);
-    CREATE INDEX IF NOT EXISTS idx_reports_seq ON reports(seq);
+    CREATE INDEX IF NOT EXISTS idx_reports_card_seq ON reports(card_id, seq);
     CREATE INDEX IF NOT EXISTS idx_tt_task ON task_transitions(task_id, at);
     CREATE INDEX IF NOT EXISTS idx_task_cards_task ON task_cards(task_id);
     CREATE INDEX IF NOT EXISTS idx_tv_task ON task_verdicts(task_id, at);
@@ -1584,14 +1595,16 @@ export function openStore(userDataDir: string) {
     LEFT JOIN cards c ON c.id = tc.card_id
     WHERE t.board_id = ?
   `);
-  // Relatório do card PRINCIPAL de cada task (`tasks.card_id`, o mesmo que
-  // `upsertTaskCardIfAbsent` já trata como "implementer") — é o dado que
-  // decide a etapa implementar/review e a barra de proposta de conclusão
-  // (decisões 3 e 9). `reports.card_id` é PRIMARY KEY, então o JOIN nunca
-  // duplica linha por task.
+  // Relatório mais recente do card PRINCIPAL de cada task (`tasks.card_id`)
+  // — etapa implementar/review e barra de proposta de conclusão (decisões
+  // 3 e 9). Com append-only, restringe ao MAX(seq) por card para o JOIN
+  // não duplicar linha por task (o Map em index.ts também cairia no
+  // último, mas a query não deve devolver N linhas por card).
   const reportsForBoardStmt = db.prepare(`
     SELECT r.card_id, r.seq, r.report_json, r.verdict, r.updated_at FROM reports r
-    JOIN tasks t ON t.card_id = r.card_id WHERE t.board_id = ?
+    JOIN tasks t ON t.card_id = r.card_id
+    WHERE t.board_id = ?
+      AND r.seq = (SELECT MAX(r2.seq) FROM reports r2 WHERE r2.card_id = r.card_id)
   `);
 
   // RODADA 4 — histórico de veredito por board (pílulas + gráficos 1/2).
@@ -1616,12 +1629,21 @@ export function openStore(userDataDir: string) {
     FROM tasks t WHERE t.board_id = ?
   `);
 
-  const getReportStmt = db.prepare("SELECT card_id, seq, report_json, verdict, updated_at FROM reports WHERE card_id = ?");
+  // Sem afterSeq: o mais recente do card (contrato de sempre de
+  // `read_report`). Com afterSeq: o PRÓXIMO (menor seq > afterSeq) —
+  // caminha o histórico append-only sem pular rodadas.
+  const getLatestReportStmt = db.prepare(
+    "SELECT card_id, seq, report_json, verdict, updated_at FROM reports WHERE card_id = ? ORDER BY seq DESC LIMIT 1",
+  );
+  const getReportAfterStmt = db.prepare(
+    "SELECT card_id, seq, report_json, verdict, updated_at FROM reports WHERE card_id = ? AND seq > ? ORDER BY seq ASC LIMIT 1",
+  );
+  // Append-only — INSERT puro. O nome `upsertReport` permanece porque é o
+  // choke point já wired em message-bus/index; a semântica de conflito
+  // (slot) foi a causa do bug.
   const upsertReportStmt = db.prepare(`
     INSERT INTO reports (card_id, seq, report_json, verdict, updated_at)
     VALUES (@card_id, @seq, @report_json, @verdict, @updated_at)
-    ON CONFLICT(card_id) DO UPDATE SET
-      seq = excluded.seq, report_json = excluded.report_json, verdict = excluded.verdict, updated_at = excluded.updated_at
   `);
   // A `seq` monotônica (message-bus.ts) precisa sobreviver ao restart
   // junto com os relatórios — senão o `afterSeq` do `read_report` passa a
@@ -1632,12 +1654,12 @@ export function openStore(userDataDir: string) {
   // contador em memória de sempre. Mesmo padrão de `nextIdSeed` acima,
   // outra coluna.
   const nextReportSeqStmt = db.prepare("SELECT MAX(seq) as m FROM reports");
-  // Ver o comentário grande de `ReportRow`/`MAX_STORED_REPORTS` no topo do
-  // arquivo — roda a cada `upsertReport`, mantém só os `cap` relatórios de
-  // `seq` mais alta (os mais recentes, de qualquer card), descarta o
-  // resto.
+  // Ver o comentário grande de `ReportRow`/`MAX_STORED_REPORTS` — mantém
+  // só as `cap` linhas de `seq` mais alta (qualquer card), descarta o
+  // resto. Subquery aninhada: SQLite recusa DELETE da mesma tabela que o
+  // SELECT com ORDER BY/LIMIT direto referencia.
   const pruneReportsStmt = db.prepare(
-    "DELETE FROM reports WHERE card_id NOT IN (SELECT card_id FROM reports ORDER BY seq DESC LIMIT ?)",
+    "DELETE FROM reports WHERE seq NOT IN (SELECT seq FROM (SELECT seq FROM reports ORDER BY seq DESC LIMIT ?))",
   );
 
   const listFavoritesStmt = db.prepare("SELECT url, title, created_at FROM browser_favorites ORDER BY created_at DESC");
@@ -1845,7 +1867,10 @@ export function openStore(userDataDir: string) {
     /** Ator da 1ª transição `kind:'status'` — `human` ⇒ criada pela UI. */
     listFirstActorsForBoard: (boardId: string): { task_id: string; first_actor: TaskActor | null }[] =>
       firstActorsForBoardStmt.all(boardId) as { task_id: string; first_actor: TaskActor | null }[],
-    getReport: (cardId: string): ReportRow | undefined => getReportStmt.get(cardId) as ReportRow | undefined,
+    getReport: (cardId: string, afterSeq?: number): ReportRow | undefined =>
+      (afterSeq === undefined
+        ? getLatestReportStmt.get(cardId)
+        : getReportAfterStmt.get(cardId, afterSeq)) as ReportRow | undefined,
     upsertReport: (row: ReportRow) => {
       upsertReportStmt.run({ ...row, verdict: row.verdict ?? null });
       pruneReportsStmt.run(MAX_STORED_REPORTS);

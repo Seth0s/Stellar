@@ -688,9 +688,9 @@ export function createMessageBus(
      * JSON.stringify/parse do valor do relatório — a mesma divisão de
      * responsabilidade que `serializeTask` já usa pra `result_json`, não
      * uma segunda convenção. Ver o comentário grande de `ReportRow` em
-     * store.ts pro ciclo de vida completo (slot único por card, sem
-     * cascade delete, sem TTL, cap só por contagem). */
-    getReport: (cardId: string) => ReportRow | undefined;
+     * store.ts (append-only por `seq`; `getReport` sem `afterSeq` = mais
+     * recente; com `afterSeq` = próximo). */
+    getReport: (cardId: string, afterSeq?: number) => ReportRow | undefined;
     upsertReport: (row: ReportRow) => void;
     /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
      * pass-through síncrono pro `store.ts`'s `recordParticipationRound`
@@ -860,31 +860,20 @@ export function createMessageBus(
   // waiters for one still pending (same shape as pendingCardExits above).
   /** Parte 2b (achado ao vivo, depois do briefing inicial) — "um card de
    * review que revisou 4 rodadas do mesmo diff devolveu o relatório da 3a
-   * rodada instantaneamente na 4a chamada": `cardReports` é um SLOT ÚNICO
-   * por card (o `report` de baixo sempre SOBRESCREVE), e antes disto nada
-   * distinguia "relatório novo" de "o mesmo de sempre" — a volta por cima
-   * foi o próprio agente carimbar um campo `round` no JSON, o chamador
-   * compensando uma lacuna do protocolo. `seq` é atribuída AQUI, pelo bus,
-   * nunca aceita do chamador (que pode mentir ou esquecer) — monotônica
-   * por processo, nunca reiniciada por card.
+   * rodada instantaneamente na 4a chamada": o protocolo precisa distinguir
+   * "relatório novo" de "o mesmo de sempre". `seq` é atribuída AQUI, pelo
+   * bus, nunca aceita do chamador — monotônica por processo, seedada do
+   * persistido. A tabela `reports` é append-only por `seq` (store.ts);
+   * `get_report` sem `afterSeq` devolve o mais recente, com `afterSeq` o
+   * próximo — quem lê rodada a rodada não perde conteúdo quando o card
+   * reporta de novo.
    *
    * DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" (achado ao
    * vivo, 2026-09-09) — o `Map` que vivia aqui (`cardReports`) e o
-   * contador acima eram 100% em memória: um restart do Electron (update,
-   * crash, relogin, `quitAndInstall`) apagava TODOS os relatórios de TODOS
-   * os cards sem aviso nenhum — foi exatamente isso que mordeu nesta
-   * sessão (um `report` retornou `ok:true`, o Electron reiniciou, e o
-   * relatório sumiu). O slot em si agora é `callbacks.getReport`/
-   * `upsertReport` (store.ts, ver o comentário grande de `ReportRow` lá
-   * pro ciclo de vida completo) — este arquivo só monta/desmonta o JSON
-   * (mesma divisão que `serializeTask` já faz pra `result_json`).
-   * `reportSeqCounter` continua em memória (só um inteiro, sem motivo pra
-   * round-trip no SQLite a cada `report`), mas agora SEEDADO do que já
-   * está persistido (`nextReportSeqSeed()`) em vez de sempre começar em 0
-   * — senão o restart resolveria a perda do relatório e reabriria o outro
-   * bug que motivou `seq` existir: um relatório novo saindo com seq MENOR
-   * que um antigo já persistido, fazendo o `afterSeq` do `read_report`
-   * mentir pro consumidor. */
+   * contador acima eram 100% em memória: um restart do Electron apagava
+   * TODOS os relatórios. Persistência via `callbacks.getReport`/
+   * `upsertReport`. `reportSeqCounter` continua em memória, SEEDADO do
+   * que já está persistido (`nextReportSeqSeed()`). */
   let reportSeqCounter = callbacks.nextReportSeqSeed();
   type StoredReport = { report: unknown; seq: number; verdict?: string | null };
   const pendingReportWaiters = new Map<string, Array<{ afterSeq: number; resolve: (stored: StoredReport) => void }>>();
@@ -2055,14 +2044,13 @@ export function createMessageBus(
       if (!req.target) return { ok: false, error: "missing target cardId" };
       const target = req.target;
       const afterSeq = req.afterSeq;
-      const storedRow = callbacks.getReport(target);
+      // Sem afterSeq: mais recente. Com afterSeq: próximo (seq > afterSeq),
+      // para caminhar histórico append-only depois do fato.
+      const storedRow = callbacks.getReport(target, afterSeq);
       const current: StoredReport | undefined = storedRow
         ? { report: JSON.parse(storedRow.report_json), seq: storedRow.seq, verdict: storedRow.verdict ?? null }
         : undefined;
-      // Sem `afterSeq`: comportamento de sempre — devolve o último já
-      // presente, sem olhar pra `wait`. Com `afterSeq`: só serve se for
-      // estritamente mais novo que o informado (Parte 2b).
-      if (current && (afterSeq === undefined || current.seq > afterSeq)) {
+      if (current) {
         return { ok: true, report: current.report, seq: current.seq, verdict: current.verdict ?? null };
       }
       if (!req.wait) return { ok: false, error: afterSeq === undefined ? "no report yet" : "no report newer than the given sequence yet" };

@@ -339,7 +339,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "read_report",
       {
         description:
-          "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet. Every report carries a `seq` assigned by the server (never the reporting card) — pass the last `seq` you saw back as `afterSeq` to wait for the NEXT report instead of instantly getting the same one back (e.g. a reviewer that reports once per round). Also returns `verdict` ('aprovado'/'reprovado'/null) when the reporter set one.",
+          "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet. Every report carries a `seq` assigned by the server (never the reporting card) — pass the last `seq` you saw back as `afterSeq` to get the NEXT report (smallest seq strictly greater than that), including after the fact when the card already filed several rounds. Without `afterSeq`, returns the most recent report for that card. Also returns `verdict` ('aprovado'/'reprovado'/null) when the reporter set one.",
         inputSchema: {
           target: z.string().describe("The reporting card's id (see list_cards)"),
           wait: z.boolean().optional().describe("Block until a report arrives instead of returning ok:false immediately"),

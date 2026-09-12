@@ -30,11 +30,19 @@ type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: str
 type FakeReportRow = { card_id: string; seq: number; report_json: string; updated_at: number };
 
 function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
-  const reports = new Map<string, FakeReportRow>();
+  // Append-only por card (espelha store.ts depois de §0 "Dois avisos"):
+  // sem afterSeq → mais recente; com afterSeq → próximo seq > afterSeq.
+  const reportsByCard = new Map<string, FakeReportRow[]>();
   const reportDefaults: Record<string, (...args: never[]) => unknown> = {
-    getReport: ((cardId: string) => reports.get(cardId)) as never,
+    getReport: ((cardId: string, afterSeq?: number) => {
+      const rows = reportsByCard.get(cardId) ?? [];
+      if (afterSeq === undefined) return rows.length ? rows[rows.length - 1] : undefined;
+      return rows.find((r) => r.seq > afterSeq);
+    }) as never,
     upsertReport: ((row: FakeReportRow) => {
-      reports.set(row.card_id, row);
+      const rows = reportsByCard.get(row.card_id) ?? [];
+      rows.push(row);
+      reportsByCard.set(row.card_id, rows);
     }) as never,
     nextReportSeqSeed: (() => 0) as never,
   };
