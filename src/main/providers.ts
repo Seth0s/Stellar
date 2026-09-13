@@ -117,7 +117,9 @@ export type ProviderCapacity = {
   delivery: {
     /** 
      * Como o brief é passado no spawn.
-     * 'positional' (claude, codex, cursor)
+     * 'positional' (claude, codex, cursor) — emitido como `-- <brief>` na
+     *   cauda do argv (`spawnArgv`); exige que o parser da CLI honre
+     *   `--`, medido para os três (ver `END_OF_OPTIONS`).
      * 'flag' (opencode: --prompt, antigravity: -i)
      * 'none' (bash)
      */
@@ -181,17 +183,41 @@ export function deriveReportChannel(capacity: ProviderCapacity): ReportChannel {
 }
 
 /**
+ * POSIX end-of-options marker. Everything after it is an operand, so a
+ * positional brief placed behind it can never be swallowed by a
+ * preceding VARIADIC option — the 2026-09-13 boot death (card 471):
+ * `claude --mcp-config <json> <brief>` parsed the brief as a second
+ * config path (`ENAMETOOLONG`), because `--mcp-config <configs...>` is
+ * variadic and eats every following non-option token. It also stops a
+ * brief that starts with `-` (a markdown bullet, say) from being read as
+ * an unknown option and dropped in silence (measured: `claude --print
+ * "-diga"` → "Input must be provided", exit 1; with `--` → answered).
+ *
+ * Honoured by every positional provider's real parser, measured
+ * 2026-09-13: claude (commander, `-- "diga apenas OK"` → OK), cursor
+ * `agent` (commander, same probe → OK), codex (clap, `-- --help` did not
+ * print help — the token became the PROMPT). A future positional
+ * provider whose parser does NOT honour `--` must be measured before
+ * being declared positional here.
+ *
+ * Consequence that shapes `spawnArgv` below: the brief fragment MUST be
+ * the argv tail. Any option pushed after `--` would itself become an
+ * operand — which is why `buildArgs` no longer sees `brief` at all.
+ */
+export const END_OF_OPTIONS = "--";
+
+/**
  * Argv fragment implied by `delivery` for a spawn brief. One place —
  * `buildArgs` must not invent a second form (positional vs flag vs
  * none). Empty when there is no brief or the provider cannot take one
- * on argv (`bash`).
+ * on argv (`bash`). Positional briefs ride behind `END_OF_OPTIONS`.
  */
 export function briefArgvFragment(
   delivery: ProviderCapacity["delivery"],
   brief: string | undefined,
 ): string[] {
   if (!brief) return [];
-  if (delivery.briefMechanism === "positional") return [brief];
+  if (delivery.briefMechanism === "positional") return [END_OF_OPTIONS, brief];
   if (delivery.briefMechanism === "flag" && delivery.briefFlag) {
     return [delivery.briefFlag, brief];
   }
@@ -213,21 +239,27 @@ export function argsCarryDeclaredBrief(
 }
 
 /**
- * Empirical: this provider's `buildArgs` places `brief` in argv as
- * declared. Spawn dispatch uses this for `canArgv` so a stale
- * declaration cannot drop the text — the typing fallback still fires.
+ * Empirical: this provider's spawn argv carries `brief` as declared.
+ * Spawn dispatch uses this for `canArgv` so a stale declaration cannot
+ * drop the text — the typing fallback still fires.
  */
 export function argvCarriesDeclaredBrief(providerId: string, brief: string): boolean {
   const provider = providerById(providerId);
   if (!provider) return false;
-  return argsCarryDeclaredBrief(provider.buildArgs({ brief }), provider.capacity.delivery, brief);
+  return argsCarryDeclaredBrief(spawnArgv(provider, { brief }), provider.capacity.delivery, brief);
 }
 
-/** Append the brief in the form THIS provider declared — never a second literal. */
-export function appendDeclaredBrief(providerId: ProviderId, args: string[], brief?: string): void {
-  const delivery = providerById(providerId)?.capacity.delivery;
-  if (!delivery) return;
-  args.push(...briefArgvFragment(delivery, brief));
+/**
+ * The full argv for a spawn: the provider's hand-written flags, then the
+ * brief in the form `delivery` declares — ALWAYS as the tail. This is the
+ * one place that decides WHERE the brief goes; `buildArgs` cannot even
+ * read `opts.brief` (see `ProviderDef.buildArgs`'s type), so no provider
+ * can put it back in the middle of its flags, where a variadic option
+ * would eat it (the `--mcp-config` death, see `END_OF_OPTIONS`).
+ */
+export function spawnArgv(provider: ProviderDef, opts: SpawnOpts): string[] {
+  const { brief, ...flagOpts } = opts;
+  return [...provider.buildArgs(flagOpts), ...briefArgvFragment(provider.capacity.delivery, brief)];
 }
 
 // DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface
@@ -271,11 +303,21 @@ export function composeSystemPrompt(systemPrompt?: string): string {
  * provedores (confirmado contra a documentação real de cada um). */
 type InstallCommand = { posix: string; windows: string };
 
-type ProviderDef = {
+/** What `buildArgs` gets: every spawn option EXCEPT the brief. */
+export type ProviderFlagOpts = Omit<SpawnOpts, "brief">;
+
+export type ProviderDef = {
   id: ProviderId;
   label: string;
   binaryNames: string[];
-  buildArgs: (opts: SpawnOpts) => string[];
+  /**
+   * Flags only — never the brief. `spawnArgv` appends the brief after
+   * these, in the declared form, so the ORDER (brief last, behind `--`
+   * for positional providers) is derived once instead of chosen by hand
+   * in five places. Must never emit a bare `--` itself: that would turn
+   * every later token into an operand.
+   */
+  buildArgs: (opts: ProviderFlagOpts) => string[];
   /** Declared capabilities — report discovery is DERIVED from this
    * (`deriveReportDiscovery`), never chosen ad hoc in buildArgs / tips. */
   capacity: ProviderCapacity;
@@ -329,7 +371,7 @@ export const PROVIDERS: ProviderDef[] = [
       posix: "npm install -g @anthropic-ai/claude-code",
       windows: "npm install -g @anthropic-ai/claude-code",
     },
-    buildArgs: ({ resumeId, continueLast, imposedSessionId, model, effort, systemPrompt, mcpUrl, brief }) => {
+    buildArgs: ({ resumeId, continueLast, imposedSessionId, model, effort, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       // Restore vs impose are different flags (measured): `--resume`
       // needs a session that already exists; `--session-id` creates one
@@ -357,13 +399,18 @@ export const PROVIDERS: ProviderDef[] = [
       // one process. `--strict-mcp-config` is deliberately NOT set here —
       // this should ADD to whatever the user's own project already
       // configures, not replace it.
+      //
+      // `--mcp-config <configs...>` is VARIADIC (`claude --help`): it
+      // keeps eating non-option tokens. The brief used to be pushed right
+      // here and was read as a second config file (card 471, 2026-09-13,
+      // `ENAMETOOLONG`). The brief now arrives via `spawnArgv`, behind
+      // `--`, after every flag — nothing positional may follow this.
       if (mcpUrl) {
         args.push(
           "--mcp-config",
           JSON.stringify({ mcpServers: { stellar: { type: "http", url: mcpUrl } } }),
         );
       }
-      appendDeclaredBrief("claude", args, brief);
       // Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
       // usuário: `isActive` (useTerminal.ts) hoje é só uma aproximação por
       // silêncio de bytes (900ms sem nada = "parou"), documentada como tal
@@ -412,7 +459,12 @@ export const PROVIDERS: ProviderDef[] = [
     // key=value` CLI option (confirmed via `codex --help`) accepts the
     // official `developer_instructions` config key. JSON.stringify produces
     // a valid TOML basic string, including for prompts with quotes/newlines.
-    buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl, brief }) => {
+    // Variadic audit (`codex --help`, 2026-09-13): only `-i, --image
+    // <FILE>...` is variadic, and it is not used here — `-c` is
+    // repeatable, one value each. The brief is appended by `spawnArgv`
+    // behind `--` (clap honours it, measured) so this stays true even if
+    // a variadic flag is added later.
+    buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       if (resumeId) args.push("resume", resumeId);
       else if (continueLast) args.push("resume", "--last");
@@ -422,7 +474,6 @@ export const PROVIDERS: ProviderDef[] = [
         `developer_instructions=${JSON.stringify(composeSystemPrompt(systemPrompt))}`,
       );
       if (mcpUrl) args.push("-c", `mcp_servers.stellar.url=${mcpUrl}`);
-      appendDeclaredBrief("codex", args, brief);
       return args;
     },
   },
@@ -475,7 +526,7 @@ export const PROVIDERS: ProviderDef[] = [
     // por invocação. Por isso não há nada de MCP nos args aqui.
     // Report discovery is DERIVED as scrollback (capacity.systemPrompt
     // none + acbridgeOnPath) — see decideBashCardDiscovery.
-    buildArgs: ({ resumeId, continueLast, imposedSessionId, model, brief }) => {
+    buildArgs: ({ resumeId, continueLast, imposedSessionId, model }) => {
       const args: string[] = [];
       // Measured: `--resume <uuid>` creates the session when the id does
       // not exist yet. Same flag for restore and impose.
@@ -484,8 +535,9 @@ export const PROVIDERS: ProviderDef[] = [
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
       // Positional prompt (`agent [options] [command] [prompt...]`) —
-      // measured task 95582065. Form comes from `delivery`, not a second literal.
-      appendDeclaredBrief("cursor", args, brief);
+      // measured task 95582065 — is appended by `spawnArgv` behind `--`.
+      // Variadic audit (`agent --help`, 2026-09-13): no variadic option;
+      // `--add-dir`/`--plugin-dir`/`-H` are repeatable, one value each.
       return args;
     },
   },
@@ -544,16 +596,17 @@ export const PROVIDERS: ProviderDef[] = [
     // to keep in sync, not a second layer of real safety (`effort` isn't
     // renderer-writable outside that one path — see providers.ts's
     // `SpawnOpts.effort` doc comment).
-    buildArgs: ({ resumeId, continueLast, model, effort, brief }) => {
+    buildArgs: ({ resumeId, continueLast, model, effort }) => {
       const args: string[] = [];
       if (resumeId) args.push("--conversation", resumeId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
       if (effort) args.push("--effort", effort);
       // Interactive prompt only: positional is refused (exit 2); `-p` is
-      // headless and exits. Measured task 95582065. Form (`-i`) comes
-      // from `delivery.briefFlag`, not a second literal.
-      appendDeclaredBrief("antigravity", args, brief);
+      // headless and exits. Measured task 95582065. Form (`-i <brief>`)
+      // comes from `delivery.briefFlag`, appended by `spawnArgv`. Go
+      // `flag` parser (`agy --help`, 2026-09-13): no variadic option at
+      // all, and a flag-carried brief cannot be swallowed anyway.
       return args;
     },
   },
@@ -581,12 +634,13 @@ export const PROVIDERS: ProviderDef[] = [
     // Sem flag de system-prompt: `--prompt`/mensagens são entrada do
     // usuário; instruções de sistema exigem configuração persistente.
     // Report discovery → scrollback (derived). MCP via global opencode.json.
-    buildArgs: ({ resumeId, continueLast, model, brief }) => {
+    buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--session", resumeId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
-      appendDeclaredBrief("opencode", args, brief);
+      // `--prompt <brief>` appended by `spawnArgv`. yargs (`opencode
+      // --help`, 2026-09-13): only `--cors` is an array option; unused.
       return args;
     },
   },
@@ -731,7 +785,7 @@ export function resolveSpawn(
   }
   const binary = which(provider.binaryNames);
   if (!binary) return null;
-  return { binary, args: provider.buildArgs(opts) };
+  return { binary, args: spawnArgv(provider, opts) };
 }
 
 export type AgentAvailability = {

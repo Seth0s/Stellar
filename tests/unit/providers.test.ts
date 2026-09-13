@@ -11,6 +11,8 @@ import {
   providerById,
   providerCapacity,
   shouldImposeSessionId,
+  spawnArgv,
+  END_OF_OPTIONS,
 } from "../../src/main/providers";
 
 // Sticky item "spawn_agent effort" (2026-09-03) — reported live: asking
@@ -243,7 +245,7 @@ describe("providers: delivery.briefMechanism is implemented by buildArgs", () =>
     const caught: string[] = [];
     for (const p of declared) {
       const { briefMechanism, briefFlag } = p.capacity.delivery;
-      const args = p.buildArgs({ brief: SENTINEL });
+      const args = spawnArgv(p, { brief: SENTINEL });
       const placed =
         briefMechanism === "flag"
           ? Boolean(briefFlag) && args[args.indexOf(briefFlag)] === briefFlag && args[args.indexOf(briefFlag) + 1] === SENTINEL
@@ -258,7 +260,7 @@ describe("providers: delivery.briefMechanism is implemented by buildArgs", () =>
       if (p.capacity.delivery.briefMechanism !== "flag") continue;
       const flag = p.capacity.delivery.briefFlag;
       expect(flag, `${p.id} declares flag without briefFlag`).toBeTruthy();
-      const args = p.buildArgs({ brief: SENTINEL });
+      const args = spawnArgv(p, { brief: SENTINEL });
       const i = args.indexOf(flag!);
       expect(i, `${p.id} missing declared briefFlag ${flag}`).toBeGreaterThanOrEqual(0);
       expect(args[i + 1], `${p.id} briefFlag not followed by brief`).toBe(SENTINEL);
@@ -268,12 +270,12 @@ describe("providers: delivery.briefMechanism is implemented by buildArgs", () =>
   it("none providers never put the brief in argv", () => {
     for (const p of PROVIDERS) {
       if (p.capacity.delivery.briefMechanism !== "none") continue;
-      expect(p.buildArgs({ brief: SENTINEL })).not.toContain(SENTINEL);
+      expect(spawnArgv(p, { brief: SENTINEL })).not.toContain(SENTINEL);
     }
   });
 
-  it("briefArgvFragment is derived from delivery — cursor positional, antigravity -i", () => {
-    expect(briefArgvFragment({ briefMechanism: "positional" }, SENTINEL)).toEqual([SENTINEL]);
+  it("briefArgvFragment is derived from delivery — positional behind `--`, antigravity -i", () => {
+    expect(briefArgvFragment({ briefMechanism: "positional" }, SENTINEL)).toEqual([END_OF_OPTIONS, SENTINEL]);
     expect(briefArgvFragment({ briefMechanism: "flag", briefFlag: "-i" }, SENTINEL)).toEqual(["-i", SENTINEL]);
     expect(briefArgvFragment({ briefMechanism: "none" }, SENTINEL)).toEqual([]);
     expect(briefArgvFragment({ briefMechanism: "flag", briefFlag: "-i" }, undefined)).toEqual([]);
@@ -285,8 +287,89 @@ describe("providers: delivery.briefMechanism is implemented by buildArgs", () =>
     for (const p of PROVIDERS) {
       const declared = p.capacity.delivery.briefMechanism !== "none";
       expect(argvCarriesDeclaredBrief(p.id, SENTINEL), p.id).toBe(declared);
-      expect(argsCarryDeclaredBrief(p.buildArgs({ brief: SENTINEL }), p.capacity.delivery, SENTINEL)).toBe(declared);
+      expect(argsCarryDeclaredBrief(spawnArgv(p, { brief: SENTINEL }), p.capacity.delivery, SENTINEL)).toBe(declared);
     }
+  });
+});
+
+// 2026-09-13, card 471 — a claude card spawned with a brief AND the
+// ephemeral MCP flag died on boot: `Invalid MCP configuration ... open
+// '/home/lucas/<the whole brief>'` (ENAMETOOLONG). `--mcp-config
+// <configs...>` is VARIADIC in `claude --help`; the brief pushed right
+// after it was read as a second config path. Reproduced outside Stellar:
+// `claude --mcp-config '{"mcpServers":{}}' "diga apenas OK" --print` →
+// "MCP config file not found: /tmp/diga apenas OK". claude is the default
+// auto-dispatch provider, so every `deps` chain without an explicit
+// provider was born dead — hidden behind a green suite because no test
+// pinned WHERE the brief sits relative to the flags.
+//
+// Argv tests, not CLI behaviour: the fix is structural (brief is the argv
+// tail behind POSIX `--`, composed once by `spawnArgv`; `buildArgs` cannot
+// read `brief`), and these pin that shape for every provider.
+describe("providers: brief is the argv tail, never glued to a variadic flag", () => {
+  const BRIEF = "Implemente a task. Leia o briefing em /tmp/briefing.md e reporte.";
+  const FULL_OPTS = {
+    model: "opus",
+    effort: "high",
+    systemPrompt: "task",
+    mcpUrl: "http://127.0.0.1:4489/mcp",
+    imposedSessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    brief: BRIEF,
+  };
+
+  it("claude: the token after --mcp-config's JSON is an option, not the brief (the card-471 shape)", () => {
+    const argv = spawnArgv(providerById("claude")!, FULL_OPTS);
+    const i = argv.indexOf("--mcp-config");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(() => JSON.parse(argv[i + 1]!)).not.toThrow();
+    const after = argv[i + 2];
+    expect(after, "brief glued to --mcp-config would be swallowed as a 2nd config").not.toBe(BRIEF);
+    expect(after, "only an option token can terminate the variadic --mcp-config").toMatch(/^-/);
+  });
+
+  it("claude: argv ends with `-- <brief>`, and every flag (incl. --settings) precedes `--`", () => {
+    const argv = spawnArgv(providerById("claude")!, FULL_OPTS);
+    expect(argv.slice(-2)).toEqual([END_OF_OPTIONS, BRIEF]);
+    expect(argv.indexOf("--settings")).toBeLessThan(argv.indexOf(END_OF_OPTIONS));
+    expect(argv.indexOf("--mcp-config")).toBeLessThan(argv.indexOf(END_OF_OPTIONS));
+  });
+
+  it("every positional provider ends with `-- <brief>`; flag providers end with `<flag> <brief>`; none has no brief", () => {
+    for (const p of PROVIDERS) {
+      const argv = spawnArgv(p, FULL_OPTS);
+      const { briefMechanism, briefFlag } = p.capacity.delivery;
+      if (briefMechanism === "positional") {
+        expect(argv.slice(-2), p.id).toEqual([END_OF_OPTIONS, BRIEF]);
+      } else if (briefMechanism === "flag") {
+        expect(argv.slice(-2), p.id).toEqual([briefFlag, BRIEF]);
+        expect(argv, p.id).not.toContain(END_OF_OPTIONS);
+      } else {
+        expect(argv, p.id).not.toContain(BRIEF);
+        expect(argv, p.id).not.toContain(END_OF_OPTIONS);
+      }
+    }
+  });
+
+  it("`--` appears at most once and never without a brief (a bare `--` would demote later flags to operands)", () => {
+    for (const p of PROVIDERS) {
+      const withBrief = spawnArgv(p, FULL_OPTS);
+      expect(withBrief.filter((t) => t === END_OF_OPTIONS).length, p.id).toBeLessThanOrEqual(1);
+      const { brief: _brief, ...flagOpts } = FULL_OPTS;
+      expect(p.buildArgs(flagOpts), `${p.id} buildArgs must never emit --`).not.toContain(END_OF_OPTIONS);
+      expect(spawnArgv(p, flagOpts), p.id).not.toContain(END_OF_OPTIONS);
+    }
+  });
+
+  it("a brief that starts with `-` still rides behind `--` (would be parsed as an unknown option otherwise)", () => {
+    const argv = spawnArgv(providerById("claude")!, { brief: "- item 1\n- item 2" });
+    expect(argv.slice(-2)).toEqual([END_OF_OPTIONS, "- item 1\n- item 2"]);
+  });
+
+  it("resolveSpawn/argvCarriesDeclaredBrief go through the same composition (no second path)", () => {
+    // `resolveSpawn` needs a binary on PATH — assert through the pure
+    // composition instead, which is what it calls.
+    expect(argvCarriesDeclaredBrief("claude", BRIEF)).toBe(true);
+    expect(argsCarryDeclaredBrief(spawnArgv(providerById("claude")!, FULL_OPTS), providerCapacity("claude")!.delivery, BRIEF)).toBe(true);
   });
 });
 
