@@ -74,7 +74,7 @@ if (!sockPath) {
 }
 
 const USAGE =
-  "usage: acbridge <list | send <cardId> <message...> | open <url> | " +
+  "usage: acbridge <list | send <cardId> <message...> | get-delivery <id> | open <url> | " +
   "close-card <cardId> [reason...] | delete-card <cardId> [reason...] | " +
   "update-card-content [--append] <cardId> <text...> | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
@@ -115,6 +115,10 @@ if (cmd === "list") {
   // automatically. Omitted (not failed) when unset — unlike `report`,
   // `send` still works from outside a card context, just unprefixed.
   request = { cmd: "send", target, text: msgParts.join(" "), ...(ownCardId ? { requesterId: ownCardId } : {}) };
+} else if (cmd === "get-delivery") {
+  const [id] = rest;
+  if (!id) fail("usage: acbridge get-delivery <id>");
+  request = { cmd: "get_delivery", id };
 } else if (cmd === "open") {
   const [url] = rest;
   if (!url) fail("usage: acbridge open <url>");
@@ -229,7 +233,20 @@ if (cmd === "list") {
   ) {
     report = { ...report, taskId: ownTaskId };
   }
-  request = { cmd: "report", requesterId: ownCardId, report };
+  // Keep in lockstep with report-verdict-decision.ts `promoteReportVerdict`.
+  // The CLI has one JSON argument; a formal `verdict` inside it is the
+  // typed request field (MCP sends that separately). Lift it off the
+  // payload so the column and `report_json` are not two copies.
+  let verdict;
+  if (report && typeof report === "object" && !Array.isArray(report)) {
+    const embedded = report.verdict;
+    if (embedded === "aprovado" || embedded === "reprovado") {
+      verdict = embedded;
+      const { verdict: _drop, ...rest } = report;
+      report = rest;
+    }
+  }
+  request = { cmd: "report", requesterId: ownCardId, report, ...(verdict ? { verdict } : {}) };
 } else if (cmd === "read-report") {
   const [target, waitTimeoutMsStr] = rest;
   if (!target) fail("usage: acbridge read-report <cardId> [waitTimeoutMs]");
@@ -426,7 +443,11 @@ socket.on("close", () => {
     if (others.length === 0) console.log("(no other cards open)");
     else for (const c of others) console.log([c.id, c.kind ?? "terminal", c.label ?? "-", c.provider ?? "", c.url ?? c.cwd ?? ""].join("\t"));
   } else if (cmd === "send") {
-    console.log(`sent to card ${rest[0]}`);
+    // Receipt, not a lie that typing already finished. Same fields as
+    // the MCP send_to_card return — poll get-delivery with `id`.
+    console.log(JSON.stringify({ delivery: res.delivery, reason: res.reason, id: res.id }));
+  } else if (cmd === "get-delivery") {
+    console.log(JSON.stringify({ delivery: res.delivery, reason: res.reason, id: res.id, target: res.target }));
   } else if (cmd === "open") {
     // O cardId agora vem junto (2026-09-01) — é ele que serve de alvo pros
     // comandos `browser-*` e `page-text` no card recém-aberto.

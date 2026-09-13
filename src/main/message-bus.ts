@@ -3,7 +3,7 @@ import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, type DeliveryWriteKind } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, type CardDeliveryHoldReason, type CardDeliveryReceipt, type DeliveryWriteKind } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
 import {
@@ -26,6 +26,7 @@ import {
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
 import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
 import { fillReportTaskId, resolveDeclaredTaskId } from "./card-spawn-env-decision";
+import { promoteReportVerdict } from "./report-verdict-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
@@ -246,6 +247,7 @@ export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error:
 export type BusRequest =
   | { cmd: "list" }
   | { cmd: "send"; target?: string; text?: string; requesterId?: string }
+  | { cmd: "get_delivery"; id?: string }
   | { cmd: "open"; url?: string; requesterId?: string; reason?: string }
   | { cmd: "close_card"; target?: string; requesterId?: string; reason?: string }
   | {
@@ -944,6 +946,15 @@ export function createMessageBus(
    * notices, and explicit `send_to_card` calls must not overtake each other,
    * and none may be dropped just because another delivery is in flight. */
   const deliveryQueues = new Map<string, Promise<void>>();
+  /** Status index over `deliveryQueues` — not a second queue. `send` returns
+   * the id immediately; `get_delivery` reads this after the FIFO item settles. */
+  type TrackedDelivery = {
+    id: string;
+    target: string;
+    delivery: "queued" | "delivered";
+    reason?: CardDeliveryHoldReason;
+  };
+  const deliveryRecords = new Map<string, TrackedDelivery>();
   function markWaiting(requesterId: string) {
     if (!requesterId) return;
     waitingOnConsent.set(requesterId, (waitingOnConsent.get(requesterId) ?? 0) + 1);
@@ -1231,17 +1242,67 @@ export function createMessageBus(
     }
   }
 
-  /** Queue all programmatic deliveries per PTY. A rejected delivery does
-   * not poison the next one; the next message still gets its own attempt. */
-  async function typeAndSubmit(target: string, text: string): Promise<void> {
+  /** Peek why THIS enqueue would sit at human/TUI rhythm. Does not wait.
+   * `queueAhead` is another FIFO item already chained for this card. */
+  function peekDeliveryHold(target: string, queueAhead: boolean): CardDeliveryHoldReason | undefined {
+    const snapshot = callbacks.getCardWriteReadiness(target);
+    if (!snapshot) {
+      return inspectDeliveryHold({
+        writeReadiness: { action: "proceed", reason: "timeout" },
+        deliveryGate: { action: "proceed", reason: "empty" },
+        queueAhead,
+      });
+    }
+    const now = Date.now();
+    return inspectDeliveryHold({
+      writeReadiness: decideWriteReadiness({
+        hasReceivedData: snapshot.hasReceivedData,
+        msSinceLastActivity: now - snapshot.lastActivityAtMs,
+        msSinceSpawn: now - snapshot.spawnedAtMs,
+      }),
+      deliveryGate: decideDeliveryGate({
+        hasPendingHumanInput: snapshot.hasPendingHumanInput === true,
+        pendingHumanInputLastAtMs: snapshot.inputLineLastAtMs ?? null,
+        nowMs: now,
+      }),
+      queueAhead,
+    });
+  }
+
+  /**
+   * Unified form for any tool whose job is to accept a PTY message, not
+   * to sit in the human-input / write-readiness gates. Chains onto the
+   * existing per-card FIFO (`deliveryQueues`) and returns immediately.
+   * Callers that still want to wait (internal, not a tool RPC) can
+   * `await` the returned `done` promise.
+   */
+  function enqueueCardDelivery(target: string, text: string): { receipt: CardDeliveryReceipt; done: Promise<void> } {
+    const id = randomUUID();
+    const queueAhead = deliveryQueues.has(target);
+    const reason = peekDeliveryHold(target, queueAhead);
+    const record: TrackedDelivery = { id, target, delivery: "queued", ...(reason ? { reason } : {}) };
+    deliveryRecords.set(id, record);
+
     const previous = deliveryQueues.get(target) ?? Promise.resolve();
     const current = previous.catch(() => undefined).then(() => deliverCard(target, text));
     deliveryQueues.set(target, current);
-    try {
-      await current;
-    } finally {
+    const done = current.finally(() => {
+      record.delivery = "delivered";
+      delete record.reason;
       if (deliveryQueues.get(target) === current) deliveryQueues.delete(target);
-    }
+    });
+
+    return {
+      receipt: { ok: true, delivery: "queued", ...(reason ? { reason } : {}), id },
+      done,
+    };
+  }
+
+  /** Queue all programmatic deliveries per PTY and wait for this item.
+   * Internal callers only (human task-drag). Tools must use
+   * `enqueueCardDelivery` and return the receipt without awaiting. */
+  async function typeAndSubmit(target: string, text: string): Promise<void> {
+    await enqueueCardDelivery(target, text).done;
   }
 
   /** Round-trip de sticky — mesmo timeout e mesma forma do `readCardText`
@@ -1549,8 +1610,23 @@ export function createMessageBus(
       // deste arquivo, chamado de dentro do `handleRequest` wrapper) —
       // nada a fazer aqui, o wrapper cuida disso depois que este bloco
       // devolver `{ok:true}`.
-      await typeAndSubmit(target, text);
-      return { ok: true };
+      // The tool's job is to enqueue. Typing (and the 30s human-input
+      // gate) happens on the existing FIFO; awaiting it here is the
+      // MCP-timeout / duplicate-send class that `report` already left.
+      return enqueueCardDelivery(target, text).receipt;
+    }
+
+    if (req.cmd === "get_delivery") {
+      if (!req.id) return { ok: false, error: "missing delivery id" };
+      const record = deliveryRecords.get(req.id);
+      if (!record) return { ok: false, error: `no delivery with id "${req.id}"` };
+      return {
+        ok: true,
+        delivery: record.delivery,
+        ...(record.reason ? { reason: record.reason } : {}),
+        id: record.id,
+        target: record.target,
+      };
     }
 
     if (req.cmd === "open") {
@@ -1908,8 +1984,14 @@ export function createMessageBus(
         primaryTaskIds: linkedTask ? [linkedTask.id] : [],
         linkTaskIds,
       });
-      const report = fillReportTaskId(req.report, reportTaskId);
-      const stored: StoredReport = { report, seq: ++reportSeqCounter, verdict: req.verdict ?? null };
+      const filled = fillReportTaskId(req.report, reportTaskId);
+      // acbridge `report <json>` has no separate flag — a formal
+      // `verdict` inside that JSON is the typed column. Lift it off
+      // the payload so `report_json` and `reports.verdict` are not
+      // two copies of the same fact. MCP's explicit `req.verdict` wins.
+      const promoted = promoteReportVerdict(filled, req.verdict);
+      const report = promoted.report;
+      const stored: StoredReport = { report, seq: ++reportSeqCounter, verdict: promoted.verdict ?? null };
       // DESIGN-BACKLOG.md §2.1 — persiste ANTES de resolver waiters/avisar
       // o spawner: se o processo morrer bem aqui no meio (mesma classe de
       // evento que motivou esta tarefa), o pior caso agora é um waiter que
@@ -2703,7 +2785,7 @@ export function createMessageBus(
           pendingSpawnAgents.delete(requestId);
           unmarkWaiting(requesterId);
           if (result.ok && typedBrief) {
-            deliverCard(result.cardId, typedBrief).catch(console.error);
+            enqueueCardDelivery(result.cardId, typedBrief);
           }
           resolve(result);
         },

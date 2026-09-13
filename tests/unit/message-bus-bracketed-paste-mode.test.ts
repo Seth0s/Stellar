@@ -57,10 +57,21 @@ describe("message-bus: bracketed paste só com DECSET 2004h", () => {
     return { writes };
   }
 
+  async function waitForDelivery(id: string) {
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      const status = (await bus!.handleRequest({ cmd: "get_delivery", id } as BusRequest)) as { delivery?: string };
+      if (status.delivery === "delivered") return;
+      if (Date.now() >= deadline) throw new Error("delivery did not settle");
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
   it("multi-linha SEM 2004h → bytes crus (sem CSI 200~)", async () => {
     const { writes } = makeBus(false);
     const text = "line1\nline2\nline3 briefing";
-    await bus!.handleRequest({ cmd: "send", target: "target", text } as BusRequest);
+    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text } as BusRequest)) as { id: string };
+    await waitForDelivery(sent.id);
     expect(writes[0]).toBe(text);
     expect(writes[0]!.startsWith("\x1b[200~")).toBe(false);
   });
@@ -68,7 +79,8 @@ describe("message-bus: bracketed paste só com DECSET 2004h", () => {
   it("multi-linha COM 2004h → envelopa bracketed paste", async () => {
     const { writes } = makeBus(true);
     const text = "line1\nline2\nline3 briefing";
-    await bus!.handleRequest({ cmd: "send", target: "target", text } as BusRequest);
+    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text } as BusRequest)) as { id: string };
+    await waitForDelivery(sent.id);
     expect(writes[0]).toBe(`\x1b[200~${text}\x1b[201~`);
   });
 });

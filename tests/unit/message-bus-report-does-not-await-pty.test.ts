@@ -14,10 +14,11 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
  * This file does not inspect source. It installs a PTY double that
  * never becomes ready and never answers a screen read. If anyone
  * `await`s a write/read of that PTY on the `report` path, `report`
- * cannot return before `REPORT_MUST_RETURN_MS`. `send_to_card` is the
- * control: it still goes through `typeAndSubmit`, so the same double
- * MUST swallow it. If both return, the double is broken and the test
- * is not proving anything.
+ * cannot return before `REPORT_MUST_RETURN_MS`. `send_to_card` used to
+ * be the control that the same double swallowed (it awaited
+ * `typeAndSubmit`). That hang was confirmed, then send was given the
+ * same enqueue-and-return form as report. The control is now
+ * `get_delivery`: the FIFO item stays queued on this double.
  *
  * Run against `6239269^` (pre-fix `message-bus.ts`) to confirm this
  * fails on the old `await notifySpawnerOfReport`.
@@ -124,7 +125,7 @@ describe("message-bus: report não espera PTY (regressão do timeout MCP)", () =
     return { bus, rounds };
   }
 
-  it("orquestrador ocupado: report devolve na hora; send_to_card no mesmo PTY não", async () => {
+  it("orquestrador ocupado: report devolve na hora; send enfileira sem esperar o PTY", async () => {
     const { bus: b } = makeBus({ stuckPty: true });
 
     const waiter = b.handleRequest({
@@ -154,10 +155,27 @@ describe("message-bus: report não espera PTY (regressão do timeout MCP)", () =
     expect(waited.seq).toBe(1);
 
     const sendRes = await firstOf(
-      b.handleRequest({ cmd: "send", target: "orchestrator-1", text: "hello" } as BusRequest) as Promise<unknown>,
+      b.handleRequest({ cmd: "send", target: "orchestrator-1", text: "hello" } as BusRequest) as Promise<{
+        ok: boolean;
+        delivery?: string;
+        reason?: string;
+        id?: string;
+      }>,
       REPORT_MUST_RETURN_MS,
     );
-    expect(sendRes).toBe("timeout");
+    expect(sendRes).not.toBe("timeout");
+    if (sendRes === "timeout") return;
+    expect(sendRes.ok).toBe(true);
+    expect(sendRes.delivery).toBe("queued");
+    expect(sendRes.reason).toBe("human-input");
+    expect(typeof sendRes.id).toBe("string");
+
+    const delivery = (await b.handleRequest({ cmd: "get_delivery", id: sendRes.id } as BusRequest)) as {
+      ok: boolean;
+      delivery?: string;
+    };
+    expect(delivery.ok).toBe(true);
+    expect(delivery.delivery).toBe("queued");
   });
 
   it("dois reports idênticos do mesmo card: duas linhas, dois seq, duas rodadas; waiter de afterSeq acorda no segundo", async () => {

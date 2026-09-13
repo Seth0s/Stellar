@@ -84,6 +84,7 @@ try {
       "concurrency_status",
       "create_task",
       "delete_card",
+      "get_delivery",
       "get_page_text",
       "get_task",
       "list_cards",

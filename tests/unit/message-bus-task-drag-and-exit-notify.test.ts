@@ -319,6 +319,16 @@ describe("message-bus: histórico de veredito por participação — os dois cho
     expect(typeof calls[0][2]).toBe("number");
   });
 
+  it("cmd 'report' com verdict só no JSON (forma acbridge): a rodada fecha com o valor tipado, não null", async () => {
+    const calls: unknown[][] = [];
+    const b = makeBus({ listAllConnectors: () => [] as ConnectorRow[], recordParticipationRound: (...args: unknown[]) => calls.push(args) });
+
+    await b.handleRequest({ cmd: "report", requesterId: "card-r-cli", report: { ok: true, verdict: "reprovado" } } as BusRequest);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toBe("reprovado");
+  });
+
   it("cmd 'report' SEM verdict: a rodada ainda fecha, com verdict null (não pula a chamada) — 'terminou sem veredito' é um resultado real, não ausência de evento", async () => {
     const calls: unknown[][] = [];
     const b = makeBus({ listAllConnectors: () => [] as ConnectorRow[], recordParticipationRound: (...args: unknown[]) => calls.push(args) });
