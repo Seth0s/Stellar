@@ -28,7 +28,16 @@ export type CardRow = {
 // `effort` widened from "low" | "high" to plain string — see
 // main/providers.ts's own `SpawnOpts.effort` doc comment (review
 // adversarial 2026-09-09, achado 2).
-type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; effort?: string; systemPrompt?: string; brief?: string };
+type SpawnOpts = {
+  resumeId?: string;
+  continueLast?: boolean;
+  model?: string;
+  effort?: string;
+  systemPrompt?: string;
+  brief?: string;
+  /** Same optional `SpawnOpts.taskId` as providers.ts — only set when this card was spawned for a task. */
+  taskId?: string;
+};
 type SpawnResult =
   | { id: string; consumedBrief?: boolean }
   | { error: "binary_not_found"; providerId: string; installCommand: string | null; searchedPath: string }
@@ -616,6 +625,8 @@ export type SpawnAgentAskParams = {
    * field CardTag rename sets. */
   label?: string;
   brief?: string;
+  /** Optional. Set when this spawn is tied to a task (`spawn_agent({ taskId })` or auto-dispatch). Omitted for a first-class task-less spawn. */
+  taskId?: string;
   /** DESIGN-BACKLOG.md item 59 — the requester's own board is in
    * autonomous mode and under its cap; App.tsx's `onAskAgent` handler
    * creates the card and resolves immediately, no `AgentAskModal`. */
@@ -1366,6 +1377,15 @@ const i18n = {
     ipcRenderer.invoke("i18n:set-override", override),
 };
 
+/** Renderer door to the existing bus `cmd: "send"` (`typeAndSubmit` /
+ * `deliverCard`). Not a second write+Enter engine — main just calls
+ * `messageBus.handleRequest`. No `requesterId`: Design Mode is a human
+ * click and must keep the body exactly as formatted (no `[de: …]`). */
+const bus = {
+  send: (target: string, text: string): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("bus:send", target, text),
+};
+
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("clipboardImage", clipboardImage);
 contextBridge.exposeInMainWorld("store", store);
@@ -1389,6 +1409,7 @@ contextBridge.exposeInMainWorld("canvasExport", canvasExport);
 contextBridge.exposeInMainWorld("boardAssets", boardAssets);
 contextBridge.exposeInMainWorld("system", system);
 contextBridge.exposeInMainWorld("i18n", i18n);
+contextBridge.exposeInMainWorld("bus", bus);
 
 /** Test-only, dev builds only — DESIGN-BACKLOG.md item 37's crash-safety
  * net (main/index.ts's `process.on("uncaughtException", ...)`). */
@@ -1433,3 +1454,4 @@ export type UpdaterApi = typeof updater;
 export type AgentsApi = typeof agents;
 export type SecretsApi = typeof secrets;
 export type ChatApi = typeof chat;
+export type BusApi = typeof bus;

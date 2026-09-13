@@ -17,6 +17,7 @@ import type {
   AgentsApi,
   SecretsApi,
   ChatApi,
+  BusApi,
   ClipboardImageApi,
   CanvasExportApi,
   BoardAssetsApi,
@@ -45,6 +46,7 @@ declare global {
     agents: AgentsApi;
     secrets: SecretsApi;
     chat: ChatApi;
+    bus: BusApi;
     canvasExport: CanvasExportApi;
     boardAssets: BoardAssetsApi;
     system: SystemApi;
