@@ -64,6 +64,19 @@ const ownCardId = process.env.AGENT_CANVAS_CARD_ID || "";
 // from a briefing. Absent when the spawn had no task — first-class.
 const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 
+// Versão do protocolo JSON-line que este script fala. O agente executa o
+// acbridge do PACOTE instalado (extraResources copia resources/bin), que
+// pode ser mais velho ou mais novo que o Stellar que bindou o socket (dev
+// e empacotado compartilham o mesmo userData/.sock). Sem esta marca a
+// defasagem era silenciosa: campo desconhecido sumia com `ok` (achado ao
+// vivo 2026-09-13, `verdict` de um relatório reprovado virando NULL).
+// Carimbado em TODO request; o bus aceita+avisa quando este lado é mais
+// velho e RECUSA quando é mais novo. Mesmo literal em
+// src/main/acbridge-protocol-decision.ts — o vitest trava os dois
+// (tests/unit/acbridge-protocol.test.ts). Bump quando a forma de um
+// request muda (cmd/campo novo), e só então.
+const ACBRIDGE_PROTOCOL = 1;
+
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
   process.exit(1);
@@ -74,17 +87,18 @@ if (!sockPath) {
 }
 
 const USAGE =
-  "usage: acbridge <list | send <cardId> <message...> | get-delivery <id> | open <url> | " +
+  "usage: acbridge <version | list | send <cardId> <message...> | get-delivery <id> | open <url> | " +
   "close-card <cardId> [reason...] | delete-card <cardId> [reason...] | " +
   "update-card-content [--append] <cardId> <text...> | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
   "read-sticky <cardId> | write-sticky [--append] [--file <path>] <cardId> [text...] | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
   "create-task <json> | update-task <taskId> <json> | request-task-status <taskId> <status> [reason...] | list-tasks | get-task <taskId> | " +
+  "link-task-card <taskId> <cardId> [implementer|reviewer] | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "set-connector-label <connectorId> <label...|null> | " +
   "concurrency-status [cap] | board-mode <cardId> | " +
-  "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] | " +
+  "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] | " +
   "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
   "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
@@ -104,7 +118,12 @@ const BASH_CARD_NOTE =
 const [, , cmd, ...rest] = process.argv;
 
 let request;
-if (cmd === "list") {
+if (cmd === "version") {
+  // Handshake explícito: imprime o protocolo deste script e o do bus que
+  // atendeu, com o veredito — o jeito barato de um orquestrador conferir
+  // "falamos a mesma língua?" antes de confiar num `ok`.
+  request = { cmd: "hello" };
+} else if (cmd === "list") {
   request = { cmd: "list" };
 } else if (cmd === "send") {
   const [target, ...msgParts] = rest;
@@ -290,6 +309,14 @@ if (cmd === "list") {
   const [taskId] = rest;
   if (!taskId) fail("usage: acbridge get-task <taskId>");
   request = { cmd: "get_task", taskId };
+} else if (cmd === "link-task-card") {
+  // Paridade com a tool MCP `link_task_card` (2026-09-13): papel de um card
+  // JÁ ABERTO numa task. `role` omitido = implementer (o bus decide o
+  // default, não a CLI); valor desconhecido é recusado pelo bus, nunca
+  // normalizado aqui.
+  const [taskId, cardId, role] = rest;
+  if (!taskId || !cardId) fail("usage: acbridge link-task-card <taskId> <cardId> [implementer|reviewer]");
+  request = { cmd: "link_task_card", taskId, cardId, role, requesterId: ownCardId };
 } else if (cmd === "list-connectors") {
   request = { cmd: "list_connectors" };
 } else if (cmd === "set-connector-kind") {
@@ -331,16 +358,27 @@ if (cmd === "list") {
   // spawn-card logo abaixo, então chamador antigo (só posicionais) segue
   // idêntico. A validação por provider (antigravity só low/high) vive no bus,
   // não aqui — um único lugar que decide, e a CLI recebe o erro dele.
+  //
+  // `--task`/`--role`/`--brief` (2026-09-13) — mesma paridade: `taskId`
+  // chegou ao MCP em 0955373 sem chegar aqui, e `role` nasce nos dois ao
+  // mesmo tempo. `--brief` é UM argumento (aspas no shell); a regra
+  // taskId-ou-brief (e a exceção pro reviewer) vive no bus, não aqui.
   const positional = [];
-  let model, effort;
+  let model, effort, taskId, role, brief;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--model") model = rest[++i];
     else if (rest[i] === "--effort") effort = rest[++i];
+    else if (rest[i] === "--task") taskId = rest[++i];
+    else if (rest[i] === "--role") role = rest[++i];
+    else if (rest[i] === "--brief") brief = rest[++i];
     else positional.push(rest[i]);
   }
   const [provider, cwd, resumeId] = positional;
-  if (!provider) fail("usage: acbridge spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>]");
-  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, requesterId: ownCardId };
+  if (!provider)
+    fail(
+      "usage: acbridge spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>]",
+    );
+  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, taskId, role, brief, requesterId: ownCardId };
 } else if (cmd === "spawn-card") {
   // Pendentes #188 ("spawn_card por coordenadas") — `--anchor`/`--side` are
   // optional trailing flags, stripped out before the positional kind/
@@ -412,6 +450,10 @@ if (cmd === "list") {
   fail(`${USAGE}\n${BASH_CARD_NOTE}`);
 }
 
+// Carimbo em TODO request, num lugar só — nenhum ramo acima precisa
+// lembrar. O bus tira a chave antes do dispatch.
+request = { ...request, protocol: ACBRIDGE_PROTOCOL };
+
 const socket = net.connect({ path: sockPath }, () => {
   socket.end(JSON.stringify(request) + "\n");
 });
@@ -431,10 +473,27 @@ socket.on("close", () => {
     return;
   }
   if (!res.ok) {
+    // Bus anterior ao handshake (todo Stellar empacotado antes do
+    // protocolo 1): não conhece `hello`, e também não conhece nada que
+    // este script ganhou desde então. Nomeie isso em vez de deixar o
+    // "unknown cmd" cru parecer um typo.
+    if (cmd === "version" && /unknown cmd "hello"/.test(String(res.error ?? ""))) {
+      console.log(`acbridge protocol ${ACBRIDGE_PROTOCOL}\tbus protocol pre-1 (no handshake)\tMISMATCH`);
+      fail("the running Stellar predates the acbridge protocol handshake — it is older than this acbridge; restart it with a matching build");
+      return;
+    }
     fail(res.error ?? "request failed");
     return;
   }
-  if (cmd === "list") {
+  // Bus mais novo que este script: o request foi aceito (é subconjunto),
+  // mas o agente precisa VER que está num acbridge atrasado — stderr, que
+  // aparece na saída da tool junto com o resultado.
+  if (typeof res.warning === "string" && res.warning) process.stderr.write(`acbridge: ${res.warning}\n`);
+  if (cmd === "version") {
+    const busProtocol = res.protocol;
+    const verdict = busProtocol === ACBRIDGE_PROTOCOL ? "match" : "MISMATCH";
+    console.log(`acbridge protocol ${ACBRIDGE_PROTOCOL}\tbus protocol ${busProtocol ?? "unknown"}\t${verdict}`);
+  } else if (cmd === "list") {
     // `kind` e `label` são novos (2026-09-01): a lista deixou de ser só de
     // terminais, então o tipo do card passa a ser a informação que decide
     // o que dá pra fazer com ele, e o rótulo é um alvo válido em qualquer
@@ -493,6 +552,8 @@ socket.on("close", () => {
     console.log(JSON.stringify(res.tasks));
   } else if (cmd === "get-task") {
     console.log(JSON.stringify(res.task));
+  } else if (cmd === "link-task-card") {
+    console.log(`linked ${res.cardId} as ${res.role}`);
   } else if (cmd === "list-connectors") {
     console.log(JSON.stringify(res.connectors));
   } else if (cmd === "set-connector-kind" || cmd === "set-connector-label") {

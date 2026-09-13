@@ -7,6 +7,7 @@ import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus"
 import { resolveCallerCardId } from "./caller-identity";
 import { reachFromHunks } from "./reach-from-hunks";
 import { reachAcrossLiterals } from "./reach-across-literals";
+import { TASK_CARD_ROLES, TASK_PURPOSES } from "../task-purpose";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface,
@@ -438,10 +439,16 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "YOUR priority guess for this task (you know what unblocks what) — shown alongside, never instead of, a human's own drag-set order. There's no agent-facing way to set that human order; it's set only by dragging on the board.",
             ),
+          purpose: z
+            .enum(TASK_PURPOSES)
+            .optional()
+            .describe(
+              "What kind of work this task IS, declared once here and shown as a chip on the board's task queue (Fila). 'investigate' = find out / diagnose, the deliverable is knowledge, not a change; 'implement' = build something new; 'measure' = collect numbers or evidence about the current state; 'fix' = correct a defect in something that already exists. WRITE-ONCE: update_task has no purpose field and cannot relabel it — a wrong value means a new task, not an edit, so decide it now. Omit when you genuinely cannot say: absence is a normal state (the chip stays empty) and is better than a guess; nothing infers it from the prompt text. Any value outside the four is REFUSED and the task is not created. This is about the TASK, not about a card — which card implements or reviews it is `role` on spawn_agent / link_task_card, a separate thing.",
+            ),
         },
       },
-      async ({ prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder }) => {
-        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder });
+      async ({ prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder, purpose }) => {
+        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder, purpose });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -450,7 +457,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "update_task",
       {
         description:
-          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. Writing status when a human last moved the task is ACCEPTED WITH A WARNING and never refused — the human status stays, divergence is signaled. To ASK the human to accept your status (they decide on the Fila card), use request_task_status instead; this tool is the direct write. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session.",
+          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. `purpose` is deliberately NOT here: it is write-once at create_task and cannot be relabeled (a wrong purpose means a new task). Writing status when a human last moved the task is ACCEPTED WITH A WARNING and never refused — the human status stays, divergence is signaled. To ASK the human to accept your status (they decide on the Fila card), use request_task_status instead; this tool is the direct write. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
           status: z.string().optional().describe("New status — e.g. 'running', 'done', 'failed'"),
@@ -529,7 +536,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_tasks",
       {
         description:
-          "List every recorded task — id, prompt, provider, status, current card (if any), cwd, result, deps, retryCount, attemptedProviders, order/suggestedOrder. Survives card closes and app restarts.",
+          "List every recorded task — id, prompt, provider, status, current card (if any), cwd, purpose (investigate/implement/measure/fix, or null when never declared), result, deps, retryCount, attemptedProviders, order/suggestedOrder. Survives card closes and app restarts.",
         inputSchema: {
           boardId: z.string().optional().describe("Only tasks belonging to this board — omit to list every task across every board, same as before this param existed"),
         },
@@ -551,6 +558,33 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
       async ({ taskId }) => {
         const res = await opts.handleRequest({ cmd: "get_task", taskId });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    // `task_cards.role` writer for a card that ALREADY exists. The other
+    // writer is spawn_agent's `role` (card born for the task). Before
+    // 2026-09-13 neither existed and 91/91 rows were the silent
+    // implementer default — see store.ts's TaskCardRow comment.
+    server.registerTool(
+      "link_task_card",
+      {
+        description:
+          "Record what an EXISTING open card does on a task — its role. Use this when you reuse a card that is already alive (e.g. a running agent you now want to review a task) instead of spawning a new one; to spawn a new card already linked, pass `taskId` + `role` to spawn_agent instead. role 'reviewer' = this card judges the work: it only adds the role row; the task's principal card (cardId) is left as it is, so the reviewer's own report {ok:false} is a verdict, not the task failing, and its rounds show up in get_task's `verdicts` with role reviewer (the Fila's ' ↔ review' chip derives from this). role 'implementer' (the default when omitted) = this card does the work: it ALSO becomes the task's principal cardId (same link spawn_agent/auto-dispatch write), status untouched. A card that is currently the task's principal cardId cannot be linked as reviewer — detach it first (update_task cardId: null). Re-linking the same card changes its role (one role per card per task). No consent needed: structural bookkeeping, nothing is spawned or typed. Unknown task, unknown card, or a role outside implementer/reviewer is REFUSED — nothing is written.",
+        inputSchema: {
+          taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
+          cardId: z.string().describe("The existing card's id (see list_cards). Must be open on the current board."),
+          role: z
+            .enum(TASK_CARD_ROLES)
+            .optional()
+            .describe(
+              "'implementer' (default when omitted) = this card does the task's work and becomes its principal cardId. 'reviewer' = this card judges the work; principal cardId is untouched. Any other value is refused.",
+            ),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ taskId, cardId, role, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "link_task_card", taskId, cardId, role, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -755,7 +789,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "spawn_agent",
       {
         description:
-          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call). `taskId` is optional: when you pass one, the new card's brief is that task's stored prompt (the same source auto-dispatch uses) and the card is linked to the task. Without `taskId`, free `brief` still works exactly as before — including omitting both, which just opens a card. Do not pass `taskId` and `brief` together.",
+          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call). `taskId` is optional: when you pass one, the new card's brief is that task's stored prompt (the same source auto-dispatch uses) and the card is linked to the task as its implementer. Without `taskId`, free `brief` still works exactly as before — including omitting both, which just opens a card. Do not pass `taskId` and `brief` together — EXCEPT with `role: \"reviewer\"`, where `brief` is the review order and the task prompt is what is under review (see `role`).",
         inputSchema: {
           provider: z.enum(["bash", "claude", "codex", "cursor", "antigravity", "opencode"]).describe("Which provider to spawn"),
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
@@ -800,11 +834,17 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Optional. When set, the spawned agent's brief is the stored prompt of that task — the same source auto-dispatch already uses — and the new card is linked as that task's card. Spawn without a task remains first-class: omit this field and `brief` still works exactly as before (including omitting both). A missing id is refused. Do not pass together with `brief`; an addendum that belongs on the work goes on the task via update_task (prompt append) first.",
+              "Optional. When set, the spawned agent's brief is the stored prompt of that task — the same source auto-dispatch already uses — and the new card is linked as that task's card. Spawn without a task remains first-class: omit this field and `brief` still works exactly as before (including omitting both). A missing id is refused. Do not pass together with `brief` (unless `role` is 'reviewer'); an addendum that belongs on the work goes on the task via update_task (prompt append) first.",
+            ),
+          role: z
+            .enum(TASK_CARD_ROLES)
+            .optional()
+            .describe(
+              "What the NEW card does on `taskId` — only meaningful with `taskId`; passing it without one is refused. Omit (or 'implementer') = the card does the task's work: it becomes the task's principal cardId, its brief is the task's stored prompt, and its report {ok:false} counts against the task's retry budget — exactly today's behavior, so nothing changes if you never pass this. 'reviewer' = the card judges someone else's work on this task: it is recorded with role reviewer (get_task `cards`/`verdicts`, the Fila's ' ↔ review' chip), the principal cardId is left on the implementer, and its brief is your free `brief` (the review order — what to check, where the diff is, how to report a verdict); the task prompt is NOT delivered, because a reviewer handed the work statement would start implementing. A reviewer spawned without `brief` opens linked but mute — send the order with send_to_card. To make an already-open card a reviewer instead, use link_task_card. Any value outside implementer/reviewer is REFUSED (no spawn).",
             ),
         },
       },
-      async ({ provider, cwd, resumeId, model, effort, label, callerCardId, reason, wait, waitTimeoutMs, brief, taskId }) => {
+      async ({ provider, cwd, resumeId, model, effort, label, callerCardId, reason, wait, waitTimeoutMs, brief, taskId, role }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
           provider,
@@ -819,6 +859,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           waitTimeoutMs,
           brief,
           taskId,
+          role,
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },

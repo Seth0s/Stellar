@@ -5,11 +5,26 @@ import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import type { StatusWriteDecision } from "../../src/main/status-write-decision";
 import type { TaskRow } from "../../src/main/store";
+import { createTaskWriteFunnel } from "../../src/main/task-write-funnel";
 
 /**
  * Card `claude` sozinho em /home/lucas — onTaskDone/retryOrFail must pass
  * the task's own cwd + a label, not hardcode cwd: undefined.
+ *
+ * 2026-09-13: `update_task{done}` no longer calls `onTaskDone` itself —
+ * the write funnel (task-write-funnel.ts, index.ts's `persistTask`) does,
+ * from the store's decision. The mocked `upsertTask` here is wired the
+ * same way index.ts wires it, so the dispatch path under test is real.
  */
+
+function funnelled(decide: (task: TaskRow) => StatusWriteDecision, getBus: () => ReturnType<typeof createMessageBus> | null) {
+  return createTaskWriteFunnel({
+    upsertTask: decide,
+    applyColumnDrop: (dragged) => decide(dragged),
+    afterWrite: () => {},
+    onTaskDone: (id) => getBus()?.onTaskDone(id),
+  }).persistTask;
+}
 
 function applied(status: string): StatusWriteDecision {
   return {
@@ -82,6 +97,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
     // getTask still serves the pre-update row; onTaskDone reads listTasks
     // AFTER the dep upsert, so listTasks must already show dep as done.
     const depBefore = { ...dep, status: "running" };
+    const persistTask = funnelled((task) => applied(task.status), () => bus);
 
     bus = createMessageBus(
       join(dir, "agent-canvas.sock"),
@@ -91,7 +107,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
         isBoardAutonomous: () => true,
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
-        upsertTask: (task: TaskRow) => applied(task.status),
+        upsertTask: (task: TaskRow) => persistTask(task),
         onSpawnAgentRequest: (_requestId: string, _requesterId: string, params: Record<string, unknown>) => {
           spawnParams.push(params);
         },
@@ -120,6 +136,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
       prompt: null,
     });
     const depBefore = { ...dep, status: "running" };
+    const persistTask = funnelled((task) => applied(task.status), () => bus);
 
     bus = createMessageBus(
       join(dir, "agent-canvas.sock"),
@@ -129,7 +146,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
         isBoardAutonomous: () => true,
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
-        upsertTask: (task: TaskRow) => applied(task.status),
+        upsertTask: (task: TaskRow) => persistTask(task),
         onSpawnAgentRequest: (_requestId: string, _requesterId: string, params: Record<string, unknown>) => {
           spawnParams.push(params);
         },
