@@ -328,6 +328,130 @@ describe("shouldPressEnterOnAttempt", () => {
     expect(fixedPresses).toBe(1);
     expect(prevFixed).toBe("sent");
   });
+
+  it("investigação: baseline JÁ contendo follow-ups e um chip [Pasted text], screenText com chip novo no compositor => devolve unsent e dispara 4 Enters", () => {
+    // Caso exato solicitado na investigação:
+    // screenTextBeforeWrite já continha a caixa de follow-ups e um chip [Pasted text #1]
+    const before = [
+      "follow-ups",
+      "  ○ [Pasted text #1 +10 lines]",
+      "enter steer · ↑ select/edit · esc cancel",
+    ].join("\n");
+
+    // screenText depois com mais um chip no compositor (sem o bullet [○●→] de item aceito na fila):
+    const after = [
+      "follow-ups",
+      "  ○ [Pasted text #1 +10 lines]",
+      "enter steer · ↑ select/edit · esc cancel",
+      "[Pasted text #2 +14 lines]",
+    ].join("\n");
+
+    const input: SubmitCheckInput = {
+      screenTextBeforeWrite: before,
+      screenText: after,
+      sentNeedle: "consertar o roteamento",
+      hasNewActivitySinceWrite: true,
+    };
+
+    // 1. O que decideSubmitCheck devolve:
+    // followUpsAppearedSince: FOLLOW_UPS_HEADING_PATTERN conta 1 vs 1 (flat).
+    // FOLLOW_UP_ROW_PATTERN (/[○●→]\s*\[Pasted text[^\]]*\]/gi) só casa em "○ [Pasted text #1]",
+    // pois o chip novo no compositor não tem bullet [○●→]. Contagem flat: 1 vs 1.
+    // submitStartedAppearedSince dá false (nenhum Working/Thinking novo).
+    // Linha 330: if (/pasted text/i.test(after)) return "unsent" dispara!
+    const decision = decideSubmitCheck(input);
+    expect(decision).toBe("unsent");
+
+    // 2. O que shouldPressEnterOnAttempt faz com esse resultado nas 4 voltas:
+    let prevResult: "sent" | "unsent" | "unknown" | null = null;
+    let enterCount = 0;
+    const enterDecisions: boolean[] = [];
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const willPress = shouldPressEnterOnAttempt(attempt, prevResult);
+      enterDecisions.push(willPress);
+      if (willPress) enterCount++;
+      // A cada volta a tela continua contendo o chip
+      prevResult = decideSubmitCheck(input);
+      if (prevResult === "sent") break;
+    }
+
+    // Prova matemática do bug:
+    // Tentativa 0 aperta Enter (inicial).
+    // Tentativa 1 aperta Enter de novo (unsent).
+    // Tentativa 2 aperta Enter de novo (unsent).
+    // Tentativa 3 aperta Enter de novo (unsent).
+    // Total: 4 Enters disparados!
+    expect(enterDecisions).toEqual([true, true, true, true]);
+    expect(enterCount).toBe(4);
+    expect(prevResult).toBe("unsent");
+  });
+
+  it("investigação: se o 2º chip já tem bullet [○●→], countPatternMatches sobe e devolve sent (1 Enter)", () => {
+    const before = [
+      "follow-ups",
+      "  ○ [Pasted text #1 +10 lines]",
+      "enter steer · ↑ select/edit · esc cancel",
+    ].join("\n");
+    // Se o segundo chip entrar como linha com bullet na fila:
+    const after = [
+      "follow-ups",
+      "  ○ [Pasted text #1 +10 lines]",
+      "  ○ [Pasted text #2 +14 lines]",
+      "enter steer · ↑ select/edit · esc cancel",
+    ].join("\n");
+
+    const decision = decideSubmitCheck({
+      screenTextBeforeWrite: before,
+      screenText: after,
+      sentNeedle: "consertar",
+      hasNewActivitySinceWrite: true,
+    });
+    // Onde a leitura do código do usuário divergiu do código:
+    // FOLLOW_UP_ROW_PATTERN conta 2 > 1, então followUpsAppearedSince intercepta ANTES da linha 330!
+    expect(decision).toBe("sent");
+    expect(shouldPressEnterOnAttempt(0, null)).toBe(true);
+  });
+
+  it("investigação caso Cursor real: histórico tem chip e Cursor está rodando tool (Running não está no vocabulário) => unsent e 4 Enters", () => {
+    // Medição real do Cursor Agent (agent v2026.09.10):
+    // Cursor NÃO usa cabeçalho "follow-ups" nem "○ [Pasted text]".
+    // Cursor usa "Running", "Reading", "Grepping" e prompt "→ Add a follow-up ctrl+c to stop".
+    const before = [
+      "  → [Pasted text #1 +50 lines]",
+      " ⠠⠜ Running  35 tokens",
+      "  → Add a follow-up                                 ctrl+c to stop",
+    ].join("\n");
+
+    // Entrega 2 envia mensagem enquanto Cursor está em execução.
+    // O chip anterior continua no histórico das 8 linhas:
+    const after = [
+      "  → [Pasted text #1 +50 lines]",
+      " ⠠⠜ Running  35 tokens",
+      "  → Add a follow-up                                 ctrl+c to stop",
+    ].join("\n");
+
+    const decision = decideSubmitCheck({
+      screenTextBeforeWrite: before,
+      screenText: after,
+      sentNeedle: "nova instrução de teste",
+      hasNewActivitySinceWrite: true,
+    });
+
+    // 1. followUpsAppearedSince é false (sem heading follow-ups, sem bullet row)
+    // 2. submitStartedAppearedSince é false (Running NÃO está em SUBMIT_STARTED_PATTERN)
+    // 3. Linha 330 (/pasted text/i.test(after)) vê o chip do turno 1 no histórico e devolve "unsent"!
+    expect(decision).toBe("unsent");
+
+    // 4 Enters são disparados para o Cursor que aceita follow-ups a cada Enter!
+    let enterCount = 0;
+    let prev: "sent" | "unsent" | "unknown" | null = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (shouldPressEnterOnAttempt(attempt, prev)) enterCount++;
+      prev = decision;
+    }
+    expect(enterCount).toBe(4);
+  });
 });
 
 describe("wrapBracketedPaste / deliveryTextBytes / composerClearSequence", () => {
