@@ -25,6 +25,7 @@ import {
   describeExitWithoutAcceptedReport,
 } from "./report-retry-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
+import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
@@ -434,6 +435,11 @@ export type BusRequest =
       wait?: boolean;
       waitTimeoutMs?: number;
       brief?: string;
+      /** Optional. When set, the delivered brief is that task's stored
+       * `prompt` — same source auto-dispatch already uses. Omit to keep
+       * free `brief` (or no brief) as a first-class path. Refused together
+       * with `brief`; a missing id is refused, not ignored. */
+      taskId?: string;
     }
   | {
       cmd: "spawn_card";
@@ -2680,6 +2686,15 @@ export function createMessageBus(
           error: `claude only accepts effort "low", "medium", "high", "xhigh", or "max", got "${req.effort}" — refusing to spawn rather than silently substituting a different value`,
         };
       }
+      // taskId vs brief is resolved here, before depth is spent and
+      // before dispatch — a missing task or an ambiguous pair must not
+      // open a mute card. The delivered text then goes through
+      // `dispatchSpawnAgentRequest` (the one argv-vs-type split).
+      const briefDecision = resolveSpawnBrief(
+        { taskId: req.taskId, brief: req.brief },
+        { findTask: (id) => callbacks.getTask(id) },
+      );
+      if (!briefDecision.ok) return { ok: false, error: briefDecision.error };
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
       // Pre-release audit S4 — ignores `req.depth` entirely; see
@@ -2703,13 +2718,33 @@ export function createMessageBus(
         model: req.model,
         effort: req.effort,
         label: req.label,
-        brief: req.brief,
+        brief: briefDecision.brief,
       };
       const spawnResult: SpawnAgentResult =
         autonomous && requesterBoardId
           ? await autonomousSpawn(requesterBoardId, requestId, requesterId, spawnParams)
           : await dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
-      if (spawnResult.ok) cardSpawnDepth.set(spawnResult.cardId, depth);
+      if (spawnResult.ok) {
+        cardSpawnDepth.set(spawnResult.cardId, depth);
+        // Same link auto-dispatch writes after a successful spawn
+        // (`card_id` + task_cards implementer). `resolveNotifyTarget`
+        // reads spawned/modified connectors, not this column — no
+        // collision. Status is left alone (`statusProposed: false`):
+        // amarrar o card não é propor running, e um hold humano no
+        // pending não deve virar divergência colateral deste spawn.
+        if (briefDecision.taskId) {
+          const latest = callbacks.getTask(briefDecision.taskId);
+          if (latest) {
+            callbacks.upsertTask({
+              ...latest,
+              card_id: spawnResult.cardId,
+              updated_at: Date.now(),
+              actor: "app",
+              statusProposed: false,
+            });
+          }
+        }
+      }
       // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open
       // past "the human approved and the card exists" (spawnResult above)
       // until the process actually exits, so the caller gets a real
@@ -3098,7 +3133,7 @@ export function createMessageBus(
       reason,
       model: undefined,
       label: resolveTaskDispatchLabel(task),
-      brief: task.prompt ?? undefined,
+      brief: briefFromTaskPrompt(task.prompt),
     };
   }
 

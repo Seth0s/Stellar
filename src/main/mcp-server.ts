@@ -739,7 +739,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "spawn_agent",
       {
         description:
-          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call).",
+          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call). `taskId` is optional: when you pass one, the new card's brief is that task's stored prompt (the same source auto-dispatch uses) and the card is linked to the task. Without `taskId`, free `brief` still works exactly as before — including omitting both, which just opens a card. Do not pass `taskId` and `brief` together.",
         inputSchema: {
           provider: z.enum(["bash", "claude", "codex", "cursor", "antigravity", "opencode"]).describe("Which provider to spawn"),
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
@@ -774,10 +774,21 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .optional()
             .describe("Hold this call open until the spawned card's process exits, instead of returning as soon as it starts (default 10 minutes, see waitTimeoutMs)"),
           waitTimeoutMs: z.number().optional().describe("Override the default wait window (10 minutes) when wait is true"),
-          brief: z.string().optional().describe("Initial prompt/briefing for the spawned agent (what it should do). E.g. a task description. Highly recommended so the agent knows why it was spawned."),
+          brief: z
+            .string()
+            .optional()
+            .describe(
+              "Initial prompt/briefing for the spawned agent (what it should do). Still the first-class path when you are not tying this card to a task — omit `taskId` and this text is delivered as today. Omit both to just open a card. Do not pass together with `taskId`.",
+            ),
+          taskId: z
+            .string()
+            .optional()
+            .describe(
+              "Optional. When set, the spawned agent's brief is the stored prompt of that task — the same source auto-dispatch already uses — and the new card is linked as that task's card. Spawn without a task remains first-class: omit this field and `brief` still works exactly as before (including omitting both). A missing id is refused. Do not pass together with `brief`; an addendum that belongs on the work goes on the task via update_task (prompt append) first.",
+            ),
         },
       },
-      async ({ provider, cwd, resumeId, model, effort, label, callerCardId, reason, wait, waitTimeoutMs, brief }) => {
+      async ({ provider, cwd, resumeId, model, effort, label, callerCardId, reason, wait, waitTimeoutMs, brief, taskId }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
           provider,
@@ -791,6 +802,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           wait,
           waitTimeoutMs,
           brief,
+          taskId,
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
