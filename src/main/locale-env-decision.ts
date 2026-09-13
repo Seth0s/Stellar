@@ -14,27 +14,50 @@
  * those names or write nothing. A name `setlocale()` would refuse falls
  * back to C — the original bug, now wearing a disguise.
  *
+ * Genealogy is not a source. `C.UTF-8` became FreeBSD's default in
+ * Nov 2020 and macOS libc descends from FreeBSD — but it was absent on
+ * macOS through Sonoma 14.x and Sequoia 15.4, and only present on the
+ * 26.6.2 host we measured. Inferring "exists since 2020 because FreeBSD
+ * has it" would have written a name `setlocale()` refuses, falling back
+ * to C: the original bug in disguise. The `locale -a` veto is what
+ * saved us, not the family tree. VS Code tried preferred languages
+ * without a veto and had to revert (PR 169068) after inventing names
+ * that did not exist.
+ *
  * Language is synthesized from the process env (when it names a real
- * language) and from the OS UI language hint. We do not copy the login
- * shell's LANG: on the measured Mac it was `C.UTF-8`, which would fix
- * encoding and throw away Portuguese CLI messages.
+ * language) and from the OS preferred-language hint
+ * (`composeSystemLanguageHint`). We do not copy the login shell's LANG:
+ * on the measured Mac it was `C.UTF-8`, which would fix encoding and
+ * throw away Portuguese CLI messages. We also do not take Chromium's
+ * application locale (`app.getLocale()`): that follows the packaged
+ * `locales/` folder, and a Brazilian Mac whose `.app` omitted
+ * `pt.lproj` reports `en-US` (VS Code issue 173749 is the same mirror).
  *
  * POSIX encoding precedence: LC_ALL > LC_CTYPE > LANG.
  * An already-UTF-8 winner is left alone. C / POSIX / US-ASCII (and an
- * absent winner) are filled. Any other encoding (ISO-8859-1, EUC-JP) is
- * treated as a deliberate choice and kept.
+ * absent winner) are filled — except an explicit `LC_ALL` in that set
+ * is UNSET, not rewritten. POSIX ch. 8 / Debian: LANG is the persistent
+ * default; LC_ALL is a one-shot override. Rewriting `LC_ALL=C` to
+ * `LC_ALL=pt_BR.UTF-8` would lock every category and translate a
+ * deliberate POSIX override. Rewriting it to `LC_ALL=C.UTF-8` would
+ * keep the lock and erase Portuguese — the same mistake as copying the
+ * login shell. Any other encoding (ISO-8859-1, EUC-JP) is treated as a
+ * deliberate choice and kept.
  */
 
 export type LocaleEnvInput = {
   env: Record<string, string | undefined>;
   availableLocales: readonly string[];
-  /** BCP 47 or POSIX, e.g. `pt-BR` / `pt_BR`. From the OS UI language. */
+  /** BCP 47 or POSIX, e.g. `pt-BR` / `pt_BR`. From `composeSystemLanguageHint`. */
   preferredLanguage?: string | null;
 };
 
+/** `null` = unset the variable on the inherited env. */
+export type LocaleEnvWrites = Record<string, string | null>;
+
 export type LocaleEnvDecision = {
-  /** Variables to assign. Empty = leave the inherited env as-is. */
-  writes: Record<string, string>;
+  /** Variables to assign or unset. Empty = leave the inherited env as-is. */
+  writes: LocaleEnvWrites;
 };
 
 const ENCODING_PRECEDENCE = ["LC_ALL", "LC_CTYPE", "LANG"] as const;
@@ -61,6 +84,83 @@ export function splitLocaleName(name: string): SplitLocale {
 
 function compactEncoding(encoding: string): string {
   return encoding.toLowerCase().replace(/[-_]/g, "");
+}
+
+type LanguageTagParts = { language: string; region: string | null };
+
+/**
+ * Split a BCP 47 / POSIX tag into language + region. Script subtags
+ * (`zh-Hans`) are not a region; `zh-Hans-CN` yields region `CN`.
+ */
+function languageTagParts(tag: string): LanguageTagParts {
+  const parts = tag
+    .trim()
+    .replace(/_/g, "-")
+    .split("-")
+    .filter(Boolean);
+  if (parts.length === 0) return { language: "", region: null };
+  let region: string | null = null;
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i]!;
+    if (/^[A-Za-z]{2}$/.test(part) || /^\d{3}$/.test(part)) {
+      region = part.toUpperCase();
+    }
+  }
+  return { language: parts[0]!.toLowerCase(), region };
+}
+
+/**
+ * OS language hint for PTY synthesis — not Chromium's application locale.
+ *
+ * Language comes from `app.getPreferredSystemLanguages()[0]`
+ * (`[NSLocale preferredLanguages]` on macOS). Region, when that tag is
+ * language-only, comes from `app.getSystemLocale()` (`[NSLocale
+ * currentLocale]` on macOS) — and only when the languages match, so we
+ * do not invent `pt-US`. `app.getLocale()` is the wrong source: it is
+ * the packaged Chromium locale, and a Brazilian Mac whose `.app`
+ * omitted `pt.lproj` reports `en-US`. The POSIX name we later write is
+ * still vetoed by `locale -a`.
+ */
+export function composeSystemLanguageHint(
+  preferredLanguages: readonly string[] | string | null | undefined,
+  systemLocale?: string | null,
+): string | null {
+  const preferredRaw = Array.isArray(preferredLanguages) ? preferredLanguages[0] : preferredLanguages;
+  const preferred = preferredRaw?.trim() || "";
+  const system = systemLocale?.trim() || "";
+  if (!preferred) return system || null;
+
+  const pref = languageTagParts(preferred);
+  if (pref.region) return preferred;
+
+  if (system) {
+    const sys = languageTagParts(system);
+    if (sys.language === pref.language && sys.region) {
+      return `${pref.language}-${sys.region}`;
+    }
+  }
+  return preferred;
+}
+
+/**
+ * Apply `writes` onto an env. `null` unsets; a string assigns.
+ * A spread of `{ LC_ALL: null }` would stringify to `"null"` in
+ * `process.env` — this is the only safe apply path.
+ */
+export function applyLocaleEnvWrites(
+  env: Record<string, string | undefined>,
+  writes: LocaleEnvWrites,
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    if (writes[key] === null) continue;
+    next[key] = value;
+  }
+  for (const [key, value] of Object.entries(writes)) {
+    if (value !== null) next[key] = value;
+  }
+  return next;
 }
 
 function normalizedLanguage(language: string): string {
@@ -188,12 +288,22 @@ export function decideLocaleEnv(input: LocaleEnvInput): LocaleEnvDecision {
   if (!needsCorrection(winner.value)) return { writes: {} };
 
   const chosen = pickAvailableUtf8Locale(input.availableLocales, localeLanguageSearchKeys(input.env, input.preferredLanguage));
+
+  if (winner.key === "LC_ALL") {
+    // Explicit C / POSIX / US-ASCII override: unset the blanket lock
+    // and persist the UTF-8 name on LANG. Do not rewrite LC_ALL.
+    // Unset is not inventing a name — if LANG is already a real
+    // encoding, we drop LC_ALL even when `locale -a` returned nothing.
+    const lang = readEnvVar(input.env, "LANG");
+    if (lang && !needsCorrection(lang)) return { writes: { LC_ALL: null } };
+    if (!chosen) return { writes: {} };
+    return { writes: { LC_ALL: null, LANG: chosen } };
+  }
+
   if (!chosen) return { writes: {} };
 
-  if (winner.key === "LC_ALL") return { writes: { LC_ALL: chosen } };
-
   if (winner.key === "LC_CTYPE") {
-    const writes: Record<string, string> = { LC_CTYPE: chosen };
+    const writes: LocaleEnvWrites = { LC_CTYPE: chosen };
     const lang = readEnvVar(input.env, "LANG");
     if (!lang || needsCorrection(lang)) writes.LANG = chosen;
     return { writes };

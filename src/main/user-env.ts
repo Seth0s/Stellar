@@ -4,7 +4,7 @@ import { homedir, userInfo } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { which } from "./providers";
-import { decideLocaleEnv } from "./locale-env-decision";
+import { applyLocaleEnvWrites, decideLocaleEnv } from "./locale-env-decision";
 
 /**
  * PATH efetivo do usuário — o ambiente que o Stellar precisa ver para
@@ -591,10 +591,13 @@ export function installedLocales(): string[] {
 }
 
 /**
- * OS UI language (Electron `app.getLocale()`), not the in-app catalog
- * override. A Brazilian host that set the Stellar UI to English still
- * wants Portuguese CLIs. `null` until `setSystemLanguageHint` runs;
- * `systemLanguageHint()` then falls back to ICU.
+ * OS preferred language (`composeSystemLanguageHint` of
+ * `app.getPreferredSystemLanguages()[0]` + matching-region
+ * `app.getSystemLocale()`), not Chromium's `app.getLocale()` and not
+ * the in-app catalog override. A Brazilian host that set the Stellar
+ * UI to English still wants Portuguese CLIs. `null` until
+ * `setSystemLanguageHint` runs; `systemLanguageHint()` then falls
+ * back to ICU.
  */
 let languageHint: string | null = null;
 
@@ -614,14 +617,26 @@ export function systemLanguageHint(): string | null {
 }
 
 /**
- * Patch to spread onto a PTY env. Pure decision + cached listing; no
- * login-shell spawn. Empty object = inherited locale is already fine
- * (or we have no name we can justify).
+ * Writes to apply onto a PTY env (`null` = unset). Pure decision +
+ * cached listing; no login-shell spawn. Empty object = inherited
+ * locale is already fine (or we have no name we can justify).
+ * Do not spread this onto `process.env` — `null` would become `"null"`.
+ * Use {@link applyEffectiveLocaleEnv} as the env base instead.
  */
-export function effectiveLocaleEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+export function effectiveLocaleEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string | null> {
   return decideLocaleEnv({
     env,
     availableLocales: installedLocales(),
     preferredLanguage: systemLanguageHint(),
   }).writes;
+}
+
+/**
+ * Inherited env with locale writes applied. Unsets are deletions, not
+ * the string `"null"`. This is what a PTY spawn should spread as its
+ * env base — spreading the writes delta on top of the inherited env
+ * cannot remove `LC_ALL`.
+ */
+export function applyEffectiveLocaleEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return applyLocaleEnvWrites(env, effectiveLocaleEnv(env));
 }
