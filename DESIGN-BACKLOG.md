@@ -1101,3 +1101,32 @@ Ordem de prioridade técnica sugerida para as próximas implementações:
 3. **Chatbox & Mídias:** Upload de imagens/anexos no composer (Item 66).
 4. **Design System & Acessibilidade:** Documentação do System Design (`docs/SYSTEM_DESIGN.md`) e melhorias D1, D2, D5 e D8.
 5. **CI & Manutenção:** Estabilização dos seletores de testes (`data-kind`), inclusão do workflow de CI e atualização do `SYSTEM.md`.
+
+### Segunda opinião sobre "a task é a origem dos spawns" (2026-09-13, card `critica-task-orquestra`)
+
+Reprovou as duas formulações — spawnar a corrente inteira na criação e spawn escalonado
+manual — e recomendou uma terceira. O que ficou **decidido não fazer**, com a medição:
+
+- **Forma fixa investigação→implementação→review**: não descreve metade das correntes reais.
+  Das 8 investigações de 2026-09-13, 4 foram 1:1, 1 foi fan-out 1→7 (`95582065`) e 3 foram
+  fan-in 3→1 (`97f34bf8`). A forma da corrente não é conhecida na criação.
+- **Card pré-spawnado esperando o pai**: ocupa slot em `countRunningAgentsOnBoard`
+  (index.ts:1438), cap 10 no board. O custo é slot de concorrência, **não cota** — a
+  evidência de cota (codex 408/410 mortos) mostra cota esgotada ANTES do spawn, não
+  consumida por ociosidade. Argumento de cota retirado por falta de medição.
+- **Review como etapa de 100% das tasks**: ~3 de 89 tasks pediram review, sempre como task
+  separada. Review vira **papel** (segundo card na mesma task, `role=reviewer`), não etapa.
+- **Reescrever o achado do pai no prompt do filho**: medido nas 3 sequências reais, o prompt
+  do filho ⊂ relatório do pai em 3/3 (numa delas quase verbatim), e a reescrita manual
+  PERDEU dado em 1/3. O que a leitura humana acrescenta é poda de escopo e território —
+  cabe num append, não numa reescrita. Vira o ponteiro de `deps` (task `ec01dc40`).
+
+**Decisão sem código (movimento 4)**: `done` continua sendo o julgamento humano/orquestrador
+e segue sendo o gatilho da corrente. Medido: o MASTER lê o relatório, cria e spawna o filho,
+e SÓ DEPOIS marca `done` — o `done` é o recibo da leitura. Andar em `report` ou em `verdict`
+seria andar sobre relatório não julgado; andar em `done` não é. Nada a implementar aqui.
+
+**Caminho de volta nunca exercitado**: 0 `reprovado` no banco até `seq 213`. `verdict:
+'reprovado'` é gravado e nada age; não existe status `cancelled`; nos três casos de quebra
+de corrente (investigação sem o que implementar, implementação que derruba o diagnóstico,
+review que reprova) a resposta hoje é "o humano desfaz na mão". Fica registrado como aberto.
