@@ -7,6 +7,9 @@ import {
   groupTasksByColumn,
   originBadge,
   deriveStage,
+  shouldShowStageTrail,
+  derivePurposeChip,
+  describePurposeChip,
   shouldProposeCompletion,
   shortTaskId,
   formatTaskAge,
@@ -159,6 +162,58 @@ describe("deriveStage", () => {
   it("running sem relatório ainda é 'implementar'; com relatório (aprovado OU reprovado) é 'review'", () => {
     expect(deriveStage("running", false)).toBe("implementar");
     expect(deriveStage("running", true)).toBe("review");
+  });
+});
+
+describe("shouldShowStageTrail", () => {
+  it("some sem purpose e sem reviewer — não mente implementar→review", () => {
+    expect(shouldShowStageTrail(null, ["implementer"])).toBe(false);
+    expect(shouldShowStageTrail(null, [])).toBe(false);
+    expect(shouldShowStageTrail("investigate", ["implementer"])).toBe(false);
+    expect(shouldShowStageTrail("measure", [])).toBe(false);
+  });
+
+  it("aparece pra implement/fix, ou quando um card é reviewer de verdade", () => {
+    expect(shouldShowStageTrail("implement", ["implementer"])).toBe(true);
+    expect(shouldShowStageTrail("fix", [])).toBe(true);
+    expect(shouldShowStageTrail("investigate", ["implementer", "reviewer"])).toBe(true);
+    expect(shouldShowStageTrail(null, ["reviewer"])).toBe(true);
+  });
+});
+
+describe("derivePurposeChip / describePurposeChip", () => {
+  beforeEach(() => setLocale("pt-BR"));
+
+  it("sem purpose (NORMAL) devolve null — chip vazio, sem palpite", () => {
+    expect(derivePurposeChip(null, [], {}, ["implementer"])).toBeNull();
+    expect(derivePurposeChip("INVESTIGAÇÃO", ["dep"], { dep: "investigate" }, [])).toBeNull();
+  });
+
+  it("purpose sozinho vira o chip; deps do mesmo propósito não inventam seta", () => {
+    const chip = derivePurposeChip("investigate", ["d1"], { d1: "investigate" }, ["implementer"]);
+    expect(chip).toEqual({ purpose: "investigate", fromPurpose: null, hasReviewer: false });
+    expect(describePurposeChip(chip!)).toBe("investigação");
+  });
+
+  it("deps de propósito diferente derivam A → B", () => {
+    const chip = derivePurposeChip("implement", ["inv"], { inv: "investigate" }, []);
+    expect(chip).toEqual({ purpose: "implement", fromPurpose: "investigate", hasReviewer: false });
+    expect(describePurposeChip(chip!)).toBe("investigação → implementação");
+  });
+
+  it("dep sem purpose (task antiga) não inventa seta", () => {
+    const chip = derivePurposeChip("fix", ["old"], { old: null }, []);
+    expect(chip?.fromPurpose).toBeNull();
+    expect(describePurposeChip(chip!)).toBe("correção");
+  });
+
+  it("↔ review só com role reviewer de verdade — implementer sozinho não conta", () => {
+    const without = derivePurposeChip("implement", [], {}, ["implementer", "implementer"]);
+    expect(without?.hasReviewer).toBe(false);
+    expect(describePurposeChip(without!)).toBe("implementação");
+    const withReview = derivePurposeChip("implement", [], {}, ["implementer", "reviewer"]);
+    expect(withReview?.hasReviewer).toBe(true);
+    expect(describePurposeChip(withReview!)).toBe("implementação ↔ review");
   });
 });
 
@@ -813,5 +868,7 @@ describe("sprint history helpers (fechamento explícito)", () => {
     expect(item.boardId).toBe("b1");
     expect(item.cards).toEqual([]);
     expect(item.cardAlive).toBe(false);
+    expect(item.purpose).toBeNull();
+    expect(item.depPurposes).toEqual({});
   });
 });

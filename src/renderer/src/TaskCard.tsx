@@ -14,6 +14,9 @@ import {
   groupTasksByColumn,
   originBadge,
   deriveStage,
+  shouldShowStageTrail,
+  derivePurposeChip,
+  describePurposeChip,
   shouldProposeCompletion,
   shortTaskId,
   formatTaskAge,
@@ -223,7 +226,10 @@ function TaskItem({
   onDragPointerDown: (e: React.PointerEvent) => void;
 }) {
   const badge = originBadge(task.lastActor);
+  const cardRoles = task.cards.map((c) => c.role);
+  const purposeChip = derivePurposeChip(task.purpose, task.deps, task.depPurposes, cardRoles);
   const stage = deriveStage(task.status, task.report !== null);
+  const showStage = Boolean(stage && shouldShowStageTrail(task.purpose, cardRoles));
   const propose = shouldProposeCompletion(task.status, task.report?.verdict);
   const waitingOn = waitingOnDep(task.deps, task.depStatuses);
   const pills = computeMetaPills(waitingOn, task.order, task.suggestedOrder, task.verdicts);
@@ -285,6 +291,12 @@ function TaskItem({
           {formatTaskAge(task.createdAt, now)}
         </span>
       </div>
+      {/* No purpose → no chip. Absence is NORMAL; do not invent a label. */}
+      {purposeChip && (
+        <div className={styles.purposeChip} data-part="purpose-chip">
+          {describePurposeChip(purposeChip)}
+        </div>
+      )}
       <div className={styles.prompt}>{parsedPrompt.original || t("task.noPrompt")}</div>
       {task.cards.length > 0 && (
         <div className={styles.chips}>
@@ -306,7 +318,7 @@ function TaskItem({
           redundante (propor conclusão já diz "passou pela review") —
           comparação lado a lado com o protótipo confirmou que ele nunca
           mostra as duas juntas. */}
-      {stage && !proposeVisible && (
+      {showStage && !proposeVisible && (
         <div className={styles.stageTrail} data-part="stage-trail">
           <span className={`${styles.stageSeg} ${stage === "implementar" ? styles.stageSegActive : ""}`}>{t("task.stage.implement")}</span>
           <span className={`${styles.stageSeg} ${stage === "review" ? styles.stageSegActive : ""}`}>{t("task.stage.review")}</span>

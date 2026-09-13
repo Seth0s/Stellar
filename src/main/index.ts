@@ -17,6 +17,9 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
+import { identifyCurrentSession } from "./session-identify";
+import { isSessionIdClaimed } from "./session-watch";
+import { decideIdentifyApply, decideIdentifyCardGate } from "./session-identify-apply";
 // Fase B (atalhos), round 2 — `matchesCombo`/`getShortcutCombo` vêm de
 // `renderer/src/shortcut-registry.ts` de propósito: é um módulo puro (zero
 // import de React/DOM/Electron, confirmado — só depende de `keyboard-
@@ -35,6 +38,7 @@ import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow
 import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
 import { describeStatusAskResolved } from "./status-write-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
+import { normalizeTaskPurpose } from "../task-purpose";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { refreshUserEnv, setSystemLanguageHint, userEnvSnapshot } from "./user-env";
@@ -1113,6 +1117,8 @@ function createWindow() {
     // falso positivo.
     deps: string[];
     depStatuses: Record<string, string>;
+    purpose: "investigate" | "implement" | "measure" | "fix" | null;
+    depPurposes: Record<string, "investigate" | "implement" | "measure" | "fix" | null>;
     cardAlive: boolean;
     statusTransitions: { toValue: string; at: number }[];
     /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo de divergência.
@@ -1176,6 +1182,7 @@ function createWindow() {
     const allDepIds = new Set<string>();
     for (const deps of depsByTask.values()) for (const d of deps) allDepIds.add(d);
     const depStatusById = store.getTaskStatusesByIds([...allDepIds]);
+    const depPurposeById = store.getTaskPurposesByIds([...allDepIds]);
     // Fidelidade visual ao protótipo v5, delta 6 (trilha de transição) —
     // mesma consulta (uma por board inteiro, `JOIN`, sem N+1) que o
     // gráfico 3 já usava só quando o painel abria; anexada aqui, em TODA
@@ -1208,9 +1215,13 @@ function createWindow() {
       const report = t.card_id ? reportByCardId.get(t.card_id) : undefined;
       const deps = depsByTask.get(t.id) ?? [];
       const depStatuses: Record<string, string> = {};
+      const depPurposes: Record<string, "investigate" | "implement" | "measure" | "fix" | null> = {};
       for (const depId of deps) {
         const s = depStatusById[depId];
         if (s !== undefined) depStatuses[depId] = s;
+        if (Object.prototype.hasOwnProperty.call(depPurposeById, depId)) {
+          depPurposes[depId] = normalizeTaskPurpose(depPurposeById[depId]);
+        }
       }
       return {
         id: t.id,
@@ -1230,6 +1241,8 @@ function createWindow() {
         report: report ? { verdict: (report.verdict ?? null) as "aprovado" | "reprovado" | null, updatedAt: report.updated_at } : null,
         deps,
         depStatuses,
+        purpose: normalizeTaskPurpose(t.purpose),
+        depPurposes,
         // Fidelidade visual ao protótipo v5, delta 4 — `registry.isAlive`
         // é uma consulta a um Map em memória (pty-registry.ts), O(1),
         // então uma chamada por task aqui não é o N+1 que o comentário
@@ -1705,6 +1718,16 @@ function createWindow() {
   ipcMain.handle("pty:kill", (_e, id: string) => {
     registry.kill(id);
     remoteServer?.broadcastCards();
+  });
+  // Manual identify — one card, one click. Disk/CLI I/O stays in main
+  // (`identifyCurrentSession`). The renderer only receives the result.
+  ipcMain.handle("pty:identify-session", async (_e, id: string) => {
+    if (typeof id !== "string" || id.length === 0) return { status: "unavailable" as const };
+    const card = store.getCard(id);
+    const gate = decideIdentifyCardGate(card);
+    if (gate) return gate;
+    const result = await identifyCurrentSession(card!.provider, card!.cwd);
+    return decideIdentifyApply(result, isSessionIdClaimed);
   });
   // "não consigo mandar foto pelo terminal" (2026-08-27) — ver
   // clipboard-image.ts pro raciocínio completo. Não é `pty:*` de

@@ -1,4 +1,7 @@
 import { t, type MessageKey } from "../../shared/i18n";
+import { cardHasReviewer, normalizeTaskPurpose, type TaskPurpose } from "../../task-purpose";
+
+export type { TaskPurpose };
 
 /**
  * DESIGN-BACKLOG.md §2.1 "Card `task`" — pure, React-free view-model logic
@@ -140,6 +143,56 @@ export type TaskStage = "implementar" | "review";
 export function deriveStage(status: string, hasReport: boolean): TaskStage | null {
   if (status !== "running") return null;
   return hasReport ? "review" : "implementar";
+}
+
+/** Stage trail used to render on EVERY running task, so an investigation
+ * lied "implementar → review". Only show it when the proposal is
+ * implement/fix, or a card actually holds `reviewer`. No purpose and no
+ * reviewer → hide (empty chip already said we don't know). */
+export function shouldShowStageTrail(purpose: TaskPurpose | null, cardRoles: readonly string[]): boolean {
+  if (purpose === "implement" || purpose === "fix") return true;
+  return cardHasReviewer(cardRoles);
+}
+
+/** Derived Fila chip. `null` = empty chip (NORMAL — do not invent).
+ * `fromPurpose` is the first dep whose purpose differs; `hasReviewer`
+ * needs a real `reviewer` row (0 of 91 on 2026-09-13). */
+export type PurposeChip = {
+  purpose: TaskPurpose;
+  fromPurpose: TaskPurpose | null;
+  hasReviewer: boolean;
+};
+
+export function derivePurposeChip(
+  purpose: unknown,
+  deps: readonly string[],
+  depPurposes: Readonly<Record<string, TaskPurpose | null | undefined>>,
+  cardRoles: readonly string[],
+): PurposeChip | null {
+  const self = normalizeTaskPurpose(purpose);
+  if (!self) return null;
+  let fromPurpose: TaskPurpose | null = null;
+  for (const id of deps) {
+    const other = normalizeTaskPurpose(depPurposes[id]);
+    if (other && other !== self) {
+      fromPurpose = other;
+      break;
+    }
+  }
+  return { purpose: self, fromPurpose, hasReviewer: cardHasReviewer(cardRoles) };
+}
+
+const PURPOSE_I18N: Record<TaskPurpose, MessageKey> = {
+  investigate: "task.purpose.investigate",
+  implement: "task.purpose.implement",
+  measure: "task.purpose.measure",
+  fix: "task.purpose.fix",
+};
+
+export function describePurposeChip(chip: PurposeChip): string {
+  const self = t(PURPOSE_I18N[chip.purpose]);
+  const base = chip.fromPurpose ? `${t(PURPOSE_I18N[chip.fromPurpose])} → ${self}` : self;
+  return chip.hasReviewer ? `${base} ↔ ${t("task.stage.review")}` : base;
 }
 
 /** Barra de proposta de conclusão (decisão 9) — só APARECE, nunca decide:
@@ -784,6 +837,8 @@ export function snapshotTaskToBoardItem(
   report: null;
   deps: [];
   depStatuses: Record<string, string>;
+  purpose: null;
+  depPurposes: Record<string, TaskPurpose | null>;
   cardAlive: false;
   statusTransitions: [];
   divergedStatus: null;
@@ -814,6 +869,8 @@ export function snapshotTaskToBoardItem(
     report: null,
     deps: [],
     depStatuses: {},
+    purpose: null,
+    depPurposes: {},
     cardAlive: false,
     statusTransitions: [],
     divergedStatus: null,

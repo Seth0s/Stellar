@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { decideStatusWrite, retainStatusAsk, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
+import { normalizeTaskPurpose } from "../task-purpose";
 
 export type CardRow = {
   id: string;
@@ -180,6 +181,19 @@ export type TaskRow = {
   cwd: string | null;
   result_json: string | null;
   deps_json: string | null;
+  /**
+   * Proposal of the task — what it IS (`investigate`/`implement`/`measure`/`fix`).
+   * Written ONCE at create (`upsertTask` INSERT); the ON CONFLICT path
+   * never lists this column, so a later `update_task` cannot relabel it.
+   *
+   * `null` is NORMAL, not a hole to fill: 2026-09-13 measured 91/91
+   * `task_cards.role = implementer` (silent default) and 140/148
+   * `task_verdicts.verdict` null. A silent purpose default would make
+   * the Fila lie with more confidence. UI degrades to an empty chip.
+   * Optional on the type so existing TaskRow constructors stay valid;
+   * SQL persists explicit nulls. Never inferred from `prompt` text.
+   */
+  purpose?: string | null;
   /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 —
    * `retry_count` is incremented by the app on each in-line `report`
    * refusal (same agent, same session) and by `update_task.incrementRetry`
@@ -334,7 +348,14 @@ export type TaskTransitionRow = {
  * "atual"/principal); esta tabela é o recorte pra "306 implementa, 304
  * revisa" ao mesmo tempo, sem forçar quem já lê `card_id` a mudar nada.
  * PK composta (task_id, card_id): um card só tem UM papel por task —
- * trocar de papel é um upsert, não uma segunda linha. */
+ * trocar de papel é um upsert, não uma segunda linha.
+ *
+ * `role: "reviewer"` is what the Fila ` ↔ review` arrow derives from.
+ * Measured 2026-09-13: 0 of 91 rows were reviewer — `upsertTask` always
+ * writes `implementer` (`upsertTaskCardIfAbsent`) and no MCP tool calls
+ * `linkTaskCard`. The arrow is born without appearing until someone
+ * actually records a reviewer (cheap path: `spawn_agent`/`create_task`
+ * accept `role`, call `linkTaskCard` — mcp-server/message-bus, not here). */
 export type TaskCardRow = { task_id: string; card_id: string; role: string };
 
 /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
@@ -616,6 +637,14 @@ function migrate(db: Database.Database) {
   }
   try {
     db.exec(`ALTER TABLE reports ADD COLUMN verdict TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  // Task proposal (`investigate|implement|measure|fix`). Nullable on
+  // purpose: absence is NORMAL (empty chip), never a silent default.
+  // Additive only — existing rows stay NULL. See TaskRow.purpose.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN purpose TEXT`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -1103,7 +1132,7 @@ export function openStore(userDataDir: string) {
     )
   `);
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
   // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
   // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` e
   // `prompt` de propósito: uma declaração estacionada ou um acréscimo de
@@ -1145,9 +1174,13 @@ export function openStore(userDataDir: string) {
   // chama sem board continua vendo exatamente o que via antes.
   const listTasksByBoardStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE board_id = ? ORDER BY created_at ASC`);
   const getTaskStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`);
+  // `purpose` is on INSERT only. Omitting it from ON CONFLICT is the
+  // immutability: a later upsert (update_task, drag, retry) cannot
+  // relabel the proposal. Typo at create is a new task, not an edit —
+  // see TaskRow.purpose.
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, board_id = excluded.board_id, cwd = excluded.cwd, result_json = excluded.result_json, deps_json = excluded.deps_json,
@@ -1464,6 +1497,11 @@ export function openStore(userDataDir: string) {
     const ask = retained.ask;
     const persistable = {
       ...rest,
+      // Create: accept a valid enum or persist NULL (NORMAL). Update:
+      // keep whatever the row already has — ON CONFLICT also omits
+      // `purpose`, so this is belt-and-suspenders against a caller
+      // stuffing a new label into the object.
+      purpose: existing ? (existing.purpose ?? null) : normalizeTaskPurpose(rest.purpose),
       status: decision.status,
       diverged_status: decision.divergedStatus,
       diverged_actor: decision.divergedActor,
@@ -1868,6 +1906,18 @@ export function openStore(userDataDir: string) {
       const placeholders = ids.map(() => "?").join(",");
       const rows = db.prepare(`SELECT id, status FROM tasks WHERE id IN (${placeholders})`).all(...ids) as { id: string; status: string }[];
       return Object.fromEntries(rows.map((r) => [r.id, r.status]));
+    },
+    /** Same one-shot `IN` as `getTaskStatusesByIds` — `buildTaskBoard`
+     * needs dep purposes to derive `investigação → implementação` without
+     * an N+1. Values are normalized; unknown/absent purpose stays `null`. */
+    getTaskPurposesByIds: (ids: string[]): Record<string, string | null> => {
+      if (ids.length === 0) return {};
+      const placeholders = ids.map(() => "?").join(",");
+      const rows = db.prepare(`SELECT id, purpose FROM tasks WHERE id IN (${placeholders})`).all(...ids) as {
+        id: string;
+        purpose: string | null;
+      }[];
+      return Object.fromEntries(rows.map((r) => [r.id, normalizeTaskPurpose(r.purpose)]));
     },
     /** DESIGN-BACKLOG.md §2.1 "QUEM ESCREVE — o ponto mais importante
      * desta fase". A transição é gravada AQUI, comparando com a linha que

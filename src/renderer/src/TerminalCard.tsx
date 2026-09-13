@@ -8,6 +8,7 @@ import type { Rect } from "./board-model";
 import { PROVIDER_GLYPH } from "./provider-glyph";
 import styles from "./TerminalCard.module.css";
 import type { ShortcutOverrides } from "./shortcut-registry";
+import type { IdentifySessionResult } from "../../preload/index";
 
 export type { Rect };
 
@@ -15,6 +16,10 @@ export type { Rect };
  * enquanto desativa as notificações". `bash` deliberadamente NÃO está
  * aqui — não é um agente com "turnos", nunca fez parte deste problema. */
 const NOTIFICATION_DISABLED_PROVIDERS = new Set(["codex", "cursor", "antigravity", "opencode"]);
+
+/** Same set `session-identify.ts` actually inspects. Bash has no session
+ * id, so an empty-resume button there would always fail. */
+const SESSION_PROVIDERS = new Set(["claude", "codex", "cursor", "antigravity", "opencode"]);
 
 const PROVIDER_ACCENT: Record<string, string> = {
   bash: "var(--accent-bash)",
@@ -147,7 +152,13 @@ function TerminalCardInner({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const urlBadgeRef = useRef<HTMLButtonElement>(null);
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+  const identifyBtnRef = useRef<HTMLButtonElement>(null);
   const [urlPopoverOpen, setUrlPopoverOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const identifyInFlightRef = useRef(false);
+  const [identifyBusy, setIdentifyBusy] = useState(false);
+  const [identifyFeedback, setIdentifyFeedback] = useState<IdentifySessionResult | null>(null);
   // Clicking a URL's own text copies it (the primary action pedida ao
   // vivo) — só reporta "copiado" se `writeText` de fato resolveu, nunca
   // um feedback otimista. `{url, ok}` em vez de um Set de urls copiadas:
@@ -166,6 +177,56 @@ function TerminalCardInner({
     setCopyFeedback({ url, ok });
     if (copyFeedbackTimer.current) clearTimeout(copyFeedbackTimer.current);
     copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
+  }
+
+  async function identifyThisSession() {
+    if (identifyInFlightRef.current) return;
+    identifyInFlightRef.current = true;
+    // Disarm in the same tick as the click — React state alone would
+    // leave a second click able to start another IPC before the re-render.
+    if (identifyBtnRef.current) {
+      identifyBtnRef.current.disabled = true;
+      identifyBtnRef.current.setAttribute("data-busy", "true");
+    }
+    setIdentifyBusy(true);
+    setIdentifyFeedback(null);
+    setMenuOpen(false);
+    try {
+      const result = await window.pty.identifySession(id);
+      if (result.status === "found") {
+        onResumeIdDiscovered(result.id);
+        setIdentifyFeedback(null);
+      } else {
+        setIdentifyFeedback(result);
+      }
+    } catch (error) {
+      setIdentifyFeedback({
+        status: "error",
+        source: providerId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      identifyInFlightRef.current = false;
+      setIdentifyBusy(false);
+    }
+  }
+
+  function identifyFeedbackText(result: IdentifySessionResult): string {
+    switch (result.status) {
+      case "none":
+        return t("terminal.identifyNone");
+      case "ambiguous":
+        return t("terminal.identifyAmbiguous", { ids: result.ids.join(", ") });
+      case "claimed":
+        return t("terminal.identifyClaimed", { id: result.id });
+      case "error":
+        return t("terminal.identifyError", { message: result.message });
+      case "already-set":
+      case "unavailable":
+        return t("terminal.identifyUnavailable");
+      case "found":
+        return "";
+    }
   }
   const { exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
     containerRef,
@@ -342,9 +403,11 @@ function TerminalCardInner({
     onStatusChange?.(spawnError !== null ? "error" : exitCode !== null ? "exited" : "ok");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spawnError, exitCode]);
+  const effectiveResumeId = resumeId || discoveredResumeId;
+  const canIdentify = !effectiveResumeId && SESSION_PROVIDERS.has(providerId);
   const footerParts = [
     cwd,
-    resumeId || discoveredResumeId ? `resume:${resumeId ?? discoveredResumeId}` : null,
+    effectiveResumeId ? `resume:${effectiveResumeId}` : null,
     !resumeId && continueLast ? "--continue" : null,
     model ? `model:${model}` : null,
   ].filter(Boolean);
@@ -432,6 +495,19 @@ function TerminalCardInner({
             >
               <Icon name="bell" size={12} />
             </button>
+            {canIdentify && (
+              <button
+                ref={menuBtnRef}
+                data-no-drag
+                data-role="terminal-card-menu"
+                title={t("terminal.cardMenu")}
+                disabled={identifyBusy}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setMenuOpen((v) => !v)}
+              >
+                <Icon name="moreVertical" size={12} />
+              </button>
+            )}
             <button
               title={t("terminal.sigint")}
               onPointerDown={(e) => e.stopPropagation()}
@@ -465,6 +541,34 @@ function TerminalCardInner({
             </span>
           )}
           <span className={styles.terminalCardFootText}>{footerParts.join(" · ")}</span>
+          {canIdentify && (
+            <span className={styles.terminalCardIdentifySlot}>
+              <span className={styles.terminalCardResumeEmpty} data-role="terminal-resume-empty">
+                resume:
+              </span>
+              <button
+                ref={identifyBtnRef}
+                className={styles.terminalCardIdentify}
+                data-role="terminal-identify-session"
+                data-busy={identifyBusy ? "true" : undefined}
+                title={t("terminal.identifySessionTitle")}
+                disabled={identifyBusy}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => void identifyThisSession()}
+              >
+                {identifyBusy ? t("terminal.identifyingSession") : t("terminal.identifySession")}
+              </button>
+            </span>
+          )}
+          {identifyFeedback && (
+            <span
+              className={styles.terminalCardIdentifyFeedback}
+              data-role="terminal-identify-feedback"
+              title={identifyFeedbackText(identifyFeedback)}
+            >
+              {identifyFeedbackText(identifyFeedback)}
+            </span>
+          )}
           {seenUrls.length > 0 && (
             <button
               ref={urlBadgeRef}
@@ -519,6 +623,23 @@ function TerminalCardInner({
           {t("terminal.processExitedShort", { code: exitCode })}
         </div>
       )}
+      <Popover
+        anchorRef={menuBtnRef}
+        open={menuOpen && canIdentify}
+        onClose={() => setMenuOpen(false)}
+        className={styles.terminalCardMenu}
+        dataRole="terminal-card-menu-popover"
+      >
+        <button
+          data-role="terminal-identify-menu-item"
+          disabled={identifyBusy}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => void identifyThisSession()}
+        >
+          <Icon name="findCard" size={14} />
+          {identifyBusy ? t("terminal.identifyingSession") : t("terminal.identifyMenu")}
+        </button>
+      </Popover>
       <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className={styles.terminalCardUrlPopover}>
         {[...seenUrls].reverse().map((url) => {
           const feedback = copyFeedback?.url === url ? copyFeedback : null;
