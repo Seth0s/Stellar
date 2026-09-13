@@ -24,6 +24,57 @@ Este documento consolida o estado atual de design, produto e arquitetura do proj
 ---
 
 ## 🐛 0. Bugs Urgentes (Recém-Reportados)
+
+### Sprint 3 — aberta 2026-09-13 (relatos do dono + usuários de Mac)
+
+* **Spawn de card cursor abre um binário alheio — relato de usuários de Mac.** "Continua abrindo Claude ou
+  agentes alheios na função de spawn."
+  * **Causa candidata, localizada no código, ainda NÃO medida:** `providers.ts:312` declara
+    `binaryNames: ["agent", "cursor-agent"]`. `agent` é um nome genérico demais para ser o primeiro candidato
+    — qualquer executável com esse nome no PATH do usuário casa. E `which()` (`providers.ts:506-529`) varre
+    **diretório no laço externo, nome no interno**: o primeiro diretório do PATH que tenha *qualquer* coisa
+    chamada `agent` ganha, mesmo que `cursor-agent` (o nome inequívoco) exista logo adiante.
+  * Por que isso morde mais no macOS: PATH de app aberto pelo Finder é montado por outro caminho que o do
+    Terminal (mesma família do achado de `user-env.ts`), então a ordem dos diretórios não é a que o usuário vê
+    quando roda `which agent` no terminal dele.
+  * **O que medir antes de corrigir:** o que de fato resolve na máquina do relator, e se o binário aberto é um
+    `agent` de terceiro ou o próprio `claude`. A correção provável é preferir o nome inequívoco e validar a
+    identidade do binário, não só a existência — mas isso é hipótese, não conclusão.
+
+* **Entrega de task duplicada/triplicada em cards cursor — relato do dono.** "Enviou duplo ou trio, e o cursor
+  aceita follow-up, que dá esse problema."
+  * **Causa candidata, localizada no código, ainda NÃO medida:** em `decideSubmitCheck`
+    (`type-and-submit-decision.ts:320-341`) a linha 330 — `if (/pasted text/i.test(after)) return "unsent"` —
+    é o **único teste da função que não é relativo ao baseline**. Todos os outros comparam *antes × depois*
+    justamente para não confundir sobra da rodada anterior com sinal novo. Esse não: ele olha a tela atual e
+    pronto.
+  * O chip `[Pasted text #N +M lines]` **continua visível depois de enviado** (vai para o histórico / caixa de
+    follow-ups do cursor). Então: entrega 1 cria a caixa, `followUpsAppearedSince` pega e devolve `"sent"`.
+    Entrega 2 já encontra a caixa no baseline → `appearedSinceBaseline` dá falso → cai na linha 330 → `"unsent"`
+    → `shouldPressEnterOnAttempt` aperta Enter de novo → cursor enfileira follow-up. `SEND_ENTER_MAX_ATTEMPTS`
+    é 4, o que explica "duplo ou trio".
+  * Isso também explica por que o sintoma é do cursor e não do claude: os sinais de "enviou" em
+    `SUBMIT_STARTED_PATTERN` são vocabulário de Claude Code (`Working`, `Thinking`, `Esc to interrupt`).
+  * **O que medir antes de corrigir:** capturar a tela real de um card cursor antes e depois de uma entrega, e
+    confirmar a sequência acima. A correção provável é tornar a linha 330 relativa ao baseline como as outras —
+    mas escrever isso sem medir é trocar um palpite por outro.
+
+* **Distribuir task sem digitar na TUI — ideia do dono, ainda em investigação.** "Estou pensando em criar uma
+  ferramenta MCP só para distribuir task, mais eficiente, em vez de usar `send_to_card`."
+  * **Minha leitura, para ser confirmada ou derrubada:** o problema não é `send_to_card` ser a abstração
+    errada. É que **qualquer** entrega hoje termina em simulação de teclado numa TUI viva, confirmada por
+    leitura de tela (`deliverCard`, `message-bus.ts:1142`). Uma ferramenta MCP nova que ainda digitasse na TUI
+    herdaria o mesmo laço e a mesma duplicação com outro nome.
+  * **O que muda o jogo:** entregar o brief **no spawn, por argv**, em vez de digitar depois. O próprio
+    comentário em `providers.ts:330` registra que no cursor "`prompt` é a entrada do usuário" — ou seja, a CLI
+    aceita o prompt posicional. Para o *primeiro* envio — que é exatamente o que "distribuir task" significa —
+    isso elimina o laço de confirmação inteiro, não o conserta.
+  * Continua fazendo falta um canal para o que vem **depois** do primeiro envio (correção a meio caminho,
+    follow-up do orquestrador). Esse caso permanece com digitação, e é por isso que consertar a linha 330 vale
+    por si só, independente desta decisão.
+  * **Medir antes de desenhar:** quais dos cinco providers aceitam prompt inicial por argv (`claude`, `codex`,
+    `agent`, `agy`, `opencode`), e se aceitam em modo interativo — não só em modo headless/`-p`, que fecha
+    depois de responder e não serve para um card.
 * **Acentuacao sai corrompida no macOS — relato de usuario de Mac (2026-09-12).** O texto vem com mojibake:
   "nao consegui" aparece como `n√£o consegui`, "permissao" como `permiss√£o`. O padrao identifica a causa: os
   bytes UTF-8 de `ã` (C3 A3) estao sendo interpretados como **MacRoman** (`√` = C3, `£` = A3). Ou seja, em algum
