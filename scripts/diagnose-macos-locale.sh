@@ -68,10 +68,24 @@ OUT="${STELLAR_LOCALE_OUT:-/tmp/stellar-locale-diag.txt}"
   if [ -n "$found" ]; then
     echo "app_pid=$found"
     # ps eww is one long line; split on spaces so LANG= is grep-able.
-    if ps eww -p "$found" 2>/dev/null | tr ' ' '\n' | grep -E '^(LANG|LC_|LANGUAGE)='; then
-      :
+    #
+    # CUIDADO MEDIDO (2026-09-13): em Linux este probe devolveu SÓ a linha
+    # de comando, sem env nenhum, e a versão anterior imprimia
+    # "APP_ENV_LOCALE=ABSENT" — indistinguível de uma ausência real, e
+    # ausência real é justamente o que confirmaria a hipótese. Em macOS a
+    # restrição é mais forte ainda (env de outro processo normalmente não
+    # é legível). Então: PATH existe em QUALQUER env real. Sem PATH na
+    # saída, o probe não leu nada e isso é UNREADABLE, não ABSENT.
+    app_env=$(ps eww -p "$found" 2>/dev/null | tr ' ' '\n')
+    if printf '%s' "$app_env" | grep -q '^PATH='; then
+      if printf '%s' "$app_env" | grep -E '^(LANG|LC_|LANGUAGE)='; then
+        :
+      else
+        echo "APP_ENV_LOCALE=ABSENT   # env lido de verdade (PATH presente) e sem locale"
+      fi
     else
-      echo "APP_ENV_LOCALE=ABSENT"
+      echo "APP_ENV_LOCALE=UNREADABLE   # ps nao devolveu env; NAO conta como ausencia"
+      echo "APP_ENV_NOTE=use a secao B: o card e filho do app, o env dele JA e o env herdado"
     fi
   else
     echo "app_pid=NOT_FOUND"
@@ -80,7 +94,12 @@ OUT="${STELLAR_LOCALE_OUT:-/tmp/stellar-locale-diag.txt}"
 
   echo "----- D. UTF-8 locales installed (locale -a) -----"
   if command -v locale >/dev/null 2>&1; then
-    locale -a 2>/dev/null | grep -i -E 'utf-8|utf8' || echo "NO_UTF8_LOCALE"
+    # Só a contagem e uma amostra: a listagem inteira passa de 300 linhas e
+    # afoga o resto do arquivo. Quem responde a pergunta são os has_* abaixo.
+    utf8_count=$(locale -a 2>/dev/null | grep -i -c -E 'utf-8|utf8' || true)
+    echo "utf8_locale_count=${utf8_count:-0}"
+    [ "${utf8_count:-0}" = "0" ] && echo "NO_UTF8_LOCALE"
+    locale -a 2>/dev/null | grep -i -E 'utf-8|utf8' | head -8
     echo "has_en_US_UTF8=$(locale -a 2>/dev/null | grep -ci -E '^en_US\.(UTF-8|utf8)$' || true)"
     echo "has_pt_BR_UTF8=$(locale -a 2>/dev/null | grep -ci -E '^pt_BR\.(UTF-8|utf8)$' || true)"
     echo "has_C_UTF8=$(locale -a 2>/dev/null | grep -ci -E '^C\.(UTF-8|utf8)$' || true)"
