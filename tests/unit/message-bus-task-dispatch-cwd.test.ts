@@ -104,6 +104,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
     expect(spawnParams[0].cwd).toBe("/home/lucas/Workplace/Projects/Stellar");
     expect(spawnParams[0].label).toBe("i18n fase 2");
     expect(spawnParams[0].provider).toBe("claude");
+    expect(spawnParams[0].brief).toBe("i18n fase 2");
   });
 
   it("onTaskDone com task sem cwd passa undefined (fallback do board no renderer)", async () => {
@@ -139,6 +140,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
     expect(spawnParams).toHaveLength(1);
     expect(spawnParams[0].cwd).toBeUndefined();
     expect(spawnParams[0].label).toBe("task no-cwd-t");
+    expect(spawnParams[0].brief).toBeUndefined();
   });
 
   it("create_task grava cwd explícito; omitido vira null", async () => {
