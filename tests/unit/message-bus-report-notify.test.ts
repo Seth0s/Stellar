@@ -107,6 +107,36 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
     expect(written).toHaveLength(0);
   });
 
+  it("card amarrado a uma task: report sem taskId ganha o id completo", async () => {
+    const taskId = "d5453f98-31d8-407a-bbde-634812137732";
+    const { bus: b } = makeBus({
+      listTasks: () => [{ id: taskId, card_id: "child-linked", status: "pending" }],
+      listTaskCardsForCard: () => [{ task_id: taskId, card_id: "child-linked", role: "implementer" }],
+    });
+    await b.handleRequest({ cmd: "report", requesterId: "child-linked", report: { ok: true, verdict: "ship" } } as BusRequest);
+    const stored = (await b.handleRequest({ cmd: "get_report", target: "child-linked" } as BusRequest)) as { report: unknown };
+    expect(stored.report).toEqual({ ok: true, verdict: "ship", taskId });
+  });
+
+  it("card sem task: report não ganha taskId inventado", async () => {
+    const { bus: b } = makeBus({
+      listTasks: () => [],
+      listTaskCardsForCard: () => [],
+    });
+    await b.handleRequest({ cmd: "report", requesterId: "free-card", report: { ok: true } } as BusRequest);
+    const stored = (await b.handleRequest({ cmd: "get_report", target: "free-card" } as BusRequest)) as { report: unknown };
+    expect(stored.report).toEqual({ ok: true });
+  });
+
+  it("taskId já no corpo: o do chamador fica", async () => {
+    const { bus: b } = makeBus({
+      listTasks: () => [{ id: "linked-id", card_id: "child-own", status: "pending" }],
+    });
+    await b.handleRequest({ cmd: "report", requesterId: "child-own", report: { ok: true, taskId: "already" } } as BusRequest);
+    const stored = (await b.handleRequest({ cmd: "get_report", target: "child-own" } as BusRequest)) as { report: unknown };
+    expect(stored.report).toEqual({ ok: true, taskId: "already" });
+  });
+
   it("o corpo do relatório NÃO é digitado — só vive na tabela / get_report", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-1", to_card_id: "child-3", updated_at: Date.now() }];
     const bigReport = { ok: true, result: "x".repeat(5000), secret: "não pode vazar pro PTY do spawner" };

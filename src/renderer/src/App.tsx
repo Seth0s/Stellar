@@ -171,6 +171,7 @@ type PendingAsk =
       effort?: string;
       label?: string;
       brief?: string;
+      taskId?: string;
     }
   | {
       kind: "spawn-card";
@@ -908,7 +909,7 @@ export function App() {
       // a human-approved spawn, just triggered immediately instead of by
       // a button click.
       if (params.autoApprove) {
-        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model, params.label, params.effort, params.brief);
+        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model, params.label, params.effort, params.brief, params.taskId);
         // DESIGN-BACKLOG.md item 62 — records real spawn lineage
         // automatically; `requesterId` is "" for the task engine's own
         // dispatches (item 60 peça 3), which have no real requester
@@ -936,6 +937,7 @@ export function App() {
         effort: params.effort,
         label: params.label,
         brief: params.brief,
+        taskId: params.taskId,
       });
     });
     const offAskSpawnCard = window.spawn.onAskCard((requestId, requesterId, params) => {
@@ -2072,7 +2074,7 @@ export function App() {
   // rather than a human. Always through `addCard` (unlike openBrowserFor
   // above) — this IS the "something appeared on the board that a human
   // didn't click" moment the toast exists for.
-  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string, effort?: string, brief?: string): string {
+  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string, effort?: string, brief?: string, taskId?: string): string {
     const id = String(nextId.current++);
     addCard({
       id,
@@ -2086,6 +2088,7 @@ export function App() {
       systemPrompt: null,
       initialInput: null,
       brief: brief || null,
+      taskId: taskId || null,
       rect: centeredSlot(visibleRect, cardsRef.current.length, existingRectsFor(cardsRef.current)),
       groupId: null,
       // DESIGN-BACKLOG.md item 62 — an MCP-driven spawn can name its own
@@ -2196,7 +2199,7 @@ export function App() {
       if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
       void window.browser.resolveAsk(ask.requestId, true, cardId);
     } else if (ask.kind === "spawn-agent") {
-      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort, ask.brief);
+      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort, ask.brief, ask.taskId);
       // DESIGN-BACKLOG.md item 62 — same lineage record as the
       // autonomous auto-approve path above, for a human-approved spawn.
       // 2026-09-09 — same `reason`-as-label reasoning as the auto-approve path above.
@@ -2990,6 +2993,7 @@ export function App() {
                 systemPrompt={c.systemPrompt}
                 initialInput={c.initialInput}
                 brief={c.brief}
+                taskId={c.taskId ?? null}
                 visible={isInView(c.rect, visibleRect)}
                 seenUrls={seenUrls[c.id] ?? EMPTY_URLS}
                 interactionMode={interactionMode}

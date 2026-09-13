@@ -58,6 +58,11 @@ delete process.env.AGENT_CANVAS_SHIM_REEXEC;
 
 const sockPath = process.env.AGENT_CANVAS_SOCK;
 const ownCardId = process.env.AGENT_CANVAS_CARD_ID || "";
+// Same auto-fill class as ownCardId: when this card was spawned for a
+// task, the PTY env already has the full id (pty-registry.ts). `report`
+// stamps it onto the JSON so the agent does not copy a truncated id
+// from a briefing. Absent when the spawn had no task — first-class.
+const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -214,6 +219,15 @@ if (cmd === "list") {
     report = JSON.parse(json);
   } catch {
     fail("report: argument must be valid JSON");
+  }
+  if (
+    ownTaskId &&
+    report &&
+    typeof report === "object" &&
+    !Array.isArray(report) &&
+    !Object.prototype.hasOwnProperty.call(report, "taskId")
+  ) {
+    report = { ...report, taskId: ownTaskId };
   }
   request = { cmd: "report", requesterId: ownCardId, report };
 } else if (cmd === "read-report") {

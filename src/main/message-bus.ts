@@ -25,6 +25,7 @@ import {
 } from "./report-retry-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
 import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
+import { fillReportTaskId, resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
@@ -805,6 +806,8 @@ export function createMessageBus(
          * `AgentAskModal` shown at all. */
         autoApprove?: boolean;
         brief?: string;
+        /** Optional. Present when this spawn is tied to a task — renderer threads it into SpawnOpts / AGENT_CANVAS_TASK_ID. Omitted for a first-class task-less spawn. */
+        taskId?: string;
       },
     ) => void;
     onSpawnCardRequest: (
@@ -926,6 +929,7 @@ export function createMessageBus(
       effort?: string;
       label?: string;
       brief?: string;
+      taskId?: string;
     };
   };
   const spawnQueue = new Map<string, SpawnQueueEntry[]>();
@@ -1893,7 +1897,19 @@ export function createMessageBus(
         };
       }
       if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
-      const stored: StoredReport = { report: req.report, seq: ++reportSeqCounter, verdict: req.verdict ?? null };
+      // Stamp the linked task onto the report body when the caller omitted
+      // it — same auto-fill class as acbridge's AGENT_CANVAS_TASK_ID, from
+      // the store fact (tasks.card_id / task_cards) so MCP callers that
+      // never read env still don't copy a truncated id from a briefing.
+      // Acceptance already ran on the original payload; this does not
+      // invent a task when the card is not linked.
+      const linkTaskIds = (callbacks.listTaskCardsForCard(req.requesterId) ?? []).map((l) => l.task_id);
+      const reportTaskId = resolveDeclaredTaskId({
+        primaryTaskIds: linkedTask ? [linkedTask.id] : [],
+        linkTaskIds,
+      });
+      const report = fillReportTaskId(req.report, reportTaskId);
+      const stored: StoredReport = { report, seq: ++reportSeqCounter, verdict: req.verdict ?? null };
       // DESIGN-BACKLOG.md §2.1 — persiste ANTES de resolver waiters/avisar
       // o spawner: se o processo morrer bem aqui no meio (mesma classe de
       // evento que motivou esta tarefa), o pior caso agora é um waiter que
@@ -2423,6 +2439,7 @@ export function createMessageBus(
         effort: req.effort,
         label: req.label,
         brief: briefDecision.brief,
+        taskId: briefDecision.taskId,
       };
       const spawnResult: SpawnAgentResult =
         autonomous && requesterBoardId
@@ -2787,6 +2804,7 @@ export function createMessageBus(
       model: undefined,
       label: resolveTaskDispatchLabel(task),
       brief: briefFromTaskPrompt(task.prompt),
+      taskId: task.id,
     };
   }
 

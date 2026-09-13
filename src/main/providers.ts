@@ -44,6 +44,14 @@ export type SpawnOpts = {
    * every call site needing to know the port. */
   mcpUrl?: string;
   brief?: string;
+  /**
+   * Task this card was spawned to serve (`spawn_agent({ taskId })` or
+   * auto-dispatch). Optional in earnest: spawn without a task stays
+   * first-class and this stays unset. Threaded into
+   * `AGENT_CANVAS_TASK_ID` (pty-registry.ts) only when present — never a
+   * placeholder. Not read by `buildArgs`.
+   */
+  taskId?: string;
 };
 
 // ---------------------------------------------------------------------------

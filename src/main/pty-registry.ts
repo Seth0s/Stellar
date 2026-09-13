@@ -6,6 +6,7 @@ import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMA
 import { decideRearmOnLine, CLAIMED_SESSION_STALE_MS } from "./session-rearm-decision";
 import { decideResumeValidity } from "./session-resume-validation";
 import { decideBashCardDiscovery } from "./bash-discovery-decision";
+import { decideCardIdentityEnv } from "./card-spawn-env-decision";
 import {
   renewsHumanInputGateClock,
   initialBracketedPasteModeState,
@@ -513,6 +514,15 @@ export function createPtyRegistry(registryOpts: {
       // funciona. Chega aos shims por herança: PTY → CLI do provider →
       // shim.
       AGENT_CANVAS_NODE: realNodePath() ?? process.execPath,
+      // Stable facts the app already knows at spawn (card-spawn-env-
+      // decision.ts). `AGENT_CANVAS_CWD` is the card's official workspace
+      // (list_cards compares against this, not a later `cd`).
+      // `AGENT_CANVAS_TASK_ID` only when this spawn was tied to a task —
+      // omitted entirely otherwise, so a task-less card is not a second-
+      // class path. Who else is alive in this cwd, and whether the board
+      // is autonomous, change during the session: those stay on
+      // `list_cards` / `board_mode`, not a birth snapshot in env.
+      ...decideCardIdentityEnv({ taskId: spawnOpts.taskId, cwd }),
       // `effectivePath()` e não `process.env.PATH` (2026-09-08): num
       // `.app` aberto pelo Finder no macOS, o PATH herdado é o mínimo do
       // launchd, e era ELE que todo PTY do board recebia — nenhum agente

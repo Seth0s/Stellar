@@ -258,6 +258,8 @@ export function useTerminal(
    * store. */
   initialInput: string | null,
   brief: string | null,
+  /** Spawn-time task this card serves — becomes AGENT_CANVAS_TASK_ID only when set. */
+  taskId: string | null,
   visible: boolean,
   zoom: number,
   /** Follow-up fase C — ref estável (App → TerminalCard → aqui). O
@@ -368,14 +370,14 @@ export function useTerminal(
   zoomRef.current = zoom;
   // Spawn-time-only options, read via ref instead of effect deps below — see
   // the comment on Effect 1's dependency array for why.
-  const spawnOptsRef = useRef({ resumeId, continueLast, model, effort, systemPrompt, initialInput, brief });
-  spawnOptsRef.current = { resumeId, continueLast, model, effort, systemPrompt, initialInput, brief };
+  const spawnOptsRef = useRef({ resumeId, continueLast, model, effort, systemPrompt, initialInput, brief, taskId });
+  spawnOptsRef.current = { resumeId, continueLast, model, effort, systemPrompt, initialInput, brief, taskId };
 
   // Effect 1: PTY lifecycle. Independent of the container/visible — spawns
   // once per identity and keeps running regardless of on-screen visibility.
   useEffect(() => {
     let disposed = false;
-    const { resumeId, continueLast, model, effort, systemPrompt, initialInput, brief } = spawnOptsRef.current;
+    const { resumeId, continueLast, model, effort, systemPrompt, initialInput, brief, taskId } = spawnOptsRef.current;
     const spawnOpts = {
       resumeId: resumeId ?? undefined,
       continueLast,
@@ -383,6 +385,7 @@ export function useTerminal(
       effort: effort ?? undefined,
       systemPrompt: systemPrompt ?? undefined,
       brief: brief ?? undefined,
+      taskId: taskId ?? undefined,
     };
     // Achado ao vivo escrevendo isto: o eco de um path colado pode chegar
     // partido em mais de um chunk de `pty:data` (o TTY não garante um

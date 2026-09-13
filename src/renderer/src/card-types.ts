@@ -67,6 +67,12 @@ export type TerminalCardData = BaseCard & {
   initialInput: string | null;
   /** One-shot brief for a task dispatch, passed via argv or typed (bifurcated centrally) */
   brief: string | null;
+  /**
+   * Task this card was spawned to serve. Spawn-time only, not persisted
+   * (`fromRow` leaves it unset). Restore re-derives from the store link
+   * in `pty:spawn` — we do not invent one for a task-less card.
+   */
+  taskId?: string | null;
 };
 
 /** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido", 2026-09-10 —
