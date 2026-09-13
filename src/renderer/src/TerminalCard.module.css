@@ -354,3 +354,78 @@
   color: var(--foam);
   border-color: var(--foam);
 }
+
+/* Empty resume: stays visible next to the identify button so the eye
+   already looking at the missing id finds the action. flex-shrink: 0
+   so a long cwd ellipsizes first, not this slot. */
+.terminalCardIdentifySlot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminalCardResumeEmpty {
+  color: var(--muted);
+}
+
+.terminalCardIdentify {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  background: var(--panel);
+  color: var(--foam);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.terminalCardIdentify:hover:not(:disabled) {
+  border-color: var(--foam);
+}
+
+.terminalCardIdentify:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.terminalCardIdentifyFeedback {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--warn);
+}
+
+.terminalCardMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+}
+
+.terminalCardMenu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminalCardMenu button:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.terminalCardMenu button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

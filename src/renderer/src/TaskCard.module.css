@@ -191,6 +191,22 @@
   font-size: 10.5px;
 }
 
+/* Proposal chip — replaces the hardcoded implementar|review trail as
+   the thing that says what the task IS. Absence is NORMAL (no chip),
+   never a guessed "implementar". Tokens only (foam/border/muted). */
+.purposeChip {
+  align-self: flex-start;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 700;
+  color: var(--foam);
+  background: color-mix(in srgb, var(--foam) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--foam) 40%, var(--border));
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+
 .prompt {
   color: var(--text);
   overflow: hidden;

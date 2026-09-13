@@ -112,7 +112,22 @@ const pty = {
     ipcRenderer.on("pty:turn-input", listener);
     return () => ipcRenderer.removeListener("pty:turn-input", listener);
   },
+  /**
+   * Manual identify of this card's session (empty `resume_id` only).
+   * Main process does the disk/CLI read — never the renderer.
+   */
+  identifySession: (id: string): Promise<IdentifySessionResult> =>
+    ipcRenderer.invoke("pty:identify-session", id),
 };
+
+export type IdentifySessionResult =
+  | { status: "found"; id: string; source: string }
+  | { status: "ambiguous"; ids: string[]; source: string }
+  | { status: "none"; source: string }
+  | { status: "claimed"; id: string; source: string }
+  | { status: "error"; source: string; message: string }
+  | { status: "already-set" }
+  | { status: "unavailable" };
 
 export type SaveClipboardImageResult = { ok: true; path: string } | { ok: false; error: string };
 
@@ -748,6 +763,12 @@ export type TaskBoardItem = {
    * isso como não-bloqueante, nunca um falso positivo. */
   deps: string[];
   depStatuses: Record<string, string>;
+  /** Proposal (`tasks.purpose`). `null` is NORMAL — empty chip, never a
+   * guessed default. Set once at create; the Fila never edits it. */
+  purpose: "investigate" | "implement" | "measure" | "fix" | null;
+  /** Purpose of each id in `deps` (same presence rule as `depStatuses`:
+   * missing key = dep not found). Used to derive `A → B` when purposes differ. */
+  depPurposes: Record<string, "investigate" | "implement" | "measure" | "fix" | null>;
   /** Fidelidade visual ao protótipo v5, delta 4 (varredura de atividade) —
    * `registry.isAlive(cardId)` (main/index.ts's `buildTaskBoard`), O(1),
    * síncrono, sem custo de N chamadas. `false` quando `cardId` é `null`
