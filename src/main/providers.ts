@@ -43,6 +43,7 @@ export type SpawnOpts = {
    * `buildArgs` below can register the MCP server per-provider without
    * every call site needing to know the port. */
   mcpUrl?: string;
+  brief?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -91,6 +92,24 @@ export type ProviderCapacity = {
    * derivation reads one field instead of a second handwritten list.
    */
   acbridgeOnPath: boolean;
+
+  /** Como a CLI gerencia instruções (brief e TUI follow-ups) */
+  delivery: {
+    /** 
+     * Como o brief é passado no spawn.
+     * 'positional' (claude, codex, cursor)
+     * 'flag' (opencode: --prompt, antigravity: -i)
+     * 'none' (bash)
+     */
+    briefMechanism: "positional" | "flag" | "none";
+    briefFlag?: string;
+    
+    /** 
+     * Vocabulário de tela DAQUELE provider indicando o início de um turno após receber input na TUI.
+     * Fica undefined se não foi medido (evitando inventar regras) ou não for TUI de agente.
+     */
+    submitStartedPattern?: RegExp;
+  };
 };
 
 /**
@@ -191,6 +210,7 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "none" },
       mcp: { mechanism: "none" },
       acbridgeOnPath: true,
+      delivery: { briefMechanism: "none", submitStartedPattern: undefined },
     },
   },
   {
@@ -202,12 +222,16 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "append-system-prompt" },
       mcp: { mechanism: "ephemeral-flag" },
       acbridgeOnPath: true,
+      delivery: {
+        briefMechanism: "positional",
+        submitStartedPattern: /\b(Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Slithering|Esc to interrupt)\b/i,
+      },
     },
     installCommand: {
       posix: "npm install -g @anthropic-ai/claude-code",
       windows: "npm install -g @anthropic-ai/claude-code",
     },
-    buildArgs: ({ resumeId, continueLast, model, effort, systemPrompt, mcpUrl }) => {
+    buildArgs: ({ resumeId, continueLast, model, effort, systemPrompt, mcpUrl, brief }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
       else if (continueLast) args.push("--continue");
@@ -237,6 +261,7 @@ export const PROVIDERS: ProviderDef[] = [
           JSON.stringify({ mcpServers: { stellar: { type: "http", url: mcpUrl } } }),
         );
       }
+      if (brief) args.push(brief);
       // Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
       // usuário: `isActive` (useTerminal.ts) hoje é só uma aproximação por
       // silêncio de bytes (900ms sem nada = "parou"), documentada como tal
@@ -274,6 +299,7 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "developer_instructions" },
       mcp: { mechanism: "ephemeral-flag" },
       acbridgeOnPath: true,
+      delivery: { briefMechanism: "positional", submitStartedPattern: undefined },
     },
     installCommand: {
       posix: "npm install -g @openai/codex",
@@ -284,7 +310,7 @@ export const PROVIDERS: ProviderDef[] = [
     // key=value` CLI option (confirmed via `codex --help`) accepts the
     // official `developer_instructions` config key. JSON.stringify produces
     // a valid TOML basic string, including for prompts with quotes/newlines.
-    buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl }) => {
+    buildArgs: ({ resumeId, continueLast, model, systemPrompt, mcpUrl, brief }) => {
       const args: string[] = [];
       if (resumeId) args.push("resume", resumeId);
       else if (continueLast) args.push("resume", "--last");
@@ -294,6 +320,7 @@ export const PROVIDERS: ProviderDef[] = [
         `developer_instructions=${JSON.stringify(composeSystemPrompt(systemPrompt))}`,
       );
       if (mcpUrl) args.push("-c", `mcp_servers.stellar.url=${mcpUrl}`);
+      if (brief) args.push(brief);
       return args;
     },
   },
@@ -318,6 +345,10 @@ export const PROVIDERS: ProviderDef[] = [
       // discovery; see deriveReportDiscovery / capacity-contract header.
       mcp: { mechanism: "global-config" },
       acbridgeOnPath: true,
+      delivery: {
+        briefMechanism: "positional",
+        submitStartedPattern: /[\u2800-\u28FF]\s*(?:Running|Reading|Grepping)\b/i,
+      },
     },
     // Windows confirmado contra cursor.com/docs/cli/installation
     // (2026-09-03) — instalador PowerShell nativo, mesmo endpoint com
@@ -372,6 +403,11 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "none" },
       mcp: { mechanism: "global-config" },
       acbridgeOnPath: true,
+      delivery: {
+        briefMechanism: "flag",
+        briefFlag: "-i",
+        submitStartedPattern: /[\u2800-\u28FF]\s*(Generating|Reviewing Initial Input)\.\.\./i,
+      },
     },
     // Windows confirmado contra a documentação real do Antigravity CLI
     // (2026-09-03) — instalador PowerShell nativo, sem WSL (há também uma
@@ -423,16 +459,18 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "none" },
       mcp: { mechanism: "global-config" },
       acbridgeOnPath: true,
+      delivery: { briefMechanism: "flag", briefFlag: "--prompt", submitStartedPattern: undefined },
     },
     installCommand: { posix: "npm install -g opencode-ai", windows: "npm install -g opencode-ai" },
     // Sem flag de system-prompt: `--prompt`/mensagens são entrada do
     // usuário; instruções de sistema exigem configuração persistente.
     // Report discovery → scrollback (derived). MCP via global opencode.json.
-    buildArgs: ({ resumeId, continueLast, model }) => {
+    buildArgs: ({ resumeId, continueLast, model, brief }) => {
       const args: string[] = [];
       if (resumeId) args.push("--session", resumeId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
+      if (brief) args.push("--prompt", brief);
       return args;
     },
   },

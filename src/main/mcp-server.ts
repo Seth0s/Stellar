@@ -761,9 +761,10 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .optional()
             .describe("Hold this call open until the spawned card's process exits, instead of returning as soon as it starts (default 10 minutes, see waitTimeoutMs)"),
           waitTimeoutMs: z.number().optional().describe("Override the default wait window (10 minutes) when wait is true"),
+          brief: z.string().optional().describe("Initial prompt/briefing for the spawned agent (what it should do). E.g. a task description. Highly recommended so the agent knows why it was spawned."),
         },
       },
-      async ({ provider, cwd, resumeId, model, effort, label, callerCardId, reason, wait, waitTimeoutMs }) => {
+      async ({ provider, cwd, resumeId, model, effort, label, callerCardId, reason, wait, waitTimeoutMs, brief }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
           provider,
@@ -776,6 +777,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           label,
           wait,
           waitTimeoutMs,
+          brief,
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },

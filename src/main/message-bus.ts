@@ -20,6 +20,7 @@ import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatc
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
+import { providerCapacity } from "./providers";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -424,6 +425,7 @@ export type BusRequest =
       label?: string;
       wait?: boolean;
       waitTimeoutMs?: number;
+      brief?: string;
     }
   | {
       cmd: "spawn_card";
@@ -833,6 +835,7 @@ export function createMessageBus(
          * renderer creates the card and resolves immediately, with no
          * `AgentAskModal` shown at all. */
         autoApprove?: boolean;
+        brief?: string;
       },
     ) => void;
     onSpawnCardRequest: (
@@ -953,6 +956,7 @@ export function createMessageBus(
       model?: string;
       effort?: string;
       label?: string;
+      brief?: string;
     };
   };
   const spawnQueue = new Map<string, SpawnQueueEntry[]>();
@@ -1213,6 +1217,11 @@ export function createMessageBus(
         // `break` fora da decisão pura — inalterado, não regride.
         if (!check.ok) break;
         const currentActivity = callbacks.getCardLastActivityAt(target);
+        const targetCard = callbacks.listCards().find((c) => c.id === target);
+        const submitStartedPattern = targetCard?.provider
+          ? providerCapacity(targetCard.provider)?.delivery.submitStartedPattern
+          : undefined;
+
         previousResult = decideSubmitCheck({
           screenText: check.text,
           screenTextBeforeWrite,
@@ -1221,6 +1230,7 @@ export function createMessageBus(
           // não travar o laço num "unknown" eterno por timestamp ausente.
           hasNewActivitySinceWrite:
             typeof activityAtWrite !== "number" || typeof currentActivity !== "number" || currentActivity > activityAtWrite,
+          submitStartedPattern,
         });
         if (previousResult === "sent") break;
         // "unsent" → next iteration presses Enter again.
@@ -2633,6 +2643,7 @@ export function createMessageBus(
         model: req.model,
         effort: req.effort,
         label: req.label,
+        brief: req.brief,
       };
       const spawnResult: SpawnAgentResult =
         autonomous && requesterBoardId
@@ -2895,6 +2906,20 @@ export function createMessageBus(
     params: SpawnQueueEntry["params"],
     autoApprove: boolean,
   ) {
+    let passedBrief = params.brief;
+    let typedBrief: string | undefined;
+
+    if (params.brief) {
+      const capacity = providerCapacity(params.provider);
+      const canArgv = capacity?.delivery?.briefMechanism !== "none" && capacity?.delivery?.briefMechanism !== undefined;
+      // 131071 is ARG_MAX on typical Linux; leave some padding for other args/env
+      const isTooLarge = Buffer.byteLength(params.brief, "utf8") > 130000;
+      if (!canArgv || isTooLarge) {
+        passedBrief = undefined;
+        typedBrief = params.brief;
+      }
+    }
+
     return new Promise<SpawnAgentResult>((resolve) => {
       markWaiting(requesterId);
       const timer = setTimeout(() => {
@@ -2907,11 +2932,14 @@ export function createMessageBus(
           clearTimeout(timer);
           pendingSpawnAgents.delete(requestId);
           unmarkWaiting(requesterId);
+          if (result.ok && typedBrief) {
+            deliverCard(result.cardId, typedBrief).catch(console.error);
+          }
           resolve(result);
         },
         timer,
       });
-      callbacks.onSpawnAgentRequest(requestId, requesterId, { ...params, autoApprove });
+      callbacks.onSpawnAgentRequest(requestId, requesterId, { ...params, brief: passedBrief, autoApprove });
     });
   }
 
@@ -2994,6 +3022,22 @@ export function createMessageBus(
    * initiated dispatch, never an agent asking to spawn another, so
    * MAX_SPAWN_DEPTH's fork-bomb guard doesn't apply; the task DAG's own
    * size is what bounds this. */
+  function buildTaskDispatchParams(task: TaskRow, provider: string, reason: string): SpawnQueueEntry["params"] {
+    return {
+      provider,
+      // Task's own cwd when set; `undefined` keeps App.tsx's
+      // `cwd || activeBoardCwd` board-root fallback (declared, not
+      // a hardcoded omission). See task-dispatch-decision.ts.
+      cwd: resolveTaskDispatchCwd(task.cwd),
+      resumeId: undefined,
+      depth: 0,
+      reason,
+      model: undefined,
+      label: resolveTaskDispatchLabel(task),
+      brief: task.prompt ?? undefined,
+    };
+  }
+
   function onTaskDone(taskId: string) {
     const allTasks = callbacks.listTasks();
     for (const task of allTasks) {
@@ -3004,18 +3048,7 @@ export function createMessageBus(
       const allDone = deps.every((depId) => allTasks.find((t) => t.id === depId)?.status === "done");
       if (!allDone) continue;
       const requestId = randomUUID();
-      const params = {
-        provider: task.provider ?? "claude",
-        // Task's own cwd when set; `undefined` keeps App.tsx's
-        // `cwd || activeBoardCwd` board-root fallback (declared, not
-        // a hardcoded omission). See task-dispatch-decision.ts.
-        cwd: resolveTaskDispatchCwd(task.cwd),
-        resumeId: undefined,
-        depth: 0,
-        reason: `auto-dispatch: task ${task.id} (deps satisfied)`,
-        model: undefined,
-        label: resolveTaskDispatchLabel(task),
-      };
+      const params = buildTaskDispatchParams(task, task.provider ?? "claude", `auto-dispatch: task ${task.id} (deps satisfied)`);
       // Mark `running` right away (not after the promise settles) so a
       // second, near-simultaneous `onTaskDone` call for a sibling dep
       // can't also see this task as still `pending` and dispatch it
@@ -3085,15 +3118,7 @@ export function createMessageBus(
     const provider = fallbackProviders.find((p) => !attempted.includes(p)) ?? task.provider ?? "claude";
     attempted.push(provider);
     const requestId = randomUUID();
-    const params = {
-      provider,
-      cwd: resolveTaskDispatchCwd(task.cwd),
-      resumeId: undefined,
-      depth: 0,
-      reason: `auto-retry: task ${task.id} (tentativa ${task.retry_count + 1} de ${maxRetries})`,
-      model: undefined,
-      label: resolveTaskDispatchLabel(task),
-    };
+    const params = buildTaskDispatchParams(task, provider, `auto-retry: task ${task.id} (tentativa ${task.retry_count + 1} de ${maxRetries})`);
     const retrying: TaskRow = {
       ...task,
       status: "running",

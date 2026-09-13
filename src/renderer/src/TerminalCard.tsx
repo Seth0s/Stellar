@@ -45,6 +45,7 @@ function TerminalCardInner({
   effort,
   systemPrompt,
   initialInput,
+  brief,
   visible,
   seenUrls,
   interactionMode,
@@ -91,6 +92,7 @@ function TerminalCardInner({
    * useTerminal.ts) — never persisted, only ever set by
    * `openInstallTerminal` (App.tsx, item 57 ponto 13). */
   initialInput: string | null;
+  brief: string | null;
   visible: boolean;
   /** URLs this card's own output has printed — never opened on its own, only offered (see AGENTS.md). */
   seenUrls: string[];
@@ -173,6 +175,7 @@ function TerminalCardInner({
     effort,
     systemPrompt,
     initialInput,
+    brief,
     visible,
     zoom,
     shortcutOverridesRef,

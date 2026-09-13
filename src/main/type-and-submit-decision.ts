@@ -194,21 +194,13 @@ export interface SubmitCheckInput {
    * text? Boot-silence signal only — NOT used to distinguish echo from
    * a real response (see module doc). */
   hasNewActivitySinceWrite: boolean;
+  /**
+   * Padrão de vocabulário específico do provider que indica o início de um turno.
+   * Se ausente (não aplicável ou não medido), a verificação afirmativa de início de turno
+   * é pulada, e a decisão degrada para os testes de needle e atividade genérica.
+   */
+  submitStartedPattern?: RegExp;
 }
-
-/**
- * Content signal that the CLI accepted the submit and started a turn.
- * Deliberately patterns of RESPONSE, not of echo. Shared across
- * cursor-agent, claude, codex, agy TUIs as observed live.
- */
-export const SUBMIT_STARTED_PATTERN =
-  /\b(Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Esc to interrupt)\b/i;
-
-/** cursor-agent follow-ups box heading — CLI-specific. */
-export const FOLLOW_UPS_HEADING_PATTERN = /\bfollow-ups\b/i;
-
-/** Rows inside the follow-ups box (○ queued / → processing). */
-export const FOLLOW_UP_ROW_PATTERN = /[○●→]\s*\[Pasted text[^\]]*\]/gi;
 
 export function countPatternMatches(text: string, pattern: RegExp): number {
   const flags = pattern.global ? pattern.flags : `${pattern.flags}g`;
@@ -274,26 +266,8 @@ export function appearedSinceBaseline(before: string, after: string, pattern: Re
   return false;
 }
 
-export function looksLikeFollowUpsQueued(screenText: string): boolean {
-  return FOLLOW_UPS_HEADING_PATTERN.test(screenText);
-}
-
-export function looksLikeSubmitStarted(screenText: string): boolean {
-  return SUBMIT_STARTED_PATTERN.test(screenText);
-}
-
-/**
- * New follow-up activity since baseline: heading newly appeared, or more
- * paste-chip rows under the box (the owner symptom — each extra Enter
- * adds a row while the turn runs).
- */
-export function followUpsAppearedSince(before: string, after: string): boolean {
-  if (appearedSinceBaseline(before, after, FOLLOW_UPS_HEADING_PATTERN)) return true;
-  return appearedSinceBaseline(before, after, FOLLOW_UP_ROW_PATTERN);
-}
-
-export function submitStartedAppearedSince(before: string, after: string): boolean {
-  return appearedSinceBaseline(before, after, SUBMIT_STARTED_PATTERN);
+export function submitStartedAppearedSince(before: string, after: string, pattern: RegExp): boolean {
+  return appearedSinceBaseline(before, after, pattern);
 }
 
 /** Is `sentNeedle` still visible on screen? Long needles: anywhere.
@@ -321,13 +295,24 @@ export function decideSubmitCheck(input: SubmitCheckInput): SubmitCheckResult {
   const before = input.screenTextBeforeWrite;
   const after = input.screenText;
 
-  // NEW since write only — leftover "Working"/"follow-ups" from the prior
+  // NEW since write only — leftover "Working" from the prior
   // turn must not count (review: false positive on prose / stale box).
-  if (followUpsAppearedSince(before, after)) return "sent";
-  if (submitStartedAppearedSince(before, after)) return "sent";
+  // Regra do Vazio: se o provider não definiu vocabulário (ou não medimos), pula essa verificação.
+  if (input.submitStartedPattern && submitStartedAppearedSince(before, after, input.submitStartedPattern)) return "sent";
 
   // Collapsed paste chip still in the COMPOSER (no NEW queue/Working).
-  if (/pasted text/i.test(after)) return "unsent";
+  // Fix: distinguishing history vs composer zone avoids returning "unsent"
+  // when an old "[Pasted text]" chip is just sitting in the history while
+  // the TUI legitimately accepted the input.
+  //
+  // Heurística Declarada: `message-bus.ts` invoca `readCardText(8)`, então
+  // a tela (`after`) tem no máximo 8 linhas. Recortar as últimas 6
+  // (`slice(-6)`) cria uma margem de 2 linhas: se o chip "[Pasted text]"
+  // subiu o suficiente para sair das últimas 6 linhas visíveis, assumimos
+  // que ele não está mais prendendo o cursor (foi pro histórico). É frouxo,
+  // mas funciona na mecânica visual de TUI sem depender de âncoras frágeis.
+  const tail = after.split(/\r?\n/).slice(-6).join("\n");
+  if (/pasted text/i.test(tail)) return "unsent";
 
   const visible = needleVisibleOnScreen(after, input.sentNeedle);
 

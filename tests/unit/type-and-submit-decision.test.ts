@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+
+const CLAUDE_PATTERN = /\b(Working|Thinking)\b/i;
+const CURSOR_PATTERN = /[\u2800-\u28FF]\s*(?:Running|Reading|Grepping)\b/i;
 import {
   decideWriteReadiness,
   decideSubmitCheck,
@@ -11,7 +14,6 @@ import {
   composerClearSequence,
   wrapBracketedPaste,
   deliveryTextBytes,
-  followUpsAppearedSince,
   submitStartedAppearedSince,
   appearedSinceBaseline,
   updateBracketedPasteMode,
@@ -71,34 +73,18 @@ describe("decideWriteReadiness", () => {
 });
 
 describe("looksLikeSubmitStarted / needleVisibleOnScreen / delta", () => {
-  it("Working/Thinking/Generating contam como resposta real, não eco", () => {
-    expect(looksLikeSubmitStarted("→ brief\n  Working")).toBe(true);
-    expect(looksLikeSubmitStarted("Thinking…")).toBe(true);
-    expect(looksLikeSubmitStarted("Generating...")).toBe(true);
-    expect(looksLikeSubmitStarted("❯ brief only, no response yet")).toBe(false);
-  });
-
   it("needle longo: match em qualquer lugar; curto: só no tail", () => {
     expect(needleVisibleOnScreen("history consertar o roteamento do push here", "consertar o roteamento")).toBe(true);
     expect(needleVisibleOnScreen("ok is buried above\n\n\n\n\n\n> ", "ok")).toBe(false);
     expect(needleVisibleOnScreen("line1\nline2\n> ok", "ok")).toBe(true);
   });
 
-  it("delta: Working/follow-ups só contam se a contagem sobe vs baseline", () => {
-    expect(submitStartedAppearedSince("agent said Working yesterday", "agent said Working yesterday\n> chip")).toBe(false);
-    expect(submitStartedAppearedSince("idle prompt", "→ brief\n  Working")).toBe(true);
-    expect(followUpsAppearedSince("follow-ups\n  ○ [Pasted text #1 +2 lines]", "follow-ups\n  ○ [Pasted text #1 +2 lines]\n> new")).toBe(false);
-    expect(
-      followUpsAppearedSince(
-        "follow-ups\n  ○ [Pasted text #1 +2 lines]",
-        "follow-ups\n  ○ [Pasted text #1 +2 lines]\n  ○ [Pasted text #2 +14 lines]",
-      ),
-    ).toBe(true);
+  it("delta: Working só conta se a contagem sobe vs baseline", () => {
+    expect(submitStartedAppearedSince("agent said Working yesterday", "agent said Working yesterday\n> chip", CLAUDE_PATTERN)).toBe(false);
+    expect(submitStartedAppearedSince("idle prompt", "→ brief\n  Working", CLAUDE_PATTERN)).toBe(true);
   });
 
   it("rodada 4: scroll troca Working velho por novo (contagem flat) → ainda é appeared", () => {
-    // Measured failure mode: 8-line window drops old Working as new enters;
-    // count stays 1, count-only delta was false → false "unsent" → duplicate.
     const before = [
       "prose Working yesterday",
       "follow-ups",
@@ -119,14 +105,15 @@ describe("looksLikeSubmitStarted / needleVisibleOnScreen / delta", () => {
       "  Working",
       "[Pasted text #2 +14 lines]",
     ].join("\n");
-    expect(appearedSinceBaseline(before, after, SUBMIT_STARTED_PATTERN)).toBe(true);
-    expect(submitStartedAppearedSince(before, after)).toBe(true);
+    expect(appearedSinceBaseline(before, after, CLAUDE_PATTERN)).toBe(true);
+    expect(submitStartedAppearedSince(before, after, CLAUDE_PATTERN)).toBe(true);
     expect(
       decideSubmitCheck({
         screenTextBeforeWrite: before,
         screenText: after,
         sentNeedle: "Task briefing long enough",
         hasNewActivitySinceWrite: true,
+        submitStartedPattern: CLAUDE_PATTERN,
       }),
     ).toBe("sent");
   });
@@ -143,30 +130,30 @@ describe("looksLikeSubmitStarted / needleVisibleOnScreen / delta", () => {
       "  Working",
       "> ",
     ].join("\n");
-    expect(submitStartedAppearedSince(before, after)).toBe(true);
+    expect(submitStartedAppearedSince(before, after, CLAUDE_PATTERN)).toBe(true);
     expect(
       decideSubmitCheck({
         screenTextBeforeWrite: before,
         screenText: after,
         sentNeedle: "Task briefing long enough",
         hasNewActivitySinceWrite: true,
+        submitStartedPattern: CLAUDE_PATTERN,
       }),
     ).toBe("sent");
   });
 
   it("review A: timer [10s]→[11s] no mesmo Working NÃO é appeared (não marca sent)", () => {
-    // Measured failure: raw neighborhood differs only in digits → false
-    // "appeared" → "sent" while Enter still needed. Digit-stabilize holds.
     const before = "task running\n[10s] Working\n> ";
     const after = "task running\n[11s] Working\n[Pasted text #2 +14 lines]";
-    expect(appearedSinceBaseline(before, after, SUBMIT_STARTED_PATTERN)).toBe(false);
-    expect(submitStartedAppearedSince(before, after)).toBe(false);
+    expect(appearedSinceBaseline(before, after, CLAUDE_PATTERN)).toBe(false);
+    expect(submitStartedAppearedSince(before, after, CLAUDE_PATTERN)).toBe(false);
     expect(
       decideSubmitCheck({
         screenTextBeforeWrite: before,
         screenText: after,
         sentNeedle: "Task briefing long enough",
         hasNewActivitySinceWrite: true,
+        submitStartedPattern: CLAUDE_PATTERN,
       }),
     ).toBe("unsent"); // paste chip still in composer — retry Enter
   });
@@ -184,15 +171,7 @@ describe("decideSubmitCheck", () => {
     expect(decideSubmitCheck({ ...base, screenText: "[Pasted text #1 +40 lines]" })).toBe("unsent");
   });
 
-  it("NOVA caixa follow-ups + Working => sent (fila real do bug — pare Enter)", () => {
-    const screen = `follow-ups
-  ○ [Pasted text #2 +14 lines]
-  ○ [Pasted text #2 +14 lines]
-  enter steer · ↑ select/edit · esc cancel
-→ [Pasted text #2 +14 lines]
-  Working`;
-    expect(decideSubmitCheck({ ...base, screenText: screen, screenTextBeforeWrite: "Add a follow-up" })).toBe("sent");
-  });
+
 
   it("Working NOVO na tela => sent mesmo com needle (eco no histórico)", () => {
     expect(
@@ -200,6 +179,7 @@ describe("decideSubmitCheck", () => {
         ...base,
         screenTextBeforeWrite: "> ",
         screenText: "→ consertar o roteamento do push\n  Working",
+        submitStartedPattern: CLAUDE_PATTERN,
       }),
     ).toBe("sent");
   });
@@ -212,23 +192,12 @@ describe("decideSubmitCheck", () => {
         screenTextBeforeWrite: stale,
         screenText: `${stale}[Pasted text #2 +14 lines]`,
         hasNewActivitySinceWrite: true,
+        submitStartedPattern: CLAUDE_PATTERN,
       }),
     ).toBe("unsent");
   });
 
-  it("achado 2: follow-ups do TURNO ANTERIOR + paste novo ainda no composer => unsent", () => {
-    const priorBox = `follow-ups
-  ○ [Pasted text #1 +3 lines]
-enter steer`;
-    expect(
-      decideSubmitCheck({
-        ...base,
-        screenTextBeforeWrite: priorBox,
-        screenText: `${priorBox}\n[Pasted text #2 +14 lines]`,
-        hasNewActivitySinceWrite: true,
-      }),
-    ).toBe("unsent");
-  });
+
 
   it("Working + Pasted text com Working NOVO => sent", () => {
     expect(
@@ -236,6 +205,7 @@ enter steer`;
         ...base,
         screenTextBeforeWrite: "> ",
         screenText: "→ [Pasted text #2 +14 lines]\n  Working",
+        submitStartedPattern: CLAUDE_PATTERN,
       }),
     ).toBe("sent");
   });
@@ -246,13 +216,14 @@ enter steer`;
         ...base,
         screenText: "> consertar o roteamento do push",
         hasNewActivitySinceWrite: true,
+        submitStartedPattern: CLAUDE_PATTERN,
       }),
     ).toBe("unsent");
   });
 
   it("needle ausente sem atividade => unknown (boot)", () => {
-    expect(decideSubmitCheck({ ...base, screenText: "", hasNewActivitySinceWrite: false })).toBe("unknown");
-    expect(decideSubmitCheck({ ...base, screenText: "Loading codex...", hasNewActivitySinceWrite: false })).toBe("unknown");
+    expect(decideSubmitCheck({ ...base, screenText: "", hasNewActivitySinceWrite: false, submitStartedPattern: CLAUDE_PATTERN })).toBe("unknown");
+    expect(decideSubmitCheck({ ...base, screenText: "Loading codex...", hasNewActivitySinceWrite: false, submitStartedPattern: CLAUDE_PATTERN })).toBe("unknown");
   });
 
   it("needle ausente com atividade + Thinking novo => sent", () => {
@@ -262,6 +233,7 @@ enter steer`;
         screenTextBeforeWrite: "> ",
         screenText: "> Thinking...",
         hasNewActivitySinceWrite: true,
+        submitStartedPattern: CLAUDE_PATTERN,
       }),
     ).toBe("sent");
   });
@@ -322,26 +294,25 @@ describe("shouldPressEnterOnAttempt", () => {
     let fixedPresses = 0;
     for (let i = 0; i < 4; i++) {
       if (shouldPressEnterOnAttempt(i, prevFixed)) fixedPresses++;
-      prevFixed = decideSubmitCheck({ ...needle, screenText: screens[i]! });
+      prevFixed = decideSubmitCheck({ ...needle, screenText: screens[i]!, submitStartedPattern: CLAUDE_PATTERN });
       if (prevFixed === "sent") break;
     }
     expect(fixedPresses).toBe(1);
     expect(prevFixed).toBe("sent");
   });
 
-  it("investigação: baseline JÁ contendo follow-ups e um chip [Pasted text], screenText com chip novo no compositor => devolve unsent e dispara 4 Enters", () => {
-    // Caso exato solicitado na investigação:
-    // screenTextBeforeWrite já continha a caixa de follow-ups e um chip [Pasted text #1]
+  it("investigação: chip preso no compositor (novo chip no tail) => devolve unsent e dispara 4 Enters", () => {
+    // Comportamento atualizado: sem follow-ups.
+    // O baseline tinha um chip (pode ser velho)
     const before = [
-      "follow-ups",
-      "  ○ [Pasted text #1 +10 lines]",
+      "  → [Pasted text #1 +10 lines]",
       "enter steer · ↑ select/edit · esc cancel",
     ].join("\n");
 
-    // screenText depois com mais um chip no compositor (sem o bullet [○●→] de item aceito na fila):
+    // Depois, um NOVO chip aparece no compositor (na cauda da tela), e não há sinal de Running.
+    // Isso significa que a entrega está presa no compositor (Enter foi engolido).
     const after = [
-      "follow-ups",
-      "  ○ [Pasted text #1 +10 lines]",
+      "  → [Pasted text #1 +10 lines]",
       "enter steer · ↑ select/edit · esc cancel",
       "[Pasted text #2 +14 lines]",
     ].join("\n");
@@ -351,18 +322,13 @@ describe("shouldPressEnterOnAttempt", () => {
       screenText: after,
       sentNeedle: "consertar o roteamento",
       hasNewActivitySinceWrite: true,
+      submitStartedPattern: CURSOR_PATTERN,
     };
 
-    // 1. O que decideSubmitCheck devolve:
-    // followUpsAppearedSince: FOLLOW_UPS_HEADING_PATTERN conta 1 vs 1 (flat).
-    // FOLLOW_UP_ROW_PATTERN (/[○●→]\s*\[Pasted text[^\]]*\]/gi) só casa em "○ [Pasted text #1]",
-    // pois o chip novo no compositor não tem bullet [○●→]. Contagem flat: 1 vs 1.
-    // submitStartedAppearedSince dá false (nenhum Working/Thinking novo).
-    // Linha 330: if (/pasted text/i.test(after)) return "unsent" dispara!
+    // Agora, como o chip "Pasted text" está no TAIL (últimas 6 linhas), a função devolve "unsent".
     const decision = decideSubmitCheck(input);
     expect(decision).toBe("unsent");
 
-    // 2. O que shouldPressEnterOnAttempt faz com esse resultado nas 4 voltas:
     let prevResult: "sent" | "unsent" | "unknown" | null = null;
     let enterCount = 0;
     const enterDecisions: boolean[] = [];
@@ -371,63 +337,72 @@ describe("shouldPressEnterOnAttempt", () => {
       const willPress = shouldPressEnterOnAttempt(attempt, prevResult);
       enterDecisions.push(willPress);
       if (willPress) enterCount++;
-      // A cada volta a tela continua contendo o chip
       prevResult = decideSubmitCheck(input);
       if (prevResult === "sent") break;
     }
 
-    // Prova matemática do bug:
-    // Tentativa 0 aperta Enter (inicial).
-    // Tentativa 1 aperta Enter de novo (unsent).
-    // Tentativa 2 aperta Enter de novo (unsent).
-    // Tentativa 3 aperta Enter de novo (unsent).
-    // Total: 4 Enters disparados!
     expect(enterDecisions).toEqual([true, true, true, true]);
     expect(enterCount).toBe(4);
     expect(prevResult).toBe("unsent");
   });
 
-  it("investigação: se o 2º chip já tem bullet [○●→], countPatternMatches sobe e devolve sent (1 Enter)", () => {
+  it("investigação: chip velho no histórico (fora do tail) e sem chip novo no compositor => não retenta", () => {
+    // Esse é o conserto da linha 330.
+    // Baseline tem um chip
     const before = [
-      "follow-ups",
-      "  ○ [Pasted text #1 +10 lines]",
-      "enter steer · ↑ select/edit · esc cancel",
+      "  → [Pasted text #1 +10 lines]",
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "enter steer",
     ].join("\n");
-    // Se o segundo chip entrar como linha com bullet na fila:
+    
+    // Após tentar submeter, o texto novo sumiu (foi consumido), mas não gerou sinal afirmativo ainda.
+    // O chip velho continua lá em cima (fora das 6 últimas linhas).
     const after = [
-      "follow-ups",
-      "  ○ [Pasted text #1 +10 lines]",
-      "  ○ [Pasted text #2 +14 lines]",
-      "enter steer · ↑ select/edit · esc cancel",
+      "  → [Pasted text #1 +10 lines]",
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "old",
+      "enter steer",
+      "loading...",
     ].join("\n");
 
     const decision = decideSubmitCheck({
       screenTextBeforeWrite: before,
       screenText: after,
-      sentNeedle: "consertar",
+      sentNeedle: "novo texto muito longo",
       hasNewActivitySinceWrite: true,
+      submitStartedPattern: CURSOR_PATTERN,
     });
-    // Onde a leitura do código do usuário divergiu do código:
-    // FOLLOW_UP_ROW_PATTERN conta 2 > 1, então followUpsAppearedSince intercepta ANTES da linha 330!
+    // Como o chip está fora do tail, ele não dispara o fallback de "unsent".
+    // E como o needle sumiu da tela e há nova atividade, ele passa a devolver "sent" (ou unknown se falso).
+    // Neste caso, como a atividade é true e needleVisible é false, devolve "sent".
     expect(decision).toBe("sent");
-    expect(shouldPressEnterOnAttempt(0, null)).toBe(true);
   });
 
-  it("investigação caso Cursor real: histórico tem chip e Cursor está rodando tool (Running não está no vocabulário) => unsent e 4 Enters", () => {
-    // Medição real do Cursor Agent (agent v2026.09.10):
-    // Cursor NÃO usa cabeçalho "follow-ups" nem "○ [Pasted text]".
-    // Cursor usa "Running", "Reading", "Grepping" e prompt "→ Add a follow-up ctrl+c to stop".
+  it("investigação caso Cursor real: histórico tem chip e Cursor está rodando tool (agora Running faz parte do vocabulário) => sent", () => {
+    // A medição ao vivo derrubou o follow-ups e trouxe o vocabulário real:
     const before = [
       "  → [Pasted text #1 +50 lines]",
-      " ⠠⠜ Running  35 tokens",
       "  → Add a follow-up                                 ctrl+c to stop",
     ].join("\n");
 
-    // Entrega 2 envia mensagem enquanto Cursor está em execução.
-    // O chip anterior continua no histórico das 8 linhas:
+    // Entrega 2 envia mensagem. O Cursor aceita e atualiza o estado com um spinner.
+    // Note que o chip antigo e o spinner Running estão na tela.
     const after = [
       "  → [Pasted text #1 +50 lines]",
-      " ⠠⠜ Running  35 tokens",
+      " ⠠⠜ Running  40 tokens",
       "  → Add a follow-up                                 ctrl+c to stop",
     ].join("\n");
 
@@ -436,21 +411,13 @@ describe("shouldPressEnterOnAttempt", () => {
       screenText: after,
       sentNeedle: "nova instrução de teste",
       hasNewActivitySinceWrite: true,
+      submitStartedPattern: CURSOR_PATTERN,
     });
 
-    // 1. followUpsAppearedSince é false (sem heading follow-ups, sem bullet row)
-    // 2. submitStartedAppearedSince é false (Running NÃO está em SUBMIT_STARTED_PATTERN)
-    // 3. Linha 330 (/pasted text/i.test(after)) vê o chip do turno 1 no histórico e devolve "unsent"!
-    expect(decision).toBe("unsent");
-
-    // 4 Enters são disparados para o Cursor que aceita follow-ups a cada Enter!
-    let enterCount = 0;
-    let prev: "sent" | "unsent" | "unknown" | null = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      if (shouldPressEnterOnAttempt(attempt, prev)) enterCount++;
-      prev = decision;
-    }
-    expect(enterCount).toBe(4);
+    // 1. followUpsAppearedSince foi removido (padrão morto).
+    // 2. submitStartedAppearedSince AGORA detecta "Running" novo e retorna "sent"!
+    // 3. A linha 330 nem é alcançada, consertando o bug original de múltiplos Enters e retentativas falsas.
+    expect(decision).toBe("sent");
   });
 });
 

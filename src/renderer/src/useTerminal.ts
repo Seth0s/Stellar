@@ -257,6 +257,7 @@ export function useTerminal(
    * install-command terminal, always null for a card restored from the
    * store. */
   initialInput: string | null,
+  brief: string | null,
   visible: boolean,
   zoom: number,
   /** Follow-up fase C — ref estável (App → TerminalCard → aqui). O
@@ -367,20 +368,21 @@ export function useTerminal(
   zoomRef.current = zoom;
   // Spawn-time-only options, read via ref instead of effect deps below — see
   // the comment on Effect 1's dependency array for why.
-  const spawnOptsRef = useRef({ resumeId, continueLast, model, effort, systemPrompt, initialInput });
-  spawnOptsRef.current = { resumeId, continueLast, model, effort, systemPrompt, initialInput };
+  const spawnOptsRef = useRef({ resumeId, continueLast, model, effort, systemPrompt, initialInput, brief });
+  spawnOptsRef.current = { resumeId, continueLast, model, effort, systemPrompt, initialInput, brief };
 
   // Effect 1: PTY lifecycle. Independent of the container/visible — spawns
   // once per identity and keeps running regardless of on-screen visibility.
   useEffect(() => {
     let disposed = false;
-    const { resumeId, continueLast, model, effort, systemPrompt, initialInput } = spawnOptsRef.current;
+    const { resumeId, continueLast, model, effort, systemPrompt, initialInput, brief } = spawnOptsRef.current;
     const spawnOpts = {
       resumeId: resumeId ?? undefined,
       continueLast,
       model: model ?? undefined,
       effort: effort ?? undefined,
       systemPrompt: systemPrompt ?? undefined,
+      brief: brief ?? undefined,
     };
     // Achado ao vivo escrevendo isto: o eco de um path colado pode chegar
     // partido em mais de um chunk de `pty:data` (o TTY não garante um
@@ -514,7 +516,7 @@ export function useTerminal(
         return;
       }
       ptyIdRef.current = result.id;
-      if (initialInput) void window.pty.write(id, initialInput);
+      if (initialInput && !result.consumedBrief) void window.pty.write(id, initialInput);
       setPtyId(result.id);
     });
 
