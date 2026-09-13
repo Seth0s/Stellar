@@ -1162,7 +1162,7 @@ function createWindow() {
     }
     const reportByCardId = new Map(store.listReportsForBoard(boardId).map((r) => [r.card_id, r]));
     // RODADA 2 — mesma convenção de parse que message-bus.ts's
-    // onTaskDone/retryOrFail já usam pra este mesmo campo (`deps_json ?
+    // onTaskDone já usa pra este mesmo campo (`deps_json ?
     // JSON.parse(...) : []`, sem try/catch): só este código escreve essa
     // coluna, sempre via JSON.stringify, então não há formato estranho a
     // se defender de.
@@ -1502,8 +1502,8 @@ function createWindow() {
     // Fase 2, peça 2 — era `store.upsertTask(task)` direto; `persistTask`
     // (acima) é o MESMO efeito mais o push pro board aberto. Cobre TODO
     // caminho que já passava por aqui: `create_task`/`update_task` (MCP),
-    // o motor de auto-dispatch/retry (`onTaskDone`/`retryOrFail`/
-    // `markTaskFailed`, message-bus.ts) e o botão humano de aprovar
+    // o motor de auto-dispatch (`onTaskDone`/`markTaskFailed`,
+    // message-bus.ts) e o botão humano de aprovar
     // conclusão (`store:tasks:approve-completion` abaixo).
     upsertTask: (task) => persistTask(task),
     setStatusAsk: (taskId, ask) => {

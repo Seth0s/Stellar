@@ -16,6 +16,14 @@ import {
   retainStatusAsk,
 } from "./status-write-decision";
 import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, type FailureSource } from "./failure-kind-decision";
+import {
+  decideReportAcceptance,
+  errorFromReportPayload,
+  stashLastRefusedReport,
+  clearLastRefusedStash,
+  lastRefusedReasonFromResultJson,
+  describeExitWithoutAcceptedReport,
+} from "./report-retry-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
@@ -138,9 +146,9 @@ const DEFAULT_CONCURRENCY_CAP = 3;
 // default on purpose — the same "waiting for a real result is the actual
 // point" reasoning as DEFAULT_REPORT_TIMEOUT_MS above, not a bug backstop.
 const DEFAULT_QUEUE_TIMEOUT_MS = 600_000;
-// DESIGN-BACKLOG.md item 60, peça 4 — small on purpose: an unattended
-// auto-retry loop that never gives up is worse than one that stops and
-// leaves a clearly `failed` task for a human/orchestrator to look at.
+// In-line `report` retry budget for the same agent (not a new spawn).
+// Small on purpose: a loop that never gives up is worse than one that
+// accepts the declared failure and leaves a clearly `failed` task.
 const DEFAULT_MAX_RETRIES = 2;
 
 // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — an agent spawning another
@@ -908,7 +916,7 @@ export function createMessageBus(
   // spawned (pty-registry.ts) — so this map is the server-side record,
   // keyed by cardId, that the client can no longer talk its way around.
   // A card absent from this map (human-initiated, or the task engine's
-  // own internal dispatch — see onTaskDone/retryOrFail) is depth 0.
+  // own internal dispatch — see onTaskDone) is depth 0.
   const cardSpawnDepth = new Map<string, number>();
   // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 1 — a
   // dedicated result channel, decoupled from process exit (an agent might
@@ -2136,6 +2144,42 @@ export function createMessageBus(
     }
 
     if (req.cmd === "report") {
+      const listed = callbacks.listTasks();
+      const tasks = Array.isArray(listed) ? listed : [];
+      const linkedTask = req.requesterId ? tasks.find((t) => t.card_id === req.requesterId) : undefined;
+      const runningTask = linkedTask?.status === "running" ? linkedTask : undefined;
+      const decision = decideReportAcceptance({
+        requesterId: req.requesterId,
+        report: req.report,
+        linkedTask: runningTask
+          ? { status: runningTask.status, retry_count: runningTask.retry_count, max_retries: runningTask.max_retries }
+          : undefined,
+        defaultMaxRetries: DEFAULT_MAX_RETRIES,
+      });
+      if (decision.action === "structural") {
+        return { ok: false, error: decision.error, field: decision.field };
+      }
+      if (decision.action === "refuse_retryable") {
+        // In-line retry: same session, same card. Increment + stash the
+        // declared reason on the task (not a report row, not a status).
+        // Never spawn, never persist this report, never wake waiters.
+        if (runningTask) {
+          callbacks.upsertTask({
+            ...runningTask,
+            retry_count: decision.retryCount,
+            result_json: stashLastRefusedReport(runningTask.result_json, req.report),
+            updated_at: Date.now(),
+            actor: "app",
+            statusProposed: false,
+          });
+        }
+        return {
+          ok: false,
+          error: decision.error,
+          retryCount: decision.retryCount,
+          retriesRemaining: decision.retriesRemaining,
+        };
+      }
       if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
       const stored: StoredReport = { report: req.report, seq: ++reportSeqCounter, verdict: req.verdict ?? null };
       // DESIGN-BACKLOG.md §2.1 — persiste ANTES de resolver waiters/avisar
@@ -2177,7 +2221,26 @@ export function createMessageBus(
       // Parte 1/2 — "ja acabou, novamente você não tem informação": mesmo
       // caminho do idle (resolve pra quem empurrar via `resolveNotifyTarget`),
       // aviso só com o ponteiro — ver `notifySpawnerOfReport` acima.
+      // Waiters already received the JSON above; notify is the pointer
+      // for a spawner that was not blocked on read_report {wait:true}.
       await notifySpawnerOfReport(req.requesterId);
+      // An accepted report supersedes any refused-round stash. Clear it
+      // here so a later exit cannot revive a reason that was already
+      // replaced. Status is untouched on a plain accept.
+      if (runningTask) {
+        const clearedJson = clearLastRefusedStash(runningTask.result_json);
+        if (decision.action === "accept_failure") {
+          markTaskFailed({ ...runningTask, result_json: clearedJson }, errorFromReportPayload(req.report), "explicit_failed");
+        } else if (clearedJson !== runningTask.result_json) {
+          callbacks.upsertTask({
+            ...runningTask,
+            result_json: clearedJson,
+            updated_at: Date.now(),
+            actor: "app",
+            statusProposed: false,
+          });
+        }
+      }
       return { ok: true, seq: stored.seq };
     }
 
@@ -2325,14 +2388,11 @@ export function createMessageBus(
       };
       // DESIGN-BACKLOG.md §2.1 Decisão 8 — a precedência mora no choke
       // point (`upsertTask` → `decideStatusWrite`). Side effects abaixo
-      // (onTaskDone / retryOrFail) só disparam quando o status de fato
-      // MUDOU — um hold humano NÃO pode desbloquear dependentes nem
-      // auto-retentar como se a task tivesse chegado em done/failed.
+      // (onTaskDone) só disparam quando o status de fato MUDOU — um hold
+      // humano NÃO pode desbloquear dependentes como se a task tivesse
+      // chegado em done. The app never reassigns or respawns on fail.
       const decision = callbacks.upsertTask(updated);
       if (decision.statusChanged && decision.status === "done" && existing.status !== "done") onTaskDone(req.taskId);
-      if (decision.statusChanged && decision.status === "failed" && existing.status !== "failed") {
-        retryOrFail({ ...updated, status: decision.status });
-      }
       const promptWritten = req.prompt !== undefined ? { prompt } : {};
       if (decision.warnAgent) {
         const warning = describeStatusHeldWarning(decision.status, decision.declaredStatus ?? req.status ?? decision.status);
@@ -2855,7 +2915,12 @@ export function createMessageBus(
       // especificamente `running` (comportamento intocado).
       const linkedTask = callbacks.listTasks().find((t) => t.card_id === cardId);
       if (linkedTask?.status === "running") {
-        markTaskFailed(linkedTask, `process exited (code ${exitCode}) without ever calling report`, "exit_without_report");
+        const lastRefused = lastRefusedReasonFromResultJson(linkedTask.result_json);
+        markTaskFailed(
+          { ...linkedTask, result_json: clearLastRefusedStash(linkedTask.result_json) },
+          describeExitWithoutAcceptedReport(exitCode, lastRefused),
+          "exit_without_report",
+        );
       }
       // Fechar histórico e avisar o spawner são critérios diferentes:
       // qualquer vínculo atual em task_cards fecha a participação, inclusive
@@ -3012,8 +3077,7 @@ export function createMessageBus(
 
   /** DESIGN-BACKLOG.md item 60, peça 3 — called whenever a task reaches
    * `done` (never `failed` — a dependent shouldn't start on top of a
-   * failed prerequisite; peça 4's auto-retry is what would eventually
-   * flip it back to `done`). Finds every OTHER pending task whose
+   * failed prerequisite). Finds every OTHER pending task whose
    * `deps_json` names this one, and for each whose OWN deps are now all
    * satisfied, auto-dispatches it — but only if that task's OWN board
    * opted into autonomous mode; every other task is left untouched,
@@ -3076,7 +3140,7 @@ export function createMessageBus(
    * to "a fazer"); `retry_spawn_failed` / `spawn_failed` are their own
    * causes (also default interrompida). A task that already carries
    * `failureKind: julgada` is NEVER downgraded — the judgment survives a
-   * later spawn/retry failure. */
+   * later spawn failure. The app does not respawn after this write. */
   function markTaskFailed(task: TaskRow, error: string, source: FailureSource) {
     const existingKind = failureKindFromResultJson(task.result_json);
     const kind = resolveFailureKind(existingKind, source);
@@ -3090,54 +3154,8 @@ export function createMessageBus(
     };
     const decision = callbacks.upsertTask(next);
     if (!decision.statusChanged) return;
-    retryOrFail({ ...next, status: decision.status });
-  }
-
-  /** DESIGN-BACKLOG.md item 60, peça 4 — called on a task that just
-   * became `failed`. Bookkeeping-only outside an autonomous board (same
-   * boundary as peça 3's onTaskDone) — an external orchestrator's own
-   * retry loop is untouched there. Inside one: reassigns to the next
-   * untried provider in `fallback_providers_json` (the multi-provider
-   * thesis the audit actually argued for — flagged live by a reviewing
-   * agent that the first pass only ever retried the SAME provider,
-   * which didn't really deliver on that thesis), falling back to
-   * retrying the original provider when no fallback list was given
-   * (unchanged old behavior) or once the list is exhausted. Reuses
-   * `autonomousSpawn` (same cap/queue as every other spawn) up to
-   * `max_retries` (default DEFAULT_MAX_RETRIES) — past that, the task
-   * stays `failed` for good, no infinite loop. A retry that itself fails
-   * to spawn recurses back into `markTaskFailed`, bounded by the same
-   * `retry_count` check — each recursion increments it, so this always
-   * terminates. */
-  function retryOrFail(task: TaskRow) {
-    if (!task.board_id || !callbacks.isBoardAutonomous(task.board_id)) return;
-    const maxRetries = task.max_retries ?? DEFAULT_MAX_RETRIES;
-    if (task.retry_count >= maxRetries) return;
-    const attempted: string[] = task.attempted_providers_json ? JSON.parse(task.attempted_providers_json) : [];
-    const fallbackProviders: string[] = task.fallback_providers_json ? JSON.parse(task.fallback_providers_json) : [];
-    const provider = fallbackProviders.find((p) => !attempted.includes(p)) ?? task.provider ?? "claude";
-    attempted.push(provider);
-    const requestId = randomUUID();
-    const params = buildTaskDispatchParams(task, provider, `auto-retry: task ${task.id} (tentativa ${task.retry_count + 1} de ${maxRetries})`);
-    const retrying: TaskRow = {
-      ...task,
-      status: "running",
-      retry_count: task.retry_count + 1,
-      attempted_providers_json: JSON.stringify(attempted),
-      updated_at: Date.now(),
-      actor: "app",
-    };
-    // Same class as onTaskDone/markTaskFailed: do not spawn if the store
-    // held the transition back to `running` under a human lock.
-    const decision = callbacks.upsertTask(retrying);
-    if (!decision.statusChanged) return;
-    autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
-      if (result.ok) {
-        callbacks.upsertTask({ ...retrying, card_id: result.cardId, updated_at: Date.now(), actor: "app" });
-      } else {
-        markTaskFailed(retrying, result.error, "retry_spawn_failed");
-      }
-    });
+    // Retry is in-line on `report` (same agent, same session). The app
+    // never respawns or reassigns here — a human/orchestrator does that.
   }
 
   function resolveSpawnCard(requestId: string, result: SpawnCardResult) {

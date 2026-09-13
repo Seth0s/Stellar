@@ -21,7 +21,7 @@
  * reason `task_transitions` is written inside upsert, not via a separate
  * API someone has to remember.
  *
- * Callers that fire side effects AFTER upsert (auto-dispatch, auto-retry)
+ * Callers that fire side effects AFTER upsert (auto-dispatch)
  * MUST observe `statusChanged` — a held write is not a silent no-op for
  * them; spawning on top of a held status is exactly the bug class the
  * adversarial review found (2026-09-11).

@@ -337,7 +337,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "report",
       {
         description:
-          "Report a structured result back to whoever spawned you, decoupled from process exit — call this when you finish a delegated task, even if you keep running afterward. The caller reads it with read_report, no ANSI/scrollback parsing needed. Requires your own card id.",
+          "Report a structured result back to whoever spawned you, decoupled from process exit — call this when you finish a delegated task, even if you keep running afterward. The caller reads it with read_report, no ANSI/scrollback parsing needed. Requires your own card id. " +
+          "Acceptance: success is {ok: true, ...}; a report without ok is also accepted (not treated as failure). " +
+          "Declared failure is {ok: false, ...}. If that failure is still retryable (you omitted retryable, or sent retryable: true) AND a running task is linked to this card with retry budget left, THIS CALL IS REFUSED — the tool returns {ok: false, retriesRemaining, ...}, the task stays running, retry_count goes up by 1, and you (the same session, same context) correct and call report again. No new card is spawned. " +
+          "Honest terminal failure — use when retry cannot help (no credits, investigation concluded negatively, a metric the CLI does not expose): {ok: false, retryable: false, ...}. That is accepted on the first call, the task becomes failed, and no retry is spent. Without retryable: false, the only other accepted exits are success or exhausting max_retries. Do not declare ok: true to escape a real failure. " +
+          "The app does not judge whether your contents are correct. A refused call names the acceptance rule and remaining attempts; a structural refusal (missing report, ok/retryable not a boolean) names the field.",
         inputSchema: {
           callerCardId: z
             .string()
@@ -345,7 +349,11 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: a registered MCP process is identified by its URL stamp; this body field is not trusted when that stamp is absent, so an external client cannot report as a different card just by naming one here.",
             ),
-          report: z.unknown().describe("Any JSON value — e.g. {ok: true, result: '...'} or {ok: false, error: '...'}"),
+          report: z
+            .unknown()
+            .describe(
+              "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans.",
+            ),
           verdict: z
             .enum(["aprovado", "reprovado"])
             .optional()
@@ -393,15 +401,20 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Working directory for auto-dispatch/auto-retry of this task. Omit to keep the board-root fallback (same as before). Pass the repo path when the task must NOT open at the board root — otherwise a dependent spawn can land on 'trust this folder' and exit 129.",
+              "Working directory for auto-dispatch of this task. Omit to keep the board-root fallback (same as before). Pass the repo path when the task must NOT open at the board root — otherwise a dependent spawn can land on 'trust this folder' and exit 129.",
             ),
           deps: z.array(z.string()).optional().describe("Ids of other tasks this one depends on — auto-dispatched once all are 'done', but only if this task's board is autonomous"),
-          maxRetries: z.number().optional().describe("Auto-retry budget (DESIGN-BACKLOG.md item 60 peça 4) — only applies inside an autonomous board; default 2 when omitted"),
+          maxRetries: z
+            .number()
+            .optional()
+            .describe(
+              "In-line retry budget for the same agent: how many times a declared failure ({ok: false} without retryable: false) is refused so that agent can correct and report again in the same session. Default 2 when omitted. Does not spawn a new card.",
+            ),
           fallbackProviders: z
             .array(z.string())
             .optional()
             .describe(
-              "Providers to reassign to, in order, on auto-retry — tries the next untried one each failure, falling back to retrying the original provider once exhausted or if omitted. Only applies inside an autonomous board.",
+              "Bookkeeping list of substitute providers. The app never reassigns or spawns a fallback itself — a human or orchestrator reassigns by hand via update_task.attemptedProvider. Kept so that loop does not have to track the list elsewhere.",
             ),
           suggestedOrder: z
             .number()
@@ -421,7 +434,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "update_task",
       {
         description:
-          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. Writing status when a human last moved the task is ACCEPTED WITH A WARNING and never refused — the human status stays, divergence is signaled. To ASK the human to accept your status (they decide on the Fila card), use request_task_status instead; this tool is the direct write. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for your own retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — this app doesn't retry or reassign anything itself.",
+          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. Writing status when a human last moved the task is ACCEPTED WITH A WARNING and never refused — the human status stays, divergence is signaled. To ASK the human to accept your status (they decide on the Fila card), use request_task_status instead; this tool is the direct write. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
           status: z.string().optional().describe("New status — e.g. 'running', 'done', 'failed'"),
@@ -431,7 +444,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .nullable()
             .optional()
             .describe(
-              "Set or clear this task's working directory for auto-dispatch/retry. null clears back to the board-root fallback; omit leaves unchanged.",
+              "Set or clear this task's working directory for auto-dispatch. null clears back to the board-root fallback; omit leaves unchanged.",
             ),
           result: z.unknown().optional().describe("Any JSON value — the task's outcome"),
           incrementRetry: z.boolean().optional().describe("Bump the task's retry counter by 1 — e.g. after deciding to retry a task whose agent exited without reporting"),
