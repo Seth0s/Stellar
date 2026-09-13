@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { which } from "./providers";
+import { decideLocaleEnv } from "./locale-env-decision";
 
 /**
  * PATH efetivo do usuário — o ambiente que o Stellar precisa ver para
@@ -58,6 +59,19 @@ import { which } from "./providers";
  * Por isso `effectivePath()` é síncrona e SEMPRE responde: o snapshot
  * nasce no import com o que dá para saber sem spawnar nada, e a perna da
  * shell só o MELHORA depois, em background. Nenhum chamador vira async.
+ *
+ * ## Locale UTF-8 (o mesmo furo, outra variável)
+ *
+ * Medido num Mac real (2026-09-13, macOS 26.6.2, `.app` pelo Finder): o
+ * processo herda LANG/LC_* ausentes (`launchctl getenv LANG` vazio). O
+ * libc de cada PTY resolve isso como C / US-ASCII. A login shell do
+ * mesmo usuário tinha UTF-8, e `locale -a` listava pt_BR.UTF-8, C.UTF-8
+ * e en_US.UTF-8. Copiar a login shell seria o erro simétrico ao PATH:
+ * é lento, e o LANG dela era `C.UTF-8` — conserta encoding e apaga o
+ * português das CLIs. `locale-env-decision.ts` sintetiza um nome que
+ * `locale -a` devolveu; `effectiveLocaleEnv()` só aplica essa decisão.
+ * `pty-registry.ts` espalha o patch no env do PTY. Sem `if (darwin)`:
+ * lista vazia (comando sumiu, Windows) → não escreve nome nenhum.
  */
 
 /** Resultado da resolução, só para log e para o smoke de verificação. */
@@ -363,6 +377,9 @@ let refreshing: Promise<UserEnvSnapshot> | null = null;
 
 /** Uma tentativa por vida do app. Chamada no boot; nunca bloqueia nada. */
 export function refreshUserEnv(): Promise<UserEnvSnapshot> {
+  // Prefetch here so the first PTY spawn does not pay `locale -a` on the
+  // hot path. Failure is empty-list, same as a later lazy call.
+  ensureInstalledLocales();
   if (refreshing) return refreshing;
   refreshing = queryShellPath({}).then(async (shellPath) => {
     if (shellPath) {
@@ -518,4 +535,93 @@ let realNode: string | null = null;
  * Quem chama trata `null` caindo em `process.execPath`. */
 export function realNodePath(): string | null {
   return realNode;
+}
+
+/**
+ * Parse of `locale -a` stdout. Exported so the test can feed a captured
+ * listing without spawning; the names we later write come from here,
+ * never from a string we constructed ourselves.
+ */
+export function parseLocaleDashA(stdout: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const name = line.trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
+export type LocaleListSpawn = () => { status: number | null; stdout: string };
+
+/**
+ * Installed locale names. `locale -a` is the portable listing whose
+ * strings `setlocale()` will accept. An injected `spawn` keeps the
+ * failure path (ENOENT, non-zero, empty) testable without a Mac.
+ * win32 / missing binary → `[]` → decision writes nothing.
+ */
+export function queryInstalledLocales(opts: { spawn?: LocaleListSpawn; timeoutMs?: number } = {}): string[] {
+  try {
+    const result =
+      opts.spawn?.() ??
+      spawnSync("locale", ["-a"], {
+        encoding: "utf8",
+        timeout: opts.timeoutMs ?? 2_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    if (result.status !== 0 || typeof result.stdout !== "string") return [];
+    return parseLocaleDashA(result.stdout);
+  } catch {
+    return [];
+  }
+}
+
+let localesSnapshot: string[] | null = null;
+
+function ensureInstalledLocales(): string[] {
+  if (!localesSnapshot) localesSnapshot = queryInstalledLocales();
+  return localesSnapshot;
+}
+
+/** Cached `locale -a` listing. Empty until first query; never invented. */
+export function installedLocales(): string[] {
+  return ensureInstalledLocales();
+}
+
+/**
+ * OS UI language (Electron `app.getLocale()`), not the in-app catalog
+ * override. A Brazilian host that set the Stellar UI to English still
+ * wants Portuguese CLIs. `null` until `setSystemLanguageHint` runs;
+ * `systemLanguageHint()` then falls back to ICU.
+ */
+let languageHint: string | null = null;
+
+export function setSystemLanguageHint(tag: string | null | undefined): void {
+  const trimmed = tag?.trim();
+  languageHint = trimmed ? trimmed : null;
+}
+
+export function systemLanguageHint(): string | null {
+  if (languageHint) return languageHint;
+  try {
+    const tag = Intl.DateTimeFormat().resolvedOptions().locale;
+    return tag || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Patch to spread onto a PTY env. Pure decision + cached listing; no
+ * login-shell spawn. Empty object = inherited locale is already fine
+ * (or we have no name we can justify).
+ */
+export function effectiveLocaleEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return decideLocaleEnv({
+    env,
+    availableLocales: installedLocales(),
+    preferredLanguage: systemLanguageHint(),
+  }).writes;
 }

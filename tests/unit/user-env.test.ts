@@ -10,10 +10,13 @@ import {
   knownBinDirs,
   loginShell,
   mergePathDirs,
+  parseLocaleDashA,
+  queryInstalledLocales,
   queryShellPath,
   resolveRealNode,
   shellQuery,
 } from "../../src/main/user-env";
+import { decideLocaleEnv } from "../../src/main/locale-env-decision";
 import { which } from "../../src/main/providers";
 
 /**
@@ -414,5 +417,28 @@ describe("user-env: resolveRealNode", () => {
     expect(typeof node).toBe("string");
     expect(node).toBe(preflight);
     expect(existsSync(node!)).toBe(true);
+  });
+});
+
+describe("user-env: locale listing (I/O around locale-env-decision)", () => {
+  it("parseLocaleDashA descarta vazios e preserva o nome exato de locale -a", () => {
+    expect(parseLocaleDashA("C\npt_BR.UTF-8\n\npt_BR.UTF-8\nC.utf8\n")).toEqual(["C", "pt_BR.UTF-8", "C.utf8"]);
+  });
+
+  it("queryInstalledLocales: comando ausente / status != 0 devolve lista vazia, sem inventar nome", () => {
+    expect(queryInstalledLocales({ spawn: () => ({ status: 1, stdout: "pt_BR.UTF-8\n" }) })).toEqual([]);
+    expect(queryInstalledLocales({ spawn: () => { throw new Error("ENOENT"); } })).toEqual([]);
+  });
+
+  it("queryInstalledLocales: listing real — cada nome escrito por effectiveLocaleEnv está na lista", () => {
+    const available = queryInstalledLocales();
+    const writes = decideLocaleEnv({
+      env: {},
+      availableLocales: available,
+      preferredLanguage: "pt-BR",
+    }).writes;
+    for (const name of Object.values(writes)) {
+      expect(available).toContain(name);
+    }
   });
 });
