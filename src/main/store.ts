@@ -174,40 +174,33 @@ export type TaskRow = {
    * board to check for autonomous mode) — pure external-orchestrator
    * bookkeeping only, same as before this column existed. */
   board_id: string | null;
-  /** Working directory for auto-dispatch / auto-retry spawns. Set at
-   * `create_task` (or later via `update_task`); `null` means "use the
-   * board root" — the same fallback `App.tsx` already applied when spawn
-   * params omitted cwd, now declared on the task instead of hardcoded
-   * `undefined` in `onTaskDone`/`retryOrFail`. No repo-heuristic fill-in. */
+  /** Working directory for auto-dispatch spawns. Set at `create_task`
+   * (or later via `update_task`); `null` means "use the board root" —
+   * the same fallback `App.tsx` already applied when spawn params omitted
+   * cwd, now declared on the task instead of hardcoded `undefined` in
+   * `onTaskDone`. No repo-heuristic fill-in. */
   cwd: string | null;
   result_json: string | null;
   deps_json: string | null;
-  /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 — started
-   * as bare bookkeeping for an external orchestrator's own retry loop;
-   * item 60 peça 4 added a REAL internal auto-retry on top, but only
-   * inside an autonomous board (`board_id` set + `isBoardAutonomous`) —
-   * outside that, still pure bookkeeping, unchanged. `retry_count` and
-   * `attempted_providers_json` (JSON array, in order tried) exist either
-   * way, so an external orchestrator that doesn't opt into autonomous
-   * mode keeps working exactly as before. */
+  /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 —
+   * `retry_count` is incremented by the app on each in-line `report`
+   * refusal (same agent, same session) and by `update_task.incrementRetry`
+   * when a human/orchestrator reassigns by hand. `attempted_providers_json`
+   * (JSON array, in order tried) is bookkeeping for that hand reassignment
+   * — the app never picks a fallback provider itself. */
   retry_count: number;
   attempted_providers_json: string | null;
   /** DESIGN-BACKLOG.md item 60, peça 4 — set once at `create_task`,
    * never changed after. `null` means "use the app-wide default"
    * (`DEFAULT_MAX_RETRIES` in message-bus.ts), same convention as
-   * `boards.concurrency_cap`. Auto-retry (peça 4) stops once
-   * `retry_count` reaches this — the task stays `failed` for good,
-   * no infinite retry loop. */
+   * `boards.concurrency_cap`. Bounds in-line `report` refusals for the
+   * same agent; once `retry_count` reaches this, a declared failure is
+   * accepted and the task stays `failed`. */
   max_retries: number | null;
-  /** DESIGN-BACKLOG.md item 60, peça 4 follow-up — reassignment on
-   * retry, the multi-provider thesis the audit actually argued for
-   * (item 60's first pass only retried the SAME provider every time,
-   * flagged live by a reviewing agent as not really delivering on that
-   * thesis). Set once at `create_task`, in the order to try — never
-   * guessed by the app itself, since "what's an acceptable substitute
-   * provider" is domain-specific, not something to hardcode. `null`/
-   * empty means "keep retrying the original provider", the old
-   * behavior, unchanged when this is omitted. */
+  /** Bookkeeping list of substitute providers for a human/orchestrator
+   * who reassigns by hand (`update_task.attemptedProvider`). The app
+   * never reads this to spawn or reassign — kept public so that loop
+   * does not have to track the list elsewhere. */
   fallback_providers_json: string | null;
   /** DESIGN-BACKLOG.md §2.1 "Card `task`", decisão 6 — DOIS DONOS
    * deliberadamente separados: `order` só é escrito por um humano
@@ -304,7 +297,7 @@ export type TaskRow = {
 };
 
 /** `actor` de `task_transitions` — quem causou a transição. "app" é o
- * próprio motor (onTaskDone/retryOrFail/card saindo sem reportar,
+ * próprio motor (onTaskDone/card saindo sem reportar,
  * message-bus.ts), "agent" é uma chamada de create_task/update_task via
  * MCP, "human" é reservado pra Fase 2 (arrastar a mão no board). */
 export type TaskActor = "app" | "agent" | "human";

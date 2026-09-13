@@ -2,7 +2,7 @@
  * Pure decision for auto-dispatch/retry spawn params (DESIGN-BACKLOG.md —
  * card `claude` alone at board root / "trust this folder").
  *
- * `onTaskDone` / `retryOrFail` used to hardcode `cwd: undefined`, so the
+ * `onTaskDone` used to hardcode `cwd: undefined`, so the
  * renderer always fell through to `cwd || activeBoardCwd` (board root).
  * That is still the declared fallback when a task has no cwd of its own —
  * this module makes that choice explicit and testable. No repo-heuristic
