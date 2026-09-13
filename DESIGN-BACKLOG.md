@@ -27,6 +27,85 @@ Este documento consolida o estado atual de design, produto e arquitetura do proj
 
 ### Sprint 3 — aberta 2026-09-13 (relatos do dono + usuários de Mac)
 
+#### Enxutação do fluxo — síntese das 3 investigações (2026-09-13, tasks 215b8528 / 806a4832 / 3b92be14)
+
+Pedido do dono: "o que mais de enxutação de processos para tornar o fluxo do Stellar
+algo mais direto... gostei do retry em tempo real, em turno, para poupar o agente de
+não entender o processo". As três investigações mediram no código e no banco, não
+opinaram. O que segue é tudo o que elas acharam, incluindo o que decidimos NÃO fazer —
+o não-fazer com motivo vale tanto quanto o fazer, e é o que impede alguém de "consertar"
+isso daqui a três meses.
+
+**Já resolvido hoje, e é o modelo**: `2023a74` (recusa de report volta como JSON no
+retorno da própria tool, zero digitação), `e14cc76` (brief inicial por argv no spawn),
+`0955373` (`spawn_agent{taskId}` mata o `update_task(cardId)` e o briefing reescrito),
+`4b0cb70` (declaração de brief virou verificada, não acreditada).
+
+**A fazer — canal programático no lugar de digitação** (todos com o JSON já existindo):
+* `notifySpawnerOfReport` digita no PTY do orquestrador MESMO quando um waiter de
+  `read_report` já recebeu o corpo — dois canais para o mesmo evento. O aviso é só
+  ponteiro; o payload já está na tabela antes dele.
+* `notifySpawnerOfUnreportedExit` — mesma forma, e é *fire-and-forget*: um Enter extra
+  corrompe o turno do orquestrador sem o caller saber.
+* Aviso de hold do `update_task` — o retorno da tool **já carrega** `warning`,
+  `status` e `divergedStatus`. A digitação só repete o mesmo texto. É a cópia mais
+  barata do modelo do `2023a74`.
+* Os dois `notifyHumanMovedTask` assíncronos (drag humano na Fila; Allow/Deny do
+  pedido de status) — virar fallback. A verdade está na task; quem precisa reagir
+  consulta `get_task`. Só manter push se o dono exigir reação imediata no card.
+
+**A fazer — o card nasce sabendo**:
+* O card **não recebe o próprio `taskId`**. O vínculo existe (`tasks.card_id`,
+  `task_cards`), mas o env só leva `AGENT_CANVAS_CARD_ID/SOCK/MCP_URL/SPAWN_DEPTH`.
+  Entregar o id não exige heurística nenhuma.
+* Derivar fatos de sessão do que o app já sabe (cardId, taskId, cwd, quem mais está
+  no mesmo cwd, board autônomo) e entregar pelo mesmo caminho do `deriveReportDiscovery`.
+* O que é **julgamento** (território de arquivos, lista de gates, "eu commito",
+  schema do report) não pode ser derivado — só declarado. Vira campo estruturado na
+  task, uma vez, em vez de parágrafo colado em todo briefing. Com o schema declarado,
+  a recusa in-line do `report` passa a nomear o campo em falta.
+
+**A fazer — buracos medidos**:
+* `create_task(deps)` **não dispara quando o pai já está `done`** — só a transição
+  dispara. Como o prompt do filho costuma ser escrito depois de ler o relatório do
+  pai, esse é o caminho que mais cai no buraco.
+* `deliverCard` é o único motor que confirma por leitura de tela, e continua sendo
+  necessário para o que sobrar. Endurecer a confirmação **depois** de encolher os
+  chamadores, não antes.
+* `BrowserCard.sendDesignPickTo` aperta Enter cego após 60 ms, **sem read-back** —
+  confirmação mais fraca que a do `deliverCard`, num caminho humano.
+
+**Decidido NÃO fazer, com o motivo medido**:
+* **Auto-`done` em `report{ok:true}`** — 3 das 8 tasks concluídas hoje tiveram 2 a 5
+  relatórios, a maioria com `ok:true` em rodada intermediária (`d7250487` teve 4).
+  Fechar no primeiro teria despachado dependentes em cima de progresso. E ensinaria o
+  agente a declarar sucesso falso para escapar — o mesmo motivo de `retryable: false`
+  existir.
+* **Auto-fechar card no `done`** — mata processo, sem undo, e neste board nem pede
+  consentimento. O retry in-line tornou manter o card **mais** valioso, não menos.
+* **Auto-começar `pending` sem deps** — o app passaria a iniciar trabalho sozinho.
+  As três investigações da manhã ficaram 52 min em `pending` de propósito: isso é
+  cadência humana, não lacuna.
+* **Inventar inbox/RPC para `send_to_card`** — CLI de terceiro numa TUI não tem RPC;
+  stdin é o único input que ele trata como mensagem. O conserto ali é a confirmação,
+  não o canal.
+* **Inflar `SERVER_INSTRUCTIONS`/`ACBRIDGE_HINT`** com as regras repetidas — texto
+  estático igual para todo card, e cursor/antigravity/opencode nem recebem o HINT.
+* **Vigiar filesystem para inferir território, interceptar `git add`, julgar saída de
+  gate** — heurística frágil, e faria o app virar test runner.
+
+**Medições que mudam o comportamento do orquestrador, não o código**:
+* `read_report {wait: true}` é armadilha: o servidor aguenta 10 min, mas o host MCP
+  aborta em ~2 min. O caminho certo é esperar o push e chamar `read_report` sem wait,
+  com `afterSeq` quando houver rodadas.
+* `deps` foi usada **zero** vezes nas 11 tasks criadas hoje, e havia três sequências
+  investigar→corrigir que cabiam nela.
+* **0 de 20 relatórios** usaram o campo `verdict` tipado — e `shouldProposeCompletion`
+  só oferece o botão de concluir quando `verdict === "aprovado"`. A funcionalidade
+  existe e está morta por falta de uso.
+* Gap mediano entre relatório e `done` hoje: ~2 min (12–221 s). Se fosse mecânico,
+  seria zero — é nesse intervalo que o julgamento acontece.
+
 * **Spawn de card cursor abre um binário alheio — relato de usuários de Mac.** "Continua abrindo Claude ou
   agentes alheios na função de spawn."
   * **Causa candidata, localizada no código, ainda NÃO medida:** `providers.ts:312` declara
