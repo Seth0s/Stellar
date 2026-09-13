@@ -1130,3 +1130,52 @@ seria andar sobre relatório não julgado; andar em `done` não é. Nada a imple
 'reprovado'` é gravado e nada age; não existe status `cancelled`; nos três casos de quebra
 de corrente (investigação sem o que implementar, implementação que derruba o diagnóstico,
 review que reprova) a resposta hoje é "o humano desfaz na mão". Fica registrado como aberto.
+
+### Por que nenhum card cursor jamais teve as tools MCP (2026-09-13)
+
+`cursor-agent mcp list` diz `stellar: ready` e `mcp list-tools stellar` diz
+`No tools available`. A causa não é aprovação, config, rede nem o shim: **o cursor não
+repassa ambiente ao processo MCP que lança — é whitelist, não herança.** Medido em
+`/proc` com cards vivos: o processo `agent` tem ~70 variáveis (incluindo
+`AGENT_CANVAS_MCP_URL`, `CARD_ID`, `SOCK`, `NODE`); o shim filho recebe 10
+(`SHELL PWD LOGNAME HOME TERM USER SHLVL PATH` + as 2 que a própria linha `sh` do shim
+cria). Sem `AGENT_CANVAS_MCP_URL`, o shim cai em `respondOffline` e devolve
+`serverInfo: "stellar (offline)"` com `tools: []`.
+
+É por isso que o `acbridge` funciona e o MCP não **no mesmo card**: o acbridge é filho do
+bash do PTY e herda tudo; o shim é filho do cliente MCP do cursor.
+
+Consequência que muda a leitura do dia: os 3 shims cursor vivos (cards 467, 481, 483)
+estavam todos sem env. **Nenhum card cursor teve as tools `stellar` funcionando.** Todo
+`reports.verdict` tipado gravado por card cursor veio por contorno (SDK do MCP contra
+`$AGENT_CANVAS_MCP_URL` a partir do shell, que tem a variável).
+
+**Achado que ninguém tinha visto**: `AGENT_CANVAS_NODE` também é filtrado. O polyglot
+sh/node no cabeçalho do shim existe para sobreviver ao PATH mínimo do Finder no macOS, e a
+mesma whitelist o derrota — o shim cai no `node` do PATH.
+
+**Solução, medida duas vezes independentemente**: `~/.cursor/mcp.json` aceita interpolação
+`${env:VAR}`, resolvida por **cada processo `cursor-agent` a partir do próprio ambiente**.
+Um config global e único portanto **dá identidade por card**. Duas formas funcionam:
+`env` interpolado mantendo o shim, ou `"url": "${env:AGENT_CANVAS_MCP_URL}?card=${env:AGENT_CANVAS_CARD_ID}"`
+sem shim nenhum (44 tools ao vivo, transporte HTTP nativo). Task `8d9fe659`.
+
+**Descartado — descoberta de identidade por árvore de processos.** A hipótese é
+factualmente correta (o shim é filho direto do `agent`, um hop, `/proc/<ppid>/environ`
+legível pelo mesmo uid — verificado nos três cards). Cai por **desnecessidade**, não por
+impossibilidade: cria um segundo mecanismo em lockstep com a injeção de env do
+`pty-registry`, depende de o cursor nunca inserir um wrapper entre ele e o shim, e não
+existe no macOS.
+
+**Descartado — "MCP primário, acbridge fallback" como conserto.** Certo como ergonomia,
+errado como motivo: a perda do verdict era propriedade da **build instalada** (11/09), não
+do acbridge. Com `promoteReportVerdict` no servidor, os dois canais gravam a mesma coluna.
+O que sobra de vantagem do MCP é real mas menor — schema tipado, não escapar JSON no
+shell, `read_report{wait}`, `get_task`. A regra única para o agente passa a ser: *se a
+tool `report` está no seu catálogo, use-a; senão `acbridge report` com `verdict` dentro do
+JSON* — decidível em runtime pelo próprio agente, sem segunda lista.
+
+**Ordem de execução corrigida**: o pré-requisito de `1f82dddf` nunca foi o MCP do cursor —
+era **instalar a build atual**. A de 11/09 não tem `promoteReportVerdict`,
+`resolveReporterRole`, `link_task_card` nem `AGENT_CANVAS_TASK_ID`; com ela nenhum canal
+grava papel.
