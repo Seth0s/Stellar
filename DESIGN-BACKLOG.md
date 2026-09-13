@@ -94,6 +94,16 @@ retorno da própria tool, zero digitação), `e14cc76` (brief inicial por argv n
 * **Vigiar filesystem para inferir território, interceptar `git add`, julgar saída de
   gate** — heurística frágil, e faria o app virar test runner.
 
+**Notificação de SO para de incomodar o humano (decisão do dono, 2026-09-13)**:
+Aviso de agente é para agente. Hoje cada `report` de cada card dispara um popup de
+SO (`notifyCardReported`, index.ts:1404), cada saída sem relatório dispara outro
+(`notifyCardExitedWithoutReport`, 1421), e o poller de idle dispara um terceiro
+(`notifyIdleCard`, 1372). O idle de card de agente **sai**; os outros dois somem ou
+viram opt-in. Junto com a troca de digitação por JSON acima, o resultado é o que o
+dono pediu: o orquestrador recebe JSON, e o humano não é interrompido. Notar que o
+throttle `REPORT_NOTIFY_MIN_INTERVAL_MS` existe só por causa do popup — sem ele,
+perde o sentido.
+
 **Medições que mudam o comportamento do orquestrador, não o código**:
 * `read_report {wait: true}` é armadilha: o servidor aguenta 10 min, mas o host MCP
   aborta em ~2 min. O caminho certo é esperar o push e chamar `read_report` sem wait,
