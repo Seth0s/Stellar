@@ -18,6 +18,19 @@
     0 0 20px -6px var(--accent, transparent);
 }
 
+/* Medido via CDP (card 55ed1cb4): `.card-scale` é `rect` em unidades de
+   mundo, o frame é border-box com 1px de borda, origin 0 0 depois da
+   borda esquerda/cima. Em zoom >= 0.9 o CardFrame NÃO compensa (comentário
+   em CardFrame.tsx — mexer lá pega BrowserCard). Resultado no terminal
+   largo: clip/body/footer 1px além da borda direita E inferior, o
+   anel de acento acima torna o vazamento óbvio. Encolher o clip 2px
+   (as duas bordas) ancora o body dentro da content-box sem tocar no
+   CardFrame nem nas zonas de resize (irmãs do scale, fora do clip). */
+.terminalCard :global(.card-clip) {
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+}
+
 /* Sino de notificação (2026-09-02) — mesma base de `.card-head button`;
    `.on` (ligado, padrão) tinge com `--accent` — a MESMA variável que
    CardFrame.tsx já seta em `.card-frame` a partir de PROVIDER_ACCENT
@@ -63,16 +76,19 @@
    cards.css via :global() quebra o PostCSS deste setup (ver
    TaskCard.module.css — mesma causa da varredura sumida). Duas vezes já
    produziu animação morta neste repo — não globalizar.
-   Sweep (§2.0 item 6): width 34%, começa em left:-34%. translateX é % da
-   PRÓPRIA faixa, então deslocamento em % do card = translate × 0.34.
-   288% andava ~98% do card (borda direita quase saindo). 200% anda 68%
-   — a borda direita da faixa para em ~68% do card, antes do fim. */
+   Sweep: width 34%, começa em left:-34%. translateX é % da PRÓPRIA faixa,
+   então 200% só anda 68% do card e o ease-in-out congela aí — a foto do
+   dono (barra eterna parada antes do fim). Medido ao vivo: `100cqi`
+   dentro do keyframe resolveu pra 0 neste Chromium (andou só ~32%,
+   equivalente a translateX(100%) da faixa). 394.117647% = (1+0.34)/0.34
+   — um card inteiro mais a própria faixa, borda direita sai do card.
+   Ver terminal-activity-sweep.ts. */
 @keyframes terminal-card-activity-sweep {
   from {
     transform: translateX(0);
   }
   to {
-    transform: translateX(200%);
+    transform: translateX(394.117647%);
   }
 }
 .terminalCardActivity {
@@ -118,6 +134,8 @@
 
 .terminalCardBody {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   font-family: var(--font-mono);
   background: var(--panel);
