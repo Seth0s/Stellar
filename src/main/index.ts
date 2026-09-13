@@ -37,7 +37,7 @@ import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJs
 import { describeStatusAskResolved } from "./status-write-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
-import { refreshUserEnv, userEnvSnapshot } from "./user-env";
+import { refreshUserEnv, setSystemLanguageHint, userEnvSnapshot } from "./user-env";
 import {
   createEntry,
   deletePath,
@@ -458,6 +458,10 @@ function createWindow() {
   const localePrefs = createLocalePrefs(app.getPath("userData"));
   const systemLocale = app.getLocale();
   setLocale(resolveLocale(systemLocale, localePrefs.getOverride()));
+  // PTY locale synthesis (user-env.ts) uses the OS language, not the
+  // in-app catalog override: CLIs should speak the host language even
+  // when the Stellar UI was switched to English.
+  setSystemLanguageHint(systemLocale);
 
   function applyLocale(next: Locale): void {
     setLocale(next);

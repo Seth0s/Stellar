@@ -1,7 +1,7 @@
 import { delimiter } from "node:path";
 import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, providerById, type SpawnOpts } from "./providers";
-import { effectivePath, realNodePath } from "./user-env";
+import { effectivePath, effectiveLocaleEnv, realNodePath } from "./user-env";
 import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
 import { decideRearmOnLine, CLAIMED_SESSION_STALE_MS } from "./session-rearm-decision";
 import { decideResumeValidity } from "./session-resume-validation";
@@ -470,6 +470,10 @@ export function createPtyRegistry(registryOpts: {
 
     const env: Record<string, string> = {
       ...inheritedEnv,
+      // Same launchd hole as PATH (user-env.ts): a Finder `.app` arrives
+      // with LANG/LC_* absent and every PTY becomes C/US-ASCII. Decision
+      // is `locale-env-decision.ts`; this spread only applies the patch.
+      ...effectiveLocaleEnv(inheritedEnv),
       AGENT_CANVAS_SOCK: registryOpts.sockPath,
       AGENT_CANVAS_CARD_ID: id,
       // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — fork-bomb guard.
