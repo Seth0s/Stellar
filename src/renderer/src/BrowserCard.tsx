@@ -8,6 +8,7 @@ import type { Rect } from "./board-model";
 import styles from "./BrowserCard.module.css";
 import { matchesShortcut } from "./shortcut-config";
 import type { ShortcutOverrides } from "./shortcut-registry";
+import { sendDesignPick, type DesignPick } from "./design-pick-send";
 
 // DESIGN-BACKLOG.md §2.1 Item E — Mobile/Tablet mirroring the real
 // devices CentralByte's own presets target. "Fluido" (free resize) has
@@ -97,10 +98,10 @@ function mouseButtonName(button: number): "left" | "middle" | "right" {
  * processo main além de console-message, e reaproveitar isso pra dado
  * estruturado seria mais gambiarra que o polling.
  *
- * "Enviar" usa `window.pty.write` direto — o MESMO primitivo que
- * `send_to_card` (MCP) usa por trás (`pty-registry.ts`'s `write`), só que
- * chamado direto do renderer: é o próprio usuário agindo num card que ele
- * está olhando, mesma categoria de `evalJs`/`getPageText` (sem gate). */
+ * "Enviar" vai pelo `cmd send` do bus (`window.bus.send` →
+ * `typeAndSubmit`/`deliverCard`): destino pronto, Enter confirmado,
+ * composer limpo se desistir. Sem `pty.write` + Enter cego. Caminho
+ * humano (um clique) — sem retry próprio; o motor já existente cobre. */
 const DESIGN_ENABLE_SCRIPT = `
 (() => {
   if (window.__stellarDesignActive) return true;
@@ -162,8 +163,6 @@ const DESIGN_POLL_SCRIPT = `
 `;
 const DESIGN_POLL_INTERVAL_MS = 200;
 
-type DesignPick = { tag: string; className: string; selector: string; width: number; height: number };
-
 /** `"fit"` — o frame do dispositivo cabe no espaço disponível (contido,
  * sem cortar); qualquer valor numérico (`"1"`/`"0.75"`/`"0.5"` dos zooms
  * fixos, ou um valor arbitrário travado durante um arraste de resize —
@@ -204,11 +203,6 @@ function emulatedFrameCanvasStyle(frame: EmulatedFrame): React.CSSProperties {
     return { maxWidth: "100%", maxHeight: "100%", aspectRatio: `${frame.width} / ${frame.height}` };
   }
   return { width: frame.width * Number(frame.zoom), height: frame.height * Number(frame.zoom) };
-}
-
-function designContextText(pick: DesignPick, pageUrl: string): string {
-  const opening = pick.className ? `<${pick.tag} class="${pick.className}">` : `<${pick.tag}>`;
-  return `${opening} — ${pick.selector}\n${pageUrl} · ${pick.width}×${pick.height}px`;
 }
 
 /** Pre-release audit P1 — see useStableCardHandler.ts's doc comment;
@@ -559,10 +553,7 @@ function BrowserCardInner({
 
   function sendDesignPickTo(targetId: string) {
     if (!designPick) return;
-    const text = designContextText(designPick, bar);
-    void window.pty.write(targetId, text).then(() => {
-      window.setTimeout(() => void window.pty.write(targetId, "\r"), 60);
-    });
+    sendDesignPick((target, text) => window.bus.send(target, text), targetId, designPick, bar);
     setDesignPick(null);
   }
 

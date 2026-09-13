@@ -36,6 +36,7 @@ import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJs
 import { describeStatusAskResolved } from "./status-write-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
+import { resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { refreshUserEnv, setSystemLanguageHint, userEnvSnapshot } from "./user-env";
 import { composeSystemLanguageHint } from "./locale-env-decision";
 import {
@@ -1674,12 +1675,31 @@ function createWindow() {
         // que é exatamente o que ele tinha antes disto existir.
         console.error(`mcp-registration (${providerId}): ${registration.error}`);
       }
-      const result = registry.spawn(id, providerId, cwd, cols, rows, opts);
+      // Restore (and any spawn that omitted opts.taskId) re-reads the
+      // store link: a card already amarrado to a task gets
+      // AGENT_CANVAS_TASK_ID without inventing one. First spawn via
+      // spawn_agent({ taskId }) / auto-dispatch still passes it in opts
+      // because the link is written only after the card exists.
+      const taskId = resolveDeclaredTaskId({
+        explicit: opts?.taskId,
+        primaryTaskIds: store.listTasks().filter((t) => t.card_id === id).map((t) => t.id),
+        linkTaskIds: store.listTaskCardsForCard(id).map((l) => l.task_id),
+      });
+      const result = registry.spawn(id, providerId, cwd, cols, rows, { ...opts, taskId });
       if ("id" in result) remoteServer?.broadcastCards();
       return result;
     },
   );
   ipcMain.handle("pty:write", (_e, id: string, data: string) => registry.write(id, data));
+  // Human Design Mode "Enviar" (BrowserCard) — same `cmd: "send"` that
+  // `send_to_card` / `acbridge send` already use. Thin wire only; the
+  // engine stays in message-bus.ts (`typeAndSubmit` / `deliverCard`).
+  ipcMain.handle("bus:send", (_e, target: string, text: string) => {
+    if (typeof target !== "string" || typeof text !== "string") {
+      return { ok: false as const, error: "invalid send" };
+    }
+    return messageBus!.handleRequest({ cmd: "send", target, text });
+  });
   ipcMain.handle("pty:resize", (_e, id: string, cols: number, rows: number) => registry.resize(id, cols, rows));
   ipcMain.handle("pty:interrupt", (_e, id: string) => registry.interrupt(id));
   ipcMain.handle("pty:kill", (_e, id: string) => {
