@@ -200,6 +200,20 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
     expect(claude.spawned[0].params.brief).toBe(task.prompt);
     expect(claude.writes).toEqual([]);
 
+    const cursor = await dispatch(
+      { cmd: "spawn_agent", provider: "cursor", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
+    );
+    expect(cursor.spawned[0].params.brief).toBe(task.prompt);
+    expect(cursor.writes).toEqual([]);
+
+    const antigravity = await dispatch(
+      { cmd: "spawn_agent", provider: "antigravity", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
+    );
+    expect(antigravity.spawned[0].params.brief).toBe(task.prompt);
+    expect(antigravity.writes).toEqual([]);
+
     const bash = await dispatch(
       { cmd: "spawn_agent", provider: "bash", taskId: task.id, requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
