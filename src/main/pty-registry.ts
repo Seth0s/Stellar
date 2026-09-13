@@ -1039,6 +1039,9 @@ export function createPtyRegistry(registryOpts: {
     inputLineLastAtMs: number | null;
     /** Peer requested DECSET 2004h (Bracketed Paste Mode). */
     bracketedPasteMode: boolean;
+    /** Monotonic `2004l`/reset count — readline "line accepted" signal
+     * for shell targets (see `BracketedPasteModeState.offEvents`). */
+    bracketedPasteOffEvents: number;
   } | null {
     const entry = entries.get(id);
     if (!entry) return null;
@@ -1049,6 +1052,7 @@ export function createPtyRegistry(registryOpts: {
       hasPendingHumanInput: entry.inputLineBuffer.length > 0,
       inputLineLastAtMs: entry.inputLineLastAtMs,
       bracketedPasteMode: entry.bracketedPasteMode.enabled,
+      bracketedPasteOffEvents: entry.bracketedPasteMode.offEvents,
     };
   }
 

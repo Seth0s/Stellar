@@ -506,7 +506,10 @@ socket.on("close", () => {
     // the MCP send_to_card return — poll get-delivery with `id`.
     console.log(JSON.stringify({ delivery: res.delivery, reason: res.reason, id: res.id }));
   } else if (cmd === "get-delivery") {
-    console.log(JSON.stringify({ delivery: res.delivery, reason: res.reason, id: res.id, target: res.target }));
+    // `delivery` settles to delivered | failed | unconfirmed — the screen
+    // confirmation's verdict, not "the FIFO item finished". `confirm` is
+    // the raw finding behind it (result, attempts, enters, composerCleared).
+    console.log(JSON.stringify({ delivery: res.delivery, reason: res.reason, confirm: res.confirm, id: res.id, target: res.target }));
   } else if (cmd === "open") {
     // O cardId agora vem junto (2026-09-01) — é ele que serve de alvo pros
     // comandos `browser-*` e `page-text` no card recém-aberto.

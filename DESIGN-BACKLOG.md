@@ -71,9 +71,27 @@ retorno da própria tool, zero digitação), `e14cc76` (brief inicial por argv n
   pai, esse é o caminho que mais cai no buraco.
 * `deliverCard` é o único motor que confirma por leitura de tela, e continua sendo
   necessário para o que sobrar. Endurecer a confirmação **depois** de encolher os
-  chamadores, não antes.
+  chamadores, não antes. — **[x] feito (2026-09-13, depois de `97f34bf8`)**. O que
+  se mediu: o veredito do laço era **descartado** — `get_delivery` dizia `delivered`
+  até para a entrega que apertou 4 Enters, viu o texto preso, limpou o composer e o
+  perdeu; e alvo `bash` lia **sempre** `unsent` (o eco do comando fica na tela), então
+  toda `send_to_card` para bash custava 4 Enters + Ctrl+U. Agora: `get_delivery`
+  assenta em `delivered` / `failed` (texto visivelmente preso, composer limpo —
+  reenvie) / `unconfirmed` (sem evidência — `read_card` antes de reenviar), com
+  `confirm:{result,attempts,enters,composerCleared}`; alvo shell tem regra própria
+  (`decideShellSubmitCheck`) e usa o `2004l` que o readline emite ao aceitar a linha
+  (medido no bash 5.3: sai **antes** do comando rodar, até para `sleep`) — comando
+  silencioso é `delivered`, programa em foreground ecoando é `unconfirmed` com **um**
+  Enter, não três a mais. `smoke-mcp-delivery-outcome.mjs` prova os três contra bash
+  real; o `failed` só é reproduzível em unit (nenhuma CLI real engole Enter de
+  propósito). Limite honesto que fica: o chip `[Pasted text]` na cauda continua
+  sendo teste absoluto, não relativo ao baseline (item da entrega duplicada no cursor).
 * `BrowserCard.sendDesignPickTo` aperta Enter cego após 60 ms, **sem read-back** —
-  confirmação mais fraca que a do `deliverCard`, num caminho humano.
+  confirmação mais fraca que a do `deliverCard`, num caminho humano. — **[x] já
+  resolvido em `9a8a58c`** (passa por `window.bus.send` → `cmd send` → `deliverCard`;
+  verificado por leitura em 2026-09-13, nada a fazer). O humano ainda não vê o
+  veredito (`bus:send` devolve só o recibo `queued`) — se quiser feedback no card,
+  é um `bus:get-delivery` no preload + polling, não outra variante de digitação.
 
 **Decidido NÃO fazer, com o motivo medido**:
 * **Auto-`done` em `report{ok:true}`** — 3 das 8 tasks concluídas hoje tiveram 2 a 5

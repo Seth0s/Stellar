@@ -1,0 +1,200 @@
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+
+/**
+ * Enxutação 2026-09-13 (DESIGN-BACKLOG.md §0, "deliverCard é o único motor
+ * que confirma por leitura de tela... o conserto é a confirmação"): the
+ * confirm loop's verdict used to be dropped on the floor — `get_delivery`
+ * answered `delivered` for a delivery that pressed Enter four times, saw
+ * the text still in the composer, cleared it and lost it. These tests
+ * lock the three settled states and the raw `confirm` behind them,
+ * against the same PTY double the other bus tests use (screen reads are
+ * scripted, nothing else is mocked).
+ */
+
+type DeliveryStatus = {
+  ok: boolean;
+  delivery?: "queued" | "delivered" | "unconfirmed" | "failed";
+  reason?: string;
+  confirm?: { result: string; attempts: number; enters: number; composerCleared: boolean };
+  id?: string;
+  target?: string;
+};
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+describe("message-bus: get_delivery carrega o veredito da confirmação", () => {
+  let dir: string | undefined;
+  let bus: ReturnType<typeof createMessageBus> | undefined;
+
+  afterEach(() => {
+    bus?.close();
+    bus = undefined;
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  function makeBus(opts: {
+    provider: string;
+    /** Screen text handed back to every read (before-write baseline and
+     * every post-Enter check alike). `null` → the read fails. */
+    screen: (readIndex: number) => string | null;
+    alive?: () => boolean;
+    /** Shell-only DECSET 2004 signal: was the prompt in 2004h, and does
+     * a `2004l` get emitted once the body is written (readline accepted)? */
+    paste?: { atPrompt: boolean; acceptsOnEnter: boolean };
+  }) {
+    dir = mkdtempSync(join(tmpdir(), "stellar-bus-delivery-outcome-"));
+    const writes: string[] = [];
+    const readySince = Date.now() - 1_000;
+    let lastActivity = readySince;
+    let reads = 0;
+    let offEvents = 0;
+    const callbacks = {
+      listCards: () => [{ id: "t", kind: "terminal", provider: opts.provider, cwd: "", label: null, displayName: opts.provider }],
+      writeToCard: () => undefined,
+      writeToCardWithOrigin: (_id: string, text: string) => {
+        writes.push(text);
+        lastActivity = Math.max(Date.now(), lastActivity + 1);
+        // bash 5.3 measured: `2004l` arrives with the Enter echo.
+        if (text === "\r" && opts.paste?.atPrompt && opts.paste.acceptsOnEnter) offEvents++;
+      },
+      beginCardDelivery: () => true,
+      endCardDelivery: () => undefined,
+      isCardAlive: opts.alive ?? (() => true),
+      getCardLastActivityAt: () => lastActivity,
+      getCardWriteReadiness: () => ({
+        spawnedAtMs: readySince,
+        hasReceivedData: true,
+        lastActivityAtMs: readySince,
+        hasPendingHumanInput: false,
+        inputLineLastAtMs: null,
+        ...(opts.paste ? { bracketedPasteMode: opts.paste.atPrompt, bracketedPasteOffEvents: offEvents } : {}),
+      }),
+      onReadCardRequest: (requestId: string) => {
+        const text = opts.screen(reads++);
+        bus?.resolveReadCard(requestId, text === null ? { ok: false, error: "no card" } : { ok: true, text });
+      },
+      describeCardLabel: (id: string) => id,
+      nextReportSeqSeed: () => 0,
+    } as unknown as Parameters<typeof createMessageBus>[1];
+    bus = createMessageBus(join(dir, "agent-canvas.sock"), callbacks);
+    return { bus, writes };
+  }
+
+  async function settle(b: NonNullable<typeof bus>, id: string, ms = 4000): Promise<DeliveryStatus> {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const status = (await b.handleRequest({ cmd: "get_delivery", id } as BusRequest)) as DeliveryStatus;
+      if (status.delivery !== "queued") return status;
+      if (Date.now() >= deadline) return status;
+      await delay(20);
+    }
+  }
+
+  it("texto preso no composer depois de todo Enter => failed, composer limpo, 4 Enters contados", async () => {
+    // Baseline "> " then, forever, the text sitting in the composer.
+    const { bus: b, writes } = makeBus({
+      provider: "claude",
+      screen: (i) => (i === 0 ? "> " : "> consertar o roteamento do push agora"),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "consertar o roteamento do push agora" } as BusRequest)) as DeliveryStatus;
+    expect(sent.delivery).toBe("queued");
+
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("failed");
+    expect(status.reason).toBeUndefined();
+    expect(status.confirm).toEqual({ result: "unsent", attempts: 4, enters: 4, composerCleared: true });
+    expect(writes.filter((w) => w === "\r")).toHaveLength(4);
+    expect(writes[writes.length - 1]).toBe("\x15\x15");
+  });
+
+  it("submit confirmado na primeira leitura => delivered, 1 Enter, composer intacto", async () => {
+    const { bus: b, writes } = makeBus({
+      provider: "claude",
+      screen: (i) => (i === 0 ? "> " : "→ consertar o roteamento do push agora\n  Working"),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "consertar o roteamento do push agora" } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("delivered");
+    expect(status.confirm).toEqual({ result: "sent", attempts: 1, enters: 1, composerCleared: false });
+    expect(writes).not.toContain("\x15\x15");
+  });
+
+  const prompt = "lucas@host:~/Stellar$";
+
+  it("alvo bash: eco + saída + prompt novo => delivered com 1 Enter (a regra de composer dava 4 + Ctrl+U)", async () => {
+    const { bus: b, writes } = makeBus({
+      provider: "bash",
+      screen: (i) => (i === 0 ? prompt : [`${prompt} echo mcp-smoke-$((1+1))`, "mcp-smoke-2", prompt].join("\n")),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "echo mcp-smoke-$((1+1))" } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("delivered");
+    expect(status.confirm).toEqual({ result: "sent", attempts: 1, enters: 1, composerCleared: false });
+    expect(writes).toEqual(["echo mcp-smoke-$((1+1))", "\r"]);
+  });
+
+  it("alvo bash, comando silencioso (sleep): readline emitiu 2004l => delivered, mesmo sem nada abaixo do eco", async () => {
+    const { bus: b, writes } = makeBus({
+      provider: "bash",
+      paste: { atPrompt: true, acceptsOnEnter: true },
+      screen: (i) => (i === 0 ? prompt : [prompt, `${prompt} sleep 30`].join("\n")),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "sleep 30" } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("delivered");
+    expect(status.confirm).toEqual({ result: "sent", attempts: 1, enters: 1, composerCleared: false });
+    expect(writes).toEqual(["sleep 30", "\r"]);
+  });
+
+  it("alvo bash com programa em foreground ecoando (sem readline) => unconfirmed, 1 Enter só, sem reenviar", async () => {
+    const { bus: b, writes } = makeBus({
+      provider: "bash",
+      paste: { atPrompt: false, acceptsOnEnter: false },
+      screen: (i) => (i === 0 ? `${prompt} python3 sink.py` : [`${prompt} python3 sink.py`, "HOLD-STELLAR texto que o sink ecoou"].join("\n")),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "HOLD-STELLAR texto que o sink ecoou" } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm).toEqual({ result: "unknown", attempts: 4, enters: 1, composerCleared: true });
+    expect(writes.filter((w) => w === "\r")).toHaveLength(1);
+  });
+
+  it("alvo bash no prompt (2004h) que NÃO aceita a linha => unsent/failed com retentativas de Enter", async () => {
+    const { bus: b, writes } = makeBus({
+      provider: "bash",
+      paste: { atPrompt: true, acceptsOnEnter: false },
+      screen: (i) => (i === 0 ? prompt : `${prompt} echo mcp-smoke-$((1+1))`),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "echo mcp-smoke-$((1+1))" } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("failed");
+    expect(status.confirm).toEqual({ result: "unsent", attempts: 4, enters: 4, composerCleared: true });
+    expect(writes.filter((w) => w === "\r")).toHaveLength(4);
+  });
+
+  it("leitura de tela falha => unconfirmed/read-failed, sem adivinhar", async () => {
+    const { bus: b } = makeBus({ provider: "claude", screen: (i) => (i === 0 ? "> " : null) });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "consertar o roteamento do push agora" } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm?.result).toBe("read-failed");
+    expect(status.confirm?.enters).toBe(1);
+    expect(status.confirm?.composerCleared).toBe(true);
+  });
+
+  it("card sumiu antes de digitar => unconfirmed/card-gone, nada escrito", async () => {
+    const { bus: b, writes } = makeBus({ provider: "claude", screen: () => "> ", alive: () => false });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "consertar o roteamento do push agora" } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm).toEqual({ result: "card-gone", attempts: 0, enters: 0, composerCleared: false });
+    expect(writes).toEqual([]);
+  });
+});
