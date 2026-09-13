@@ -127,4 +127,22 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
     expect(writes.at(-1)).toBe(composerClearSequence());
     expect(inputs).toEqual(["target"]);
   });
+
+  it("regressão: message-bus PASSA o padrão do provider para decidir se começou", async () => {
+    const brief = "brief the worker";
+    // O texto da tela contém O NEEDLE VISÍVEL e a palavra afirmativa "Working".
+    // - Sem o submitStartedPattern de Claude (a regressão), decideSubmitCheck vê o
+    //   needle, não acha submit-started, deduz que o chip está travado, devolve
+    //   "unsent" e o bus aperta Enter 4 vezes.
+    // - Com o pattern de Claude ("Working"), ele devolve "sent" imediatamente,
+    //   mesmo o needle estando lá (é eco do histórico), e para no 1º Enter.
+    const { writes } = makeBus({
+      screenAfterWrite: (attempt) => attempt === 0 ? "" : `→ ${brief}\n  Working`,
+    });
+    await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest);
+
+    const enters = writes.filter((w) => w === "\r").length;
+    // Se o chamador não passar o padrão do provider Claude, enters seria > 1 (retry loop) e falharia.
+    expect(enters).toBe(1);
+  });
 });

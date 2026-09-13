@@ -1,6 +1,6 @@
 import { delimiter } from "node:path";
 import * as pty from "node-pty";
-import { resolveSpawn, providerInstallCommand, type SpawnOpts } from "./providers";
+import { resolveSpawn, providerInstallCommand, providerById, type SpawnOpts } from "./providers";
 import { effectivePath, realNodePath } from "./user-env";
 import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
 import { decideRearmOnLine, CLAIMED_SESSION_STALE_MS } from "./session-rearm-decision";
@@ -392,7 +392,7 @@ export function createPtyRegistry(registryOpts: {
     rows: number,
     spawnOpts: SpawnOpts = {},
   ):
-    | { id: string }
+    | { id: string; consumedBrief?: boolean }
     /** `searchedPath` pedido por nome no depoimento de um usuário de macOS
      * (2026-09-08): "mensagem de erro atual não informa qual PATH foi
      * usado na busca — dificulta diagnóstico pelo usuário final". Sem
@@ -701,7 +701,9 @@ export function createPtyRegistry(registryOpts: {
       registryOpts.onExit(id, exitCode);
     });
 
-    return { id };
+    const providerDef = providerById(providerId);
+    const consumedBrief = providerDef?.capacity.delivery.briefMechanism !== "none";
+    return { id, consumedBrief };
   }
 
   // Achado ao vivo (2026-09-07) — ver RESUME_TRIGGER_COMMANDS em

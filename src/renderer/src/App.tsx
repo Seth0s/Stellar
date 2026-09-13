@@ -170,6 +170,7 @@ type PendingAsk =
       // and card-types.ts's TerminalCardData.effort for the full reasoning.
       effort?: string;
       label?: string;
+      brief?: string;
     }
   | {
       kind: "spawn-card";
@@ -546,6 +547,7 @@ function fromRow(r: CardRow): Card {
         effort: r.effort,
         systemPrompt: r.system_prompt,
         initialInput: null,
+        brief: null,
         label,
         rect,
         groupId,
@@ -570,6 +572,7 @@ function fromRow(r: CardRow): Card {
         effort: r.effort,
         systemPrompt: r.system_prompt,
         initialInput: null,
+        brief: null,
         label,
         rect,
         groupId,
@@ -905,7 +908,7 @@ export function App() {
       // a human-approved spawn, just triggered immediately instead of by
       // a button click.
       if (params.autoApprove) {
-        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model, params.label, params.effort);
+        const cardId = spawnAgentFor(params.provider, params.cwd, params.resumeId, params.model, params.label, params.effort, params.brief);
         // DESIGN-BACKLOG.md item 62 — records real spawn lineage
         // automatically; `requesterId` is "" for the task engine's own
         // dispatches (item 60 peça 3), which have no real requester
@@ -932,6 +935,7 @@ export function App() {
         model: params.model,
         effort: params.effort,
         label: params.label,
+        brief: params.brief,
       });
     });
     const offAskSpawnCard = window.spawn.onAskCard((requestId, requesterId, params) => {
@@ -1847,6 +1851,7 @@ export function App() {
       effort: newEffort || null,
       systemPrompt: newSystemPrompt.trim() || null,
       initialInput: null,
+      brief: null,
       rect,
       groupId: null,
       label: null,
@@ -2068,7 +2073,7 @@ export function App() {
   // rather than a human. Always through `addCard` (unlike openBrowserFor
   // above) — this IS the "something appeared on the board that a human
   // didn't click" moment the toast exists for.
-  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string, effort?: string): string {
+  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string, effort?: string, brief?: string): string {
     const id = String(nextId.current++);
     addCard({
       id,
@@ -2081,6 +2086,7 @@ export function App() {
       effort: effort || null,
       systemPrompt: null,
       initialInput: null,
+      brief: brief || null,
       rect: centeredSlot(visibleRect, cardsRef.current.length, existingRectsFor(cardsRef.current)),
       groupId: null,
       // DESIGN-BACKLOG.md item 62 — an MCP-driven spawn can name its own
@@ -2115,6 +2121,7 @@ export function App() {
       effort: null,
       systemPrompt: null,
       initialInput: command,
+      brief: null,
       rect: centeredSlot(visibleRect, cardsRef.current.length, existingRectsFor(cardsRef.current)),
       groupId: null,
       label: `instalar ${providerId}`,
@@ -2190,7 +2197,7 @@ export function App() {
       if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
       void window.browser.resolveAsk(ask.requestId, true, cardId);
     } else if (ask.kind === "spawn-agent") {
-      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort);
+      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort, ask.brief);
       // DESIGN-BACKLOG.md item 62 — same lineage record as the
       // autonomous auto-approve path above, for a human-approved spawn.
       // 2026-09-09 — same `reason`-as-label reasoning as the auto-approve path above.
@@ -2983,6 +2990,7 @@ export function App() {
                 effort={c.effort}
                 systemPrompt={c.systemPrompt}
                 initialInput={c.initialInput}
+                brief={c.brief}
                 visible={isInView(c.rect, visibleRect)}
                 seenUrls={seenUrls[c.id] ?? EMPTY_URLS}
                 interactionMode={interactionMode}

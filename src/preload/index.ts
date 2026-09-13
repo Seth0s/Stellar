@@ -28,9 +28,9 @@ export type CardRow = {
 // `effort` widened from "low" | "high" to plain string — see
 // main/providers.ts's own `SpawnOpts.effort` doc comment (review
 // adversarial 2026-09-09, achado 2).
-type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; effort?: string; systemPrompt?: string };
+type SpawnOpts = { resumeId?: string; continueLast?: boolean; model?: string; effort?: string; systemPrompt?: string; brief?: string };
 type SpawnResult =
-  | { id: string }
+  | { id: string; consumedBrief?: boolean }
   | { error: "binary_not_found"; providerId: string; installCommand: string | null; searchedPath: string }
   | { error: "spawn_failed"; providerId: string };
 
@@ -615,6 +615,7 @@ export type SpawnAgentAskParams = {
   /** DESIGN-BACKLOG.md item 62 — names the new card, same free-text
    * field CardTag rename sets. */
   label?: string;
+  brief?: string;
   /** DESIGN-BACKLOG.md item 59 — the requester's own board is in
    * autonomous mode and under its cap; App.tsx's `onAskAgent` handler
    * creates the card and resolves immediately, no `AgentAskModal`. */

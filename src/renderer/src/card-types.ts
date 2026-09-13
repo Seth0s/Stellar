@@ -65,6 +65,8 @@ export type TerminalCardData = BaseCard & {
    * 13) — same never-persisted spirit as `continueLast`, always null for
    * a card restored from the store. */
   initialInput: string | null;
+  /** One-shot brief for a task dispatch, passed via argv or typed (bifurcated centrally) */
+  brief: string | null;
 };
 
 /** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido", 2026-09-10 —
