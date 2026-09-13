@@ -137,6 +137,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
     expect(res).toEqual({ ok: true, cardId: "spawned-card" });
     expect(spawned).toHaveLength(1);
     expect(spawned[0].params.brief).toBe("derive the brief from this prompt");
+    expect(spawned[0].params.taskId).toBe(task.id);
   });
 
   it("b. sem taskId, brief livre → igual a hoje", async () => {
@@ -148,6 +149,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
     } as BusRequest);
     expect(res.ok).toBe(true);
     expect(spawned[0].params.brief).toBe("explore the rail");
+    expect(spawned[0].params.taskId).toBeUndefined();
     expect(upserted).toEqual([]);
   });
 
@@ -159,6 +161,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
     } as BusRequest);
     expect(res.ok).toBe(true);
     expect(spawned[0].params.brief).toBeUndefined();
+    expect(spawned[0].params.taskId).toBeUndefined();
     expect(upserted).toEqual([]);
   });
 

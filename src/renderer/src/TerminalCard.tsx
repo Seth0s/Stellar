@@ -46,6 +46,7 @@ function TerminalCardInner({
   systemPrompt,
   initialInput,
   brief,
+  taskId,
   visible,
   seenUrls,
   interactionMode,
@@ -93,6 +94,8 @@ function TerminalCardInner({
    * `openInstallTerminal` (App.tsx, item 57 ponto 13). */
   initialInput: string | null;
   brief: string | null;
+  /** Spawn-time task this card serves, when the spawn was tied to one. */
+  taskId: string | null;
   visible: boolean;
   /** URLs this card's own output has printed — never opened on its own, only offered (see AGENTS.md). */
   seenUrls: string[];
@@ -176,6 +179,7 @@ function TerminalCardInner({
     systemPrompt,
     initialInput,
     brief,
+    taskId,
     visible,
     zoom,
     shortcutOverridesRef,
