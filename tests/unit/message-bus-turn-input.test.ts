@@ -65,9 +65,22 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
     return { writes, inputs };
   }
 
+  async function waitForDelivery(id: string) {
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      const status = (await bus!.handleRequest({ cmd: "get_delivery", id } as BusRequest)) as { delivery?: string };
+      if (status.delivery === "delivered") return;
+      if (Date.now() >= deadline) throw new Error("delivery did not settle");
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
   it("entrega por send_to_card avisa uma vez no corpo, não no Enter", async () => {
     const { writes, inputs } = makeBus({ screenAfterWrite: "Working" });
-    await bus!.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest);
+    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest)) as {
+      id: string;
+    };
+    await waitForDelivery(sent.id);
     expect(writes[0]).toBe("brief the worker");
     expect(writes).toContain("\r");
     expect(inputs).toEqual(["target"]);
@@ -106,7 +119,16 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
     } as unknown as Parameters<typeof createMessageBus>[1];
 
     bus = createMessageBus(join(dir, "agent-canvas.sock"), callbacks);
-    await bus.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest);
+    const sent = (await bus.handleRequest({ cmd: "send", target: "target", text: "brief the worker" } as BusRequest)) as {
+      id: string;
+    };
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      const status = (await bus.handleRequest({ cmd: "get_delivery", id: sent.id } as BusRequest)) as { delivery?: string };
+      if (status.delivery === "delivered") break;
+      if (Date.now() >= deadline) throw new Error("delivery did not settle");
+      await new Promise((r) => setTimeout(r, 20));
+    }
     // Body opens the delivered turn; flushed keys open THEIRS. Two
     // notices, not one — the flush is not chrome of the body.
     expect(inputs).toEqual(["target", "target"]);
@@ -121,7 +143,8 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
       // turn_complete: must not count as a new turn.
       screenAfterWrite: brief,
     });
-    await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest);
+    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest)) as { id: string };
+    await waitForDelivery(sent.id);
     expect(writes[0]).toBe(brief);
     expect(writes.filter((w) => w === "\r").length).toBeGreaterThan(1);
     expect(writes.at(-1)).toBe(composerClearSequence());
@@ -139,7 +162,8 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
     const { writes } = makeBus({
       screenAfterWrite: (attempt) => attempt === 0 ? "" : `→ ${brief}\n  Working`,
     });
-    await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest);
+    const sent = (await bus!.handleRequest({ cmd: "send", target: "target", text: brief } as BusRequest)) as { id: string };
+    await waitForDelivery(sent.id);
 
     const enters = writes.filter((w) => w === "\r").length;
     // Se o chamador não passar o padrão do provider Claude, enters seria > 1 (retry loop) e falharia.

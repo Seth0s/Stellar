@@ -43,17 +43,28 @@ describe("message-bus: entrega programática FIFO por card", () => {
     } as unknown as Parameters<typeof createMessageBus>[1];
 
     bus = createMessageBus(join(dir, "agent-canvas.sock"), callbacks);
-    const first = bus.handleRequest({ cmd: "send", target: "target", text: "first" } as BusRequest);
+    const first = (await bus.handleRequest({ cmd: "send", target: "target", text: "first" } as BusRequest)) as {
+      id: string;
+    };
 
     // Wait until the first text crossed the PTY, then queue another message
     // while the first one is still between Enter and confirmation.
     for (let i = 0; i < 20 && writes.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 20));
     expect(writes).toEqual(["first"]);
-    const second = bus.handleRequest({ cmd: "send", target: "target", text: "second" } as BusRequest);
+    const second = (await bus.handleRequest({ cmd: "send", target: "target", text: "second" } as BusRequest)) as {
+      id: string;
+    };
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(writes).toEqual(["first", "\r"]);
 
-    await Promise.all([first, second]);
+    const deadline = Date.now() + 2000;
+    for (;;) {
+      const a = (await bus.handleRequest({ cmd: "get_delivery", id: first.id } as BusRequest)) as { delivery?: string };
+      const b = (await bus.handleRequest({ cmd: "get_delivery", id: second.id } as BusRequest)) as { delivery?: string };
+      if (a.delivery === "delivered" && b.delivery === "delivered") break;
+      if (Date.now() >= deadline) throw new Error("deliveries did not settle");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     expect(writes).toEqual(["first", "\r", "second", "\r"]);
   });
 });

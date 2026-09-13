@@ -6,6 +6,7 @@ import {
   decideWriteReadiness,
   decideSubmitCheck,
   decideDeliveryGate,
+  inspectDeliveryHold,
   renewsHumanInputGateClock,
   shouldPressEnterOnAttempt,
   deliveryWriteOpensTurn,
@@ -517,6 +518,31 @@ describe("decideDeliveryGate", () => {
     expect(
       decideDeliveryGate({ hasPendingHumanInput: true, pendingHumanInputLastAtMs: null, nowMs: 10_000 }),
     ).toEqual({ action: "proceed", reason: "unknown-age" });
+  });
+});
+
+describe("inspectDeliveryHold", () => {
+  const ready = { action: "proceed" as const, reason: "quiet" as const };
+  const tuiWait = { action: "wait" as const };
+  const humanWait = { action: "wait" as const, reason: "human-input" as const };
+  const gateOpen = { action: "proceed" as const, reason: "empty" as const };
+
+  it("tecla humana recente vence TUI ocupada e fila à frente", () => {
+    expect(inspectDeliveryHold({ writeReadiness: tuiWait, deliveryGate: humanWait, queueAhead: true })).toBe(
+      "human-input",
+    );
+  });
+
+  it("TUI ainda subindo, sem humano => card-busy", () => {
+    expect(inspectDeliveryHold({ writeReadiness: tuiWait, deliveryGate: gateOpen, queueAhead: false })).toBe("card-busy");
+  });
+
+  it("outra entrega já na FIFO => card-busy", () => {
+    expect(inspectDeliveryHold({ writeReadiness: ready, deliveryGate: gateOpen, queueAhead: true })).toBe("card-busy");
+  });
+
+  it("nada segurando => undefined", () => {
+    expect(inspectDeliveryHold({ writeReadiness: ready, deliveryGate: gateOpen, queueAhead: false })).toBeUndefined();
   });
 });
 

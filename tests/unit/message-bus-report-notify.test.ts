@@ -11,7 +11,7 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 
 type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: string; updated_at: number };
 
-type FakeReportRow = { card_id: string; seq: number; report_json: string; updated_at: number };
+type FakeReportRow = { card_id: string; seq: number; report_json: string; verdict?: string | null; updated_at: number };
 
 function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
   const reportsByCard = new Map<string, FakeReportRow[]>();
@@ -105,6 +105,30 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
     expect(stored.ok).toBe(true);
     expect(stored.report).toEqual({ ok: true });
     expect(written).toHaveLength(0);
+  });
+
+  it("acbridge-shaped: verdict formal no JSON vira a coluna e some do payload", async () => {
+    // Sem sobrescrever `upsertReport`: a versão anterior deste teste
+    // trocava o duplo por um que só empurrava num array local, e aí o
+    // `getReport` padrão (que lê do store falso compartilhado) não achava
+    // nada — o teste falhava por causa do próprio duplo, não do código.
+    // `get_report` já devolve as DUAS coisas que interessam aqui: o
+    // payload guardado e a coluna `verdict`.
+    const { bus: b } = makeBus({});
+    await b.handleRequest({
+      cmd: "report",
+      requesterId: "cli-card",
+      report: { ok: true, result: "done", verdict: "aprovado" },
+    } as BusRequest);
+
+    const stored = (await b.handleRequest({ cmd: "get_report", target: "cli-card" } as BusRequest)) as {
+      report: unknown;
+      verdict?: string | null;
+    };
+    // A coluna recebeu o veredito formal...
+    expect(stored.verdict).toBe("aprovado");
+    // ...e ele NÃO ficou duplicado dentro do payload.
+    expect(stored.report).toEqual({ ok: true, result: "done" });
   });
 
   it("card amarrado a uma task: report sem taskId ganha o id completo", async () => {

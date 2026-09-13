@@ -152,6 +152,37 @@ export type DeliveryGateDecision =
   | { action: "proceed"; reason: "empty" | "expired" | "unknown-age" }
   | { action: "wait"; reason: "human-input" };
 
+/**
+ * Shared receipt for any programmatic PTY delivery that must not sit
+ * inside an RPC. The tool's job is to enqueue; typing is how the FIFO
+ * item happens. `queued` is the honest send/spawn-brief return.
+ * `delivered` is what `get_delivery` reports after `deliverCard` settles.
+ * Same shape as `report` → `seq` + `read_report`: accept now, query later.
+ */
+export type CardDeliveryState = "queued" | "delivered";
+export type CardDeliveryHoldReason = "human-input" | "card-busy";
+export type CardDeliveryReceipt = {
+  ok: true;
+  delivery: CardDeliveryState;
+  reason?: CardDeliveryHoldReason;
+  id: string;
+};
+
+/**
+ * Peek — never wait — why a delivery would sit at human/TUI rhythm.
+ * Human-input wins over card-busy: it is the 30s gate that timed out MCP.
+ * `queueAhead` is another FIFO item already in flight for this card.
+ */
+export function inspectDeliveryHold(input: {
+  writeReadiness: WriteReadinessDecision;
+  deliveryGate: DeliveryGateDecision;
+  queueAhead: boolean;
+}): CardDeliveryHoldReason | undefined {
+  if (input.deliveryGate.action === "wait") return "human-input";
+  if (input.writeReadiness.action === "wait" || input.queueAhead) return "card-busy";
+  return undefined;
+}
+
 /** Decide se uma entrega pode atravessar o PTY sem atropelar o composer
  * humano. A decisão é pura para que o limite e o fallback de relógio sejam
  * testados sem Electron, PTY ou timers reais. A idade é idle desde a
