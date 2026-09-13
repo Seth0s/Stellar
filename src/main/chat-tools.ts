@@ -1,6 +1,7 @@
 import { structuredPatch } from "diff";
 import { readFile, writeFile, confine, MAX_FILE_BYTES } from "./fs-tools";
 import { isSandboxAvailable, runSandboxedBash } from "./sandbox";
+import { PROVIDERS, type ProviderId } from "./providers";
 
 /**
  * DESIGN-BACKLOG.md item 12, Fase C — the tool set both chat providers
@@ -93,7 +94,7 @@ export const TOOL_PARAMETERS = {
   [DELEGATE_TOOL_NAME]: {
     type: "object",
     properties: {
-      provider: { type: "string", enum: ["claude", "codex", "antigravity"], description: "Which CLI agent to spawn" },
+      provider: { type: "string", enum: PROVIDERS.filter(p => p.capacity.role === "agent").map(p => p.id), description: "Which CLI agent to spawn" },
       reason: { type: "string", description: "Short description of the task being delegated, shown to the human" },
     },
     required: ["provider", "reason"],
@@ -108,7 +109,7 @@ export type WriteConsentRequest = { path: string; isNewFile: boolean; diffText: 
 export type DiffHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] };
 
 export type BashConsentRequest = { command: string };
-export type DelegateProvider = "claude" | "codex" | "antigravity";
+export type DelegateProvider = ProviderId;
 export type DelegateResult = { ok: true; cardId: string } | { ok: false; error: string };
 
 /** DESIGN-BACKLOG.md item 57 ponto 7 — real usage from the provider's own
@@ -225,12 +226,18 @@ export async function executeTool(name: string, input: unknown, hooks: ChatToolH
       result = allowed ? await runSandboxedBash(hooks.root, command) : { ok: false, text: "o usuário negou a execução deste comando" };
     }
   } else if (name === DELEGATE_TOOL_NAME) {
-    const provider: DelegateProvider = args.provider === "codex" ? "codex" : args.provider === "antigravity" ? "antigravity" : "claude";
-    const reason = String(args.reason ?? "");
-    const delegated = await hooks.delegateToAgent(provider, reason);
-    result = delegated.ok
-      ? { ok: true, text: `agente ${provider} criado (card ${delegated.cardId}), rodando de forma independente — acompanhe pelo board` }
-      : { ok: false, text: `delegação não realizada: ${delegated.error}` };
+    const requestedProvider = String(args.provider ?? "");
+    const providerDef = PROVIDERS.find(p => p.id === requestedProvider && p.capacity.role === "agent");
+    if (!providerDef) {
+      result = { ok: false, text: `provider inválido ou desconhecido: "${requestedProvider}"` };
+    } else {
+      const provider = providerDef.id as DelegateProvider;
+      const reason = String(args.reason ?? "");
+      const delegated = await hooks.delegateToAgent(provider, reason);
+      result = delegated.ok
+        ? { ok: true, text: `agente ${provider} criado (card ${delegated.cardId}), rodando de forma independente — acompanhe pelo board` }
+        : { ok: false, text: `delegação não realizada: ${delegated.error}` };
+    }
   } else {
     result = { ok: false, text: `tool desconhecida: ${name}` };
   }
