@@ -120,7 +120,9 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
     expect(spawnParams[0].cwd).toBe("/home/lucas/Workplace/Projects/Stellar");
     expect(spawnParams[0].label).toBe("i18n fase 2");
     expect(spawnParams[0].provider).toBe("claude");
-    expect(spawnParams[0].brief).toBe("i18n fase 2");
+    // Prompt first; the parent pointer (dep-pointer-decision.ts) follows
+    // because this task HAS deps — pinned in message-bus-dep-pointer.test.ts.
+    expect((spawnParams[0].brief as string).startsWith("i18n fase 2\n\n---\n[stellar:deps]")).toBe(true);
     expect(spawnParams[0].taskId).toBe("ceaabaac-xxxx");
   });
 
@@ -158,7 +160,8 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
     expect(spawnParams).toHaveLength(1);
     expect(spawnParams[0].cwd).toBeUndefined();
     expect(spawnParams[0].label).toBe("task no-cwd-t");
-    expect(spawnParams[0].brief).toBeUndefined();
+    // No prompt, but deps → the pointer alone is the brief (never mute AND parentless).
+    expect((spawnParams[0].brief as string).startsWith("[stellar:deps]")).toBe(true);
     expect(spawnParams[0].taskId).toBe("no-cwd-task");
   });
 
