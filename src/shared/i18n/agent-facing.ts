@@ -23,10 +23,11 @@
  *   nested agents) and stays English because agents may read the same
  *   scrollback — listed here only for the agent tips above.
  * - `src/main/message-bus.ts` — text that `typeAndSubmit` types into a
- *   PTY for another agent (`[de: X] relatório disponível…`,
- *   `[de: X] saiu (código N) sem chamar report.`). The `[de: …]` prefix
- *   is a convention other code interprets; translating it breaks routing
- *   / recognition. Marked at each call site.
+ *   PTY (`send_to_card`, human task-drag). The `[de: …]` prefix is a
+ *   convention other code interprets; translating it breaks routing /
+ *   recognition. Marked at each call site. Report / idle / exit-without-
+ *   report no longer type — the JSON of the tool and `card_status` +
+ *   `read_report` are the channel.
  * - `src/main/status-write-decision.ts` — strings delivered to the writing
  *   agent via `typeAndSubmit` / MCP response. Agent-facing.
  * - `src/main/reach-from-hunks.ts` — `reach_from_hunks` result payload

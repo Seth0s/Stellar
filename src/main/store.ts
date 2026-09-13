@@ -81,18 +81,16 @@ export type ConnectorRow = {
    * an orchestrator wants it to mean for ITS OWN reading, nothing in
    * this app ever dispatches off it.
    *
-   * Two kinds THIS app does act on for report/idle push routing
-   * (message-bus.ts / report-notify-routing.ts), still never for task
-   * auto-dispatch:
-   * - `'spawned'` — lineage from `spawn_agent` (primary route; live
-   *   spawner wins unconditionally).
+   * Two kinds this app still treats as lineage on the graph (never for
+   * task auto-dispatch). They used to also route a PTY/OS push when a
+   * card reported, went idle, or exited without report — those callers
+   * are gone; the orchestrator polls `card_status` + `read_report`.
+   * - `'spawned'` — lineage from `spawn_agent`. `set_connector_kind`
+   *   still guards writes that declare or disarm this kind.
    * - `'modified'` — auto-connect from `send_to_card` (and other
-   *   mutation cmds). For report notify this is ONLY the directive
-   *   FALLBACK when no live `spawned` edge exists — picked by highest
-   *   `updated_at` into the reporting card (`pickLatestDirectiveSender`).
-   *   Persists across main-process restarts; do not reintroduce an
-   *   in-memory shadow of this edge. Never promote `modified` to
-   *   `spawned` just because it was used as a route. */
+   *   mutation cmds). Persists across main-process restarts; do not
+   *   reintroduce an in-memory shadow of this edge. Never promote
+   *   `modified` to `spawned` just because a send happened. */
   kind: string | null;
   /** Short free-text motivation for the connector — "aplicou em queue.ts",
    * "ctx: nota fixada" — set once at creation time from whatever text was
@@ -1012,14 +1010,11 @@ export function openStore(userDataDir: string) {
   const listAllConnectorsStmt = db.prepare(
     "SELECT id, board_id, from_card_id, to_card_id, updated_at, kind, label FROM connectors",
   );
-  // DESIGN-BACKLOG.md §0 "Relatorio nao chega ao orquestrador depois de
-  // um restart" — the directive fallback for report/idle notify. Same
-  // selection rule as `pickLatestDirectiveSender` (report-notify-
-  // routing.ts): inbound `modified` only, highest `updated_at` wins.
-  // Exposed for callers that already hold a store handle and don't want
-  // to pull the full connector list; message-bus keeps using
-  // `listAllConnectors` + the pure picker so unit tests can inject edges
-  // without a real DB.
+  // Inbound `modified` only, highest `updated_at` wins — same selection
+  // as `pickLatestDirectiveSender` (report-notify-routing.ts). Exposed
+  // for callers that already hold a store handle and don't want to pull
+  // the full connector list. Not a push router: nothing in message-bus
+  // types or pops a notification off this query anymore.
   const findLatestDirectiveSenderStmt = db.prepare(`
     SELECT from_card_id FROM connectors
     WHERE to_card_id = ? AND kind = 'modified'

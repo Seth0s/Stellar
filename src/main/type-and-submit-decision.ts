@@ -7,8 +7,8 @@
 /**
  * Pure decisions behind `typeAndSubmit` (message-bus.ts) — the mechanism
  * that types text into a terminal card and confirms Enter actually
- * submitted it, shared by `send_to_card`, `notifySpawnerOfReport`,
- * `notifySpawnerOfIdleCard`, and the "task moved by hand" notification.
+ * submitted it, shared by `send_to_card` and the "task moved by hand"
+ * notification. Report / idle / exit-without-report do not type.
  *
  * DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
  * caixa sem submeter" + "Cards recebem a mesma task duas vezes" +

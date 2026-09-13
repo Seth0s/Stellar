@@ -5,13 +5,12 @@
  * report (rodada 2, 2026-09-11, achado 1) — antes desta guarda,
  * `set_connector_kind` checava só se o conector existia. Isso era
  * inofensivo enquanto `kind` era de fato decorativo, e deixou de ser no
- * momento em que `spawned` passou a decidir PARA QUEM vai o push de
- * report: qualquer card podia chamar `list_connectors`, achar o conector
+ * momento em que `spawned` passou a significar linhagem de verdade no
+ * grafo: qualquer card podia chamar `list_connectors`, achar o conector
  * `spawned` legítimo de outro, desarmá-lo com `set_connector_kind(id,
- * null)` e retitular o próprio — reintroduzindo, por outra porta, o
- * sequestro de notificação que a rodada 1 tinha sido reprovada por
- * permitir. A guarda daquela rodada: uma regra só, sem exceção por kind —
- * só a ponta de ORIGEM mexe no `kind` de um conector, sempre, uniforme.
+ * null)` e retitular o próprio. A guarda daquela rodada: uma regra só,
+ * sem exceção por kind — só a ponta de ORIGEM mexe no `kind` de um
+ * conector, sempre, uniforme.
  *
  * RODADA 2 (review adversarial do card 337, 2026-09-11, "fila 85975417") —
  * a uniformidade acima tinha DOIS custos reais, os dois vindo do mesmo
@@ -51,7 +50,7 @@
  *
  * As duas formas (a)/(b) continuam com a MESMA guarda estrita de antes —
  * chamador identificado E é a ponta de ORIGEM — porque são elas, não o
- * `kind` em si, que decidem quem recebe o push de report amanhã.
+ * `kind` em si, que decidem quem o grafo trata como spawner.
  *
  * Furo avaliado e não fechado aqui, de propósito (não é o vetor deste
  * achado): a ponta de ORIGEM sempre pôde se auto-declarar `spawned` do
