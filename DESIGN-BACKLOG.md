@@ -1248,3 +1248,63 @@ qual vence; herdar sempre ou só quando o campo está ausente. Reuso pronto:
 
 **Restrição que vale para as três:** os campos continuam OPCIONAIS. "Não podemos obrigar
 estilo engenharia de software para o usuário".
+
+### O modelo de task em quatro camadas — aprovado (2026-09-13)
+
+Decidido com o dono depois de três rodadas de crítica. Substitui a seção "Pauta para a
+próxima rodada de discussão" acima, que era insumo e não decisão.
+
+**A causa única.** Hoje `status` é uma coluna escrita por quatro atores — agente, app,
+humano, motor — com regras de precedência entre eles. Os defeitos do dia (Fila mentindo,
+`?? "claude"`, id reciclado, tempestade de retry, implementador se declarando pronto) não
+são independentes: são **o app agindo com confiança sobre dado herdado**. Ausência vira
+constante; vínculo velho vira carimbo novo.
+
+**As quatro camadas**, todas opcionais, separadas pelo CONSUMIDOR e não pelo assunto:
+
+1. **Contrato** — `prompt`, `purpose`, `deps`, `review`. Consumidor: o agente, pelo brief e
+   por `get_task`. Poda de escopo e território continuam texto escrito à mão antes do `done`
+   do pai: o MCP resolveu o canal, não o julgamento.
+2. **Perfil de execução** — `provider`, `model`, `effort` **por participação**; `cwd` da
+   task. Consumidor: o argv do spawn, nunca o brief.
+3. **Participações** — `task_cards` (card, papel), vivo ou morto. Consumidor: a derivação de
+   status.
+4. **Julgamentos** — verdicts por papel, `done`, `failed`. Consumidor: a Fila e `onTaskDone`.
+
+**Decisões que mudaram o desenho durante a discussão:**
+
+- **O perfil é da participação, não da task.** `role` já distingue implementer de reviewer na
+  MESMA task, logo a mesma task tem duas execuções com providers diferentes. Um perfil por
+  task não expressa isso, e o Stellar é multiprovider por proposta. Efeito colateral: o valor
+  deixa de ser declaração perdida (`cards.model`/`cards.effort` estão 0/10 na história
+  inteira, porque vão para o argv e morrem ali) e vira fato registrado.
+- **Provider não herda do pai.** Palavra do dono: *"a proposta do Stellar é multiprovider, se
+  a task sempre herdar o pai, ficaremos preso"*. A roteirização real é por formato da task,
+  não por linhagem — uma corrente investigar→implementar→revisar que herda nasce presa a quem
+  investigou. Só `cwd` herda: o repositório não muda descendo a corrente.
+- **Sem provider declarado, recusa — não há default.** *"Esse modelo de uso ele é estrito por
+  ser organizado, então isso é necessário"*. Custo medido e aceito: das 5 tasks que nasceram
+  hoje sem provider, a regra teria bloqueado 5 de 5.
+- **`status` se parte em duas.** `pending`/`running` derivados da participação;
+  `done`/`failed` gravados com ator e hora. Participação é estado observável agora;
+  julgamento é evento que aconteceu — não cabem na mesma coluna. O argumento decisivo é um
+  efeito colateral: **depois de um restart nada está rodando**, e hoje as tasks seguem
+  `running` mentindo para sempre porque o valor foi escrito e ninguém o reviu.
+- **Integrante da task não julga a própria task.** Quem participa requer
+  (`request_task_status` e as colunas `requested_*` já existem); o orquestrador ou o humano
+  julgam. A formulação anterior — "implementer só requer" — estava um nível abaixo: o
+  critério é estar dentro ou fora da task. É também o que impede o board autônomo de travar,
+  já que o orquestrador não é integrante das tasks que despacha. Isso ABSORVE
+  `deriveCompletionProposal`, que deixa de ser uma segunda decisão e vira a apresentação
+  desta.
+- **Identidade não é nome.** Ids de card eram reciclados (`nextIdSeed` era `MAX(id)` só sobre
+  `cards`, e fechar card faz `DELETE`), e `task_cards` guardava o histórico — o app atribuía
+  relatório novo a task morta com `role` carimbado com confiança. Medido: **37 vereditos
+  gravados depois de a task já estar done**. O seed passa a unir todas as tabelas que
+  referenciam card, e a leitura viva ignora vínculo cuja task já terminou. Sem backfill: as
+  linhas são `implementer` por impossibilidade e reescrevê-las inventaria história.
+
+**Aberto, com o olho aberto:** a época suspeita das linhas erradas não está documentada fora
+do relatório da task `ef31e603`; nada foi medido fora do Linux (`${env:}` no macOS, whitelist
+de ambiente do agy e do opencode); e nada do processo principal fica vivo sem rebuild, o que
+mata a sessão do orquestrador junto.
