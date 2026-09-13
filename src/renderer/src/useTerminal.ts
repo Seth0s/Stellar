@@ -16,6 +16,7 @@ import {
   type TerminalActivityEvent,
   type XtermOutgoingSource,
 } from "./terminal-activity-decision";
+import { TURN_END_BUFFER_MAX, TURN_END_PATTERNS, providerHasRealTurnSignal } from "./terminal-turn-signal";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -33,33 +34,7 @@ const ZOOM_MOUSE_EVENT_TYPES = ["mousedown", "mouseup", "mousemove"] as const;
 // mais toca fontSize, fit() ou o PTY.
 const BASE_FONT_SIZE = 15;
 
-/**
- * Pedido ao vivo (2026-09-06) — "unificar detecção de turno" pra
- * codex/cursor/antigravity: nenhum dos três expõe um hook de verdade pro
- * fim do turno do agente PRINCIPAL (confirmado investigando os 3
- * binários — codex tem hooks reais, mas só PreToolUse/PostToolUse/
- * PreCompact/PostCompact/SessionStart/SessionEnd/SubagentStart/
- * SubagentStop/Interrupt, nenhum mapeia pra "turno acabou"; cursor-agent
- * não tem hook nenhum; antigravity tem indício de um "stop hook" interno
- * mas só via plugin instalado, sem flag efêmera por-invocação). Como
- * alternativa, um marcador de TEXTO que o próprio TUI imprime só depois
- * que o turno de fato terminou (relatado ao vivo pelo usuário observando
- * codex: "Worked for 1m 06s") — ainda uma heurística (o texto pode mudar
- * numa atualização da CLI), mas lida do conteúdo real em vez de um
- * intervalo arbitrário de silêncio, então sobrevive a uma pausa longa e
- * silenciosa (pensando, chamando ferramenta) sem apagar a barra à toa,
- * mesmo problema que o hook Stop resolveu pra claude. Só codex por
- * enquanto — sem um padrão confirmado pros outros dois ainda.
- */
-const TURN_END_PATTERNS: Partial<Record<string, RegExp>> = {
-  codex: /Worked for (?:\d+h\s*)?(?:\d+m\s*)?\d+s/,
-};
-/** Janela do buffer rolante que acumula bytes crus pra testar contra
- * `TURN_END_PATTERNS` — generosa o bastante pro marcador mais longo
- * esperado sobreviver inteiro mesmo se vier partido em vários chunks de
- * `pty:data` (o TTY não garante um chunk por escrita), sem crescer sem
- * limite numa sessão longa. */
-const TURN_END_BUFFER_MAX = 500;
+/** Turn-end regex / hook split: `terminal-turn-signal.ts`. */
 
 /**
  * Shared by `FullWidthFitAddon` below — the real usable pixels inside
@@ -422,7 +397,7 @@ export function useTerminal(
     // por enquanto, ver comentário lá). Depois que o sinal prova
     // capacidade neste PTY, silêncio NÃO desliga a barra.
     const turnEndPattern = TURN_END_PATTERNS[providerId];
-    const hasRealTurnSignal = providerId === "claude" || turnEndPattern !== undefined;
+    const hasRealTurnSignal = providerHasRealTurnSignal(providerId);
     function clearIdleTimer() {
       if (idleTimerRef.current) {
         clearTimeout(idleTimerRef.current);
