@@ -35,7 +35,7 @@ import {
   normalizeTaskPurpose,
 } from "../task-purpose";
 import { fillReportTaskId, resolveDeclaredTaskId } from "./card-spawn-env-decision";
-import { promoteReportVerdict } from "./report-verdict-decision";
+import { promoteReportVerdict, resolveReporterRole } from "./report-verdict-decision";
 import {
   ACBRIDGE_PROTOCOL,
   checkAcbridgeProtocol,
@@ -955,7 +955,10 @@ export function createMessageBus(
    * `upsertReport`. `reportSeqCounter` continua em memória, SEEDADO do
    * que já está persistido (`nextReportSeqSeed()`). */
   let reportSeqCounter = callbacks.nextReportSeqSeed();
-  type StoredReport = { report: unknown; seq: number; verdict?: string | null };
+  // `role` — `task_cards.role` do card que reportou, resolvido no
+  // `report` (ver `resolveReporterRole`); `null` = desconhecido, nunca
+  // um default. Viaja junto com `verdict` pra quem lê (`get_report`).
+  type StoredReport = { report: unknown; seq: number; verdict?: string | null; role?: string | null };
   const pendingReportWaiters = new Map<string, Array<{ afterSeq: number; resolve: (stored: StoredReport) => void }>>();
   const pendingSpawnAgents = new Map<string, { resolve: (result: SpawnAgentResult) => void; timer: NodeJS.Timeout }>();
   const pendingSpawnCards = new Map<string, { resolve: (result: SpawnCardResult) => void; timer: NodeJS.Timeout }>();
@@ -2031,7 +2034,8 @@ export function createMessageBus(
       // never read env still don't copy a truncated id from a briefing.
       // Acceptance already ran on the original payload; this does not
       // invent a task when the card is not linked.
-      const linkTaskIds = (callbacks.listTaskCardsForCard(req.requesterId) ?? []).map((l) => l.task_id);
+      const taskCardLinks = callbacks.listTaskCardsForCard(req.requesterId) ?? [];
+      const linkTaskIds = taskCardLinks.map((l) => l.task_id);
       const reportTaskId = resolveDeclaredTaskId({
         primaryTaskIds: linkedTask ? [linkedTask.id] : [],
         linkTaskIds,
@@ -2043,7 +2047,16 @@ export function createMessageBus(
       // two copies of the same fact. MCP's explicit `req.verdict` wins.
       const promoted = promoteReportVerdict(filled, req.verdict);
       const report = promoted.report;
-      const stored: StoredReport = { report, seq: ++reportSeqCounter, verdict: promoted.verdict ?? null };
+      // Who is saying it — the caller's `task_cards.role`, stamped next
+      // to the verdict from the SAME links `recordParticipationRound`
+      // reads below (one source, two rows). `null` when the card is on
+      // no task, or on tasks with different roles: unknown is a fact to
+      // record, not a value to guess — never `implementer` by default.
+      // The completion proposal (task-board-model.ts) only trusts an
+      // `aprovado` whose role is `reviewer`; an implementer's verdict is
+      // still stored (honest: "the implementer thinks it is done").
+      const reporterRole = resolveReporterRole(taskCardLinks);
+      const stored: StoredReport = { report, seq: ++reportSeqCounter, verdict: promoted.verdict ?? null, role: reporterRole };
       // DESIGN-BACKLOG.md §2.1 — persiste ANTES de resolver waiters/avisar
       // o spawner: se o processo morrer bem aqui no meio (mesma classe de
       // evento que motivou esta tarefa), o pior caso agora é um waiter que
@@ -2056,6 +2069,7 @@ export function createMessageBus(
         seq: stored.seq,
         report_json: JSON.stringify(stored.report),
         verdict: stored.verdict,
+        role: stored.role,
         updated_at: now,
       });
       // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
@@ -2112,10 +2126,10 @@ export function createMessageBus(
       // para caminhar histórico append-only depois do fato.
       const storedRow = callbacks.getReport(target, afterSeq);
       const current: StoredReport | undefined = storedRow
-        ? { report: JSON.parse(storedRow.report_json), seq: storedRow.seq, verdict: storedRow.verdict ?? null }
+        ? { report: JSON.parse(storedRow.report_json), seq: storedRow.seq, verdict: storedRow.verdict ?? null, role: storedRow.role ?? null }
         : undefined;
       if (current) {
-        return { ok: true, report: current.report, seq: current.seq, verdict: current.verdict ?? null };
+        return { ok: true, report: current.report, seq: current.seq, verdict: current.verdict ?? null, role: current.role ?? null };
       }
       if (!req.wait) return { ok: false, error: afterSeq === undefined ? "no report yet" : "no report newer than the given sequence yet" };
       const timeoutMs = req.timeoutMs ?? DEFAULT_REPORT_TIMEOUT_MS;
@@ -2137,7 +2151,7 @@ export function createMessageBus(
           afterSeq: threshold,
           resolve: (stored: StoredReport) => {
             clearTimeout(timer);
-            resolve({ ok: true, report: stored.report, seq: stored.seq, verdict: stored.verdict ?? null });
+            resolve({ ok: true, report: stored.report, seq: stored.seq, verdict: stored.verdict ?? null, role: stored.role ?? null });
           },
         };
         const waiters = pendingReportWaiters.get(target) ?? [];

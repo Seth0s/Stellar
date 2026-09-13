@@ -17,7 +17,7 @@ import {
   shouldShowStageTrail,
   derivePurposeChip,
   describePurposeChip,
-  shouldProposeCompletion,
+  deriveCompletionProposal,
   shortTaskId,
   formatTaskAge,
   waitingOnDep,
@@ -230,24 +230,28 @@ function TaskItem({
   const purposeChip = derivePurposeChip(task.purpose, task.deps, task.depPurposes, cardRoles);
   const stage = deriveStage(task.status, task.report !== null);
   const showStage = Boolean(stage && shouldShowStageTrail(task.purpose, cardRoles));
-  const propose = shouldProposeCompletion(task.status, task.report?.verdict);
+  // Quem disse "aprovado" importa: a proposta vem de `task_verdicts` (com
+  // papel), não do relatório do card principal — ver
+  // `deriveCompletionProposal`. `origin: "self"` = implementador sem
+  // reviewer na task; a barra diz isso em texto.
+  const proposal = deriveCompletionProposal(task.status, cardRoles, task.verdicts);
   const waitingOn = waitingOnDep(task.deps, task.depStatuses);
   const pills = computeMetaPills(waitingOn, task.order, task.suggestedOrder, task.verdicts);
   // RODADA 2 — "Mais uma rodada" (segundo botão da barra de proposta): a
   // semântica não estava definida em lugar nenhum do briefing. Implementado
   // como o caso mais simples e mais seguro descrito por ele mesmo —
-  // dispensa a proposta ATÉ chegar um relatório novo, sem NENHUMA escrita
-  // no banco. `dismissedAtReportUpdatedAt` guarda o `updatedAt` do
-  // relatório que estava presente quando o humano dispensou; comparar com
-  // o `updatedAt` do relatório ATUAL é o que invalida a dispensa sozinho
-  // assim que um relatório novo substituir o antigo (`upsertReport`
-  // sobrescreve a mesma linha, então `updatedAt` sempre muda) — sem
-  // precisar de um `useEffect` limpando nada. Estado só de UI, local a
-  // este item: se o card fechar e reabrir, ou a task sair e voltar da
-  // lista, a proposta reaparece — aceitável pro que isto é (um "não agora"
-  // efêmero, não uma decisão que precisa sobreviver a um reload).
-  const [dismissedAtReportUpdatedAt, setDismissedAtReportUpdatedAt] = useState<number | null>(null);
-  const proposeVisible = propose && task.report?.updatedAt !== dismissedAtReportUpdatedAt;
+  // dispensa a proposta ATÉ chegar um veredito novo, sem NENHUMA escrita
+  // no banco. `dismissedAtVerdictAt` guarda o `at` da rodada que
+  // sustentava a proposta quando o humano dispensou; comparar com o `at`
+  // da proposta ATUAL é o que invalida a dispensa sozinho assim que uma
+  // rodada nova a substituir (`task_verdicts` é append-only, cada rodada
+  // tem o próprio `at`) — sem precisar de um `useEffect` limpando nada.
+  // Estado só de UI, local a este item: se o card fechar e reabrir, ou a
+  // task sair e voltar da lista, a proposta reaparece — aceitável pro que
+  // isto é (um "não agora" efêmero, não uma decisão que precisa sobreviver
+  // a um reload).
+  const [dismissedAtVerdictAt, setDismissedAtVerdictAt] = useState<number | null>(null);
+  const proposeVisible = proposal !== null && proposal.at !== dismissedAtVerdictAt;
   // FIDELIDADE VISUAL (delta 4) — "vivo" agora é o CARD por trás estar
   // vivo de verdade (`task.cardAlive`, `registry.isAlive` do main
   // process), não só a task estar `running`: uma task pode continuar
@@ -329,16 +333,16 @@ function TaskItem({
           {trail}
         </div>
       )}
-      {proposeVisible && (
-        <div className={styles.proposeBar} data-part="propose-bar">
+      {proposeVisible && proposal && (
+        <div className={styles.proposeBar} data-part="propose-bar" data-origin={proposal.origin}>
           <span className={styles.proposeText}>
             <span className={styles.verdictChip} data-part="verdict-chip">
-              {task.report?.verdict}
+              {proposal.verdict}
             </span>
-            {t("task.propose")}
+            {proposal.origin === "self" ? t("task.propose.self") : t("task.propose")}
           </span>
           <span className={styles.proposeActions}>
-            <button type="button" data-no-drag className={styles.proposeSecondary} onClick={() => setDismissedAtReportUpdatedAt(task.report?.updatedAt ?? null)}>
+            <button type="button" data-no-drag className={styles.proposeSecondary} onClick={() => setDismissedAtVerdictAt(proposal.at)}>
               {t("task.anotherRound")}
             </button>
             <button type="button" data-no-drag onClick={() => onApproveCompletion(task.id)}>

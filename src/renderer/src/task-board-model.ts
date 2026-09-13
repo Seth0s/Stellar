@@ -198,10 +198,68 @@ export function describePurposeChip(chip: PurposeChip): string {
 /** Barra de proposta de conclusão (decisão 9) — só APARECE, nunca decide:
  * "o app nunca marca concluído sozinho" (decisão 8) é a UI nunca chamando
  * `approveCompletion` sozinha, só o humano clicando o botão que esta
- * função manda mostrar. `verdict` vem do MESMO relatório que
- * `deriveStage` acima consome. */
-export function shouldProposeCompletion(status: string, verdict: string | null | undefined): boolean {
-  return status === "running" && verdict === "aprovado";
+ * função manda mostrar.
+ *
+ * Substitui `shouldProposeCompletion(status, verdict)`, que reagia a
+ * `verdict === "aprovado"` do relatório do card PRINCIPAL sem olhar QUEM
+ * mandou. Medido 2026-09-13: os 14 `aprovado` até então eram todos do
+ * próprio implementador — a barra era o implementador aprovando o
+ * próprio trabalho, vestida de review. A fonte agora é `task_verdicts`
+ * (uma linha por rodada, com o `role` copiado de `task_cards` no
+ * momento do report), o único lugar que sabe o papel de cada veredito.
+ *
+ * Regra:
+ * - Task com reviewer (linha `reviewer` em `cardRoles` OU alguma rodada
+ *   com role reviewer): só a ÚLTIMA rodada de reviewer conta. `aprovado`
+ *   → proposta `origin: "reviewer"`; qualquer outra coisa (reprovado,
+ *   sem veredito, ainda não reportou) → nada, mesmo que o implementador
+ *   tenha dito `aprovado`. O veredito do implementador continua gravado
+ *   (é informação honesta), mas não propõe conclusão sozinho.
+ * - Task SEM reviewer: a última rodada de implementer `aprovado` propõe
+ *   com `origin: "self"` — a UI marca "auto-aprovado pelo implementador".
+ *   Decisão deliberada (não flag): 100% das tasks até hoje não têm
+ *   reviewer; suprimir a proposta apagaria o único sinal de "terminei"
+ *   que a Fila tem, e o dano real nunca foi a proposta existir — foi ela
+ *   se passar por review. Com a origem visível, quem decide continua
+ *   sendo o humano no botão; nada muda no que é gravado.
+ * - Role fora de implementer/reviewer (desconhecido, ou lixo): nunca
+ *   propõe — papel que não se conhece não sustenta uma proposta. */
+export type CompletionProposal = {
+  verdict: "aprovado";
+  /** `reviewer` = veredito de quem revisa; `self` = o implementador
+   * julgando o próprio trabalho numa task sem reviewer. */
+  origin: "reviewer" | "self";
+  cardId: string;
+  /** `at` da rodada que sustenta a proposta — o que a UI usa pra
+   * invalidar um "mais uma rodada" quando chega veredito novo. */
+  at: number;
+};
+
+type VerdictRound = { cardId: string; role: string; verdict: string | null; at: number };
+
+function latestRound(rounds: readonly VerdictRound[]): VerdictRound | null {
+  // Último por `at`; empate → o que veio depois na lista (a query já
+  // ordena `at ASC, rowid ASC`, então "depois na lista" = gravado depois).
+  let last: VerdictRound | null = null;
+  for (const r of rounds) if (!last || r.at >= last.at) last = r;
+  return last;
+}
+
+export function deriveCompletionProposal(
+  status: string,
+  cardRoles: readonly string[],
+  verdicts: readonly VerdictRound[],
+): CompletionProposal | null {
+  if (status !== "running") return null;
+  const reviewerRounds = verdicts.filter((v) => v.role === "reviewer");
+  if (cardHasReviewer(cardRoles) || reviewerRounds.length > 0) {
+    const last = latestRound(reviewerRounds);
+    if (!last || last.verdict !== "aprovado") return null;
+    return { verdict: "aprovado", origin: "reviewer", cardId: last.cardId, at: last.at };
+  }
+  const last = latestRound(verdicts.filter((v) => v.role === "implementer"));
+  if (!last || last.verdict !== "aprovado") return null;
+  return { verdict: "aprovado", origin: "self", cardId: last.cardId, at: last.at };
 }
 
 /** RODADA 2 (review de fidelidade ao protótipo v5) — id curto pro topo do
