@@ -1180,6 +1180,22 @@ era **instalar a build atual**. A de 11/09 não tem `promoteReportVerdict`,
 `resolveReporterRole`, `link_task_card` nem `AGENT_CANVAS_TASK_ID`; com ela nenhum canal
 grava papel.
 
+**Resolvido (2026-09-13, task `8d9fe659`) — forma (i), `env` interpolado no shim, e duas
+correções ao que está escrito acima.** (1) Variável ausente no processo do cursor **não vira
+vazio**: chega o literal `${env:VAR}` sem expandir (medido). Com `"url"` isso é `Invalid URL`;
+com o shim era `exec: ${env:AGENT_CANVAS_NODE}: not found` — os dois viram linha vermelha em
+toda sessão do usuário fora de um card. Só o shim consegue degradar: a linha 2 e `fromEnv`
+tratam o literal como ausente e caem em `respondOffline`. (2) A aprovação do cursor é por
+**hash da config já resolvida, por cwd** (`~/.cursor/projects/<slug>/mcp-approvals.json`) —
+mas só para o `.cursor/mcp.json` de **projeto**; para o global o middleware nem é instalado
+(lido no bundle da CLI 2026.09.10). Todo probe de projeto, portanto, mostra "not approved" a
+cada card id diferente e subestima o registro global. Prova viva: card cursor 474 nasceu com
+o shim recebendo `MCP_URL`, `CARD_ID=474` e `NODE` (13 vars em `/proc`, contra 10 antes),
+viu 47 tools com `report`, chamou a tool MCP e gravou `verdict=aprovado` (seq 221). A lista
+literal de providers em `ensureMcpRegistered` saiu: o gate é `capacity.mcp.mechanism ===
+"global-config"` e `deriveReportChannel` deriva o canal esperado da mesma declaração. Não
+medido: `${env:}` no macOS; se agy/opencode repassam ambiente ao shim.
+
 ### Pauta para a próxima rodada de discussão (2026-09-13, NÃO decidido)
 
 Levantado de observação ao vivo, com a medição feita, mas **sem decisão de design**. Nada

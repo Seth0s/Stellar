@@ -22,8 +22,10 @@
  */
 
 import {
+  deriveReportChannel,
   deriveReportDiscovery,
   providerCapacity,
+  type ReportChannel,
   type ReportDiscovery,
 } from "./providers";
 
@@ -47,6 +49,9 @@ export type BashDiscoveryDecision = {
   spawnBlock: string | null;
   /** Derived report-discovery path for this provider (or unreachable). */
   reportDiscovery: ReportDiscovery;
+  /** Derived channel the report is expected on (`deriveReportChannel`) —
+   * same `capacity.mcp` that gates `ensureMcpRegistered`. */
+  reportChannel: ReportChannel;
   /** Whether a hand-launched nested agent can auto-discover Stellar. */
   nestedAgentAutoDiscovery: "full" | "none";
   /**
@@ -65,14 +70,17 @@ export type BashDiscoveryDecision = {
  * Delivered when capacity derives `scrollback` (no system-prompt flag,
  * acbridge on PATH). Same substance as ACBRIDGE_HINT, framed for a
  * one-shot scrollback line so cursor/antigravity/opencode learn to report
- * without depending on MCP tools actually connecting.
+ * without depending on MCP tools actually connecting. Single rule, same
+ * as ACBRIDGE_HINT: the agent looks at its own catalog and picks the
+ * channel — both land in the same record (`promoteReportVerdict`).
  */
 export const AGENT_SCROLLBACK_DISCOVERY_TIP =
-  "[stellar] This provider has no system-prompt injection. `acbridge` is " +
-  "on PATH — when you finish a task another card spawned you for, call " +
-  "`acbridge report '<json>'` with a structured result (or the `report` " +
-  "MCP tool if a server named `stellar` is connected). Prefer MCP tools " +
-  "when available.";
+  "[stellar] This provider has no system-prompt injection. When you " +
+  "finish a task another card spawned you for, report a structured " +
+  "result: if a tool named `report` is in your tool catalog (MCP server " +
+  "`stellar`), call it; otherwise run `acbridge report '<json>'` (on " +
+  "PATH) with `verdict` inside the JSON. Same payload, same record " +
+  "either way.";
 
 /** Human-facing tip for bash cards (nested hand-launched agents). English
  * for the same reason as ACBRIDGE_HINT; agents may read the scrollback.
@@ -104,18 +112,21 @@ export function decideBashCardDiscovery(input: BashDiscoveryInput): BashDiscover
       scrollbackTip: null,
       spawnBlock: REPORT_DISCOVERY_UNREACHABLE_TIP,
       reportDiscovery: "unreachable",
+      reportChannel: "unreachable",
       nestedAgentAutoDiscovery: "none",
       nestedIdentity: "known_gap",
     };
   }
 
   const reportDiscovery = deriveReportDiscovery(capacity);
+  const reportChannel = deriveReportChannel(capacity);
 
   if (input.providerId === "bash") {
     return {
       scrollbackTip: BASH_CARD_DISCOVERY_TIP,
       spawnBlock: null,
       reportDiscovery,
+      reportChannel,
       nestedAgentAutoDiscovery: "none",
       nestedIdentity: "known_gap",
     };
@@ -126,6 +137,7 @@ export function decideBashCardDiscovery(input: BashDiscoveryInput): BashDiscover
       scrollbackTip: null,
       spawnBlock: REPORT_DISCOVERY_UNREACHABLE_TIP,
       reportDiscovery,
+      reportChannel,
       nestedAgentAutoDiscovery: "none",
       nestedIdentity: "card_is_self",
     };
@@ -135,6 +147,7 @@ export function decideBashCardDiscovery(input: BashDiscoveryInput): BashDiscover
     scrollbackTip: reportDiscovery === "scrollback" ? AGENT_SCROLLBACK_DISCOVERY_TIP : null,
     spawnBlock: null,
     reportDiscovery,
+    reportChannel,
     // Provider cards get buildArgs coverage (MCP and/or system-prompt)
     // for the TOP-level process; a further nested hand-launch inside
     // that card is out of scope here (same gap class, different card).

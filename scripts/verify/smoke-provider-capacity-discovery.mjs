@@ -18,8 +18,11 @@ import {
   pickFreePort,
 } from "./cdp-client.mjs";
 
+// Prefix of AGENT_SCROLLBACK_DISCOVERY_TIP (bash-discovery-decision.ts).
+// Reworded 2026-09-13 into the single rule (catalog has `report` → tool,
+// else `acbridge report` with `verdict`); the prefix is what identifies it.
 const TIP =
-  "[stellar] This provider has no system-prompt injection. `acbridge` is on PATH";
+  "[stellar] This provider has no system-prompt injection. When you finish a task";
 const BASH_TIP = "[stellar] Bash card: `acbridge` is on PATH";
 
 const CDP_PORT = await pickFreePort();

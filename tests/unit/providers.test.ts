@@ -6,6 +6,7 @@ import {
   argvCarriesDeclaredBrief,
   briefArgvFragment,
   canImposeSessionId,
+  deriveReportChannel,
   deriveReportDiscovery,
   providerById,
   providerCapacity,
@@ -185,6 +186,44 @@ describe("providers: capacity contract (§0)", () => {
 
   it("ACBRIDGE_HINT never contains a URL scheme (pty URL sighting)", () => {
     expect(ACBRIDGE_HINT).not.toMatch(/https?:\/\//);
+  });
+
+  it("ACBRIDGE_HINT states the single report rule: catalog has `report` → tool, else acbridge report with verdict", () => {
+    expect(ACBRIDGE_HINT).toContain("`report`");
+    expect(ACBRIDGE_HINT).toContain("catalog");
+    expect(ACBRIDGE_HINT).toContain("acbridge report");
+    expect(ACBRIDGE_HINT).toContain("`verdict`");
+  });
+});
+
+// 2026-09-13 — one declaration (`capacity.mcp`) drives both whether
+// `ensureMcpRegistered` acts (mcp-registration.ts) and the channel a
+// report is expected on. Discovery (how the agent LEARNS) stays separate
+// and is NOT flipped here: cursor is still `scrollback`.
+describe("providers: deriveReportChannel (from capacity.mcp, never a list)", () => {
+  it("any MCP mechanism → mcp; none + acbridge → acbridge; neither → unreachable", () => {
+    const base = {
+      role: "agent" as const,
+      systemPrompt: { mechanism: "none" as const },
+      delivery: { briefMechanism: "none" as const },
+    };
+    expect(deriveReportChannel({ ...base, mcp: { mechanism: "ephemeral-flag" }, acbridgeOnPath: false })).toBe("mcp");
+    expect(deriveReportChannel({ ...base, mcp: { mechanism: "global-config" }, acbridgeOnPath: false })).toBe("mcp");
+    expect(deriveReportChannel({ ...base, mcp: { mechanism: "none" }, acbridgeOnPath: true })).toBe("acbridge");
+    expect(deriveReportChannel({ ...base, mcp: { mechanism: "none" }, acbridgeOnPath: false })).toBe("unreachable");
+  });
+
+  it("every agent provider today expects mcp; bash expects acbridge", () => {
+    for (const p of PROVIDERS) {
+      const expected = p.id === "bash" ? "acbridge" : "mcp";
+      expect(deriveReportChannel(p.capacity), p.id).toBe(expected);
+    }
+  });
+
+  it("channel and discovery are independent axes (cursor: mcp channel, scrollback discovery)", () => {
+    const cursor = providerCapacity("cursor")!;
+    expect(deriveReportChannel(cursor)).toBe("mcp");
+    expect(deriveReportDiscovery(cursor)).toBe("scrollback");
   });
 });
 
