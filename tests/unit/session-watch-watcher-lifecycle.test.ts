@@ -44,9 +44,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-// Espelha session-watch.ts (não exportadas de lá) — POLL_MS/TIMEOUT_MS.
+// Espelha session-watch.ts (POLL_MS não exportada de lá).
 const POLL_MS = 1500;
-const TIMEOUT_MS = 30_000;
 
 describe("watchForSession — RODADA 8, achado 1: cancelamento durante o await não comita", () => {
   beforeEach(() => {
@@ -117,7 +116,7 @@ describe("watchForSession — RODADA 8, achado 1: cancelamento durante o await n
   });
 });
 
-describe("watchForSession — RODADA 7/8, achado 3 (mecanismo): onTimeout dispara numa expiração de verdade, nunca num cancelamento manual", () => {
+describe("watchForSession — sem prazo: polla enquanto o card existir", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -127,23 +126,24 @@ describe("watchForSession — RODADA 7/8, achado 3 (mecanismo): onTimeout dispar
     vi.restoreAllMocks();
   });
 
-  it("nunca acha nada dentro do prazo => onTimeout dispara exatamente uma vez, onFound nunca", async () => {
+  it("nunca acha nada: onTimeout NUNCA dispara, onFound nunca — o poller continua até stop()", async () => {
     const { watchForSession } = await import("../../src/main/session-watch");
 
-    fsHooks.readdirImpl = async () => []; // nunca há candidato
+    fsHooks.readdirImpl = async () => [];
     fsHooks.statImpl = async () => ({ mtimeMs: 0 });
 
     const onFound = vi.fn();
     const onTimeout = vi.fn();
-    watchForSession("claude", "/tmp/idle-project", Date.now(), onFound, onTimeout);
+    const stop = watchForSession("claude", "/tmp/idle-project", Date.now(), onFound, onTimeout);
 
-    await vi.advanceTimersByTimeAsync(TIMEOUT_MS + POLL_MS);
+    await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onTimeout).not.toHaveBeenCalled();
     expect(onFound).not.toHaveBeenCalled();
+    stop();
   });
 
-  it("cancelado via stop() ANTES do prazo => onTimeout NUNCA dispara (é isto que garante que rearmar o watcher VELHO não apaga o estado do watcher NOVO)", async () => {
+  it("cancelado via stop() => onTimeout NUNCA dispara", async () => {
     const { watchForSession } = await import("../../src/main/session-watch");
 
     fsHooks.readdirImpl = async () => [];
@@ -155,10 +155,7 @@ describe("watchForSession — RODADA 7/8, achado 3 (mecanismo): onTimeout dispar
 
     await vi.advanceTimersByTimeAsync(POLL_MS * 2);
     stop();
-    // Avança bem além do que seria o prazo original — se o cancelamento
-    // não tivesse desarmado o setTimeout interno, onTimeout dispararia
-    // aqui.
-    await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(onTimeout).not.toHaveBeenCalled();
     expect(onFound).not.toHaveBeenCalled();
@@ -176,7 +173,7 @@ describe("watchForSession — atribuição temporal de rearms", () => {
   });
 
   it("entrega um candidato compartilhado ao último input, não ao watcher mais antigo", async () => {
-    const { MATCH_GRACE_MS, watchForSession } = await import("../../src/main/session-watch");
+    const { watchForSession } = await import("../../src/main/session-watch");
     const firstInputMs = Date.now();
     const secondInputMs = firstInputMs + 100;
     const candidateMtimeMs = secondInputMs + 100;
@@ -198,7 +195,6 @@ describe("watchForSession — atribuição temporal de rearms", () => {
       matchStartMs: secondInputMs,
     });
 
-    expect(candidateMtimeMs).toBeLessThanOrEqual(secondInputMs + MATCH_GRACE_MS);
     await vi.advanceTimersByTimeAsync(1500);
 
     expect(firstFound).not.toHaveBeenCalled();
@@ -207,17 +203,37 @@ describe("watchForSession — atribuição temporal de rearms", () => {
     stopSecond();
   });
 
-  it("não aceita um arquivo que nasceu depois da janela do input que rearmou o watcher", async () => {
-    const { MATCH_GRACE_MS, watchForSession } = await import("../../src/main/session-watch");
+  it("arquivo que nasce tarde AINDA é aceito se for o único candidato da reserva — sem teto de relógio", async () => {
+    const { watchForSession } = await import("../../src/main/session-watch");
     const inputMs = Date.now();
-    const sessionId = "sess-rearm-too-late";
+    const sessionId = "sess-rearm-late-ok";
 
     fsHooks.readdirImpl = async () => [`${sessionId}.jsonl`];
-    fsHooks.statImpl = async () => ({ mtimeMs: inputMs + MATCH_GRACE_MS + 1 });
+    fsHooks.statImpl = async () => ({ mtimeMs: inputMs + 60_000 });
 
     const found = vi.fn();
     const stop = watchForSession("claude", "/tmp/late-rearm-project", inputMs, found, undefined, {
       ownerId: "card-late",
+      rearmAtMs: inputMs,
+      matchStartMs: inputMs,
+    });
+
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(found).toHaveBeenCalledWith(sessionId);
+    stop();
+  });
+
+  it("dois candidatos sem dono no mesmo cwd => nenhum claim (não escolhe por mtime)", async () => {
+    const { watchForSession } = await import("../../src/main/session-watch");
+    const inputMs = Date.now();
+
+    fsHooks.readdirImpl = async () => ["one.jsonl", "two.jsonl"];
+    fsHooks.statImpl = async () => ({ mtimeMs: inputMs + 50 });
+
+    const found = vi.fn();
+    const stop = watchForSession("claude", "/tmp/ambiguous-project", inputMs, found, undefined, {
+      ownerId: "card-amb",
       rearmAtMs: inputMs,
       matchStartMs: inputMs,
     });

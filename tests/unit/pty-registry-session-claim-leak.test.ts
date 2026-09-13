@@ -118,8 +118,6 @@ vi.mock("node-pty", () => ({
   }),
 }));
 
-const POLL_MS = 1500; // espelha session-watch.ts (não exportada de lá)
-
 async function setup() {
   const { createPtyRegistry } = await import("../../src/main/pty-registry");
   const { isSessionIdClaimed } = await import("../../src/main/session-watch");
@@ -129,6 +127,7 @@ async function setup() {
     onData: vi.fn(),
     onExit,
     onSessionFound,
+    onResumeInvalid: vi.fn(),
     onUrlSeen: vi.fn(),
     sockPath: "/tmp/fake.sock",
     binDir: "/tmp/fake-bin",
@@ -148,44 +147,29 @@ describe("pty-registry.ts + session-watch.ts: claim é liberado no fechamento do
     vi.restoreAllMocks();
   });
 
-  it("cenário de 4 passos do reviewer: card A descobre sessão X, fecha; card B novo, mesmo cwd, CONSEGUE descobrir X (antes desta correção, ficava invisível pra sempre)", async () => {
-    const cwd = `/tmp/project-${Math.random().toString(36).slice(2)}`; // cwd único por teste — claimedSessionIds é module-level
+  it("claude/cursor impõem o id no spawn: onSessionFound é síncrono, fechar libera a claim, o próximo card gera OUTRO uuid", async () => {
+    const cwd = `/tmp/project-${Math.random().toString(36).slice(2)}`;
     const { registry, onSessionFound, isSessionIdClaimed } = await setup();
 
-    // Passo 1 — "abre um card claude e digita algo (sessão X reivindicada)".
-    // A descoberta automática (watchForSession, sem resumeId) é o que
-    // "reivindica" de verdade — findClaudeSession acha o candidato assim
-    // que o poller roda.
-    fsHooks.readdirImpl = async () => ["sess-x.jsonl"];
-    fsHooks.statImpl = async () => ({ mtimeMs: Date.now() + 1_000 });
     const spawnResultA = registry.spawn("card-a", "claude", cwd, 80, 24);
     expect("id" in spawnResultA).toBe(true);
     const procA = ptyHooks.spawned[0];
 
-    await vi.advanceTimersByTimeAsync(POLL_MS);
-    expect(onSessionFound).toHaveBeenCalledWith("card-a", "sess-x");
-    expect(isSessionIdClaimed("sess-x")).toBe(true);
+    expect(onSessionFound).toHaveBeenCalledTimes(1);
+    const imposedA = onSessionFound.mock.calls[0]![1] as string;
+    expect(imposedA).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(isSessionIdClaimed(imposedA)).toBe(true);
 
-    // Passo 2 — "fecha o card". Saída natural do processo (sem kill()
-    // nenhum, caminho (a) da enumeração no topo do arquivo).
     procA.simulateExit(0);
+    expect(isSessionIdClaimed(imposedA)).toBe(false);
 
-    // A correção da RODADA 9: fechar o card libera a claim.
-    expect(isSessionIdClaimed("sess-x")).toBe(false);
-
-    // Passos 3 e 4 — "abre um card claude NOVO e vazio, mesmo diretório" —
-    // a mesma sess-x.jsonl continua no disco (nada a ver com o arquivo em
-    // si, só a claim que precisa ter sumido) e agora precisa ser
-    // descobrível de novo.
-    const spawnResultB = registry.spawn("card-b", "claude", cwd, 80, 24);
+    const spawnResultB = registry.spawn("card-b", "cursor", cwd, 80, 24);
     expect("id" in spawnResultB).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(POLL_MS);
-
-    // O bug do achado: sem a correção, esta chamada nunca acontece — o
-    // watcher de B filtra sess-x via `claimedSessionIds.has()` (ainda
-    // marcada, contagem nunca decrementada) e não acha nada.
-    expect(onSessionFound).toHaveBeenCalledWith("card-b", "sess-x");
+    expect(onSessionFound).toHaveBeenCalledTimes(2);
+    const imposedB = onSessionFound.mock.calls[1]![1] as string;
+    expect(imposedB).not.toBe(imposedA);
+    expect(isSessionIdClaimed(imposedB)).toBe(true);
+    expect(isSessionIdClaimed(imposedA)).toBe(false);
   });
 
   it("caminho (b) — kill() gracioso (unmount de card / troca de board) seguido da saída real do processo: libera exatamente uma vez", async () => {
@@ -233,7 +217,9 @@ describe("pty-registry.ts + session-watch.ts: claim é liberado no fechamento do
     const { registry, isSessionIdClaimed } = await setup();
     fsHooks.readdirImpl = async () => []; // nunca acha candidato
     fsHooks.statImpl = async () => ({ mtimeMs: 0 });
-    registry.spawn("card-never-found", "claude", "/tmp/never", 80, 24);
+    // antigravity still discovers (cannot impose). claude/cursor now
+    // stamp a UUID at spawn and never sit in this "never found" state.
+    registry.spawn("card-never-found", "antigravity", "/tmp/never", 80, 24);
     const proc = ptyHooks.spawned[0];
 
     expect(() => proc.simulateExit(0)).not.toThrow();

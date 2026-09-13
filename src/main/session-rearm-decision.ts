@@ -71,9 +71,9 @@
  * do pai; um claim errado cedo deixa o carimbo num arquivo parado enquanto
  * o processo escreve noutro. Com atividade nesta linha e o arquivo
  * carimbado parado há mais que `CLAIMED_SESSION_STALE_MS`, rearma E reseta
- * `sessionFound` — o watcher com piso fresco + `MATCH_GRACE_MS` só aceita
- * escrita depois DESTE input, então a renovação segue a sessão viva sem
- * reabrir a janela de horas da RODADA 7.
+ * `sessionFound` — o watcher com piso fresco só aceita escrita depois
+ * DESTE input (reserva de posse, sem prazo de relógio), então a
+ * renovação segue a sessão viva sem reabrir a janela de horas da RODADA 7.
  */
 /** How long a claimed session file may sit without a write, relative to
  * `nowMs` at decision time, before the next qualifying input line treats

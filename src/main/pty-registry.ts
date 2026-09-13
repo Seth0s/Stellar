@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { delimiter } from "node:path";
 import * as pty from "node-pty";
-import { resolveSpawn, providerInstallCommand, providerById, type SpawnOpts } from "./providers";
+import { resolveSpawn, providerInstallCommand, providerById, shouldImposeSessionId, type SpawnOpts } from "./providers";
 import { effectivePath, applyEffectiveLocaleEnv, realNodePath } from "./user-env";
 import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
 import { decideRearmOnLine, CLAIMED_SESSION_STALE_MS } from "./session-rearm-decision";
@@ -443,6 +444,13 @@ export function createPtyRegistry(registryOpts: {
       }
     }
     const effectiveSpawnOpts: SpawnOpts = resumeInvalidReason ? { ...spawnOpts, resumeId: undefined } : spawnOpts;
+    // Measured 2026-09-13: claude/cursor accept a caller-chosen UUID.
+    // Generate it HERE (not inside buildArgs) so we can persist
+    // `resume_id` on the same spawn tick — the watcher does not run for
+    // an imposed id. Skip when restoring or `--continue`.
+    const imposedSessionId = shouldImposeSessionId(providerId, effectiveSpawnOpts)
+      ? randomUUID()
+      : undefined;
 
     const cardMcpUrl = registryOpts.mcpUrl ? `${registryOpts.mcpUrl}?card=${encodeURIComponent(id)}` : registryOpts.mcpUrl;
     // DESIGN-BACKLOG.md §0 — capacity-derived report discovery. Refuse
@@ -453,7 +461,7 @@ export function createPtyRegistry(registryOpts: {
       return { error: "spawn_failed", providerId };
     }
 
-    const resolved = resolveSpawn(providerId, { ...effectiveSpawnOpts, mcpUrl: cardMcpUrl });
+    const resolved = resolveSpawn(providerId, { ...effectiveSpawnOpts, mcpUrl: cardMcpUrl, imposedSessionId });
     if (!resolved) {
       return {
         error: "binary_not_found",
@@ -579,7 +587,7 @@ export function createPtyRegistry(registryOpts: {
       // em `Entry` acima). Um card fresco começa `false` e vira `true`
       // assim que o callback de sucesso abaixo (ou o de
       // `rearmSessionWatch`) rodar.
-      sessionFound: !!effectiveSpawnOpts.resumeId,
+      sessionFound: !!(effectiveSpawnOpts.resumeId || imposedSessionId),
       // RODADA 7, achado 3 — nunca começa `true`: o modo "qualquer input
       // rearma" só liga quando um trigger explícito dispara (write()
       // abaixo), nunca no spawn.
@@ -588,7 +596,7 @@ export function createPtyRegistry(registryOpts: {
       // RODADA 7, achado 2 — já preenchido quando o card nasce restaurado
       // (`effectiveSpawnOpts.resumeId`), pra `rearmSessionWatch` ter o que
       // liberar no dia em que este card trocar de sessão via `/resume`.
-      claimedSessionId: effectiveSpawnOpts.resumeId ?? null,
+      claimedSessionId: effectiveSpawnOpts.resumeId ?? imposedSessionId ?? null,
     };
     entries.set(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
@@ -623,7 +631,11 @@ export function createPtyRegistry(registryOpts: {
     // watcher for a different, later-spawned card in the same cwd can
     // "discover" and steal this restored card's own in-use session file,
     // since nothing else ever marks it as belonging to someone.
-    if (!effectiveSpawnOpts.resumeId) {
+    if (imposedSessionId) {
+      // Known at spawn — persist immediately. No watcher.
+      claimSessionId(imposedSessionId);
+      registryOpts.onSessionFound(id, imposedSessionId);
+    } else if (!effectiveSpawnOpts.resumeId) {
       entry.stopWatch = watchForSession(
         providerId,
         cwd,
@@ -635,15 +647,8 @@ export function createPtyRegistry(registryOpts: {
           entry.claimedSessionId = sessionId;
           registryOpts.onSessionFound(id, sessionId);
         },
-        // RODADA 7, achado 1 — sem isto, `entry.stopWatch` ficaria com
-        // uma função obsoleta depois de uma expiração natural, e nenhum
-        // rearm futuro saberia distinguir "ainda em voo" de "já morreu".
-        // RODADA 8, achado 3 — `awaitingResumeAnyInput = false` aqui
-        // também: irrelevante NESTE watch específico (nunca começa
-        // `true` no spawn), mas mantém os dois `onTimeout` (este e o de
-        // `rearmSessionWatch`) simétricos e a garantia igual nos dois
-        // lugares — nenhum caminho de expiração deixa o modo pós-resume
-        // preso.
+        // Kept for signature compatibility. Discovery no longer times
+        // out; this callback never fires. Rearm still cancels via stop().
         () => {
           entry.stopWatch = null;
           entry.awaitingResumeAnyInput = false;
@@ -798,11 +803,12 @@ export function createPtyRegistry(registryOpts: {
       {
         ownerId: id,
         rearmAtMs,
-        // The scan floor may intentionally predate this input when another
-        // watcher was still in flight. Ownership, however, starts at THIS
-        // input: a file born before it remains attributable to the earlier
-        // reservation, while a later file belongs to the latest input.
-        matchStartMs: rearmAtMs,
+        // When a watcher is already in flight, `floorMs` stays pinned
+        // (two fast submits). Ownership lower bound must use that same
+        // floor so the first submit's file is still attributable. A
+        // brand-new attempt uses `rearmAtMs` (= floorMs when nothing
+        // was in flight).
+        matchStartMs: floorMs,
       },
     );
   }

@@ -13,8 +13,8 @@
  * Esta é a metade PURA e testável dessa checagem — mesmo precedente de
  * `session-rearm-decision.ts`: cada provider tem seu próprio formato de
  * armazenamento (arquivo `.jsonl` do claude, `.db` sqlite do antigravity,
- * diretório com `store.db` do cursor, linha de tabela do opencode, índice
- * append-only do codex), então TODA a leitura de disco/db por-provider
+ * diretório com `store.db` do cursor, linha de tabela do opencode, rollout
+ * `session_meta` do codex), então TODA a leitura de disco/db por-provider
  * fica fora daqui (`getResumeTargetEvidence` em `session-watch.ts`, que já
  * é o módulo que conhece esses layouts) — esta função só decide, a partir
  * de uma evidência já normalizada, se o resumeId restaurado merece
@@ -44,6 +44,7 @@
  * outros). Medido contra CLI real (2026-09-12): `claude --resume`/
  * `--continue` reusam o mesmo id; `claude --fork-session` cria id NOVO e
  * congela o mtime do pai — exatamente o padrao que este ramo detecta.
+ * Codex evidence is the rollout file (`session_meta`), not `session_index.jsonl`.
  */
 export interface ResumeTargetEvidence {
   /** Existe algum arquivo/registro para este id, no lugar onde este

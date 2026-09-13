@@ -5,9 +5,11 @@ import {
   argsCarryDeclaredBrief,
   argvCarriesDeclaredBrief,
   briefArgvFragment,
+  canImposeSessionId,
   deriveReportDiscovery,
   providerById,
   providerCapacity,
+  shouldImposeSessionId,
 } from "../../src/main/providers";
 
 // Sticky item "spawn_agent effort" (2026-09-03) — reported live: asking
@@ -246,5 +248,51 @@ describe("providers: delivery.briefMechanism is implemented by buildArgs", () =>
       expect(argvCarriesDeclaredBrief(p.id, SENTINEL), p.id).toBe(declared);
       expect(argsCarryDeclaredBrief(p.buildArgs({ brief: SENTINEL }), p.capacity.delivery, SENTINEL)).toBe(declared);
     }
+  });
+});
+
+// Measured 2026-09-13 (task c1064d95): Stellar can IMPOSE the session id
+// on claude (`--session-id`) and cursor (`--resume` even for a fresh
+// uuid). The other three refuse or mint their own — buildArgs must not
+// invent a flag for them just because an imposed id was passed.
+describe("providers: impose session id (claude/cursor)", () => {
+  it("canImposeSessionId is only claude and cursor", () => {
+    expect(canImposeSessionId("claude")).toBe(true);
+    expect(canImposeSessionId("cursor")).toBe(true);
+    for (const id of ["codex", "antigravity", "opencode", "bash"]) {
+      expect(canImposeSessionId(id)).toBe(false);
+    }
+  });
+
+  it("shouldImposeSessionId is false when restoring or continuing", () => {
+    expect(shouldImposeSessionId("claude", {})).toBe(true);
+    expect(shouldImposeSessionId("cursor", {})).toBe(true);
+    expect(shouldImposeSessionId("claude", { resumeId: "already" })).toBe(false);
+    expect(shouldImposeSessionId("cursor", { continueLast: true })).toBe(false);
+    expect(shouldImposeSessionId("codex", {})).toBe(false);
+  });
+
+  it("claude restore uses --resume; impose uses --session-id; never both", () => {
+    const claude = providerById("claude")!;
+    const restored = claude.buildArgs({ resumeId: "sess-restore" });
+    expect(restored.slice(0, 2)).toEqual(["--resume", "sess-restore"]);
+    expect(restored).not.toContain("--session-id");
+
+    const imposed = claude.buildArgs({ imposedSessionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" });
+    expect(imposed.slice(0, 2)).toEqual(["--session-id", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"]);
+    expect(imposed).not.toContain("--resume");
+  });
+
+  it("cursor uses --resume for both restore and impose", () => {
+    const cursor = providerById("cursor")!;
+    expect(cursor.buildArgs({ resumeId: "old" }).slice(0, 2)).toEqual(["--resume", "old"]);
+    expect(cursor.buildArgs({ imposedSessionId: "new-uuid" }).slice(0, 2)).toEqual(["--resume", "new-uuid"]);
+  });
+
+  it("codex/antigravity/opencode ignore imposedSessionId (cannot impose)", () => {
+    const id = "deadbeef-dead-4eef-8eef-deadbeefdead";
+    expect(providerById("codex")!.buildArgs({ imposedSessionId: id })).not.toContain(id);
+    expect(providerById("antigravity")!.buildArgs({ imposedSessionId: id })).not.toContain(id);
+    expect(providerById("opencode")!.buildArgs({ imposedSessionId: id })).not.toContain(id);
   });
 });
