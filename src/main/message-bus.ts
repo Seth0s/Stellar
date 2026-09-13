@@ -24,6 +24,7 @@ import {
   describeExitWithoutAcceptedReport,
 } from "./report-retry-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
+import { appendDepPointer, depIdsFromJson, summarizeReport, type DepPointerSource, type DepReportSummary } from "./dep-pointer-decision";
 import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
 import {
   TASK_CARD_IMPLEMENTER_ROLE,
@@ -2643,6 +2644,15 @@ export function createMessageBus(
         { findTask: (id) => callbacks.getTask(id) },
       );
       if (!briefDecision.ok) return { ok: false, error: briefDecision.error };
+      // Implementer tied to a task with deps gets the same parent pointer
+      // auto-dispatch appends (`briefForTask`): whoever spawns the child,
+      // it must not open unaware of its parents. Reviewer keeps the free
+      // review order untouched. `getTask` was already consulted by
+      // `resolveSpawnBrief`; a task with no deps leaves the brief as is.
+      const deliveredBrief =
+        briefDecision.taskId && role !== TASK_CARD_REVIEWER_ROLE
+          ? appendDepPointer(briefDecision.brief, depPointerSources(callbacks.getTask(briefDecision.taskId) ?? { deps_json: null }))
+          : briefDecision.brief;
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
       // Pre-release audit S4 — ignores `req.depth` entirely; see
@@ -2666,7 +2676,7 @@ export function createMessageBus(
         model: req.model,
         effort: req.effort,
         label: req.label,
-        brief: briefDecision.brief,
+        brief: deliveredBrief,
         taskId: briefDecision.taskId,
       };
       const spawnResult: SpawnAgentResult =
@@ -3025,6 +3035,37 @@ export function createMessageBus(
    * task is left untouched, exactly as before this engine existed (pure
    * bookkeeping, an external orchestrator's problem). `onTaskDone` finds
    * the candidates; `dispatchIfUnblocked` is the one dispatch path. */
+  /** Parent pointer for a dependent's brief (dep-pointer-decision.ts).
+   * Reads only stored facts: each dep row via `getTask` (which carries
+   * `task_cards`), and the latest report of every linked card. A dep
+   * whose id matches nothing, or whose cards never reported, is stated
+   * as such — never silently dropped. Empty deps → no pointer. */
+  function depPointerSources(task: Pick<TaskRow, "deps_json">): DepPointerSource[] {
+    return depIdsFromJson(task.deps_json).map((depId) => {
+      const dep = callbacks.getTask(depId);
+      if (!dep) return { id: depId, status: null, reports: [] };
+      const cards = Array.isArray(dep.cards) ? dep.cards : [];
+      const reports: Array<{ seq: number; summary: DepReportSummary }> = [];
+      // Most recent card first: `task_cards` has no order column, so the
+      // latest report `seq` stands in for recency.
+      for (const card of cards) {
+        const row = callbacks.getReport(card.card_id);
+        if (row) reports.push({ seq: row.seq, summary: summarizeReport(card.card_id, row.report_json, row.verdict) });
+      }
+      reports.sort((a, b) => b.seq - a.seq);
+      return { id: depId, status: dep.status, reports: reports.map((r) => r.summary) };
+    });
+  }
+
+  /** The delivered brief for a task-tied implementer spawn: stored prompt
+   * plus the parent pointer when the task has deps. Both task-tied spawn
+   * paths (`spawn_agent({taskId})` and auto-dispatch) go through here so
+   * a dependent never opens without knowing it has a parent, whichever
+   * path spawned it. Reviewers do not: their brief is the review order. */
+  function briefForTask(task: Pick<TaskRow, "prompt" | "deps_json">): string | undefined {
+    return appendDepPointer(briefFromTaskPrompt(task.prompt), depPointerSources(task));
+  }
+
   function buildTaskDispatchParams(task: TaskRow, provider: string, reason: string): SpawnQueueEntry["params"] {
     return {
       provider,
@@ -3037,7 +3078,7 @@ export function createMessageBus(
       reason,
       model: undefined,
       label: resolveTaskDispatchLabel(task),
-      brief: briefFromTaskPrompt(task.prompt),
+      brief: briefForTask(task),
       taskId: task.id,
     };
   }

@@ -121,7 +121,11 @@ describe("task-write-funnel: every `done` writer dispatches dependents", () => {
     expect(rig.onTaskDoneCalls).toEqual(["d1"]);
     expect(rig.spawns).toHaveLength(1);
     expect(rig.spawns[0].taskId).toBe("child");
-    expect(rig.spawns[0].brief).toBe("corrigir");
+    // Prompt first, then the parent pointer (dep-pointer-decision.ts): d1
+    // reached done by button, no card ever reported — the child is told.
+    const brief = rig.spawns[0].brief as string;
+    expect(brief.startsWith("corrigir\n\n---\n[stellar:deps]")).toBe(true);
+    expect(brief).toContain("- d1 — status done, NO report on file");
     expect(rig.store.getTask("child")!.status).toBe("running");
   });
 
@@ -236,7 +240,7 @@ describe("create_task with deps already done dispatches at birth", () => {
     expect(rig.spawns).toHaveLength(1);
     expect(rig.spawns[0].taskId).toBe(res.taskId);
     expect(rig.spawns[0].provider).toBe("codex");
-    expect(rig.spawns[0].brief).toBe("corrigir com base no relatório");
+    expect((rig.spawns[0].brief as string).startsWith("corrigir com base no relatório\n\n---\n[stellar:deps]")).toBe(true);
     expect(rig.store.getTask(res.taskId)!.status).toBe("running");
   });
 
