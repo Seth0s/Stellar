@@ -6,16 +6,15 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 
 /**
  * DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 (arrastar) + "SINAL 2" (saída sem
- * relatório) — os dois pontos de main process que este trabalho acrescenta
- * a message-bus.ts: `notifyHumanMovedTask` (peça 3, decisão 5 — o card
- * vinculado a uma task arrastada pelo HUMANO ainda recebe o aviso
- * digitado; CLI de terceiro não tem RPC) e o que `resolveCardExit` faz
- * quando um card sai sem nunca ter chamado `report`: marca a task, fecha
- * participação, e NÃO digita / NÃO dispara popup. O orquestrador vê
- * `card_status: exited` e o status novo via `get_task`.
+ * relatório) — `notifyHumanMovedTask` (peça 3) e o que `resolveCardExit`
+ * faz quando um card sai sem nunca ter chamado `report`: marca a task,
+ * fecha participação, e digita o ponteiro AGENT-half no PTY do spawner
+ * via `enqueueCardDelivery` (sem popup de SO).
  */
 type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: string; updated_at: number };
 type FakeTaskRow = { id: string; card_id: string | null; status: string };
+
+const EXIT_POINTER_NEEDLE = "sem chamar report";
 
 function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
   return new Proxy(
@@ -97,7 +96,7 @@ describe("message-bus: notifyHumanMovedTask (peça 3, decisão 5 — o card vinc
   });
 });
 
-describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o spawner por PTY/popup", () => {
+describe("message-bus: SINAL 2 — resolveCardExit marca a task e digita o ponteiro (sem SO)", () => {
   let dir: string;
   let bus: ReturnType<typeof createMessageBus> | null;
 
@@ -118,10 +117,16 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
         listTasks: () => [] as FakeTaskRow[],
         upsertTask: () => ({ status: "failed", statusChanged: true, divergedStatus: null, divergedActor: null, recordDeclaration: false, warnAgent: false, declaredStatus: null }),
         getCardBoardId: () => undefined,
+        beginCardDelivery: () => true,
+        getCardWriteReadiness: () => null,
         ...overrides,
       }),
     );
     return bus;
+  }
+
+  async function flushDelivery(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 80));
   }
 
   // ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 3, MÉDIO) — a versão
@@ -143,12 +148,12 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
     });
 
     b.resolveCardExit("child-e1", 1);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushDelivery();
 
     expect(written).toHaveLength(0);
   });
 
-  it("[qualificação] COM task vinculada (mesmo 'done'): NÃO digita no PTY do spawner — o canal era o popup+Enter, e saiu", async () => {
+  it("[qualificação] COM task vinculada (mesmo 'done'): digita o ponteiro no PTY do spawner — sem popup de SO", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-e5", to_card_id: "child-e5", updated_at: Date.now() }];
     const written: Array<[string, string]> = [];
     const b = makeBus({
@@ -161,14 +166,19 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
     });
 
     b.resolveCardExit("child-e5", 1);
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await flushDelivery();
 
-    expect(written).toHaveLength(0);
+    const bodies = written.filter(([, data]) => data !== "\r");
+    expect(bodies.length).toBeGreaterThanOrEqual(1);
+    expect(bodies[0][0]).toBe("spawner-e5");
+    expect(bodies[0][1]).toContain("[de: Implementer]");
+    expect(bodies[0][1]).toContain(EXIT_POINTER_NEEDLE);
+    expect(bodies[0][1]).toContain("código 1");
   });
 
-  it("[qualificação] SEM task vinculada, mas com LINHAGEM de spawn_agent: tampouco digita", async () => {
+  it("[qualificação] SEM task vinculada, mas com LINHAGEM de spawn_agent: digita o ponteiro", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "orchestrator-1", to_card_id: "agent-x", updated_at: Date.now() }];
-    const written: unknown[][] = [];
+    const written: Array<[string, string]> = [];
     let b: ReturnType<typeof createMessageBus> | null = null;
     b = makeBus({
       onSpawnAgentRequest: (requestId: string) => b?.resolveSpawnAgent(requestId, { ok: true, cardId: "agent-x" }),
@@ -176,15 +186,15 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
       isCardAlive: (id: string) => id === "orchestrator-1",
       describeCardLabel: (id: string) => id,
       listCards: () => [{ id: "orchestrator-1", kind: "terminal" }],
-      writeToCard: (...args: unknown[]) => written.push(args),
+      writeToCard: (...args: unknown[]) => written.push(args as [string, string]),
     });
 
     await b.handleRequest({ cmd: "spawn_agent", requesterId: "", provider: "claude" } as BusRequest);
 
     b.resolveCardExit("agent-x", 1);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushDelivery();
 
-    expect(written).toHaveLength(0);
+    expect(written.some(([, data]) => data.includes(EXIT_POINTER_NEEDLE))).toBe(true);
   });
 
   it("[qualificação] linhagem de spawn_agent MAS provider bash: NÃO escreve — bash não tem MCP/report", async () => {
@@ -203,7 +213,7 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
     await b.handleRequest({ cmd: "spawn_agent", requesterId: "", provider: "bash" } as BusRequest);
 
     b.resolveCardExit("bash-x", 1);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushDelivery();
 
     expect(written).toHaveLength(0);
   });
@@ -221,7 +231,7 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
     });
 
     b.resolveCardExit("child-e2", 0);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushDelivery();
 
     expect(written).toHaveLength(0);
   });
@@ -235,7 +245,7 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
     });
 
     expect(() => b.resolveCardExit("human-opened", 1)).not.toThrow();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushDelivery();
     expect(written).toHaveLength(0);
   });
 
@@ -250,7 +260,7 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
     });
 
     expect(() => b.resolveCardExit("child-e3", 1)).not.toThrow();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushDelivery();
     expect(written).toHaveLength(0);
   });
 
@@ -267,7 +277,7 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o s
     });
 
     b.resolveCardExit("child-e4", 1);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushDelivery();
 
     expect(upserted).toHaveLength(1);
     expect(upserted[0].status).toBe("pending");

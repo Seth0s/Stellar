@@ -4,14 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 
-// `report` persists JSON and wakes `read_report {wait:true}` waiters.
-// It does NOT type into the spawner's PTY and does NOT fire an OS popup.
-// The orchestrator discovers the row by polling card_status then
-// read_report (no wait). Same Proxy + fake report store as before.
+// AGENT-half restore (2026-09-13): `report` persists JSON, wakes waiters,
+// AND enqueues a short PTY pointer at the notify target via
+// `enqueueCardDelivery`. OS popup callbacks stay absent from Callbacks —
+// the type system is the gate that none of idle/report/exit fire one.
 
 type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: string; updated_at: number };
 
 type FakeReportRow = { card_id: string; seq: number; report_json: string; verdict?: string | null; updated_at: number };
+
+const POINTER_NEEDLE = "relatório disponível — chame read_report";
 
 function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
   const reportsByCard = new Map<string, FakeReportRow[]>();
@@ -36,7 +38,7 @@ function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => 
   ) as Parameters<typeof createMessageBus>[1];
 }
 
-describe("message-bus: report persiste JSON e não digita no PTY do orquestrador", () => {
+describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orquestrador", () => {
   let dir: string;
   let bus: ReturnType<typeof createMessageBus> | null;
 
@@ -59,13 +61,27 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
         isCardAlive: () => true,
         describeCardLabel: (id: string) => id,
         listAllConnectors: () => [] as ConnectorRow[],
+        beginCardDelivery: () => true,
+        getCardWriteReadiness: () => null,
         ...overrides,
       }),
     );
     return { bus, written };
   }
 
-  it("spawner vivo com conector de spawn: persiste, acorda waiter, NÃO escreve no PTY", async () => {
+  async function flushDelivery(ms = 400): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function waitForPointers(written: Array<[string, string]>, min: number, timeoutMs = 2000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (written.filter(([, data]) => data.includes(POINTER_NEEDLE)).length >= min) return;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+  }
+
+  it("spawner vivo com conector de spawn: persiste, acorda waiter, E escreve o ponteiro no PTY", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-1", to_card_id: "child-1", updated_at: Date.now() }];
     const { bus: b, written } = makeBus({
       listAllConnectors: () => connectors,
@@ -89,7 +105,33 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
     const waited = await waiter;
     expect(waited.ok).toBe(true);
     expect(waited.report).toEqual({ ok: true, result: "done" });
-    expect(written).toHaveLength(0);
+
+    await flushDelivery();
+    const bodyWrites = written.filter(([, data]) => data !== "\r");
+    expect(bodyWrites.length).toBeGreaterThanOrEqual(1);
+    expect(bodyWrites[0][0]).toBe("spawner-1");
+    expect(bodyWrites[0][1]).toContain("[de: Child One]");
+    expect(bodyWrites[0][1]).toContain(POINTER_NEEDLE);
+    // Ponteiro só — o corpo do relatório não vaza pro PTY.
+    expect(bodyWrites[0][1]).not.toContain("done");
+  });
+
+  it("waiter ativo: o ponteiro AINDA sai (humano na tela ≠ waiter da tool)", async () => {
+    const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-1", to_card_id: "child-w", updated_at: Date.now() }];
+    const { bus: b, written } = makeBus({
+      listAllConnectors: () => connectors,
+      describeCardLabel: (id: string) => (id === "child-w" ? "Waiter Child" : id),
+    });
+
+    const waiter = b.handleRequest({ cmd: "get_report", target: "child-w", wait: true, timeoutMs: 2000 } as BusRequest) as Promise<{
+      ok: boolean;
+      report: unknown;
+    }>;
+    await b.handleRequest({ cmd: "report", requesterId: "child-w", report: { ok: true } } as BusRequest);
+    expect((await waiter).ok).toBe(true);
+
+    await flushDelivery();
+    expect(written.some(([, data]) => data.includes(POINTER_NEEDLE))).toBe(true);
   });
 
   it("card sem conector de spawn: ainda persiste, sem erro, sem escrita", async () => {
@@ -104,16 +146,25 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
     };
     expect(stored.ok).toBe(true);
     expect(stored.report).toEqual({ ok: true });
+    await flushDelivery();
     expect(written).toHaveLength(0);
   });
 
+  it("Callbacks não expõe notify* de SO — o caminho do report só digita", async () => {
+    // Regressão do pedido do dono: idle/report/exit sem popup. Se alguém
+    // reintroduzir notifyCardReported no tipo Callbacks, este cast deixa
+    // de ser o único lugar que afirma a ausência.
+    const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-1", to_card_id: "child-os", updated_at: Date.now() }];
+    const { bus: b } = makeBus({ listAllConnectors: () => connectors });
+    await b.handleRequest({ cmd: "report", requesterId: "child-os", report: { ok: true } } as BusRequest);
+    await flushDelivery();
+    const sample = callbacksWithOverrides({});
+    expect("notifyCardReported" in sample).toBe(false);
+    expect("notifyIdleCard" in sample).toBe(false);
+    expect("notifyCardExitedWithoutReport" in sample).toBe(false);
+  });
+
   it("acbridge-shaped: verdict formal no JSON vira a coluna e some do payload", async () => {
-    // Sem sobrescrever `upsertReport`: a versão anterior deste teste
-    // trocava o duplo por um que só empurrava num array local, e aí o
-    // `getReport` padrão (que lê do store falso compartilhado) não achava
-    // nada — o teste falhava por causa do próprio duplo, não do código.
-    // `get_report` já devolve as DUAS coisas que interessam aqui: o
-    // payload guardado e a coluna `verdict`.
     const { bus: b } = makeBus({});
     await b.handleRequest({
       cmd: "report",
@@ -125,9 +176,7 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
       report: unknown;
       verdict?: string | null;
     };
-    // A coluna recebeu o veredito formal...
     expect(stored.verdict).toBe("aprovado");
-    // ...e ele NÃO ficou duplicado dentro do payload.
     expect(stored.report).toEqual({ ok: true, result: "done" });
   });
 
@@ -161,7 +210,7 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
     expect(stored.report).toEqual({ ok: true, taskId: "already" });
   });
 
-  it("o corpo do relatório NÃO é digitado — só vive na tabela / get_report", async () => {
+  it("o corpo do relatório NÃO é digitado — só o ponteiro curto", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-1", to_card_id: "child-3", updated_at: Date.now() }];
     const bigReport = { ok: true, result: "x".repeat(5000), secret: "não pode vazar pro PTY do spawner" };
     const { bus: b, written } = makeBus({
@@ -170,12 +219,15 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
     });
 
     await b.handleRequest({ cmd: "report", requesterId: "child-3", report: bigReport } as BusRequest);
-    expect(written).toHaveLength(0);
+    await flushDelivery();
+    const bodies = written.filter(([, data]) => data !== "\r").map(([, data]) => data);
+    expect(bodies.some((t) => t.includes(POINTER_NEEDLE))).toBe(true);
+    expect(bodies.every((t) => !t.includes("secret") && !t.includes("xxxx"))).toBe(true);
     const stored = (await b.handleRequest({ cmd: "get_report", target: "child-3" } as BusRequest)) as { report: unknown };
     expect(stored.report).toEqual(bigReport);
   });
 
-  it("dois relatórios rápidos: os dois persistem (seq avança); nenhum é digitado", async () => {
+  it("dois relatórios rápidos: os dois persistem; os dois ponteiros saem (sem throttle no canal agente)", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-1", to_card_id: "reviewer-loop", updated_at: Date.now() }];
     const { bus: b, written } = makeBus({ listAllConnectors: () => connectors });
 
@@ -183,7 +235,9 @@ describe("message-bus: report persiste JSON e não digita no PTY do orquestrador
     const r2 = (await b.handleRequest({ cmd: "report", requesterId: "reviewer-loop", report: { round: 2 } } as BusRequest)) as { seq: number };
 
     expect(r2.seq).toBeGreaterThan(r1.seq);
-    expect(written).toHaveLength(0);
+    await waitForPointers(written, 2);
+    const pointers = written.filter(([, data]) => data.includes(POINTER_NEEDLE));
+    expect(pointers.length).toBeGreaterThanOrEqual(2);
     const latest = (await b.handleRequest({ cmd: "get_report", target: "reviewer-loop" } as BusRequest)) as { report: unknown };
     expect(latest.report).toEqual({ round: 2 });
   });
