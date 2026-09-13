@@ -29,7 +29,7 @@ import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
-import { providerCapacity } from "./providers";
+import { argvCarriesDeclaredBrief, providerCapacity } from "./providers";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -3010,8 +3010,11 @@ export function createMessageBus(
     let typedBrief: string | undefined;
 
     if (params.brief) {
-      const capacity = providerCapacity(params.provider);
-      const canArgv = capacity?.delivery?.briefMechanism !== "none" && capacity?.delivery?.briefMechanism !== undefined;
+      // Empirical, not the declaration alone: a stale `briefMechanism`
+      // that buildArgs does not implement used to set canArgv=true, skip
+      // the typing fallback, and drop the brief in silence. Probe the
+      // actual argv. Declaration still answers HOW; this answers WHETHER.
+      const canArgv = argvCarriesDeclaredBrief(params.provider, params.brief);
       // 131071 is ARG_MAX on typical Linux; leave some padding for other args/env
       const isTooLarge = Buffer.byteLength(params.brief, "utf8") > 130000;
       if (!canArgv || isTooLarge) {

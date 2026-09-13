@@ -134,6 +134,56 @@ export function deriveReportDiscovery(capacity: ProviderCapacity): ReportDiscove
   return "unreachable";
 }
 
+/**
+ * Argv fragment implied by `delivery` for a spawn brief. One place —
+ * `buildArgs` must not invent a second form (positional vs flag vs
+ * none). Empty when there is no brief or the provider cannot take one
+ * on argv (`bash`).
+ */
+export function briefArgvFragment(
+  delivery: ProviderCapacity["delivery"],
+  brief: string | undefined,
+): string[] {
+  if (!brief) return [];
+  if (delivery.briefMechanism === "positional") return [brief];
+  if (delivery.briefMechanism === "flag" && delivery.briefFlag) {
+    return [delivery.briefFlag, brief];
+  }
+  return [];
+}
+
+/** Whether `args` actually carry `brief` the way `delivery` declares. */
+export function argsCarryDeclaredBrief(
+  args: readonly string[],
+  delivery: ProviderCapacity["delivery"],
+  brief: string,
+): boolean {
+  const fragment = briefArgvFragment(delivery, brief);
+  if (fragment.length === 0) return false;
+  for (let i = 0; i <= args.length - fragment.length; i++) {
+    if (fragment.every((part, j) => args[i + j] === part)) return true;
+  }
+  return false;
+}
+
+/**
+ * Empirical: this provider's `buildArgs` places `brief` in argv as
+ * declared. Spawn dispatch uses this for `canArgv` so a stale
+ * declaration cannot drop the text — the typing fallback still fires.
+ */
+export function argvCarriesDeclaredBrief(providerId: string, brief: string): boolean {
+  const provider = providerById(providerId);
+  if (!provider) return false;
+  return argsCarryDeclaredBrief(provider.buildArgs({ brief }), provider.capacity.delivery, brief);
+}
+
+/** Append the brief in the form THIS provider declared — never a second literal. */
+export function appendDeclaredBrief(providerId: ProviderId, args: string[], brief?: string): void {
+  const delivery = providerById(providerId)?.capacity.delivery;
+  if (!delivery) return;
+  args.push(...briefArgvFragment(delivery, brief));
+}
+
 // DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface
 // is now the MCP server (mcp-server.ts) for providers that speak MCP;
 // acbridge stays as the CLI fallback (see its own header comment). Kept
@@ -261,7 +311,7 @@ export const PROVIDERS: ProviderDef[] = [
           JSON.stringify({ mcpServers: { stellar: { type: "http", url: mcpUrl } } }),
         );
       }
-      if (brief) args.push(brief);
+      appendDeclaredBrief("claude", args, brief);
       // Prototipo (2026-09-06) — "unificar detecção de turno" pedido pelo
       // usuário: `isActive` (useTerminal.ts) hoje é só uma aproximação por
       // silêncio de bytes (900ms sem nada = "parou"), documentada como tal
@@ -320,7 +370,7 @@ export const PROVIDERS: ProviderDef[] = [
         `developer_instructions=${JSON.stringify(composeSystemPrompt(systemPrompt))}`,
       );
       if (mcpUrl) args.push("-c", `mcp_servers.stellar.url=${mcpUrl}`);
-      if (brief) args.push(brief);
+      appendDeclaredBrief("codex", args, brief);
       return args;
     },
   },
@@ -369,11 +419,14 @@ export const PROVIDERS: ProviderDef[] = [
     // por invocação. Por isso não há nada de MCP nos args aqui.
     // Report discovery is DERIVED as scrollback (capacity.systemPrompt
     // none + acbridgeOnPath) — see decideBashCardDiscovery.
-    buildArgs: ({ resumeId, continueLast, model }) => {
+    buildArgs: ({ resumeId, continueLast, model, brief }) => {
       const args: string[] = [];
       if (resumeId) args.push("--resume", resumeId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
+      // Positional prompt (`agent [options] [command] [prompt...]`) —
+      // measured task 95582065. Form comes from `delivery`, not a second literal.
+      appendDeclaredBrief("cursor", args, brief);
       return args;
     },
   },
@@ -432,12 +485,16 @@ export const PROVIDERS: ProviderDef[] = [
     // to keep in sync, not a second layer of real safety (`effort` isn't
     // renderer-writable outside that one path — see providers.ts's
     // `SpawnOpts.effort` doc comment).
-    buildArgs: ({ resumeId, continueLast, model, effort }) => {
+    buildArgs: ({ resumeId, continueLast, model, effort, brief }) => {
       const args: string[] = [];
       if (resumeId) args.push("--conversation", resumeId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
       if (effort) args.push("--effort", effort);
+      // Interactive prompt only: positional is refused (exit 2); `-p` is
+      // headless and exits. Measured task 95582065. Form (`-i`) comes
+      // from `delivery.briefFlag`, not a second literal.
+      appendDeclaredBrief("antigravity", args, brief);
       return args;
     },
   },
@@ -470,7 +527,7 @@ export const PROVIDERS: ProviderDef[] = [
       if (resumeId) args.push("--session", resumeId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
-      if (brief) args.push("--prompt", brief);
+      appendDeclaredBrief("opencode", args, brief);
       return args;
     },
   },

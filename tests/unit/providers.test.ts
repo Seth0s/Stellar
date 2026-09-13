@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   ACBRIDGE_HINT,
   PROVIDERS,
+  argsCarryDeclaredBrief,
+  argvCarriesDeclaredBrief,
+  briefArgvFragment,
   deriveReportDiscovery,
   providerById,
   providerCapacity,
@@ -180,5 +183,68 @@ describe("providers: capacity contract (§0)", () => {
 
   it("ACBRIDGE_HINT never contains a URL scheme (pty URL sighting)", () => {
     expect(ACBRIDGE_HINT).not.toMatch(/https?:\/\//);
+  });
+});
+
+// Declaration vs buildArgs for the spawn brief. The 2026-09-13 silent
+// loss on cursor/antigravity happened because `delivery.briefMechanism`
+// said the CLI takes a brief while `buildArgs` never read `opts.brief`.
+// `canArgv` trusted the declaration, so the typing fallback never armed
+// and the text vanished. This walks EVERY provider — a new one that
+// declares positional/flag without placing the brief must fail here.
+describe("providers: delivery.briefMechanism is implemented by buildArgs", () => {
+  const SENTINEL = "__stellar_brief_contract__";
+
+  it("every provider that declares briefMechanism !== none places that brief in argv", () => {
+    const declared = PROVIDERS.filter(
+      (p) => p.capacity.delivery.briefMechanism !== "none" && p.capacity.delivery.briefMechanism !== undefined,
+    );
+    const caught: string[] = [];
+    for (const p of declared) {
+      const { briefMechanism, briefFlag } = p.capacity.delivery;
+      const args = p.buildArgs({ brief: SENTINEL });
+      const placed =
+        briefMechanism === "flag"
+          ? Boolean(briefFlag) && args[args.indexOf(briefFlag)] === briefFlag && args[args.indexOf(briefFlag) + 1] === SENTINEL
+          : args.includes(SENTINEL);
+      if (!placed) caught.push(p.id);
+    }
+    expect(caught, `declared=${declared.map((p) => p.id).join(",")} caught=${caught.join(",")}`).toEqual([]);
+  });
+
+  it("flag providers place the declared briefFlag immediately before the brief", () => {
+    for (const p of PROVIDERS) {
+      if (p.capacity.delivery.briefMechanism !== "flag") continue;
+      const flag = p.capacity.delivery.briefFlag;
+      expect(flag, `${p.id} declares flag without briefFlag`).toBeTruthy();
+      const args = p.buildArgs({ brief: SENTINEL });
+      const i = args.indexOf(flag!);
+      expect(i, `${p.id} missing declared briefFlag ${flag}`).toBeGreaterThanOrEqual(0);
+      expect(args[i + 1], `${p.id} briefFlag not followed by brief`).toBe(SENTINEL);
+    }
+  });
+
+  it("none providers never put the brief in argv", () => {
+    for (const p of PROVIDERS) {
+      if (p.capacity.delivery.briefMechanism !== "none") continue;
+      expect(p.buildArgs({ brief: SENTINEL })).not.toContain(SENTINEL);
+    }
+  });
+
+  it("briefArgvFragment is derived from delivery — cursor positional, antigravity -i", () => {
+    expect(briefArgvFragment({ briefMechanism: "positional" }, SENTINEL)).toEqual([SENTINEL]);
+    expect(briefArgvFragment({ briefMechanism: "flag", briefFlag: "-i" }, SENTINEL)).toEqual(["-i", SENTINEL]);
+    expect(briefArgvFragment({ briefMechanism: "none" }, SENTINEL)).toEqual([]);
+    expect(briefArgvFragment({ briefMechanism: "flag", briefFlag: "-i" }, undefined)).toEqual([]);
+  });
+
+  it("argvCarriesDeclaredBrief is empirical: bash false, every declared provider true", () => {
+    expect(argvCarriesDeclaredBrief("bash", SENTINEL)).toBe(false);
+    expect(argvCarriesDeclaredBrief("no-such-provider", SENTINEL)).toBe(false);
+    for (const p of PROVIDERS) {
+      const declared = p.capacity.delivery.briefMechanism !== "none";
+      expect(argvCarriesDeclaredBrief(p.id, SENTINEL), p.id).toBe(declared);
+      expect(argsCarryDeclaredBrief(p.buildArgs({ brief: SENTINEL }), p.capacity.delivery, SENTINEL)).toBe(declared);
+    }
   });
 });
