@@ -1,11 +1,10 @@
 /**
  * Pure lineage decision: given a card, who spawned it / last directed it
  * via `send_to_card`? Live `spawned` wins; inbound `modified` is fallback.
- * Message-bus used to push an OS/PTY notice at that target when a card
- * reported, went idle, or exited without report — those callers are gone.
- * The rule stays as the spec of the connector graph (`set_connector_kind`
- * hand-off, `store.findLatestDirectiveSender`). Do not reintroduce a
- * typed push from here.
+ * Fed by `resolveNotifyTarget` in message-bus.ts for the AGENT-half push
+ * (short PTY pointer via `enqueueCardDelivery`) when a card reports or
+ * exits without report. OS notifications stay removed — this module only
+ * answers "who", never "how to popup".
  *
  * DESIGN-BACKLOG.md §0 "Push de report se perde em silencio quando o
  * orquestrador READOTA um card" (achado ao vivo, 2026-09-11) — the routing

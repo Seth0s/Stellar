@@ -355,6 +355,12 @@ export type TaskTransitionRow = {
  * PK composta (task_id, card_id): um card só tem UM papel por task —
  * trocar de papel é um upsert, não uma segunda linha.
  *
+ * Rows are KEPT when a card closes or a task completes — they are
+ * historical evidence (chips on the Fila, audits), not a live pointer.
+ * Live participation (report role stamp, `recordParticipationRound`)
+ * re-reads through `listTaskCardsForCard`, which drops links whose task
+ * is already `done`/`failed`. Closing a card does not delete these rows.
+ *
  * `role: "reviewer"` is what the Fila ` ↔ review` arrow derives from.
  * Measured 2026-09-13: 0 of 91 rows were reviewer — not disuse, there was
  * no writer: `upsertTask` only writes the if-absent `implementer`
@@ -1158,11 +1164,27 @@ export function openStore(userDataDir: string) {
   // main-process registry, and a connector's from/to reference, both need
   // to stay unique app-wide, not just within one board) — this seeds that
   // counter without fetching every board's full rows on boot.
+  //
+  // Measured 2026-09-13: closing a non-chat card DELETEs its `cards` row
+  // while `task_cards` / `task_verdicts` / `reports` / `tasks.card_id` keep
+  // the numeric id as history. Seeding from cards∪connectors∪boards alone
+  // then DROPS the max on restart and reissues the same short id to a new
+  // card — which inherits every stale `task_cards` row and stamps new
+  // reports onto dead tasks with confidence (card 478 → ec01dc40 after
+  // 16:26). The seed must cover every table that still names a card id,
+  // so a short id is never recycled while any historical reference exists.
+  // Humans keep typing the short number; the number simply never comes back.
   const maxIdStmt = db.prepare(`
     SELECT MAX(v) as m FROM (
       SELECT CAST(id AS INTEGER) as v FROM cards
       UNION ALL SELECT CAST(id AS INTEGER) FROM connectors
       UNION ALL SELECT CAST(id AS INTEGER) FROM boards
+      UNION ALL SELECT CAST(from_card_id AS INTEGER) FROM connectors
+      UNION ALL SELECT CAST(to_card_id AS INTEGER) FROM connectors
+      UNION ALL SELECT CAST(card_id AS INTEGER) FROM task_cards
+      UNION ALL SELECT CAST(card_id AS INTEGER) FROM task_verdicts
+      UNION ALL SELECT CAST(card_id AS INTEGER) FROM reports
+      UNION ALL SELECT CAST(card_id AS INTEGER) FROM tasks WHERE card_id IS NOT NULL AND card_id != ''
     )
   `);
 
@@ -1680,7 +1702,27 @@ export function openStore(userDataDir: string) {
   // saber onde apendar a rodada. Um card normal só aparece numa linha
   // (o caso comum, 1 card = 1 task ativa); o schema não impede mais de
   // uma, então o fan-out cobre isso sem assumir cardinalidade.
-  const listTaskCardsForCardStmt = db.prepare("SELECT task_id, card_id, role FROM task_cards WHERE card_id = ?");
+  //
+  // LIVE participation only — `task_cards` is append-ish history (rows
+  // survive card close and task completion on purpose; see TaskCardRow).
+  // Reading every row by card_id as "who this card is right now" is what
+  // let a recycled id (and even the same living card after its task went
+  // done) stamp `reports.role` / `task_verdicts` onto finished work with
+  // confidence. Terminal task status is the revalidated fact: a done/
+  // failed link is evidence of past participation, not a live role.
+  // `getTaskCards(taskId)` stays unfiltered for the Fila/history chips.
+  const listTaskCardsForCardStmt = db.prepare(`
+    SELECT tc.task_id, tc.card_id, tc.role
+    FROM task_cards tc
+    JOIN tasks t ON t.id = tc.task_id
+    WHERE tc.card_id = ?
+      AND t.status NOT IN ('done', 'failed')
+  `);
+  /** Full card-side history (including terminal tasks). Diagnostics and
+   * audits only — never the report / participation write path. */
+  const listTaskCardsForCardHistoryStmt = db.prepare(
+    "SELECT task_id, card_id, role FROM task_cards WHERE card_id = ?",
+  );
 
   // Ver o comentário grande de `TaskVerdictRow` acima pro modelo
   // completo. `ORDER BY at ASC, rowid ASC` — mesmo desempate de
@@ -1707,13 +1749,14 @@ export function openStore(userDataDir: string) {
    *
    * Fan-out: um `cardId` pode participar de mais de uma task ao mesmo
    * tempo (schema de `task_cards` permite); `db.transaction` garante
-   * que, se o card estiver em N tasks, ou as N linhas entram todas ou
-   * nenhuma — mesma garantia de atomicidade que `applyColumnDrop` já
+   * que, se o card estiver em N tasks VIVAS, ou as N linhas entram todas
+   * ou nenhuma — mesma garantia de atomicidade que `applyColumnDrop` já
    * tem, mesmo motivo (um crash no meio não pode deixar a rodada
-   * registrada em ALGUMAS tasks e não noutras). Card sem NENHUMA linha
-   * em `task_cards` (nunca esteve vinculado a task nenhuma): 0 linhas
-   * lidas, 0 gravadas — não há rodada de participação nenhuma pra
-   * fechar, silêncio correto, não bug. */
+   * registrada em ALGUMAS tasks e não noutras). Só links vivos
+   * (`listTaskCardsForCardStmt`: task não `done`/`failed`) — um vínculo
+   * histórico a task já fechada NÃO fecha rodada nova. Card sem NENHUMA
+   * linha viva em `task_cards`: 0 linhas lidas, 0 gravadas — silêncio
+   * correto, não bug. */
   const recordParticipationRound = db.transaction((cardId: string, verdict: string | null, at: number): TaskVerdictRow[] => {
     const links = listTaskCardsForCardStmt.all(cardId) as TaskCardRow[];
     const written: TaskVerdictRow[] = [];
@@ -2037,11 +2080,14 @@ export function openStore(userDataDir: string) {
       applyColumnDrop(dragged, siblingImplicitOrders),
     getTaskTransitions: (taskId: string): TaskTransitionRow[] => getTaskTransitionsStmt.all(taskId) as TaskTransitionRow[],
     getTaskCards: (taskId: string): TaskCardRow[] => listTaskCardsStmt.all(taskId) as TaskCardRow[],
-    /** Same current-link view as `getTaskCards`, from the card side. The
-     * message bus uses this only to distinguish a secondary task card with a
-     * real participation link from an unrelated support card before asking
-     * `recordParticipationRound` to close the round. */
+    /** Live participation links from the card side (non-terminal tasks
+     * only). The message bus stamps `reports.role` and closes participation
+     * rounds from this — never from the historical `task_cards` dump. */
     listTaskCardsForCard: (cardId: string): TaskCardRow[] => listTaskCardsForCardStmt.all(cardId) as TaskCardRow[],
+    /** Every `task_cards` row for this card id, including done/failed —
+     * history/evidence. Do not use for role stamping. */
+    listTaskCardsForCardHistory: (cardId: string): TaskCardRow[] =>
+      listTaskCardsForCardHistoryStmt.all(cardId) as TaskCardRow[],
     linkTaskCard: (taskId: string, cardId: string, role: string) => linkTaskCardStmt.run({ task_id: taskId, card_id: cardId, role }),
     // Ver o comentário grande de `recordParticipationRound` acima
     // (definida antes do `return`, junto dos prepared statements) —

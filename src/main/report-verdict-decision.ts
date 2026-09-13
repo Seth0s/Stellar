@@ -52,13 +52,18 @@ export function promoteReportVerdict(
  * implementer itself, and the completion proposal reacted to the value
  * without knowing who wrote it.
  *
- * `links` are the caller's current `task_cards` rows (one per task the
- * card participates in). A report is per CARD, not per task, so the role
- * is only a fact when every link agrees:
- * - 0 links → `null`: the card is not on any task, its role is unknown.
+ * `links` are the caller's LIVE `task_cards` rows (non-terminal tasks —
+ * see `store.listTaskCardsForCard`). A report is per CARD, not per task,
+ * so the role is only a fact when every live link agrees:
+ * - 0 links → `null`: the card is not on any open task, its role is unknown.
  * - N links, one distinct role → that role.
  * - N links, different roles → `null`: the report does not say which
  *   task it is about, so picking one would be a guess.
+ *
+ * Historical links to already-done/failed tasks are NOT passed in here
+ * (the store filters them). That is a different failure mode from
+ * "ambiguous roles": a single stale link with one role looked
+ * unambiguous and was still wrong after card-id recycle (2026-09-13).
  *
  * `null` is the honest record, NEVER "implementer by default" — that
  * default is what made 156/156 `task_verdicts` rows indistinguishable.

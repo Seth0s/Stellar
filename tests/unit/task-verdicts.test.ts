@@ -237,7 +237,7 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       .prepare(
         "INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, retry_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
       )
-      .run("pre-existing-task", "task antiga", "claude", "done", "card-old", "default", Date.now(), Date.now());
+      .run("pre-existing-task", "task antiga", "claude", "running", "card-old", "default", Date.now(), Date.now());
     raw.close();
 
     const store = openStore(dir);
@@ -248,6 +248,9 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       // `updated_at` — mesma decisão já tomada para `task_transitions`.
       expect(task.verdicts).toEqual([]);
 
+      // Status must be non-terminal: live participation ignores done/failed
+      // links (card-id recycle fix, 2026-09-13). Migration itself is what
+      // this test covers — recording still has to work on an open task.
       store.recordParticipationRound("card-old", "aprovado", Date.now());
       expect(store.getTask("pre-existing-task")!.verdicts).toHaveLength(1);
     } finally {

@@ -2,6 +2,7 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
+import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
@@ -1172,10 +1173,11 @@ export function createMessageBus(
    * Enter, e CONFIRMA que submeteu de verdade (relendo o card e
    * comparando com um prefixo do que foi escrito), retentando só o Enter
    * (nunca o texto de novo) até `SEND_ENTER_MAX_ATTEMPTS`. Extraído aqui
-   * pra todo caller que ainda digita (`send`, drag humano de task) usar
-   * o MESMO mecanismo — nunca uma segunda variante que "quase" faz a
-   * mesma coisa. Report/idle/exit-sem-report NÃO passam por aqui: o JSON
-   * da tool e o poll de `card_status` + `read_report` são o canal.
+   * pra todo caller que ainda digita (`send`, drag humano de task, ponteiro
+   * de report / saída-sem-report via `enqueueCardDelivery`) usar o MESMO
+   * mecanismo — nunca uma segunda variante que "quase" faz a mesma coisa.
+   * Idle NÃO passa por aqui (nem popup de SO): o orquestrador polla
+   * `card_status`. O corpo do relatório também não — só o ponteiro curto.
    *
    * DESIGN-BACKLOG.md §0 (2026-09-11, relatado 2x com `codex`) — 2 achados
    * que se somavam: (1) nada aqui esperava a TUI do CLI terminar de subir
@@ -1504,6 +1506,83 @@ export function createMessageBus(
     return Date.now() - lastActivityAt >= IDLE_THRESHOLD_MS;
   }
 
+  /** Who spawned `cardId` (`kind === "spawned"`, most recent by
+   * `updated_at`) — only if that spawner is still alive. `null` is the
+   * quiet no-op for both "opened by a human" and "spawner already gone". */
+  function resolveLiveSpawner(cardId: string): string | null {
+    const spawnedBy = callbacks
+      .listAllConnectors()
+      .filter((c) => c.kind === "spawned" && c.to_card_id === cardId)
+      .sort((a, b) => b.updated_at - a.updated_at)[0];
+    if (!spawnedBy) return null;
+    const spawnerId = spawnedBy.from_card_id;
+    if (!callbacks.isCardAlive(spawnerId)) return null;
+    return spawnerId;
+  }
+
+  /** Feeds `decideReportNotifyTarget` (report-notify-routing.ts) — live
+   * `spawned` wins; inbound `modified` is the readoption fallback. This
+   * is the production caller that module exists for; do not leave the
+   * pure function without a feeder again. */
+  function resolveNotifyTarget(cardId: string): string | null {
+    const connectors = callbacks.listAllConnectors();
+    const spawnedById = resolveLiveSpawner(cardId);
+    const directiveFromId = pickLatestDirectiveSender(connectors, cardId);
+    return decideReportNotifyTarget({
+      directiveFromId,
+      directiveFromAlive: directiveFromId !== null && callbacks.isCardAlive(directiveFromId),
+      spawnedById,
+      spawnedByAlive: spawnedById !== null,
+    }).targetId;
+  }
+
+  /**
+   * AGENT half of "a report arrived" — short pointer typed into the
+   * orchestrator's PTY via `enqueueCardDelivery` (FIFO + human-input
+   * gate + receipt). OS popup stays gone (owner ask, 6239269).
+   *
+   * Always fires, including when a `read_report {wait:true}` waiter just
+   * got the JSON: the waiter is the agent RPC; the human watching the
+   * orchestrator card is not that waiter. Skipping the pointer left the
+   * screen silent (measured 2026-09-13: seq 221+ after the dual-channel
+   * removal). `wait:true` is also a known MCP-host trap (~2 min abort vs
+   * 10 min tool), so the pointer is not redundant in practice.
+   *
+   * Does NOT `await` delivery — `report` must return as soon as the row
+   * is persisted (f073f59 / message-bus-report-does-not-await-pty). The
+   * enqueue form from 5206f7e is what makes that safe again: the old
+   * `await typeAndSubmit` blocked the tool and corrupted turns.
+   */
+  function notifySpawnerOfReport(cardId: string): void {
+    const spawnerId = resolveNotifyTarget(cardId);
+    if (!spawnerId) {
+      console.warn(
+        `[report] ${callbacks.describeCardLabel(cardId)} produziu um relatório mas não há card vivo pra empurrar (sem diretiva recente nem spawner vivo) — use read_report pra consultar manualmente.`,
+      );
+      return;
+    }
+    if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
+    const label = callbacks.describeCardLabel(cardId);
+    // AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+    enqueueCardDelivery(spawnerId, `[de: ${label}] relatório disponível — chame read_report para ver o resultado.`);
+  }
+
+  /**
+   * AGENT half of "exit without report" (DESIGN-BACKLOG.md §2.1 SINAL 2).
+   * Same lineage resolver and same `enqueueCardDelivery` path as report —
+   * no OS popup. Queued (not fire-and-forget `await` on a sync exit
+   * hook): the receipt/FIFO from 5206f7e is what retires the old
+   * corruption objection against `notifySpawnerOfUnreportedExit`.
+   */
+  function notifySpawnerOfUnreportedExit(cardId: string, exitCode: number): void {
+    const spawnerId = resolveNotifyTarget(cardId);
+    if (!spawnerId) return;
+    if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
+    const label = callbacks.describeCardLabel(cardId);
+    // AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+    enqueueCardDelivery(spawnerId, `[de: ${label}] saiu (código ${exitCode}) sem chamar report.`);
+  }
+
   /** DESIGN-BACKLOG.md §2.1, decisão 5 — "arrastar a mão SEMPRE vale, e
    * AVISA o agente". O alvo já é conhecido de saída — o próprio card
    * vinculado à task que o HUMANO acabou de arrastar (`tasks.card_id`).
@@ -1526,9 +1605,9 @@ export function createMessageBus(
    * texto — vira comando de shell de verdade, e a resposta previsível é
    * "command not found" no meio do que quer que o card estivesse
    * fazendo. Excluído explicitamente (mesma convenção "bash não é
-   * agente" de `countRunningAgentsOnBoard`) — o mínimo que este achado
-   * pediu, não uma correção geral de prontidão do destinatário (fora
-   * de escopo aqui). */
+   * agente" de `countRunningAgentsOnBoard`/`cardWasExpectedToReport`) —
+   * o mínimo que este achado pediu, não uma correção geral de prontidão
+   * do destinatário (fora de escopo aqui). */
   async function notifyHumanMovedTask(cardId: string, message: string) {
     if (!callbacks.isCardAlive(cardId)) return;
     const card = listTerminalCards().find((c) => c.id === cardId);
@@ -2108,10 +2187,13 @@ export function createMessageBus(
       // two copies of the same fact. MCP's explicit `req.verdict` wins.
       const promoted = promoteReportVerdict(filled, req.verdict);
       const report = promoted.report;
-      // Who is saying it — the caller's `task_cards.role`, stamped next
+      // Who is saying it — the caller's LIVE `task_cards.role`, stamped next
       // to the verdict from the SAME links `recordParticipationRound`
-      // reads below (one source, two rows). `null` when the card is on
-      // no task, or on tasks with different roles: unknown is a fact to
+      // reads below (one source, two rows). Historical links to done/
+      // failed tasks are already dropped by `listTaskCardsForCard` —
+      // ambiguity across roles is a separate guard inside
+      // `resolveReporterRole`. `null` when the card is on no open task,
+      // or on open tasks with different roles: unknown is a fact to
       // record, not a value to guess — never `implementer` by default.
       // The completion proposal (task-board-model.ts) only trusts an
       // `aprovado` whose role is `reviewer`; an implementer's verdict is
@@ -2155,10 +2237,11 @@ export function createMessageBus(
         if (remaining.length === 0) pendingReportWaiters.delete(req.requesterId);
         else pendingReportWaiters.set(req.requesterId, remaining);
       }
-      // Persist + wake waiters above. No PTY pointer and no OS popup:
-      // the JSON is already in the table; the orchestrator polls
-      // card_status then read_report (no wait). A waiter of
-      // read_report {wait:true} already received the body.
+      // AGENT half: pointer into the orchestrator's PTY (enqueue, never
+      // await — report must return now). OS popup stays removed. Fires
+      // even when a wait:true waiter already got the JSON — that waiter
+      // is the agent RPC; the human on the orchestrator card is not.
+      notifySpawnerOfReport(req.requesterId);
       // An accepted report supersedes any refused-round stash. Clear it
       // here so a later exit cannot revive a reason that was already
       // replaced. Status is untouched on a plain accept.
@@ -2922,6 +3005,18 @@ export function createMessageBus(
     pendingSpawnAgents.get(requestId)?.resolve(result);
   }
 
+  /** DESIGN-BACKLOG.md §2.1 "SINAL 2", achado de review adversarial
+   * (achado 3, MÉDIO) — avisar o spawner só quando havia trabalho
+   * esperado: (a) task vinculada (qualquer status) OU (b) linhagem de
+   * `spawn_agent` (`cardSpawnDepth`) e provider !== `bash`. Ruído de
+   * card de apoio (`files`/`browser`/`bash`) ensina o orquestrador a
+   * ignorar o sinal. */
+  function cardWasExpectedToReport(cardId: string, linkedTask: TaskRow | undefined): boolean {
+    if (linkedTask) return true;
+    if (!cardSpawnDepth.has(cardId)) return false;
+    return callbacks.getAnyCard(cardId)?.provider !== "bash";
+  }
+
   /** DESIGN-BACKLOG.md item 58, M4 — called from pty-registry's own
    * `onExit`, unconditionally, for every card that exits (not just ones
    * with a waiter — cheap Map lookup, no-op when nothing's waiting). */
@@ -2951,6 +3046,10 @@ export function createMessageBus(
     // case — whatever it said is the real outcome, for whoever reads it
     // to call update_task, not this engine to guess.
     if (!callbacks.getReport(cardId)) {
+      // `.find` sem filtrar por status: `cardWasExpectedToReport` (achado
+      // 3) considera QUALQUER status principal vinculado como "havia
+      // trabalho esperado"; só `markTaskFailed` abaixo continua exigindo
+      // especificamente `running` (comportamento intocado).
       const linkedTask = callbacks.listTasks().find((t) => t.card_id === cardId);
       if (linkedTask?.status === "running") {
         const lastRefused = lastRefusedReasonFromResultJson(linkedTask.result_json);
@@ -2960,13 +3059,19 @@ export function createMessageBus(
           "exit_without_report",
         );
       }
-      // Qualquer vínculo atual em task_cards fecha a participação,
-      // inclusive um card secundário de review. Card de apoio sem
-      // vínculo nenhum não cria linha. Sem PTY/popup: o orquestrador
-      // vê `exited` em card_status e o status novo via get_task.
+      // Fechar histórico e avisar o spawner são critérios diferentes:
+      // qualquer vínculo atual em task_cards fecha a participação, inclusive
+      // um card secundário de review; apenas `cardWasExpectedToReport`
+      // qualifica o aviso de entrega ao spawner. Card de apoio sem vínculo
+      // nenhum não chama recordParticipationRound e não cria linha.
       const taskCardLinks = callbacks.listTaskCardsForCard(cardId) ?? [];
       if (taskCardLinks.length > 0) {
         callbacks.recordParticipationRound(cardId, null, Date.now());
+      }
+      if (cardWasExpectedToReport(cardId, linkedTask)) {
+        // Enqueue (não await): resolveCardExit é síncrono no onExit do
+        // pty-registry. A FIFO de 5206f7e segura a vez; sem popup de SO.
+        notifySpawnerOfUnreportedExit(cardId, exitCode);
       }
     }
   }
