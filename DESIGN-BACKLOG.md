@@ -1179,3 +1179,38 @@ JSON* — decidível em runtime pelo próprio agente, sem segunda lista.
 era **instalar a build atual**. A de 11/09 não tem `promoteReportVerdict`,
 `resolveReporterRole`, `link_task_card` nem `AGENT_CANVAS_TASK_ID`; com ela nenhum canal
 grava papel.
+
+### Pauta para a próxima rodada de discussão (2026-09-13, NÃO decidido)
+
+Levantado de observação ao vivo, com a medição feita, mas **sem decisão de design**. Nada
+aqui deve ser implementado antes de passar pelo card de segunda opinião. As tasks
+correspondentes existem paradas (`92d1ce98`, acréscimo em `7d8d7398`) e não têm `deps`, logo
+o auto-dispatch não as alcança.
+
+**1. A Fila mente sobre task com card vivo.** `spawn_agent({taskId})` amarra o card e deixa
+o status intocado; `dispatchIfUnblocked` marca `running`. Medido: `8d9fe659` e `312d4c0a`
+com card aberto e agente trabalhando aparecem `pending`; `d1074fc2`, nascida por
+auto-dispatch, aparece `running`. A causa é deliberada e está comentada em
+message-bus.ts:2712 — *"amarrar o card não é propor running, e um hold humano no pending não
+deve virar divergência colateral deste spawn"*. O raciocínio protege um caso real; o defeito
+é tratar o caso raro (existe hold) e o comum (não existe) do mesmo jeito. **Em aberto:** o
+que um `role: reviewer` faz com o status, já que ele entra em task muitas vezes `done`; o que
+fazer quando a task está `failed`; qual `actor` fica na trilha.
+
+**2. `model` e `effort` como campos da task.** Hoje a task declara `provider` e `cwd`, e não
+declara os dois que custam dinheiro — `--effort` existe em providers.ts por causa de um custo
+real já registrado pelo dono. **Em aberto:** se isso é da mesma classe de
+`território`/`gates`/`report-schema` (a resposta provável é não — `model`/`effort` vão para o
+argv do spawn, os outros vão para o texto do brief; misturar os dois numa abstração é erro).
+
+**3. Herança na corrente `deps`.** O filho não herda nada do pai — nem provider, nem cwd, nem
+model, nem effort; cai no default do app. Medido ao vivo duas vezes em 2026-09-13, as duas
+com o dono vendo nascer um card `claude` em `/home/lucas` ("spawn de agente alheio"). O
+paliativo sem código existe e é o orquestrador passar os campos no `create_task` — falhei
+nisso em 4 tasks seguidas, o que é evidência a favor de o app herdar em vez de depender de
+memória humana. **Em aberto:** herdar da task pai ou do card que executou o pai; com N pais,
+qual vence; herdar sempre ou só quando o campo está ausente. Reuso pronto:
+`depPointerSources()` já faz `getTask` de cada dep.
+
+**Restrição que vale para as três:** os campos continuam OPCIONAIS. "Não podemos obrigar
+estilo engenharia de software para o usuário".
