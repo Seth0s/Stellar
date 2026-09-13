@@ -1,88 +1,39 @@
 import { open, readdir, readFile, stat } from "node:fs/promises";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import type { ResumeTargetEvidence } from "./session-resume-validation";
+import { decideClaimAmongCandidates, type ReservationView } from "./session-claim-decision";
 
 const POLL_MS = 1500;
-const TIMEOUT_MS = 30_000;
-// Achado ao vivo (2026-09-07) — Codex nunca restaurava sessão: o Codex TUI
-// só grava a entrada em `~/.codex/session_index.jsonl` bem depois do início
-// real da sessão (embedded timestamp do rollout vs. mtime do index, medido
-// neste mesmo host): 36s num caso, 211s (3.5min) noutro. Ambos passam do
-// TIMEOUT_MS de 30s compartilhado por todo provider, então o watcher sempre
-// desistia antes do Codex escrever o índice — `resumeId` ficava `null` pra
-// sempre e o próximo launch simplesmente abria uma sessão nova vazia
-// (indistinguível de "falhou a restaurar"). Cursor grava quase
-// instantaneamente (~2s) — 30s continua certo pra ele.
-//
-// CORREÇÃO (2026-09-11, investigação do achado 1 abaixo) — "Claude...
-// grava quase instantaneamente" acima estava ERRADO, nunca tinha sido
-// medido contra o CLI real: `claude` deixado ocioso por 40s (pty real,
-// env limpo de CLAUDE_CODE_*/CLAUDECODE/CLAUDE_PID/CLAUDE_EFFORT/AI_AGENT
-// como `pty-registry.ts::isInheritedClaudeSessionEnvKey` já faz — sem
-// isso o processo filho herda `CLAUDE_CODE_CHILD_SESSION` de QUEM RODOU O
-// TESTE e desliga "transcript saving" sozinho, invalidando a medição) não
-// cria arquivo NENHUM em `~/.claude/projects/<slug>/` — nem um stub. O
-// primeiro byte só sai ~0.1s DEPOIS do primeiro prompt ser submetido, não
-// perto do spawn. `opencode` tem o mesmo padrão (zero linha na tabela
-// `session` até o submit). Ver `REARM_ON_INPUT_PROVIDERS` logo abaixo,
-// que essa medição levou a corrigir.
-const CODEX_TIMEOUT_MS = 6 * 60_000;
 
 /**
- * Review adversarial (2026-09-11), achado 1 (o mais grave) — estender
- * `REARM_ON_INPUT_PROVIDERS` para claude/opencode (logo abaixo) fecha o
- * achado 1 original, mas PIORA a corrida que a própria investigação já
- * tinha provado existir (10/10 rodadas, script isolado fora do board):
- * `claimedSessionIds` impede RECLAIM do mesmo id por dois watchers, mas
- * não amarra arquivo nenhum ao PTY que o escreveu — atribuição é "primeiro
- * watcher a ver". Antes desta rodada, a janela de um card "faminto" (sem
- * sessão ainda) era fixa: `TIMEOUT_MS` a partir do SPAWN, e morria de vez.
- * Com rearm-on-input, a janela se RENOVA a cada linha de input — um card A
- * que recebe input aos 40s e cujo arquivo demora/falha continua com
- * watcher vivo indefinidamente, pronto pra sequestrar o arquivo que um
- * card B, mesmo cwd, cria ao receber SEU PRÓPRIO input aos 50s.
+ * Descoberta de sessão ancorada em ESTADO, não em relógio. Enquanto o
+ * card existir e `resume_id` for null, o poller continua. O gatilho de
+ * re-tentativa é uma linha de input real (`REARM_ON_INPUT_PROVIDERS`)
+ * ou o próximo tick — nunca um prazo. `claude`/`cursor` normalmente
+ * nem entram aqui: o UUID é imposto no spawn e gravado na hora.
  *
- * Fix: a medição desta mesma investigação já deu a evidência de posse que
- * faltava — o arquivo nasce ~0.13s (claude) / ~70ms (opencode) DEPOIS do
- * input real ser processado, não em qualquer ponto de uma janela de 30s.
- * Isso é um vínculo TEMPORAL forte entre "um candidato apareceu" e "QUAL
- * card acabou de receber input". `MATCH_GRACE_MS` é esse vínculo: quando
- * um watcher é REARMADO por uma linha de input real (nunca no watch
- * inicial do spawn — ver `rearmSessionWatch`/`write` em `pty-registry.ts`),
- * um candidato só é aceito se `mtime` cair dentro de
- * `[floor, momento-deste-rearm + MATCH_GRACE_MS]`, não em qualquer ponto
- * até o `TIMEOUT_MS` inteiro. Generoso o bastante acima da latência
- * medida (75×+ pro pior caso, opencode) pra tolerar uma máquina mais lenta
- * sem virar falso negativo, mas reduz o antigo "qualquer ponto numa janela
- * de 30s renovada pra sempre" pra "poucos segundos depois do MEU último
- * input real" — encolhe a corrida por ordens de grandeza, não a elimina
- * (dois cards recebendo input a menos de `MATCH_GRACE_MS` um do outro, no
- * mesmo cwd, ainda podem colidir — residual, documentado, não escondido).
- * Ancorado no momento do REARM (não no `floor`, que RODADA 7 pode manter
- * pinado por várias linhas seguidas enquanto um watcher já está em voo —
- * ver o histórico de `scanFloorMs` em `pty-registry.ts`) porque só assim
- * uma sequência de rearms ao longo de um período longo continua
- * estendendo a tolerância a partir da atividade mais recente de verdade,
- * em vez de travar num prazo calculado a partir de uma linha antiga.
- * `cursor`/`codex` não usam isto — não estão em `REARM_ON_INPUT_PROVIDERS`
- * e não têm a janela que se renove, então não ganham a exposição nova que
- * este mecanismo existe pra fechar.
+ * Corrida (dois cards, mesmo cwd+provider): se dois candidatos sem dono
+ * aparecem e nada os distingue, `decideClaimAmongCandidates` recusa o
+ * claim — não escolhe por mtime. A reserva de input (quem digitou, e
+ * depois de qual instante o arquivo nasceu) é a única evidência barata
+ * de posse; se ela empatar ou faltar, o id fica para a ação manual.
+ *
+ * HISTÓRICO — não reintroduzir. Até 2026-09-13 a descoberta tinha um
+ * prazo de 30s (6min no Codex) e uma janela de graça de 10s após o
+ * rearm. As três constantes de relógio foram removidas: um prazo só
+ * muda a probabilidade de achar, e uma janela maior aumenta a chance
+ * de casar o arquivo ERRADO. A graça temporal encolhia a corrida mas
+ * ainda era relógio — dois cards digitando perto um do outro no mesmo
+ * cwd ainda colidiam. O desenho atual não tem nenhuma delas.
  */
-export const MATCH_GRACE_MS = 10_000;
-
-/** Pura, testável (mesmo precedente de `decideRearmOnLine`/
- * `decideResumeValidity`): um candidato é "fresco" se seu `mtime` for mais
- * novo que o piso E (quando um prazo de correspondência foi passado — só
- * acontece num watcher rearmado por input real, nunca no watch inicial do
- * spawn) não mais novo que esse prazo. `matchDeadlineMs` `undefined`
- * preserva o comportamento de sempre (sem teto, só o piso). */
-export function isFreshCandidate(mtimeMs: number, floorMs: number, matchDeadlineMs?: number): boolean {
-  if (mtimeMs <= floorMs) return false;
-  if (matchDeadlineMs !== undefined && mtimeMs > matchDeadlineMs) return false;
-  return true;
+/** Pura, testável: um candidato é "fresco" se seu `mtime` for mais novo
+ * que o piso de scan. Sem teto de relógio — um arquivo que nasce tarde
+ * ainda é deste card se for o único candidato atribuível. */
+export function isFreshCandidate(mtimeMs: number, floorMs: number): boolean {
+  return mtimeMs > floorMs;
 }
 
 /**
@@ -152,7 +103,6 @@ type RearmReservation = {
   ownerId: string;
   rearmAtMs: number;
   matchStartMs: number;
-  matchDeadlineMs: number;
 };
 
 /**
@@ -163,7 +113,7 @@ type RearmReservation = {
  * provider+cwd so a candidate created after two nearby inputs is awarded to
  * the most recent input, while a candidate created before the newer input is
  * still available to the earlier watcher. A reservation is removed when its
- * watcher is cancelled, finds a session, or times out.
+ * watcher is cancelled or finds a session — never by a clock.
  */
 const rearmReservations = new Map<string, Map<string, RearmReservation>>();
 
@@ -190,28 +140,10 @@ function registerRearmReservation(
   };
 }
 
-function canClaimRearmedCandidate(providerId: string, cwd: string, candidate: SessionCandidate, ownerId?: string): boolean {
-  // A rearm reservation is only meaningful for providers whose candidate has
-  // a creation/update timestamp. The only provider without one (codex) never
-  // enters this path, but keeping the fallback makes the helper conservative
-  // if another index-backed provider is added later.
-  if (!ownerId || candidate.timestampMs === undefined) return true;
+function reservationsFor(providerId: string, cwd: string): ReservationView[] {
   const reservations = rearmReservations.get(reservationScope(providerId, cwd));
-  if (!reservations) return true;
-
-  let newestMatchingReservation: RearmReservation | null = null;
-  for (const reservation of reservations.values()) {
-    // A candidate that predates a later input cannot belong to that later
-    // input. The deadline is included for clarity and protects this helper
-    // if a caller ever supplies a candidate outside its own find* filter.
-    if (candidate.timestampMs <= reservation.matchStartMs || candidate.timestampMs > reservation.matchDeadlineMs) {
-      continue;
-    }
-    if (!newestMatchingReservation || reservation.rearmAtMs > newestMatchingReservation.rearmAtMs) {
-      newestMatchingReservation = reservation;
-    }
-  }
-  return newestMatchingReservation === null || newestMatchingReservation.ownerId === ownerId;
+  if (!reservations) return [];
+  return [...reservations.values()];
 }
 
 /**
@@ -293,78 +225,50 @@ export const RESUME_TRIGGER_COMMANDS: Partial<Record<string, string>> = {
 };
 
 /**
- * Review adversarial RODADA 2 (2026-09-09), achado 1 — antigravity's own
- * problem, distinct from `RESUME_TRIGGER_COMMANDS` above: `agy` only
- * writes its on-disk conversation file (what `findAntigravitySession`
- * scans for) after a prompt is submitted, not at spawn. A card spawned
- * and left idle for a real orchestrator briefing (`send_to_card` — a
- * real pattern on this board, not hypothetical) can sit well past
- * `TIMEOUT_MS` before any prompt ever arrives, exactly what happened to
- * real cards 294/296/298. Inflating the timeout only delays the same
- * failure for an even-idler card. The actual fix:
- * `pty-registry.ts::write` rearms this provider's `watchForSession` on
- * EVERY non-empty input line that reaches the card's PTY — reusing the
- * exact same input-buffering/line-detection machinery
- * `RESUME_TRIGGER_COMMANDS` already established, just triggering on any
- * completed line instead of one specific trigger phrase. This list says
- * which providers want that "rearm on input" behavior — originally just
- * antigravity, on the ASSUMED premise that every other provider's session
- * file already appears close enough to spawn time that a rearm would add
- * nothing.
+ * Providers whose on-disk session record appears only AFTER a prompt
+ * (measured). `pty-registry.ts::write` rearms `watchForSession` on
+ * every non-empty input line for these — a retry TRIGGER and an
+ * ownership reservation, not a new deadline. The poller already lives
+ * while `resume_id` is null; the rearm is what says "this card just
+ * typed", so a sibling's file is not claimed as ours.
  *
- * CORREÇÃO (2026-09-11) — essa premissa nunca tinha sido testada contra
- * um CLI real, e caiu: DESIGN-BACKLOG.md's "resume_id nao sobrevive ao
- * restart" achado 1, relatado ao vivo pelo dono do repo, listava 3 cards
- * `claude` reais (321/323/325/327, spawnados via `spawn_agent` e
- * briefados só depois via `send_to_card` — exatamente o padrão
- * "spawnado-e-deixado-ocioso" que a RODADA 2 já tinha documentado pro
- * antigravity) com `resume_id` NULL depois de trabalharem a noite
- * inteira. Medido ao vivo (pty real via `pty.fork`, env limpo dos mesmos
+ * HISTÓRICO — por que a lista existe (RODADA 2, 2026-09-09): `agy` só
+ * grava o `.db` depois do prompt, não no spawn. Cards 294/296/298
+ * ficaram ociosos esperando `send_to_card` e o watcher de então
+ * desistia ao vencer um prazo de 30s contado desde o spawn. Inflar
+ * esse prazo só atrasava a mesma falha. Hoje não há timeout nenhum.
+ *
+ * Medição 2026-09-11 (pty real, env limpo dos mesmos
  * `CLAUDE_CODE_*`/`CLAUDECODE`/`CLAUDE_PID`/`CLAUDE_EFFORT`/`AI_AGENT`
- * que `pty-registry.ts::isInheritedClaudeSessionEnvKey` já remove antes
- * de todo spawn real — sem isso o processo filho herda
- * `CLAUDE_CODE_CHILD_SESSION` de quem RODOU o teste e desliga "transcript
- * saving" sozinho, invalidando a medição):
- *   - `claude`: 40s de idle puro (dialog de trust já dispensado) não
- *     cria NENHUM arquivo em `~/.claude/projects/<slug>/` — nem um stub.
- *     Um prompt de verdade cria o primeiro arquivo em ~0.1s depois do
- *     submit, não do spawn. Ou seja, o arquivo nasce no SUBMIT, e este
- *     provider tem exatamente o mesmo problema que o antigravity: um
- *     card spawnado e briefado só depois pode facilmente passar de
- *     `TIMEOUT_MS` (30s) antes do primeiro prompt sequer existir.
- *   - `opencode`: mesmo padrão — 15s de idle sem NENHUMA linha nova na
- *     tabela `session` de `~/.local/share/opencode/opencode.db`; a linha
- *     só aparece ~70ms depois de um prompt real ser enviado. Estava
- *     ausente desta lista E de `RESUME_TRIGGER_COMMANDS` — pior cobertura
- *     que claude, que ao menos tinha o gancho explícito de `/resume`.
- *   - `cursor`: confirmado SEGURO como estava — `meta.json` com o `cwd`
- *     certo aparece ~0.7s depois de confirmar o dialog de "workspace
- *     trust", ANTES de qualquer prompt. Continua fora desta lista.
- * `codex` fica de fora também, mas por razão distinta: já tem
- * `CODEX_TIMEOUT_MS` (6min) cobrindo a mesma classe de atraso (medido:
- * 36s–211s pra escrever o índice) — funciona hoje, mas é "esperar mais"
- * em vez de rearm-on-input; se o pior caso já medido crescer, vale
- * reconsiderar. `bash` nunca teve conceito de sessão, fora de cogitação.
+ * que `pty-registry.ts::isInheritedClaudeSessionEnvKey` já remove —
+ * sem isso o filho herda `CLAUDE_CODE_CHILD_SESSION` e desliga
+ * transcript saving, invalidando a medição):
+ *   - `claude`: 40s de idle não cria arquivo; o primeiro write sai
+ *     ~0.1s após o submit. HOJE não está nesta lista: Stellar impõe
+ *     `--session-id` no spawn. Fica só em `RESUME_TRIGGER_COMMANDS`
+ *     por causa do `/resume` interativo.
+ *   - `opencode`: mesmo padrão (~70ms após o prompt). Continua aqui.
+ *   - `cursor`: `meta.json` já no spawn — e HOJE o id é imposto via
+ *     `--resume`. Fora desta lista.
+ *   - `codex`: o rollout nasce após o spawn, sem prompt. Fora desta
+ *     lista. (Houve um prazo de 6min só para esperar
+ *     `session_index.jsonl`; o índice era incompleto e o timeout saiu
+ *     junto com ele.)
+ *   - `bash`: sem conceito de sessão.
  *
- * RODADA 3 (review adversarial, 2026-09-09), achado 1 — a first pass
- * here rearmed only on the FIRST such line (once per card, guarded by a
- * flag), reasoning that "idle since spawn" only needed converting once
- * into "idle since the last real interaction". Wrong: the first line of
- * a multi-line paste (shift+enter, a long pasted briefing) restarts the
- * clock too early, and it can expire again before the actual submit —
- * the exact class of bug this whole fix exists to close, just moved one
- * step later. Rearming on EVERY non-empty line for the card's whole
- * lifetime fixes that: the window always counts from the card's last
- * real activity, not from an arbitrary earlier point, and each rearm is
- * cheap (`rearmSessionWatch` cancels its own previous watch first — see
- * that function's own doc comment — so repeated rearms never leak a
- * timer or stack a second poller). Not exact-submission-precise even
- * now (a `\r` mid multi-line-paste still restarts the clock before the
- * final Enter) — still good enough on purpose: the point was never
- * detecting the precise submit moment, just keeping the window's start
- * honest relative to real activity instead of a spawn-time guess.
+ * RODADA 3 (2026-09-09) — a first pass rearmed only on the FIRST line
+ * (once per card). Wrong: the first line of a multi-line paste
+ * (shift+enter) fired too early, and the old timeout could then expire
+ * before the real submit. Rearm on EVERY non-empty line. The old
+ * wording talked about "restarting the clock" because a timeout still
+ * existed; today there is no clock to restart — every line still
+ * rearms so the reservation tracks the latest real input.
+ * `rearmSessionWatch` cancels its previous watch first, so repeated
+ * rearms never leak a timer. A `\r` mid-paste still rearms before the
+ * final Enter — good enough: the point is "last real activity", not
+ * detecting the precise submit.
  */
-export const REARM_ON_INPUT_PROVIDERS: readonly string[] = ["antigravity", "claude", "opencode"];
+export const REARM_ON_INPUT_PROVIDERS: readonly string[] = ["antigravity", "opencode"];
 
 let claimQueue: Promise<unknown> = Promise.resolve();
 /** Serializa a seção crítica (achar candidato + `claimSessionId`)
@@ -384,64 +288,116 @@ function encodeCwdForClaude(cwd: string): string {
   return cwd.replace(/\//g, "-");
 }
 
-async function findClaudeSession(cwd: string, spawnedAtMs: number, matchDeadlineMs?: number): Promise<SessionCandidate | null> {
+async function listClaudeSessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
   const dir = join(homedir(), ".claude", "projects", encodeCwdForClaude(cwd));
   let entries: string[];
   try {
     entries = await readdir(dir);
   } catch {
-    return null;
+    return [];
   }
-  let best: { id: string; mtimeMs: number } | null = null;
+  const out: SessionCandidate[] = [];
   for (const name of entries) {
     if (!name.endsWith(".jsonl")) continue;
     const id = name.slice(0, -".jsonl".length);
     if (claimedSessionIds.has(id)) continue;
     const full = join(dir, name);
     const st = await stat(full).catch(() => null);
-    if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs, matchDeadlineMs)) continue;
-    if (!best || st.mtimeMs > best.mtimeMs) {
-      best = { id, mtimeMs: st.mtimeMs };
-    }
+    if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs)) continue;
+    out.push({ id, timestampMs: st.mtimeMs });
   }
-  return best ? { id: best.id, timestampMs: best.mtimeMs } : null;
+  return out;
 }
 
-// Codex's session_index.jsonl is append-only — track byte offset at spawn
-// time and only parse what's new, per watcher (module-level, keyed by cwd
-// isn't needed: each watcher tracks its own offset independently).
-async function findCodexSession(sinceOffset: number): Promise<{ candidate: SessionCandidate | null; newOffset: number }> {
-  const file = join(homedir(), ".codex", "session_index.jsonl");
+/**
+ * Measured 2026-09-13 (task c1064d95): `session_index.jsonl` is incomplete
+ * on this machine (4 lines for dozens of rollouts). Discovery reads
+ * `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` and the first
+ * `session_meta` line (`cwd` + `session_id`). Never the index.
+ */
+async function readCodexSessionMeta(
+  filePath: string,
+): Promise<{ sessionId: string; cwd: string } | null> {
   let content: string;
   try {
-    content = await readFile(file, "utf8");
+    content = await readFile(filePath, "utf8");
   } catch {
-    return { candidate: null, newOffset: sinceOffset };
+    return null;
   }
-  if (content.length <= sinceOffset) return { candidate: null, newOffset: content.length };
-  const added = content.slice(sinceOffset);
-  const lines = added.split("\n").filter((l) => l.trim());
-  let id: string | null = null;
-  for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line);
-      if (typeof parsed.id === "string" && !claimedSessionIds.has(parsed.id)) id = parsed.id;
-    } catch {
-      // partial line (file mid-write) — ignore, next poll will re-read it whole.
-    }
+  const first = content.split("\n").find((line) => line.trim());
+  if (!first) return null;
+  try {
+    const parsed = JSON.parse(first) as {
+      type?: string;
+      payload?: { session_id?: unknown; cwd?: unknown };
+    };
+    if (parsed.type !== "session_meta") return null;
+    const sessionId = parsed.payload?.session_id;
+    const cwd = parsed.payload?.cwd;
+    if (typeof sessionId !== "string" || typeof cwd !== "string") return null;
+    return { sessionId, cwd };
+  } catch {
+    return null;
   }
-  return { candidate: id ? { id } : null, newOffset: content.length };
 }
 
-async function findCursorSession(cwd: string, spawnedAtMs: number, matchDeadlineMs?: number): Promise<SessionCandidate | null> {
+async function listCodexSessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
+  const root = join(homedir(), ".codex", "sessions");
+  const out: SessionCandidate[] = [];
+  let years: string[];
+  try {
+    years = await readdir(root);
+  } catch {
+    return [];
+  }
+  for (const year of years) {
+    const yearPath = join(root, year);
+    let months: string[];
+    try {
+      months = await readdir(yearPath);
+    } catch {
+      continue;
+    }
+    for (const month of months) {
+      const monthPath = join(yearPath, month);
+      let days: string[];
+      try {
+        days = await readdir(monthPath);
+      } catch {
+        continue;
+      }
+      for (const day of days) {
+        const dayPath = join(monthPath, day);
+        let files: string[];
+        try {
+          files = await readdir(dayPath);
+        } catch {
+          continue;
+        }
+        for (const name of files) {
+          if (!name.startsWith("rollout-") || !name.endsWith(".jsonl")) continue;
+          const full = join(dayPath, name);
+          const st = await stat(full).catch(() => null);
+          if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs)) continue;
+          const meta = await readCodexSessionMeta(full);
+          if (!meta || meta.cwd !== cwd || claimedSessionIds.has(meta.sessionId)) continue;
+          out.push({ id: meta.sessionId, timestampMs: st.mtimeMs });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+async function listCursorSessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
   const chatsDir = join(homedir(), ".cursor", "chats");
   let hashDirs: string[];
   try {
     hashDirs = await readdir(chatsDir);
   } catch {
-    return null;
+    return [];
   }
-  let best: { id: string; createdAtMs: number } | null = null;
+  const out: SessionCandidate[] = [];
   for (const hash of hashDirs) {
     const hashPath = join(chatsDir, hash);
     let sessionDirs: string[];
@@ -462,17 +418,15 @@ async function findCursorSession(cwd: string, spawnedAtMs: number, matchDeadline
       if (
         meta.cwd !== cwd ||
         typeof meta.createdAtMs !== "number" ||
-        !isFreshCandidate(meta.createdAtMs, spawnedAtMs, matchDeadlineMs)
+        !isFreshCandidate(meta.createdAtMs, spawnedAtMs)
       ) continue;
-      if (!best || meta.createdAtMs > best.createdAtMs) {
-        best = { id: sessionId, createdAtMs: meta.createdAtMs };
-      }
+      out.push({ id: sessionId, timestampMs: meta.createdAtMs });
     }
   }
-  return best ? { id: best.id, timestampMs: best.createdAtMs } : null;
+  return out;
 }
 
-async function findOpenCodeSession(cwd: string, spawnedAtMs: number, matchDeadlineMs?: number): Promise<SessionCandidate | null> {
+async function listOpenCodeSessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
   // opencode (sst/opencode, see providers.ts) keeps its own sessions in a
   // real sqlite db (`~/.local/share/opencode/opencode.db`, `session` table
   // — schema confirmed live on this machine via `PRAGMA table_info`), not
@@ -483,22 +437,19 @@ async function findOpenCodeSession(cwd: string, spawnedAtMs: number, matchDeadli
   try {
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
   } catch {
-    return null;
+    return [];
   }
   try {
     // `time_created`, not `time_updated`: an old session receiving a later
     // turn is not evidence that this newly rearmed card created it.
     const rows = db
-      .prepare("SELECT id, time_created FROM session WHERE directory = ? AND time_created > ? ORDER BY time_created DESC")
+      .prepare("SELECT id, time_created FROM session WHERE directory = ? AND time_created > ?")
       .all(cwd, spawnedAtMs) as { id: string; time_created: number }[];
-    for (const row of rows) {
-      if (!claimedSessionIds.has(row.id) && isFreshCandidate(row.time_created, spawnedAtMs, matchDeadlineMs)) {
-        return { id: row.id, timestampMs: row.time_created };
-      }
-    }
-    return null;
+    return rows
+      .filter((row) => !claimedSessionIds.has(row.id) && isFreshCandidate(row.time_created, spawnedAtMs))
+      .map((row) => ({ id: row.id, timestampMs: row.time_created }));
   } catch {
-    return null;
+    return [];
   } finally {
     db.close();
   }
@@ -542,14 +493,10 @@ async function findOpenCodeSession(cwd: string, spawnedAtMs: number, matchDeadli
  *     continuam zeradas até o FIM do turno, então um prompt real cujo
  *     processo morre antes da resposta terminar era descartado como
  *     "vazio", perdendo conteúdo de verdade).
- *   - codex: melhor esforço, mais fraco que os outros de propósito
- *     assumido — o conteúdo real do rollout não foi localizado nesta
- *     investigação (só o índice `session_index.jsonl`, que não carrega
- *     nenhum sinal de tamanho/atividade). `exists` aqui só confirma que o
- *     id aparece no índice; `hasContent` acompanha `exists` sem checagem
- *     adicional. Não regride nada (codex nunca teve este tipo de
- *     validação antes), mas não teve a mesma medição ao vivo que
- *     claude/opencode/cursor tiveram — documentado, não escondido.
+ *   - codex: o arquivo `rollout-*.jsonl` em `~/.codex/sessions/YYYY/MM/DD`
+ *     cujo nome contém o id (mesmo store da descoberta). Tamanho do
+ *     arquivo via `fileEvidence`. `session_index.jsonl` não é lido —
+ *     medido incompleto (task c1064d95).
  */
 const MIN_CONTENT_BYTES = 16;
 
@@ -674,22 +621,41 @@ function findOpenCodeSessionEvidence(resumeId: string): ResumeTargetEvidence {
 }
 
 function findCodexSessionEvidence(resumeId: string): ResumeTargetEvidence {
-  const file = join(homedir(), ".codex", "session_index.jsonl");
-  let content: string;
+  // Same store as discovery — the rollout file, not session_index.jsonl
+  // (measured incomplete). Filename embeds the session id.
+  const root = join(homedir(), ".codex", "sessions");
+  let years: string[];
   try {
-    content = readFileSync(file, "utf8");
+    years = readdirSync(root);
   } catch {
     return { exists: false, hasContent: false, mtimeMs: null };
   }
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
+  for (const year of years) {
+    let months: string[];
     try {
-      const parsed = JSON.parse(line);
-      // Índice não carrega tamanho/atividade do rollout (documentado no
-      // cabecalho de getResumeTargetEvidence) — mtime null de propósito.
-      if (parsed.id === resumeId) return { exists: true, hasContent: true, mtimeMs: null };
+      months = readdirSync(join(root, year));
     } catch {
-      // linha parcial (índice sendo escrito nesse instante) — ignora.
+      continue;
+    }
+    for (const month of months) {
+      let days: string[];
+      try {
+        days = readdirSync(join(root, year, month));
+      } catch {
+        continue;
+      }
+      for (const day of days) {
+        let files: string[];
+        try {
+          files = readdirSync(join(root, year, month, day));
+        } catch {
+          continue;
+        }
+        for (const name of files) {
+          if (!name.startsWith("rollout-") || !name.endsWith(".jsonl") || !name.includes(resumeId)) continue;
+          return fileEvidence(join(root, year, month, day, name));
+        }
+      }
     }
   }
   return { exists: false, hasContent: false, mtimeMs: null };
@@ -730,7 +696,7 @@ export function getResumeTargetEvidence(providerId: string, cwd: string, resumeI
 // are bounded to ANTIGRAVITY_READ_WINDOW_BYTES instead of the whole db.
 const ANTIGRAVITY_READ_WINDOW_BYTES = 128 * 1024;
 
-async function extractAntigravityWorkspaceUri(filePath: string): Promise<string | null> {
+export async function extractAntigravityWorkspaceUri(filePath: string): Promise<string | null> {
   let handle: Awaited<ReturnType<typeof open>> | null = null;
   try {
     handle = await open(filePath, "r");
@@ -759,97 +725,69 @@ async function extractAntigravityWorkspaceUri(filePath: string): Promise<string 
 }
 
 // DESIGN-BACKLOG.md §2.1 "Cards antigravity não têm retomada de sessão" —
-// REVERTIDO (review adversarial RODADA 1, 2026-09-09): a hipótese original
-// era ler `ANTIGRAVITY_CONVERSATION_ID` do env do próprio processo via
-// `/proc/<pid>/environ`, supostamente confirmada por um explorer lendo o
-// env de um card antigravity vivo. Provado FALSO por execução real contra
-// os `agy` de verdade rodando neste host (`tr '\0' '\n' <
-// /proc/<pid>/environ | grep -c ANTIGRAVITY_CONVERSATION_ID` devolveu 0
-// nos três processos vivos): `agy` define essa variável em RUNTIME
-// (`os.Setenv` em Go), o que muda o `environ` do processo NA MEMÓRIA e é
-// herdado por filhos que ele venha a spawnar, mas o kernel NUNCA atualiza
-// `/proc/<pid>/environ` depois do `execve` inicial — só reflete o env
-// ORIGINAL do processo, nunca uma mutação em runtime. A evidência do
-// explorer não provava o que parecia: ele viu a variável rodando `env`
-// dentro de um SHELL FILHO do agy (que herda o env de runtime de verdade),
-// não lendo o procfs do próprio agy. Conclusão honesta: não há caminho de
-// env viável aqui, sem rodar um subprocesso dentro do card (fora de
-// cogitação — mexeria no PTY que o usuário está usando).
+// HISTÓRICO, REVERTIDO (review adversarial RODADA 1, 2026-09-09): a
+// hipótese original era ler `ANTIGRAVITY_CONVERSATION_ID` do env do
+// próprio processo via `/proc/<pid>/environ`. Provado FALSO contra os
+// `agy` reais deste host (`tr '\0' '\n' < /proc/<pid>/environ | grep -c
+// ANTIGRAVITY_CONVERSATION_ID` devolveu 0 nos três processos vivos):
+// `agy` faz `os.Setenv` em runtime, o que muda o `environ` NA MEMÓRIA e
+// é herdado por filhos, mas o kernel NUNCA atualiza `/proc/<pid>/environ`
+// depois do `execve` inicial. O explorer viu a variável num SHELL FILHO
+// (que herda o env de runtime), não no procfs do próprio agy. Sem
+// caminho de env viável — um subprocesso dentro do card mexeria no PTY.
 //
-// RODADA 1 do conserto (também revertida) — inflar TIMEOUT_MS pro
-// antigravity, copiando CODEX_TIMEOUT_MS. Errado pelo motivo apontado em
-// review RODADA 2: o codex só DEMORA a gravar depois de já ter processado
-// um prompt; o antigravity espera o PRIMEIRO PROMPT chegar — se um card
-// ficar ocioso esperando um briefing por `send_to_card` (padrão real
-// deste board, não hipotético) por mais tempo que o timeout escolhido, o
-// watcher ainda desiste antes. Aumentar o número só empurra o mesmo
-// problema pra um card ainda mais ocioso.
+// HISTÓRICO — RODADA 1 do conserto (também revertida) tentou inflar um
+// timeout do antigravity, copiando o prazo longo que o Codex tinha.
+// Errado (RODADA 2): o Codex só DEMORA a gravar depois de já ter
+// processado um prompt; o antigravity espera o PRIMEIRO PROMPT. Um
+// card ocioso à espera de `send_to_card` ainda perderia qualquer
+// prazo. Hoje não há timeout nenhum.
 //
-// Conserto real: `REARM_ON_INPUT_PROVIDERS` abaixo — o relógio de
-// `findAntigravitySession` reinicia a CADA input de verdade que chega no
-// PTY deste card (via `pty-registry.ts::write`, o mesmo caminho que
-// `send_to_card`/`writeToCard` usam — não um mecanismo paralelo), não num
-// tempo fixo contado desde o spawn. Isso dá ao scan em
-// disco uma janela de TIMEOUT_MS normal a partir do momento em que `agy`
-// está de fato prestes a escrever algo, em vez de adivinhar quanto tempo
-// um card vai ficar ocioso.
+// O que ficou: `REARM_ON_INPUT_PROVIDERS`. Cada input real no PTY
+// (`pty-registry.ts::write` / `send_to_card`) rearma o watcher — gatilho
+// de re-tentativa e reserva de posse, não renovação de prazo. O poller
+// já vive enquanto `resume_id` for null.
 
-async function findAntigravitySession(cwd: string, spawnedAtMs: number, matchDeadlineMs?: number): Promise<SessionCandidate | null> {
+async function listAntigravitySessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
   const dir = join(homedir(), ".gemini", "antigravity-cli", "conversations");
   let entries: string[];
   try {
     entries = await readdir(dir);
   } catch {
-    return null;
+    return [];
   }
   const cwdUri = `file://${cwd}`;
-  let best: { id: string; mtimeMs: number } | null = null;
+  const out: SessionCandidate[] = [];
   for (const name of entries) {
     if (!name.endsWith(".db")) continue; // skip sqlite's own -wal/-shm siblings
     const id = name.slice(0, -".db".length);
     if (claimedSessionIds.has(id)) continue;
     const full = join(dir, name);
     const st = await stat(full).catch(() => null);
-    if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs, matchDeadlineMs)) continue;
-    if (best && st.mtimeMs <= best.mtimeMs) continue;
+    if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs)) continue;
     const workspaceUri = await extractAntigravityWorkspaceUri(full);
     if (workspaceUri !== cwdUri) continue;
-    best = { id, mtimeMs: st.mtimeMs };
+    out.push({ id, timestampMs: st.mtimeMs });
   }
-  return best ? { id: best.id, timestampMs: best.mtimeMs } : null;
+  return out;
 }
 
 /**
- * Polls the on-disk location each provider (undocumented, reverse-engineered
- * on this machine — see AGENTS.md) writes new sessions to, looking for one
- * created after `spawnedAtMs`. Stops after finding one or after ~30s (longer
- * for codex — see CODEX_TIMEOUT_MS). `bash` has no session concept —
- * callers should never call this for it. `opencode` also has no branch
- * needed beyond `findOpenCodeSession` below: unlike the others it keeps a
- * real sqlite db, not loose files.
+ * Polls the on-disk location each provider writes new sessions to, looking
+ * for one created after `spawnedAtMs`. Lives while the card exists and
+ * `resume_id` is still null — no clock cutoff. `claude`/`cursor` normally
+ * never enter this path (Stellar imposes the id at spawn); they still
+ * can, for `/resume` / `--continue`. `bash` has no session concept.
  *
- * `onTimeout` — review adversarial RODADA 7 (2026-09-10), achado 1. Before
- * this, a natural expiration (ran the full `TIMEOUT_MS` without finding
- * anything) was invisible to the caller: the returned stop function still
- * sat there, callable but stale, with nothing distinguishing "still
- * polling" from "already gave up" — `pty-registry.ts` needs that exact
- * distinction to decide whether a rearm may reuse the current scan floor
- * (a watcher genuinely still in flight — two fast submits landing in the
- * same poll window) or must start a fresh one at "now" (no watcher in
- * flight — the card sat idle long enough for the previous attempt to
- * expire, so anything on disk from that idle stretch, e.g. a session the
- * user opened by hand outside Stellar, must NOT be treated as this card's
- * own). Called ONLY on a real expiration, never when the caller cancels
- * via the returned stop function (that's an intentional supersession —
- * about to start a new watch and log it as the new "in flight" one right
- * after, not a "we're done" signal).
+ * `onTimeout` is kept so existing callers compile, but it never fires:
+ * a deadline only changed the odds of matching the wrong file.
  */
 export function watchForSession(
   providerId: string,
   cwd: string,
   spawnedAtMs: number,
   onFound: (sessionId: string) => void,
-  onTimeout?: () => void,
+  _onTimeout?: () => void,
   options: {
     /** Card/PTY identity used only for the rearm ownership reservation. */
     ownerId?: string;
@@ -870,100 +808,54 @@ export function watchForSession(
   }
 
   let stopped = false;
-  let codexOffset = 0;
-  let codexOffsetReady = false;
   const matchStartMs = options.matchStartMs ?? options.rearmAtMs ?? spawnedAtMs;
-  const matchDeadlineMs = options.rearmAtMs === undefined ? undefined : options.rearmAtMs + MATCH_GRACE_MS;
   const releaseReservation =
     options.ownerId !== undefined && options.rearmAtMs !== undefined
       ? registerRearmReservation(providerId, cwd, {
           ownerId: options.ownerId,
           rearmAtMs: options.rearmAtMs,
           matchStartMs,
-          matchDeadlineMs: options.rearmAtMs + MATCH_GRACE_MS,
         })
       : () => {};
-  // Establish the starting offset before the first poll so we only ever
-  // look at bytes appended after this watcher started — set once, then
-  // `findCodexSession` advances it every subsequent tick.
-  const initCodexOffset =
-    providerId === "codex"
-      ? readFile(join(homedir(), ".codex", "session_index.jsonl"), "utf8")
-          .then((c) => c.length)
-          .catch(() => 0)
-      : Promise.resolve(0);
 
   const timer = setInterval(async () => {
     if (stopped) return;
     try {
-      // `runExclusive` — todo o "achar candidato + reivindicar" roda como
-      // seção crítica única entre TODOS os watchers vivos (ver o comentário
-      // de `runExclusive` acima); sem isto, dois watchers cujo `readdir`/
-      // `stat` interleavam podiam computar o mesmo "best" antes de
-      // qualquer um dos dois chamar `claimSessionId`.
       const found = await runExclusive(async () => {
         if (stopped) return null;
-        let candidate: SessionCandidate | null;
+        let candidates: SessionCandidate[];
         if (providerId === "claude") {
-          candidate = await findClaudeSession(cwd, spawnedAtMs, matchDeadlineMs);
+          candidates = await listClaudeSessions(cwd, spawnedAtMs);
         } else if (providerId === "codex") {
-          if (!codexOffsetReady) {
-            codexOffset = await initCodexOffset;
-            codexOffsetReady = true;
-          }
-          const result = await findCodexSession(codexOffset);
-          codexOffset = result.newOffset;
-          candidate = result.candidate;
+          candidates = await listCodexSessions(cwd, spawnedAtMs);
         } else if (providerId === "cursor") {
-          candidate = await findCursorSession(cwd, spawnedAtMs, matchDeadlineMs);
+          candidates = await listCursorSessions(cwd, spawnedAtMs);
         } else if (providerId === "antigravity") {
-          candidate = await findAntigravitySession(cwd, spawnedAtMs, matchDeadlineMs);
+          candidates = await listAntigravitySessions(cwd, spawnedAtMs);
         } else if (providerId === "opencode") {
-          candidate = await findOpenCodeSession(cwd, spawnedAtMs, matchDeadlineMs);
+          candidates = await listOpenCodeSessions(cwd, spawnedAtMs);
         } else {
-          candidate = null;
+          candidates = [];
         }
-        if (stopped || !candidate || !canClaimRearmedCandidate(providerId, cwd, candidate, options.ownerId)) {
-          return null;
-        }
-        // Claim inside the shared critical section, immediately after the
-        // ownership arbitration. This closes the old poller-vs-poller gap:
-        // no second watcher can read the same candidate and pass its own
-        // `claimedSessionIds` check before this watcher marks it claimed.
-        claimSessionId(candidate.id);
-        return candidate.id;
+        if (stopped) return null;
+        const decision = decideClaimAmongCandidates({
+          candidates,
+          isClaimed: (id) => claimedSessionIds.has(id),
+          ownerId: options.ownerId,
+          reservations: reservationsFor(providerId, cwd),
+          requiresInputReservation: REARM_ON_INPUT_PROVIDERS.includes(providerId),
+        });
+        if (decision.action !== "claim") return null;
+        claimSessionId(decision.id);
+        return decision.id;
       });
-      // RODADA 8 (2026-09-10), achado 1 — `stopped` só era checado ANTES
-      // do `await runExclusive(...)` acima, no topo deste tick. Se
-      // `stop()` (a função devolvida por `watchForSession`, chamada por
-      // `pty-registry.ts`'s `rearmSessionWatch` bem antes de reatribuir
-      // `entry.stopWatch` pro watcher NOVO) for chamada exatamente
-      // enquanto esta tick estava NA FILA do mutex (outro watcher ainda
-      // rodando sua própria seção crítica), `stopped` já virava `true`
-      // no meio do caminho, mas nada aqui recheca — a tick acordava, via
-      // `found` de verdade, e commitava mesmo assim: reivindicava o id,
-      // e pior, chamava o `onFound` DESTE watcher (o velho, já
-      // cancelado) — que zera `entry.stopWatch` de volta pra `null`,
-      // pisando no watcher NOVO que `rearmSessionWatch` já tinha acabado
-      // de atribuir ali, e reportando uma sessão pro card com a Entry já
-      // corrompida. Recheca aqui, depois do único `await` desta seção
-      // crítica, antes de tocar em qualquer estado compartilhado.
       if (stopped) {
-        // `stop()` may run in the tiny gap after the critical section
-        // returned. The claim was made atomically there, so release it if
-        // this cancelled watcher must not commit the result.
         if (found) releaseSessionId(found);
         return;
       }
       if (found) {
-        // The remaining ambiguity is provider storage that only exposes a
-        // coarse/updated timestamp (an old session can be appended to
-        // during the grace interval); there is no portable PTY id in those
-        // stores. The temporal reservation is the strongest cheap evidence
-        // available and is deliberately conservative about that residual.
         stopped = true;
         clearInterval(timer);
-        clearTimeout(timeout);
         releaseReservation();
         onFound(found);
       }
@@ -972,20 +864,9 @@ export function watchForSession(
     }
   }, POLL_MS);
 
-  const timeout = setTimeout(
-    () => {
-      stopped = true;
-      clearInterval(timer);
-      releaseReservation();
-      onTimeout?.();
-    },
-    providerId === "codex" ? CODEX_TIMEOUT_MS : TIMEOUT_MS,
-  );
-
   return () => {
     stopped = true;
     clearInterval(timer);
-    clearTimeout(timeout);
     releaseReservation();
   };
 }
