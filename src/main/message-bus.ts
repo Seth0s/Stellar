@@ -2,7 +2,6 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
-import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, type DeliveryWriteKind } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
@@ -70,24 +69,6 @@ const CLOSE_TIMEOUT_MS = 120_000;
 // provider's own UI), picked deliberately LONGER than that 900ms client
 // heuristic so a normal generation pause doesn't misreport as idle here.
 const IDLE_THRESHOLD_MS = 5_000;
-// How often the idle-watch poller (below) re-checks every terminal card
-// for a running -> idle transition, to notify whoever spawned it.
-const IDLE_WATCH_INTERVAL_MS = 2_000;
-// Correção 2 (revisão adversarial, 2026-09-09) — "report é edge-triggered,
-// dispara uma vez" não é garantia: um card de review pode legitimamente
-// reportar várias rodadas do mesmo diff (observado ao vivo nesta sessão,
-// 4 rodadas). Sem proteção, um agente numa dessas rodadas rápidas — ou
-// preso num loop de retry — martelaria o PTY do spawner com uma linha por
-// relatório. Mitigação simples (leading-edge, por card que REPORTA, não
-// por spawner): o primeiro `report` de um card sempre notifica na hora;
-// qualquer `report` seguinte do MESMO card dentro desta janela é
-// suprimido no popup humano — mas NUNCA perdido: o slot do relatório
-// (persistido, ver `ReportRow` em store.ts), a `seq` monotônica e a entrega
-// ao agente (fila FIFO por PTY) avançam de qualquer forma. 3s é curto o
-// bastante pra não atrasar um handoff real (rounds de review, mesmo
-// rápidos, são separados por segundos de trabalho de verdade) e longo o
-// bastante pra absorver um loop apertado.
-const REPORT_NOTIFY_MIN_INTERVAL_MS = 3_000;
 // Reading a page's text is exactly as sensitive as a pixel snapshot (an
 // already-open page an agent already has a card reference to) — no human
 // decision needed, same short backstop-only timeout as snapshot.
@@ -601,31 +582,6 @@ export function createMessageBus(
       /** Peer requested DECSET 2004h. Absent/false → deliver raw bytes. */
       bracketedPasteMode?: boolean;
     } | null;
-    /** Sticky item "card_status idle" (fix ao vivo, 2026-09-04) — OS
-     * notification, never touches any terminal's PTY/input. See the doc
-     * comment on `notifySpawnerOfIdleCard` above for why `writeToCard`
-     * was wrong here. `idleThresholdMs` is passed through purely for the
-     * notification body text, not used for any timing decision here. */
-    notifyIdleCard: (spawnerId: string, idleCardLabel: string, idleThresholdMs: number) => void;
-    /** Achado ao vivo (2026-09-09) — "ja acabou, novamente você não tem
-     * informação, precisamos melhorar o report": o `report` cmd só
-     * guardava o resultado e resolvia quem já estava esperando com
-     * `read_report({wait:true})` — quem não estava esperando (o caso
-     * comum: orquestrador seguiu fazendo outra coisa) nunca sabia que
-     * chegou. Mesmo canal não-invasivo do `notifyIdleCard` acima (OS
-     * `Notification`, nunca o PTY), mas o aviso carrega só o PONTEIRO
-     * (label de quem reportou) — nunca o corpo do relatório: um relatório
-     * grande despejado ali envenenaria o contexto de quem recebe, e o
-     * valor do `report` é justamente ser estruturado, lido sob demanda via
-     * `read_report`. */
-    notifyCardReported: (spawnerId: string, reportingCardLabel: string) => void;
-    /** DESIGN-BACKLOG.md §2.1 "SINAL 2 — saída sem relatório" — a metade
-     * humana do mesmo aviso, mesmo canal/postura de `notifyCardReported`
-     * acima (popup de SO, nunca o PTY): serve a quem estiver mesmo olhando
-     * a tela. A metade que alcança um AGENTE de verdade é a 2ª, feita em
-     * `notifySpawnerOfUnreportedExit` via `typeAndSubmit` — mesmo padrão
-     * de divisão que o sinal 1 (report) já usa. */
-    notifyCardExitedWithoutReport: (spawnerId: string, exitedCardLabel: string, exitCode: number) => void;
     /** Prototipo (2026-09-06) — ver o comentário de `turn_complete` no
      * `BusRequest` acima. Push fire-and-forget pro renderer, keyed pelo
      * mesmo id unificado card/PTY (pty-registry.ts); `useTerminal.ts`
@@ -747,10 +703,9 @@ export function createMessageBus(
     /** Notify the Fila card after an MCP close/open so the history panel
      * refreshes. Optional — tests that don't mount a window omit it. */
     onSprintsChanged?: (boardId: string) => void;
-    /** Current task_cards links from the card side. This is deliberately
-     * separate from `cardWasExpectedToReport`: a secondary reviewer card can
-     * close a participation round without being the principal card whose
-     * failed delivery deserves a spawner notification. */
+    /** Current task_cards links from the card side. A secondary reviewer
+     * card can close a participation round without being the principal
+     * card of the task. */
     listTaskCardsForCard: (cardId: string) => TaskCardRow[];
     /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — mesmo
      * pass-through direto pro store das 3 linhas acima, mesmo motivo. O
@@ -1129,20 +1084,22 @@ export function createMessageBus(
   }
 
   /** Extraído do cmd `send` (correção pós-revisão, 2026-09-09) — ANTES
-   * disto `notifySpawnerOfReport` escrevia sua linha via `writeToCard` e
-   * parava aí, sem apertar Enter, achando (errado — apontado em revisão)
-   * que não submeter era mais seguro. É o oposto: `writeToCard` termina em
-   * `entry.proc.write(data)` no PTY (pty-registry.ts) — é digitação
-   * simulada, não uma mensagem de canal programático. Texto NÃO submetido
-   * fica pendurado no buffer de input de quem estiver do outro lado e é
-   * concatenado (ou pior, executado) junto da PRÓXIMA coisa que esse
-   * card digitar — exatamente o dano que se queria evitar. `send_to_card`
-   * já resolve isso corretamente pra mensagem agente-pra-agente: escreve o
-   * texto, aperta Enter, e CONFIRMA que submeteu de verdade (relendo o
-   * card e comparando com um prefixo do que foi escrito), retentando só o
-   * Enter (nunca o texto de novo) até `SEND_ENTER_MAX_ATTEMPTS`. Extraído
-   * aqui pra `send` e `notifySpawnerOfReport` usarem o MESMO mecanismo —
-   * nunca uma segunda variante que "quase" faz a mesma coisa.
+   * disto um caller escrevia via `writeToCard` e parava aí, sem apertar
+   * Enter, achando (errado — apontado em revisão) que não submeter era
+   * mais seguro. É o oposto: `writeToCard` termina em `entry.proc.write(data)`
+   * no PTY (pty-registry.ts) — é digitação simulada, não uma mensagem de
+   * canal programático. Texto NÃO submetido fica pendurado no buffer de
+   * input de quem estiver do outro lado e é concatenado (ou pior,
+   * executado) junto da PRÓXIMA coisa que esse card digitar — exatamente
+   * o dano que se queria evitar. `send_to_card` já resolve isso
+   * corretamente pra mensagem agente-pra-agente: escreve o texto, aperta
+   * Enter, e CONFIRMA que submeteu de verdade (relendo o card e
+   * comparando com um prefixo do que foi escrito), retentando só o Enter
+   * (nunca o texto de novo) até `SEND_ENTER_MAX_ATTEMPTS`. Extraído aqui
+   * pra todo caller que ainda digita (`send`, drag humano de task) usar
+   * o MESMO mecanismo — nunca uma segunda variante que "quase" faz a
+   * mesma coisa. Report/idle/exit-sem-report NÃO passam por aqui: o JSON
+   * da tool e o poll de `card_status` + `read_report` são o canal.
    *
    * DESIGN-BACKLOG.md §0 (2026-09-11, relatado 2x com `codex`) — 2 achados
    * que se somavam: (1) nada aqui esperava a TUI do CLI terminar de subir
@@ -1367,245 +1324,16 @@ export function createMessageBus(
     return Date.now() - lastActivityAt >= IDLE_THRESHOLD_MS;
   }
 
-  /** Sticky item "card_status idle" — "o agente precisa saber que o card
-   * que ele spawnou ficou ocioso... um evento tipo card_status_changed
-   * que dispare notificação automática pro agente que fez o spawn_agent".
-   *
-   * Achado ao vivo (2026-09-04) — a primeira versão disto reusava
-   * `writeToCard` (o mecanismo do `send_to_card`), digitando um texto de
-   * sistema direto no PTY do spawner. Isso é invasivo por construção:
-   * `writeToCard` simula teclas reais, sem apertar Enter — o texto fica
-   * sentado, NÃO ENVIADO, dentro do prompt de quem quer que esteja do
-   * outro lado. Quando o spawner é o próprio card de chat ao vivo do
-   * usuário (o caso comum quando o usuário está orquestrando sub-agentes
-   * na mesma sessão em que está digitando), isso invade literalmente a
-   * entrada dele — relatado ao vivo como "extremamente invasiva". Trocado
-   * por uma notificação de SO (`Notification.notifyIdleCard`, main
-   * process), o mesmo canal não-intrusivo já revisado e aprovado nesta
-   * sessão pro "turno terminado" — nunca toca o buffer/entrada de
-   * nenhum terminal. Um agente orquestrador que precise saber
-   * programaticamente ainda tem `card_status` pra fazer poll (o próprio
-   * padrão usado ao longo desta sessão). Silent no-op se o spawner sumiu
-   * ou não há spawner registrado (card aberto por um humano, não por
-   * outro agente). */
-  /** Extraído de `notifySpawnerOfIdleCard` (2026-09-09) pro `report` reusar
-   * a mesma resolução de linhagem — achar QUEM spawnou `cardId` (conector
-   * `kind === "spawned"` mais recente por `updated_at`) e devolver seu id
-   * só se ele ainda estiver vivo. `null` cobre os dois no-ops silenciosos
-   * que os dois avisos precisam ter: sem conector de spawn (card aberto
-   * por um humano) e spawner já morto — nenhum dos dois é erro, os dois
-   * só significam "ninguém pra avisar". */
-  function resolveLiveSpawner(cardId: string): string | null {
-    const spawnedBy = callbacks
-      .listAllConnectors()
-      .filter((c) => c.kind === "spawned" && c.to_card_id === cardId)
-      .sort((a, b) => b.updated_at - a.updated_at)[0];
-    if (!spawnedBy) return null;
-    const spawnerId = spawnedBy.from_card_id;
-    if (!callbacks.isCardAlive(spawnerId)) return null;
-    return spawnerId;
-  }
-
-  /** DESIGN-BACKLOG.md §0 "Push de report se perde em silencio quando o
-   * orquestrador READOTA um card" + "Relatorio nao chega ao orquestrador
-   * depois de um restart" — a linhagem `spawned` sozinha (acima) fica
-   * cega assim que um card é readotado (briefado via `send_to_card` em
-   * vez de `spawn_agent`): nunca existiu conector `spawned` pra ele. A
-   * 2ª fonte fecha esse buraco lendo o conector `kind === "modified"`
-   * que `AUTO_CONNECT_CMDS` já grava no SQLite em todo `send` bem-
-   * sucedido (`pickLatestDirectiveSender` em report-notify-routing.ts) —
-   * a mesma tabela, o mesmo `updated_at`, sem um Map em memória do
-   * processo que nascia vazio depois de um restart (RODADA 3: report
-   * gravado, `targetId` null, ninguém avisado). Não promove `modified`
-   * a linhagem: a aresta continua decorativa/auto-connect no grafo; só
-   * passa a ser consultada como FALLBACK de rota.
-   *
-   * Precedência entre as duas fontes (`decideReportNotifyTarget`,
-   * report-notify-routing.ts, ver o comentário de topo daquele arquivo pra
-   * a rodada 2 completa) — **linhagem de spawn viva ganha sempre**,
-   * diretiva é só FALLBACK pra quando não há spawner vivo registrado.
-   * Invertido na revisão adversarial desta tarefa: a versão anterior dava
-   * preferência cega à diretiva mais recente, o que abre sequestro de
-   * notificação num board multi-agente — card A spawna W, card B qualquer
-   * manda uma mensagem pra W a meio do trabalho (uso normal, não abuso),
-   * e o report de W ia pra B, nunca pra A, que segue vivo esperando. A
-   * linhagem de spawn, quando existe e está viva, é sempre o sinal mais
-   * confiável de quem quer o report — o caso que motivou a readoção
-   * nunca dependia de derrubar isso: o que faltava era o CONECTOR
-   * `spawned` em si (ausência), não a vivacidade do orquestrador — então
-   * `spawnedById` cai pra `null` (não "presente mas morto") e a
-   * resolução cai pro fallback de diretiva de qualquer jeito. Várias
-   * arestas `modified` pro mesmo alvo: a de maior `updated_at` ganha
-   * (espelha `resolveLiveSpawner` e o "último que mandou" do Map antigo).
-   * O caso comum (spawn, card reporta, nenhuma diretiva no meio) nunca
-   * acha `modified` inbound — cai direto na linhagem de spawn. */
-  function resolveNotifyTarget(cardId: string): string | null {
-    const connectors = callbacks.listAllConnectors();
-    const spawnedById = resolveLiveSpawner(cardId);
-    const directiveFromId = pickLatestDirectiveSender(connectors, cardId);
-    return decideReportNotifyTarget({
-      directiveFromId,
-      directiveFromAlive: directiveFromId !== null && callbacks.isCardAlive(directiveFromId),
-      spawnedById,
-      spawnedByAlive: spawnedById !== null,
-    }).targetId;
-  }
-
-  function notifySpawnerOfIdleCard(cardId: string) {
-    // Mesma resolução de 2 fontes do report (ver `resolveNotifyTarget`
-    // acima) — um card readotado também precisa avisar quem o briefou por
-    // último quando fica ocioso, não só quem o spawnou originalmente.
-    const spawnerId = resolveNotifyTarget(cardId);
-    if (!spawnerId) return;
-    const label = callbacks.describeCardLabel(cardId);
-    callbacks.notifyIdleCard(spawnerId, label, IDLE_THRESHOLD_MS);
-  }
-
-  // Correção 2 (revisão adversarial, 2026-09-09) — ver o comentário de
-  // `REPORT_NOTIFY_MIN_INTERVAL_MS` acima. Chave é o card que REPORTA
-  // (quem pode estar num loop de rodadas), não o spawner — dois cards
-  // diferentes reportando pro mesmo spawner não devem se suprimir um ao
-  // outro.
-  const lastReportNotifyAt = new Map<string, number>();
-
-  /** Parte 2 do achado "precisamos melhorar o report" (ver o comentário de
-   * `notifyCardReported` no tipo `Callbacks` acima) — mesmo caminho do
-   * idle: resolve pra quem empurrar (`resolveNotifyTarget`, diretiva mais
-   * recente ou conector de spawn, ambos já checados vivos), avisa só com o
-   * PONTEIRO (label). Chamado pelo cmd `report` abaixo, nunca aqui
-   * mesmo sozinho.
-   *
-   * Canal 2 — histórico da correção (revisão adversarial, 2026-09-09,
-   * DUAS rodadas): a 1ª versão só tinha o popup de SO (canal 1 abaixo),
-   * que a Parte 1 desta investigação provou ser invisível pra um agente
-   * rodando dentro de um PTY — resolvia a linhagem toda e jogava o aviso
-   * fora pro mesmo buraco. A 2ª versão acrescentou `writeToCard` mas SEM
-   * apertar Enter, no raciocínio (equivocado, apontado na revisão
-   * seguinte) de que não submeter seria "menos invasivo" — na prática é o
-   * oposto: `writeToCard` termina em `entry.proc.write(data)` no PTY
-   * (pty-registry.ts), digitação simulada de verdade, e texto NÃO
-   * submetido fica pendurado no buffer de input do spawner até ser
-   * concatenado (ou executado) junto da PRÓXIMA coisa que ele digitar —
-   * corrompendo o comando dele. Esta versão usa `typeAndSubmit` (extraído
-   * do cmd `send` acima) — o MESMO mecanismo que já entrega mensagem de
-   * agente pra agente nesta app, texto + Enter + confirmação — em vez de
-   * uma 3ª variante inventada.
-   *
-   * Por que isto NÃO reabre a objeção de 2026-09-04 contra escrever no
-   * PTY (comentário de `notifySpawnerOfIdleCard` acima): aquela troca foi
-   * motivada por IDLE ser LEVEL-TRIGGERED — enquanto o card continuasse
-   * ocioso, cada tick do poll (a cada 2s) reinseriria a mesma linha,
-   * ruído recorrente capaz de destruir uma mensagem longa que um humano
-   * estivesse digitando. `report` não tem essa recorrência automática —
-   * só dispara quando o card de fato chama `report` — mas TAMBÉM não é
-   * garantidamente "uma vez só" (achado da revisão seguinte: um reviewer
-   * pode legitimamente reportar várias rodadas seguidas), daí
-   * `REPORT_NOTIFY_MIN_INTERVAL_MS` abaixo: throttle explícito em vez de
-   * uma suposição de raridade. O cenário concreto que a nota de
-   * 2026-09-04 chamava de "extremamente invasivo" — o spawner ser o card
-   * de CHAT ao vivo do usuário (`ChatCardData`, card-types.ts, que fala
-   * direto com a API, nunca com um PTY) — nem chega aqui: sem PTY nenhum
-   * registrado pra esse kind, `isCardAlive` (já checado dentro de
-   * `resolveLiveSpawner` acima) já é `false`, e o `listTerminalCards()`
-   * abaixo também nunca o inclui.
-   *
-   * PONTEIRO, nunca o corpo (mesma decisão de desenho do popup) — a
-   * MENSAGEM que `typeAndSubmit` entrega é fixa e curta, nunca o JSON do
-   * relatório. */
-  async function notifySpawnerOfReport(cardId: string) {
-    // Mesma resolução de 2 fontes (ver `resolveNotifyTarget`/
-    // report-notify-routing.ts) — diretiva mais recente ganha da linhagem
-    // de spawn, cobrindo o caso de readoção sem regredir o caso comum.
-    const spawnerId = resolveNotifyTarget(cardId);
-    if (!spawnerId) {
-      // DESIGN-BACKLOG.md §0, encaminhamento 3 — a falha que motivou esta
-      // tarefa era 100% silenciosa: nem log, nem erro, só um `return`. O
-      // report em si (`upsertReport`, chamado pelo cmd `report` antes
-      // desta função) já rodou e continua acessível via `read_report` —
-      // isto é só o aviso de que NINGUÉM vai ser empurrado até lá, pra não
-      // levar uma sessão inteira pra alguém notar de novo.
-      console.warn(`[report] ${callbacks.describeCardLabel(cardId)} produziu um relatório mas não há card vivo pra empurrar (sem diretiva recente nem spawner vivo) — use read_report pra consultar manualmente.`);
-      return;
-    }
-
-    // Throttle apenas o popup humano. A entrega ao PTY abaixo entra numa
-    // fila FIFO e nunca pode ser suprimida: depois que o porteiro existe,
-    // usar este throttle para o caminho do agente perderia um report real.
-    const now = Date.now();
-    const last = lastReportNotifyAt.get(cardId) ?? 0;
-    const notifyHuman = now - last >= REPORT_NOTIFY_MIN_INTERVAL_MS;
-    if (notifyHuman) lastReportNotifyAt.set(cardId, now);
-
-    const label = callbacks.describeCardLabel(cardId);
-    // Canal 1 — o mesmo popup de SO do `notifyIdleCard`. Serve a um humano
-    // de fato olhando a tela; o throttle não afeta o canal do agente.
-    if (notifyHuman) callbacks.notifyCardReported(spawnerId, label);
-    // Canal 2 — mesmo formato do `send_to_card` (prefixo `[de: X]`, depois
-    // Enter com confirmação), único jeito de isto virar uma MENSAGEM de
-    // verdade pro card de destino em vez de texto pendurado no prompt.
-    if (listTerminalCards().some((c) => c.id === spawnerId)) {
-      // AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
-      // Typed into a PTY for another agent via typeAndSubmit. The `[de: …]`
-      // prefix is a convention other code interprets; translating breaks
-      // recognition. See `src/shared/i18n/agent-facing.ts`.
-      await typeAndSubmit(spawnerId, `[de: ${label}] relatório disponível — chame read_report para ver o resultado.`);
-    }
-  }
-
-  /** DESIGN-BACKLOG.md §2.1 "SINAL 2 — SAÍDA SEM RELATÓRIO" — mesma
-   * resolução de linhagem que `notifySpawnerOfReport` acima
-   * (`resolveLiveSpawner`), mesmos DOIS canais (popup de SO +
-   * `typeAndSubmit` no PTY do spawner) — só a mensagem muda, não o
-   * mecanismo, exatamente a mesma disciplina de "nunca uma 3ª variante"
-   * que motivou extrair `typeAndSubmit` do cmd `send` em primeiro lugar.
-   *
-   * Chamada por `resolveCardExit` abaixo, sempre que um card sai sem
-   * NUNCA ter chamado `report` — a MESMA condição que já derruba pra
-   * `failed` a task (se houver uma) ligada a este card: "são os MESMOS
-   * três sinais da derivação de status do quadro" (DESIGN-BACKLOG.md,
-   * "Como o orquestrador descobre que um card terminou"), os dois efeitos
-   * nascem do mesmo evento, por isso vivem lado a lado ali, não aqui
-   * dentro (esta função só cuida do AVISO; quem decide `failed` é
-   * `markTaskFailed`, já síncrono e já rodando antes desta chamar).
-   *
-   * Sem throttle — ao contrário do `report` (que um mesmo card pode
-   * disparar várias rodadas seguidas), um card só sai uma vez. Fire-and-
-   * forget: `resolveCardExit` não é `async` (chamada direto do `onExit`
-   * do pty-registry, que também não é), então nada aguarda esta promise —
-   * o pior caso de falha aqui é o aviso não chegar, nunca a marcação de
-   * `failed` deixar de acontecer (já síncrona, antes desta linha). */
-  async function notifySpawnerOfUnreportedExit(cardId: string, exitCode: number) {
-    // Mesma resolução de 2 fontes que `notifySpawnerOfReport` já usa
-    // (`resolveNotifyTarget`/report-notify-routing.ts, achado ao vivo
-    // concorrente a esta tarefa) — diretiva mais recente ganha da
-    // linhagem de spawn quando não há uma viva. Sinal 2 é irmão do sinal
-    // 1 (mesma seção do backlog, "os MESMOS três sinais"); resolver a
-    // linhagem de um jeito e do outro seria a 2ª variante que a própria
-    // `resolveNotifyTarget` foi criada pra evitar.
-    const spawnerId = resolveNotifyTarget(cardId);
-    if (!spawnerId) return;
-    const label = callbacks.describeCardLabel(cardId);
-    callbacks.notifyCardExitedWithoutReport(spawnerId, label, exitCode);
-    if (listTerminalCards().some((c) => c.id === spawnerId)) {
-      // AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
-      // Same [de: …] convention as the report-available notify above.
-      await typeAndSubmit(spawnerId, `[de: ${label}] saiu (código ${exitCode}) sem chamar report.`);
-    }
-  }
-
   /** DESIGN-BACKLOG.md §2.1, decisão 5 — "arrastar a mão SEMPRE vale, e
-   * AVISA o agente". Diferente de `notifySpawnerOfReport`/
-   * `notifySpawnerOfUnreportedExit` acima (que resolvem a LINHAGEM de
-   * spawn pra achar quem avisar), aqui o alvo já é conhecido de saída — o
-   * próprio card vinculado à task que acabou de ser arrastada
-   * (`tasks.card_id`), não o spawner de ninguém. Mesmo mecanismo
-   * (`typeAndSubmit`) que os dois sinais acima já usam, nenhuma 3ª
-   * variante; `message` já vem pronta do renderer (task-board-model.ts's
-   * `describeHumanMove`) — este método só entrega. No-op silencioso se o
-   * card não existe mais ou não é um terminal vivo (mesma postura
-   * "aviso é best-effort, nunca bloqueia a gravação" dos outros dois —
-   * a escrita de `status`/`order` já aconteceu antes desta chamada,
-   * síncrona, em `index.ts`'s `persistTask`).
+   * AVISA o agente". O alvo já é conhecido de saída — o próprio card
+   * vinculado à task que o HUMANO acabou de arrastar (`tasks.card_id`).
+   * CLI de terceiro numa TUI não tem RPC; stdin é o único input que ela
+   * trata como mensagem, então isto ainda passa por `typeAndSubmit`.
+   * Hold de `update_task` NÃO passa por aqui: o retorno da tool já
+   * carrega `warning`/`status`/`divergedStatus`. No-op silencioso se o
+   * card não existe mais ou não é um terminal vivo — a escrita de
+   * `status`/`order` já aconteceu antes desta chamada, síncrona, em
+   * `index.ts`'s `persistTask`.
    *
    * ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 4, MÉDIO) — digitar
    * texto+Enter num PTY sem saber o ESTADO do destinatário é uma
@@ -1618,36 +1346,15 @@ export function createMessageBus(
    * texto — vira comando de shell de verdade, e a resposta previsível é
    * "command not found" no meio do que quer que o card estivesse
    * fazendo. Excluído explicitamente (mesma convenção "bash não é
-   * agente" de `countRunningAgentsOnBoard`/`cardWasExpectedToReport`) —
-   * o mínimo que este achado pediu, não uma correção geral de prontidão
-   * do destinatário (fora de escopo aqui). */
+   * agente" de `countRunningAgentsOnBoard`) — o mínimo que este achado
+   * pediu, não uma correção geral de prontidão do destinatário (fora
+   * de escopo aqui). */
   async function notifyHumanMovedTask(cardId: string, message: string) {
     if (!callbacks.isCardAlive(cardId)) return;
     const card = listTerminalCards().find((c) => c.id === cardId);
     if (!card || card.provider === "bash") return;
     await typeAndSubmit(cardId, message);
   }
-
-  /** Sticky item "card_status idle" — polls instead of hooking `onData`
-   * directly: idle is defined by the ABSENCE of activity for a while, not
-   * an event `pty-registry.ts` can ever fire on its own (there's nothing
-   * to react to when nothing happens). `previousIdleState` is what turns
-   * a level (idle right now) into an edge (JUST became idle) — without it
-   * every tick after the first would "re-notify" a card that's been
-   * sitting idle for an hour. Cleared on `close()` below. */
-  const previousIdleState = new Map<string, boolean>();
-  const idleWatchTimer = setInterval(() => {
-    for (const card of listTerminalCards()) {
-      if (waitingOnConsent.has(card.id) || !callbacks.isCardAlive(card.id)) {
-        previousIdleState.delete(card.id);
-        continue;
-      }
-      const idleNow = isCardIdle(card.id);
-      const wasIdle = previousIdleState.get(card.id) ?? false;
-      previousIdleState.set(card.id, idleNow);
-      if (idleNow && !wasIdle) notifySpawnerOfIdleCard(card.id);
-    }
-  }, IDLE_WATCH_INTERVAL_MS);
 
   /** Achado ao vivo (2026-09-01): "eu renomeio os card dos agentes para
    * Stellar, isso só está visual em vez de funcional". Renomear escrevia
@@ -1796,9 +1503,8 @@ export function createMessageBus(
     const res = await dispatchRequest(req);
     const kind = AUTO_CONNECT_CMDS[req.cmd];
     if (kind && res.ok && "target" in req && req.target && "requesterId" in req && req.requesterId) {
-      // `send` → kind "modified" is also the persisted directive route
-      // (`pickLatestDirectiveSender` / resolveNotifyTarget). No separate
-      // in-memory Map: the connector row is the single source of truth.
+      // `send` → kind "modified" is the persisted auto-connect edge.
+      // No separate in-memory Map: the connector row is the source of truth.
       callbacks.onAutoConnect(req.requesterId, req.target, kind, deriveAutoConnectLabel(req));
     }
     return res;
@@ -2224,12 +1930,10 @@ export function createMessageBus(
         if (remaining.length === 0) pendingReportWaiters.delete(req.requesterId);
         else pendingReportWaiters.set(req.requesterId, remaining);
       }
-      // Parte 1/2 — "ja acabou, novamente você não tem informação": mesmo
-      // caminho do idle (resolve pra quem empurrar via `resolveNotifyTarget`),
-      // aviso só com o ponteiro — ver `notifySpawnerOfReport` acima.
-      // Waiters already received the JSON above; notify is the pointer
-      // for a spawner that was not blocked on read_report {wait:true}.
-      await notifySpawnerOfReport(req.requesterId);
+      // Persist + wake waiters above. No PTY pointer and no OS popup:
+      // the JSON is already in the table; the orchestrator polls
+      // card_status then read_report (no wait). A waiter of
+      // read_report {wait:true} already received the body.
       // An accepted report supersedes any refused-round stash. Clear it
       // here so a later exit cannot revive a reason that was already
       // replaced. Status is untouched on a plain accept.
@@ -2402,11 +2106,12 @@ export function createMessageBus(
       const promptWritten = req.prompt !== undefined ? { prompt } : {};
       if (decision.warnAgent) {
         const warning = describeStatusHeldWarning(decision.status, decision.declaredStatus ?? req.status ?? decision.status);
-        // Review adversarial achado 4 — typeAndSubmit ONLY to requesterId.
-        // Falling back to `updated.card_id` typed the warning into the
-        // implementer's PTY (corrupting an innocent session). No requester
-        // → MCP `warning` field alone; never notify the wrong card.
-        if (req.requesterId) notifyHumanMovedTask(req.requesterId, warning).catch(() => {});
+        // Same shape as report's in-line refusal (2023a74): the tool
+        // return already carries warning/status/divergedStatus. Typing
+        // the same text into a PTY was a second channel for the same
+        // fact — and when requesterId is missing the code already
+        // fell through to this JSON alone, which is the proof it
+        // suffices. Do not type.
         return { ok: true, warning, status: decision.status, divergedStatus: decision.divergedStatus, ...promptWritten };
       }
       // Same retainStatusAsk the store already ran: a live request for X
@@ -2587,8 +2292,7 @@ export function createMessageBus(
       // `spawned`); qualquer outra (context/depends/null advisory) é
       // livre — ver `connector-kind-authorization.ts` pro porquê e pro
       // que isso destrava. Roda ANTES do write: recusar depois de gravar
-      // não recusaria nada. Mesma leitura que `resolveLiveSpawner` já faz
-      // deste conjunto, sem callback novo.
+      // não recusaria nada. Lê o conector pelo id, sem callback novo.
       const endpoints = callbacks
         .listAllConnectors()
         .find((c) => c.id === req.connectorId);
@@ -2727,9 +2431,8 @@ export function createMessageBus(
       if (spawnResult.ok) {
         cardSpawnDepth.set(spawnResult.cardId, depth);
         // Same link auto-dispatch writes after a successful spawn
-        // (`card_id` + task_cards implementer). `resolveNotifyTarget`
-        // reads spawned/modified connectors, not this column — no
-        // collision. Status is left alone (`statusProposed: false`):
+        // (`card_id` + task_cards implementer). Status is left alone
+        // (`statusProposed: false`):
         // amarrar o card não é propor running, e um hold humano no
         // pending não deve virar divergência colateral deste spawn.
         if (briefDecision.taskId) {
@@ -2880,41 +2583,6 @@ export function createMessageBus(
     pendingSpawnAgents.get(requestId)?.resolve(result);
   }
 
-  /** DESIGN-BACKLOG.md §2.1 "SINAL 2", achado de review adversarial
-   * (achado 3, MÉDIO) — a versão anterior avisava o spawner pra QUALQUER
-   * card sem report, mesmo um "card de apoio" que nunca deveria chamar
-   * `report` (um `files`/`browser` spawnado só pra olhar algo, ou um
-   * `bash` — opção real de `provider` do próprio `spawn_agent`, mas sem
-   * MCP/conceito de relatório nenhum, mesma convenção "bash não é
-   * agente" de `countRunningAgentsOnBoard`). Ruído aqui é pior que
-   * silêncio: um orquestrador que aprende a ignorar o aviso porque ele
-   * dispara sempre para de confiar nele exatamente no caso real.
-   *
-   * Qualificação escolhida — DUAS fontes independentes de "havia
-   * trabalho esperado", OR entre elas:
-   * (a) TASK VINCULADA — existe uma task (qualquer status, não só
-   *     `running`) cujo `card_id` é este card. A própria existência do
-   *     vínculo já é o sinal mais forte de que alguém esperava um
-   *     resultado estruturado dele.
-   * (b) LINHAGEM DE AGENTE — o card foi spawnado por um `spawn_agent`
-   *     bem-sucedido (`cardSpawnDepth` só é populado ali, nunca por
-   *     `spawn_card`/`open_url`/um humano abrindo um terminal à mão —
-   *     ver o comentário da própria `cardSpawnDepth`) E não é `bash`
-   *     (excluído via `getAnyCard`, que alcança um card mesmo fora do
-   *     board carregado). O contrato de `spawn_agent` pressupõe um
-   *     agente capaz de eventualmente reportar; qualquer OUTRO caminho
-   *     de criação nunca teve esse contrato.
-   *
-   * Residual conhecido, não fechado agora: se o card já foi DELETADO (não
-   * só saiu — `deleteCard`, que `getAnyCard` também não alcança mais), não
-   * há como checar o provider, e a qualificação (b) por padrão assume
-   * "não é bash" (prefere avisar de mais a silenciar um caso real). */
-  function cardWasExpectedToReport(cardId: string, linkedTask: TaskRow | undefined): boolean {
-    if (linkedTask) return true;
-    if (!cardSpawnDepth.has(cardId)) return false;
-    return callbacks.getAnyCard(cardId)?.provider !== "bash";
-  }
-
   /** DESIGN-BACKLOG.md item 58, M4 — called from pty-registry's own
    * `onExit`, unconditionally, for every card that exits (not just ones
    * with a waiter — cheap Map lookup, no-op when nothing's waiting). */
@@ -2944,10 +2612,6 @@ export function createMessageBus(
     // case — whatever it said is the real outcome, for whoever reads it
     // to call update_task, not this engine to guess.
     if (!callbacks.getReport(cardId)) {
-      // `.find` sem filtrar por status: `cardWasExpectedToReport` (achado
-      // 3) considera QUALQUER status principal vinculado como "havia
-      // trabalho esperado"; só `markTaskFailed` abaixo continua exigindo
-      // especificamente `running` (comportamento intocado).
       const linkedTask = callbacks.listTasks().find((t) => t.card_id === cardId);
       if (linkedTask?.status === "running") {
         const lastRefused = lastRefusedReasonFromResultJson(linkedTask.result_json);
@@ -2957,27 +2621,13 @@ export function createMessageBus(
           "exit_without_report",
         );
       }
-      // Fechar histórico e avisar o spawner são critérios diferentes:
-      // qualquer vínculo atual em task_cards fecha a participação, inclusive
-      // um card secundário de review; apenas `cardWasExpectedToReport`
-      // qualifica o aviso de entrega ao spawner. Card de apoio sem vínculo
-      // nenhum não chama recordParticipationRound e não cria linha.
+      // Qualquer vínculo atual em task_cards fecha a participação,
+      // inclusive um card secundário de review. Card de apoio sem
+      // vínculo nenhum não cria linha. Sem PTY/popup: o orquestrador
+      // vê `exited` em card_status e o status novo via get_task.
       const taskCardLinks = callbacks.listTaskCardsForCard(cardId) ?? [];
       if (taskCardLinks.length > 0) {
         callbacks.recordParticipationRound(cardId, null, Date.now());
-      }
-      if (cardWasExpectedToReport(cardId, linkedTask)) {
-        // A qualificação do aviso continua separada de propósito: uma
-        // linhagem de agente pode merecer aviso mesmo sem task_cards, mas
-        // nunca cria histórico de participação por si só.
-        // Fire-and-forget — ver o doc comment de `notifySpawnerOfUnreportedExit`
-        // pro porquê de não ser `await`ado aqui. `.catch` explícito (achado
-        // de review adversarial, achado 5): uma promise solta sem handler
-        // vira `unhandledRejection` no processo inteiro se algum dia
-        // rejeitar — `typeAndSubmit`/`readCardText` hoje nunca rejeitam
-        // (resolvem sempre, até no timeout), mas essa garantia vive em
-        // OUTRO arquivo; engolir aqui é não depender dela se um dia mudar.
-        notifySpawnerOfUnreportedExit(cardId, exitCode).catch(() => {});
       }
     }
   }
@@ -3410,15 +3060,12 @@ export function createMessageBus(
     // `reportSeqCounter`) — waiters de UMA execução, corretamente
     // descartados quando o bus derruba.
     pendingReportWaiters.clear();
-    lastReportNotifyAt.clear();
     for (const { timer } of pendingSpawnAgents.values()) clearTimeout(timer);
     pendingSpawnAgents.clear();
     for (const { timer } of pendingSpawnCards.values()) clearTimeout(timer);
     pendingSpawnCards.clear();
     for (const list of spawnQueue.values()) for (const { timer } of list) clearTimeout(timer);
     spawnQueue.clear();
-    clearInterval(idleWatchTimer);
-    previousIdleState.clear();
     // Bug real relatado (Pop!_OS, 2026-09-09) — descoberta ao escrever o
     // teste desta guarda: `server.close()` ELE MESMO já faz um unlink cego
     // do que estiver em `sockPath` como parte da limpeza do bind AF_UNIX no

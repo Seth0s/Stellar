@@ -341,4 +341,81 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
     await new Promise((r) => setTimeout(r, 80));
     expect(writes).toEqual([]);
   });
+
+  it("hold COM requesterId também NÃO digita — o JSON da tool basta (warning/status/divergedStatus)", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-hold-warn-req-"));
+    const writes: string[] = [];
+    const existing: TaskRow = {
+      id: "t1",
+      prompt: "x",
+      provider: "claude",
+      status: "running",
+      card_id: "impl-innocent",
+      board_id: "b1",
+      cwd: null,
+      result_json: null,
+      deps_json: null,
+      retry_count: 0,
+      attempted_providers_json: null,
+      max_retries: null,
+      fallback_providers_json: null,
+      order: null,
+      suggested_order: null,
+      implicit_order: null,
+      diverged_status: null,
+      diverged_actor: null,
+      created_at: 1,
+      updated_at: 1,
+    };
+
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        getTask: () => existing,
+        listCards: () => [
+          { id: "impl-innocent", kind: "terminal", provider: "claude" },
+          { id: "orch-1", kind: "terminal", provider: "claude" },
+        ],
+        isCardAlive: () => true,
+        writeToCard: (id: string) => {
+          writes.push(id);
+        },
+        writeToCardWithOrigin: (id: string) => {
+          writes.push(id);
+        },
+        beginCardDelivery: () => ({ deliveryId: "d1", generation: 1 }),
+        endCardDelivery: () => {},
+        getCardWriteReadiness: () => ({
+          hasReceivedData: true,
+          lastActivityAtMs: Date.now(),
+          spawnedAtMs: Date.now() - 10_000,
+          hasPendingHumanInput: false,
+          inputLineStartedAtMs: null,
+        }),
+        upsertTask: () => ({
+          status: "running",
+          statusChanged: false,
+          divergedStatus: "done",
+          divergedActor: "agent",
+          recordDeclaration: true,
+          warnAgent: true,
+          declaredStatus: "done",
+        }),
+      }),
+    );
+
+    const res = (await bus.handleRequest({
+      cmd: "update_task",
+      taskId: "t1",
+      status: "done",
+      requesterId: "orch-1",
+    } as BusRequest)) as { ok: boolean; warning?: string; status?: string; divergedStatus?: string };
+
+    expect(res.ok).toBe(true);
+    expect(res.warning).toBeTruthy();
+    expect(res.status).toBe("running");
+    expect(res.divergedStatus).toBe("done");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(writes).toEqual([]);
+  });
 });

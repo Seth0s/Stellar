@@ -1,19 +1,15 @@
 // Sticky item "card_status idle" (2026-09-03) — "card_status nunca
 // retorna idle, só waiting/running/exited... o agente não tem noção que
-// o card entrou em X, ele precisa saber disso... um evento tipo
-// card_status_changed que dispare notificação automática pro agente que
-// fez o spawn_agent". Verifies BOTH halves: `card_status` reports 'idle'
-// (not just 'running') for a card that's genuinely gone quiet, and the
-// spawner gets notified the moment that transition happens.
+// o card entrou em X, ele precisa saber disso". Verifies the remaining
+// signal: `card_status` reports 'idle' (not just 'running') for a card
+// that's genuinely gone quiet.
 //
-// Achado ao vivo (2026-09-04) — a primeira versão disto verificava a
-// notificação escrevendo (via `writeToCard`) direto no PTY do spawner.
-// Relatado ao vivo como "extremamente invasiva": sentava como texto NÃO
-// ENVIADO no prompt de quem estivesse do outro lado, inclusive o chat ao
-// vivo do próprio usuário quando ele é o spawner. Trocado por uma
-// notificação de SO (`electron.Notification`, main process) — este teste
-// agora confirma a chamada via `debug:last-idle-notification` (test-only,
-// ver main/index.ts) em vez de ler o buffer do terminal.
+// The OS popup half (`notifyIdleCard` / `debug:last-idle-notification`)
+// was removed on purpose: the owner does not want the human interrupted
+// when an agent card goes idle. Polling `card_status` is the channel.
+// Do not resurrect a lastIdleNotification probe here — that hook is gone
+// with the popup; asserting on it would fail in silence for the wrong
+// reason.
 import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
@@ -67,9 +63,7 @@ try {
   const listPayload = await toolJson("list_cards", {});
   const spawnerCardId = listPayload.cards.find((c) => c.kind === "terminal").id;
 
-  // spawn_agent a partir do spawner — grava a lineage 'spawned' real
-  // (item 62) que `notifySpawnerOfIdleCard` usa pra achar pra quem
-  // notificar.
+  // spawn_agent a partir do spawner — grava a lineage 'spawned' real.
   const spawnPromise = callTool("spawn_agent", { provider: "bash", callerCardId: spawnerCardId, reason: "smoke test idle" });
   await new Promise((r) => setTimeout(r, 500));
   await clickModalButton(page, "Permitir");
@@ -82,20 +76,13 @@ try {
   const freshStatus = await toolJson("card_status", { target: childCardId });
   check("card_status logo após o spawn ainda é 'running', não 'idle' de cara", freshStatus.status, "running");
 
-  // Espera passar do threshold de idle (5s) + pelo menos 1 tick do
-  // poller (2s) — um bash real sentado no prompt não produz NENHUM
-  // output sozinho, cenário exatamente real de "ocioso".
+  // Espera passar do threshold de idle (5s). card_status calcula idle
+  // na hora (sem poller de popup). Um bash real sentado no prompt não
+  // produz NENHUM output sozinho — cenário exatamente real de "ocioso".
   await new Promise((r) => setTimeout(r, 8000));
 
   const idleStatus = await toolJson("card_status", { target: childCardId });
   check("card_status reporta 'idle' depois do card ficar quieto de verdade", idleStatus.status, "idle");
-
-  // O spawner (o card que chamou spawn_agent) deve ter disparado uma
-  // notificação de SO real — sem tocar no buffer/entrada de nenhum
-  // terminal. `debug:last-idle-notification` é test-only (main/index.ts).
-  const lastNotif = JSON.parse(await page.evalJs(`window.debugBridge.lastIdleNotification().then(JSON.stringify)`));
-  check("uma notificação de SO foi disparada (não uma escrita no PTY)", lastNotif !== null, true);
-  check("a notificação referencia o card que ficou ocioso", lastNotif?.label != null, true);
 
   page.close();
 } finally {

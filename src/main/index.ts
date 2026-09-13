@@ -7,7 +7,6 @@ import {
   ipcMain,
   Menu,
   net,
-  Notification,
   protocol,
   screen,
   session,
@@ -817,19 +816,6 @@ function createWindow() {
     setTimeout(() => recentlyClosedCardBoardIds.delete(cardId), 60_000);
   }
 
-  /** Test-only (verify harness — scripts/verify/smoke-mcp-card-status-idle.mjs)
-   * — `electron.Notification` is a real OS popup, nothing a CDP smoke test
-   * can assert on directly the way it mocks `window.Notification` in the
-   * renderer. Records the last `notifyIdleCard` call so the test can poll
-   * it over `debug:last-idle-notification` (same `!app.isPackaged`-gated
-   * pattern as every other debug: handler below); never read outside
-   * dev builds. */
-  let lastIdleNotification: { label: string; idleThresholdMs: number } | null = null;
-  /** Mesmo motivo/padrão de `lastIdleNotification` acima, pro aviso de
-   * `report` (achado ao vivo 2026-09-09, "precisamos melhorar o report") —
-   * exposto via `debug:last-report-notification`. */
-  let lastReportNotification: { label: string } | null = null;
-
   const mcpServer = createMcpServer({
     // Default 0 lets the OS assign a free ephemeral port — the URL is only
     // ever read in-process (registry's `mcpUrl` getter below), never
@@ -1359,75 +1345,6 @@ function createWindow() {
     isCardAlive: (id) => registry.isAlive(id),
     getCardLastActivityAt: (id) => registry.getLastActivityAt(id),
     getCardWriteReadiness: (id) => registry.getWriteReadiness(id),
-    // Achado ao vivo (2026-09-04) — main-process `Notification`, não
-    // `writeToCard`: a versão anterior digitava o aviso direto no PTY do
-    // spawner (sem apertar Enter), o que sentava como texto NÃO ENVIADO
-    // dentro do prompt de quem estivesse do outro lado — inclusive o
-    // próprio chat ao vivo do usuário quando ele mesmo é o "spawner".
-    // `electron.Notification` é uma notificação de SO de verdade: nunca
-    // toca buffer/entrada de nenhum card, e (diferente do `new
-    // Notification()` do renderer) não depende do
-    // `setPermissionRequestHandler`/`MAIN_WINDOW_ONLY_PERMISSIONS` acima
-    // — é o processo principal disparando, não uma página.
-    notifyIdleCard: (_spawnerId, idleCardLabel, idleThresholdMs) => {
-      lastIdleNotification = { label: idleCardLabel, idleThresholdMs };
-      try {
-        new Notification({
-          title: t("notify.idleTitle", { label: idleCardLabel }),
-          body: t("notify.idleBody", { seconds: idleThresholdMs / 1000 }),
-        }).show();
-      } catch {
-        // Notification indisponível nesse ambiente/SO — nunca deve
-        // derrubar o poller de idle, só não notifica.
-      }
-    },
-    // Achado ao vivo (2026-09-09) — "ja acabou, novamente você não tem
-    // informação, precisamos melhorar o report": ESTE callback é só a
-    // METADE humana do aviso — mesmo canal do `notifyIdleCard` acima (OS
-    // `Notification`, nunca o PTY), pro caso de alguém estar mesmo olhando
-    // a tela. `_spawnerId` fica sem uso AQUI de propósito (mesmo padrão de
-    // `notifyIdleCard`'s próprio `_spawnerId` acima): a entrega que
-    // alcança um AGENTE de verdade (a que faltava originalmente) é a 2ª
-    // metade, feita direto em `notifySpawnerOfReport` (message-bus.ts) via
-    // `typeAndSubmit` — o MESMO mecanismo de texto+Enter+confirmação que
-    // `send_to_card` já usa pra entregar mensagem de agente pra agente,
-    // reaproveitado lá, não duplicado aqui (2ª revisão, 2026-09-09: a
-    // 1ª correção escrevia sem apertar Enter, achando isso "menos
-    // invasivo" — na prática deixava texto pendurado no buffer de input do
-    // spawner, corrompendo a PRÓXIMA coisa que ele digitasse). Ver o
-    // comentário grande em `notifySpawnerOfReport` pra por que escrever no
-    // PTY aqui não reabre a objeção de 2026-09-04 contra o do IDLE, e por
-    // que há um throttle (`REPORT_NOTIFY_MIN_INTERVAL_MS`) por card que
-    // reporta. O corpo aqui é deliberadamente só o PONTEIRO — nunca o
-    // conteúdo do relatório. Quem recebe chama `read_report` pra ler o
-    // JSON estruturado.
-    notifyCardReported: (_spawnerId, reportingCardLabel) => {
-      lastReportNotification = { label: reportingCardLabel };
-      try {
-        new Notification({
-          title: t("notify.reportTitle", { label: reportingCardLabel }),
-          body: t("notify.reportBody"),
-        }).show();
-      } catch {
-        // Mesma postura defensiva de notifyIdleCard: Notification
-        // indisponível nesse ambiente/SO nunca deve derrubar o `report`.
-      }
-    },
-    // DESIGN-BACKLOG.md §2.1 "SINAL 2 — saída sem relatório" — metade
-    // humana do aviso, mesmo canal/postura de `notifyCardReported` acima
-    // (popup de SO, nunca o PTY). A metade que alcança um agente de
-    // verdade é `notifySpawnerOfUnreportedExit` (message-bus.ts), via
-    // `typeAndSubmit`.
-    notifyCardExitedWithoutReport: (_spawnerId, exitedCardLabel, exitCode) => {
-      try {
-        new Notification({
-          title: t("notify.exitTitle", { label: exitedCardLabel }),
-          body: t("notify.exitBody", { code: exitCode }),
-        }).show();
-      } catch {
-        // Mesma postura defensiva das outras Notification acima.
-      }
-    },
     // Prototipo (2026-09-06) — ver message-bus.ts's doc comment no cmd
     // `turn_complete`. Push simples pro renderer, mesmo padrão de
     // `pty:session-found`/`pty:data` abaixo — nenhum estado novo aqui no
@@ -2416,18 +2333,6 @@ function createWindow() {
   ipcMain.handle("debug:browser-content-size", (_e, cardId: string) => {
     if (app.isPackaged) return null;
     return browserRegistry.getContentSize(cardId);
-  });
-
-  // Test-only, same guard — see `lastIdleNotification`'s doc comment above.
-  ipcMain.handle("debug:last-idle-notification", () => {
-    if (app.isPackaged) return null;
-    return lastIdleNotification;
-  });
-
-  // Test-only, same guard — see `lastReportNotification`'s doc comment above.
-  ipcMain.handle("debug:last-report-notification", () => {
-    if (app.isPackaged) return null;
-    return lastReportNotification;
   });
 
   // DESIGN-BACKLOG.md item 12, Fase B/C.

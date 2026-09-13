@@ -8,12 +8,11 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
  * DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 (arrastar) + "SINAL 2" (saída sem
  * relatório) — os dois pontos de main process que este trabalho acrescenta
  * a message-bus.ts: `notifyHumanMovedTask` (peça 3, decisão 5 — o card
- * vinculado a uma task arrastada recebe o aviso) e o aviso ao SPAWNER
- * dentro de `resolveCardExit` quando um card sai sem nunca ter chamado
- * `report` (sinal 2). Mesmo padrão de Proxy no-op + overrides pontuais que
- * `message-bus-report-notify.test.ts` já usa pro sinal 1 (`report`) — os
- * dois sinais compartilham o mesmo mecanismo (`typeAndSubmit`), então o
- * mesmo jeito de testar serve pros dois.
+ * vinculado a uma task arrastada pelo HUMANO ainda recebe o aviso
+ * digitado; CLI de terceiro não tem RPC) e o que `resolveCardExit` faz
+ * quando um card sai sem nunca ter chamado `report`: marca a task, fecha
+ * participação, e NÃO digita / NÃO dispara popup. O orquestrador vê
+ * `card_status: exited` e o status novo via `get_task`.
  */
 type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: string; updated_at: number };
 type FakeTaskRow = { id: string; card_id: string | null; status: string };
@@ -50,7 +49,7 @@ describe("message-bus: notifyHumanMovedTask (peça 3, decisão 5 — o card vinc
     return bus;
   }
 
-  it("card vivo e terminal: entrega a mensagem exata (texto + Enter), mesmo formato de send_to_card/notifySpawnerOfReport", async () => {
+  it("card vivo e terminal: entrega a mensagem exata (texto + Enter), mesmo formato de send_to_card", async () => {
     const written: Array<[string, string]> = [];
     const b = makeBus({
       isCardAlive: (id: string) => id === "impl-1",
@@ -98,7 +97,7 @@ describe("message-bus: notifyHumanMovedTask (peça 3, decisão 5 — o card vinc
   });
 });
 
-describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card sai sem NUNCA ter chamado report", () => {
+describe("message-bus: SINAL 2 — resolveCardExit marca a task e NÃO avisa o spawner por PTY/popup", () => {
   let dir: string;
   let bus: ReturnType<typeof createMessageBus> | null;
 
@@ -132,56 +131,44 @@ describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card
   // pra olhar algo). Ruído aqui faz o sinal ser ignorado — o oposto do
   // que ele existe pra fazer. Este teste é a confirmação de que esse
   // falso positivo específico foi cortado.
-  it("[qualificação, achado 3] card de apoio SEM task vinculada e SEM linhagem de spawn_agent: NÃO avisa — era o ruído que o achado pediu pra cortar", async () => {
+  it("[qualificação, achado 3] card de apoio SEM task vinculada e SEM linhagem de spawn_agent: NÃO escreve no PTY", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-e1", to_card_id: "child-e1", updated_at: Date.now() }];
-    const popups: unknown[][] = [];
+    const written: unknown[][] = [];
     const b = makeBus({
       listAllConnectors: () => connectors,
       isCardAlive: (id: string) => id === "spawner-e1",
       describeCardLabel: (id: string) => id,
       listCards: () => [{ id: "spawner-e1", kind: "terminal" }],
-      // "child-e1" nunca passou por `spawn_agent` (cardSpawnDepth vazio
-      // pra ele) e `listTasks` (default do makeBus) não tem nenhuma task
-      // ligada — as DUAS fontes de qualificação ausentes.
-      notifyCardExitedWithoutReport: (...args: unknown[]) => popups.push(args),
+      writeToCard: (...args: unknown[]) => written.push(args),
     });
 
     b.resolveCardExit("child-e1", 1);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(popups).toHaveLength(0);
+    expect(written).toHaveLength(0);
   });
 
-  it("[qualificação] COM task vinculada (qualquer status, nem precisa ser 'running'): avisa com popup + mensagem no PTY, código de saída incluso", async () => {
+  it("[qualificação] COM task vinculada (mesmo 'done'): NÃO digita no PTY do spawner — o canal era o popup+Enter, e saiu", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-e5", to_card_id: "child-e5", updated_at: Date.now() }];
-    const popups: unknown[][] = [];
     const written: Array<[string, string]> = [];
     const b = makeBus({
       listAllConnectors: () => connectors,
       isCardAlive: (id: string) => id === "spawner-e5",
       describeCardLabel: (id: string) => (id === "child-e5" ? "Implementer" : id),
       listCards: () => [{ id: "spawner-e5", kind: "terminal" }],
-      // status "done", não "running" — a task JÁ tinha terminado (não é
-      // o que dispara `markTaskFailed`); o vínculo em si já basta pra
-      // qualificar o AVISO, os dois efeitos são condições distintas.
       listTasks: () => [{ id: "task-5", card_id: "child-e5", status: "done" }] as FakeTaskRow[],
-      notifyCardExitedWithoutReport: (...args: unknown[]) => popups.push(args),
       writeToCard: (...args: unknown[]) => written.push(args as [string, string]),
     });
 
     b.resolveCardExit("child-e5", 1);
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    expect(popups).toHaveLength(1);
-    expect(popups[0]).toEqual(["spawner-e5", "Implementer", 1]);
-    expect(written).toHaveLength(2);
-    expect(written[0]).toEqual(["spawner-e5", "[de: Implementer] saiu (código 1) sem chamar report."]);
-    expect(written[1]).toEqual(["spawner-e5", "\r"]);
+    expect(written).toHaveLength(0);
   });
 
-  it("[qualificação] SEM task vinculada, mas com LINHAGEM de spawn_agent (provider real, não bash): avisa mesmo assim", async () => {
+  it("[qualificação] SEM task vinculada, mas com LINHAGEM de spawn_agent: tampouco digita", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "orchestrator-1", to_card_id: "agent-x", updated_at: Date.now() }];
-    const popups: unknown[][] = [];
+    const written: unknown[][] = [];
     let b: ReturnType<typeof createMessageBus> | null = null;
     b = makeBus({
       onSpawnAgentRequest: (requestId: string) => b?.resolveSpawnAgent(requestId, { ok: true, cardId: "agent-x" }),
@@ -189,22 +176,20 @@ describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card
       isCardAlive: (id: string) => id === "orchestrator-1",
       describeCardLabel: (id: string) => id,
       listCards: () => [{ id: "orchestrator-1", kind: "terminal" }],
-      notifyCardExitedWithoutReport: (...args: unknown[]) => popups.push(args),
+      writeToCard: (...args: unknown[]) => written.push(args),
     });
 
-    // Popula `cardSpawnDepth` pra "agent-x" de verdade, via um spawn_agent
-    // bem-sucedido — a mesma linhagem que `cardWasExpectedToReport` lê.
     await b.handleRequest({ cmd: "spawn_agent", requesterId: "", provider: "claude" } as BusRequest);
 
     b.resolveCardExit("agent-x", 1);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(popups).toHaveLength(1);
+    expect(written).toHaveLength(0);
   });
 
-  it("[qualificação] linhagem de spawn_agent MAS provider bash: NÃO avisa — bash não tem MCP/report nenhum pra ter deixado de chamar", async () => {
+  it("[qualificação] linhagem de spawn_agent MAS provider bash: NÃO escreve — bash não tem MCP/report", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "orchestrator-2", to_card_id: "bash-x", updated_at: Date.now() }];
-    const popups: unknown[][] = [];
+    const written: unknown[][] = [];
     let b: ReturnType<typeof createMessageBus> | null = null;
     b = makeBus({
       onSpawnAgentRequest: (requestId: string) => b?.resolveSpawnAgent(requestId, { ok: true, cardId: "bash-x" }),
@@ -212,7 +197,7 @@ describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card
       isCardAlive: (id: string) => id === "orchestrator-2",
       describeCardLabel: (id: string) => id,
       getAnyCard: (id: string) => (id === "bash-x" ? { boardId: "b1", kind: "terminal", provider: "bash" } : undefined),
-      notifyCardExitedWithoutReport: (...args: unknown[]) => popups.push(args),
+      writeToCard: (...args: unknown[]) => written.push(args),
     });
 
     await b.handleRequest({ cmd: "spawn_agent", requesterId: "", provider: "bash" } as BusRequest);
@@ -220,56 +205,56 @@ describe("message-bus: SINAL 2 — resolveCardExit avisa o spawner quando o card
     b.resolveCardExit("bash-x", 1);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(popups).toHaveLength(0);
+    expect(written).toHaveLength(0);
   });
 
   it("card JÁ reportou (getReport devolve algo): nenhum aviso de saída-sem-relatório, mesma condição que já protege o failed derivado", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-e2", to_card_id: "child-e2", updated_at: Date.now() }];
-    const popups: unknown[][] = [];
+    const written: unknown[][] = [];
     const b = makeBus({
       listAllConnectors: () => connectors,
       isCardAlive: () => true,
       describeCardLabel: (id: string) => id,
       listCards: () => [{ id: "spawner-e2", kind: "terminal" }],
       getReport: () => ({ card_id: "child-e2", seq: 1, report_json: "{}", updated_at: Date.now() }),
-      notifyCardExitedWithoutReport: (...args: unknown[]) => popups.push(args),
+      writeToCard: (...args: unknown[]) => written.push(args),
     });
 
     b.resolveCardExit("child-e2", 0);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(popups).toHaveLength(0);
+    expect(written).toHaveLength(0);
   });
 
   it("sem conector de spawn (card aberto por um humano): ninguém é avisado, sem erro", async () => {
-    const popups: unknown[][] = [];
+    const written: unknown[][] = [];
     const b = makeBus({
       listAllConnectors: () => [] as ConnectorRow[],
       describeCardLabel: (id: string) => id,
-      notifyCardExitedWithoutReport: (...args: unknown[]) => popups.push(args),
+      writeToCard: (...args: unknown[]) => written.push(args),
     });
 
     expect(() => b.resolveCardExit("human-opened", 1)).not.toThrow();
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(popups).toHaveLength(0);
+    expect(written).toHaveLength(0);
   });
 
   it("spawner morto: não avisa e não lança", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "dead-spawner", to_card_id: "child-e3", updated_at: Date.now() }];
-    const popups: unknown[][] = [];
+    const written: unknown[][] = [];
     const b = makeBus({
       listAllConnectors: () => connectors,
       isCardAlive: () => false,
       describeCardLabel: (id: string) => id,
-      notifyCardExitedWithoutReport: (...args: unknown[]) => popups.push(args),
+      writeToCard: (...args: unknown[]) => written.push(args),
     });
 
     expect(() => b.resolveCardExit("child-e3", 1)).not.toThrow();
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(popups).toHaveLength(0);
+    expect(written).toHaveLength(0);
   });
 
-  it("task running vinculada a este card volta pra 'pending' (interrompida) no mesmo evento que avisa o spawner", async () => {
+  it("task running vinculada a este card volta pra 'pending' (interrompida) no mesmo evento do exit — sem depender de aviso digitado", async () => {
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-e4", to_card_id: "child-e4", updated_at: Date.now() }];
     const upserted: FakeTaskRow[] = [];
     const b = makeBus({

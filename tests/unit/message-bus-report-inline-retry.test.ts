@@ -97,8 +97,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     const spawnRequests: unknown[] = [];
     const upserts: TaskRow[] = [];
     const live = task;
-    const notified: unknown[][] = [];
-    const exitNotified: unknown[][] = [];
+    const written: unknown[][] = [];
     const connectors: ConnectorRow[] = [
       { kind: "spawned", from_card_id: "spawner-1", to_card_id: live.card_id ?? "worker-1", updated_at: Date.now() },
     ];
@@ -110,9 +109,8 @@ describe("message-bus: report in-line retry (no spawn)", () => {
         listAllConnectors: () => connectors,
         isCardAlive: (id: string) => id === "spawner-1",
         describeCardLabel: (id: string) => id,
-        notifyCardReported: (...args: unknown[]) => notified.push(args),
-        notifyCardExitedWithoutReport: (...args: unknown[]) => exitNotified.push(args),
-        listCards: () => [],
+        writeToCard: (...args: unknown[]) => written.push(args),
+        listCards: () => [{ id: "spawner-1", kind: "terminal" }],
         isBoardAutonomous: () => true,
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
@@ -127,11 +125,11 @@ describe("message-bus: report in-line retry (no spawn)", () => {
         },
       }),
     );
-    return { bus, live, spawnRequests, upserts, notified, exitNotified };
+    return { bus, live, spawnRequests, upserts, written };
   }
 
   it("a: declared failure with budget — refuses in-line, task stays running, retry_count rises, no spawn", async () => {
-    const { bus: b, live, spawnRequests, notified } = harness(baseTask());
+    const { bus: b, live, spawnRequests, written } = harness(baseTask());
     const waiter = b.handleRequest({
       cmd: "get_report",
       target: "worker-1",
@@ -168,7 +166,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(refused.failureKind).toBeUndefined();
     expect(failureKindFromResultJson(live.result_json)).toBeNull();
     expect(spawnRequests).toHaveLength(0);
-    expect(notified).toHaveLength(0);
+    expect(written).toHaveLength(0);
 
     const waited = (await waiter) as { ok: boolean };
     expect(waited.ok).toBe(false);
@@ -187,8 +185,8 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(JSON.parse(live.result_json ?? "{}").failureKind).toBeUndefined();
   });
 
-  it("b: declared failure without budget — accepts, stores, task becomes failed, waiters/spawner notified, no spawn", async () => {
-    const { bus: b, live, spawnRequests, notified } = harness(baseTask({ retry_count: 2 }));
+  it("b: declared failure without budget — accepts, stores, task becomes failed, waiter gets JSON, no PTY write, no spawn", async () => {
+    const { bus: b, live, spawnRequests, written } = harness(baseTask({ retry_count: 2 }));
     const waiter = b.handleRequest({
       cmd: "get_report",
       target: "worker-1",
@@ -208,7 +206,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(live.retry_count).toBe(2);
     expect(JSON.parse(live.result_json ?? "{}").failureKind).toBe("julgada");
     expect(spawnRequests).toHaveLength(0);
-    expect(notified).toHaveLength(1);
+    expect(written).toHaveLength(0);
 
     const waited = (await waiter) as { ok: boolean; report?: { error?: string }; seq?: number };
     expect(waited.ok).toBe(true);
@@ -216,8 +214,8 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(waited.report?.error).toBe("still failing");
   });
 
-  it("c: agent exits without reporting — exit_without_report stamps the failure and notifies, no spawn", async () => {
-    const { bus: b, live, spawnRequests, exitNotified, notified } = harness(baseTask({ retry_count: 0, max_retries: 2 }));
+  it("c: agent exits without reporting — exit_without_report stamps the failure, no PTY write, no spawn", async () => {
+    const { bus: b, live, spawnRequests, written } = harness(baseTask({ retry_count: 0, max_retries: 2 }));
 
     b.resolveCardExit("worker-1", 1);
     await new Promise((r) => setTimeout(r, 50));
@@ -227,14 +225,12 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(JSON.parse(live.result_json ?? "{}").failureKind).toBe("interrompida");
     expect(JSON.parse(live.result_json ?? "{}").error).toBe(describeExitWithoutAcceptedReport(1, null));
     expect(JSON.parse(live.result_json ?? "{}").error).toContain("without ever calling report");
-    expect(exitNotified).toHaveLength(1);
-    expect(exitNotified[0][0]).toBe("spawner-1");
-    expect(notified).toHaveLength(0);
+    expect(written).toHaveLength(0);
     expect(spawnRequests).toHaveLength(0);
   });
 
   it("d: declared terminal failure — accepted immediately, no refusal, no retry spent, no spawn", async () => {
-    const { bus: b, live, spawnRequests, notified } = harness(baseTask({ retry_count: 0 }));
+    const { bus: b, live, spawnRequests, written } = harness(baseTask({ retry_count: 0 }));
 
     const res = (await b.handleRequest({
       cmd: "report",
@@ -250,11 +246,11 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(JSON.parse(live.result_json ?? "{}").error).toBe("no credits");
     expect(JSON.parse(live.result_json ?? "{}").failureKind).toBe("julgada");
     expect(spawnRequests).toHaveLength(0);
-    expect(notified).toHaveLength(1);
+    expect(written).toHaveLength(0);
   });
 
   it("exit after a refused report names the death and the last declared failure; get_report stays empty, waiter sleeps, no spawn", async () => {
-    const { bus: b, live, spawnRequests, exitNotified, notified } = harness(baseTask());
+    const { bus: b, live, spawnRequests, written } = harness(baseTask());
     const waiter = b.handleRequest({
       cmd: "get_report",
       target: "worker-1",
@@ -284,8 +280,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(result[LAST_REFUSED_REPORT_KEY]).toBeUndefined();
     expect(live.status).toBe("pending");
     expect(result.failureKind).toBe("interrompida");
-    expect(exitNotified).toHaveLength(1);
-    expect(notified).toHaveLength(0);
+    expect(written).toHaveLength(0);
     expect(spawnRequests).toHaveLength(0);
 
     const peeked = (await b.handleRequest({ cmd: "get_report", target: "worker-1" } as BusRequest)) as { ok: boolean };

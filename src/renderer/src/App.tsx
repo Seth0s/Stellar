@@ -1507,10 +1507,9 @@ export function App() {
    * only overwrites `pendingLabel` — no SQLite UPDATE, no `setConnectors`
    * render — and a single trailing timer flushes whatever's pending when
    * the window closes, so the pill always lands on the LAST real value
-   * instead of silently dropping it (a pure leading-edge throttle, like
-   * `REPORT_NOTIFY_MIN_INTERVAL_MS` elsewhere in this codebase, would
-   * drop it — fine for a one-shot notification, wrong for "what's the
-   * connector doing right now"). Cuts BOTH costs the finding named (the
+   * instead of silently dropping it (a pure leading-edge throttle would
+   * drop it — fine for a one-shot, wrong for "what's the connector
+   * doing right now"). Cuts BOTH costs the finding named (the
    * write and the render) together, since they're the same call
    * (`updateConnectorLabel` does the `setConnectors` + the `upsert` IPC
    * in one place) — there's no separate "push" to cut here, this branch
