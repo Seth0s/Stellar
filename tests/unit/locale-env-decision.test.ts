@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyLocaleEnvWrites,
+  composeSystemLanguageHint,
   decideLocaleEnv,
   isExplicitCOrAsciiLocale,
   isUtf8LocaleName,
@@ -72,14 +74,17 @@ describe("b — LANG=C / LC_ALL=POSIX / charmap US-ASCII", () => {
     expect(writes).toEqual({ LANG: "pt_BR.UTF-8" });
   });
 
-  it("LC_ALL=POSIX → corrige LC_ALL (é ele quem ganha)", () => {
+  it("LC_ALL=POSIX → UNSET do LC_ALL e escreve LANG", () => {
+    // Was: writes.LC_ALL = pt_BR.UTF-8. That treated an explicit
+    // override as a defect and locked every category. POSIX ch. 8 /
+    // Debian: LANG is persistent; LC_ALL is a one-shot. We unset
+    // LC_ALL and write LANG so the card can still set LC_TIME.
     const { writes } = decideLocaleEnv({
       env: { LC_ALL: "POSIX", LANG: "C" },
       availableLocales: MAC_AVAILABLE,
       preferredLanguage: "pt-BR",
     });
-    expect(writes).toEqual({ LC_ALL: "pt_BR.UTF-8" });
-    expect(writes.LANG).toBeUndefined();
+    expect(writes).toEqual({ LC_ALL: null, LANG: "pt_BR.UTF-8" });
   });
 
   it("LANG=en_US.US-ASCII → corrige para o UTF-8 da mesma língua", () => {
@@ -147,13 +152,16 @@ describe("d — precedência LC_ALL > LC_CTYPE > LANG", () => {
     expect(writes).toEqual({});
   });
 
-  it("LC_ALL=C ganha de LANG UTF-8 — corrige LC_ALL na língua do LANG", () => {
+  it("LC_ALL=C com LANG UTF-8 — UNSET do LC_ALL, LANG já está certo", () => {
+    // Was: LC_ALL=pt_BR.UTF-8. An explicit C override is no longer
+    // rewritten into a translated lock; we drop it so LANG wins.
     const { writes } = decideLocaleEnv({
       env: { LC_ALL: "C", LANG: "pt_BR.UTF-8" },
       availableLocales: MAC_AVAILABLE,
       preferredLanguage: "en-US",
     });
-    expect(writes).toEqual({ LC_ALL: "pt_BR.UTF-8" });
+    expect(writes).toEqual({ LC_ALL: null });
+    expect(writes.LANG).toBeUndefined();
   });
 
   it("LC_CTYPE=C com LANG UTF-8 — só corrige LC_CTYPE, preserva LANG", () => {
@@ -207,7 +215,7 @@ describe("e — desejado indisponível → cai para um nome que existe", () => {
       availableLocales: available,
       preferredLanguage: "fr-FR",
     });
-    expect(Object.values(writes).every((name) => available.includes(name))).toBe(true);
+    expect(Object.values(writes).every((name) => name === null || available.includes(name))).toBe(true);
     expect(writes.LANG).toBe("ja_JP.UTF-8");
   });
 });
@@ -225,5 +233,100 @@ describe("síntese de língua — env + hint do SO, sem copiar a login shell", (
       availableLocales: MAC_AVAILABLE,
     });
     expect(writes).toEqual({ LANG: "C.UTF-8" });
+  });
+});
+
+describe("fonte do idioma — preferred languages, não app.getLocale()", () => {
+  it("preferred [pt-BR] vence um getLocale()-style en-US (o .app sem pt.lproj)", () => {
+    expect(composeSystemLanguageHint(["pt-BR"], "en-US")).toBe("pt-BR");
+    const { writes } = decideLocaleEnv({
+      env: {},
+      availableLocales: MAC_AVAILABLE,
+      preferredLanguage: composeSystemLanguageHint(["pt-BR"], "en-US"),
+    });
+    expect(writes).toEqual({ LANG: "pt_BR.UTF-8" });
+    expect(writes.LANG).not.toBe("en_US.UTF-8");
+  });
+
+  it("tag só com língua casa a região de getSystemLocale() quando o idioma bate", () => {
+    expect(composeSystemLanguageHint(["pt"], "pt-BR")).toBe("pt-BR");
+  });
+
+  it("não inventa pt-US quando a região do sistema é outra língua", () => {
+    expect(composeSystemLanguageHint(["pt"], "en-US")).toBe("pt");
+    const { writes } = decideLocaleEnv({
+      env: {},
+      availableLocales: MAC_AVAILABLE,
+      preferredLanguage: composeSystemLanguageHint(["pt"], "en-US"),
+    });
+    expect(writes).toEqual({ LANG: "pt_BR.UTF-8" });
+  });
+
+  it("sem preferred language, cai no system locale (NSLocale currentLocale)", () => {
+    expect(composeSystemLanguageHint([], "pt-BR")).toBe("pt-BR");
+    expect(composeSystemLanguageHint(undefined, "pt-BR")).toBe("pt-BR");
+    expect(composeSystemLanguageHint(null, null)).toBeNull();
+  });
+});
+
+describe("LC_ALL=C explícito — UNSET, não reescrever", () => {
+  it("LC_ALL=C sozinho → unset + LANG na língua do hint", () => {
+    const { writes } = decideLocaleEnv({
+      env: { LC_ALL: "C" },
+      availableLocales: MAC_AVAILABLE,
+      preferredLanguage: "pt-BR",
+    });
+    expect(writes).toEqual({ LC_ALL: null, LANG: "pt_BR.UTF-8" });
+  });
+
+  it("LC_ALL=C.UTF-8 já é UTF-8 — não mexe (override explícito com encoding)", () => {
+    const { writes } = decideLocaleEnv({
+      env: { LC_ALL: "C.UTF-8" },
+      availableLocales: MAC_AVAILABLE,
+      preferredLanguage: "pt-BR",
+    });
+    expect(writes).toEqual({});
+  });
+
+  it("LC_ALL=en_US.US-ASCII → unset + LANG UTF-8 da mesma língua", () => {
+    const { writes } = decideLocaleEnv({
+      env: { LC_ALL: "en_US.US-ASCII" },
+      availableLocales: MAC_AVAILABLE,
+      preferredLanguage: "pt-BR",
+    });
+    expect(writes).toEqual({ LC_ALL: null, LANG: "en_US.UTF-8" });
+  });
+
+  it("lista vazia + LANG já UTF-8 → UNSET do LC_ALL, sem inventar nome", () => {
+    const { writes } = decideLocaleEnv({
+      env: { LC_ALL: "C", LANG: "pt_BR.UTF-8" },
+      availableLocales: [],
+    });
+    expect(writes).toEqual({ LC_ALL: null });
+  });
+
+  it("lista vazia + LC_ALL=C sem LANG UTF-8 → não escreve nem unset (não há nome)", () => {
+    const { writes } = decideLocaleEnv({
+      env: { LC_ALL: "C" },
+      availableLocales: [],
+      preferredLanguage: "pt-BR",
+    });
+    expect(writes).toEqual({});
+  });
+});
+
+describe("writes null = unset", () => {
+  it("applyLocaleEnvWrites remove LC_ALL e não stringify null", () => {
+    const applied = applyLocaleEnvWrites(
+      { LC_ALL: "C", LANG: "C", PATH: "/bin" },
+      { LC_ALL: null, LANG: "pt_BR.UTF-8" },
+    );
+    expect(applied).toEqual({ LANG: "pt_BR.UTF-8", PATH: "/bin" });
+    expect(applied).not.toHaveProperty("LC_ALL");
+    expect(Object.values(applied).includes("null")).toBe(false);
+  });
+
+  it("applyLocaleEnvWrites com writes vazio preserva o env herdado", () => {
+    expect(applyLocaleEnvWrites({ LANG: "pt_BR.UTF-8" }, {})).toEqual({ LANG: "pt_BR.UTF-8" });
   });
 });

@@ -38,6 +38,7 @@ import { describeStatusAskResolved } from "./status-write-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { refreshUserEnv, setSystemLanguageHint, userEnvSnapshot } from "./user-env";
+import { composeSystemLanguageHint } from "./locale-env-decision";
 import {
   createEntry,
   deletePath,
@@ -458,10 +459,19 @@ function createWindow() {
   const localePrefs = createLocalePrefs(app.getPath("userData"));
   const systemLocale = app.getLocale();
   setLocale(resolveLocale(systemLocale, localePrefs.getOverride()));
-  // PTY locale synthesis (user-env.ts) uses the OS language, not the
-  // in-app catalog override: CLIs should speak the host language even
-  // when the Stellar UI was switched to English.
-  setSystemLanguageHint(systemLocale);
+  // PTY locale synthesis uses the OS preferred language
+  // (`getPreferredSystemLanguages()[0]`), not Chromium's application
+  // locale. `app.getLocale()` above is correct for the Stellar UI
+  // catalog — it follows the packaged `locales/` folder — but a
+  // Brazilian Mac whose `.app` omitted `pt.lproj` reports `en-US`
+  // there. Writing that into LANG would fix encoding and erase
+  // Portuguese, which is exactly what rule 2 exists to prevent.
+  // Region is paired from `getSystemLocale()` only when the preferred
+  // tag is language-only and the languages match. The POSIX name is
+  // still vetoed by `locale -a`.
+  setSystemLanguageHint(
+    composeSystemLanguageHint(app.getPreferredSystemLanguages(), app.getSystemLocale()),
+  );
 
   function applyLocale(next: Locale): void {
     setLocale(next);

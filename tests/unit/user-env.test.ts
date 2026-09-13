@@ -10,6 +10,7 @@ import {
   knownBinDirs,
   loginShell,
   mergePathDirs,
+  applyEffectiveLocaleEnv,
   parseLocaleDashA,
   queryInstalledLocales,
   queryShellPath,
@@ -438,7 +439,16 @@ describe("user-env: locale listing (I/O around locale-env-decision)", () => {
       preferredLanguage: "pt-BR",
     }).writes;
     for (const name of Object.values(writes)) {
+      if (name === null) continue;
       expect(available).toContain(name);
     }
+  });
+
+  it("applyEffectiveLocaleEnv: LC_ALL=C com LANG UTF-8 some o LC_ALL, não vira a string null", () => {
+    const applied = applyEffectiveLocaleEnv({ LC_ALL: "C", LANG: "pt_BR.UTF-8", PATH: "/usr/bin" });
+    expect(applied.LANG).toBe("pt_BR.UTF-8");
+    expect(applied.PATH).toBe("/usr/bin");
+    expect(applied).not.toHaveProperty("LC_ALL");
+    expect(Object.values(applied).includes("null")).toBe(false);
   });
 });
