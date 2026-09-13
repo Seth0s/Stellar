@@ -309,7 +309,7 @@ export const PROVIDERS: ProviderDef[] = [
   {
     id: "cursor",
     label: "Cursor",
-    binaryNames: ["agent", "cursor-agent"],
+    binaryNames: ["cursor-agent", "agent"],
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "none" },
@@ -519,8 +519,8 @@ export function which(
     platform === "win32"
       ? names.flatMap((name) => [name, ...extensions.map((ext) => name + ext)])
       : names;
-  for (const dir of dirs) {
-    for (const name of candidateNames) {
+  for (const name of candidateNames) {
+    for (const dir of dirs) {
       const candidate = join(dir, name);
       if (isExecutable(candidate)) return candidate;
     }
