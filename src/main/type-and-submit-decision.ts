@@ -37,6 +37,14 @@
  * Bracketed Paste (CSI 200~/201~): only when the PTY peer requested
  * DECSET `2004h`. Blind wrapping poisons CLIs that never asked — they
  * echo the raw escapes as text. When unknown, send raw.
+ *
+ * Enxutação (2026-09-13, §0 "endurecer a confirmação depois de encolher
+ * os chamadores"): the loop's verdict is now RETURNED, not dropped —
+ * `DeliveryConfirmation` → `decideDeliveryOutcome` → `get_delivery`
+ * says `delivered` / `failed` / `unconfirmed` instead of a blanket
+ * `delivered`. And `bash` targets get their own rule
+ * (`decideShellSubmitCheck`): readline echoes and keeps the command on
+ * screen, so the composer rule read every shell submit as `"unsent"`.
  */
 
 /** Quiescence window after the card's last pty output before typing is
@@ -156,10 +164,24 @@ export type DeliveryGateDecision =
  * Shared receipt for any programmatic PTY delivery that must not sit
  * inside an RPC. The tool's job is to enqueue; typing is how the FIFO
  * item happens. `queued` is the honest send/spawn-brief return.
- * `delivered` is what `get_delivery` reports after `deliverCard` settles.
  * Same shape as `report` → `seq` + `read_report`: accept now, query later.
+ *
+ * Settled states carry the confirmation loop's VERDICT, not just "the
+ * FIFO item finished" (DESIGN-BACKLOG.md §0, enxutação: "`deliverCard` é
+ * o único motor que confirma por leitura de tela... o conserto é a
+ * confirmação, não o canal"). Before this, `get_delivery` said
+ * `delivered` even when the loop gave up after every Enter, cleared the
+ * composer and the text never reached the agent — the one caller that
+ * could resend was told everything was fine.
+ *  - `delivered`   → `"sent"` confirmed on screen.
+ *  - `failed`      → text was still visibly in the composer after the
+ *                    last Enter; composer cleared; the text did NOT go
+ *                    through. Resend (or read_card) is the caller's call.
+ *  - `unconfirmed` → no evidence either way (no echo, screen read
+ *                    failed, card vanished mid-delivery, or an
+ *                    unexpected error). Don't assume; `read_card`.
  */
-export type CardDeliveryState = "queued" | "delivered";
+export type CardDeliveryState = "queued" | "delivered" | "unconfirmed" | "failed";
 export type CardDeliveryHoldReason = "human-input" | "card-busy";
 export type CardDeliveryReceipt = {
   ok: true;
@@ -167,6 +189,53 @@ export type CardDeliveryReceipt = {
   reason?: CardDeliveryHoldReason;
   id: string;
 };
+
+/** Last thing the confirmation loop learned. `SubmitCheckResult` is the
+ * screen verdict; the rest are the ways the loop ends without one. */
+export type DeliveryCheckOutcome = SubmitCheckResult | "read-failed" | "card-gone" | "error";
+
+/** What `deliverCard` hands back and `get_delivery` exposes verbatim.
+ * `enters` is how many `\r` the loop actually wrote — the number the
+ * duplicate-delivery investigations kept asking for and never had. */
+export type DeliveryConfirmation = {
+  result: DeliveryCheckOutcome;
+  attempts: number;
+  enters: number;
+  composerCleared: boolean;
+};
+
+/** Map the loop's last finding onto the settled delivery state. Pure so
+ * the three-way split is locked by tests, not by reading `deliverCard`. */
+export function decideDeliveryOutcome(result: DeliveryCheckOutcome): Exclude<CardDeliveryState, "queued"> {
+  if (result === "sent") return "delivered";
+  if (result === "unsent") return "failed";
+  return "unconfirmed";
+}
+
+/** Which side of the PTY is reading the delivery. `"agent"` is a TUI
+ * composer (claude/codex/cursor/...), `"shell"` is readline in a `bash`
+ * card. Mirrors `ProviderCapacity.role` — passed in, not imported, so
+ * this module stays free of providers.ts. */
+export type DeliveryTargetRole = "agent" | "shell";
+
+/**
+ * Normalized needle the confirm loop looks for on screen. Short texts
+ * (<8 — system notices like `ok`) are matched whole, in the tail only.
+ *
+ * Agent TUI: a 24-char PREFIX — the composer shows the start of the
+ * text (or collapses it into a paste chip), and a submit moves it into
+ * history where the prefix is what survives.
+ *
+ * Shell: a 24-char SUFFIX. readline echoes the whole command and the
+ * cursor sits right after its LAST character; a long command wraps onto
+ * several rows, so the prefix row can have "rows below it" while the
+ * command is still unsubmitted. The suffix is on the cursor's row.
+ */
+export function deliveryNeedle(text: string, role: DeliveryTargetRole = "agent"): string {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (normalized.length < 8) return normalized;
+  return role === "shell" ? normalized.slice(-24) : normalized.slice(0, 24);
+}
 
 /**
  * Peek — never wait — why a delivery would sit at human/TUI rhythm.
@@ -231,6 +300,114 @@ export interface SubmitCheckInput {
    * é pulada, e a decisão degrada para os testes de needle e atividade genérica.
    */
   submitStartedPattern?: RegExp;
+  /**
+   * `"shell"` switches to the readline rule (`decideShellSubmitCheck`).
+   * Omitted / `"agent"` keeps the TUI-composer rule below. The caller
+   * derives this from `providerCapacity(provider).role`; a `sentNeedle`
+   * built with the matching `deliveryNeedle(text, role)` is expected.
+   */
+  targetRole?: DeliveryTargetRole;
+  /**
+   * Shell only. Out-of-screen submit signal from the PTY stream: did the
+   * peer emit `2004l` between the body write and this read? `true` →
+   * readline accepted the line (bash/zsh/fish emit it on Enter, before
+   * the command runs). `false` → the prompt WAS in bracketed-paste mode
+   * and no accept happened yet. `null`/absent → no such signal (old
+   * shell without bracketed paste, or an opaque foreground program
+   * owns stdin) — screen evidence is all there is.
+   */
+  readlineAccepted?: boolean | null;
+}
+
+/**
+ * Derive `readlineAccepted` from two `BracketedPasteModeState` snapshots
+ * — the one taken right before the body write and the one at check time.
+ * Only meaningful when the prompt was in `2004h` before we typed: that is
+ * what makes a later `2004l` mean "line accepted" rather than noise.
+ */
+export function readlineAcceptedSince(
+  before: { enabled: boolean; offEvents: number } | null | undefined,
+  after: { offEvents: number } | null | undefined,
+): boolean | null {
+  if (!before || !after || !before.enabled) return null;
+  return after.offEvents > before.offEvents;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Row index (in `rows`) holding the END of the LAST needle occurrence,
+ * or -1. Rows are whitespace-collapsed individually and the needle's
+ * spaces may fall on a row break (a multi-line paste echoes as several
+ * rows). Short needles (<8, same cut-off as `needleVisibleOnScreen`)
+ * must not be glued to path/word characters — `ls` inside `~/tools$` is
+ * the prompt, not the echo. Long needles are plain substrings: a shell
+ * suffix needle is routinely cut mid-token, so a left boundary would
+ * miss the real echo.
+ */
+export function lastNeedleRow(rows: readonly string[], needle: string): number {
+  const norm = rows.map((r) => r.replace(/\s+/g, " ").trim()).join("\n");
+  const trimmed = needle.trim();
+  const body = trimmed
+    .split(" ")
+    .filter((part) => part.length > 0)
+    .map(escapeRegExp)
+    .join("[ \\n]");
+  if (!body) return -1;
+  const bounded = trimmed.length < 8;
+  const re = new RegExp(bounded ? `(?<![\\w/.\\-])${body}(?![\\w/.\\-])` : body, "g");
+  let lastEnd = -1;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(norm)) !== null) {
+    lastEnd = m.index + m[0].length;
+    if (m[0].length === 0) re.lastIndex++;
+  }
+  if (lastEnd < 0) return -1;
+  return norm.slice(0, lastEnd).split("\n").length - 1;
+}
+
+/**
+ * readline rule for `bash` targets — the TUI rule always read these as
+ * `"unsent"`: a shell ECHOES the command and leaves it on screen after
+ * executing it, so "needle still visible" is true for every submitted
+ * command whose output didn't scroll it away. Result before this: four
+ * Enters and a Ctrl+U on every `send_to_card` into a bash card (blank
+ * lines, harmless — but it also made the honest outcome read `failed`).
+ *
+ * Strongest signal first — `readlineAccepted` (DECSET 2004 delta on the
+ * PTY stream, see `readlineAcceptedSince`): `true` is `"sent"` no matter
+ * what the screen shows. This is what covers a SILENT command — `sleep`,
+ * `cat > file`, a program waiting on stdin — whose echo is the last row
+ * with nothing below it. Measured live (smoke-mcp-delivery-outcome):
+ * the screen rule alone read `python3 sink.py` as unsent → 4 Enters →
+ * `failed`, for a command that had already been running for a second.
+ *
+ * Then the screen, for what the shell does that a composer doesn't: on
+ * submit it prints SOMETHING below the echoed line — output, or at
+ * minimum the next prompt. Needle's row followed by a non-empty row →
+ * `"sent"`. Needle gone → output scrolled it out of the window:
+ * `"sent"` if the card produced anything since the write, else
+ * `"unknown"` (nothing echoed yet — don't press Enter into that).
+ *
+ * Needle on the last row with nothing below: `"unsent"` only when the
+ * prompt was in bracketed-paste mode and never accepted the line
+ * (`readlineAccepted === false`) — that is readline holding our text.
+ * With no readline signal (`null`) it is an opaque foreground program
+ * echoing our bytes: we cannot know what it did with Enter, and feeding
+ * it three more is the duplicate-delivery class. `"unknown"`.
+ */
+export function decideShellSubmitCheck(
+  input: Pick<SubmitCheckInput, "screenText" | "sentNeedle" | "hasNewActivitySinceWrite" | "readlineAccepted">,
+): SubmitCheckResult {
+  if (input.readlineAccepted === true) return "sent";
+  const rows = input.screenText.split(/\r?\n/);
+  const row = lastNeedleRow(rows, input.sentNeedle);
+  if (row < 0) return input.hasNewActivitySinceWrite ? "sent" : "unknown";
+  const printedBelow = rows.slice(row + 1).some((r) => r.trim().length > 0);
+  if (printedBelow) return "sent";
+  return input.readlineAccepted === false ? "unsent" : "unknown";
 }
 
 export function countPatternMatches(text: string, pattern: RegExp): number {
@@ -323,6 +500,10 @@ export function needleVisibleOnScreen(screenText: string, sentNeedle: string): b
  *  - `"sent"` → stop
  */
 export function decideSubmitCheck(input: SubmitCheckInput): SubmitCheckResult {
+  // A shell has no composer, no paste chip and no turn vocabulary — the
+  // TUI heuristics below are wrong for it, not merely weak. Own rule.
+  if (input.targetRole === "shell") return decideShellSubmitCheck(input);
+
   const before = input.screenTextBeforeWrite;
   const after = input.screenText;
 
@@ -394,10 +575,20 @@ export interface BracketedPasteModeState {
   enabled: boolean;
   /** Incomplete CSI private-mode prefix split across chunks. */
   carry: string;
+  /**
+   * Monotonic count of `2004l` / reset events seen on the stream. For a
+   * shell at its prompt this is "readline accepted a line": measured
+   * against bash 5.3 with TERM=xterm-256color (2026-09-13) — `2004h` at
+   * the prompt, `2004l` emitted the instant Enter accepts the line
+   * (BEFORE the command runs, even a silent `sleep`), `2004h` again when
+   * the prompt returns. The one out-of-screen submit signal a shell
+   * gives; `decideShellSubmitCheck` uses the delta across the delivery.
+   */
+  offEvents: number;
 }
 
 export function initialBracketedPasteModeState(): BracketedPasteModeState {
-  return { enabled: false, carry: "" };
+  return { enabled: false, carry: "", offEvents: 0 };
 }
 
 /** Incomplete ESC suffix that may continue in the next chunk — private
@@ -454,12 +645,16 @@ export function updateBracketedPasteMode(state: BracketedPasteModeState, chunk: 
   }
 
   events.sort((a, b) => a.index - b.index);
+  let offEvents = state.offEvents ?? 0;
   for (const ev of events) {
     if (ev.kind === "on") enabled = true;
-    else enabled = false; // reset or 2004l
+    else {
+      enabled = false; // reset or 2004l
+      offEvents++;
+    }
   }
 
-  return { enabled, carry: incompletePrivateModeSuffix(text) };
+  return { enabled, carry: incompletePrivateModeSuffix(text), offEvents };
 }
 
 /**

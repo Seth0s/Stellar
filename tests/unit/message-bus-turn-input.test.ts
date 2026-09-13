@@ -69,7 +69,11 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
     const deadline = Date.now() + 2000;
     for (;;) {
       const status = (await bus!.handleRequest({ cmd: "get_delivery", id } as BusRequest)) as { delivery?: string };
-      if (status.delivery === "delivered") return;
+      // Settled, whatever the verdict — the give-up case below now reads
+      // `failed`, not a blanket `delivered` (tests/unit/message-bus-
+      // delivery-outcome.test.ts owns that split). This file is about
+      // turn notices, not the verdict.
+      if (status.delivery && status.delivery !== "queued") return;
       if (Date.now() >= deadline) throw new Error("delivery did not settle");
       await new Promise((r) => setTimeout(r, 20));
     }

@@ -121,7 +121,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "send_to_card",
       {
         description:
-          "Enqueue a message to type into another open terminal card, followed by Enter — same as typing it yourself into that card. Returns immediately with {ok:true, delivery:\"queued\", id, reason?} so this call never sits in the human-input or TUI-boot gates (those wait on the existing per-card FIFO). delivery is \"queued\" here; poll get_delivery with the id to learn when that FIFO item has finished typing. reason is \"human-input\" when the target human is mid-line, \"card-busy\" when the TUI is still booting or another delivery is already in that card's FIFO.",
+          "Enqueue a message to type into another open terminal card, followed by Enter — same as typing it yourself into that card. Returns immediately with {ok:true, delivery:\"queued\", id, reason?} so this call never sits in the human-input or TUI-boot gates (those wait on the existing per-card FIFO). delivery is \"queued\" here; poll get_delivery with the id to learn whether the text was CONFIRMED submitted (\"delivered\"), visibly stuck and cleared (\"failed\" — resend) or left without evidence (\"unconfirmed\" — read_card). reason is \"human-input\" when the target human is mid-line, \"card-busy\" when the TUI is still booting or another delivery is already in that card's FIFO.",
         inputSchema: {
           target: z.string().describe("The target card's id or label (see list_cards)"),
           text: z.string().describe("The text to type"),
@@ -143,7 +143,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "get_delivery",
       {
         description:
-          "Read the status of one send_to_card (or other programmatic PTY) delivery by the id that call returned. {delivery:\"queued\"} means the FIFO item has not finished typing yet (reason names the hold if one is still visible). {delivery:\"delivered\"} means that FIFO item settled — the same moment the old awaited send_to_card used to return. Does not wait.",
+          "Read the status of one send_to_card (or other programmatic PTY) delivery by the id that call returned. {delivery:\"queued\"} means the FIFO item has not finished typing yet (reason names the hold if one is still visible). Settled states carry the screen-confirmation verdict: \"delivered\" = the submit was confirmed on the target's screen; \"failed\" = the text was still sitting in the composer after every Enter retry, so it was cleared and did NOT reach the agent — resend; \"unconfirmed\" = no evidence either way (no echo, screen read failed, card vanished) — check with read_card before resending. confirm:{result, attempts, enters, composerCleared} is the raw finding behind that state. Does not wait.",
         inputSchema: {
           id: z.string().describe("The delivery id from send_to_card's return"),
         },

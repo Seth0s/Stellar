@@ -3,7 +3,7 @@ import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, type CardDeliveryHoldReason, type CardDeliveryReceipt, type DeliveryWriteKind } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
 import {
@@ -627,6 +627,9 @@ export function createMessageBus(
       inputLineLastAtMs?: number | null;
       /** Peer requested DECSET 2004h. Absent/false → deliver raw bytes. */
       bracketedPasteMode?: boolean;
+      /** Monotonic `2004l` count — shell "line accepted" signal for the
+       * confirm loop (`readlineAcceptedSince`). Absent → no signal. */
+      bracketedPasteOffEvents?: number;
     } | null;
     /** Prototipo (2026-09-06) — ver o comentário de `turn_complete` no
      * `BusRequest` acima. Push fire-and-forget pro renderer, keyed pelo
@@ -999,12 +1002,15 @@ export function createMessageBus(
    * and none may be dropped just because another delivery is in flight. */
   const deliveryQueues = new Map<string, Promise<void>>();
   /** Status index over `deliveryQueues` — not a second queue. `send` returns
-   * the id immediately; `get_delivery` reads this after the FIFO item settles. */
+   * the id immediately; `get_delivery` reads this after the FIFO item settles.
+   * `confirm` is the loop's own verdict (see `DeliveryConfirmation`) — the
+   * settled `delivery` is derived from it, never a blanket "delivered". */
   type TrackedDelivery = {
     id: string;
     target: string;
-    delivery: "queued" | "delivered";
+    delivery: CardDeliveryState;
     reason?: CardDeliveryHoldReason;
+    confirm?: DeliveryConfirmation;
   };
   const deliveryRecords = new Map<string, TrackedDelivery>();
   function markWaiting(requesterId: string) {
@@ -1183,8 +1189,15 @@ export function createMessageBus(
    * `activityAtWrite` abaixo é o baseline ANTES da escrita (sinal de
    * silêncio de boot apenas). Eco vs resposta real NÃO usam esse
    * timestamp: a distinção é por conteúdo (`looksLikeSubmitStarted`).
-   * Entrega que desiste limpa o composer (`composerClearSequence`). */
-  async function deliverCard(target: string, text: string): Promise<void> {
+   * Entrega que desiste limpa o composer (`composerClearSequence`).
+   *
+   * Devolve a `DeliveryConfirmation` (2026-09-13) em vez de `void`: o
+   * veredito do laço era descartado aqui e `get_delivery` dizia
+   * "delivered" pra tudo — inclusive pra entrega que desistiu, limpou o
+   * composer e perdeu o texto. Quem chama `send_to_card` é o único que
+   * pode reenviar, e era exatamente quem não ficava sabendo. */
+  async function deliverCard(target: string, text: string): Promise<DeliveryConfirmation> {
+    const confirm: DeliveryConfirmation = { result: "unknown", attempts: 0, enters: 0, composerCleared: false };
     await waitForWriteReadiness(target);
     await waitForHumanInputGate(target);
 
@@ -1192,7 +1205,7 @@ export function createMessageBus(
     const hasDeliverySection = Object.prototype.hasOwnProperty.call(callbacks, "beginCardDelivery");
     if (hasDeliverySection && callbacks.beginCardDelivery) {
       while (!deliveryStarted) {
-        if (!callbacks.isCardAlive(target)) return;
+        if (!callbacks.isCardAlive(target)) return { ...confirm, result: "card-gone" };
         const result = callbacks.beginCardDelivery(target);
         // Existing unit-test doubles use a Proxy that returns a no-op
         // function for unknown callbacks. `undefined` therefore means the
@@ -1231,37 +1244,56 @@ export function createMessageBus(
       // stay raw regardless (see shouldUseBracketedPaste).
       const readinessForPaste = callbacks.getCardWriteReadiness(target);
       const bracketedPasteMode = readinessForPaste?.bracketedPasteMode === true;
+      // Shell submit signal baseline: was readline at a bracketed-paste
+      // prompt, and how many `2004l` had the stream carried so far. A
+      // later delta means the line was accepted, whatever the screen
+      // shows (silent commands). See `readlineAcceptedSince`.
+      const pasteStateBefore =
+        typeof readinessForPaste?.bracketedPasteOffEvents === "number"
+          ? { enabled: bracketedPasteMode, offEvents: readinessForPaste.bracketedPasteOffEvents }
+          : null;
       writeDelivery(deliveryTextBytes(text, bracketedPasteMode), "body");
       // Sticky item "send_to_card não confirma envio" (2026-09-03) — a
       // regex de placeholder sozinha só cobre UM sintoma (CLI que colapsa
       // um paste grande num chip "[Pasted text ...]"); uma mensagem curta
       // simplesmente fica CRUA na caixa, nunca colapsa, então checar só o
       // placeholder deixaria passar como "enviado" um caso que não foi.
-      // Needle: full trimmed text when short (<8 — system notices), else
-      // a 24-char prefix. Short needles are matched in the screen tail
-      // only (see needleVisibleOnScreen).
-      const normalized = text.trim().replace(/\s+/g, " ");
-      const sentNeedle = normalized.length < 8 ? normalized : normalized.slice(0, 24);
+      // Needle + rule depend on WHO reads the PTY: a TUI composer (agent)
+      // or readline (bash). Resolved once, before the loop — the card's
+      // provider does not change mid-delivery. Unknown provider → agent
+      // rule, the conservative one (never invents a shell).
+      const targetCard = callbacks.listCards().find((c) => c.id === target);
+      const capacity = targetCard?.provider ? providerCapacity(targetCard.provider) : undefined;
+      const targetRole: DeliveryTargetRole = capacity?.role === "shell" ? "shell" : "agent";
+      const submitStartedPattern = capacity?.delivery.submitStartedPattern;
+      const sentNeedle = deliveryNeedle(text, targetRole);
       // Previous confirm result drives whether the NEXT iteration presses
       // Enter. `null` before attempt 0 → always press once. `"unknown"`
       // never presses (wait/re-read only).
       let previousResult: ReturnType<typeof decideSubmitCheck> | null = null;
       for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
+        confirm.attempts = attempt + 1;
         await delay(SEND_ENTER_DELAY_MS);
         if (shouldPressEnterOnAttempt(attempt, previousResult)) {
           writeDelivery("\r", "enter");
+          confirm.enters++;
         }
         await delay(SEND_ENTER_CONFIRM_DELAY_MS);
         const check = await readCardText(target, 8);
         // Falha de leitura (timeout, card sumiu) não é evidência de que o
         // submit falhou — para de retentar em vez de adivinhar. Único
-        // `break` fora da decisão pura — inalterado, não regride.
-        if (!check.ok) break;
+        // `break` fora da decisão pura — inalterado, não regride. O que
+        // muda é que o caller passa a saber que foi ISSO que encerrou.
+        if (!check.ok) {
+          confirm.result = "read-failed";
+          break;
+        }
         const currentActivity = callbacks.getCardLastActivityAt(target);
-        const targetCard = callbacks.listCards().find((c) => c.id === target);
-        const submitStartedPattern = targetCard?.provider
-          ? providerCapacity(targetCard.provider)?.delivery.submitStartedPattern
-          : undefined;
+        const pasteStateNow = callbacks.getCardWriteReadiness(target);
+        const readlineAccepted =
+          targetRole === "shell" && typeof pasteStateNow?.bracketedPasteOffEvents === "number"
+            ? readlineAcceptedSince(pasteStateBefore, { offEvents: pasteStateNow.bracketedPasteOffEvents })
+            : null;
 
         previousResult = decideSubmitCheck({
           screenText: check.text,
@@ -1272,7 +1304,10 @@ export function createMessageBus(
           hasNewActivitySinceWrite:
             typeof activityAtWrite !== "number" || typeof currentActivity !== "number" || currentActivity > activityAtWrite,
           submitStartedPattern,
+          targetRole,
+          readlineAccepted,
         });
+        confirm.result = previousResult;
         if (previousResult === "sent") break;
         // "unsent" → next iteration presses Enter again.
         // "unknown" → next iteration waits/re-reads only (no Enter).
@@ -1281,7 +1316,17 @@ export function createMessageBus(
       // composer for the next delivery to concatenate with. Ctrl+U×2.
       if (previousResult !== "sent") {
         writeDelivery(composerClearSequence(), "composer_clear");
+        confirm.composerCleared = true;
+        // §0: "falha silenciosa foi o que fez isso passar despercebido".
+        // The verdict also travels back through `get_delivery`; this line
+        // is for the human reading the main-process log.
+        console.warn(
+          `[message-bus] delivery to card ${target} not confirmed (${confirm.result}) after ${confirm.attempts} attempt(s), ${confirm.enters} Enter(s); composer cleared`,
+        );
       }
+    } catch (err) {
+      confirm.result = "error";
+      console.warn(`[message-bus] delivery to card ${target} threw:`, err);
     } finally {
       if (deliveryStarted) {
         const ended = callbacks.endCardDelivery?.(target);
@@ -1295,6 +1340,7 @@ export function createMessageBus(
         }
       }
     }
+    return confirm;
   }
 
   /** Peek why THIS enqueue would sit at human/TUI rhythm. Does not wait.
@@ -1339,13 +1385,27 @@ export function createMessageBus(
     deliveryRecords.set(id, record);
 
     const previous = deliveryQueues.get(target) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => deliverCard(target, text));
-    deliveryQueues.set(target, current);
-    const done = current.finally(() => {
-      record.delivery = "delivered";
-      delete record.reason;
-      if (deliveryQueues.get(target) === current) deliveryQueues.delete(target);
-    });
+    // Settled state comes from the loop's verdict. `deliverCard` already
+    // converts its own throws into `result: "error"`; the rejection arm
+    // here only guards the FIFO itself from ever wedging on a surprise.
+    const done: Promise<void> = previous
+      .catch(() => undefined)
+      .then(() => deliverCard(target, text))
+      .then(
+        (confirm) => {
+          record.confirm = confirm;
+          record.delivery = decideDeliveryOutcome(confirm.result);
+        },
+        () => {
+          record.confirm = { result: "error", attempts: 0, enters: 0, composerCleared: false };
+          record.delivery = "unconfirmed";
+        },
+      )
+      .finally(() => {
+        delete record.reason;
+        if (deliveryQueues.get(target) === done) deliveryQueues.delete(target);
+      });
+    deliveryQueues.set(target, done);
 
     return {
       receipt: { ok: true, delivery: "queued", ...(reason ? { reason } : {}), id },
@@ -1679,6 +1739,7 @@ export function createMessageBus(
         ok: true,
         delivery: record.delivery,
         ...(record.reason ? { reason: record.reason } : {}),
+        ...(record.confirm ? { confirm: record.confirm } : {}),
         id: record.id,
         target: record.target,
       };

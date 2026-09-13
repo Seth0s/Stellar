@@ -20,6 +20,11 @@ import {
   updateBracketedPasteMode,
   initialBracketedPasteModeState,
   incompletePrivateModeSuffix,
+  deliveryNeedle,
+  lastNeedleRow,
+  decideShellSubmitCheck,
+  decideDeliveryOutcome,
+  readlineAcceptedSince,
   HUMAN_INPUT_GATE_MAX_AGE_MS,
   WRITE_READY_QUIET_MS,
   WRITE_READY_MAX_WAIT_MS,
@@ -259,6 +264,157 @@ describe("decideSubmitCheck", () => {
         hasNewActivitySinceWrite: true,
       }),
     ).toBe("sent");
+  });
+});
+
+// Enxutação 2026-09-13 — "endurecer a confirmação depois de encolher os
+// chamadores": alvo bash ganha regra própria e o veredito do laço vira
+// estado de entrega em vez de ser descartado.
+describe("deliveryNeedle", () => {
+  it("curto: texto inteiro; agente: prefixo de 24; shell: sufixo de 24 (linha do cursor)", () => {
+    expect(deliveryNeedle("ok")).toBe("ok");
+    expect(deliveryNeedle("ok", "shell")).toBe("ok");
+    const long = "echo alpha beta gamma delta epsilon zeta";
+    expect(deliveryNeedle(long)).toBe(long.slice(0, 24));
+    expect(deliveryNeedle(long, "agent")).toBe(long.slice(0, 24));
+    expect(deliveryNeedle(long, "shell")).toBe(long.slice(-24));
+    // Normaliza espaços/quebras antes de cortar, igual ao needle antigo.
+    expect(deliveryNeedle("a\n  b\tc", "shell")).toBe("a b c");
+  });
+});
+
+describe("lastNeedleRow", () => {
+  it("devolve a linha do FIM da última ocorrência", () => {
+    expect(lastNeedleRow(["$ echo hi", "hi", "$ "], "echo hi")).toBe(0);
+    expect(lastNeedleRow(["$ echo hi", "hi", "$ echo hi"], "echo hi")).toBe(2);
+    expect(lastNeedleRow(["nada", "aqui"], "echo hi")).toBe(-1);
+  });
+
+  it("needle pode cruzar quebra de linha (paste multi-linha ecoado em várias rows)", () => {
+    expect(lastNeedleRow(["$ line one", "line two"], "one line two")).toBe(1);
+  });
+
+  it("needle curto colado em caractere de palavra/path NÃO é o eco (`ls` dentro de ~/tools$)", () => {
+    expect(lastNeedleRow(["lucas@host:~/tools$"], "ls")).toBe(-1);
+    expect(lastNeedleRow(["lucas@host:~/tools$ ls", "a b", "lucas@host:~/tools$"], "ls")).toBe(0);
+  });
+
+  it("needle longo é substring pura — sufixo de shell é cortado no meio do token", () => {
+    expect(lastNeedleRow(["$ echo xxxxxxxxxx", "xxxx fim-do-comando-aqui"], "xxxx fim-do-comando-aqui")).toBe(1);
+  });
+});
+
+describe("decideShellSubmitCheck / decideSubmitCheck(targetRole: shell)", () => {
+  const prompt = "lucas@host:~/Stellar$";
+
+  it("comando ecoado com saída/prompt abaixo => sent (a regra de composer lia isto como unsent)", () => {
+    const after = [`${prompt} echo mcp-smoke-$((1+1))`, "mcp-smoke-2", prompt].join("\n");
+    const needle = deliveryNeedle("echo mcp-smoke-$((1+1))", "shell");
+    expect(decideShellSubmitCheck({ screenText: after, sentNeedle: needle, hasNewActivitySinceWrite: true })).toBe("sent");
+    expect(
+      decideSubmitCheck({ screenText: after, screenTextBeforeWrite: prompt, sentNeedle: needle, hasNewActivitySinceWrite: true, targetRole: "shell" }),
+    ).toBe("sent");
+    // Controle: a MESMA tela pela regra de agente é "unsent" — era o que
+    // disparava 4 Enters + Ctrl+U em toda entrega para bash.
+    expect(
+      decideSubmitCheck({ screenText: after, screenTextBeforeWrite: prompt, sentNeedle: deliveryNeedle("echo mcp-smoke-$((1+1))"), hasNewActivitySinceWrite: true }),
+    ).toBe("unsent");
+  });
+
+  it("comando parado na linha do prompt, readline em 2004h sem aceitar => unsent (Enter engolido)", () => {
+    const after = [prompt, `${prompt} echo mcp-smoke-$((1+1))`].join("\n");
+    const needle = deliveryNeedle("echo mcp-smoke-$((1+1))", "shell");
+    expect(decideShellSubmitCheck({ screenText: after, sentNeedle: needle, hasNewActivitySinceWrite: true, readlineAccepted: false })).toBe("unsent");
+  });
+
+  it("mesma tela SEM sinal de readline (programa em foreground ecoando) => unknown, não unsent", () => {
+    // Medido ao vivo: `python3 sink.py` ecoa o texto e engole Enter — a
+    // regra de tela sozinha lia "unsent" e mandava 3 Enters a mais pra
+    // dentro do programa. Sem readline por baixo, não há o que retentar.
+    const after = [`${prompt} python3 sink.py`, "HOLD-STELLAR texto que o sink ecoou"].join("\n");
+    const needle = deliveryNeedle("HOLD-STELLAR texto que o sink ecoou", "shell");
+    expect(decideShellSubmitCheck({ screenText: after, sentNeedle: needle, hasNewActivitySinceWrite: true })).toBe("unknown");
+    expect(decideShellSubmitCheck({ screenText: after, sentNeedle: needle, hasNewActivitySinceWrite: true, readlineAccepted: null })).toBe("unknown");
+  });
+
+  it("readline aceitou a linha (2004l) => sent mesmo com comando silencioso e nada abaixo do eco", () => {
+    const after = [prompt, `${prompt} sleep 30`].join("\n");
+    const needle = deliveryNeedle("sleep 30", "shell");
+    expect(decideShellSubmitCheck({ screenText: after, sentNeedle: needle, hasNewActivitySinceWrite: true, readlineAccepted: true })).toBe("sent");
+    expect(
+      decideSubmitCheck({ screenText: after, screenTextBeforeWrite: prompt, sentNeedle: needle, hasNewActivitySinceWrite: true, targetRole: "shell", readlineAccepted: true }),
+    ).toBe("sent");
+  });
+
+  it("tela mostra saída abaixo do eco => sent mesmo com readlineAccepted=false (TUI com 2004h dentro de um card bash)", () => {
+    const after = [`${prompt} claude`, "> mensagem para o claude manual", "  Working", "esc to interrupt"].join("\n");
+    const needle = deliveryNeedle("mensagem para o claude manual", "shell");
+    expect(decideShellSubmitCheck({ screenText: after, sentNeedle: needle, hasNewActivitySinceWrite: true, readlineAccepted: false })).toBe("sent");
+  });
+
+  it("comando longo quebrado em duas rows, não submetido => unsent (sufixo está na row do cursor)", () => {
+    const text = "echo " + "x".repeat(70) + " fim-do-comando-aqui";
+    const rows = [`${prompt} echo ${"x".repeat(60)}`, `${"x".repeat(10)} fim-do-comando-aqui`];
+    const needle = deliveryNeedle(text, "shell");
+    expect(decideShellSubmitCheck({ screenText: rows.join("\n"), sentNeedle: needle, hasNewActivitySinceWrite: true, readlineAccepted: false })).toBe("unsent");
+    // Mesma tela + prompt novo abaixo => sent.
+    expect(decideShellSubmitCheck({ screenText: [...rows, prompt].join("\n"), sentNeedle: needle, hasNewActivitySinceWrite: true, readlineAccepted: false })).toBe("sent");
+  });
+
+  it("eco rolou pra fora da janela: sent com atividade, unknown sem", () => {
+    const after = ["saida 1", "saida 2", "saida 3", prompt].join("\n");
+    const needle = deliveryNeedle("npm test -- --run tudo", "shell");
+    expect(decideShellSubmitCheck({ screenText: after, sentNeedle: needle, hasNewActivitySinceWrite: true })).toBe("sent");
+    expect(decideShellSubmitCheck({ screenText: after, sentNeedle: needle, hasNewActivitySinceWrite: false })).toBe("unknown");
+  });
+
+  it("aviso curto (ok) parado no prompt => unsent; executado => sent", () => {
+    expect(decideShellSubmitCheck({ screenText: `${prompt} ok`, sentNeedle: "ok", hasNewActivitySinceWrite: true, readlineAccepted: false })).toBe("unsent");
+    expect(
+      decideShellSubmitCheck({ screenText: [`${prompt} ok`, "bash: ok: command not found", prompt].join("\n"), sentNeedle: "ok", hasNewActivitySinceWrite: true }),
+    ).toBe("sent");
+  });
+});
+
+describe("readlineAcceptedSince / offEvents (sinal 2004l medido no bash 5.3)", () => {
+  it("prompt em 2004h antes + 2004l depois => aceitou; sem 2004l => não; prompt fora de 2004h => null", () => {
+    expect(readlineAcceptedSince({ enabled: true, offEvents: 3 }, { offEvents: 4 })).toBe(true);
+    expect(readlineAcceptedSince({ enabled: true, offEvents: 3 }, { offEvents: 3 })).toBe(false);
+    expect(readlineAcceptedSince({ enabled: false, offEvents: 3 }, { offEvents: 4 })).toBeNull();
+    expect(readlineAcceptedSince(null, { offEvents: 4 })).toBeNull();
+    expect(readlineAcceptedSince({ enabled: true, offEvents: 3 }, null)).toBeNull();
+  });
+
+  it("updateBracketedPasteMode conta 2004l e resets, nunca 2004h; sobrevive a chunk partido", () => {
+    let state = initialBracketedPasteModeState();
+    expect(state.offEvents).toBe(0);
+    // Sequência real medida: prompt, Enter aceita (2004l), prompt volta (2004h).
+    state = updateBracketedPasteMode(state, "\x1b[?2004hP$ ");
+    expect(state.offEvents).toBe(0);
+    state = updateBracketedPasteMode(state, "\r\n\x1b[?2004l\r");
+    expect(state.offEvents).toBe(1);
+    state = updateBracketedPasteMode(state, "\x1b[?2004hP$ ");
+    expect(state.offEvents).toBe(1);
+    expect(state.enabled).toBe(true);
+    // Partido entre chunks: só conta quando completa, e conta uma vez.
+    state = updateBracketedPasteMode(state, "\x1b[?20");
+    expect(state.offEvents).toBe(1);
+    state = updateBracketedPasteMode(state, "04l");
+    expect(state.offEvents).toBe(2);
+    // Reset também é "modo saiu".
+    state = updateBracketedPasteMode(state, "\x1bc");
+    expect(state.offEvents).toBe(3);
+  });
+});
+
+describe("decideDeliveryOutcome", () => {
+  it("sent => delivered; unsent => failed; o resto => unconfirmed", () => {
+    expect(decideDeliveryOutcome("sent")).toBe("delivered");
+    expect(decideDeliveryOutcome("unsent")).toBe("failed");
+    expect(decideDeliveryOutcome("unknown")).toBe("unconfirmed");
+    expect(decideDeliveryOutcome("read-failed")).toBe("unconfirmed");
+    expect(decideDeliveryOutcome("card-gone")).toBe("unconfirmed");
+    expect(decideDeliveryOutcome("error")).toBe("unconfirmed");
   });
 });
 
