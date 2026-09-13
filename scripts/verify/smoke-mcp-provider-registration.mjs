@@ -78,6 +78,19 @@ try {
   check("spawnar um card cursor registra o stellar no config global", after.mcpServers?.stellar?.command, SHIM);
   check("...apontando pro shim stdio, não pra uma URL com porta efêmera", /stellar-mcp$/.test(after.mcpServers?.stellar?.command ?? ""), true);
   check("...e MERGEIA: o servidor que o usuário já tinha continua lá", after.mcpServers?.outro?.command, "algum-outro-servidor");
+  // 2026-09-13 — o cursor faz whitelist do ambiente do processo MCP (medido
+  // em /proc: o shim recebia 10 vars, nenhuma AGENT_CANVAS_*). O que
+  // atravessa é o `env` da entrada, interpolado por processo com
+  // `${env:VAR}`; sem isto o shim responde offline dentro de um card vivo.
+  check(
+    "...e carrega o env interpolado que a whitelist do cursor derruba (MCP_URL, CARD_ID, NODE)",
+    JSON.stringify(after.mcpServers?.stellar?.env),
+    JSON.stringify({
+      AGENT_CANVAS_MCP_URL: "${env:AGENT_CANVAS_MCP_URL}",
+      AGENT_CANVAS_CARD_ID: "${env:AGENT_CANVAS_CARD_ID}",
+      AGENT_CANVAS_NODE: "${env:AGENT_CANVAS_NODE}",
+    }),
+  );
 
   // Idempotência: um segundo card não deve reescrever nada. Um marcador
   // fora de `mcpServers` sobrevive se (e só se) ninguém regravou o arquivo.

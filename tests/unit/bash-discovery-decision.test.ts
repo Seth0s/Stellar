@@ -16,6 +16,7 @@ describe("decideBashCardDiscovery (capacity-derived §0 + §2.1 points 3–4)", 
       scrollbackTip: BASH_CARD_DISCOVERY_TIP,
       spawnBlock: null,
       reportDiscovery: "not_applicable",
+      reportChannel: "acbridge",
       nestedAgentAutoDiscovery: "none",
       nestedIdentity: "known_gap",
     });
@@ -27,6 +28,7 @@ describe("decideBashCardDiscovery (capacity-derived §0 + §2.1 points 3–4)", 
         scrollbackTip: null,
         spawnBlock: null,
         reportDiscovery: "system_prompt",
+        reportChannel: "mcp",
         nestedAgentAutoDiscovery: "full",
         nestedIdentity: "card_is_self",
       });
@@ -39,6 +41,7 @@ describe("decideBashCardDiscovery (capacity-derived §0 + §2.1 points 3–4)", 
         scrollbackTip: AGENT_SCROLLBACK_DISCOVERY_TIP,
         spawnBlock: null,
         reportDiscovery: "scrollback",
+        reportChannel: "mcp",
         nestedAgentAutoDiscovery: "full",
         nestedIdentity: "card_is_self",
       });
@@ -50,13 +53,17 @@ describe("decideBashCardDiscovery (capacity-derived §0 + §2.1 points 3–4)", 
       scrollbackTip: null,
       spawnBlock: REPORT_DISCOVERY_UNREACHABLE_TIP,
       reportDiscovery: "unreachable",
+      reportChannel: "unreachable",
       nestedAgentAutoDiscovery: "none",
       nestedIdentity: "known_gap",
     });
   });
 
-  it("agent scrollback tip teaches acbridge report, never a URL", () => {
+  it("agent scrollback tip states the single rule (catalog → report tool, else acbridge report with verdict), never a URL", () => {
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("acbridge report");
+    expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("`report`");
+    expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("catalog");
+    expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("`verdict`");
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).toContain("stellar");
     expect(AGENT_SCROLLBACK_DISCOVERY_TIP).not.toMatch(/https?:\/\//);
   });

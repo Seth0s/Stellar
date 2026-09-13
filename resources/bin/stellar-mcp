@@ -1,5 +1,5 @@
 #!/bin/sh
-":" //# ; if [ -n "${AGENT_CANVAS_SHIM_REEXEC-}" ]; then echo "stellar: AGENT_CANVAS_NODE='${AGENT_CANVAS_NODE-}' nao e um interpretador node" >&2; exit 127; fi; AGENT_CANVAS_SHIM_REEXEC=1 ELECTRON_RUN_AS_NODE=1 exec "${AGENT_CANVAS_NODE:-node}" "$0" "$@"
+":" //# ; if [ -n "${AGENT_CANVAS_SHIM_REEXEC-}" ]; then echo "stellar: AGENT_CANVAS_NODE='${AGENT_CANVAS_NODE-}' nao e um interpretador node" >&2; exit 127; fi; case "${AGENT_CANVAS_NODE-}" in '${'*) AGENT_CANVAS_NODE=;; esac; AGENT_CANVAS_SHIM_REEXEC=1 ELECTRON_RUN_AS_NODE=1 exec "${AGENT_CANVAS_NODE:-node}" "$0" "$@"
 // Polyglot sh/node deliberado, não um acidente (2026-09-08), e a ORDEM
 // das duas linhas acima é obrigatória. O shebang `#!/usr/bin/env node`
 // que estava aqui exigia `node` no PATH do processo que lança este
@@ -19,10 +19,46 @@
 // (quebrado e corrigido ao vivo escrevendo isto).
 //
 // `AGENT_CANVAS_NODE` é o binário do próprio Electron, injetado por
-// pty-registry.ts em todo processo spawnado e herdado daí pela CLI que
-// lança este shim; `node` do PATH é o fallback para quando o shim roda
-// fora do Stellar, onde o PATH é rico. `ELECTRON_RUN_AS_NODE` é setado
-// aqui mesmo para não depender de quem lançou; o node normal ignora.
+// pty-registry.ts em todo processo spawnado; `node` do PATH é o fallback
+// para quando o shim roda fora do Stellar, onde o PATH é rico.
+// `ELECTRON_RUN_AS_NODE` é setado aqui mesmo para não depender de quem
+// lançou; o node normal ignora.
+//
+// O `case` na linha 2 descarta um `AGENT_CANVAS_NODE` que ainda seja o
+// literal `${env:AGENT_CANVAS_NODE}` — ver "COMO O AMBIENTE CHEGA" abaixo:
+// é o que o cursor entrega quando a variável não existe no processo dele
+// (fora de um card). Sem a guarda o `exec` falha com "not found" e a CLI
+// do usuário mostra uma linha vermelha em toda sessão fora do Stellar
+// (medido 2026-09-13).
+//
+// COMO O AMBIENTE CHEGA (medido em /proc em 2026-09-13, e é o motivo de
+// nenhum card cursor jamais ter tido as tools): o cursor NÃO herda o
+// ambiente ao processo MCP — é whitelist. O processo `agent` tem ~70
+// variáveis (com todas as AGENT_CANVAS_*); o shim filho recebe 10
+// (`SHELL PWD LOGNAME HOME TERM USER SHLVL PATH` + as duas que a própria
+// linha 2 cria). Nem `AGENT_CANVAS_MCP_URL`, nem `CARD_ID`, nem `NODE`
+// passavam — o shim caía em `respondOffline` dentro de um card vivo, e o
+// conserto do PATH do Finder acima era derrotado pela mesma whitelist.
+//
+// O que atravessa a whitelist é o `env` da própria entrada em
+// `~/.cursor/mcp.json`, e o cursor interpola `${env:VAR}` ali a partir do
+// ambiente de CADA processo `agent` — então um config global e único dá
+// identidade por card. É isso que `mcp-registration.ts` escreve
+// (`cursorServerEntry`). Quando a variável NÃO existe no processo do
+// cursor, o literal `${env:VAR}` chega sem expandir (medido) — por isso
+// tanto a linha 2 quanto `fromEnv` abaixo tratam esse literal como
+// ausente, o que devolve exatamente o comportamento offline de antes.
+// Sem aprovação envolvida: o cursor só exige aprovação (por hash da
+// config já resolvida, guardada em `~/.cursor/projects/<cwd>/
+// mcp-approvals.json`) para o `.cursor/mcp.json` de PROJETO; para o
+// global ele nem instala o middleware de aprovação (lido no bundle da
+// CLI 2026.09.10). Um probe de projeto, portanto, subestima o que o
+// registro global consegue.
+//
+// agy e opencode: NÃO medido se repassam o ambiente ao shim (não havia
+// card vivo desses em 2026-09-13). Se também filtrarem, o sintoma é o
+// mesmo — `serverInfo: "stellar (offline)"` dentro de um card — e a
+// leitura de `/proc/<pid do shim>/environ` responde em um comando.
 // Servidor MCP em stdio — um proxy puro pro servidor MCP HTTP que a app já
 // roda (src/main/mcp-server.ts). Não define ferramenta nenhuma: repassa
 // `tools/list`, `tools/call` e tudo mais tal e qual, então a lista de
@@ -51,9 +87,12 @@
 //   AGENT_CANVAS_CARD_ID   o card em cujo terminal a CLI está rodando
 //
 // `pty-registry.ts` injeta os dois no spawn; a CLI do agente sobe este
-// script como processo filho, que herda o ambiente. A identidade chega
-// então pelo mesmo caminho que ela já chega pro claude/codex (o `?card=`
-// carimbado na URL), sem depender do modelo lembrar de preencher nada.
+// script como processo filho. Se a CLI herda o ambiente, os dois chegam
+// sozinhos; se ela filtra (o cursor filtra — ver "COMO O AMBIENTE CHEGA"
+// no topo), chegam pelo `env` interpolado da entrada de registro. Nos
+// dois casos a identidade entra pelo mesmo caminho que ela já entra pro
+// claude/codex (o `?card=` carimbado na URL), sem depender do modelo
+// lembrar de preencher nada.
 //
 // ESM e sem dependência nenhuma, mesma restrição do `acbridge` ao lado: é
 // um arquivo solto em `resources/bin`, empacotado como extraResource, sem
@@ -78,8 +117,18 @@
 // deixá-la no ambiente faria um neto que chame um shim ser recusado.
 delete process.env.AGENT_CANVAS_SHIM_REEXEC;
 
-const mcpUrl = process.env.AGENT_CANVAS_MCP_URL;
-const cardId = process.env.AGENT_CANVAS_CARD_ID || "";
+/** Um `${env:VAR}` que o cursor não conseguiu interpolar (variável ausente
+ * no processo dele) chega como literal, não como vazio — medido
+ * 2026-09-13. Tratá-lo como ausente é o que mantém `respondOffline` fora
+ * de um card; sem isto o shim tentaria um `fetch("${env:...}")`. */
+function fromEnv(name) {
+  const value = process.env[name];
+  if (!value || value.startsWith("${")) return "";
+  return value;
+}
+
+const mcpUrl = fromEnv("AGENT_CANVAS_MCP_URL");
+const cardId = fromEnv("AGENT_CANVAS_CARD_ID");
 
 function log(msg) {
   process.stderr.write(`stellar-mcp: ${msg}\n`);

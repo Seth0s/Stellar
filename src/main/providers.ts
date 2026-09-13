@@ -155,6 +155,32 @@ export function deriveReportDiscovery(capacity: ProviderCapacity): ReportDiscove
 }
 
 /**
+ * The channel a report is EXPECTED to arrive on for this provider —
+ * distinct from `ReportDiscovery`, which is how the agent LEARNS it must
+ * report. `mcp` means the `report` tool should be in the agent's catalog
+ * (registered either by an ephemeral flag in `buildArgs` or by the
+ * persistent config `mcp-registration.ts` writes); `acbridge` means the
+ * CLI on PATH is the only path; `unreachable` means neither.
+ *
+ * Derived, never declared: the same `capacity.mcp` that decides whether
+ * `ensureMcpRegistered` acts decides this, so the two cannot disagree.
+ * Both channels land in the same row (`promoteReportVerdict` in
+ * mcp-server.ts unifies them), which is what lets the agent-facing rule
+ * stay a single sentence: if `report` is in your catalog use it,
+ * otherwise `acbridge report` with `verdict` inside the JSON. The agent
+ * decides at runtime by looking at its own catalog — the derived value
+ * here is the expectation, not a promise the transport always kept (see
+ * the 2026-09-13 whitelist finding in mcp-registration.ts).
+ */
+export type ReportChannel = "mcp" | "acbridge" | "unreachable";
+
+export function deriveReportChannel(capacity: ProviderCapacity): ReportChannel {
+  if (capacity.mcp.mechanism !== "none") return "mcp";
+  if (capacity.acbridgeOnPath) return "acbridge";
+  return "unreachable";
+}
+
+/**
  * Argv fragment implied by `delivery` for a spawn brief. One place —
  * `buildArgs` must not invent a second form (positional vs flag vs
  * none). Empty when there is no brief or the provider cannot take one
@@ -220,10 +246,12 @@ export const ACBRIDGE_HINT =
   "close_card/snapshot/page-text/read_card/card_status/report/read_report — read " +
   "each tool's own description). Otherwise a CLI `acbridge` is on your " +
   "PATH with the same capabilities (`acbridge` with no args prints " +
-  "usage). If another card spawned you to do a task, call `report` (or " +
-  "`acbridge report '<json>'`) with a structured result when you finish " +
-  "it, even if you keep running afterward. Use these only when it " +
-  "genuinely helps the task at hand.";
+  "usage). If another card spawned you to do a task, report a structured " +
+  "result when you finish it, even if you keep running afterward: if a " +
+  "tool named `report` is in your tool catalog, call it; otherwise run " +
+  "`acbridge report '<json>'` with `verdict` inside the JSON. Same " +
+  "payload, same record either way. Use these only when it genuinely " +
+  "helps the task at hand.";
 
 /** The custom prompt describes the task; ACBRIDGE_HINT describes the runtime
  * environment. Keep both, in that order, separated by a blank line so the
@@ -415,8 +443,12 @@ export const PROVIDERS: ProviderDef[] = [
       role: "agent",
       systemPrompt: { mechanism: "none" },
       // Global ~/.cursor/mcp.json — headless `agent` DOES read it
-      // (measured 2026-09-12). Still insufficient alone for report
-      // discovery; see deriveReportDiscovery / capacity-contract header.
+      // (measured 2026-09-12). Why no cursor card ever saw the tools
+      // anyway, and the fix (`env` interpolation in the entry, because
+      // cursor whitelists the MCP child's environment): measured
+      // 2026-09-13, documented in mcp-registration.ts. Still insufficient
+      // alone for report DISCOVERY (no system-prompt flag) — see
+      // deriveReportDiscovery / capacity-contract header.
       mcp: { mechanism: "global-config" },
       acbridgeOnPath: true,
       delivery: {

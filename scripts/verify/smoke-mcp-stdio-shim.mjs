@@ -33,9 +33,12 @@ async function httpTool(name, args) {
   return JSON.parse(JSON.parse(line).result.content[0].text);
 }
 
-/** Um cliente MCP em stdio mínimo, falando com o shim como processo filho. */
-function startShim(env) {
-  const child = spawn(process.execPath, [SHIM], {
+/** Um cliente MCP em stdio mínimo, falando com o shim como processo filho.
+ * `viaShell` executa o arquivo pelo shebang (`#!/bin/sh`), como uma CLI
+ * de agente faz — é a única forma de exercitar a linha 2 do polyglot
+ * (o `exec` pro node e a guarda do literal `${env:AGENT_CANVAS_NODE}`). */
+function startShim(env, { viaShell = false } = {}) {
+  const child = spawn(viaShell ? SHIM : process.execPath, viaShell ? [] : [SHIM], {
     env: { ...process.env, ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -100,6 +103,7 @@ const { check, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 let shim = null;
 let offline = null;
+let literal = null;
 try {
   const page = await connectPage(CDP_PORT);
   await new Promise((r) => setTimeout(r, 1000));
@@ -141,6 +145,38 @@ try {
   check("tools/call de verdade atravessa o shim", payload.ok, true);
   check("...e enxerga o board real", payload.cards.some((c) => c.id === bashId), true);
 
+  // --- fora do Stellar: degrada, não quebra ---
+  // Um humano que rode `cursor-agent` fora da app tem o mesmo registro no
+  // config global apontando pra este script. Ele precisa completar o
+  // handshake e dizer "nenhuma ferramenta", nunca morrer no boot e virar
+  // uma linha vermelha sem explicação na CLI do agente.
+  offline = startShim({ AGENT_CANVAS_MCP_URL: "", AGENT_CANVAS_CARD_ID: "" });
+  const offInit = await offline.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } });
+  check("sem a app por perto, o handshake ainda completa", offInit.result?.serverInfo?.name, "stellar (offline)");
+  const offList = await offline.request("tools/list", {});
+  check("...com uma lista de ferramentas vazia em vez de um crash", (offList.result?.tools ?? []).length, 0);
+  offline.stop();
+
+  // --- fora do Stellar, pelo cursor: o literal `${env:VAR}` ---
+  // Medido 2026-09-13: quando a variável não existe no processo do cursor,
+  // a interpolação da entrada NÃO vira vazio — chega o literal. Sem a
+  // guarda (linha 2 do shim pro NODE, `fromEnv` pro resto) isso era
+  // `exec: ${env:AGENT_CANVAS_NODE}: not found` e uma linha vermelha em
+  // toda sessão do usuário fora de um card.
+  literal = startShim(
+    {
+      AGENT_CANVAS_MCP_URL: "${env:AGENT_CANVAS_MCP_URL}",
+      AGENT_CANVAS_CARD_ID: "${env:AGENT_CANVAS_CARD_ID}",
+      AGENT_CANVAS_NODE: "${env:AGENT_CANVAS_NODE}",
+    },
+    { viaShell: true },
+  );
+  const litInit = await literal.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } });
+  check("com os literais `${env:...}` não expandidos, o handshake ainda completa offline", litInit.result?.serverInfo?.name, "stellar (offline)");
+  const litList = await literal.request("tools/list", {});
+  check("...e a lista é vazia, não um fetch numa URL inválida", (litList.result?.tools ?? []).length, 0);
+  literal.stop();
+
   // --- identidade: o ponto todo do shim ---
   // Liga o modo autônomo e chama uma tool que exige saber QUEM está
   // chamando, SEM passar callerCardId. Se o shim não carimbasse o
@@ -172,20 +208,10 @@ try {
   check("o shim carrega a identidade do card — nenhum modal aparece", await hasModal(page), false);
   const opened = JSON.parse((await openPromise).result.content[0].text);
   check("...e a chamada resolve ok:true sozinha", opened.ok, true);
-
-  // --- fora do Stellar: degrada, não quebra ---
-  // Um humano que rode `cursor-agent` fora da app tem o mesmo registro no
-  // config global apontando pra este script. Ele precisa completar o
-  // handshake e dizer "nenhuma ferramenta", nunca morrer no boot e virar
-  // uma linha vermelha sem explicação na CLI do agente.
-  offline = startShim({ AGENT_CANVAS_MCP_URL: "", AGENT_CANVAS_CARD_ID: "" });
-  const offInit = await offline.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } });
-  check("sem a app por perto, o handshake ainda completa", offInit.result?.serverInfo?.name, "stellar (offline)");
-  const offList = await offline.request("tools/list", {});
-  check("...com uma lista de ferramentas vazia em vez de um crash", (offList.result?.tools ?? []).length, 0);
 } finally {
   shim?.stop();
   offline?.stop();
+  literal?.stop();
   finish();
   await stopApp(app);
 }
