@@ -84,3 +84,52 @@ describe("resolveSpawnBrief", () => {
     });
   });
 });
+
+// `role` (task_cards.role, 2026-09-13). O reviewer é a ÚNICA exceção da
+// recusa taskId+brief, e pelo motivo dela, não contra: o prompt da task é
+// o enunciado do trabalho, e um revisor não está sendo mandado fazer o
+// trabalho — entregar o prompt a ele spawnaria um segundo implementador.
+describe("resolveSpawnBrief com role", () => {
+  it("role sem taskId: recusa — papel é de um card NUMA task", () => {
+    expect(resolveSpawnBrief({ role: "reviewer", brief: "review it" }, { findTask: () => undefined })).toEqual({
+      ok: false,
+      error: 'role "reviewer" only applies together with taskId — a role is what a card does ON a task',
+    });
+    expect(resolveSpawnBrief({ role: "implementer" }, { findTask: () => undefined }).ok).toBe(false);
+  });
+
+  it("implementer explícito = default: brief é o prompt da task, brief junto recusado", () => {
+    expect(resolveSpawnBrief({ taskId: "t1", role: "implementer" }, lookup("do the work"))).toEqual({
+      ok: true,
+      brief: "do the work",
+      taskId: "t1",
+    });
+    expect(resolveSpawnBrief({ taskId: "t1", role: "implementer", brief: "extra" }, lookup("do the work"))).toEqual({
+      ok: false,
+      error: "pass taskId or brief, not both",
+    });
+  });
+
+  it("reviewer + brief: o brief livre é a ordem de revisão, o prompt da task NÃO é entregue", () => {
+    expect(resolveSpawnBrief({ taskId: "t1", role: "reviewer", brief: "review the diff of t1" }, lookup("implement X"))).toEqual({
+      ok: true,
+      brief: "review the diff of t1",
+      taskId: "t1",
+    });
+  });
+
+  it("reviewer sem brief: card abre mudo e vinculado — nunca recebe o prompt do implementador", () => {
+    expect(resolveSpawnBrief({ taskId: "t1", role: "reviewer" }, lookup("implement X"))).toEqual({
+      ok: true,
+      brief: undefined,
+      taskId: "t1",
+    });
+  });
+
+  it("reviewer com taskId inexistente: recusa nomeando o id", () => {
+    expect(resolveSpawnBrief({ taskId: "missing", role: "reviewer", brief: "r" }, lookup("x"))).toEqual({
+      ok: false,
+      error: 'no such task "missing"',
+    });
+  });
+});

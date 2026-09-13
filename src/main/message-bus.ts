@@ -25,8 +25,23 @@ import {
 } from "./report-retry-decision";
 import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
 import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
+import {
+  TASK_CARD_IMPLEMENTER_ROLE,
+  TASK_CARD_REVIEWER_ROLE,
+  TASK_CARD_ROLES,
+  TASK_PURPOSES,
+  normalizeTaskCardRole,
+  normalizeTaskPurpose,
+} from "../task-purpose";
 import { fillReportTaskId, resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { promoteReportVerdict } from "./report-verdict-decision";
+import {
+  ACBRIDGE_PROTOCOL,
+  checkAcbridgeProtocol,
+  decideAcbridgeProtocol,
+  stripProtocolStamp,
+  type ProtocolCheck,
+} from "./acbridge-protocol-decision";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
@@ -313,6 +328,9 @@ export type BusRequest =
    * preenche `cardId` sozinho a partir do próprio `AGENT_CANVAS_CARD_ID`
    * do processo que roda o hook, mesmo padrão de auto-fill de `report`. */
   | { cmd: "turn_complete"; cardId?: string }
+  /** Handshake de versão (`acbridge version`). Só existe no caminho do
+   * socket — resolvido antes do dispatcher, ver acbridge-protocol-decision.ts. */
+  | { cmd: "hello" }
   // `verdict` — DESIGN-BACKLOG.md §2.1 decisão 9: campo real e opcional
   // do protocolo (não mais só uma convenção informal dentro do JSON livre
   // de `report`), para não quebrar quem já reporta sem mandar nada.
@@ -341,6 +359,13 @@ export type BusRequest =
       // — nenhuma UI ainda o escreve, de propósito (ver o relatório
       // final).
       suggestedOrder?: number;
+      /** `tasks.purpose` — what the task IS (`investigate|implement|
+       * measure|fix`), written ONCE here. Deliberately absent from
+       * `update_task`: the store's ON CONFLICT omits the column, so no
+       * later write can relabel it. Omitted = `null` (NORMAL, empty chip).
+       * An unknown value is REFUSED, never normalized to null or to a
+       * default — same principle as `spawn_agent`'s effort check. */
+      purpose?: string;
     }
   | {
       cmd: "update_task";
@@ -372,6 +397,14 @@ export type BusRequest =
   // existente muda).
   | { cmd: "list_tasks"; boardId?: string }
   | { cmd: "get_task"; taskId?: string }
+  /** `task_cards.role` for a card that ALREADY exists (the other write
+   * path is `spawn_agent({taskId, role})`, for a card born for the task).
+   * `implementer` also makes the card the task's principal `card_id`
+   * (the one `report`'s retry/failure mechanics key off); `reviewer`
+   * only adds the role row and leaves `card_id` alone — a reviewer's
+   * `{ok:false}` report is a verdict, not the task failing. Role omitted
+   * = implementer; unknown role = REFUSED. */
+  | { cmd: "link_task_card"; taskId?: string; cardId?: string; role?: string; requesterId?: string }
   | {
       cmd: "request_task_status";
       taskId?: string;
@@ -424,6 +457,15 @@ export type BusRequest =
        * free `brief` (or no brief) as a first-class path. Refused together
        * with `brief`; a missing id is refused, not ignored. */
       taskId?: string;
+      /** `task_cards.role` of the new card on `taskId` (2026-09-13 —
+       * before this, 91/91 rows were the silent `implementer` default
+       * because no tool could say otherwise). Omitted = `implementer`
+       * (today's behavior: card becomes `card_id`, brief = task prompt).
+       * `reviewer` = role row only, `card_id` untouched, brief = the free
+       * `brief` (the review order), never the task prompt — see
+       * spawn-brief-decision.ts. Without `taskId`, or with an unknown
+       * value, the spawn is REFUSED. */
+      role?: string;
     }
   | {
       cmd: "spawn_card";
@@ -710,6 +752,12 @@ export function createMessageBus(
      * card can close a participation round without being the principal
      * card of the task. */
     listTaskCardsForCard: (cardId: string) => TaskCardRow[];
+    /** Explicit role write (`store.linkTaskCard`, the upsert that DOES
+     * overwrite an existing role — unlike `upsertTask`'s if-absent
+     * implementer). Called by `spawn_agent({taskId, role:"reviewer"})`
+     * and `link_task_card`; the wiring in index.ts also pushes the Fila
+     * so the ` ↔ review` chip updates without a reload. */
+    linkTaskCard: (taskId: string, cardId: string, role: string) => void;
     /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — mesmo
      * pass-through direto pro store das 3 linhas acima, mesmo motivo. O
      * cmd `report`/`get_report` (mais abaixo) continua sendo quem faz
@@ -979,6 +1027,9 @@ export function createMessageBus(
       cardId: row.card_id,
       boardId: row.board_id,
       cwd: row.cwd,
+      // What the task IS (`create_task.purpose`, write-once). `null` is
+      // the normal "not declared" — a reader must not infer one.
+      purpose: normalizeTaskPurpose(row.purpose),
       result: row.result_json ? JSON.parse(row.result_json) : null,
       deps: row.deps_json ? JSON.parse(row.deps_json) : [],
       retryCount: row.retry_count,
@@ -2114,7 +2165,21 @@ export function createMessageBus(
       if (boardId !== null && !callbacks.boardExists(boardId)) {
         return { ok: false, error: `no such board "${boardId}" — check list_tasks/the board list before retrying, or omit boardId for a bookkeeping-only task` };
       }
-      callbacks.upsertTask({
+      // `purpose` is write-once (the store's ON CONFLICT omits it), so
+      // this is the ONLY place a value can enter — which is exactly why
+      // a typo must be refused here, not normalized to null: the store's
+      // `normalizeTaskPurpose` fallback exists for legacy rows, and
+      // letting `"banana"` reach it would silently create a task with an
+      // empty chip that can never be corrected. Checked before anything
+      // is written (same shape as the boardId refusal above). Absent is
+      // still NORMAL and persists `null`.
+      if (req.purpose !== undefined && normalizeTaskPurpose(req.purpose) === null) {
+        return {
+          ok: false,
+          error: `purpose must be one of ${TASK_PURPOSES.map((p) => `"${p}"`).join(", ")} (or omitted), got "${String(req.purpose)}" — refusing to create rather than silently dropping the value; purpose cannot be fixed later`,
+        };
+      }
+      const created: TaskRow = {
         id,
         prompt: req.prompt ?? null,
         provider: req.provider ?? null,
@@ -2124,6 +2189,7 @@ export function createMessageBus(
         // Explicit only — never inferred from card/board/repo. Empty string
         // collapses to null (same as omitted): board-root fallback at dispatch.
         cwd: resolveTaskDispatchCwd(req.cwd) ?? null,
+        purpose: req.purpose ?? null,
         result_json: null,
         deps_json: req.deps ? JSON.stringify(req.deps) : null,
         retry_count: 0,
@@ -2141,8 +2207,19 @@ export function createMessageBus(
         // agente. Explícito aqui em vez de deixar pro default do store,
         // pelo mesmo motivo de "não adivinhar": este ponto SABE quem é.
         actor: "agent",
-      });
-      return { ok: true, taskId: id };
+      };
+      callbacks.upsertTask(created);
+      // Born already unblocked (2026-09-13): `deps` naming tasks that are
+      // ALL `done` at creation. The child's prompt is usually written
+      // after reading the parent's report, so this is the common shape —
+      // and until now nothing happened: `onTaskDone` fires on the dep's
+      // transition, which is in the past. Same dispatch path as that
+      // transition (`dispatchIfUnblocked`), never a second one; the same
+      // autonomous-board gate applies, so on a human-in-the-loop board the
+      // task simply stays `pending` as before. `listTasks()` is read AFTER
+      // the upsert so the check sees the deps' current status.
+      const dispatched = created.status === "pending" && created.deps_json ? dispatchIfUnblocked(created, callbacks.listTasks()) : false;
+      return { ok: true, taskId: id, dispatched };
     }
 
     if (req.cmd === "update_task") {
@@ -2181,6 +2258,10 @@ export function createMessageBus(
         if (!applied.ok) return applied;
         prompt = applied.prompt;
       }
+      // `purpose` is NOT read from `req` on purpose (acbridge spreads raw
+      // JSON into this request, so the key CAN arrive): the row keeps
+      // `existing.purpose`, and the store's ON CONFLICT omits the column
+      // anyway. Write-once means create_task is the only writer.
       const updated: TaskRow = {
         ...existing,
         prompt,
@@ -2195,12 +2276,16 @@ export function createMessageBus(
         statusProposed,
       };
       // DESIGN-BACKLOG.md §2.1 Decisão 8 — a precedência mora no choke
-      // point (`upsertTask` → `decideStatusWrite`). Side effects abaixo
-      // (onTaskDone) só disparam quando o status de fato MUDOU — um hold
-      // humano NÃO pode desbloquear dependentes como se a task tivesse
-      // chegado em done. The app never reassigns or respawns on fail.
+      // point (`upsertTask` → `decideStatusWrite`). `done` → dependentes
+      // NÃO é decidido aqui (2026-09-13): `callbacks.upsertTask` É o funil
+      // de index.ts (task-write-funnel.ts), que observa `statusChanged &&
+      // status === "done"` na decisão e chama `onTaskDone` — o MESMO
+      // gatilho que aprovar por botão, arrastar pra "concluído" e Allow
+      // recebem. Um hold humano continua não desbloqueando ninguém (a
+      // decisão vem com `statusChanged: false`). Chamar `onTaskDone` daqui
+      // também seria despachar duas vezes. The app never reassigns or
+      // respawns on fail.
       const decision = callbacks.upsertTask(updated);
-      if (decision.statusChanged && decision.status === "done" && existing.status !== "done") onTaskDone(req.taskId);
       const promptWritten = req.prompt !== undefined ? { prompt } : {};
       if (decision.warnAgent) {
         const warning = describeStatusHeldWarning(decision.status, decision.declaredStatus ?? req.status ?? decision.status);
@@ -2252,6 +2337,57 @@ export function createMessageBus(
       const task = callbacks.getTask(req.taskId);
       if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
       return { ok: true, task: serializeTask(task) };
+    }
+
+    if (req.cmd === "link_task_card") {
+      // Second writer of `task_cards.role` (the first is `spawn_agent`
+      // with `role`), for the pattern "reuse a card that is already
+      // alive as this task's reviewer". Every refusal happens before any
+      // write; nothing is normalized in silence (acbridge reaches this
+      // without zod, so the enum is re-checked here).
+      if (!req.taskId) return { ok: false, error: "missing taskId" };
+      if (!req.cardId) return { ok: false, error: "missing cardId" };
+      const task = callbacks.getTask(req.taskId);
+      if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
+      if (!callbacks.listCards().some((c) => c.id === req.cardId)) {
+        return { ok: false, error: `no open card with id "${req.cardId}"` };
+      }
+      const role = req.role === undefined ? TASK_CARD_IMPLEMENTER_ROLE : normalizeTaskCardRole(req.role);
+      if (role === null) {
+        return {
+          ok: false,
+          error: `role must be one of ${TASK_CARD_ROLES.map((r) => `"${r}"`).join(", ")} (or omitted for implementer), got "${String(req.role)}" — refusing to link rather than silently substituting a role`,
+        };
+      }
+      if (role === TASK_CARD_REVIEWER_ROLE) {
+        // A reviewer must not be the principal card: `report` keys the
+        // in-line retry budget and `accept_failure` → task failed off
+        // `tasks.card_id`, and a reviewer's `{ok:false}` is a verdict on
+        // someone else's work, not this task failing. Refuse instead of
+        // leaving the two tables disagreeing about the same card.
+        if (task.card_id === req.cardId) {
+          return {
+            ok: false,
+            error: `card "${req.cardId}" is task "${req.taskId}"'s principal card (cardId) — detach it first (update_task cardId: null) before linking it as reviewer`,
+          };
+        }
+        callbacks.linkTaskCard(req.taskId, req.cardId, role);
+        return { ok: true, taskId: req.taskId, cardId: req.cardId, role };
+      }
+      // Implementer IS the principal card — same write `spawn_agent
+      // {taskId}` and auto-dispatch make after a successful spawn
+      // (`card_id` + if-absent implementer row), status left alone. Then
+      // the explicit upsert, so a card previously recorded as reviewer
+      // really changes role ("trocar de papel é um upsert").
+      callbacks.upsertTask({
+        ...task,
+        card_id: req.cardId,
+        updated_at: Date.now(),
+        actor: "agent",
+        statusProposed: false,
+      });
+      callbacks.linkTaskCard(req.taskId, req.cardId, role);
+      return { ok: true, taskId: req.taskId, cardId: req.cardId, role };
     }
 
     if (req.cmd === "request_task_status") {
@@ -2488,12 +2624,22 @@ export function createMessageBus(
           error: `claude only accepts effort "low", "medium", "high", "xhigh", or "max", got "${req.effort}" — refusing to spawn rather than silently substituting a different value`,
         };
       }
+      // `role` (task_cards.role) — same refuse-don't-remap rule as effort,
+      // and checked before depth is spent. `undefined` keeps today's
+      // default (implementer); only an unknown string is refused.
+      const role = req.role === undefined ? null : normalizeTaskCardRole(req.role);
+      if (req.role !== undefined && role === null) {
+        return {
+          ok: false,
+          error: `role must be one of ${TASK_CARD_ROLES.map((r) => `"${r}"`).join(", ")} (or omitted for implementer), got "${String(req.role)}" — refusing to spawn rather than silently substituting a role`,
+        };
+      }
       // taskId vs brief is resolved here, before depth is spent and
       // before dispatch — a missing task or an ambiguous pair must not
       // open a mute card. The delivered text then goes through
       // `dispatchSpawnAgentRequest` (the one argv-vs-type split).
       const briefDecision = resolveSpawnBrief(
-        { taskId: req.taskId, brief: req.brief },
+        { taskId: req.taskId, brief: req.brief, role },
         { findTask: (id) => callbacks.getTask(id) },
       );
       if (!briefDecision.ok) return { ok: false, error: briefDecision.error };
@@ -2529,12 +2675,21 @@ export function createMessageBus(
           : await dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
       if (spawnResult.ok) {
         cardSpawnDepth.set(spawnResult.cardId, depth);
-        // Same link auto-dispatch writes after a successful spawn
-        // (`card_id` + task_cards implementer). Status is left alone
-        // (`statusProposed: false`):
-        // amarrar o card não é propor running, e um hold humano no
-        // pending não deve virar divergência colateral deste spawn.
-        if (briefDecision.taskId) {
+        if (briefDecision.taskId && role === TASK_CARD_REVIEWER_ROLE) {
+          // Reviewer: role row ONLY. `tasks.card_id` stays on whoever is
+          // implementing — `report` derives the in-line retry budget and
+          // `accept_failure` → task failed from `card_id`, and a
+          // reviewer's `{ok:false}` is a verdict on someone else's work,
+          // not this task failing. `recordParticipationRound` fans out
+          // through task_cards, so the reviewer's rounds/verdicts land
+          // with role "reviewer" (the Fila ` ↔ review` arrow reads this).
+          callbacks.linkTaskCard(briefDecision.taskId, spawnResult.cardId, role);
+        } else if (briefDecision.taskId) {
+          // Implementer (default): same link auto-dispatch writes after
+          // a successful spawn (`card_id` + task_cards implementer).
+          // Status is left alone (`statusProposed: false`): amarrar o
+          // card não é propor running, e um hold humano no pending não
+          // deve virar divergência colateral deste spawn.
           const latest = callbacks.getTask(briefDecision.taskId);
           if (latest) {
             callbacks.upsertTask({
@@ -2862,17 +3017,14 @@ export function createMessageBus(
     return dispatchSpawnAgentRequest(requestId, requesterId, params, true);
   }
 
-  /** DESIGN-BACKLOG.md item 60, peça 3 — called whenever a task reaches
-   * `done` (never `failed` — a dependent shouldn't start on top of a
-   * failed prerequisite). Finds every OTHER pending task whose
-   * `deps_json` names this one, and for each whose OWN deps are now all
-   * satisfied, auto-dispatches it — but only if that task's OWN board
-   * opted into autonomous mode; every other task is left untouched,
-   * exactly as before this engine existed (pure bookkeeping, an external
-   * orchestrator's problem). Depth is NOT tracked here — this is engine-
-   * initiated dispatch, never an agent asking to spawn another, so
-   * MAX_SPAWN_DEPTH's fork-bomb guard doesn't apply; the task DAG's own
-   * size is what bounds this. */
+  /** DESIGN-BACKLOG.md item 60, peça 3 — the dependents engine. A task
+   * reaching `done` (never `failed` — a dependent shouldn't start on top
+   * of a failed prerequisite) unblocks every OTHER pending task whose
+   * `deps_json` names it and whose OWN deps are now all satisfied — but
+   * only if that task's OWN board opted into autonomous mode; every other
+   * task is left untouched, exactly as before this engine existed (pure
+   * bookkeeping, an external orchestrator's problem). `onTaskDone` finds
+   * the candidates; `dispatchIfUnblocked` is the one dispatch path. */
   function buildTaskDispatchParams(task: TaskRow, provider: string, reason: string): SpawnQueueEntry["params"] {
     return {
       provider,
@@ -2890,37 +3042,64 @@ export function createMessageBus(
     };
   }
 
+  /** Called by the write funnel (index.ts → task-write-funnel.ts) — the
+   * ONE place that observes a task's status actually changing to `done`,
+   * whatever wrote it: `update_task` from an agent, the approve button, a
+   * drag to "concluído", Allow on a status ask. This function does not
+   * decide *whether* the task reached done; it trusts the funnel's
+   * `StatusWriteDecision` and only asks "who was waiting on this id?".
+   * Exposed on the bus's public surface for exactly that caller. */
   function onTaskDone(taskId: string) {
     const allTasks = callbacks.listTasks();
     for (const task of allTasks) {
-      if (task.status !== "pending" || !task.board_id) continue;
       const deps: string[] = task.deps_json ? JSON.parse(task.deps_json) : [];
       if (!deps.includes(taskId)) continue;
-      if (!callbacks.isBoardAutonomous(task.board_id)) continue;
-      const allDone = deps.every((depId) => allTasks.find((t) => t.id === depId)?.status === "done");
-      if (!allDone) continue;
-      const requestId = randomUUID();
-      const params = buildTaskDispatchParams(task, task.provider ?? "claude", `auto-dispatch: task ${task.id} (deps satisfied)`);
-      // Mark `running` right away (not after the promise settles) so a
-      // second, near-simultaneous `onTaskDone` call for a sibling dep
-      // can't also see this task as still `pending` and dispatch it
-      // twice — same race this guards against as `markWaiting`'s ref-
-      // count elsewhere in this file.
-      //
-      // Decisão 8 / review adversarial achado 1 — the store may HOLD this
-      // write when a human locked the dependent. Spawning after a held
-      // upsert is the decorative-lock bug: observe `statusChanged`
-      // before `autonomousSpawn`. Divergence is already signaled.
-      const decision = callbacks.upsertTask({ ...task, status: "running", updated_at: Date.now(), actor: "app" });
-      if (!decision.statusChanged) continue;
-      autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
-        if (result.ok) {
-          callbacks.upsertTask({ ...task, status: "running", card_id: result.cardId, updated_at: Date.now(), actor: "app" });
-        } else {
-          markTaskFailed(task, result.error, "spawn_failed");
-        }
-      });
+      dispatchIfUnblocked(task, allTasks);
     }
+  }
+
+  /** The single dispatch path for a dependent task. Two triggers reach
+   * it, never a third copy: a dep transitioning to `done` (`onTaskDone`
+   * above) and `create_task` with `deps` that are ALREADY done at birth
+   * (2026-09-13 — the child's prompt is usually written AFTER reading the
+   * parent's report, so this is the common case, and it used to declare
+   * the edge and do nothing). Same checks in both: the task's own board
+   * opted into autonomous mode, and EVERY dep is done. Depth is NOT
+   * tracked — engine-initiated, never an agent asking to spawn another,
+   * so MAX_SPAWN_DEPTH's fork-bomb guard doesn't apply; the DAG bounds it.
+   *
+   * Returns whether a spawn was actually issued (tests assert on it). */
+  function dispatchIfUnblocked(task: TaskRow, allTasks: TaskRow[]): boolean {
+    if (task.status !== "pending" || !task.board_id) return false;
+    const deps: string[] = task.deps_json ? JSON.parse(task.deps_json) : [];
+    if (deps.length === 0) return false;
+    if (!callbacks.isBoardAutonomous(task.board_id)) return false;
+    const allDone = deps.every((depId) => allTasks.find((t) => t.id === depId)?.status === "done");
+    if (!allDone) return false;
+    const requestId = randomUUID();
+    const params = buildTaskDispatchParams(task, task.provider ?? "claude", `auto-dispatch: task ${task.id} (deps satisfied)`);
+    // Mark `running` right away (not after the promise settles) so a
+    // second, near-simultaneous `onTaskDone` call for a sibling dep
+    // can't also see this task as still `pending` and dispatch it
+    // twice — same race this guards against as `markWaiting`'s ref-
+    // count elsewhere in this file. This write goes back through the
+    // funnel, which sees `running` (not `done`) and stops there — no
+    // recursion into `onTaskDone`.
+    //
+    // Decisão 8 / review adversarial achado 1 — the store may HOLD this
+    // write when a human locked the dependent. Spawning after a held
+    // upsert is the decorative-lock bug: observe `statusChanged`
+    // before `autonomousSpawn`. Divergence is already signaled.
+    const decision = callbacks.upsertTask({ ...task, status: "running", updated_at: Date.now(), actor: "app" });
+    if (!decision.statusChanged) return false;
+    autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
+      if (result.ok) {
+        callbacks.upsertTask({ ...task, status: "running", card_id: result.cardId, updated_at: Date.now(), actor: "app" });
+      } else {
+        markTaskFailed(task, result.error, "spawn_failed");
+      }
+    });
+    return true;
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 4 + "Falha TIPADA" — cause is an
@@ -2948,6 +3127,19 @@ export function createMessageBus(
 
   function resolveSpawnCard(requestId: string, result: SpawnCardResult) {
     pendingSpawnCards.get(requestId)?.resolve(result);
+  }
+
+  // Defasagem acbridge↔bus vai pro log do main UMA vez por forma
+  // (kind+versão), não a cada request — o Stop hook do Claude Code chama
+  // `acbridge turn-complete` a cada turno, e um acbridge antigo vivo
+  // inundaria o stderr sem acrescentar informação. O aviso pro AGENTE vai
+  // no `warning` da resposta, esse sim a cada request.
+  const protocolDriftLogged = new Set<string>();
+  function logProtocolDrift(check: ProtocolCheck, message: string) {
+    const key = `${check.kind}:${"theirs" in check ? check.theirs : ""}`;
+    if (protocolDriftLogged.has(key)) return;
+    protocolDriftLogged.add(key);
+    console.error("message-bus: protocolo acbridge —", message);
   }
 
   // allowHalfOpen: true — acbridge writes its request then immediately
@@ -2978,13 +3170,33 @@ export function createMessageBus(
       if (lines.length === 0) return;
       Promise.all(
         lines.map((line): Promise<unknown> => {
-          let req: BusRequest;
+          let parsed: unknown;
           try {
-            req = JSON.parse(line);
+            parsed = JSON.parse(line);
           } catch {
             return Promise.resolve({ ok: false, error: "invalid json" });
           }
-          return handleRequest(req);
+          // Único ponto em que um acbridge (ou cliente cru) entra no bus —
+          // é aqui, e só aqui, que a versão do protocolo é conferida. O
+          // caminho MCP chama `handleRequest` direto no mesmo processo/
+          // build e não tem defasagem possível. Ver o cabeçalho de
+          // acbridge-protocol-decision.ts pela política (aceita+avisa
+          // quando o acbridge é mais velho; recusa quando é mais novo).
+          const check = checkAcbridgeProtocol(parsed);
+          const decision = decideAcbridgeProtocol(check);
+          if (!decision.accept) {
+            logProtocolDrift(check, decision.error);
+            return Promise.resolve({ ok: false, error: decision.error });
+          }
+          if (decision.warning) logProtocolDrift(check, decision.warning);
+          const req = stripProtocolStamp(parsed) as BusRequest;
+          if (req.cmd === "hello") {
+            // Handshake explícito (`acbridge version`): devolve o
+            // protocolo do bus pra quem quiser conferir sem esperar um
+            // request real dar errado.
+            return Promise.resolve({ ok: true, protocol: ACBRIDGE_PROTOCOL, ...(decision.warning ? { warning: decision.warning } : {}) });
+          }
+          return handleRequest(req).then((res) => (decision.warning ? { ...res, warning: decision.warning } : res));
         }),
       ).then((results) => {
         socket.end(results.map((r) => JSON.stringify(r)).join("\n") + "\n");
@@ -3409,6 +3621,12 @@ export function createMessageBus(
     resolveCardExit,
     notifyConcurrencyCapChanged,
     notifyHumanMovedTask,
+    // Dependents engine entry point for the write funnel (index.ts →
+    // task-write-funnel.ts): the funnel detects `done` from the store's
+    // decision, this runs the dispatch. Same "avisa o motor" surface as
+    // `notifyConcurrencyCapChanged` above — index.ts never re-implements
+    // dispatch on its side.
+    onTaskDone,
     close,
   };
 }

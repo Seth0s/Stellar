@@ -37,6 +37,7 @@ import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
 import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
 import { describeStatusAskResolved } from "./status-write-decision";
+import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose } from "../task-purpose";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
@@ -1282,30 +1283,33 @@ function createWindow() {
     safeSend(win, "task-board-scope:changed", store.taskCountsByBoard());
   }
   // Choke point único pra toda gravação de task (agente via MCP/acbridge,
-  // motor interno de retry/auto-dispatch, OU o botão humano de aprovar
-  // conclusão abaixo) — `store.upsertTask` já grava a transição (actor
-  // chega dentro do próprio `task`, ver seu comentário grande em
-  // store.ts); só falta empurrar o board pra quem estiver com ele aberto
-  // e o rodapé de escopo de todo mundo.
-  function persistTask(task: TaskRow) {
-    const decision = store.upsertTask(task);
-    notifyTaskChanged(task.board_id);
-    notifyTaskScopeChanged();
-    return decision;
-  }
-  // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — review adversarial (rodada 3,
-  // achado 2). Irmão de `persistTask` acima, pro caso em que um único
-  // gesto de arraste precisa gravar MAIS de uma task (a arrastada +
-  // vizinhas que precisaram materializar `implicit_order` — ver
-  // `computeColumnDrop`, task-board-model.ts): `store.applyColumnDrop` é
-  // uma `db.transaction` (tudo-ou-nada), e o push acontece UMA vez só
-  // depois dela — nunca um `notifyTaskChanged`/`notifyTaskScopeChanged`
-  // por linha do lote.
-  function persistColumnDrop(dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]) {
-    store.applyColumnDrop(dragged, siblingImplicitOrders);
-    notifyTaskChanged(dragged.board_id);
-    notifyTaskScopeChanged();
-  }
+  // motor interno de retry/auto-dispatch, OU os três gestos humanos da
+  // Fila abaixo) — `store.upsertTask` já grava a transição (actor chega
+  // dentro do próprio `task`, ver seu comentário grande em store.ts); o
+  // funil empurra o board pra quem estiver com ele aberto, o rodapé de
+  // escopo de todo mundo, e — a partir da `StatusWriteDecision` que o
+  // store devolveu, nunca do que o chamador quis gravar — avisa o motor
+  // de dependentes quando a task de fato CHEGOU em `done`. Antes
+  // (2026-09-13) essa detecção morava só dentro de `update_task` no bus:
+  // aprovar por botão, arrastar pra "concluído" e Allow no modal gravavam
+  // `done` sem ninguém observar. Ver task-write-funnel.ts.
+  //
+  // `persistColumnDrop` — DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 (review
+  // adversarial rodada 3, achado 2): um único gesto de arraste pode gravar
+  // MAIS de uma task (a arrastada + vizinhas que materializam
+  // `implicit_order`, ver `computeColumnDrop`); `store.applyColumnDrop` é
+  // uma `db.transaction` e o push acontece UMA vez depois dela.
+  const { persistTask, persistColumnDrop } = createTaskWriteFunnel({
+    upsertTask: (task) => store.upsertTask(task),
+    applyColumnDrop: (dragged, siblings) => store.applyColumnDrop(dragged, siblings),
+    afterWrite: (boardId) => {
+      notifyTaskChanged(boardId);
+      notifyTaskScopeChanged();
+    },
+    // `messageBus` é criado logo abaixo com `persistTask` como callback —
+    // lookup por chamada, não captura, por isso o optional chaining.
+    onTaskDone: (taskId) => messageBus?.onTaskDone(taskId),
+  });
 
   messageBus = createMessageBus(sockPath, {
     // Achado ao vivo (2026-09-01): o `.filter(kind === "terminal")` que
@@ -1445,11 +1449,13 @@ function createWindow() {
     listTasksByBoard: (boardId) => store.listTasksByBoard(boardId),
     getTask: (id) => store.getTask(id),
     // Fase 2, peça 2 — era `store.upsertTask(task)` direto; `persistTask`
-    // (acima) é o MESMO efeito mais o push pro board aberto. Cobre TODO
-    // caminho que já passava por aqui: `create_task`/`update_task` (MCP),
-    // o motor de auto-dispatch (`onTaskDone`/`markTaskFailed`,
-    // message-bus.ts) e o botão humano de aprovar
-    // conclusão (`store:tasks:approve-completion` abaixo).
+    // (funil acima) é o MESMO efeito mais o push pro board aberto e a
+    // detecção de `done` → `onTaskDone`. Cobre TODO caminho que já passava
+    // por aqui: `create_task`/`update_task` (MCP), o motor de auto-dispatch
+    // (`dispatchIfUnblocked`/`markTaskFailed`, message-bus.ts) e os três
+    // gestos humanos da Fila abaixo (aprovar, arrastar, Allow). O bus NÃO
+    // chama `onTaskDone` por conta própria depois de `update_task` — seria
+    // a segunda cópia da regra que este funil elimina.
     upsertTask: (task) => persistTask(task),
     setStatusAsk: (taskId, ask) => {
       const result = store.setStatusAsk(taskId, ask);
@@ -1505,6 +1511,15 @@ function createWindow() {
       }
     },
     listTaskCardsForCard: (cardId) => store.listTaskCardsForCard(cardId),
+    // `task_cards.role` explicit write (`spawn_agent role` /
+    // `link_task_card`). Same push `persistTask` does: the Fila derives
+    // the ` ↔ review` arrow from these rows, so it must see the new one
+    // without a reload.
+    linkTaskCard: (taskId, cardId, role) => {
+      store.linkTaskCard(taskId, cardId, role);
+      const task = store.getTask(taskId);
+      if (task) notifyTaskChanged(task.board_id);
+    },
     listAllConnectors: () => store.listAllConnectors(),
     // A lacuna que este comentário descrevia (2026-09-09: `set_connector_kind`
     // gravava no banco e não avisava ninguém, então um board aberto só via

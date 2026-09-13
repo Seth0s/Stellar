@@ -185,6 +185,11 @@ export type TaskRow = {
    * Proposal of the task — what it IS (`investigate`/`implement`/`measure`/`fix`).
    * Written ONCE at create (`upsertTask` INSERT); the ON CONFLICT path
    * never lists this column, so a later `update_task` cannot relabel it.
+   * The writer is `create_task.purpose` (mcp-server.ts inputSchema +
+   * message-bus.ts handler, 2026-09-13), which REFUSES an unknown value
+   * before anything is inserted — so `normalizeTaskPurpose` below only
+   * ever sees a valid enum or absence from that path; its null fallback
+   * covers legacy rows and direct store callers.
    *
    * `null` is NORMAL, not a hole to fill: 2026-09-13 measured 91/91
    * `task_cards.role = implementer` (silent default) and 140/148
@@ -351,11 +356,16 @@ export type TaskTransitionRow = {
  * trocar de papel é um upsert, não uma segunda linha.
  *
  * `role: "reviewer"` is what the Fila ` ↔ review` arrow derives from.
- * Measured 2026-09-13: 0 of 91 rows were reviewer — `upsertTask` always
- * writes `implementer` (`upsertTaskCardIfAbsent`) and no MCP tool calls
- * `linkTaskCard`. The arrow is born without appearing until someone
- * actually records a reviewer (cheap path: `spawn_agent`/`create_task`
- * accept `role`, call `linkTaskCard` — mcp-server/message-bus, not here). */
+ * Measured 2026-09-13: 0 of 91 rows were reviewer — not disuse, there was
+ * no writer: `upsertTask` only writes the if-absent `implementer`
+ * (`upsertTaskCardIfAbsent`) and nothing called `linkTaskCard`. Same day,
+ * two MCP/acbridge writers were added (message-bus.ts): `spawn_agent`
+ * accepts `role` alongside `taskId`, and `link_task_card` sets a role on
+ * a card that already exists. Both call `linkTaskCard` for `reviewer`
+ * and validate against `TASK_CARD_ROLES` (task-purpose.ts), refusing
+ * anything else. A reviewer never becomes `tasks.card_id`: `report`
+ * derives the retry budget and task failure from that column, and a
+ * reviewer's `{ok:false}` is a verdict, not the task failing. */
 export type TaskCardRow = { task_id: string; card_id: string; role: string };
 
 /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
@@ -1584,13 +1594,23 @@ export function openStore(userDataDir: string) {
    * `Infinity`). `db.transaction` (better-sqlite3, síncrono) garante
    * tudo-ou-nada. O chamador (main/index.ts's `persistColumnDrop`) faz UM
    * push só depois desta função retornar, não um por linha — resolve
-   * também o "barulhento" do mesmo achado. */
-  const applyColumnDrop = db.transaction((dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]) => {
-    upsertTaskInternal(dragged);
-    for (const s of siblingImplicitOrders) {
-      setImplicitOrderStmt.run({ id: s.id, implicit_order: s.implicitOrder, updated_at: dragged.updated_at });
-    }
-  });
+   * também o "barulhento" do mesmo achado.
+   *
+   * Devolve a MESMA `StatusWriteDecision` que `upsertTask` devolve pra
+   * arrastada (2026-09-13): até então o retorno era descartado, e um drag
+   * pra "concluído" era um `done` que ninguém observava — os dependentes
+   * da task arrastada ficavam `pending` pra sempre (a 312d4c0a foi o caso
+   * medido). O funil (`task-write-funnel.ts`) lê `statusChanged`/`status`
+   * daqui exatamente como lê de `upsertTask`. */
+  const applyColumnDrop = db.transaction(
+    (dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]): StatusWriteDecision => {
+      const decision = upsertTaskInternal(dragged);
+      for (const s of siblingImplicitOrders) {
+        setImplicitOrderStmt.run({ id: s.id, implicit_order: s.implicitOrder, updated_at: dragged.updated_at });
+      }
+      return decision;
+    },
+  );
 
   // DESIGN-BACKLOG.md §2.1 "Log de transição" — `id` gerado aqui
   // (randomUUID), nunca pelo chamador. `ORDER BY at ASC, rowid ASC`: `at`
@@ -1612,9 +1632,11 @@ export function openStore(userDataDir: string) {
   // de `card_id` (nunca sobrescreve um papel já decidido, por design:
   // "implementer" é só o palpite padrão pro card que a coluna singular já
   // apontava). `linkTaskCard` é o upsert de verdade (sobrescreve role),
-  // pra atribuir um papel explícito como "reviewer" — sem tool de MCP
-  // ainda nesta fase (ver relatório final), mas o primitivo do store já
-  // existe e está coberto por teste.
+  // pra atribuir um papel explícito como "reviewer". Quem chama
+  // (2026-09-13): `spawn_agent({taskId, role})` e `link_task_card`, os
+  // dois no message-bus.ts, via o callback `linkTaskCard` (index.ts, que
+  // também empurra a Fila). Até então o primitivo existia sem chamador e
+  // a coluna era 91/91 implementer.
   const upsertTaskCardIfAbsentStmt = db.prepare(`
     INSERT INTO task_cards (task_id, card_id, role)
     VALUES (@task_id, @card_id, @role)
@@ -1987,7 +2009,7 @@ export function openStore(userDataDir: string) {
     // Ver o comentário grande de `applyColumnDrop` acima (definida antes
     // do `return`, junto dos prepared statements) — exposta aqui como
     // método do store, mesma convenção de todo o resto deste objeto.
-    applyColumnDrop: (dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]) =>
+    applyColumnDrop: (dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]): StatusWriteDecision =>
       applyColumnDrop(dragged, siblingImplicitOrders),
     getTaskTransitions: (taskId: string): TaskTransitionRow[] => getTaskTransitionsStmt.all(taskId) as TaskTransitionRow[],
     getTaskCards: (taskId: string): TaskCardRow[] => listTaskCardsStmt.all(taskId) as TaskCardRow[],
