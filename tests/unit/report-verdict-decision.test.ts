@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isFormalVerdict, promoteReportVerdict } from "../../src/main/report-verdict-decision";
+import { isFormalVerdict, promoteReportVerdict, resolveReporterRole } from "../../src/main/report-verdict-decision";
 
 describe("isFormalVerdict", () => {
   it("só os dois valores da coluna", () => {
@@ -48,5 +48,32 @@ describe("promoteReportVerdict", () => {
     expect(promoteReportVerdict(["ok"])).toEqual({ report: ["ok"], verdict: undefined });
     expect(promoteReportVerdict("done", "aprovado")).toEqual({ report: "done", verdict: "aprovado" });
     expect(promoteReportVerdict({ ok: true })).toEqual({ report: { ok: true }, verdict: undefined });
+  });
+});
+
+// Quem mandou o verdict — `task_cards.role` do card, carimbado em
+// `reports.role`. Desconhecido é `null`, nunca `implementer` por default
+// (156/156 `task_verdicts` eram implementer justamente por um default
+// desses).
+describe("resolveReporterRole", () => {
+  it("um vínculo: o papel dele, tal como gravado", () => {
+    expect(resolveReporterRole([{ role: "implementer" }])).toBe("implementer");
+    expect(resolveReporterRole([{ role: "reviewer" }])).toBe("reviewer");
+  });
+
+  it("vários vínculos com o MESMO papel: esse papel", () => {
+    expect(resolveReporterRole([{ role: "reviewer" }, { role: "reviewer" }])).toBe("reviewer");
+  });
+
+  it("sem vínculo nenhum: null (desconhecido), não implementer", () => {
+    expect(resolveReporterRole([])).toBeNull();
+  });
+
+  it("vínculos com papéis diferentes: null — o report é por card e não diz de qual task fala", () => {
+    expect(resolveReporterRole([{ role: "implementer" }, { role: "reviewer" }])).toBeNull();
+  });
+
+  it("papel fora do enum é repassado como fato gravado, não normalizado", () => {
+    expect(resolveReporterRole([{ role: "observer" }])).toBe("observer");
   });
 });

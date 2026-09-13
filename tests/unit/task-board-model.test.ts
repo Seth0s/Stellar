@@ -10,7 +10,7 @@ import {
   shouldShowStageTrail,
   derivePurposeChip,
   describePurposeChip,
-  shouldProposeCompletion,
+  deriveCompletionProposal,
   shortTaskId,
   formatTaskAge,
   waitingOnDep,
@@ -217,19 +217,86 @@ describe("derivePurposeChip / describePurposeChip", () => {
   });
 });
 
-describe("shouldProposeCompletion", () => {
-  it("só propõe com a task ainda running E verdict exatamente 'aprovado'", () => {
-    expect(shouldProposeCompletion("running", "aprovado")).toBe(true);
+// Medido 2026-09-13: 156/156 `task_verdicts` e os 14 `aprovado` de
+// `reports` eram do próprio implementador, e a barra de proposta reagia
+// ao valor sem olhar quem mandou. A decisão agora lê o PAPEL de cada
+// rodada. Os três casos exigidos pelo gate: implementer, reviewer, role
+// desconhecido — mais a política pra task sem reviewer.
+describe("deriveCompletionProposal", () => {
+  const impl = (verdict: string | null, at: number, cardId = "impl-1") => ({ cardId, role: "implementer", verdict, at });
+  const rev = (verdict: string | null, at: number, cardId = "rev-1") => ({ cardId, role: "reviewer", verdict, at });
+
+  it("reviewer 'aprovado' propõe com origem reviewer", () => {
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [impl("aprovado", 1), rev("aprovado", 2)])).toEqual({
+      verdict: "aprovado",
+      origin: "reviewer",
+      cardId: "rev-1",
+      at: 2,
+    });
   });
 
-  it("nunca propõe pra reprovado, verdict ausente, ou task que não está mais running", () => {
-    expect(shouldProposeCompletion("running", "reprovado")).toBe(false);
-    expect(shouldProposeCompletion("running", null)).toBe(false);
-    expect(shouldProposeCompletion("running", undefined)).toBe(false);
+  it("com reviewer vinculado, 'aprovado' do implementer NÃO propõe — nem antes do reviewer falar, nem depois de um reprovado dele", () => {
+    // Reviewer vinculado (task_cards) mas ainda sem rodada: review pendente.
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [impl("aprovado", 1)])).toBeNull();
+    // Reviewer reprovou: o "aprovado" do implementer não sobrepõe.
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [impl("aprovado", 1), rev("reprovado", 2)])).toBeNull();
+    // Reviewer que reportou sem veredito (ou saiu sem report): nada.
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [impl("aprovado", 1), rev(null, 2)])).toBeNull();
+    // Implementer "aprova" DEPOIS do reprovado do reviewer: continua nada —
+    // a última palavra do REVIEWER é o que conta, não a última rodada.
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [rev("reprovado", 1), impl("aprovado", 2)])).toBeNull();
+  });
+
+  it("rodada de reviewer no histórico basta pra impor a regra, mesmo se o papel atual em task_cards já não diz reviewer", () => {
+    expect(deriveCompletionProposal("running", ["implementer"], [impl("aprovado", 1), rev("reprovado", 2)])).toBeNull();
+    expect(deriveCompletionProposal("running", ["implementer"], [impl("aprovado", 1), rev("aprovado", 2)])?.origin).toBe("reviewer");
+  });
+
+  it("a ÚLTIMA rodada do reviewer é a que vale (reprovou, depois aprovou → propõe; aprovou, depois reprovou → não)", () => {
+    expect(deriveCompletionProposal("running", ["reviewer"], [rev("reprovado", 1), rev("aprovado", 2)])).toMatchObject({ origin: "reviewer", at: 2 });
+    expect(deriveCompletionProposal("running", ["reviewer"], [rev("aprovado", 1), rev("reprovado", 2)])).toBeNull();
+    // Empate de `at`: a que veio depois na lista (rowid maior) vence.
+    expect(deriveCompletionProposal("running", ["reviewer"], [rev("aprovado", 5), rev("reprovado", 5)])).toBeNull();
+    expect(deriveCompletionProposal("running", ["reviewer"], [rev("reprovado", 5), rev("aprovado", 5)])?.origin).toBe("reviewer");
+  });
+
+  it("task SEM reviewer: 'aprovado' do implementer propõe com origem 'self' (auto-aprovado, marcado — nunca disfarçado de review)", () => {
+    expect(deriveCompletionProposal("running", ["implementer"], [impl("aprovado", 1)])).toEqual({
+      verdict: "aprovado",
+      origin: "self",
+      cardId: "impl-1",
+      at: 1,
+    });
+    // Última rodada do implementer vale: reprovou a si mesmo depois → nada.
+    expect(deriveCompletionProposal("running", ["implementer"], [impl("aprovado", 1), impl("reprovado", 2)])).toBeNull();
+    expect(deriveCompletionProposal("running", ["implementer"], [impl("reprovado", 1), impl("aprovado", 2, "impl-2")])).toMatchObject({
+      origin: "self",
+      cardId: "impl-2",
+    });
+  });
+
+  it("role desconhecido (fora de implementer/reviewer) nunca propõe, mesmo com 'aprovado'", () => {
+    const unknown = { cardId: "x", role: "observer", verdict: "aprovado", at: 1 };
+    expect(deriveCompletionProposal("running", ["observer"], [unknown])).toBeNull();
+    // Nem sozinho, nem somado a um implementer que não aprovou.
+    expect(deriveCompletionProposal("running", ["implementer", "observer"], [impl("reprovado", 1), unknown])).toBeNull();
+    // E não conta como reviewer: um implementer aprovado numa task com só
+    // "observer" continua sendo o caso sem reviewer (self), não reviewer.
+    expect(deriveCompletionProposal("running", ["implementer", "observer"], [impl("aprovado", 1), { ...unknown, verdict: "reprovado" }])?.origin).toBe(
+      "self",
+    );
+  });
+
+  it("nunca propõe sem 'aprovado' de ninguém, sem rodada nenhuma, ou fora de running", () => {
+    expect(deriveCompletionProposal("running", ["implementer"], [impl("reprovado", 1)])).toBeNull();
+    expect(deriveCompletionProposal("running", ["implementer"], [impl(null, 1)])).toBeNull();
+    expect(deriveCompletionProposal("running", ["implementer"], [])).toBeNull();
+    expect(deriveCompletionProposal("running", [], [])).toBeNull();
     // Já concluída (por qualquer caminho) — propor de novo seria ruído,
     // não decisão pendente.
-    expect(shouldProposeCompletion("done", "aprovado")).toBe(false);
-    expect(shouldProposeCompletion("failed", "aprovado")).toBe(false);
+    expect(deriveCompletionProposal("done", ["reviewer"], [rev("aprovado", 1)])).toBeNull();
+    expect(deriveCompletionProposal("failed", ["implementer"], [impl("aprovado", 1)])).toBeNull();
+    expect(deriveCompletionProposal("pending", ["reviewer"], [rev("aprovado", 1)])).toBeNull();
   });
 });
 

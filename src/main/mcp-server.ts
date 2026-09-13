@@ -374,7 +374,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           verdict: z
             .enum(["aprovado", "reprovado"])
             .optional()
-            .describe("Formal verdict for a review report — a real, typed field (not just a convention inside `report`'s free JSON). Omit for a plain non-review report."),
+            .describe(
+              "Formal verdict for a review report — a real, typed field (not just a convention inside `report`'s free JSON). Omit for a plain non-review report. Stored together with YOUR role on the task (task_cards: implementer/reviewer, or unknown when your card is not linked). Only an 'aprovado' from a card linked as reviewer proposes completion on the Fila; an implementer's 'aprovado' is recorded as self-assessment and, while a reviewer is linked to the task, does not propose anything.",
+            ),
         },
       },
       async ({ callerCardId, report, verdict }) => {
@@ -387,7 +389,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "read_report",
       {
         description:
-          "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet. Every report carries a `seq` assigned by the server (never the reporting card) — pass the last `seq` you saw back as `afterSeq` to get the NEXT report (smallest seq strictly greater than that), including after the fact when the card already filed several rounds. Without `afterSeq`, returns the most recent report for that card. Also returns `verdict` ('aprovado'/'reprovado'/null) when the reporter set one.",
+          "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet. Every report carries a `seq` assigned by the server (never the reporting card) — pass the last `seq` you saw back as `afterSeq` to get the NEXT report (smallest seq strictly greater than that), including after the fact when the card already filed several rounds. Without `afterSeq`, returns the most recent report for that card. Also returns `verdict` ('aprovado'/'reprovado'/null) when the reporter set one, and `role` — the reporter's task_cards role at report time ('implementer'/'reviewer'/null when unknown), so you can tell a review verdict from an implementer judging its own work.",
         inputSchema: {
           target: z.string().describe("The reporting card's id (see list_cards)"),
           wait: z.boolean().optional().describe("Block until a report arrives instead of returning ok:false immediately"),
