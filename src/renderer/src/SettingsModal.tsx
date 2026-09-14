@@ -199,11 +199,17 @@ function GeneralPage({
 }) {
   const [override, setOverride] = useState<Locale | null>(null);
   const [systemLocale, setSystemLocale] = useState("");
+  const [buildLabel, setBuildLabel] = useState<string | null>(null);
 
   useEffect(() => {
     void window.i18n.get().then((info) => {
       setOverride(info.override);
       setSystemLocale(info.systemLocale);
+    });
+    void window.system.getBuildIdentity().then((id) => {
+      setBuildLabel(
+        `${id.label} · v${id.version} · bus protocol ${id.busProtocol}`,
+      );
     });
   }, [locale]);
 
@@ -236,6 +242,15 @@ function GeneralPage({
             </option>
           ))}
         </select>
+      </div>
+      <div className="settings-row">
+        <label>
+          {t("settings.general.buildIdentity")}
+          <small>{t("settings.general.buildIdentityHint")}</small>
+        </label>
+        <code data-settings-build-identity="" title={buildLabel ?? undefined}>
+          {buildLabel ?? t("settings.general.buildIdentityLoading")}
+        </code>
       </div>
       <div className="settings-note">{t("settings.general.scopeNote")}</div>
     </>

@@ -40,7 +40,7 @@ describe("message-bus: spawn_card task singleton", () => {
       }),
     );
 
-    const result = await bus.handleRequest({ cmd: "spawn_card", kind: "task", requesterId: "agent-1" } as BusRequest);
+    const result = await bus.handleRequest({ cmd: "spawn_card", kind: "task", reason: "test", requesterId: "agent-1" } as BusRequest);
 
     expect(result).toEqual({ ok: true, cardId: "queue-4" });
   });

@@ -62,7 +62,7 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("achado 1: onTaskDone NÃO dispara autonomousSpawn quando upsert pra running é hold", async () => {
+  it("achado 1: onTaskDone NÃO dispara autonomousSpawn quando human lock bloqueia dispatch", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-hold-dispatch-"));
     const spawnRequests: unknown[] = [];
     const dep: TaskRow = {
@@ -94,15 +94,9 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
       deps_json: JSON.stringify(["dep-done"]),
     };
 
-    const heldWrites: string[] = [];
     const { persistTask } = createTaskWriteFunnel({
       upsertTask: (task: TaskRow) => {
         if (task.id === "dep-done") return applied("done");
-        // Human locked the dependent — store holds pending, refuses running.
-        if (task.id === "held-pending") {
-          heldWrites.push(task.status);
-          return held("pending", "running");
-        }
         return applied(task.status);
       },
       applyColumnDrop: () => applied("pending"),
@@ -118,10 +112,21 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
         // must already show the dep as done — with the stale `running`
         // row the `allDone` check bailed first and this test passed
         // without ever reaching the hold it claims to cover.
-        listTasks: () => [{ ...dep, status: "done" }, pending],
+        listTasks: () => [{ ...dep, status: "done" }, { ...pending, diverged_status: "pending", diverged_actor: "human" }],
+        getTask: (id: string) =>
+          id === "dep-done"
+            ? { ...dep, status: "done", transitions: [{ kind: "status", actor: "human", from_value: null, to_value: "done", at: 1 }] }
+            : {
+                ...pending,
+                diverged_status: "pending",
+                diverged_actor: "human",
+                transitions: [{ kind: "status", actor: "human", from_value: null, to_value: "pending", at: 1 }],
+              },
         isBoardAutonomous: () => true,
+        isCardAlive: () => false,
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
+        linkTaskCard: () => {},
         upsertTask: (task: TaskRow) => persistTask(task),
         onSpawnAgentRequest: (requestId: string, ...rest: unknown[]) => {
           spawnRequests.push([requestId, ...rest]);
@@ -131,9 +136,8 @@ describe("message-bus: decisão 8 — side effects observam statusChanged", () =
 
     await bus.handleRequest({ cmd: "update_task", taskId: "dep-done", status: "done" } as BusRequest);
 
-    // The engine DID try to mark the dependent running (proof the path
-    // was exercised) and the hold stopped it before any spawn.
-    expect(heldWrites).toEqual(["running"]);
+    // CAMADA 3 — human hold + diverged pending blocks dispatch without
+    // ever writing `running`.
     expect(spawnRequests).toHaveLength(0);
   });
 

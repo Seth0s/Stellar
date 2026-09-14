@@ -72,6 +72,9 @@ function TerminalCardInner({
   onConnectorStart,
   onSelectStart,
   onStatusChange,
+  isBoardOrchestrator,
+  onMarkOrchestrator,
+  onClearOrchestrator,
   screenProjected,
   panX,
   panY,
@@ -125,6 +128,12 @@ function TerminalCardInner({
   /** Bubbles live status up for the session breadcrumb/list (item 1) — the
    * only place this app has real (not structural-proxy) agent status. */
   onStatusChange?: (status: "ok" | "error" | "exited") => void;
+  /** Board orchestrator mark — human UI only. */
+  isBoardOrchestrator?: boolean;
+  /** Ask App to confirm + set the mark (hard to do by accident). */
+  onMarkOrchestrator?: () => void;
+  /** Clear the mark — one click, obvious undo. */
+  onClearOrchestrator?: () => void;
   /** Trilha B — see CardFrame.tsx's `screenProjected` doc comment. Passed
    * straight through, same pattern the other migrated kinds use.
    * Deliberately does NOT touch `useTerminal.ts`'s `correctZoomCoords` —
@@ -507,6 +516,15 @@ function TerminalCardInner({
                 </span>
               );
             })()}
+            {isBoardOrchestrator && (
+              <span
+                className={styles.terminalCardOrchBadge}
+                data-role="terminal-orchestrator-badge"
+                title={t("terminal.orchestratorBadgeTitle")}
+              >
+                {t("terminal.orchestratorBadge")}
+              </span>
+            )}
           </span>
           <span className="card-head-actions">
             <button
@@ -518,19 +536,17 @@ function TerminalCardInner({
             >
               <Icon name="bell" size={12} />
             </button>
-            {canIdentify && (
-              <button
-                ref={menuBtnRef}
-                data-no-drag
-                data-role="terminal-card-menu"
-                title={t("terminal.cardMenu")}
-                disabled={identifyBusy}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => setMenuOpen((v) => !v)}
-              >
-                <Icon name="moreVertical" size={12} />
-              </button>
-            )}
+            <button
+              ref={menuBtnRef}
+              data-no-drag
+              data-role="terminal-card-menu"
+              title={t("terminal.cardMenu")}
+              disabled={identifyBusy}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setMenuOpen((v) => !v)}
+            >
+              <Icon name="moreVertical" size={12} />
+            </button>
             <button
               title={t("terminal.sigint")}
               onPointerDown={(e) => e.stopPropagation()}
@@ -676,20 +692,48 @@ function TerminalCardInner({
       )}
       <Popover
         anchorRef={menuBtnRef}
-        open={menuOpen && canIdentify}
+        open={menuOpen}
         onClose={() => setMenuOpen(false)}
         className={styles.terminalCardMenu}
         dataRole="terminal-card-menu-popover"
       >
-        <button
-          data-role="terminal-identify-menu-item"
-          disabled={identifyBusy}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => void identifyThisSession()}
-        >
-          <Icon name="findCard" size={14} />
-          {identifyBusy ? t("terminal.identifyingSession") : t("terminal.identifyMenu")}
-        </button>
+        {canIdentify && (
+          <button
+            data-role="terminal-identify-menu-item"
+            disabled={identifyBusy}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => void identifyThisSession()}
+          >
+            <Icon name="findCard" size={14} />
+            {identifyBusy ? t("terminal.identifyingSession") : t("terminal.identifyMenu")}
+          </button>
+        )}
+        {isBoardOrchestrator ? (
+          <button
+            data-role="terminal-clear-orchestrator"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              setMenuOpen(false);
+              onClearOrchestrator?.();
+            }}
+          >
+            <Icon name="close" size={14} />
+            {t("terminal.clearOrchestrator")}
+          </button>
+        ) : (
+          <button
+            data-role="terminal-mark-orchestrator"
+            title={t("terminal.markOrchestratorTitle")}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              setMenuOpen(false);
+              onMarkOrchestrator?.();
+            }}
+          >
+            <Icon name="check" size={14} />
+            {t("terminal.markOrchestrator")}
+          </button>
+        )}
       </Popover>
       <Popover anchorRef={urlBadgeRef} open={urlPopoverOpen} onClose={() => setUrlPopoverOpen(false)} side={urlPopoverSide} className={styles.terminalCardUrlPopover}>
         {[...seenUrls].reverse().map((url) => {

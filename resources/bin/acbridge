@@ -550,6 +550,18 @@ socket.on("close", () => {
     const busProtocol = res.protocol;
     const verdict = busProtocol === ACBRIDGE_PROTOCOL ? "match" : "MISMATCH";
     console.log(`acbridge protocol ${ACBRIDGE_PROTOCOL}\tbus protocol ${busProtocol ?? "unknown"}\t${verdict}`);
+    // App-side identity (2026-09-14): hello may carry build stamps when
+    // the running Stellar knows them. Print when present — never invent.
+    if (typeof res.mode === "string" || typeof res.label === "string") {
+      const parts = [
+        res.mode ?? "?",
+        res.commit ?? "?",
+        res.dirty === true ? "dirty" : res.dirty === false ? "clean" : null,
+        res.builtAt ?? null,
+        typeof res.version === "string" ? `v${res.version}` : null,
+      ].filter((p) => p !== null && p !== undefined);
+      console.log(`stellar ${parts.join("\t")}`);
+    }
   } else if (cmd === "list") {
     // `kind` e `label` são novos (2026-09-01): a lista deixou de ser só de
     // terminais, então o tipo do card passa a ser a informação que decide

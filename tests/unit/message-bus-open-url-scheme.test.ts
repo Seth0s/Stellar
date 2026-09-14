@@ -110,7 +110,7 @@ describe("message-bus: esquemas recusados falham antes do consentimento", () => 
       cmd: "spawn_card",
       kind: "browser",
       url: "file:///tmp/coverage/index.html",
-      requesterId: "agent-1",
+      reason: "test", requesterId: "agent-1",
     } as BusRequest)) as { ok: boolean; error?: string };
 
     expect(res.ok).toBe(false);
@@ -128,7 +128,7 @@ describe("message-bus: esquemas recusados falham antes do consentimento", () => 
     const res = await b.handleRequest({
       cmd: "spawn_card",
       kind: "browser",
-      requesterId: "agent-1",
+      reason: "test", requesterId: "agent-1",
     } as BusRequest);
     expect(asked).toBe(1);
     expect(res).toEqual({ ok: true, cardId: "b1" });
@@ -145,7 +145,7 @@ describe("message-bus: esquemas recusados falham antes do consentimento", () => 
     const res = await b.handleRequest({
       cmd: "spawn_card",
       kind: "sticky",
-      requesterId: "agent-1",
+      reason: "test", requesterId: "agent-1",
     } as BusRequest);
     expect(asked).toBe(1);
     expect(res).toEqual({ ok: true, cardId: "s1" });

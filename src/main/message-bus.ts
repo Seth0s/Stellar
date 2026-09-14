@@ -1,7 +1,7 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
+import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow, SpawnRow } from "./store";
 import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import {
   formatAgentFacingAuthorship,
@@ -57,6 +57,7 @@ import {
   allowCommitToSql,
 } from "./task-contract-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
+import { decideSpawnReason, deriveSpawnDepth } from "./spawn-record-decision";
 import {
   TASK_CARD_IMPLEMENTER_ROLE,
   TASK_CARD_REVIEWER_ROLE,
@@ -373,6 +374,9 @@ export type BusRequest =
   /** Handshake de versão (`acbridge version`). Só existe no caminho do
    * socket — resolvido antes do dispatcher, ver acbridge-protocol-decision.ts. */
   | { cmd: "hello" }
+  /** Build identity of the running Electron process (commit/builtAt/mode).
+   * Passive — no consent. Same payload hello carries for acbridge version. */
+  | { cmd: "build_identity" }
   // `verdict` — DESIGN-BACKLOG.md §2.1 decisão 9: campo real e opcional
   // do protocolo (não mais só uma convenção informal dentro do JSON livre
   // de `report`), para não quebrar quem já reporta sem mandar nada.
@@ -483,6 +487,7 @@ export type BusRequest =
   | { cmd: "rename_sprint"; sprintId?: string; name?: string | null }
   | { cmd: "delete_sprint"; sprintId?: string }
   | { cmd: "list_connectors" }
+  | { cmd: "spawn_lineage"; cardId?: string }
   | { cmd: "set_connector_kind"; connectorId?: string; kind?: string | null; requesterId?: string }
   | { cmd: "set_connector_label"; connectorId?: string; label?: string | null }
   | { cmd: "concurrency_status"; cap?: number }
@@ -728,6 +733,9 @@ export function createMessageBus(
      * history as an occupied queue. */
     listCardsForBoard: (boardId: string) => TaskCardGuardCard[];
     isBoardAutonomous: (boardId: string) => boolean;
+    /** Board orchestrator mark — read-only here. Only the renderer UI
+     * writes `boards.orchestrator_card_id`. `null`/undefined = unmarked. */
+    getBoardOrchestratorCardId: (boardId: string) => string | null | undefined;
     /** RODADA 4 (DESIGN-BACKLOG.md §2.3, fechar a classe do board órfão)
      * — `create_task` valida contra isto antes de gravar: um `boardId`
      * que não existe é recusado (erro explícito ao chamador), nunca
@@ -748,7 +756,9 @@ export function createMessageBus(
      * o card já saiu do board carregado. `null` pros kinds sem provider
      * (files/changes/browser/sticky/etc.) e pra um card sem linha (já
      * coberto pelo `undefined` do retorno inteiro). */
-    getAnyCard: (cardId: string) => { boardId: string; kind: string; provider: string | null } | undefined;
+    getAnyCard: (
+      cardId: string,
+    ) => { boardId: string; kind: string; provider: string | null; model?: string | null; effort?: string | null } | undefined;
     /** Direct store mutation, no live renderer/IPC round-trip at all —
      * dispatchRequest only ever calls these for a card whose board ISN'T
      * the one currently loaded (nothing live to keep in sync there; a
@@ -872,6 +882,21 @@ export function createMessageBus(
      * still goes through its own human consent gate, same as ever) —
      * see AGENTS.md's positioning entry on this. */
     listAllConnectors: () => ConnectorRow[];
+    /** Spawn registry — append-only; see store.recordSpawn / SpawnRow. */
+    recordSpawn: (input: {
+      boardId: string;
+      fromCardId: string | null;
+      toCardId: string;
+      reason: string | null;
+      taskId?: string | null;
+      provider?: string | null;
+      cardKind?: string | null;
+      cwd?: string | null;
+      origin: string;
+      createdAt?: number;
+    }) => SpawnRow;
+    findSpawnByChild: (toCardId: string) => SpawnRow | undefined;
+    listSpawnsByParent: (fromCardId: string) => SpawnRow[];
     setConnectorKind: (id: string, kind: string | null) => boolean;
     /** Same contract as setConnectorKind, `label` column instead — backs
      * `set_connector_label` below (2026-09-09, "label em tempo real"). */
@@ -969,6 +994,20 @@ export function createMessageBus(
         side?: "left" | "right" | "top" | "bottom";
       },
     ) => void;
+    /**
+     * Build identity of THIS Electron process (see build-identity.ts).
+     * Optional so existing test doubles stay source-compatible; when
+     * absent, `build_identity` / `hello` omit the fields.
+     */
+    getBuildIdentity?: () => {
+      mode: "dev" | "packaged";
+      version: string;
+      commit: string | null;
+      builtAt: string | null;
+      dirty: boolean;
+      busProtocol: number;
+      label: string;
+    };
   },
 ) {
   // Bug real relatado (Pop!_OS, 2026-09-09; achado seguinte do coordenador,
@@ -1299,7 +1338,7 @@ export function createMessageBus(
    * round-trip pro renderer) em volta da decisão pura
    * `decideWriteReadiness` (type-and-submit-decision.ts) — ver o doc
    * comment daquele arquivo pra por que os dois achados (portão +
-   * confirmação tri-state, em `typeAndSubmit` abaixo) precisam andar
+   * confirmação tri-state, em `deliverCard` abaixo) precisam andar
    * juntos. Card sem entry (já morto, ou nunca existiu) devolve
    * imediatamente: nada a esperar, `writeToCard`/o resto do fluxo já
    * lidam com card morto do jeito de sempre. */
@@ -1771,15 +1810,20 @@ export function createMessageBus(
     return spawnerId;
   }
 
-  /** Feeds `decideReportNotifyTarget` (report-notify-routing.ts) — live
-   * `spawned` wins; inbound `modified` is the readoption fallback. This
+  /** Feeds `decideReportNotifyTarget` (report-notify-routing.ts) — board
+   * orchestrator mark wins when alive; dead mark escalates to human
+   * (`none`); unmarked keeps live `spawned` / inbound `modified`. This
    * is the production caller that module exists for; do not leave the
    * pure function without a feeder again. */
   function resolveNotifyTarget(cardId: string): string | null {
+    const boardId = callbacks.getCardBoardId(cardId);
+    const orchId = boardId ? (callbacks.getBoardOrchestratorCardId(boardId) ?? null) : null;
     const connectors = callbacks.listAllConnectors();
     const spawnedById = resolveLiveSpawner(cardId);
     const directiveFromId = pickLatestDirectiveSender(connectors, cardId);
     return decideReportNotifyTarget({
+      orchestratorCardId: orchId,
+      orchestratorAlive: orchId !== null && callbacks.isCardAlive(orchId),
       directiveFromId,
       directiveFromAlive: directiveFromId !== null && callbacks.isCardAlive(directiveFromId),
       spawnedById,
@@ -1899,8 +1943,9 @@ export function createMessageBus(
    * mesmos 4 tools). Deliberadamente ausente: leituras (`list`, `read_*`,
    * `browser_query`/`snapshot`/`browser_console`/`browser_network`/
    * `browser_wait_for`, `card_status`, `get_report`, `list_tasks`,
-   * `get_task`, `list_connectors`, `concurrency_status`, `board_mode`) —
-   * olhar pra um card não é interagir com ele. Também ausente de propósito:
+   * `get_task`, `list_connectors`, `concurrency_status`, `board_mode`,
+   * `build_identity`) — olhar pra um card não é interagir com ele.
+   * Também ausente de propósito:
    * `write_sticky`/`set_sticky_color`/`set_sticky_mode` — essas 3 já
    * chamam `autoConnect` direto no `offSticky` do App.tsx (é lá que
    * `content`/`color`/`mode` realmente vivem, round-trip que já existia
@@ -2740,13 +2785,17 @@ export function createMessageBus(
       // done/failed (judgment). Refuse and name `request_task_status`
       // (teaching refusal, same class as report-retry-decision). Outsider
       // and reviewer may write; anonymous requesterId = outsider.
-      // Human/app paths never enter this handler.
+      // Human/app paths never enter this handler. Board-orchestrator
+      // mark does not widen this gate — participation still wins.
       const statusProposed = req.status !== undefined;
       if (statusProposed && req.status !== undefined) {
         const cards = callbacks.getTaskCards(req.taskId) ?? [];
         const judgment = decideJudgmentWrite({
           proposedStatus: req.status,
           requesterRoleOnTask: roleOnTask(cards, req.requesterId),
+          // Extension point for sibling `review: wanted` — pass
+          // `existing.review_wanted` (or equivalent) once that column
+          // ships. Omitting keeps today's allow path.
         });
         if (judgment.action === "refuse") return { ok: false, error: judgment.error };
       }
@@ -2816,6 +2865,16 @@ export function createMessageBus(
         if (req.allowCommit !== undefined) allow_commit = allowCommitToSql(contractParse.contract.allowCommit);
         if (req.reportSchema !== undefined) report_schema_json = reportSchemaToSql(contractParse.contract.reportSchema);
       }
+      // Delegated signature: marked board orchestrator writing judgment
+      // stamps `orchestrator`, never `human` (false trail) and never
+      // plain `agent` (would lose the audit distinction). Non-judgment
+      // updates and unmarked callers stay `agent`.
+      let writeActor: "agent" | "orchestrator" = "agent";
+      if (statusProposed && req.status !== undefined && isJudgmentStatus(req.status) && req.requesterId) {
+        const taskBoardId = existing.board_id ?? callbacks.getCardBoardId(req.requesterId);
+        const orchId = taskBoardId ? callbacks.getBoardOrchestratorCardId(taskBoardId) : null;
+        if (orchId && orchId === req.requesterId) writeActor = "orchestrator";
+      }
       const updated: TaskRow = {
         ...existing,
         prompt,
@@ -2831,7 +2890,7 @@ export function createMessageBus(
         attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
         suggested_order: req.suggestedOrder !== undefined ? req.suggestedOrder : existing.suggested_order,
         updated_at: now,
-        actor: "agent",
+        actor: writeActor,
         statusProposed,
       };
       // DESIGN-BACKLOG.md §2.1 Decisão 8 — a precedência mora no choke
@@ -2866,7 +2925,7 @@ export function createMessageBus(
           requestedBy: existing.requested_by ?? null,
           requestedAt: existing.requested_at ?? null,
         },
-        newActor: "agent",
+        newActor: writeActor,
         proposedStatus: statusProposed ? (req.status ?? null) : null,
         resultingStatus: decision.status,
       });
@@ -3075,6 +3134,36 @@ export function createMessageBus(
       };
     }
 
+    // Spawn registry read — parent + children + depth. No push; poll when
+    // you need lineage (owner 2026-09-14: register always, notify never).
+    if (req.cmd === "spawn_lineage") {
+      if (!req.cardId) return { ok: false, error: "missing cardId" };
+      const parentOf = (id: string) => callbacks.findSpawnByChild(id) ?? null;
+      const serialize = (row: SpawnRow) => ({
+        id: row.id,
+        boardId: row.board_id,
+        fromCardId: row.from_card_id,
+        toCardId: row.to_card_id,
+        reason: row.reason,
+        taskId: row.task_id,
+        provider: row.provider,
+        cardKind: row.card_kind,
+        cwd: row.cwd,
+        origin: row.origin,
+        createdAt: row.created_at,
+        depth: deriveSpawnDepth(row.to_card_id, parentOf),
+      });
+      const parentRow = callbacks.findSpawnByChild(req.cardId);
+      const children = callbacks.listSpawnsByParent(req.cardId).map(serialize);
+      return {
+        ok: true,
+        cardId: req.cardId,
+        depth: deriveSpawnDepth(req.cardId, parentOf),
+        parent: parentRow ? serialize(parentRow) : null,
+        children,
+      };
+    }
+
     if (req.cmd === "set_connector_kind") {
       if (!req.connectorId) return { ok: false, error: "missing connectorId" };
       // DESIGN-BACKLOG.md item 62 — "spawned" included here so an
@@ -3171,8 +3260,21 @@ export function createMessageBus(
       };
     }
 
+    if (req.cmd === "build_identity") {
+      // Passive: which binary is holding the socket. No consent. Same
+      // fields `hello` already carries for `acbridge version`.
+      const identity = callbacks.getBuildIdentity?.();
+      if (!identity) return { ok: false, error: "build identity unavailable" };
+      return { ok: true, ...identity };
+    }
+
     if (req.cmd === "spawn_agent") {
       if (!req.provider) return { ok: false, error: "missing provider" };
+      // Spawn registry (2026-09-14): agent must declare reason — refuse
+      // naming the field (same class as report-retry-decision). Not a
+      // spawn gate otherwise; human/system paths skip this.
+      const reasonDecision = decideSpawnReason({ requesterId: req.requesterId, reason: req.reason });
+      if (reasonDecision.action === "refuse") return { ok: false, error: reasonDecision.error };
       // CLAUDE_EFFORT_VALUES / ANTIGRAVITY_EFFORT_VALUES's own comment
       // above has the full decision writeup (refuse, never silently
       // remap). Checked before the spawn-depth budget below is touched —
@@ -3209,14 +3311,12 @@ export function createMessageBus(
         { findTask: (id) => callbacks.getTask(id) },
       );
       if (!briefDecision.ok) return { ok: false, error: briefDecision.error };
-      // Implementer tied to a task with deps gets the same parent pointer
-      // auto-dispatch appends (`briefForTask`): whoever spawns the child,
-      // it must not open unaware of its parents. Reviewer keeps the free
-      // review order untouched. `getTask` was already consulted by
-      // `resolveSpawnBrief`; a task with no deps leaves the brief as is.
+      // Implementer tied to a task: same brief as auto-dispatch (prompt +
+      // dep pointer + contract). Reviewer keeps the free review order.
+      const taskForBrief = briefDecision.taskId ? callbacks.getTask(briefDecision.taskId) : undefined;
       const deliveredBrief =
-        briefDecision.taskId && role !== TASK_CARD_REVIEWER_ROLE
-          ? appendDepPointer(briefDecision.brief, depPointerSources(callbacks.getTask(briefDecision.taskId) ?? { deps_json: null }))
+        briefDecision.taskId && role !== TASK_CARD_REVIEWER_ROLE && taskForBrief
+          ? briefForTask(taskForBrief)
           : briefDecision.brief;
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
@@ -3249,7 +3349,7 @@ export function createMessageBus(
         cwd: req.cwd,
         resumeId: req.resumeId,
         depth,
-        reason: req.reason,
+        reason: reasonDecision.reason ?? undefined,
         model: req.model,
         effort: req.effort,
         label: req.label,
@@ -3263,6 +3363,32 @@ export function createMessageBus(
           : await dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
       if (spawnResult.ok) {
         cardSpawnDepth.set(spawnResult.cardId, depth);
+        // Spawn registry — derived fields only; reason already decided.
+        // No notification (register always, notify never).
+        const boardId =
+          requesterBoardId ??
+          callbacks.getCardBoardId(spawnResult.cardId) ??
+          taskForBrief?.board_id ??
+          undefined;
+        if (boardId) {
+          try {
+            callbacks.recordSpawn({
+              boardId,
+              fromCardId: requesterId || null,
+              toCardId: spawnResult.cardId,
+              reason: reasonDecision.reason,
+              taskId: briefDecision.taskId ?? null,
+              provider: req.provider,
+              cardKind: "terminal",
+              cwd: req.cwd ?? null,
+              origin: reasonDecision.origin,
+            });
+          } catch (e) {
+            // UNIQUE(to_card_id) collision is a logic bug; surface in logs
+            // but do not undo a successful spawn.
+            console.error("recordSpawn failed after spawn_agent:", e);
+          }
+        }
         // Fact on the participation: what actually went to argv.
         const profile = profileFromSpawnArgs({
           provider: req.provider,
@@ -3317,6 +3443,8 @@ export function createMessageBus(
       if (!req.kind || !validKinds.includes(req.kind as SpawnCardKind)) {
         return { ok: false, error: `kind must be one of ${validKinds.join(", ")}` };
       }
+      const reasonDecision = decideSpawnReason({ requesterId: req.requesterId, reason: req.reason });
+      if (reasonDecision.action === "refuse") return { ok: false, error: reasonDecision.error };
       // Pendentes #188 ("spawn_card por coordenadas") — validated here, not
       // just by mcp-server.ts's zod schema: acbridge talks to this bus
       // directly over the socket, no zod in that path at all (same reason
@@ -3371,6 +3499,29 @@ export function createMessageBus(
             clearTimeout(timer);
             pendingSpawnCards.delete(requestId);
             unmarkWaiting(requesterId);
+            if (result.ok) {
+              const boardId =
+                requesterBoardId ?? callbacks.getCardBoardId(result.cardId) ?? taskBoardId ?? undefined;
+              // Reuse paths (task singleton, etc.) resolve ok with an
+              // existing cardId — do not invent a second birth.
+              if (boardId && !callbacks.findSpawnByChild(result.cardId)) {
+                try {
+                  callbacks.recordSpawn({
+                    boardId,
+                    fromCardId: requesterId || null,
+                    toCardId: result.cardId,
+                    reason: reasonDecision.reason,
+                    taskId: null,
+                    provider: null,
+                    cardKind: req.kind as string,
+                    cwd: req.cwd ?? null,
+                    origin: reasonDecision.origin,
+                  });
+                } catch (e) {
+                  console.error("recordSpawn failed after spawn_card:", e);
+                }
+              }
+            }
             resolve(result);
           },
           timer,
@@ -3379,7 +3530,7 @@ export function createMessageBus(
           kind: req.kind as SpawnCardKind,
           cwd: req.cwd,
           url: req.url,
-          reason: req.reason,
+          reason: reasonDecision.reason ?? undefined,
           autoApprove,
           anchorCardId: req.anchorCardId,
           side: req.anchorCardId ? (req.side ?? "right") : undefined,
@@ -3695,6 +3846,7 @@ export function createMessageBus(
       depth: 0,
       reason,
       model: undefined,
+      effort: undefined,
       label: resolveTaskDispatchLabel(task),
       brief: briefForTask(task),
       taskId: task.id,
@@ -3781,8 +3933,13 @@ export function createMessageBus(
     const allDone = deps.every((depId) => allTasks.find((t) => t.id === depId)?.status === "done");
     if (!allDone) return false;
     const lastActor = lastStatusActorFromRow(callbacks.getTask(task.id) ?? task);
-    if (lastActor === "human") return false;
-    if (task.diverged_actor === "human" && task.diverged_status === "pending") return false;
+    if (lastActor === "human" || lastActor === "orchestrator") return false;
+    if (
+      (task.diverged_actor === "human" || task.diverged_actor === "orchestrator") &&
+      task.diverged_status === "pending"
+    ) {
+      return false;
+    }
 
     const providerDecision = decideTaskDispatchProvider(task.provider);
     if (providerDecision.action === "refuse") {
@@ -3937,8 +4094,15 @@ export function createMessageBus(
           if (req.cmd === "hello") {
             // Handshake explícito (`acbridge version`): devolve o
             // protocolo do bus pra quem quiser conferir sem esperar um
-            // request real dar errado.
-            return Promise.resolve({ ok: true, protocol: ACBRIDGE_PROTOCOL, ...(decision.warning ? { warning: decision.warning } : {}) });
+            // request real dar errado. Build identity rides along so the
+            // same one-liner answers "which Stellar is listening?".
+            const identity = callbacks.getBuildIdentity?.();
+            return Promise.resolve({
+              ok: true,
+              protocol: ACBRIDGE_PROTOCOL,
+              ...(identity ?? {}),
+              ...(decision.warning ? { warning: decision.warning } : {}),
+            });
           }
           return handleRequest(req).then((res) => (decision.warning ? { ...res, warning: decision.warning } : res));
         }),

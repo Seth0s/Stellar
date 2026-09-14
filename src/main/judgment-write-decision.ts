@@ -11,6 +11,11 @@
  * is the role. So the gate is not "every row in task_cards is barred";
  * only the implementer link is barred from writing judgment.
  *
+ * Board-orchestrator delegation (same day): the marked card may sign
+ * judgment in the human's place with actor `orchestrator`, BUT
+ * participation still wins — if that card is implementer on THIS task,
+ * it only asks. No exception.
+ *
  * Lives next to the `update_task` handler (message-bus), not inside
  * `decideStatusWrite`: human/app writers never pass through this gate,
  * and the store choke point has no writer card id today. Agents reach
@@ -43,24 +48,51 @@ export function describeImplementerJudgmentRefusal(proposedStatus: string): stri
 }
 
 /**
+ * AGENT-FACING — DO NOT TRANSLATE. Extension wording for sibling
+ * `review: wanted` (not wired yet). Kept here so the refuse path and
+ * the future caller share one string.
+ */
+export function describeReviewWantedJudgmentRefusal(proposedStatus: string): string {
+  return (
+    `[de: stellar] update_task status "${proposedStatus}" recusado: ` +
+    `esta task exige review — só o reviewer grava julgamento (done/failed). ` +
+    `Assinatura delegada do orquestrador do board não se aplica.`
+  );
+}
+
+/**
  * Decide whether an agent `update_task` may write a judgment status.
  *
  * @param proposedStatus status field from the request, or null when omitted
  * @param requesterRoleOnTask role from `task_cards` for (taskId, requesterId);
  *   `null` when the caller has no link on this task OR no requesterId
  *   (anonymous / external orchestrator — treated as outsider).
+ * @param reviewWanted EXTENSION POINT for the sibling `review: wanted`
+ *   task (NOT implemented in this change). When `true`, only a linked
+ *   reviewer may write judgment — board-orchestrator delegation loses.
+ *   Callers omit / pass `false` until that column exists.
  */
 export function decideJudgmentWrite(input: {
   proposedStatus: string | null;
   requesterRoleOnTask: JudgmentRequesterRole;
+  reviewWanted?: boolean;
 }): JudgmentWriteDecision {
   if (input.proposedStatus === null) return { action: "allow" };
   if (!isJudgmentStatus(input.proposedStatus)) return { action: "allow" };
+  // Extension point — `review: wanted` beats delegated signature.
+  // Wire from the task row when that sibling ships; do not invent the
+  // column here.
+  if (input.reviewWanted && input.requesterRoleOnTask !== TASK_CARD_REVIEWER_ROLE) {
+    return { action: "refuse", error: describeReviewWantedJudgmentRefusal(input.proposedStatus) };
+  }
   if (input.requesterRoleOnTask === TASK_CARD_IMPLEMENTER_ROLE) {
     return { action: "refuse", error: describeImplementerJudgmentRefusal(input.proposedStatus) };
   }
   // reviewer (may judge), outsider (null), or unknown role → allow write.
   // Unknown roles are not implementer; barring them would invent policy.
+  // Board-orchestrator mark does NOT widen this gate — the marked card
+  // is simply an outsider (or reviewer) whose actor stamp becomes
+  // `orchestrator` at the write site when it is allowed.
   void TASK_CARD_REVIEWER_ROLE;
   return { action: "allow" };
 }

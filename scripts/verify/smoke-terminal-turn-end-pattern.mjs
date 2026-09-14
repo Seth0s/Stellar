@@ -97,7 +97,7 @@ try {
   await bootIntoFreshSession(page, "Turn End Pattern Smoke");
   await delay(500);
 
-  const spawnPromise = callTool("spawn_agent", { provider: "codex" });
+  const spawnPromise = callTool("spawn_agent", { provider: "codex", reason: "smoke turn-end pattern" });
   await delay(500);
   await clickModalButton(page, "Permitir");
   const spawnResult = JSON.parse((await spawnPromise).content[0].text);

@@ -107,7 +107,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
         listTasks: () => [live],
         listTaskCardsForCard: () => [],
         listAllConnectors: () => connectors,
-        isCardAlive: (id: string) => id === "spawner-1",
+        isCardAlive: (id: string) => id === "spawner-1" || id === "worker-1",
         describeCardLabel: (id: string) => id,
         writeToCard: (...args: unknown[]) => written.push(args),
         listCards: () => [{ id: "spawner-1", kind: "terminal" }],

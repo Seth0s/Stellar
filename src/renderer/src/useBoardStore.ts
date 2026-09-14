@@ -230,7 +230,18 @@ export function useBoardStore(
     // inherited from anywhere (there's nowhere to inherit it from here —
     // a brand-new board has no prior row). Duplicating a board isn't a
     // feature this app has, so that inheritance path doesn't exist either.
-    const board: BoardRow = { id, name, project, cwd, created_at: now, updated_at: now, last_accessed_at: now, autonomous: false, concurrency_cap: null };
+    const board: BoardRow = {
+      id,
+      name,
+      project,
+      cwd,
+      created_at: now,
+      updated_at: now,
+      last_accessed_at: now,
+      autonomous: false,
+      concurrency_cap: null,
+      orchestrator_card_id: null,
+    };
     setBoards((prev) => [...prev, board]);
     void window.store.boards.upsert(board);
     // `cwd` passed explicitly — see loadBoard's comment on why a `boards`
@@ -276,6 +287,29 @@ export function useBoardStore(
     setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, concurrency_cap: cap } : b)));
     void window.store.boards.setConcurrencyCap(id, cap);
     toast(cap === null ? t("toast.concurrencyDefault") : t("toast.concurrencyCap", { cap }));
+  }
+
+  /** Board orchestrator mark — UI-only, same immediate-fire pattern as
+   * setBoardAutonomous. `cardId: null` clears. Replacing is intentional
+   * (one card per board). */
+  function setBoardOrchestratorCard(boardId: string, cardId: string | null) {
+    setBoards((prev) => prev.map((b) => (b.id === boardId ? { ...b, orchestrator_card_id: cardId } : b)));
+    void window.store.boards.setOrchestratorCard(boardId, cardId).then((ok) => {
+      if (!ok) {
+        // Revert optimistic update if the store refused (wrong board/kind).
+        void window.store.boards.list().then(setBoards);
+        return;
+      }
+      toast(cardId ? t("toast.orchestratorOn") : t("toast.orchestratorOff"));
+    });
+  }
+
+  /** Keep renderer board state in sync when a card is deleted — the
+   * store already cleared `orchestrator_card_id` inside `deleteCard`. */
+  function clearOrchestratorMarkIfCard(cardId: string) {
+    setBoards((prev) =>
+      prev.map((b) => (b.orchestrator_card_id === cardId ? { ...b, orchestrator_card_id: null } : b)),
+    );
   }
 
   async function deleteBoard(id: string) {
@@ -331,5 +365,7 @@ export function useBoardStore(
     deleteBoard,
     setBoardAutonomous,
     setBoardConcurrencyCap,
+    setBoardOrchestratorCard,
+    clearOrchestratorMarkIfCard,
   };
 }

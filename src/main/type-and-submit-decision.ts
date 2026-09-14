@@ -236,7 +236,9 @@ export type DeliveryConfirmation = {
 
 /** Map the loop's last finding onto the settled delivery state. Pure so
  * the split is locked by tests, not by reading `deliverCard`. */
-export function decideDeliveryOutcome(result: DeliveryCheckOutcome): Exclude<CardDeliveryState, "queued"> {
+export function decideDeliveryOutcome(
+  result: DeliveryCheckOutcome,
+): Exclude<CardDeliveryState, "queued" | "cancelled"> {
   if (result === "sent") return "delivered";
   if (result === "parked") return "parked";
   if (result === "unsent") return "failed";
@@ -309,7 +311,7 @@ export interface SubmitCheckInput {
   screenText: string;
   /**
    * Same line-window snapshot taken BEFORE the delivery text was written.
-   * Submit-started / follow-ups only fire when match counts rise vs this
+   * Submit-started / mid-turn park only fire when match counts rise vs this
    * baseline — so leftover prose/chrome from the previous turn cannot
    * mark a swallowed Enter as `"sent"`.
    */

@@ -86,6 +86,8 @@ import {
   type DelegateProvider,
 } from "./chat-tools";
 import { decideSingleInstancePolicy } from "./single-instance-decision";
+import { resolveBuildIdentity, type BuildIdentity } from "./build-identity";
+import { ACBRIDGE_PROTOCOL } from "./acbridge-protocol-decision";
 
 // DESIGN-BACKLOG.md item 37 — reported live: fullscreen video in an
 // embedded browser card, then closing something, crashed the ENTIRE app.
@@ -267,6 +269,19 @@ if (singleInstancePolicy.quitIfLost && !gotSingleInstanceLock) {
   // `createWindow()` nunca roda nesta instância, mesmo se `ready` disparar
   // antes do quit terminar.
   app.quit();
+}
+
+/** Identity of THIS process — shared by Settings UI, MCP `build_identity`,
+ * and `hello` / `acbridge version`. See build-identity.ts. */
+function currentBuildIdentity(): BuildIdentity {
+  return resolveBuildIdentity({
+    isPackaged: app.isPackaged,
+    version: app.getVersion(),
+    busProtocol: ACBRIDGE_PROTOCOL,
+    // electron-vite / packaged launches keep cwd at the project or install
+    // root; when that isn't a git work tree, probe returns commit:null.
+    gitCwd: process.cwd(),
+  });
 }
 
 /**
@@ -1106,7 +1121,7 @@ function createWindow() {
     retryCount: number;
     createdAt: number;
     updatedAt: number;
-    lastActor: "app" | "agent" | "human" | null;
+    lastActor: "app" | "agent" | "human" | "orchestrator" | null;
     cards: { cardId: string; role: string; kind: string | null; provider: string | null; label: string | null }[];
     report: { verdict: "aprovado" | "reprovado" | null; updatedAt: number } | null;
     // RODADA 2 (review de fidelidade ao protótipo v5) — pílula "espera
@@ -1128,7 +1143,7 @@ function createWindow() {
      * Ambos null = sem divergência. Espelha `tasks.diverged_status` /
      * `diverged_actor`. */
     divergedStatus: string | null;
-    divergedActor: "app" | "agent" | "human" | null;
+    divergedActor: "app" | "agent" | "human" | "orchestrator" | null;
     requestedStatus: string | null;
     requestedReason: string | null;
     requestedBy: string | null;
@@ -1137,7 +1152,7 @@ function createWindow() {
      * provider do card pra gráfico 1 / pílulas. */
     verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
     /** Ator da 1ª transição de status — `human` ⇒ criada pela UI do quadro. */
-    firstActor: "app" | "agent" | "human" | null;
+    firstActor: "app" | "agent" | "human" | "orchestrator" | null;
     /** DESIGN-BACKLOG.md "Falha TIPADA" — motivo visível quando a task
      * voltou pra "a fazer" por interrupção (não julgamento). */
     interruptionReason: string | null;
@@ -1397,6 +1412,7 @@ function createWindow() {
     notifyBusUnavailable: (message) => {
       safeSend(win, "acbridge:unavailable", message);
     },
+    getBuildIdentity: () => currentBuildIdentity(),
     // DESIGN-BACKLOG.md §2.1 "identidade e descoberta de card", ponto 1 —
     // delega pra `deriveCardDisplayName` (shared/card-identity.ts), a
     // ÚNICA fonte agora — usada aqui (notificações, prefixo de
@@ -1427,6 +1443,7 @@ function createWindow() {
         archivedAt: card.archived_at,
       })),
     isBoardAutonomous: (boardId) => store.getBoard(boardId)?.autonomous ?? false,
+    getBoardOrchestratorCardId: (boardId) => store.getBoard(boardId)?.orchestrator_card_id ?? null,
     // RODADA 4 — ver o comentário grande da entrada `boardExists` na
     // interface de callbacks (message-bus.ts).
     boardExists: (boardId) => store.getBoard(boardId) !== undefined,
@@ -1436,7 +1453,15 @@ function createWindow() {
     // whichever board is currently loaded.
     getAnyCard: (id) => {
       const row = store.getCard(id);
-      return row ? { boardId: row.board_id, kind: row.kind, provider: row.provider ?? null } : undefined;
+      return row
+        ? {
+            boardId: row.board_id,
+            kind: row.kind,
+            provider: row.provider ?? null,
+            model: row.model ?? null,
+            effort: row.effort ?? null,
+          }
+        : undefined;
     },
     deleteCardDirect: (id) => {
       store.deleteConnectorsForCard(id);
@@ -1536,6 +1561,9 @@ function createWindow() {
       if (task) notifyTaskChanged(task.board_id);
     },
     listAllConnectors: () => store.listAllConnectors(),
+    recordSpawn: (input) => store.recordSpawn(input),
+    findSpawnByChild: (toCardId) => store.findSpawnByChild(toCardId),
+    listSpawnsByParent: (fromCardId) => store.listSpawnsByParent(fromCardId),
     // A lacuna que este comentário descrevia (2026-09-09: `set_connector_kind`
     // gravava no banco e não avisava ninguém, então um board aberto só via
     // o `kind` novo depois de recarregar) foi FECHADA em 2026-09-10 —
@@ -1838,6 +1866,33 @@ function createWindow() {
   ipcMain.handle("store:connectors:upsert", (_e, row: ConnectorRow) => store.upsertConnector(row));
   ipcMain.handle("store:connectors:delete", (_e, id: string) => store.deleteConnector(id));
   ipcMain.handle("store:connectors:delete-for-card", (_e, cardId: string) => store.deleteConnectorsForCard(cardId));
+  // Human UI card birth — honest absence of reason/requester. Agent
+  // spawns go through message-bus.recordSpawn instead.
+  ipcMain.handle(
+    "store:spawns:record-human",
+    (
+      _e,
+      input: {
+        boardId: string;
+        toCardId: string;
+        provider?: string | null;
+        cardKind?: string | null;
+        cwd?: string | null;
+      },
+    ) => {
+      if (store.findSpawnByChild(input.toCardId)) return;
+      store.recordSpawn({
+        boardId: input.boardId,
+        fromCardId: null,
+        toCardId: input.toCardId,
+        reason: null,
+        provider: input.provider ?? null,
+        cardKind: input.cardKind ?? null,
+        cwd: input.cwd ?? null,
+        origin: "human",
+      });
+    },
+  );
 
   ipcMain.handle("store:favorites:list", () => store.listFavorites());
   ipcMain.handle("store:favorites:add", (_e, url: string, title: string) => store.addFavorite(url, title));
@@ -1863,6 +1918,11 @@ function createWindow() {
   // (App.tsx's session UI), never from message-bus.ts/mcp-server.ts —
   // there is no `BusRequest` cmd that touches this at all, on purpose.
   ipcMain.handle("store:boards:set-autonomous", (_e, id: string, autonomous: boolean) => store.setBoardAutonomous(id, autonomous));
+  // Board orchestrator mark — UI-only, same narrow write path guarantee
+  // as set-autonomous. Never reachable from message-bus/mcp-server.
+  ipcMain.handle("store:boards:set-orchestrator-card", (_e, boardId: string, cardId: string | null) =>
+    store.setBoardOrchestratorCardId(boardId, cardId),
+  );
   // Achado ao vivo (2026-09-01) — ver `activeBoardId` e o callback
   // `listCards` acima. Puro estado de sessão: nada é persistido, e um
   // relançamento começa em `null` (a app sempre abre na Home).
@@ -2014,6 +2074,11 @@ function createWindow() {
   // ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 2, BAIXO-MÉDIO) — todo
   // o lote é atômico (`persistColumnDrop`/`store.applyColumnDrop`,
   // `db.transaction`) e gera UM push só, não um por linha.
+  //
+  // No PTY push on drag (2026-09-14): unsolicited interrupt into the work
+  // card. Truth is on the task before this returns; the Fila shows the
+  // human-move mark. Allow/Deny of a status ask is a different channel
+  // (resume of a request) and keeps `notifyHumanMovedTask`.
   ipcMain.handle(
     "store:tasks:move",
     (
@@ -2409,6 +2474,13 @@ function createWindow() {
     return registry.seenUrlsCount(cardId);
   });
 
+  // Human-input gate probe (2026-09-14) — verify harness reads buffer
+  // contents without touching the PTY. Packaged builds refuse.
+  ipcMain.handle("debug:human-input-gate", () => {
+    if (app.isPackaged) return null;
+    return registry.dumpHumanInputGate();
+  });
+
   // Test-only, same guard — Trilha A do navegador's verify harness needs
   // the offscreen BrowserWindow's REAL content-pixel size, straight from
   // Electron, to prove `resize`'s zoom scaling actually happened.
@@ -2434,6 +2506,7 @@ function createWindow() {
     const locale = resolveLocale(systemLocale, override);
     return { locale, override, systemLocale };
   });
+  ipcMain.handle("app:build-identity", () => currentBuildIdentity());
   ipcMain.handle("i18n:set-override", (_e, override: unknown) => {
     const next =
       override === null || override === undefined ? null : isLocale(override) ? override : null;

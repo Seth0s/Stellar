@@ -160,18 +160,39 @@ export interface ReportRoutingInput {
   /** The card id that spawned this card, per the most recent `spawned`
    * connector pointing at it (`resolveLiveSpawner`'s existing lookup), or
    * `null` if none exists. Wins unconditionally over `directiveFromId`
-   * whenever present and alive. */
+   * whenever present and alive — unless a board orchestrator mark is set. */
   spawnedById: string | null;
   /** Whether `spawnedById` is still a live card (`isCardAlive`).
    * Meaningless when `spawnedById` is `null`. */
   spawnedByAlive: boolean;
+  /**
+   * Board orchestrator mark (`boards.orchestrator_card_id`), or `null`
+   * when the board is unmarked. When present and alive, this is THE
+   * report target for the board — not a second router, the same function
+   * with one more input. Dead mark escalates to the human (`none`) and
+   * does NOT fall through to spawned/directive (owner: never trap).
+   */
+  orchestratorCardId?: string | null;
+  /** Whether `orchestratorCardId` is still a live card. Meaningless when
+   * the id is null/absent. */
+  orchestratorAlive?: boolean;
 }
 
 export type ReportRoutingDecision =
-  | { targetId: string; source: "directive" | "spawned" }
+  | { targetId: string; source: "directive" | "spawned" | "orchestrator" }
   | { targetId: null; source: "none" };
 
 export function decideReportNotifyTarget(input: ReportRoutingInput): ReportRoutingDecision {
+  // Board mark — when set and alive, reports go to the orchestrator.
+  // When set but dead, escalate to human (none): do not fall through to
+  // lineage, or a closed/hung mark would silently re-route to a spawner.
+  const orchId = input.orchestratorCardId ?? null;
+  if (orchId) {
+    if (input.orchestratorAlive) {
+      return { targetId: orchId, source: "orchestrator" };
+    }
+    return { targetId: null, source: "none" };
+  }
   // RODADA 2 — spawned lineage checked FIRST, unconditionally, so a live
   // spawner can never be shouldered aside by an unrelated card that merely
   // sent a message (this module's own hijack scenario, doc comment above).

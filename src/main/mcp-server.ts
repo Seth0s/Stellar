@@ -831,11 +831,26 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_connectors",
       {
         description:
-          "List every connector (arrow) on the board — id, fromCardId, toCardId, kind. `kind` is null for a purely decorative connector (hand-drawn via the UI); 'spawned' is set automatically whenever spawn_agent creates a new card — a real record of who spawned whom, not a guess. Writing or clearing `spawned` is guarded (only the origin card, and only when identified). The app does NOT push a typed notice or OS popup when a card reports, goes idle, or exits — poll card_status then read_report (no wait). 'depends'/'context' stay purely advisory — an orchestrating agent attaches them on purpose with set_connector_kind, for THAT ORCHESTRATOR'S OWN reading; nothing in this app acts on either. Task auto-dispatch (DESIGN-BACKLOG.md item 60 peça 3) never reads this graph at all, `spawned` included — it reads create_task's own `deps` (task ids), a separate mechanism, since a task can exist with no card at all. Connectors link cards, not tasks; the two are deliberately never merged.",
+          "List every connector (arrow) on the board — id, fromCardId, toCardId, kind. `kind` is null for a purely decorative connector (hand-drawn via the UI); 'spawned' is set automatically whenever spawn_agent creates a new card — a real record of who spawned whom, not a guess. Writing or clearing `spawned` is guarded (only the origin card, and only when identified). The app does NOT push a typed notice or OS popup when a card reports, goes idle, or exits — poll card_status then read_report (no wait). 'depends'/'context' stay purely advisory — an orchestrating agent attaches them on purpose with set_connector_kind, for THAT ORCHESTRATOR'S OWN reading; nothing in this app acts on either. Task auto-dispatch (DESIGN-BACKLOG.md item 60 peça 3) never reads this graph at all, `spawned` included — it reads create_task's own `deps` (task ids), a separate mechanism, since a task can exist with no card at all. Connectors link cards, not tasks; the two are deliberately never merged. For spawn motive (reason) and derived depth/provider/cwd that survive restart, use spawn_lineage — the connector is the visual edge only.",
         inputSchema: {},
       },
       async () => {
         const res = await opts.handleRequest({ cmd: "list_connectors" });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "spawn_lineage",
+      {
+        description:
+          "Read the spawn registry for one card: who created it (parent) and what it spawned (children), with reason, origin, taskId, provider/cwd, and depth derived from the persisted chain (survives restart). Register-only — the app never pushes when a spawn happens; poll this when you need lineage. Human UI births have origin \"human\", null reason, null fromCardId.",
+        inputSchema: {
+          cardId: z.string().describe("Card id to inspect (see list_cards)"),
+        },
+      },
+      async ({ cardId }) => {
+        const res = await opts.handleRequest({ cmd: "spawn_lineage", cardId });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -909,6 +924,19 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "build_identity",
+      {
+        description:
+          "Read the identity of the Stellar process holding the bus — mode (dev|packaged), short commit, build ISO time (packaged only), whether the git tree is dirty (dev only), package version, and bus protocol. Passive, no consent. Compare the commit yourself to `git log` in the repo BEFORE promising a fix is live; this tool does not compare for you. Also available as `acbridge version` (same fields on the hello response).",
+        inputSchema: {},
+      },
+      async () => {
+        const res = await opts.handleRequest({ cmd: "build_identity" });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "open_url",
       {
         description:
@@ -973,7 +1001,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the registered MCP URL stamp is the only trusted identity and determines real spawn depth/autonomy; this field is not trusted when that stamp is absent."),
-          reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
+          reason: z
+            .string()
+            .min(1)
+            .describe(
+              "REQUIRED for every agent spawn — why this card exists (the only field the app cannot derive). Shown in the human approval dialog when consent is needed. Empty/omitted is REFUSED naming this field; human UI spawns never use this tool and owe no reason. Persistido no registro de spawn (não é notificação).",
+            ),
           wait: z
             .boolean()
             .optional()
@@ -1036,7 +1069,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
               "Only meaningful for kind:\"browser\". Default false: always create a new browser card. Set true to navigate your existing browser instead (same as open_url's default).",
             ),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server already knows which card you are from the MCP URL registered for your process."),
-          reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
+          reason: z
+            .string()
+            .min(1)
+            .describe(
+              "REQUIRED for every agent spawn_card — why this card exists. Shown in the approval dialog when consent is needed. Empty/omitted is REFUSED naming this field. Persistido no registro de spawn (não é notificação).",
+            ),
           anchorCardId: z.string().optional().describe("Place the new card right next to this existing card (see list_cards) instead of the default centered placement"),
           side: z.enum(["left", "right", "top", "bottom"]).optional().describe("Which side of anchorCardId to place the new card on. Defaults to \"right\" when anchorCardId is given. Ignored without anchorCardId."),
         },

@@ -59,8 +59,8 @@ describe("store.ts: task_transitions / order / task_cards", () => {
 
       store.upsertTask(baseTaskFields("t1", { status: "running", updated_at: Date.now() + 1 }));
       transitions = store.getTask("t1")!.transitions!;
-      expect(transitions).toHaveLength(2);
-      expect(transitions[1]).toMatchObject({ kind: "status", from_value: "pending", to_value: "running", actor: "agent" });
+      // CAMADA 3 — `running` coerced to `pending`; no second status transition.
+      expect(transitions).toHaveLength(1);
     } finally {
       store.close();
     }
@@ -143,7 +143,7 @@ describe("store.ts: task_transitions / order / task_cards", () => {
       store.upsertTask(baseTaskFields("t3", { status: "done", actor: "human", updated_at: Date.now() + 2 }));
 
       const transitions = store.getTask("t3")!.transitions!;
-      expect(transitions.map((t) => t.actor)).toEqual(["agent", "app", "human"]);
+      expect(transitions.map((t) => t.actor)).toEqual(["agent", "human"]);
 
       // `actor` nunca vira coluna persistida de `tasks` — transiente.
       const raw = new Database(join(dir, "agent-canvas.db")).prepare("SELECT * FROM tasks WHERE id = ?").get("t3") as Record<string, unknown>;
@@ -159,11 +159,11 @@ describe("store.ts: task_transitions / order / task_cards", () => {
     try {
       const t0 = Date.now();
       store.upsertTask(baseTaskFields("t4", { status: "pending", created_at: t0, updated_at: t0 }));
-      store.upsertTask(baseTaskFields("t4", { status: "running", updated_at: t0 })); // mesmo milissegundo de propósito
+      store.upsertTask(baseTaskFields("t4", { status: "running", updated_at: t0 })); // coerced — no-op
       store.upsertTask(baseTaskFields("t4", { status: "done", updated_at: t0 + 50 }));
 
       const transitions = store.getTask("t4")!.transitions!;
-      expect(transitions.map((t) => t.to_value)).toEqual(["pending", "running", "done"]);
+      expect(transitions.map((t) => t.to_value)).toEqual(["pending", "done"]);
       for (let i = 1; i < transitions.length; i++) {
         expect(transitions[i].at).toBeGreaterThanOrEqual(transitions[i - 1].at);
       }
@@ -232,7 +232,7 @@ describe("store.ts: task_transitions / order / task_cards", () => {
 
       // O backfill de card_id ainda funciona: a task antiga com card_id
       // vira uma linha de junção com papel razoável.
-      expect(task!.cards).toEqual([{ task_id: "pre-existing-task", card_id: "card-old", role: "implementer" }]);
+      expect(task!.cards).toMatchObject([{ task_id: "pre-existing-task", card_id: "card-old", role: "implementer" }]);
 
       // E as tabelas novas já funcionam de ponta a ponta a partir daqui.
       store.upsertTask({ ...task!, status: "failed", updated_at: Date.now() });
@@ -276,16 +276,20 @@ describe("store.ts: task_transitions / order / task_cards", () => {
       // upsertTask com card_id popula 'implementer' sozinho (sem chamada
       // extra que alguém precise lembrar).
       store.upsertTask(baseTaskFields("t6", { card_id: "card-306" }));
-      expect(store.getTaskCards("t6")).toEqual([{ task_id: "t6", card_id: "card-306", role: "implementer" }]);
+      // `toMatchObject`, não `toEqual`: a linha de `task_cards` ganhou
+      // `linked_at` (época do vínculo, 007dda0) e as colunas de perfil de
+      // execução (6720343). Este teste é sobre PAPEL — fixar o shape
+      // inteiro faz ele quebrar a cada coluna nova sem nada a ver.
+      expect(store.getTaskCards("t6")).toMatchObject([{ task_id: "t6", card_id: "card-306", role: "implementer" }]);
 
       // Um segundo card, papel diferente, via o primitivo explícito.
       store.linkTaskCard("t6", "card-304", "reviewer");
       const cards = store.getTaskCards("t6");
       expect(cards).toHaveLength(2);
-      expect(cards).toEqual(
+      expect(cards).toMatchObject(
         expect.arrayContaining([
-          { task_id: "t6", card_id: "card-306", role: "implementer" },
-          { task_id: "t6", card_id: "card-304", role: "reviewer" },
+          expect.objectContaining({ task_id: "t6", card_id: "card-306", role: "implementer" }),
+          expect.objectContaining({ task_id: "t6", card_id: "card-304", role: "reviewer" }),
         ]),
       );
 
@@ -374,7 +378,7 @@ describe("store.ts: applyColumnDrop (peça 3, review adversarial rodada 3)", () 
       store.applyColumnDrop(dragged, [{ id: "sib1", implicitOrder: 250 }]);
 
       const draggedAfter = store.getTask("dragged")!;
-      expect(draggedAfter.status).toBe("running");
+      expect(draggedAfter.status).toBe("pending");
       expect(draggedAfter.order).toBe(500);
       expect(draggedAfter.implicit_order).toBeNull(); // a arrastada nunca ganha implicit_order — ela já tem order de verdade
 

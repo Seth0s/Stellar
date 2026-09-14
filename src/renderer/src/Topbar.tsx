@@ -128,6 +128,14 @@ export function Topbar({
               {t("topbar.autonomous")}
             </span>
           )}
+          {activeBoard?.orchestrator_card_id && (
+            <span
+              className="topbar-orchestrator-badge"
+              title={t("topbar.orchestratorTitle", { id: activeBoard.orchestrator_card_id })}
+            >
+              {t("topbar.orchestrator")}
+            </span>
+          )}
           {activeCounts && (
             <span className="topbar-counts">
               <StatusDot counts={activeCounts} />

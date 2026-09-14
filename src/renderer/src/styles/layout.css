@@ -442,6 +442,17 @@ body {
   padding: 1px 5px;
 }
 
+.topbar-orchestrator-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
 /* DESIGN-BACKLOG.md item 60, peça 1 — floating panel, only rendered while
    the active board's queue is non-empty (SpawnQueuePanel.tsx returns null
    otherwise). Anchored top-right, under the topbar, same surface/border

@@ -75,6 +75,9 @@ describe("message-bus: link_task_card", () => {
               };
             if (prop === "linkTaskCard") return (taskId: string, cardId: string, role: string) => linked.push({ taskId, cardId, role });
             if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
             return () => undefined;
           },
         },
@@ -91,13 +94,13 @@ describe("message-bus: link_task_card", () => {
     expect(upserted).toEqual([]);
   });
 
-  it("implementer (default quando omitido): vira card_id principal sem propor status, e grava o papel explícito", async () => {
+  it("implementer (default quando omitido): vira card_id principal via linkImplementerToTask", async () => {
     const { res, upserted, linked } = await run({ taskId: "t-link", cardId: "rev" });
     expect(res).toEqual({ ok: true, taskId: "t-link", cardId: "rev", role: "implementer" });
     expect(upserted).toHaveLength(1);
     expect(upserted[0].card_id).toBe("rev");
-    expect(upserted[0].status).toBe("running");
-    expect(upserted[0].statusProposed).toBe(false);
+    expect(upserted[0].status).toBe("pending");
+    expect(upserted[0].statusProposed).toBe(true);
     expect(upserted[0].actor).toBe("agent");
     expect(linked).toEqual([{ taskId: "t-link", cardId: "rev", role: "implementer" }]);
   });

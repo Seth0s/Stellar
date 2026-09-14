@@ -112,6 +112,34 @@ export type ConnectorRow = {
   label: string | null;
 };
 
+/**
+ * Spawn registry (2026-09-14) — who spawned whom, and why. Separate from
+ * the visual `connectors` row (`kind=spawned`): that edge needs a real
+ * from-card and never carried `reason` (label was banned from motive).
+ * Human UI has no requester; connector cannot say that honestly. Append-
+ * only, one row per newborn card (`to_card_id` UNIQUE). Depth is NOT
+ * stored — derive by walking `from_card_id` (see spawn-record-decision).
+ * Register always; never a notification feeder.
+ */
+export type SpawnRow = {
+  id: string;
+  board_id: string;
+  /** Null when origin is human UI or system (task auto-dispatch). */
+  from_card_id: string | null;
+  to_card_id: string;
+  /** Agent must supply non-empty; human/system may be null. */
+  reason: string | null;
+  task_id: string | null;
+  /** Terminal provider, or null for non-terminal spawn_card. */
+  provider: string | null;
+  /** `terminal` for spawn_agent; spawn_card kind otherwise. */
+  card_kind: string | null;
+  cwd: string | null;
+  /** `agent` | `human` | `system` — see spawn-record-decision.ts. */
+  origin: string;
+  created_at: number;
+};
+
 /** DESIGN-BACKLOG.md §2.1 "próxima rodada" — favoritos do navegador,
  * globais pro app inteiro (decisão explícita do usuário, não por board):
  * um site salvo faz sentido reusar entre projetos diferentes. `url` como
@@ -156,6 +184,15 @@ export type BoardRow = {
    * default", not "zero" — a board that predates this column, or that
    * never had the cap touched, must not suddenly refuse every spawn. */
   concurrency_cap: number | null;
+  /**
+   * Board orchestrator mark (owner contract 2026-09-14) — at most ONE
+   * card id per board. Lives on `boards` (not `cards`) so two marks are
+   * inexpressible: one column, one value. `null` = unmarked board
+   * (degrades to today's human-signs / spawn-lineage report routing).
+   * Only the renderer UI writes this — never MCP/acbridge. Cleared when
+   * the pointed card is deleted (orphan delegation is forbidden).
+   */
+  orchestrator_card_id: string | null;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -341,8 +378,10 @@ export type TaskRow = {
 /** `actor` de `task_transitions` — quem causou a transição. "app" é o
  * próprio motor (onTaskDone/card saindo sem reportar,
  * message-bus.ts), "agent" é uma chamada de create_task/update_task via
- * MCP, "human" é reservado pra Fase 2 (arrastar a mão no board). */
-export type TaskActor = "app" | "agent" | "human";
+ * MCP, "human" é o gesto na UI, "orchestrator" é assinatura delegada do
+ * card marcado no board (nunca gravar `human` por delegação — trilha
+ * falsa). */
+export type TaskActor = "app" | "agent" | "human" | "orchestrator";
 
 /** DESIGN-BACKLOG.md §2.1 "Log de transição (`task_transitions`)" —
  * desenhada e aprovada em separado da tabela `tasks`. `kind` distingue
@@ -678,6 +717,13 @@ function migrate(db: Database.Database) {
   }
   try {
     db.exec(`ALTER TABLE boards ADD COLUMN concurrency_cap INTEGER`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  // Board orchestrator mark — nullable card id, one per board by
+  // construction (column on boards, not a flag on cards).
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN orchestrator_card_id TEXT`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -1043,6 +1089,23 @@ export function openStore(userDataDir: string) {
     );
   `);
 
+  // Spawn registry — see SpawnRow. UNIQUE(to_card_id): a card is born once.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS spawns (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL,
+      from_card_id TEXT,
+      to_card_id TEXT NOT NULL UNIQUE,
+      reason TEXT,
+      task_id TEXT,
+      provider TEXT,
+      card_kind TEXT,
+      cwd TEXT,
+      origin TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
   // Must run after every CREATE TABLE IF NOT EXISTS above (cards,
   // connectors, AND boards — it now ALTERs all three): on a brand-new
   // database running it any earlier throws "no such table" for whichever
@@ -1064,6 +1127,8 @@ export function openStore(userDataDir: string) {
     CREATE INDEX IF NOT EXISTS idx_tasks_sprint_id ON tasks(sprint_id);
     CREATE INDEX IF NOT EXISTS idx_sprints_board_id ON sprints(board_id);
     CREATE INDEX IF NOT EXISTS idx_reports_card_seq ON reports(card_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_spawns_from_card_id ON spawns(from_card_id);
+    CREATE INDEX IF NOT EXISTS idx_spawns_board_id ON spawns(board_id);
     CREATE INDEX IF NOT EXISTS idx_tt_task ON task_transitions(task_id, at);
     CREATE INDEX IF NOT EXISTS idx_task_cards_task ON task_cards(task_id);
     CREATE INDEX IF NOT EXISTS idx_tv_task ON task_verdicts(task_id, at);
@@ -1250,16 +1315,17 @@ export function openStore(userDataDir: string) {
   const getConnectorBoardIdStmt = db.prepare("SELECT board_id FROM connectors WHERE id = ?");
 
   const listBoardsStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap FROM boards ORDER BY created_at ASC",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id FROM boards ORDER BY created_at ASC",
   );
   const getBoardStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap FROM boards WHERE id = ?",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id FROM boards WHERE id = ?",
   );
   const upsertBoardStmt = db.prepare(`
-    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap)
-    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous, @concurrency_cap)
+    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id)
+    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous, @concurrency_cap, @orchestrator_card_id)
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, cwd = excluded.cwd,
-      updated_at = excluded.updated_at, autonomous = excluded.autonomous, concurrency_cap = excluded.concurrency_cap
+      updated_at = excluded.updated_at, autonomous = excluded.autonomous, concurrency_cap = excluded.concurrency_cap,
+      orchestrator_card_id = excluded.orchestrator_card_id
   `);
   const deleteBoardStmt = db.prepare("DELETE FROM boards WHERE id = ?");
   const touchBoardStmt = db.prepare("UPDATE boards SET last_accessed_at = ? WHERE id = ?");
@@ -1273,6 +1339,15 @@ export function openStore(userDataDir: string) {
   // the input field next to the autonomous checkbox fires this directly,
   // not routed through the general board-edit save.
   const setBoardConcurrencyCapStmt = db.prepare("UPDATE boards SET concurrency_cap = ?, updated_at = ? WHERE id = ?");
+  // Board orchestrator mark — UI-only write path (mirrors autonomous).
+  // Setting a new card id replaces any previous mark (one level, one
+  // column). `null` clears. No MCP surface calls this.
+  const setBoardOrchestratorCardIdStmt = db.prepare(
+    "UPDATE boards SET orchestrator_card_id = ?, updated_at = ? WHERE id = ?",
+  );
+  const clearOrchestratorMarkForCardStmt = db.prepare(
+    "UPDATE boards SET orchestrator_card_id = NULL, updated_at = ? WHERE orchestrator_card_id = ?",
+  );
 
   // Structural counts for the session-list popover (item 1). Both
   // "agents" and "active" exclude plain bash terminals (provider = 'bash')
@@ -1672,7 +1747,7 @@ export function openStore(userDataDir: string) {
       existingDivergedStatus: existing?.diverged_status ?? null,
       existingDivergedActor: existing?.diverged_actor ?? null,
     });
-    if (applyStatusDespiteHold && proposedStatus !== null && previousActor === "human") {
+    if (applyStatusDespiteHold && proposedStatus !== null && (previousActor === "human" || previousActor === "orchestrator")) {
       decision = {
         status: proposedStatus,
         statusChanged: proposedStatus !== previousStatus,
@@ -1714,7 +1789,7 @@ export function openStore(userDataDir: string) {
     const linkedCardId = rest.card_id ?? existing?.card_id ?? null;
     let divergedStatus = decision.divergedStatus;
     let divergedActor = decision.divergedActor;
-    if (newActor === "human" && proposedStatus === "pending" && linkedCardId) {
+    if ((newActor === "human" || newActor === "orchestrator") && proposedStatus === "pending" && linkedCardId) {
       divergedStatus = "pending";
       divergedActor = "human";
     }
@@ -2071,6 +2146,19 @@ export function openStore(userDataDir: string) {
   `);
   const removeFavoriteStmt = db.prepare("DELETE FROM browser_favorites WHERE url = ?");
 
+  const SPAWN_COLUMNS =
+    "id, board_id, from_card_id, to_card_id, reason, task_id, provider, card_kind, cwd, origin, created_at";
+  const insertSpawnStmt = db.prepare(`
+    INSERT INTO spawns (${SPAWN_COLUMNS})
+    VALUES (@id, @board_id, @from_card_id, @to_card_id, @reason, @task_id, @provider, @card_kind, @cwd, @origin, @created_at)
+  `);
+  const findSpawnByChildStmt = db.prepare(
+    `SELECT ${SPAWN_COLUMNS} FROM spawns WHERE to_card_id = ?`,
+  );
+  const listSpawnsByParentStmt = db.prepare(
+    `SELECT ${SPAWN_COLUMNS} FROM spawns WHERE from_card_id = ? ORDER BY created_at ASC`,
+  );
+
   return {
     listCards: (boardId: string): CardRow[] => listStmt.all(boardId) as CardRow[],
     listAllCards: (): CardRow[] => listAllStmt.all() as CardRow[],
@@ -2090,7 +2178,12 @@ export function openStore(userDataDir: string) {
         // INSERT only — ON CONFLICT leaves the stored incarnation clock alone.
         created_at: card.created_at ?? Date.now(),
       }),
-    deleteCard: (id: string) => deleteStmt.run(id),
+    deleteCard: (id: string) => {
+      // Orphan delegation is forbidden: closing the marked card drops the
+      // board mark so the next judgment/report path degrades to unmarked.
+      clearOrchestratorMarkForCardStmt.run(Date.now(), id);
+      deleteStmt.run(id);
+    },
     listChatSessions: (): CardRow[] => listChatSessionsStmt.all() as CardRow[],
     archiveCard: (id: string, at: number) => archiveCardStmt.run(at, id),
     unarchiveCard: (id: string) => unarchiveCardStmt.run(id),
@@ -2110,18 +2203,88 @@ export function openStore(userDataDir: string) {
     setConnectorLabel: (id: string, label: string | null): boolean => setConnectorLabelStmt.run(label, Date.now(), id).changes > 0,
     getConnectorBoardId: (id: string): string | undefined => (getConnectorBoardIdStmt.get(id) as { board_id: string } | undefined)?.board_id,
     deleteConnectorsForCard: (cardId: string) => deleteConnectorsForCardStmt.run(cardId, cardId),
+    /**
+     * Append one spawn registry row. `to_card_id` is UNIQUE — a second
+     * birth of the same card is refused by SQLite (callers must not
+     * re-record). Depth is not written; readers walk `from_card_id`.
+     */
+    recordSpawn: (input: {
+      boardId: string;
+      fromCardId: string | null;
+      toCardId: string;
+      reason: string | null;
+      taskId?: string | null;
+      provider?: string | null;
+      cardKind?: string | null;
+      cwd?: string | null;
+      origin: string;
+      createdAt?: number;
+    }): SpawnRow => {
+      const row: SpawnRow = {
+        id: randomUUID(),
+        board_id: input.boardId,
+        from_card_id: input.fromCardId,
+        to_card_id: input.toCardId,
+        reason: input.reason,
+        task_id: input.taskId ?? null,
+        provider: input.provider ?? null,
+        card_kind: input.cardKind ?? null,
+        cwd: input.cwd ?? null,
+        origin: input.origin,
+        created_at: input.createdAt ?? Date.now(),
+      };
+      insertSpawnStmt.run(row);
+      return row;
+    },
+    /** Parent spawn that created `toCardId`, or undefined. */
+    findSpawnByChild: (toCardId: string): SpawnRow | undefined =>
+      findSpawnByChildStmt.get(toCardId) as SpawnRow | undefined,
+    /** Cards this one spawned, oldest first. */
+    listSpawnsByParent: (fromCardId: string): SpawnRow[] =>
+      listSpawnsByParentStmt.all(fromCardId) as SpawnRow[],
     // `autonomous` is stored as SQLite's usual 0/1 INTEGER (no native
     // boolean type) — converted to/from a real `boolean` here so nothing
     // downstream (MCP JSON responses included) ever sees a raw 0/1.
-    listBoards: (): BoardRow[] => (listBoardsStmt.all() as Array<Omit<BoardRow, "autonomous"> & { autonomous: number }>).map((b) => ({ ...b, autonomous: !!b.autonomous })),
+    listBoards: (): BoardRow[] =>
+      (listBoardsStmt.all() as Array<Omit<BoardRow, "autonomous"> & { autonomous: number }>).map((b) => ({
+        ...b,
+        autonomous: !!b.autonomous,
+        orchestrator_card_id: b.orchestrator_card_id ?? null,
+      })),
     getBoard: (id: string): BoardRow | undefined => {
       const row = getBoardStmt.get(id) as (Omit<BoardRow, "autonomous"> & { autonomous: number }) | undefined;
-      return row ? { ...row, autonomous: !!row.autonomous } : undefined;
+      return row
+        ? { ...row, autonomous: !!row.autonomous, orchestrator_card_id: row.orchestrator_card_id ?? null }
+        : undefined;
     },
-    upsertBoard: (board: BoardRow) => upsertBoardStmt.run({ ...board, autonomous: board.autonomous ? 1 : 0, concurrency_cap: board.concurrency_cap ?? null }),
+    upsertBoard: (board: BoardRow) =>
+      upsertBoardStmt.run({
+        ...board,
+        autonomous: board.autonomous ? 1 : 0,
+        concurrency_cap: board.concurrency_cap ?? null,
+        orchestrator_card_id: board.orchestrator_card_id ?? null,
+      }),
     touchBoard: (id: string, at: number) => touchBoardStmt.run(at, id),
     setBoardAutonomous: (id: string, autonomous: boolean) => setBoardAutonomousStmt.run(autonomous ? 1 : 0, Date.now(), id),
     setBoardConcurrencyCap: (id: string, cap: number | null) => setBoardConcurrencyCapStmt.run(cap, Date.now(), id),
+    /**
+     * UI-only orchestrator mark. `cardId: null` clears. Replacing an
+     * existing mark is intentional (one level — human points elsewhere).
+     * Returns false when the board is missing; when setting a card id,
+     * also false if that card is missing or not on this board.
+     */
+    setBoardOrchestratorCardId: (boardId: string, cardId: string | null): boolean => {
+      if (!getBoardExistsStmt.get(boardId)) return false;
+      if (cardId !== null) {
+        const card = getCardStmt.get(cardId) as { board_id: string; kind: string } | undefined;
+        if (!card || card.board_id !== boardId) return false;
+        // Reports land on a PTY — only terminal cards can hold the mark.
+        if (card.kind !== "terminal") return false;
+      }
+      setBoardOrchestratorCardIdStmt.run(cardId, Date.now(), boardId);
+      return true;
+    },
+    clearOrchestratorMarkForCard: (cardId: string) => clearOrchestratorMarkForCardStmt.run(Date.now(), cardId),
     getCard: (id: string): CardRow | undefined => getCardStmt.get(id) as CardRow | undefined,
     cardCounts: (): Record<string, BoardCounts> => {
       const rows = cardCountsStmt.all() as { board_id: string; agents: number; active: number }[];

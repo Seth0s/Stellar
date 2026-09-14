@@ -25,6 +25,9 @@ function callbacksWithSpies(overrides: Record<string, (...args: never[]) => unkn
       get: (_target, prop: string) => {
         if (prop in overrides) return overrides[prop];
         if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
         if (prop === "getCardBoardId") return () => undefined;
         if (prop === "isBoardAutonomous") return () => false;
@@ -63,7 +66,7 @@ describe("message-bus.ts: spawn_agent effort validation por provider", () => {
           cmd: "spawn_agent",
           provider: "antigravity",
           effort,
-          requesterId: "card-1",
+          reason: "test", requesterId: "card-1",
         } as BusRequest)) as { ok: boolean; error?: string };
         expect(res.ok).toBe(false);
         expect(res.error).toMatch(/low.*medium.*high/i);
@@ -88,7 +91,7 @@ describe("message-bus.ts: spawn_agent effort validation por provider", () => {
       // Sem `wait`, handleRequest resolve assim que o request é
       // despachado (SPAWN_TIMEOUT_MS é longo) — não precisamos simular
       // aprovação humana pra provar que a validação deixou passar.
-      void bus.handleRequest({ cmd: "spawn_agent", provider: "antigravity", effort, requesterId: "card-1" } as BusRequest);
+      void bus.handleRequest({ cmd: "spawn_agent", provider: "antigravity", effort, reason: "test", requesterId: "card-1" } as BusRequest);
       await new Promise((r) => setTimeout(r, 20));
       expect(receivedEffort).toBe(effort);
     } finally {
@@ -111,7 +114,7 @@ describe("message-bus.ts: spawn_agent effort validation por provider", () => {
         cmd: "spawn_agent",
         provider: "claude",
         effort: "garbage",
-        requesterId: "card-1",
+        reason: "test", requesterId: "card-1",
       } as BusRequest)) as { ok: boolean; error?: string };
       expect(res.ok).toBe(false);
       expect(res.error).toMatch(/low.*medium.*high.*xhigh.*max/i);
@@ -134,7 +137,7 @@ describe("message-bus.ts: spawn_agent effort validation por provider", () => {
         }),
       );
       try {
-        void bus.handleRequest({ cmd: "spawn_agent", provider: "claude", effort, requesterId: "card-1" } as BusRequest);
+        void bus.handleRequest({ cmd: "spawn_agent", provider: "claude", effort, reason: "test", requesterId: "card-1" } as BusRequest);
         await new Promise((r) => setTimeout(r, 20));
         expect(dispatched).toBe(true);
       } finally {
@@ -154,7 +157,7 @@ describe("message-bus.ts: spawn_agent effort validation por provider", () => {
       }),
     );
     try {
-      void bus.handleRequest({ cmd: "spawn_agent", provider: "antigravity", requesterId: "card-1" } as BusRequest);
+      void bus.handleRequest({ cmd: "spawn_agent", provider: "antigravity", reason: "test", requesterId: "card-1" } as BusRequest);
       await new Promise((r) => setTimeout(r, 20));
       expect(receivedParams).toBeDefined();
       expect(receivedParams!.effort).toBeUndefined();
@@ -190,7 +193,7 @@ describe("message-bus.ts: spawn_agent effort validation por provider", () => {
           // sent, in this test) approval/resolution — awaiting the promise
           // directly would hang until SPAWN_TIMEOUT_MS. Whether it reached
           // `onSpawnAgentRequest` at all is the signal this test needs.
-          void bus.handleRequest({ cmd: "spawn_agent", provider, effort, requesterId: "card-1" } as BusRequest);
+          void bus.handleRequest({ cmd: "spawn_agent", provider, effort, reason: "test", requesterId: "card-1" } as BusRequest);
           await new Promise((r) => setTimeout(r, 20));
           const offeredByUi = (PROVIDER_EFFORT_VALUES[provider] ?? []).includes(effort);
           expect(dispatched).toBe(offeredByUi);

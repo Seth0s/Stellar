@@ -41,6 +41,9 @@ function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => 
       get: (_target, prop: string) => {
         if (prop in overrides) return overrides[prop];
         if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
         if (prop === "getCardBoardId") return () => undefined;
         if (prop === "isBoardAutonomous") return () => false;
@@ -222,7 +225,7 @@ describe("message-bus: spawn_agent({taskId}) compartilha o ponteiro", () => {
         listCards: (() => [{ id: "new-card", kind: "terminal", provider: "claude", cwd: "", label: null }]) as never,
       }),
     );
-    const res = (await bus.handleRequest({ cmd: "spawn_agent", provider: "claude", taskId: task.id, requesterId: "orch", ...req } as BusRequest)) as { ok: boolean };
+    const res = (await bus.handleRequest({ cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch", ...req } as BusRequest)) as { ok: boolean };
     return { res, spawned };
   }
 

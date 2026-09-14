@@ -111,9 +111,14 @@ export function groupTasksByColumn<T extends TaskOrderable & { status: string }>
 /** `actor` de `task_transitions` (store.ts) — replicado aqui em vez de
  * importado (ver o doc comment do módulo) pra manter isto livre de
  * qualquer dependência do lado Electron. */
-export type TaskActor = "app" | "agent" | "human";
+export type TaskActor = "app" | "agent" | "human" | "orchestrator";
 
-const ACTOR_BADGE: Record<TaskActor, MessageKey> = { app: "task.badge.app", agent: "task.badge.agent", human: "task.badge.human" };
+const ACTOR_BADGE: Record<TaskActor, MessageKey> = {
+  app: "task.badge.app",
+  agent: "task.badge.agent",
+  human: "task.badge.human",
+  orchestrator: "task.badge.orchestrator",
+};
 
 /** Selo de origem (DESIGN-BACKLOG.md §2.1, "lido da última linha do log de
  * transição") — `lastActor` já chega pronto do main process (uma
@@ -779,6 +784,7 @@ export function describeStatusDivergence(
   if (!divergedStatus || !divergedActor) return null;
   const label = t(COLUMN_I18N[columnForStatus(divergedStatus)]);
   if (divergedActor === "human") return t("task.divergence.humanHold", { label });
+  if (divergedActor === "orchestrator") return t("task.divergence.orchestratorHold", { label });
   if (divergedActor === "app") return t("task.divergence.app", { label });
   if (divergedActor === "agent") return t("task.divergence.agent", { label });
   return t("task.divergence.other", { label });

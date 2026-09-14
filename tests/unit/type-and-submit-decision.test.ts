@@ -710,9 +710,10 @@ describe("inspectDeliveryHold", () => {
 });
 
 describe("renewsHumanInputGateClock", () => {
-  it("tecla humana renova; delivery não", () => {
+  it("tecla humana renova; delivery e auto não", () => {
     expect(renewsHumanInputGateClock("human")).toBe(true);
     expect(renewsHumanInputGateClock("delivery")).toBe(false);
+    expect(renewsHumanInputGateClock("auto")).toBe(false);
   });
 });
 

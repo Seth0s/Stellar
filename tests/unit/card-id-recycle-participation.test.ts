@@ -86,6 +86,9 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         if (prop === "listTasks") return () => store.listTasks();
         if (prop === "upsertTask") return (row: TaskRow) => store.upsertTask(row);
         if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
         if (prop === "getTaskCards") return (taskId: string) => store.getTaskCards(taskId);
         return () => undefined;
@@ -175,20 +178,33 @@ describe("card id recycle vs live participation (store real)", () => {
     store.upsertTask(baseTask("ec01-old", { card_id: "478", status: "pending" }));
     store.recordParticipationRound("478", null, 1_000);
     store.upsertTask(baseTask("ec01-old", { card_id: "478", status: "done", updated_at: Date.now() }));
-    const staleLink = store.listTaskCardsForCardHistory("478").find((l) => l.task_id === "ec01-old");
-    expect(staleLink?.linked_at).toEqual(expect.any(Number));
-
     store.deleteCard("478");
-    // Force pre-fix recycle: rebirth under the same short id with an
-    // incarnation clock strictly AFTER the stale link, but not in the
-    // future — the new link's linked_at is Date.now() and must still be
-    // >= created_at.
-    const rebirthAt = (staleLink!.linked_at as number) + 1;
-    store.upsertCard({ ...baseCard("478"), created_at: rebirthAt });
+
+    // Pin epochs explicitly (avoid same-ms flakiness between linked_at and created_at).
+    store.close();
+    store = null;
+    bus.close();
+    bus = null;
+    {
+      const raw = new Database(join(dir, "agent-canvas.db"));
+      raw.prepare("UPDATE task_cards SET linked_at = 1000 WHERE task_id = 'ec01-old' AND card_id = '478'").run();
+      raw.close();
+    }
+    store = openStore(dir);
+    bus = createMessageBus(join(dir, "epoch.sock"), callbacksBackedByStore(store));
+    store.upsertCard({ ...baseCard("478"), created_at: 2000 });
     store.upsertTask(baseTask("d107-new", { card_id: "478", status: "pending" }));
-    // If this machine's clock somehow tied, bump the new link explicitly.
-    if ((store.listTaskCardsForCardHistory("478").find((l) => l.task_id === "d107-new")?.linked_at ?? 0) < rebirthAt) {
-      store.linkTaskCard("d107-new", "478", "implementer");
+    {
+      // Ensure the NEW link is of this incarnation (Date.now() is fine; pin for certainty).
+      store.close();
+      store = null;
+      bus.close();
+      bus = null;
+      const raw = new Database(join(dir, "agent-canvas.db"));
+      raw.prepare("UPDATE task_cards SET linked_at = 3000 WHERE task_id = 'd107-new' AND card_id = '478'").run();
+      raw.close();
+      store = openStore(dir);
+      bus = createMessageBus(join(dir, "epoch.sock"), callbacksBackedByStore(store));
     }
 
     expect(store.listTaskCardsForCardHistory("478").map((l) => l.task_id).sort()).toEqual(["d107-new", "ec01-old"]);
