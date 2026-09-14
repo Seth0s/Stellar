@@ -18,6 +18,7 @@ import {
   derivePurposeChip,
   describePurposeChip,
   deriveCompletionProposal,
+  describeVerdictChip,
   shortTaskId,
   formatTaskAge,
   waitingOnDep,
@@ -236,6 +237,9 @@ function TaskItem({
   // reviewer na task; a barra diz isso em texto. Com `review="wanted"`
   // sem reviewer, a barra some e `reviewWantedNotice` explica o stall.
   const proposal = deriveCompletionProposal(task.status, cardRoles, task.verdicts, task.review === "wanted");
+  const proposalChip = proposal
+    ? describeVerdictChip(proposal.origin === "self" ? "implementer" : "reviewer", proposal.verdict)
+    : null;
   const reviewWantedNotice = describeReviewWantedNotice(task.review, cardRoles);
   const waitingOn = waitingOnDep(task.deps, task.depStatuses);
   const pills = computeMetaPills(waitingOn, task.order, task.suggestedOrder, task.verdicts);
@@ -335,11 +339,11 @@ function TaskItem({
           {trail}
         </div>
       )}
-      {proposeVisible && proposal && (
+      {proposeVisible && proposal && proposalChip && (
         <div className={styles.proposeBar} data-part="propose-bar" data-origin={proposal.origin}>
           <span className={styles.proposeText}>
-            <span className={styles.verdictChip} data-part="verdict-chip">
-              {proposal.verdict}
+            <span className={styles.verdictChip} data-part="verdict-chip" data-tone={proposalChip.tone}>
+              {proposalChip.label}
             </span>
             {proposal.origin === "self" ? t("task.propose.self") : t("task.propose")}
           </span>
@@ -587,16 +591,21 @@ function TaskDetailModal({
               <div className={styles.detailEmpty}>{t("task.detail.noVerdicts")}</div>
             ) : (
               <div className={styles.detailList}>
-                {task.verdicts.map((v, i) => (
+                {task.verdicts.map((v, i) => {
+                  const chip = describeVerdictChip(v.role, v.verdict);
+                  return (
                   <div key={`${v.cardId}-${v.at}-${i}`} className={styles.detailVerdict} data-part="task-detail-verdict">
                     <span>{t("task.detail.verdictRound", { n: i + 1 })}</span>
                     <span className={styles.chipId}>{v.cardId}</span>
                     <span className={styles.chipRole}>{describeCardRole(v.role)}</span>
-                    <span className={styles.verdictChip}>{v.verdict ?? t("task.detail.verdictNone")}</span>
+                    <span className={styles.verdictChip} data-part="verdict-chip" data-tone={chip.tone}>
+                      {chip.label}
+                    </span>
                     {v.provider && <span className={styles.age}>{v.provider}</span>}
                     <span className={styles.detailVerdictWhen}>{formatPromptWhen(v.at)}</span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

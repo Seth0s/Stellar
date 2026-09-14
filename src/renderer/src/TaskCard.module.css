@@ -474,6 +474,13 @@
   color: var(--text);
 }
 
+/* Implementer self-proposal: same bar shape, neutral chrome — never
+   the success wash that reserved `--good` for a real reviewer verdict. */
+.proposeBar[data-origin="self"] {
+  background: color-mix(in srgb, var(--muted) 14%, var(--panel));
+  border-color: color-mix(in srgb, var(--muted) 40%, var(--border));
+}
+
 .proposeText {
   display: flex;
   align-items: center;
@@ -482,7 +489,8 @@
 }
 
 /* RODADA 2 — chip de veredito próprio (`aprovado`), separado do texto —
-   o protótipo mostra os dois como elementos distintos, não uma frase só. */
+   o protótipo mostra os dois como elementos distintos, não uma frase só.
+   Default = reviewer (`--good`). `data-tone` demotes implementer/unknown. */
 .verdictChip {
   flex: none;
   text-transform: uppercase;
@@ -493,6 +501,23 @@
   background: var(--good);
   border-radius: 4px;
   padding: 1px 5px;
+}
+
+.verdictChip[data-tone="muted"] {
+  background: var(--muted);
+  color: var(--on-accent);
+}
+
+.verdictChip[data-tone="danger"] {
+  background: var(--danger);
+  /* §5.4 — badge on danger uses white, not --on-accent (dark-on-dark). */
+  color: #fff;
+}
+
+.verdictChip[data-tone="none"] {
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--border);
 }
 
 .proposeActions {
