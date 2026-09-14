@@ -41,6 +41,11 @@ Camada operacional do projeto **Stellar**. Este documento é o contrato de traba
 4. **Proteção de Segredos & Integridade de Dados:**
    * Credenciais de API e pareamentos remotos são gravados atomicamente via `safeStorage` (ou fallback `chmod 0600`).
    * Nunca versionar ou expor tokens reais nos logs ou testes.
+5. **Nenhum Comando Git que Descarte Estado:**
+   * Proibidos `reset --hard`, `checkout <arquivo>`, `restore`, `stash` e `clean` nesta árvore.
+   * Motivo medido (2026-09-14): um agente rodou um reset destrutivo para "isolar" a própria entrega e destruiu trabalho não commitado de três cards; os blobs não eram recuperáveis por `lost-found`. Esta árvore é compartilhada por vários agentes simultâneos com frequência — o custo de um comando destrutivo aqui nunca é local.
+   * Precisa de árvore limpa para um gate? `git worktree add /tmp/<nome> HEAD`, rode lá, remova depois.
+   * Vale para agentes E para humanos: quem está sozinho na árvore não sabe se um card vai nascer no minuto seguinte.
 
 ---
 
