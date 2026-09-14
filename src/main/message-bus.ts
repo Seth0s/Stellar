@@ -776,7 +776,16 @@ export function createMessageBus(
      * coberto pelo `undefined` do retorno inteiro). */
     getAnyCard: (
       cardId: string,
-    ) => { boardId: string; kind: string; provider: string | null; model?: string | null; effort?: string | null } | undefined;
+    ) =>
+      | {
+          boardId: string;
+          kind: string;
+          provider: string | null;
+          model?: string | null;
+          effort?: string | null;
+          resume_id?: string | null;
+        }
+      | undefined;
     /** Direct store mutation, no live renderer/IPC round-trip at all —
      * dispatchRequest only ever calls these for a card whose board ISN'T
      * the one currently loaded (nothing live to keep in sync there; a
@@ -861,7 +870,13 @@ export function createMessageBus(
       taskId: string,
       cardId: string,
       role: string,
-      profile?: { provider?: string | null; model?: string | null; effort?: string | null },
+      profile?: {
+        provider?: string | null;
+        model?: string | null;
+        effort?: string | null;
+        requestedResumeId?: string | null;
+        sessionId?: string | null;
+      },
     ) => void;
     /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — mesmo
      * pass-through direto pro store das 3 linhas acima, mesmo motivo. O
@@ -1217,7 +1232,13 @@ export function createMessageBus(
     task: TaskRow,
     cardId: string,
     actor: StatusActor,
-    profile?: { provider?: string | null; model?: string | null; effort?: string | null },
+    profile?: {
+      provider?: string | null;
+      model?: string | null;
+      effort?: string | null;
+      requestedResumeId?: string | null;
+      sessionId?: string | null;
+    },
   ) {
     const latest = callbacks.getTask(task.id) ?? task;
     const newStoredStatus = storedStatusAfterImplementerLink(latest.status);
@@ -1314,6 +1335,13 @@ export function createMessageBus(
         provider: c.provider ?? null,
         model: c.model ?? null,
         effort: c.effort ?? null,
+        // Session identity — same Camada 2 fact; survives card close.
+        // Prefer sessionId for spawn_agent({ resumeId }); fall back to
+        // requestedResumeId when discovery never fired (see
+        // resumeTargetFromParticipation). list_tasks deliberately omits
+        // cards[] entirely — do not add these there (payload size).
+        requestedResumeId: c.requested_resume_id ?? null,
+        sessionId: c.session_id ?? null,
       })),
       // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
       // — mesma condição de presença que `transitions`/`cards` acima:
@@ -3435,6 +3463,7 @@ export function createMessageBus(
           provider: req.provider,
           model: req.model,
           effort: req.effort,
+          resumeId: req.resumeId,
         });
         if (briefDecision.taskId && role === TASK_CARD_REVIEWER_ROLE) {
           // Reviewer: role row ONLY. `tasks.card_id` stays on whoever is
