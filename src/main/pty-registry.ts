@@ -1025,6 +1025,19 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.lastActivityAt ?? null;
   }
 
+  /** PTY child pid for process-ownership identify (`/proc/<pid>/fd`). */
+  function getPid(id: string): number | null {
+    const entry = entries.get(id);
+    if (!entry) return null;
+    const pid = entry.proc.pid;
+    return typeof pid === "number" && pid > 0 ? pid : null;
+  }
+
+  /** Session id this live entry already claimed (impose/resume/watcher). */
+  function getClaimedSessionId(id: string): string | null {
+    return entries.get(id)?.claimedSessionId ?? null;
+  }
+
   /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
    * caixa sem submeter" — o snapshot que `typeAndSubmit` (message-bus.ts)
    * precisa pra decidir, via `decideWriteReadiness`
@@ -1063,5 +1076,5 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getWriteReadiness, seenUrlsCount };
+  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getPid, getClaimedSessionId, getWriteReadiness, seenUrlsCount };
 }
