@@ -2261,15 +2261,17 @@ export function createMessageBus(
       const report = promoted.report;
       // Who is saying it — the caller's LIVE `task_cards.role`, stamped next
       // to the verdict from the SAME links `recordParticipationRound`
-      // reads below (one source, two rows). Historical links to done/
-      // failed tasks are already dropped by `listTaskCardsForCard` —
-      // ambiguity across roles is a separate guard inside
-      // `resolveReporterRole`. `null` when the card is on no open task,
-      // or on open tasks with different roles: unknown is a fact to
-      // record, not a value to guess — never `implementer` by default.
-      // The completion proposal (task-board-model.ts) only trusts an
-      // `aprovado` whose role is `reviewer`; an implementer's verdict is
-      // still stored (honest: "the implementer thinks it is done").
+      // reads below (one source, two rows). Live = link epoch matches the
+      // living card (`linked_at >= cards.created_at`); missing clocks fall
+      // back to dropping done/failed — so a recycled id cannot stamp old
+      // history, and a reviewer linked onto an already-done task still
+      // counts. Ambiguity across roles is a separate guard inside
+      // `resolveReporterRole`. `null` when the card has no live link, or
+      // live links with different roles: unknown is a fact to record, not
+      // a value to guess — never `implementer` by default. The completion
+      // proposal (task-board-model.ts) only trusts an `aprovado` whose
+      // role is `reviewer`; an implementer's verdict is still stored
+      // (honest: "the implementer thinks it is done").
       const reporterRole = resolveReporterRole(taskCardLinks);
       const stored: StoredReport = { report, seq: ++reportSeqCounter, verdict: promoted.verdict ?? null, role: reporterRole };
       // DESIGN-BACKLOG.md §2.1 — persiste ANTES de resolver waiters/avisar

@@ -2,21 +2,24 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { openStore, type CardRow, type ReportRow, type TaskRow } from "../../src/main/store";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 
 /**
- * 2026-09-13 — card id recycle + task_cards history stamped as live role.
- * Measured in production: card 478 died on ec01dc40, id reused, new card
- * reported, and the report landed as a participation round on the old
- * (already done) task with role `implementer` with confidence.
+ * Card-id recycle vs live participation — two cases that MUST share a
+ * criterion (epoch), because "task is done/failed" alone cannot tell them
+ * apart:
  *
- * Two guards, both required:
- * 1. `nextIdSeed` never reissues an id still named by task_cards /
- *    verdicts / reports / tasks.card_id (short ids stay short, they just
- *    never come back).
- * 2. Live participation ignores links whose task is already done/failed,
- *    so even a forced same-id rebirth cannot stamp the dead task.
+ * 1. Reviewer linked onto a task that is ALREADY `done` → verdict WRITTEN
+ *    with role `reviewer` (the case 5bd45eb's status filter broke: card
+ *    494 → ef31e603).
+ * 2. Recycled short id MUST NOT inherit a stale `task_cards` row from a
+ *    previous incarnation (the 37-verdict bug the status filter was
+ *    protecting).
+ *
+ * Also: `nextIdSeed` covers every schema column in the short-id space,
+ * including `task_transitions.card_id` (the hole in the hand-written UNION).
  */
 
 function baseCard(id: string): CardRow {
@@ -48,7 +51,7 @@ function baseTask(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
     id,
     prompt: "work",
     provider: "cursor",
-    status: "running",
+    status: "pending",
     card_id: null,
     board_id: "default",
     cwd: null,
@@ -84,6 +87,7 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         if (prop === "upsertTask") return (row: TaskRow) => store.upsertTask(row);
         if (prop === "listAllConnectors") return () => [];
         if (prop === "listCards") return () => [];
+        if (prop === "getTaskCards") return (taskId: string) => store.getTaskCards(taskId);
         return () => undefined;
       },
     },
@@ -103,63 +107,123 @@ describe("card id recycle vs live participation (store real)", () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
+  it("nextIdSeed does not reuse a deleted card id still referenced only by task_transitions", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-id-seed-tt-"));
+    store = openStore(dir);
+    store.upsertCard(baseCard("10"));
+    store.upsertTask(baseTask("t-tt", { status: "pending" }));
+    store.close();
+    store = null;
+
+    // The hole 5bd45eb left: a card that only left footprints in
+    // task_transitions, then was DELETEd from cards, with no row in the
+    // hand-written UNION tables.
+    const raw = new Database(join(dir, "agent-canvas.db"));
+    raw.prepare(
+      `INSERT INTO task_transitions (id, task_id, kind, from_value, to_value, actor, card_id, at)
+       VALUES ('tt-1', 't-tt', 'status', 'pending', 'done', 'agent', '10', ?)`,
+    ).run(Date.now());
+    raw.prepare("DELETE FROM cards WHERE id = '10'").run();
+    raw.close();
+
+    store = openStore(dir);
+    expect(store.getCard("10")).toBeUndefined();
+    expect(store.listTaskCardsForCardHistory("10")).toEqual([]);
+    expect(store.getTaskTransitions("t-tt").some((t) => t.card_id === "10")).toBe(true);
+    expect(store.nextIdSeed()).toBeGreaterThanOrEqual(10);
+  });
+
   it("nextIdSeed does not reuse a deleted card id still referenced by task_cards", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-id-seed-"));
     store = openStore(dir);
     store.upsertCard(baseCard("10"));
     store.upsertTask(baseTask("t-old", { card_id: "10", status: "done" }));
-    // Close path for non-chat cards: hard delete. History stays in task_cards.
     store.deleteCard("10");
     expect(store.getCard("10")).toBeUndefined();
     expect(store.listTaskCardsForCardHistory("10")).toEqual([
-      { task_id: "t-old", card_id: "10", role: "implementer" },
+      expect.objectContaining({ task_id: "t-old", card_id: "10", role: "implementer" }),
     ]);
 
-    // Without the historical union, MAX(cards) would be null/0 and the
-    // next spawn would reissue "10". Seed must stay at least 10.
     expect(store.nextIdSeed()).toBeGreaterThanOrEqual(10);
   });
 
-  it("card closes, same id is forced back, new card reports → old done task gets NO new verdict; new running task does", async () => {
-    dir = mkdtempSync(join(tmpdir(), "stellar-id-recycle-"));
+  it("SAME file: reviewer on done task writes verdict; recycled id does NOT inherit stale link", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-epoch-"));
     store = openStore(dir);
-    bus = createMessageBus(join(dir, "recycle.sock"), callbacksBackedByStore(store));
+    bus = createMessageBus(join(dir, "epoch.sock"), callbacksBackedByStore(store));
 
+    // --- Case A: reviewer on already-done task (the mechanism 5bd45eb broke) ---
+    store.upsertCard(baseCard("494"));
+    store.upsertTask(baseTask("ef31-done", { status: "done", card_id: null }));
+    store.linkTaskCard("ef31-done", "494", "reviewer");
+    expect(store.listTaskCardsForCard("494")).toEqual([
+      expect.objectContaining({ task_id: "ef31-done", card_id: "494", role: "reviewer" }),
+    ]);
+
+    const resReview = (await bus.handleRequest({
+      cmd: "report",
+      requesterId: "494",
+      report: { ok: true },
+      verdict: "reprovado",
+    } as BusRequest)) as { ok: boolean };
+    expect(resReview.ok).toBe(true);
+    expect(store.getReport("494")?.role).toBe("reviewer");
+    expect(store.getTaskVerdicts("ef31-done").map((v) => [v.role, v.verdict])).toEqual([["reviewer", "reprovado"]]);
+
+    // --- Case B: recycle — same short id, stale done-task link must not fire ---
     store.upsertCard(baseCard("478"));
-    store.upsertTask(baseTask("ec01-old", { card_id: "478", status: "running" }));
-    // First incarnation participates, then the task completes (measured:
-    // ec01dc40 → done at 16:26 while task_cards kept the row).
+    store.upsertTask(baseTask("ec01-old", { card_id: "478", status: "pending" }));
     store.recordParticipationRound("478", null, 1_000);
     store.upsertTask(baseTask("ec01-old", { card_id: "478", status: "done", updated_at: Date.now() }));
+    const staleLink = store.listTaskCardsForCardHistory("478").find((l) => l.task_id === "ec01-old");
+    expect(staleLink?.linked_at).toEqual(expect.any(Number));
 
     store.deleteCard("478");
-    // Force the pre-fix recycle: same short id reborn as a new card,
-    // linked to a DIFFERENT live task (d1074fc2 class).
-    store.upsertCard(baseCard("478"));
-    store.upsertTask(baseTask("d107-new", { card_id: "478", status: "running" }));
+    // Force pre-fix recycle: rebirth under the same short id with an
+    // incarnation clock strictly AFTER the stale link, but not in the
+    // future — the new link's linked_at is Date.now() and must still be
+    // >= created_at.
+    const rebirthAt = (staleLink!.linked_at as number) + 1;
+    store.upsertCard({ ...baseCard("478"), created_at: rebirthAt });
+    store.upsertTask(baseTask("d107-new", { card_id: "478", status: "pending" }));
+    // If this machine's clock somehow tied, bump the new link explicitly.
+    if ((store.listTaskCardsForCardHistory("478").find((l) => l.task_id === "d107-new")?.linked_at ?? 0) < rebirthAt) {
+      store.linkTaskCard("d107-new", "478", "implementer");
+    }
 
-    // History still names both; live view must only see the running one.
     expect(store.listTaskCardsForCardHistory("478").map((l) => l.task_id).sort()).toEqual(["d107-new", "ec01-old"]);
-    expect(store.listTaskCardsForCard("478")).toEqual([{ task_id: "d107-new", card_id: "478", role: "implementer" }]);
+    expect(store.listTaskCardsForCard("478")).toEqual([
+      expect.objectContaining({ task_id: "d107-new", card_id: "478", role: "implementer" }),
+    ]);
 
     const beforeOld = store.getTaskVerdicts("ec01-old").length;
-    const res = (await bus.handleRequest({
+    const resRecycle = (await bus.handleRequest({
       cmd: "report",
       requesterId: "478",
       report: { ok: true },
       verdict: "aprovado",
     } as BusRequest)) as { ok: boolean };
-    expect(res.ok).toBe(true);
+    expect(resRecycle.ok).toBe(true);
 
     expect(store.getReport("478")?.role).toBe("implementer");
     expect(store.getTaskVerdicts("ec01-old")).toHaveLength(beforeOld);
     expect(store.getTaskVerdicts("d107-new").map((v) => [v.role, v.verdict])).toEqual([["implementer", "aprovado"]]);
   });
 
-  it("recordParticipationRound alone ignores a done-task link even when it is the only link (resolveReporterRole would have trusted it)", () => {
+  it("legacy NULL clocks still drop a lone done-task link (recycle fallback)", () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-id-stale-only-"));
     store = openStore(dir);
+    store.upsertCard(baseCard("99"));
     store.upsertTask(baseTask("dead", { card_id: "99", status: "done" }));
+    store.close();
+    store = null;
+
+    const raw = new Database(join(dir, "agent-canvas.db"));
+    raw.prepare("UPDATE cards SET created_at = NULL WHERE id = '99'").run();
+    raw.prepare("UPDATE task_cards SET linked_at = NULL WHERE card_id = '99'").run();
+    raw.close();
+
+    store = openStore(dir);
     expect(store.listTaskCardsForCardHistory("99")).toHaveLength(1);
     expect(store.listTaskCardsForCard("99")).toEqual([]);
     expect(store.recordParticipationRound("99", "aprovado", Date.now())).toEqual([]);
