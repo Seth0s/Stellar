@@ -474,6 +474,15 @@ export type TaskCardRow = {
   provider?: string | null;
   model?: string | null;
   effort?: string | null;
+  /**
+   * Session identity on the participation (Camada 2 — same nature as
+   * provider/model/effort). Survives `DELETE FROM cards`.
+   * `requested_resume_id` = spawn argv; `session_id` = discovered /
+   * imposed id. Both nullable, no backfill. See
+   * participation-session-decision.ts.
+   */
+  requested_resume_id?: string | null;
+  session_id?: string | null;
 };
 
 /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
@@ -887,6 +896,15 @@ function migrate(db: Database.Database) {
       if (!String(e).includes("duplicate column name")) throw e;
     }
   }
+  // Session identity on the participation — survives card DELETE.
+  // Additive, nullable, no backfill (legacy rows stay null).
+  for (const col of ["requested_resume_id TEXT", "session_id TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE task_cards ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
+  }
   // Task contract fields — judgment declared once (territory/gates/
   // allow_commit/report_schema). Separate from participation profile.
   for (const col of [
@@ -1049,6 +1067,8 @@ export function openStore(userDataDir: string) {
       provider TEXT,
       model TEXT,
       effort TEXT,
+      requested_resume_id TEXT,
+      session_id TEXT,
       PRIMARY KEY (task_id, card_id)
     );
   `);
@@ -1946,6 +1966,8 @@ export function openStore(userDataDir: string) {
         provider: null,
         model: null,
         effort: null,
+        requested_resume_id: null,
+        session_id: null,
       });
     }
     return decision;
@@ -2005,22 +2027,24 @@ export function openStore(userDataDir: string) {
   // também empurra a Fila). Até então o primitivo existia sem chamador e
   // a coluna era 91/91 implementer.
   const upsertTaskCardIfAbsentStmt = db.prepare(`
-    INSERT INTO task_cards (task_id, card_id, role, linked_at, provider, model, effort)
-    VALUES (@task_id, @card_id, @role, @linked_at, @provider, @model, @effort)
+    INSERT INTO task_cards (task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id)
+    VALUES (@task_id, @card_id, @role, @linked_at, @provider, @model, @effort, @requested_resume_id, @session_id)
     ON CONFLICT(task_id, card_id) DO NOTHING
   `);
   const linkTaskCardStmt = db.prepare(`
-    INSERT INTO task_cards (task_id, card_id, role, linked_at, provider, model, effort)
-    VALUES (@task_id, @card_id, @role, @linked_at, @provider, @model, @effort)
+    INSERT INTO task_cards (task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id)
+    VALUES (@task_id, @card_id, @role, @linked_at, @provider, @model, @effort, @requested_resume_id, @session_id)
     ON CONFLICT(task_id, card_id) DO UPDATE SET
       role = excluded.role,
       linked_at = excluded.linked_at,
       provider = COALESCE(excluded.provider, task_cards.provider),
       model = COALESCE(excluded.model, task_cards.model),
-      effort = COALESCE(excluded.effort, task_cards.effort)
+      effort = COALESCE(excluded.effort, task_cards.effort),
+      requested_resume_id = COALESCE(excluded.requested_resume_id, task_cards.requested_resume_id),
+      session_id = COALESCE(excluded.session_id, task_cards.session_id)
   `);
   const listTaskCardsStmt = db.prepare(
-    "SELECT task_id, card_id, role, linked_at, provider, model, effort FROM task_cards WHERE task_id = ?",
+    "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id FROM task_cards WHERE task_id = ?",
   );
   // "Histórico de veredito por participação" — o outro lado da mesma
   // junção: `recordParticipationRound` (abaixo) recebe só um `cardId` (é
@@ -2044,7 +2068,7 @@ export function openStore(userDataDir: string) {
   // status guard so recycle into done/failed history stays blocked.
   // `getTaskCards(taskId)` stays unfiltered for the Fila/history chips.
   const listTaskCardsForCardStmt = db.prepare(`
-    SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at, tc.provider, tc.model, tc.effort
+    SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at, tc.provider, tc.model, tc.effort, tc.requested_resume_id, tc.session_id
     FROM task_cards tc
     JOIN tasks t ON t.id = tc.task_id
     LEFT JOIN cards c ON c.id = tc.card_id
@@ -2058,8 +2082,28 @@ export function openStore(userDataDir: string) {
   /** Full card-side history (including terminal tasks). Diagnostics and
    * audits only — never the report / participation write path. */
   const listTaskCardsForCardHistoryStmt = db.prepare(
-    "SELECT task_id, card_id, role, linked_at, provider, model, effort FROM task_cards WHERE card_id = ?",
+    "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id FROM task_cards WHERE card_id = ?",
   );
+
+  /**
+   * Stamp discovered/imposed session id onto every LIVE participation
+   * for this card. Lives in main (onSessionFound) — must NOT depend on
+   * the cards row still existing: the whole point is surviving DELETE.
+   * Epoch filter when the card is still around; after DELETE, every
+   * link for that card_id is updated (recycle protection keeps old
+   * incarnations from sharing the id).
+   */
+  const setParticipationSessionIdStmt = db.prepare(`
+    UPDATE task_cards
+    SET session_id = @session_id
+    WHERE card_id = @card_id
+      AND CASE
+        WHEN linked_at IS NOT NULL
+          AND EXISTS (SELECT 1 FROM cards c WHERE c.id = @card_id AND c.created_at IS NOT NULL)
+          THEN linked_at >= (SELECT created_at FROM cards WHERE id = @card_id)
+        ELSE 1
+      END
+  `);
 
   // Ver o comentário grande de `TaskVerdictRow` acima pro modelo
   // completo. `ORDER BY at ASC, rowid ASC` — mesmo desempate de
@@ -2530,7 +2574,13 @@ export function openStore(userDataDir: string) {
       taskId: string,
       cardId: string,
       role: string,
-      profile?: { provider?: string | null; model?: string | null; effort?: string | null },
+      profile?: {
+        provider?: string | null;
+        model?: string | null;
+        effort?: string | null;
+        requestedResumeId?: string | null;
+        sessionId?: string | null;
+      },
     ) =>
       linkTaskCardStmt.run({
         task_id: taskId,
@@ -2540,7 +2590,17 @@ export function openStore(userDataDir: string) {
         provider: profile?.provider ?? null,
         model: profile?.model ?? null,
         effort: profile?.effort ?? null,
+        requested_resume_id: profile?.requestedResumeId ?? null,
+        session_id: profile?.sessionId ?? null,
       }),
+    /**
+     * Write discovered/imposed session id onto participations for this
+     * card. Returns how many rows changed. Safe after cards DELETE.
+     */
+    setParticipationSessionId: (cardId: string, sessionId: string): number => {
+      const r = setParticipationSessionIdStmt.run({ card_id: cardId, session_id: sessionId });
+      return r.changes;
+    },
     // Ver o comentário grande de `recordParticipationRound` acima
     // (definida antes do `return`, junto dos prepared statements) —
     // exposta aqui como método do store, mesma convenção de

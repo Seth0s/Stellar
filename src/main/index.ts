@@ -52,6 +52,7 @@ import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-d
 import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
 import { deriveParticipationDivergence, deriveTaskStatus } from "../task-status-derive";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
+import { shouldStampParticipationSession } from "./participation-session-decision";
 import { resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { refreshUserEnv, setSystemLanguageHint, userEnvSnapshot } from "./user-env";
 import { composeSystemLanguageHint } from "./locale-env-decision";
@@ -997,6 +998,11 @@ function createWindow() {
    * fechado tem exatamente um `onExit` esperado depois, então cada entrada
    * se limpa sozinha num timeout generoso em vez de crescer pra sempre. */
   const recentlyClosedCardBoardIds = new Map<string, string>();
+  // onSessionFound (impose) can fire DURING spawn, BEFORE spawn_agent's
+  // linkTaskCard writes the participation row. Buffer the id so the
+  // subsequent link can stamp it — otherwise session_id stays null on
+  // the very path that discovers it first.
+  const pendingParticipationSessions = new Map<string, string>();
   function rememberBoardIdBeforeDelete(cardId: string) {
     const boardId = store.getCard(cardId)?.board_id;
     if (!boardId) return;
@@ -1052,7 +1058,20 @@ function createWindow() {
         task?.board_id ?? store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id);
       if (boardId) notifyTaskChanged(boardId);
     },
-    onSessionFound: (id, sessionId) => safeSend(win, "pty:session-found", id, sessionId),
+    onSessionFound: (id, sessionId) => {
+      // Camada 2: stamp participation BEFORE (and independent of) the
+      // renderer write-back. Card DELETE must not erase the id the task
+      // needs to resume. Only resumable providers (claude/cursor).
+      const provider =
+        store.getCard(id)?.provider ??
+        store.listTaskCardsForCardHistory(id)[0]?.provider ??
+        null;
+      if (shouldStampParticipationSession(provider)) {
+        const n = store.setParticipationSessionId(id, sessionId);
+        if (n === 0) pendingParticipationSessions.set(id, sessionId);
+      }
+      safeSend(win, "pty:session-found", id, sessionId);
+    },
     // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — canal dedicado pro aviso
     // de resumeId inválido (ver `pty-registry.ts`'s doc comment em
     // `onResumeInvalid`): DOM de verdade no rodapé do card
@@ -1650,6 +1669,7 @@ function createWindow() {
             provider: row.provider ?? null,
             model: row.model ?? null,
             effort: row.effort ?? null,
+            resume_id: row.resume_id ?? null,
           }
         : undefined;
     },
@@ -1747,6 +1767,11 @@ function createWindow() {
     // without a reload.
     linkTaskCard: (taskId, cardId, role, profile) => {
       store.linkTaskCard(taskId, cardId, role, profile);
+      const pending = pendingParticipationSessions.get(cardId);
+      if (pending) {
+        store.setParticipationSessionId(cardId, pending);
+        pendingParticipationSessions.delete(cardId);
+      }
       const task = store.getTask(taskId);
       if (task) notifyTaskChanged(task.board_id);
     },

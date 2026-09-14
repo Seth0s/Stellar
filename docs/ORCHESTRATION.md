@@ -125,8 +125,26 @@ decisão do orquestrador, não do app.
 
 ### Camada 2 — Perfil de execução: *com o que ela roda*
 
-`provider`, `model`, `effort` — **por participação**, não por task. A mesma task pode ser
-implementada por um cursor e revisada por um antigravity com outro modelo e outro esforço.
+`provider`, `model`, `effort`, e o **id de sessão** — **por participação**, não por
+task. A mesma task pode ser implementada por um cursor e revisada por um antigravity com
+outro modelo e outro esforço.
+
+O id de sessão também é fato da participação (`task_cards`), não do card. O card pode
+morrer e a linha de `cards` ser apagada; a participação sobrevive e guarda:
+
+| Campo | O que é | Quando grava |
+|---|---|---|
+| `requestedResumeId` | o `resumeId` pedido no `spawn_agent` | no spawn/link (pode ser `null`) |
+| `sessionId` | o id descoberto/`imposed` em runtime (`onSessionFound`) | assíncrono; pode chegar depois do spawn; fica `null` se nunca descobrir |
+
+Eles **não** são a mesma coisa: um spawn sem resume ganha sessão nova; um resume pode
+receber id diferente do pedido (medido no claude). Para retomar: `get_task` →
+`cards[].sessionId ?? cards[].requestedResumeId` → `spawn_agent({ resumeId })`. Só
+claude e cursor têm retomada real (`IMPOSE_SESSION_ID_PROVIDERS`); nos demais o
+registro fica `null` de propósito — ausência honesta, não id falso.
+
+`list_tasks` **não** traz esses campos (nem o array `cards`) — payload grande demais;
+use `get_task` por task.
 
 **Provider NÃO é herdado do pai.** Uma task despachada sem `provider` declarado é
 **recusada** com `provider não declarado`, e isso é intencional: o Stellar é multiprovider,
@@ -634,7 +652,7 @@ zero, o recurso nunca existiu de verdade.
 | **participação** | linha em `task_cards`: um card, uma task, um papel |
 | **julgamento** | veredito de uma rodada (`task_verdicts`), append-only |
 | **contrato** | Camada 1: `prompt · purpose · deps · review` + território/gates |
-| **perfil de execução** | Camada 2: provider/model/effort, por participação |
+| **perfil de execução** | Camada 2: provider/model/effort + sessionId/requestedResumeId, por participação |
 | **orquestrador** | o card que assina pelo humano naquele board |
 | **autodispatch** | despacho automático quando as `deps` ficam `done` em board autônomo |
 | **parked** | entregue à fila do provider, **não vista** pelo agente |

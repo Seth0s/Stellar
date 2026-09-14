@@ -144,4 +144,46 @@ describe("store: task contract + participation profile", () => {
       store.close();
     }
   });
+
+  it("session_id on task_cards survives DELETE FROM cards", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-session-survive-"));
+    const store = openStore(dir);
+    try {
+      store.upsertCard(baseCard("20"));
+      store.upsertTask(baseTask("t-sess"));
+      store.linkTaskCard("t-sess", "20", "implementer", {
+        provider: "cursor",
+        requestedResumeId: "asked-but-maybe-wrong",
+      });
+      expect(store.setParticipationSessionId("20", "real-session-uuid")).toBe(1);
+      const before = store.getTaskCards("t-sess")[0]!;
+      expect(before.requested_resume_id).toBe("asked-but-maybe-wrong");
+      expect(before.session_id).toBe("real-session-uuid");
+
+      store.deleteCard("20");
+      expect(store.getCard("20")).toBeUndefined();
+
+      const after = store.getTaskCards("t-sess")[0]!;
+      expect(after.card_id).toBe("20");
+      expect(after.session_id).toBe("real-session-uuid");
+      expect(after.requested_resume_id).toBe("asked-but-maybe-wrong");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("legacy task_cards rows keep null session fields (no backfill)", () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-session-null-"));
+    const store = openStore(dir);
+    try {
+      store.upsertCard(baseCard("21"));
+      store.upsertTask(baseTask("t-legacy"));
+      store.linkTaskCard("t-legacy", "21", "implementer", { provider: "bash" });
+      const row = store.getTaskCards("t-legacy")[0]!;
+      expect(row.session_id).toBeNull();
+      expect(row.requested_resume_id).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
 });
