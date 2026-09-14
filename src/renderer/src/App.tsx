@@ -185,6 +185,9 @@ type PendingAsk =
       reason?: string;
       anchorCardId?: string;
       side?: "left" | "right" | "top" | "bottom";
+      assetPath?: string;
+      mediaType?: "image" | "pdf";
+      path?: string;
     }
   | { kind: "close-card"; requestId: string; requesterId: string; target: string; reason?: string };
 
@@ -950,7 +953,17 @@ export function App() {
       // DESIGN-BACKLOG.md item 60, peça 5 — same shape as spawn_agent's
       // autoApprove above, extended to non-terminal cards.
       if (params.autoApprove) {
-        const spawned = spawnCardFor(params.kind, params.cwd, params.url, requesterId, params.anchorCardId, params.side);
+        const spawned = spawnCardFor(
+          params.kind,
+          params.cwd,
+          params.url,
+          requesterId,
+          params.anchorCardId,
+          params.side,
+          params.assetPath && params.mediaType
+            ? { assetPath: params.assetPath, mediaType: params.mediaType }
+            : undefined,
+        );
         // Achado ao vivo (2026-09-02) — mesma lacuna do open_url acima:
         // spawn_card nunca registrava lineage, só spawn_agent tinha.
         // 2026-09-09 — same `reason`-as-label reasoning as spawn_agent above.
@@ -970,6 +983,9 @@ export function App() {
         reason: params.reason,
         anchorCardId: params.anchorCardId,
         side: params.side,
+        assetPath: params.assetPath,
+        mediaType: params.mediaType,
+        path: params.path,
       });
     });
     // Sticky item "close_card" (2026-09-03) — same ask/consent shape as
@@ -1950,6 +1966,14 @@ export function App() {
     return { x: at.x - w / 2, y: at.y - h / 2, w, h };
   }
 
+  /** Sync default for agent `spawn_card kind:"media"` (image) — natural
+   * size stays on the human drop path (`imageNaturalSize` is async). */
+  function defaultImageRect(at: Point): Rect {
+    const w = 640;
+    const h = 480;
+    return { x: at.x - w / 2, y: at.y - h / 2, w, h };
+  }
+
   function imageNaturalSize(file: File): Promise<{ w: number; h: number }> {
     return new Promise((resolve) => {
       const url = URL.createObjectURL(file);
@@ -2172,6 +2196,7 @@ export function App() {
     requesterId: string | null,
     anchorCardId?: string,
     side?: AnchorSide,
+    media?: { assetPath: string; mediaType: "image" | "pdf" },
   ): SpawnCardOutcome {
     if (kind === "task") {
       const boardId = activeBoardIdRef.current;
@@ -2205,6 +2230,32 @@ export function App() {
     const rect = anchoredBase
       ? nearestFreeSlot(anchoredBase, existingRects, visibleRect)
       : centeredSlot(visibleRect, cardsRef.current.length, existingRects);
+    if (kind === "media") {
+      // Main already copied into board-assets and validated type. Default
+      // rect (sync path) — natural image size stays a human-drop luxury
+      // because spawnCardFor is synchronous like every other spawn kind.
+      const at = { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
+      const mediaRect = media?.mediaType === "pdf" ? defaultPdfRect(at) : defaultImageRect(at);
+      const placed = anchoredBase
+        ? nearestFreeSlot(mediaRect, existingRects, visibleRect)
+        : nearestFreeSlot(
+            { ...mediaRect, x: rect.x + (rect.w - mediaRect.w) / 2, y: rect.y + (rect.h - mediaRect.h) / 2 },
+            existingRects,
+            visibleRect,
+          );
+      addCard({
+        id,
+        kind: "media",
+        assetPath: media?.assetPath ?? "",
+        mediaType: media?.mediaType ?? "image",
+        rotation: 0,
+        view: DEFAULT_MEDIA_VIEW,
+        rect: placed,
+        groupId: null,
+        label: null,
+      });
+      return { cardId: id, reused: false };
+    }
     const card = {
       id,
       ...defaultCardFields(kind, cwd || activeBoardCwd),
@@ -2234,7 +2285,15 @@ export function App() {
       if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned", ask.connectorLabel ?? null);
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
     } else if (ask.kind === "spawn-card") {
-      const spawned = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId, ask.anchorCardId, ask.side);
+      const spawned = spawnCardFor(
+        ask.cardKind,
+        ask.cwd,
+        ask.url,
+        ask.requesterId,
+        ask.anchorCardId,
+        ask.side,
+        ask.assetPath && ask.mediaType ? { assetPath: ask.assetPath, mediaType: ask.mediaType } : undefined,
+      );
       if (ask.requesterId && !spawned.reused) autoConnect(ask.requesterId, spawned.cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
       void window.spawn.resolveCard(ask.requestId, { ok: true, cardId: spawned.cardId });
     } else {
@@ -2270,7 +2329,7 @@ export function App() {
     if (ask.kind === "spawn-card") {
       return {
         title: t("app.perm.spawnCard"),
-        command: `${ask.cardKind}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.url ? ` (${ask.url})` : ""}`,
+        command: `${ask.cardKind}${ask.cwd ? ` em ${ask.cwd}` : ""}${ask.url ? ` (${ask.url})` : ""}${ask.path ? ` (${ask.path})` : ""}`,
       };
     }
     return { title: t("app.perm.closeCard"), command: describeCard(ask.target) };
