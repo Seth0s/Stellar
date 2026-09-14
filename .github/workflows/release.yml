@@ -13,6 +13,8 @@ name: Release
 # can never block or cancel it (matrix `fail-fast` would do exactly
 # that; separate jobs don't).
 #
+# QUEM CRIA A RELEASE: um job só, ANTES dos builds (`prepare-release`).
+#
 # Achado ao vivo (2026-08-31, releases v0.1.5/v0.1.6/v0.2.0 todas com o
 # mesmo sintoma): os 3 jobs de build rodavam em paralelo e cada um
 # chamava `electron-builder --publish always`, que checa "a release da
@@ -21,15 +23,29 @@ name: Release
 # SUA própria release pra mesma tag, resultando em duas releases
 # "gêmeas" com os assets espalhados entre elas (o .rpm, por exemplo,
 # ficava só na release que `gh release view` não resolve por padrão —
-# parecia ter sumido, mas só estava na gêmea). Corrigido separando build
-# (paralelo, sem tocar a Release — só sobe pra artifact storage do
-# Actions) de publish (um job só, depois que os builds terminam,
-# consolida tudo numa única `gh release create/upload`, sem race
-# possível por ter só um chamador). Efeito colateral bom: o build não
-# faz mais upload de rede pra API de Releases (só electron-builder local
-# + upload-artifact, que já tem retry robusto embutido) — elimina
-# também o "Request timed out" que travou o Windows na v0.2.0, sem
-# precisar reduzir a superfície de asset nenhuma.
+# parecia ter sumido, mas só estava na gêmea).
+#
+# A primeira correção (2026-09) tirou a criação dos builds e pôs num job
+# `publish` DEPOIS deles, consolidando via artifact storage do Actions.
+# Matou o race, e criou outro problema: cada release gravava os binários
+# DUAS vezes — uma no artifact storage (cota apertada) e outra na
+# Release (que não conta pra essa cota). O storage nunca era limpo.
+#
+# Medido em 2026-09-14, no release da v0.8.0: `Failed to CreateArtifact:
+# Artifact storage quota has been hit` no job do macOS. O build tinha
+# PASSADO; só o upload falhou, e sem os artifacts o `publish` não tinha
+# o que publicar. Havia 3,47 GB em 15 artifacts de 5 releases antigas,
+# contra os 500 MB do plano — e um release sozinho ocupa ~746 MB (mac
+# 335 + linux 269 + win 142), então nem `retention-days: 1` caberia.
+#
+# Desenho atual, que mantém o race morto SEM usar artifact storage:
+# `prepare-release` cria a Release da tag uma vez (um chamador só, antes
+# de todo mundo), e cada build faz `gh release upload --clobber` dos
+# SEUS arquivos direto. Ninguém mais cria, então não há gêmea possível;
+# ninguém passa pelo artifact storage, então não há cota pra estourar.
+# A independência entre plataformas melhora de tabela: cada job publica
+# o que conseguiu, sem esperar os outros dois nem depender de um job
+# final que só roda se algo sobreviveu.
 on:
   push:
     tags:
@@ -39,7 +55,28 @@ permissions:
   contents: write
 
 jobs:
+  # Único criador da Release — roda antes de tudo, então os três builds
+  # encontram a Release já existente e só fazem upload. É isto que
+  # impede as releases gêmeas descritas no cabeçalho.
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: cria a Release da tag se ainda não existir
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME já existe — nada a criar."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
+
   build-linux:
+    needs: prepare-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,18 +111,22 @@ jobs:
       - name: Build .rpm and .deb
         run: npx electron-builder --linux rpm deb --publish never
 
-      - uses: actions/upload-artifact@v4
+      - name: publica os artefatos Linux na Release da tag
         if: always()
-        with:
-          name: linux-artifacts
-          path: |
-            dist/*.rpm
-            dist/*.deb
-            dist/*.blockmap
-            dist/latest-linux.yml
-          if-no-files-found: ignore
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -e
+          FILES=$(ls -1 dist/*.rpm dist/*.deb dist/*.blockmap dist/latest-linux.yml 2>/dev/null || true)
+          if [ -z "$FILES" ]; then
+            echo "::error::nenhum artefato gerado neste job"
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" $FILES --repo "$GITHUB_REPOSITORY" --clobber
 
   build-mac:
+    needs: prepare-release
     runs-on: macos-latest
     # Never blocks/gets blocked by build-linux — see the note at the top
     # of this file. No macOS/Windows signing yet (DESIGN-BACKLOG.md item
@@ -101,18 +142,22 @@ jobs:
       - run: npm run build
       - name: Build macOS artifacts
         run: npx electron-builder --mac --publish never
-      - uses: actions/upload-artifact@v4
+      - name: publica os artefatos macOS na Release da tag
         if: always()
-        with:
-          name: mac-artifacts
-          path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.blockmap
-            dist/latest-mac.yml
-          if-no-files-found: ignore
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -e
+          FILES=$(ls -1 dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml 2>/dev/null || true)
+          if [ -z "$FILES" ]; then
+            echo "::error::nenhum artefato gerado neste job"
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" $FILES --repo "$GITHUB_REPOSITORY" --clobber
 
   build-windows:
+    needs: prepare-release
     runs-on: windows-latest
     # Same independence note as build-mac above; no code signing yet
     # (SmartScreen will warn on first run until docs/packaging.md §4 is
@@ -126,42 +171,42 @@ jobs:
       - run: npm run build
       - name: Build Windows artifacts
         run: npx electron-builder --win --publish never
-      - uses: actions/upload-artifact@v4
+      - name: publica os artefatos Windows na Release da tag
         if: always()
-        with:
-          name: windows-artifacts
-          path: |
-            dist/*.exe
-            dist/*.blockmap
-            dist/latest.yml
-          if-no-files-found: ignore
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -e
+          FILES=$(ls -1 dist/*.exe dist/*.blockmap dist/latest.yml 2>/dev/null || true)
+          if [ -z "$FILES" ]; then
+            echo "::error::nenhum artefato gerado neste job"
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" $FILES --repo "$GITHUB_REPOSITORY" --clobber
 
-  publish:
-    name: publica a Release consolidada
+  # Fecha o release dizendo o que de fato chegou na Release. Não publica
+  # nada — cada build já publicou o seu — então não pode criar gêmea nem
+  # depender de artifact storage. `if: always()` mantém a independência:
+  # roda mesmo com uma plataforma quebrada, e o resumo diz qual faltou.
+  summary:
+    name: resumo do que foi publicado
     needs: [build-linux, build-mac, build-windows]
-    # Roda mesmo se um dos 3 builds falhar — mesma filosofia de
-    # independência do resto do arquivo: uma plataforma quebrada não
-    # deve segurar a publicação das outras duas que deram certo. Só
-    # publica o que de fato existe como artifact.
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist-artifacts
-
-      - name: cria ou atualiza a Release da tag, um chamador só (sem race)
+      - name: lista os assets da Release da tag
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          FILES=$(find dist-artifacts -type f)
-          if [ -z "$FILES" ]; then
-            echo "::error::nenhum artifact de build sobreviveu — os 3 jobs de build falharam"
+          ASSETS=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' || true)
+          if [ -z "$ASSETS" ]; then
+            echo "::error::a Release $GITHUB_REF_NAME não tem nenhum asset — os três builds falharam"
             exit 1
           fi
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" $FILES --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" $FILES --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
-          fi
+          echo "Assets publicados em $GITHUB_REF_NAME:"
+          echo "$ASSETS" | sed 's/^/  /'
+          for want in rpm deb dmg exe; do
+            echo "$ASSETS" | grep -q "\.$want" || echo "::warning::nenhum .$want nesta Release (build da plataforma falhou)"
+          done
