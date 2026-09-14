@@ -13,6 +13,7 @@ import {
   cascadeSlot,
   centeredSlot,
   pointSlot,
+  anchoredSlot,
   hitTest,
   type Rect,
   type WorldTransform,
@@ -152,6 +153,34 @@ describe("board-model geometry", () => {
     const somewhereElse: Rect = { x: 500 + SPAWN_W, y: 500 + SPAWN_H, w: 50, h: 50 };
 
     expect(centeredSlot(visible, 0, [somewhereElse])).toEqual(centeredSlot(visible, 0));
+  });
+
+  // 2026-09-14 — measured: viewport 1280×800, seed bash at cascadeSlot(0),
+  // SPAWN 1340×900. preferInside can never fire (card larger than view),
+  // so the free ring walks the next SPAWN-sized card fully past the fold.
+  // This is WHY agent spawn_card needs a post-place focus on Permitir —
+  // birth-in-view is geometrically impossible at SPAWN size next to a
+  // SPAWN-sized seed without overlapping it.
+  it("centeredSlot past a SPAWN-sized seed on a smaller viewport lands with center off-fold", () => {
+    const visible: Rect = { x: 0, y: 0, w: 1280, h: 800 };
+    const seed = cascadeSlot(0);
+    expect(SPAWN_W).toBeGreaterThan(visible.w);
+    expect(SPAWN_H).toBeGreaterThan(visible.h);
+    expect(isInView(seed, visible)).toBe(true);
+
+    const next = centeredSlot(visible, 1, [seed]);
+    const cx = next.x + next.w / 2;
+    const cy = next.y + next.h / 2;
+    const centerInView = cx >= visible.x && cx <= visible.x + visible.w && cy >= visible.y && cy <= visible.y + visible.h;
+    expect(centerInView).toBe(false);
+  });
+
+  it("anchoredSlot right of a SPAWN-sized in-view seed is itself past the right fold", () => {
+    const visible: Rect = { x: 0, y: 0, w: 1280, h: 800 };
+    const seed = cascadeSlot(0);
+    const right = anchoredSlot(seed, "right");
+    const cx = right.x + right.w / 2;
+    expect(cx).toBeGreaterThan(visible.x + visible.w);
   });
 
   it("performs hit testing by z-order", () => {
