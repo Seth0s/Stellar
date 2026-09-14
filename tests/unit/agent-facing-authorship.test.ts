@@ -7,6 +7,7 @@ import {
   hasAgentFacingAuthorPrefix,
   REPORT_AVAILABLE_POINTER_BODY,
   unreportedExitPointerBody,
+  unreportedIdlePointerBody,
 } from "../../src/main/agent-facing-authorship";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 
@@ -34,13 +35,16 @@ describe("formatAgentFacingAuthorship — uma forma só", () => {
     const viaSend = formatAgentFacingAuthorship(label, "olá do send");
     const viaReport = formatAgentFacingAuthorship(label, REPORT_AVAILABLE_POINTER_BODY);
     const viaExit = formatAgentFacingAuthorship(label, unreportedExitPointerBody(1));
+    const viaIdle = formatAgentFacingAuthorship(label, unreportedIdlePointerBody());
 
     expect(viaSend.startsWith(`[de: ${label}] `)).toBe(true);
     expect(viaReport).toBe(`[de: ${label}] ${REPORT_AVAILABLE_POINTER_BODY}`);
     expect(viaExit).toBe(`[de: ${label}] ${unreportedExitPointerBody(1)}`);
+    expect(viaIdle).toBe(`[de: ${label}] ${unreportedIdlePointerBody()}`);
     // Same constructor → same prefix shape (not two hand-rolled templates).
     expect(viaSend.slice(0, `[de: ${label}]`.length)).toBe(viaReport.slice(0, `[de: ${label}]`.length));
     expect(viaSend.slice(0, `[de: ${label}]`.length)).toBe(viaExit.slice(0, `[de: ${label}]`.length));
+    expect(viaSend.slice(0, `[de: ${label}]`.length)).toBe(viaIdle.slice(0, `[de: ${label}]`.length));
   });
 
   it("hasAgentFacingAuthorPrefix reconhece a convenção", () => {
