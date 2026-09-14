@@ -1515,9 +1515,10 @@ export function createMessageBus(
    * `await` the returned `done` promise.
    *
    * `steer` (default false here): when the provider parks mid-turn, press
-   * its declared steer key once. `send_to_card` passes true by default;
-   * internal notices (report pointer, unreported-exit) keep false so a
-   * system ping does not interrupt a live turn.
+   * its declared steer key once. `send_to_card` and status-ask Allow/Deny
+   * pass true (answer / correction the peer asked for). Report pointer and
+   * unreported-exit keep false so a system ping does not inject into a
+   * live turn.
    */
   function enqueueCardDelivery(
     target: string,
@@ -1557,13 +1558,6 @@ export function createMessageBus(
       receipt: { ok: true, delivery: "queued", ...(reason ? { reason } : {}), id },
       done,
     };
-  }
-
-  /** Queue all programmatic deliveries per PTY and wait for this item.
-   * Internal callers only (human task-drag). Tools must use
-   * `enqueueCardDelivery` and return the receipt without awaiting. */
-  async function typeAndSubmit(target: string, text: string): Promise<void> {
-    await enqueueCardDelivery(target, text).done;
   }
 
   /** Round-trip de sticky — mesmo timeout e mesma forma do `readCardText`
@@ -1727,36 +1721,26 @@ export function createMessageBus(
     enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, unreportedExitPointerBody(exitCode)));
   }
 
-  /** DESIGN-BACKLOG.md §2.1, decisão 5 — "arrastar a mão SEMPRE vale, e
-   * AVISA o agente". O alvo já é conhecido de saída — o próprio card
-   * vinculado à task que o HUMANO acabou de arrastar (`tasks.card_id`).
-   * CLI de terceiro numa TUI não tem RPC; stdin é o único input que ela
-   * trata como mensagem, então isto ainda passa por `typeAndSubmit`.
-   * Hold de `update_task` NÃO passa por aqui: o retorno da tool já
-   * carrega `warning`/`status`/`divergedStatus`. No-op silencioso se o
-   * card não existe mais ou não é um terminal vivo — a escrita de
-   * `status`/`order` já aconteceu antes desta chamada, síncrona, em
-   * `index.ts`'s `persistTask`.
+  /** Allow/Deny on a `request_task_status` ask — resume of a request the
+   * agent made, not an unsolicited drag interrupt. Human drag no longer
+   * calls this (Fila mark + `get_task` are enough). Hold of `update_task`
+   * also does not: the tool return already carries
+   * `warning`/`status`/`divergedStatus`.
    *
-   * ACHADO DE REVIEW ADVERSARIAL (RODADA 2, achado 4, MÉDIO) — digitar
-   * texto+Enter num PTY sem saber o ESTADO do destinatário é uma
-   * superfície já problemática por si só (bug aberto no backlog, §0:
-   * "texto entregue a um card recém-spawnado fica na caixa sem
-   * submeter" — o mesmo `typeAndSubmit` não sabe se quem está do outro
-   * lado está pronto pra receber). Não é este método que conserta essa
-   * raiz — só não a piora: um card `bash` (provider real, não um kind
-   * diferente) não tem NENHUM agente do outro lado interpretando o
-   * texto — vira comando de shell de verdade, e a resposta previsível é
-   * "command not found" no meio do que quer que o card estivesse
-   * fazendo. Excluído explicitamente (mesma convenção "bash não é
-   * agente" de `countRunningAgentsOnBoard`/`cardWasExpectedToReport`) —
-   * o mínimo que este achado pediu, não uma correção geral de prontidão
-   * do destinatário (fora de escopo aqui). */
-  async function notifyHumanMovedTask(cardId: string, message: string) {
+   * Delivery: `enqueueCardDelivery` with `steer: true` (0b728f1) — same
+   * physics as `send_to_card`. The asker is waiting on this answer; if
+   * the provider parked mid-turn, inject once. Report/exit pointers keep
+   * steer false; this path does not.
+   *
+   * Fire-and-forget: status is already persisted in `index.ts` before
+   * this runs. No-op when the card is gone, not a terminal, or bash
+   * (bash has no agent reading the line — same exclusion as report
+   * notify). */
+  function notifyHumanMovedTask(cardId: string, message: string): void {
     if (!callbacks.isCardAlive(cardId)) return;
     const card = listTerminalCards().find((c) => c.id === cardId);
     if (!card || card.provider === "bash") return;
-    await typeAndSubmit(cardId, message);
+    enqueueCardDelivery(cardId, message, { steer: true });
   }
 
   /** Achado ao vivo (2026-09-01): "eu renomeio os card dos agentes para

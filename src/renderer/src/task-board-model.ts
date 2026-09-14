@@ -644,17 +644,6 @@ export function computeColumnDrop<T extends TaskOrderable & { id: string }>(
   return { order, siblingImplicitOrders };
 }
 
-/** Decisão 5, textual: "arrastar a mão SEMPRE vale, e AVISA o agente" — o
- * aviso em si (SE mandar ou não) não é uma decisão condicional desta fase,
- * é incondicional a todo drop que de fato moveu a task; só o TEXTO do
- * aviso precisa de uma decisão (qual coluna virou o destino). Separado do
- * mecanismo de entrega (`typeAndSubmit`, message-bus.ts, main process) pra
- * manter mensagem e transporte testáveis em separado — mesma divisão que
- * `describeWaitingOn`/`waitingOnDep` já usa acima. */
-export function describeHumanMove(column: TaskColumn): string {
-  return `[de: você] moveu esta task para "${COLUMN_TITLE[column]}".`;
-}
-
 /**
  * FIDELIDADE VISUAL AO PROTÓTIPO v5 (DESIGN-BACKLOG.md §2.1, comparação
  * lado a lado pedida pelo dono do repo) — a fase 2 ficou funcional antes
@@ -762,13 +751,12 @@ function formatClockTime(at: number): string {
 }
 
 /** Marca de movimento humano (delta 8) — "Movida à mão com o card 288
- * ainda rodando. O card foi avisado." Só aparece quando as DUAS coisas
- * são verdade: a ÚLTIMA transição foi de um humano (`lastActor`, já
- * gravado por `upsertTask`/decisão 5), E o card vinculado ainda está
- * vivo (`cardAlive`, mesmo dado que `isTaskCardLive` usa acima) — as
- * duas evidências independentes de que "o aviso que a decisão 5 manda
- * pelo `typeAndSubmit` foi de fato entregue a um processo que ainda
- * existe", não uma suposição.
+ * ainda rodando." Só aparece quando as DUAS coisas são verdade: a ÚLTIMA
+ * transição foi de um humano (`lastActor`, já gravado por
+ * `upsertTask`/decisão 5), E o card vinculado ainda está vivo
+ * (`cardAlive`, mesmo dado que `isTaskCardLive` usa acima). Não afirma
+ * push no PTY — drag não digita no card de trabalho (2026-09-14); a
+ * Fila é a superfície.
  *
  * Deliberadamente NÃO travado ao status atual da task: o protótipo
  * mostra isto sob uma task já em "concluído" — um humano pode arrastar a

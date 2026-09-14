@@ -387,9 +387,9 @@
 }
 
 /* FIDELIDADE VISUAL AO PROTÓTIPO v5 (delta 8) — marca de movimento
-   humano ("Movida à mão com o card N ainda rodando. O card foi
-   avisado."). Âmbar (`--warn`) — mesmo token que o resto do app usa pra
-   "atenção, mas não é erro" (D8, indicadores acessíveis). */
+   humano ("Movida à mão com o card N ainda rodando."). Âmbar (`--warn`) —
+   mesmo token que o resto do app usa pra "atenção, mas não é erro"
+   (D8, indicadores acessíveis). Não afirma push no PTY. */
 .humanMoveNotice {
   padding: 5px 7px;
   border-radius: 6px;

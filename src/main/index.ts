@@ -1923,8 +1923,13 @@ function createWindow() {
       store.setStatusAsk(taskId, null);
       notifyTaskChanged(existing.board_id);
     }
+    // Resume of a request the agent made (`request_task_status`) — not an
+    // unsolicited interrupt. Truth is already on the task; this push is the
+    // fallback until a programmatic wait/poll exists. Delivery goes through
+    // `enqueueCardDelivery` with steer:true (0b728f1): same as send_to_card,
+    // so a mid-turn park injects once instead of sitting in follow-ups.
     if (requesterId) {
-      messageBus?.notifyHumanMovedTask(requesterId, describeStatusAskResolved(requested, allowed)).catch(() => {});
+      messageBus?.notifyHumanMovedTask(requesterId, describeStatusAskResolved(requested, allowed));
     }
     return { ok: true };
   });
@@ -1991,10 +1996,9 @@ function createWindow() {
   );
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 — arrastar entre colunas/dentro
   // da coluna. Tudo já chega PRONTO do renderer (task-board-model.ts's
-  // `COLUMN_TO_STATUS`/`computeColumnDrop`/`describeHumanMove` — decidir
-  // "pra onde"/"que prioridade"/"quem mais precisa materializar
-  // posição"/"que aviso" é lógica pura, testada lá, nunca duplicada
-  // aqui).
+  // `COLUMN_TO_STATUS`/`computeColumnDrop` — decidir "pra onde"/"que
+  // prioridade"/"quem mais precisa materializar posição" é lógica pura,
+  // testada lá, nunca duplicada aqui).
   //
   // ACHADO DE REVIEW ADVERSARIAL (RODADA 3, achado 1, ALTO) — a rodada 2
   // gravava `order` em TODAS as tasks do lote (arrastada + vizinhas),
@@ -2017,7 +2021,6 @@ function createWindow() {
       status: string,
       order: number,
       siblingImplicitOrders: { id: string; implicitOrder: number }[],
-      message: string,
     ) => {
       const existing = store.getTask(draggedTaskId);
       if (!existing) return { ok: false, error: `no such task "${draggedTaskId}"` };
@@ -2029,13 +2032,6 @@ function createWindow() {
       }
       const dragged: TaskRow = { ...existing, status, order, result_json, updated_at: Date.now(), actor: "human" };
       persistColumnDrop(dragged, siblingImplicitOrders);
-      // O aviso é fire-and-forget (`notifyHumanMovedTask` é async,
-      // `typeAndSubmit` por baixo): nunca atrasa a resposta pro drag,
-      // mesma postura de todo aviso deste app. `.catch` explícito —
-      // achado de review adversarial (rodada 2, achado 5): uma promise
-      // solta sem handler vira `unhandledRejection` se algum dia
-      // rejeitar.
-      if (dragged.card_id) messageBus?.notifyHumanMovedTask(dragged.card_id, message).catch(() => {});
       return { ok: true };
     },
   );
@@ -2095,7 +2091,7 @@ function createWindow() {
     };
   });
   ipcMain.handle("store:tasks:close-sprint", (_e, boardId: string) => {
-    const result = store.closeSprint(boardId);
+    const result = store.closeSprint(boardId, (id) => registry.isAlive(id));
     if (!result.ok) return result;
     notifyTaskChanged(boardId);
     notifySprintsChanged(boardId);
