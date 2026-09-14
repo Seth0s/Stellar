@@ -72,6 +72,7 @@ import { startWatching, stopWatching, stopAllWatchers, setWatchedDirs, getWatchS
 import { saveClipboardImage, saveImageBytes, readAttachmentImage, testWriteClipboardImage } from "./clipboard-image";
 import { wrapJpegAsPdf } from "./pdf-export";
 import { saveBoardAssetBytes, copyBoardAssetFromPath, resolveBoardAsset } from "./board-assets";
+import { PICK_MEDIA_EXTENSIONS, resolvePickedMediaFile } from "./spawn-media-decision";
 import {
   createBrowserRegistry,
   type BrowserMouseEvent,
@@ -2447,6 +2448,53 @@ function createWindow() {
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
+  });
+
+  // Human rail "Mídia": OS file dialog BEFORE any card exists. Cancel →
+  // null (no ghost card, no toast). Accept → same validation as
+  // `spawn_card kind:"media"` (`resolvePickedMediaFile` →
+  // `decideSpawnMediaPath`); renderer still copies via board-assets.
+  // Filters = MediaCard's real set only (PICK_MEDIA_EXTENSIONS).
+  //
+  // CDP cannot drive a native dialog — `fs:pick-media-file-test-next`
+  // arms the NEXT `pick-media-file` call with a path (same resolve
+  // function; packaged builds refuse). Replacing `window.fs.pickMediaFile`
+  // in the renderer does NOT work: contextBridge freezes the API object.
+  let testNextMediaPickPath: string | null = null;
+  ipcMain.handle("fs:pick-media-file-test-next", (_e, filePath: string | null) => {
+    if (app.isPackaged) return { ok: false as const, error: "test-only" };
+    // `null` clears a pending arm. `""` arms a simulated cancel (dialog
+    // returned no path). Any other string is the injected absolute path.
+    if (filePath === null) testNextMediaPickPath = null;
+    else if (filePath === "") testNextMediaPickPath = "";
+    else testNextMediaPickPath = filePath.trim() || "";
+    return { ok: true as const };
+  });
+  ipcMain.handle("fs:pick-media-file", async () => {
+    if (!app.isPackaged && testNextMediaPickPath !== null) {
+      const injected = testNextMediaPickPath;
+      testNextMediaPickPath = null;
+      if (injected === "") return null;
+      return resolvePickedMediaFile(injected);
+    }
+    const result = await dialog.showOpenDialog(win, {
+      properties: ["openFile"],
+      filters: [
+        {
+          name: "Images & PDF",
+          extensions: [...PICK_MEDIA_EXTENSIONS],
+        },
+      ],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return resolvePickedMediaFile(result.filePaths[0]!);
+  });
+  ipcMain.handle("fs:pick-media-file-test", (_e, filePath: string) => {
+    if (app.isPackaged) return { ok: false as const, error: "test-only" };
+    if (typeof filePath !== "string" || filePath.trim().length === 0) {
+      return { ok: false as const, error: "test path required" };
+    }
+    return resolvePickedMediaFile(filePath);
   });
 
   // Item 57.8 — "exportação do canvas com seleção de área". `rect` já vem

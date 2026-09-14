@@ -34,7 +34,7 @@ const RAIL_TITLE_KEYS: Record<(typeof RAIL_CREATE_ORDER)[number], MessageKey> = 
   task: "rail.title.task",
 };
 
-const RAIL_DESC_KEYS: Record<(typeof RAIL_CREATE_ORDER)[number] | "terminal", MessageKey> = {
+const RAIL_DESC_KEYS: Record<(typeof RAIL_CREATE_ORDER)[number] | "terminal" | "media", MessageKey> = {
   terminal: "rail.desc.terminal",
   files: "rail.desc.files",
   changes: "rail.desc.changes",
@@ -43,6 +43,7 @@ const RAIL_DESC_KEYS: Record<(typeof RAIL_CREATE_ORDER)[number] | "terminal", Me
   chat: "rail.desc.chat",
   "remote-window": "rail.desc.remote-window",
   task: "rail.desc.task",
+  media: "rail.desc.media",
 };
 
 export function Rail({
@@ -74,6 +75,7 @@ export function Rail({
   setNewSystemPrompt,
   onCreateTerminal,
   onCreate,
+  onCreateMedia,
   aiBusy,
   summarizeDisabled,
   onReorganize,
@@ -112,6 +114,9 @@ export function Rail({
   setNewSystemPrompt: (v: string) => void;
   onCreateTerminal: () => void;
   onCreate: (kind: (typeof RAIL_CREATE_ORDER)[number]) => void;
+  /** Media is not in `RAIL_CREATE_ORDER` — opens the OS file dialog first
+   * (same "needs input before birth" class as terminal's provider popover). */
+  onCreateMedia: () => void;
   aiBusy: boolean;
   summarizeDisabled: boolean;
   onReorganize: () => void;
@@ -332,6 +337,27 @@ export function Rail({
                     </span>
                   </button>
                 ))}
+
+                {/* Media — not in RAIL_CREATE_ORDER (one-click would birth an
+                    empty shell). Same class as terminal: gather input first
+                    (OS file dialog), then create. */}
+                <button
+                  className="popover-row"
+                  data-kind="media"
+                  title={t("rail.title.media")}
+                  onClick={() => {
+                    onCreateMedia();
+                    setOpenPopover(null);
+                  }}
+                >
+                  <span className="popover-row-icon">
+                    <Icon name={CARD_ICON.media} size={18} />
+                  </span>
+                  <span>
+                    <span className="popover-row-title">{t("rail.title.media")}</span>
+                    <span className="popover-row-desc">{t(RAIL_DESC_KEYS.media)}</span>
+                  </span>
+                </button>
               </div>
             </>
           )}

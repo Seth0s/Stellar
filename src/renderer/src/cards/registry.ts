@@ -51,9 +51,15 @@ export const CARD_ICON: Record<Card["kind"], IconName> = {
  * "terminal" keeps its own dedicated popover (provider/resume/model
  * fields no other kind has) and "stroke" has no button at all (it's only
  * ever created by finishing a pen drawing), so both stay out of this
- * list. Order here is the order the buttons render in. "media" (item
- * 57.9) is excluded too — it só nasce de paste/drop no canvas vazio,
- * nunca de um botão de "card em branco". */
+ * list. Order here is the order the buttons render in.
+ *
+ * "media" stays out too — but NOT because paste/drop is its only birth
+ * (the rail now offers it). Rule of this array is still "one click, one
+ * card": a blank media card is nothing, so Media follows the terminal
+ * precedent — its own Rail row that opens an OS file dialog FIRST, then
+ * creates the card only after a file is chosen (see Rail's `onCreateMedia`
+ * / `fs:pick-media-file`). Putting `"media"` in this array would spawn an
+ * empty shell and break that rule. */
 export const RAIL_CREATE_ORDER: Exclude<Card["kind"], "terminal" | "stroke" | "media">[] = [
   "files",
   "changes",

@@ -2062,6 +2062,91 @@ export function App() {
     });
   }
 
+  /** Rail "Mídia" / path already validated by `resolvePickedMediaFile`
+   * (same rules as `spawn_card kind:"media"`). Copy via board-assets —
+   * same IPC as drop and as the agent's `prepareMediaAsset`. Dialog
+   * cancel never reaches here (`pickMediaFile` returned null upstream). */
+  async function createMediaCardFromPath(
+    sourcePath: string,
+    mediaType: "image" | "pdf",
+    opts?: { focusIfOffscreen?: boolean },
+  ) {
+    const boardId = activeBoardIdRef.current;
+    if (!boardId) return;
+    const saveResult = await window.boardAssets.copyFromPath(boardId, sourcePath);
+    if (!saveResult.ok) {
+      toast(t("toast.mediaSaveFail", { error: saveResult.error }));
+      return;
+    }
+
+    const existingRects = existingRectsFor(cardsRef.current);
+    const slot = centeredSlot(visibleRect, cardsRef.current.length, existingRects);
+    const at = { x: slot.x + slot.w / 2, y: slot.y + slot.h / 2 };
+
+    let mediaRect: Rect;
+    if (mediaType === "image") {
+      const filename = saveResult.path.split(/[\\/]/).pop() ?? "";
+      const assetUrl = `stellar-asset://asset/${encodeURIComponent(boardId)}/${encodeURIComponent(filename)}`;
+      const { w, h } = await imageNaturalSizeFromUrl(assetUrl);
+      mediaRect = fitMediaRect(w, h, at);
+    } else {
+      mediaRect = defaultPdfRect(at);
+    }
+    const rect = nearestFreeSlot(mediaRect, existingRects, visibleRect);
+
+    const id = String(nextId.current++);
+    addCard({
+      id,
+      kind: "media",
+      assetPath: saveResult.path,
+      mediaType,
+      rotation: 0,
+      view: DEFAULT_MEDIA_VIEW,
+      rect,
+      groupId: null,
+      label: null,
+    });
+    const boardIdForSpawn = activeBoardIdRef.current;
+    if (boardIdForSpawn) {
+      void window.store.recordHumanSpawn({
+        boardId: boardIdForSpawn,
+        toCardId: id,
+        provider: null,
+        cardKind: "media",
+        cwd: activeBoardCwd,
+      });
+    }
+    // Same off-screen guard as `addCardOfKind` — human just picked the
+    // file; keep the card visible. Do not invent a second recenter policy.
+    if (opts?.focusIfOffscreen !== false && !centerInView(rect, visibleRect)) {
+      setTimeout(() => focusCard(id), 0);
+    }
+  }
+
+  function imageNaturalSizeFromUrl(url: string): Promise<{ w: number; h: number }> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        resolve({ w: img.naturalWidth || MEDIA_MAX_DIM, h: img.naturalHeight || MEDIA_MAX_DIM * 0.75 });
+      };
+      img.onerror = () => {
+        resolve({ w: 640, h: 480 });
+      };
+      img.src = url;
+    });
+  }
+
+  /** Rail entry for media — dialog FIRST, card only after a file is chosen. */
+  async function addMediaCardFromPicker() {
+    const picked = await window.fs.pickMediaFile();
+    if (picked === null) return;
+    if (!picked.ok) {
+      toast(t("toast.mediaSaveFail", { error: picked.error }));
+      return;
+    }
+    await createMediaCardFromPath(picked.path, picked.mediaType);
+  }
+
   /** Agent-requested (post-Allow) or a seenUrls chip click confirmed via the
    * `pendingOpenUrl`/ConfirmModal gate below — both are already-consented
    * by the time this runs. Reuse is a CALLER choice (DESIGN-BACKLOG.md §2.0
@@ -3722,6 +3807,9 @@ export function App() {
         // argument, but staying explicit here costs nothing and documents
         // why it matters.
         onCreate={(kind) => addCardOfKind(kind)}
+        onCreateMedia={() => {
+          void addMediaCardFromPicker();
+        }}
         aiBusy={aiBusy}
         summarizeDisabled={newProvider === "bash"}
         onReorganize={aiReorganize}
