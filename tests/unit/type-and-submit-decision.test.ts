@@ -9,6 +9,7 @@ import {
   inspectDeliveryHold,
   renewsHumanInputGateClock,
   shouldPressEnterOnAttempt,
+  shouldSteerAfterPark,
   deliveryWriteOpensTurn,
   looksLikeSubmitStarted,
   needleVisibleOnScreen,
@@ -17,6 +18,8 @@ import {
   deliveryTextBytes,
   submitStartedAppearedSince,
   appearedSinceBaseline,
+  midTurnQueueParkedSince,
+  decideSteerCheck,
   updateBracketedPasteMode,
   initialBracketedPasteModeState,
   incompletePrivateModeSuffix,
@@ -32,6 +35,8 @@ import {
   type WriteReadinessInput,
   type SubmitCheckInput,
 } from "../../src/main/type-and-submit-decision";
+
+const CURSOR_PARKED = /\bfollow-ups\b[\s\S]*?\benter\s+steer\b/i;
 
 // DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
 // caixa sem submeter" + "Cards recebem a mesma task duas vezes".
@@ -408,8 +413,9 @@ describe("readlineAcceptedSince / offEvents (sinal 2004l medido no bash 5.3)", (
 });
 
 describe("decideDeliveryOutcome", () => {
-  it("sent => delivered; unsent => failed; o resto => unconfirmed", () => {
+  it("sent => delivered; parked => parked; unsent => failed; o resto => unconfirmed", () => {
     expect(decideDeliveryOutcome("sent")).toBe("delivered");
+    expect(decideDeliveryOutcome("parked")).toBe("parked");
     expect(decideDeliveryOutcome("unsent")).toBe("failed");
     expect(decideDeliveryOutcome("unknown")).toBe("unconfirmed");
     expect(decideDeliveryOutcome("read-failed")).toBe("unconfirmed");
@@ -436,6 +442,7 @@ describe("shouldPressEnterOnAttempt", () => {
     expect(shouldPressEnterOnAttempt(1, "unsent")).toBe(true);
     expect(shouldPressEnterOnAttempt(1, "unknown")).toBe(false);
     expect(shouldPressEnterOnAttempt(1, "sent")).toBe(false);
+    expect(shouldPressEnterOnAttempt(1, "parked")).toBe(false);
   });
 
   it("simulação tela do dono com baseline vazio: 1 Enter (não 4)", () => {
@@ -706,5 +713,100 @@ describe("renewsHumanInputGateClock", () => {
   it("tecla humana renova; delivery não", () => {
     expect(renewsHumanInputGateClock("human")).toBe(true);
     expect(renewsHumanInputGateClock("delivery")).toBe(false);
+  });
+});
+
+describe("mid-turn park ≠ delivered (cursor follow-ups)", () => {
+  const needle = "PROBE-NO-STEER-A marker=alpha-111";
+  const beforeBusy = [
+    " ⠘⠤ Running  91 tokens",
+    "  → Add a follow-up                                                 ctrl+c to stop",
+  ].join("\n");
+  const afterParked = [
+    "┌─ follow-ups ─────────────────────────────────────────────────────┐",
+    `│ ○ ${needle}                                                     │`,
+    "│ enter steer · ↑ select/edit · esc cancel                         │",
+    "└──────────────────────────────────────────────────────────────────┘",
+    " ⠘⠤ Running  170 tokens",
+    "  → Add a follow-up                                                 ctrl+c to stop",
+  ].join("\n");
+
+  it("fila follow-ups NOVA com nosso texto => parked, NÃO sent (mesmo com Running 'novo' por shift)", () => {
+    expect(midTurnQueueParkedSince(beforeBusy, afterParked, CURSOR_PARKED, needle)).toBe(true);
+    expect(
+      decideSubmitCheck({
+        screenTextBeforeWrite: beforeBusy,
+        screenText: afterParked,
+        sentNeedle: needle,
+        hasNewActivitySinceWrite: true,
+        submitStartedPattern: CURSOR_PATTERN,
+        midTurnParkedPattern: CURSOR_PARKED,
+      }),
+    ).toBe("parked");
+    expect(decideDeliveryOutcome("parked")).toBe("parked");
+  });
+
+  it("sem midTurnParkedPattern o Running deslocado ainda mentiria sent — o pattern é obrigatório", () => {
+    // Documents why capacity.delivery.midTurnQueue must be declared: without
+    // it, the park box shifting Running's neighborhood false-positives sent.
+    expect(
+      decideSubmitCheck({
+        screenTextBeforeWrite: beforeBusy,
+        screenText: afterParked,
+        sentNeedle: needle,
+        hasNewActivitySinceWrite: true,
+        submitStartedPattern: CURSOR_PATTERN,
+        // no midTurnParkedPattern
+      }),
+    ).toBe("sent");
+  });
+
+  it("parked NÃO dispara Enter de retry; steer é escolha separada", () => {
+    expect(shouldPressEnterOnAttempt(1, "parked")).toBe(false);
+    expect(shouldSteerAfterPark({ result: "parked", steer: true, steerKey: "\r" })).toBe(true);
+    expect(shouldSteerAfterPark({ result: "parked", steer: false, steerKey: "\r" })).toBe(false);
+    expect(shouldSteerAfterPark({ result: "parked", steer: true, steerKey: undefined })).toBe(false);
+    expect(shouldSteerAfterPark({ result: "sent", steer: true, steerKey: "\r" })).toBe(false);
+  });
+
+  it("depois do steer: caixa sumiu => sent; caixa + needle => ainda parked", () => {
+    expect(
+      decideSteerCheck({
+        screenTextAfterSteer: " ⠘⠤ Running  200 tokens\n  → Add a follow-up",
+        parkedPattern: CURSOR_PARKED,
+        sentNeedle: needle,
+      }),
+    ).toBe("sent");
+    expect(
+      decideSteerCheck({
+        screenTextAfterSteer: afterParked,
+        parkedPattern: CURSOR_PARKED,
+        sentNeedle: needle,
+      }),
+    ).toBe("parked");
+  });
+
+  it("segunda entrada numa caixa já aberta (chrome flat) ainda é parked via needle novo", () => {
+    const beforeOpen = afterParked;
+    const afterSecond = [
+      "┌─ follow-ups ─────────────────────────────────────────────────────┐",
+      "│ ○ PROBE-NO-STEER-A marker=alpha-111                              │",
+      "│ ○ PROBE-NO-STEER-B marker=beta-222                               │",
+      "│ enter steer · ↑ select/edit · esc cancel                         │",
+      "└──────────────────────────────────────────────────────────────────┘",
+      " ⠘⠤ Running  200 tokens",
+    ].join("\n");
+    const needleB = "PROBE-NO-STEER-B marker=beta-222";
+    expect(midTurnQueueParkedSince(beforeOpen, afterSecond, CURSOR_PARKED, needleB)).toBe(true);
+    expect(
+      decideSubmitCheck({
+        screenTextBeforeWrite: beforeOpen,
+        screenText: afterSecond,
+        sentNeedle: needleB,
+        hasNewActivitySinceWrite: true,
+        submitStartedPattern: CURSOR_PATTERN,
+        midTurnParkedPattern: CURSOR_PARKED,
+      }),
+    ).toBe("parked");
   });
 });

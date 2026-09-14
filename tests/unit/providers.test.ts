@@ -227,6 +227,16 @@ describe("providers: deriveReportChannel (from capacity.mcp, never a list)", () 
     expect(deriveReportChannel(cursor)).toBe("mcp");
     expect(deriveReportDiscovery(cursor)).toBe("scrollback");
   });
+
+  it("midTurnQueue is declared only where measured (cursor); others omit it", () => {
+    const cursor = providerCapacity("cursor")!;
+    expect(cursor.delivery.midTurnQueue?.parkedPattern).toBeInstanceOf(RegExp);
+    expect(cursor.delivery.midTurnQueue?.steerKey).toBe("\r");
+    for (const p of PROVIDERS) {
+      if (p.id === "cursor") continue;
+      expect(p.capacity.delivery.midTurnQueue, p.id).toBeUndefined();
+    }
+  });
 });
 
 // Declaration vs buildArgs for the spawn brief. The 2026-09-13 silent

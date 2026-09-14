@@ -17,9 +17,9 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 
 type DeliveryStatus = {
   ok: boolean;
-  delivery?: "queued" | "delivered" | "unconfirmed" | "failed";
+  delivery?: "queued" | "delivered" | "parked" | "unconfirmed" | "failed";
   reason?: string;
-  confirm?: { result: string; attempts: number; enters: number; composerCleared: boolean };
+  confirm?: { result: string; attempts: number; enters: number; composerCleared: boolean; steered?: boolean };
   id?: string;
   target?: string;
 };
@@ -196,5 +196,68 @@ describe("message-bus: get_delivery carrega o veredito da confirmação", () => 
     expect(status.delivery).toBe("unconfirmed");
     expect(status.confirm).toEqual({ result: "card-gone", attempts: 0, enters: 0, composerCleared: false });
     expect(writes).toEqual([]);
+  });
+
+  const parkNeedle = "PROBE-PARK-MARKER alpha-111 do not act";
+  const beforeBusy = " ⠘⠤ Running  40 tokens\n  → Add a follow-up                    ctrl+c to stop";
+  const parkedScreen = [
+    "┌─ follow-ups ──────────────────────────────────┐",
+    `│ ○ ${parkNeedle}                              │`,
+    "│ enter steer · ↑ select/edit · esc cancel      │",
+    "└──────────────────────────────────────────────┘",
+    " ⠘⠤ Running  80 tokens",
+    "  → Add a follow-up                    ctrl+c to stop",
+  ].join("\n");
+
+  it("cursor mid-turn: park detectado + steer:false => parked, 1 Enter, sem limpar composer", async () => {
+    const { bus: b, writes } = makeBus({
+      provider: "cursor",
+      screen: (i) => (i === 0 ? beforeBusy : parkedScreen),
+    });
+    const sent = (await b.handleRequest({
+      cmd: "send",
+      target: "t",
+      text: parkNeedle,
+      steer: false,
+    } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("parked");
+    expect(status.confirm).toMatchObject({
+      result: "parked",
+      attempts: 1,
+      enters: 1,
+      composerCleared: false,
+    });
+    expect(status.confirm?.steered).toBeFalsy();
+    expect(writes.filter((w) => w === "\r")).toHaveLength(1);
+    expect(writes).not.toContain("\x15\x15");
+  });
+
+  it("cursor mid-turn: park + steer default => um Enter extra (steer) e delivered quando a caixa some", async () => {
+    const { bus: b, writes } = makeBus({
+      provider: "cursor",
+      screen: (i) => {
+        if (i === 0) return beforeBusy;
+        if (i === 1) return parkedScreen;
+        return " ⠘⠤ Running  120 tokens\n  → Add a follow-up                    ctrl+c to stop";
+      },
+    });
+
+    const sent = (await b.handleRequest({
+      cmd: "send",
+      target: "t",
+      text: parkNeedle,
+      // steer omitted → default true on send
+    } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("delivered");
+    expect(status.confirm).toMatchObject({
+      result: "sent",
+      attempts: 1,
+      enters: 2,
+      composerCleared: false,
+      steered: true,
+    });
+    expect(writes.filter((w) => w === "\r")).toHaveLength(2);
   });
 });

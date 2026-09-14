@@ -9,7 +9,7 @@ import {
   unreportedExitPointerBody,
 } from "./agent-facing-authorship";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
 import {
@@ -284,7 +284,7 @@ export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error:
 
 export type BusRequest =
   | { cmd: "list" }
-  | { cmd: "send"; target?: string; text?: string; requesterId?: string }
+  | { cmd: "send"; target?: string; text?: string; requesterId?: string; steer?: boolean }
   | { cmd: "get_delivery"; id?: string }
   | { cmd: "open"; url?: string; requesterId?: string; reason?: string }
   | { cmd: "close_card"; target?: string; requesterId?: string; reason?: string }
@@ -1297,8 +1297,14 @@ export function createMessageBus(
    * "delivered" pra tudo — inclusive pra entrega que desistiu, limpou o
    * composer e perdeu o texto. Quem chama `send_to_card` é o único que
    * pode reenviar, e era exatamente quem não ficava sabendo. */
-  async function deliverCard(target: string, text: string): Promise<DeliveryConfirmation> {
+  async function deliverCard(
+    target: string,
+    text: string,
+    opts: { steer?: boolean } = {},
+  ): Promise<DeliveryConfirmation> {
     const confirm: DeliveryConfirmation = { result: "unknown", attempts: 0, enters: 0, composerCleared: false };
+    // send_to_card defaults steer on; internal notices pass steer:false.
+    const steer = opts.steer === true;
     await waitForWriteReadiness(target);
     await waitForHumanInputGate(target);
 
@@ -1367,10 +1373,13 @@ export function createMessageBus(
       const capacity = targetCard?.provider ? providerCapacity(targetCard.provider) : undefined;
       const targetRole: DeliveryTargetRole = capacity?.role === "shell" ? "shell" : "agent";
       const submitStartedPattern = capacity?.delivery.submitStartedPattern;
+      // Derived from capacity — never `if (provider === "cursor")` here.
+      const midTurnQueue = capacity?.delivery.midTurnQueue;
+      const midTurnParkedPattern = midTurnQueue?.parkedPattern;
       const sentNeedle = deliveryNeedle(text, targetRole);
       // Previous confirm result drives whether the NEXT iteration presses
-      // Enter. `null` before attempt 0 → always press once. `"unknown"`
-      // never presses (wait/re-read only).
+      // Enter. `null` before attempt 0 → always press once. `"unknown"` /
+      // `"parked"` never press in this loop (steer is a separate single key).
       let previousResult: ReturnType<typeof decideSubmitCheck> | null = null;
       for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
         confirm.attempts = attempt + 1;
@@ -1405,17 +1414,44 @@ export function createMessageBus(
           hasNewActivitySinceWrite:
             typeof activityAtWrite !== "number" || typeof currentActivity !== "number" || currentActivity > activityAtWrite,
           submitStartedPattern,
+          midTurnParkedPattern,
           targetRole,
           readlineAccepted,
         });
         confirm.result = previousResult;
-        if (previousResult === "sent") break;
+        if (previousResult === "sent" || previousResult === "parked") break;
         // "unsent" → next iteration presses Enter again.
         // "unknown" → next iteration waits/re-reads only (no Enter).
       }
+
+      // Mid-turn steer: at most ONE provider-declared key after park.
+      // Not part of the unsent-retry loop (owner 2026-09-11: 5× → exit 143).
+      if (
+        previousResult === "parked" &&
+        shouldSteerAfterPark({ result: previousResult, steer, steerKey: midTurnQueue?.steerKey })
+      ) {
+        const steerKey = midTurnQueue!.steerKey;
+        writeDelivery(steerKey, "enter");
+        confirm.enters++;
+        confirm.steered = true;
+        await delay(SEND_ENTER_CONFIRM_DELAY_MS);
+        const afterSteer = await readCardText(target, 8);
+        if (afterSteer.ok) {
+          previousResult = decideSteerCheck({
+            screenTextAfterSteer: afterSteer.text,
+            parkedPattern: midTurnParkedPattern!,
+            sentNeedle,
+          });
+          confirm.result = previousResult;
+        }
+      }
+
       // Achado 4 — delivery that gave up must not leave text in the
       // composer for the next delivery to concatenate with. Ctrl+U×2.
-      if (previousResult !== "sent") {
+      // Do NOT clear on `"parked"`: text is already out of the composer
+      // and into the provider queue; Ctrl+U cannot dequeue it and would
+      // only risk collateral. `"sent"` keeps the composer intact.
+      if (previousResult !== "sent" && previousResult !== "parked") {
         writeDelivery(composerClearSequence(), "composer_clear");
         confirm.composerCleared = true;
         // §0: "falha silenciosa foi o que fez isso passar despercebido".
@@ -1477,8 +1513,17 @@ export function createMessageBus(
    * existing per-card FIFO (`deliveryQueues`) and returns immediately.
    * Callers that still want to wait (internal, not a tool RPC) can
    * `await` the returned `done` promise.
+   *
+   * `steer` (default false here): when the provider parks mid-turn, press
+   * its declared steer key once. `send_to_card` passes true by default;
+   * internal notices (report pointer, unreported-exit) keep false so a
+   * system ping does not interrupt a live turn.
    */
-  function enqueueCardDelivery(target: string, text: string): { receipt: CardDeliveryReceipt; done: Promise<void> } {
+  function enqueueCardDelivery(
+    target: string,
+    text: string,
+    opts: { steer?: boolean } = {},
+  ): { receipt: CardDeliveryReceipt; done: Promise<void> } {
     const id = randomUUID();
     const queueAhead = deliveryQueues.has(target);
     const reason = peekDeliveryHold(target, queueAhead);
@@ -1491,7 +1536,7 @@ export function createMessageBus(
     // here only guards the FIFO itself from ever wedging on a surprise.
     const done: Promise<void> = previous
       .catch(() => undefined)
-      .then(() => deliverCard(target, text))
+      .then(() => deliverCard(target, text, { steer: opts.steer === true }))
       .then(
         (confirm) => {
           record.confirm = confirm;
@@ -1946,7 +1991,10 @@ export function createMessageBus(
       // MCP-timeout / duplicate-send class that `report` already left.
       // No content dedupe here either: two byte-identical texts can be
       // intentional (card 469, seq 222+223); identity is the delivery id.
-      return enqueueCardDelivery(target, text).receipt;
+      // `steer` defaults TRUE for send_to_card (owner: real-time in-turn
+      // correction). Explicit `steer:false` parks mid-turn without injecting.
+      const steer = req.steer !== false;
+      return enqueueCardDelivery(target, text, { steer }).receipt;
     }
 
     if (req.cmd === "get_delivery") {
