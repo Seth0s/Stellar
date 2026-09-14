@@ -1505,6 +1505,10 @@ const debugBridge = {
    * packaged build, see main/index.ts's guard. */
   browserContentSize: (cardId: string): Promise<{ w: number; h: number; scaleFactor: number } | null> =>
     ipcRenderer.invoke("debug:browser-content-size", cardId),
+  /** Test-only — force a real renderer death (`forcefullyCrashRenderer`). */
+  crashRenderer: (): Promise<void> => ipcRenderer.invoke("debug:crash-renderer"),
+  /** Test-only — absolute path of `renderer-gone.log` under this instance's userData. */
+  rendererGoneLogPath: (): Promise<string | null> => ipcRenderer.invoke("debug:renderer-gone-log-path"),
 };
 contextBridge.exposeInMainWorld("debugBridge", debugBridge);
 

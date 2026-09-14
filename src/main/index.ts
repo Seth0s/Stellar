@@ -12,11 +12,21 @@ import {
   session,
   shell,
 } from "electron";
-import { chmodSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
+import {
+  decidePtyHoldAppend,
+  decideRendererGone,
+  decideSafeSend,
+  decideSafeSendErrorLog,
+  formatRendererGoneLogLine,
+  pruneRendererGoneReloads,
+  RENDERER_GONE_LOG_BASENAME,
+  type RendererGoneDecision,
+} from "./renderer-gone-decision";
 import { identifyCurrentSession } from "./session-identify";
 import { isSessionIdClaimed } from "./session-watch";
 import { decideIdentifyApply, decideIdentifyCardGate, decideIdentifyChoiceApply } from "./session-identify-apply";
@@ -309,10 +319,44 @@ function currentBuildIdentity(): BuildIdentity {
  * event-emitter callbacks, not from an ipcMain handler) and crashes the
  * whole main process — confirmed live. Every send in this file goes through
  * this guard instead of calling `win.webContents.send` directly.
+ *
+ * 2026-09-14 follow-up: `win.isDestroyed()` alone is not enough. A live
+ * BrowserWindow whose renderer frame is already gone (the journal incident)
+ * still passes that check, and every `send` throws "Render frame was
+ * disposed…". Gate via `decideSafeSend` (sticky `rendererReachable` +
+ * contents destroyed) and catch the race; only the first frame-disposed
+ * in a streak is logged — see `decideSafeSendErrorLog`.
  */
+let mainWindowRendererReachable = true;
+let safeSendFrameDisposedStreak = 0;
+
 function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
-  if (win.isDestroyed()) return;
-  win.webContents.send(channel, ...args);
+  const gate = decideSafeSend({
+    windowDestroyed: win.isDestroyed(),
+    contentsDestroyed: win.isDestroyed() ? true : win.webContents.isDestroyed(),
+    rendererReachable: mainWindowRendererReachable,
+  });
+  if (gate.action === "skip") return;
+  try {
+    win.webContents.send(channel, ...args);
+    safeSendFrameDisposedStreak = 0;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const logDecision = decideSafeSendErrorLog({
+      errorMessage,
+      consecutiveFrameDisposed: safeSendFrameDisposedStreak,
+    });
+    if (logDecision.kind === "frame-disposed") {
+      safeSendFrameDisposedStreak += 1;
+      // Sticky flag — further sends skip before throw (and PTY onData holds).
+      mainWindowRendererReachable = false;
+    } else {
+      safeSendFrameDisposedStreak = 0;
+    }
+    if (logDecision.log) {
+      console.error(`[safeSend] ${channel}:`, errorMessage);
+    }
+  }
 }
 
 /**
@@ -674,6 +718,111 @@ function createWindow() {
     if (isMainFrame) resolveConsentsForCard(null);
   });
 
+  // 2026-09-14 — renderer-gone blindness. Policy in renderer-gone-decision.ts.
+  // Log path under userData survives restart (owner looks here, not journal).
+  const rendererGoneLogPath = join(app.getPath("userData"), RENDERER_GONE_LOG_BASENAME);
+  let rendererGoneIsQuitting = false;
+  let recentRendererGoneReloads: number[] = [];
+  const heldPtyChunks = new Map<string, { chunks: string[]; bytes: number }>();
+
+  function recordRendererGone(line: string) {
+    try {
+      appendFileSync(rendererGoneLogPath, line);
+    } catch (err) {
+      console.error("[renderer-gone] failed to append log:", err);
+    }
+    console.error(`[renderer-gone] ${line.trim()}`);
+  }
+
+  function holdPtyData(id: string, data: string) {
+    const existing = heldPtyChunks.get(id) ?? { chunks: [], bytes: 0 };
+    const decision = decidePtyHoldAppend({
+      existingBytes: existing.bytes,
+      incoming: data,
+    });
+    if (decision.action === "append") {
+      existing.chunks.push(data);
+      existing.bytes = decision.nextBytes;
+      heldPtyChunks.set(id, existing);
+      return;
+    }
+    const joined = existing.chunks.join("") + data;
+    const kept = joined.slice(decision.keepFrom);
+    heldPtyChunks.set(id, { chunks: [kept], bytes: decision.nextBytes });
+  }
+
+  function flushHeldPtyData() {
+    for (const [id, held] of heldPtyChunks) {
+      if (held.chunks.length === 0) continue;
+      safeSend(win, "pty:data", id, held.chunks.join(""));
+    }
+    heldPtyChunks.clear();
+  }
+
+  function applyRendererGoneDecision(
+    reason: string,
+    exitCode: number,
+    decision: Extract<RendererGoneDecision, { record: true }>,
+    nowMs: number,
+  ) {
+    recordRendererGone(
+      formatRendererGoneLogLine({ atMs: nowMs, reason, exitCode, decision }),
+    );
+    if (decision.action === "reload") {
+      recentRendererGoneReloads = pruneRendererGoneReloads(
+        [...recentRendererGoneReloads, nowMs],
+        nowMs,
+      );
+      // Defer out of the `render-process-gone` stack. Measured 2026-09-14:
+      // calling `reload()` synchronously here coincided with the browser
+      // process dying SIGTRAP (exit 133) before the page came back — log
+      // said `action:"reload"` but CDP went ECONNREFUSED. setImmediate
+      // lets Chromium finish tearing down the dead frame first.
+      setImmediate(() => {
+        try {
+          if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+            console.error("[renderer-gone] reloading webContents (deferred)");
+            win.webContents.reload();
+          } else {
+            console.error("[renderer-gone] skip reload — window/contents already destroyed");
+          }
+        } catch (err) {
+          console.error("[renderer-gone] reload failed:", err);
+          rendererGoneIsQuitting = true;
+          app.quit();
+        }
+      });
+      return;
+    }
+    rendererGoneIsQuitting = true;
+    app.quit();
+  }
+
+  win.webContents.on("render-process-gone", (_event, details) => {
+    mainWindowRendererReachable = false;
+    const nowMs = Date.now();
+    const decision = decideRendererGone({
+      reason: details.reason,
+      exitCode: details.exitCode,
+      nowMs,
+      recentReloadAtMs: recentRendererGoneReloads,
+      windowAlive: !win.isDestroyed(),
+      isQuitting: rendererGoneIsQuitting,
+    });
+    if (!decision.record) return;
+    applyRendererGoneDecision(details.reason, details.exitCode, decision, nowMs);
+  });
+
+  win.webContents.on("did-finish-load", () => {
+    mainWindowRendererReachable = true;
+    safeSendFrameDisposedStreak = 0;
+    flushHeldPtyData();
+  });
+
+  app.on("before-quit", () => {
+    rendererGoneIsQuitting = true;
+  });
+
   // Packaged: electron-builder's extraResources copies resources/bin next to
   // the app (outside app.asar, where a script can still be spawned as a real
   // OS process) at process.resourcesPath/bin. Dev: __dirname-relative, not
@@ -869,7 +1018,14 @@ function createWindow() {
 
   const registry = createPtyRegistry({
     onData: (id, data) => {
-      safeSend(win, "pty:data", id, data);
+      // Hold while the frame is dead — scrollback is agent work product;
+      // discard would erase output produced during the gap. Cap + tail
+      // truncate in decidePtyHoldAppend. remote mirror still gets live bytes.
+      if (!mainWindowRendererReachable) {
+        holdPtyData(id, data);
+      } else {
+        safeSend(win, "pty:data", id, data);
+      }
       remoteServer?.broadcastPtyData(id, data);
     },
     onExit: (id, exitCode) => {
@@ -1770,6 +1926,12 @@ function createWindow() {
   ipcMain.handle(
     "pty:spawn",
     async (_e, id: string, providerId: string, cwd: string, cols: number, rows: number, opts?: SpawnOpts) => {
+      // Reattach after renderer-gone reload: PTYs survive in main (React
+      // cleanup never ran). Remount always calls spawn — without this
+      // early return, a second process would orphan the survivor.
+      if (registry.isAlive(id)) {
+        return { id };
+      }
       // Precisa acontecer ANTES do spawn: `cursor`/`antigravity` leem o
       // registro de MCP do disco na subida, então registrar depois só
       // valeria a partir do próximo card. É no-op imediato pros outros
@@ -2467,6 +2629,23 @@ function createWindow() {
   ipcMain.handle("ai:summarize", (_e, providerId: string, cwd: string, prompt: string) =>
     runOneShotSummary(providerId, cwd, prompt),
   );
+
+  // Test-only — live proof for renderer-gone recovery (smoke-renderer-gone.mjs).
+  // setImmediate so the invoke can resolve before the frame dies; a sync
+  // crash inside the handler left the page's Promise hanging and, measured
+  // 2026-09-14, the renderer PID sometimes never actually exited.
+  ipcMain.handle("debug:crash-renderer", () => {
+    if (app.isPackaged) return;
+    setImmediate(() => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.forcefullyCrashRenderer();
+      }
+    });
+  });
+  ipcMain.handle("debug:renderer-gone-log-path", () => {
+    if (app.isPackaged) return null;
+    return rendererGoneLogPath;
+  });
 
   // Test-only, same guard/reasoning as chat:test-simulate-tool above —
   // DESIGN-BACKLOG.md item 37's crash-safety net (`process.on
