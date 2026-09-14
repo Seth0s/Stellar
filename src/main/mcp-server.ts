@@ -121,10 +121,16 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "send_to_card",
       {
         description:
-          "Enqueue a message to type into another open terminal card, followed by Enter — same as typing it yourself into that card. Returns immediately with {ok:true, delivery:\"queued\", id, reason?} so this call never sits in the human-input or TUI-boot gates (those wait on the existing per-card FIFO). delivery is \"queued\" here; poll get_delivery with the id to learn whether the text was CONFIRMED submitted (\"delivered\"), visibly stuck and cleared (\"failed\" — resend) or left without evidence (\"unconfirmed\" — read_card). reason is \"human-input\" when the target human is mid-line, \"card-busy\" when the TUI is still booting or another delivery is already in that card's FIFO.",
+          "Enqueue a message to type into another open terminal card, followed by Enter — same as typing it yourself into that card. Returns immediately with {ok:true, delivery:\"queued\", id, reason?} so this call never sits in the human-input or TUI-boot gates (those wait on the existing per-card FIFO). delivery is \"queued\" here; poll get_delivery with the id to learn the settled verdict: \"delivered\" = the agent has the text (turn started or mid-turn steer injected it); \"parked\" = a provider mid-turn queue accepted it (cursor follow-ups) and the agent has NOT seen it yet — distinct from FIFO queued; \"failed\" = still in the composer after every Enter retry, cleared — resend; \"unconfirmed\" = no evidence — read_card. On providers that declare a mid-turn queue, steer (default true) presses that provider's steer key once after a park so a correction reaches the live turn; pass steer:false to leave the text parked until the turn ends. reason is \"human-input\" when the target human is mid-line, \"card-busy\" when the TUI is still booting or another delivery is already in that card's FIFO.",
         inputSchema: {
           target: z.string().describe("The target card's id or label (see list_cards)"),
           text: z.string().describe("The text to type"),
+          steer: z
+            .boolean()
+            .optional()
+            .describe(
+              "When the target provider parks mid-turn input (cursor follow-ups), press its steer key once to inject into the live turn. Default true. Pass false to leave the text in the park queue until the turn ends. Ignored when the provider has no mid-turn queue. Never a blind second Enter on every send — only after a detected park.",
+            ),
           callerCardId: z
             .string()
             .optional()
@@ -133,8 +139,14 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ),
         },
       },
-      async ({ target, text, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "send", target, text, requesterId: caller(callerCardId) });
+      async ({ target, text, steer, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "send",
+          target,
+          text,
+          requesterId: caller(callerCardId),
+          ...(steer === undefined ? {} : { steer }),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -143,7 +155,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "get_delivery",
       {
         description:
-          "Read the status of one send_to_card (or other programmatic PTY) delivery by the id that call returned. {delivery:\"queued\"} means the FIFO item has not finished typing yet (reason names the hold if one is still visible). Settled states carry the screen-confirmation verdict: \"delivered\" = the submit was confirmed on the target's screen; \"failed\" = the text was still sitting in the composer after every Enter retry, so it was cleared and did NOT reach the agent — resend; \"unconfirmed\" = no evidence either way (no echo, screen read failed, card vanished) — check with read_card before resending. confirm:{result, attempts, enters, composerCleared} is the raw finding behind that state. Does not wait.",
+          "Read the status of one send_to_card (or other programmatic PTY) delivery by the id that call returned. {delivery:\"queued\"} means the FIFO item has not finished typing yet (reason names the hold if one is still visible). Settled states carry the screen-confirmation verdict: \"delivered\" = the agent has the text; \"parked\" = provider mid-turn queue (e.g. cursor follow-ups) holds it — agent has not seen it yet (not the same as FIFO queued); \"failed\" = the text was still sitting in the composer after every Enter retry, so it was cleared and did NOT reach the agent — resend; \"unconfirmed\" = no evidence either way (no echo, screen read failed, card vanished) — check with read_card before resending. confirm:{result, attempts, enters, composerCleared, steered?} is the raw finding behind that state. Does not wait.",
         inputSchema: {
           id: z.string().describe("The delivery id from send_to_card's return"),
         },

@@ -131,6 +131,24 @@ export type ProviderCapacity = {
      * Fica undefined se não foi medido (evitando inventar regras) ou não for TUI de agente.
      */
     submitStartedPattern?: RegExp;
+
+    /**
+     * Mid-turn holding UI: submit while the agent is busy parks the text
+     * instead of injecting it. Measured 2026-09-14 on cursor-agent only
+     * (`follow-ups` box + `enter steer` footer). Absent = this provider
+     * has no such queue (or it was not measured) — callers must not
+     * invent an `if (provider === "cursor")` elsewhere; derive from here.
+     */
+    midTurnQueue?: {
+      /** Screen chrome of the park box (new since the delivery write). */
+      parkedPattern: RegExp;
+      /**
+       * Key that injects the selected parked item into the live turn.
+       * Measured cursor: bare Enter. At most ONE press after park — never
+       * the unsent-retry loop (owner 2026-09-11: 5× paste → exit 143).
+       */
+      steerKey: string;
+    };
   };
 };
 
@@ -505,6 +523,16 @@ export const PROVIDERS: ProviderDef[] = [
       delivery: {
         briefMechanism: "positional",
         submitStartedPattern: /[\u2800-\u28FF]\s*(?:Running|Reading|Grepping)\b/i,
+        // Live 2026-09-14 (card 513): mid-turn send → box `follow-ups` with
+        // footer `enter steer · ↑ select/edit · esc cancel`. First Enter
+        // parks; second Enter steers into the live turn. get_delivery used
+        // to call that park `delivered` (Running neighborhood shifted when
+        // the box appeared). Antigravity/claude measured same day: no
+        // equivalent box — do not copy this declaration without measuring.
+        midTurnQueue: {
+          parkedPattern: /\bfollow-ups\b[\s\S]*?\benter\s+steer\b/i,
+          steerKey: "\r",
+        },
       },
     },
     // Windows confirmado contra cursor.com/docs/cli/installation

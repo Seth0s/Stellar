@@ -12,27 +12,33 @@
  *
  * DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
  * caixa sem submeter" + "Cards recebem a mesma task duas vezes" +
- * cursor-agent follow-ups queue (owner 2026-09-11: 5× paste chip → exit 143)
+ * cursor-agent follow-ups queue (owner 2026-09-11: 5× paste chip → exit 143;
+ * owner 2026-09-14: mid-turn send parks in `follow-ups` / `enter steer`,
+ * and `delivered` was wrongly reported — enqueued ≠ agent saw it)
  * + rodada 4 (`49ae26b7`): bracketed paste cego + âncora que escorrega.
  *
  * Screen text is a HISTORY window, not "what just happened". Matching
- * `Working` / `follow-ups` / `Thinking` by mere presence false-positives
- * on prose and chrome from the PREVIOUS turn (adversarial review): Enter
- * swallowed → check reads old words → `"sent"` → text stuck. Same class:
- * a leftover follow-ups box from an earlier turn must not mark a NEW
- * paste as submitted.
+ * `Working` / `Thinking` by mere presence false-positives on prose and
+ * chrome from the PREVIOUS turn (adversarial review): Enter swallowed →
+ * check reads old words → `"sent"` → text stuck. Same class: a leftover
+ * follow-ups box from an earlier turn must not mark a NEW paste as
+ * submitted — and a NEW follow-ups box is `"parked"`, not `"sent"`
+ * (the box appearing also shifts the Running neighborhood and used to
+ * false-positive submit-started).
  *
  * Anchor: `screenTextBeforeWrite` (same line window, read BEFORE the
- * delivery write). Submit-started / follow-ups only count as `"sent"` when
- * a match's stabilized left neighborhood is new vs that baseline (or the
- * raw count rises). Digit runs in the prefix are collapsed so a ticking
- * timer (`[10s]` → `[11s]`) cannot rewrite an old hit as new. Count-only
+ * delivery write). Submit-started only counts as `"sent"` when a match's
+ * stabilized left neighborhood is new vs that baseline (or the raw count
+ * rises). Digit runs in the prefix are collapsed so a ticking timer
+ * (`[10s]` → `[11s]`) cannot rewrite an old hit as new. Count-only
  * arithmetic still fails when an 8-line window drops an old `Working` in
  * the same tick a new one with an identical non-digit prefix enters —
  * known limit, see `appearedSinceBaseline`.
  *
- * Paste chip in the composer (no NEW follow-ups / NEW Working) → `"unsent"`
- * (retry Enter). Order: delta signals first, then chip/needle.
+ * Mid-turn queue (provider `capacity.delivery.midTurnQueue`): NEW park
+ * chrome → `"parked"` (agent has not seen the text). Paste chip in the
+ * composer (no park / no NEW Working) → `"unsent"` (retry Enter). Order:
+ * park first, then submit-started, then chip/needle.
  *
  * Bracketed Paste (CSI 200~/201~): only when the PTY peer requested
  * DECSET `2004h`. Blind wrapping poisons CLIs that never asked — they
@@ -173,7 +179,12 @@ export type DeliveryGateDecision =
  * `delivered` even when the loop gave up after every Enter, cleared the
  * composer and the text never reached the agent — the one caller that
  * could resend was told everything was fine.
- *  - `delivered`   → `"sent"` confirmed on screen.
+ *  - `delivered`   → `"sent"` confirmed on screen (agent turn has the text).
+ *  - `parked`      → `"parked"`: provider mid-turn queue accepted the text
+ *                    (cursor `follow-ups`); the agent has NOT seen it yet.
+ *                    Distinct from FIFO `queued` (Stellar has not finished
+ *                    typing). Resend with `steer:true`, or wait for the
+ *                    turn to end.
  *  - `failed`      → text was still visibly in the composer after the
  *                    last Enter; composer cleared; the text did NOT go
  *                    through. Resend (or read_card) is the caller's call.
@@ -181,7 +192,7 @@ export type DeliveryGateDecision =
  *                    failed, card vanished mid-delivery, or an
  *                    unexpected error). Don't assume; `read_card`.
  */
-export type CardDeliveryState = "queued" | "delivered" | "unconfirmed" | "failed";
+export type CardDeliveryState = "queued" | "delivered" | "parked" | "unconfirmed" | "failed";
 export type CardDeliveryHoldReason = "human-input" | "card-busy";
 export type CardDeliveryReceipt = {
   ok: true;
@@ -202,12 +213,15 @@ export type DeliveryConfirmation = {
   attempts: number;
   enters: number;
   composerCleared: boolean;
+  /** True when a mid-turn steer key was pressed after a park. */
+  steered?: boolean;
 };
 
 /** Map the loop's last finding onto the settled delivery state. Pure so
- * the three-way split is locked by tests, not by reading `deliverCard`. */
+ * the split is locked by tests, not by reading `deliverCard`. */
 export function decideDeliveryOutcome(result: DeliveryCheckOutcome): Exclude<CardDeliveryState, "queued"> {
   if (result === "sent") return "delivered";
+  if (result === "parked") return "parked";
   if (result === "unsent") return "failed";
   return "unconfirmed";
 }
@@ -269,7 +283,7 @@ export function decideDeliveryGate(input: DeliveryGateInput): DeliveryGateDecisi
   return { action: "wait", reason: "human-input" };
 }
 
-export type SubmitCheckResult = "sent" | "unsent" | "unknown";
+export type SubmitCheckResult = "sent" | "unsent" | "unknown" | "parked";
 
 export interface SubmitCheckInput {
   /** The screen text read back after this attempt's Enter (already known
@@ -300,6 +314,13 @@ export interface SubmitCheckInput {
    * é pulada, e a decisão degrada para os testes de needle e atividade genérica.
    */
   submitStartedPattern?: RegExp;
+  /**
+   * Provider mid-turn queue chrome (`capacity.delivery.midTurnQueue.parkedPattern`).
+   * NEW since baseline → `"parked"` (not `"sent"`). Checked BEFORE
+   * submit-started: the park box shifts Running's neighborhood and used
+   * to false-positive delivery.
+   */
+  midTurnParkedPattern?: RegExp;
   /**
    * `"shell"` switches to the readline rule (`decideShellSubmitCheck`).
    * Omitted / `"agent"` keeps the TUI-composer rule below. The caller
@@ -478,6 +499,53 @@ export function submitStartedAppearedSince(before: string, after: string, patter
   return appearedSinceBaseline(before, after, pattern);
 }
 
+/**
+ * True when `after` shows our delivery accepted into the provider's
+ * mid-turn park UI. Pattern from `capacity.delivery.midTurnQueue.parkedPattern`.
+ *
+ * Three honest signals (any one):
+ *  1. Park chrome itself is NEW vs baseline (first entry opens the box).
+ *  2. Our needle newly appears on a screen that already has park chrome
+ *     (second follow-up into an open box — chrome count stays flat).
+ *  3. A paste chip newly appears alongside park chrome (multi-line brief
+ *     collapsed; needle text is no longer raw on screen).
+ */
+export function midTurnQueueParkedSince(
+  before: string,
+  after: string,
+  parkedPattern: RegExp,
+  sentNeedle?: string,
+): boolean {
+  if (!parkedPattern.test(after)) return false;
+  if (appearedSinceBaseline(before, after, parkedPattern)) return true;
+  const needle = sentNeedle?.trim() ?? "";
+  if (needle.length > 0) {
+    const needleNew = needleVisibleOnScreen(after, needle) && !needleVisibleOnScreen(before, needle);
+    if (needleNew) return true;
+  }
+  const chipNew = /pasted text/i.test(after) && !/pasted text/i.test(before);
+  return chipNew;
+}
+
+/**
+ * After one steer key: did the park release our text into the live turn?
+ * Do NOT reuse `decideSubmitCheck` here — a steered message often remains
+ * visible as history, which that function would read as `"unsent"`.
+ */
+export function decideSteerCheck(input: {
+  screenTextAfterSteer: string;
+  parkedPattern: RegExp;
+  sentNeedle: string;
+}): SubmitCheckResult {
+  const after = input.screenTextAfterSteer;
+  if (!input.parkedPattern.test(after)) return "sent";
+  // Box still open with our payload → steer did not take.
+  if (needleVisibleOnScreen(after, input.sentNeedle)) return "parked";
+  if (/pasted text/i.test(after)) return "parked";
+  // Box chrome leftover but our entry gone → treated as injected.
+  return "sent";
+}
+
 /** Is `sentNeedle` still visible on screen? Long needles: anywhere.
  * Short needles (<8): only the last few lines (composer zone) — a short
  * notice must not be declared `"sent"` just because activity exists. */
@@ -495,9 +563,11 @@ export function needleVisibleOnScreen(screenText: string, sentNeedle: string): b
  * Decide whether the typed text has been submitted.
  *
  * Caller contract (`deliverCard`):
- *  - `"unsent"` → press Enter again
+ *  - `"unsent"` → press Enter again (composer retry — NOT steer)
+ *  - `"parked"` → mid-turn queue; do NOT retry Enter in this loop.
+ *                 Caller may press the provider's steer key once.
  *  - `"unknown"` → wait/re-read, do NOT press Enter
- *  - `"sent"` → stop
+ *  - `"sent"` → stop (agent has the text)
  */
 export function decideSubmitCheck(input: SubmitCheckInput): SubmitCheckResult {
   // A shell has no composer, no paste chip and no turn vocabulary — the
@@ -507,12 +577,23 @@ export function decideSubmitCheck(input: SubmitCheckInput): SubmitCheckResult {
   const before = input.screenTextBeforeWrite;
   const after = input.screenText;
 
+  // PARK BEFORE submit-started. Live 2026-09-14: follow-ups box appearing
+  // shifts the existing Running spinner's left neighborhood →
+  // `submitStartedAppearedSince` falsely returned `"sent"` while the
+  // text sat unread in the queue. Enqueued ≠ delivered.
+  if (
+    input.midTurnParkedPattern &&
+    midTurnQueueParkedSince(before, after, input.midTurnParkedPattern, input.sentNeedle)
+  ) {
+    return "parked";
+  }
+
   // NEW since write only — leftover "Working" from the prior
   // turn must not count (review: false positive on prose / stale box).
   // Regra do Vazio: se o provider não definiu vocabulário (ou não medimos), pula essa verificação.
   if (input.submitStartedPattern && submitStartedAppearedSince(before, after, input.submitStartedPattern)) return "sent";
 
-  // Collapsed paste chip still in the COMPOSER (no NEW queue/Working).
+  // Collapsed paste chip still in the COMPOSER (no NEW park/Working).
   // Fix: distinguishing history vs composer zone avoids returning "unsent"
   // when an old "[Pasted text]" chip is just sitting in the history while
   // the TUI legitimately accepted the input.
@@ -538,10 +619,24 @@ export function decideSubmitCheck(input: SubmitCheckInput): SubmitCheckResult {
 }
 
 /** Whether this confirm-loop iteration should press Enter. First attempt
- * always does; later attempts only on `"unsent"`. `"unknown"` waits. */
+ * always does; later attempts only on `"unsent"`. `"parked"` / `"unknown"`
+ * wait — steer is a separate single key outside this retry loop. */
 export function shouldPressEnterOnAttempt(attemptIndex: number, previousResult: SubmitCheckResult | null): boolean {
   if (attemptIndex === 0) return true;
   return previousResult === "unsent";
+}
+
+/**
+ * After a park, should the caller press the provider's steer key?
+ * Only when the sender asked (`steer`) AND the provider declared one.
+ * Never invent a second `\r` for providers without `midTurnQueue`.
+ */
+export function shouldSteerAfterPark(input: {
+  result: SubmitCheckResult;
+  steer: boolean;
+  steerKey: string | undefined;
+}): boolean {
+  return input.result === "parked" && input.steer === true && typeof input.steerKey === "string" && input.steerKey.length > 0;
 }
 
 /**
@@ -666,9 +761,9 @@ export function updateBracketedPasteMode(state: BracketedPasteModeState, chunk: 
  *
  * Does NOT undo cursor-agent follow-ups already queued — once an entry
  * is in that box, clearing the composer cannot dequeue it. Caller only
- * invokes this on give-up (`previousResult !== "sent"`), so a live turn
- * that reached `"sent"` never receives Ctrl+U. Kept to stop abandoned
- * unsent text from concatenating into the next delivery (review achado 4).
+ * invokes this on give-up (`previousResult` is `"unsent"` / `"unknown"`),
+ * never on `"sent"` or `"parked"`. Kept to stop abandoned unsent text
+ * from concatenating into the next delivery (review achado 4).
  */
 export function composerClearSequence(): string {
   return "\x15\x15";
