@@ -400,6 +400,46 @@
   color: var(--warn);
 }
 
+.terminalCardIdentifyAmbiguous {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.terminalCardIdentifyPicks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: 100%;
+}
+
+.terminalCardIdentifyPick {
+  flex: none;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--panel);
+  color: var(--foam);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.terminalCardIdentifyPick:hover:not(:disabled) {
+  border-color: var(--foam);
+}
+
+.terminalCardIdentifyPick:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .terminalCardMenu {
   display: flex;
   flex-direction: column;

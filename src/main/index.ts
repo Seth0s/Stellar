@@ -19,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
 import { identifyCurrentSession } from "./session-identify";
 import { isSessionIdClaimed } from "./session-watch";
-import { decideIdentifyApply, decideIdentifyCardGate } from "./session-identify-apply";
+import { decideIdentifyApply, decideIdentifyCardGate, decideIdentifyChoiceApply } from "./session-identify-apply";
 // Fase B (atalhos), round 2 — `matchesCombo`/`getShortcutCombo` vêm de
 // `renderer/src/shortcut-registry.ts` de propósito: é um módulo puro (zero
 // import de React/DOM/Electron, confirmado — só depende de `keyboard-
@@ -1747,13 +1747,23 @@ function createWindow() {
   });
   // Manual identify — one card, one click. Disk/CLI I/O stays in main
   // (`identifyCurrentSession`). The renderer only receives the result.
-  ipcMain.handle("pty:identify-session", async (_e, id: string) => {
+  // Optional `chooseId`: human picked among ambiguous candidates.
+  ipcMain.handle("pty:identify-session", async (_e, id: string, chooseId?: string) => {
     if (typeof id !== "string" || id.length === 0) return { status: "unavailable" as const };
     const card = store.getCard(id);
     const gate = decideIdentifyCardGate(card);
     if (gate) return gate;
-    const result = await identifyCurrentSession(card!.provider, card!.cwd);
-    return decideIdentifyApply(result, isSessionIdClaimed);
+    const ownClaimedId = registry.getClaimedSessionId(id);
+    const pid = registry.getPid(id) ?? undefined;
+    if (typeof chooseId === "string" && chooseId.length > 0) {
+      // Allowed set = every on-disk/CLI match for this cwd (no process
+      // filter) — the pick came from that list in the footer.
+      const listed = await identifyCurrentSession(card!.provider, card!.cwd, {});
+      const allowed = listed.ids;
+      return decideIdentifyChoiceApply(chooseId, allowed, isSessionIdClaimed, ownClaimedId);
+    }
+    const result = await identifyCurrentSession(card!.provider, card!.cwd, { pid });
+    return decideIdentifyApply(result, isSessionIdClaimed, ownClaimedId);
   });
   // "não consigo mandar foto pelo terminal" (2026-08-27) — ver
   // clipboard-image.ts pro raciocínio completo. Não é `pty:*` de

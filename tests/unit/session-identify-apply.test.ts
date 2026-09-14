@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { decideIdentifyApply, decideIdentifyCardGate } from "../../src/main/session-identify-apply";
+import {
+  decideIdentifyApply,
+  decideIdentifyCardGate,
+  decideIdentifyChoiceApply,
+} from "../../src/main/session-identify-apply";
 
 describe("decideIdentifyCardGate", () => {
   it("missing card => unavailable", () => {
@@ -40,10 +44,52 @@ describe("decideIdentifyApply", () => {
     });
   });
 
-  it("ambiguous stays ambiguous — does not pick", () => {
+  it("ambiguous stays ambiguous — does not pick — and keeps candidates for the human", () => {
     expect(
-      decideIdentifyApply({ status: "ambiguous", ids: ["a", "b"], source: "src" }, () => false),
-    ).toEqual({ status: "ambiguous", ids: ["a", "b"], source: "src" });
+      decideIdentifyApply(
+        {
+          status: "ambiguous",
+          ids: ["a", "b"],
+          source: "src",
+          candidates: [
+            { id: "a", title: "A" },
+            { id: "b", title: "B" },
+          ],
+        },
+        () => false,
+      ),
+    ).toEqual({
+      status: "ambiguous",
+      ids: ["a", "b"],
+      source: "src",
+      candidates: [
+        { id: "a", title: "A" },
+        { id: "b", title: "B" },
+      ],
+    });
+  });
+
+  it("found id claimed by THIS card => found (re-identify after clearing resume)", () => {
+    expect(
+      decideIdentifyApply(
+        { status: "found", ids: ["mine"], source: "src", via: "open-fd" },
+        (id) => id === "mine",
+        "mine",
+      ),
+    ).toEqual({ status: "found", id: "mine", source: "src", via: "open-fd" });
+  });
+
+  it("human choice must be in the allowed set", () => {
+    expect(decideIdentifyChoiceApply("a", ["a", "b"], () => false)).toEqual({
+      status: "found",
+      id: "a",
+      source: "identify-choice",
+    });
+    expect(decideIdentifyChoiceApply("z", ["a", "b"], () => false)).toEqual({
+      status: "error",
+      source: "identify-choice",
+      message: "chosen id is not among the ambiguous candidates",
+    });
   });
 
   it("none stays none", () => {

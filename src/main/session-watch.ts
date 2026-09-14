@@ -19,7 +19,10 @@ const POLL_MS = 1500;
  * aparecem e nada os distingue, `decideClaimAmongCandidates` recusa o
  * claim — não escolhe por mtime. A reserva de input (quem digitou, e
  * depois de qual instante o arquivo nasceu) é a única evidência barata
- * de posse; se ela empatar ou faltar, o id fica para a ação manual.
+ * de posse; se ela empatar ou faltar, o id fica para a ação manual
+ * (`pty:identify-session` → `decideIdentifyByProcessEvidence`: ownership
+ * via `/proc/<pid>/fd` no Linux, escolha humana se ainda ambíguo —
+ * nunca mtime sozinho).
  *
  * HISTÓRICO — não reintroduzir. Até 2026-09-13 a descoberta tinha um
  * prazo de 30s (6min no Codex) e uma janela de graça de 10s após o

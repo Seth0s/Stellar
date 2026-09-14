@@ -115,14 +115,22 @@ const pty = {
   /**
    * Manual identify of this card's session (empty `resume_id` only).
    * Main process does the disk/CLI read — never the renderer.
+   * Pass `chooseId` when the human picks among ambiguous candidates.
    */
-  identifySession: (id: string): Promise<IdentifySessionResult> =>
-    ipcRenderer.invoke("pty:identify-session", id),
+  identifySession: (id: string, chooseId?: string): Promise<IdentifySessionResult> =>
+    ipcRenderer.invoke("pty:identify-session", id, chooseId),
+};
+
+export type IdentifyCandidateInfo = {
+  id: string;
+  title?: string;
+  createdAtMs?: number;
+  updatedAtMs?: number;
 };
 
 export type IdentifySessionResult =
-  | { status: "found"; id: string; source: string }
-  | { status: "ambiguous"; ids: string[]; source: string }
+  | { status: "found"; id: string; source: string; via?: string }
+  | { status: "ambiguous"; ids: string[]; source: string; candidates?: IdentifyCandidateInfo[] }
   | { status: "none"; source: string }
   | { status: "claimed"; id: string; source: string }
   | { status: "error"; source: string; message: string }

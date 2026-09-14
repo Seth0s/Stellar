@@ -179,7 +179,7 @@ function TerminalCardInner({
     copyFeedbackTimer.current = setTimeout(() => setCopyFeedback((f) => (f?.url === url ? null : f)), 1400);
   }
 
-  async function identifyThisSession() {
+  async function identifyThisSession(chooseId?: string) {
     if (identifyInFlightRef.current) return;
     identifyInFlightRef.current = true;
     // Disarm in the same tick as the click — React state alone would
@@ -192,7 +192,7 @@ function TerminalCardInner({
     setIdentifyFeedback(null);
     setMenuOpen(false);
     try {
-      const result = await window.pty.identifySession(id);
+      const result = await window.pty.identifySession(id, chooseId);
       if (result.status === "found") {
         onResumeIdDiscovered(result.id);
         setIdentifyFeedback(null);
@@ -211,12 +211,26 @@ function TerminalCardInner({
     }
   }
 
+  function formatCandidateWhen(ms: number | undefined): string | null {
+    if (ms === undefined || !Number.isFinite(ms)) return null;
+    try {
+      return new Date(ms).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return null;
+    }
+  }
+
   function identifyFeedbackText(result: IdentifySessionResult): string {
     switch (result.status) {
       case "none":
         return t("terminal.identifyNone");
       case "ambiguous":
-        return t("terminal.identifyAmbiguous", { ids: result.ids.join(", ") });
+        return t("terminal.identifyAmbiguous");
       case "claimed":
         return t("terminal.identifyClaimed", { id: result.id });
       case "error":
@@ -227,6 +241,15 @@ function TerminalCardInner({
       case "found":
         return "";
     }
+  }
+
+  function ambiguousPickLabel(c: { id: string; title?: string; updatedAtMs?: number; createdAtMs?: number }): string {
+    const when = formatCandidateWhen(c.updatedAtMs ?? c.createdAtMs);
+    const short = c.id.length > 8 ? `${c.id.slice(0, 8)}…` : c.id;
+    if (c.title && when) return `${c.title} · ${when}`;
+    if (c.title) return c.title;
+    if (when) return `${short} · ${when}`;
+    return short;
   }
   const { exitCode, spawnError, discoveredResumeId, resumeInvalidNotice, hasReceivedOutput, isActive, fitNow, interrupt } = useTerminal(
     containerRef,
@@ -560,7 +583,35 @@ function TerminalCardInner({
               </button>
             </span>
           )}
-          {identifyFeedback && (
+          {identifyFeedback && identifyFeedback.status === "ambiguous" && (
+            <span
+              className={styles.terminalCardIdentifyAmbiguous}
+              data-role="terminal-identify-feedback"
+              data-status="ambiguous"
+            >
+              <span className={styles.terminalCardIdentifyFeedback}>{identifyFeedbackText(identifyFeedback)}</span>
+              <span className={styles.terminalCardIdentifyPicks} data-role="terminal-identify-picks">
+                {(identifyFeedback.candidates ?? identifyFeedback.ids.map((cid) => ({ id: cid })))
+                  .slice(0, 8)
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={styles.terminalCardIdentifyPick}
+                      data-role="terminal-identify-pick"
+                      data-session-id={c.id}
+                      title={t("terminal.identifyPickTitle", { id: c.id })}
+                      disabled={identifyBusy}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={() => void identifyThisSession(c.id)}
+                    >
+                      {ambiguousPickLabel(c)}
+                    </button>
+                  ))}
+              </span>
+            </span>
+          )}
+          {identifyFeedback && identifyFeedback.status !== "ambiguous" && (
             <span
               className={styles.terminalCardIdentifyFeedback}
               data-role="terminal-identify-feedback"

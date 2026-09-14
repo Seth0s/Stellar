@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { decideClaimAmongCandidates } from "../../src/main/session-claim-decision";
+import {
+  decideClaimAmongCandidates,
+  decideIdentifyByProcessEvidence,
+} from "../../src/main/session-claim-decision";
 
 const noneClaimed = () => false;
 
@@ -105,5 +108,97 @@ describe("decideClaimAmongCandidates", () => {
         requiresInputReservation: true,
       }),
     ).toEqual({ action: "none", reason: "ambiguous" });
+  });
+});
+
+describe("decideIdentifyByProcessEvidence", () => {
+  const two = [
+    { id: "older", createdAtMs: 100 },
+    { id: "newer", createdAtMs: 500 },
+  ];
+
+  it("exactly one candidate => unique, no process evidence needed", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: [{ id: "only" }],
+        evidence: { openSessionIds: [] },
+      }),
+    ).toEqual({ action: "claim", id: "only", via: "unique" });
+  });
+
+  it("open fd for exactly one candidate => claim via open-fd (not mtime)", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: two,
+        evidence: { openSessionIds: ["older"] },
+      }),
+    ).toEqual({ action: "claim", id: "older", via: "open-fd" });
+  });
+
+  it("open fd wins even when another candidate is newer", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: two,
+        evidence: { openSessionIds: ["older"], processStartedAtMs: 50 },
+      }),
+    ).toEqual({ action: "claim", id: "older", via: "open-fd" });
+  });
+
+  it("cmdline --resume/--session-id hits exactly one => claim via cmdline", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: two,
+        evidence: { openSessionIds: [], cmdlineSessionIds: ["newer"] },
+      }),
+    ).toEqual({ action: "claim", id: "newer", via: "cmdline" });
+  });
+
+  it("process-birth window keeps one candidate born after the process => claim", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: two,
+        evidence: { openSessionIds: [], processStartedAtMs: 400 },
+      }),
+    ).toEqual({ action: "claim", id: "newer", via: "process-birth-window" });
+  });
+
+  it("process-birth window with TWO survivors => ambiguous, never pick by mtime", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: [
+          { id: "a", createdAtMs: 450 },
+          { id: "b", createdAtMs: 480 },
+          { id: "old", createdAtMs: 10 },
+        ],
+        evidence: { openSessionIds: [], processStartedAtMs: 400 },
+      }),
+    ).toEqual({ action: "ambiguous", ids: ["a", "b"] });
+  });
+
+  it("no process evidence and multiple candidates => ambiguous (refusal kept)", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: two,
+        evidence: { openSessionIds: [] },
+      }),
+    ).toEqual({ action: "ambiguous", ids: ["older", "newer"] });
+  });
+
+  it("open fd id not in candidates is ignored; falls through", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: two,
+        evidence: { openSessionIds: ["foreign"] },
+      }),
+    ).toEqual({ action: "ambiguous", ids: ["older", "newer"] });
+  });
+
+  it("no candidates => none", () => {
+    expect(
+      decideIdentifyByProcessEvidence({
+        candidates: [],
+        evidence: { openSessionIds: ["x"] },
+      }),
+    ).toEqual({ action: "none" });
   });
 });
