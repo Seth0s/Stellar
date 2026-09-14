@@ -876,6 +876,21 @@ function createWindow() {
       // waiting on it.
       messageBus?.resolveCardExit(id, exitCode);
     },
+    // CAMADA 3 — Fila derives pending/running from `registry.isAlive`, but
+    // `task:changed` used to fire only on task-row writes. Measured
+    // 2026-09-14: linkImplementerToTask pushes before `pty:spawn` (card
+    // exists, PTY not yet in the Map → cardAlive=false frozen on the
+    // Fila), and onExit never pushed. One consumer of the registry's
+    // liveness edge — not a third copy of "task reached done" detection.
+    onLivenessChanged: (id) => {
+      // Board without a new query shape: principal task row carries
+      // board_id; if the card row is already gone (close→delete before
+      // async onExit), the same short-lived cache resolveCardExit uses.
+      const task = store.listTasks().find((t) => t.card_id === id);
+      const boardId =
+        task?.board_id ?? store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id);
+      if (boardId) notifyTaskChanged(boardId);
+    },
     onSessionFound: (id, sessionId) => safeSend(win, "pty:session-found", id, sessionId),
     // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — canal dedicado pro aviso
     // de resumeId inválido (ver `pty-registry.ts`'s doc comment em

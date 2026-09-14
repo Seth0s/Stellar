@@ -321,6 +321,18 @@ export function createPtyRegistry(registryOpts: {
    * PTY). */
   onResumeInvalid: (id: string, reason: "missing" | "empty", staleResumeId: string) => void;
   onUrlSeen: (id: string, url: string) => void;
+  /**
+   * Fila derived status (CAMADA 3) depends on `isAlive`, but the renderer
+   * is push-never-poll for `task:changed`. Task-row writers alone never
+   * see a PTY birth/death. Measured 2026-09-14: spawn_agent links
+   * `tasks.card_id` and pushes WHILE the TerminalCard has not yet called
+   * `pty:spawn` (`resolveAgent` returns from `addCard`, PTY mounts later),
+   * so that push freezes `cardAlive=false`; `onExit` never pushed at all.
+   * One source — the Map transitions that DEFINE `isAlive` — invalidates
+   * the Fila. Idempotent: a second `drop` (kill immediate then real
+   * `onExit`) does not re-fire.
+   */
+  onLivenessChanged?: (id: string, alive: boolean) => void;
   /** Path to the acbridge Unix socket, and the dir it lives in — injected into every spawned provider's env/PATH. */
   sockPath: string;
   binDir: string;
@@ -330,6 +342,19 @@ export function createPtyRegistry(registryOpts: {
   mcpUrl: string;
 }) {
   const entries = new Map<string, Entry>();
+
+  /** Sole writers of the liveness Map — `isAlive` is `entries.has`. */
+  function adoptEntry(id: string, entry: Entry): void {
+    const wasAlive = entries.has(id);
+    entries.set(id, entry);
+    if (!wasAlive) registryOpts.onLivenessChanged?.(id, true);
+  }
+  function dropEntry(id: string): boolean {
+    if (!entries.has(id)) return false;
+    entries.delete(id);
+    registryOpts.onLivenessChanged?.(id, false);
+    return true;
+  }
 
   /** Pre-release audit B5 — URL sighting used to run on each raw `onData`
    * chunk from node-pty, not on this coalesced buffer. A URL longer than
@@ -598,7 +623,7 @@ export function createPtyRegistry(registryOpts: {
       // liberar no dia em que este card trocar de sessão via `/resume`.
       claimedSessionId: effectiveSpawnOpts.resumeId ?? imposedSessionId ?? null,
     };
-    entries.set(id, entry);
+    adoptEntry(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
 
     // Review adversarial (2026-09-11), achado 4 — isto disparava via
@@ -711,12 +736,14 @@ export function createPtyRegistry(registryOpts: {
       // desprotegeria uma sessão com outro card ainda usando — ver o
       // comentário de `releaseSessionId`, achado 2 da RODADA 8).
       if (entry.claimedSessionId) releaseSessionId(entry.claimedSessionId);
-      // O ÚNICO lugar que remove uma entrada. `kill` abaixo não remove
-      // mais por conta própria: enquanto o processo não sai de verdade,
-      // ele continua no registry e `isAlive` continua dizendo a verdade.
+      // O ÚNICO lugar que remove uma entrada no caminho normal. `kill`
+      // gracioso NÃO remove por conta própria: enquanto o processo não
+      // sai de verdade, ele continua no registry e `isAlive` continua
+      // dizendo a verdade. `kill({immediate:true})` (fechamento do app)
+      // é a exceção — drop síncrono lá, e este `dropEntry` vira no-op.
       entry.deliveryActive = false;
       entry.deferredHumanInput = [];
-      entries.delete(id);
+      dropEntry(id);
       if (openOpencodeCardIds.delete(id) && openOpencodeCardIds.size === 0) notifyLastOpencodeCardClosed();
       registryOpts.onExit(id, exitCode);
     });
@@ -975,7 +1002,10 @@ export function createPtyRegistry(registryOpts: {
       } catch {
         // Já morreu entre o get e o kill — nada a fazer.
       }
-      entries.delete(id);
+      // Bookkeeping so `isAlive` is false immediately (app quit cannot
+      // wait for the async onExit). Real `proc.onExit` still fires and
+      // its `dropEntry` is a no-op — one liveness edge, not two.
+      dropEntry(id);
       return;
     }
     step(0);
