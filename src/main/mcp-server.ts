@@ -550,13 +550,29 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "list_tasks",
       {
         description:
-          "List every recorded task — id, prompt, provider, status, current card (if any), cwd, purpose (investigate/implement/measure/fix, or null when never declared), result, deps, retryCount, attemptedProviders, order/suggestedOrder. Survives card closes and app restarts.",
+          "List recorded tasks. Without filters this is the full history (prompt+result per row — hundreds of KB once a board has a sprint behind it). For the orchestrator, pass filters: status (one or many), boardId, since (updatedAt >= epoch-ms), hasCard (true = principal cardId has a live PTY right now). view \"summary\" drops prompt and result (the scan shape); \"full\" is the complete row (default). Survives card closes and app restarts. For one task's transitions/cards/verdicts use get_task. \"Pending with a live card\" = status pending + hasCard true.",
         inputSchema: {
-          boardId: z.string().optional().describe("Only tasks belonging to this board — omit to list every task across every board, same as before this param existed"),
+          boardId: z.string().optional().describe("Only tasks belonging to this board — omit to list across every board"),
+          status: z
+            .union([z.string(), z.array(z.string())])
+            .optional()
+            .describe("Keep only these statuses (e.g. \"pending\" or [\"pending\",\"running\"]). Known values today: pending, running, done, failed"),
+          since: z
+            .number()
+            .optional()
+            .describe("Keep only tasks whose updatedAt is >= this epoch-ms — timeline window, not createdAt"),
+          hasCard: z
+            .boolean()
+            .optional()
+            .describe("true = principal cardId has a live PTY right now; false = no live principal card. Combine with status pending for \"pending with a live card\""),
+          view: z
+            .enum(["summary", "full"])
+            .optional()
+            .describe("summary = id/status/card/board/provider/purpose/deps/order/timestamps/… without prompt or result; full = every list field (default)"),
         },
       },
-      async ({ boardId }) => {
-        const res = await opts.handleRequest({ cmd: "list_tasks", boardId });
+      async ({ boardId, status, since, hasCard, view }) => {
+        const res = await opts.handleRequest({ cmd: "list_tasks", boardId, status, since, hasCard, view });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

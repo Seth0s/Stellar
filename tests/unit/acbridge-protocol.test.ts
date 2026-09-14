@@ -110,6 +110,7 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
     const hash = createHash("sha256").update(surface).digest("hex").slice(0, 16);
     const pinned: Record<number, string> = {
       1: "77836d4160f10a69",
+      2: "2fdddc26f54807bb",
     };
     expect(
       hash,
