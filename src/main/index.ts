@@ -39,7 +39,7 @@ import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJs
 import { describeStatusAskResolved } from "./status-write-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
-import { normalizeTaskPurpose } from "../task-purpose";
+import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
 import { deriveParticipationDivergence, deriveTaskStatus } from "../task-status-derive";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { resolveDeclaredTaskId } from "./card-spawn-env-decision";
@@ -1136,6 +1136,8 @@ function createWindow() {
     deps: string[];
     depStatuses: Record<string, string>;
     purpose: "investigate" | "implement" | "measure" | "fix" | null;
+    /** Layer-1 review requirement. `null` = never declared. */
+    review: "wanted" | null;
     depPurposes: Record<string, "investigate" | "implement" | "measure" | "fix" | null>;
     cardAlive: boolean;
     statusTransitions: { toValue: string; at: number }[];
@@ -1270,6 +1272,7 @@ function createWindow() {
         deps,
         depStatuses,
         purpose: normalizeTaskPurpose(t.purpose),
+        review: normalizeTaskReview(t.review),
         depPurposes,
         // Fidelidade visual ao protótipo v5, delta 4 — `registry.isAlive`
         // é uma consulta a um Map em memória (pty-registry.ts), O(1),

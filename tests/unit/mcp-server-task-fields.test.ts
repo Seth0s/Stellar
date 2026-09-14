@@ -87,6 +87,27 @@ describe("mcp-server: purpose / role on the tool surface", () => {
     expect(seen.map((r) => (r as { purpose?: string }).purpose)).toEqual(["measure", undefined]);
   });
 
+  it("create_task.review: enum wanted, omitido=undefined; update_task aceita wanted|null", async () => {
+    const createSchema = await schemaOf("create_task");
+    expect(createSchema.properties?.review?.enum).toEqual(["wanted"]);
+    const updateSchema = await schemaOf("update_task");
+    // nullable → JSON Schema anyOf, not a top-level enum
+    const reviewProp = updateSchema.properties?.review as { anyOf?: Array<{ enum?: string[] }> } | undefined;
+    expect(reviewProp).toBeDefined();
+    const wantedBranch = reviewProp!.anyOf?.find((b) => b.enum?.includes("wanted"));
+    expect(wantedBranch?.enum).toEqual(["wanted"]);
+    seen.length = 0;
+    await client.callTool({ name: "create_task", arguments: { prompt: "x", review: "wanted" } });
+    expect((seen[0] as { review?: string }).review).toBe("wanted");
+    const bad = await client.callTool({ name: "create_task", arguments: { prompt: "x", review: "none" } });
+    expect(bad.isError).toBe(true);
+    seen.length = 0;
+    await client.callTool({ name: "update_task", arguments: { taskId: "t1", review: "wanted" } });
+    expect(seen[0]).toMatchObject({ cmd: "update_task", review: "wanted" });
+    await client.callTool({ name: "update_task", arguments: { taskId: "t1", review: null } });
+    expect((seen[1] as { review: unknown }).review).toBeNull();
+  });
+
   it("spawn_agent.role: enum implementer|reviewer, descrição diz o default, o que reviewer muda e o que é recusado", async () => {
     const schema = await schemaOf("spawn_agent");
     const role = schema.properties?.role;

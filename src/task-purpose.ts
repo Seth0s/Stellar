@@ -31,6 +31,29 @@ export function normalizeTaskPurpose(raw: unknown): TaskPurpose | null {
   return (TASK_PURPOSES as readonly string[]).includes(raw) ? (raw as TaskPurpose) : null;
 }
 
+/**
+ * Layer-1 contract field `tasks.review` — whether this task REQUIRES a
+ * reviewer verdict before agent judgment (`done`/`failed`) may land.
+ * Sole meaningful value is `"wanted"`; `null` = never declared (NORMAL).
+ * Not a boolean: `false` would invent an "explicitly no" state that the
+ * gate treats the same as absence, muddying coverage metrics. Not
+ * `none|wanted`: `none` ≡ null for the gate. Callers REFUSE unknown
+ * strings (same posture as purpose); they never coerce typos to null.
+ */
+export const TASK_REVIEW_VALUES = ["wanted"] as const;
+export type TaskReview = (typeof TASK_REVIEW_VALUES)[number];
+export const TASK_REVIEW_WANTED: TaskReview = "wanted";
+
+export function normalizeTaskReview(raw: unknown): TaskReview | null {
+  if (typeof raw !== "string") return null;
+  return (TASK_REVIEW_VALUES as readonly string[]).includes(raw) ? (raw as TaskReview) : null;
+}
+
+/** True when the row declares review required. Absent/null is false. */
+export function isReviewWanted(raw: unknown): boolean {
+  return normalizeTaskReview(raw) === TASK_REVIEW_WANTED;
+}
+
 /** `null` = not a role we know. Callers REFUSE on null (same principle
  * as `spawn_agent`'s effort check); they never fall back to implementer
  * from a typo — the default only applies when the field is absent. */

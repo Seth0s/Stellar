@@ -63,8 +63,11 @@ import {
   TASK_CARD_REVIEWER_ROLE,
   TASK_CARD_ROLES,
   TASK_PURPOSES,
+  TASK_REVIEW_VALUES,
+  isReviewWanted,
   normalizeTaskCardRole,
   normalizeTaskPurpose,
+  normalizeTaskReview,
 } from "../task-purpose";
 import { fillReportTaskId, resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { promoteReportVerdict, resolveReporterRole } from "./report-verdict-decision";
@@ -412,6 +415,11 @@ export type BusRequest =
        * An unknown value is REFUSED, never normalized to null or to a
        * default — same principle as `spawn_agent`'s effort check. */
       purpose?: string;
+      /** Layer-1 contract — `"wanted"` means agent judgment (`done`/
+       * `failed`) requires a linked reviewer; `null`/omit = never
+       * declared. MUTABLE via update_task (unlike purpose). Does NOT
+       * spawn a reviewer. Unknown value REFUSED. */
+      review?: string;
       /** Task CONTRACT — structured judgment (not a paragraph). Optional;
        * absence is NORMAL. Consumer: delivered brief + reportSchema refusal. */
       territory?: string[];
@@ -443,6 +451,9 @@ export type BusRequest =
        * chamadas antigas / bookkeeping externo: o aviso ainda volta no
        * envelope MCP (`warning`), e cai no `card_id` da task se houver. */
       requesterId?: string;
+      /** Layer-1 `review` — set `"wanted"` or clear with `null`. Omit =
+       * leave unchanged. Unknown string REFUSED. */
+      review?: string | null;
       /** Contract fields — same shape as create_task. Omit = leave; null = clear. */
       territory?: string[] | null;
       gates?: string[] | null;
@@ -1253,6 +1264,8 @@ export function createMessageBus(
       // What the task IS (`create_task.purpose`, write-once). `null` is
       // the normal "not declared" — a reader must not infer one.
       purpose: normalizeTaskPurpose(row.purpose),
+      // Layer-1 review requirement. `null` = never declared.
+      review: normalizeTaskReview(row.review),
       // Contract — structured judgment on the task (brief + reportSchema).
       territory: contract.territory,
       gates: contract.gates,
@@ -2725,6 +2738,12 @@ export function createMessageBus(
           error: `purpose must be one of ${TASK_PURPOSES.map((p) => `"${p}"`).join(", ")} (or omitted), got "${String(req.purpose)}" — refusing to create rather than silently dropping the value; purpose cannot be fixed later`,
         };
       }
+      if (req.review !== undefined && normalizeTaskReview(req.review) === null) {
+        return {
+          ok: false,
+          error: `review must be ${TASK_REVIEW_VALUES.map((v) => `"${v}"`).join(" or ")} (or omitted), got "${String(req.review)}" — refusing to create rather than silently dropping the value`,
+        };
+      }
       const contractParse = parseTaskContractInput({
         territory: req.territory,
         gates: req.gates,
@@ -2745,6 +2764,7 @@ export function createMessageBus(
         // collapses to null (same as omitted): board-root fallback at dispatch.
         cwd: resolveTaskDispatchCwd(req.cwd) ?? null,
         purpose: req.purpose ?? null,
+        review: req.review ?? null,
         territory_json: territoryToSql(contractParse.contract.territory),
         gates_json: gatesToSql(contractParse.contract.gates),
         allow_commit: allowCommitToSql(contractParse.contract.allowCommit),
@@ -2791,15 +2811,29 @@ export function createMessageBus(
       // and reviewer may write; anonymous requesterId = outsider.
       // Human/app paths never enter this handler. Board-orchestrator
       // mark does not widen this gate — participation still wins.
+      // When `review="wanted"`, ONLY a linked reviewer may write —
+      // outsider and orchestrator lose (delegated signature loses).
+      // Effective review for THIS request: a same-call `review:"wanted"`
+      // must already gate judgment (cannot sneak done past a new latch).
       const statusProposed = req.status !== undefined;
+      let reviewForGate = existing.review ?? null;
+      if (req.review !== undefined) {
+        if (req.review === null) reviewForGate = null;
+        else if (normalizeTaskReview(req.review) === null) {
+          return {
+            ok: false,
+            error: `review must be ${TASK_REVIEW_VALUES.map((v) => `"${v}"`).join(" or ")} (or null to clear), got "${String(req.review)}"`,
+          };
+        } else {
+          reviewForGate = normalizeTaskReview(req.review);
+        }
+      }
       if (statusProposed && req.status !== undefined) {
         const cards = callbacks.getTaskCards(req.taskId) ?? [];
         const judgment = decideJudgmentWrite({
           proposedStatus: req.status,
           requesterRoleOnTask: roleOnTask(cards, req.requesterId),
-          // Extension point for sibling `review: wanted` — pass
-          // `existing.review_wanted` (or equivalent) once that column
-          // ships. Omitting keeps today's allow path.
+          reviewWanted: isReviewWanted(reviewForGate),
         });
         if (judgment.action === "refuse") return { ok: false, error: judgment.error };
       }
@@ -2869,6 +2903,8 @@ export function createMessageBus(
         if (req.allowCommit !== undefined) allow_commit = allowCommitToSql(contractParse.contract.allowCommit);
         if (req.reportSchema !== undefined) report_schema_json = reportSchemaToSql(contractParse.contract.reportSchema);
       }
+      // Layer-1 `review` — already validated above into reviewForGate.
+      const review = reviewForGate;
       // Delegated signature: marked board orchestrator writing judgment
       // stamps `orchestrator`, never `human` (false trail) and never
       // plain `agent` (would lose the audit distinction). Non-judgment
@@ -2885,6 +2921,7 @@ export function createMessageBus(
         status: statusProposed ? req.status! : existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
         cwd: req.cwd !== undefined ? (resolveTaskDispatchCwd(req.cwd) ?? null) : existing.cwd,
+        review,
         territory_json,
         gates_json,
         allow_commit,
