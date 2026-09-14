@@ -1529,8 +1529,8 @@ function createWindow() {
     // `link_task_card`). Same push `persistTask` does: the Fila derives
     // the ` ↔ review` arrow from these rows, so it must see the new one
     // without a reload.
-    linkTaskCard: (taskId, cardId, role) => {
-      store.linkTaskCard(taskId, cardId, role);
+    linkTaskCard: (taskId, cardId, role, profile) => {
+      store.linkTaskCard(taskId, cardId, role, profile);
       const task = store.getTask(taskId);
       if (task) notifyTaskChanged(task.board_id);
     },

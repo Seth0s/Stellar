@@ -121,7 +121,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "send_to_card",
       {
         description:
-          "Enqueue a message to type into another open terminal card, followed by Enter — same as typing it yourself into that card. Returns immediately with {ok:true, delivery:\"queued\", id, reason?} so this call never sits in the human-input or TUI-boot gates (those wait on the existing per-card FIFO). delivery is \"queued\" here; poll get_delivery with the id to learn the settled verdict: \"delivered\" = the agent has the text (turn started or mid-turn steer injected it); \"parked\" = a provider mid-turn queue accepted it (cursor follow-ups) and the agent has NOT seen it yet — distinct from FIFO queued; \"failed\" = still in the composer after every Enter retry, cleared — resend; \"unconfirmed\" = no evidence — read_card. On providers that declare a mid-turn queue, steer (default true) presses that provider's steer key once after a park so a correction reaches the live turn; pass steer:false to leave the text parked until the turn ends. reason is \"human-input\" when the target human is mid-line, \"card-busy\" when the TUI is still booting or another delivery is already in that card's FIFO.",
+          "Enqueue a message to type into another open terminal card, followed by Enter — same as typing it yourself into that card. Returns immediately with {ok:true, delivery:\"queued\", id, reason?} so this call never sits in the human-input or TUI-boot gates (those wait on the existing per-card FIFO). delivery is \"queued\" here; poll get_delivery with the id to learn the settled verdict: \"delivered\" = the agent has the text (turn started or mid-turn steer injected it); \"parked\" = a provider mid-turn queue accepted it (cursor follow-ups) and the agent has NOT seen it yet — distinct from FIFO queued; \"failed\" = still in the composer after every Enter retry, cleared — resend; \"unconfirmed\" = no evidence — read_card; \"cancelled\" = author exited/closed before typing started. On providers that declare a mid-turn queue, steer (default true) presses that provider's steer key once after a park so a correction reaches the live turn; pass steer:false to leave the text parked until the turn ends. reason is \"human-input\" when the target human is mid-line, \"card-busy\" when the TUI is still booting or another delivery is already in that card's FIFO. A single origin card may enqueue at most 5 deliveries to the same target within 10 seconds — further sends return ok:false (loop guard). When the author card's process exits, its not-yet-started queued sends are cancelled automatically.",
         inputSchema: {
           target: z.string().describe("The target card's id or label (see list_cards)"),
           text: z.string().describe("The text to type"),
@@ -504,10 +504,50 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "What kind of work this task IS, declared once here and shown as a chip on the board's task queue (Fila). 'investigate' = find out / diagnose, the deliverable is knowledge, not a change; 'implement' = build something new; 'measure' = collect numbers or evidence about the current state; 'fix' = correct a defect in something that already exists. WRITE-ONCE: update_task has no purpose field and cannot relabel it — a wrong value means a new task, not an edit, so decide it now. Omit when you genuinely cannot say: absence is a normal state (the chip stays empty) and is better than a guess; nothing infers it from the prompt text. Any value outside the four is REFUSED and the task is not created. This is about the TASK, not about a card — which card implements or reviews it is `role` on spawn_agent / link_task_card, a separate thing.",
             ),
+          territory: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "File paths/globs this task may touch — structured, not a paragraph. Declared once on the task; appended to the delivered brief. The app never derives this from the filesystem. Omit = undeclared (NORMAL).",
+            ),
+          gates: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Commands the agent must run before declaring success — structured list. Declared once; appended to the brief. The app never runs or judges them. Omit = undeclared.",
+            ),
+          allowCommit: z
+            .boolean()
+            .optional()
+            .describe(
+              "false = do not commit. true = commits allowed. Omit = undeclared (not the same as allowed). Never inferred by intercepting git.",
+            ),
+          reportSchema: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Top-level keys required on a successful report for this task. Missing keys are refused in-line naming the field (same class as report.ok type errors). Failure reports (ok:false) skip this check.",
+            ),
         },
       },
-      async ({ prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder, purpose }) => {
-        const res = await opts.handleRequest({ cmd: "create_task", prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder, purpose });
+      async ({ prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder, purpose, territory, gates, allowCommit, reportSchema }) => {
+        const res = await opts.handleRequest({
+          cmd: "create_task",
+          prompt,
+          provider,
+          cardId,
+          boardId,
+          cwd,
+          deps,
+          maxRetries,
+          fallbackProviders,
+          suggestedOrder,
+          purpose,
+          territory,
+          gates,
+          allowCommit,
+          reportSchema,
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -542,10 +582,46 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(["append", "replace"])
             .optional()
             .describe("How to write prompt. Default append. replace is explicit overwrite of the whole briefing."),
+          territory: z
+            .array(z.string())
+            .nullable()
+            .optional()
+            .describe("Set/clear task territory (paths). null clears; omit leaves unchanged. See create_task."),
+          gates: z
+            .array(z.string())
+            .nullable()
+            .optional()
+            .describe("Set/clear gates list. null clears; omit leaves unchanged."),
+          allowCommit: z
+            .boolean()
+            .nullable()
+            .optional()
+            .describe("Set/clear allowCommit. null clears (undeclared); omit leaves unchanged."),
+          reportSchema: z
+            .array(z.string())
+            .nullable()
+            .optional()
+            .describe("Set/clear required report keys. null clears; omit leaves unchanged."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
         },
       },
-      async ({ taskId, status, cardId, cwd, result, incrementRetry, attemptedProvider, suggestedOrder, prompt, promptMode, callerCardId }) => {
+      async ({
+        taskId,
+        status,
+        cardId,
+        cwd,
+        result,
+        incrementRetry,
+        attemptedProvider,
+        suggestedOrder,
+        prompt,
+        promptMode,
+        territory,
+        gates,
+        allowCommit,
+        reportSchema,
+        callerCardId,
+      }) => {
         const res = await opts.handleRequest({
           cmd: "update_task",
           taskId,
@@ -558,6 +634,10 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           suggestedOrder,
           prompt,
           promptMode,
+          territory,
+          gates,
+          allowCommit,
+          reportSchema,
           requesterId: caller(callerCardId),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
@@ -626,7 +706,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "get_task",
       {
         description:
-          "Read one task's current record by id — also includes its full status-transition trail (`transitions`), every card linked to it with a role (`cards`, e.g. one implementing + one reviewing), and its append-only verdict history (`verdicts`: one entry per participation round, `{cardId, role, verdict, at}`, `verdict: null` meaning that round ended without one) — unlike list_tasks which stays lean. Read-only: no tool writes to this history directly, it's derived from `report` calls and unreported exits.",
+          "Read one task's current record by id — also includes its full status-transition trail (`transitions`), every card linked to it with a role (`cards`, e.g. one implementing + one reviewing, each with the recorded execution profile provider/model/effort when known), contract fields (territory/gates/allowCommit/reportSchema), and its append-only verdict history (`verdicts`: one entry per participation round, `{cardId, role, verdict, at}`, `verdict: null` meaning that round ended without one) — unlike list_tasks which stays lean. Read-only: no tool writes to this history directly, it's derived from `report` calls and unreported exits.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
         },

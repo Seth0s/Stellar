@@ -48,6 +48,16 @@ import {
 import { appendDepPointer, depIdsFromJson, summarizeReport, type DepPointerSource, type DepReportSummary } from "./dep-pointer-decision";
 import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
 import {
+  appendTaskContract,
+  contractFromTaskRow,
+  parseTaskContractInput,
+  territoryToSql,
+  gatesToSql,
+  reportSchemaToSql,
+  allowCommitToSql,
+} from "./task-contract-decision";
+import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
+import {
   TASK_CARD_IMPLEMENTER_ROLE,
   TASK_CARD_REVIEWER_ROLE,
   TASK_CARD_ROLES,
@@ -398,6 +408,12 @@ export type BusRequest =
        * An unknown value is REFUSED, never normalized to null or to a
        * default — same principle as `spawn_agent`'s effort check. */
       purpose?: string;
+      /** Task CONTRACT — structured judgment (not a paragraph). Optional;
+       * absence is NORMAL. Consumer: delivered brief + reportSchema refusal. */
+      territory?: string[];
+      gates?: string[];
+      allowCommit?: boolean;
+      reportSchema?: string[];
     }
   | {
       cmd: "update_task";
@@ -423,6 +439,11 @@ export type BusRequest =
        * chamadas antigas / bookkeeping externo: o aviso ainda volta no
        * envelope MCP (`warning`), e cai no `card_id` da task se houver. */
       requesterId?: string;
+      /** Contract fields — same shape as create_task. Omit = leave; null = clear. */
+      territory?: string[] | null;
+      gates?: string[] | null;
+      allowCommit?: boolean | null;
+      reportSchema?: string[] | null;
     }
   // DESIGN-BACKLOG.md §2.1 item 6 — `boardId` opcional: omitido, devolve
   // exatamente a lista sem filtro de sempre (nenhum comportamento
@@ -808,7 +829,12 @@ export function createMessageBus(
      * implementer). Called by `spawn_agent({taskId, role:"reviewer"})`
      * and `link_task_card`; the wiring in index.ts also pushes the Fila
      * so the ` ↔ review` chip updates without a reload. */
-    linkTaskCard: (taskId: string, cardId: string, role: string) => void;
+    linkTaskCard: (
+      taskId: string,
+      cardId: string,
+      role: string,
+      profile?: { provider?: string | null; model?: string | null; effort?: string | null },
+    ) => void;
     /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — mesmo
      * pass-through direto pro store das 3 linhas acima, mesmo motivo. O
      * cmd `report`/`get_report` (mais abaixo) continua sendo quem faz
@@ -1130,11 +1156,16 @@ export function createMessageBus(
     return deriveTaskStatus(row.status, hasLiveImplementer);
   }
 
-  function linkImplementerToTask(task: TaskRow, cardId: string, actor: StatusActor) {
+  function linkImplementerToTask(
+    task: TaskRow,
+    cardId: string,
+    actor: StatusActor,
+    profile?: { provider?: string | null; model?: string | null; effort?: string | null },
+  ) {
     const latest = callbacks.getTask(task.id) ?? task;
     const newStoredStatus = storedStatusAfterImplementerLink(latest.status);
     const reopeningFailed = latest.status === "failed";
-    callbacks.linkTaskCard(task.id, cardId, TASK_CARD_IMPLEMENTER_ROLE);
+    callbacks.linkTaskCard(task.id, cardId, TASK_CARD_IMPLEMENTER_ROLE, profile);
     // Lifetime floor for exit_without_report (exit-lifetime-decision.ts).
     implementerStartedAt.set(cardId, Date.now());
     callbacks.upsertTask({
@@ -1164,6 +1195,7 @@ export function createMessageBus(
       existingDivergedStatus: row.diverged_status,
       existingDivergedActor: row.diverged_actor as StatusActor | null,
     });
+    const contract = contractFromTaskRow(row);
     return {
       id: row.id,
       prompt: row.prompt,
@@ -1175,6 +1207,11 @@ export function createMessageBus(
       // What the task IS (`create_task.purpose`, write-once). `null` is
       // the normal "not declared" — a reader must not infer one.
       purpose: normalizeTaskPurpose(row.purpose),
+      // Contract — structured judgment on the task (brief + reportSchema).
+      territory: contract.territory,
+      gates: contract.gates,
+      allowCommit: contract.allowCommit,
+      reportSchema: contract.reportSchema,
       result: row.result_json ? JSON.parse(row.result_json) : null,
       deps: row.deps_json ? JSON.parse(row.deps_json) : [],
       retryCount: row.retry_count,
@@ -1211,7 +1248,14 @@ export function createMessageBus(
         cardId: t.card_id,
         at: t.at,
       })),
-      cards: row.cards?.map((c) => ({ cardId: c.card_id, role: c.role })),
+      cards: row.cards?.map((c) => ({
+        cardId: c.card_id,
+        role: c.role,
+        // Participation profile — fact recorded at spawn/link.
+        provider: c.provider ?? null,
+        model: c.model ?? null,
+        effort: c.effort ?? null,
+      })),
       // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
       // — mesma condição de presença que `transitions`/`cards` acima:
       // só existe quando `row` veio de `getTask`, e é SÓ LEITURA por
@@ -2426,7 +2470,12 @@ export function createMessageBus(
         requesterId: req.requesterId,
         report: req.report,
         linkedTask: runningTask
-          ? { status: runningTask.status, retry_count: runningTask.retry_count, max_retries: runningTask.max_retries }
+          ? {
+              status: runningTask.status,
+              retry_count: runningTask.retry_count,
+              max_retries: runningTask.max_retries,
+              reportSchema: contractFromTaskRow(runningTask).reportSchema,
+            }
           : undefined,
         defaultMaxRetries: DEFAULT_MAX_RETRIES,
       });
@@ -2627,6 +2676,15 @@ export function createMessageBus(
           error: `purpose must be one of ${TASK_PURPOSES.map((p) => `"${p}"`).join(", ")} (or omitted), got "${String(req.purpose)}" — refusing to create rather than silently dropping the value; purpose cannot be fixed later`,
         };
       }
+      const contractParse = parseTaskContractInput({
+        territory: req.territory,
+        gates: req.gates,
+        allowCommit: req.allowCommit,
+        reportSchema: req.reportSchema,
+      });
+      if (!contractParse.ok) {
+        return { ok: false, error: contractParse.error, field: contractParse.field };
+      }
       const created: TaskRow = {
         id,
         prompt: req.prompt ?? null,
@@ -2638,6 +2696,10 @@ export function createMessageBus(
         // collapses to null (same as omitted): board-root fallback at dispatch.
         cwd: resolveTaskDispatchCwd(req.cwd) ?? null,
         purpose: req.purpose ?? null,
+        territory_json: territoryToSql(contractParse.contract.territory),
+        gates_json: gatesToSql(contractParse.contract.gates),
+        allow_commit: allowCommitToSql(contractParse.contract.allowCommit),
+        report_schema_json: reportSchemaToSql(contractParse.contract.reportSchema),
         result_json: null,
         deps_json: req.deps ? JSON.stringify(req.deps) : null,
         retry_count: 0,
@@ -2723,11 +2785,47 @@ export function createMessageBus(
       // JSON into this request, so the key CAN arrive): the row keeps
       // `existing.purpose`, and the store's ON CONFLICT omits the column
       // anyway. Write-once means create_task is the only writer.
+      // Contract fields ARE updatable (unlike purpose): omit keeps,
+      // null clears, bad shape refuses before write.
+      let territory_json = existing.territory_json ?? null;
+      let gates_json = existing.gates_json ?? null;
+      let allow_commit = existing.allow_commit ?? null;
+      let report_schema_json = existing.report_schema_json ?? null;
+      if (
+        req.territory !== undefined ||
+        req.gates !== undefined ||
+        req.allowCommit !== undefined ||
+        req.reportSchema !== undefined
+      ) {
+        const partial: {
+          territory?: unknown;
+          gates?: unknown;
+          allowCommit?: unknown;
+          reportSchema?: unknown;
+        } = {};
+        if (req.territory !== undefined) partial.territory = req.territory;
+        if (req.gates !== undefined) partial.gates = req.gates;
+        if (req.allowCommit !== undefined) partial.allowCommit = req.allowCommit;
+        if (req.reportSchema !== undefined) partial.reportSchema = req.reportSchema;
+        const contractParse = parseTaskContractInput(partial);
+        if (!contractParse.ok) {
+          return { ok: false, error: contractParse.error, field: contractParse.field };
+        }
+        if (req.territory !== undefined) territory_json = territoryToSql(contractParse.contract.territory);
+        if (req.gates !== undefined) gates_json = gatesToSql(contractParse.contract.gates);
+        if (req.allowCommit !== undefined) allow_commit = allowCommitToSql(contractParse.contract.allowCommit);
+        if (req.reportSchema !== undefined) report_schema_json = reportSchemaToSql(contractParse.contract.reportSchema);
+      }
       const updated: TaskRow = {
         ...existing,
         prompt,
         status: statusProposed ? req.status! : existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
+        cwd: req.cwd !== undefined ? (resolveTaskDispatchCwd(req.cwd) ?? null) : existing.cwd,
+        territory_json,
+        gates_json,
+        allow_commit,
+        report_schema_json,
         result_json,
         retry_count: existing.retry_count + (req.incrementRetry ? 1 : 0),
         attempted_providers_json: attemptedProviders.length > 0 ? JSON.stringify(attemptedProviders) : existing.attempted_providers_json,
@@ -2849,10 +2947,12 @@ export function createMessageBus(
             error: `card "${req.cardId}" is task "${req.taskId}"'s principal card (cardId) — detach it first (update_task cardId: null) before linking it as reviewer`,
           };
         }
-        callbacks.linkTaskCard(req.taskId, req.cardId, role);
+        const profile = profileFromCardRow(callbacks.getAnyCard(req.cardId));
+        callbacks.linkTaskCard(req.taskId, req.cardId, role, profile);
         return { ok: true, taskId: req.taskId, cardId: req.cardId, role };
       }
-      linkImplementerToTask(task, req.cardId, "agent");
+      const profile = profileFromCardRow(callbacks.getAnyCard(req.cardId));
+      linkImplementerToTask(task, req.cardId, "agent", profile);
       return { ok: true, taskId: req.taskId, cardId: req.cardId, role };
     }
 
@@ -3163,6 +3263,12 @@ export function createMessageBus(
           : await dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
       if (spawnResult.ok) {
         cardSpawnDepth.set(spawnResult.cardId, depth);
+        // Fact on the participation: what actually went to argv.
+        const profile = profileFromSpawnArgs({
+          provider: req.provider,
+          model: req.model,
+          effort: req.effort,
+        });
         if (briefDecision.taskId && role === TASK_CARD_REVIEWER_ROLE) {
           // Reviewer: role row ONLY. `tasks.card_id` stays on whoever is
           // implementing — `report` derives the in-line retry budget and
@@ -3171,10 +3277,10 @@ export function createMessageBus(
           // not this task failing. `recordParticipationRound` fans out
           // through task_cards, so the reviewer's rounds/verdicts land
           // with role "reviewer" (the Fila ` ↔ review` arrow reads this).
-          callbacks.linkTaskCard(briefDecision.taskId, spawnResult.cardId, role);
+          callbacks.linkTaskCard(briefDecision.taskId, spawnResult.cardId, role, profile);
         } else if (briefDecision.taskId) {
           const latest = callbacks.getTask(briefDecision.taskId);
-          if (latest) linkImplementerToTask(latest, spawnResult.cardId, "agent");
+          if (latest) linkImplementerToTask(latest, spawnResult.cardId, "agent", profile);
         }
       }
       // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open
@@ -3569,8 +3675,9 @@ export function createMessageBus(
    * paths (`spawn_agent({taskId})` and auto-dispatch) go through here so
    * a dependent never opens without knowing it has a parent, whichever
    * path spawned it. Reviewers do not: their brief is the review order. */
-  function briefForTask(task: Pick<TaskRow, "prompt" | "deps_json">): string | undefined {
-    return appendDepPointer(briefFromTaskPrompt(task.prompt), depPointerSources(task));
+  function briefForTask(task: Pick<TaskRow, "prompt" | "deps_json" | "territory_json" | "gates_json" | "allow_commit" | "report_schema_json">): string | undefined {
+    const withDeps = appendDepPointer(briefFromTaskPrompt(task.prompt), depPointerSources(task));
+    return appendTaskContract(withDeps, contractFromTaskRow(task));
   }
 
   function buildTaskDispatchParams(
@@ -3699,7 +3806,12 @@ export function createMessageBus(
     autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
       dispatchingTaskIds.delete(task.id);
       if (result.ok) {
-        linkImplementerToTask(task, result.cardId, "app");
+        linkImplementerToTask(
+          task,
+          result.cardId,
+          "app",
+          profileFromSpawnArgs({ provider: params.provider, model: params.model, effort: params.effort }),
+        );
       } else {
         markTaskFailed(task, result.error, "spawn_failed");
       }

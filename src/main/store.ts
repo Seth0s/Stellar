@@ -207,6 +207,17 @@ export type TaskRow = {
    * SQL persists explicit nulls. Never inferred from `prompt` text.
    */
   purpose?: string | null;
+  /**
+   * Task CONTRACT — judgment the app cannot derive (DESIGN-BACKLOG §0).
+   * Declared once as structured fields; consumer is the delivered brief
+   * and (for report_schema_json) in-line report refusal. Separate from
+   * execution profile on `task_cards` (provider/model/effort).
+   * Absence is NORMAL. JSON arrays of strings; allow_commit is 0/1/null.
+   */
+  territory_json?: string | null;
+  gates_json?: string | null;
+  allow_commit?: number | null;
+  report_schema_json?: string | null;
   /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 —
    * `retry_count` is incremented by the app on each in-line `report`
    * refusal (same agent, same session) and by `update_task.incrementRetry`
@@ -384,6 +395,14 @@ export type TaskTransitionRow = {
  * written (or last role-upserted via `linkTaskCard`). `null` on rows
  * that predate the column — no backfill.
  *
+ * Execution PROFILE (`provider` / `model` / `effort`) is a FACT recorded
+ * on this participation at spawn/link time from what went to argv (or
+ * from the living card on `link_task_card`). Nullable, no backfill —
+ * same posture as `linked_at`. NOT task intention: the same task can
+ * run implementer and reviewer on different providers. Task-level
+ * `model`/`effort` intention was rejected (measured empty fill rates;
+ * a field without a defaulting consumer stays empty).
+ *
  * `role: "reviewer"` is what the Fila ` ↔ review` arrow derives from.
  * Measured 2026-09-13: 0 of 91 rows were reviewer — not disuse, there was
  * no writer: `upsertTask` only writes the if-absent `implementer`
@@ -395,7 +414,16 @@ export type TaskTransitionRow = {
  * anything else. A reviewer never becomes `tasks.card_id`: `report`
  * derives the retry budget and task failure from that column, and a
  * reviewer's `{ok:false}` is a verdict, not the task failing. */
-export type TaskCardRow = { task_id: string; card_id: string; role: string; linked_at?: number | null };
+export type TaskCardRow = {
+  task_id: string;
+  card_id: string;
+  role: string;
+  linked_at?: number | null;
+  /** Fact recorded at link/spawn — what actually ran. null = undeclared/legacy. */
+  provider?: string | null;
+  model?: string | null;
+  effort?: string | null;
+};
 
 /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
  * (levantado 2026-09-11, ao fechar a fidelidade visual do card Fila —
@@ -762,6 +790,29 @@ function migrate(db: Database.Database) {
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
+  // Execution profile on the participation — see TaskCardRow. Additive,
+  // nullable, no backfill (same posture as linked_at).
+  for (const col of ["provider TEXT", "model TEXT", "effort TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE task_cards ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
+  }
+  // Task contract fields — judgment declared once (territory/gates/
+  // allow_commit/report_schema). Separate from participation profile.
+  for (const col of [
+    "territory_json TEXT",
+    "gates_json TEXT",
+    "allow_commit INTEGER",
+    "report_schema_json TEXT",
+  ]) {
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
+  }
   // DESIGN-BACKLOG.md §0 "Dois avisos de relatorio do mesmo card" — o
   // schema original tinha `card_id` PRIMARY KEY (slot único). Instalações
   // novas já nascem append-only (`seq` PK) no CREATE TABLE IF NOT EXISTS
@@ -899,6 +950,9 @@ export function openStore(userDataDir: string) {
       card_id TEXT NOT NULL,
       role TEXT NOT NULL,
       linked_at INTEGER,
+      provider TEXT,
+      model TEXT,
+      effort TEXT,
       PRIMARY KEY (task_id, card_id)
     );
   `);
@@ -1266,7 +1320,7 @@ export function openStore(userDataDir: string) {
   // reviewer-em-done. Não inventar lock que só cobre um processo.
   const maxIdStmt = db.prepare(buildMaxShortIdSql(db));
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
   // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
   // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` e
   // `prompt` de propósito: uma declaração estacionada ou um acréscimo de
@@ -1313,11 +1367,13 @@ export function openStore(userDataDir: string) {
   // relabel the proposal. Typo at create is a new task, not an edit —
   // see TaskRow.purpose.
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @territory_json, @gates_json, @allow_commit, @report_schema_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, board_id = excluded.board_id, cwd = excluded.cwd, result_json = excluded.result_json, deps_json = excluded.deps_json,
+      territory_json = excluded.territory_json, gates_json = excluded.gates_json,
+      allow_commit = excluded.allow_commit, report_schema_json = excluded.report_schema_json,
       retry_count = excluded.retry_count, attempted_providers_json = excluded.attempted_providers_json,
       max_retries = excluded.max_retries, fallback_providers_json = excluded.fallback_providers_json,
       "order" = excluded."order", suggested_order = excluded.suggested_order, implicit_order = excluded.implicit_order,
@@ -1669,6 +1725,13 @@ export function openStore(userDataDir: string) {
       // `purpose`, so this is belt-and-suspenders against a caller
       // stuffing a new label into the object.
       purpose: existing ? (existing.purpose ?? null) : normalizeTaskPurpose(rest.purpose),
+      // Contract fields — updatable (unlike purpose). Explicit null clears;
+      // omitted on update keeps the existing value via the spread of `rest`
+      // which callers must re-pass (message-bus always spreads existing).
+      territory_json: rest.territory_json ?? null,
+      gates_json: rest.gates_json ?? null,
+      allow_commit: rest.allow_commit ?? null,
+      report_schema_json: rest.report_schema_json ?? null,
       status: decision.status,
       diverged_status: divergedStatus,
       diverged_actor: divergedActor,
@@ -1741,6 +1804,11 @@ export function openStore(userDataDir: string) {
         card_id: task.card_id,
         role: "implementer",
         linked_at: Date.now(),
+        // No spawn argv here — profile stays null until linkTaskCard /
+        // spawn stamps the fact. Do not invent from tasks.provider.
+        provider: null,
+        model: null,
+        effort: null,
       });
     }
     return decision;
@@ -1800,18 +1868,23 @@ export function openStore(userDataDir: string) {
   // também empurra a Fila). Até então o primitivo existia sem chamador e
   // a coluna era 91/91 implementer.
   const upsertTaskCardIfAbsentStmt = db.prepare(`
-    INSERT INTO task_cards (task_id, card_id, role, linked_at)
-    VALUES (@task_id, @card_id, @role, @linked_at)
+    INSERT INTO task_cards (task_id, card_id, role, linked_at, provider, model, effort)
+    VALUES (@task_id, @card_id, @role, @linked_at, @provider, @model, @effort)
     ON CONFLICT(task_id, card_id) DO NOTHING
   `);
   const linkTaskCardStmt = db.prepare(`
-    INSERT INTO task_cards (task_id, card_id, role, linked_at)
-    VALUES (@task_id, @card_id, @role, @linked_at)
+    INSERT INTO task_cards (task_id, card_id, role, linked_at, provider, model, effort)
+    VALUES (@task_id, @card_id, @role, @linked_at, @provider, @model, @effort)
     ON CONFLICT(task_id, card_id) DO UPDATE SET
       role = excluded.role,
-      linked_at = excluded.linked_at
+      linked_at = excluded.linked_at,
+      provider = COALESCE(excluded.provider, task_cards.provider),
+      model = COALESCE(excluded.model, task_cards.model),
+      effort = COALESCE(excluded.effort, task_cards.effort)
   `);
-  const listTaskCardsStmt = db.prepare("SELECT task_id, card_id, role, linked_at FROM task_cards WHERE task_id = ?");
+  const listTaskCardsStmt = db.prepare(
+    "SELECT task_id, card_id, role, linked_at, provider, model, effort FROM task_cards WHERE task_id = ?",
+  );
   // "Histórico de veredito por participação" — o outro lado da mesma
   // junção: `recordParticipationRound` (abaixo) recebe só um `cardId` (é
   // tudo que o choke point tem à mão — `report`/`resolveCardExit` falam
@@ -1834,7 +1907,7 @@ export function openStore(userDataDir: string) {
   // status guard so recycle into done/failed history stays blocked.
   // `getTaskCards(taskId)` stays unfiltered for the Fila/history chips.
   const listTaskCardsForCardStmt = db.prepare(`
-    SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at
+    SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at, tc.provider, tc.model, tc.effort
     FROM task_cards tc
     JOIN tasks t ON t.id = tc.task_id
     LEFT JOIN cards c ON c.id = tc.card_id
@@ -1848,7 +1921,7 @@ export function openStore(userDataDir: string) {
   /** Full card-side history (including terminal tasks). Diagnostics and
    * audits only — never the report / participation write path. */
   const listTaskCardsForCardHistoryStmt = db.prepare(
-    "SELECT task_id, card_id, role, linked_at FROM task_cards WHERE card_id = ?",
+    "SELECT task_id, card_id, role, linked_at, provider, model, effort FROM task_cards WHERE card_id = ?",
   );
 
   // Ver o comentário grande de `TaskVerdictRow` acima pro modelo
@@ -2228,8 +2301,21 @@ export function openStore(userDataDir: string) {
      * history/evidence. Do not use for role stamping. */
     listTaskCardsForCardHistory: (cardId: string): TaskCardRow[] =>
       listTaskCardsForCardHistoryStmt.all(cardId) as TaskCardRow[],
-    linkTaskCard: (taskId: string, cardId: string, role: string) =>
-      linkTaskCardStmt.run({ task_id: taskId, card_id: cardId, role, linked_at: Date.now() }),
+    linkTaskCard: (
+      taskId: string,
+      cardId: string,
+      role: string,
+      profile?: { provider?: string | null; model?: string | null; effort?: string | null },
+    ) =>
+      linkTaskCardStmt.run({
+        task_id: taskId,
+        card_id: cardId,
+        role,
+        linked_at: Date.now(),
+        provider: profile?.provider ?? null,
+        model: profile?.model ?? null,
+        effort: profile?.effort ?? null,
+      }),
     // Ver o comentário grande de `recordParticipationRound` acima
     // (definida antes do `return`, junto dos prepared statements) —
     // exposta aqui como método do store, mesma convenção de

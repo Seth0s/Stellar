@@ -140,6 +140,41 @@ describe("decideReportAcceptance — declared failure", () => {
       }),
     ).toEqual({ action: "accept" });
   });
+
+  it("names a missing reportSchema field on a non-failure report", () => {
+    const linked = { ...running, reportSchema: ["separation", "files"] };
+    expect(
+      decideReportAcceptance({
+        requesterId: "c",
+        report: { ok: true, separation: "x" },
+        linkedTask: linked,
+        defaultMaxRetries: 2,
+      }),
+    ).toEqual({
+      action: "structural",
+      field: "files",
+      error: describeStructuralReportError("files"),
+    });
+    expect(
+      decideReportAcceptance({
+        requesterId: "c",
+        report: { ok: true, separation: "x", files: [] },
+        linkedTask: linked,
+        defaultMaxRetries: 2,
+      }),
+    ).toEqual({ action: "accept" });
+  });
+
+  it("does not enforce reportSchema on a declared failure", () => {
+    expect(
+      decideReportAcceptance({
+        requesterId: "c",
+        report: { ok: false, retryable: false, error: "blocked" },
+        linkedTask: { ...running, reportSchema: ["separation"] },
+        defaultMaxRetries: 2,
+      }),
+    ).toEqual({ action: "accept_failure", terminal: true });
+  });
 });
 
 describe("errorFromReportPayload", () => {
