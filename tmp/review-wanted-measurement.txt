@@ -1,0 +1,10 @@
+metric                       n  
+---------------------------  ---
+total_tasks                  116
+tasks_with_reviewer_link     1  
+tasks_with_reviewer_verdict  0  
+prompt_strong_review_signal  7  
+---
+column_tasks.review: not present on live DB yet (0 declared via field)
+proxy_historical_comment_camada4: ~3/89 (~3%)
+live_db_total: 116

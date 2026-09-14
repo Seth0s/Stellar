@@ -1,0 +1,35 @@
+# Identity migration proof — 2026-09-14
+
+## Decisions
+(a) Automatic first-boot migration (selective copy + marker)
+(b) Reversible — legacy dir left intact; marker records source
+(c) Never delete legacy without owner OK
+(d) Abort if legacy sock is live (new lock key ≠ old)
+(e) Keep basenames agent-canvas.db / .sock; fixtures stay true
+
+## WAL policy
+Copy .db + .db-wal + .db-shm together. No checkpoint on source.
+
+## Live proof against COPY (never real ~/.config/agent-canvas)
+
+Proof root: /tmp/stellar-identity-mig-proof-wal-* (second run, WAL intact)
+
+SOURCE counts (copy, WAL present 391432 bytes):
+  boards=2 cards=22 tasks=117 reports=137
+
+DEST after applyUserDataMigration:
+  boards=2 cards=22 tasks=117 reports=137
+  MATCH=true
+  copied trio: agent-canvas.db, agent-canvas.db-wal, agent-canvas.db-shm
+  Cache NOT copied; legacy intact
+
+First proof (after sqlite3 CLI checkpointed source WAL→0) also MATCH 2/22/117/137
+with essentials + board-assets/secrets/locale/remote-devices.
+
+## Gates
+- rtk proxy npx tsc --noEmit → clean
+- npx vitest run → PASS 1486 FAIL 0
+
+## NOT fired
+Real ~/.config/stellar was not created. Boot against real userData waits for owner
+(rebuild+install + close live cards).
