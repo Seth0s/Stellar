@@ -163,6 +163,9 @@ export const ptBR = {
     "Modo autônomo ativo — agentes deste board podem spawnar outros sem pedir permissão",
   "topbar.orchestrator": "orquestrador",
   "topbar.orchestratorTitle": "Orquestrador do board: card {id} — assina done/failed e recebe relatórios",
+  "topbar.orchestratorMissing": "orquestrador ausente",
+  "topbar.orchestratorMissingTitle":
+    "Marca aponta para o card {id}, que não está neste board — remova a marca ou marque outro card; o app não limpa sozinho",
   "topbar.sessions": "SESSÕES",
   "topbar.newSession": "+ nova sessão",
   "topbar.editSession": "Editar sessão",
@@ -924,6 +927,9 @@ export const en: Record<MessageKey, string> = {
   "topbar.autonomousTitle": "Autonomous mode on — agents on this board can spawn others without asking",
   "topbar.orchestrator": "orchestrator",
   "topbar.orchestratorTitle": "Board orchestrator: card {id} — signs done/failed and receives reports",
+  "topbar.orchestratorMissing": "orchestrator missing",
+  "topbar.orchestratorMissingTitle":
+    "Mark points at card {id}, which is not on this board — clear the mark or mark another card; the app will not clear it silently",
   "topbar.sessions": "SESSIONS",
   "topbar.newSession": "+ new session",
   "topbar.editSession": "Edit session",

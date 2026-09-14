@@ -31,6 +31,7 @@ export function Topbar({
   onUpdateBoard,
   onDeleteBoard,
   onSuggestInstall,
+  orchestratorCardPresent = true,
 }: {
   boards: Board[];
   activeBoardId: string;
@@ -66,6 +67,14 @@ export function Topbar({
    * `openInstallTerminal`), só que disparada daqui em vez de um botão que
    * só aparecia depois de um spawn já ter falhado. */
   onSuggestInstall: (providerId: string, command: string) => void;
+  /**
+   * Whether `activeBoard.orchestrator_card_id` still resolves to a card on
+   * this board. Closing a terminal clears the mark in the store — so a
+   * missing id means an orphan (manual DB edit, race, or a bug), not the
+   * normal close path. We show it honestly and do NOT auto-clear: silent
+   * cleanup would hide the inconsistency the human needs to see.
+   */
+  orchestratorCardPresent?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
@@ -130,10 +139,16 @@ export function Topbar({
           )}
           {activeBoard?.orchestrator_card_id && (
             <span
-              className="topbar-orchestrator-badge"
-              title={t("topbar.orchestratorTitle", { id: activeBoard.orchestrator_card_id })}
+              className={`topbar-orchestrator-badge${orchestratorCardPresent ? "" : " topbar-orchestrator-badge-missing"}`}
+              data-role="topbar-orchestrator-badge"
+              data-missing={orchestratorCardPresent ? undefined : "true"}
+              title={
+                orchestratorCardPresent
+                  ? t("topbar.orchestratorTitle", { id: activeBoard.orchestrator_card_id })
+                  : t("topbar.orchestratorMissingTitle", { id: activeBoard.orchestrator_card_id })
+              }
             >
-              {t("topbar.orchestrator")}
+              {orchestratorCardPresent ? t("topbar.orchestrator") : t("topbar.orchestratorMissing")}
             </span>
           )}
           {activeCounts && (

@@ -3654,6 +3654,10 @@ export function App() {
         onUpdateBoard={updateBoard}
         onDeleteBoard={deleteBoard}
         onSuggestInstall={stableSuggestInstall}
+        orchestratorCardPresent={(() => {
+          const orchId = boards.find((b) => b.id === activeBoardId)?.orchestrator_card_id;
+          return !orchId || cards.some((c) => c.id === orchId);
+        })()}
       />
       <Compass cards={cards} visibleRect={visibleRect} kindIcon={CARD_ICON} kindLabel={CARD_LABEL} cardLabel={describeCard} onFocusCard={jumpToCard} />
       <UpdateBanner />
