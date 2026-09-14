@@ -155,13 +155,58 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "get_delivery",
       {
         description:
-          "Read the status of one send_to_card (or other programmatic PTY) delivery by the id that call returned. {delivery:\"queued\"} means the FIFO item has not finished typing yet (reason names the hold if one is still visible). Settled states carry the screen-confirmation verdict: \"delivered\" = the agent has the text; \"parked\" = provider mid-turn queue (e.g. cursor follow-ups) holds it — agent has not seen it yet (not the same as FIFO queued); \"failed\" = the text was still sitting in the composer after every Enter retry, so it was cleared and did NOT reach the agent — resend; \"unconfirmed\" = no evidence either way (no echo, screen read failed, card vanished) — check with read_card before resending. confirm:{result, attempts, enters, composerCleared, steered?} is the raw finding behind that state. Does not wait.",
+          "Read the status of one send_to_card (or other programmatic PTY) delivery by the id that call returned. {delivery:\"queued\"} means the FIFO item has not finished typing yet (reason names the hold if one is still visible). Settled states carry the screen-confirmation verdict: \"delivered\" = the agent has the text; \"parked\" = provider mid-turn queue (e.g. cursor follow-ups) holds it — agent has not seen it yet (not the same as FIFO queued); \"failed\" = the text was still sitting in the composer after every Enter retry, so it was cleared and did NOT reach the agent — resend; \"unconfirmed\" = no evidence either way (no echo, screen read failed, card vanished) — check with read_card before resending; \"cancelled\" = the author card exited/closed (or cancel_deliveries ran) before this item started typing — it will never be written. confirm:{result, attempts, enters, composerCleared, steered?} is the raw finding behind confirm-loop states (absent on cancelled). Does not wait.",
         inputSchema: {
           id: z.string().describe("The delivery id from send_to_card's return"),
         },
       },
       async ({ id }) => {
         const res = await opts.handleRequest({ cmd: "get_delivery", id });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "list_deliveries",
+      {
+        description:
+          "List programmatic PTY deliveries known to this process (in-memory FIFO index). Filter by target (destination card), requesterId (author card), and/or delivery state (e.g. \"queued\"). Use to see what is still pending for a card after a loop, without polling get_delivery one id at a time. Does not wait.",
+        inputSchema: {
+          target: z.string().optional().describe("Destination card id"),
+          requesterId: z.string().optional().describe("Author card id (send_to_card caller)"),
+          delivery: z
+            .string()
+            .optional()
+            .describe('State filter — typically "queued"; also delivered/parked/failed/unconfirmed/cancelled'),
+        },
+      },
+      async ({ target, requesterId, delivery }) => {
+        const res = await opts.handleRequest({
+          cmd: "list_deliveries",
+          ...(target !== undefined ? { target } : {}),
+          ...(requesterId !== undefined ? { requesterId } : {}),
+          ...(delivery !== undefined ? { delivery } : {}),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "cancel_deliveries",
+      {
+        description:
+          "Cancel not-yet-started queued deliveries. Pass id to cancel one item, or requesterId to cancel every queued item that card authored (same rule as when that card's process exits). Already-started / delivered / parked items are left alone — aborting mid-type would leave a half-written composer. Returns {ok:true, cancelledIds}.",
+        inputSchema: {
+          id: z.string().optional().describe("Single delivery id to cancel"),
+          requesterId: z.string().optional().describe("Cancel all queued not-yet-started deliveries from this author card"),
+        },
+      },
+      async ({ id, requesterId }) => {
+        const res = await opts.handleRequest({
+          cmd: "cancel_deliveries",
+          ...(id !== undefined ? { id } : {}),
+          ...(requesterId !== undefined ? { requesterId } : {}),
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

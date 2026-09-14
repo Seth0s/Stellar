@@ -10,6 +10,13 @@ import {
 } from "./agent-facing-authorship";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
+import {
+  cancelPendingFromRequester,
+  decideOriginDeliveryRate,
+  filterDeliveryRecords,
+  pruneOriginDeliveryRateSamples,
+  type OriginDeliveryRateSample,
+} from "./delivery-lifecycle-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
 import type { StatusWriteDecision } from "./status-write-decision";
 import {
@@ -286,6 +293,8 @@ export type BusRequest =
   | { cmd: "list" }
   | { cmd: "send"; target?: string; text?: string; requesterId?: string; steer?: boolean }
   | { cmd: "get_delivery"; id?: string }
+  | { cmd: "list_deliveries"; target?: string; requesterId?: string; delivery?: string }
+  | { cmd: "cancel_deliveries"; id?: string; requesterId?: string }
   | { cmd: "open"; url?: string; requesterId?: string; reason?: string }
   | { cmd: "close_card"; target?: string; requesterId?: string; reason?: string }
   | {
@@ -1065,11 +1074,37 @@ export function createMessageBus(
   type TrackedDelivery = {
     id: string;
     target: string;
+    /** Agent `send` only — system pointers omit so cancel-on-death leaves them. */
+    requesterId?: string;
     delivery: CardDeliveryState;
     reason?: CardDeliveryHoldReason;
     confirm?: DeliveryConfirmation;
+    /** True once this FIFO item entered `deliverCard` (cancel must not touch). */
+    started?: boolean;
   };
   const deliveryRecords = new Map<string, TrackedDelivery>();
+  /** Sliding-window samples for agent `send` rate ceiling (requester × target). */
+  let originDeliveryRateSamples: OriginDeliveryRateSample[] = [];
+
+  /**
+   * Mark queued, not-yet-started deliveries from `requesterId` as cancelled.
+   * FIFO chain stays intact (next item still runs); cancelled slots no-op.
+   * Called from `resolveCardExit` BEFORE exit-pointer enqueue so the pointer
+   * (no requesterId) survives. Same helper backs `cancel_deliveries`.
+   */
+  function applyCancelPendingFromRequester(requesterId: string): string[] {
+    const { cancelledIds } = cancelPendingFromRequester({
+      records: deliveryRecords.values(),
+      requesterId,
+    });
+    for (const id of cancelledIds) {
+      const record = deliveryRecords.get(id);
+      if (!record) continue;
+      record.delivery = "cancelled";
+      delete record.reason;
+    }
+    return cancelledIds;
+  }
   function markWaiting(requesterId: string) {
     if (!requesterId) return;
     waitingOnConsent.set(requesterId, (waitingOnConsent.get(requesterId) ?? 0) + 1);
@@ -1272,11 +1307,13 @@ export function createMessageBus(
    * Enter, e CONFIRMA que submeteu de verdade (relendo o card e
    * comparando com um prefixo do que foi escrito), retentando só o Enter
    * (nunca o texto de novo) até `SEND_ENTER_MAX_ATTEMPTS`. Extraído aqui
-   * pra todo caller que ainda digita (`send`, drag humano de task, ponteiro
-   * de report / saída-sem-report via `enqueueCardDelivery`) usar o MESMO
-   * mecanismo — nunca uma segunda variante que "quase" faz a mesma coisa.
-   * Idle NÃO passa por aqui (nem popup de SO): o orquestrador polla
-   * `card_status`. O corpo do relatório também não — só o ponteiro curto.
+   * pra todo caller que ainda digita (`send`, ponteiro de report /
+   * saída-sem-report / status-ask Allow/Deny via `enqueueCardDelivery`)
+   * usar o MESMO mecanismo — nunca uma segunda variante que "quase" faz
+   * a mesma coisa. Idle NÃO passa por aqui (nem popup de SO): o
+   * orquestrador polla `card_status`. O corpo do relatório também não —
+   * só o ponteiro curto. Drag humano na Fila também não: gravar status é
+   * suficiente; a Fila mostra a marca.
    *
    * DESIGN-BACKLOG.md §0 (2026-09-11, relatado 2x com `codex`) — 2 achados
    * que se somavam: (1) nada aqui esperava a TUI do CLI terminar de subir
@@ -1519,31 +1556,63 @@ export function createMessageBus(
    * pass true (answer / correction the peer asked for). Report pointer and
    * unreported-exit keep false so a system ping does not inject into a
    * live turn.
+   *
+   * `requesterId` (optional): agent `send` stamps the author so close/exit
+   * can cancel not-yet-started items. System enqueues omit it — a final
+   * report/exit pointer must still deliver after the author process dies.
    */
   function enqueueCardDelivery(
     target: string,
     text: string,
-    opts: { steer?: boolean } = {},
-  ): { receipt: CardDeliveryReceipt; done: Promise<void> } {
+    opts: { steer?: boolean; requesterId?: string } = {},
+  ): { receipt: CardDeliveryReceipt; done: Promise<void> } | { ok: false; error: string } {
+    const requesterId = opts.requesterId;
+    if (requesterId) {
+      const nowMs = Date.now();
+      originDeliveryRateSamples = pruneOriginDeliveryRateSamples(originDeliveryRateSamples, nowMs);
+      const rate = decideOriginDeliveryRate({
+        samples: originDeliveryRateSamples,
+        requesterId,
+        target,
+        nowMs,
+      });
+      if (rate.action === "refuse") return { ok: false, error: rate.error };
+      originDeliveryRateSamples.push({ requesterId, target, atMs: nowMs });
+    }
+
     const id = randomUUID();
     const queueAhead = deliveryQueues.has(target);
     const reason = peekDeliveryHold(target, queueAhead);
-    const record: TrackedDelivery = { id, target, delivery: "queued", ...(reason ? { reason } : {}) };
+    const record: TrackedDelivery = {
+      id,
+      target,
+      delivery: "queued",
+      ...(requesterId ? { requesterId } : {}),
+      ...(reason ? { reason } : {}),
+    };
     deliveryRecords.set(id, record);
 
     const previous = deliveryQueues.get(target) ?? Promise.resolve();
     // Settled state comes from the loop's verdict. `deliverCard` already
     // converts its own throws into `result: "error"`; the rejection arm
     // here only guards the FIFO itself from ever wedging on a surprise.
+    // Cancel-before-write: if the author died while this item waited, skip
+    // `deliverCard` entirely — FIFO still advances for everyone else.
     const done: Promise<void> = previous
       .catch(() => undefined)
-      .then(() => deliverCard(target, text, { steer: opts.steer === true }))
+      .then(() => {
+        if (record.delivery === "cancelled") return undefined;
+        record.started = true;
+        return deliverCard(target, text, { steer: opts.steer === true });
+      })
       .then(
         (confirm) => {
+          if (record.delivery === "cancelled" || confirm === undefined) return;
           record.confirm = confirm;
           record.delivery = decideDeliveryOutcome(confirm.result);
         },
         () => {
+          if (record.delivery === "cancelled") return;
           record.confirm = { result: "error", attempts: 0, enters: 0, composerCleared: false };
           record.delivery = "unconfirmed";
         },
@@ -1978,7 +2047,12 @@ export function createMessageBus(
       // `steer` defaults TRUE for send_to_card (owner: real-time in-turn
       // correction). Explicit `steer:false` parks mid-turn without injecting.
       const steer = req.steer !== false;
-      return enqueueCardDelivery(target, text, { steer }).receipt;
+      const enqueued = enqueueCardDelivery(target, text, {
+        steer,
+        ...(req.requesterId ? { requesterId: req.requesterId } : {}),
+      });
+      if (!("receipt" in enqueued)) return enqueued;
+      return enqueued.receipt;
     }
 
     if (req.cmd === "get_delivery") {
@@ -1990,9 +2064,50 @@ export function createMessageBus(
         delivery: record.delivery,
         ...(record.reason ? { reason: record.reason } : {}),
         ...(record.confirm ? { confirm: record.confirm } : {}),
+        ...(record.requesterId ? { requesterId: record.requesterId } : {}),
         id: record.id,
         target: record.target,
       };
+    }
+
+    if (req.cmd === "list_deliveries") {
+      const filtered = filterDeliveryRecords(deliveryRecords.values(), {
+        ...(req.requesterId !== undefined ? { requesterId: req.requesterId } : {}),
+        ...(req.target !== undefined ? { target: req.target } : {}),
+        ...(req.delivery !== undefined ? { delivery: req.delivery } : {}),
+      });
+      return {
+        ok: true,
+        deliveries: filtered.map((r) => ({
+          id: r.id,
+          target: r.target,
+          delivery: r.delivery,
+          ...(r.requesterId ? { requesterId: r.requesterId } : {}),
+          ...(r.reason ? { reason: r.reason } : {}),
+          ...(r.started ? { started: true } : {}),
+        })),
+      };
+    }
+
+    if (req.cmd === "cancel_deliveries") {
+      if (req.id) {
+        const record = deliveryRecords.get(req.id);
+        if (!record) return { ok: false, error: `no delivery with id "${req.id}"` };
+        if (record.delivery !== "queued" || record.started) {
+          return {
+            ok: false,
+            error: `delivery "${req.id}" is ${record.delivery}${record.started ? " (started)" : ""} — only queued not-yet-started items cancel`,
+          };
+        }
+        record.delivery = "cancelled";
+        delete record.reason;
+        return { ok: true, cancelledIds: [req.id] };
+      }
+      if (req.requesterId) {
+        const cancelledIds = applyCancelPendingFromRequester(req.requesterId);
+        return { ok: true, cancelledIds };
+      }
+      return { ok: false, error: "pass id or requesterId" };
     }
 
     if (req.cmd === "open") {
@@ -3213,6 +3328,11 @@ export function createMessageBus(
    * `onExit`, unconditionally, for every card that exits (not just ones
    * with a waiter — cheap Map lookup, no-op when nothing's waiting). */
   function resolveCardExit(cardId: string, exitCode: number) {
+    // Live 2026-09-14: origin died / was closed; destination FIFO kept
+    // typing that author's queued probes. Cancel not-yet-started sends
+    // stamped with this card as requester — BEFORE exit-pointer enqueue
+    // (that pointer omits requesterId and must still deliver).
+    applyCancelPendingFromRequester(cardId);
     const waiters = pendingCardExits.get(cardId);
     if (waiters) {
       pendingCardExits.delete(cardId);
