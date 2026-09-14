@@ -117,12 +117,13 @@ describe("message-bus: request_task_status (terceiro caminho)", () => {
     expect(asks).toHaveLength(0);
   });
 
-  it("update_task direto continua aceito com aviso — o pedido é caminho novo", async () => {
+  it("update_task direto de outsider sob hold humano continua aceito com aviso — pedido é caminho do implementer", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-status-ask-bus-"));
     bus = createMessageBus(
       join(dir, "agent-canvas.sock"),
       callbacksWithOverrides({
         getTask: () => humanLocked({ diverged_status: null, diverged_actor: null }),
+        getTaskCards: () => [],
         upsertTask: () => ({
           status: "pending",
           statusChanged: false,
@@ -135,7 +136,7 @@ describe("message-bus: request_task_status (terceiro caminho)", () => {
       }),
     );
 
-    const res = await bus.handleRequest({ cmd: "update_task", taskId: "t-locked", status: "done" } as BusRequest);
+    const res = await bus.handleRequest({ cmd: "update_task", taskId: "t-locked", status: "done", requesterId: "orch" } as BusRequest);
     expect(res.ok).toBe(true);
     expect(String(res.warning)).toContain("prevalece");
     expect(String(res.warning)).toContain("request_task_status");

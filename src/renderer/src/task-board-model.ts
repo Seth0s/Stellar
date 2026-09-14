@@ -195,20 +195,21 @@ export function describePurposeChip(chip: PurposeChip): string {
   return chip.hasReviewer ? `${base} ↔ ${t("task.stage.review")}` : base;
 }
 
-/** Barra de proposta de conclusão (decisão 9) — só APARECE, nunca decide:
- * "o app nunca marca concluído sozinho" (decisão 8) é a UI nunca chamando
- * `approveCompletion` sozinha, só o humano clicando o botão que esta
- * função manda mostrar.
+/**
+ * CAMADA 4 — APRESENTAÇÃO do julgamento, não uma segunda autoridade de
+ * escrita. Quem PODE gravar `done`/`failed` é decidido uma vez só no bus
+ * (`decideJudgmentWrite`: implementer desta task só pede via
+ * `request_task_status`; outsider/reviewer/humano julgam). Esta função
+ * só diz o que a barra da Fila mostra quando um sinal de prontidão chegou
+ * (veredito), pra o humano clicar — o mesmo clique que já existia.
+ * "o app nunca marca concluído sozinho" (decisão 8) continua: a UI nunca
+ * chama `approveCompletion` sozinha.
  *
- * Substitui `shouldProposeCompletion(status, verdict)`, que reagia a
- * `verdict === "aprovado"` do relatório do card PRINCIPAL sem olhar QUEM
- * mandou. Medido 2026-09-13: os 14 `aprovado` até então eram todos do
- * próprio implementador — a barra era o implementador aprovando o
- * próprio trabalho, vestida de review. A fonte agora é `task_verdicts`
- * (uma linha por rodada, com o `role` copiado de `task_cards` no
- * momento do report), o único lugar que sabe o papel de cada veredito.
+ * `cebc7d1` gateava só esta barra (reviewer `aprovado`); o buraco era a
+ * escrita direta do implementer. Não reintroduzir um segundo critério de
+ * "quem conclui" aqui.
  *
- * Regra:
+ * Regra de apresentação (forma inalterada):
  * - Task com reviewer (linha `reviewer` em `cardRoles` OU alguma rodada
  *   com role reviewer): só a ÚLTIMA rodada de reviewer conta. `aprovado`
  *   → proposta `origin: "reviewer"`; qualquer outra coisa (reprovado,
@@ -216,18 +217,17 @@ export function describePurposeChip(chip: PurposeChip): string {
  *   tenha dito `aprovado`. O veredito do implementador continua gravado
  *   (é informação honesta), mas não propõe conclusão sozinho.
  * - Task SEM reviewer: a última rodada de implementer `aprovado` propõe
- *   com `origin: "self"` — a UI marca "auto-aprovado pelo implementador".
- *   Decisão deliberada (não flag): 100% das tasks até hoje não têm
- *   reviewer; suprimir a proposta apagaria o único sinal de "terminei"
- *   que a Fila tem, e o dano real nunca foi a proposta existir — foi ela
- *   se passar por review. Com a origem visível, quem decide continua
- *   sendo o humano no botão; nada muda no que é gravado.
+ *   com `origin: "self"` — sinal de "terminei" pro humano, não auto-
+ *   conclusão na escrita (isso o gate do bus já impede). ~3/89 tasks
+ *   pedem review; apagar a barra sem reviewer apagaria o único sinal de
+ *   prontidão. Quem decide continua sendo o humano no botão (ou um
+ *   outsider via `update_task`).
  * - Role fora de implementer/reviewer (desconhecido, ou lixo): nunca
  *   propõe — papel que não se conhece não sustenta uma proposta. */
 export type CompletionProposal = {
   verdict: "aprovado";
   /** `reviewer` = veredito de quem revisa; `self` = o implementador
-   * julgando o próprio trabalho numa task sem reviewer. */
+   * sinalizando prontidão numa task sem reviewer (humano/outsider julgam). */
   origin: "reviewer" | "self";
   cardId: string;
   /** `at` da rodada que sustenta a proposta — o que a UI usa pra

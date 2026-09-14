@@ -20,7 +20,9 @@ import {
   describeStatusHeldWarning,
   retainStatusAsk,
 } from "./status-write-decision";
-import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, type FailureSource } from "./failure-kind-decision";
+import { decideJudgmentWrite, roleOnTask } from "./judgment-write-decision";
+import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, interruptionReasonFromResultJson, type FailureSource } from "./failure-kind-decision";
+import { decideExitWithoutReportWrite } from "./exit-lifetime-decision";
 import {
   decideReportAcceptance,
   errorFromReportPayload,
@@ -779,6 +781,10 @@ export function createMessageBus(
      * card can close a participation round without being the principal
      * card of the task. */
     listTaskCardsForCard: (cardId: string) => TaskCardRow[];
+    /** Every `task_cards` row for one task (Fila chips / judgment gate).
+     * Unfiltered by terminal status — membership for "may this card
+     * write done/failed" must still see the link on a live task. */
+    getTaskCards: (taskId: string) => TaskCardRow[];
     /** Explicit role write (`store.linkTaskCard`, the upsert that DOES
      * overwrite an existing role — unlike `upsertTask`'s if-absent
      * implementer). Called by `spawn_agent({taskId, role:"reviewer"})`
@@ -1119,9 +1125,9 @@ export function createMessageBus(
       updatedAt: row.updated_at,
       // DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo (não histórico).
       // Presente em list/get pra o agente ver a mesma divergência que o
-      // quadro Fila mostra.
-      divergedStatus: row.diverged_status,
-      divergedActor: row.diverged_actor,
+      // quadro Fila mostra (derived on read for participation holds).
+      divergedStatus,
+      divergedActor,
       requestedStatus: row.requested_status ?? null,
       requestedReason: row.requested_reason ?? null,
       requestedBy: row.requested_by ?? null,
@@ -3125,11 +3131,17 @@ export function createMessageBus(
       // exit without report on a linked non-judgment task is still failure.
       if (linkedTask && !isJudgmentStatus(linkedTask.status)) {
         const lastRefused = lastRefusedReasonFromResultJson(linkedTask.result_json);
+        const startedAt = implementerStartedAt.get(cardId);
+        implementerStartedAt.delete(cardId);
+        const lifetimeMs = startedAt !== undefined ? Date.now() - startedAt : null;
         markTaskFailed(
           { ...linkedTask, result_json: clearLastRefusedStash(linkedTask.result_json) },
           describeExitWithoutAcceptedReport(exitCode, lastRefused),
           "exit_without_report",
+          { lifetimeMs },
         );
+      } else {
+        implementerStartedAt.delete(cardId);
       }
       // Fechar histórico e avisar o spawner são critérios diferentes:
       // qualquer vínculo atual em task_cards fecha a participação, inclusive
@@ -3446,18 +3458,45 @@ export function createMessageBus(
 
   /** DESIGN-BACKLOG.md item 60, peça 4 + "Falha TIPADA" — cause is an
    * argument, never assumed. `exit_without_report` → interrompida (back
-   * to "a fazer"); `retry_spawn_failed` / `spawn_failed` are their own
-   * causes (also default interrompida). A task that already carries
-   * `failureKind: julgada` is NEVER downgraded — the judgment survives a
-   * later spawn failure. The app does not respawn after this write. */
-  function markTaskFailed(task: TaskRow, error: string, source: FailureSource) {
-    const existingKind = failureKindFromResultJson(task.result_json);
-    const kind = resolveFailureKind(existingKind, source);
-    const write = decideFailureWrite(kind);
+   * to "a fazer") UNLESS the card died under the lifetime floor
+   * (exit-lifetime-decision.ts): that is a launch diagnosis → `failed`
+   * with a visible reason, not a silent pending that invites another
+   * spawn. `retry_spawn_failed` / `spawn_failed` stay interrompida.
+   * A task that already carries `failureKind: julgada` is NEVER
+   * downgraded. The app does not respawn after this write (2023a74). */
+  function markTaskFailed(
+    task: TaskRow,
+    error: string,
+    source: FailureSource,
+    opts?: { lifetimeMs?: number | null },
+  ) {
+    // Always re-read: callers (e.g. dispatchIfUnblocked `.then`) may hold
+    // a snapshot older than an intervening exit/human write.
+    const latest = callbacks.getTask(task.id) ?? task;
+    const existingKind = failureKindFromResultJson(latest.result_json);
+
+    let status: string;
+    let failureKind: "julgada" | "interrompida";
+    let finalError = error;
+    if (source === "exit_without_report" && existingKind !== "julgada") {
+      const exitWrite = decideExitWithoutReportWrite({
+        lifetimeMs: opts?.lifetimeMs ?? null,
+        exitError: error,
+      });
+      status = exitWrite.status;
+      failureKind = exitWrite.failureKind;
+      finalError = exitWrite.error;
+    } else {
+      const kind = resolveFailureKind(existingKind, source);
+      const write = decideFailureWrite(kind);
+      status = write.status;
+      failureKind = write.failureKind;
+    }
+
     const next: TaskRow = {
-      ...task,
-      status: write.status,
-      result_json: stampFailureKindJson(task.result_json, write.failureKind, error),
+      ...latest,
+      status,
+      result_json: stampFailureKindJson(latest.result_json, failureKind, finalError),
       updated_at: Date.now(),
       actor: "app",
     };
