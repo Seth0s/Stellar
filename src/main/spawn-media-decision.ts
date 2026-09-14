@@ -29,8 +29,30 @@ export const SPAWN_MEDIA_EXT_TO_TYPE: Record<string, SpawnMediaType> = {
   ".pdf": "pdf",
 };
 
+/** Extensions offered by the human OS file picker (`fs:pick-media-file`) —
+ * must stay in lockstep with `SPAWN_MEDIA_EXT_TO_TYPE` / MediaCard. A filter
+ * that lists a type the card cannot open is a lying UI. No dots. */
+export const PICK_MEDIA_EXTENSIONS: string[] = Object.keys(SPAWN_MEDIA_EXT_TO_TYPE).map((ext) =>
+  ext.replace(/^\./, ""),
+);
+
 export function describeAcceptedSpawnMedia(): string {
   return "accepted types: image (.png .jpg .jpeg .gif .webp) or pdf (.pdf)";
+}
+
+/** Result of the human media picker (rail) or its test seam — `null` means
+ * the human cancelled; never invent a card on cancel. */
+export type PickMediaFileResult =
+  | { ok: true; path: string; mediaType: SpawnMediaType }
+  | { ok: false; error: string };
+
+/** Absolute path from the OS dialog (or the test seam) → same accept/refuse
+ * rules as `spawn_card kind:"media"`. Caller still copies via
+ * `copyBoardAssetFromPath` / `boardAssets.copyFromPath`. */
+export function resolvePickedMediaFile(filePath: string): PickMediaFileResult {
+  const decision = decideSpawnMediaPath({ path: filePath, cwd: null });
+  if (decision.action === "refuse") return { ok: false, error: decision.error };
+  return { ok: true, path: decision.resolvedPath, mediaType: decision.mediaType };
 }
 
 export type SpawnMediaPathDecision =

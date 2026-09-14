@@ -333,6 +333,24 @@ const fs = {
    * `null` when the user cancels. */
   pickDirectory: (defaultPath: string): Promise<string | null> =>
     ipcRenderer.invoke("fs:pick-directory", defaultPath),
+  /** Native OS file dialog for the rail "Mídia" entry — opens BEFORE any
+   * card exists. `null` on cancel; `{ ok:false }` only when the chosen
+   * path fails the same validation as `spawn_card kind:"media"`. */
+  pickMediaFile: (): Promise<
+    null | { ok: true; path: string; mediaType: "image" | "pdf" } | { ok: false; error: string }
+  > => ipcRenderer.invoke("fs:pick-media-file"),
+  /** Test-only — arm the NEXT `pickMediaFile` call. `path` = inject that
+   * file; `""` = simulate cancel (returns null); `null` = clear a pending
+   * arm. contextBridge freezes `fs`, so smokes cannot replace
+   * `pickMediaFile` in-page. Packaged builds refuse. */
+  pickMediaFileTestNext: (filePath: string | null): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("fs:pick-media-file-test-next", filePath),
+  /** Test-only — resolve a path through the same validator without touching
+   * the dialog arming slot. Packaged builds refuse. */
+  pickMediaFileTest: (
+    filePath: string,
+  ): Promise<{ ok: true; path: string; mediaType: "image" | "pdf" } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("fs:pick-media-file-test", filePath),
   list: (root: string, path: string): Promise<DirEntry[]> => ipcRenderer.invoke("fs:list", root, path),
   read: (root: string, path: string): Promise<ReadFileResult> => ipcRenderer.invoke("fs:read", root, path),
   readImage: (root: string, path: string): Promise<ReadImageResult> =>
