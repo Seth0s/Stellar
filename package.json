@@ -1,5 +1,5 @@
 {
-  "name": "agent-canvas",
+  "name": "stellar",
   "version": "0.7.0",
   "description": "Stellar — a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
   "license": "Apache-2.0",

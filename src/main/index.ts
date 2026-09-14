@@ -86,6 +86,15 @@ import {
   type DelegateProvider,
 } from "./chat-tools";
 import { decideSingleInstancePolicy } from "./single-instance-decision";
+import {
+  APP_NAME,
+  SOCK_BASENAME,
+  applyUserDataMigration,
+  decideUserDataMigration,
+  legacyUserDataDir,
+  probeLegacyInstanceLive,
+  readMigrationFsSnapshot,
+} from "./user-data-migration";
 import { resolveBuildIdentity, type BuildIdentity } from "./build-identity";
 import { ACBRIDGE_PROTOCOL } from "./acbridge-protocol-decision";
 
@@ -216,9 +225,11 @@ app.commandLine.appendSwitch("enable-features", "WebRTCPipeWireCapturer");
 // straight at the compiled entry file (out/main/index.js, what electron-vite
 // dev and a plain `electron out/main/index.js` both do), it can't find that
 // package.json and app.name silently defaults to "Electron", scattering
-// state into ~/.config/Electron instead of ~/.config/agent-canvas. Pin it
+// state into ~/.config/Electron instead of ~/.config/stellar. Pin it
 // explicitly so userData is deterministic regardless of launch method.
-app.setName("agent-canvas");
+// First boot after this rename runs `user-data-migration.ts` (copy
+// essentials from the legacy `agent-canvas` dir; leave that dir intact).
+app.setName(APP_NAME);
 
 // Bug real relatado (Pop!_OS, 2026-09-09) — sem lock de instância única,
 // nada impedia DUAS instâncias do Stellar coexistindo (ex.: um segundo
@@ -241,10 +252,10 @@ app.setName("agent-canvas");
 // `sockPath`/`openStore`/`createSecretsStore` usam, linhas abaixo), e o
 // comentário logo acima de `app.setName()` já documenta que, sem ele,
 // `app.name` cai pro default do Electron ("Electron") em vez de
-// "agent-canvas" quando lançado pelo entry point compilado (não `electron
+// "stellar" quando lançado pelo entry point compilado (não `electron
 // .`) — exatamente como electron-vite dev e o binário empacotado rodam.
 // Pegar o lock ANTES do `setName()` adquiria sob a identidade errada, não
-// sob "agent-canvas": tinha que rodar depois, e ainda assim antes de
+// sob "stellar": tinha que rodar depois, e ainda assim antes de
 // qualquer efeito colateral real (store/socket/mcp/janela), daí ficar bem
 // aqui.
 //
@@ -677,7 +688,7 @@ function createWindow() {
   } catch {
     // Missing in this checkout — acbridge calls will just fail with ENOENT.
   }
-  const sockPath = join(app.getPath("userData"), "agent-canvas.sock");
+  const sockPath = join(app.getPath("userData"), SOCK_BASENAME);
   // Same dev-vs-packaged resolution as binDir above, for the mobile
   // remote-control client's static files (DESIGN-BACKLOG.md item 2).
   const mobileClientDir = app.isPackaged
@@ -2765,13 +2776,51 @@ app.on("second-instance", () => {
   win.focus();
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Ver o comentário de `requestSingleInstanceLock()` no topo do arquivo —
   // `app.quit()` já foi chamado ali pra 2ª instância, mas é assíncrono;
   // este guard é quem de fato impede `createWindow()` (store, socket do
   // acbridge, servidor MCP) de rodar aqui numa corrida onde `ready` dispara
   // antes do quit terminar.
   if (!gotSingleInstanceLock) return;
+
+  // Identity migration (`agent-canvas` → `stellar`) must run after setName
+  // (so userData is the new path) and before openStore inside createWindow.
+  // Does not delete the legacy directory. Aborts start if a pre-migration
+  // instance is still holding the legacy sock — new lock key ≠ old key.
+  const newUserData = app.getPath("userData");
+  const legacyDir = legacyUserDataDir(newUserData);
+  const legacyLive = await probeLegacyInstanceLive(join(legacyDir, SOCK_BASENAME));
+  const decision = decideUserDataMigration(readMigrationFsSnapshot(legacyDir, newUserData, legacyLive));
+  if (decision.action === "abort") {
+    const messages: Record<typeof decision.reason, string> = {
+      "legacy-instance-live":
+        `[stellar] Recusando start: instância legada ainda escuta em ${join(legacyDir, SOCK_BASENAME)}. ` +
+        `Feche todos os cards/processos agent-canvas antes de abrir o Stellar com a identidade nova.`,
+      "partial-interrupted":
+        `[stellar] Migração incompleta em ${newUserData} (marcador ${join(newUserData, ".migration-in-progress")}). ` +
+        `Remova o destino parcial à mão se for seguro, ou restaure a partir de ${legacyDir} — não apague o legado sem confirmação.`,
+      "target-conflict":
+        `[stellar] ${newUserData} já tem agent-canvas.db sem marcador de migração. ` +
+        `Não vou sobrescrever. Resolva o conflito antes de abrir.`,
+    };
+    console.error(messages[decision.reason]);
+    app.quit();
+    return;
+  }
+  if (decision.action === "migrate") {
+    const result = applyUserDataMigration(legacyDir, newUserData);
+    if (!result.ok) {
+      console.error(`[stellar] Migração de userData falhou: ${result.error}`);
+      app.quit();
+      return;
+    }
+    console.info(
+      `[stellar] Migração agent-canvas → stellar: copiados [${result.copied.join(", ")}] de ${legacyDir}. ` +
+        `Diretório legado intacto (reversível).`,
+    );
+  }
+
   createWindow();
   void refreshUserEnv().then(() => {
     const win = BrowserWindow.getAllWindows()[0];
