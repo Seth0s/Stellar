@@ -85,6 +85,7 @@ import {
   type BashConsentRequest,
   type DelegateProvider,
 } from "./chat-tools";
+import { decideSingleInstancePolicy } from "./single-instance-decision";
 
 // DESIGN-BACKLOG.md item 37 — reported live: fullscreen video in an
 // embedded browser card, then closing something, crashed the ENTIRE app.
@@ -245,21 +246,21 @@ app.setName("agent-canvas");
 // qualquer efeito colateral real (store/socket/mcp/janela), daí ficar bem
 // aqui.
 //
-// Gate em `app.isPackaged` (resposta ao ponto 2 do coordenador) — dev e
-// packaged chamam o MESMO `app.setName("agent-canvas")`, logo
-// compartilhariam o mesmo userData e portanto o mesmo lock se ambos o
-// pedissem. O dono deste repo roda o build de dev com o Stellar instalado
-// já aberto (fluxo de desenvolvimento normal) — sem este gate, a instância
-// de dev perderia a corrida pelo lock, chamaria `app.quit()` e morreria
-// silenciosamente toda vez. O caso real reportado (Pop!_OS) é sempre o app
-// EMPACOTADO; travar a 2ª instância só quando `app.isPackaged` continua
-// fechando esse bug para o usuário final sem quebrar o fluxo de dev.
-// Trade-off aceito: duas instâncias de DEV rodando ao mesmo tempo (bem
-// mais raro, e um cenário que o próprio desenvolvedor controla) não são
-// protegidas por este lock — ficam sujeitas ao mesmo bug de socket que
-// motivou esta correção, mas isso é dev local, não o relato original.
-const gotSingleInstanceLock = app.isPackaged ? app.requestSingleInstanceLock() : true;
-if (app.isPackaged && !gotSingleInstanceLock) {
+// Política 2026-09-14 (`single-instance-decision.ts`): SEMPRE pedir o
+// lock — dev e packaged compartilham o mesmo `setName` / userData /
+// socket / DB. O gate antigo em `app.isPackaged` (permitir dev com o
+// instalado aberto) era exatamente a classe de bug: acbridge cruzado,
+// seed de id colidindo (FURO 2), medição ambígua de "código velho".
+// Medido no mesmo dia: 11 scopes `app-electron-*` subiram com
+// `/opt/Stellar/stellar` ainda vivo. Separar userData por modo foi
+// rejeitado — o board real (Maestro + Idyplatform) sumiria em dev sem
+// migração explícita. Fluxo novo: fechar uma instância antes de abrir a
+// outra; a 2ª tentativa foca a que detém o lock via `second-instance`.
+const singleInstancePolicy = decideSingleInstancePolicy(app.isPackaged);
+const gotSingleInstanceLock = singleInstancePolicy.requestLock
+  ? app.requestSingleInstanceLock()
+  : true;
+if (singleInstancePolicy.quitIfLost && !gotSingleInstanceLock) {
   // `app.quit()` é assíncrono — não interrompe a execução síncrona deste
   // módulo. O guard dentro de `app.whenReady().then()` lá embaixo
   // (`if (!gotSingleInstanceLock) return;`) é o que garante de verdade que
