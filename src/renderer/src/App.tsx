@@ -172,6 +172,8 @@ type PendingAsk =
       label?: string;
       brief?: string;
       taskId?: string;
+      /** Sole source for the spawned connector pill (from the bus). */
+      connectorLabel?: string | null;
     }
   | {
       kind: "spawn-card";
@@ -914,14 +916,12 @@ export function App() {
         // automatically; `requesterId` is "" for the task engine's own
         // dispatches (item 60 peça 3), which have no real requester
         // card to connect from.
-        // 2026-09-09 — `reason` (spawn_agent's own param, already carried
-        // for the human-consent modal) is the only text this request
-        // brings describing WHAT the spawned agent is for; says the task,
-        // not just "spawned", same intent as deriveAutoConnectLabel does
-        // for send/browser_* in message-bus.ts (spawn never goes through
-        // that generalized path — see AUTO_CONNECT_CMDS's own comment —
-        // so it needs its own label here).
-        if (requesterId) addConnector(requesterId, cardId, "spawned", params.reason ? truncateConnectorLabel(params.reason) : null);
+        // 2026-09-14 — ONE source for the pill: `connectorLabel` from
+        // message-bus `deriveAutoConnectLabel` (purpose + role). `reason`
+        // is consent-modal text only — never a second label source
+        // (measured: every filled spawned label was free-text reason
+        // garbage). Already truncated in the bus; do not re-truncate.
+        if (requesterId) addConnector(requesterId, cardId, "spawned", params.connectorLabel ?? null);
         void window.spawn.resolveAgent(requestId, { ok: true, cardId });
         return;
       }
@@ -938,6 +938,7 @@ export function App() {
         label: params.label,
         brief: params.brief,
         taskId: params.taskId,
+        connectorLabel: params.connectorLabel,
       });
     });
     const offAskSpawnCard = window.spawn.onAskCard((requestId, requesterId, params) => {
@@ -2202,8 +2203,8 @@ export function App() {
       const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort, ask.brief, ask.taskId);
       // DESIGN-BACKLOG.md item 62 — same lineage record as the
       // autonomous auto-approve path above, for a human-approved spawn.
-      // 2026-09-09 — same `reason`-as-label reasoning as the auto-approve path above.
-      if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
+      // 2026-09-14 — same single-source `connectorLabel` (not `reason`).
+      if (ask.requesterId) addConnector(ask.requesterId, cardId, "spawned", ask.connectorLabel ?? null);
       void window.spawn.resolveAgent(ask.requestId, { ok: true, cardId });
     } else if (ask.kind === "spawn-card") {
       const spawned = spawnCardFor(ask.cardKind, ask.cwd, ask.url, ask.requesterId, ask.anchorCardId, ask.side);

@@ -120,6 +120,104 @@ describe("deriveAutoConnectLabel", () => {
     });
   });
 
+  describe("alimentador spawn_agent → connectorLabel (uma fonte)", () => {
+    it("spawn com task+purpose coloca connectorLabel='correção' nos params (não usa reason)", async () => {
+      const t = task({ purpose: "fix" });
+      const spawned: Array<Record<string, unknown>> = [];
+      dir = mkdtempSync(join(tmpdir(), "stellar-derive-feed-"));
+      bus = createMessageBus(
+        join(dir, "agent-canvas.sock"),
+        callbacksWithOverrides({
+          getTask: ((id: string) => (id === t.id ? t : undefined)) as never,
+          getCardBoardId: (() => "b1") as never,
+          isBoardAutonomous: (() => true) as never,
+          onSpawnAgentRequest: ((requestId: string, _r: string, params: Record<string, unknown>) => {
+            spawned.push(params);
+            bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
+          }) as never,
+          listCards: (() => [{ id: "orch", kind: "terminal", provider: "claude", cwd: "", label: null }]) as never,
+        }),
+      );
+
+      const res = (await bus.handleRequest({
+        cmd: "spawn_agent",
+        provider: "bash",
+        taskId: t.id,
+        requesterId: "orch",
+        reason: "REGRAS DESTE BOARD — NÃO deve virar label do connector",
+        label: "prova-label",
+      } as BusRequest)) as { ok: boolean };
+
+      expect(res.ok).toBe(true);
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0].connectorLabel).toBe("correção");
+      expect(spawned[0].reason).toBe("REGRAS DESTE BOARD — NÃO deve virar label do connector");
+    });
+
+    it("spawn sem task → connectorLabel null mesmo com reason", async () => {
+      const spawned: Array<Record<string, unknown>> = [];
+      dir = mkdtempSync(join(tmpdir(), "stellar-derive-feed-"));
+      bus = createMessageBus(
+        join(dir, "agent-canvas.sock"),
+        callbacksWithOverrides({
+          getCardBoardId: (() => "b1") as never,
+          isBoardAutonomous: (() => true) as never,
+          onSpawnAgentRequest: ((requestId: string, _r: string, params: Record<string, unknown>) => {
+            spawned.push(params);
+            bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "spawned-card" });
+          }) as never,
+          listCards: (() => [{ id: "orch", kind: "terminal", provider: "claude", cwd: "", label: null }]) as never,
+        }),
+      );
+
+      await bus.handleRequest({
+        cmd: "spawn_agent",
+        provider: "bash",
+        brief: "explore",
+        requesterId: "orch",
+        reason: "só modal",
+      } as BusRequest);
+
+      expect(spawned[0].connectorLabel).toBeNull();
+      expect(spawned[0].reason).toBe("só modal");
+    });
+
+    it("spawn reviewer → connectorLabel 'revisão · correção'", async () => {
+      const t = task({ purpose: "fix", status: "running", card_id: "impl" });
+      const spawned: Array<Record<string, unknown>> = [];
+      dir = mkdtempSync(join(tmpdir(), "stellar-derive-feed-"));
+      bus = createMessageBus(
+        join(dir, "agent-canvas.sock"),
+        callbacksWithOverrides({
+          getTask: ((id: string) => (id === t.id ? t : undefined)) as never,
+          getCardBoardId: (() => "b1") as never,
+          isBoardAutonomous: (() => true) as never,
+          linkTaskCard: (() => undefined) as never,
+          onSpawnAgentRequest: ((requestId: string, _r: string, params: Record<string, unknown>) => {
+            spawned.push(params);
+            bus?.resolveSpawnAgent(requestId, { ok: true, cardId: "reviewer-card" });
+          }) as never,
+          listCards: (() => [
+            { id: "orch", kind: "terminal", provider: "claude", cwd: "", label: null },
+            { id: "impl", kind: "terminal", provider: "claude", cwd: "", label: null },
+          ]) as never,
+        }),
+      );
+
+      await bus.handleRequest({
+        cmd: "spawn_agent",
+        provider: "bash",
+        taskId: t.id,
+        role: "reviewer",
+        brief: "revise o trabalho",
+        requesterId: "orch",
+        reason: "texto do modal",
+      } as BusRequest);
+
+      expect(spawned[0].connectorLabel).toBe("revisão · correção");
+    });
+  });
+
   describe("regressão dos cinco cmds existentes", () => {
     it("send → text", () => {
       const b = makeBus();

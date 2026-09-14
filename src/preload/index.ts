@@ -650,6 +650,12 @@ export type SpawnAgentAskParams = {
   brief?: string;
   /** Optional. Set when this spawn is tied to a task (`spawn_agent({ taskId })` or auto-dispatch). Omitted for a first-class task-less spawn. */
   taskId?: string;
+  /**
+   * Connector pill for the spawned lineage arrow — sole source, already
+   * derived+truncated by message-bus `deriveAutoConnectLabel`. `reason` is
+   * consent-modal text only; do not re-derive a label from it.
+   */
+  connectorLabel?: string | null;
   /** DESIGN-BACKLOG.md item 59 — the requester's own board is in
    * autonomous mode and under its cap; App.tsx's `onAskAgent` handler
    * creates the card and resolves immediately, no `AgentAskModal`. */
