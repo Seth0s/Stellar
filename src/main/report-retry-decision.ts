@@ -10,12 +10,21 @@
  * Terminal failure (`ok: false` AND `retryable: false`) is the honest
  * exit: accepted immediately, no retry spent. Without that mark, a
  * refused-until-ok:true loop would teach the agent to lie.
+ *
+ * When the linked task declares `reportSchema`, a non-failure report
+ * missing a required top-level key is a structural refusal that names
+ * that field (same class as missing `ok` type) — the schema is judgment
+ * declared on the task, never inferred from filesystem or git.
  */
+
+import { missingReportSchemaField } from "./task-contract-decision";
 
 export type ReportRetryLinkedTask = {
   status: string;
   retry_count: number;
   max_retries: number | null;
+  /** Declared required top-level keys on the task (`tasks.report_schema_json`). */
+  reportSchema?: string[] | null;
 };
 
 export type ReportRetryDecision =
@@ -119,6 +128,12 @@ export function decideReportAcceptance(input: {
   }
 
   if (!isPlainObject(input.report)) {
+    // Non-object bodies cannot satisfy a declared key list — name the
+    // first missing field the same way a plain object would.
+    const missing = missingReportSchemaField(input.report, input.linkedTask?.reportSchema);
+    if (missing) {
+      return { action: "structural", field: missing, error: describeStructuralReportError(missing) };
+    }
     return { action: "accept" };
   }
 
@@ -129,7 +144,14 @@ export function decideReportAcceptance(input: {
     return { action: "structural", field: "retryable", error: describeStructuralReportError("retryable") };
   }
 
+  // Declared failure skips reportSchema — the agent is saying it cannot
+  // deliver the contract yet (retryable) or at all (terminal). Success /
+  // omitted-ok must name every declared field.
   if (input.report.ok !== false) {
+    const missing = missingReportSchemaField(input.report, input.linkedTask?.reportSchema);
+    if (missing) {
+      return { action: "structural", field: missing, error: describeStructuralReportError(missing) };
+    }
     return { action: "accept" };
   }
 
