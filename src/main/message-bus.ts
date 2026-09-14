@@ -1,7 +1,7 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow, SpawnRow } from "./store";
+import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow, ReportIngressChannel, SpawnRow } from "./store";
 import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import {
   formatAgentFacingAuthorship,
@@ -550,6 +550,13 @@ export type BusRequest =
     };
 
 export type BusResponse = Record<string, unknown> & { ok: boolean };
+
+/**
+ * Optional second arg to `handleRequest`. `channel` is stamped by the
+ * frontend that received the bytes (HTTP vs Unix socket) — never by the
+ * agent payload. See `ReportRow.channel`.
+ */
+export type HandleRequestOpts = { channel?: ReportIngressChannel | null };
 
 /**
  * A local Unix socket bridge letting a spawned provider CLI act on the
@@ -2062,25 +2069,21 @@ export function createMessageBus(
     }
   }
 
-  /** Shared by both frontends — see the module doc comment. Never throws;
-   * every branch resolves to a `BusResponse`, including "unknown cmd".
-   * Thin wrapper around `dispatchRequest` — the only thing added here is
-   * the auto-connector rule above, so every caller (MCP, acbridge, the
-   * internal recursive call in the socket server below) gets it for free
-   * without dispatchRequest's ~30 `if (req.cmd === ...)` branches each
-   * needing their own copy of the same 3 lines. Label→id resolution also
-   * moved here (out of dispatchRequest) — `autoConnect` below needs the
-   * REAL card id, not whatever label the caller happened to pass in
-   * `target`; `dispatchRequest` used to do this resolution itself, on a
-   * local shadowed `req` that never escaped it. */
-  async function handleRequest(request: BusRequest): Promise<BusResponse> {
+  /**
+   * Ingress stamp — set ONLY by the two real frontends (HTTP MCP wrapper
+   * in index.ts, Unix-socket server below). Never read from the request
+   * body: an agent declaring its own channel is self-reported noise.
+   * Tests pass it explicitly to simulate each porta. Omitted → null on
+   * the reports row (unknown ingress), same honesty as role/verdict.
+   */
+  async function handleRequest(request: BusRequest, opts?: HandleRequestOpts): Promise<BusResponse> {
     let req = request;
     if ("target" in req && typeof req.target === "string") {
       const resolved = resolveTargetId(req.target);
       if ("error" in resolved) return { ok: false, error: resolved.error };
       if (resolved.id !== req.target) req = { ...req, target: resolved.id };
     }
-    const res = await dispatchRequest(req);
+    const res = await dispatchRequest(req, opts?.channel ?? null);
     const kind = AUTO_CONNECT_CMDS[req.cmd];
     if (kind && res.ok && "target" in req && req.target && "requesterId" in req && req.requesterId) {
       // `send` → kind "modified" is the persisted auto-connect edge.
@@ -2090,7 +2093,7 @@ export function createMessageBus(
     return res;
   }
 
-  async function dispatchRequest(req: BusRequest): Promise<BusResponse> {
+  async function dispatchRequest(req: BusRequest, ingressChannel: ReportIngressChannel | null): Promise<BusResponse> {
     if (req.cmd === "list") {
       return { ok: true, cards: callbacks.listCards() };
     }
@@ -2596,6 +2599,7 @@ export function createMessageBus(
         report_json: JSON.stringify(stored.report),
         verdict: stored.verdict,
         role: stored.role,
+        channel: ingressChannel,
         updated_at: now,
       });
       // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
@@ -4104,7 +4108,7 @@ export function createMessageBus(
               ...(decision.warning ? { warning: decision.warning } : {}),
             });
           }
-          return handleRequest(req).then((res) => (decision.warning ? { ...res, warning: decision.warning } : res));
+          return handleRequest(req, { channel: "socket" }).then((res) => (decision.warning ? { ...res, warning: decision.warning } : res));
         }),
       ).then((results) => {
         socket.end(results.map((r) => JSON.stringify(r)).join("\n") + "\n");

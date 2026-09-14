@@ -848,7 +848,7 @@ function createWindow() {
     // isolated test instances, which DO need a predictable port to dial
     // directly from outside the process (see smoke-mcp.mjs).
     port: Number(process.env.AGENT_CANVAS_MCP_PORT) || 0,
-    handleRequest: (req: BusRequest) => messageBus!.handleRequest(req),
+    handleRequest: (req: BusRequest) => messageBus!.handleRequest(req, { channel: "http" }),
   });
 
   const registry = createPtyRegistry({
