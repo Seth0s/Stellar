@@ -165,24 +165,35 @@ export async function startApp({
   // stale ports. `detached: true` puts the wrapper (and everything it
   // spawns) in its own process group, so `stopApp` below can kill the
   // whole group at once via a negative pid instead of just the wrapper.
+  //
+  // RLIMIT_CORE=0 via prlimit (2026-09-14, renderer-gone live proof):
+  // smokes that kill a renderer are legitimate, but each death was
+  // producing a ~1 GB Electron coredump that systemd-coredump then
+  // captured+compressed. Measured in 45 min on the owner's machine:
+  // 7 coredumps, 12 journal dump events, PSI full avg10=24.4% /
+  // avg60=32.2% — the whole system stalled on disk while the owner's
+  // live app starved. Node's spawn() cannot set rlimit directly, so
+  // wrap with `prlimit --core=0` (util-linux; present here). Inheritance
+  // covers the real Electron binary and its renderer children.
+  const electronArgs = [
+    ELECTRON_MAIN,
+    `--remote-debugging-port=${cdpPort}`,
+    `--user-data-dir=${userDataDir}`,
+    // CI runners don't (and shouldn't) chown+setuid `chrome-sandbox` to
+    // root — Chromium's own sandbox helper refuses to run without that
+    // and aborts on launch with SIGTRAP ("app didn't come up on port
+    // ... within 15000ms", the actual failure signature this whole
+    // suite's been showing in ci.yml since before 2026-08-31). `--no-
+    // sandbox` is the standard workaround for exactly this (same one
+    // Playwright/Puppeteer docs recommend for CI). Gated to `process.env.CI`
+    // (set by GitHub Actions) so local runs keep testing under the real
+    // sandboxed conditions, which already work fine here.
+    ...(process.env.CI ? ["--no-sandbox"] : []),
+    ...extraArgs,
+  ];
   const proc = spawn(
-    ELECTRON_BIN,
-    [
-      ELECTRON_MAIN,
-      `--remote-debugging-port=${cdpPort}`,
-      `--user-data-dir=${userDataDir}`,
-      // CI runners don't (and shouldn't) chown+setuid `chrome-sandbox` to
-      // root — Chromium's own sandbox helper refuses to run without that
-      // and aborts on launch with SIGTRAP ("app didn't come up on port
-      // ... within 15000ms", the actual failure signature this whole
-      // suite's been showing in ci.yml since before 2026-08-31). `--no-
-      // sandbox` is the standard workaround for exactly this (same one
-      // Playwright/Puppeteer docs recommend for CI). Gated to `process.env.CI`
-      // (set by GitHub Actions) so local runs keep testing under the real
-      // sandboxed conditions, which already work fine here.
-      ...(process.env.CI ? ["--no-sandbox"] : []),
-      ...extraArgs,
-    ],
+    "prlimit",
+    ["--core=0", "--", ELECTRON_BIN, ...electronArgs],
     {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
