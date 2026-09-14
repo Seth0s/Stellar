@@ -799,6 +799,9 @@ export type TaskBoardItem = {
   /** Proposal (`tasks.purpose`). `null` is NORMAL — empty chip, never a
    * guessed default. Set once at create; the Fila never edits it. */
   purpose: "investigate" | "implement" | "measure" | "fix" | null;
+  /** Layer-1 `tasks.review`. `"wanted"` = agent judgment requires a
+   * linked reviewer; `null` = never declared (NORMAL). Mutable. */
+  review: "wanted" | null;
   /** Purpose of each id in `deps` (same presence rule as `depStatuses`:
    * missing key = dep not found). Used to derive `A → B` when purposes differ. */
   depPurposes: Record<string, "investigate" | "implement" | "measure" | "fix" | null>;

@@ -31,6 +31,7 @@ import {
   describeHumanMoveNotice,
   describeStatusDivergence,
   describeStatusAskNotice,
+  describeReviewWantedNotice,
   msToHours,
   cycleAxisMarks,
   computeVerdictsByProvider,
@@ -232,8 +233,10 @@ function TaskItem({
   // Quem disse "aprovado" importa: a proposta vem de `task_verdicts` (com
   // papel), não do relatório do card principal — ver
   // `deriveCompletionProposal`. `origin: "self"` = implementador sem
-  // reviewer na task; a barra diz isso em texto.
-  const proposal = deriveCompletionProposal(task.status, cardRoles, task.verdicts);
+  // reviewer na task; a barra diz isso em texto. Com `review="wanted"`
+  // sem reviewer, a barra some e `reviewWantedNotice` explica o stall.
+  const proposal = deriveCompletionProposal(task.status, cardRoles, task.verdicts, task.review === "wanted");
+  const reviewWantedNotice = describeReviewWantedNotice(task.review, cardRoles);
   const waitingOn = waitingOnDep(task.deps, task.depStatuses);
   const pills = computeMetaPills(waitingOn, task.order, task.suggestedOrder, task.verdicts);
   // RODADA 2 — "Mais uma rodada" (segundo botão da barra de proposta): a
@@ -363,6 +366,11 @@ function TaskItem({
       {statusAskNotice && (
         <div className={styles.statusAskNotice} data-part="status-ask-notice">
           {statusAskNotice}
+        </div>
+      )}
+      {reviewWantedNotice && (
+        <div className={styles.statusAskNotice} data-part="review-wanted-notice">
+          {reviewWantedNotice}
         </div>
       )}
       {interruptNotice && (

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { decideStatusWrite, retainStatusAsk, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
-import { normalizeTaskPurpose } from "../task-purpose";
+import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveTaskStatus } from "../task-status-derive";
 
 export type CardRow = {
@@ -244,6 +244,18 @@ export type TaskRow = {
    * SQL persists explicit nulls. Never inferred from `prompt` text.
    */
   purpose?: string | null;
+  /**
+   * Layer-1 contract — whether this task REQUIRES reviewer judgment
+   * before an agent may write `done`/`failed` (DESIGN-BACKLOG four-layer
+   * model: `prompt · purpose · deps · review`). Sole value `"wanted"`;
+   * `null` = never declared (NORMAL). MUTABLE unlike `purpose`: the
+   * owner may discover mid-flight that the task is riskier than it
+   * looked. Explicit `null` on update clears. Measured demand is low
+   * (~3/89 historically) so absence must stay cheap. Gate lives in
+   * `decideJudgmentWrite({ reviewWanted })` — does NOT auto-spawn a
+   * reviewer card.
+   */
+  review?: string | null;
   /**
    * Task CONTRACT — judgment the app cannot derive (DESIGN-BACKLOG §0).
    * Declared once as structured fields; consumer is the delivered brief
@@ -889,6 +901,13 @@ function migrate(db: Database.Database) {
       if (!String(e).includes("duplicate column name")) throw e;
     }
   }
+  // Layer-1 `review` — `"wanted"` or NULL. Additive, nullable, no
+  // backfill: existing rows stay undeclared. See TaskRow.review.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN review TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
   // DESIGN-BACKLOG.md §0 "Dois avisos de relatorio do mesmo card" — o
   // schema original tinha `card_id` PRIMARY KEY (slot único). Instalações
   // novas já nascem append-only (`seq` PK) no CREATE TABLE IF NOT EXISTS
@@ -1427,7 +1446,7 @@ export function openStore(userDataDir: string) {
   // reviewer-em-done. Não inventar lock que só cobre um processo.
   const maxIdStmt = db.prepare(buildMaxShortIdSql(db));
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
   // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
   // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` e
   // `prompt` de propósito: uma declaração estacionada ou um acréscimo de
@@ -1472,13 +1491,15 @@ export function openStore(userDataDir: string) {
   // `purpose` is on INSERT only. Omitting it from ON CONFLICT is the
   // immutability: a later upsert (update_task, drag, retry) cannot
   // relabel the proposal. Typo at create is a new task, not an edit —
-  // see TaskRow.purpose.
+  // see TaskRow.purpose. `review` IS on ON CONFLICT (mutable) — risk
+  // can escalate mid-flight; see TaskRow.review.
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @territory_json, @gates_json, @allow_commit, @report_schema_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @review, @territory_json, @gates_json, @allow_commit, @report_schema_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, board_id = excluded.board_id, cwd = excluded.cwd, result_json = excluded.result_json, deps_json = excluded.deps_json,
+      review = excluded.review,
       territory_json = excluded.territory_json, gates_json = excluded.gates_json,
       allow_commit = excluded.allow_commit, report_schema_json = excluded.report_schema_json,
       retry_count = excluded.retry_count, attempted_providers_json = excluded.attempted_providers_json,
@@ -1832,6 +1853,15 @@ export function openStore(userDataDir: string) {
       // `purpose`, so this is belt-and-suspenders against a caller
       // stuffing a new label into the object.
       purpose: existing ? (existing.purpose ?? null) : normalizeTaskPurpose(rest.purpose),
+      // `review` is MUTABLE (ON CONFLICT writes it). Explicit null clears;
+      // key omitted on update keeps the existing value (callers that
+      // rebuild a full TaskRow from `...existing` re-pass it). Invalid
+      // strings normalize to null — bus refuses those before write.
+      review: existing
+        ? "review" in rest
+          ? normalizeTaskReview(rest.review)
+          : (existing.review ?? null)
+        : normalizeTaskReview(rest.review),
       // Contract fields — updatable (unlike purpose). Explicit null clears;
       // omitted on update keeps the existing value via the spread of `rest`
       // which callers must re-pass (message-bus always spreads existing).

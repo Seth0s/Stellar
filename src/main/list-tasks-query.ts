@@ -36,6 +36,7 @@ export type ListedTask = {
   boardId: string | null;
   cwd: string | null;
   purpose: string | null;
+  review: string | null;
   territory: string[] | null;
   gates: string[] | null;
   allowCommit: boolean | null;

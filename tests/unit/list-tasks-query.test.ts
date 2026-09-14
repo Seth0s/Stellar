@@ -14,6 +14,7 @@ function task(partial: Partial<ListedTask> & Pick<ListedTask, "id" | "status">):
     boardId: "64",
     cwd: null,
     purpose: null,
+    review: null,
     result: { bulky: true },
     deps: [],
     retryCount: 0,

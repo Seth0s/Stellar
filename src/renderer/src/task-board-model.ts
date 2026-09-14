@@ -227,6 +227,9 @@ export function describePurposeChip(chip: PurposeChip): string {
  *   pedem review; apagar a barra sem reviewer apagaria o único sinal de
  *   prontidão. Quem decide continua sendo o humano no botão (ou um
  *   outsider via `update_task`).
+ * - Task com `review="wanted"` e SEM reviewer ainda: NÃO propõe self —
+ *   agents cannot close, so "auto-aprovado" would lie. Fila shows
+ *   `describeReviewWantedNotice` instead.
  * - Role fora de implementer/reviewer (desconhecido, ou lixo): nunca
  *   propõe — papel que não se conhece não sustenta uma proposta. */
 export type CompletionProposal = {
@@ -254,6 +257,7 @@ export function deriveCompletionProposal(
   status: string,
   cardRoles: readonly string[],
   verdicts: readonly VerdictRound[],
+  reviewWanted = false,
 ): CompletionProposal | null {
   if (status !== "running") return null;
   const reviewerRounds = verdicts.filter((v) => v.role === "reviewer");
@@ -262,9 +266,22 @@ export function deriveCompletionProposal(
     if (!last || last.verdict !== "aprovado") return null;
     return { verdict: "aprovado", origin: "reviewer", cardId: last.cardId, at: last.at };
   }
+  // Declared review requirement without a reviewer yet: no self bar.
+  if (reviewWanted) return null;
   const last = latestRound(verdicts.filter((v) => v.role === "implementer"));
   if (!last || last.verdict !== "aprovado") return null;
   return { verdict: "aprovado", origin: "self", cardId: last.cardId, at: last.at };
+}
+
+/** Fila notice when `review="wanted"` and no reviewer is linked yet —
+ * the visible counterpart of the agent refusal (no silent stall). */
+export function describeReviewWantedNotice(
+  review: string | null | undefined,
+  cardRoles: readonly string[],
+): string | null {
+  if (review !== "wanted") return null;
+  if (cardHasReviewer(cardRoles)) return null;
+  return t("task.review.wantedWaiting");
 }
 
 /** RODADA 2 (review de fidelidade ao protótipo v5) — id curto pro topo do
@@ -890,6 +907,7 @@ export function snapshotTaskToBoardItem(
   deps: [];
   depStatuses: Record<string, string>;
   purpose: null;
+  review: null;
   depPurposes: Record<string, TaskPurpose | null>;
   cardAlive: false;
   statusTransitions: [];
@@ -922,6 +940,7 @@ export function snapshotTaskToBoardItem(
     deps: [],
     depStatuses: {},
     purpose: null,
+    review: null,
     depPurposes: {},
     cardAlive: false,
     statusTransitions: [],

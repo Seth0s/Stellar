@@ -48,15 +48,17 @@ export function describeImplementerJudgmentRefusal(proposedStatus: string): stri
 }
 
 /**
- * AGENT-FACING — DO NOT TRANSLATE. Extension wording for sibling
- * `review: wanted` (not wired yet). Kept here so the refuse path and
- * the future caller share one string.
+ * AGENT-FACING — DO NOT TRANSLATE. Names the contract field the same
+ * way `report-retry-decision.ts` names a missing schema key — refusal
+ * that teaches, not silence.
  */
 export function describeReviewWantedJudgmentRefusal(proposedStatus: string): string {
   return (
     `[de: stellar] update_task status "${proposedStatus}" recusado: ` +
-    `esta task exige review — só o reviewer grava julgamento (done/failed). ` +
-    `Assinatura delegada do orquestrador do board não se aplica.`
+    `review="wanted" nesta task — só um card com role=reviewer grava julgamento (done/failed). ` +
+    `Implementer, outsider e orquestrador (assinatura delegada) são recusados. ` +
+    `Vincule um reviewer (spawn_agent/link_task_card com role=reviewer) e deixe-o julgar, ` +
+    `ou use request_task_status para pedir ao humano.`
   );
 }
 
@@ -67,10 +69,8 @@ export function describeReviewWantedJudgmentRefusal(proposedStatus: string): str
  * @param requesterRoleOnTask role from `task_cards` for (taskId, requesterId);
  *   `null` when the caller has no link on this task OR no requesterId
  *   (anonymous / external orchestrator — treated as outsider).
- * @param reviewWanted EXTENSION POINT for the sibling `review: wanted`
- *   task (NOT implemented in this change). When `true`, only a linked
+ * @param reviewWanted when true (`tasks.review = "wanted"`), only a linked
  *   reviewer may write judgment — board-orchestrator delegation loses.
- *   Callers omit / pass `false` until that column exists.
  */
 export function decideJudgmentWrite(input: {
   proposedStatus: string | null;
@@ -79,9 +79,7 @@ export function decideJudgmentWrite(input: {
 }): JudgmentWriteDecision {
   if (input.proposedStatus === null) return { action: "allow" };
   if (!isJudgmentStatus(input.proposedStatus)) return { action: "allow" };
-  // Extension point — `review: wanted` beats delegated signature.
-  // Wire from the task row when that sibling ships; do not invent the
-  // column here.
+  // `review: wanted` beats delegated signature AND outsider write.
   if (input.reviewWanted && input.requesterRoleOnTask !== TASK_CARD_REVIEWER_ROLE) {
     return { action: "refuse", error: describeReviewWantedJudgmentRefusal(input.proposedStatus) };
   }

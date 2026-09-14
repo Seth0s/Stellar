@@ -7,7 +7,7 @@ import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus"
 import { resolveCallerCardId } from "./caller-identity";
 import { reachFromHunks } from "./reach-from-hunks";
 import { reachAcrossLiterals } from "./reach-across-literals";
-import { TASK_CARD_ROLES, TASK_PURPOSES } from "../task-purpose";
+import { TASK_CARD_ROLES, TASK_PURPOSES, TASK_REVIEW_VALUES } from "../task-purpose";
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface,
@@ -504,6 +504,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "What kind of work this task IS, declared once here and shown as a chip on the board's task queue (Fila). 'investigate' = find out / diagnose, the deliverable is knowledge, not a change; 'implement' = build something new; 'measure' = collect numbers or evidence about the current state; 'fix' = correct a defect in something that already exists. WRITE-ONCE: update_task has no purpose field and cannot relabel it — a wrong value means a new task, not an edit, so decide it now. Omit when you genuinely cannot say: absence is a normal state (the chip stays empty) and is better than a guess; nothing infers it from the prompt text. Any value outside the four is REFUSED and the task is not created. This is about the TASK, not about a card — which card implements or reviews it is `role` on spawn_agent / link_task_card, a separate thing.",
             ),
+          review: z
+            .enum(TASK_REVIEW_VALUES)
+            .optional()
+            .describe(
+              "Layer-1 contract: whether this task REQUIRES a reviewer before an agent may write judgment (done/failed). 'wanted' = only a card linked as role=reviewer may conclude; implementer, outsider, and the board orchestrator's delegated signature are all REFUSED — use request_task_status to ask the human, or spawn/link a reviewer. Omit = never declared (NORMAL) — task behaves exactly as today. Does NOT auto-spawn a reviewer card; it only declares the requirement. Mutable later via update_task. Any other value is REFUSED.",
+            ),
           territory: z
             .array(z.string())
             .optional()
@@ -530,7 +536,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ),
         },
       },
-      async ({ prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder, purpose, territory, gates, allowCommit, reportSchema }) => {
+      async ({ prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder, purpose, review, territory, gates, allowCommit, reportSchema }) => {
         const res = await opts.handleRequest({
           cmd: "create_task",
           prompt,
@@ -543,6 +549,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           fallbackProviders,
           suggestedOrder,
           purpose,
+          review,
           territory,
           gates,
           allowCommit,
@@ -556,7 +563,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "update_task",
       {
         description:
-          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. `purpose` is deliberately NOT here: it is write-once at create_task and cannot be relabeled (a wrong purpose means a new task). JUDGMENT statuses (done/failed): a card linked as implementer on THIS task is REFUSED — use request_task_status instead (orchestrator outside the task, a linked reviewer, or the human may write judgment). Writing status when a human last moved the task is ACCEPTED WITH A WARNING when you ARE allowed to write — the human status stays, divergence is signaled. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session.",
+          "Update a task's status/card/result/prompt — e.g. after checking card_status or reading a report. Only the fields you pass change; the rest stay as they were. `purpose` is deliberately NOT here: it is write-once at create_task and cannot be relabeled (a wrong purpose means a new task). JUDGMENT statuses (done/failed): a card linked as implementer on THIS task is REFUSED — use request_task_status instead. When the task declares review=\"wanted\", ONLY a linked reviewer may write judgment — outsider and board-orchestrator delegated signature are also REFUSED (the requirement beats delegation). Without review declared, outsider/reviewer/human may write as before. Writing status when a human last moved the task is ACCEPTED WITH A WARNING when you ARE allowed to write — the human status stays, divergence is signaled. prompt defaults to APPEND: the original statement (why the task exists) stays, and your text is added below a visible [stellar:added …] marker so anyone who later reads this task can see what arrived after create. promptMode \"replace\" overwrites the whole briefing — omit it unless you mean to. Writing prompt does NOT type or re-send anything to a card already running; the stored prompt is what a later spawn receives. incrementRetry/attemptedProvider are bookkeeping for YOUR OWN retry/reassignment loop (DESIGN-BACKLOG.md item 58 roteiro peça 5) — you increment and record providers when YOU reassign. This app never reassigns to another provider. It does retry in-line on the same agent: a report of {ok: false} without retryable: false is refused while max_retries remain, so that agent can correct and report again in the same session.",
         inputSchema: {
           taskId: z.string().describe("The task's id (from create_task or list_tasks)"),
           status: z.string().optional().describe("New status — e.g. 'running', 'done', 'failed'"),
@@ -582,6 +589,13 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(["append", "replace"])
             .optional()
             .describe("How to write prompt. Default append. replace is explicit overwrite of the whole briefing."),
+          review: z
+            .enum(TASK_REVIEW_VALUES)
+            .nullable()
+            .optional()
+            .describe(
+              "Set or clear the review requirement. 'wanted' = only a linked reviewer may write done/failed (beats orchestrator delegation). null clears back to undeclared. Omit leaves unchanged. Does NOT spawn a reviewer.",
+            ),
           territory: z
             .array(z.string())
             .nullable()
@@ -616,6 +630,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         suggestedOrder,
         prompt,
         promptMode,
+        review,
         territory,
         gates,
         allowCommit,
@@ -634,6 +649,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           suggestedOrder,
           prompt,
           promptMode,
+          review,
           territory,
           gates,
           allowCommit,
