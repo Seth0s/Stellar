@@ -111,6 +111,7 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
     const pinned: Record<number, string> = {
       1: "77836d4160f10a69",
       2: "2fdddc26f54807bb",
+      3: "2f6e3e0fd6ee73d3",
     };
     expect(
       hash,

@@ -356,6 +356,16 @@ export type TaskRow = {
    * create_task/update_task de hoje vem de um agente via MCP). */
   actor?: TaskActor;
   /**
+   * Transient — like `actor`. Subject card that CAUSED this write
+   * (MCP/acbridge `requesterId`). When present (including explicit
+   * `null` for an anonymous call), stamped on `task_transitions.card_id`
+   * instead of the task's implementer `card_id`. Omitted = legacy
+   * fallback to `task.card_id` (app/human paths that never knew a
+   * requester). Measured 2026-09-14: `setStatusAsk` already wrote the
+   * requester into transition `card_id`; `upsertTask` threw it away.
+   */
+  actorCardId?: string | null;
+  /**
    * Transient — like `actor`. When `false`, the caller did NOT propose a
    * status change (e.g. `update_task` without a `status` field). Absent
    * or `true` = `status` on this object is an intentional proposal.
@@ -420,6 +430,14 @@ export type TaskTransitionRow = {
   from_value: string | null;
   to_value: string;
   actor: TaskActor;
+  /**
+   * Subject card when known — who caused the write, not "the task's
+   * implementer". `request` / `request_denied` already stored the
+   * requester here; status/prompt/declaration now do the same when the
+   * caller passes `TaskRow.actorCardId`. Legacy rows (and app/human
+   * writes that omit `actorCardId`) may still hold `tasks.card_id` at
+   * write time, or null — no backfill; absence means "does not know".
+   */
   card_id: string | null;
   at: number;
 };
@@ -1792,6 +1810,7 @@ export function openStore(userDataDir: string) {
   function upsertTaskInternal(task: TaskRow): StatusWriteDecision {
     const {
       actor,
+      actorCardId,
       statusProposed,
       applyStatusDespiteHold,
       transitions: _transitions,
@@ -1801,6 +1820,10 @@ export function openStore(userDataDir: string) {
     } = task;
     const existing = getTaskStmt.get(task.id) as TaskRow | undefined;
     const newActor = actor ?? "agent";
+    // Prefer the writer (requester) when the caller named one — same
+    // meaning `setStatusAsk` already used for kind:'request'. Omitted
+    // keeps the pre-2026-09-14 fallback (task.card_id / null).
+    const transitionCardId = actorCardId !== undefined ? actorCardId : (rest.card_id ?? null);
     const previousActor = existing
       ? ((lastStatusActorStmt.get(task.id) as { actor: TaskActor } | undefined)?.actor ?? null)
       : null;
@@ -1908,7 +1931,7 @@ export function openStore(userDataDir: string) {
         from_value: existing ? existing.status : null,
         to_value: decision.status,
         actor: newActor,
-        card_id: task.card_id,
+        card_id: transitionCardId,
         at,
       });
     }
@@ -1920,7 +1943,7 @@ export function openStore(userDataDir: string) {
         from_value: existing.status,
         to_value: decision.declaredStatus,
         actor: newActor,
-        card_id: task.card_id,
+        card_id: transitionCardId,
         at,
       });
     }
@@ -1935,7 +1958,7 @@ export function openStore(userDataDir: string) {
         from_value: existing.requested_status,
         to_value: decision.status,
         actor: newActor,
-        card_id: task.card_id,
+        card_id: transitionCardId,
         at,
       });
     }
@@ -1951,7 +1974,7 @@ export function openStore(userDataDir: string) {
         from_value: existing.prompt,
         to_value: persistable.prompt ?? "",
         actor: newActor,
-        card_id: task.card_id,
+        card_id: transitionCardId,
         at,
       });
     }

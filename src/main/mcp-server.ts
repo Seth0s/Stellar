@@ -534,9 +534,27 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Top-level keys required on a successful report for this task. Missing keys are refused in-line naming the field (same class as report.ok type errors). Failure reports (ok:false) skip this check.",
             ),
+          callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ prompt, provider, cardId, boardId, cwd, deps, maxRetries, fallbackProviders, suggestedOrder, purpose, review, territory, gates, allowCommit, reportSchema }) => {
+      async ({
+        prompt,
+        provider,
+        cardId,
+        boardId,
+        cwd,
+        deps,
+        maxRetries,
+        fallbackProviders,
+        suggestedOrder,
+        purpose,
+        review,
+        territory,
+        gates,
+        allowCommit,
+        reportSchema,
+        callerCardId,
+      }) => {
         const res = await opts.handleRequest({
           cmd: "create_task",
           prompt,
@@ -554,6 +572,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           gates,
           allowCommit,
           reportSchema,
+          requesterId: caller(callerCardId),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },

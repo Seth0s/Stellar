@@ -75,7 +75,7 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // src/main/acbridge-protocol-decision.ts — o vitest trava os dois
 // (tests/unit/acbridge-protocol.test.ts). Bump quando a forma de um
 // request muda (cmd/campo novo), e só então.
-const ACBRIDGE_PROTOCOL = 2;
+const ACBRIDGE_PROTOCOL = 3;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -307,7 +307,7 @@ if (cmd === "version") {
       fail("create-task: argument must be valid JSON");
     }
   }
-  request = { cmd: "create_task", ...fields };
+  request = { cmd: "create_task", ...fields, ...(ownCardId ? { requesterId: ownCardId } : {}) };
 } else if (cmd === "update-task") {
   const [taskId, json] = rest;
   if (!taskId || !json) fail("usage: acbridge update-task <taskId> <json>");
