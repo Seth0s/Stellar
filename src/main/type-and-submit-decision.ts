@@ -197,8 +197,19 @@ export type DeliveryGateDecision =
  *  - `unconfirmed` → no evidence either way (no echo, screen read
  *                    failed, card vanished mid-delivery, or an
  *                    unexpected error). Don't assume; `read_card`.
+ *  - `cancelled`   → author died (or explicit cancel) before this FIFO item
+ *                    entered `deliverCard`. Not a confirm-loop verdict —
+ *                    see delivery-lifecycle-decision.ts. Distinct from
+ *                    `failed` (typed, not confirmed) and from `parked`
+ *                    (provider queue holds it).
  */
-export type CardDeliveryState = "queued" | "delivered" | "parked" | "unconfirmed" | "failed";
+export type CardDeliveryState =
+  | "queued"
+  | "delivered"
+  | "parked"
+  | "unconfirmed"
+  | "failed"
+  | "cancelled";
 export type CardDeliveryHoldReason = "human-input" | "card-busy";
 export type CardDeliveryReceipt = {
   ok: true;
