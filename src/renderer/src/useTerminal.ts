@@ -12,6 +12,7 @@ import type { ShortcutOverrides } from "./shortcut-registry";
 import {
   decideTerminalActivity,
   initialTerminalActivity,
+  originForXtermData,
   xtermOutgoingOpensTurn,
   type TerminalActivityEvent,
   type XtermOutgoingSource,
@@ -306,6 +307,8 @@ export function useTerminal(
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
+  /** Next xterm `onData` was preceded by a human gesture (key / paste). */
+  const humanGesturePendingRef = useRef(false);
   // Item 34 — guards Effect 3 so the DOM/GPU attachment (`term.open()`)
   // happens at most once per Terminal instance, not once per visibility
   // flip. Reset only when Effect 2 tears the instance down for real.
@@ -494,7 +497,7 @@ export function useTerminal(
         return;
       }
       ptyIdRef.current = result.id;
-      if (initialInput && !result.consumedBrief) void window.pty.write(id, initialInput);
+      if (initialInput && !result.consumedBrief) void window.pty.write(id, initialInput, "delivery");
       setPtyId(result.id);
     });
 
@@ -601,17 +604,22 @@ export function useTerminal(
     registerTerminal(id, term);
     // xterm's public split, not a payload heuristic: `onKey` is a
     // keystroke (DOM event); `onData` is that PLUS automatic replies
-    // (CPR / DSR / DA — InputHandler `triggerDataEvent` with
-    // wasUserInput default false). Opening the turn on every `onData`
-    // is the third incarnation of lighting the bar on any byte.
+    // (CPR / DSR / DA / mouse SGR / focus — InputHandler `triggerDataEvent`
+    // with wasUserInput default false). Opening the turn on every `onData`
+    // is the third incarnation of lighting the bar on any byte. The same
+    // split feeds the human-input gate: only a matching human gesture
+    // marks the write as `"human"`; unmatched `onData` goes as `"auto"`.
     const noteOutgoing = (source: XtermOutgoingSource) => {
       if (xtermOutgoingOpensTurn(source)) applyActivityRef.current("input");
     };
     const onTermKey = term.onKey(() => {
+      humanGesturePendingRef.current = true;
       noteOutgoing("key");
     });
     const onTermData = term.onData((data) => {
-      if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, data);
+      const origin = originForXtermData(humanGesturePendingRef.current);
+      humanGesturePendingRef.current = false;
+      if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, data, origin);
     });
     return () => {
       unregisterTerminal(id);
@@ -767,7 +775,7 @@ export function useTerminal(
           // `maskQueueRef` acima / `mask-buffer.ts`).
           maskQueueRef.current.push({ needle: quotedPath, replacement: t("terminal.imageTag", { n: pastedImageCount }) });
           if (xtermOutgoingOpensTurn("paste")) applyActivityRef.current("input");
-          void window.pty.write(ptyIdRef.current!, typed);
+          void window.pty.write(ptyIdRef.current!, typed, "human");
           toast(t("terminal.imagePasted"));
         });
       }
@@ -779,6 +787,7 @@ export function useTerminal(
         // Text paste is human input (xterm `onData` will carry the bytes
         // but must not open the turn by itself — that's the CPR path).
         if (!hasImage) {
+          humanGesturePendingRef.current = true;
           if (xtermOutgoingOpensTurn("paste")) applyActivityRef.current("input");
           return;
         }
@@ -850,7 +859,7 @@ export function useTerminal(
             return;
           case "sigint":
             if (ptyIdRef.current) {
-              void window.pty.write(ptyIdRef.current, "\x03");
+              void window.pty.write(ptyIdRef.current, "\x03", "human");
               applyActivityRef.current("interrupt");
             }
             return;
@@ -870,6 +879,7 @@ export function useTerminal(
               try {
                 const text = await navigator.clipboard.readText();
                 if (text) {
+                  humanGesturePendingRef.current = true;
                   if (xtermOutgoingOpensTurn("paste")) applyActivityRef.current("input");
                   term.paste(text);
                 }
@@ -879,7 +889,7 @@ export function useTerminal(
             })();
             return;
           case "eof":
-            if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, "\x04");
+            if (ptyIdRef.current) void window.pty.write(ptyIdRef.current, "\x04", "human");
             return;
         }
       }

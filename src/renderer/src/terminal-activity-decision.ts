@@ -86,6 +86,16 @@ export function xtermOutgoingOpensTurn(source: XtermOutgoingSource): boolean {
   return source === "key" || source === "paste";
 }
 
+/**
+ * PTY write origin for one `onData` chunk. Same split as
+ * `xtermOutgoingOpensTurn`: a preceding human gesture (key / paste)
+ * → `"human"`; unmatched automatic reply → `"auto"`. The human-input
+ * gate consumes this so mouse SGR / focus / CPR cannot jam it.
+ */
+export function originForXtermData(humanGesturePending: boolean): "human" | "auto" {
+  return humanGesturePending ? "human" : "auto";
+}
+
 export type TerminalActivityDecision = {
   next: TerminalActivityState;
   /** `null` = do not arm (and clear any pending timer). */
