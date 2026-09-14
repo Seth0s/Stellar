@@ -3,6 +3,11 @@ import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow } from "./store";
 import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
+import {
+  formatAgentFacingAuthorship,
+  REPORT_AVAILABLE_POINTER_BODY,
+  unreportedExitPointerBody,
+} from "./agent-facing-authorship";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, shouldPressEnterOnAttempt, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
@@ -1563,8 +1568,8 @@ export function createMessageBus(
     }
     if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
     const label = callbacks.describeCardLabel(cardId);
-    // AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
-    enqueueCardDelivery(spawnerId, `[de: ${label}] relatório disponível — chame read_report para ver o resultado.`);
+    // Authorship form lives in agent-facing-authorship.ts — same helper as `send`.
+    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, REPORT_AVAILABLE_POINTER_BODY));
   }
 
   /**
@@ -1579,8 +1584,8 @@ export function createMessageBus(
     if (!spawnerId) return;
     if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
     const label = callbacks.describeCardLabel(cardId);
-    // AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
-    enqueueCardDelivery(spawnerId, `[de: ${label}] saiu (código ${exitCode}) sem chamar report.`);
+    // Authorship form lives in agent-facing-authorship.ts — same helper as `send`.
+    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, unreportedExitPointerBody(exitCode)));
   }
 
   /** DESIGN-BACKLOG.md §2.1, decisão 5 — "arrastar a mão SEMPRE vale, e
@@ -1798,7 +1803,10 @@ export function createMessageBus(
       // CLI's prose input.
       const targetProvider = cards.find((c) => c.id === target)?.provider;
       const senderLabel = req.requesterId && targetProvider !== "bash" ? callbacks.describeCardLabel(req.requesterId) : null;
-      const text = senderLabel ? `[de: ${senderLabel}] ${req.text ?? ""}` : (req.text ?? "");
+      // Single authorship form (agent-facing-authorship.ts) — same helper as
+      // notifySpawnerOfReport / notifySpawnerOfUnreportedExit. Does not
+      // restamp a body that already opens with `[de: …]`.
+      const text = formatAgentFacingAuthorship(senderLabel, req.text ?? "");
       // Regra geral de auto-conector (2026-09-02, generalizada a QUALQUER
       // interação entre cards via MCP — ver `AUTO_CONNECT_CMDS` no fim
       // deste arquivo, chamado de dentro do `handleRequest` wrapper) —
