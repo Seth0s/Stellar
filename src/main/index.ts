@@ -1261,13 +1261,13 @@ function createWindow() {
         // antigo de `TaskCard.tsx`'s `alive` temia (aquele custo seria
         // real pra uma leitura de PTY de verdade, não pra uma checagem de
         // Map). `false` quando não há card vinculado.
-        cardAlive: t.card_id ? registry.isAlive(t.card_id) : false,
+        cardAlive,
         statusTransitions: transitionsByTask.get(t.id) ?? [],
         // DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo no push
         // `task:changed` (canal do quadro; o aviso ao agente vai por
-        // typeAndSubmit + envelope MCP).
-        divergedStatus: t.diverged_status,
-        divergedActor: t.diverged_actor,
+        // typeAndSubmit + envelope MCP). Derived on read (CAMADA 3).
+        divergedStatus,
+        divergedActor,
         requestedStatus: t.requested_status ?? null,
         requestedReason: t.requested_reason ?? null,
         requestedBy: t.requested_by ?? null,
@@ -1522,6 +1522,9 @@ function createWindow() {
       }
     },
     listTaskCardsForCard: (cardId) => store.listTaskCardsForCard(cardId),
+    // CAMADA 4 — judgment write gate on update_task needs the task-side
+    // dump (role of requester on THIS task), not the card-side live filter.
+    getTaskCards: (taskId) => store.getTaskCards(taskId),
     // `task_cards.role` explicit write (`spawn_agent role` /
     // `link_task_card`). Same push `persistTask` does: the Fila derives
     // the ` ↔ review` arrow from these rows, so it must see the new one

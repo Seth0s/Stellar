@@ -1175,27 +1175,27 @@ export function openStore(userDataDir: string) {
   // counter without fetching every board's full rows on boot.
   //
   // Measured 2026-09-13: closing a non-chat card DELETEs its `cards` row
-  // while `task_cards` / `task_verdicts` / `reports` / `tasks.card_id` keep
-  // the numeric id as history. Seeding from cards∪connectors∪boards alone
-  // then DROPS the max on restart and reissues the same short id to a new
-  // card — which inherits every stale `task_cards` row and stamps new
-  // reports onto dead tasks with confidence (card 478 → ec01dc40 after
-  // 16:26). The seed must cover every table that still names a card id,
-  // so a short id is never recycled while any historical reference exists.
-  // Humans keep typing the short number; the number simply never comes back.
-  const maxIdStmt = db.prepare(`
-    SELECT MAX(v) as m FROM (
-      SELECT CAST(id AS INTEGER) as v FROM cards
-      UNION ALL SELECT CAST(id AS INTEGER) FROM connectors
-      UNION ALL SELECT CAST(id AS INTEGER) FROM boards
-      UNION ALL SELECT CAST(from_card_id AS INTEGER) FROM connectors
-      UNION ALL SELECT CAST(to_card_id AS INTEGER) FROM connectors
-      UNION ALL SELECT CAST(card_id AS INTEGER) FROM task_cards
-      UNION ALL SELECT CAST(card_id AS INTEGER) FROM task_verdicts
-      UNION ALL SELECT CAST(card_id AS INTEGER) FROM reports
-      UNION ALL SELECT CAST(card_id AS INTEGER) FROM tasks WHERE card_id IS NOT NULL AND card_id != ''
-    )
-  `);
+  // while `task_cards` / `task_verdicts` / `reports` / `tasks.card_id` /
+  // `task_transitions.card_id` keep the numeric id as history. Seeding
+  // from a hand-written UNION then DROPS the max on restart whenever a
+  // table is forgotten (review of 5bd45eb: `task_transitions` was the
+  // hole) and reissues the same short id — which inherits every stale
+  // `task_cards` row. The seed is derived from PRAGMA table_info via
+  // `buildMaxShortIdSql` (naming convention: `id`, `card_id`, `*_card_id`,
+  // `group_id`, `requested_by`), so the next table that stores a card id
+  // is covered without editing this statement again.
+  //
+  // FURO 2 (decisão, 2026-09-14): o seed é lido UMA vez no boot do
+  // renderer e `nextId` avança em memória. Dois processos Electron sobre
+  // o mesmo `userData` (dev + empacotado — single-instance só no
+  // packaged, de propósito) veem seeds independentes e colidem. A
+  // alocação correta é mintar no SQLite (`BEGIN IMMEDIATE` + contador
+  // persistente) a cada id, porque o lock do arquivo É o que funciona
+  // entre processos; um mutex em memória não. Aceito o limite AGORA:
+  // um processo writer por userData. Mover o mint pra o store (e tirar
+  // o cache do renderer) é a evolução — fora do território urgente do
+  // reviewer-em-done. Não inventar lock que só cobre um processo.
+  const maxIdStmt = db.prepare(buildMaxShortIdSql(db));
 
   const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
   // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
@@ -2121,16 +2121,22 @@ export function openStore(userDataDir: string) {
     applyColumnDrop: (dragged: TaskRow, siblingImplicitOrders: { id: string; implicitOrder: number }[]): StatusWriteDecision =>
       applyColumnDrop(dragged, siblingImplicitOrders),
     getTaskTransitions: (taskId: string): TaskTransitionRow[] => getTaskTransitionsStmt.all(taskId) as TaskTransitionRow[],
+    /** Task-side `task_cards` dump (Fila chips + CAMADA 4 judgment gate on
+     * `update_task`: role of requester on THIS task). Unfiltered by
+     * terminal status — unlike `listTaskCardsForCard`. */
     getTaskCards: (taskId: string): TaskCardRow[] => listTaskCardsStmt.all(taskId) as TaskCardRow[],
-    /** Live participation links from the card side (non-terminal tasks
-     * only). The message bus stamps `reports.role` and closes participation
-     * rounds from this — never from the historical `task_cards` dump. */
+    /** Live participation links from the card side — epoch match
+     * (`linked_at >= cards.created_at`), with terminal-status fallback
+     * when either clock is missing. The message bus stamps `reports.role`
+     * and closes participation rounds from this — never from the
+     * historical `task_cards` dump. */
     listTaskCardsForCard: (cardId: string): TaskCardRow[] => listTaskCardsForCardStmt.all(cardId) as TaskCardRow[],
     /** Every `task_cards` row for this card id, including done/failed —
      * history/evidence. Do not use for role stamping. */
     listTaskCardsForCardHistory: (cardId: string): TaskCardRow[] =>
       listTaskCardsForCardHistoryStmt.all(cardId) as TaskCardRow[],
-    linkTaskCard: (taskId: string, cardId: string, role: string) => linkTaskCardStmt.run({ task_id: taskId, card_id: cardId, role }),
+    linkTaskCard: (taskId: string, cardId: string, role: string) =>
+      linkTaskCardStmt.run({ task_id: taskId, card_id: cardId, role, linked_at: Date.now() }),
     // Ver o comentário grande de `recordParticipationRound` acima
     // (definida antes do `return`, junto dos prepared statements) —
     // exposta aqui como método do store, mesma convenção de

@@ -225,8 +225,11 @@ export function describeStatusHeldWarning(authoritativeStatus: string, proposedS
  *     and autonomous boards are exactly where a silent done would
  *     auto-dispatch dependents. `autoApply` is always false.
  *
- * Direct `update_task` is UNCHANGED (decision 8): accepted with a
- * warning, never refused. This is a new path, not a removal of the old.
+ * Direct `update_task` under a human lock is still decision 8 (accepted
+ * with a warning, never refused) — WHEN the caller is allowed to write
+ * judgment at all. CAMADA 4 (`decideJudgmentWrite`) refuses an
+ * implementer linked to the task before this module runs; that gate is
+ * participation, not the human-lock axis.
  */
 export type StatusAskFields = {
   requestedStatus: string | null;
