@@ -48,6 +48,11 @@ npm run verify   # tsc + build + the full CDP/Electron smoke suite
 
 ## More context
 
+- [`docs/ORCHESTRATION.md`](docs/ORCHESTRATION.md) — **the orchestrator's
+  manual**. How to actually run a board with agents: the task model, the
+  MCP/acbridge surface, how to brief a task, how to commit a shared tree
+  without destroying someone's work, and the anti-patterns with what each
+  one cost. Start here if you (human or AI) are taking over a board.
 - [`AGENTS.md`](AGENTS.md) — architecture, decisions, and a running log
   of what's been built/fixed and how it was verified.
 - [`DESIGN-BACKLOG.md`](DESIGN-BACKLOG.md) — the product backlog, one
