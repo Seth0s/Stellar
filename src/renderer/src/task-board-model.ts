@@ -664,13 +664,12 @@ export function describeHumanMove(column: TaskColumn): string {
  * automatizada (`vitest` roda `environment: "node"`, sem jsdom).
  */
 
-/** Varredura de atividade (delta 4) — o protótipo anima a task cujo CARD
- * está VIVO, não cuja task está `running`: uma task pode continuar
- * `running` por um instante depois do processo do card já ter morrido
- * (entre o crash e o Sinal 2 derrubar pra `failed`), e a varredura nesse
- * intervalo mentiria "isto está acontecendo agora". `cardAlive` chega
- * pronto do main process (`registry.isAlive`, já síncrono/O(1), sem custo
- * de N chamadas — ver `buildTaskBoard`, main/index.ts). */
+/** Varredura de atividade (delta 4, CAMADA 3) — `running` is DERIVED on
+ * read from live implementer participation (`tasks.card_id` +
+ * `registry.isAlive`). By the time `status` reaches the renderer it is
+ * already effective (pending + live card → running). The sweep therefore
+ * keys off effective `running` AND `cardAlive`, not a stale written
+ * column. `cardAlive` chega pronto do main process (O(1) Map lookup). */
 export function isTaskCardLive(status: string, cardAlive: boolean): boolean {
   return status === "running" && cardAlive;
 }
@@ -791,6 +790,7 @@ export function describeStatusDivergence(
 ): string | null {
   if (!divergedStatus || !divergedActor) return null;
   const label = t(COLUMN_I18N[columnForStatus(divergedStatus)]);
+  if (divergedActor === "human") return t("task.divergence.humanHold", { label });
   if (divergedActor === "app") return t("task.divergence.app", { label });
   if (divergedActor === "agent") return t("task.divergence.agent", { label });
   return t("task.divergence.other", { label });

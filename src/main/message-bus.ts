@@ -53,6 +53,14 @@ import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-d
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
 import { argvCarriesDeclaredBrief, providerCapacity } from "./providers";
+import { filterListedTasks, parseListTasksQuery, projectListedTask, type ListedTask } from "./list-tasks-query";
+import {
+  deriveParticipationDivergence,
+  deriveTaskStatus,
+  isJudgmentStatus,
+  storedStatusAfterImplementerLink,
+  type StatusActor,
+} from "../task-status-derive";
 
 export type SockIdentity = { dev: number; ino: number };
 
@@ -745,7 +753,10 @@ export function createMessageBus(
      * estes callbacks existem só pro MCP/acbridge. */
     listSprints: (boardId: string) => import("./store").SprintRow[];
     openSprint: (boardId: string) => { ok: true; sprint: import("./store").SprintRow } | { ok: false; error: string };
-    closeSprint: (boardId: string) =>
+    closeSprint: (
+      boardId: string,
+      isCardAlive?: (cardId: string) => boolean,
+    ) =>
       | { ok: true; closed: import("./store").SprintRow; opened: import("./store").SprintRow }
       | { ok: false; error: string };
     renameSprint: (
@@ -1030,16 +1041,57 @@ export function createMessageBus(
     else waitingOnConsent.set(requesterId, n);
   }
 
+  function lastStatusActorFromRow(row: TaskRow): StatusActor | null {
+    const transitions = row.transitions;
+    if (!transitions?.length) return null;
+    for (let i = transitions.length - 1; i >= 0; i--) {
+      if (transitions[i]!.kind === "status") return transitions[i]!.actor as StatusActor;
+    }
+    return null;
+  }
+
+  function effectiveTaskStatus(row: TaskRow): string {
+    const hasLiveImplementer = !!(row.card_id && callbacks.isCardAlive(row.card_id));
+    return deriveTaskStatus(row.status, hasLiveImplementer);
+  }
+
+  function linkImplementerToTask(task: TaskRow, cardId: string, actor: StatusActor) {
+    const latest = callbacks.getTask(task.id) ?? task;
+    const newStoredStatus = storedStatusAfterImplementerLink(latest.status);
+    const reopeningFailed = latest.status === "failed";
+    callbacks.linkTaskCard(task.id, cardId, TASK_CARD_IMPLEMENTER_ROLE);
+    callbacks.upsertTask({
+      ...latest,
+      card_id: cardId,
+      status: newStoredStatus,
+      updated_at: Date.now(),
+      actor,
+      statusProposed: true,
+      applyStatusDespiteHold: reopeningFailed,
+    });
+  }
+
   // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 3 — the
   // stored row keeps deps/result as opaque JSON text (same convention as
   // cards.messages_json); this is the one place that turns it back into
-  // real values for a caller.
-  function serializeTask(row: TaskRow) {
+  // real values for a caller. CAMADA 3 — `status`/`diverged*` derived
+  // from `tasks.card_id` + isCardAlive on read.
+  function serializeTask(row: TaskRow, lastStatusActor?: StatusActor | null) {
+    const storedStatus = row.status;
+    const effectiveStatus = effectiveTaskStatus(row);
+    const lastActor = lastStatusActor ?? lastStatusActorFromRow(row);
+    const { divergedStatus, divergedActor } = deriveParticipationDivergence({
+      storedStatus,
+      effectiveStatus,
+      lastStatusActor: lastActor,
+      existingDivergedStatus: row.diverged_status,
+      existingDivergedActor: row.diverged_actor as StatusActor | null,
+    });
     return {
       id: row.id,
       prompt: row.prompt,
       provider: row.provider,
-      status: row.status,
+      status: effectiveStatus,
       cardId: row.card_id,
       boardId: row.board_id,
       cwd: row.cwd,
@@ -2495,15 +2547,32 @@ export function createMessageBus(
       // `store.listTasksByBoard` (usa `idx_tasks_board_id`), o mesmo
       // statement já coberto por teste direto contra o store. Sem
       // `boardId`: idêntico a antes (`listTasks()` sem filtro).
+      //
+      // status/since/hasCard/view (2026-09-14): filtros do orquestrador
+      // derivados do uso real em sqlite — ver list-tasks-query.ts.
+      // Aplicados DEPOIS do corte por board. hasCard usa isCardAlive (PTY),
+      // não só "card_id preenchido" — card fechado deixa id stale.
+      const parsed = parseListTasksQuery(req);
+      if (!parsed.ok) return { ok: false, error: parsed.error };
       const tasks = req.boardId ? callbacks.listTasksByBoard(req.boardId) : callbacks.listTasks();
-      return { ok: true, tasks: tasks.map(serializeTask) };
+      const aliveCardIds = new Set(
+        tasks
+          .map((t) => t.card_id)
+          .filter((id): id is string => typeof id === "string" && id.length > 0 && callbacks.isCardAlive(id)),
+      );
+      const listed = filterListedTasks(
+        tasks.map((row) => serializeTask(row) as ListedTask),
+        parsed,
+        aliveCardIds,
+      );
+      return { ok: true, tasks: listed.map((t) => projectListedTask(t, parsed.view)) };
     }
 
     if (req.cmd === "get_task") {
       if (!req.taskId) return { ok: false, error: "missing taskId" };
       const task = callbacks.getTask(req.taskId);
       if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
-      return { ok: true, task: serializeTask(task) };
+      return { ok: true, task: serializeTask(task, lastStatusActorFromRow(task)) };
     }
 
     if (req.cmd === "link_task_card") {
@@ -2541,19 +2610,7 @@ export function createMessageBus(
         callbacks.linkTaskCard(req.taskId, req.cardId, role);
         return { ok: true, taskId: req.taskId, cardId: req.cardId, role };
       }
-      // Implementer IS the principal card — same write `spawn_agent
-      // {taskId}` and auto-dispatch make after a successful spawn
-      // (`card_id` + if-absent implementer row), status left alone. Then
-      // the explicit upsert, so a card previously recorded as reviewer
-      // really changes role ("trocar de papel é um upsert").
-      callbacks.upsertTask({
-        ...task,
-        card_id: req.cardId,
-        updated_at: Date.now(),
-        actor: "agent",
-        statusProposed: false,
-      });
-      callbacks.linkTaskCard(req.taskId, req.cardId, role);
+      linkImplementerToTask(task, req.cardId, "agent");
       return { ok: true, taskId: req.taskId, cardId: req.cardId, role };
     }
 
@@ -2861,21 +2918,8 @@ export function createMessageBus(
           // with role "reviewer" (the Fila ` ↔ review` arrow reads this).
           callbacks.linkTaskCard(briefDecision.taskId, spawnResult.cardId, role);
         } else if (briefDecision.taskId) {
-          // Implementer (default): same link auto-dispatch writes after
-          // a successful spawn (`card_id` + task_cards implementer).
-          // Status is left alone (`statusProposed: false`): amarrar o
-          // card não é propor running, e um hold humano no pending não
-          // deve virar divergência colateral deste spawn.
           const latest = callbacks.getTask(briefDecision.taskId);
-          if (latest) {
-            callbacks.upsertTask({
-              ...latest,
-              card_id: spawnResult.cardId,
-              updated_at: Date.now(),
-              actor: "app",
-              statusProposed: false,
-            });
-          }
+          if (latest) linkImplementerToTask(latest, spawnResult.cardId, "agent");
         }
       }
       // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open
@@ -3053,13 +3097,13 @@ export function createMessageBus(
     // what exit code accompanied it. A report that DID arrive is not this
     // case — whatever it said is the real outcome, for whoever reads it
     // to call update_task, not this engine to guess.
-    if (!callbacks.getReport(cardId)) {
-      // `.find` sem filtrar por status: `cardWasExpectedToReport` (achado
-      // 3) considera QUALQUER status principal vinculado como "havia
-      // trabalho esperado"; só `markTaskFailed` abaixo continua exigindo
-      // especificamente `running` (comportamento intocado).
-      const linkedTask = callbacks.listTasks().find((t) => t.card_id === cardId);
-      if (linkedTask?.status === "running") {
+    const listed = callbacks.listTasks();
+    const linkedTask = Array.isArray(listed) ? listed.find((t) => t.card_id === cardId) : undefined;
+    const hasReport = !!callbacks.getReport(cardId);
+    if (!hasReport) {
+      // CAMADA 3 — stored may be `pending` while participation was live;
+      // exit without report on a linked non-judgment task is still failure.
+      if (linkedTask && !isJudgmentStatus(linkedTask.status)) {
         const lastRefused = lastRefusedReasonFromResultJson(linkedTask.result_json);
         markTaskFailed(
           { ...linkedTask, result_json: clearLastRefusedStash(linkedTask.result_json) },
@@ -3299,31 +3343,24 @@ export function createMessageBus(
    *
    * Returns whether a spawn was actually issued (tests assert on it). */
   function dispatchIfUnblocked(task: TaskRow, allTasks: TaskRow[]): boolean {
-    if (task.status !== "pending" || !task.board_id) return false;
+    if (isJudgmentStatus(task.status) || task.status !== "pending" || !task.board_id) return false;
+    if (task.card_id && callbacks.isCardAlive(task.card_id)) return false;
+    if (dispatchingTaskIds.has(task.id)) return false;
     const deps: string[] = task.deps_json ? JSON.parse(task.deps_json) : [];
     if (deps.length === 0) return false;
     if (!callbacks.isBoardAutonomous(task.board_id)) return false;
     const allDone = deps.every((depId) => allTasks.find((t) => t.id === depId)?.status === "done");
     if (!allDone) return false;
+    const lastActor = lastStatusActorFromRow(callbacks.getTask(task.id) ?? task);
+    if (lastActor === "human") return false;
+    if (task.diverged_actor === "human" && task.diverged_status === "pending") return false;
+    dispatchingTaskIds.add(task.id);
     const requestId = randomUUID();
     const params = buildTaskDispatchParams(task, task.provider ?? "claude", `auto-dispatch: task ${task.id} (deps satisfied)`);
-    // Mark `running` right away (not after the promise settles) so a
-    // second, near-simultaneous `onTaskDone` call for a sibling dep
-    // can't also see this task as still `pending` and dispatch it
-    // twice — same race this guards against as `markWaiting`'s ref-
-    // count elsewhere in this file. This write goes back through the
-    // funnel, which sees `running` (not `done`) and stops there — no
-    // recursion into `onTaskDone`.
-    //
-    // Decisão 8 / review adversarial achado 1 — the store may HOLD this
-    // write when a human locked the dependent. Spawning after a held
-    // upsert is the decorative-lock bug: observe `statusChanged`
-    // before `autonomousSpawn`. Divergence is already signaled.
-    const decision = callbacks.upsertTask({ ...task, status: "running", updated_at: Date.now(), actor: "app" });
-    if (!decision.statusChanged) return false;
     autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
+      dispatchingTaskIds.delete(task.id);
       if (result.ok) {
-        callbacks.upsertTask({ ...task, status: "running", card_id: result.cardId, updated_at: Date.now(), actor: "app" });
+        linkImplementerToTask(task, result.cardId, "app");
       } else {
         markTaskFailed(task, result.error, "spawn_failed");
       }

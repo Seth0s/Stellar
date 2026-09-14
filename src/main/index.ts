@@ -40,6 +40,7 @@ import { describeStatusAskResolved } from "./status-write-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose } from "../task-purpose";
+import { deriveParticipationDivergence, deriveTaskStatus } from "../task-status-derive";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import { resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { refreshUserEnv, setSystemLanguageHint, userEnvSnapshot } from "./user-env";
@@ -1224,11 +1225,21 @@ function createWindow() {
           depPurposes[depId] = normalizeTaskPurpose(depPurposeById[depId]);
         }
       }
+      const cardAlive = t.card_id ? registry.isAlive(t.card_id) : false;
+      const lastActor = lastActorByTask.get(t.id) ?? null;
+      const effectiveStatus = deriveTaskStatus(t.status, cardAlive);
+      const { divergedStatus, divergedActor } = deriveParticipationDivergence({
+        storedStatus: t.status,
+        effectiveStatus,
+        lastStatusActor: lastActor,
+        existingDivergedStatus: t.diverged_status,
+        existingDivergedActor: t.diverged_actor,
+      });
       return {
         id: t.id,
         prompt: t.prompt,
         provider: t.provider,
-        status: t.status,
+        status: effectiveStatus,
         cardId: t.card_id,
         boardId: t.board_id,
         order: t.order,

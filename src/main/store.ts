@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { decideStatusWrite, retainStatusAsk, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
 import { normalizeTaskPurpose } from "../task-purpose";
+import { coerceStoredTaskStatus, deriveTaskStatus } from "../task-status-derive";
 
 export type CardRow = {
   id: string;
@@ -296,6 +297,12 @@ export type TaskRow = {
    * Adversarial review 2026-09-11, finding 3.
    */
   statusProposed?: boolean;
+  /**
+   * Transient — bypass human lock when linking reopens a `failed` task
+   * (`storedStatusAfterImplementerLink` → pending). Used only by
+   * `linkImplementerToTask` in message-bus.ts.
+   */
+  applyStatusDespiteHold?: boolean;
   /** Transiente, só de LEITURA — anexado só por `getTask` (nunca por
    * `listTasks`, de propósito: manter a listagem em massa barata).
    * DESIGN-BACKLOG.md §2.1 "MCP: exponha a trilha em LEITURA (no
@@ -638,6 +645,8 @@ function migrate(db: Database.Database) {
       if (!String(e).includes("duplicate column name")) throw e;
     }
   }
+  // CAMADA 3 — `running` is derived on read; normalize legacy rows once.
+  db.prepare("UPDATE tasks SET status = 'pending' WHERE status = 'running'").run();
   // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — membership vivo.
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN sprint_id TEXT`);
@@ -1319,7 +1328,7 @@ export function openStore(userDataDir: string) {
      ORDER BY number DESC, started_at DESC LIMIT 1`,
   );
   const tasksForSprintStmt = db.prepare(
-    `SELECT id, prompt, status, result_json, "order", suggested_order, implicit_order, created_at, updated_at FROM tasks WHERE sprint_id = ?`,
+    `SELECT id, prompt, status, card_id, result_json, "order", suggested_order, implicit_order, created_at, updated_at FROM tasks WHERE sprint_id = ?`,
   );
   const getBoardExistsStmt = db.prepare(`SELECT id FROM boards WHERE id = ?`);
 
@@ -1356,7 +1365,12 @@ export function openStore(userDataDir: string) {
    * Product answer 3: empty queue and already-closed are REFUSED with a
    * visible reason — never silent no-op / never invent an empty boundary.
    */
-  const closeSprintInternal = db.transaction((boardId: string, at: number): { closed: SprintRow; opened: SprintRow } => {
+  const closeSprintInternal = db.transaction(
+    (
+      boardId: string,
+      at: number,
+      isCardAlive?: (cardId: string) => boolean,
+    ): { closed: SprintRow; opened: SprintRow } => {
     const active = getActiveSprintStmt.get(boardId) as SprintRow | undefined;
     if (!active) {
       throw Object.assign(new Error(`no active sprint on board "${boardId}" — already closed or never opened`), {
@@ -1367,6 +1381,7 @@ export function openStore(userDataDir: string) {
       id: string;
       prompt: string | null;
       status: string;
+      card_id: string | null;
       result_json: string | null;
       order: number | null;
       suggested_order: number | null;
@@ -1379,13 +1394,17 @@ export function openStore(userDataDir: string) {
         code: "sprint_empty",
       });
     }
+    const derivedMembers = members.map((m) => {
+      const hasLiveImplementer = !!(m.card_id && isCardAlive?.(m.card_id));
+      return { ...m, status: deriveTaskStatus(m.status, hasLiveImplementer) };
+    });
     const decision = decideSprintClose(
-      members.map((m) => ({
+      derivedMembers.map((m) => ({
         id: m.id,
         status: m.status,
       })),
     );
-    const snapshot: SprintSnapshotTask[] = members.map((m) => ({
+    const snapshot: SprintSnapshotTask[] = derivedMembers.map((m) => ({
       id: m.id,
       prompt: m.prompt,
       status: m.status,
@@ -1439,7 +1458,8 @@ export function openStore(userDataDir: string) {
       snapshot_json: snapshotJson,
     };
     return { closed, opened };
-  });
+  },
+  );
 
   /**
    * DESIGN-BACKLOG.md §2.0 item 2 — delete recovers from an accidental
@@ -1500,6 +1520,7 @@ export function openStore(userDataDir: string) {
     const {
       actor,
       statusProposed,
+      applyStatusDespiteHold,
       transitions: _transitions,
       cards: _cards,
       verdicts: _verdicts,
@@ -1510,18 +1531,33 @@ export function openStore(userDataDir: string) {
     const previousActor = existing
       ? ((lastStatusActorStmt.get(task.id) as { actor: TaskActor } | undefined)?.actor ?? null)
       : null;
+    const previousStatus = existing ? existing.status : null;
     // `statusProposed !== false` — absent/true means the status on the
     // row is intentional (create, drag, markFailed, explicit update_task
     // status). Only an explicit `false` (update_task omitting status)
-    // becomes `proposedStatus: null` for the decision.
-    const decision = decideStatusWrite({
+    // becomes `proposedStatus: null` for the decision. CAMADA 3 — never
+    // persist `running`; participation is derived on read.
+    const rawProposed = statusProposed === false ? null : task.status;
+    const proposedStatus = rawProposed === null ? null : coerceStoredTaskStatus(rawProposed);
+    let decision = decideStatusWrite({
       previousActor,
-      previousStatus: existing ? existing.status : null,
-      proposedStatus: statusProposed === false ? null : task.status,
+      previousStatus,
+      proposedStatus,
       newActor,
       existingDivergedStatus: existing?.diverged_status ?? null,
       existingDivergedActor: existing?.diverged_actor ?? null,
     });
+    if (applyStatusDespiteHold && proposedStatus !== null && previousActor === "human") {
+      decision = {
+        status: proposedStatus,
+        statusChanged: proposedStatus !== previousStatus,
+        divergedStatus: null,
+        divergedActor: null,
+        recordDeclaration: false,
+        warnAgent: false,
+        declaredStatus: null,
+      };
+    }
     // Sprint membership: assign to the board's active sprint when the
     // caller left sprint_id empty (create paths, legacy rows). Never
     // steals an explicit sprint_id. Does NOT go through status
@@ -1532,7 +1568,6 @@ export function openStore(userDataDir: string) {
     // CURRENT active sprint — the closed sprint's frozen counts stay put.
     let sprintId = rest.sprint_id ?? existing?.sprint_id ?? null;
     const boardId = rest.board_id ?? existing?.board_id ?? null;
-    const previousStatus = existing ? existing.status : null;
     const leavingFailed = previousStatus === "failed" && decision.status !== "failed";
     if (leavingFailed && boardId) {
       sprintId = ensureActiveSprintInternal(boardId, Date.now()).id;
@@ -1547,10 +1582,17 @@ export function openStore(userDataDir: string) {
         requestedAt: existing?.requested_at ?? null,
       },
       newActor,
-      proposedStatus: statusProposed === false ? null : task.status,
+      proposedStatus,
       resultingStatus: decision.status,
     });
     const ask = retained.ask;
+    const linkedCardId = rest.card_id ?? existing?.card_id ?? null;
+    let divergedStatus = decision.divergedStatus;
+    let divergedActor = decision.divergedActor;
+    if (newActor === "human" && proposedStatus === "pending" && linkedCardId) {
+      divergedStatus = "pending";
+      divergedActor = "human";
+    }
     const persistable = {
       ...rest,
       // Create: accept a valid enum or persist NULL (NORMAL). Update:
@@ -1559,8 +1601,8 @@ export function openStore(userDataDir: string) {
       // stuffing a new label into the object.
       purpose: existing ? (existing.purpose ?? null) : normalizeTaskPurpose(rest.purpose),
       status: decision.status,
-      diverged_status: decision.divergedStatus,
-      diverged_actor: decision.divergedActor,
+      diverged_status: divergedStatus,
+      diverged_actor: divergedActor,
       requested_status: ask.requestedStatus,
       requested_reason: ask.requestedReason,
       requested_by: ask.requestedBy,
@@ -2162,10 +2204,13 @@ export function openStore(userDataDir: string) {
     },
     /** Freeze the active sprint's snapshot, migrate unfinished todo/doing,
      * open the next. Refuses empty queue and already-closed (no active). */
-    closeSprint: (boardId: string): { ok: true; closed: SprintRow; opened: SprintRow } | { ok: false; error: string } => {
+    closeSprint: (
+      boardId: string,
+      isCardAlive?: (cardId: string) => boolean,
+    ): { ok: true; closed: SprintRow; opened: SprintRow } | { ok: false; error: string } => {
       if (!getBoardExistsStmt.get(boardId)) return { ok: false, error: `no such board "${boardId}"` };
       try {
-        const result = closeSprintInternal(boardId, Date.now());
+        const result = closeSprintInternal(boardId, Date.now(), isCardAlive);
         return { ok: true, ...result };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
