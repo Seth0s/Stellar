@@ -50,6 +50,7 @@ import {
   type MetaPillKind,
   type SprintView,
 } from "./task-board-model";
+import { computeWorkStats, formatCycleMinutes, MIN_COMPARE_N } from "./work-stats";
 import styles from "./TaskCard.module.css";
 import { getLocale, t } from "../../shared/i18n";
 
@@ -830,49 +831,26 @@ function CycleTimeChart({ data, loading }: { data: { id: string; queuedHours: nu
   );
 }
 
-/** Painel de gráficos — escondido por padrão. Vereditos vêm das tasks
- * passadas (quadro vivo ou snapshot congelado). Transições do gráfico 3:
- * ao vivo só quando `liveTransitions` — nunca consultar o board ativo
- * enquanto se visualiza um sprint fechado. */
-function ChartsPanel({
-  boardId,
-  tasks,
-  liveTransitions,
-}: {
-  boardId: string;
-  tasks: TaskBoardItem[];
-  liveTransitions: boolean;
-}) {
-  const [transitionsByTask, setTransitionsByTask] = useState<Record<string, { toValue: string; at: number }[]> | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!liveTransitions) {
-      // Frozen view: use trails already on the snapshot stubs (usually
-      // empty) — never `transitionsByBoard` of the live sprint.
-      const grouped: Record<string, { toValue: string; at: number }[]> = {};
-      for (const t of tasks) {
-        if (t.statusTransitions.length > 0) grouped[t.id] = t.statusTransitions;
-      }
-      setTransitionsByTask(grouped);
-      return;
-    }
-    setTransitionsByTask(null);
-    window.tasks.transitionsByBoard(boardId).then((rows) => {
-      if (cancelled) return;
-      const grouped: Record<string, { toValue: string; at: number }[]> = {};
-      for (const r of rows) {
-        const list = grouped[r.task_id] ?? [];
-        list.push({ toValue: r.to_value, at: r.at });
-        grouped[r.task_id] = list;
-      }
-      setTransitionsByTask(grouped);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [boardId, liveTransitions, tasks]);
-
+/** Painel "Como anda" — escondido por padrão. Agregados primeiro (ciclo,
+ * rodadas, cobertura); gráficos por task ficam embaixo como detalhe.
+ * Sem sujeito ("quem"): só provider/model/task — ver identidade-de-ator. */
+function ChartsPanel({ tasks }: { tasks: TaskBoardItem[] }) {
+  const stats = computeWorkStats(
+    tasks.map((t) => ({
+      id: t.id,
+      status: t.status,
+      verdicts: t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })),
+      cards: t.cards.map((c) => ({
+        cardId: c.cardId,
+        role: c.role,
+        provider: c.provider,
+        model: c.model,
+        orphan: c.orphan,
+      })),
+      statusTransitions: t.statusTransitions,
+    })),
+  );
+  const cov = stats.coverage;
   const allVerdicts = tasks.flatMap((t) => t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })));
   const verdictsByProvider = computeVerdictsByProvider(allVerdicts);
   const roundsData = computeRoundsToApprove(
@@ -882,24 +860,80 @@ function ChartsPanel({
       verdicts: t.verdicts.map((v) => ({ verdict: v.verdict, provider: v.provider, at: v.at })),
     })),
   );
-
   const now = Date.now();
-  const cycleData =
-    transitionsByTask === null
-      ? []
-      : tasks
-          .map((t) => {
-            const cycle = computeCycleTime(transitionsByTask[t.id] ?? [], now);
-            return { id: t.id, queuedHours: msToHours(cycle.queuedMs), runningHours: msToHours(cycle.runningMs) };
-          })
-          .filter((d) => d.queuedHours > 0 || d.runningHours > 0);
+  // Outliers only — full wall of per-task bars is noise when n≳20.
+  const cycleData = tasks
+    .map((t) => {
+      const cycle = computeCycleTime(t.statusTransitions, now);
+      return { id: t.id, queuedHours: msToHours(cycle.queuedMs), runningHours: msToHours(cycle.runningMs) };
+    })
+    .filter((d) => d.queuedHours > 0 || d.runningHours > 0)
+    .sort((a, b) => b.queuedHours + b.runningHours - (a.queuedHours + a.runningHours))
+    .slice(0, 8);
+
+  const cycleLabel =
+    stats.medianCycleMs === null
+      ? t("task.stats.cycleEmpty")
+      : t("task.stats.cycleValue", { minutes: formatCycleMinutes(stats.medianCycleMs), n: String(cov.doneWithCycle) });
+  const roundsLabel =
+    stats.medianRounds === null
+      ? t("task.stats.roundsEmpty")
+      : t("task.stats.roundsValue", { rounds: String(stats.medianRounds), n: String(cov.doneWithRounds) });
 
   return (
     <div className={styles.chartsPanel} data-part="charts-panel">
+      <div className={styles.statsCoverage} data-part="stats-coverage">
+        {t("task.stats.coverage", {
+          tasks: String(cov.tasksInView),
+          cycle: String(cov.doneWithCycle),
+          reopened: String(cov.reopened),
+          verdicts: String(cov.verdictRows),
+          typed: String(cov.verdictTyped),
+          nulls: String(cov.verdictNull),
+          parts: String(cov.participations),
+          orphans: String(cov.orphanParticipations),
+          withProvider: String(cov.withProvider),
+        })}
+      </div>
+      <div className={styles.statsRow} data-part="stats-row">
+        <div className={styles.statCard} data-part="stat-cycle">
+          <div className={styles.chartTitle}>{t("task.stats.cycle")}</div>
+          <div className={styles.statValue}>{cycleLabel}</div>
+          {cov.reopened > 0 && (
+            <div className={styles.statNote} data-part="stat-reopened">
+              {t("task.stats.reopened", { n: String(cov.reopened) })}
+            </div>
+          )}
+        </div>
+        <div className={styles.statCard} data-part="stat-rounds">
+          <div className={styles.chartTitle}>{t("task.stats.rounds")}</div>
+          <div className={styles.statValue}>{roundsLabel}</div>
+          <div className={styles.statNote}>{t("task.stats.roundsNote")}</div>
+        </div>
+        <div className={styles.statCard} data-part="stat-provider">
+          <div className={styles.chartTitle}>{t("task.stats.provider")}</div>
+          {stats.providerRounds.length === 0 ? (
+            <div className={styles.chartEmpty}>{t("task.stats.providerEmpty", { withProvider: String(cov.withProvider), parts: String(cov.participations) })}</div>
+          ) : (
+            <ul className={styles.statsProviderList} data-part="stats-provider-list">
+              {stats.providerRounds.map((p) => (
+                <li key={p.key} data-insufficient={p.insufficient ? "true" : "false"}>
+                  <span className={styles.statsProviderKey}>{p.key}</span>
+                  <span className={styles.statsProviderMeta}>
+                    {p.insufficient
+                      ? t("task.stats.providerInsufficient", { n: String(p.tasks), min: String(MIN_COMPARE_N) })
+                      : t("task.stats.providerOk", { n: String(p.tasks), rounds: String(p.medianRounds ?? "—") })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
       <div className={styles.chartsGrid}>
         <VerdictsByProviderChart data={verdictsByProvider} />
         <RoundsToApproveChart data={roundsData} />
-        <CycleTimeChart data={cycleData} loading={liveTransitions && transitionsByTask === null} />
+        <CycleTimeChart data={cycleData} loading={false} />
       </div>
     </div>
   );
@@ -1625,11 +1659,11 @@ function TaskCardInner({
               data-part="charts-toggle"
               className={`${styles.chartsToggleBtn} ${chartsOpen ? styles.chartsToggleActive : ""}`}
               aria-pressed={chartsOpen}
-              title={t("task.charts")}
+              title={t("task.stats")}
               onClick={() => setChartsOpen((v) => !v)}
             >
               <Icon name="charts" size={12} />
-              <span>{t("task.charts")}</span>
+              <span>{t("task.stats")}</span>
             </button>
             <button onClick={onClose}>
               <Icon name="close" size={12} />
@@ -1735,7 +1769,7 @@ function TaskCardInner({
           setClosingSprint={setClosingSprint}
         />
       )}
-      {chartsOpen && <ChartsPanel boardId={activeBoardId} tasks={boardTasks} liveTransitions={!viewingFrozen} />}
+      {chartsOpen && <ChartsPanel tasks={boardTasks} />}
       {openTask && (
         <TaskDetailModal task={openTask} now={now} readOnly={viewingFrozen} onClose={() => setOpenTaskId(null)} />
       )}

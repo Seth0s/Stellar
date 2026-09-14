@@ -1387,10 +1387,31 @@ function createWindow() {
       ? allOnBoard.filter((t) => t.sprint_id === activeSprint.id || !t.sprint_id)
       : allOnBoard;
     const lastActorByTask = new Map(store.listLastActorsForBoard(boardId).map((r) => [r.task_id, r.last_actor]));
-    const cardsByTask = new Map<string, { cardId: string; role: string; kind: string | null; provider: string | null; label: string | null }[]>();
+    const cardsByTask = new Map<
+      string,
+      {
+        cardId: string;
+        role: string;
+        kind: string | null;
+        provider: string | null;
+        model: string | null;
+        effort: string | null;
+        label: string | null;
+        orphan: boolean;
+      }[]
+    >();
     for (const tc of store.listTaskCardsForBoard(boardId)) {
       const list = cardsByTask.get(tc.task_id) ?? [];
-      list.push({ cardId: tc.card_id, role: tc.role, kind: tc.card_kind, provider: tc.card_provider, label: tc.card_label });
+      list.push({
+        cardId: tc.card_id,
+        role: tc.role,
+        kind: tc.card_kind,
+        provider: tc.card_provider,
+        model: tc.card_model,
+        effort: tc.card_effort,
+        label: tc.card_label,
+        orphan: tc.card_orphaned === 1,
+      });
       cardsByTask.set(tc.task_id, list);
     }
     const reportByCardId = new Map(store.listReportsForBoard(boardId).map((r) => [r.card_id, r]));
@@ -1413,10 +1434,10 @@ function createWindow() {
     // mesma consulta (uma por board inteiro, `JOIN`, sem N+1) que o
     // gráfico 3 já usava só quando o painel abria; anexada aqui, em TODA
     // task, em todo push.
-    const transitionsByTask = new Map<string, { toValue: string; at: number }[]>();
+    const transitionsByTask = new Map<string, { toValue: string; fromValue: string | null; at: number }[]>();
     for (const row of store.listStatusTransitionsForBoard(boardId)) {
       const list = transitionsByTask.get(row.task_id) ?? [];
-      list.push({ toValue: row.to_value, at: row.at });
+      list.push({ toValue: row.to_value, fromValue: row.from_value, at: row.at });
       transitionsByTask.set(row.task_id, list);
     }
     // RODADA 4 — vereditos + firstActor (pílulas / gráficos / aviso de

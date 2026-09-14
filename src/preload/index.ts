@@ -785,12 +785,20 @@ export type TaskBoardItem = {
   createdAt: number;
   updatedAt: number;
   lastActor: "app" | "agent" | "human" | "orchestrator" | null;
-  /** `kind`/`provider`/`label` vêm de um LEFT JOIN direto com `cards`
-   * (store.ts) — funcionam mesmo pra um card já fechado (a linha
-   * continua existindo; só `deleteCard`, raro, apaga de vez), sem
-   * depender do card estar entre os cards VIVOS do board carregado.
-   * `null` só quando o card foi mesmo deletado, ou ainda não existe. */
-  cards: { cardId: string; role: string; kind: string | null; provider: string | null; label: string | null }[];
+  /** `kind`/`provider`/`label` vêm de um LEFT JOIN com `cards` (store.ts)
+   * coalescido com o perfil em `task_cards.provider`/`model`/`effort` —
+   * o perfil sobrevive a `DELETE FROM cards` (caso majoritário medido).
+   * `orphan: true` quando a linha em `cards` sumiu de vez. */
+  cards: {
+    cardId: string;
+    role: string;
+    kind: string | null;
+    provider: string | null;
+    model: string | null;
+    effort: string | null;
+    label: string | null;
+    orphan: boolean;
+  }[];
   report: { verdict: "aprovado" | "reprovado" | null; updatedAt: number } | null;
   /** RODADA 2 (review de fidelidade ao protótipo v5) — pílula "espera
    * <id>". `deps` é o array cru de `tasks.deps_json`; `depStatuses` só
@@ -824,7 +832,7 @@ export type TaskBoardItem = {
    * barato (uma consulta por board inteiro) e o delta pede a trilha
    * sempre visível, não atrás de um toggle. `task-board-model.ts`'s
    * `describeTransitionTrail` formata. */
-  statusTransitions: { toValue: string; at: number }[];
+  statusTransitions: { toValue: string; fromValue: string | null; at: number }[];
   /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo de divergência entre o
    * status humano autoritativo e o que app/agente declarou. Ambos null =
    * sem divergência. `task-board-model.ts`'s `describeStatusDivergence`
@@ -927,7 +935,9 @@ const tasks = {
    * ver TaskCard.tsx. `to_value`/`at` bastam pra computar quanto tempo
    * cada task passou em cada status (task-board-model.ts's
    * `computeCycleTime`). */
-  transitionsByBoard: (boardId: string): Promise<{ task_id: string; to_value: string; at: number }[]> =>
+  transitionsByBoard: (
+    boardId: string,
+  ): Promise<{ task_id: string; from_value: string | null; to_value: string; at: number }[]> =>
     ipcRenderer.invoke("store:tasks:transitions-by-board", boardId),
   /** DESIGN-BACKLOG.md §2.1 "Historico de sprints" — fechamento explícito
    * (botão no card Fila). Snapshot congelado no main; este bridge só
