@@ -273,7 +273,6 @@ describe("message-bus: entry bind guard (probe on EADDRINUSE)", () => {
 
     orphanChild = await spawnOrphanServer(sockPath);
     expect(existsSync(sockPath)).toBe(true);
-    const orphanStat = statSync(sockPath);
 
     // Shutdown sujo de verdade — sem isto (um `.close()` normal, mesmo
     // vindo de fora), o próprio libuv já teria feito o unlink sozinho (ver
@@ -283,17 +282,34 @@ describe("message-bus: entry bind guard (probe on EADDRINUSE)", () => {
     await new Promise((r) => setTimeout(r, 150));
     expect(existsSync(sockPath)).toBe(true); // o arquivo sobrevive à morte do processo
 
+    // Conta só o unlink do rebind — não o de um close() anterior neste
+    // describe (afterEach já zera, mas o spawn órfão não passa por ele).
+    fsHooks.unlinkSyncCalls = [];
     const notifications: string[] = [];
     const bus = createMessageBus(
       sockPath,
       callbacksWithSpies({ notifyBusUnavailable: (msg: string) => notifications.push(msg) }),
     );
     try {
-      // Inode diferente do órfão é a prova de que houve unlink + rebind
-      // reais, não só "o arquivo ainda existe" (que seria verdade mesmo se
-      // nada tivesse acontecido).
-      await waitUntil(() => existsSync(sockPath) && statSync(sockPath).ino !== orphanStat.ino, 3000);
+      // Provado no runner do GitHub (2026-09-14, run 34910746295): unlink +
+      // rebind RODAM (`unlinks=1`, `notes=[]`, connect ok), mas o inode do
+      // arquivo novo no `/tmp` tmpfs do GHA frequentemente É O MESMO número
+      // do órfão (reciclagem imediata). A asserção antiga
+      // `ino !== orphanStat.ino` passava localmente e falhava 100% no CI —
+      // waitUntil: timed out — treinando vermelho permanente. Oráculo que
+      // sobrevive à reciclagem: o mock viu o unlink do path E alguém
+      // escuta de novo (connect), sem notifyBusUnavailable.
+      await waitUntil(() => fsHooks.unlinkSyncCalls.includes(sockPath) && existsSync(sockPath), 3000);
+      expect(fsHooks.unlinkSyncCalls).toContain(sockPath);
       expect(notifications).toEqual([]);
+      await new Promise<void>((resolve, reject) => {
+        const client = createRawConnection(sockPath);
+        client.on("connect", () => {
+          client.end();
+          resolve();
+        });
+        client.on("error", reject);
+      });
     } finally {
       bus.close();
     }
