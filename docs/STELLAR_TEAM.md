@@ -18,6 +18,7 @@ Este arquivo existe porque a ideia de negócio foi descrita e, ao medir o que j�
 - [6. Decisões que são do dono](#6-decisões-que-são-do-dono)
 - [7. Ordem de trabalho](#7-ordem-de-trabalho)
 - [8. O que NÃO fazer](#8-o-que-não-fazer)
+- [9. Escolha de backend: Supabase](#9-escolha-de-backend-supabase)
 
 ---
 
@@ -193,6 +194,78 @@ Cada etapa entrega algo sozinha. Na ordem inversa, constroem-se meses de servido
 
 ---
 
+## 9. Escolha de backend: Supabase
+
+**Decisão do dono (2026-09-14):** o backend do Stellar Team é **Supabase** — para identidade e camada de time. **Não** como store do app.
+
+### O que ele economiza de verdade
+
+Os três modos de [§1](#1-a-ideia-como-o-dono-a-descreveu) mapeiam quase um-para-um:
+
+| Necessidade | Peça do Supabase |
+|---|---|
+| Cadastro no próprio app | Auth (email/senha, OAuth) |
+| Mesmo `user_id` anexado a um team | tabela de membership |
+| Team enxerga só as tasks do team | Row-Level Security por `team_id` |
+| Distribuir task entre membros | coluna de atribuição + policy |
+| Casa de trabalho num servidor | Storage |
+| Ver a task do colega mudar ao vivo | Realtime |
+
+Auth e multi-tenancy escritos à mão são semanas de trabalho, e são onde o erro vira vazamento de dados em vez de bug. RLS é exatamente a forma do problema "usuário pertence a times". **É aqui que está o ganho.**
+
+### O alinhamento que joga a favor
+
+A classificação de conflito de [§3.5](#35-conflito-se-separa-em-dois-tipos-e-isso-decide-se-sync-é-fácil) coincide com a divisão que o produto precisa:
+
+```
+append-only, não conflita:  tasks, transitions, verdicts, reports, spawns  → é a camada de TIME
+disputa garantida:          posição de card, sticky, boards                → é a camada LOCAL
+```
+
+A metade sem conflito **é** a metade que interessa ao time. Não é coincidência: trabalho é histórico, canvas é espaço. Dá para sincronizar a parte fácil e deixar a difícil local, sem nunca escrever merge de canvas.
+
+### O que o Supabase NÃO resolve
+
+Nada disto encolhe por trocar de backend, e todos continuam valendo:
+
+- **A casa de trabalho** ([§3.1](#31-a-casa-de-trabalho-não-é-o-banco-do-stellar)) vive em config de terceiros. O Storage guarda arquivo; sync, versionamento e **remap de caminho absoluto** continuam sendo trabalho próprio.
+- **Segredos** ([§3.3](#33-credencial-não-viaja)). Existe Vault, mas a pergunta é de responsabilidade legal, não de tecnologia — a decisão 1 de [§6](#6-decisões-que-são-do-dono) segue aberta.
+- **Escritor único local** ([§3.4](#34-o-app-é-escritor-único-por-design)): seed de id em memória, um socket, um lock. É arquitetura do app.
+- **Merge de canvas**: Realtime propaga mudança; não decide quem ganha quando dois arrastam o mesmo card.
+
+### A medição que fecha a porta principal
+
+`src/main/store.ts`: **93 statements preparados, 119 chamadas `.get/.all/.run`, ZERO `await`**. É inteiramente síncrono, porque `better-sqlite3` é síncrono por design.
+
+Fazer o Postgres ser *o* store quando logado transformaria os 119 pontos em assíncronos, junto com `message-bus.ts` e `index.ts`, que chamam o store esperando resposta imediata. E o app perderia o funcionamento offline — um canvas que trava porque a internet caiu é um produto pior que o atual.
+
+Portanto: **SQLite continua sendo a verdade local; o Supabase é destino de sincronização, não substituto.**
+
+### A forma
+
+```
+Supabase (Postgres + Auth + RLS)
+  identidade, teams, membership          ← só existe lá
+  tasks, verdicts, transitions, reports  ← espelhados do local (append-only)
+  casa de trabalho (Storage)             ← arquivos + metadados
+
+SQLite local (síncrono, offline, inalterado)
+  boards, cards, posição, connectors     ← nunca sai da máquina
+  tudo que o app lê no caminho quente
+```
+
+Propriedade que vem de graça: **o modo local continua sendo o app inteiro**, sem servidor. O login não muda o que o Stellar é — acrescenta um destino.
+
+### Custo e lock-in, declarados
+
+Free serve para validar; Pro são ~US$ 25/mês, irrelevante perto do tempo de escrever auth à mão. É Postgres de verdade, então os dados saem. Mas **Auth e RLS não são portáteis** — se um dia migrar, essa parte se reescreve. Lock-in aceitável, desde que consciente.
+
+### Efeito nas etapas de [§7](#7-ordem-de-trabalho)
+
+Nenhuma etapa muda de ordem. A 7 deixa de ser "escrever um backend" e passa a ser "modelar identidade e time no Supabase e espelhar a camada append-only". As etapas 4, 5 e 6 seguem idênticas — e continuam sendo pré-requisito, porque nenhuma delas é problema de servidor.
+
+---
+
 ## Apêndice — medições reproduzíveis
 
 ```bash
@@ -214,4 +287,8 @@ sqlite3 ~/.config/stellar/agent-canvas.db \
 # média mente, mediana não
 sqlite3 ~/.config/stellar/agent-canvas.db \
   "SELECT COUNT(*) FROM tasks WHERE status='done';"
+
+# store.ts e sincrono: Postgres como store primario tornaria 119 chamadas assincronas
+grep -cE "\.(get|all|run)\(" src/main/store.ts   # 119
+grep -c "await " src/main/store.ts                # 0
 ```
