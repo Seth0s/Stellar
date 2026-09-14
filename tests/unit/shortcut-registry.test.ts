@@ -260,6 +260,7 @@ describe("findShortcutClaimingKey — effective combo from the registry", () => 
   it("unscoped: finds a native terminal effective combo", () => {
     expect(findShortcutClaimingKey(key({ key: "c", ctrlKey: true }), {})).toBe("terminal.sigint");
     expect(findShortcutClaimingKey(key({ key: "v", ctrlKey: true }), {})).toBe("terminal.paste");
+    expect(findShortcutClaimingKey(key({ key: "End", ctrlKey: true }), {})).toBe("terminal.scroll.toEnd");
   });
 
   it("returns null for a key nobody claims", () => {
@@ -321,6 +322,14 @@ describe("groupShortcutsForOverlay — the overlay is a pure projection of the r
     const copy = rows.find((r) => r.id === "terminal.copySelection");
     expect(copy).toBeDefined();
     expect(copy!.display).toBe("Ctrl+Shift+C");
+  });
+
+  it("documents Ctrl+End as viewport scroll-to-end (not a PTY byte)", () => {
+    const rows = groupShortcutsForOverlay().flatMap((g) => g.rows);
+    const scroll = rows.find((r) => r.id === "terminal.scroll.toEnd");
+    expect(scroll).toBeDefined();
+    expect(scroll!.display).toBe("Ctrl+End");
+    expect(scroll!.description.toLowerCase()).toMatch(/viewport|rola|scroll/);
   });
 
   it("Ctrl+D appears twice — once as the canvas-scope card duplicate, once as the terminal-scope EOF passthrough — same combo, different meaning by scope", () => {

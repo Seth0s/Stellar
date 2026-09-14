@@ -290,6 +290,77 @@
   cursor: pointer;
 }
 
+/* Dica de atalhos no `.card-foot` (SYSTEM_DESIGN §4.1) — não chrome novo
+ * no header. Oculta por padrão; aparece em hover/selected/focus-within do
+ * card ou enquanto o popover está aberto. Board com 20 cards não grita. */
+.terminalCardShortcutsHint {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+:global(.card-frame:hover) .terminalCardShortcutsHint,
+:global(.card-frame.selected) .terminalCardShortcutsHint,
+:global(.card-frame:focus-within) .terminalCardShortcutsHint,
+.terminalCardShortcutsHint.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.terminalCardShortcutsHint:hover,
+.terminalCardShortcutsHint.open {
+  color: var(--foam);
+  border-color: var(--foam);
+}
+
+.terminalCardShortcutsPopover {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.terminalCardShortcutsLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.terminalCardShortcutsRow {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.terminalCardShortcutsRow kbd {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--foam);
+  background: color-mix(in srgb, var(--foam) 12%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
 .terminalCardUrlPopover {
   display: flex;
   flex-direction: column;

@@ -79,4 +79,13 @@ describe("resolveTerminalShortcutKeydown — matched ⇒ consume (review adversa
   it("tecla qualquer sem match: não consome", () => {
     expect(resolveTerminalShortcutKeydown(key({ key: "a" }), {}, "")).toEqual({ consume: false, action: "none" });
   });
+
+  it("Ctrl+End: scroll-to-end (viewport) — consome, nunca sigint/eof/paste", () => {
+    const d = resolveTerminalShortcutKeydown(key({ key: "End", ctrlKey: true }), {}, "");
+    expect(d).toEqual({ consume: true, action: "scroll-to-end" });
+  });
+
+  it("End sozinho (sem Ctrl) não é scroll-to-end — fica pro TUI/readline", () => {
+    expect(resolveTerminalShortcutKeydown(key({ key: "End" }), {}, "").action).toBe("none");
+  });
 });

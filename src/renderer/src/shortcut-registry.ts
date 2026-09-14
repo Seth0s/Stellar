@@ -446,6 +446,18 @@ export const SHORTCUT_REGISTRY: ShortcutDefinition[] = [
     description: "shortcuts.desc.eof",
     owner: "useTerminal.ts (keydown capture, matchesShortcut → pty.write \\x04)",
   },
+  // Viewport only — never pty.write. Watching an agent: scroll up to read
+  // history, then jump back to live output. Clear/search/page-scroll stay
+  // out (clear looks like shell `clear`; search needs UI; PgUp/Dn fight TUIs).
+  {
+    id: "terminal.scroll.toEnd",
+    group: "shortcuts.group.terminal",
+    dispatch: "native",
+    combo: { key: "End", ctrlOrCmd: true },
+    scopes: ["terminal"],
+    description: "shortcuts.desc.scrollToEnd",
+    owner: "useTerminal.ts (keydown → term.scrollToBottom; never pty.write)",
+  },
 
   // ---- Canvas --------------------------------------------------------
   {

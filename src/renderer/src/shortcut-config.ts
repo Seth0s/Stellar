@@ -95,6 +95,7 @@ const RENDERER_WIRED_NATIVE_IDS: ReadonlySet<string> = new Set([
   "terminal.paste",
   "terminal.sigint",
   "terminal.eof",
+  "terminal.scroll.toEnd",
 ]);
 
 /** Por que (ou se) `def` NÃO pode ser reatribuído pela UI — `undefined`

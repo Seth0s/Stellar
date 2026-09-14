@@ -7,7 +7,12 @@ import { Popover } from "./Popover";
 import type { Rect } from "./board-model";
 import { PROVIDER_GLYPH } from "./provider-glyph";
 import styles from "./TerminalCard.module.css";
-import type { ShortcutOverrides } from "./shortcut-registry";
+import {
+  formatCombo,
+  SHORTCUT_REGISTRY,
+  type ShortcutOverrides,
+} from "./shortcut-registry";
+import { getEffectiveCombo } from "./shortcut-config";
 import type { IdentifySessionResult } from "../../preload/index";
 
 export type { Rect };
@@ -161,9 +166,12 @@ function TerminalCardInner({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const urlBadgeRef = useRef<HTMLButtonElement>(null);
+  const shortcutsHintRef = useRef<HTMLButtonElement>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const identifyBtnRef = useRef<HTMLButtonElement>(null);
   const [urlPopoverOpen, setUrlPopoverOpen] = useState(false);
+  const [shortcutsHintOpen, setShortcutsHintOpen] = useState(false);
+  const [hintOverrides, setHintOverrides] = useState<ShortcutOverrides>({});
   const [menuOpen, setMenuOpen] = useState(false);
   const identifyInFlightRef = useRef(false);
   const [identifyBusy, setIdentifyBusy] = useState(false);
@@ -455,6 +463,17 @@ function TerminalCardInner({
   // sempre "right" clipparia off-screen pra um card na metade direita.
   const urlPopoverSide: "left" | "right" =
     (urlBadgeRef.current?.getBoundingClientRect().left ?? 0) > window.innerWidth / 2 ? "left" : "right";
+  const shortcutsHintSide: "left" | "right" =
+    (shortcutsHintRef.current?.getBoundingClientRect().left ?? 0) > window.innerWidth / 2 ? "left" : "right";
+
+  // Mesmo registro da página de Configurações — só o grupo terminal.
+  // Combos efetivos (overrides) no open, pra não mentir após rebind.
+  const terminalShortcutDefs = SHORTCUT_REGISTRY.filter((d) => d.group === "shortcuts.group.terminal");
+
+  function openShortcutsHint() {
+    setHintOverrides(shortcutOverridesRef.current);
+    setShortcutsHintOpen((v) => !v);
+  }
 
   return (
     <CardFrame
@@ -649,6 +668,22 @@ function TerminalCardInner({
               {seenUrls.length}
             </button>
           )}
+          {/* Anatomia §4.1: `.card-foot` já existe — dica no rodapé, não
+           * chrome novo no header. Só em selected/hover/focus-within (CSS)
+           * pra não poluir um board com dezenas de cards. Lista do MESMO
+           * SHORTCUT_REGISTRY que ShortcutsOverlay. */}
+          <button
+            ref={shortcutsHintRef}
+            className={`${styles.terminalCardShortcutsHint}${shortcutsHintOpen ? ` ${styles.open}` : ""}`}
+            data-role="terminal-shortcuts-hint"
+            title={t("terminal.shortcutsHintTitle")}
+            aria-label={t("terminal.shortcutsHint")}
+            aria-expanded={shortcutsHintOpen}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={openShortcutsHint}
+          >
+            <Icon name="keyboard" size={11} />
+          </button>
         </span>
       }
     >
@@ -769,6 +804,26 @@ function TerminalCardInner({
               >
                 <Icon name="browser" size={11} />
               </button>
+            </div>
+          );
+        })}
+      </Popover>
+      <Popover
+        anchorRef={shortcutsHintRef}
+        open={shortcutsHintOpen}
+        onClose={() => setShortcutsHintOpen(false)}
+        side={shortcutsHintSide}
+        className={styles.terminalCardShortcutsPopover}
+        dataRole="terminal-shortcuts-popover"
+      >
+        <div className={styles.terminalCardShortcutsLabel}>{t("shortcuts.group.terminal")}</div>
+        {terminalShortcutDefs.map((def) => {
+          const combo = getEffectiveCombo(def, hintOverrides) ?? def.combo;
+          if (!combo) return null;
+          return (
+            <div key={def.id} className={styles.terminalCardShortcutsRow} data-shortcut-id={def.id}>
+              <kbd>{formatCombo(combo)}</kbd>
+              <span>{t(def.description)}</span>
             </div>
           );
         })}

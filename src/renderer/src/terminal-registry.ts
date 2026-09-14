@@ -105,3 +105,31 @@ export function selectTextForTest(cardId: string, needle: string): boolean {
 
 (window as unknown as { __selectTerminalTextForTest?: typeof selectTextForTest }).__selectTerminalTextForTest =
   selectTextForTest;
+
+/** Test-only — viewport scroll position of a live xterm (smoke scroll-to-end). */
+export function getTerminalScrollPos(
+  cardId: string,
+): { viewportY: number; baseY: number; atBottom: boolean } | null {
+  const term = terminals.get(cardId);
+  if (!term) return null;
+  const buf = term.buffer.active;
+  return {
+    viewportY: buf.viewportY,
+    baseY: buf.baseY,
+    atBottom: buf.viewportY >= buf.baseY,
+  };
+}
+
+(window as unknown as { __getTerminalScrollPos: typeof getTerminalScrollPos }).__getTerminalScrollPos =
+  getTerminalScrollPos;
+
+/** Test-only — scroll the viewport without writing bytes to the PTY. */
+export function scrollTerminalLinesForTest(cardId: string, lines: number): boolean {
+  const term = terminals.get(cardId);
+  if (!term) return false;
+  term.scrollLines(lines);
+  return true;
+}
+
+(window as unknown as { __scrollTerminalLinesForTest: typeof scrollTerminalLinesForTest }).__scrollTerminalLinesForTest =
+  scrollTerminalLinesForTest;
