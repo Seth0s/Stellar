@@ -427,6 +427,9 @@ export type BusRequest =
       gates?: string[];
       allowCommit?: boolean;
       reportSchema?: string[];
+      /** Who called — stamped on the create transition as subject card.
+       * Same field update_task already carried; create_task used to drop it. */
+      requesterId?: string;
     }
   | {
       cmd: "update_task";
@@ -2839,6 +2842,9 @@ export function createMessageBus(
         // agente. Explícito aqui em vez de deixar pro default do store,
         // pelo mesmo motivo de "não adivinhar": este ponto SABE quem é.
         actor: "agent",
+        // Subject of the write — not the task's implementer cardId.
+        // Null when the call was anonymous (no URL stamp / no env).
+        actorCardId: req.requesterId ?? null,
       };
       callbacks.upsertTask(created);
       // Born already unblocked (2026-09-13): `deps` naming tasks that are
@@ -2985,6 +2991,9 @@ export function createMessageBus(
         suggested_order: req.suggestedOrder !== undefined ? req.suggestedOrder : existing.suggested_order,
         updated_at: now,
         actor: writeActor,
+        // Writer card (requester), not the task's implementer — was
+        // discarded before 2026-09-14; setStatusAsk already kept it.
+        actorCardId: req.requesterId ?? null,
         statusProposed,
       };
       // DESIGN-BACKLOG.md §2.1 Decisão 8 — a precedência mora no choke
