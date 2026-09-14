@@ -417,8 +417,17 @@ export type BusRequest =
     }
   // DESIGN-BACKLOG.md §2.1 item 6 — `boardId` opcional: omitido, devolve
   // exatamente a lista sem filtro de sempre (nenhum comportamento
-  // existente muda).
-  | { cmd: "list_tasks"; boardId?: string }
+  // existente muda). `status`/`since`/`hasCard`/`view` — filtros e
+  // projeção do orquestrador (list-tasks-query.ts); omitidos = firehose
+  // de sempre, para não quebrar quem já chama sem args.
+  | {
+      cmd: "list_tasks";
+      boardId?: string;
+      status?: string | string[];
+      since?: number;
+      hasCard?: boolean;
+      view?: "summary" | "full";
+    }
   | { cmd: "get_task"; taskId?: string }
   /** `task_cards.role` for a card that ALREADY exists (the other write
    * path is `spawn_agent({taskId, role})`, for a card born for the task).
@@ -891,6 +900,14 @@ export function createMessageBus(
         brief?: string;
         /** Optional. Present when this spawn is tied to a task — renderer threads it into SpawnOpts / AGENT_CANVAS_TASK_ID. Omitted for a first-class task-less spawn. */
         taskId?: string;
+        /**
+         * Connector pill for the spawned lineage arrow — the ONE source.
+         * Computed by `deriveAutoConnectLabel` (purpose + role). `reason`
+         * stays consent-modal text only; the renderer must not invent a
+         * second label from it (2026-09-14). Already through
+         * `truncateForLabel`; `null` = no pill.
+         */
+        connectorLabel?: string | null;
       },
     ) => void;
     onSpawnCardRequest: (
@@ -1016,9 +1033,20 @@ export function createMessageBus(
       label?: string;
       brief?: string;
       taskId?: string;
+      /** See onSpawnAgentRequest — single source for the spawned arrow pill. */
+      connectorLabel?: string | null;
     };
   };
   const spawnQueue = new Map<string, SpawnQueueEntry[]>();
+  /** CAMADA 3 — in-flight auto-dispatch without writing `running`. */
+  const dispatchingTaskIds = new Set<string>();
+  /**
+   * retry-sem-freio — clock for the lifetime floor in `markTaskFailed`.
+   * PTY deletes its entry BEFORE `onExit` (pty-registry), so
+   * `getCardWriteReadiness` is already null when `resolveCardExit` runs;
+   * we stamp the implementer link time here instead. Cleared on exit.
+   */
+  const implementerStartedAt = new Map<string, number>();
   // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 2 — a card
   // blocked on a consent modal (open/spawn_agent/spawn_card) looks
   // identical to one still working, from the outside. Ref-counted (not a
@@ -1072,6 +1100,8 @@ export function createMessageBus(
     const newStoredStatus = storedStatusAfterImplementerLink(latest.status);
     const reopeningFailed = latest.status === "failed";
     callbacks.linkTaskCard(task.id, cardId, TASK_CARD_IMPLEMENTER_ROLE);
+    // Lifetime floor for exit_without_report (exit-lifetime-decision.ts).
+    implementerStartedAt.set(cardId, Date.now());
     callbacks.upsertTask({
       ...latest,
       card_id: cardId,
@@ -1805,6 +1835,41 @@ export function createMessageBus(
         return req.selector ? truncateForLabel(req.selector) : null;
       case "browser_eval":
         return req.js ? truncateForLabel(req.js) : null;
+      // Spawn lineage: the arrow is the RELATION (what role this card
+      // plays on the task), not a second copy of the card title. The
+      // card name already carries `resolveTaskDispatchLabel` / an
+      // explicit `label` (often the prompt's first 48 chars) — repeating
+      // that on the pill is visual noise. `purpose` is the Fila chip the
+      // owner asked for ("tags that show the task's proposal"); same
+      // question applies here. No taskId → null (spawn without a task is
+      // first-class; inventing a label would lie). No purpose → null for
+      // an implementer (absence is normal, never invent). Reviewer is the
+      // relation that was invisible: always name it, and keep purpose
+      // when declared. Strings match catalogs.ts's pt-BR purpose/role
+      // chips so the pill and the Fila speak the same vocabulary.
+      case "spawn_agent": {
+        if (!req.taskId) return null;
+        const task = callbacks.getTask(req.taskId);
+        if (!task) return null;
+        const purpose = normalizeTaskPurpose(task.purpose);
+        const role =
+          req.role === undefined ? TASK_CARD_IMPLEMENTER_ROLE : normalizeTaskCardRole(req.role);
+        if (req.role !== undefined && role === null) return null;
+        const purposeLabel =
+          purpose === "investigate"
+            ? "investigação"
+            : purpose === "implement"
+              ? "implementação"
+              : purpose === "measure"
+                ? "medição"
+                : purpose === "fix"
+                  ? "correção"
+                  : null;
+        if (role === TASK_CARD_REVIEWER_ROLE) {
+          return truncateForLabel(purposeLabel ? `revisão · ${purposeLabel}` : "revisão");
+        }
+        return purposeLabel ? truncateForLabel(purposeLabel) : null;
+      }
       default:
         return null;
     }
@@ -1879,6 +1944,8 @@ export function createMessageBus(
       // The tool's job is to enqueue. Typing (and the 30s human-input
       // gate) happens on the existing FIFO; awaiting it here is the
       // MCP-timeout / duplicate-send class that `report` already left.
+      // No content dedupe here either: two byte-identical texts can be
+      // intentional (card 469, seq 222+223); identity is the delivery id.
       return enqueueCardDelivery(target, text).receipt;
     }
 
@@ -2206,7 +2273,8 @@ export function createMessageBus(
       const listed = callbacks.listTasks();
       const tasks = Array.isArray(listed) ? listed : [];
       const linkedTask = req.requesterId ? tasks.find((t) => t.card_id === req.requesterId) : undefined;
-      const runningTask = linkedTask?.status === "running" ? linkedTask : undefined;
+      const runningTask =
+        linkedTask && effectiveTaskStatus(linkedTask) === "running" ? linkedTask : undefined;
       const decision = decideReportAcceptance({
         requesterId: req.requesterId,
         report: req.report,
@@ -2416,7 +2484,7 @@ export function createMessageBus(
         id,
         prompt: req.prompt ?? null,
         provider: req.provider ?? null,
-        status: req.cardId ? "running" : "pending",
+        status: "pending",
         card_id: req.cardId ?? null,
         board_id: boardId,
         // Explicit only — never inferred from card/board/repo. Empty string
@@ -2484,7 +2552,6 @@ export function createMessageBus(
       // when the agent omitted `status`: the bus must NOT inject
       // `existing.status` as if it were an alignment proposal (that used
       // to clear a live divergence in silence). Other fields still update.
-      const statusProposed = req.status !== undefined;
       // DESIGN-BACKLOG.md §2.1 "Falha TIPADA" — failureKind is always
       // derived by the app, never accepted from an agent's `result`.
       // Strip forged kinds; keep any server stamp already on the row.
@@ -2918,6 +2985,18 @@ export function createMessageBus(
       // only UI toggle. No MCP/acbridge cmd reaches this flag.
       const requesterBoardId = callbacks.getCardBoardId(requesterId);
       const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
+      // Connector pill: ONE source — `deriveAutoConnectLabel` here, before
+      // the renderer draws the arrow. `reason` is consent-modal text only
+      // (measured 2026-09-14: every filled `kind=spawned` label was a
+      // free-text reason — board rules, stop orders — never the relation).
+      // Use the resolved taskId (briefDecision) so a refused/missing task
+      // never reaches this line with a stale id.
+      const connectorLabel = deriveAutoConnectLabel({
+        ...req,
+        cmd: "spawn_agent",
+        taskId: briefDecision.taskId,
+        role: role ?? undefined,
+      });
       const spawnParams = {
         provider: req.provider as string,
         cwd: req.cwd,
@@ -2929,6 +3008,7 @@ export function createMessageBus(
         label: req.label,
         brief: deliveredBrief,
         taskId: briefDecision.taskId,
+        connectorLabel,
       };
       const spawnResult: SpawnAgentResult =
         autonomous && requesterBoardId
@@ -3159,6 +3239,15 @@ export function createMessageBus(
         // pty-registry. A FIFO de 5206f7e segura a vez; sem popup de SO.
         notifySpawnerOfUnreportedExit(cardId, exitCode);
       }
+    } else if (linkedTask) {
+      // Card exited after reporting — refresh Fila derived status (PTY
+      // already dead; participation drops to pending on read).
+      callbacks.upsertTask({
+        ...linkedTask,
+        updated_at: Date.now(),
+        actor: "app",
+        statusProposed: false,
+      });
     }
   }
 
@@ -3350,6 +3439,14 @@ export function createMessageBus(
       label: resolveTaskDispatchLabel(task),
       brief: briefForTask(task),
       taskId: task.id,
+      // Same single source as manual spawn_agent — auto-dispatch is still
+      // a spawn; the arrow (when a requester exists) must not fall back
+      // to `reason` ("auto-dispatch: task …").
+      connectorLabel: deriveAutoConnectLabel({
+        cmd: "spawn_agent",
+        provider,
+        taskId: task.id,
+      } as BusRequest),
     };
   }
 

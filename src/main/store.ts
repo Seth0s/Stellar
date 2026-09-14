@@ -541,6 +541,47 @@ const MAX_STORED_REPORTS = 1000;
 
 const DEFAULT_BOARD_ID = "default";
 
+/**
+ * Columns whose values live in the short numeric id allocator space
+ * (`App.tsx`/`useBoardStore`'s `nextId`). Naming convention — not a
+ * hand-maintained table list — so a new `*_card_id` / `card_id` /
+ * `group_id` / `requested_by` column is covered by the seed without
+ * editing it. Every table's `id` is included too: non-numeric ids
+ * (UUIDs, `"default"`) CAST to 0 and are filtered out by `> 0`.
+ */
+function isShortIdSpaceColumn(column: string): boolean {
+  return (
+    column === "id" ||
+    column === "card_id" ||
+    column.endsWith("_card_id") ||
+    column === "group_id" ||
+    column === "requested_by"
+  );
+}
+
+/** Build `SELECT MAX(v) AS m FROM (… UNION ALL …)` from PRAGMA table_info. */
+function buildMaxShortIdSql(db: Database.Database): string {
+  const tables = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+    .all() as { name: string }[];
+  const parts: string[] = [];
+  for (const { name: table } of tables) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) continue;
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    for (const col of cols) {
+      if (!isShortIdSpaceColumn(col.name)) continue;
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(col.name)) continue;
+      parts.push(
+        `SELECT CAST(${col.name} AS INTEGER) AS v FROM ${table}` +
+          ` WHERE ${col.name} IS NOT NULL AND TRIM(CAST(${col.name} AS TEXT)) != ''` +
+          ` AND CAST(${col.name} AS INTEGER) > 0`,
+      );
+    }
+  }
+  if (parts.length === 0) return "SELECT 0 AS m";
+  return `SELECT MAX(v) AS m FROM (${parts.join(" UNION ALL ")})`;
+}
+
 function migrate(db: Database.Database) {
   for (const col of [
     "resume_id TEXT",
@@ -788,7 +829,8 @@ export function openStore(userDataDir: string) {
       label TEXT,
       messages_json TEXT,
       archived_at INTEGER,
-      effort TEXT
+      effort TEXT,
+      created_at INTEGER
     );
   `);
   db.exec(`
@@ -856,6 +898,7 @@ export function openStore(userDataDir: string) {
       task_id TEXT NOT NULL,
       card_id TEXT NOT NULL,
       role TEXT NOT NULL,
+      linked_at INTEGER,
       PRIMARY KEY (task_id, card_id)
     );
   `);
@@ -1054,7 +1097,7 @@ export function openStore(userDataDir: string) {
   // the table (its `messages_json` is the whole point), but must never
   // reappear as a live card on the board it used to live on.
   const listStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE board_id = ? AND archived_at IS NULL",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at, created_at FROM cards WHERE board_id = ? AND archived_at IS NULL",
   );
   // Used only by acbridge's `list` command (main/message-bus.ts) — that
   // protocol has no notion of boards, and restricting it to the caller's
@@ -1064,17 +1107,17 @@ export function openStore(userDataDir: string) {
   // excluded here too — acbridge/MCP `list_cards` is about live, real
   // cards an agent could send/spawn to, not history.
   const listAllStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE archived_at IS NULL",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at, created_at FROM cards WHERE archived_at IS NULL",
   );
   // DESIGN-BACKLOG.md item 59 — a single card lookup, needed to find
   // which board a `spawn_agent` requester's card belongs to (so the
   // autonomous-mode check can be board-scoped, not global).
   const getCardStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE id = ?",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at, created_at FROM cards WHERE id = ?",
   );
   const upsertStmt = db.prepare(`
-    INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at)
-    VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @effort, @system_prompt, @group_id, @label, @updated_at, @messages_json, @archived_at)
+    INSERT INTO cards (id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at, created_at)
+    VALUES (@id, @board_id, @kind, @provider, @cwd, @x, @y, @w, @h, @resume_id, @model, @effort, @system_prompt, @group_id, @label, @updated_at, @messages_json, @archived_at, @created_at)
     ON CONFLICT(id) DO UPDATE SET
       board_id = excluded.board_id, kind = excluded.kind, provider = excluded.provider, cwd = excluded.cwd,
       x = excluded.x, y = excluded.y, w = excluded.w, h = excluded.h,
@@ -1100,7 +1143,7 @@ export function openStore(userDataDir: string) {
   // re-open one via `unarchiveCard` right below) — filtering them out
   // here would make that feature unreachable.
   const listChatSessionsStmt = db.prepare(
-    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at FROM cards WHERE kind = 'chat' ORDER BY updated_at DESC",
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at, created_at FROM cards WHERE kind = 'chat' ORDER BY updated_at DESC",
   );
   const archiveCardStmt = db.prepare("UPDATE cards SET archived_at = ? WHERE id = ?");
   const unarchiveCardStmt = db.prepare("UPDATE cards SET archived_at = NULL WHERE id = ?");
@@ -1693,7 +1736,12 @@ export function openStore(userDataDir: string) {
       });
     }
     if (task.card_id) {
-      upsertTaskCardIfAbsentStmt.run({ task_id: task.id, card_id: task.card_id, role: "implementer" });
+      upsertTaskCardIfAbsentStmt.run({
+        task_id: task.id,
+        card_id: task.card_id,
+        role: "implementer",
+        linked_at: Date.now(),
+      });
     }
     return decision;
   }
@@ -1789,7 +1837,7 @@ export function openStore(userDataDir: string) {
     SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at
     FROM task_cards tc
     JOIN tasks t ON t.id = tc.task_id
-    JOIN cards c ON c.id = tc.card_id
+    LEFT JOIN cards c ON c.id = tc.card_id
     WHERE tc.card_id = ?
       AND CASE
         WHEN tc.linked_at IS NOT NULL AND c.created_at IS NOT NULL
@@ -1961,7 +2009,14 @@ export function openStore(userDataDir: string) {
     // never had a reason to know this key exists at all) — a caller that
     // doesn't set it shouldn't crash the whole card save over an optional
     // field only "chat" kind cards ever populate.
-    upsertCard: (card: CardRow) => upsertStmt.run({ ...card, messages_json: card.messages_json ?? null, archived_at: card.archived_at ?? null }),
+    upsertCard: (card: CardRow) =>
+      upsertStmt.run({
+        ...card,
+        messages_json: card.messages_json ?? null,
+        archived_at: card.archived_at ?? null,
+        // INSERT only — ON CONFLICT leaves the stored incarnation clock alone.
+        created_at: card.created_at ?? Date.now(),
+      }),
     deleteCard: (id: string) => deleteStmt.run(id),
     listChatSessions: (): CardRow[] => listChatSessionsStmt.all() as CardRow[],
     archiveCard: (id: string, at: number) => archiveCardStmt.run(at, id),
