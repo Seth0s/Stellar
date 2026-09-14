@@ -355,7 +355,7 @@ describe("integração com resolveGlobalShortcut — o rebind realmente muda o q
 });
 
 // Follow-up da fase C — atalhos de componente passam a ler o registro.
-describe("matchesShortcut / rebindBlockedReason — follow-up componente (7 wireados)", () => {
+describe("matchesShortcut / rebindBlockedReason — follow-up componente (8 wireados)", () => {
   function key(partial: Partial<Parameters<typeof matchesShortcut>[0]> & { key: string }) {
     return { ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...partial };
   }
@@ -368,9 +368,10 @@ describe("matchesShortcut / rebindBlockedReason — follow-up componente (7 wire
     "terminal.paste",
     "terminal.sigint",
     "terminal.eof",
+    "terminal.scroll.toEnd",
   ] as const;
 
-  it("os 7 atalhos de componente saem do bloqueio", () => {
+  it("os 8 atalhos de componente saem do bloqueio", () => {
     for (const id of WIRED) {
       const def = SHORTCUT_REGISTRY.find((d) => d.id === id)!;
       expect(isRebindable(def)).toBe(true);
@@ -400,6 +401,11 @@ describe("matchesShortcut / rebindBlockedReason — follow-up componente (7 wire
     expect(matchesShortcut(key({ key: "Enter" }), "browser.navigate", {})).toBe(true);
     expect(matchesShortcut(key({ key: "d", ctrlKey: true }), "terminal.eof", {})).toBe(true);
     expect(matchesShortcut(key({ key: "d", ctrlKey: true, shiftKey: true }), "terminal.eof", {})).toBe(false);
+  });
+
+  it("combo padrão: terminal.scroll.toEnd casa Ctrl+End", () => {
+    expect(matchesShortcut(key({ key: "End", ctrlKey: true }), "terminal.scroll.toEnd", {})).toBe(true);
+    expect(matchesShortcut(key({ key: "End" }), "terminal.scroll.toEnd", {})).toBe(false);
   });
 
   it("com override, a NOVA tecla dispara e a antiga do mesmo id não", () => {

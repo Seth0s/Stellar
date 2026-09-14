@@ -857,6 +857,12 @@ export function useTerminal(
           case "defer-central":
           case "none":
             return;
+          case "scroll-to-end":
+            // Viewport only — never humanGesturePending / never pty.write.
+            // Rolar não é digitar; o gate de origem (`humanGesturePendingRef`
+            // → originForXtermData) só classifica bytes que saem pelo onData.
+            term.scrollToBottom();
+            return;
           case "sigint":
             if (ptyIdRef.current) {
               void window.pty.write(ptyIdRef.current, "\x03", "human");

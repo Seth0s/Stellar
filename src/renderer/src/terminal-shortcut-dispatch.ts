@@ -29,6 +29,8 @@ export type TerminalShortcutDispatch =
   | { consume: true; action: "sigint" }
   | { consume: true; action: "paste" }
   | { consume: true; action: "eof" }
+  /** Viewport only — `term.scrollToBottom()`, never `pty.write`. */
+  | { consume: true; action: "scroll-to-end" }
   /** Default do registro ainda casa, mas o efetivo não (rebindou pra
    * longe) E ninguém que RODARIA no escopo terminal reivindicou a tecla
    * — engole pra o encoding antigo do xterm não disparar E pra o
@@ -54,11 +56,12 @@ export type TerminalShortcutDispatch =
  * 2. sigint efetivo
  * 3. paste efetivo
  * 4. eof efetivo
- * 5. stale sigint / stale eof:
+ * 5. scroll-to-end efetivo (viewport; depois dos bytes pro PTY)
+ * 6. stale sigint / stale eof:
  *    - ninguém que rodaria no escopo terminal → swallow
  *    - dono que `resolveGlobalShortcut` despacharia aqui → defer-central
  *      (bubbla; xterm barrado no handler)
- * 6. none
+ * 7. none
  *
  * Qualquer ramo matched devolve `consume: true` — inclusive copy sem
  * seleção. Stale no fim = tecla liberada pode ser reatribuída de verdade.
@@ -80,6 +83,9 @@ export function resolveTerminalShortcutKeydown(
   }
   if (matchesShortcut(e, "terminal.eof", overrides)) {
     return { consume: true, action: "eof" };
+  }
+  if (matchesShortcut(e, "terminal.scroll.toEnd", overrides)) {
+    return { consume: true, action: "scroll-to-end" };
   }
   // Stale por último: engole encoding antigo / nativo do Chromium quando
   // a tecla ficou órfã NO ESCOPO TERMINAL — `findShortcutClaimingKey` com
