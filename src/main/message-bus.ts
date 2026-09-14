@@ -7,6 +7,7 @@ import {
   formatAgentFacingAuthorship,
   REPORT_AVAILABLE_POINTER_BODY,
   unreportedExitPointerBody,
+  unreportedIdlePointerBody,
 } from "./agent-facing-authorship";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
@@ -30,6 +31,10 @@ import {
 import { decideJudgmentWrite, roleOnTask } from "./judgment-write-decision";
 import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, interruptionReasonFromResultJson, type FailureSource } from "./failure-kind-decision";
 import { decideExitWithoutReportWrite } from "./exit-lifetime-decision";
+import {
+  decideIdleWithoutReport,
+  IDLE_WITHOUT_REPORT_POLL_MS,
+} from "./idle-without-report-decision";
 import {
   decideReportAcceptance,
   errorFromReportPayload,
@@ -1189,6 +1194,9 @@ export function createMessageBus(
   // consent gate open at once. Cleared on resolve AND on the request's own
   // timeout — never left stuck past whichever comes first.
   const waitingOnConsent = new Map<string, number>();
+  /** SINAL 3 — card ids already pointed at the spawner for this
+   * idle-without-report episode. Cleared on accepted report or exit. */
+  const idleWithoutReportNotified = new Set<string>();
   /** Every programmatic message to one PTY shares one FIFO. Reports, task
    * notices, and explicit `send_to_card` calls must not overtake each other,
    * and none may be dropped just because another delivery is in flight. */
@@ -1954,6 +1962,47 @@ export function createMessageBus(
     enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, unreportedExitPointerBody(exitCode)));
   }
 
+  /**
+   * AGENT half of SINAL 3 (idle without report). Same lineage resolver and
+   * `enqueueCardDelivery` path as report / exit — no OS popup, no poke of
+   * the idle card itself (that would inject into a possibly-thinking turn).
+   * Caller stamps `idleWithoutReportNotified` so this fires once per episode.
+   */
+  function notifySpawnerOfUnreportedIdle(cardId: string): void {
+    const spawnerId = resolveNotifyTarget(cardId);
+    if (!spawnerId) return;
+    if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
+    const label = callbacks.describeCardLabel(cardId);
+    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, unreportedIdlePointerBody()));
+  }
+
+  /**
+   * Scan alive terminals for SINAL 3. Pure gate in
+   * idle-without-report-decision.ts; this only feeds facts and fires the
+   * pointer. Exported as a test seam (same pattern as resolveCardExit).
+   */
+  function scanIdleWithoutReport(): void {
+    const listed = callbacks.listTasks();
+    const tasks = Array.isArray(listed) ? listed : [];
+    for (const card of listTerminalCards()) {
+      const cardId = card.id;
+      const linkedTask = tasks.find((t) => t.card_id === cardId);
+      const lastActivityAt = callbacks.getCardLastActivityAt(cardId);
+      const decision = decideIdleWithoutReport({
+        alive: callbacks.isCardAlive(cardId),
+        waitingOnConsent: waitingOnConsent.has(cardId),
+        hasReport: !!callbacks.getReport(cardId),
+        hasLinkedRunningTask: !!linkedTask && !isJudgmentStatus(linkedTask.status),
+        alreadyNotified: idleWithoutReportNotified.has(cardId),
+        msSinceLastActivity: lastActivityAt === null ? null : Date.now() - lastActivityAt,
+      });
+      if (decision.action !== "notify") continue;
+      // Stamp BEFORE enqueue so a slow FIFO cannot double-fire on the next poll.
+      idleWithoutReportNotified.add(cardId);
+      notifySpawnerOfUnreportedIdle(cardId);
+    }
+  }
+
   /** Allow/Deny on a `request_task_status` ask — resume of a request the
    * agent made, not an unsolicited drag interrupt. Human drag no longer
    * calls this (Fila mark + `get_task` are enough). Hold of `update_task`
@@ -2698,6 +2747,9 @@ export function createMessageBus(
       // even when a wait:true waiter already got the JSON — that waiter
       // is the agent RPC; the human on the orchestrator card is not.
       notifySpawnerOfReport(req.requesterId);
+      // Accepted report ends the SINAL 3 episode — a later idle wait for
+      // follow-up must not re-fire the "idle sem report" pointer.
+      idleWithoutReportNotified.delete(req.requesterId);
       // An accepted report supersedes any refused-round stash. Clear it
       // here so a later exit cannot revive a reason that was already
       // replaced. Status is untouched on a plain accept.
@@ -3724,6 +3776,8 @@ export function createMessageBus(
     // stamped with this card as requester — BEFORE exit-pointer enqueue
     // (that pointer omits requesterId and must still deliver).
     applyCancelPendingFromRequester(cardId);
+    // Exit owns the failure signal now — drop any idle-without-report stamp.
+    idleWithoutReportNotified.delete(cardId);
     const waiters = pendingCardExits.get(cardId);
     if (waiters) {
       pendingCardExits.delete(cardId);
@@ -4391,7 +4445,20 @@ export function createMessageBus(
   });
   server.listen(sockPath);
 
+  // SINAL 3 — cheap rescan; the pure gate refuses until the 180s floor.
+  const idleWithoutReportTimer = setInterval(() => {
+    try {
+      scanIdleWithoutReport();
+    } catch (err) {
+      console.error("message-bus: idle-without-report scan failed:", err);
+    }
+  }, IDLE_WITHOUT_REPORT_POLL_MS);
+  // Unref so the timer alone cannot keep a draining process alive.
+  idleWithoutReportTimer.unref?.();
+
   function close() {
+    clearInterval(idleWithoutReportTimer);
+    idleWithoutReportNotified.clear();
     for (const { timer } of pendingOpens.values()) clearTimeout(timer);
     pendingOpens.clear();
     for (const { timer } of pendingCloseCards.values()) clearTimeout(timer);
@@ -4663,6 +4730,8 @@ export function createMessageBus(
     resolveSpawnAgent,
     resolveSpawnCard,
     resolveCardExit,
+    /** Test seam — SINAL 3 scan (same pure gate the poller runs). */
+    scanIdleWithoutReport,
     notifyConcurrencyCapChanged,
     notifyHumanMovedTask,
     // Dependents engine entry point for the write funnel (index.ts →

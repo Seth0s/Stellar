@@ -12,7 +12,8 @@
  *
  * Design cut (seq 232 — reapplied after git reset --hard wiped the tree):
  * - Form is assembled HERE only. `send` and `notifySpawnerOfReport` /
- *   `notifySpawnerOfUnreportedExit` both call this; they do not hand-roll
+ *   `notifySpawnerOfUnreportedExit` / `notifySpawnerOfUnreportedIdle`
+ *   both call this; they do not hand-roll
  *   the prefix. `enqueueCardDelivery` stays a dumb FIFO of final text —
  *   status-write / task-drag already author full lines with synthetic
  *   labels (`stellar`, `você`) and are not "card X says Y".
@@ -53,4 +54,10 @@ export const REPORT_AVAILABLE_POINTER_BODY =
 /** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n). */
 export function unreportedExitPointerBody(exitCode: number): string {
   return `saiu (código ${exitCode}) sem chamar report.`;
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+ * SINAL 3 — card still alive, idle long enough, never called report. */
+export function unreportedIdlePointerBody(): string {
+  return "idle sem chamar report.";
 }
