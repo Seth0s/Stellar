@@ -59,6 +59,13 @@ export type CardRow = {
    * is still a real `deleteCard` exactly as before; only chat's history
    * is worth keeping around after the card itself is gone. */
   archived_at: number | null;
+  /** Wall-clock birth of THIS incarnation of the short id. Set on INSERT
+   * only (ON CONFLICT never rewrites it). `null` on rows that predate the
+   * column — no backfill. Paired with `task_cards.linked_at` so live
+   * participation can tell a recycled id's stale links from a reviewer
+   * who just linked onto a task that is already `done`. Optional on
+   * write: store stamps `Date.now()` when absent. */
+  created_at?: number | null;
 };
 
 export type ConnectorRow = {
@@ -365,8 +372,17 @@ export type TaskTransitionRow = {
  * Rows are KEPT when a card closes or a task completes — they are
  * historical evidence (chips on the Fila, audits), not a live pointer.
  * Live participation (report role stamp, `recordParticipationRound`)
- * re-reads through `listTaskCardsForCard`, which drops links whose task
- * is already `done`/`failed`. Closing a card does not delete these rows.
+ * re-reads through `listTaskCardsForCard`, which keeps a link only when
+ * its epoch matches the living card (`linked_at >= cards.created_at`);
+ * when either timestamp is missing (rows that predate the columns), it
+ * falls back to dropping `done`/`failed` tasks — the recycle guard that
+ * must not be removed, but must not be the only criterion (a reviewer
+ * links onto a task that is already `done` by definition). Closing a
+ * card does not delete these rows.
+ *
+ * `linked_at` is the wall-clock moment this (task_id, card_id) row was
+ * written (or last role-upserted via `linkTaskCard`). `null` on rows
+ * that predate the column — no backfill.
  *
  * `role: "reviewer"` is what the Fila ` ↔ review` arrow derives from.
  * Measured 2026-09-13: 0 of 91 rows were reviewer — not disuse, there was
@@ -379,7 +395,7 @@ export type TaskTransitionRow = {
  * anything else. A reviewer never becomes `tasks.card_id`: `report`
  * derives the retry budget and task failure from that column, and a
  * reviewer's `{ok:false}` is a verdict, not the task failing. */
-export type TaskCardRow = { task_id: string; card_id: string; role: string };
+export type TaskCardRow = { task_id: string; card_id: string; role: string; linked_at?: number | null };
 
 /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação"
  * (levantado 2026-09-11, ao fechar a fidelidade visual do card Fila —
@@ -540,6 +556,8 @@ function migrate(db: Database.Database) {
     // `CardRow.effort` doc comment above for the full why. Same
     // ALTER-then-catch-duplicate-column pattern as every column above.
     "effort TEXT",
+    // Card-incarnation epoch — see `CardRow.created_at`. Nullable, no backfill.
+    "created_at INTEGER",
   ]) {
     try {
       db.exec(`ALTER TABLE cards ADD COLUMN ${col}`);
@@ -692,6 +710,14 @@ function migrate(db: Database.Database) {
   // Additive only — existing rows stay NULL. See TaskRow.purpose.
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN purpose TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  // Link epoch — see `TaskCardRow` / `listTaskCardsForCardStmt`. Nullable,
+  // no backfill: old rows keep the terminal-status fallback until a
+  // fresh `linkTaskCard` / if-absent insert writes a real timestamp.
+  try {
+    db.exec(`ALTER TABLE task_cards ADD COLUMN linked_at INTEGER`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -1726,16 +1752,18 @@ export function openStore(userDataDir: string) {
   // também empurra a Fila). Até então o primitivo existia sem chamador e
   // a coluna era 91/91 implementer.
   const upsertTaskCardIfAbsentStmt = db.prepare(`
-    INSERT INTO task_cards (task_id, card_id, role)
-    VALUES (@task_id, @card_id, @role)
+    INSERT INTO task_cards (task_id, card_id, role, linked_at)
+    VALUES (@task_id, @card_id, @role, @linked_at)
     ON CONFLICT(task_id, card_id) DO NOTHING
   `);
   const linkTaskCardStmt = db.prepare(`
-    INSERT INTO task_cards (task_id, card_id, role)
-    VALUES (@task_id, @card_id, @role)
-    ON CONFLICT(task_id, card_id) DO UPDATE SET role = excluded.role
+    INSERT INTO task_cards (task_id, card_id, role, linked_at)
+    VALUES (@task_id, @card_id, @role, @linked_at)
+    ON CONFLICT(task_id, card_id) DO UPDATE SET
+      role = excluded.role,
+      linked_at = excluded.linked_at
   `);
-  const listTaskCardsStmt = db.prepare("SELECT task_id, card_id, role FROM task_cards WHERE task_id = ?");
+  const listTaskCardsStmt = db.prepare("SELECT task_id, card_id, role, linked_at FROM task_cards WHERE task_id = ?");
   // "Histórico de veredito por participação" — o outro lado da mesma
   // junção: `recordParticipationRound` (abaixo) recebe só um `cardId` (é
   // tudo que o choke point tem à mão — `report`/`resolveCardExit` falam
@@ -1745,25 +1773,34 @@ export function openStore(userDataDir: string) {
   // (o caso comum, 1 card = 1 task ativa); o schema não impede mais de
   // uma, então o fan-out cobre isso sem assumir cardinalidade.
   //
-  // LIVE participation only — `task_cards` is append-ish history (rows
-  // survive card close and task completion on purpose; see TaskCardRow).
-  // Reading every row by card_id as "who this card is right now" is what
-  // let a recycled id (and even the same living card after its task went
-  // done) stamp `reports.role` / `task_verdicts` onto finished work with
-  // confidence. Terminal task status is the revalidated fact: a done/
-  // failed link is evidence of past participation, not a live role.
+  // LIVE participation — epoch, not terminal status alone. `task_cards`
+  // is append-ish history (rows survive card close and task completion;
+  // see TaskCardRow). Filtering only `done`/`failed` protected recycle
+  // but discarded the legitimate reviewer who links AFTER the task is
+  // already done (measured: card 494 → ef31e603, verdict dropped, role
+  // null). Criterion: the living card's incarnation (`cards.created_at`)
+  // vs when the link was written (`task_cards.linked_at`). Same-id
+  // rebirth gets a new `created_at`; stale links keep the old
+  // `linked_at` and fall out. When either timestamp is missing (rows
+  // that predate the columns — no backfill), fall back to the terminal-
+  // status guard so recycle into done/failed history stays blocked.
   // `getTaskCards(taskId)` stays unfiltered for the Fila/history chips.
   const listTaskCardsForCardStmt = db.prepare(`
-    SELECT tc.task_id, tc.card_id, tc.role
+    SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at
     FROM task_cards tc
     JOIN tasks t ON t.id = tc.task_id
+    JOIN cards c ON c.id = tc.card_id
     WHERE tc.card_id = ?
-      AND t.status NOT IN ('done', 'failed')
+      AND CASE
+        WHEN tc.linked_at IS NOT NULL AND c.created_at IS NOT NULL
+          THEN tc.linked_at >= c.created_at
+        ELSE t.status NOT IN ('done', 'failed')
+      END
   `);
   /** Full card-side history (including terminal tasks). Diagnostics and
    * audits only — never the report / participation write path. */
   const listTaskCardsForCardHistoryStmt = db.prepare(
-    "SELECT task_id, card_id, role FROM task_cards WHERE card_id = ?",
+    "SELECT task_id, card_id, role, linked_at FROM task_cards WHERE card_id = ?",
   );
 
   // Ver o comentário grande de `TaskVerdictRow` acima pro modelo
@@ -1795,8 +1832,9 @@ export function openStore(userDataDir: string) {
    * ou nenhuma — mesma garantia de atomicidade que `applyColumnDrop` já
    * tem, mesmo motivo (um crash no meio não pode deixar a rodada
    * registrada em ALGUMAS tasks e não noutras). Só links vivos
-   * (`listTaskCardsForCardStmt`: task não `done`/`failed`) — um vínculo
-   * histórico a task já fechada NÃO fecha rodada nova. Card sem NENHUMA
+   * (`listTaskCardsForCardStmt`: época do vínculo vs nascimento do card;
+   * fallback `done`/`failed` quando a época falta) — um vínculo
+   * histórico de outra incarnação NÃO fecha rodada nova. Card sem NENHUMA
    * linha viva em `task_cards`: 0 linhas lidas, 0 gravadas — silêncio
    * correto, não bug. */
   const recordParticipationRound = db.transaction((cardId: string, verdict: string | null, at: number): TaskVerdictRow[] => {
