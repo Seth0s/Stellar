@@ -50,9 +50,15 @@ retorno da própria tool, zero digitação), `e14cc76` (brief inicial por argv n
 * Aviso de hold do `update_task` — o retorno da tool **já carrega** `warning`,
   `status` e `divergedStatus`. A digitação só repete o mesmo texto. É a cópia mais
   barata do modelo do `2023a74`.
-* Os dois `notifyHumanMovedTask` assíncronos (drag humano na Fila; Allow/Deny do
-  pedido de status) — virar fallback. A verdade está na task; quem precisa reagir
-  consulta `get_task`. Só manter push se o dono exigir reação imediata no card.
+* ~~Os dois `notifyHumanMovedTask` assíncronos (drag humano na Fila; Allow/Deny do
+  pedido de status)~~ — **[x] assimetria aplicada (2026-09-14)**. Não são um item só:
+  * **Drag:** push cortado. Interrupt não pedido; a verdade já está na task; a Fila
+    mostra "Movida à mão com o card N ainda rodando." (copy deixou de mentir
+    "O card foi avisado").
+  * **Allow/Deny:** mantido como fallback de *resume* do `request_task_status`, via
+    `enqueueCardDelivery({ steer: true })` (0b728f1) — resposta pedida, injeta se
+    parked mid-turn; não é o ping de sistema (report/exit ficam `steer: false`).
+    Some quando existir canal programático (poll/`wait`).
 
 **A fazer — o card nasce sabendo**:
 * O card **não recebe o próprio `taskId`**. O vínculo existe (`tasks.card_id`,

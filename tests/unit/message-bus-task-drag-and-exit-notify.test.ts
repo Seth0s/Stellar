@@ -5,11 +5,10 @@ import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 
 /**
- * DESIGN-BACKLOG.md §2.1 Fase 2, peça 3 (arrastar) + "SINAL 2" (saída sem
- * relatório) — `notifyHumanMovedTask` (peça 3) e o que `resolveCardExit`
- * faz quando um card sai sem nunca ter chamado `report`: marca a task,
- * fecha participação, e digita o ponteiro AGENT-half no PTY do spawner
- * via `enqueueCardDelivery` (sem popup de SO).
+ * Status-ask Allow/Deny resume (`notifyHumanMovedTask`) + SINAL 2
+ * (exit without report). Human drag on the Fila no longer calls
+ * `notifyHumanMovedTask` — that path is only the resume of a
+ * `request_task_status` ask (enqueueCardDelivery + steer:true).
  */
 type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: string; updated_at: number };
 type FakeTaskRow = { id: string; card_id: string | null; status: string };
@@ -25,7 +24,7 @@ function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => 
   ) as Parameters<typeof createMessageBus>[1];
 }
 
-describe("message-bus: notifyHumanMovedTask (peça 3, decisão 5 — o card vinculado é avisado)", () => {
+describe("message-bus: notifyHumanMovedTask (status-ask Allow/Deny resume — steer:true)", () => {
   let dir: string;
   let bus: ReturnType<typeof createMessageBus> | null;
 
@@ -36,7 +35,7 @@ describe("message-bus: notifyHumanMovedTask (peça 3, decisão 5 — o card vinc
   });
 
   function makeBus(overrides: Record<string, (...args: never[]) => unknown>) {
-    dir = mkdtempSync(join(tmpdir(), "stellar-bus-drag-notify-"));
+    dir = mkdtempSync(join(tmpdir(), "stellar-bus-status-ask-notify-"));
     const sockPath = join(dir, "agent-canvas.sock");
     bus = createMessageBus(
       sockPath,
@@ -48,37 +47,47 @@ describe("message-bus: notifyHumanMovedTask (peça 3, decisão 5 — o card vinc
     return bus;
   }
 
-  it("card vivo e terminal: entrega a mensagem exata (texto + Enter), mesmo formato de send_to_card", async () => {
+  async function flushDelivery(): Promise<void> {
+    // deliverCard: body → SEND_ENTER_DELAY_MS (80) → Enter → confirm delay (250).
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  it("card vivo e terminal: entrega a mensagem exata (texto + Enter) via enqueueCardDelivery", async () => {
     const written: Array<[string, string]> = [];
     const b = makeBus({
       isCardAlive: (id: string) => id === "impl-1",
-      listCards: () => [{ id: "impl-1", kind: "terminal" }],
+      listCards: () => [{ id: "impl-1", kind: "terminal", provider: "claude" }],
       writeToCard: (...args: unknown[]) => written.push(args as [string, string]),
+      beginCardDelivery: () => true,
+      getCardWriteReadiness: () => ({
+        spawnedAtMs: Date.now() - 1_000,
+        hasReceivedData: true,
+        lastActivityAtMs: Date.now() - 1_000,
+        hasPendingHumanInput: false,
+        inputLineLastAtMs: null,
+      }),
+      getCardLastActivityAt: () => Date.now(),
     });
 
-    await b.notifyHumanMovedTask("impl-1", '[de: você] moveu esta task para "em andamento".');
+    b.notifyHumanMovedTask("impl-1", '[de: stellar] humano aceitou o pedido de status "done".');
+    await flushDelivery();
 
-    expect(written).toHaveLength(2);
-    expect(written[0]).toEqual(["impl-1", '[de: você] moveu esta task para "em andamento".']);
-    expect(written[1]).toEqual(["impl-1", "\r"]);
+    const bodies = written.filter(([, data]) => data !== "\r");
+    const enters = written.filter(([, data]) => data === "\r");
+    expect(bodies[0]).toEqual(["impl-1", '[de: stellar] humano aceitou o pedido de status "done".']);
+    expect(enters.length).toBeGreaterThanOrEqual(1);
   });
 
   it("card morto: nada é escrito, nada estoura", async () => {
     const written: unknown[][] = [];
     const b = makeBus({
       isCardAlive: () => false,
-      listCards: () => [{ id: "impl-2", kind: "terminal" }],
+      listCards: () => [{ id: "impl-2", kind: "terminal", provider: "claude" }],
       writeToCard: (...args: unknown[]) => written.push(args),
     });
 
-    let threw = false;
-    try {
-      await b.notifyHumanMovedTask("impl-2", "irrelevante");
-    } catch {
-      threw = true;
-    }
-
-    expect(threw).toBe(false);
+    expect(() => b.notifyHumanMovedTask("impl-2", "irrelevante")).not.toThrow();
+    await flushDelivery();
     expect(written).toHaveLength(0);
   });
 
@@ -90,8 +99,21 @@ describe("message-bus: notifyHumanMovedTask (peça 3, decisão 5 — o card vinc
       writeToCard: (...args: unknown[]) => written.push(args),
     });
 
-    await b.notifyHumanMovedTask("impl-3", "irrelevante");
+    b.notifyHumanMovedTask("impl-3", "irrelevante");
+    await flushDelivery();
+    expect(written).toHaveLength(0);
+  });
 
+  it("provider bash: nada é escrito — bash não tem agente lendo a linha", async () => {
+    const written: unknown[][] = [];
+    const b = makeBus({
+      isCardAlive: () => true,
+      listCards: () => [{ id: "bash-1", kind: "terminal", provider: "bash" }],
+      writeToCard: (...args: unknown[]) => written.push(args),
+    });
+
+    b.notifyHumanMovedTask("bash-1", "irrelevante");
+    await flushDelivery();
     expect(written).toHaveLength(0);
   });
 });

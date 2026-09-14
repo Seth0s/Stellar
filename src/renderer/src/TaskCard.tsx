@@ -25,7 +25,6 @@ import {
   computeBoardScope,
   computeCycleTime,
   computeColumnDrop,
-  describeHumanMove,
   isTaskCardLive,
   computeMetaPills,
   describeTransitionTrail,
@@ -73,7 +72,7 @@ const COLUMN_EMPTY_KEY = {
   failed: "task.empty.failed",
 } as const satisfies Record<TaskColumn, "task.empty.todo" | "task.empty.doing" | "task.empty.done" | "task.empty.failed">;
 
-/** Column header keys — JSX only; `describeHumanMove` keeps hardcoded COLUMN_TITLE. */
+/** Column header keys — JSX only; agent-facing COLUMN_TITLE stays in the model. */
 const COLUMN_HEADER_KEY = {
   todo: "task.column.todo",
   doing: "task.column.doing",
@@ -1483,14 +1482,15 @@ function TaskCardInner({
    * ainda vence normalmente.
    *
    * Escreve incondicionalmente quando houve movimento de verdade (`onUp`
-   * só chama isto com um `target` não-nulo): decisão 5 é "SEMPRE vale, e
-   * AVISA o agente", não uma otimização de "só grava se mudou de
-   * verdade". */
+   * só chama isto com um `target` não-nulo): decisão 5 é "SEMPRE vale" —
+   * a Fila mostra a marca de movimento humano; o card de trabalho NÃO
+   * recebe push (interrupt não pedido). Status-ask Allow/Deny é outro
+   * canal. */
   function onDropTask(task: TaskBoardItem, column: TaskColumn, index: number) {
     const destination = groupsRef.current[column].filter((t) => t.id !== task.id);
     const result = computeColumnDrop(destination, index);
     const status = COLUMN_TO_STATUS[column];
-    window.tasks.moveTask(task.id, status, result.order, result.siblingImplicitOrders, describeHumanMove(column));
+    window.tasks.moveTask(task.id, status, result.order, result.siblingImplicitOrders);
   }
 
   /** Reaproveita o MESMO gesto pointerdown→pointermove→pointerup que
