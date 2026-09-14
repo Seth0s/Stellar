@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import { visualizer } from "rollup-plugin-visualizer";
@@ -8,9 +9,38 @@ import { visualizer } from "rollup-plugin-visualizer";
 // throwaway config edit every time bundle size needs a real look.
 const visualize = process.env.VISUALIZE === "1";
 
+/**
+ * Build identity stamps for the main asar bundle (see build-identity.ts).
+ * Vite already compiles main — `define` is free. Env overrides exist so a
+ * proof rebuild can force a distinct stamp without touching git.
+ * acbridge stays verbatim under extraResources (no inject here).
+ */
+function stellarBuildStamps(): { commit: string; time: string } {
+  const commit =
+    process.env.STELLAR_BUILD_COMMIT?.trim() ||
+    (() => {
+      try {
+        return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+      } catch {
+        return "unknown";
+      }
+    })();
+  const time = process.env.STELLAR_BUILD_TIME?.trim() || new Date().toISOString();
+  return { commit, time };
+}
+
+const stamps = stellarBuildStamps();
+
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    define: {
+      __STELLAR_BUILD_COMMIT__: JSON.stringify(stamps.commit),
+      __STELLAR_BUILD_TIME__: JSON.stringify(stamps.time),
+    },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

@@ -29,7 +29,6 @@ import {
   COLUMN_ORDER,
   COLUMN_TO_STATUS,
   computeColumnDrop,
-  describeHumanMove,
   isTaskCardLive,
   computeMetaPills,
   describeTransitionTrail,
@@ -662,14 +661,6 @@ describe("computeColumnDrop — peça 3 (arrastar), técnica de gap", () => {
   });
 });
 
-describe("describeHumanMove", () => {
-  it("nomeia a coluna de destino pelo título real (COLUMN_TITLE), prefixo '[de: você]' como todo aviso de typeAndSubmit", () => {
-    const msg = describeHumanMove("doing");
-    expect(msg).toContain("em andamento");
-    expect(msg.startsWith("[de: você]")).toBe(true);
-  });
-});
-
 // Fidelidade visual ao protótipo v5 — delta 4 (varredura de atividade).
 describe("isTaskCardLive", () => {
   it("só é viva quando a task está running E o card por trás está vivo — as duas, nunca uma só", () => {
@@ -817,7 +808,11 @@ describe("describeHumanMoveNotice", () => {
   });
 
   it("só aparece quando o ÚLTIMO ator foi humano E o card vinculado ainda está vivo — as duas condições", () => {
-    expect(describeHumanMoveNotice("human", true, "288")).toBe("Movida à mão com o card 288 ainda rodando. O card foi avisado.");
+    expect(describeHumanMoveNotice("human", true, "288")).toBe("Movida à mão com o card 288 ainda rodando.");
+  });
+
+  it("não afirma que o card foi avisado no PTY — drag não digita (2026-09-14)", () => {
+    expect(describeHumanMoveNotice("human", true, "288")).not.toMatch(/avisado|notified/i);
   });
 
   it("último ator agente ou app: nunca aparece, mesmo com o card vivo", () => {

@@ -32,8 +32,14 @@
 
 /** Mirrored from `store.ts`'s `TaskActor` — kept local so this module
  * stays free of a runtime import from the store (the store imports THIS
- * file at the choke point). Same three values, same meaning. */
-export type StatusWriteActor = "app" | "agent" | "human";
+ * file at the choke point). Same four values, same meaning. */
+export type StatusWriteActor = "app" | "agent" | "human" | "orchestrator";
+
+/** Human UI click OR board-orchestrator delegated signature — both are
+ * authoritative judgment. Agent/app never displace either. */
+function isAuthoritativeActor(actor: StatusWriteActor): boolean {
+  return actor === "human" || actor === "orchestrator";
+}
 
 export type StatusWriteInput = {
   /** Last `kind:'status'` transition actor. `null` when the task has no
@@ -97,10 +103,12 @@ export type StatusWriteDecision = {
  *     current status AND keep any live divergence; no declaration.
  *  3. Explicit proposal equals current → status no-op; CLEAR divergence
  *     (legitimate alignment — card "came back to life" / observation matches).
- *  4. Human writes → ALWAYS apply; CLEAR divergence.
- *  5. App/agent writes while last status actor is human → HOLD human
- *     status; SET divergence to the proposed value; warn when actor is
- *     agent; record a declaration (not a status transition).
+ *  4. Authoritative writer (human OR board orchestrator) → ALWAYS apply;
+ *     CLEAR divergence. Orchestrator is delegated signature — never stamp
+ *     as `human`.
+ *  5. App/agent writes while last status actor is authoritative → HOLD
+ *     that status; SET divergence to the proposed value; warn when actor
+ *     is agent; record a declaration (not a status transition).
  *  6. Otherwise → apply; CLEAR divergence.
  */
 export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision {
@@ -155,7 +163,7 @@ export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision 
     };
   }
 
-  if (newActor === "human") {
+  if (isAuthoritativeActor(newActor)) {
     return {
       status: proposedStatus,
       statusChanged: true,
@@ -167,7 +175,7 @@ export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision 
     };
   }
 
-  if (previousActor === "human") {
+  if (previousActor !== null && isAuthoritativeActor(previousActor)) {
     return {
       status: previousStatus,
       statusChanged: false,
@@ -307,7 +315,7 @@ export function retainStatusAsk(input: {
   if (!input.existing.requestedStatus || input.proposedStatus === null) {
     return { ask: input.existing, resolvedBy: null };
   }
-  if (input.newActor === "human") {
+  if (input.newActor === "human" || input.newActor === "orchestrator") {
     return { ask: CLEARED_STATUS_ASK, resolvedBy: "human-status" };
   }
   if (

@@ -55,6 +55,9 @@ function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => 
       get: (_target, prop: string) => {
         if (prop in overrides) return overrides[prop];
         if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
         if (prop === "getCardBoardId") return () => undefined;
         if (prop === "isBoardAutonomous") return () => false;
@@ -103,14 +106,14 @@ describe("message-bus: spawn_agent role", () => {
     return { res, spawned, upserted, linked };
   }
 
-  it("role omitido: comportamento de hoje — card_id via upsertTask, brief = prompt, linkTaskCard não é chamado", async () => {
+  it("role omitido: card_id + task_cards implementer via linkImplementerToTask", async () => {
     const task = existingTask();
-    const { res, spawned, upserted, linked } = await dispatch({ cmd: "spawn_agent", provider: "claude", taskId: task.id, requesterId: "orch" } as BusRequest);
+    const { res, spawned, upserted, linked } = await dispatch({ cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest);
     expect(res).toEqual({ ok: true, cardId: "new-card" });
     expect(spawned[0].brief).toBe("implement the thing");
     expect(upserted).toHaveLength(1);
     expect(upserted[0].card_id).toBe("new-card");
-    expect(linked).toEqual([]);
+    expect(linked).toEqual([{ taskId: task.id, cardId: "new-card", role: "implementer" }]);
   });
 
   it("role 'implementer' explícito é idêntico ao omitido", async () => {
@@ -120,12 +123,12 @@ describe("message-bus: spawn_agent role", () => {
       provider: "claude",
       taskId: task.id,
       role: "implementer",
-      requesterId: "orch",
+      reason: "test", requesterId: "orch",
     } as BusRequest);
     expect(res.ok).toBe(true);
     expect(spawned[0].brief).toBe("implement the thing");
     expect(upserted[0].card_id).toBe("new-card");
-    expect(linked).toEqual([]);
+    expect(linked).toEqual([{ taskId: task.id, cardId: "new-card", role: "implementer" }]);
   });
 
   it("role 'reviewer' + brief: linkTaskCard reviewer, card_id intocado, brief é a ordem de revisão", async () => {
@@ -136,7 +139,7 @@ describe("message-bus: spawn_agent role", () => {
       taskId: task.id,
       role: "reviewer",
       brief: "review the diff of this task; report a verdict",
-      requesterId: "orch",
+      reason: "test", requesterId: "orch",
     } as BusRequest);
     expect(res).toEqual({ ok: true, cardId: "new-card" });
     expect(spawned[0].brief).toBe("review the diff of this task; report a verdict");
@@ -154,7 +157,7 @@ describe("message-bus: spawn_agent role", () => {
       provider: "claude",
       taskId: task.id,
       role: "reviewer",
-      requesterId: "orch",
+      reason: "test", requesterId: "orch",
     } as BusRequest);
     expect(res.ok).toBe(true);
     expect(spawned[0].brief).toBeUndefined();
@@ -169,7 +172,7 @@ describe("message-bus: spawn_agent role", () => {
       provider: "claude",
       taskId: task.id,
       role: "banana",
-      requesterId: "orch",
+      reason: "test", requesterId: "orch",
     } as BusRequest);
     expect(res.ok).toBe(false);
     expect(res.error).toContain('got "banana"');
@@ -185,7 +188,7 @@ describe("message-bus: spawn_agent role", () => {
       provider: "claude",
       role: "reviewer",
       brief: "review something",
-      requesterId: "orch",
+      reason: "test", requesterId: "orch",
     } as BusRequest);
     expect(res.ok).toBe(false);
     expect(res.error).toContain("only applies together with taskId");
@@ -194,7 +197,7 @@ describe("message-bus: spawn_agent role", () => {
 
   it("reviewer com taskId inexistente: recusa, não spawna", async () => {
     const { res, spawned, linked } = await dispatch(
-      { cmd: "spawn_agent", provider: "claude", taskId: "nope", role: "reviewer", brief: "r", requesterId: "orch" } as BusRequest,
+      { cmd: "spawn_agent", provider: "claude", taskId: "nope", role: "reviewer", brief: "r", reason: "test", requesterId: "orch" } as BusRequest,
       null,
     );
     expect(res).toEqual({ ok: false, error: 'no such task "nope"' });

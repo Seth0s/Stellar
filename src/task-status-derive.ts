@@ -41,12 +41,13 @@ export function deriveTaskStatus(storedStatus: string, hasLiveImplementer: boole
   return hasLiveImplementer ? "running" : "pending";
 }
 
-export type StatusActor = "app" | "agent" | "human";
+export type StatusActor = "app" | "agent" | "human" | "orchestrator";
 
 /**
  * Human hold against live participation must be VISIBLE. When effective
  * is already pending, a human-hold diverged signal is noise (aligned).
  * Judgment rows keep whatever diverged_* the write funnel stored.
+ * Board-orchestrator delegated signature is authoritative the same way.
  */
 export function deriveParticipationDivergence(input: {
   storedStatus: string;
@@ -62,7 +63,10 @@ export function deriveParticipationDivergence(input: {
     };
   }
   if (input.effectiveStatus === "pending") {
-    if (input.existingDivergedActor === "human" && input.existingDivergedStatus === "pending") {
+    if (
+      (input.existingDivergedActor === "human" || input.existingDivergedActor === "orchestrator") &&
+      input.existingDivergedStatus === "pending"
+    ) {
       return { divergedStatus: null, divergedActor: null };
     }
     return {
@@ -72,9 +76,17 @@ export function deriveParticipationDivergence(input: {
   }
   if (
     input.lastStatusActor === "human" ||
-    (input.existingDivergedActor === "human" && input.existingDivergedStatus === "pending")
+    input.lastStatusActor === "orchestrator" ||
+    ((input.existingDivergedActor === "human" || input.existingDivergedActor === "orchestrator") &&
+      input.existingDivergedStatus === "pending")
   ) {
-    return { divergedStatus: "pending", divergedActor: "human" };
+    // Keep the stamp that created the hold — don't rewrite orchestrator
+    // as human (false trail).
+    const holdActor: StatusActor =
+      input.lastStatusActor === "orchestrator" || input.existingDivergedActor === "orchestrator"
+        ? "orchestrator"
+        : "human";
+    return { divergedStatus: "pending", divergedActor: holdActor };
   }
   return {
     divergedStatus: input.existingDivergedStatus ?? null,

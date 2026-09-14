@@ -41,6 +41,9 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
             if (prop === "boardExists") return () => true;
             if (prop === "getCardBoardId") return () => undefined;
             if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
             if (prop === "listCards") return () => [];
             if (prop === "listTaskCardsForCard") return (cardId: string) => s.listTaskCardsForCard(cardId);
             return () => undefined;

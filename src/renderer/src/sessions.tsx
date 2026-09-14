@@ -4,7 +4,15 @@
 
 import { t } from "../../shared/i18n";
 
-export type Board = { id: string; name: string; project: string; cwd: string; autonomous: boolean; concurrency_cap: number | null };
+export type Board = {
+  id: string;
+  name: string;
+  project: string;
+  cwd: string;
+  autonomous: boolean;
+  concurrency_cap: number | null;
+  orchestrator_card_id: string | null;
+};
 export type BoardCounts = { agents: number; active: number };
 
 /** @deprecated Use t("session.ungrouped") at display sites; kept for grouping key compatibility. */

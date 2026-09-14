@@ -723,6 +723,9 @@ export function App() {
   /** Set only when closeCard needs confirmation first (a terminal card
    * whose process is still live) — see closeCard/confirmCloseCard below. */
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null);
+  /** Confirm before marking a card as board orchestrator — hard to do
+   * by accident; clearing is one menu click without this gate. */
+  const [pendingOrchestratorMarkId, setPendingOrchestratorMarkId] = useState<string | null>(null);
   const [reflowing, setReflowing] = useState(false);
   /** Live per-card status (item 1) — only ever populated for the currently
    * loaded board's terminal cards (see TerminalCard's onStatusChange); every
@@ -852,6 +855,8 @@ export function App() {
     deleteBoard,
     setBoardAutonomous,
     setBoardConcurrencyCap,
+    setBoardOrchestratorCard,
+    clearOrchestratorMarkIfCard,
   } = useBoardStore(
     nextId,
     setCards,
@@ -1842,10 +1847,11 @@ export function App() {
   function addTerminalCard(at?: Point, provider?: string) {
     const id = String(nextId.current++);
     const rect = at ? pointSlot(at) : centeredSlot(visibleRect, cards.length, existingRectsFor(cards));
+    const resolvedProvider = provider ?? newProvider;
     addCard({
       id,
       kind: "terminal",
-      provider: provider ?? newProvider,
+      provider: resolvedProvider,
       cwd: activeBoardCwd,
       resumeId: newResumeId.trim() || null,
       continueLast: newResumeId.trim() === "" && newContinueLast,
@@ -1858,6 +1864,17 @@ export function App() {
       groupId: null,
       label: null,
     });
+    // Spawn registry — human UI birth: no requester, no reason (honest).
+    const boardId = activeBoardIdRef.current;
+    if (boardId) {
+      void window.store.recordHumanSpawn({
+        boardId,
+        toCardId: id,
+        provider: resolvedProvider,
+        cardKind: "terminal",
+        cwd: activeBoardCwd,
+      });
+    }
     // centeredSlot's collision ring-search (board-model.ts) can walk a new
     // card's slot almost a full SPAWN_H/W past the naive centered position
     // to dodge an existing card — easily past the edge of the viewport on a
@@ -1902,6 +1919,16 @@ export function App() {
       groupId: null,
       label: null,
     } as Card);
+    const boardId = activeBoardIdRef.current;
+    if (boardId) {
+      void window.store.recordHumanSpawn({
+        boardId,
+        toCardId: id,
+        provider: null,
+        cardKind: kind,
+        cwd: activeBoardCwd,
+      });
+    }
     // Same off-screen-spawn guard as addTerminalCard above — see its comment.
     if (!centerInView(rect, visibleRect)) setTimeout(() => focusCard(id), 0);
   }
@@ -2412,7 +2439,12 @@ export function App() {
       // gone); tell main so it denies rather than wedging that
       // provider's tool loop forever.
       window.chat.notifyCardClosed(id);
-    } else void window.store.delete(id);
+    } else {
+      void window.store.delete(id);
+      // store.deleteCard already cleared boards.orchestrator_card_id;
+      // keep renderer board state honest.
+      clearOrchestratorMarkIfCard(id);
+    }
     void window.store.connectors.deleteForCard(id);
     clearConnectorLabelThrottleForCard(id);
   }
@@ -3013,6 +3045,11 @@ export function App() {
                  onOpenUrl={setPendingOpenUrl}
                  onConnectorStart={onConnectorStart}
                  onSelectStart={onSelectStart}
+                 isBoardOrchestrator={boards.find((b) => b.id === activeBoardId)?.orchestrator_card_id === c.id}
+                 onMarkOrchestrator={() => setPendingOrchestratorMarkId(c.id)}
+                 onClearOrchestrator={() => {
+                   if (activeBoardId) setBoardOrchestratorCard(activeBoardId, null);
+                 }}
                  selected={selected}
                  screenProjected
                 isFocused={zIndex === order.length - 1}
@@ -3673,6 +3710,20 @@ export function App() {
           danger
           onConfirm={confirmCloseCard}
           onCancel={cancelCloseCard}
+        />
+      )}
+      {pendingOrchestratorMarkId && activeBoardId && (
+        <ConfirmModal
+          title={t("terminal.markOrchestratorConfirmTitle")}
+          message={t("terminal.markOrchestratorConfirmMessage", {
+            name: describeCard(pendingOrchestratorMarkId),
+          })}
+          confirmLabel={t("terminal.markOrchestratorConfirm")}
+          onConfirm={() => {
+            setBoardOrchestratorCard(activeBoardId, pendingOrchestratorMarkId);
+            setPendingOrchestratorMarkId(null);
+          }}
+          onCancel={() => setPendingOrchestratorMarkId(null)}
         />
       )}
       {pendingAsk && (

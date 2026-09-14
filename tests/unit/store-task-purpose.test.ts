@@ -81,7 +81,7 @@ describe("store.ts: tasks.purpose write-once", () => {
       store.upsertTask(base("t1", { purpose: "implement", status: "running", updated_at: Date.now() + 1 }));
       const row = store.getTask("t1")!;
       expect(row.purpose).toBe("investigate");
-      expect(row.status).toBe("running");
+      expect(row.status).toBe("pending");
     } finally {
       store.close();
     }

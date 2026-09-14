@@ -6,6 +6,7 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import { openStore, type TaskRow } from "../../src/main/store";
 import { createTaskWriteFunnel, reachedDone } from "../../src/main/task-write-funnel";
 import type { StatusWriteDecision } from "../../src/main/status-write-decision";
+import { deriveTaskStatus } from "../../src/task-status-derive";
 
 /**
  * Task e83d2c10 (2026-09-13) — `onTaskDone` was called from ONE place only
@@ -77,11 +78,14 @@ function buildRig(dir: string, opts: { autonomous: boolean }) {
       boardExists: () => true,
       getCardBoardId: () => undefined,
       isBoardAutonomous: () => opts.autonomous,
+      isCardAlive: () => true,
       countRunningAgentsOnBoard: () => 0,
       getBoardConcurrencyCap: () => 4,
       listCards: () => [],
-      onSpawnAgentRequest: (_requestId: string, _requesterId: string, params: Record<string, unknown>) => {
+      linkTaskCard: () => {},
+      onSpawnAgentRequest: (requestId: string, _requesterId: string, params: Record<string, unknown>) => {
         spawns.push(params);
+        bus?.resolveSpawnAgent(requestId, { ok: true, cardId: `card-${String(params.taskId ?? "spawn")}` });
       },
     } as Record<string, unknown>,
     { get: (target, prop: string) => target[prop] ?? (() => undefined) },
@@ -93,8 +97,18 @@ function buildRig(dir: string, opts: { autonomous: boolean }) {
 /** dep `d1` (pending) + dependent `child` (pending, deps=[d1]) — the
  * shape of 312d4c0a/97f34bf8 before the parent was marked done. */
 function seedParentChild(rig: Rig) {
-  rig.store.upsertTask(baseTask({ id: "d1", prompt: "investigar", status: "running", card_id: "card-d1", actor: "agent" }));
+  rig.store.upsertTask(baseTask({ id: "d1", prompt: "investigar", status: "pending", card_id: "card-d1", actor: "agent" }));
   rig.store.upsertTask(baseTask({ id: "child", prompt: "corrigir", deps_json: JSON.stringify(["d1"]), actor: "agent" }));
+}
+
+function expectEffectivelyRunning(rig: Rig, taskId: string) {
+  const row = rig.store.getTask(taskId)!;
+  expect(row.card_id).toBeTruthy();
+  expect(deriveTaskStatus(row.status, true)).toBe("running");
+}
+
+async function flushDispatch() {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
 describe("task-write-funnel: every `done` writer dispatches dependents", () => {
@@ -108,7 +122,7 @@ describe("task-write-funnel: every `done` writer dispatches dependents", () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("approve button (`store:tasks:approve-completion` row) dispatches the dependent", () => {
+  it("approve button (`store:tasks:approve-completion` row) dispatches the dependent", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-funnel-approve-"));
     rig = buildRig(dir, { autonomous: true });
     seedParentChild(rig);
@@ -119,6 +133,7 @@ describe("task-write-funnel: every `done` writer dispatches dependents", () => {
 
     expect(reachedDone(decision)).toBe(true);
     expect(rig.onTaskDoneCalls).toEqual(["d1"]);
+    await flushDispatch();
     expect(rig.spawns).toHaveLength(1);
     expect(rig.spawns[0].taskId).toBe("child");
     // Prompt first, then the parent pointer (dep-pointer-decision.ts): d1
@@ -126,10 +141,10 @@ describe("task-write-funnel: every `done` writer dispatches dependents", () => {
     const brief = rig.spawns[0].brief as string;
     expect(brief.startsWith("corrigir\n\n---\n[stellar:deps]")).toBe(true);
     expect(brief).toContain("- d1 — status done, NO report on file");
-    expect(rig.store.getTask("child")!.status).toBe("running");
+    expectEffectivelyRunning(rig, "child");
   });
 
-  it("drag to 'concluído' (`store:tasks:move` → persistColumnDrop) dispatches the dependent", () => {
+  it("drag to 'concluído' (`store:tasks:move` → persistColumnDrop) dispatches the dependent", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-funnel-drag-"));
     rig = buildRig(dir, { autonomous: true });
     seedParentChild(rig);
@@ -143,12 +158,13 @@ describe("task-write-funnel: every `done` writer dispatches dependents", () => {
     expect(decision.statusChanged).toBe(true);
     expect(decision.status).toBe("done");
     expect(rig.store.getTask("neighbor")!.implicit_order).toBe(0);
+    await flushDispatch();
     expect(rig.spawns).toHaveLength(1);
     expect(rig.spawns[0].taskId).toBe("child");
-    expect(rig.store.getTask("child")!.status).toBe("running");
+    expectEffectivelyRunning(rig, "child");
   });
 
-  it("Allow on a status ask (`store:tasks:respond-status-ask`) dispatches the dependent", () => {
+  it("Allow on a status ask (`store:tasks:respond-status-ask`) dispatches the dependent", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-funnel-allow-"));
     rig = buildRig(dir, { autonomous: true });
     seedParentChild(rig);
@@ -159,9 +175,10 @@ describe("task-write-funnel: every `done` writer dispatches dependents", () => {
     // Exactly what the handler writes on `allowed === true`.
     rig.funnel.persistTask({ ...existing, status: existing.requested_status!, updated_at: Date.now(), actor: "human" });
 
+    await flushDispatch();
     expect(rig.spawns).toHaveLength(1);
     expect(rig.spawns[0].taskId).toBe("child");
-    expect(rig.store.getTask("child")!.status).toBe("running");
+    expectEffectivelyRunning(rig, "child");
     expect(rig.store.getTask("d1")!.requested_status).toBeNull();
   });
 
@@ -174,6 +191,7 @@ describe("task-write-funnel: every `done` writer dispatches dependents", () => {
 
     expect(res.ok).toBe(true);
     expect(rig.onTaskDoneCalls).toEqual(["d1"]);
+    await flushDispatch();
     expect(rig.spawns).toHaveLength(1);
     expect(rig.spawns[0].taskId).toBe("child");
   });
@@ -194,9 +212,8 @@ describe("task-write-funnel: every `done` writer dispatches dependents", () => {
   it("a HELD write (human locked status, agent proposes done) does not dispatch", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-funnel-held-"));
     rig = buildRig(dir, { autonomous: true });
-    seedParentChild(rig);
-    // Human moves d1 back to pending — decision 8: human status is locked.
-    rig.funnel.persistTask({ ...rig.store.getTask("d1")!, status: "pending", updated_at: Date.now(), actor: "human" });
+    rig.store.upsertTask(baseTask({ id: "d1", prompt: "investigar", status: "pending", card_id: "card-d1", actor: "human" }));
+    rig.store.upsertTask(baseTask({ id: "child", prompt: "corrigir", deps_json: JSON.stringify(["d1"]), actor: "agent" }));
 
     const res = (await rig.bus.handleRequest({ cmd: "update_task", taskId: "d1", status: "done" } as BusRequest)) as {
       ok: boolean;
@@ -237,19 +254,31 @@ describe("create_task with deps already done dispatches at birth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.dispatched).toBe(true);
+    await flushDispatch();
     expect(rig.spawns).toHaveLength(1);
     expect(rig.spawns[0].taskId).toBe(res.taskId);
     expect(rig.spawns[0].provider).toBe("codex");
     expect((rig.spawns[0].brief as string).startsWith("corrigir com base no relatório\n\n---\n[stellar:deps]")).toBe(true);
-    expect(rig.store.getTask(res.taskId)!.status).toBe("running");
+    expectEffectivelyRunning(rig, res.taskId);
   });
 
   it("dep NOT done yet → stays pending at birth, dispatched later when the dep is approved", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-funnel-birth-later-"));
     rig = buildRig(dir, { autonomous: true });
-    rig.store.upsertTask(baseTask({ id: "parent", prompt: "investigar", status: "running", actor: "agent" }));
+    rig.store.upsertTask(baseTask({ id: "parent", prompt: "investigar", status: "pending", card_id: "card-p", actor: "agent" }));
 
-    const res = (await rig.bus.handleRequest({ cmd: "create_task", boardId: "b1", prompt: "corrigir", deps: ["parent"] } as BusRequest)) as {
+    // `provider` declarado na criação: o despacho é ESTRITO e não herda o
+    // provider do pai (decisão do dono — Stellar é multiprovider, herdar
+    // prenderia a cadeia inteira no provider de quem começou). Sem ele o
+    // despacho recusa com `provider não declarado`, e é o caso do teste
+    // seguinte.
+    const res = (await rig.bus.handleRequest({
+      cmd: "create_task",
+      boardId: "b1",
+      prompt: "corrigir",
+      provider: "claude",
+      deps: ["parent"],
+    } as BusRequest)) as {
       ok: boolean;
       taskId: string;
       dispatched: boolean;
@@ -260,8 +289,26 @@ describe("create_task with deps already done dispatches at birth", () => {
 
     rig.funnel.persistTask({ ...rig.store.getTask("parent")!, status: "done", updated_at: Date.now(), actor: "human" });
 
+    await flushDispatch();
     expect(rig.spawns).toHaveLength(1);
     expect(rig.spawns[0].taskId).toBe(res.taskId);
+  });
+
+  it("dep liberado mas task sem provider → recusa declarada, não herda o do pai", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-funnel-noprovider-"));
+    rig = buildRig(dir, { autonomous: true });
+    rig.store.upsertTask(baseTask({ id: "parent", prompt: "investigar", status: "pending", card_id: "card-p", actor: "agent" }));
+
+    const res = (await rig.bus.handleRequest({ cmd: "create_task", boardId: "b1", prompt: "corrigir", deps: ["parent"] } as BusRequest)) as {
+      taskId: string;
+    };
+    rig.funnel.persistTask({ ...rig.store.getTask("parent")!, status: "done", updated_at: Date.now(), actor: "human" });
+    await flushDispatch();
+
+    expect(rig.spawns).toHaveLength(0);
+    const row = rig.store.getTask(res.taskId)!;
+    expect(row.status).toBe("pending");
+    expect(JSON.parse(row.result_json!)).toMatchObject({ failureKind: "interrompida", error: "provider não declarado" });
   });
 
   it("no deps → never auto-dispatched (a plain 'a fazer' task, as before)", async () => {
@@ -310,6 +357,7 @@ describe("no double dispatch, no recursion", () => {
     seedParentChild(rig);
 
     rig.funnel.persistTask({ ...rig.store.getTask("d1")!, status: "done", updated_at: Date.now(), actor: "human" });
+    await flushDispatch();
     await rig.bus.handleRequest({ cmd: "update_task", taskId: "d1", status: "done" } as BusRequest);
     // And a second human gesture on an already-done row.
     rig.funnel.persistTask({ ...rig.store.getTask("d1")!, status: "done", updated_at: Date.now(), actor: "human" });
@@ -317,21 +365,23 @@ describe("no double dispatch, no recursion", () => {
     // Only the FIRST write changed status; the others carry statusChanged:false.
     expect(rig.onTaskDoneCalls).toEqual(["d1"]);
     expect(rig.spawns).toHaveLength(1);
-    expect(rig.store.getTask("child")!.status).toBe("running");
+    expectEffectivelyRunning(rig, "child");
   });
 
-  it("two deps finishing in sequence → dependent dispatched once, after the last one", () => {
+  it("two deps finishing in sequence → dependent dispatched once, after the last one", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-funnel-twodeps-"));
     rig = buildRig(dir, { autonomous: true });
-    rig.store.upsertTask(baseTask({ id: "a", status: "running", actor: "agent" }));
-    rig.store.upsertTask(baseTask({ id: "b", status: "running", actor: "agent" }));
+    rig.store.upsertTask(baseTask({ id: "a", status: "pending", card_id: "ca", actor: "agent" }));
+    rig.store.upsertTask(baseTask({ id: "b", status: "pending", card_id: "cb", actor: "agent" }));
     rig.store.upsertTask(baseTask({ id: "child", deps_json: JSON.stringify(["a", "b"]), actor: "agent" }));
 
     rig.funnel.persistTask({ ...rig.store.getTask("a")!, status: "done", updated_at: Date.now(), actor: "human" });
+    await flushDispatch();
     expect(rig.spawns).toHaveLength(0);
     expect(rig.store.getTask("child")!.status).toBe("pending");
 
     rig.funnel.persistTask({ ...rig.store.getTask("b")!, status: "done", updated_at: Date.now(), actor: "human" });
+    await flushDispatch();
     expect(rig.spawns).toHaveLength(1);
 
     // A stray re-notification for either dep finds the child already running.
@@ -340,7 +390,7 @@ describe("no double dispatch, no recursion", () => {
     expect(rig.spawns).toHaveLength(1);
   });
 
-  it("dispatch writes `running` back through the funnel without re-entering onTaskDone", () => {
+  it("dispatch links card without re-entering onTaskDone", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-funnel-reentry-"));
     rig = buildRig(dir, { autonomous: true });
     // A chain: d1 → child → grandchild. Finishing d1 must dispatch child
@@ -349,6 +399,7 @@ describe("no double dispatch, no recursion", () => {
     rig.store.upsertTask(baseTask({ id: "grandchild", deps_json: JSON.stringify(["child"]), actor: "agent" }));
 
     rig.funnel.persistTask({ ...rig.store.getTask("d1")!, status: "done", updated_at: Date.now(), actor: "human" });
+    await flushDispatch();
 
     expect(rig.onTaskDoneCalls).toEqual(["d1"]);
     expect(rig.spawns.map((s) => s.taskId)).toEqual(["child"]);

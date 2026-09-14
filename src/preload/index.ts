@@ -221,6 +221,9 @@ export type BoardRow = {
   /** DESIGN-BACKLOG.md item 60, peça 2 — per-board override of the
    * concurrency cap. `null` means "use the app-wide default". */
   concurrency_cap: number | null;
+  /** Board orchestrator mark — at most one card id. UI-only write via
+   * `setOrchestratorCard`. `null` = unmarked. */
+  orchestrator_card_id: string | null;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -234,6 +237,15 @@ const store = {
   upsert: (card: CardRow): Promise<void> => ipcRenderer.invoke("store:upsert", card),
   delete: (id: string): Promise<void> => ipcRenderer.invoke("store:delete", id),
   nextIdSeed: (): Promise<number> => ipcRenderer.invoke("store:next-id-seed"),
+  /** Human UI birth → spawn registry (origin human, null reason). Agent
+   * spawns are recorded by message-bus; do not call this from those paths. */
+  recordHumanSpawn: (input: {
+    boardId: string;
+    toCardId: string;
+    provider?: string | null;
+    cardKind?: string | null;
+    cwd?: string | null;
+  }): Promise<void> => ipcRenderer.invoke("store:spawns:record-human", input),
   connectors: {
     list: (boardId: string): Promise<ConnectorRow[]> => ipcRenderer.invoke("store:connectors:list", boardId),
     upsert: (row: ConnectorRow): Promise<void> => ipcRenderer.invoke("store:connectors:upsert", row),
@@ -278,6 +290,9 @@ const store = {
      * toggle, called only from the session UI's own checkbox/switch. */
     setAutonomous: (id: string, autonomous: boolean): Promise<void> =>
       ipcRenderer.invoke("store:boards:set-autonomous", id, autonomous),
+    /** Board orchestrator mark — UI only. `cardId: null` clears. */
+    setOrchestratorCard: (boardId: string, cardId: string | null): Promise<boolean> =>
+      ipcRenderer.invoke("store:boards:set-orchestrator-card", boardId, cardId),
 /** Achado ao vivo (2026-09-01) — qual board está aberto AGORA. Só o
  * renderer sabe (é estado de UI, não coluna de tabela), e o bus precisa
  * saber pra escopar `list_cards`: um card de outra sessão nem está
@@ -764,7 +779,7 @@ export type TaskBoardItem = {
   retryCount: number;
   createdAt: number;
   updatedAt: number;
-  lastActor: "app" | "agent" | "human" | null;
+  lastActor: "app" | "agent" | "human" | "orchestrator" | null;
   /** `kind`/`provider`/`label` vêm de um LEFT JOIN direto com `cards`
    * (store.ts) — funcionam mesmo pra um card já fechado (a linha
    * continua existindo; só `deleteCard`, raro, apaga de vez), sem
@@ -808,7 +823,7 @@ export type TaskBoardItem = {
    * formata; limpo no choke point quando o humano move de novo ou a
    * observação se alinha. */
   divergedStatus: string | null;
-  divergedActor: "app" | "agent" | "human" | null;
+  divergedActor: "app" | "agent" | "human" | "orchestrator" | null;
   /** Third path — live ask the human has not answered. All null = none. */
   requestedStatus: string | null;
   requestedReason: string | null;
@@ -818,7 +833,7 @@ export type TaskBoardItem = {
    * momento da leitura (LEFT JOIN); null se o card foi deletado. */
   verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
   /** Ator da 1ª transição `kind:'status'` — `human` ⇒ criada pela UI. */
-  firstActor: "app" | "agent" | "human" | null;
+  firstActor: "app" | "agent" | "human" | "orchestrator" | null;
   /** Motivo visível de interrupção (falha tipada → voltou pra a fazer). */
   interruptionReason: string | null;
 };
@@ -1404,6 +1419,16 @@ const system = {
   // lights nativos ali no darwin. `process` já existe neste escopo do
   // preload (roda em contexto Node, não no sandbox do renderer).
   platform: process.platform,
+  /** Build identity of the running process — Settings → General + agents. */
+  getBuildIdentity: (): Promise<{
+    mode: "dev" | "packaged";
+    version: string;
+    commit: string | null;
+    builtAt: string | null;
+    dirty: boolean;
+    busProtocol: number;
+    label: string;
+  }> => ipcRenderer.invoke("app:build-identity"),
 };
 
 /** DESIGN-BACKLOG.md §2.1 i18n fase 1 — locale from `app.getLocale()` with

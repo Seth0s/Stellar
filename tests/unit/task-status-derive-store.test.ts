@@ -16,6 +16,7 @@ function makeBoard(id: string): BoardRow {
     last_accessed_at: null,
     autonomous: false,
     concurrency_cap: null,
+    orchestrator_card_id: null,
   };
 }
 import { deriveTaskStatus } from "../../src/task-status-derive";

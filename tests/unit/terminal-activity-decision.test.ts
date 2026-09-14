@@ -4,6 +4,7 @@ import {
   ACTIVITY_UNPROVEN_SIGNAL_IDLE_MS,
   decideTerminalActivity,
   initialTerminalActivity,
+  originForXtermData,
   xtermOutgoingOpensTurn,
   type TerminalActivityState,
 } from "../../src/renderer/src/terminal-activity-decision";
@@ -145,6 +146,22 @@ describe("xtermOutgoingOpensTurn — tecla vs resposta automática", () => {
     const opened = apply(idle, "input");
     expect(opened.next.turnOpen).toBe(true);
     expect(opened.next.isActive).toBe(true);
+  });
+});
+
+describe("originForXtermData — porteiro: tecla vs resposta automática", () => {
+  it("gesto humano pendente → human; sem gesto → auto", () => {
+    expect(originForXtermData(true)).toBe("human");
+    expect(originForXtermData(false)).toBe("auto");
+  });
+
+  it("casa com a barra: key/paste abrem turno e marcam human; auto não", () => {
+    expect(xtermOutgoingOpensTurn("key")).toBe(true);
+    expect(originForXtermData(true)).toBe("human");
+    expect(xtermOutgoingOpensTurn("paste")).toBe(true);
+    expect(originForXtermData(true)).toBe("human");
+    expect(xtermOutgoingOpensTurn("auto")).toBe(false);
+    expect(originForXtermData(false)).toBe("auto");
   });
 });
 

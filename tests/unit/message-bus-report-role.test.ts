@@ -59,6 +59,9 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         if (prop === "listTasks") return () => store.listTasks();
         if (prop === "upsertTask") return (row: TaskRow) => store.upsertTask(row);
         if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
         return () => undefined;
       },

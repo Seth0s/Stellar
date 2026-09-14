@@ -75,6 +75,9 @@ describe("message-bus.ts: list_tasks usa o statement indexado por board", () => 
             };
           }
           if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
           if (prop === "listCards") return () => [];
           return () => undefined;
         },

@@ -97,9 +97,18 @@ describe("mcp-server: purpose / role on the tool surface", () => {
       expect(d, `description must mention ${word}`).toContain(word);
     }
     seen.length = 0;
-    await client.callTool({ name: "spawn_agent", arguments: { provider: "claude", taskId: "t1", role: "reviewer", brief: "review it" } });
+    // `reason` passou a ser OBRIGATÓRIO em spawn de agente (registro de
+    // spawn, ce2e05f8): é o único campo que o app não consegue derivar.
+    // Sem ele a chamada é recusada antes de chegar ao bus.
+    await client.callTool({
+      name: "spawn_agent",
+      arguments: { provider: "claude", taskId: "t1", role: "reviewer", brief: "review it", reason: "revisar a entrega" },
+    });
     expect(seen[0]).toMatchObject({ cmd: "spawn_agent", taskId: "t1", role: "reviewer", brief: "review it" });
-    const bad = await client.callTool({ name: "spawn_agent", arguments: { provider: "claude", taskId: "t1", role: "observer" } });
+    const bad = await client.callTool({
+      name: "spawn_agent",
+      arguments: { provider: "claude", taskId: "t1", role: "observer", reason: "x" },
+    });
     expect(bad.isError).toBe(true);
     expect(seen).toHaveLength(1);
   });

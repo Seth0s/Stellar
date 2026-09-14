@@ -119,6 +119,9 @@ describe("acbridge: stdout drain antes do exit (pipe > 64 KiB)", () => {
           if (prop === "listCards") return () => [];
           if (prop === "isCardAlive") return () => false;
           if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
           if (prop === "nextReportSeqSeed") return () => 0;
           return () => undefined;
         },

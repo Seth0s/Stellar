@@ -152,7 +152,7 @@ describe("store.ts: tabela reports", () => {
     try {
       // Dado pré-existente sobrevive intacto.
       expect(store.getCard("pre-existing-card")).toBeDefined();
-      expect(store.getTask("pre-existing-task")?.status).toBe("running");
+      expect(store.getTask("pre-existing-task")?.status).toBe("pending");
 
       // E a tabela nova já funciona de ponta a ponta.
       expect(store.getReport("pre-existing-card")).toBeUndefined();
@@ -282,6 +282,9 @@ describe("message-bus + store: seq monotônica e relatório sobrevivem a um rest
           if (prop === "upsertReport") return (row: ReportRow) => store.upsertReport(row);
           if (prop === "nextReportSeqSeed") return () => store.nextReportSeqSeed();
           if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
           if (prop === "listCards") return () => [];
           return () => undefined;
         },

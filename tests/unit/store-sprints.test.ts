@@ -15,6 +15,7 @@ function makeBoard(id: string): BoardRow {
     last_accessed_at: null,
     autonomous: false,
     concurrency_cap: null,
+    orchestrator_card_id: null,
   };
 }
 
@@ -89,8 +90,8 @@ describe("store.ts: sprints — snapshot no fechamento + migração", () => {
     if (!closed.ok) return;
 
     expect(closed.closed.id).toBe(first.id);
-    expect(closed.closed.count_todo).toBe(2); // todo1 + intr1
-    expect(closed.closed.count_doing).toBe(1);
+    expect(closed.closed.count_todo).toBe(3); // todo1 + doing1 (stored pending) + intr1
+    expect(closed.closed.count_doing).toBe(0); // CAMADA 3: `running` never stored
     expect(closed.closed.count_done).toBe(1);
     expect(closed.closed.count_failed).toBe(1); // só julgada
     expect(closed.closed.migrated_out).toBe(3); // todo + doing + interrompida

@@ -51,6 +51,9 @@ function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => 
       get: (_target, prop: string) => {
         if (prop in overrides) return overrides[prop];
         if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
         if (prop === "getCardBoardId") return () => undefined;
         if (prop === "isBoardAutonomous") return () => false;
@@ -131,7 +134,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
   it("a. taskId de task existente → brief entregue é o prompt dela", async () => {
     const task = existingTask();
     const { res, spawned } = await dispatch(
-      { cmd: "spawn_agent", provider: "claude", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
     expect(res).toEqual({ ok: true, cardId: "spawned-card" });
@@ -145,7 +148,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
       cmd: "spawn_agent",
       provider: "claude",
       brief: "explore the rail",
-      requesterId: "orch",
+      reason: "test", requesterId: "orch",
     } as BusRequest);
     expect(res.ok).toBe(true);
     expect(spawned[0].params.brief).toBe("explore the rail");
@@ -157,7 +160,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
     const { res, spawned, upserted } = await dispatch({
       cmd: "spawn_agent",
       provider: "claude",
-      requesterId: "orch",
+      reason: "test", requesterId: "orch",
     } as BusRequest);
     expect(res.ok).toBe(true);
     expect(spawned[0].params.brief).toBeUndefined();
@@ -170,7 +173,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
       cmd: "spawn_agent",
       provider: "claude",
       taskId: "does-not-exist",
-      requesterId: "orch",
+      reason: "test", requesterId: "orch",
     } as BusRequest);
     expect(res.ok).toBe(false);
     expect(res.error).toBe('no such task "does-not-exist"');
@@ -185,7 +188,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
         provider: "claude",
         taskId: task.id,
         brief: "and also this addendum",
-        requesterId: "orch",
+        reason: "test", requesterId: "orch",
       } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
@@ -197,28 +200,28 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
   it("f. brief derivado passa pela mesma bifurcação argv/digitar", async () => {
     const task = existingTask();
     const claude = await dispatch(
-      { cmd: "spawn_agent", provider: "claude", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
     expect(claude.spawned[0].params.brief).toBe(task.prompt);
     expect(claude.writes).toEqual([]);
 
     const cursor = await dispatch(
-      { cmd: "spawn_agent", provider: "cursor", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { cmd: "spawn_agent", provider: "cursor", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
     expect(cursor.spawned[0].params.brief).toBe(task.prompt);
     expect(cursor.writes).toEqual([]);
 
     const antigravity = await dispatch(
-      { cmd: "spawn_agent", provider: "antigravity", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { cmd: "spawn_agent", provider: "antigravity", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
     expect(antigravity.spawned[0].params.brief).toBe(task.prompt);
     expect(antigravity.writes).toEqual([]);
 
     const bash = await dispatch(
-      { cmd: "spawn_agent", provider: "bash", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { cmd: "spawn_agent", provider: "bash", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
     expect(bash.spawned[0].params.brief).toBeUndefined();
@@ -230,20 +233,20 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
   it("spawn com taskId amarra o card_id sem propor status", async () => {
     const task = existingTask();
     const { upserted } = await dispatch(
-      { cmd: "spawn_agent", provider: "claude", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
     expect(upserted).toHaveLength(1);
     expect(upserted[0].card_id).toBe("spawned-card");
     expect(upserted[0].status).toBe("pending");
-    expect(upserted[0].statusProposed).toBe(false);
-    expect(upserted[0].actor).toBe("app");
+    expect(upserted[0].statusProposed).toBe(true);
+    expect(upserted[0].actor).toBe("agent");
   });
 
   it("task com prompt vazio: card abre, brief ausente, card ainda é amarrado", async () => {
     const task = existingTask({ prompt: null });
     const { res, spawned, upserted } = await dispatch(
-      { cmd: "spawn_agent", provider: "claude", taskId: task.id, requesterId: "orch" } as BusRequest,
+      { cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
     expect(res.ok).toBe(true);

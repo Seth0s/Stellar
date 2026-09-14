@@ -52,6 +52,9 @@ describe("message-bus list_tasks: filtros + projeção", () => {
             if (prop === "listCards") return () => aliveCardIds.map((id) => ({ id }));
             if (prop === "isCardAlive") return (id: string) => alive.has(id);
             if (prop === "listAllConnectors") return () => [];
+        if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
+        if (prop === "findSpawnByChild") return () => undefined;
+        if (prop === "listSpawnsByParent") return () => [];
             if (prop === "nextReportSeqSeed") return () => 0;
             return () => undefined;
           },

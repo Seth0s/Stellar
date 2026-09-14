@@ -49,6 +49,19 @@ beforeEach(() => {
         systemLocale: "pt-BR",
       })),
     },
+    system: {
+      homeDir: "/home/test",
+      platform: "linux",
+      getBuildIdentity: vi.fn(async () => ({
+        mode: "dev" as const,
+        version: "0.7.0",
+        commit: "abc1234",
+        builtAt: null,
+        dirty: true,
+        busProtocol: 2,
+        label: "dev abc1234 (dirty tree)",
+      })),
+    },
     secrets: {
       isEncryptionAvailable: vi.fn(async () => true),
       hasKey: vi.fn(async () => false),
@@ -77,11 +90,13 @@ describe("SettingsModal", () => {
     expect(screen.getByRole("button", { name: /Geral/ }).getAttribute("aria-current")).toBe("page");
   });
 
-  it("General is the app-scoped page: locale control + scope note, no board toggles", () => {
+  it("General is the app-scoped page: locale control + build identity + scope note, no board toggles", async () => {
     renderSettings("general");
 
     expect(screen.getByLabelText("Idioma")).toBeTruthy();
     expect(screen.getByText(/vale para o aplicativo inteiro/)).toBeTruthy();
+    expect(await screen.findByText(/dev abc1234 \(dirty tree\)/)).toBeTruthy();
+    expect(document.querySelector("[data-settings-build-identity]")).toBeTruthy();
     expect(screen.queryByLabelText(/Modo autônomo/)).toBeNull();
     expect(screen.queryByLabelText(/Limite de agentes/)).toBeNull();
   });
