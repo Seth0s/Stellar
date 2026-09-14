@@ -932,6 +932,42 @@ Tudo aqui saiu do primeiro dia de uso do painel de sprints e dos terminais, com 
 ---
 
 ## 💡 3. Ideias & Brainstorms
+
+### 3.-1 NOTA (não decidida) — o brief carrega um PONTEIRO, nunca uma cópia de regra
+
+Anotada em 2026-09-14 a pedido do dono ("3 deixa anotada apenas"), para decidir com o card de
+discussão antes de virar task.
+
+**A observação que gerou isto**, do dono: "percebi que você teve que mandar mensagem para
+completar o prompt da task, por quê?". Estava certo. O brief do autodispatch
+(`message-bus.ts` → `briefForTask`) é `prompt + dep-pointer + contrato`. Regra de board não
+existe nessa lista, então eu re-digitava cinco regras à mão em cada card novo — e quando
+esqueci, nasceu o card que rodou o reset destrutivo.
+
+**A pergunta do dono, que matou a versão ingênua da ideia**: "não é redundante com o
+AGENTS.md?". É. O teste que separa é *a regra sobrevive ao board acabar?*
+
+| Regra que eu digitava | Sobrevive | Casa correta |
+|---|---|---|
+| nenhum git que descarte estado | sim | **`AGENTS.md` §3.5 — feito neste commit** |
+| você não commita / reporte por arquivo | não | `allow_commit` + `territory`, que **já existem** e eu não usava |
+| peça autorização ao orquestrador | não | **já é estrutural** desde `96fa24b8` |
+| não use o PTY do card 330 | não | única regra genuinamente de board |
+| a base é `<commit>` | não (vence em uma hora) | derivável — `build_identity`/HEAD |
+
+Sobrou uma linha e meia. **Um blob de "regras do board" seria uma segunda fonte de verdade ao
+lado do `AGENTS.md`** — o defeito que este repo passou o dia matando. A ideia só sobrevive na
+forma fraca: o brief ganha um PONTEIRO DERIVADO ("as regras deste repo estão em `<arquivo>`; o
+orquestrador deste board é o card N"), duas frases que o app já sabe calcular, zero texto
+escrito à mão, zero duplicação.
+
+**O problema real que sobra não é de conteúdo, é de ENTREGA.** Arquivo é *pull*: o agente
+precisa decidir ler, no cwd certo, e cada provider lê um nome diferente (`AGENTS.md`,
+`CLAUDE.md`, `.cursorrules`; antigravity pode não ler nenhum). Brief é *push*. O card do reset
+não morreu por falta de regra escrita — morreu porque nada garantiu que ele lesse.
+
+Aberto para a discussão: se o ponteiro vale a pena ou se basta eu preencher o contrato.
+
 ### 3.0 Raio de alcance — infraestrutura no Stellar, derivada do codigo (recorte fechado 2026-09-12)
 
 **O proposito, na frase do dono do repo:** o implementador A mexe no arquivo C, C alimenta 3
