@@ -80,14 +80,20 @@ export const WRITE_READY_MAX_WAIT_MS = 8_000;
 export const HUMAN_INPUT_GATE_MAX_AGE_MS = 30_000;
 
 /** Origin mark threaded through `pty-registry.write` — kept local so this
- * module stays free of a runtime import from the registry. `"human"` is
- * a real keystroke (or deferred human bytes flushed after a delivery);
- * `"delivery"` is programmatic `typeAndSubmit` text/Enter. */
-export type DeliveryWriteOrigin = "human" | "delivery";
+ * module stays free of a runtime import from the registry.
+ *   - `"human"`: real keystroke / paste (or deferred human bytes flushed
+ *     after a delivery). Renews the abandoned-line clock.
+ *   - `"delivery"`: programmatic `typeAndSubmit` text/Enter. Does not.
+ *   - `"auto"`: xterm automatic replies on `onData` with no matching
+ *     keystroke/paste (mouse SGR, focus, CPR/DSR/DA). Does not — those
+ *     bytes have no newline, so classifying them as human permanently
+ *     jammed the gate on active TUIs (MASTER 330, measured 2026-09-14). */
+export type DeliveryWriteOrigin = "human" | "delivery" | "auto";
 
 /** Only human keystrokes renew the abandoned-line clock. Programmatic
- * delivery must not — an agent writing continuously into a card would
- * otherwise hold every other queued notice behind that card forever. */
+ * delivery and xterm auto-replies must not — an agent writing continuously
+ * into a card, or a TUI polling the emulator, would otherwise hold every
+ * other queued notice behind that card forever. */
 export function renewsHumanInputGateClock(origin: DeliveryWriteOrigin): boolean {
   return origin === "human";
 }

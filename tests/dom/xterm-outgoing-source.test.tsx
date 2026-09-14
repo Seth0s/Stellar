@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { Terminal } from "@xterm/xterm";
-import { xtermOutgoingOpensTurn } from "@renderer/terminal-activity-decision";
+import { xtermOutgoingOpensTurn, originForXtermData } from "@renderer/terminal-activity-decision";
 
 beforeAll(() => {
   if (typeof window.matchMedia !== "function") {
@@ -71,6 +71,11 @@ describe("xterm outgoing source — onData não é tecla", () => {
     expect(data.length).toBeGreaterThan(0);
     expect(data.some(isAutomaticReply)).toBe(true);
     expect(xtermOutgoingOpensTurn("auto")).toBe(false);
+    // Gate classifier: no onKey ⇒ every chunk is "auto", never "human".
+    for (const chunk of data) {
+      expect(originForXtermData(false)).toBe("auto");
+      void chunk;
+    }
     cleanup();
   });
 
@@ -92,6 +97,41 @@ describe("xterm outgoing source — onData não é tecla", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(keys.length).toBeGreaterThan(0);
     expect(xtermOutgoingOpensTurn("key")).toBe(true);
+    expect(originForXtermData(true)).toBe("human");
+    cleanup();
+  });
+
+  it("porteiro: latch onKey→onData é human; onData sozinho é auto", async () => {
+    const { term, cleanup } = await openTerm();
+    const origins: Array<"human" | "auto"> = [];
+    let pending = false;
+    term.onKey(() => {
+      pending = true;
+    });
+    term.onData(() => {
+      origins.push(originForXtermData(pending));
+      pending = false;
+    });
+    term.write("\x1b[6n");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(origins.length).toBeGreaterThan(0);
+    expect(origins.every((o) => o === "auto")).toBe(true);
+
+    origins.length = 0;
+    const ta = term.textarea!;
+    ta.focus();
+    ta.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "x",
+        code: "KeyX",
+        keyCode: 88,
+        which: 88,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(origins.some((o) => o === "human")).toBe(true);
     cleanup();
   });
 });

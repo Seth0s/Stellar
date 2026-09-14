@@ -13,6 +13,7 @@ import {
   initialBracketedPasteModeState,
   updateBracketedPasteMode,
   type BracketedPasteModeState,
+  type DeliveryWriteOrigin,
 } from "./type-and-submit-decision";
 
 // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — encaminhamento 3. Só os
@@ -90,11 +91,10 @@ const ANSI_PATTERN = new RegExp(
   "g",
 );
 
-/** Origem da escrita distingue teclas/bytes humanos de texto que o bus
- * entrega deliberadamente ao agente. A distinção é necessária tanto para
- * o porteiro quanto para o rearm de sessão: uma entrega não pode parecer
- * uma nova linha humana nem bloquear a si própria. */
-export type PtyWriteOrigin = "human" | "delivery";
+/** Origem da escrita — espelho de `DeliveryWriteOrigin`. Sem default em
+ * `write()`: omitir o parâmetro reintroduzia o bug (toda resposta
+ * automática do xterm virava tecla humana). Callers must pass explicitly. */
+export type PtyWriteOrigin = DeliveryWriteOrigin;
 
 type Entry = {
   proc: pty.IPty;
@@ -897,7 +897,7 @@ export function createPtyRegistry(registryOpts: {
     if (entry.inputLineBuffer.length === 0) entry.inputLineLastAtMs = null;
   }
 
-  function write(id: string, data: string, origin: PtyWriteOrigin = "human") {
+  function write(id: string, data: string, origin: PtyWriteOrigin) {
     const entry = entries.get(id);
     if (!entry) return;
 
@@ -907,13 +907,15 @@ export function createPtyRegistry(registryOpts: {
     // aviso. A ordem dos bytes é preservada; `endDelivery` devolve-os via
     // `write(..., "human")` e o bus emite o aviso de entrada — eram
     // humanas ao adiar, continuam humanas ao despejar.
+    // `"auto"` (mouse/CPR/focus) NÃO entra aqui: a TUI precisa das
+    // respostas do emulador mesmo no meio de uma entrega.
     if (renewsHumanInputGateClock(origin) && entry.deliveryActive) {
       entry.deferredHumanInput.push(data);
       return;
     }
 
     // Só origem humana alimenta o buffer/relógio do porteiro — `delivery`
-    // (typeAndSubmit) não pode renovar o idle e segurar a fila dos outros.
+    // e `auto` não podem renovar o idle e segurar a fila dos outros.
     if (renewsHumanInputGateClock(origin)) recordHumanInput(id, entry, data);
     entry.proc.write(data);
   }
@@ -1069,6 +1071,37 @@ export function createPtyRegistry(registryOpts: {
     };
   }
 
+  /** Dev/verify: dump human-input gate buffers for every live entry. */
+  function dumpHumanInputGate(): Array<{
+    id: string;
+    providerId: string;
+    hasPendingHumanInput: boolean;
+    inputLineLastAtMs: number | null;
+    bufferHex: string;
+    bufferRepr: string;
+  }> {
+    const out: Array<{
+      id: string;
+      providerId: string;
+      hasPendingHumanInput: boolean;
+      inputLineLastAtMs: number | null;
+      bufferHex: string;
+      bufferRepr: string;
+    }> = [];
+    for (const [id, entry] of entries) {
+      const buf = entry.inputLineBuffer;
+      out.push({
+        id,
+        providerId: entry.providerId,
+        hasPendingHumanInput: buf.length > 0,
+        inputLineLastAtMs: entry.inputLineLastAtMs,
+        bufferHex: Buffer.from(buf, "utf8").toString("hex"),
+        bufferRepr: JSON.stringify(buf),
+      });
+    }
+    return out;
+  }
+
   /** Test-only accessor (pre-release audit B7's verify coverage) — the
    * live harness has no other way to observe that `seenUrls` actually
    * stays capped at `MAX_SEEN_URLS` rather than growing forever. */
@@ -1076,5 +1109,5 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getPid, getClaimedSessionId, getWriteReadiness, seenUrlsCount };
+  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount };
 }

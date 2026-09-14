@@ -891,7 +891,7 @@ function createWindow() {
           provider: c.provider,
           cwd: c.cwd,
         })),
-    onWrite: (id, data) => registry.write(id, data),
+    onWrite: (id, data) => registry.write(id, data, "human"),
     onResize: (id, cols, rows) => registry.resize(id, cols, rows),
   });
 
@@ -1367,7 +1367,7 @@ function createWindow() {
         }
       });
     },
-    writeToCard: (id, text) => registry.write(id, text),
+    writeToCard: (id, text) => registry.write(id, text, "delivery"),
     writeToCardWithOrigin: (id, text, origin) => registry.write(id, text, origin),
     beginCardDelivery: (id) => registry.beginDelivery(id),
     endCardDelivery: (id) => registry.endDelivery(id),
@@ -1477,7 +1477,7 @@ function createWindow() {
     listSprints: (boardId) => store.listSprints(boardId),
     openSprint: (boardId) => store.openSprint(boardId),
     closeSprint: (boardId) => {
-      const result = store.closeSprint(boardId);
+      const result = store.closeSprint(boardId, (id) => registry.isAlive(id));
       if (result.ok) notifyTaskChanged(boardId);
       return result;
     },
@@ -1732,7 +1732,10 @@ function createWindow() {
       return result;
     },
   );
-  ipcMain.handle("pty:write", (_e, id: string, data: string) => registry.write(id, data));
+  ipcMain.handle("pty:write", (_e, id: string, data: string, origin: "human" | "delivery" | "auto") => {
+    if (origin !== "human" && origin !== "delivery" && origin !== "auto") return;
+    registry.write(id, data, origin);
+  });
   // Human Design Mode "Enviar" (BrowserCard) — same `cmd: "send"` that
   // `send_to_card` / `acbridge send` already use. Thin wire only; the
   // engine stays in message-bus.ts (`typeAndSubmit` / `deliverCard`).

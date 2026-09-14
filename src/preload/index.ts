@@ -23,6 +23,9 @@ export type CardRow = {
   messages_json: string | null;
   /** DESIGN-BACKLOG.md item 30 — see main/store.ts's own doc comment. */
   archived_at: number | null;
+  /** Card-incarnation epoch — see main/store.ts. Optional on write: store
+   * stamps Date.now() on INSERT and never rewrites on conflict. */
+  created_at?: number | null;
 };
 
 // `effort` widened from "low" | "high" to plain string — see
@@ -52,7 +55,8 @@ const pty = {
     rows: number,
     opts?: SpawnOpts,
   ): Promise<SpawnResult> => ipcRenderer.invoke("pty:spawn", id, providerId, cwd, cols, rows, opts),
-  write: (id: string, data: string): Promise<void> => ipcRenderer.invoke("pty:write", id, data),
+  write: (id: string, data: string, origin: "human" | "delivery" | "auto"): Promise<void> =>
+    ipcRenderer.invoke("pty:write", id, data, origin),
   resize: (id: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke("pty:resize", id, cols, rows),
   interrupt: (id: string): Promise<void> => ipcRenderer.invoke("pty:interrupt", id),
@@ -868,17 +872,16 @@ const tasks = {
    * (`store.applyColumnDrop`, `db.transaction`) e gera UM push só, não um
    * por linha.
    *
-   * `message` é o texto exato que o card da task arrastada (se vivo)
-   * recebe pelo mesmo `typeAndSubmit` do push de report — decidido no
-   * renderer (`describeHumanMove`), main só relaya. */
+   * Does not type into the linked card — drag is an unsolicited interrupt;
+   * the Fila human-move mark is the surface. Status-ask Allow/Deny is the
+   * separate resume path (`notifyHumanMovedTask`). */
   moveTask: (
     draggedTaskId: string,
     status: string,
     order: number,
     siblingImplicitOrders: { id: string; implicitOrder: number }[],
-    message: string,
   ): Promise<{ ok: true } | { ok: false; error: string }> =>
-    ipcRenderer.invoke("store:tasks:move", draggedTaskId, status, order, siblingImplicitOrders, message),
+    ipcRenderer.invoke("store:tasks:move", draggedTaskId, status, order, siblingImplicitOrders),
   onChanged: (cb: (boardId: string, tasks: TaskBoardItem[]) => void) => {
     const listener = (_e: unknown, boardId: string, tasks: TaskBoardItem[]) => cb(boardId, tasks);
     ipcRenderer.on("task:changed", listener);
@@ -1459,6 +1462,17 @@ const debugBridge = {
   /** Test-only (pre-release audit B7's verify coverage) — -1 in a
    * packaged build, see main/index.ts's guard. */
   seenUrlsCount: (cardId: string): Promise<number> => ipcRenderer.invoke("debug:seen-urls-count", cardId),
+  /** Test-only — human-input gate buffer dump (porteiro falso-positivo). */
+  humanInputGate: (): Promise<
+    Array<{
+      id: string;
+      providerId: string;
+      hasPendingHumanInput: boolean;
+      inputLineLastAtMs: number | null;
+      bufferHex: string;
+      bufferRepr: string;
+    }> | null
+  > => ipcRenderer.invoke("debug:human-input-gate"),
   /** Test-only (Trilha A do navegador's verify coverage) — null in a
    * packaged build, see main/index.ts's guard. */
   browserContentSize: (cardId: string): Promise<{ w: number; h: number; scaleFactor: number } | null> =>
