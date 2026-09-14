@@ -74,9 +74,24 @@ async function spawnBash(page, requesterId, args) {
 }
 
 async function reportVerdict(page, cardId, verdict) {
+  // Wait for the bash PTY to be ready (prompt), then report, then wait
+  // for the structured channel — a fixed 600ms race was losing the
+  // verdict before the Fila check (live fail 2026-09-14).
+  // `pty:write` requires origin ("human"|"delivery"|"auto"); without it
+  // the main handler no-ops (scrollback stayed at the bare prompt).
+  await delay(800);
+  const waitPromise = callTool("read_report", { target: cardId, wait: true, timeoutMs: 15000 });
+  await delay(300);
   const json = JSON.stringify({ ok: true, result: `chip-honesty-${verdict}`, verdict }).replace(/"/g, '\\"');
-  await page.evalJs(`window.pty.write(${JSON.stringify(cardId)}, ${JSON.stringify(`acbridge report "${json}"\r`)})`);
-  await delay(600);
+  await page.evalJs(
+    `window.pty.write(${JSON.stringify(cardId)}, ${JSON.stringify(`acbridge report "${json}"\r`)}, "human")`,
+  );
+  const waited = JSON.parse((await waitPromise).content[0].text);
+  if (!waited.ok) {
+    const scroll = await toolJson("read_card", { target: cardId }).catch((e) => ({ error: String(e) }));
+    throw new Error(`reportVerdict(${cardId}, ${verdict}) did not land: ${JSON.stringify({ waited, scroll })}`);
+  }
+  return waited;
 }
 
 const { check, finish } = makeChecker();
@@ -130,7 +145,8 @@ try {
   });
   await reportVerdict(page, revB, "aprovado");
 
-  await delay(800);
+  // Fila listens on push; give the board a beat to paint chips.
+  await delay(1500);
 
   const board = JSON.parse(
     await page.evalJs(`
@@ -153,6 +169,7 @@ try {
       })()
     `),
   );
+  console.log(`LIVE_PROOF_BOARD=${JSON.stringify(board)}`);
 
   check("task A tem veredito implementer/aprovado", board.a?.verdicts?.some((v) => v.role === "implementer" && v.verdict === "aprovado"), true);
   check("task B tem veredito reviewer/aprovado", board.b?.verdicts?.some((v) => v.role === "reviewer" && v.verdict === "aprovado"), true);
