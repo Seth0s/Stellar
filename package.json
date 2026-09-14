@@ -1,6 +1,6 @@
 {
   "name": "stellar",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Stellar — a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/Seth0s/Stellar",
