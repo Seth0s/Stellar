@@ -75,11 +75,35 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // src/main/acbridge-protocol-decision.ts — o vitest trava os dois
 // (tests/unit/acbridge-protocol.test.ts). Bump quando a forma de um
 // request muda (cmd/campo novo), e só então.
-const ACBRIDGE_PROTOCOL = 1;
+const ACBRIDGE_PROTOCOL = 2;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
-  process.exit(1);
+  finish(1);
+}
+
+/**
+ * Drain stdout/stderr before exit. `console.log` writes are async when the
+ * fd is a pipe; `process.exit` kills the process with the userland write
+ * queue still full, so the reader only ever sees the kernel pipe buffer
+ * (exactly 65536 bytes measured: `acbridge list-tasks | wc -c`). File
+ * redirects look fine because they accept the whole write synchronously.
+ * Every command exits through here — not just list-tasks.
+ */
+function finish(code = 0) {
+  let left = 2;
+  const one = () => {
+    if (--left <= 0) process.exit(code);
+  };
+  const end = (stream) => {
+    if (!stream.writable || stream.destroyed || stream.writableEnded) {
+      one();
+      return;
+    }
+    stream.end(one);
+  };
+  end(process.stdout);
+  end(process.stderr);
 }
 
 if (!sockPath) {
@@ -93,7 +117,8 @@ const USAGE =
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
   "read-sticky <cardId> | write-sticky [--append] [--file <path>] <cardId> [text...] | " +
   "card-status <cardId> | report <json> | read-report <cardId> [waitTimeoutMs] | " +
-  "create-task <json> | update-task <taskId> <json> | request-task-status <taskId> <status> [reason...] | list-tasks | get-task <taskId> | " +
+  "create-task <json> | update-task <taskId> <json> | request-task-status <taskId> <status> [reason...] | " +
+  "list-tasks [--status <s>[,<s>…]] [--board <boardId>] [--since <epochMs>] [--has-card|--no-card] [--view summary|full] | get-task <taskId> | " +
   "link-task-card <taskId> <cardId> [implementer|reviewer] | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "set-connector-label <connectorId> <label...|null> | " +
@@ -304,7 +329,39 @@ if (cmd === "version") {
     ...(ownCardId ? { requesterId: ownCardId } : {}),
   };
 } else if (cmd === "list-tasks") {
-  request = { cmd: "list_tasks" };
+  // Same filters/projection as MCP list_tasks (list-tasks-query.ts). Flags
+  // only — positional args would diverge from the tool surface.
+  let boardId;
+  let status;
+  let since;
+  let hasCard;
+  let view;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--board") {
+      boardId = rest[++i];
+      if (!boardId) fail("usage: acbridge list-tasks --board <boardId>");
+    } else if (a === "--status") {
+      const raw = rest[++i];
+      if (!raw) fail("usage: acbridge list-tasks --status <s>[,<s>…]");
+      status = raw.split(",").filter(Boolean);
+    } else if (a === "--since") {
+      const raw = rest[++i];
+      if (raw === undefined) fail("usage: acbridge list-tasks --since <epochMs>");
+      since = Number(raw);
+      if (!Number.isFinite(since)) fail(`list-tasks: --since must be a finite epoch-ms number, got ${JSON.stringify(raw)}`);
+    } else if (a === "--has-card") {
+      hasCard = true;
+    } else if (a === "--no-card") {
+      hasCard = false;
+    } else if (a === "--view") {
+      view = rest[++i];
+      if (view !== "summary" && view !== "full") fail('usage: acbridge list-tasks --view summary|full');
+    } else {
+      fail(`${USAGE}\n${BASH_CARD_NOTE}`);
+    }
+  }
+  request = { cmd: "list_tasks", boardId, status, since, hasCard, view };
 } else if (cmd === "get-task") {
   const [taskId] = rest;
   if (!taskId) fail("usage: acbridge get-task <taskId>");
@@ -582,5 +639,5 @@ socket.on("close", () => {
     console.log(res.result);
     if (res.truncated) process.stderr.write("acbridge: eval result truncated\n");
   }
-  process.exit(0);
+  finish(0);
 });

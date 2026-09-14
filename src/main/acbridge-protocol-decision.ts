@@ -40,7 +40,7 @@
  * forma sem bumpar falhe no vitest, não em produção.
  */
 
-export const ACBRIDGE_PROTOCOL = 1;
+export const ACBRIDGE_PROTOCOL = 2;
 
 /** Chave carimbada pelo acbridge no JSON do request. Removida antes do
  * dispatch — nenhum cmd do bus a vê. */
