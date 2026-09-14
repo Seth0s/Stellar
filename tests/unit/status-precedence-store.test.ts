@@ -6,9 +6,8 @@ import { openStore, type TaskRow } from "../../src/main/store";
 
 /**
  * DESIGN-BACKLOG.md §2.1 Decisão 8 — integração no choke point
- * (`upsertTaskInternal`). A função pura vive em status-write-decision.test.ts;
- * isto trava o QUE o banco grava (status autoritativo, diverged_*,
- * declaration vs status transition, limpeza).
+ * (`upsertTaskInternal`). CAMADA 3: human "running" column writes coerce
+ * to stored `pending`; derived `running` comes from live card on read.
  */
 describe("store.ts: status híbrido com precedência (decisão 8)", () => {
   let dir: string;
@@ -53,7 +52,7 @@ describe("store.ts: status híbrido com precedência (decisão 8)", () => {
 
       const decision = store.upsertTask(base("t1", { status: "done", actor: "agent", updated_at: Date.now() + 2 }));
       expect(decision).toMatchObject({
-        status: "running",
+        status: "pending",
         statusChanged: false,
         divergedStatus: "done",
         divergedActor: "agent",
@@ -62,21 +61,19 @@ describe("store.ts: status híbrido com precedência (decisão 8)", () => {
       });
 
       const t = store.getTask("t1")!;
-      expect(t.status).toBe("running");
+      expect(t.status).toBe("pending");
       expect(t.diverged_status).toBe("done");
       expect(t.diverged_actor).toBe("agent");
 
       const transitions = t.transitions!;
-      // create + human move = 2 status; agent hold = 1 declaration
       expect(transitions.filter((x) => x.kind === "status")).toHaveLength(2);
       expect(transitions.filter((x) => x.kind === "declaration")).toHaveLength(1);
       expect(transitions.find((x) => x.kind === "declaration")).toMatchObject({
-        from_value: "running",
+        from_value: "pending",
         to_value: "done",
         actor: "agent",
       });
 
-      // last_actor de status continua humano — declaração NÃO desfaz o lock
       const last = store.listLastActorsForBoard("default").find((r) => r.task_id === "t1");
       expect(last?.last_actor).toBe("human");
     } finally {
@@ -94,14 +91,14 @@ describe("store.ts: status híbrido com precedência (decisão 8)", () => {
 
       const decision = store.upsertTask(base("t2", { status: "failed", actor: "app", updated_at: Date.now() + 3 }));
       expect(decision).toMatchObject({
-        status: "running",
+        status: "pending",
         statusChanged: false,
         divergedStatus: "failed",
         divergedActor: "app",
         warnAgent: false,
         recordDeclaration: true,
       });
-      expect(store.getTask("t2")!.status).toBe("running");
+      expect(store.getTask("t2")!.status).toBe("pending");
       expect(store.listLastActorsForBoard("default").find((r) => r.task_id === "t2")?.last_actor).toBe("human");
     } finally {
       store.close();
@@ -138,7 +135,7 @@ describe("store.ts: status híbrido com precedência (decisão 8)", () => {
 
       const decision = store.upsertTask(base("t4", { status: "running", actor: "app", updated_at: Date.now() + 3 }));
       expect(decision.divergedStatus).toBeNull();
-      expect(store.getTask("t4")!.status).toBe("running");
+      expect(store.getTask("t4")!.status).toBe("pending");
       expect(store.getTask("t4")!.diverged_status).toBeNull();
     } finally {
       store.close();
@@ -156,7 +153,7 @@ describe("store.ts: status híbrido com precedência (decisão 8)", () => {
 
       const decision = store.upsertTask(
         base("t4b", {
-          status: "running", // same as current — but statusProposed:false means "did not propose"
+          status: "running",
           result_json: JSON.stringify({ note: "partial" }),
           actor: "agent",
           statusProposed: false,
