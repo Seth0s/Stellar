@@ -597,8 +597,31 @@ export type SprintRow = {
  * `implementer` aqui — foi exatamente isso que tornou 156/156 linhas
  * indistinguíveis em `task_verdicts`. Linhas de antes desta coluna
  * ficam `null` de propósito (sem backfill: reescrevê-las inventaria
- * história). */
-export type ReportRow = { card_id: string; seq: number; report_json: string; verdict?: string | null; role?: string | null; updated_at: number };
+ * história).
+ *
+ * `channel` — porta de ingresso do request, carimbada pelo SERVIDOR no
+ * ponto de entrada (nunca um campo que o agente declara). Valores:
+ * `http` = chegou pelo endpoint HTTP do MCP; `socket` = chegou pelo
+ * Unix socket do acbridge. Ambiguidade HONESTA: um script Node com o
+ * SDK MCP contra `$AGENT_CANVAS_MCP_URL` (card 469) também é `http` —
+ * o transporte não distingue tool do catálogo de cliente cru no mesmo
+ * URL. Não confundir com `deriveReportChannel` em providers.ts (lá é a
+ * EXPECTATIVA por capacidade do provider: mcp|acbridge|unreachable).
+ * Nullable, sem backfill: linhas antigas ficam `null` (não sabem por
+ * onde entraram). Não viaja em `get_report`/`read_report` — medição do
+ * dono é SELECT na tabela. Mesma classe de fato derivado pelo servidor
+ * que `spawns.origin` (ce2e05f8), mas cabe na linha de `reports` porque
+ * descreve ESTE relatório, não um nascimento. */
+export type ReportIngressChannel = "http" | "socket";
+export type ReportRow = {
+  card_id: string;
+  seq: number;
+  report_json: string;
+  verdict?: string | null;
+  role?: string | null;
+  channel?: ReportIngressChannel | null;
+  updated_at: number;
+};
 
 // Cap de contagem TOTAL de LINHAS (não "um por card"). Generoso o bastante
 // pra uso normal (KB * 1000 ainda é trivial pro SQLite) e existir só como
@@ -820,6 +843,13 @@ function migrate(db: Database.Database) {
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
+  // Porta de ingresso (ver `ReportRow.channel`). Aditiva, nullable,
+  // sem backfill — linhas antigas ficam NULL (não inventar história).
+  try {
+    db.exec(`ALTER TABLE reports ADD COLUMN channel TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
   // Task proposal (`investigate|implement|measure|fix`). Nullable on
   // purpose: absence is NORMAL (empty chip), never a silent default.
   // Additive only — existing rows stay NULL. See TaskRow.purpose.
@@ -879,6 +909,7 @@ function migrate(db: Database.Database) {
           report_json TEXT NOT NULL,
           verdict TEXT,
           role TEXT,
+          channel TEXT,
           updated_at INTEGER NOT NULL
         );
       `);
@@ -1013,6 +1044,7 @@ export function openStore(userDataDir: string) {
       report_json TEXT NOT NULL,
       verdict TEXT,
       role TEXT,
+      channel TEXT,
       updated_at INTEGER NOT NULL
     );
   `);
@@ -2077,7 +2109,7 @@ export function openStore(userDataDir: string) {
   // não duplicar linha por task (o Map em index.ts também cairia no
   // último, mas a query não deve devolver N linhas por card).
   const reportsForBoardStmt = db.prepare(`
-    SELECT r.card_id, r.seq, r.report_json, r.verdict, r.role, r.updated_at FROM reports r
+    SELECT r.card_id, r.seq, r.report_json, r.verdict, r.role, r.channel, r.updated_at FROM reports r
     JOIN tasks t ON t.card_id = r.card_id
     WHERE t.board_id = ?
       AND r.seq = (SELECT MAX(r2.seq) FROM reports r2 WHERE r2.card_id = r.card_id)
@@ -2109,17 +2141,17 @@ export function openStore(userDataDir: string) {
   // `read_report`). Com afterSeq: o PRÓXIMO (menor seq > afterSeq) —
   // caminha o histórico append-only sem pular rodadas.
   const getLatestReportStmt = db.prepare(
-    "SELECT card_id, seq, report_json, verdict, role, updated_at FROM reports WHERE card_id = ? ORDER BY seq DESC LIMIT 1",
+    "SELECT card_id, seq, report_json, verdict, role, channel, updated_at FROM reports WHERE card_id = ? ORDER BY seq DESC LIMIT 1",
   );
   const getReportAfterStmt = db.prepare(
-    "SELECT card_id, seq, report_json, verdict, role, updated_at FROM reports WHERE card_id = ? AND seq > ? ORDER BY seq ASC LIMIT 1",
+    "SELECT card_id, seq, report_json, verdict, role, channel, updated_at FROM reports WHERE card_id = ? AND seq > ? ORDER BY seq ASC LIMIT 1",
   );
   // Append-only — INSERT puro. O nome `upsertReport` permanece porque é o
   // choke point já wired em message-bus/index; a semântica de conflito
   // (slot) foi a causa do bug.
   const upsertReportStmt = db.prepare(`
-    INSERT INTO reports (card_id, seq, report_json, verdict, role, updated_at)
-    VALUES (@card_id, @seq, @report_json, @verdict, @role, @updated_at)
+    INSERT INTO reports (card_id, seq, report_json, verdict, role, channel, updated_at)
+    VALUES (@card_id, @seq, @report_json, @verdict, @role, @channel, @updated_at)
   `);
   // A `seq` monotônica (message-bus.ts) precisa sobreviver ao restart
   // junto com os relatórios — senão o `afterSeq` do `read_report` passa a
@@ -2523,7 +2555,12 @@ export function openStore(userDataDir: string) {
         ? getLatestReportStmt.get(cardId)
         : getReportAfterStmt.get(cardId, afterSeq)) as ReportRow | undefined,
     upsertReport: (row: ReportRow) => {
-      upsertReportStmt.run({ ...row, verdict: row.verdict ?? null, role: row.role ?? null });
+      upsertReportStmt.run({
+        ...row,
+        verdict: row.verdict ?? null,
+        role: row.role ?? null,
+        channel: row.channel ?? null,
+      });
       pruneReportsStmt.run(MAX_STORED_REPORTS);
     },
     nextReportSeqSeed: (): number => (nextReportSeqStmt.get() as { m: number | null }).m ?? 0,
