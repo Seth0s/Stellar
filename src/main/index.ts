@@ -85,7 +85,7 @@ import {
   type BashConsentRequest,
   type DelegateProvider,
 } from "./chat-tools";
-import { decideSingleInstancePolicy } from "./single-instance-decision";
+import { decideSingleInstancePolicy, describeSingleInstanceRefusal } from "./single-instance-decision";
 import {
   APP_NAME,
   SOCK_BASENAME,
@@ -274,6 +274,11 @@ const gotSingleInstanceLock = singleInstancePolicy.requestLock
   ? app.requestSingleInstanceLock()
   : true;
 if (singleInstancePolicy.quitIfLost && !gotSingleInstanceLock) {
+  // Fala antes de morrer — ver `describeSingleInstanceRefusal`. `quit()`
+  // é assíncrono e não garante que nada mais saia depois; escrever aqui,
+  // síncrono, é o que garante que a linha exista no stderr de quem
+  // lançou (agente ou humano).
+  process.stderr.write(`${describeSingleInstanceRefusal(app.getPath("userData"))}\n`);
   // `app.quit()` é assíncrono — não interrompe a execução síncrona deste
   // módulo. O guard dentro de `app.whenReady().then()` lá embaixo
   // (`if (!gotSingleInstanceLock) return;`) é o que garante de verdade que

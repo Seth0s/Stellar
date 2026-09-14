@@ -51,3 +51,28 @@ export type SingleInstancePolicy = {
 export function decideSingleInstancePolicy(_isPackaged: boolean): SingleInstancePolicy {
   return { requestLock: true, quitIfLost: true };
 }
+
+/**
+ * A recusa precisa FALAR. Medido com o dono (2026-09-14): um agente rodou
+ * o app para testar, perdeu o lock e o processo saiu com `app.quit()` —
+ * código 0, stderr vazio. Quem estava do outro lado viu "abriu e fechou" e
+ * concluiu que o próprio teste estava quebrado. Sair em silêncio com
+ * código de sucesso é a mesma classe de defeito que este repo vem matando:
+ * o app sabia a resposta e não contou.
+ *
+ * Isto é uma STRING DE DIAGNÓSTICO, não UI: vai para o stderr do processo
+ * que está desistindo, que é onde um humano num terminal ou um agente
+ * lendo a saída do `npm run dev` de fato olha. Por isso não passa por
+ * `t()` — não há janela para traduzir, e o leitor pode ser um agente.
+ *
+ * Diz as três coisas que faltavam: QUE não é falha do teste, POR QUE
+ * (userData compartilhado, um processo por banco) e O QUE FAZER.
+ */
+export function describeSingleInstanceRefusal(userDataDir: string): string {
+  return (
+    `[stellar] outra instância já está rodando sobre este userData (${userDataDir}) — ` +
+    `esta saiu sem abrir janela, e isso NÃO é falha do seu teste. ` +
+    `Um processo por banco é deliberado: dois escritores colidem no socket do acbridge e no seed de ids de card. ` +
+    `Feche a instância aberta antes de rodar dev/smoke, ou suba com --user-data-dir próprio (é o que scripts/verify/cdp-client.mjs faz).`
+  );
+}

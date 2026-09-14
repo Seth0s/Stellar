@@ -18,7 +18,8 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { rmSync } from "node:fs";
+import { rmSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { createServer } from "node:net";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -83,6 +84,55 @@ export async function pickFreePort() {
  * Calling the binary directly means `proc` IS the Electron process, so a
  * normal SIGTERM actually reaches it.
  */
+/**
+ * VAZAMENTO MEDIDO (2026-09-14, disco do dono em 96%): `.verify-tmp/`
+ * tinha 103 diretórios e 748 MB — um `userData` de Electron por run de
+ * smoke, com cache de Chromium dentro, nenhum removido.
+ *
+ * A causa é uma correção que silenciou outra. `startApp` sempre limpou o
+ * diretório ANTES de subir ("todo run começa com perfil limpo"), e isso
+ * bastava quando o nome era FIXO por script: o run seguinte reaproveitava
+ * e limpava. Aí a correção de concorrência (ver `pickFreePort` acima)
+ * passou a sortear a porta e a pôr no nome do diretório — nome novo a
+ * cada run, então o `rmSync` do start nunca mais encontrou o anterior.
+ *
+ * Duas frentes, porque limpar só no fim não basta: um run que morre no
+ * meio (agente que sai, SIGKILL, disco cheio) nunca chega ao `stopApp`.
+ *  - `stopApp` remove o perfil do run que terminou;
+ *  - esta varredura remove órfãos antigos de runs que não terminaram.
+ *
+ * `VERIFY_KEEP_USERDATA=1` preserva tudo: quando um smoke FALHA, o sqlite
+ * do perfil é a evidência, e apagá-lo automaticamente seria trocar disco
+ * por cegueira. A varredura respeita o TTL mesmo assim, para o escape
+ * hatch não virar o vazamento de volta.
+ */
+const USER_DATA_TTL_MS = 6 * 60 * 60 * 1000;
+
+export function sweepStaleUserData(dir = join(PROJECT_ROOT, ".verify-tmp"), ttlMs = USER_DATA_TTL_MS) {
+  let removed = 0;
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0; // diretório ainda não existe — nada a varrer
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    // Só diretórios: os `.mjs`/`.json` de repro soltos ali são trabalho
+    // de gente, não lixo de run.
+    if (!entry.isDirectory()) continue;
+    const full = join(dir, entry.name);
+    try {
+      if (now - statSync(full).mtimeMs < ttlMs) continue;
+    } catch {
+      continue;
+    }
+    rmSync(full, { recursive: true, force: true });
+    removed++;
+  }
+  return removed;
+}
+
 export async function startApp({
   cdpPort,
   userDataDir,
@@ -104,6 +154,9 @@ export async function startApp({
   // wiping away what the first launch wrote. Defaults to the old
   // always-wipe behavior for every other caller.
   if (!preserveUserData) rmSync(userDataDir, { recursive: true, force: true });
+  // Órfãos de runs que nunca chegaram ao `stopApp` (agente que saiu no
+  // meio, SIGKILL, disco cheio). Barato: um `readdir` + `stat` por run.
+  sweepStaleUserData();
   // `node_modules/.bin/electron` is itself a small Node wrapper (cli.js)
   // that spawns the REAL Electron binary as ITS OWN child and waits on
   // it — confirmed the hard way: killing that wrapper process left the
@@ -163,7 +216,9 @@ export async function startApp({
   while (Date.now() < deadline) {
     try {
       const res = await fetch(`http://127.0.0.1:${cdpPort}/json`);
-      if (res.ok) return { proc, cdpPort, stderr: () => stderr };
+      // `userDataDir`/`preserveUserData` viajam no objeto para `stopApp`
+      // poder limpar o perfil ao final — ver `sweepStaleUserData` acima.
+      if (res.ok) return { proc, cdpPort, userDataDir, preserveUserData, stderr: () => stderr };
     } catch {
       // Not up yet — normal during the first second or so.
     }
@@ -202,6 +257,14 @@ export async function stopApp(app) {
     await delay(100);
   }
   if (app.proc.exitCode === null && app.proc.signalCode === null) killGroup("SIGKILL");
+  // O perfil deste run morre com ele. Antes nada removia, e cada run
+  // deixava ~9 MB para trás para sempre (ver `sweepStaleUserData`).
+  // `preserveUserData` é de quem vai reiniciar o app sobre o MESMO
+  // diretório; `VERIFY_KEEP_USERDATA=1` é de quem está depurando uma
+  // falha e precisa do sqlite que o run deixou.
+  if (app.userDataDir && !app.preserveUserData && process.env.VERIFY_KEEP_USERDATA !== "1") {
+    rmSync(app.userDataDir, { recursive: true, force: true });
+  }
 }
 
 /** A live CDP connection to the app's one page target — `send` for raw
