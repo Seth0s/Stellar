@@ -2081,7 +2081,7 @@ export function App() {
     ownerCardId: string | null,
     url: string,
     rectOverride?: Rect,
-    opts?: { reuse?: boolean },
+    opts?: { reuse?: boolean; focusIfOffscreen?: boolean },
   ): string {
     if (decideBrowserReuse(ownerCardId, opts?.reuse)) {
       const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
@@ -2118,6 +2118,9 @@ export function App() {
     // browser card born from open_url is exactly the "hard to read at the
     // user's current zoom" case the item calls out.
     if (world.zoom !== 1) setZoomAbs(1);
+    // Human-approved spawn_card kind:browser (via spawnCardFor → allowAsk)
+    // — same off-screen guard as the rail; never on autonomous autoApprove.
+    if (opts?.focusIfOffscreen && !centerInView(rect, visibleRect)) setTimeout(() => focusCard(id), 0);
     return id;
   }
 
@@ -2126,8 +2129,26 @@ export function App() {
   // rather than a human. Always through `addCard` (unlike openBrowserFor
   // above) — this IS the "something appeared on the board that a human
   // didn't click" moment the toast exists for.
-  function spawnAgentFor(provider: string, cwd?: string, resumeId?: string, model?: string, label?: string, effort?: string, brief?: string, taskId?: string): string {
+  //
+  // `focusIfOffscreen` (2026-09-14): ONLY the human-approved AgentAskModal
+  // path passes true — the human already stopped to decide, so bringing the
+  // new card into view matches their attention. Autonomous / autoApprove
+  // must NOT pass it: jumping the canvas on every background spawn steals
+  // the place the human was looking at (worse than an off-screen card +
+  // toast + Compass pill). Same policy as `spawnCardFor` below.
+  function spawnAgentFor(
+    provider: string,
+    cwd?: string,
+    resumeId?: string,
+    model?: string,
+    label?: string,
+    effort?: string,
+    brief?: string,
+    taskId?: string,
+    opts?: { focusIfOffscreen?: boolean },
+  ): string {
     const id = String(nextId.current++);
+    const rect = centeredSlot(visibleRect, cardsRef.current.length, existingRectsFor(cardsRef.current));
     addCard({
       id,
       kind: "terminal",
@@ -2141,7 +2162,7 @@ export function App() {
       initialInput: null,
       brief: brief || null,
       taskId: taskId || null,
-      rect: centeredSlot(visibleRect, cardsRef.current.length, existingRectsFor(cardsRef.current)),
+      rect,
       groupId: null,
       // DESIGN-BACKLOG.md item 62 — an MCP-driven spawn can name its own
       // child agent, same free-text field CardTag rename already sets;
@@ -2149,6 +2170,7 @@ export function App() {
       // ordinal convention whenever it's non-null.
       label: label || null,
     });
+    if (opts?.focusIfOffscreen && !centerInView(rect, visibleRect)) setTimeout(() => focusCard(id), 0);
     return id;
   }
 
@@ -2187,6 +2209,14 @@ export function App() {
   // always opens a NEW card (`reuse: false`) — spawn_card is the explicit
   // "give me another window" path; open_url keeps the anti-clutter reuse
   // default (DESIGN-BACKLOG.md §2.0 item 5).
+  //
+  // `focusIfOffscreen` (2026-09-14, medido): rail `addCardOfKind` already
+  // recenters when the ring-search lands past the fold; this agent path
+  // used not to — human clicks Permitir, toast fires, canvas stays empty.
+  // Calling focusCard on EVERY spawn would pan away from whatever the
+  // human was watching each time any agent created a card. Policy: only
+  // the consented `allowAsk` path passes true; autoApprove / sticky
+  // auto-approve / autonomous leave the camera alone (toast + Compass).
   type SpawnCardOutcome = { cardId: string; reused: boolean };
 
   function spawnCardFor(
@@ -2197,6 +2227,7 @@ export function App() {
     anchorCardId?: string,
     side?: AnchorSide,
     media?: { assetPath: string; mediaType: "image" | "pdf" },
+    opts?: { focusIfOffscreen?: boolean },
   ): SpawnCardOutcome {
     if (kind === "task") {
       const boardId = activeBoardIdRef.current;
@@ -2221,7 +2252,10 @@ export function App() {
     const anchoredBase = anchor && side ? anchoredSlot(anchor.rect, side) : undefined;
     if (kind === "browser") {
       return {
-        cardId: openBrowserFor(requesterId, url || "about:blank", anchoredBase, { reuse: false }),
+        cardId: openBrowserFor(requesterId, url || "about:blank", anchoredBase, {
+          reuse: false,
+          focusIfOffscreen: opts?.focusIfOffscreen,
+        }),
         reused: false,
       };
     }
@@ -2254,6 +2288,7 @@ export function App() {
         groupId: null,
         label: null,
       });
+      if (opts?.focusIfOffscreen && !centerInView(placed, visibleRect)) setTimeout(() => focusCard(id), 0);
       return { cardId: id, reused: false };
     }
     const card = {
@@ -2264,6 +2299,7 @@ export function App() {
       label: null,
     } as Card;
     addCard(card);
+    if (opts?.focusIfOffscreen && !centerInView(rect, visibleRect)) setTimeout(() => focusCard(id), 0);
     return { cardId: id, reused: false };
   }
 
@@ -2278,7 +2314,11 @@ export function App() {
       if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
       void window.browser.resolveAsk(ask.requestId, true, cardId);
     } else if (ask.kind === "spawn-agent") {
-      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort, ask.brief, ask.taskId);
+      // Human clicked Permitir — recenter if the ring-search landed off-fold
+      // (never on the autoApprove branch above).
+      const cardId = spawnAgentFor(ask.provider, ask.cwd, ask.resumeId, ask.model, ask.label, ask.effort, ask.brief, ask.taskId, {
+        focusIfOffscreen: true,
+      });
       // DESIGN-BACKLOG.md item 62 — same lineage record as the
       // autonomous auto-approve path above, for a human-approved spawn.
       // 2026-09-14 — same single-source `connectorLabel` (not `reason`).
@@ -2293,6 +2333,7 @@ export function App() {
         ask.anchorCardId,
         ask.side,
         ask.assetPath && ask.mediaType ? { assetPath: ask.assetPath, mediaType: ask.mediaType } : undefined,
+        { focusIfOffscreen: true },
       );
       if (ask.requesterId && !spawned.reused) autoConnect(ask.requesterId, spawned.cardId, "spawned", ask.reason ? truncateConnectorLabel(ask.reason) : null);
       void window.spawn.resolveCard(ask.requestId, { ok: true, cardId: spawned.cardId });
