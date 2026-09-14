@@ -273,6 +273,38 @@ export function deriveCompletionProposal(
   return { verdict: "aprovado", origin: "self", cardId: last.cardId, at: last.at };
 }
 
+/**
+ * CAMADA 4 — rótulo/tom do chip de veredito. O valor gravado em
+ * `task_verdicts.verdict` continua `aprovado`/`reprovado`/`null` (sem
+ * backfill); só a LEITURA muda. Verde (`--good`) + "aprovado" é
+ * reservado a `role=reviewer`. Implementer + `aprovado` é proposta de
+ * conclusão (`--muted`), não julgamento. `reprovado` do implementer
+ * permanece "reprovado" (`--danger`): auto-reprovar é confissão, não
+ * mente sobre revisão alheia — mesmo rótulo barato, sem inventar chip
+ * novo. Rodada sem veredito: "sem veredito", tom neutro (caso 169/200).
+ */
+export type VerdictChipTone = "good" | "muted" | "danger" | "none";
+
+export function describeVerdictChip(
+  role: string | null | undefined,
+  verdict: string | null | undefined,
+): { label: string; tone: VerdictChipTone } {
+  if (verdict == null || verdict === "") {
+    return { label: t("task.detail.verdictNone"), tone: "none" };
+  }
+  if (verdict === "aprovado") {
+    if (role === "reviewer") return { label: t("task.verdict.chip.approved"), tone: "good" };
+    if (role === "implementer") return { label: t("task.verdict.chip.propose"), tone: "muted" };
+    // Papel desconhecido: não pinta de verde (só reviewer). Mantém a
+    // palavra gravada, sem inventar "propõe concluir".
+    return { label: t("task.verdict.chip.approved"), tone: "muted" };
+  }
+  if (verdict === "reprovado") {
+    return { label: t("task.verdict.chip.rejected"), tone: "danger" };
+  }
+  return { label: verdict, tone: "none" };
+}
+
 /** Fila notice when `review="wanted"` and no reviewer is linked yet —
  * the visible counterpart of the agent refusal (no silent stall). */
 export function describeReviewWantedNotice(

@@ -35,6 +35,7 @@ import {
   describeHumanMoveNotice,
   describeStatusDivergence,
   describeStatusAskNotice,
+  describeVerdictChip,
   formatSprintTimestamp,
   formatSprintDuration,
   describeSprintCounts,
@@ -296,6 +297,45 @@ describe("deriveCompletionProposal", () => {
     expect(deriveCompletionProposal("done", ["reviewer"], [rev("aprovado", 1)])).toBeNull();
     expect(deriveCompletionProposal("failed", ["implementer"], [impl("aprovado", 1)])).toBeNull();
     expect(deriveCompletionProposal("pending", ["reviewer"], [rev("aprovado", 1)])).toBeNull();
+  });
+});
+
+// Chip honesty (2026-09-14): green APROVADO is reviewer-only. Implementer
+// "aprovado" is a completion proposal (muted). Reprovado stays danger for
+// any role (self-reject is confession). Null/empty stays neutral. Unknown
+// role keeps the stored word and never paints green.
+describe("describeVerdictChip", () => {
+  beforeEach(() => setLocale("pt-BR"));
+
+  it("reviewer + aprovado → rótulo 'aprovado', tom good (--good)", () => {
+    expect(describeVerdictChip("reviewer", "aprovado")).toEqual({ label: "aprovado", tone: "good" });
+  });
+
+  it("implementer + aprovado → 'propõe concluir', tom muted (--muted)", () => {
+    expect(describeVerdictChip("implementer", "aprovado")).toEqual({ label: "propõe concluir", tone: "muted" });
+  });
+
+  it("reprovado → 'reprovado', tom danger (--danger) para qualquer papel", () => {
+    expect(describeVerdictChip("implementer", "reprovado")).toEqual({ label: "reprovado", tone: "danger" });
+    expect(describeVerdictChip("reviewer", "reprovado")).toEqual({ label: "reprovado", tone: "danger" });
+  });
+
+  it("sem veredito → 'sem veredito', tom none (caso majoritário)", () => {
+    expect(describeVerdictChip("implementer", null)).toEqual({ label: "sem veredito", tone: "none" });
+    expect(describeVerdictChip("reviewer", "")).toEqual({ label: "sem veredito", tone: "none" });
+    expect(describeVerdictChip(null, null)).toEqual({ label: "sem veredito", tone: "none" });
+  });
+
+  it("papel nulo/desconhecido + aprovado: mantém a palavra gravada, NÃO pinta de verde", () => {
+    expect(describeVerdictChip(null, "aprovado")).toEqual({ label: "aprovado", tone: "muted" });
+    expect(describeVerdictChip("observer", "aprovado")).toEqual({ label: "aprovado", tone: "muted" });
+    expect(describeVerdictChip(undefined, "aprovado")).toEqual({ label: "aprovado", tone: "muted" });
+  });
+
+  it("em inglês troca o wording do chip, não só o tom", () => {
+    setLocale("en");
+    expect(describeVerdictChip("implementer", "aprovado")).toEqual({ label: "proposes done", tone: "muted" });
+    expect(describeVerdictChip("reviewer", "aprovado")).toEqual({ label: "approved", tone: "good" });
   });
 });
 
