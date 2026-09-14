@@ -1073,11 +1073,17 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "spawn_card",
       {
         description:
-          "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, remote window, or the board's task queue) on the board. `kind: \"task\"` is a singleton per board: when that board already has a live queue card, this call succeeds by returning its cardId instead of creating another. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind still requires human approval unless the board is in autonomous mode. `kind: \"browser\"` always opens a NEW browser card (never reuses one you already own) — use this when you need a second window alongside one opened via open_url; pass `reuse: true` only if you intentionally want open_url's navigate-existing behavior instead. By default the card lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open).",
+          "Create a non-terminal tool card (files explorer, git changes, sticky note, embedded browser, remote window, the board's task queue, or a media viewer for an image/PDF already on disk) on the board. `kind: \"task\"` is a singleton per board: when that board already has a live queue card, this call succeeds by returning its cardId instead of creating another. `kind: \"sticky\"` is created immediately, no approval needed (same risk class as write_sticky — reversible, no disk/process side effect). Every other kind — including `media` (copies the file into the board's durable assets folder) — still requires human approval unless the board is in autonomous mode. `kind: \"media\"` requires `path` (absolute, or relative to your card's cwd) pointing at an existing image (.png .jpg .jpeg .gif .webp) or PDF (.pdf); unsupported types and missing/unreadable files are refused with a clear error before consent. The card shows a COPY, so later edits/deletes of the source leave the board content intact. `kind: \"browser\"` always opens a NEW browser card (never reuses one you already own) — use this when you need a second window alongside one opened via open_url; pass `reuse: true` only if you intentionally want open_url's navigate-existing behavior instead. By default the card lands wherever centeredSlot picks (viewport center, nudged to avoid overlap); pass `anchorCardId`+`side` to place it right next to a specific existing card instead (e.g. next to a files card you already have open).",
         inputSchema: {
-          kind: z.enum(["files", "changes", "sticky", "browser", "remote-window", "task"]).describe("Which card kind to create; task reuses the board's existing live queue card; browser always creates a new card unless reuse:true"),
+          kind: z.enum(["files", "changes", "sticky", "browser", "remote-window", "task", "media"]).describe("Which card kind to create; task reuses the board's existing live queue card; browser always creates a new card unless reuse:true; media requires path"),
           cwd: z.string().optional().describe("Root path — used by files/changes kinds, defaults to the board's root"),
           url: z.string().optional().describe("URL — used by the browser kind"),
+          path: z
+            .string()
+            .optional()
+            .describe(
+              'File on disk for kind:"media" — absolute, or relative to your card cwd. Copied into board-assets (image: png/jpeg/gif/webp; pdf). Missing/unreadable/unsupported → refused naming what is accepted.',
+            ),
           reuse: z
             .boolean()
             .optional()
@@ -1095,7 +1101,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           side: z.enum(["left", "right", "top", "bottom"]).optional().describe("Which side of anchorCardId to place the new card on. Defaults to \"right\" when anchorCardId is given. Ignored without anchorCardId."),
         },
       },
-      async ({ kind, cwd, url, reuse, callerCardId, reason, anchorCardId, side }) => {
+      async ({ kind, cwd, url, path, reuse, callerCardId, reason, anchorCardId, side }) => {
         const requesterId = caller(callerCardId);
         // DESIGN-BACKLOG.md §2.0 item 5 — spawn_card browser defaults to a
         // fresh card; reuse:true opts into open_url's navigate-existing path.
@@ -1106,7 +1112,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           const res = await opts.handleRequest({ cmd: "open", url, requesterId, reason });
           return { content: [{ type: "text", text: JSON.stringify(res) }] };
         }
-        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, requesterId, reason, anchorCardId, side });
+        const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, path, requesterId, reason, anchorCardId, side });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

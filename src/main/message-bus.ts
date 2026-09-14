@@ -58,6 +58,7 @@ import {
 } from "./task-contract-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
 import { decideSpawnReason, deriveSpawnDepth } from "./spawn-record-decision";
+import { decideSpawnMediaPath, type SpawnMediaType } from "./spawn-media-decision";
 import {
   TASK_CARD_IMPLEMENTER_ROLE,
   TASK_CARD_REVIEWER_ROLE,
@@ -297,7 +298,7 @@ export type StickyOp =
   | { op: "set_color"; color: string; requesterId?: string }
   | { op: "set_mode"; mode: "edit" | "preview"; requesterId?: string };
 export type CardStatusResult = { ok: true; status: "running" | "waiting" | "exited" } | { ok: false; error: string };
-export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window" | "task";
+export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window" | "task" | "media";
 export type SpawnAgentResult =
   | { ok: true; cardId: string; exited?: boolean; exitCode?: number }
   | { ok: false; error: string };
@@ -550,6 +551,10 @@ export type BusRequest =
       kind?: string;
       cwd?: string;
       url?: string;
+      /** Absolute or cwd-relative path — required for `kind: "media"`.
+       * Validated + copied into board-assets before consent (MediaCard
+       * only loads via stellar-asset://). */
+      path?: string;
       requesterId?: string;
       reason?: string;
       /** Pendentes #188 ("spawn_card por coordenadas") — place the new
@@ -745,6 +750,11 @@ export function createMessageBus(
      * the UI (App.tsx's session UI → `setBoardAutonomous`), never an
      * MCP/acbridge cmd (see AGENTS.md's architecture entry). */
     getCardBoardId: (cardId: string) => string | undefined;
+    /** Currently loaded board — optional so existing test doubles stay
+     * source-compatible. Used as a last-resort board id for `kind:
+     * "media"` asset copies when the caller is anonymous (no card stamp)
+     * but the spawn still lands on the open board. */
+    getActiveBoardId?: () => string | undefined;
     /** Card rows for one board in the store's live-card universe. The
      * archivedAt field remains explicit in the shared guard input so callers
      * that do have historical rows can ignore them rather than treating
@@ -1018,15 +1028,30 @@ export function createMessageBus(
          * it) — OR, achado ao vivo 2026-09-06, for `kind: "sticky"`
          * regardless of autonomous mode: same risk class as
          * `write_sticky` (already gate-free), reversible, no disk/process
-         * side effect, unlike every other `spawn_card` kind. */
+         * side effect, unlike every other `spawn_card` kind. `media`
+         * stays gated: copying into board-assets is a disk write. */
         autoApprove?: boolean;
         /** Pendentes #188 ("spawn_card por coordenadas") — already
          * validated against `callbacks.listCards()` by the time this
          * fires, so the renderer can trust it names a real live card. */
         anchorCardId?: string;
         side?: "left" | "right" | "top" | "bottom";
+        /** `kind: "media"` only — already copied into board-assets. */
+        assetPath?: string;
+        mediaType?: SpawnMediaType;
+        /** Original source path (consent dialog display). */
+        path?: string;
       },
     ) => void;
+    /**
+     * Copy a validated source file into the board's persistent assets
+     * folder (`board-assets.ts`). Optional so unit doubles stay source-
+     * compatible; required at runtime for `kind: "media"`.
+     */
+    prepareMediaAsset?: (
+      boardId: string,
+      sourcePath: string,
+    ) => { ok: true; path: string } | { ok: false; error: string };
     /**
      * Build identity of THIS Electron process (see build-identity.ts).
      * Optional so existing test doubles stay source-compatible; when
@@ -3509,7 +3534,7 @@ export function createMessageBus(
     }
 
     if (req.cmd === "spawn_card") {
-      const validKinds: SpawnCardKind[] = ["files", "changes", "sticky", "browser", "remote-window", "task"];
+      const validKinds: SpawnCardKind[] = ["files", "changes", "sticky", "browser", "remote-window", "task", "media"];
       if (!req.kind || !validKinds.includes(req.kind as SpawnCardKind)) {
         return { ok: false, error: `kind must be one of ${validKinds.join(", ")}` };
       }
@@ -3542,6 +3567,32 @@ export function createMessageBus(
         const spawnUrlError = navigationUrlError(req.url);
         if (spawnUrlError) return { ok: false, error: spawnUrlError };
       }
+      // `kind: "media"` — validate + COPY into board-assets before consent
+      // (MediaCard only loads stellar-asset://; a bare reference would
+      // 404). Same permanence as human paste/drop (board-assets.ts).
+      let mediaAssetPath: string | undefined;
+      let mediaType: SpawnMediaType | undefined;
+      let mediaSourcePath: string | undefined;
+      if (req.kind === "media") {
+        const callerCwd = requesterId
+          ? callbacks.listCards().find((c) => c.id === requesterId)?.cwd
+          : undefined;
+        const pathDecision = decideSpawnMediaPath({ path: req.path, cwd: callerCwd });
+        if (pathDecision.action === "refuse") return { ok: false, error: pathDecision.error };
+        const boardIdForAsset =
+          requesterBoardId ?? taskBoardId ?? callbacks.getActiveBoardId?.() ?? undefined;
+        if (!boardIdForAsset) {
+          return { ok: false, error: 'kind "media" needs a board (caller card must belong to one, or a board must be open)' };
+        }
+        if (!callbacks.prepareMediaAsset) {
+          return { ok: false, error: "media spawn is unavailable in this process" };
+        }
+        const prepared = callbacks.prepareMediaAsset(boardIdForAsset, pathDecision.resolvedPath);
+        if (!prepared.ok) return { ok: false, error: prepared.error };
+        mediaAssetPath = prepared.path;
+        mediaType = pathDecision.mediaType;
+        mediaSourcePath = pathDecision.resolvedPath;
+      }
       const requestId = randomUUID();
       // DESIGN-BACKLOG.md item 60, peça 5 — same board-scoped auto-approve
       // as `open` above.
@@ -3556,6 +3607,7 @@ export function createMessageBus(
       // consentimento simplesmente trava o agente pra sempre nesse caso —
       // isentar só `sticky`, isolado dos outros kinds, que continuam
       // exigindo o modal normalmente fora de um board autônomo.
+      // `media` stays gated: it writes a durable copy under board-assets.
       const autoApprove = autonomous || req.kind === "sticky";
       markWaiting(requesterId);
       return new Promise((resolve) => {
@@ -3584,7 +3636,7 @@ export function createMessageBus(
                     taskId: null,
                     provider: null,
                     cardKind: req.kind as string,
-                    cwd: req.cwd ?? null,
+                    cwd: req.kind === "media" ? mediaSourcePath ?? null : req.cwd ?? null,
                     origin: reasonDecision.origin,
                   });
                 } catch (e) {
@@ -3604,6 +3656,9 @@ export function createMessageBus(
           autoApprove,
           anchorCardId: req.anchorCardId,
           side: req.anchorCardId ? (req.side ?? "right") : undefined,
+          assetPath: mediaAssetPath,
+          mediaType,
+          path: mediaSourcePath,
         });
       });
     }

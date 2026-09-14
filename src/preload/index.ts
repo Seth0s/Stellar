@@ -647,7 +647,7 @@ const browser = {
     ipcRenderer.invoke("browser:get-process-stats", id),
 };
 
-export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window" | "task";
+export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window" | "task" | "media";
 export type SpawnAgentAskParams = {
   provider: string;
   cwd?: string;
@@ -692,6 +692,11 @@ export type SpawnCardAskParams = {
    * against the live card list by message-bus.ts before this fires. */
   anchorCardId?: string;
   side?: "left" | "right" | "top" | "bottom";
+  /** `kind: "media"` — path already copied into board-assets by main. */
+  assetPath?: string;
+  mediaType?: "image" | "pdf";
+  /** Original source path for the consent dialog. */
+  path?: string;
 };
 /** DESIGN-BACKLOG.md item 60, peça 1 — one queued spawn_agent request. */
 export type SpawnQueueEntry = { id: string; requesterId: string; provider: string; reason?: string; requestedAt: number };

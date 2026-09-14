@@ -1639,6 +1639,10 @@ function createWindow() {
       return cardDisplayName(card, store.listCards(card.board_id));
     },
     getCardBoardId: (id) => store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id),
+    /** Active board in the live window — fallback for anonymous MCP
+     * callers (no `?card=` stamp) that still spawn onto the open board.
+     * Media asset copies need a board id even when identity is blank. */
+    getActiveBoardId: () => activeBoardId ?? undefined,
     // DESIGN-BACKLOG.md §2.1 "Fila" — unlike `listCards`, this lookup is
     // explicitly board-scoped and store-backed, so an MCP request cannot
     // mistake a queue on another board for the current one. `listCards`
@@ -1924,6 +1928,7 @@ function createWindow() {
       safeSend(win, "spawn:ask-agent", requestId, requesterId, params),
     onSpawnCardRequest: (requestId, requesterId, params) =>
       safeSend(win, "spawn:ask-card", requestId, requesterId, params),
+    prepareMediaAsset: (boardId, sourcePath) => copyBoardAssetFromPath(boardId, sourcePath),
     // DESIGN-BACKLOG.md item 60, peça 1 — live push so a queue panel never
     // has to poll; same safeSend guard as every other main→renderer event.
     onQueueChanged: (boardId, queue) => safeSend(win, "spawn-queue:changed", boardId, queue),
