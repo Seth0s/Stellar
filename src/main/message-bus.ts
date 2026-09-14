@@ -29,7 +29,13 @@ import {
   lastRefusedReasonFromResultJson,
   describeExitWithoutAcceptedReport,
 } from "./report-retry-decision";
-import { resolveTaskDispatchCwd, resolveTaskDispatchLabel } from "./task-dispatch-decision";
+import {
+  resolveTaskDispatchCwd,
+  resolveTaskDispatchLabel,
+  decideTaskDispatchProvider,
+  decideTaskDispatchCwd,
+  type AncestorCwdNode,
+} from "./task-dispatch-decision";
 import { appendDepPointer, depIdsFromJson, summarizeReport, type DepPointerSource, type DepReportSummary } from "./dep-pointer-decision";
 import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
 import {
@@ -2445,6 +2451,20 @@ export function createMessageBus(
       if (!req.taskId) return { ok: false, error: "missing taskId" };
       const existing = callbacks.getTask(req.taskId);
       if (!existing) return { ok: false, error: `no such task "${req.taskId}"` };
+      // CAMADA 4 — implementer linked to THIS task cannot write
+      // done/failed (judgment). Refuse and name `request_task_status`
+      // (teaching refusal, same class as report-retry-decision). Outsider
+      // and reviewer may write; anonymous requesterId = outsider.
+      // Human/app paths never enter this handler.
+      const statusProposed = req.status !== undefined;
+      if (statusProposed && req.status !== undefined) {
+        const cards = callbacks.getTaskCards(req.taskId) ?? [];
+        const judgment = decideJudgmentWrite({
+          proposedStatus: req.status,
+          requesterRoleOnTask: roleOnTask(cards, req.requesterId),
+        });
+        if (judgment.action === "refuse") return { ok: false, error: judgment.error };
+      }
       // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 — pure
       // bookkeeping an external orchestrator's own retry/reassignment loop
       // can lean on instead of tracking this itself: `incrementRetry`
@@ -3298,13 +3318,17 @@ export function createMessageBus(
     return appendDepPointer(briefFromTaskPrompt(task.prompt), depPointerSources(task));
   }
 
-  function buildTaskDispatchParams(task: TaskRow, provider: string, reason: string): SpawnQueueEntry["params"] {
+  function buildTaskDispatchParams(
+    task: TaskRow,
+    provider: string,
+    reason: string,
+    cwd: string | undefined,
+  ): SpawnQueueEntry["params"] {
     return {
       provider,
-      // Task's own cwd when set; `undefined` keeps App.tsx's
-      // `cwd || activeBoardCwd` board-root fallback (declared, not
-      // a hardcoded omission). See task-dispatch-decision.ts.
-      cwd: resolveTaskDispatchCwd(task.cwd),
+      // Resolved cwd (own or inherited); `undefined` keeps App.tsx's
+      // `cwd || activeBoardCwd` board-root fallback. See task-dispatch-decision.ts.
+      cwd,
       resumeId: undefined,
       depth: 0,
       reason,
@@ -3313,6 +3337,39 @@ export function createMessageBus(
       brief: briefForTask(task),
       taskId: task.id,
     };
+  }
+
+  /** Ancestor rows for cwd inheritance — same `getTask` lookup
+   * `depPointerSources` already does per dep, walked for grandparents. */
+  function ancestorCwdNodes(rootDepIds: string[], allTasks: TaskRow[]): AncestorCwdNode[] {
+    const nodes: AncestorCwdNode[] = [];
+    const seen = new Set<string>();
+    const queue = [...rootDepIds];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const dep = allTasks.find((t) => t.id === id) ?? callbacks.getTask(id);
+      if (!dep) continue;
+      const childDeps = depIdsFromJson(dep.deps_json);
+      nodes.push({ id: dep.id, cwd: dep.cwd, depIds: childDeps });
+      for (const child of childDeps) queue.push(child);
+    }
+    return nodes;
+  }
+
+  /** CAMADA 3 — refuse without writing status. Stamp `result_json` so the
+   * Fila shows `interruptionReason`; participation stays derived pending. */
+  function recordDispatchRefusal(task: TaskRow, reason: string) {
+    const latest = callbacks.getTask(task.id) ?? task;
+    if (interruptionReasonFromResultJson(latest.result_json) === reason) return;
+    callbacks.upsertTask({
+      ...latest,
+      result_json: stampFailureKindJson(latest.result_json, "interrompida", reason),
+      updated_at: Date.now(),
+      actor: "app",
+      statusProposed: false,
+    });
   }
 
   /** Called by the write funnel (index.ts → task-write-funnel.ts) — the
@@ -3341,7 +3398,9 @@ export function createMessageBus(
    * tracked — engine-initiated, never an agent asking to spawn another,
    * so MAX_SPAWN_DEPTH's fork-bomb guard doesn't apply; the DAG bounds it.
    *
-   * Returns whether a spawn was actually issued (tests assert on it). */
+   * Returns whether a spawn was actually issued (tests assert on it).
+   * Missing provider / divergent cwd → refuse in place (pending + visible
+   * reason), never invent `claude` or a path. */
   function dispatchIfUnblocked(task: TaskRow, allTasks: TaskRow[]): boolean {
     if (isJudgmentStatus(task.status) || task.status !== "pending" || !task.board_id) return false;
     if (task.card_id && callbacks.isCardAlive(task.card_id)) return false;
@@ -3354,9 +3413,26 @@ export function createMessageBus(
     const lastActor = lastStatusActorFromRow(callbacks.getTask(task.id) ?? task);
     if (lastActor === "human") return false;
     if (task.diverged_actor === "human" && task.diverged_status === "pending") return false;
+
+    const providerDecision = decideTaskDispatchProvider(task.provider);
+    if (providerDecision.action === "refuse") {
+      recordDispatchRefusal(task, providerDecision.reason);
+      return false;
+    }
+    const cwdDecision = decideTaskDispatchCwd(task.cwd, ancestorCwdNodes(deps, allTasks), deps);
+    if (cwdDecision.action === "refuse") {
+      recordDispatchRefusal(task, cwdDecision.reason);
+      return false;
+    }
+
     dispatchingTaskIds.add(task.id);
     const requestId = randomUUID();
-    const params = buildTaskDispatchParams(task, task.provider ?? "claude", `auto-dispatch: task ${task.id} (deps satisfied)`);
+    const params = buildTaskDispatchParams(
+      task,
+      providerDecision.provider,
+      `auto-dispatch: task ${task.id} (deps satisfied)`,
+      cwdDecision.cwd,
+    );
     autonomousSpawn(task.board_id, requestId, "", params).then((result) => {
       dispatchingTaskIds.delete(task.id);
       if (result.ok) {
@@ -3876,6 +3952,8 @@ export function createMessageBus(
 
   return {
     handleRequest,
+    /** Test seam — `deriveAutoConnectLabel` is nested; unit tests call it here. */
+    deriveAutoConnectLabel,
     resolveOpen,
     resolveCloseCard,
     resolveSnapshot,

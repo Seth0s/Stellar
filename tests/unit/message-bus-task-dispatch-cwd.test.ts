@@ -6,15 +6,12 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import type { StatusWriteDecision } from "../../src/main/status-write-decision";
 import type { TaskRow } from "../../src/main/store";
 import { createTaskWriteFunnel } from "../../src/main/task-write-funnel";
+import { PROVIDER_UNDECLARED_REASON } from "../../src/main/task-dispatch-decision";
+import { interruptionReasonFromResultJson } from "../../src/main/failure-kind-decision";
 
 /**
- * Card `claude` sozinho em /home/lucas — onTaskDone/retryOrFail must pass
- * the task's own cwd + a label, not hardcode cwd: undefined.
- *
- * 2026-09-13: `update_task{done}` no longer calls `onTaskDone` itself —
- * the write funnel (task-write-funnel.ts, index.ts's `persistTask`) does,
- * from the store's decision. The mocked `upsertTask` here is wired the
- * same way index.ts wires it, so the dispatch path under test is real.
+ * Auto-dispatch: no `?? "claude"`, cwd inherits from deps, refusal stamps
+ * result_json WITHOUT writing status (CAMADA 3).
  */
 
 function funnelled(decide: (task: TaskRow) => StatusWriteDecision, getBus: () => ReturnType<typeof createMessageBus> | null) {
@@ -94,8 +91,6 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
       cwd: "/home/lucas/Workplace/Projects/Stellar",
       prompt: "i18n fase 2",
     });
-    // getTask still serves the pre-update row; onTaskDone reads listTasks
-    // AFTER the dep upsert, so listTasks must already show dep as done.
     const depBefore = { ...dep, status: "running" };
     const persistTask = funnelled((task) => applied(task.status), () => bus);
 
@@ -120,13 +115,59 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
     expect(spawnParams[0].cwd).toBe("/home/lucas/Workplace/Projects/Stellar");
     expect(spawnParams[0].label).toBe("i18n fase 2");
     expect(spawnParams[0].provider).toBe("claude");
-    // Prompt first; the parent pointer (dep-pointer-decision.ts) follows
-    // because this task HAS deps — pinned in message-bus-dep-pointer.test.ts.
     expect((spawnParams[0].brief as string).startsWith("i18n fase 2\n\n---\n[stellar:deps]")).toBe(true);
     expect(spawnParams[0].taskId).toBe("ceaabaac-xxxx");
   });
 
-  it("onTaskDone com task sem cwd passa undefined (fallback do board no renderer)", async () => {
+  it("onTaskDone herda cwd do pai quando a filha não declara", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-dispatch-inherit-cwd-"));
+    const spawnParams: Array<Record<string, unknown>> = [];
+    const rows = new Map<string, TaskRow>();
+    const dep = baseTask({
+      id: "dep-done",
+      status: "done",
+      prompt: "fase 1",
+      cwd: "/home/lucas/Workplace/Projects/Stellar",
+      provider: "cursor",
+    });
+    const pending = baseTask({
+      id: "child-no-cwd",
+      status: "pending",
+      deps_json: JSON.stringify(["dep-done"]),
+      cwd: null,
+      provider: "cursor",
+      prompt: "fase 2",
+    });
+    rows.set(dep.id, { ...dep, status: "running" });
+    rows.set(pending.id, pending);
+    const persistTask = funnelled((task) => {
+      rows.set(task.id, task);
+      return applied(task.status);
+    }, () => bus);
+
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        getTask: (id: string) => rows.get(id),
+        listTasks: () => [dep, pending],
+        isBoardAutonomous: () => true,
+        countRunningAgentsOnBoard: () => 0,
+        getBoardConcurrencyCap: () => 4,
+        upsertTask: (task: TaskRow) => persistTask(task),
+        onSpawnAgentRequest: (_requestId: string, _requesterId: string, params: Record<string, unknown>) => {
+          spawnParams.push(params);
+        },
+      }),
+    );
+
+    await bus.handleRequest({ cmd: "update_task", taskId: "dep-done", status: "done" } as BusRequest);
+
+    expect(spawnParams).toHaveLength(1);
+    expect(spawnParams[0].cwd).toBe("/home/lucas/Workplace/Projects/Stellar");
+    expect(spawnParams[0].provider).toBe("cursor");
+  });
+
+  it("onTaskDone com task sem cwd e pai sem cwd passa undefined (fallback do board no renderer)", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-dispatch-nocwd-"));
     const spawnParams: Array<Record<string, unknown>> = [];
     const dep = baseTask({ id: "dep-done", status: "done", prompt: "fase 1" });
@@ -160,9 +201,55 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
     expect(spawnParams).toHaveLength(1);
     expect(spawnParams[0].cwd).toBeUndefined();
     expect(spawnParams[0].label).toBe("task no-cwd-t");
-    // No prompt, but deps → the pointer alone is the brief (never mute AND parentless).
     expect((spawnParams[0].brief as string).startsWith("[stellar:deps]")).toBe(true);
     expect(spawnParams[0].taskId).toBe("no-cwd-task");
+  });
+
+  it("sem provider: NÃO despacha, fica pending, grava motivo sem propor status", async () => {
+    dir = mkdtempSync(join(tmpdir(), "stellar-dispatch-refuse-provider-"));
+    const spawnParams: Array<Record<string, unknown>> = [];
+    const upserts: TaskRow[] = [];
+    const rows = new Map<string, TaskRow>();
+    const dep = baseTask({ id: "dep-done", status: "done", prompt: "fase 1", cwd: "/tmp/repo" });
+    const pending = baseTask({
+      id: "no-provider",
+      status: "pending",
+      provider: null,
+      deps_json: JSON.stringify(["dep-done"]),
+      cwd: null,
+      prompt: "filho sem provider",
+    });
+    rows.set(dep.id, { ...dep, status: "running" });
+    rows.set(pending.id, pending);
+    const persistTask = funnelled((task) => {
+      upserts.push(task);
+      rows.set(task.id, task);
+      return applied(task.status);
+    }, () => bus);
+
+    bus = createMessageBus(
+      join(dir, "agent-canvas.sock"),
+      callbacksWithOverrides({
+        getTask: (id: string) => rows.get(id),
+        listTasks: () => [dep, rows.get("no-provider")!],
+        isBoardAutonomous: () => true,
+        countRunningAgentsOnBoard: () => 0,
+        getBoardConcurrencyCap: () => 4,
+        upsertTask: (task: TaskRow) => persistTask(task),
+        onSpawnAgentRequest: (_requestId: string, _requesterId: string, params: Record<string, unknown>) => {
+          spawnParams.push(params);
+        },
+      }),
+    );
+
+    await bus.handleRequest({ cmd: "update_task", taskId: "dep-done", status: "done" } as BusRequest);
+
+    expect(spawnParams).toHaveLength(0);
+    const refusal = upserts.find((t) => t.id === "no-provider" && t.result_json);
+    expect(refusal).toBeDefined();
+    expect(refusal!.statusProposed).toBe(false);
+    expect(interruptionReasonFromResultJson(refusal!.result_json)).toBe(PROVIDER_UNDECLARED_REASON);
+    expect(rows.get("no-provider")!.status).toBe("pending");
   });
 
   it("create_task grava cwd explícito; omitido vira null", async () => {

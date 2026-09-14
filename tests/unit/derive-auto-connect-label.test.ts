@@ -1,0 +1,155 @@
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import type { TaskRow } from "../../src/main/store";
+
+/**
+ * `deriveAutoConnectLabel` — spawn_agent case (2026-09-14).
+ * The arrow names the RELATION (purpose + reviewer), not a second copy
+ * of the card title. Regression keeps the five pre-existing cmds.
+ */
+
+function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
+  return new Proxy(
+    {},
+    {
+      get: (_target, prop: string) => overrides[prop] ?? (() => undefined),
+    },
+  ) as Parameters<typeof createMessageBus>[1];
+}
+
+function task(overrides: Partial<TaskRow> = {}): TaskRow {
+  return {
+    id: "task-1",
+    prompt: "Connector de spawn nasce sem label. Texto longo que viraria o nome do card.",
+    provider: "claude",
+    status: "pending",
+    card_id: null,
+    board_id: "b1",
+    cwd: null,
+    result_json: null,
+    deps_json: null,
+    purpose: "fix",
+    retry_count: 0,
+    attempted_providers_json: null,
+    max_retries: null,
+    fallback_providers_json: null,
+    order: null,
+    suggested_order: null,
+    implicit_order: null,
+    diverged_status: null,
+    diverged_actor: null,
+    created_at: 1,
+    updated_at: 1,
+    ...overrides,
+  };
+}
+
+describe("deriveAutoConnectLabel", () => {
+  let dir: string;
+  let bus: ReturnType<typeof createMessageBus> | null;
+
+  afterEach(() => {
+    bus?.close();
+    bus = null;
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function makeBus(overrides: Record<string, (...args: never[]) => unknown> = {}) {
+    dir = mkdtempSync(join(tmpdir(), "stellar-derive-label-"));
+    bus = createMessageBus(join(dir, "agent-canvas.sock"), callbacksWithOverrides(overrides));
+    return bus;
+  }
+
+  describe("spawn_agent", () => {
+    it("com task + purpose fix (implementer) → 'correção'", () => {
+      const t = task({ purpose: "fix" });
+      const b = makeBus({ getTask: ((id: string) => (id === t.id ? t : undefined)) as never });
+      expect(b.deriveAutoConnectLabel({ cmd: "spawn_agent", taskId: t.id, provider: "claude" } as BusRequest)).toBe(
+        "correção",
+      );
+    });
+
+    it("sem taskId → null", () => {
+      const b = makeBus();
+      expect(b.deriveAutoConnectLabel({ cmd: "spawn_agent", provider: "claude" } as BusRequest)).toBeNull();
+    });
+
+    it("role reviewer + purpose → 'revisão · correção'", () => {
+      const t = task({ purpose: "fix" });
+      const b = makeBus({ getTask: ((id: string) => (id === t.id ? t : undefined)) as never });
+      expect(
+        b.deriveAutoConnectLabel({
+          cmd: "spawn_agent",
+          taskId: t.id,
+          role: "reviewer",
+          provider: "claude",
+        } as BusRequest),
+      ).toBe("revisão · correção");
+    });
+
+    it("role reviewer sem purpose → 'revisão'", () => {
+      const t = task({ purpose: null });
+      const b = makeBus({ getTask: ((id: string) => (id === t.id ? t : undefined)) as never });
+      expect(
+        b.deriveAutoConnectLabel({
+          cmd: "spawn_agent",
+          taskId: t.id,
+          role: "reviewer",
+          provider: "claude",
+        } as BusRequest),
+      ).toBe("revisão");
+    });
+
+    it("implementer sem purpose → null (ausência é normal)", () => {
+      const t = task({ purpose: null });
+      const b = makeBus({ getTask: ((id: string) => (id === t.id ? t : undefined)) as never });
+      expect(b.deriveAutoConnectLabel({ cmd: "spawn_agent", taskId: t.id, provider: "claude" } as BusRequest)).toBeNull();
+    });
+
+    it("passa por truncateForLabel (não trunca por conta própria)", () => {
+      // purpose labels are short; prove the sanitizer path still runs by
+      // ensuring a purpose with C0 whitespace collapses the same way.
+      const t = task({ purpose: "implement" });
+      const b = makeBus({ getTask: ((id: string) => (id === t.id ? t : undefined)) as never });
+      expect(b.deriveAutoConnectLabel({ cmd: "spawn_agent", taskId: t.id, provider: "claude" } as BusRequest)).toBe(
+        "implementação",
+      );
+    });
+  });
+
+  describe("regressão dos cinco cmds existentes", () => {
+    it("send → text", () => {
+      const b = makeBus();
+      expect(b.deriveAutoConnectLabel({ cmd: "send", text: "ls -la", target: "t" } as BusRequest)).toBe("ls -la");
+    });
+
+    it("browser_type → text, senão selector", () => {
+      const b = makeBus();
+      expect(b.deriveAutoConnectLabel({ cmd: "browser_type", text: "hello", target: "t" } as BusRequest)).toBe("hello");
+      expect(b.deriveAutoConnectLabel({ cmd: "browser_type", selector: "#q", target: "t" } as BusRequest)).toBe("#q");
+    });
+
+    it("browser_click → selector", () => {
+      const b = makeBus();
+      expect(b.deriveAutoConnectLabel({ cmd: "browser_click", selector: "button.submit", target: "t" } as BusRequest)).toBe(
+        "button.submit",
+      );
+    });
+
+    it("browser_scroll → selector ou null", () => {
+      const b = makeBus();
+      expect(b.deriveAutoConnectLabel({ cmd: "browser_scroll", selector: "#main", target: "t" } as BusRequest)).toBe("#main");
+      expect(b.deriveAutoConnectLabel({ cmd: "browser_scroll", target: "t" } as BusRequest)).toBeNull();
+    });
+
+    it("browser_eval → js", () => {
+      const b = makeBus();
+      expect(b.deriveAutoConnectLabel({ cmd: "browser_eval", js: "document.title", target: "t" } as BusRequest)).toBe(
+        "document.title",
+      );
+    });
+  });
+});
