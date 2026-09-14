@@ -777,6 +777,21 @@ export const ptBR = {
   "error.agyAddFailed": "agy mcp add falhou: {error}",
   "error.agyBinaryMissing": "binário agy não encontrado",
   "error.mcpInvoked": "provider registra MCP por invocação",
+  "task.stats": "Como anda",
+  "task.stats.cycle": "ciclo pending → done",
+  "task.stats.cycleValue": "mediana {minutes} min · n={n}",
+  "task.stats.cycleEmpty": "sem chegada a done com início em pending",
+  "task.stats.reopened": "{n} voltaram de done — a mediana usa a 1ª chegada; a volta não alonga o número",
+  "task.stats.rounds": "rodadas por task done",
+  "task.stats.roundsValue": "mediana {rounds} · n={n}",
+  "task.stats.roundsEmpty": "nenhuma task done com rodada gravada",
+  "task.stats.roundsNote": "conta toda linha em task_verdicts (inclui saída sem veredito)",
+  "task.stats.provider": "rodadas por provider/model",
+  "task.stats.providerEmpty": "sem perfil gravado ({withProvider}/{parts}) — não dá pra comparar classes",
+  "task.stats.providerInsufficient": "n={n} < {min} — amostra insuficiente pra comparar",
+  "task.stats.providerOk": "n={n} · mediana {rounds} rodadas",
+  "task.stats.coverage":
+    "{tasks} tasks · ciclo n={cycle} · {reopened} reabertas · {verdicts} rodadas ({typed} com veredito, {nulls} sem) · {orphans}/{parts} cards mortos · {withProvider}/{parts} com provider",
 } as const;
 
 export type MessageKey = keyof typeof ptBR;
@@ -1544,6 +1559,21 @@ export const en: Record<MessageKey, string> = {
   "error.agyAddFailed": "agy mcp add failed: {error}",
   "error.agyBinaryMissing": "agy binary not found",
   "error.mcpInvoked": "provider registers MCP per invocation",
+  "task.stats": "How it's going",
+  "task.stats.cycle": "cycle pending → done",
+  "task.stats.cycleValue": "median {minutes} min · n={n}",
+  "task.stats.cycleEmpty": "no arrival at done with a pending start",
+  "task.stats.reopened": "{n} left done later — median uses first arrival; reopen does not stretch it",
+  "task.stats.rounds": "rounds per done task",
+  "task.stats.roundsValue": "median {rounds} · n={n}",
+  "task.stats.roundsEmpty": "no done task with a recorded round",
+  "task.stats.roundsNote": "counts every task_verdicts row (includes exit without a verdict)",
+  "task.stats.provider": "rounds by provider/model",
+  "task.stats.providerEmpty": "no profile stamped ({withProvider}/{parts}) — cannot compare classes",
+  "task.stats.providerInsufficient": "n={n} < {min} — sample too small to compare",
+  "task.stats.providerOk": "n={n} · median {rounds} rounds",
+  "task.stats.coverage":
+    "{tasks} tasks · cycle n={cycle} · {reopened} reopened · {verdicts} rounds ({typed} with verdict, {nulls} without) · {orphans}/{parts} dead cards · {withProvider}/{parts} with provider",
 };
 
 export const CATALOGS = {

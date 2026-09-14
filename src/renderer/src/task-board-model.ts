@@ -450,7 +450,7 @@ export function computeBoardScope(
  * precisa — mesmo padrão de `TaskOrderable` acima (shape local, não
  * importado de `preload/index.ts`, pra manter o módulo sem dependência
  * Electron-adjacent). */
-export type StatusTransitionPoint = { toValue: string; at: number };
+export type StatusTransitionPoint = { toValue: string; fromValue?: string | null; at: number };
 
 export type CycleTime = { queuedMs: number; runningMs: number };
 
@@ -512,7 +512,7 @@ function formatAxisHour(h: number): string {
 }
 
 /** Forma mínima de uma linha de `task_verdicts` pro quadro (provider vem
- * do LEFT JOIN com `cards` em `listVerdictsForBoard`). */
+ * de COALESCE(task_cards.provider, cards.provider) em `listVerdictsForBoard`). */
 export type VerdictPoint = { verdict: string | null; provider: string | null; at: number };
 
 export type ProviderVerdictStats = { provider: string; approved: number; rejected: number };

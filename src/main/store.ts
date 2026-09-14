@@ -1512,8 +1512,12 @@ export function openStore(userDataDir: string) {
   // `getTaskTransitions` por task. `kind = 'status'` — `'stage'` está no
   // tipo mas nenhum caminho escreve isso ainda (ver TaskTransitionRow's
   // doc comment).
+  // `from_value` rides along so arrival-cycle reopen detection
+  // (work-stats.ts) can see done→pending without reconstructing the
+  // previous to_value. No new column — the field already exists on every
+  // transition row.
   const transitionsForBoardStmt = db.prepare(`
-    SELECT tt.task_id, tt.to_value, tt.at
+    SELECT tt.task_id, tt.from_value, tt.to_value, tt.at
     FROM task_transitions tt
     JOIN tasks t ON t.id = tt.task_id
     WHERE t.board_id = ? AND tt.kind = 'status'
@@ -2193,8 +2197,17 @@ export function openStore(userDataDir: string) {
   // apaga a linha — ver `CardRow.archived_at`'s doc comment). `LEFT` pra
   // nunca sumir com o vínculo task↔card só porque o card raro que FOI
   // deletado de verdade não existe mais.
+  // Provider/model: prefer the profile stamped on `task_cards` (survives
+  // DELETE FROM cards — measured 2026-09-14: ~135/139 participations are
+  // orphans). Fall back to the live `cards` row when the profile was
+  // never written (pre-9a7950b). `card_orphaned` is the LEFT JOIN miss.
   const taskCardsForBoardStmt = db.prepare(`
-    SELECT tc.task_id, tc.card_id, tc.role, c.kind as card_kind, c.provider as card_provider, c.label as card_label
+    SELECT tc.task_id, tc.card_id, tc.role, c.kind as card_kind,
+      COALESCE(tc.provider, c.provider) as card_provider,
+      tc.model as card_model,
+      tc.effort as card_effort,
+      c.label as card_label,
+      CASE WHEN c.id IS NULL THEN 1 ELSE 0 END as card_orphaned
     FROM task_cards tc
     JOIN tasks t ON t.id = tc.task_id
     LEFT JOIN cards c ON c.id = tc.card_id
@@ -2213,13 +2226,15 @@ export function openStore(userDataDir: string) {
   `);
 
   // RODADA 4 — histórico de veredito por board (pílulas + gráficos 1/2).
-  // LEFT JOIN cards pro provider (mesmo motivo de taskCardsForBoardStmt:
-  // card fechado/deletado não pode apagar a rodada). Ordenado por task +
-  // at — o chamador agrupa em JS sem reordenar.
+  // Provider: COALESCE(task_cards.provider, cards.provider) — same
+  // survival rule as taskCardsForBoardStmt. Card deleted ⇒ still have
+  // the class when the participation profile was stamped.
   const verdictsForBoardStmt = db.prepare(`
-    SELECT tv.task_id, tv.card_id, tv.role, tv.verdict, tv.at, c.provider as card_provider
+    SELECT tv.task_id, tv.card_id, tv.role, tv.verdict, tv.at,
+      COALESCE(tc.provider, c.provider) as card_provider
     FROM task_verdicts tv
     JOIN tasks t ON t.id = tv.task_id
+    LEFT JOIN task_cards tc ON tc.task_id = tv.task_id AND tc.card_id = tv.card_id
     LEFT JOIN cards c ON c.id = tv.card_id
     WHERE t.board_id = ?
     ORDER BY tv.task_id, tv.at ASC, tv.rowid ASC
@@ -2450,8 +2465,15 @@ export function openStore(userDataDir: string) {
       return Object.fromEntries(rows.map((r) => [r.board_id, r.n]));
     },
     // Ver o comentário grande de `transitionsForBoardStmt` acima.
-    listStatusTransitionsForBoard: (boardId: string): { task_id: string; to_value: string; at: number }[] =>
-      transitionsForBoardStmt.all(boardId) as { task_id: string; to_value: string; at: number }[],
+    listStatusTransitionsForBoard: (
+      boardId: string,
+    ): { task_id: string; from_value: string | null; to_value: string; at: number }[] =>
+      transitionsForBoardStmt.all(boardId) as {
+        task_id: string;
+        from_value: string | null;
+        to_value: string;
+        at: number;
+      }[],
     // DESIGN-BACKLOG.md §2.1 item 6 — ver TASK_COLUMNS/listTasksByBoardStmt
     // acima. Wired (2026-09-10) through index.ts's `listTasksByBoard`
     // callback into message-bus.ts's `list_tasks` cmd, which now uses this
@@ -2640,11 +2662,21 @@ export function openStore(userDataDir: string) {
       lastActorsForBoardStmt.all(boardId) as { task_id: string; last_actor: TaskActor | null }[],
     listTaskCardsForBoard: (
       boardId: string,
-    ): (TaskCardRow & { card_kind: string | null; card_provider: string | null; card_label: string | null })[] =>
+    ): (TaskCardRow & {
+      card_kind: string | null;
+      card_provider: string | null;
+      card_model: string | null;
+      card_effort: string | null;
+      card_label: string | null;
+      card_orphaned: number;
+    })[] =>
       taskCardsForBoardStmt.all(boardId) as (TaskCardRow & {
         card_kind: string | null;
         card_provider: string | null;
+        card_model: string | null;
+        card_effort: string | null;
         card_label: string | null;
+        card_orphaned: number;
       })[],
     listReportsForBoard: (boardId: string): ReportRow[] => reportsForBoardStmt.all(boardId) as ReportRow[],
     /** RODADA 4 — vereditos do board inteiro (uma consulta), com provider
