@@ -97,6 +97,7 @@ Coordenar mais de um agente por estas ferramentas tem mecânica própria — con
 
 ## 7. 📚 Fontes Canônicas & Handoff
 
+* **[docs/ORCHESTRATION.md](docs/ORCHESTRATION.md)** — **Manual do Orquestrador.** Como conduzir um board com agentes: modelo de quatro camadas da task, marca do orquestrador, superfície MCP/acbridge e quando cada uma está disponível, como escrever um contrato de task, entrega e seus estados (`parked` ≠ `delivered`), commit por hunk filtrado em árvore compartilhada, princípios de engenharia e o catálogo de anti-padrões com o custo medido de cada um. **Leitura obrigatória para quem assume um board vindo do zero** — inclusive o agente master.
 * **[SYSTEM.md](file:///home/lucas/Workplace/Projects/Stellar/SYSTEM.md)** — Mapa detalhado de IPCs, processos main/renderer, schemas do SQLite e limites de plataforma.
 * **[docs/SYSTEM_DESIGN.md](file:///home/lucas/Workplace/Projects/Stellar/docs/SYSTEM_DESIGN.md)** — Design System formal, catálogo de componentes, tokens visuais, animações e regras de acessibilidade.
 * **[DESIGN-BACKLOG.md](file:///home/lucas/Workplace/Projects/Stellar/DESIGN-BACKLOG.md)** — Backlog consolidado de design, tarefas pendentes, acessibilidade e ideias futuras.
