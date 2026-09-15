@@ -48,7 +48,13 @@ export type SpawnOpts = {
    * value outside the app's own write-path enum (e.g. claude's `xhigh`)
    * round-trips through here unmolested instead of the type forcing a
    * lossy coercion somewhere upstream — see card-types.ts's
-   * `TerminalCardData.effort` doc comment for the full reasoning. */
+   * `TerminalCardData.effort` doc comment for the full reasoning.
+   *
+   * 2026-09-15: a spawn_agent that passes `effort` for a provider whose
+   * `capacity.effort` mechanism is "none" is now REFUSED at the gate
+   * (spawn-profile-decision.ts), not accepted-and-dropped — the
+   * pre-fix behavior for bash/codex/cursor/opencode was exactly the
+   * silent-substitution class described above. */
   effort?: string;
   /** Internal only — never set by the renderer/IPC caller. Injected by
    * `pty-registry.ts::spawn()` from its own closed-over `mcpUrl` so
@@ -100,6 +106,72 @@ export type McpRegistrationCapability =
   | { mechanism: "global-config" }
   | { mechanism: "none" };
 
+// DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" — per-provider
+// ranges re-measured 2026-09-12 against the live CLIs (not the comments):
+//
+// - `claude --help` (v2.1.269): `--effort <level>` is
+//   `low, medium, high, xhigh, max`. An unknown value is NOT rejected —
+//   the CLI prints `Warning: Unknown --effort value '…' — ignoring it and
+//   using the default effort` and continues. That is the same silent-
+//   substitution class this gate exists for, so claude NOW has a list
+//   here (the 2026-09-10 comment that it "accepts anything callers send
+//   it, so there's nothing to refuse" was empirically false).
+// - `agy --help` (v1.2.2): `--effort` is `low|medium|high`. Passing
+//   `xhigh`/`max` fails with `invalid --effort "…" (valid: low, medium,
+//   high)` — confirmed via `agy --effort xhigh --model <fake>
+//   --print='x'`. The older "available: low, high" error (gemini-3.1-pro
+//   without `--effort`, 2026-09-10) is no longer the CLI's range.
+//
+// DECISION (documented here, not just in the session report): a
+// `spawn_agent` whose provider has a known range, with an effort outside
+// that range, is REFUSED (`ok: false`, no card created), never silently
+// remapped to the nearest supported value. Mapping in silence repeats the
+// exact bug class this whole fix exists for — the user asked for X, got
+// Y, and the app never said so ("a sessão era um opus medium... voltei
+// como high e custou muito" was ITSELF a silent substitution, just one
+// the app didn't even choose on purpose). A refusal surfaces immediately,
+// in the same `ok:false` channel every other spawn precondition in
+// message-bus.ts's `spawn_agent` handler already uses (missing provider,
+// spawn depth limit) — the caller sees exactly why, before any process
+// or card is created, and can retry with a value that actually works.
+// The alternative (spawn anyway with the raw value) is worse than
+// either: it would just move the same silent-substitution failure one
+// layer down, into the CLI's own warning/error, where nothing in this
+// app surfaces it as an error at all.
+//
+// 2026-09-15: the ranges moved from two hardcoded `Set`s in
+// message-bus.ts into these per-provider declarations, and the same
+// refuse-never-silently-remap rule GAINED a second half — a provider that
+// cannot honor `effort` at all now refuses it too (the old behavior was
+// accept-and-drop: any value passed zod, never became argv, and nobody
+// was told). The pure decision that reads this declaration lives in
+// spawn-profile-decision.ts.
+/** Whether this provider can honor a caller-chosen reasoning effort on
+ * its spawn argv, and with which MEASURED range. Single source: the
+ * spawn gate (message-bus.ts via spawn-profile-decision.ts) reads this
+ * declaration — no per-provider `if` grows anywhere else. */
+export type EffortCapability =
+  | { mechanism: "flag"; flag: string; values: readonly string[] }
+  | {
+      mechanism: "none";
+      /** Why — the refusal sentence is DERIVED from this, so it stays
+       * honest: `no-flag` (measured absence) may say the CLI has no
+       * flag; `unmeasured` may only say nothing was ever measured or
+       * sent; `shell` is not an agent CLI at all. */
+      reason: "shell" | "no-flag" | "unmeasured";
+    };
+
+/** Whether this provider can honor a caller-chosen model on its spawn
+ * argv. Every agent CLI takes a model flag (measured per provider, see
+ * each buildArgs); a shell does not. The opencode qualified-spec trap
+ * (a model that doesn't resolve in its catalog falls back to a default
+ * IN SILENCE) is NOT a capacity question — the flag exists and is
+ * honored, the VALUE may still not resolve — and is documented in the
+ * opencode provider's own comment below. */
+export type ModelCapability =
+  | { mechanism: "flag"; flag: string }
+  | { mechanism: "none"; reason: "shell" };
+
 export type ProviderRole = "agent" | "shell";
 
 export type ProviderCapacity = {
@@ -112,6 +184,18 @@ export type ProviderCapacity = {
    * derivation reads one field instead of a second handwritten list.
    */
   acbridgeOnPath: boolean;
+
+  /** Since 2026-09-15: reasoning-effort support is DECLARED here too — a
+   * spawn_agent passing `effort` for a provider whose mechanism is
+   * "none" is refused by the gate (spawn-profile-decision.ts), never
+   * accepted and silently dropped (the pre-fix behavior, measured
+   * 2026-09-15: any effort passed zod for bash/codex/cursor/opencode,
+   * never became argv, and nobody was told). */
+  effort: EffortCapability;
+  /** Model support — refused for `bash` (a shell has no model). Accepted
+   * for every agent CLI; the opencode catalog caveat lives on the
+   * provider's own comment. */
+  model: ModelCapability;
 
   /** Como a CLI gerencia instruções (brief e TUI follow-ups) */
   delivery: {
@@ -368,6 +452,8 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "none" },
       mcp: { mechanism: "none" },
       acbridgeOnPath: true,
+      effort: { mechanism: "none", reason: "shell" },
+      model: { mechanism: "none", reason: "shell" },
       delivery: { briefMechanism: "none", submitStartedPattern: undefined },
     },
   },
@@ -380,6 +466,11 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "append-system-prompt" },
       mcp: { mechanism: "ephemeral-flag" },
       acbridgeOnPath: true,
+      // Range re-measured 2026-09-12 against `claude --help` (v2.1.269) —
+      // the full evidence and decision writeup live in the
+      // `EffortCapability` comment above.
+      effort: { mechanism: "flag", flag: "--effort", values: ["low", "medium", "high", "xhigh", "max"] },
+      model: { mechanism: "flag", flag: "--model" },
       delivery: {
         briefMechanism: "positional",
         submitStartedPattern: /\b(Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Slithering|Esc to interrupt)\b/i,
@@ -466,6 +557,13 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "developer_instructions" },
       mcp: { mechanism: "ephemeral-flag" },
       acbridgeOnPath: true,
+      // NOT "codex has no effort flag" — that was never measured. What is
+      // true: no effort flag was ever measured for codex's CLI, and
+      // buildArgs has never sent one. The refusal sentence derives from
+      // exactly that (reason: "unmeasured") — measuring `codex --help`
+      // for a real flag would upgrade this to a flag + range.
+      effort: { mechanism: "none", reason: "unmeasured" },
+      model: { mechanism: "flag", flag: "-m" },
       delivery: { briefMechanism: "positional", submitStartedPattern: undefined },
     },
     installCommand: {
@@ -520,6 +618,11 @@ export const PROVIDERS: ProviderDef[] = [
       // deriveReportDiscovery / capacity-contract header.
       mcp: { mechanism: "global-config" },
       acbridgeOnPath: true,
+      // Same honest "unmeasured" as codex above: no effort flag was ever
+      // measured for cursor's `agent` CLI, and buildArgs has never sent
+      // one. Do not upgrade this to "no-flag" without measuring.
+      effort: { mechanism: "none", reason: "unmeasured" },
+      model: { mechanism: "flag", flag: "--model" },
       delivery: {
         briefMechanism: "positional",
         submitStartedPattern: /[\u2800-\u28FF]\s*(?:Running|Reading|Grepping)\b/i,
@@ -595,6 +698,11 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "none" },
       mcp: { mechanism: "global-config" },
       acbridgeOnPath: true,
+      // Range re-measured 2026-09-12 against `agy --help` (v1.2.2) — the
+      // full evidence and decision writeup live in the
+      // `EffortCapability` comment above.
+      effort: { mechanism: "flag", flag: "--effort", values: ["low", "medium", "high"] },
+      model: { mechanism: "flag", flag: "--model" },
       delivery: {
         briefMechanism: "flag",
         briefFlag: "-i",
@@ -616,11 +724,12 @@ export const PROVIDERS: ProviderDef[] = [
     // No `low|medium|high` guard HERE on purpose (2026-09-10,
     // DESIGN-BACKLOG.md §2.1; range re-measured 2026-09-12) — the real
     // refusal for an out-of-range antigravity effort lives centrally in
-    // message-bus.ts's `spawn_agent` handler (`ANTIGRAVITY_EFFORT_VALUES`'s
-    // own comment has the full decision),
-    // the one place that validates BEFORE any card/process gets created.
-    // By the time `buildArgs` runs here, that gate has already passed —
-    // duplicating the check would just be a second copy of the same list
+    // message-bus.ts's `spawn_agent` handler, via `decideSpawnProfile`
+    // (spawn-profile-decision.ts) reading this provider's own
+    // `capacity.effort` declaration — the one place that validates
+    // BEFORE any card/process gets created. By the time `buildArgs`
+    // runs here, that gate has already passed — duplicating the check
+    // would just be a second copy of the same list
     // to keep in sync, not a second layer of real safety (`effort` isn't
     // renderer-writable outside that one path — see providers.ts's
     // `SpawnOpts.effort` doc comment).
@@ -656,12 +765,48 @@ export const PROVIDERS: ProviderDef[] = [
       systemPrompt: { mechanism: "none" },
       mcp: { mechanism: "global-config" },
       acbridgeOnPath: true,
+      // Measured 2026-09-15 on this machine: `opencode --help`
+      // (v1.18.31) has no effort flag at all — nothing to send, so
+      // nothing is invented here either.
+      effort: { mechanism: "none", reason: "no-flag" },
+      model: { mechanism: "flag", flag: "--model" },
       delivery: { briefMechanism: "flag", briefFlag: "--prompt", submitStartedPattern: undefined },
     },
     installCommand: { posix: "npm install -g opencode-ai", windows: "npm install -g opencode-ai" },
     // Sem flag de system-prompt: `--prompt`/mensagens são entrada do
     // usuário; instruções de sistema exigem configuração persistente.
     // Report discovery → scrollback (derived). MCP via global opencode.json.
+    //
+    // MODEL SPEC (2026-09-15, medido ao vivo — a mesma classe de bug do
+    // esforço silenciosamente largado, agora no model): `--model` é
+    // passado verbatim embaixo, e o valor que a CLI espera é o spec
+    // COMPLETO `<provider>/<id-do-catálogo>`. Para ALGUNS providers o id
+    // do catálogo (`~/.cache/opencode/models.json`) JÁ VEM prefixado — a
+    // chave do modelo em que esta própria sessão rodou é literalmente
+    // `cline-pass/glm-5.3`, então o spec que o opencode resolve é
+    // `cline-pass/cline-pass/glm-5.3`:
+    //
+    //   $ opencode run --model cline-pass/cline-pass/glm-5.3 "responda apenas: ok"
+    //   > build · cline-pass/glm-5.3
+    //   ok
+    //
+    // Com um só nível (`cline-pass/glm-5.3`) o opencode corta no
+    // PRIMEIRO `/`, procura o modelo `glm-5.3` dentro do provider
+    // `cline-pass`, não acha (a chave do catálogo é
+    // `cline-pass/glm-5.3`), e cai num default EM SILÊNCIO — sem erro,
+    // sem aviso, sem nada no scrollback (medido: pedido
+    // cline-pass/glm-5.3, o card subiu em DeepSeek V4.1 Flash). É o
+    // mesmo tipo de queda silenciosa que o antigravity tem com `--model`
+    // sem `--effort` (ver `SpawnOpts.effort`), sem nem o warning. A
+    // listagem confirmada na própria máquina:
+    // `opencode models cline-pass` → `cline-pass/cline-pass/glm-5.3`,
+    // `cline-pass/cline-pass/deepseek-v4.1-flash`, …
+    //
+    // Nenhuma validação pré-spawn acontece aqui, de propósito: checar o
+    // spec contra o catálogo real exigiria um subprocesso
+    // (`opencode models [provider]`, ~1,7s medidos nesta máquina) por
+    // spawn — o desenho foi proposto no relatório da task de 2026-09-15
+    // e NÃO implementado.
     buildArgs: ({ resumeId, continueLast, model }) => {
       const args: string[] = [];
       if (resumeId) args.push("--session", resumeId);
