@@ -1,0 +1,449 @@
+name: Release
+
+# Fazenda de build + deploy dos pacotes do Stellar.
+#
+# TOPOLOGIA (decidida na migração; não reabrir aqui):
+#   GitLab (origin, gitlab.idyplatform.com) é a verdade do código -> um
+#   espelho empurra para o GitHub (remote `github`, Seth0s/Stellar) -> é o
+#   GitHub que builda, porque é a única fonte grátis de runner macOS e
+#   Windows -> os artefatos vão por rsync-over-ssh para a VPS -> o nginx
+#   serve de /srv/stellar/download.
+#
+#   A VPS NÃO builda. Um build de Electron em três SOs come a máquina que
+#   está servindo o site; foi exatamente por isso que o runner de build
+#   saiu de produção.
+#
+# POR QUE NÃO HÁ GITHUB RELEASE NEM ARTIFACT STORAGE:
+#   `.github/workflows/` foi apagado na migração e este arquivo é novo — ele
+#   não restaura o antigo. O pipeline antigo publicava os binários numa
+#   GitHub Release; esse caminho morreu junto com a saída do GitHub como
+#   fonte da verdade. O desenho ANTERIOR a esse usava actions/upload-artifact
+#   e quebrou por cota: um release ocupa ~746 MB (mac 335 + linux 269 + win
+#   142) contra os 500 MB do plano, num repositório privado — que é o caso
+#   deste. Com os dois transportes mortos, o único que sobra é o runner
+#   enviar direto para a VPS. Cada job de build faz o SEU rsync; o job
+#   `deploy` não reenvia pacote nenhum, ele só vira o atalho `latest` depois
+#   que os três chegaram. `--publish never` em todo build: nada toca a API
+#   de Releases em momento algum.
+#
+# LAYOUT NA VPS (tem que bater com o vhost stellar.example.conf do StellarPage):
+#   /srv/stellar/download/<versão>/   <- os pacotes desta release
+#   /srv/stellar/download/latest      <- symlink para a versão corrente
+#   O botão BAIXAR do site aponta para /baixar, que o nginx redireciona para
+#   /download/latest/. Ou seja: o site nunca precisa saber a versão. Virar
+#   `latest` é o ÚLTIMO passo, depois de todos os arquivos estarem lá.
+#
+# SEGREDOS: nenhum host, usuário ou chave vive neste YAML; tudo vem de
+# `secrets.*`. A lista completa e como gerar cada um está em docs/DEPLOY.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Só leitura: este workflow nunca escreve nada no GitHub (nem Release nem
+# artifact). O transporte é a chave SSH de deploy.
+permissions:
+  contents: read
+
+# Duas tags próximas não se atropelam: uma série de jobs não cancela a outra.
+# O `latest` de uma release antiga que terminasse depois não regride — o job
+# de deploy compara as versões antes de virar o atalho.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  # Caminho ditado pelo vhost do nginx — configuração, não segredo.
+  DEPLOY_ROOT: /srv/stellar/download
+
+jobs:
+  # ---------------------------------------------------------------------
+  # prepare: deriva/valida a versão e CRIA o diretório remoto da versão.
+  # Os três jobs de build declaram `needs: prepare` (não só o Linux): sem
+  # isso macOS e Windows começariam a subir antes de o destino existir.
+  # ---------------------------------------------------------------------
+  prepare:
+    name: prepare (versão + destino)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: deriva a versão da tag e confere contra o package.json
+        id: version
+        run: |
+          set -euo pipefail
+          ref="$GITHUB_REF_NAME"
+          case "$ref" in
+            v*) version="${ref#v}" ;;
+            *) echo "::error::tag '$ref' não começa com 'v'"; exit 1 ;;
+          esac
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::versão '$version' não é semver (esperado X.Y.Z, opcional -sufixo)"
+            exit 1
+          fi
+          # O nome do artefato é montado com a versão do package.json
+          # (artifactName "${productName}-${version}-${arch}.${ext}"), então
+          # tag e package.json divergentes gerariam um diretório cujo nome não
+          # bate com o conteúdo. Falha cedo, antes de buildar nada.
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$pkg" != "$version" ]; then
+            echo "::error::tag v$version não bate com package.json ($pkg). Alinhe os dois antes de taguear."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Versão de release: $version"
+
+      - name: instala a chave de deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: cria o diretório remoto da versão (falha cedo se a chave não vale)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh -i "$HOME/.ssh/deploy_key" -p "$port" \
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$DEPLOY_ROOT/$VERSION' && ls -ld '$DEPLOY_ROOT/$VERSION'"
+
+  # ---------------------------------------------------------------------
+  # build-linux: .deb, .rpm e AppImage.
+  #   - `.rpm` exige rpmbuild; `fpm` (usado por rpm/deb) é baixado pelo
+  #     electron-builder. build-essential/python3 cobrem o node-gyp dos
+  #     nativos (better-sqlite3, node-pty) no `npm ci`.
+  #   - AppImage não está no package.json (território desta tarefa não o
+  #     inclui), então é pedido no CLI. Ele é também o alvo que faz o
+  #     electron-builder emitir latest-linux.yml.
+  # ---------------------------------------------------------------------
+  build-linux:
+    name: build linux (.deb .rpm AppImage)
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: sudo apt-get update && sudo apt-get install -y rpm build-essential python3
+
+      - run: npm ci
+
+      - run: npx tsc --noEmit
+
+      - run: npm run build
+
+      - name: gera .deb, .rpm e AppImage (sem publicar em lugar nenhum)
+        run: npx electron-builder --linux deb rpm AppImage --publish never
+
+      - name: confere que os três formatos existiram
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for ext in deb rpm AppImage; do
+            files=(dist/*."$ext")
+            if [ "${#files[@]}" -eq 0 ]; then
+              echo "::error::nenhum pacote .$ext foi gerado"
+              exit 1
+            fi
+            echo ".$ext -> ${files[*]}"
+          done
+
+      - name: instala a chave de deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: envia os pacotes Linux para a VPS
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh_opts="-i $HOME/.ssh/deploy_key -p $port -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          shopt -s nullglob
+          files=(dist/*.deb dist/*.rpm dist/*.AppImage dist/*.blockmap dist/latest-linux.yml)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::o build não gerou nenhum artefato Linux"
+            exit 1
+          fi
+          echo "Enviando para $VERSION: ${files[*]}"
+          rsync -rt -e "ssh $ssh_opts" \
+            "${files[@]}" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ROOT/$VERSION/"
+          # O feed do electron-updater só é enviado se o build o gerou. Aqui
+          # apenas declaramos o que faltou — nunca o fabricamos.
+          [ -e dist/latest-linux.yml ] || echo "::notice::dist/latest-linux.yml não foi gerado por este build (ok enquanto não houver feed)"
+
+  # ---------------------------------------------------------------------
+  # build-mac: .dmg (+ .zip, que é o que o electron-updater usa no mac).
+  #   needs: prepare — obrigatório, ver comentário no topo do job prepare.
+  #   Sem assinatura/notarização: decisão registrada (docs/packaging.md §4).
+  # ---------------------------------------------------------------------
+  build-mac:
+    name: build macOS (.dmg)
+    needs: prepare
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      # Sem identidade de assinatura no runner; evita o electron-builder
+      # gastar tempo procurando uma no keychain.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: gera o .dmg (e o .zip) sem publicar
+        run: npx electron-builder --mac --publish never
+
+      - name: confere que o .dmg existiu
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.dmg)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::nenhum .dmg foi gerado"
+            exit 1
+          fi
+          echo ".dmg -> ${files[*]}"
+
+      - name: instala a chave de deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: envia os pacotes macOS para a VPS
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          ssh_opts="-i $HOME/.ssh/deploy_key -p $port -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          shopt -s nullglob
+          files=(dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::o build não gerou nenhum artefato macOS"
+            exit 1
+          fi
+          echo "Enviando para $VERSION: ${files[*]}"
+          rsync -rt -e "ssh $ssh_opts" \
+            "${files[@]}" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ROOT/$VERSION/"
+          [ -e dist/latest-mac.yml ] || echo "::notice::dist/latest-mac.yml não foi gerado por este build (ok enquanto não houver feed)"
+
+  # ---------------------------------------------------------------------
+  # build-windows: instalador NSIS (.exe) + portable (.exe).
+  #   A imagem windows-latest NÃO traz rsync. Para manter rsync-over-ssh nos
+  #   três SOs (e não instalar um transporte diferente só aqui), o MSYS2 já
+  #   presente na imagem é usado para obter rsync/openssh.
+  # ---------------------------------------------------------------------
+  build-windows:
+    name: build windows (.exe)
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: gera o instalador e o portable (.exe) sem publicar
+        run: npx electron-builder --win --publish never
+
+      - name: confere que o .exe existiu
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.exe)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::nenhum .exe foi gerado"
+            exit 1
+          fi
+          echo ".exe -> ${files[*]}"
+
+      - name: instala rsync + openssh no MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          install: rsync openssh
+
+      - name: envia os pacotes Windows para a VPS
+        shell: msys2 {0}
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+          port="${DEPLOY_PORT:-22}"
+          ssh_opts="-i $HOME/.ssh/deploy_key -p $port -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          shopt -s nullglob
+          files=(dist/*.exe dist/*.blockmap dist/latest.yml)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::o build não gerou nenhum artefato Windows"
+            exit 1
+          fi
+          echo "Enviando para $VERSION: ${files[*]}"
+          rsync -rt -e "ssh $ssh_opts" \
+            "${files[@]}" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ROOT/$VERSION/"
+          [ -e dist/latest.yml ] || echo "::notice::dist/latest.yml não foi gerado por este build (ok enquanto não houver feed)"
+
+  # ---------------------------------------------------------------------
+  # deploy: depende dos TRÊS builds. Sem `if: always()` de propósito — se
+  # qualquer plataforma falhar, este job é pulado e `latest` NÃO se move.
+  # O diretório da versão pode ficar parcial; o atalho continua na release
+  # anterior, que está inteira. Ver docs/DEPLOY.md ("quando um SO falha").
+  #
+  # Este job não reenvia pacotes: cada build já enviou o seu. Ele existe
+  # para a única coisa que não pode ser paralela — conferir que os três
+  # chegaram e virar o atalho `latest`, por último, de forma atômica.
+  # ---------------------------------------------------------------------
+  deploy:
+    name: deploy (reaponta latest)
+    needs: [build-linux, build-mac, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: instala a chave de deploy
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: confere os três sistemas e reaponta latest (último passo)
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+          SSH=(ssh -i "$HOME/.ssh/deploy_key" -p "$port" \
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST")
+
+          # 1) Os três sistemas precisam estar presentes e não-vazios.
+          "${SSH[@]}" bash -s -- "$VERSION" "$DEPLOY_ROOT" <<'REMOTE'
+          set -euo pipefail
+          version="$1"
+          root="$2"
+          d="$root/$version"
+          test -d "$d" || { echo "diretório $d não existe" >&2; exit 1; }
+          for ext in deb rpm AppImage dmg exe; do
+            n="$(find "$d" -maxdepth 1 -name "*.$ext" -type f | wc -l)"
+            if [ "$n" -eq 0 ]; then
+              echo "faltando pacote .$ext em $d" >&2
+              exit 1
+            fi
+          done
+          if find "$d" -maxdepth 1 -type f -empty | grep -q .; then
+            echo "há arquivo de tamanho zero em $d" >&2
+            exit 1
+          fi
+          echo "Os três sistemas estão presentes em $d:"
+          ls -lh "$d"
+          REMOTE
+
+          # 2) Só agora vira o atalho — nunca antes dos arquivos.
+          "${SSH[@]}" bash -s -- "$VERSION" "$DEPLOY_ROOT" <<'REMOTE'
+          set -euo pipefail
+          version="$1"
+          root="$2"
+          current=""
+          if [ -L "$root/latest" ]; then
+            current="$(basename "$(readlink -f "$root/latest")")"
+          fi
+          if [ -n "$current" ] && [ "$current" != "$version" ]; then
+            newest="$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -n1)"
+            if [ "$newest" != "$version" ]; then
+              echo "latest já aponta para $current, que é mais nova que $version — não regride."
+              exit 0
+            fi
+          fi
+          # symlink temporário + mv -T = troca atômica (sem janela de 404).
+          link="$root/.latest.$$"
+          ln -sfn "$version" "$link"
+          mv -T "$link" "$root/latest"
+          echo "latest -> $(readlink "$root/latest")"
+          REMOTE
