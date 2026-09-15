@@ -43,22 +43,14 @@
     transition: left 0.28s ease, top 0.28s ease;
   }
 
-  @keyframes dash {
-    to {
-      stroke-dashoffset: -24;
-    }
-  }
-
-  /* PERF (docs/PERF.md, 2026-09-15): a marcha do traço só roda quando o
-     board trabalha de verdade. Antes era `.connector-line` direto —
-     `stroke-dashoffset` é PAINT, então TODO conector repintava a cada
-     frame para sempre, mesmo com o board parado (o ~11% de CPU medido).
-     O tracejado estático continua em layout.css; aqui só a ANIMAÇÃO fica
-     gated em `connectors-animated` (App.tsx decide via
-     connector-motion-decision.ts). */
-  .connectors-animated .connector-line {
-    animation: dash 1.1s linear infinite;
-  }
+  /* PERF (docs/PERF.md, 2026-09-15) — a marcha do conector não mora mais
+     aqui. `stroke-dashoffset` é PAINT: enquanto o board trabalhava, ela
+     re-rasteirizava o `<svg>` inteiro a cada frame. O pulso agora é feito de
+     elementos HTML minúsculos movidos por `transform: translate3d()` via
+     WAAPI (App.tsx's `ConnectorPulseDot` + connector-pulse-decision.ts), que
+     o compositor resolve sem repintar nada. O tracejado estático continua em
+     layout.css, e o gate de board (connector-motion-decision.ts) decide se o
+     layer de pulsos chega a montar. */
 
   @keyframes toast-in {
     from {
@@ -95,5 +87,12 @@
 @media (prefers-reduced-motion: reduce) {
   .card-frame.dragging {
     box-shadow: var(--shadow-float);
+  }
+
+  /* O pulso é decoração de movimento pura: sob reduced-motion, some. O JS
+     também não chega a criar a animação (ConnectorPulseDot), isto só garante
+     que nenhum ponto parado fique sobre a linha. */
+  .connector-pulse {
+    display: none;
   }
 }

@@ -2025,6 +2025,38 @@ select.resume-input {
   stroke: var(--violet);
 }
 
+/* PERF (docs/PERF.md, 2026-09-15) — o pulso saiu do SVG: `stroke-dashoffset`
+   é PAINT e re-rasteirizava o overlay inteiro a cada frame enquanto o board
+   trabalhava. Aqui é um elemento HTML minúsculo próprio, movido só por
+   `transform: translate3d()` (propriedade de compositor). O tracejado
+   estático acima continua sendo a leitura de "aresta"; o layer não captura
+   ponteiro nenhum. */
+.connector-pulses {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.connector-pulse {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: var(--signal);
+  /* Promove cada ponto à própria camada — é o que permite movê-lo sem
+     tocar na camada do board. Um `will-change` num elemento grande não
+     seria barato; aqui são poucos pontos de 5px. */
+  will-change: transform;
+  pointer-events: none;
+}
+
 /* Faixa larga e invisível por baixo da curva fina — só pra aumentar a
    área clicável/hover; clicar navega pro card de destino (App.tsx). */
 .connector-hit {

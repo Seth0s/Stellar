@@ -5,7 +5,7 @@
  * Contexto (2026-09-15, PERF — ver docs/PERF.md): medido pelo orquestrador,
  * o app queima ~11% de CPU com o board PARADO (gpu-process 4,6% + renderer
  * 4,1% + main 2,4%). Leitura de código isolou a fonte contínua mais barata
- * de desligar: `styles/animations.css` aplica
+ * de desligar: `styles/animations.css` aplicava
  * `animation: dash 1.1s linear infinite` a TODO `.connector-line`. A
  * animação caminha `stroke-dashoffset` para sempre, em todo conector
  * tracejado do board — e `stroke-dashoffset` não é propriedade de
@@ -20,6 +20,13 @@
  * direito de existir AGORA: apenas enquanto o board está de fato
  * trabalhando — tem um card de agente vivo (provider ≠ bash, não
  * error/exited) ou uma task em `running`.
+ *
+ * Desde 2026-09-15 (rodada seguinte), a marcha deixou de ser uma animação
+ * CSS de `stroke-dashoffset` (PAINT) e virou um layer de elementos HTML
+ * movidos por `transform: translate3d()` via WAAPI — ver
+ * `connector-pulse-decision.ts`. Esta decisão continua sendo o gate de
+ * BOARD: quando ela é falsa, o layer de pulsos nem monta; quando é
+ * verdadeira, o segundo módulo decide quais conectores pulsam.
  *
  * Por que não animar só pelo hover do mouse: o orquestrador move o mouse
  * zero vezes no caso medido. Hover é interação, não atividade de board.
@@ -37,7 +44,7 @@ export type ConnectorMotionInput = {
 /**
  * Puro — sem DOM, sem I/O, sem estado. Consumido por App.tsx, que resolve
  * os dois booleanos a partir de `liveStatus` e `taskBoards[activeBoardId]`
- * e pendura a classe `connectors-animated` no SVG `.board-overlay`.
+ * e usa o resultado para montar (ou não) o layer `.connector-pulses`.
  */
 export function decideConnectorMotion(input: ConnectorMotionInput): boolean {
   return input.anyLiveAgentCard || input.anyTaskRunning;
