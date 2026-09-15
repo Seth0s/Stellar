@@ -1,0 +1,267 @@
+{
+  "ozone": "wayland",
+  "electron": "42.3.0",
+  "chrome": "148.0.7778.180",
+  "platform": "linux x64",
+  "sessionType": "wayland",
+  "shot0baseline": {
+    "shotSize": "9600x2160",
+    "colors": {
+      "host": {
+        "count": 3879472,
+        "minX": 0,
+        "minY": 0,
+        "maxX": 9596,
+        "maxY": 2159
+      },
+      "magenta": {
+        "count": 20,
+        "minX": 2404,
+        "minY": 1022,
+        "maxX": 2412,
+        "maxY": 1034
+      },
+      "cyan": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "green": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "orange": {
+        "count": 72,
+        "minX": 24,
+        "minY": 636,
+        "maxX": 5060,
+        "maxY": 1760
+      }
+    }
+  },
+  "shot1viewsAdded": {
+    "shotSize": "9600x2160",
+    "colors": {
+      "host": {
+        "count": 3812512,
+        "minX": 0,
+        "minY": 0,
+        "maxX": 9596,
+        "maxY": 2159
+      },
+      "magenta": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "cyan": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "green": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "orange": {
+        "count": 45,
+        "minX": 24,
+        "minY": 636,
+        "maxX": 5060,
+        "maxY": 1760
+      }
+    }
+  },
+  "initialComposite": {
+    "magenta": {
+      "composed": false,
+      "contained": false,
+      "count": 0
+    },
+    "cyan": {
+      "composed": false,
+      "contained": false,
+      "count": 0
+    },
+    "green": {
+      "composed": false,
+      "contained": false,
+      "count": 0
+    }
+  },
+  "hostCapturePage": {
+    "host": {
+      "count": 357375,
+      "minX": 0,
+      "minY": 0,
+      "maxX": 1496,
+      "maxY": 952
+    },
+    "magenta": {
+      "count": 0,
+      "minX": null,
+      "minY": null,
+      "maxX": null,
+      "maxY": null
+    },
+    "cyan": {
+      "count": 0,
+      "minX": null,
+      "minY": null,
+      "maxX": null,
+      "maxY": null
+    },
+    "green": {
+      "count": 0,
+      "minX": null,
+      "minY": null,
+      "maxX": null,
+      "maxY": null
+    },
+    "orange": {
+      "count": 0,
+      "minX": null,
+      "minY": null,
+      "maxX": null,
+      "maxY": null
+    }
+  },
+  "v1InternalPaint": {
+    "size": {
+      "width": 660,
+      "height": 420
+    },
+    "magenta": 0
+  },
+  "shot2forcedRepaint": {
+    "shotSize": "9600x2160",
+    "colors": {
+      "host": {
+        "count": 4068374,
+        "minX": 0,
+        "minY": 0,
+        "maxX": 9596,
+        "maxY": 2159
+      },
+      "magenta": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "cyan": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "green": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "orange": {
+        "count": 47,
+        "minX": 24,
+        "minY": 636,
+        "maxX": 5060,
+        "maxY": 1760
+      }
+    }
+  },
+  "repaintUnsticks": {
+    "magentaInvalidate": {
+      "composed": false,
+      "contained": false,
+      "count": 0
+    },
+    "cyanDomChange": {
+      "composed": false,
+      "contained": false,
+      "count": 0
+    }
+  },
+  "shot3movedRecolored": {
+    "shotSize": "9600x2160",
+    "colors": {
+      "host": {
+        "count": 3671777,
+        "minX": 0,
+        "minY": 0,
+        "maxX": 9596,
+        "maxY": 2159
+      },
+      "magenta": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "cyan": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "green": {
+        "count": 0,
+        "minX": null,
+        "minY": null,
+        "maxX": null,
+        "maxY": null
+      },
+      "orange": {
+        "count": 68134,
+        "minX": 24,
+        "minY": 636,
+        "maxX": 7648,
+        "maxY": 1760
+      }
+    }
+  },
+  "dynamicMoveOk": {
+    "composed": false,
+    "contained": false,
+    "count": 0
+  },
+  "dynamicRepaintOk": {
+    "composed": true,
+    "contained": true,
+    "count": 68134
+  },
+  "offscreenPipeline": {
+    "frames": 1,
+    "windowMs": 12012,
+    "avgDirtyArea": 1425000,
+    "avgToJpeg90Ms": 5.35,
+    "avgToBitmapMs": 1.65,
+    "avgJpegBytes": 8744,
+    "bitmapBytes": 5700000
+  },
+  "rawBitmapRoutes": {
+    "bytes": 5700000,
+    "supported": false,
+    "error": "Port at index 0 is not a valid port",
+    "cloneRoundTripMs": 4009.62,
+    "cloneAckBytes": null,
+    "ipcSend30FramesMainThreadMs": 174.29
+  }
+}
