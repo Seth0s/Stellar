@@ -560,3 +560,59 @@ a segunda já está coberta pelo que o recorte por `dirty` entrega de graça.
 - **Contrapressão e taxa dirigida por conteúdo (§9.5, §9.6) são leitura de
   código + medição já existente, não uma sonda de carga nova** simulando IPC
   represado ou comparando frame rates diferentes ao vivo.
+
+## 10. Recorte por área suja: implementado (2026-09-15)
+
+A recomendação do §9.7 foi implementada — **ganho ARGUMENTADO, não
+remedido**: mesma restrição do resto deste documento, o app não podia ser
+rodado nesta rodada. A implementação se apoia integralmente nos números já
+medidos na sonda 4 (§9.3), não em nova medição.
+
+**`browser-frame-decision.ts`** ganhou `shouldCropFrame(dirty, frame)`: pura,
+compara `dirty.width*dirty.height / frame.width*frame.height` contra
+`FULL_FRAME_DIRTY_RATIO = 0.95`. O limiar vem de interpolar a curva de
+custo×área sintética do §9.3 (100%→1,280ms, 50%→0,802ms, ~0,0096ms por ponto
+percentual) contra o único ponto real de regressão medido (dano=100%: recorte
+1,283ms > frame cheio 1,246ms) — o cruzamento fica perto de 97-98% de área;
+0,95 fica com folga abaixo disso. Os dois casos reais medidos (cursor
+≈0,05%, barra de progresso ≈0,02%) ficam ordens de grandeza abaixo do
+limiar, então o ganho de ~58-60× do §9.3 se aplica a eles sem ressalva; o
+caso de página animada (dano=100% em 100% dos paints) cai sempre no frame
+cheio, então não sofre a regressão de ~1,03× que motivou o guard.
+
+**`browser-registry.ts`**: `Entry.needsFullFrame` força frame cheio
+(ignorando `shouldCropFrame`) em três momentos — `create()` (recém-nascido,
+sem frame anterior no canvas), `resize()` (canvas mudou de tamanho, o
+conteúdo antigo não bate mais) e `setVisible(id, true)` (pode ter perdido
+frames enquanto oculto). Fora desses três, o handler de `paint` decide por
+`shouldCropFrame` e, quando recorta, chama `image.crop(dirty).toJPEG(90)` em
+vez de `image.toJPEG(90)`. O payload de `onFrame` ganhou um quinto
+parâmetro, `region: { full: true } | { full: false; x; y }` — explícito, sem
+heurística de tamanho — que atravessa `main/index.ts` → `preload/index.ts`
+→ `BrowserCard.tsx` sem tradução.
+
+**`BrowserCard.tsx`**: com `region.full`, redimensiona o canvas e desenha em
+`0,0` (igual a antes); com recorte, desenha em `region.x, region.y` **sem**
+tocar em tamanho ou limpar o canvas — o resto do frame é o que já estava lá,
+e é essa a economia.
+
+**Corrida de decodificação (docs/PERF.md §9.4, risco 2) — resolvida por
+serialização, não por descarte.** `createImageBitmap` é assíncrono; dois
+decodes correndo em paralelo podem terminar fora de ordem. A opção
+descartada foi "descartar frame obsoleto por número de sequência": ela
+resolve a corrida citada no §9.4 (frame cheio velho decodificando depois de
+um recorte novo), mas introduz um problema novo — dois RECORTES de regiões
+diferentes, se um for descartado por chegar "atrasado" no decode, perdem
+aquele retângulo de vez (não é redundante como no modelo de frame cheio
+antigo, onde o frame mais novo sempre é superset). A escolha foi encadear o
+processamento de cada frame numa promise chain (`chain = chain.then(...)`)
+dentro do handler de `onFrame` em `BrowserCard.tsx`: a IPC do Electron já
+entrega os frames na ordem de envio, e encadear garante que o decode+desenho
+de cada frame só COMEÇA depois que o anterior terminou de desenhar — nenhum
+frame é descartado, todos aplicam na ordem de chegada, sem precisar de
+número de sequência atravessando o IPC.
+
+**Testes**: `tests/unit/browser-frame-decision.test.ts` ganhou um describe
+pra `shouldCropFrame` — dano minúsculo (cursor), dano pequeno (barra de
+progresso), limiar (94%/95%/100%) e frame de área zero. Suíte inteira:
+1681/1681 verde (era 1675 antes desta rodada).

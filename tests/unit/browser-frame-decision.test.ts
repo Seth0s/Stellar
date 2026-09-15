@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   decideBrowserFrame,
   hasDirtyArea,
+  shouldCropFrame,
+  FULL_FRAME_DIRTY_RATIO,
   SHARED_TEXTURE_FRAME_RATE,
   CPU_JPEG_FOCUSED_FRAME_RATE,
   UNFOCUSED_FRAME_RATE,
@@ -82,3 +84,48 @@ describe("hasDirtyArea — o `dirty` que o handler antigo ignorava", () => {
     expect(hasDirtyArea({ width: -1, height: 10 })).toBe(false);
   });
 });
+
+/**
+ * shouldCropFrame — o guard de docs/PERF.md §9.3: recortar só vale a pena
+ * quando o dano é pequeno de verdade. A página animada (dano = 100% em
+ * 100% dos paints) mediu recorte PIOR que frame cheio (1,283ms vs
+ * 1,246ms) — a cópia de `image.crop()` não compra nada quando não sobra
+ * área pra reduzir. As duas páginas de UI real (cursor, barra de
+ * progresso) mediram ~58-60× mais barato com dano ≈0,02-0,05% — muito
+ * abaixo do limiar, o recorte se aplica sem ressalva.
+ */
+describe("shouldCropFrame — recorte só quando sobra ganho de verdade (docs/PERF.md §9.3)", () => {
+  const frame = { width: 720, height: 560 };
+
+  it("dano minúsculo (cursor piscando, ≈0,05% da área) → recorta — é o caso ~58× mais barato", () => {
+    expect(shouldCropFrame({ width: 20, height: 20 }, frame)).toBe(true);
+  });
+
+  it("dano pequeno (barra de progresso, ≈2,4% da área) → recorta", () => {
+    expect(shouldCropFrame({ width: 400, height: 24 }, frame)).toBe(true);
+  });
+
+  it("dano logo abaixo do limiar (94% da área) → ainda recorta", () => {
+    const w = Math.floor(frame.width * Math.sqrt(0.94));
+    const h = Math.floor(frame.height * Math.sqrt(0.94));
+    expect(dirtyFraction(w, h, frame)).toBeLessThan(FULL_FRAME_DIRTY_RATIO);
+    expect(shouldCropFrame({ width: w, height: h }, frame)).toBe(true);
+  });
+
+  it("dano cobrindo o limiar exato (95%) → NÃO recorta, cai pro frame cheio", () => {
+    const dirty = { width: frame.width, height: Math.round(frame.height * FULL_FRAME_DIRTY_RATIO) };
+    expect(shouldCropFrame(dirty, frame)).toBe(false);
+  });
+
+  it("dano = 100% da área (página animada, o pior caso medido) → NÃO recorta", () => {
+    expect(shouldCropFrame(frame, frame)).toBe(false);
+  });
+
+  it("frame com área zero → não recorta (não há por onde dividir)", () => {
+    expect(shouldCropFrame({ width: 10, height: 10 }, { width: 0, height: 0 })).toBe(false);
+  });
+});
+
+function dirtyFraction(w: number, h: number, frame: { width: number; height: number }): number {
+  return (w * h) / (frame.width * frame.height);
+}

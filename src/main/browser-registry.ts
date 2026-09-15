@@ -1,7 +1,16 @@
 import { app, BrowserWindow, type Session } from "electron";
 import { t } from "../shared/i18n";
 import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
-import { decideBrowserFrame, hasDirtyArea } from "./browser-frame-decision";
+import { decideBrowserFrame, hasDirtyArea, shouldCropFrame } from "./browser-frame-decision";
+
+/**
+ * Formato explícito do payload de `onFrame` (docs/PERF.md §9.4): quem
+ * recebe (`main/index.ts` → preload → `BrowserCard.tsx`) precisa saber se
+ * é recorte ou frame cheio SEM adivinhar por heurística de tamanho — as
+ * dimensões do JPEG sozinhas não bastam pra decidir se redimensiona o
+ * canvas (frame cheio) ou só cola num offset (recorte).
+ */
+export type BrowserFrameRegion = { full: true } | { full: false; x: number; y: number };
 
 export type BrowserMouseEvent = {
   /** `mouseLeave` — achado ao vivo (2026-08-31): sem sinal explícito de
@@ -76,6 +85,14 @@ type Entry = {
   /** Último estado de foco conhecido (`setFocused`) — `decideBrowserFrame`
    * precisa dele também no `paint`, não só na hora de trocar o rate. */
   focused: boolean;
+  /** docs/PERF.md §9.4, risco 1 — três momentos em que o canvas do
+   * renderer NÃO tem conteúdo válido pra colar um recorte em cima:
+   * acabou de nascer (`create`), acabou de mudar de tamanho (`resize`),
+   * ou pode ter perdido frames enquanto estava oculto (`setVisible` de
+   * volta a `true`). `true` nesses três pontos força o próximo `paint` a
+   * mandar o frame inteiro, ignorando `shouldCropFrame`; zerado assim que
+   * esse frame cheio sai. */
+  needsFullFrame: boolean;
   scaleFactor: number;
   console: ConsoleEntry[];
   network: NetworkEntry[];
@@ -516,7 +533,7 @@ export function createBrowserRegistry(callbacks: {
   onNavigate: (id: string, url: string) => void;
   onTitle: (id: string, title: string) => void;
   onLoading: (id: string, loading: boolean) => void;
-  onFrame: (id: string, jpeg: Buffer, width: number, height: number) => void;
+  onFrame: (id: string, jpeg: Buffer, width: number, height: number, region: BrowserFrameRegion) => void;
   /** DESIGN-BACKLOG.md §2.1 Item E — `level` is Electron's own current
    * (non-deprecated) string scale, forwarded raw rather than pre-
    * filtered here so the renderer decides what counts toward its error/
@@ -676,7 +693,23 @@ export function createBrowserRegistry(callbacks: {
       // UI/texto (majoritariamente o que se navega aqui). A qualidade fica
       // em 90 mesmo com o teto de 30fps: o que a reversão corta é o NÚMERO
       // de encodes, não a nitidez de cada um.
-      callbacks.onFrame(id, image.toJPEG(90), width, height);
+      //
+      // Recorte por área suja (docs/PERF.md §9.3/§9.4) — `needsFullFrame`
+      // vence sempre: primeiro frame depois de `create`/navegação, depois
+      // de `resize`, e depois do card voltar a ficar visível são os três
+      // momentos em que o canvas do renderer não tem um frame anterior
+      // válido pra colar um recorte em cima (comentário do campo, acima).
+      // Fora esses três, `shouldCropFrame` decide pelo número medido: dano
+      // pequeno de verdade (cursor, barra de progresso) recorta ~60×
+      // mais barato; dano cobrindo quase tudo (página animada) cai pro
+      // frame cheio porque a cópia de `image.crop()` não compra nada ali.
+      if (!entry.needsFullFrame && shouldCropFrame(dirty, { width, height })) {
+        const cropped = image.crop({ x: dirty.x, y: dirty.y, width: dirty.width, height: dirty.height });
+        callbacks.onFrame(id, cropped.toJPEG(90), dirty.width, dirty.height, { full: false, x: dirty.x, y: dirty.y });
+        return;
+      }
+      entry.needsFullFrame = false;
+      callbacks.onFrame(id, image.toJPEG(90), width, height, { full: true });
     });
 
     // Same reasoning as before this rewrite: modern Chromium renders
@@ -750,7 +783,7 @@ export function createBrowserRegistry(callbacks: {
       });
     });
 
-    entries.set(id, { win, visible: true, focused: true, scaleFactor, console: [], network: [], cdp: null, originalUserAgent: null, networkEnableRefs: 0 });
+    entries.set(id, { win, visible: true, focused: true, needsFullFrame: true, scaleFactor, console: [], network: [], cdp: null, originalUserAgent: null, networkEnableRefs: 0 });
     // A sessão é a padrão, compartilhada com a janela principal, e o
     // `webRequest` do Electron aceita UM listener por evento por sessão —
     // então o registro é feito uma vez só e despachado por
@@ -1136,6 +1169,10 @@ export function createBrowserRegistry(callbacks: {
     const factor = Math.min(entry.scaleFactor * BROWSER_SUPERSAMPLE, maxDensityOverride ?? BROWSER_MAX_DENSITY);
     entry.win.webContents.setZoomFactor(factor);
     entry.win.setContentSize(Math.max(1, Math.round(w * factor)), Math.max(1, Math.round(h * factor)));
+    // docs/PERF.md §9.4, risco 1 — o canvas do renderer muda de tamanho
+    // junto (BrowserCard.tsx), então o conteúdo que já estava desenhado
+    // não vale mais nada; o próximo paint tem que vir cheio.
+    entry.needsFullFrame = true;
   }
 
   /** Test-only (scripts/verify) — the real content-pixel size the
@@ -1231,7 +1268,14 @@ export function createBrowserRegistry(callbacks: {
     else if (!visible && wc.isPainting()) wc.stopPainting();
     // Ao voltar, retoma na taxa que o foco ATUAL manda — o card pode ter
     // saído de foco enquanto estava fora da tela.
-    if (visible) applyFrameRate(entry);
+    if (visible) {
+      applyFrameRate(entry);
+      // docs/PERF.md §9.4, risco 1 — pode ter perdido frames enquanto
+      // estava oculto (a pintura fica parada, `stopPainting` acima); o
+      // canvas do renderer pode não bater mais com o que a página tem
+      // agora, então o primeiro paint depois de voltar tem que vir cheio.
+      entry.needsFullFrame = true;
+    }
   }
 
   /** Pre-release audit P2 — a visible-but-not-topmost card still needs
