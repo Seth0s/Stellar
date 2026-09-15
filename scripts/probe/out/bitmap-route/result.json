@@ -1,0 +1,25 @@
+{
+  "electron": "42.3.0",
+  "chrome": "148.0.7778.180",
+  "routes": {
+    "jpeg": {
+      "mainThreadMsPerFrame": 5.307,
+      "roundTripMsPerFrame": 0,
+      "bytesPerFrame": 8744,
+      "atSixtyFpsPercentOfCore": 31.8,
+      "atThirtyFpsPercentOfCore": 15.9
+    },
+    "bitmapCopy": {
+      "mainThreadMsPerFrame": 5.947,
+      "roundTripMsPerFrame": 8.519,
+      "bytesPerFrame": 5700000,
+      "atSixtyFpsPercentOfCore": 35.7,
+      "atThirtyFpsPercentOfCore": 17.8
+    }
+  },
+  "transferableSupported": {
+    "supported": false,
+    "why": "MessagePortMain.postMessage(message, transfer?: MessagePortMain[]) — electron.d.ts:9704 aceita apenas portas no array de transferência",
+    "observedError": "Port at index 0 is not a valid port"
+  }
+}
