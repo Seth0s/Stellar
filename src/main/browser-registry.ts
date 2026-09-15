@@ -1,6 +1,7 @@
 import { app, BrowserWindow, type Session } from "electron";
 import { t } from "../shared/i18n";
 import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
+import { decideBrowserFrame, hasDirtyArea } from "./browser-frame-decision";
 
 export type BrowserMouseEvent = {
   /** `mouseLeave` — achado ao vivo (2026-08-31): sem sinal explícito de
@@ -72,6 +73,9 @@ const NETWORK_BUFFER = 300;
 type Entry = {
   win: BrowserWindow;
   visible: boolean;
+  /** Último estado de foco conhecido (`setFocused`) — `decideBrowserFrame`
+   * precisa dele também no `paint`, não só na hora de trocar o rate. */
+  focused: boolean;
   scaleFactor: number;
   console: ConsoleEntry[];
   network: NetworkEntry[];
@@ -115,12 +119,29 @@ type Entry = {
 // rate for content nobody's actively watching move.
 //
 // Pedido ao vivo (2026-08-31, uso da v0.2.0) — 30fps focado sentia
-// travado; subiu pra 60. `UNFOCUSED_FRAME_RATE` ficou parado em 8 por
-// decisão explícita: sem custo extra pra cards fora de foco, só o card
-// que a pessoa está de fato olhando fica mais caro em encode/transfer
-// JPEG por frame.
-const FOCUSED_FRAME_RATE = 60;
-const UNFOCUSED_FRAME_RATE = 8;
+// travado; subiu pra 60. Naquele momento ainda não se sabia o preço: cada
+// frame pintado roda um `image.toJPEG(90)` inteiro NA THREAD PRINCIPAL do
+// processo main. Medição do orquestrador (2026-09-15, docs/PERF.md): com
+// uma página animada em foco, a thread principal sozinha foi a 98,9% — a
+// página em si, a 4,0%. 60 encodes/s foi a diferença.
+//
+// A rota e a taxa por card agora vivem em `browser-frame-decision.ts`
+// (`decideBrowserFrame`); este arquivo aplica a decisão. O pedido de 60fps
+// só é de graça no caminho `shared-texture`, que este consumidor não tem
+// (ver `SHARED_TEXTURE_AVAILABLE` abaixo). No caminho `cpu-jpeg`, o teto
+// focado é 30 — REVERSÃO EXPLÍCITA, declarada no módulo, não um descuido.
+// `UNFOCUSED_FRAME_RATE = 8` continua decisão explícita: card fora de foco
+// não custa nada.
+//
+// `useSharedTexture` (Electron 42) entregaria um handle de textura de GPU
+// no `paint` — zero encode. Existe no Linux desta versão
+// (`SharedTextureHandle.nativePixmap`), mas importar a textura é, pela
+// própria doc do Electron, "an advanced feature requiring a native node
+// module": o consumidor (o `<canvas>` 2D de BrowserCard.tsx) não importa
+// textura de GPU sem um addon nativo que este repo não tem. Ligar sem esse
+// consumidor deixaria o card sem pixel nenhum. Então: desligado, e a
+// ausência é o dado que `decideBrowserFrame` recebe.
+const SHARED_TEXTURE_AVAILABLE = false;
 
 /** Pendentes #188 (UA+touch) — `maxTouchPoints` reportado a
  * `navigator.maxTouchPoints` enquanto a emulação mobile está ligada. 5 é
@@ -582,7 +603,7 @@ export function createBrowserRegistry(callbacks: {
       width: 720,
       height: 560,
       webPreferences: {
-        offscreen: { deviceScaleFactor: scaleFactor },
+        offscreen: { deviceScaleFactor: scaleFactor, useSharedTexture: SHARED_TEXTURE_AVAILABLE },
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -607,8 +628,10 @@ export function createBrowserRegistry(callbacks: {
     // the worst case (video, fast scrolling) instead of firing at whatever
     // the compositor would otherwise allow. A newly created card is the one
     // the user just asked for — starts at the focused rate; `setFocused`
-    // below lowers it once something else gets raised on top.
-    wc.setFrameRate(FOCUSED_FRAME_RATE);
+    // below lowers it once something else gets raised on top. Foco + rota
+    // (encode ou textura) decidem a taxa em `decideBrowserFrame`; o rate
+    // inicial é o do card recém-criado, focado.
+    wc.setFrameRate(decideBrowserFrame({ visible: true, focused: true, sharedTextureAvailable: SHARED_TEXTURE_AVAILABLE }).frameRate);
     // Supersample fixo (ver doc comment de BROWSER_SUPERSAMPLE/`resize()`)
     // — NÃO setado aqui (achado ao vivo: setar uma constante fixa uma
     // única vez, sem reconsiderar o `scaleFactor` real, é exatamente o bug
@@ -616,9 +639,29 @@ export function createBrowserRegistry(callbacks: {
     // toda vez, incluindo na primeira chamada real (disparada pelo
     // primeiro resize do renderer logo após `create()` resolver).
 
-    wc.on("paint", (_event, _dirty, image) => {
+    wc.on("paint", (details, dirty, image) => {
       const entry = entries.get(id);
       if (!entry?.visible) return;
+      const decision = decideBrowserFrame({
+        visible: entry.visible,
+        focused: entry.focused,
+        sharedTextureAvailable: SHARED_TEXTURE_AVAILABLE,
+      });
+      if (decision.path === "skip") return;
+      if (decision.path === "shared-texture") {
+        // Caminho de GPU: não há encode nenhum, e a textura precisa ser
+        // liberada (só um número limitado existe por vez — doc do evento
+        // `paint` no electron.d.ts). Inalcançável hoje
+        // (`SHARED_TEXTURE_AVAILABLE === false`); existe pra que ligar a
+        // flag amanhã não vaze textura nem tente consumir um `image` que,
+        // nesse modo, não vem do CPU.
+        details.texture?.release();
+        return;
+      }
+      // `cpu-jpeg` — o `dirty` que o handler antigo ignorava (`_dirty`): um
+      // paint sem área mudada não tem o que encodar (ver
+      // `hasDirtyArea`/docs/PERF.md). Um frame de verdade segue igual.
+      if (!hasDirtyArea(dirty)) return;
       const { width, height } = image.getSize();
       if (width === 0 || height === 0) return;
       // JPEG, not the raw BGRA bitmap — a 720×560 raw frame is ~1.6MB;
@@ -630,7 +673,9 @@ export function createBrowserRegistry(callbacks: {
       // limitação do Electron/GPU. Subida pra 90: ainda troca um pouco de
       // nitidez por caber num canal IPC repetidamente, mas o degrau de
       // qualidade em 70 era desnecessariamente agressivo pra conteúdo de
-      // UI/texto (majoritariamente o que se navega aqui).
+      // UI/texto (majoritariamente o que se navega aqui). A qualidade fica
+      // em 90 mesmo com o teto de 30fps: o que a reversão corta é o NÚMERO
+      // de encodes, não a nitidez de cada um.
       callbacks.onFrame(id, image.toJPEG(90), width, height);
     });
 
@@ -705,7 +750,7 @@ export function createBrowserRegistry(callbacks: {
       });
     });
 
-    entries.set(id, { win, visible: true, scaleFactor, console: [], network: [], cdp: null, originalUserAgent: null, networkEnableRefs: 0 });
+    entries.set(id, { win, visible: true, focused: true, scaleFactor, console: [], network: [], cdp: null, originalUserAgent: null, networkEnableRefs: 0 });
     // A sessão é a padrão, compartilhada com a janela principal, e o
     // `webRequest` do Electron aceita UM listener por evento por sessão —
     // então o registro é feito uma vez só e despachado por
@@ -1160,6 +1205,20 @@ export function createBrowserRegistry(callbacks: {
     maxDensityOverride = value;
   }
 
+  /** Aplica a rota/taxa que `decideBrowserFrame` responde pro estado atual
+   * do card. `skip` (invisível) NÃO chama `setFrameRate(0)` — `setFrameRate`
+   * exige um fps positivo, e quem para a composição de um card fora da tela
+   * é o `setVisible`. */
+  function applyFrameRate(entry: Entry) {
+    const decision = decideBrowserFrame({
+      visible: entry.visible,
+      focused: entry.focused,
+      sharedTextureAvailable: SHARED_TEXTURE_AVAILABLE,
+    });
+    if (decision.path === "skip") return;
+    entry.win.webContents.setFrameRate(decision.frameRate);
+  }
+
   /** Pauses/resumes actual compositing (`stopPainting`/`startPainting`),
    * not just frame delivery — an off-viewport card costs nothing instead of
    * still paying for paints nobody draws. */
@@ -1170,13 +1229,19 @@ export function createBrowserRegistry(callbacks: {
     const wc = entry.win.webContents;
     if (visible && !wc.isPainting()) wc.startPainting();
     else if (!visible && wc.isPainting()) wc.stopPainting();
+    // Ao voltar, retoma na taxa que o foco ATUAL manda — o card pode ter
+    // saído de foco enquanto estava fora da tela.
+    if (visible) applyFrameRate(entry);
   }
 
   /** Pre-release audit P2 — a visible-but-not-topmost card still needs
    * to paint (it's genuinely on screen), just not at full rate: nobody's
    * watching it move right now the way they are the one they raised. */
   function setFocused(id: string, focused: boolean) {
-    entries.get(id)?.win.webContents.setFrameRate(focused ? FOCUSED_FRAME_RATE : UNFOCUSED_FRAME_RATE);
+    const entry = entries.get(id);
+    if (!entry) return;
+    entry.focused = focused;
+    applyFrameRate(entry);
   }
 
   function sendMouseEvent(id: string, evt: BrowserMouseEvent) {
