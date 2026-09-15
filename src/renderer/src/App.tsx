@@ -36,6 +36,7 @@ import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
 import { decideConnectorLabelSchedule } from "./connector-label-throttle";
 import { decideConnectorMotion } from "./connector-motion-decision";
+import { decideConnectorPulse, connectorPulseFrames } from "./connector-pulse-decision";
 import {
   anchoredSlot,
   bboxOf,
@@ -260,6 +261,99 @@ const ZOOM_STEP = 1.15;
 // immutable reference instead — module-level, outside the component, so
 // it's the exact same array for the app's entire lifetime.
 const EMPTY_URLS: string[] = [];
+
+// PERF (docs/PERF.md, 2026-09-15) — o pulso do conector é um elemento HTML
+// minúsculo movido só por `transform: translate3d()`, nunca mais
+// `stroke-dashoffset` (que é PAINT). Um traverse completo dura isto; os
+// pontos têm atraso escalonado para o "trenzinho" que o `stroke-dasharray`
+// desenhava antes. Ver connector-pulse-decision.ts para o porquê da rota
+// transform e da rejeição medida de `offset-path`/`offset-distance`.
+const CONNECTOR_PULSE_DURATION_MS = 2_400;
+const CONNECTOR_PULSE_DOTS = 3;
+
+/**
+ * Um ponto do pulso de UM conector. Elemento próprio (não dentro do `<svg>`)
+ * porque transform animado em filho de SVG não é composto como um HTML
+ * comum — mesmo motivo pelo qual o precedente medido em StellarPage tirou o
+ * pulso do SVG. Nasce em (0,0) do layer e é apenas transladado; os keyframes
+ * vêm da amostragem pura em `connectorPulseFrames`.
+ *
+ * Quando o `d` muda (cards arrastados), `setKeyframes` atualiza o efeito EM
+ * CIMA da animação que já roda, então o pulso não reinicia do zero a cada
+ * frame do arrasto.
+ */
+function ConnectorPulseDot({
+  start,
+  control,
+  end,
+  phase,
+}: {
+  start: Point;
+  control: Point;
+  end: Point;
+  phase: number;
+}) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const animRef = useRef<Animation | null>(null);
+  // Primitivos (não os objetos) para o efeito reagir só a mudança real de
+  // geometria — `Point` é recriado a cada render do board.
+  const sx = start.x;
+  const sy = start.y;
+  const cx = control.x;
+  const cy = control.y;
+  const ex = end.x;
+  const ey = end.y;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // O keyframe em translate3d continua composto sob reduced-motion? Em vez
+    // de confiar nisso, o CSS esconde `.connector-pulse` inteiro nesse caso
+    // (animations.css) e aqui nem criamos a animação.
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const frames = connectorPulseFrames({ x: sx, y: sy }, { x: cx, y: cy }, { x: ex, y: ey });
+    if (frames.length === 0) return;
+    const keyframes: Keyframe[] = frames.map((f) => ({
+      offset: f.offset,
+      transform: `translate3d(${f.x}px, ${f.y}px, 0)`,
+    }));
+
+    const existing = animRef.current;
+    if (existing) {
+      if (existing.effect instanceof KeyframeEffect) existing.effect.setKeyframes(keyframes);
+      return;
+    }
+    animRef.current = el.animate(keyframes, {
+      duration: CONNECTOR_PULSE_DURATION_MS,
+      // Negativo = o ponto já nasce no meio do percurso, escalonando os
+      // vários pontos do mesmo conector.
+      delay: -CONNECTOR_PULSE_DURATION_MS * phase,
+      iterations: Infinity,
+      easing: "linear",
+    });
+  }, [sx, sy, cx, cy, ex, ey, phase]);
+
+  useEffect(
+    () => () => {
+      animRef.current?.cancel();
+      animRef.current = null;
+    },
+    [],
+  );
+
+  return (
+    <span
+      ref={ref}
+      className="connector-pulse"
+      aria-hidden="true"
+      // Posição de repouso no início do caminho: o `useEffect` só cria a
+      // animação depois do primeiro paint, e sem isto o ponto apareceria em
+      // (0,0) do board por um frame. WAAPI sobrepõe o inline enquanto roda.
+      style={{ transform: `translate3d(${sx}px, ${sy}px, 0)` }}
+    />
+  );
+}
 
 /** Canvas background pattern — per-viewer preference (not per-board data,
  * doesn't need to sync/persist to the store), cycled by a topbar button.
@@ -3171,6 +3265,36 @@ export function App() {
     ),
   });
 
+  // PERF (docs/PERF.md, 2026-09-15) — o gate acima decide se o board inteiro
+  // está trabalhando; este filtro decide QUAIS conectores merecem o pulso: só
+  // `spawned` para um card de agente vivo. A geometria é a mesma que o
+  // `<svg>` logo abaixo desenha — aqui só se selecionam os que animam, para o
+  // layer HTML de pulsos (config. connector-pulse-decision.ts).
+  const connectorPulses = animateConnectors
+    ? connectors.flatMap((conn) => {
+        const from = cards.find((c) => c.id === conn.fromCardId);
+        const to = cards.find((c) => c.id === conn.toCardId);
+        if (!from || !to) return [];
+        const toCardProvider = to.kind === "terminal" ? to.provider : null;
+        if (
+          !decideConnectorPulse({
+            connectorKind: conn.kind ?? null,
+            toCardKind: to.kind,
+            toCardProvider,
+            toCardLive: liveStatus[to.id] !== "error" && liveStatus[to.id] !== "exited",
+          })
+        ) {
+          return [];
+        }
+        const fromCenter = rectCenter(from.rect);
+        const toCenter = rectCenter(to.rect);
+        const start = clipLineToRect(fromCenter, toCenter, from.rect);
+        const end = clipLineToRect(toCenter, fromCenter, to.rect);
+        const control = quadraticControlPoint(start, end, 0.18);
+        return [{ id: conn.id, start, control, end }];
+      })
+    : [];
+
   return (
     <div
       className="viewport"
@@ -3629,7 +3753,7 @@ export function App() {
             return assertNeverCardKind(c);
           }
         })}
-        <svg className={`board-overlay${animateConnectors ? " connectors-animated" : ""}`}>
+        <svg className="board-overlay">
           <defs>
             <marker id="connector-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 z" style={{ fill: "var(--foam)" }} />
@@ -3753,6 +3877,24 @@ export function App() {
           )}
           {marquee && <rect className="marquee" x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h} />}
         </svg>
+        {/* Pulso de conector FORA do `<svg>` — elementos minúsculos movidos
+            só por `transform: translate3d()` (composto), no lugar do
+            `stroke-dashoffset` (PAINT). Ver connector-pulse-decision.ts. */}
+        {connectorPulses.length > 0 && (
+          <div className="connector-pulses" aria-hidden="true">
+            {connectorPulses.flatMap((p) =>
+              Array.from({ length: CONNECTOR_PULSE_DOTS }, (_, i) => (
+                <ConnectorPulseDot
+                  key={`${p.id}-${i}`}
+                  start={p.start}
+                  control={p.control}
+                  end={p.end}
+                  phase={i / CONNECTOR_PULSE_DOTS}
+                />
+              )),
+            )}
+          </div>
+        )}
       </div>
       {/* Trilha B — all 9 card kinds now portal their DOM here instead of
           rendering inline inside `.world`'s map; see CardFrame.tsx's
@@ -3761,8 +3903,9 @@ export function App() {
           arrive via `createPortal`. `.world`'s own `scale(zoom)` can't be
           removed yet even so — the `<svg className="board-overlay">`
           above (connector lines, the pen-drawing live preview, the
-          group-select marquee) still lives inside `.world` and still
-          relies on that ambient transform for its own coordinates; see
+          group-select marquee) and the `.connector-pulses` layer after it
+          still live inside `.world` and still rely on that ambient
+          transform for their own coordinates; see
           DESIGN-BACKLOG.md's Trilha B entry for the follow-up this
           implies before §0.8 ponto 3 (remover scale(zoom) de .world) can
           be closed. */}
