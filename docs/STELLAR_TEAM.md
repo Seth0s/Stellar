@@ -157,7 +157,7 @@ Nenhuma destas é técnica. Todas bloqueiam trabalho a jusante.
 | 1 | **Segredos**: o usuário redigita em cada máquina, ou o serviço assume custódia de chave? | Redigitar: fricção a cada máquina nova, zero responsabilidade sobre credencial alheia. Custódia: a promessa "igual em qualquer PC" fica inteira, e vem junto responsabilidade legal e de segurança sobre chave de terceiro. |
 | 2 | **Qual é a ponta de lança** — portabilidade, padronização de time, ou métrica? | Define a primeira tela, o primeiro cliente e o argumento de venda. As três se sustentam; tentar as três ao mesmo tempo não. |
 | 3 | **Caminhos absolutos**: remapear `cwd` na chegada, ou board sincronizado ser só metadado? | Remapear: board utilizável em qualquer máquina, custo de heurística que pode errar. Só metadado: honesto e simples, mas o board sincronizado vale menos. |
-| 4 | **Id real no modo local desde o dia 1?** | Com id: migração local→conta é anexar. Sem id: migração feia, exatamente quando houver usuários reais para migrar. **Barata agora, cara depois.** |
+| 4 | **Id real no modo local desde o dia 1?** — **DECIDIDA: SIM** (2026-09-15; implementado, commit `_______`) | Com id: migração local→conta é anexar. Sem id: migração feia, exatamente quando houver usuários reais para migrar. **Barata agora, cara depois.** — o lado "com id" foi o escolhido: `user_id` (a pessoa) + `install_id` (a máquina), anônimo-local, arquivo em `userData` como fonte e espelho no banco; escrita nova em `task_transitions` carimba o sujeito, histórico antigo fica NULL (sem backfill, §8). |
 
 ---
 
@@ -170,10 +170,11 @@ A tela de login é a primeira coisa que o usuário vê e deve ser a **última** 
 | 1 | Identidade de ator (fundação: quem escreveu) | ✅ `264d39c` |
 | 2 | Inventário da casa de trabalho | ✅ `8c7710f` |
 | 3 | Estatística local — prova o valor sem servidor | ✅ `59e5cd9` |
-| 4 | **Política de segredos** (decisão 1 acima) | bloqueia o resto |
-| 5 | Sync de config de providers, com remap de caminho | o produto de portabilidade de verdade |
-| 6 | Board do Stellar como camada secundária, com estratégia de conflito | depende de 5 |
-| 7 | Backend, login, team | depende de tudo acima |
+| 4 | **Identidade local real** (decisão 4 acima — `user_id` pessoa + `install_id` máquina, anônimo-local desde o primeiro run; não depende de nada, torna a etapa 8 barata) | ✅ `_______` |
+| 5 | **Política de segredos** (decisão 1 acima) | bloqueia o resto |
+| 6 | Sync de config de providers, com remap de caminho | o produto de portabilidade de verdade |
+| 7 | Board do Stellar como camada secundária, com estratégia de conflito | depende de 6 |
+| 8 | Backend, login, team | depende de tudo acima |
 
 Cada etapa entrega algo sozinha. Na ordem inversa, constroem-se meses de servidor para descobrir o que a etapa 3 responde em uma semana.
 
