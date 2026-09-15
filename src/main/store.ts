@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { resolveLocalIdentity } from "./local-identity";
+import type { LocalIdentity } from "./local-identity-decision";
 import { decideStatusWrite, retainStatusAsk, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
 import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
@@ -439,6 +441,23 @@ export type TaskTransitionRow = {
    * write time, or null — no backfill; absence means "does not know".
    */
   card_id: string | null;
+  /**
+   * STELLAR_TEAM.md §6 decisão 4 (tomada: SIM, id real no modo local
+   * desde o dia 1) — o SUJEITO da escrita: `user_id` da identidade
+   * local desta instalação (a PESSOA, anônimo-local, opaco — ver
+   * `local-identity-decision.ts`). `actor` continua sendo a CLASSE
+   * (app|agent|human|orchestrator); os dois não se fundem, mesma
+   * separação que `264d39c` estabeleceu entre classe e card. Em modo
+   * local toda escrita pertence à única pessoa desta instalação —
+   * agentes agem por ela —, então toda linha NOVA carimba o mesmo
+   * `user_id`. SEM BACKFILL (§8: "não inventar sujeito onde não há"):
+   * linhas anteriores a esta coluna ficam NULL para sempre — ausência
+   * é dado, e o histórico anterior à decisão diz honestamente que não
+   * sabe quem foi. Optional no type pelo mesmo motivo de
+   * `requested_status` acima: construtores existentes (testes) seguem
+   * válidos; o SQL persiste valor explícito em toda inserção nova.
+   */
+  user_id?: string | null;
   at: number;
 };
 
@@ -840,6 +859,19 @@ function migrate(db: Database.Database) {
       if (!String(e).includes("duplicate column name")) throw e;
     }
   }
+  // STELLAR_TEAM.md §6 decisão 4 — sujeito das escritas. Nullable e
+  // SEM BACKFILL, deliberadamente: as transições antigas não sabem
+  // quem foi (§8 — "não inventar sujeito onde não há"; atribuir
+  // trabalho retroativamente é pior que admitir a ausência), e
+  // NULL para sempre é a resposta honesta. Mesmo padrão
+  // ALTER-then-catch-duplicate-column de todas as colunas acima — em
+  // instalação nova o CREATE TABLE já tem a coluna e o ALTER cai no
+  // catch, exatamente como em `cards`.
+  try {
+    db.exec(`ALTER TABLE task_transitions ADD COLUMN user_id TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
   // CAMADA 3 — `running` is derived on read; normalize legacy rows once.
   db.prepare("UPDATE tasks SET status = 'pending' WHERE status = 'running'").run();
   // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — membership vivo.
@@ -1070,6 +1102,7 @@ export function openStore(userDataDir: string) {
       to_value TEXT NOT NULL,
       actor TEXT NOT NULL,
       card_id TEXT,
+      user_id TEXT,
       at INTEGER NOT NULL
     );
   `);
@@ -1195,12 +1228,58 @@ export function openStore(userDataDir: string) {
     );
   `);
 
+  // STELLAR_TEAM.md §6 decisão 4 — ESPELHO da identidade local no
+  // banco. A FONTE é o arquivo `local-identity.json` em userData
+  // (local-identity.ts): o `user_id` precisa sobreviver a um banco
+  // recriado, então o SQLite nunca é a autoridade — é a cópia que
+  // permite (a) restaurar a identidade quando o ARQUIVO corrompe ou
+  // some, e (b) consultar o sujeito em SQL sem sair do banco. Uma
+  // linha só (`slot = 'local'`): modo local tem uma pessoa por
+  // instalação. Divergência arquivo×espelho é resolvida pela decisão
+  // pura (local-identity-decision.ts): arquivo válido vence e repara
+  // o espelho; espelho nunca vence arquivo válido.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS local_identity (
+      slot TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      install_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      mirrored_at INTEGER NOT NULL
+    );
+  `);
+
   // Must run after every CREATE TABLE IF NOT EXISTS above (cards,
   // connectors, AND boards — it now ALTERs all three): on a brand-new
   // database running it any earlier throws "no such table" for whichever
   // table isn't created yet — confirmed live before with cards/connectors,
   // same class of bug would hit boards.project otherwise.
   migrate(db);
+
+  // STELLAR_TEAM.md §6 decisão 4 — resolve a identidade local UMA vez
+  // por abertura de store: o arquivo em userData é a fonte, o espelho
+  // `local_identity` acima é lido primeiro (pode restaurar a
+  // identidade se o arquivo corrompeu) e reparado quando diverge.
+  // `localUserId` fica no closure e carimba TODA inserção nova em
+  // `task_transitions` — em modo local existe uma pessoa por
+  // instalação, e agentes agem por ela; `actor` continua dizendo a
+  // CLASSE da escrita. Linhas antigas não são tocadas (sem backfill).
+  const getIdentityMirrorStmt = db.prepare(
+    "SELECT user_id, install_id, created_at FROM local_identity WHERE slot = 'local'",
+  );
+  const upsertIdentityMirrorStmt = db.prepare(`
+    INSERT INTO local_identity (slot, user_id, install_id, created_at, mirrored_at)
+    VALUES ('local', @user_id, @install_id, @created_at, @mirrored_at)
+    ON CONFLICT(slot) DO UPDATE SET
+      user_id = excluded.user_id, install_id = excluded.install_id,
+      created_at = excluded.created_at, mirrored_at = excluded.mirrored_at
+  `);
+  const resolvedIdentity = resolveLocalIdentity(userDataDir, {
+    dbMirror: getIdentityMirrorStmt.get() ?? null,
+  });
+  if (resolvedIdentity.decision.writeMirror) {
+    upsertIdentityMirrorStmt.run({ ...resolvedIdentity.identity, mirrored_at: Date.now() });
+  }
+  const localUserId: string = resolvedIdentity.identity.user_id;
 
   // Pre-release audit P3 — the columns every hot query filters by
   // (board-scoped lists, connector lookups by either endpoint, task
@@ -1936,6 +2015,7 @@ export function openStore(userDataDir: string) {
         to_value: decision.status,
         actor: newActor,
         card_id: transitionCardId,
+        user_id: localUserId,
         at,
       });
     }
@@ -1948,6 +2028,7 @@ export function openStore(userDataDir: string) {
         to_value: decision.declaredStatus,
         actor: newActor,
         card_id: transitionCardId,
+        user_id: localUserId,
         at,
       });
     }
@@ -1963,6 +2044,7 @@ export function openStore(userDataDir: string) {
         to_value: decision.status,
         actor: newActor,
         card_id: transitionCardId,
+        user_id: localUserId,
         at,
       });
     }
@@ -1979,6 +2061,7 @@ export function openStore(userDataDir: string) {
         to_value: persistable.prompt ?? "",
         actor: newActor,
         card_id: transitionCardId,
+        user_id: localUserId,
         at,
       });
     }
@@ -2036,11 +2119,11 @@ export function openStore(userDataDir: string) {
   // pela ordem real de inserção, sem precisar de uma segunda coluna só
   // pra isso.
   const insertTransitionStmt = db.prepare(`
-    INSERT INTO task_transitions (id, task_id, kind, from_value, to_value, actor, card_id, at)
-    VALUES (@id, @task_id, @kind, @from_value, @to_value, @actor, @card_id, @at)
+    INSERT INTO task_transitions (id, task_id, kind, from_value, to_value, actor, card_id, user_id, at)
+    VALUES (@id, @task_id, @kind, @from_value, @to_value, @actor, @card_id, @user_id, @at)
   `);
   const getTaskTransitionsStmt = db.prepare(
-    "SELECT id, task_id, kind, from_value, to_value, actor, card_id, at FROM task_transitions WHERE task_id = ? ORDER BY at ASC, rowid ASC",
+    "SELECT id, task_id, kind, from_value, to_value, actor, card_id, user_id, at FROM task_transitions WHERE task_id = ? ORDER BY at ASC, rowid ASC",
   );
 
   // DESIGN-BACKLOG.md §2.1 "Vínculo task ↔ vários cards com papel" —
@@ -2579,6 +2662,7 @@ export function openStore(userDataDir: string) {
           to_value: ask.status,
           actor: "agent",
           card_id: ask.requesterId,
+          user_id: localUserId,
           at,
         });
       } else if (previousRequested) {
@@ -2590,6 +2674,7 @@ export function openStore(userDataDir: string) {
           to_value: previousRequested,
           actor: "human",
           card_id: existing.requested_by ?? null,
+          user_id: localUserId,
           at,
         });
       }
@@ -2773,6 +2858,12 @@ export function openStore(userDataDir: string) {
     listFavorites: (): FavoriteRow[] => listFavoritesStmt.all() as FavoriteRow[],
     addFavorite: (url: string, title: string) => addFavoriteStmt.run({ url, title, created_at: Date.now() }),
     removeFavorite: (url: string) => removeFavoriteStmt.run(url),
+    /** STELLAR_TEAM.md §6 decisão 4 — a identidade local adotada nesta
+     * abertura (resolvida uma vez, logo após `migrate`). `user_id` é a
+     * pessoa (carimbada em toda transição nova), `install_id` é esta
+     * máquina. Leitura apenas — quem nasce/roda a identidade é
+     * `local-identity.ts`, nunca um método do store. */
+    getLocalIdentity: (): LocalIdentity => resolvedIdentity.identity,
     close: () => db.close(),
   };
 }
