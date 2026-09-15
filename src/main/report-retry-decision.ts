@@ -37,6 +37,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * `report` is an untyped argument on the MCP surface (`mcp-server.ts`
+ * declares it `z.unknown()`), so a client/model can hand the payload as
+ * a JSON **string** (`'{"ok":true}'`) instead of an object. Measured
+ * 2026-09-15 in the opencode session store: the SAME agent sent `report`
+ * as an object on one call and as a JSON string on the next, so this is
+ * not a deterministic client bug — it is the price of an untyped field.
+ *
+ * A JSON-encoded object carries exactly the same value as the object, so
+ * decode it; anything else (prose, number, array, malformed JSON, a JSON
+ * array) is returned untouched and handled as before. Narrow by design:
+ * a bare free-form string is a legal report on its own and must NOT be
+ * reinterpreted.
+ */
+export function decodeReportArgument(report: unknown): unknown {
+  if (typeof report !== "string") return report;
+  const trimmed = report.trim();
+  if (trimmed[0] !== "{") return report;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return isPlainObject(parsed) ? parsed : report;
+  } catch {
+    return report;
+  }
+}
+
 /** Structural refusal: the app knows the missing/wrong field by name. */
 export function describeStructuralReportError(field: string): string {
   if (field === "requesterId") return "missing requesterId (your own card id)";
@@ -44,6 +70,39 @@ export function describeStructuralReportError(field: string): string {
   if (field === "ok") return "report.ok must be a boolean";
   if (field === "retryable") return "report.retryable must be a boolean";
   return `missing ${field}`;
+}
+
+/**
+ * A declared reportSchema key that is absent from the payload. This is a
+ * DIFFERENT fact from `describeStructuralReportError`'s type error: `ok`
+ * missing is not `ok` mistyped. Reusing the type message here made
+ * `{ok: true, ...}`-less payloads answer "report.ok must be a boolean"
+ * (measured live 2026-09-15) — again blaming the agent for a value it
+ * never supplied. Name the missing key; never claim a type problem.
+ */
+export function describeMissingReportField(field: string): string {
+  return `missing ${field} (required by the task's reportSchema)`;
+}
+
+/**
+ * A payload that is not a JSON object still has to satisfy a declared
+ * reportSchema. Naming `schema[0]` here produced "report.ok must be a
+ * boolean" for a JSON *string* envelope — a message that blamed a key
+ * the agent had supplied correctly inside the string. Name the envelope
+ * instead, and say which keys the object must carry.
+ */
+export function describeNonObjectReportError(report: unknown, schema: string[] | null | undefined): string {
+  const received =
+    report === null
+      ? "null"
+      : Array.isArray(report)
+        ? "an array"
+        : typeof report === "string"
+          ? "a string"
+          : `a ${typeof report}`;
+  const keys = schema && schema.length > 0 ? ` Required keys: ${schema.join(", ")}.` : "";
+  const hint = typeof report === "string" ? " Send the object itself, not a JSON-encoded string." : " Send a JSON object.";
+  return `report must be a JSON object (received ${received}).${keys}${hint}`;
 }
 
 /**
@@ -127,35 +186,42 @@ export function decideReportAcceptance(input: {
     return { action: "structural", field: "report", error: describeStructuralReportError("report") };
   }
 
-  if (!isPlainObject(input.report)) {
-    // Non-object bodies cannot satisfy a declared key list — name the
-    // first missing field the same way a plain object would.
-    const missing = missingReportSchemaField(input.report, input.linkedTask?.reportSchema);
+  // Normalise a JSON-encoded object envelope before judging the payload
+  // (`decodeReportArgument`). Applied here as well as at the MCP boundary
+  // so a decision reached from any caller sees the same value.
+  const report = decodeReportArgument(input.report);
+
+  if (!isPlainObject(report)) {
+    // A non-object cannot satisfy a declared key list. Name the ENVELOPE,
+    // never `schema[0]` — a JSON string contains `ok` perfectly well and
+    // must not be answered with "report.ok must be a boolean".
+    const schema = input.linkedTask?.reportSchema;
+    const missing = missingReportSchemaField(report, schema);
     if (missing) {
-      return { action: "structural", field: missing, error: describeStructuralReportError(missing) };
+      return { action: "structural", field: "report", error: describeNonObjectReportError(report, schema) };
     }
     return { action: "accept" };
   }
 
-  if ("ok" in input.report && typeof input.report.ok !== "boolean") {
+  if ("ok" in report && typeof report.ok !== "boolean") {
     return { action: "structural", field: "ok", error: describeStructuralReportError("ok") };
   }
-  if ("retryable" in input.report && typeof input.report.retryable !== "boolean") {
+  if ("retryable" in report && typeof report.retryable !== "boolean") {
     return { action: "structural", field: "retryable", error: describeStructuralReportError("retryable") };
   }
 
   // Declared failure skips reportSchema — the agent is saying it cannot
   // deliver the contract yet (retryable) or at all (terminal). Success /
   // omitted-ok must name every declared field.
-  if (input.report.ok !== false) {
-    const missing = missingReportSchemaField(input.report, input.linkedTask?.reportSchema);
+  if (report.ok !== false) {
+    const missing = missingReportSchemaField(report, input.linkedTask?.reportSchema);
     if (missing) {
-      return { action: "structural", field: missing, error: describeStructuralReportError(missing) };
+      return { action: "structural", field: missing, error: describeMissingReportField(missing) };
     }
     return { action: "accept" };
   }
 
-  const terminal = input.report.retryable === false;
+  const terminal = report.retryable === false;
   if (terminal) {
     return { action: "accept_failure", terminal: true };
   }
