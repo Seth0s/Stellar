@@ -1,0 +1,59 @@
+{
+  "ozone": "wayland",
+  "electron": "42.3.0",
+  "chrome": "148.0.7778.180",
+  "antes": {
+    "A": {
+      "composed": false,
+      "count": 0
+    },
+    "B": {
+      "composed": false,
+      "count": 0
+    },
+    "C": {
+      "composed": false,
+      "count": 0
+    },
+    "D": {
+      "composed": false,
+      "count": 2
+    }
+  },
+  "depois": {
+    "A": {
+      "composed": false,
+      "count": 0
+    },
+    "B": {
+      "composed": false,
+      "count": 0
+    },
+    "C": {
+      "composed": false,
+      "count": 0
+    },
+    "D": {
+      "composed": false,
+      "count": 2
+    }
+  },
+  "permanece": {
+    "A": {
+      "composed": false,
+      "count": 0
+    },
+    "B": {
+      "composed": false,
+      "count": 0
+    },
+    "C": {
+      "composed": false,
+      "count": 0
+    },
+    "D": {
+      "composed": false,
+      "count": 0
+    }
+  }
+}
