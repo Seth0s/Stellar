@@ -48,7 +48,11 @@ const page = (c, l) => `data:text/html,<body style="margin:0;background:${c}"><h
 function shotFile(name) {
   const file = path.join(OUT, name);
   return new Promise((resolve, reject) => {
-    const args = OZONE === "x11" ? ["import", ["-window", "root", file]] : ["python3", [path.join(__dirname, "portal_screenshot.py"), file]];
+    // PROBE_SHOT=portal força a captura do portal XDG mesmo rodando com
+    // ozone x11: numa sessão Wayland a janela Xwayland aparece na tela
+    // normalmente, mas `import -window root` não acha raiz X utilizável.
+    const usePortal = process.env.PROBE_SHOT === "portal" || OZONE !== "x11";
+    const args = usePortal ? ["python3", [path.join(__dirname, "portal_screenshot.py"), file]] : ["import", ["-window", "root", file]];
     execFile(args[0], args[1], (err, _o, se) => (err ? reject(new Error(se || err.message)) : resolve(file)));
   });
 }
