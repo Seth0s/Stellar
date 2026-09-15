@@ -49,7 +49,14 @@
     }
   }
 
-  .connector-line {
+  /* PERF (docs/PERF.md, 2026-09-15): a marcha do traço só roda quando o
+     board trabalha de verdade. Antes era `.connector-line` direto —
+     `stroke-dashoffset` é PAINT, então TODO conector repintava a cada
+     frame para sempre, mesmo com o board parado (o ~11% de CPU medido).
+     O tracejado estático continua em layout.css; aqui só a ANIMAÇÃO fica
+     gated em `connectors-animated` (App.tsx decide via
+     connector-motion-decision.ts). */
+  .connectors-animated .connector-line {
     animation: dash 1.1s linear infinite;
   }
 
