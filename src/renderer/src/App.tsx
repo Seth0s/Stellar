@@ -35,6 +35,7 @@ import { Home } from "./Home";
 import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
 import { decideConnectorLabelSchedule } from "./connector-label-throttle";
+import { decideConnectorMotion } from "./connector-motion-decision";
 import {
   anchoredSlot,
   bboxOf,
@@ -3158,6 +3159,18 @@ export function App() {
       }
     : boardCounts;
 
+  // PERF (docs/PERF.md, 2026-09-15) — a marcha do traço dos conectores só
+  // anima enquanto o board trabalha de verdade; parado, o traço fica
+  // estático e para de repintar a cada frame. Ver connector-motion-decision.ts.
+  const animateConnectors = decideConnectorMotion({
+    anyLiveAgentCard: activeTerminalCards.some(
+      (c) => liveStatus[c.id] !== "error" && liveStatus[c.id] !== "exited",
+    ),
+    anyTaskRunning: ((activeBoardId ? taskBoards[activeBoardId] : undefined) ?? []).some(
+      (t) => t.status === "running",
+    ),
+  });
+
   return (
     <div
       className="viewport"
@@ -3616,7 +3629,7 @@ export function App() {
             return assertNeverCardKind(c);
           }
         })}
-        <svg className="board-overlay">
+        <svg className={`board-overlay${animateConnectors ? " connectors-animated" : ""}`}>
           <defs>
             <marker id="connector-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 z" style={{ fill: "var(--foam)" }} />

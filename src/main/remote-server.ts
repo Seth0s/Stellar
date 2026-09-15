@@ -297,6 +297,13 @@ export function createRemoteServer(opts: {
   }
 
   function broadcast(payload: unknown) {
+    // PERF (docs/PERF.md, 2026-09-15): sem nenhum cliente remoto (o caso
+    // 99.9% — nenhum celular pareado), `JSON.stringify` de um chunk de PTY
+    // de até 64 KB rodava à toa a cada flush de saída. Um card ruidoso
+    // (build/teste) dispara flush a cada 16 ms, então isto era serialização
+    // pura desperdiçada — CPU do processo main sob carga de saída. Saída
+    // cedo, antes do stringify.
+    if (clients.size === 0) return;
     const data = JSON.stringify(payload);
     for (const ws of clients) {
       if (ws.readyState === ws.OPEN) ws.send(data);
