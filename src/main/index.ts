@@ -1274,7 +1274,7 @@ function createWindow() {
     onNavigate: (id, url) => safeSend(win, "browser:did-navigate", id, url),
     onTitle: (id, title) => safeSend(win, "browser:title", id, title),
     onLoading: (id, loading) => safeSend(win, "browser:loading", id, loading),
-    onFrame: (id, jpeg, width, height) => safeSend(win, "browser:frame", id, jpeg, width, height),
+    onFrame: (id, jpeg, width, height, region) => safeSend(win, "browser:frame", id, jpeg, width, height, region),
     onConsoleMessage: (id, level, message) => safeSend(win, "browser:console-message", id, level, message),
     onContextMenu: (id, params) => safeSend(win, "browser:context-menu", id, params),
     onCdpEvent: (id, method, params) => safeSend(win, "browser:cdp-event", id, method, params),

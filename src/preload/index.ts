@@ -425,6 +425,11 @@ export type CookieEntry = {
   sameSite: string;
 };
 export type BrowserWheelEvent = { x: number; y: number; deltaX: number; deltaY: number };
+/** docs/PERF.md §9.4 — cópia local do tipo de `browser-registry.ts` (mesma
+ * convenção de não cross-importar de `../main`). Explícito de propósito:
+ * quem recebe (BrowserCard.tsx) precisa saber se é recorte ou frame cheio
+ * sem adivinhar por heurística de tamanho. */
+export type BrowserFrameRegion = { full: true } | { full: false; x: number; y: number };
 export type BrowserKeyEvent = {
   type: "keyDown" | "keyUp" | "char";
   keyCode: string;
@@ -514,10 +519,19 @@ const browser = {
     ipcRenderer.invoke("browser:get-page-text", id),
   /** One decoded JPEG frame from the card's offscreen `BrowserWindow` — see
    * browser-registry.ts. `buffer` arrives as a Uint8Array (structured-clone
-   * of the main-process Buffer). */
-  onFrame: (cb: (id: string, buffer: Uint8Array, width: number, height: number) => void) => {
-    const listener = (_e: unknown, id: string, buffer: Uint8Array, width: number, height: number) =>
-      cb(id, buffer, width, height);
+   * of the main-process Buffer). `region` (docs/PERF.md §9.3/§9.4) says
+   * explicitly whether this is the whole frame (resize the canvas, draw at
+   * 0,0) or just the dirty rectangle (draw at `x,y`, canvas untouched
+   * elsewhere) — the caller must not guess from the JPEG's own dimensions. */
+  onFrame: (cb: (id: string, buffer: Uint8Array, width: number, height: number, region: BrowserFrameRegion) => void) => {
+    const listener = (
+      _e: unknown,
+      id: string,
+      buffer: Uint8Array,
+      width: number,
+      height: number,
+      region: BrowserFrameRegion,
+    ) => cb(id, buffer, width, height, region);
     ipcRenderer.on("browser:frame", listener);
     return () => ipcRenderer.removeListener("browser:frame", listener);
   },

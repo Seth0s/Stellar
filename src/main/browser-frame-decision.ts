@@ -106,3 +106,43 @@ export function decideBrowserFrame(input: {
 export function hasDirtyArea(dirty: { width: number; height: number }): boolean {
   return dirty.width > 0 && dirty.height > 0;
 }
+
+/**
+ * Recorte ou frame inteiro — dado que já há dano (`hasDirtyArea`), vale a
+ * pena `image.crop(dirty).toJPEG(90)` em vez de `image.toJPEG(90)` do
+ * frame cheio?
+ *
+ * O número que decide (docs/PERF.md §9.3, `dirty` real do `paint`, não
+ * sintético): cursor piscando (dano ≈0,05% da área) — frame cheio
+ * 1,888ms, só o `dirty` 0,033ms, **~58× mais barato**. Barra de progresso
+ * (dano ≈0,02%) — 1,872ms vs 0,031ms, **~60×**. Essas duas classes de UI
+ * (cursor, campo de formulário, spinner, barra de progresso) são 90% dos
+ * paints numa página real — é aí que o recorte paga.
+ *
+ * Mas `image.crop()` COPIA antes de encodar, e essa cópia não é de graça:
+ * na página que travou o app (animação em tela cheia, dano = 100% em
+ * 100% dos paints), o mesmo teste deu **1,283ms pro recorte contra
+ * 1,246ms pro frame cheio direto — recortar PIOROU**, porque a cópia
+ * extra não reduziu nada (o retângulo sujo já era o frame inteiro).
+ *
+ * `FULL_FRAME_DIRTY_RATIO = 0.95` é o guard: interpolando a curva de
+ * custo×área medida com recortes sintéticos no mesmo frame (100% →
+ * 1,280ms, 50% → 0,802ms — cai ~0,0096ms por ponto percentual de área),
+ * o recorte só passa a perder pro encode direto acima de ~97-98% de área
+ * (é onde a cópia extra deixa de ser paga pela economia de área menor).
+ * 0.95 fica com folga abaixo desse ponto de equilíbrio — cobre a página
+ * animada (100%, sempre cai pro frame cheio) sem arriscar cortar o ganho
+ * medido nos dois casos reais de UI (0,02-0,05%, muitíssimo abaixo do
+ * limiar).
+ */
+export const FULL_FRAME_DIRTY_RATIO = 0.95;
+
+export function shouldCropFrame(
+  dirty: { width: number; height: number },
+  frame: { width: number; height: number },
+): boolean {
+  const frameArea = frame.width * frame.height;
+  if (frameArea <= 0) return false;
+  const dirtyArea = dirty.width * dirty.height;
+  return dirtyArea / frameArea < FULL_FRAME_DIRTY_RATIO;
+}

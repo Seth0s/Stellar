@@ -564,27 +564,49 @@ function BrowserCardInner({
   // math or viewport clamping.
   useEffect(() => {
     let cancelled = false;
-    const offFrame = window.browser.onFrame(async (frameId, buffer, width, height) => {
-      if (frameId !== id || cancelled) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      try {
-        // IPC always hands us a real ArrayBuffer-backed Uint8Array (cloned
-        // from the main-process Buffer) — the cast just satisfies BlobPart's
-        // stricter-than-necessary type, which also allows SharedArrayBuffer.
-        const bitmap = await createImageBitmap(new Blob([buffer as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
-        if (cancelled) {
+    // Encadeado em `chain`, não disparado solto (docs/PERF.md §9.4, risco
+    // 2): `createImageBitmap` é assíncrono, e a IPC do Electron já entrega
+    // cada `onFrame` na ordem certa — o que faltava era não deixar dois
+    // decodes correrem em paralelo e TERMINAREM fora de ordem. Sem recorte
+    // isso era inofensivo (o frame mais novo sempre é o card inteiro, então
+    // sobrescreve tudo mesmo se chegar por último); com recorte, um frame
+    // CHEIO mais antigo que decodifica depois de um recorte mais novo
+    // desenharia por cima e apagaria a atualização. Encadear garante que o
+    // desenho de cada frame só começa depois do anterior terminar — nenhum
+    // frame é descartado, só serializado na ordem de chegada.
+    let chain: Promise<void> = Promise.resolve();
+    const offFrame = window.browser.onFrame((frameId, buffer, width, height, region) => {
+      if (frameId !== id) return;
+      chain = chain.then(async () => {
+        if (cancelled) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        try {
+          // IPC always hands us a real ArrayBuffer-backed Uint8Array (cloned
+          // from the main-process Buffer) — the cast just satisfies BlobPart's
+          // stricter-than-necessary type, which also allows SharedArrayBuffer.
+          const bitmap = await createImageBitmap(new Blob([buffer as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
+          if (cancelled) {
+            bitmap.close();
+            return;
+          }
+          if (region.full) {
+            if (canvas.width !== width) canvas.width = width;
+            if (canvas.height !== height) canvas.height = height;
+            canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+          } else {
+            // Recorte (docs/PERF.md §9.3): NÃO limpa o canvas nem toca no
+            // tamanho — o resto do frame é o que já estava desenhado, e é
+            // essa a economia. `region.full === false` é o sinal explícito
+            // vindo do main; não se adivinha recorte por dimensão do JPEG.
+            canvas.getContext("2d")?.drawImage(bitmap, region.x, region.y);
+          }
           bitmap.close();
-          return;
+        } catch {
+          // A frame arriving for a card mid-teardown (destroy raced the next
+          // paint) — drop it, nothing to recover.
         }
-        if (canvas.width !== width) canvas.width = width;
-        if (canvas.height !== height) canvas.height = height;
-        canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
-        bitmap.close();
-      } catch {
-        // A frame arriving for a card mid-teardown (destroy raced the next
-        // paint) — drop it, nothing to recover.
-      }
+      });
     });
     return () => {
       cancelled = true;
