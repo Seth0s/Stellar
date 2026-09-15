@@ -17,11 +17,16 @@ export type UpdateStatus = {
    * invisível em quem roda o pacote instalado. Null = sem erro (ou
    * nunca checou). */
   checkError: string | null;
+  /** Atualização automática indisponível NESTA build (saída do GitHub,
+   * 2026-09-15: sem feed enquanto a VPS de distribuição não existe).
+   * Diferente de `checkError`: não é falha, é configuração — e precisa
+   * aparecer, senão o app promete silenciosamente um update que nunca vem. */
+  updatesUnavailable: string | null;
 };
 
 const REMIND_LATER_MS = 4 * 60 * 60 * 1000;
 
-let status: UpdateStatus = { version: null, releaseNotes: null, dismissed: false, checking: false, checkError: null };
+let status: UpdateStatus = { version: null, releaseNotes: null, dismissed: false, checking: false, checkError: null, updatesUnavailable: null };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -54,7 +59,7 @@ function ensureInitialized() {
 async function runCheck() {
   setStatus({ checking: true, checkError: null });
   const result = await window.updater.check();
-  setStatus({ checking: false, checkError: result.error ?? null });
+  setStatus({ checking: false, checkError: result.error ?? null, updatesUnavailable: result.unavailable ?? null });
 }
 
 export function useUpdateStatus(): UpdateStatus & { dismiss: () => void; undismiss: () => void; checkNow: () => void } {

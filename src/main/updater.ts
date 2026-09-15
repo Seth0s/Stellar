@@ -1,4 +1,5 @@
 import { app, ipcMain, type BrowserWindow } from "electron";
+import { decideUpdateFeed } from "./update-feed-decision";
 // `electron-updater` is CommonJS with no static `exports.autoUpdater` a
 // named ESM import can see — the bundled main process (ESM output,
 // electron-vite) crashed the whole app on boot with "Named export
@@ -24,16 +25,17 @@ const { autoUpdater } = electronUpdaterPkg;
  * - Any failure (network, signature, no feed) surfaces to the renderer as
  *   a plain error string instead of installing anything.
  *
- * The feed itself comes from `.github/workflows/release.yml`: pushing a
- * `v*` tag builds+publishes to a GitHub Release via `electron-builder
- * --publish always`, which generates the per-platform `latest*.yml`
- * `checkForUpdates()` reads. Nothing in THIS file needs to change to
- * cut a release — the one thing that has to happen every time is
- * bumping `version` in `package.json` before tagging (electron-updater
- * compares the running app's own `package.json` version against the
- * feed's; forgetting the bump means the feed's version never looks
- * newer, so the update silently never surfaces).
+ * FEED (2026-09-15): o projeto saiu do GitHub para um GitLab próprio e o
+ * `release.yml` que publicava o feed foi junto. Enquanto a VPS de
+ * distribuição não existe, `build.publish` fica vazio e
+ * `decideUpdateFeed` devolve "sem feed" — um estado DECLARADO, que a UI
+ * mostra, em vez de um "sem novidades" que seria mentira. Quando a VPS
+ * subir, basta devolver `publish` ao package.json.
  */
+/** `build.publish` do package.json embutido. Vazio enquanto a
+ * distribuição por VPS não existe (saída do GitHub, 2026-09-15). */
+const FEED_PUBLISH_CONFIG: unknown = undefined;
+
 export function registerUpdater(win: BrowserWindow) {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -59,6 +61,10 @@ export function registerUpdater(win: BrowserWindow) {
     // intended to run in a packaged app") instead of failing soft, which
     // would crash `npm run dev` on every boot.
     if (!app.isPackaged) return { checked: false };
+    // Sem feed configurado não há o que checar, e dizer isso é o ponto —
+    // ver update-feed-decision.ts.
+    const feed = decideUpdateFeed(FEED_PUBLISH_CONFIG);
+    if (!feed.configured) return { checked: false, unavailable: feed.message };
     try {
       await autoUpdater.checkForUpdates();
       return { checked: true };

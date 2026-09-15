@@ -32,7 +32,7 @@ document.documentElement.dataset.platform = window.system.platform;
 export function Titlebar() {
   const [maximized, setMaximized] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const { version: updateVersion, checking: updateChecking, checkError: updateCheckError, undismiss, checkNow } = useUpdateStatus();
+  const { version: updateVersion, checking: updateChecking, checkError: updateCheckError, updatesUnavailable, undismiss, checkNow } = useUpdateStatus();
 
   useEffect(() => {
     window.winControls.isMaximized().then(setMaximized);
@@ -76,7 +76,9 @@ export function Titlebar() {
               ? t("titlebar.checkingUpdate")
               : updateCheckError
                 ? t("titlebar.checkUpdateFail", { error: updateCheckError })
-                : t("titlebar.checkUpdate")
+                : // Sem feed não é falha, é como esta build foi publicada —
+                  // some do botão só quando a distribuição existir.
+                  (updatesUnavailable ?? t("titlebar.checkUpdate"))
           }
           onClick={checkNow}
         >

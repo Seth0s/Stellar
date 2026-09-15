@@ -47,12 +47,6 @@
         "to": "mobile-client"
       }
     ],
-    "publish": {
-      "provider": "github",
-      "owner": "Seth0s",
-      "repo": "Stellar",
-      "releaseType": "release"
-    },
     "linux": {
       "target": [
         "rpm",
