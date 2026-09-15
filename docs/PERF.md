@@ -328,3 +328,235 @@ partida, e o ganho é **argumentado**:
 - `npm run lint` — 0 erros (17 warnings pré-existentes, nenhum desta entrega).
 - `npx vitest run` — 1675/1675 verdes (1665 pré-existentes + 10 novos em
   `tests/unit/browser-frame-decision.test.ts`).
+
+## 9. Sonda 4: recorte por área suja, `utilityProcess` de verdade, taxa dirigida por conteúdo (2026-09-15)
+
+Task de **medição pura** — nenhuma linha de `src/` mudou nesta rodada. Sonda:
+`scripts/probe/encode-route.js`. Rodar:
+
+```
+node_modules/.bin/electron scripts/probe/encode-route.js
+```
+
+Evidência em `scripts/probe/out/encode-route/result.json`.
+
+### 9.1 As três rotas fechadas antes desta rodada (rechecagem, não reabertura)
+
+A investigação que produziu §7 foi encerrada sem escrever este documento
+(decisão do dono — as métricas já estavam definidas). Ficaram só em mensagem
+de commit, o que é frágil: registrando aqui pra quem pensar "e se a gente
+usasse X" não precisar reabrir a discussão.
+
+| rota | veredito | número | prova |
+|---|---|---|---|
+| `WebContentsView` nativo (`contentView.addChildView`) | **não compõe** — testado em Wayland, X11 e `--disable-gpu`; quatro estímulos isolados (views recém-criadas, `invalidate()`, mutação DOM, mover+recolorir), nenhum destrava | 0 pixels da cor-assinatura contidos no bbox da janela hospedeira em nenhum estímulo | commits `7ccac8e`, `377f40a`, `9e40f93`; `scripts/probe/out/wayland/result.json` |
+| `useSharedTexture` | exige módulo nativo no consumidor — hoje é `<canvas>` 2D (`BrowserCard.tsx:567-582`, `createImageBitmap`→`drawImage`), sem addon nativo no `package.json` | — | `src/main/browser-frame-decision.ts:20-33` (doc comment), §7.2 |
+| bitmap cru **transferível** | **não existe na API** — `MessagePortMain.postMessage(message, transfer?: MessagePortMain[])` (`electron.d.ts:9704`) só aceita portas no array de transfer; `UtilityProcess.postMessage` tem a **mesma assinatura** (`electron.d.ts:15701`) — reconfirmado nesta rodada (§9.2) | erro observado: `Port at index 0 is not a valid port` | commit `00f511c`; `scripts/probe/out/wayland/result.json` (`rawBitmapRoutes`) |
+| bitmap cru **por cópia** (clone estruturado) | pior que o JPEG atual — o bitmap precisa atravessar inteiro, e a cópia custa mais que o encode que ela tentaria evitar | `toJPEG(90)` = **5,307 ms** de thread principal × `toBitmap()+MessageChannelMain` = **5,947 ms** de thread principal (+8,519 ms de round-trip, 5,7 MB) | commit `00f511c`; `scripts/probe/out/bitmap-route/result.json` |
+
+Comando pra refazer qualquer uma: `node_modules/.bin/electron scripts/probe`
+(sonda 1, `WebContentsView`+pipeline) ou
+`node_modules/.bin/electron scripts/probe/bitmap-route.js` (sonda 3, bitmap
+vs JPEG). Nenhuma sobe o Stellar do dono — `--user-data-dir` próprio em `/tmp`.
+
+### 9.2 `utilityProcess` de verdade: fechado, e por dois motivos agora
+
+A sonda 3 (00f511c) mediu o receptor como uma **janela** (`BrowserWindow`),
+não um `utilityProcess`. O pedido desta rodada era confirmar com o real —
+feito, e a rota fecha por dois motivos independentes, não só um.
+
+**Motivo 1 (o que já se suspeitava): o transporte não é de graça.** Com
+`utilityProcess.fork()` de verdade e o mesmo método da sonda 3 (mede o tempo
+que a chamada síncrona de `postMessage` prende a thread principal, que é o
+número que decide — ela também serve IPC e SQLite):
+
+| rota | thread principal / frame |
+|---|---|
+| `toJPEG(90)` direto (o que existe hoje) | **1,274 ms** |
+| `toBitmap()` + `child.postMessage()` pro utility process | **1,280 ms** |
+
+Estatisticamente iguais — mover o bitmap pro outro processo custa **o mesmo**
+que só encodar localmente, antes mesmo do outro lado fazer qualquer coisa. Os
+valores absolutos aqui são menores que os **5,307/5,947 ms** da sonda 3
+porque a página de teste desta rodada é mais simples (menos entropia por
+pixel, ver §9.7); a relação estrutural — transporte ≈ custo do encode que
+tentaria evitar — se repete nos dois testes, com páginas diferentes.
+
+**Motivo 2 (novo, mais forte): não tem como terminar o trabalho lá.**
+Testado ao vivo: dentro de um `utilityProcess.fork()`, `require("electron")`
+não lança erro, mas só expõe duas propriedades — `net` e
+`systemPreferences`. **`nativeImage` não existe.** Confirmado também que a
+porta de comunicação certa é `process.parentPort` (`electron.d.ts:26736-26738`,
+documentado em `process`, **não** em `require("electron").parentPort`, que é
+`undefined` lá dentro e foi o primeiro erro desta sonda ao escrevê-la). Sem
+`nativeImage`, o `utilityProcess` não consegue chamar `toJPEG` de jeito
+nenhum — "mover o encode pra lá" não é reconfigurar uma chamada existente,
+é **adicionar um encoder JPEG novo** (puro JS ou WASM) como dependência,
+com desempenho e paridade de qualidade com o `libjpeg` nativo do Chromium
+inteiramente não verificados.
+
+**Conclusão: a rota `utilityProcess` está fechada — hoje ela não economiza
+nada na thread principal (motivo 1) e nem executaria o encode que deveria
+mover (motivo 2).** Reabrir exige as duas coisas ao mesmo tempo: um caminho
+de transporte mais barato que hoje não existe, **e** um encoder que o
+projeto não tem.
+
+### 9.3 Recorte por área suja: ganho real, mas só quando o dano é pequeno de verdade
+
+`browser-registry.ts:664` já recebe `dirty` no `paint` e só o usa pra
+descartar frame de área zero (`hasDirtyArea`) — o frame inteiro é encodado
+sempre. Testado: `image.crop(dirty).toJPEG(90)` do recorte, contra
+`image.toJPEG(90)` do frame inteiro, em três páginas offscreen 720×560 (o
+tamanho real de um card, `browser-registry.ts:603-604`).
+
+**Curva custo × área** (recortes sintéticos sobre o mesmo frame, quadrado
+ancorado no canto, 8 repetições cada):
+
+| fração da área | ms | bytes |
+|---|---|---|
+| 100% (frame inteiro) | 1,280 | 14.635 |
+| 50% | 0,802 | 13.237 |
+| 25% | 0,464 | 11.067 |
+| 10% | 0,230 | 5.813 |
+| 5% | 0,123 | 3.059 |
+| 1% | 0,038 | 808 |
+| cursor de texto (20×40px, 0,2%) | 0,021 | 296 |
+| barra de progresso (400×24px, 2,38%) | 0,049 | 362 |
+| toolbar (720×48px, 8,57%) | 0,123 | 1.503 |
+
+O custo escala com a área (não é plano) e tem piso baixo — um recorte do
+tamanho de um cursor custa **~60× menos** que o frame inteiro.
+
+**Isso só importa se o dano real for pequeno.** Medida a distribuição de
+área suja em duas páginas desenhadas pra imitar UI real — bastante texto
+estático + (a) um cursor de texto piscando a cada 500 ms numa posição fixa,
+(b) uma barra de progresso enchendo a cada 60 ms — contra a página
+animada em tela cheia das sondas 1/3 (pior caso já documentado):
+
+| página | paints com <1% de área suja | paints com 90-100% |
+|---|---|---|
+| cheia-animada (pior caso, §7.1) | 0% | **100%** |
+| cursor piscando | **90%** | 10% (o primeiro paint, cheio, após navegar) |
+| barra de progresso | **90%** | 10% (idem) |
+
+E nos frames com dano pequeno de verdade, o custo real (não sintético — o
+`dirty` que o próprio `paint` entregou):
+
+| página | JPEG do frame inteiro | JPEG só do `dirty` | fator |
+|---|---|---|---|
+| cursor piscando (dirty ≈ 0,05% da área) | 1,888 ms | 0,033 ms | **~58×** |
+| barra de progresso (dirty ≈ 0,02% da área) | 1,872 ms | 0,031 ms | **~60×** |
+| cheia-animada (dirty = 100%, pior caso) | 1,246 ms | 1,283 ms | **~1,03× (pior, não melhor)** |
+
+A última linha é o motivo pra não recortar incondicionalmente:
+`image.crop()` copia antes de encodar, e quando o retângulo sujo já é o
+frame inteiro isso só soma uma cópia extra sem reduzir nada. O guard certo é
+barato: se `dirty` cobre (quase) todo o frame, encoda `image` direto; só
+recorta quando sobra ganho de verdade.
+
+### 9.4 O que muda no renderer (não implementado — risco, não código)
+
+Só o que muda, não a implementação:
+
+- **IPC**: o payload de `onFrame` (`browser-registry.ts:519`, `main/index.ts:1277`,
+  `preload/index.ts:518`) carrega hoje `(id, jpeg, width, height)` — largura/altura
+  do frame inteiro. Precisa passar a carregar também a origem do recorte
+  (`dirty.x`, `dirty.y`) e algum sinal de "isto é um recorte, não o frame
+  cheio" (as dimensões do JPEG sozinhas não bastam pra saber onde colar).
+- **`BrowserCard.tsx:582`**: `canvas.getContext("2d")?.drawImage(bitmap, 0, 0)`
+  vira `drawImage(bitmap, dirty.x, dirty.y)`. E o bloco de resize do canvas
+  logo acima (`:580-581`, `if (canvas.width !== width) canvas.width = width`)
+  não pode mais usar as dimensões do JPEG recebido pra decidir se
+  redimensiona — isso hoje funciona porque todo frame É do tamanho do card;
+  com recorte, o tamanho do canvas passa a ser um estado à parte, só setado
+  no frame cheio.
+- **Risco 1 — canvas sem conteúdo válido.** Primeiro frame depois de
+  `create()`, depois de um resize, e depois do card voltar a ficar visível
+  (`setVisible`) precisam vir **cheios**: nesses três momentos o canvas ou
+  está em branco ou tem pixels de um tamanho/estado que não bate mais. Essa
+  decisão é do processo main (`browser-registry.ts`, fora do território
+  desta entrega) — teria que saber diferenciar "dirty pequeno, pode recortar"
+  de "acabei de (re)nascer, manda cheio".
+- **Risco 2 — corrida de decode.** `createImageBitmap` é assíncrono
+  (`BrowserCard.tsx:575`). Hoje é inofensivo porque cada frame já é o card
+  inteiro — se dois decodes terminam fora de ordem, o mais recente sempre
+  vence porque sobrescreve tudo. Com recorte isso vira uma corrida de
+  verdade: um frame **cheio** mais antigo que decodifica **depois** de um
+  recorte mais novo desenha por cima e apaga a atualização. Precisa de
+  sequência (um contador por frame) antes de valer a pena.
+
+### 9.5 Contrapressão: não existe sinal hoje (leitura de código)
+
+Não é medição nova — é o que o código diz. `browser-registry.ts:645-679`
+(handler `paint`) decide a rota e a taxa, guarda contra área suja zero, mas
+não pergunta em nenhum momento se o renderer já desenhou o frame anterior.
+`BrowserCard.tsx:567-589` (`onFrame`) decodifica cada JPEG que chega sem
+nenhuma fila ou descarte — se um decode anterior ainda não terminou, o
+próximo começa do mesmo jeito. **Não existe ack, não existe frame pendente,
+não existe descarte.** Custo de um frame jogado fora: o mesmo de qualquer
+outro frame — 1,27-5,31 ms de thread principal (conforme a página), sem
+desconto, porque quem prende a thread é o encode em si, não o que acontece
+depois no IPC. Implementar contrapressão exigiria um round-trip de IPC (o
+renderer avisando "desenhei") e um main que suba um frame "em voo" — não
+medido nesta rodada, fica como próximo passo, não como conclusão.
+
+### 9.6 Taxa dirigida por conteúdo: já existe — no nível do `paint`, não precisa de mais nada
+
+A pergunta era se o teto de frame rate (`CPU_JPEG_FOCUSED_FRAME_RATE = 30`)
+devia depender do que a página faz. Resposta: o `paint` **já** é dirigido
+por conteúdo — Chromium só emite o evento quando há dano real, e a medição
+de partida (§7.1, "página estática: 1 paint em 12s") já provava isso antes
+desta rodada. A distribuição de §9.3 reforça o mesmo achado de um ângulo
+diferente: mesmo numa página que anima (cursor, barra), o **evento** já é
+raro fora do repaint inicial — o que sobrou pra otimizar não é a
+*frequência*, é o *tamanho* de cada paint, que é exatamente o que o recorte
+por `dirty` (§9.3) resolve. Pra página com repintura de tela cheia (o caso
+que travou o app), frequência é o único parâmetro que sobra — dano é sempre
+100%, recorte não ajuda (§9.3, última linha) — e é exatamente aí que o teto
+de 30fps (§7) já atua. **Não sustenta trabalho novo**: um teto "dirigido por
+conteúdo" separado do que `hasDirtyArea` + recorte já entregam não tem o que
+otimizar a mais.
+
+### 9.7 Recomendação
+
+**Implementar recorte por `dirty` no caminho `cpu-jpeg`, com curto-circuito
+para frame cheio quando o retângulo sujo cobre (quase) todo o frame.**
+É a única das rotas avaliadas com ganho medido e sem custo estrutural
+escondido: ~60× mais barato exatamente na classe de UI que domina o tempo
+de uma página real (cursor, campo de formulário, spinner, barra de
+progresso) — §9.3 já mede os dois lados, custo por área E que o dano nessas
+páginas É pequeno na prática, não só em teoria. O preço é side do renderer
+(§9.4): payload de IPC maior por um campo, `drawImage` com offset, e duas
+armadilhas de estado (frame cheio obrigatório em create/resize/visible, e
+sequência pra corrida de decode) que qualquer implementação real precisa
+fechar antes de ligar.
+
+`utilityProcess` continua fechado (§9.2, dois motivos independentes agora).
+Contrapressão (§9.5) e taxa dirigida por conteúdo separada (§9.6) não valem
+uma rodada própria: a primeira não tem sinal nenhum hoje pra medir contra, e
+a segunda já está coberta pelo que o recorte por `dirty` entrega de graça.
+
+### 9.8 O que NÃO foi verificado
+
+- **O app real não rodou.** Todos os números desta seção são de páginas HTML
+  sintéticas numa janela offscreen isolada (`--user-data-dir` próprio em
+  `/tmp`), não da landing que travou o app nem de um card de navegador de
+  verdade dentro do Stellar.
+- **Valores absolutos não são comparáveis 1:1 entre sondas.** A página desta
+  rodada é mais simples (menos entropia por pixel) que a da sonda 1/3 — por
+  isso `toJPEG(90)` deu 1,27 ms aqui contra 5,31/5,35 ms lá. A relação
+  *estrutural* entre rotas (o que decide a recomendação) se confirma nos dois
+  testes; o número absoluto de produção real não foi medido em nenhum dos
+  dois.
+- **Só um `dirty` por evento foi assumido.** O `paint` do Electron entrega um
+  retângulo por chamada; não foi verificado se ele é sempre a união de
+  múltiplas regiões sujas do frame Chromium ou se pode haver perda de
+  informação nessa união (um recorte da união de dois retângulos distantes
+  cobre área que nenhum dos dois sujou).
+- **O encoder do lado do `utilityProcess` não foi medido.** §9.2 mediu só o
+  transporte (nativeImage não existe lá) — se algum dia alguém colocar um
+  encoder JS/WASM lá dentro, o custo/qualidade dele é uma medição nova
+  inteira, não esta.
+- **Contrapressão e taxa dirigida por conteúdo (§9.5, §9.6) são leitura de
+  código + medição já existente, não uma sonda de carga nova** simulando IPC
+  represado ou comparando frame rates diferentes ao vivo.
