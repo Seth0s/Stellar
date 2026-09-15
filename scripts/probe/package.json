@@ -1,0 +1,7 @@
+{
+  "name": "stellar-browser-native-probe",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "description": "Sonda independente: WebContentsView compõe na janela principal nesta máquina (Electron 42.3.0 / Wayland)? Ver README.md."
+}

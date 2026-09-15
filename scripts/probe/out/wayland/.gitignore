@@ -1,0 +1,5 @@
+# Os screenshots de tela cheia são a prova bruta e pesam ~3,5 MB cada —
+# ficam fora do git. O que basta para alguém conferir a conclusão é o
+# result.json (números) e os recortes. Para gerar tudo de novo:
+# ver ../README.md.
+shot*.png
