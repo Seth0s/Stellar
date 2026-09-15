@@ -3,6 +3,9 @@ import {
   decideReportAcceptance,
   describeRetryableFailureRefusal,
   describeStructuralReportError,
+  decodeReportArgument,
+  describeNonObjectReportError,
+  describeMissingReportField,
   errorFromReportPayload,
   stashLastRefusedReport,
   lastRefusedReasonFromResultJson,
@@ -52,6 +55,70 @@ describe("decideReportAcceptance — structural", () => {
         defaultMaxRetries: 2,
       }),
     ).toEqual({ action: "structural", field: "retryable", error: "report.retryable must be a boolean" });
+  });
+});
+
+describe("JSON-encoded report envelope (the 2026-09-15 MCP bug)", () => {
+  it("decodeReportArgument decodes only a JSON object string", () => {
+    expect(decodeReportArgument('{"ok":true}')).toEqual({ ok: true });
+    expect(decodeReportArgument('  {"ok": true, "files": []}  ')).toEqual({ ok: true, files: [] });
+    // Anything that is not a JSON object stays exactly as it was.
+    expect(decodeReportArgument('plain string')).toBe("plain string");
+    expect(decodeReportArgument('{"ok":true')).toBe('{"ok":true'); // malformed
+    expect(decodeReportArgument('["ok",true]')).toBe('["ok",true]'); // array
+    expect(decodeReportArgument("42")).toBe("42");
+    const obj = { ok: true };
+    expect(decodeReportArgument(obj)).toBe(obj); // non-string is untouched, identity
+  });
+
+  it("accepts a JSON-string {ok:true} against a reportSchema instead of lying about ok", () => {
+    const linked = { ...running, reportSchema: ["ok", "files"] };
+    // Before the fix this returned field "ok" / "report.ok must be a boolean".
+    expect(
+      decideReportAcceptance({ requesterId: "c", report: '{"ok":true}', linkedTask: linked, defaultMaxRetries: 2 }),
+    ).toEqual({ action: "structural", field: "files", error: describeMissingReportField("files") });
+    expect(
+      decideReportAcceptance({ requesterId: "c", report: '{"ok":true}', linkedTask: { ...running, reportSchema: ["ok"] }, defaultMaxRetries: 2 }),
+    ).toEqual({ action: "accept" });
+  });
+
+  it("a genuinely non-object payload names the envelope, never a key it contains", () => {
+    const linked = { ...running, reportSchema: ["ok", "files"] };
+    const d = decideReportAcceptance({ requesterId: "c", report: "done!", linkedTask: linked, defaultMaxRetries: 2 });
+    expect(d).toEqual({ action: "structural", field: "report", error: describeNonObjectReportError("done!", ["ok", "files"]) });
+    expect(d.action === "structural" && d.error).toContain("received a string");
+    expect(d.action === "structural" && d.error).toContain("Required keys: ok, files");
+    expect(d.action === "structural" && d.error).not.toContain("report.ok must be a boolean");
+
+    expect(
+      describeNonObjectReportError([1, 2], ["ok"]),
+    ).toContain("received an array");
+  });
+
+  it("still names ok for a real object whose ok is not a boolean", () => {
+    expect(
+      decideReportAcceptance({
+        requesterId: "c",
+        report: { ok: "true" },
+        linkedTask: { ...running, reportSchema: ["ok", "files"] },
+        defaultMaxRetries: 2,
+      }),
+    ).toEqual({ action: "structural", field: "ok", error: "report.ok must be a boolean" });
+  });
+
+  it("says ok is MISSING when the object simply omits it (not 'must be a boolean')", () => {
+    // Live repro 2026-09-15: a payload {files, evidence} against a schema
+    // starting with "ok" was answered "report.ok must be a boolean" — the
+    // same lie, from the schema-missing path sharing the type message.
+    const d = decideReportAcceptance({
+      requesterId: "c",
+      report: { files: [], evidence: "x" },
+      linkedTask: { ...running, reportSchema: ["ok", "files", "evidence"] },
+      defaultMaxRetries: 2,
+    });
+    expect(d).toEqual({ action: "structural", field: "ok", error: describeMissingReportField("ok") });
+    expect(d.action === "structural" && d.error).toContain("missing ok");
+    expect(d.action === "structural" && d.error).not.toContain("must be a boolean");
   });
 });
 
@@ -153,7 +220,7 @@ describe("decideReportAcceptance — declared failure", () => {
     ).toEqual({
       action: "structural",
       field: "files",
-      error: describeStructuralReportError("files"),
+      error: describeMissingReportField("files"),
     });
     expect(
       decideReportAcceptance({

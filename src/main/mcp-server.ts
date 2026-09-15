@@ -7,6 +7,7 @@ import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus"
 import { resolveCallerCardId } from "./caller-identity";
 import { reachFromHunks } from "./reach-from-hunks";
 import { reachAcrossLiterals } from "./reach-across-literals";
+import { decodeReportArgument } from "./report-retry-decision";
 import { TASK_CARD_ROLES, TASK_PURPOSES, TASK_REVIEW_VALUES } from "../task-purpose";
 
 /**
@@ -426,7 +427,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           report: z
             .unknown()
             .describe(
-              "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans.",
+              "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans. Pass the payload as a JSON object; a JSON-encoded object string is also accepted and decoded.",
             ),
           verdict: z
             .enum(["aprovado", "reprovado"])
@@ -437,7 +438,16 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         },
       },
       async ({ callerCardId, report, verdict }) => {
-        const res = await opts.handleRequest({ cmd: "report", requesterId: caller(callerCardId), report, verdict });
+        const res = await opts.handleRequest({
+          cmd: "report",
+          requesterId: caller(callerCardId),
+          // `report` is `z.unknown()`, so a model may deliver the payload as a
+          // JSON string. Decode a JSON object here — at the one frontend that
+          // does not pre-parse — so both acceptance and persistence see the
+          // same object. A non-object string is passed through untouched.
+          report: decodeReportArgument(report),
+          verdict,
+        });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
