@@ -88,6 +88,7 @@ import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-d
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
 import { argvCarriesDeclaredBrief, providerCapacity } from "./providers";
+import { decideSpawnProfile } from "./spawn-profile-decision";
 import { filterListedTasks, parseListTasksQuery, projectListedTask, type ListedTask } from "./list-tasks-query";
 import {
   deriveParticipationDivergence,
@@ -214,39 +215,14 @@ const DEFAULT_MAX_RETRIES = 2;
 // disallowed is just noise.
 export const MAX_SPAWN_DEPTH = 3;
 
-/** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" — per-provider
- * ranges re-measured 2026-09-12 against the live CLIs (not the comments):
- *
- * - `claude --help` (v2.1.269): `--effort <level>` is
- *   `low, medium, high, xhigh, max`. An unknown value is NOT rejected —
- *   the CLI prints `Warning: Unknown --effort value '…' — ignoring it and
- *   using the default effort` and continues. That is the same silent-
- *   substitution class this gate exists for, so claude NOW has a list
- *   here (the 2026-09-10 comment that it "accepts anything callers send
- *   it, so there's nothing to refuse" was empirically false).
- * - `agy --help` (v1.2.2): `--effort` is `low|medium|high`. Passing
- *   `xhigh`/`max` fails with `invalid --effort "…" (valid: low, medium,
- *   high)` — confirmed via `agy --effort xhigh --model <fake>
- *   --print='x'`. The older "available: low, high" error (gemini-3.1-pro
- *   without `--effort`, 2026-09-10) is no longer the CLI's range.
- *
- * DECISION (documented here, not just in the session report): a
- * `spawn_agent` whose provider has a known range, with an effort outside
- * that range, is REFUSED (`ok: false`, no card created), never silently
- * remapped to the nearest supported value. Mapping in silence repeats the
- * exact bug class this whole fix exists for — the user asked for X, got
- * Y, and the app never said so ("a sessão era um opus medium... voltei
- * como high e custou muito" was ITSELF a silent substitution, just one
- * the app didn't even choose on purpose). A refusal surfaces immediately,
- * in the same `ok:false` channel every other spawn precondition here
- * already uses (missing provider, spawn depth limit) — the caller sees
- * exactly why, before any process or card is created, and can retry with
- * a value that actually works. The alternative (spawn anyway with the raw
- * value) is worse than either: it would just move the same silent-
- * substitution failure one layer down, into the CLI's own warning/error,
- * where nothing in this app surfaces it as an error at all. */
-const CLAUDE_EFFORT_VALUES = new Set(["low", "medium", "high", "xhigh", "max"]);
-const ANTIGRAVITY_EFFORT_VALUES = new Set(["low", "medium", "high"]);
+// (2026-09-15) The per-provider effort ranges that used to live here as
+// `CLAUDE_EFFORT_VALUES` / `ANTIGRAVITY_EFFORT_VALUES` moved to where the
+// rest of the capacity contract lives: each provider's
+// `ProviderCapacity.effort` declaration in providers.ts, together with
+// the measured evidence and the full refuse-never-silently-remap
+// decision writeup. The gate below reads that declaration via
+// `decideSpawnProfile` (spawn-profile-decision.ts) — no per-provider
+// `if` grows in this file again.
 
 /** DESIGN-BACKLOG.md item 21 ponto 9 / achado ao vivo (2026-09-01) —
  * `kind` e `label` são novos. Antes esta lista era filtrada para
@@ -523,14 +499,13 @@ export type BusRequest =
       /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity needs
        * this alongside `model` (`providers.ts`'s `SpawnOpts.effort`) or it
        * silently falls back to a different model with only a warning, no
-       * error. `undefined` for every provider that ignores it.
-       *
-       * Widened from `"low" | "high"` to plain `string` (DESIGN-BACKLOG.md
-       * §2.1, 2026-09-10) — each provider that reads `--effort` has its
-       * own range (claude: five values; antigravity: low/medium/high,
-       * re-measured 2026-09-12). See `CLAUDE_EFFORT_VALUES` /
-       * `ANTIGRAVITY_EFFORT_VALUES` for where an out-of-range value is
-       * actually enforced (refused, not silently remapped). */
+       * error. NOT "ignored" by the others: since 2026-09-15, passing
+       * `effort` for a provider that cannot honor it is REFUSED here
+       * (`decideSpawnProfile`), the same refuse-never-silently-remap rule
+       * as an out-of-range value for one that can. Each provider's range
+       * and mechanism are declared in `ProviderCapacity.effort`
+       * (providers.ts, measured evidence in `EffortCapability`'s
+       * comment), re-measured 2026-09-12 against the live CLIs. */
       effort?: string;
       /** DESIGN-BACKLOG.md item 62 — same free-text label a human sets via
        * CardTag rename; `describeCardLabel`/the renderer's `describeCard`
@@ -3430,23 +3405,25 @@ export function createMessageBus(
       // spawn gate otherwise; human/system paths skip this.
       const reasonDecision = decideSpawnReason({ requesterId: req.requesterId, reason: req.reason });
       if (reasonDecision.action === "refuse") return { ok: false, error: reasonDecision.error };
-      // CLAUDE_EFFORT_VALUES / ANTIGRAVITY_EFFORT_VALUES's own comment
-      // above has the full decision writeup (refuse, never silently
-      // remap). Checked before the spawn-depth budget below is touched —
-      // an invalid request shouldn't cost the caller part of its
-      // recursion allowance.
-      if (req.provider === "antigravity" && req.effort !== undefined && !ANTIGRAVITY_EFFORT_VALUES.has(req.effort)) {
-        return {
-          ok: false,
-          error: `antigravity only accepts effort "low", "medium", or "high", got "${req.effort}" — refusing to spawn rather than silently substituting a different value`,
-        };
-      }
-      if (req.provider === "claude" && req.effort !== undefined && !CLAUDE_EFFORT_VALUES.has(req.effort)) {
-        return {
-          ok: false,
-          error: `claude only accepts effort "low", "medium", "high", "xhigh", or "max", got "${req.effort}" — refusing to spawn rather than silently substituting a different value`,
-        };
-      }
+      // effort/model vs provider capacity — the gate is DERIVED, not
+      // hardcoded per provider (2026-09-15): which providers honor
+      // `effort` (and with which measured range) and `model` is declared
+      // in `ProviderCapacity` (providers.ts), and the pure decision in
+      // spawn-profile-decision.ts turns that declaration into a refusal
+      // sentence. Same refuse-never-silently-remap rule the two
+      // per-provider ifs here used to enforce (writeup moved with the
+      // ranges to `EffortCapability`'s comment in providers.ts) — now
+      // with the second half the old gate didn't have: a provider that
+      // CANNOT honor the field refuses it instead of accepting it and
+      // dropping it in silence. Checked before the spawn-depth budget
+      // below is touched — an invalid request shouldn't cost the caller
+      // part of its recursion allowance.
+      const profileDecision = decideSpawnProfile({
+        providerId: req.provider,
+        model: req.model,
+        effort: req.effort,
+      });
+      if (!profileDecision.ok) return { ok: false, error: profileDecision.error };
       // `role` (task_cards.role) — same refuse-don't-remap rule as effort,
       // and checked before depth is spent. `undefined` keeps today's
       // default (implementer); only an unknown string is refused.

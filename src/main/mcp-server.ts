@@ -1012,7 +1012,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           provider: z.enum(["bash", "claude", "codex", "cursor", "antigravity", "opencode"]).describe("Which provider to spawn"),
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
-          model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default"),
+          model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default. Refused for `bash` (a plain shell has no model). opencode caveat (measured 2026-09-15): the value must be the FULL `<provider>/<catalog-id>` spec, and some providers' catalog ids are already prefixed — cline-pass's catalog key for the model this session ran on is 'cline-pass/glm-5.3', so the working spec is 'cline-pass/cline-pass/glm-5.3'; a spec that doesn't resolve in opencode's catalog makes the CLI fall back to a DEFAULT MODEL IN SILENCE (asked for cline-pass/glm-5.3, the card ran DeepSeek V4.1 Flash) — verify against `opencode models [provider]` before passing one. No pre-spawn validation is done for you here."),
           // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" —
           // union of every provider's real range, re-measured 2026-09-12
           // against the live CLIs (not the comments): `claude --help`
@@ -1021,18 +1021,21 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           // only `low|high`). The two ranges differ — NOT unified by
           // picking the narrower one, which would silently make
           // `xhigh`/`max` unreachable for claude, the same class of bug
-          // this whole fix is for. The provider-specific half of the
-          // validation (a spawn with an out-of-range value for THAT
-          // provider) happens centrally in message-bus.ts's
-          // `spawn_agent` handler, the one place that has BOTH `provider`
-          // and `effort` together — zod's per-field schema here can't see
-          // across fields without a cross-field refinement that would
-          // duplicate that same provider table.
+          // this whole fix is for. The provider-specific halves — out of
+          // range for a provider that honors effort, and ANY effort at
+          // all for a provider that cannot (2026-09-15: refusal replaced
+          // the old accept-and-drop) — are decided centrally in
+          // message-bus.ts's `spawn_agent` handler via
+          // `decideSpawnProfile` (spawn-profile-decision.ts), the one
+          // place that has BOTH `provider` and `effort` together; zod's
+          // per-field schema here can't see across fields without a
+          // cross-field refinement that would duplicate that same
+          // provider table.
           effort: z
             .enum(["low", "medium", "high", "xhigh", "max"])
             .optional()
             .describe(
-              "Reasoning effort. `claude` accepts all five (low/medium/high/xhigh/max, its own --effort range). Antigravity accepts low/medium/high (its own --effort range) — some of its models (e.g. 'gemini-3.1-pro') require one of those alongside `model` or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. A value outside a provider's own range is REFUSED (no spawn), not silently remapped. Ignored by every other provider.",
+              "Reasoning effort. Only `claude` (its own --effort range: low/medium/high/xhigh/max) and `antigravity` (low/medium/high) honor this field — with antigravity, some of its models (e.g. 'gemini-3.1-pro') REQUIRE one of those alongside `model`, or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. Passing effort with ANY other provider (bash, codex, cursor, opencode) is REFUSED — no spawn — rather than accepted and silently dropped, which is what used to happen (measured 2026-09-15: any effort passed validation for those providers, never became argv, and nobody was told). A value outside the honoring provider's own range is likewise REFUSED, never silently remapped.",
             ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the registered MCP URL stamp is the only trusted identity and determines real spawn depth/autonomy; this field is not trusted when that stamp is absent."),
