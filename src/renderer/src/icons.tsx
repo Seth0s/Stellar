@@ -45,8 +45,10 @@ import {
   LayoutGrid,
   Link2,
   ListTodo,
+  Loader2,
   Maximize,
   MessageCircle,
+  Mic,
   Minimize,
   Minus,
   Monitor,
@@ -66,6 +68,7 @@ import {
   Scan,
   Crosshair,
   Search,
+  Send,
   Settings,
   Smartphone,
   Sparkles,
@@ -179,7 +182,11 @@ export type IconName =
   // DESIGN-BACKLOG.md §2.1 "Card `task`" — fidelidade ao protótipo v5, alça
   // de arraste visível na task (o arraste em si já funcionava, invisível
   // como afordância).
-  | "grip";
+  | "grip"
+  // GlobalComposer.tsx — input global com destino + ditado por voz.
+  | "mic"
+  | "send"
+  | "spinner";
 
 const COMPONENTS: Record<IconName, LucideIcon> = {
   pointer: MousePointer2,
@@ -279,6 +286,9 @@ const COMPONENTS: Record<IconName, LucideIcon> = {
   wrench: Wrench,
   bug: Bug,
   warning: TriangleAlert,
+  mic: Mic,
+  send: Send,
+  spinner: Loader2,
 };
 
 export function Icon({

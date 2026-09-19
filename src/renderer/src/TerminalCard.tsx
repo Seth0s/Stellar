@@ -17,14 +17,41 @@ import type { IdentifySessionResult } from "../../preload/index";
 
 export type { Rect };
 
-/** Pedido ao vivo (2026-09-06) — "pros providers sem hook oficial, por
- * enquanto desativa as notificações". `bash` deliberadamente NÃO está
- * aqui — não é um agente com "turnos", nunca fez parte deste problema. */
-const NOTIFICATION_DISABLED_PROVIDERS = new Set(["codex", "cursor", "antigravity", "opencode"]);
+/**
+ * Duas CAPACIDADES medidas de um provider — não uma lista de ids válidos.
+ *
+ * O que estava aqui eram dois Sets FECHADOS com os nativos (um "os
+ * desabilitados", outro "os que têm sessão"), e o defeito era a OMISSÃO:
+ * um provider que o renderer nunca ouviu falar — um CLI dinâmico carregado
+ * no boot (`main/index.ts`'s `loadDynamicProviders`, ex. cline/commandcode)
+ * — não estava em `NOTIFICATION_DISABLED_PROVIDERS`, então caía no ramo de
+ * notificação LIGADA: aviso de SO disparado pela aproximação de silêncio de
+ * bytes, que é justamente o que aquele gate existe para evitar. Um id novo
+ * agora cai no ramo CONSERVADOR por construção, porque a pergunta feita é
+ * "esta CLI PROVOU que sabe terminar um turno?", não "ela está na lista de
+ * exceções?".
+ *
+ * `bash` continua notificando: não é um agente com turnos, nunca fez parte
+ * deste problema (sempre notificou pela aproximação antiga — ver
+ * smoke-terminal-focus-notification.mjs).
+ */
+const OS_NOTIFICATION_PROVEN = new Set(["claude", "bash"]);
+/** Quem o MAIN sabe inspecionar ao vivo: `session-identify.ts` tem um caso
+ * por provider e devolve `none` para qualquer outro — num CLI dinâmico o
+ * botão existiria e falharia sempre. Mesma postura conservadora: só aparece
+ * onde há implementação. */
+const SESSION_IDENTIFY_IMPLEMENTED = new Set(["claude", "codex", "cursor", "antigravity", "opencode"]);
 
-/** Same set `session-identify.ts` actually inspects. Bash has no session
- * id, so an empty-resume button there would always fail. */
-const SESSION_PROVIDERS = new Set(["claude", "codex", "cursor", "antigravity", "opencode"]);
+/** As duas capacidades acima como pergunta — privadas de propósito: exportar
+ * função de um arquivo de componente quebra o Fast Refresh dele (regra
+ * `react-refresh/only-export-components`). O gate do TerminalCard chama
+ * exatamente estas funções, então não existe segunda cópia da regra. */
+function providerSupportsOsNotification(providerId: string): boolean {
+  return OS_NOTIFICATION_PROVEN.has(providerId);
+}
+function providerSupportsSessionIdentify(providerId: string): boolean {
+  return SESSION_IDENTIFY_IMPLEMENTED.has(providerId);
+}
 
 const PROVIDER_ACCENT: Record<string, string> = {
   bash: "var(--accent-bash)",
@@ -416,7 +443,13 @@ function TerminalCardInner({
     // silêncio antiga (ver smoke-terminal-focus-notification.mjs).
     // Reavaliar codex depois de validar o pattern-match ao vivo por um
     // tempo.
-    if (NOTIFICATION_DISABLED_PROVIDERS.has(providerId)) return;
+    //
+    // 2026-09-19 — a condição inverteu (ver `OS_NOTIFICATION_PROVEN`): a
+    // pergunta é "esta CLI provou que termina turno?", então um provider
+    // dinâmico (cline/commandcode), que não tem hook medido nenhum, fica de
+    // fora sozinho. Antes o teste era "está na lista dos desabilitados?",
+    // e um id desconhecido passava direto pra notificação.
+    if (!providerSupportsOsNotification(providerId)) return;
     // Suppress notification when this card is the focused one and the
     // window itself has OS focus — user is actively looking at it.
     if (isFocusedRef.current && document.hasFocus()) return;
@@ -444,7 +477,7 @@ function TerminalCardInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spawnError, exitCode]);
   const effectiveResumeId = resumeId || discoveredResumeId;
-  const canIdentify = !effectiveResumeId && SESSION_PROVIDERS.has(providerId);
+  const canIdentify = !effectiveResumeId && providerSupportsSessionIdentify(providerId);
   const footerParts = [
     cwd,
     effectiveResumeId ? `resume:${effectiveResumeId}` : null,

@@ -2,6 +2,12 @@ import { app, BrowserWindow, type Session } from "electron";
 import { t } from "../shared/i18n";
 import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
 import { decideBrowserFrame, hasDirtyArea, shouldCropFrame } from "./browser-frame-decision";
+import {
+  COLLECT_CLICK_TARGET_FACTS_JS,
+  decideNativeDialogRisk,
+  describeNativeDialogRefusal,
+  type ClickTargetFacts,
+} from "./browser-native-dialog-decision";
 
 /**
  * Formato explícito do payload de `onFrame` (docs/PERF.md §9.4): quem
@@ -1403,14 +1409,69 @@ export function createBrowserRegistry(callbacks: {
 
   /** Um clique de verdade é down+up, não só um dos dois — e um `mouseMove`
    * antes garante que a página viu o cursor "chegar" no elemento (hover)
-   * antes do clique, igual uma interação humana real. */
-  function clickAtPoint(id: string, x: number, y: number): { ok: true } | { ok: false; error: string } {
+   * antes do clique, igual uma interação humana real.
+   *
+   * ACHADO AO VIVO (2026-09-19) — um `browser_click` real num botão de
+   * upload abriu o seletor de arquivo NATIVO do SO e levou o card (e a
+   * sessão efêmera dele) junto antes de o resultado ser lido; pareceu
+   * crash do Stellar. `sendClick` continua sendo só o envio cru; quem
+   * chama por uma TOOL (`clickSelector`/`clickAtPoint`) passa primeiro por
+   * `nativeDialogGuard`, que recusa antes de mandar o primeiro
+   * `sendInputEvent`. O clique do HUMANO não passa por aqui — ele entra
+   * por `browser:input-mouse` → `sendMouseEvent` (main/index.ts), e um
+   * humano na frente da máquina consegue responder o diálogo; o agente
+   * não. Ver `browser-native-dialog-decision.ts` pro porquê de o guard ser
+   * ANTES do clique. */
+  function sendClick(id: string, x: number, y: number): { ok: true } | { ok: false; error: string } {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
     sendMouseEvent(id, { type: "mouseMove", x, y });
     sendMouseEvent(id, { type: "mouseDown", x, y, button: "left", clickCount: 1 });
     sendMouseEvent(id, { type: "mouseUp", x, y, button: "left", clickCount: 1 });
     return { ok: true };
+  }
+
+  /** A decisão é pura (`decideNativeDialogRisk`); aqui só se monta a
+   * recusa tipada que as tools devolvem. `target` é como o agente nomeou o
+   * alvo (seletor ou ponto) — a mensagem precisa apontar pro que ele
+   * pediu, não pra um id opaco. */
+  function nativeDialogGuard(
+    facts: ClickTargetFacts,
+    target: string,
+  ): { ok: true } | { ok: false; error: string } {
+    const risk = decideNativeDialogRisk(facts);
+    if (!risk.risky) return { ok: true };
+    return { ok: false, error: describeNativeDialogRefusal(risk.reason, target) };
+  }
+
+  /** Alvo de um clique por COORDENADA: não há seletor nenhum, então o
+   * elemento é `document.elementFromPoint(x, y)` — o MESMO que o Chromium
+   * vai acertar no `mouseDown`/`mouseUp` logo depois. Nada sob o ponto:
+   * o clique cai no vazio, não abre diálogo nenhum. Se a inspeção falhar
+   * (webContents sumindo/navegando), não se inventa suspeita: o clique
+   * segue como antes do guard. */
+  async function guardPointClick(id: string, x: number, y: number): Promise<{ ok: true } | { ok: false; error: string }> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    try {
+      const raw: unknown = await entry.win.webContents.executeJavaScript(`
+        (() => {
+          const el = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
+          return el ? { __facts: (${COLLECT_CLICK_TARGET_FACTS_JS})(el) } : { __noElement: true };
+        })()
+      `);
+      const tagged = raw as { __noElement?: boolean; __facts?: ClickTargetFacts };
+      if (!tagged?.__facts) return { ok: true };
+      return nativeDialogGuard(tagged.__facts, `the point (${x}, ${y})`);
+    } catch {
+      return { ok: true };
+    }
+  }
+
+  async function clickAtPoint(id: string, x: number, y: number): Promise<{ ok: true } | { ok: false; error: string }> {
+    const guard = await guardPointClick(id, x, y);
+    if (!guard.ok) return guard;
+    return sendClick(id, x, y);
   }
 
   /** Resolve o centro real do elemento via `executeJavaScript`
@@ -1480,16 +1541,23 @@ export function createBrowserRegistry(callbacks: {
     id: string,
     selector: string,
   ): Promise<{ ok: true; x: number; y: number } | { ok: false; error: string }> {
-    const found = await withSelector<{ x: number; y: number }>(
+    // Os fatos do guard saem da MESMA avaliação que já resolve o centro do
+    // elemento: nenhuma ida extra à página, e o que se inspeciona é
+    // exatamente o elemento que será clicado (não uma segunda busca, que
+    // poderia cair noutro nó depois de um re-render).
+    const found = await withSelector<{ x: number; y: number; facts: ClickTargetFacts }>(
       id,
       selector,
       `el.scrollIntoView({ block: "center", inline: "center" });
        const r = el.getBoundingClientRect();
-       return { x: r.x + r.width / 2, y: r.y + r.height / 2 };`,
+       return { x: r.x + r.width / 2, y: r.y + r.height / 2, facts: (${COLLECT_CLICK_TARGET_FACTS_JS})(el) };`,
     );
     if (!found.ok) return found;
-    const { x, y } = found.value;
-    clickAtPoint(id, x, y);
+    const { x, y, facts } = found.value;
+    const guard = nativeDialogGuard(facts, `selector ${JSON.stringify(selector)}`);
+    if (!guard.ok) return guard;
+    const sent = sendClick(id, x, y);
+    if (!sent.ok) return sent;
     return { ok: true, x, y };
   }
 

@@ -24,6 +24,17 @@
  * `deriveCompletionProposal` (renderer) is PRESENTATION of readiness for
  * the human click — not a second write authority. One rule decides who
  * may conclude; the bar only shows signals.
+ *
+ * SAME RULE, SECOND DOOR (2026-09-19): `report` carries a typed `verdict`
+ * (aprovado/reprovado) — judgment written without `update_task`. Measured
+ * on one real day: a card linked as implementer sent its own `aprovado`
+ * three times and the reviewer reproved all three. The gate below is
+ * `decideJudgmentWrite`'s sibling: same criterion (role on THIS task),
+ * same posture (implementer refused; `review="wanted"` refuses every
+ * non-reviewer; unknown/outsider allowed — barring them would invent
+ * policy), plus the reviewer's own requirement — a verdict with no real
+ * evidence is worth less than no review at all, so a reviewer's verdict
+ * must fill the task's declared `reportSchema` keys with actual content.
  */
 
 import { isJudgmentStatus } from "../task-status-derive";
@@ -103,4 +114,275 @@ export function roleOnTask(
   if (!cardId) return null;
   const row = cards.find((c) => c.card_id === cardId);
   return row ? row.role : null;
+}
+
+/**
+ * Words that look like an answer but carry no evidence. Kept deliberately
+ * short: each entry is a refusal that a human would agree with, not a
+ * style opinion. Compared lowercased and trimmed.
+ */
+const PLACEHOLDER_REPORT_VALUES = new Set([
+  "n/a",
+  "na",
+  "none",
+  "null",
+  "nil",
+  "todo",
+  "tbd",
+  "-",
+  "--",
+  "—",
+  "…",
+  "...",
+  "?",
+]);
+
+function isRealReportValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    return trimmed.length > 0 && !PLACEHOLDER_REPORT_VALUES.has(trimmed);
+  }
+  // A number or boolean is real content on its own: a gate's count
+  // ("373 passed") is exactly the evidence this gate exists to demand,
+  // and `false` is an answer, not an absence.
+  if (typeof value === "number" || typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as Record<string, unknown>).length > 0;
+  return false;
+}
+
+/**
+ * Which of the task's declared `reportSchema` keys are absent OR present
+ * with nothing real in them. Presence alone is what the bus checks today
+ * (`missingReportSchemaField`) — a reviewer answering `"gatesOutput": ""`
+ * satisfies presence and still says nothing, which is the hole this
+ * closes. A non-object report cannot satisfy any declared key.
+ */
+export function emptyReportSchemaFields(report: unknown, schema: readonly string[] | null | undefined): string[] {
+  if (!schema || schema.length === 0) return [];
+  if (report === null || typeof report !== "object" || Array.isArray(report)) return [...schema];
+  const payload = report as Record<string, unknown>;
+  return schema.filter((key) => !isRealReportValue(payload[key]));
+}
+
+/**
+ * AGENT-FACING — DO NOT TRANSLATE. Same teaching style as the two
+ * refusals above: name the rule, name the way out.
+ */
+export function describeImplementerVerdictRefusal(verdict: string): string {
+  return (
+    `[de: stellar] report verdict "${verdict}" recusado: ` +
+    `este card está vinculado como implementer nesta task — implementer não emite veredito sobre o próprio trabalho ` +
+    `(autoaprovação não é revisão). ` +
+    `Quem julga é um card com role=reviewer (spawn_agent/link_task_card com role=reviewer), ` +
+    `ou use request_task_status para pedir a mudança ao humano. Nada foi gravado.`
+  );
+}
+
+/**
+ * AGENT-FACING — DO NOT TRANSLATE. `review="wanted"` beats delegated
+ * signature here too: the requirement was declared, so only the linked
+ * reviewer may write the veredito.
+ */
+export function describeNonReviewerVerdictRefusal(verdict: string): string {
+  return (
+    `[de: stellar] report verdict "${verdict}" recusado: ` +
+    `review="wanted" nesta task — só um card com role=reviewer emite veredito. ` +
+    `Implementer, outsider e orquestrador (assinatura delegada) são recusados. ` +
+    `Vincule um reviewer (spawn_agent/link_task_card com role=reviewer) e deixe-o julgar, ` +
+    `ou use request_task_status para pedir ao humano. Nada foi gravado.`
+  );
+}
+
+/**
+ * AGENT-FACING — DO NOT TRANSLATE. Names the exact keys so the correction
+ * is mechanical, like `describeMissingReportField` does for a plain
+ * missing key.
+ */
+export function describeVerdictEvidenceRefusal(verdict: string, emptyKeys: readonly string[]): string {
+  return (
+    `[de: stellar] report verdict "${verdict}" recusado: ` +
+    `um veredito de reviewer precisa das chaves do reportSchema com conteúdo real — ` +
+    `sem isso o veredito vale menos que nenhuma revisão. ` +
+    `Vazias/placeholder (vazio, [], {}, "N/A", "TBD"): ${emptyKeys.join(", ")}. ` +
+    `Preencha com a evidência MEDIDA (o que foi verificado, a saída real, o número do gate) e reenvie. Nada foi gravado.`
+  );
+}
+
+export type ReportVerdictDecision = { action: "allow" } | { action: "refuse"; error: string };
+
+/**
+ * Decide whether an agent `report` may carry a typed `verdict`.
+ *
+ * Sibling of `decideJudgmentWrite`, reached through the other door
+ * (`report` instead of `update_task`), with the same criterion and the
+ * same posture:
+ *
+ * - no verdict → allow (this gate only guards judgment; a plain report is
+ *   untouched);
+ * - `review="wanted"` → only a linked reviewer may verdict, so every
+ *   other role (implementer, outsider, unknown, delegated orchestrator)
+ *   is refused;
+ * - implementer → refused: judging your own work is not review;
+ * - reviewer → allowed, but only with the task's declared `reportSchema`
+ *   keys filled with real content;
+ * - unknown role / outsider / no task link → allowed, exactly as
+ *   `decideJudgmentWrite` allows them. Unknown is not implementer, and
+ *   barring it here would invent policy the store does not have.
+ *
+ * A reviewer verdict is held to the schema regardless of `ok`: the
+ * declared contract for a FAILURE report (`ok:false` skips the keys) was
+ * written for the implementer saying it could not deliver. A reviewer is
+ * not delivering — it is judging, and a judgment owes its evidence.
+ */
+export function decideReportVerdictWrite(input: {
+  /** Typed verdict on the report (explicit `verdict` field or embedded in the payload), or null/undefined. */
+  verdict: string | null | undefined;
+  /** Requester's role on the task the report belongs to; null = no link / unknown. */
+  requesterRoleOnTask: JudgmentRequesterRole;
+  /** True when the task declares `review="wanted"`. */
+  reviewWanted?: boolean;
+  /** Decoded report payload — the evidence the schema keys are read from. */
+  report: unknown;
+  /** Task's declared required keys (`tasks.report_schema_json`), or null/empty. */
+  reportSchema?: readonly string[] | null;
+}): ReportVerdictDecision {
+  if (!input.verdict) return { action: "allow" };
+  if (input.reviewWanted && input.requesterRoleOnTask !== TASK_CARD_REVIEWER_ROLE) {
+    return { action: "refuse", error: describeNonReviewerVerdictRefusal(input.verdict) };
+  }
+  if (input.requesterRoleOnTask === TASK_CARD_IMPLEMENTER_ROLE) {
+    return { action: "refuse", error: describeImplementerVerdictRefusal(input.verdict) };
+  }
+  if (input.requesterRoleOnTask === TASK_CARD_REVIEWER_ROLE) {
+    const empty = emptyReportSchemaFields(input.report, input.reportSchema);
+    if (empty.length > 0) return { action: "refuse", error: describeVerdictEvidenceRefusal(input.verdict, empty) };
+  }
+  return { action: "allow" };
+}
+
+/**
+ * FECHAR O CARD É A ÚLTIMA PORTA — e até 2026-09-19 era a porta MUDA.
+ *
+ * Um card linkado a uma task aberta fechava sem fechar a task e sem
+ * avisar nada. MEDIDO no banco real (2026-09-19): 38 tasks abertas, 28 já
+ * sem card principal, e 7 delas com `review="wanted"`, sem card e SEM
+ * NENHUM reviewer linkado — os 7 órfãos. Em nenhum dos sete sobreviveu um
+ * único round de veredito (6 não têm `task_cards` nenhum; 1 tem um round
+ * de implementer com `verdict: null`).
+ *
+ * MEDIÇÃO QUE DECIDE `recusar` vs `auto-fechar` (a pergunta da task):
+ * auto-fechar pelo "último report ok:true" NÃO teria salvado NENHUM dos
+ * sete — nenhum deles tinha evidência de sucesso. Quem realmente fecha a
+ * porta é (a) RECUSAR quando o fechamento deixaria a task sem ninguém
+ * capaz de assiná-la, e (b) CONCLUIR quando a assinatura JÁ está no store:
+ * há 23 `aprovado` de reviewer gravados em `task_verdicts`, e 5 tasks
+ * abertas com `review="wanted"` e card vivo (4 delas sem reviewer
+ * nenhum) que virariam órfãs na próxima vez que o implementer fechasse.
+ *
+ * Mesmo critério de CAMADA 4, sem porta nova: a decisão reusa
+ * `decideJudgmentWrite` para o caso sem review, então nada aqui amplia
+ * quem pode julgar.
+ */
+export type CloseCardLinkedTask = {
+  taskId: string;
+  /** Card being closed (used only to name it in the refusal). */
+  targetCardId: string;
+  reviewWanted: boolean;
+  /** Role of the card being CLOSED on this task (`null` = principal sem role row / não linkado). */
+  targetRole: JudgmentRequesterRole;
+  /** Role of whoever ASKED for the close on this task (may be another card). */
+  requesterRoleOnTask: JudgmentRequesterRole;
+  /** Reviewer links OTHER than the card being closed whose PTY is alive right now. */
+  otherLiveReviewers: number;
+  /** The target card's last ACCEPTED report declared `ok: true`. */
+  lastReportOk: boolean;
+  /** Verdict rounds recorded on THIS task for the card being closed, chronological. */
+  targetVerdicts: readonly { role: string; verdict: string | null }[];
+};
+
+export type CloseCardTaskEffect =
+  | { action: "allow-close" }
+  | { action: "conclude-task"; taskId: string; reason: "reviewer-signature" | "success-report" }
+  | { action: "refuse"; error: string };
+
+/** AGENT-FACING — DO NOT TRANSLATE. `review="wanted"` sem reviewer vivo:
+ * fechar este card é exatamente o gerador medido dos 7 órfãos. */
+export function describeStrandedReviewTaskCloseRefusal(taskId: string, targetCardId: string): string {
+  return (
+    `[de: stellar] close_card de "${targetCardId}" recusado: o card é o implementer da task "${taskId}", ` +
+    `que exige review ("wanted") e NÃO tem nenhum reviewer VIVO linkado. ` +
+    `Fechar agora deixa a task sem quem possa assinar done — foi assim que 7 tasks ficaram órfãs. ` +
+    `Vincule/spawne um reviewer (link_task_card ou spawn_agent com role=reviewer), ` +
+    `ou use update_task review:null se a exigência não vale mais, ou request_task_status para o humano decidir. ` +
+    `Nada foi fechado.`
+  );
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. O ÚNICO revisor vivo saindo sem
+ * veredito: a task fica presa (mesmo dano, pela outra ponta). */
+export function describeReviewerLeavingUnsignedRefusal(taskId: string, targetCardId: string): string {
+  return (
+    `[de: stellar] close_card de "${targetCardId}" recusado: o card é o ÚNICO reviewer vivo da task "${taskId}" ` +
+    `(review="wanted") e não tem veredito registrado nesta task. ` +
+    `Fechar agora prende a task sem quem assine. ` +
+    `Registre o veredito primeiro (report com verdict aprovado/reprovado) e feche em seguida — ` +
+    `um aprovado de reviewer conclui a task JUNTO com o fechamento. Nada foi fechado.`
+  );
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. Sem review exigido, mas sem evidência
+ * de sucesso: o fechamento tem que ser explícito, não silencioso. */
+export function describeCloseWithoutSuccessRefusal(taskId: string, targetCardId: string): string {
+  return (
+    `[de: stellar] close_card de "${targetCardId}" recusado: o card está linkado à task aberta "${taskId}", ` +
+    `e o último report ACEITO dele não declara sucesso (ok:true). ` +
+    `Fechar agora deixaria a task aberta e órfã (28 das 38 tasks abertas hoje estão assim). ` +
+    `Conclua a task antes: update_task com status done/failed, ou request_task_status para o humano — ` +
+    `ou deixe o card reportar ok:true, que aí o próprio close conclui a task junto. Nada foi fechado.`
+  );
+}
+
+/**
+ * O que o fechamento do card deve fazer com UMA task aberta à qual ele
+ * está ligado. Puro: o chamador só coleta fatos e aplica.
+ */
+export function decideCloseCardTaskEffect(input: CloseCardLinkedTask): CloseCardTaskEffect {
+  const targetApprovedAsReviewer = (() => {
+    for (let i = input.targetVerdicts.length - 1; i >= 0; i--) {
+      const round = input.targetVerdicts[i]!;
+      if (round.role === TASK_CARD_REVIEWER_ROLE) return round.verdict === "aprovado";
+    }
+    return false;
+  })();
+  const targetJudgedAsReviewer = input.targetVerdicts.some((r) => r.role === TASK_CARD_REVIEWER_ROLE);
+
+  if (input.reviewWanted) {
+    if (input.targetRole === TASK_CARD_REVIEWER_ROLE) {
+      // A assinatura viaja com o fechamento: o aprovado já está gravado, e
+      // recusar aqui só deixaria a task presa esperando clique humano.
+      if (targetApprovedAsReviewer) return { action: "conclude-task", taskId: input.taskId, reason: "reviewer-signature" };
+      // Já julgou e não aprovou: o destino da task não depende mais deste
+      // card (volta pro implementer/humano decidir) — fechar não prende nada.
+      if (targetJudgedAsReviewer) return { action: "allow-close" };
+      return { action: "refuse", error: describeReviewerLeavingUnsignedRefusal(input.taskId, input.targetCardId) };
+    }
+    // Não é reviewer: só pode fechar se sobrar alguém vivo para assinar.
+    if (input.otherLiveReviewers > 0) return { action: "allow-close" };
+    return { action: "refuse", error: describeStrandedReviewTaskCloseRefusal(input.taskId, input.targetCardId) };
+  }
+
+  if (!input.lastReportOk) {
+    return { action: "refuse", error: describeCloseWithoutSuccessRefusal(input.taskId, input.targetCardId) };
+  }
+  // Mesmo portão de CAMADA 4: um implementer fechando o próprio card não
+  // ganha aqui o direito de julgar que `update_task` nega.
+  const judgment = decideJudgmentWrite({
+    proposedStatus: "done",
+    requesterRoleOnTask: input.requesterRoleOnTask,
+    reviewWanted: false,
+  });
+  if (judgment.action === "refuse") return { action: "refuse", error: judgment.error };
+  return { action: "conclude-task", taskId: input.taskId, reason: "success-report" };
 }

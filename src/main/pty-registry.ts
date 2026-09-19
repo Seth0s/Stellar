@@ -17,11 +17,20 @@ import {
 } from "./type-and-submit-decision";
 
 // DESIGN-BACKLOG.md, achado 2 (2026-09-11) — encaminhamento 3. Só os
-// providers com conceito de sessão têm onde checar (mesmo conjunto que
-// `watchForSession` já reconhece); `bash` nunca teve `resumeId` de
-// verdade, e validar contra um provider sem noção de sessão não faz
-// sentido nenhum.
-const PROVIDERS_WITH_SESSION_CONCEPT = new Set(["claude", "codex", "cursor", "antigravity", "opencode"]);
+// providers com conceito de sessão têm onde checar; `bash` nunca teve
+// `resumeId` de verdade, e validar contra um provider sem noção de sessão
+// não faz sentido nenhum.
+//
+// Derivado da DECLARAÇÃO, não de uma lista de ids (2026-09-19): um provider
+// criado em runtime (cline, commandcode — `providers-dynamic.ts`) nunca
+// caberia num `Set` estático, e `capacity.role === "agent"` é o MESMO
+// critério que o resto do app já usa pra separar um CLI de agente de um
+// shell — a única pergunta que importa aqui ("isto é uma CLI de agente, com
+// id de sessão?"). Ver `shouldImposeSessionId`/`canImposeSessionId` em
+// providers.ts, que derivam do mesmo `capacity.session`.
+function providerHasSessionConcept(providerId: string): boolean {
+  return providerById(providerId)?.capacity.role === "agent";
+}
 
 const COALESCE_MS = 16;
 const COALESCE_MAX = 64 * 1024;
@@ -90,6 +99,145 @@ const ANSI_PATTERN = new RegExp(
     "|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~]))",
   "g",
 );
+
+/**
+ * Morte por COTA — "providers morrem por cota no meio do trabalho, e morte
+ * por cota parece morte por bug" (docs/ORCHESTRATION.md §5/§15). Um revisor
+ * morreu exatamente ao chamar `report` com a cota esgotada e a análise
+ * inteira se perdeu: sem classificar, o card só sabia dizer "process
+ * exited", indistinguível de um crash.
+ *
+ * Os padrões abaixo não são paráfrase: cada literal foi MEDIDO no binário/
+ * bundle da CLI instalada nesta máquina em 2026-09-19 (comentário por grupo
+ * diz onde). Cota não é a MESMA mensagem entre providers — por isso o
+ * reconhecimento é por provider, com um punhado de envelopes compartilhados
+ * (HTTP/gRPC/Anthropic) que qualquer um emite.
+ *
+ * `bash` fica de fora de propósito: cota é conceito de provider, e um card
+ * shell pode `cat` um log que cita "quota" sem ter morrido por isso.
+ */
+const QUOTA_WATCHED_PROVIDERS = new Set(["claude", "codex", "cursor", "antigravity", "opencode"]);
+
+/** Sinal reconhecido no stream (antes do exit). `tail` só entra no exit. */
+export type QuotaSignal = {
+  providerId: string;
+  /** Rótulo do padrão que casou — a evidência é auditável, não um booleano. */
+  label: string;
+  /** Trecho real em volta do match (whitespace colapsado, capado). */
+  excerpt: string;
+  atMs: number;
+};
+
+/** Diagnóstico entregue no exit — o sinal + a cauda de saída preservada. */
+export type QuotaDeathEvidence = QuotaSignal & { tail: string };
+
+type QuotaPattern = { label: string; re: RegExp };
+
+/** Envelopes comuns a TODOS os providers (medidos nos bundles: Anthropic
+ * 429/529, gRPC ResourceExhausted, openai insufficient_quota). */
+const QUOTA_SHARED_PATTERNS: QuotaPattern[] = [
+  { label: "RESOURCE_EXHAUSTED", re: /RESOURCE_EXHAUSTED/ },
+  { label: "ResourceExhausted", re: /ResourceExhausted/ },
+  { label: "insufficient_quota", re: /insufficient_quota/i },
+  { label: "too many requests", re: /too many requests/i },
+  { label: "rate_limit_error", re: /rate_limit_error/i },
+  { label: "overloaded_error", re: /overloaded_error/i },
+];
+
+/**
+ * Padrões por provider. Fonte de cada grupo (medido 2026-09-19):
+ * - claude (Claude Code 2.1.278, ELF): "Usage limit reached — continuing
+ *   automatically", "You're out of usage credits. /model to switch models.",
+ *   "You've hit your team's shared budget", "Budget limit reached ($…)",
+ *   "…until your limit resets at", "usage limit; resets …".
+ * - codex (@openai/codex-linux-x64, rust): "You've hit your usage limit.
+ *   Visit https://chatgpt.com/codex/settings/usage to purchase more
+ *   credits", "You've hit your usage limit. Upgrade to Plus …", "You hit
+ *   your spend cap set in your workspace.", header
+ *   "codex-rate-limit-reached-type", "rate limit exceeded; sleeping.".
+ * - cursor (cursor-agent bundle JS): sem prosa de cota própria; o sinal é
+ *   gRPC `ResourceExhausted` (mapeado para HTTP 429 no próprio bundle) e
+ *   `PRIVATE_WORKER_RESOURCE_EXHAUSTED`.
+ * - antigravity (agy, Go): "Quota exhausted", "Allocation Quota Reached",
+ *   "…once your plan's quota runs out", "image generation quota exceeded",
+ *   "…capacity exhausted", "Use your AI credits …".
+ * - opencode: "429 Too Many Requests", "Quota exceeded. Check your plan
+ *   and billing details." (insufficient_quota), "Free limit reached",
+ *   "Go limit reached", "rate increased too quickly".
+ */
+const QUOTA_PROVIDER_PATTERNS: Record<string, QuotaPattern[]> = {
+  claude: [
+    // Exige a cauda específica, não só "you've hit your": sozinho o prefixo
+    // casaria "you've hit your stride" e a evidência sairia sem dizer de
+    // que limite se trata. O carry costura o banner partido em dois chunks.
+    { label: "you've hit your usage limit/budget", re: /you'?ve hit your (usage limit|team'?s shared budget)/i },
+    { label: "out of usage credits", re: /out of usage credits/i },
+    { label: "usage limit reached/reset", re: /usage limit (reached|reset)/i },
+    { label: "limit … reset", re: /limit[^\n\r]{0,30}reset/i },
+    { label: "budget limit reached", re: /budget limit reached/i },
+    { label: "shared budget", re: /shared budget/i },
+  ],
+  codex: [
+    { label: "you've hit your usage limit", re: /you'?ve hit your usage limit/i },
+    { label: "spend cap", re: /spend cap/i },
+    { label: "purchase more credits", re: /purchase more credits/i },
+    { label: "codex-rate-limit-reached-type", re: /codex-rate-limit-reached-type/i },
+    { label: "rate limit exceeded", re: /rate limit exceeded/i },
+  ],
+  cursor: [{ label: "PRIVATE_WORKER_RESOURCE_EXHAUSTED", re: /PRIVATE_WORKER_RESOURCE_EXHAUSTED/i }],
+  antigravity: [
+    { label: "quota exhausted", re: /quota exhausted/i },
+    { label: "allocation quota reached", re: /allocation quota reached/i },
+    { label: "plan's quota runs out", re: /quota runs out/i },
+    { label: "image generation quota exceeded", re: /image generation quota exceeded/i },
+    { label: "capacity exhausted", re: /capacity exhausted/i },
+    { label: "use your ai credits", re: /use your ai credits/i },
+  ],
+  opencode: [
+    { label: "quota exceeded", re: /quota exceeded/i },
+    { label: "(free|go) limit reached", re: /(free|go) limit reached/i },
+    { label: "account_rate_limit", re: /account_rate_limit/i },
+    { label: "rate increased too quickly", re: /rate increased too quickly/i },
+  ],
+};
+
+/** Janela ANSI-stripped varrida por canal, para um banner partido entre
+ *  chunks ainda casar (mesmo problema que `urlCarry` resolve para URLs). */
+const QUOTA_SCAN_CARRY_MAX = 4096;
+/** Capa do trecho de evidência — o match exato, não a linha inteira. */
+const QUOTA_EXCERPT_MAX = 220;
+/** Cauda de saída preservada ("rascunho") — o último trabalho do card. */
+const QUOTA_TAIL_MAX = 4096;
+
+function excerptAround(text: string, index: number, length: number): string {
+  const start = Math.max(0, index - 60);
+  const end = Math.min(text.length, index + length + 60);
+  return text
+    .slice(start, end)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, QUOTA_EXCERPT_MAX);
+}
+
+/** Reconhece um sinal de cota no texto (ANSI-stripped). Puro; provider-aware.
+ * `null` é ausência honesta — nunca um default que "parece" cota. */
+export function detectQuotaExhaustion(providerId: string, text: string): { label: string; excerpt: string } | null {
+  if (!QUOTA_WATCHED_PROVIDERS.has(providerId)) return null;
+  const patterns = [...(QUOTA_PROVIDER_PATTERNS[providerId] ?? []), ...QUOTA_SHARED_PATTERNS];
+  for (const p of patterns) {
+    const m = p.re.exec(text);
+    if (m) return { label: p.label, excerpt: excerptAround(text, m.index, m[0].length) };
+  }
+  return null;
+}
+
+/** Linha única, greppável, do falecimento por cota — distinta de crash. */
+export function describeQuotaDeath(evidence: QuotaDeathEvidence): string {
+  return (
+    `[stellar] provider quota exhausted (${evidence.providerId}) — card died by quota, ` +
+    `not by a crash. Evidence: "${evidence.excerpt}". It may resume when the quota resets.`
+  );
+}
 
 /** Origem da escrita — espelho de `DeliveryWriteOrigin`. Sem default em
  * `write()`: omitir o parâmetro reintroduzia o bug (toda resposta
@@ -260,6 +408,24 @@ type Entry = {
    * este mesmo campo guardava antes, no callback de sucesso de um rearm
    * por trigger (`rearmSessionWatch`), nunca um id arbitrário. */
   claimedSessionId: string | null;
+  /** Morte por cota (2026-09-19) — o sinal reconhecido no stream, ou `null`.
+   * Gravado no PRIMEIRO match e nunca sobrescrito: a evidência é o que de
+   * fato apareceu, não o último banner de uma retentativa. Lido no exit
+   * para distinguir "cota esgotada" de "crash normal". */
+  quotaSignal: QuotaSignal | null;
+  /** Janela ANSI-stripped (cauda) varrida contra os padrões de cota, para
+   * um banner partido entre chunks ainda casar. Mesmo problema/forma do
+   * `urlCarry` acima, com teto próprio. */
+  quotaScanCarry: string;
+  /** "Rascunho" preservado: caudal ANSI-stripped do que o card produziu
+   * (a análise que se perdeu no incidente). Capado; entregue no exit quando
+   * a morte é por cota, para o app decidir persistir. */
+  outputTail: string;
+  /** Alguém PEDIU o fim deste processo (`kill`/`killAll` — unmount de card,
+   * fechamento do app). Uma morte pedida não é "morte por cota": um card
+   * fechado à mão depois de já ter exibido um banner de cota não pode ser
+   * carimbado como cota. Distingue o exit espontâneo do provocado. */
+  killRequested: boolean;
 };
 
 /** Achado ao vivo (2026-09-01): "se eu trocar de sessão os terminais e
@@ -304,7 +470,13 @@ function notifyLastOpencodeCardClosed(): void {
 
 export function createPtyRegistry(registryOpts: {
   onData: (id: string, data: string) => void;
-  onExit: (id: string, exitCode: number) => void;
+  /** `quotaDeath` presente SÓ quando o exit foi classificado como morte por
+   * cota (ver `detectQuotaExhaustion`): carrega o padrão que casou, o trecho
+   * real e a cauda de saída preservada. Parâmetro adicional é
+   * source-compatible de propósito — o consumidor atual (index.ts) segue
+   * compilando sem mudança, e a distinção já chega hoje pelo rodapé do
+   * scrollback emitido em `onData`. */
+  onExit: (id: string, exitCode: number, quotaDeath?: QuotaDeathEvidence) => void;
   onSessionFound: (id: string, sessionId: string) => void;
   /** Review adversarial (2026-09-11), achado 4 — o primeiro conserto daqui
    * escrevia o aviso direto em `onData` (bytes injetados no próprio pty).
@@ -380,7 +552,24 @@ export function createPtyRegistry(registryOpts: {
     // with no system-prompt hook (codex/cursor): never opens anything on
     // its own, just surfaces what the agent already printed as a chip a
     // human can click.
-    const cleaned = e.urlCarry + data.replace(ANSI_PATTERN, "");
+    const stripped = data.replace(ANSI_PATTERN, "");
+    const cleaned = e.urlCarry + stripped;
+    // Morte por cota + rascunho (2026-09-19) — reaproveita o MESMO texto
+    // ANSI-stripped que a cauda de URL já calcula. Roda em toda flush
+    // (inclusive a que o `onExit` dispara antes de classificar), então um
+    // banner partido entre chunks ou impresso no instante da morte ainda é
+    // reconhecido. Só para providers com cota: um card de shell de alto
+    // volume não paga por uma varredura que nunca lhe diria nada.
+    if (QUOTA_WATCHED_PROVIDERS.has(e.providerId)) {
+      e.outputTail = (e.outputTail + stripped).slice(-QUOTA_TAIL_MAX);
+      if (!e.quotaSignal) {
+        e.quotaScanCarry = (e.quotaScanCarry + stripped).slice(-QUOTA_SCAN_CARRY_MAX);
+        const hit = detectQuotaExhaustion(e.providerId, e.quotaScanCarry);
+        if (hit) {
+          e.quotaSignal = { providerId: e.providerId, label: hit.label, excerpt: hit.excerpt, atMs: Date.now() };
+        }
+      }
+    }
     for (const rawUrl of cleaned.match(URL_PATTERN) ?? []) {
       const url = trimTrailingUnbalancedClosers(rawUrl);
       if (!e.seenUrls.has(url)) {
@@ -449,8 +638,12 @@ export function createPtyRegistry(registryOpts: {
     // TUI em tela cheia apaga ou corrompe qualquer coisa escrita ali antes
     // do próprio boot dela terminar).
     let resumeInvalidReason: "missing" | "empty" | null = null;
-    if (spawnOpts.resumeId && PROVIDERS_WITH_SESSION_CONCEPT.has(providerId)) {
+    if (spawnOpts.resumeId && providerHasSessionConcept(providerId)) {
       const evidence = getResumeTargetEvidence(providerId, cwd, spawnOpts.resumeId);
+      // `null` = provider que DECLARA retomar mas cujo store ninguém mediu
+      // (um dinâmico como cline/commandcode): não há como desmentir o id,
+      // então NÃO bloqueia. Recusar aqui derrubaria a retomada em silêncio —
+      // exatamente o dano que o encaminhamento 3 existe pra evitar.
       // Stale-vs-wall-clock is NOT applied here on purpose: a legitimate
       // overnight `--resume` has an old mtime and must still load. Cause 2
       // of "envelhece sozinho" is handled by (1) `decideResumeValidity`'s
@@ -459,12 +652,14 @@ export function createPtyRegistry(registryOpts: {
       // renews the stamp while the card is alive — so the next restart
       // already points at the live file. Spawning with Date.now() as the
       // reference would refuse every idle-but-correct session.
-      const validity = decideResumeValidity(evidence);
-      if (!validity.valid) {
-        // `stale` cannot appear without referenceActivityMs; narrow for
-        // the onResumeInvalid channel (missing | empty only).
-        if (validity.reason === "missing" || validity.reason === "empty") {
-          resumeInvalidReason = validity.reason;
+      if (evidence) {
+        const validity = decideResumeValidity(evidence);
+        if (!validity.valid) {
+          // `stale` cannot appear without referenceActivityMs; narrow for
+          // the onResumeInvalid channel (missing | empty only).
+          if (validity.reason === "missing" || validity.reason === "empty") {
+            resumeInvalidReason = validity.reason;
+          }
         }
       }
     }
@@ -622,6 +817,12 @@ export function createPtyRegistry(registryOpts: {
       // (`effectiveSpawnOpts.resumeId`), pra `rearmSessionWatch` ter o que
       // liberar no dia em que este card trocar de sessão via `/resume`.
       claimedSessionId: effectiveSpawnOpts.resumeId ?? imposedSessionId ?? null,
+      // Morte por cota (2026-09-19) — nada reconhecido ainda, nenhuma janela
+      // varrida, nenhuma cauda preservada. Tudo cresce capado em `flush`.
+      quotaSignal: null,
+      quotaScanCarry: "",
+      outputTail: "",
+      killRequested: false,
     };
     adoptEntry(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
@@ -745,7 +946,19 @@ export function createPtyRegistry(registryOpts: {
       entry.deferredHumanInput = [];
       dropEntry(id);
       if (openOpencodeCardIds.delete(id) && openOpencodeCardIds.size === 0) notifyLastOpencodeCardClosed();
-      registryOpts.onExit(id, exitCode);
+      // Morte por cota (2026-09-19) — `flush` acima já varreu a última
+      // leva, então `quotaSignal` reflete inclusive um banner impresso no
+      // instante da morte. O marcador sai por `onData` ANTES do onExit: o
+      // processo já morreu, nada redesenha por cima, e a linha sobrevive no
+      // scrollback que `read_card` entrega ao orquestrador — é a distinção
+      // VISÍVEL de crash. A cauda preservada vai no diagnóstico tipado.
+      if (entry.quotaSignal && !entry.killRequested) {
+        const quotaDeath: QuotaDeathEvidence = { ...entry.quotaSignal, tail: entry.outputTail };
+        registryOpts.onData(id, `\r\n${describeQuotaDeath(quotaDeath)}\r\n`);
+        registryOpts.onExit(id, exitCode, quotaDeath);
+      } else {
+        registryOpts.onExit(id, exitCode);
+      }
     });
 
     const providerDef = providerById(providerId);
@@ -898,7 +1111,7 @@ export function createPtyRegistry(registryOpts: {
         // primeira" nenhuma. `line.length > 0` continua excluindo um
         // Enter vazio (não conta como atividade real).
         const claimedSessionMtimeMs = entry.claimedSessionId
-          ? (getResumeTargetEvidence(entry.providerId, entry.cwd, entry.claimedSessionId).mtimeMs ?? null)
+          ? (getResumeTargetEvidence(entry.providerId, entry.cwd, entry.claimedSessionId)?.mtimeMs ?? null)
           : null;
         const decision = decideRearmOnLine({
           line,
@@ -994,6 +1207,7 @@ export function createPtyRegistry(registryOpts: {
   function kill(id: string, { immediate = false }: { immediate?: boolean } = {}) {
     const e = entries.get(id);
     if (!e) return;
+    e.killRequested = true;
     e.stopWatch?.();
     if (e.killTimer) return;
     if (immediate) {

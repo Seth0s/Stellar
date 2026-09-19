@@ -75,7 +75,7 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // src/main/acbridge-protocol-decision.ts — o vitest trava os dois
 // (tests/unit/acbridge-protocol.test.ts). Bump quando a forma de um
 // request muda (cmd/campo novo), e só então.
-const ACBRIDGE_PROTOCOL = 3;
+const ACBRIDGE_PROTOCOL = 4;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -123,7 +123,7 @@ const USAGE =
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "set-connector-label <connectorId> <label...|null> | " +
   "concurrency-status [cap] | board-mode <cardId> | " +
-  "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] | " +
+  "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] | " +
   "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
   "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
@@ -421,21 +421,26 @@ if (cmd === "version") {
   // mesmo tempo. `--brief` é UM argumento (aspas no shell); a regra
   // taskId-ou-brief (e a exceção pro reviewer) vive no bus, não aqui.
   const positional = [];
-  let model, effort, taskId, role, brief;
+  let model, effort, taskId, role, brief, isolation;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--model") model = rest[++i];
     else if (rest[i] === "--effort") effort = rest[++i];
     else if (rest[i] === "--task") taskId = rest[++i];
     else if (rest[i] === "--role") role = rest[++i];
     else if (rest[i] === "--brief") brief = rest[++i];
+    // `--isolation worktree` (2026-09-19) — paridade com o MCP: o bus
+    // RECUSA qualquer valor fora de "worktree", então a CLI só repassa o
+    // que o chamador pediu, nunca normaliza. O card nasce no caminho da
+    // worktree (leia em `acbridge list`).
+    else if (rest[i] === "--isolation") isolation = rest[++i];
     else positional.push(rest[i]);
   }
   const [provider, cwd, resumeId] = positional;
   if (!provider)
     fail(
-      "usage: acbridge spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>]",
+      "usage: acbridge spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree]",
     );
-  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, taskId, role, brief, requesterId: ownCardId };
+  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, taskId, role, brief, isolation, requesterId: ownCardId };
 } else if (cmd === "spawn-card") {
   // Pendentes #188 ("spawn_card por coordenadas") — `--anchor`/`--side` are
   // optional trailing flags, stripped out before the positional kind/

@@ -5,6 +5,7 @@ import { useModal } from "./useModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { RemotePairingModal } from "./RemotePairingModal";
+import { ProvidersPage } from "./ProvidersPage";
 import type { ShortcutCombo, ShortcutOverrides } from "./shortcut-registry";
 
 /**
@@ -33,7 +34,7 @@ import type { ShortcutCombo, ShortcutOverrides } from "./shortcut-registry";
  * they lived on SessionModal — a safety setting must not wait for Save.
  */
 
-export type SettingsPage = "general" | "shortcuts" | "keys" | "devices" | "maestro" | "agents";
+export type SettingsPage = "general" | "shortcuts" | "keys" | "devices" | "maestro" | "agents" | "providers";
 
 export type SettingsBoard = {
   id: string;
@@ -42,10 +43,11 @@ export type SettingsBoard = {
   concurrency_cap: number | null;
 };
 
-type NavItem = { page: SettingsPage; labelKey: "settings.page.general" | "shortcuts.title" | "settings.page.keys" | "settings.page.devices" | "settings.page.maestro" | "settings.page.agents"; icon: IconName };
+type NavItem = { page: SettingsPage; labelKey: "settings.page.general" | "shortcuts.title" | "settings.page.keys" | "settings.page.devices" | "settings.page.maestro" | "settings.page.agents" | "settings.page.providers"; icon: IconName };
 
 const APP_NAV: NavItem[] = [
   { page: "general", labelKey: "settings.page.general", icon: "settings" },
+  { page: "providers", labelKey: "settings.page.providers", icon: "wrench" },
   { page: "shortcuts", labelKey: "shortcuts.title", icon: "keyboard" },
   { page: "keys", labelKey: "settings.page.keys", icon: "apiKey" },
   { page: "devices", labelKey: "settings.page.devices", icon: "remoteControl" },
@@ -148,6 +150,7 @@ export function SettingsModal({
             )}
             {page === "keys" && <SecretsSettingsModal />}
             {page === "devices" && <RemotePairingModal />}
+            {page === "providers" && <ProvidersPage />}
             {page === "maestro" && board && (
               <MaestroPage board={board} onToggleAutonomous={onToggleAutonomous} />
             )}

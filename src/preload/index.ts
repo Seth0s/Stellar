@@ -1461,6 +1461,48 @@ const boardAssets = {
  * aqui no preload (sandbox: false em `main/index.ts`, sem round-trip de
  * IPC) e dá um valor síncrono real e portátil disponível antes do
  * `App.tsx` avaliar seus `const` de módulo. */
+/** Uma linha da lista de providers dinâmicos. `source` diz de ONDE o id
+ * veio — "file" (o `providers.json` do usuário, removível pelo form) ou
+ * "app" (o catálogo medido embutido do Stellar). `skipped` marca o id que o
+ * loader recusou porque um provider NATIVO já o possui: a tela precisa
+ * dizer isso, senão "cadastrei e não aconteceu nada". */
+export type ProvidersPageRow = {
+  id: string;
+  label: string;
+  binaryNames: string[];
+  mcpEnabled: boolean;
+  mcpConfigPath: string | null;
+  mcpConfigKey: string | null;
+  source: "file" | "app";
+  skipped: boolean;
+};
+
+/** A visão que a tela de Settings desenha. Nada aqui é uma segunda
+ * validação: `rows` é o que o loader REGISTROU e `rejected`/`error` são as
+ * recusas que ele mesmo produziu. */
+export type ProvidersPageView = {
+  path: string;
+  fileRead: boolean;
+  error: string | null;
+  rejected: { index: number; id: string | null; reason: string }[];
+  skipped: string[];
+  rows: ProvidersPageRow[];
+};
+
+/** O que o form sabe expressar. O resto da declaração (systemPrompt,
+ * effort, model, delivery, session) é preenchido no main com defaults
+ * seguros — e, quando o id já existe, PRESERVADO da declaração anterior. */
+export type DynamicProviderInput = {
+  id: string;
+  label: string;
+  binaryNames: string[];
+  mcp: { configPath: string; configKey: string } | null;
+};
+
+export type ProvidersMutationResult =
+  | { ok: true; view: ProvidersPageView }
+  | { ok: false; error: string };
+
 const system = {
   homeDir: homedir(),
   // Header nativo do Mac (2026-09-08) — Titlebar.tsx precisa saber se os
@@ -1479,6 +1521,20 @@ const system = {
     busProtocol: number;
     label: string;
   }> => ipcRenderer.invoke("app:build-identity"),
+  /** Providers DINÂMICOS (task cebaf3c8) — a tela de Settings. O main é
+   * dono do arquivo: a tela manda INTENÇÃO (adicionar/remover) e recebe de
+   * volta a visão do que o loader registrou. A tela nunca lê nem escreve
+   * JSON de config por conta própria — `window.fs` é confinado a um root e
+   * não alcança o `userData`, e a validação de registro tem uma fonte só
+   * (`main/providers-dynamic.ts`). */
+  getProvidersConfigPath: (): Promise<string> => ipcRenderer.invoke("app:get-providers-config-path"),
+  openProvidersConfig: (): Promise<{ ok: boolean; error: string | null }> =>
+    ipcRenderer.invoke("app:open-providers-config"),
+  /** Ler JÁ recarrega o registro (hot-reload sem restart). */
+  readProvidersConfig: (): Promise<ProvidersPageView> => ipcRenderer.invoke("app:read-providers-config"),
+  addProvider: (spec: DynamicProviderInput): Promise<ProvidersMutationResult> =>
+    ipcRenderer.invoke("app:add-provider", spec),
+  removeProvider: (id: string): Promise<ProvidersMutationResult> => ipcRenderer.invoke("app:remove-provider", id),
 };
 
 /** DESIGN-BACKLOG.md §2.1 i18n fase 1 — locale from `app.getLocale()` with
@@ -1494,9 +1550,25 @@ const i18n = {
  * `deliverCard`). Not a second write+Enter engine — main just calls
  * `messageBus.handleRequest`. No `requesterId`: Design Mode is a human
  * click and must keep the body exactly as formatted (no `[de: …]`). */
+export type BusDelivery = "queued" | "delivered" | "parked" | "unconfirmed" | "failed" | "cancelled";
+
 const bus = {
-  send: (target: string, text: string): Promise<{ ok: true } | { ok: false; error: string }> =>
-    ipcRenderer.invoke("bus:send", target, text),
+  // Widened to the REAL runtime shape (main just forwards the bus `send`
+  // cmd's receipt as-is — same one `send_to_card` returns over MCP, see
+  // ORCHESTRATION.md §8): `delivery`/`id`/`reason` were always there, only
+  // the type annotation undersold it.
+  send: (
+    target: string,
+    text: string,
+  ): Promise<
+    { ok: true; delivery: BusDelivery; id: string; reason?: string } | { ok: false; error: string }
+  > => ipcRenderer.invoke("bus:send", target, text),
+  getDelivery: (
+    id: string,
+  ): Promise<
+    | { ok: true; delivery: BusDelivery; id: string; target: string; reason?: string; requesterId?: string }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke("bus:get-delivery", id),
 };
 
 contextBridge.exposeInMainWorld("pty", pty);

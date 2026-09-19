@@ -584,6 +584,25 @@ zero, o recurso nunca existiu de verdade.
   de usar pipe. Corrigido no repo; a correção só vale depois de reinstalar.
 - **Socket Unix tem limite de 108 bytes de caminho.** Testes de socket/MCP falham a partir
   de worktrees com caminho fundo — não é bug de código; rode de um caminho curto.
+- **Worktree isolada é `spawn_agent({ isolation: "worktree" })`** (MCP) ou
+  `acbridge spawn-agent <provider> [cwd] --isolation worktree`. O card nasce numa git
+  worktree descartável do projeto, gerada sob um caminho CURTO em `/tmp/stellar-wt/` — pelo
+  limite acima, não monte a worktree à mão num caminho fundo. Uma worktree nova só tem o que
+  o git rastreia; os caminhos que o `.gitignore` esconde e o projeto precisa para rodar são
+  declarados **por projeto**, na raiz do repo, em `.stellar/worktree.json`:
+
+  ```json
+  { "copy": [".env", "vendor", "storage/jwt", "bootstrap/cache", "storage/framework"] }
+  ```
+
+  Cada item é copiado da árvore de origem (fundo, nunca symlink — symlink de `vendor/` quebra
+  o autoload). Sem o arquivo, a worktree nasce crua; um caminho declarado e ausente é
+  registrado no log, não falha o spawn. Opcionalmente o projeto define a raiz das worktrees
+  com `"worktreeRoot": "/caminho/curto"` (absoluto) — útil quando `/tmp` é `noexec` e
+  `vendor/bin/*` não roda de lá; ausente, a raiz é `/tmp/stellar-wt`. O `cwd` do card novo É o
+  caminho da worktree (leia em `list_cards` / `acbridge list`); a declaração do backend do
+  IdyPlatform é a lista acima, a de outro projeto é outra. O app **não** remove a worktree
+  quando o card fecha — faça `git worktree remove --force <path>` quando terminar.
 - **Electron órfão**: processos CDP de uma rodada anterior fazem o smoke falhar. Mate antes
   de acreditar num `FAIL`.
 - **CI (`xvfb`) está vermelho há muito tempo** e o app não sobe lá. Não é regressão da sua

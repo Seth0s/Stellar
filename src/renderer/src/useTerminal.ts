@@ -18,6 +18,7 @@ import {
   type XtermOutgoingSource,
 } from "./terminal-activity-decision";
 import { TURN_END_BUFFER_MAX, TURN_END_PATTERNS, providerHasRealTurnSignal } from "./terminal-turn-signal";
+import { decideTerminalFit } from "./terminal-fit-decision";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -313,6 +314,10 @@ export function useTerminal(
   // happens at most once per Terminal instance, not once per visibility
   // flip. Reset only when Effect 2 tears the instance down for real.
   const openedRef = useRef(false);
+  /** `requestAnimationFrame` pendente do retry de fit inicial
+   * (`fitVerified`, Effect 3) — cancelado no teardown pra não acordar um
+   * frame depois do card morrer. */
+  const fitRetryRef = useRef<number | null>(null);
   // Item 34 — lets Effect 4 (reacts to `visible` becoming true) trigger
   // Effect 3's attach function without Effect 3 itself depending on
   // `visible` (which would tear its DOM listeners down on every flip —
@@ -681,9 +686,43 @@ export function useTerminal(
         fitRef.current = fit;
         term.open(el);
       }
+      fitVerified(term, fit, 0);
+      registerDomListeners(term, fit, el);
+    }
+
+    /**
+     * O ÚNICO fit da vida do card que ninguém repete — e é justamente o
+     * que roda no instante mais frágil (mount / retomada da sessão, com o
+     * resto do app ainda assentando). Relato ao vivo 2026-09-19: "o claude
+     * principalmente vem quebrado e precisa de resize" — o card principal
+     * só normaliza com um resize manual.
+     *
+     * Medido no fonte do addon que embarca: `fit()` RETORNA EM SILÊNCIO
+     * quando `proposeDimensions()` devolve `undefined` (métrica de célula
+     * ainda não medida, ou parent ausente) — ver o doc comment de
+     * `terminal-fit-decision.ts`. Sem retry, `term.cols/rows` ficam no
+     * default do xterm (80×24, o mesmo tamanho com que o PTY nasceu) e o
+     * `pty.resize` abaixo reenvia um no-op; a próxima tentativa de
+     * verdade só vem de um resize do usuário (`onResizeSettled` / refit
+     * de 200ms do arraste em TerminalCard.tsx) — exatamente o "só
+     * normaliza depois de resize manual".
+     *
+     * A decisão é pura (`decideTerminalFit`); aqui só se mede e se
+     * agenda. Enquanto o retry está pendente, cada tentativa custa um
+     * `proposeDimensions()` e um frame. O card pode morrer/trocar de
+     * identidade no meio da espera: as refs vivas decidem, nunca as
+     * variáveis fechadas.
+     */
+    function fitVerified(term: Terminal, fit: FullWidthFitAddon, attempt: number) {
+      if (termRef.current !== term || fitRef.current !== fit) return;
+      const decision = decideTerminalFit(fit.proposeDimensions(), attempt);
+      if (decision.action === "retry") {
+        fitRetryRef.current = requestAnimationFrame(() => fitVerified(term, fit, attempt + 1));
+        return;
+      }
+      if (decision.action === "give-up") return;
       fit.fit();
       if (ptyIdRef.current) void window.pty.resize(ptyIdRef.current, term.cols, term.rows);
-      registerDomListeners(term, fit, el);
     }
     function buildTerminalNoWebgl() {
       const t = new Terminal({
@@ -983,6 +1022,10 @@ export function useTerminal(
 
     return () => {
       attachRef.current = null;
+      if (fitRetryRef.current !== null) {
+        cancelAnimationFrame(fitRetryRef.current);
+        fitRetryRef.current = null;
+      }
       removeDomListeners?.();
     };
   }, [containerRef, ptyId]);

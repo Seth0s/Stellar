@@ -69,8 +69,19 @@ export const TOOL_DESCRIPTIONS = {
   [BASH_TOOL_NAME]:
     "Run a shell command. Executes sandboxed (bubblewrap): filesystem writes are confined to this chat's project root and /tmp, the process runs in its own PID/IPC/UTS namespace (can't see or signal anything on the host), but network access IS available (npm install, curl, git clone, etc. all work). Always shown to the human for approval before running — if they deny it, nothing executes.",
   [DELEGATE_TOOL_NAME]:
-    "Delegate a substantial, independent task to a full coding agent (claude, codex, or antigravity) running in its own new terminal card on the board, in this chat's project root. Use this for real, multi-step engineering work, not small lookups. Asynchronous: you get back a card id, not the agent's output — you can't see what it does or wait for it inside this turn; check the board for the reply.",
+    "Delegate a substantial, independent task to a full coding agent (one of the agent providers currently available — see this tool's `provider` parameter, whose list is read live from the provider registry: the native CLIs plus any CLI this app registered at boot) running in its own new terminal card on the board, in this chat's project root. Use this for real, multi-step engineering work, not small lookups. Asynchronous: you get back a card id, not the agent's output — you can't see what it does or wait for it inside this turn; check the board for the reply.",
 } as const;
+
+/** Ids de CLI de AGENTE disponíveis AGORA — do registro VIVO (`PROVIDERS` é
+ * mutado por `registerDynamicProviders`, ver providers-dynamic.ts), nunca os
+ * seis literais que estavam no schema. `bash` fica de fora porque um shell
+ * não é um agente para delegar (é a distinção de `ProviderCapacity.role`).
+ *
+ * Schema e gate leem daqui, então não podem divergir: o mesmo helper alimenta
+ * o `enum` que o modelo vê e a checagem que `executeTool` faz na chamada. */
+export function availableAgentProviderIds(): string[] {
+  return PROVIDERS.filter((p) => p.capacity.role === "agent").map((p) => p.id);
+}
 
 export const TOOL_PARAMETERS = {
   [READ_FILE_TOOL_NAME]: {
@@ -94,7 +105,23 @@ export const TOOL_PARAMETERS = {
   [DELEGATE_TOOL_NAME]: {
     type: "object",
     properties: {
-      provider: { type: "string", enum: PROVIDERS.filter(p => p.capacity.role === "agent").map(p => p.id), description: "Which CLI agent to spawn" },
+      // GETTER de propósito (2026-09-19). `TOOL_PARAMETERS` é um const de
+      // MÓDULO, e `ANTHROPIC_TOOLS`/`OPENAI_TOOLS` (anthropic-client.ts:35,
+      // openai-client.ts:34) guardam uma REFERÊNCIA a este objeto, não uma
+      // cópia — então um array literal aqui (o que era) congelava os seis
+      // nativos no IMPORT do módulo: o modelo nunca via um provider
+      // cadastrado em runtime (cline, commandcode — carregados no boot por
+      // `loadDynamicProviders`), e mandar um deles era recusado pelo schema
+      // antes de chegar no handler. Com o getter, a lista é lida a cada
+      // serialização da request, do MESMO registro que a checagem de
+      // `executeTool` consulta — as duas não podem divergir.
+      get provider() {
+        return {
+          type: "string",
+          enum: availableAgentProviderIds(),
+          description: `Which CLI agent to spawn — one of the agent providers known right now: ${availableAgentProviderIds().join(", ")}`,
+        };
+      },
       reason: { type: "string", description: "Short description of the task being delegated, shown to the human" },
     },
     required: ["provider", "reason"],
@@ -229,7 +256,14 @@ export async function executeTool(name: string, input: unknown, hooks: ChatToolH
     const requestedProvider = String(args.provider ?? "");
     const providerDef = PROVIDERS.find(p => p.id === requestedProvider && p.capacity.role === "agent");
     if (!providerDef) {
-      result = { ok: false, text: `provider inválido ou desconhecido: "${requestedProvider}"` };
+      // Recusa que ENSINA: nomeia a lista do momento (registro vivo), em vez
+      // de só dizer que o id não existe — o modelo não tem como adivinhar
+      // quais CLIs esta instalação carregou.
+      const available = availableAgentProviderIds();
+      result = {
+        ok: false,
+        text: `provider inválido ou desconhecido: "${requestedProvider}" — disponíveis agora: ${available.join(", ")}`,
+      };
     } else {
       const provider = providerDef.id as DelegateProvider;
       const reason = String(args.reason ?? "");

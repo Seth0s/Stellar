@@ -174,6 +174,14 @@ describe("card id recycle vs live participation (store real)", () => {
     expect(store.getTaskVerdicts("ef31-done").map((v) => [v.role, v.verdict])).toEqual([["reviewer", "reprovado"]]);
 
     // --- Case B: recycle — same short id, stale done-task link must not fire ---
+    //
+    // O veículo é um REVIEWER no vínculo novo, não o implementer principal
+    // (2026-09-19): um veredito de implementer é recusado pelo gate do
+    // `report` antes de qualquer gravação — mesma regra que a porta MCP já
+    // aplicava (mudança em message-bus.ts). O ponto deste caso nunca foi o
+    // papel, e sim a ÉPOCA: o veredito tem de cair na task do vínculo vivo e
+    // nunca na task done herdada de outra encarnação do mesmo id curto. Um
+    // reviewer é quem de fato pode julgar, então é ele que exercita a época.
     store.upsertCard(baseCard("478"));
     store.upsertTask(baseTask("ec01-old", { card_id: "478", status: "pending" }));
     store.recordParticipationRound("478", null, 1_000);
@@ -193,7 +201,11 @@ describe("card id recycle vs live participation (store real)", () => {
     store = openStore(dir);
     bus = createMessageBus(join(dir, "epoch.sock"), callbacksBackedByStore(store));
     store.upsertCard({ ...baseCard("478"), created_at: 2000 });
-    store.upsertTask(baseTask("d107-new", { card_id: "478", status: "pending" }));
+    // `card_id: null` de propósito: um reviewer nunca é `tasks.card_id` (o
+    // retry/falha da task é derivado dessa coluna — ver store.ts), então o
+    // vínculo dele é só a linha de `task_cards` escrita por `linkTaskCard`.
+    store.upsertTask(baseTask("d107-new", { card_id: null, status: "pending" }));
+    store.linkTaskCard("d107-new", "478", "reviewer");
     {
       // Ensure the NEW link is of this incarnation (Date.now() is fine; pin for certainty).
       store.close();
@@ -209,7 +221,7 @@ describe("card id recycle vs live participation (store real)", () => {
 
     expect(store.listTaskCardsForCardHistory("478").map((l) => l.task_id).sort()).toEqual(["d107-new", "ec01-old"]);
     expect(store.listTaskCardsForCard("478")).toEqual([
-      expect.objectContaining({ task_id: "d107-new", card_id: "478", role: "implementer" }),
+      expect.objectContaining({ task_id: "d107-new", card_id: "478", role: "reviewer" }),
     ]);
 
     const beforeOld = store.getTaskVerdicts("ec01-old").length;
@@ -221,9 +233,9 @@ describe("card id recycle vs live participation (store real)", () => {
     } as BusRequest)) as { ok: boolean };
     expect(resRecycle.ok).toBe(true);
 
-    expect(store.getReport("478")?.role).toBe("implementer");
+    expect(store.getReport("478")?.role).toBe("reviewer");
     expect(store.getTaskVerdicts("ec01-old")).toHaveLength(beforeOld);
-    expect(store.getTaskVerdicts("d107-new").map((v) => [v.role, v.verdict])).toEqual([["implementer", "aprovado"]]);
+    expect(store.getTaskVerdicts("d107-new").map((v) => [v.role, v.verdict])).toEqual([["reviewer", "aprovado"]]);
   });
 
   it("legacy NULL clocks still drop a lone done-task link (recycle fallback)", () => {

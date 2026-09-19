@@ -316,6 +316,22 @@ async function resolveWithProcessEvidence(
   return applyProcessDecision(infos, decision, viaSource);
 }
 
+/** Canal de IDENTIFICAÇÃO por provider — cada um lê uma fonte medida
+ * (`claude agents --json`, `~/.cursor/chats/…`, `opencode session list`,
+ * etc.). Tabela em vez do `switch` fechado: um provider sem canal (todo
+ * dinâmico hoje — nenhum teve a fonte de identificação medida) cai no
+ * default honesto `none`, em vez de exigir mais um `case`. */
+const SESSION_IDENTIFIERS: Record<
+  string,
+  (cwd: string, pid: number | undefined, io: Required<IdentifyDeps>) => Promise<IdentifyResult>
+> = {
+  claude: identifyClaude,
+  cursor: identifyCursor,
+  antigravity: identifyAntigravity,
+  opencode: identifyOpenCode,
+  codex: identifyCodex,
+};
+
 export async function identifyCurrentSession(
   providerId: string,
   cwd: string,
@@ -323,21 +339,10 @@ export async function identifyCurrentSession(
   deps: IdentifyDeps = {},
 ): Promise<IdentifyResult> {
   const io = depsWithDefaults(deps);
+  const identify = SESSION_IDENTIFIERS[providerId];
+  if (!identify) return { status: "none", ids: [], source: providerId };
   try {
-    switch (providerId) {
-      case "claude":
-        return await identifyClaude(cwd, options.pid, io);
-      case "cursor":
-        return await identifyCursor(cwd, options.pid, io);
-      case "antigravity":
-        return await identifyAntigravity(cwd, options.pid, io);
-      case "opencode":
-        return await identifyOpenCode(cwd, options.pid, io);
-      case "codex":
-        return await identifyCodex(cwd, options.pid, io);
-      default:
-        return { status: "none", ids: [], source: providerId };
-    }
+    return await identify(cwd, options.pid, io);
   } catch (error) {
     return {
       status: "error",

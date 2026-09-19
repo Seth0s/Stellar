@@ -1119,6 +1119,15 @@ select.resume-input {
   z-index: 2100;
 }
 
+/* GlobalComposer.tsx — o popover de "Destino" é portado pro <body> como
+   todo `.popover`, mas o `.wrap` do composer é z-index 1000 e fica em cima
+   dele: o base 800 perdia e o menu renderizava ATRÁS da barra. Mesmo padrão
+   de `.popover--modal` acima, só com o número do z-index que o composer
+   realmente precisa. */
+.popover--composer {
+  z-index: 1100;
+}
+
 .popover-row {
   display: flex;
   gap: 8px;
@@ -1509,7 +1518,8 @@ select.resume-input {
 
 .shortcuts-page,
 .secrets-settings-page,
-.remote-pairing-page {
+.remote-pairing-page,
+.providers-settings-page {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -1584,6 +1594,255 @@ select.resume-input {
   gap: 8px;
   margin-top: 16px;
   flex: none;
+}
+
+/* ------------------------------------------- Settings → Providers
+   Tela dos providers DINÂMICOS (task cebaf3c8). Mesmo idioma visual do
+   resto deste arquivo: surface/border para as caixas, muted para o
+   secundário, mono só onde o dado é técnico (id, binário, caminho). */
+
+.providers-settings-page {
+  gap: 12px;
+  overflow: auto;
+}
+
+.providers-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.providers-page-subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.providers-page-head-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+
+.providers-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.providers-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 0 12px;
+}
+
+.providers-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.providers-row:last-child {
+  border-bottom: none;
+}
+
+.providers-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.providers-row-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.providers-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.providers-row-meta code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.providers-badge {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.providers-badge.is-on {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+}
+
+.providers-badge.is-warn {
+  color: var(--signal);
+  border-color: color-mix(in srgb, var(--signal) 40%, var(--border));
+}
+
+.providers-row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.providers-empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 14px 0;
+}
+
+.providers-warn {
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
+  color: var(--text);
+}
+
+.providers-warn ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.providers-warn li {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.providers-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.providers-form-grid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.providers-field {
+  flex: 1;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.providers-field input {
+  background: var(--ink);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+}
+
+.providers-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.providers-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Botões desta página caíam fora de `.modal-actions` (o escopo real de
+   `.primary`/`.ghost`) porque não vivem dentro de um modal-footer — sem
+   isso o browser desenhava o controle nativo (fundo branco, texto preto).
+   Mesma receita visual de `.modal-actions button`/`.primary`/`.ghost`,
+   só que aplicada aos três containers de botão desta página. */
+.providers-page-head-actions button,
+.providers-row-actions button,
+.providers-form-actions button {
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.providers-page-head-actions .ghost,
+.providers-row-actions .ghost,
+.providers-form-actions .ghost {
+  background: none;
+  color: var(--muted);
+}
+
+.providers-page-head-actions .primary,
+.providers-row-actions .primary,
+.providers-form-actions .primary {
+  background: var(--foam);
+  color: var(--on-accent);
+  border-color: var(--foam);
+}
+
+.providers-page-head-actions .danger,
+.providers-row-actions .danger,
+.providers-form-actions .danger {
+  background: var(--danger);
+  color: var(--on-accent);
+  border-color: var(--danger);
+}
+
+.providers-page-head-actions button:disabled,
+.providers-row-actions button:disabled,
+.providers-form-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Botão só-ícone (remover) — mesma receita do X do próprio modal
+   (`.settings-modal-close`), sem borda/fundo de botão comum. */
+.providers-row-icon-btn {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+}
+
+.providers-row-icon-btn:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 .settings-modal-footer {

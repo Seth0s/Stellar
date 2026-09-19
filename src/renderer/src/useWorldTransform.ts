@@ -85,7 +85,7 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
    * bounding box. Lets "find a specific card among many spread out ones"
    * skip the manual scroll/pan `fitView`'s own doc comment calls out as
    * the gap. */
-  function focusCard(id: string) {
+  function focusCard(id: string, humanAction = false) {
     const vp = viewportRef.current;
     const card = cardsRef.current.find((c) => c.id === id);
     if (!vp || !card) return;
@@ -98,14 +98,15 @@ export function useWorldTransform(cardsRef: React.RefObject<Card[]>) {
     const box = card.rect;
     const availW = Math.max(100, vw - PAD_LEFT - PAD_RIGHT);
     const availH = Math.max(100, vh - PAD_Y * 2);
-    const scale = Math.min(availW / box.w, availH / box.h);
-    const zoom = Math.min(3, Math.max(0.2, scale));
     const centerX = PAD_LEFT + availW / 2;
     const centerY = PAD_Y + availH / 2;
-    setWorld({
-      zoom,
-      panX: centerX - (box.x + box.w / 2) * zoom,
-      panY: centerY - (box.y + box.h / 2) * zoom,
+    setWorld((prev) => {
+      const zoom = humanAction ? Math.min(3, Math.max(0.2, Math.min(availW / box.w, availH / box.h))) : prev.zoom;
+      return {
+        zoom,
+        panX: centerX - (box.x + box.w / 2) * zoom,
+        panY: centerY - (box.y + box.h / 2) * zoom,
+      };
     });
   }
 

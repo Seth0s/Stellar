@@ -55,7 +55,10 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
   }
 
   async function createTask(fields: Record<string, unknown>) {
-    return (await bus!.handleRequest({ cmd: "create_task", ...fields } as BusRequest)) as { ok: boolean; taskId?: string; error?: string };
+    // `boardId` por padrão desde 2026-09-19: `create_task` sem board nenhum
+    // é RECUSADO (task órfã, invisível na Fila). Os casos aqui são sobre
+    // `purpose`, então o board não pode ser o que falta.
+    return (await bus!.handleRequest({ cmd: "create_task", boardId: "b1", ...fields } as BusRequest)) as { ok: boolean; taskId?: string; error?: string };
   }
 
   it("purpose válido é gravado e volta em list_tasks/get_task", async () => {

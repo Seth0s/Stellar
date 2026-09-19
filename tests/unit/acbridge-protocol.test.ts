@@ -112,6 +112,8 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
       1: "77836d4160f10a69",
       2: "2fdddc26f54807bb",
       3: "2f6e3e0fd6ee73d3",
+      // Protocol 4 — `spawn_agent` ganhou `isolation` (worktree), na CLI e no bus.
+      4: "2c258ea01178965b",
     };
     expect(
       hash,

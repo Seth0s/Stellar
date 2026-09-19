@@ -12,7 +12,7 @@ import {
   session,
   shell,
 } from "electron";
-import { appendFileSync, chmodSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -52,6 +52,15 @@ import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-d
 import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
 import { deriveParticipationDivergence, deriveTaskStatus } from "../task-status-derive";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
+import {
+  MEASURED_THIRD_PARTY_SPECS,
+  PROVIDERS_CONFIG_SCHEMA_VERSION,
+  loadDynamicProviders,
+  parseProviderSpec,
+  parseProviderSpecs,
+  providersConfigPath,
+  type DynamicProviderSpec,
+} from "./providers-dynamic";
 import { shouldStampParticipationSession } from "./participation-session-decision";
 import { resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { refreshUserEnv, setSystemLanguageHint, userEnvSnapshot } from "./user-env";
@@ -2022,6 +2031,13 @@ function createWindow() {
     }
     return messageBus!.handleRequest({ cmd: "send", target, text });
   });
+  // GlobalComposer.tsx polls this to turn a `send` receipt's `queued` into
+  // a real delivered/parked/failed state in the UI — same `get_delivery`
+  // bus cmd the MCP tool of the same name already reads, not a new fact.
+  ipcMain.handle("bus:get-delivery", (_e, id: string) => {
+    if (typeof id !== "string") return { ok: false as const, error: "invalid delivery id" };
+    return messageBus!.handleRequest({ cmd: "get_delivery", id });
+  });
   ipcMain.handle("pty:resize", (_e, id: string, cols: number, rows: number) => registry.resize(id, cols, rows));
   ipcMain.handle("pty:interrupt", (_e, id: string) => registry.interrupt(id));
   ipcMain.handle("pty:kill", (_e, id: string) => {
@@ -3118,6 +3134,238 @@ app.whenReady().then(async () => {
         `Diretório legado intacto (reversível).`,
     );
   }
+
+  loadDynamicProviders(newUserData);
+
+  // ---------------------------------------------------------------------
+  // Providers dinâmicos — a fiação IPC da tela de Settings
+  // (renderer/src/ProvidersPage.tsx, task cebaf3c8).
+  //
+  // ONDE ESTES HANDLERS MORAM, e por quê: AQUI dentro, onde `newUserData`
+  // já existe (`app.getPath("userData")`, poucas linhas acima). A primeira
+  // versão desta fiação foi escrita dentro de `createWindow()` — outro
+  // escopo, sem `newUserData` — e não compilava (5x TS2304): o caminho que
+  // grava o arquivo era uma referência morta.
+  //
+  // POR QUE IPC DEDICADO, e não o `window.fs.read`/`write` que a tela
+  // tentava usar: aquele `fs` é CONFINADO a um root (`readFile(root, path)`
+  // → `confine`) e `root=""` transforma o caminho absoluto do userData em
+  // relativo — o escape é recusado, então a tela nunca leria nem gravaria
+  // nada (falha silenciosa, dentro de um try/catch). Pior: dar `root=""`
+  // daria à tela de Settings escrita solta em qualquer caminho. Aqui o main
+  // lê, valida com o MESMO parser que o loader usa (a validação de registro
+  // continua com uma fonte só, `providers-dynamic.ts`) e grava apenas o
+  // arquivo que é assunto desta tela.
+  // ---------------------------------------------------------------------
+  function readProvidersConfigFile(path: string):
+    | { kind: "missing" }
+    | { kind: "invalid"; error: string }
+    | { kind: "ok"; raw: Record<string, unknown>; providers: unknown[] } {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { kind: "missing" };
+      return { kind: "invalid", error: `could not read ${path}: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { kind: "invalid", error: `${path} is not a JSON object` };
+      }
+      const raw = parsed as Record<string, unknown>;
+      const providers = Array.isArray(raw.providers) ? raw.providers : [];
+      return { kind: "ok", raw, providers };
+    } catch (err) {
+      return { kind: "invalid", error: `${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  /**
+   * Grava `providers` preservando o RESTO do arquivo (chaves que esta tela
+   * não conhece não são dela para apagar) e de forma atômica: um
+   * `writeFileSync` interrompido no meio deixaria ilegível um arquivo que o
+   * usuário edita à mão por definição — e a config dele é o único registro
+   * dos providers dele.
+   */
+  function writeProvidersConfig(path: string, raw: Record<string, unknown>, providers: unknown[]): void {
+    const next = { ...raw, schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION, providers };
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    renameSync(tmp, path);
+  }
+
+  /**
+   * O que a tela mostra: o que o LOADER de fato registrou (inclui o
+   * catálogo embutido — cline/commandcode), mais as recusas dele. Quem
+   * decide precedência (nativo > arquivo > embutido) continua sendo o
+   * loader; aqui só se junta rótulo/binário/MCP para exibir.
+   */
+  function providersPageView() {
+    const path = providersConfigPath(newUserData);
+    const loaded = loadDynamicProviders(newUserData);
+    const file = readProvidersConfigFile(path);
+    const fileEntries = file.kind === "ok" ? file.providers : [];
+
+    const row = (spec: DynamicProviderSpec, source: "file" | "app") => ({
+      id: spec.id,
+      label: spec.label,
+      binaryNames: [...spec.binaryNames],
+      mcpEnabled: spec.capacity.mcp.mechanism === "global-config",
+      mcpConfigPath: spec.capacity.mcp.mechanism === "global-config" ? spec.capacity.mcp.configPath : null,
+      mcpConfigKey: spec.capacity.mcp.mechanism === "global-config" ? spec.capacity.mcp.configKey : null,
+      source,
+      // O loader recusou este id porque um NATIVO já o possui — a tela
+      // precisa dizer isso, senão o usuário "cadastra" e nada acontece.
+      skipped: loaded.skipped.includes(spec.id),
+    });
+
+    const fromFile = parseProviderSpecs({ schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION, providers: fileEntries });
+    const shippedIds = new Set(loaded.shippedDefaults);
+    const rows = [
+      ...fromFile.specs.map((s) => row(s, "file" as const)),
+      ...MEASURED_THIRD_PARTY_SPECS.filter((s) => shippedIds.has(s.id)).map((s) => row(s, "app" as const)),
+    ].sort((a, b) => a.id.localeCompare(b.id));
+
+    return {
+      path,
+      fileRead: loaded.fileRead,
+      // Erro de ARQUIVO (JSON inválido/permissão) — o que impede a tela de
+      // mostrar qualquer coisa. Recusas por entrada vão em `rejected`.
+      error: loaded.error,
+      rejected: [...loaded.rejected, ...(file.kind === "invalid" ? [{ index: -1, id: null, reason: file.error }] : [])],
+      skipped: loaded.skipped,
+      rows,
+    };
+  }
+
+  ipcMain.handle("app:get-providers-config-path", () => providersConfigPath(newUserData));
+
+  /**
+   * Escape hatch do briefing: abre o JSON cru no editor do SO — este app não
+   * constrói editor de JSON. O arquivo precisa EXISTIR para o editor abrir
+   * com conteúdo, então um arquivo ausente nasce aqui, vazio e válido.
+   */
+  ipcMain.handle("app:open-providers-config", async () => {
+    const path = providersConfigPath(newUserData);
+    const file = readProvidersConfigFile(path);
+    if (file.kind === "missing") writeProvidersConfig(path, {}, []);
+    const openError = await shell.openPath(path);
+    return { ok: openError === "", error: openError === "" ? null : openError };
+  });
+
+  /** Ler JÁ recarrega o registro (hot-reload do loader, item 4 do
+   * briefing): é o mesmo gesto que o usuário faria ao voltar do editor. */
+  ipcMain.handle("app:read-providers-config", () => providersPageView());
+
+  /**
+   * Adiciona (ou reedita) um provider dinâmico. O form manda só o que ele
+   * sabe expressar — id, label, binários e o MCP — e o RESTO da declaração é
+   * preenchido aqui, com defaults seguros e DECLARADOS:
+   *   systemPrompt `none`, effort `none` (reason "no-flag"), model `none`
+   *   (reason "shell"), delivery `positional`, sessão sem id imposto,
+   *   `installCommand` nulo. É o que o briefing pede: os campos técnicos
+   *   (flags de resume/effort/model) exigem conhecer a CLI de cor e não se
+   *   adivinham por UI — quem sabe edita o JSON cru.
+   * `acbridgeOnPath: true` NÃO é um palpite sobre a CLI: `pty-registry.ts`
+   * põe o `binDir` no PATH de TODO card, então o `acbridge` está lá — é o
+   * que sustenta o `report` de um provider sem MCP (ver `deriveReportChannel`).
+   *
+   * Um id que JÁ existe (no arquivo ou no catálogo embutido) não é
+   * rebaixado: o que o form não expressa é PRESERVADO da declaração
+   * anterior, então editar o rótulo de um `cline` não apaga a capacidade
+   * medida dele.
+   */
+  ipcMain.handle("app:add-provider", (_e, input: unknown) => {
+    const path = providersConfigPath(newUserData);
+    const file = readProvidersConfigFile(path);
+    // Arquivo existente e ILEGÍVEL não é sobrescrito: o conteúdo quebrado é
+    // do usuário, e apagá-lo seria perder o trabalho dele em silêncio.
+    if (file.kind === "invalid") return { ok: false, error: file.error };
+
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      return { ok: false, error: "app:add-provider expects a provider object" };
+    }
+    const candidate = input as { id?: unknown; label?: unknown; binaryNames?: unknown; mcp?: unknown };
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
+    const binaryNames = Array.isArray(candidate.binaryNames)
+      ? candidate.binaryNames
+          .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+          .map((entry) => entry.trim())
+      : [];
+    const mcpInput = candidate.mcp === null || candidate.mcp === undefined ? null : candidate.mcp;
+    let mcp: DynamicProviderSpec["capacity"]["mcp"] = { mechanism: "none" };
+    if (mcpInput !== null) {
+      if (typeof mcpInput !== "object" || Array.isArray(mcpInput)) {
+        return { ok: false, error: "`mcp` must be null or an object with configPath/configKey" };
+      }
+      const configPath = typeof (mcpInput as { configPath?: unknown }).configPath === "string" ? (mcpInput as { configPath: string }).configPath.trim() : "";
+      const configKey = typeof (mcpInput as { configKey?: unknown }).configKey === "string" ? (mcpInput as { configKey: string }).configKey.trim() : "";
+      if (!configPath) return { ok: false, error: "`mcp.configPath` is required when MCP is enabled" };
+      if (!configKey) return { ok: false, error: "`mcp.configKey` is required when MCP is enabled" };
+      mcp = { mechanism: "global-config", configPath, configKey, serverShape: "stdio-command" };
+    }
+
+    const fresh: DynamicProviderSpec = {
+      id,
+      label,
+      binaryNames,
+      installCommand: null,
+      capacity: {
+        role: "agent",
+        session: { canImposeSessionId: false },
+        systemPrompt: { mechanism: "none" },
+        mcp,
+        acbridgeOnPath: true,
+        effort: { mechanism: "none", reason: "no-flag" },
+        model: { mechanism: "none", reason: "shell" },
+        delivery: { briefMechanism: "positional" },
+      },
+    };
+    const parsed = parseProviderSpec(fresh);
+    if (!parsed.ok) return { ok: false, error: parsed.reason };
+
+    const existing = file.kind === "ok" ? file.providers : [];
+    const previousRaw = existing.find(
+      (entry) => entry !== null && typeof entry === "object" && (entry as { id?: unknown }).id === id,
+    );
+    const previousParsed = previousRaw === undefined ? null : parseProviderSpec(previousRaw);
+    const base: DynamicProviderSpec | null = previousParsed?.ok
+      ? previousParsed.spec
+      : (MEASURED_THIRD_PARTY_SPECS.find((spec) => spec.id === id) ?? null);
+    const merged: DynamicProviderSpec = base
+      ? {
+          ...base,
+          id,
+          label,
+          binaryNames,
+          capacity: { ...base.capacity, mcp: parsed.spec.capacity.mcp },
+        }
+      : parsed.spec;
+
+    const others = existing.filter(
+      (entry) => !(entry !== null && typeof entry === "object" && (entry as { id?: unknown }).id === merged.id),
+    );
+    writeProvidersConfig(path, file.kind === "ok" ? file.raw : {}, [...others, merged]);
+    return { ok: true, view: providersPageView() };
+  });
+
+  ipcMain.handle("app:remove-provider", (_e, id: unknown) => {
+    if (typeof id !== "string" || id.trim() === "") return { ok: false, error: "missing provider id" };
+    const path = providersConfigPath(newUserData);
+    const file = readProvidersConfigFile(path);
+    if (file.kind === "invalid") return { ok: false, error: file.error };
+    const existing = file.kind === "ok" ? file.providers : [];
+    const remaining = existing.filter(
+      (entry) => !(entry !== null && typeof entry === "object" && (entry as { id?: unknown }).id === id),
+    );
+    if (remaining.length === existing.length) {
+      return { ok: false, error: `no entry for provider "${id}" in the config file` };
+    }
+    writeProvidersConfig(path, file.kind === "ok" ? file.raw : {}, remaining);
+    return { ok: true, view: providersPageView() };
+  });
 
   createWindow();
   void refreshUserEnv().then(() => {
