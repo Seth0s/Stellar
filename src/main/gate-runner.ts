@@ -27,6 +27,27 @@
  * ciclo de vida do `onExit`. Reusá-lo seria pagar tudo isso para obter
  * uma captura PIOR. O registry segue intocado.
  *
+ * SANDBOX (2026-09-19) — achado de segurança do reviewer B (task
+ * 30d858c5): os `gates` de uma task são shell de autoria do AGENTE
+ * (gravável por create_task/update_task via MCP, por qualquer card) e
+ * rodavam com `shell: true` no host, sem confinamento e sem consentimento —
+ * o caminho contornava os dois controles que o resto do app já tinha (a
+ * tool `bash` do chat RECUSA sem bubblewrap; um card de terminal é
+ * consent-gated). Agora cada comando roda DENTRO do mesmo sandbox
+ * `bubblewrap` do `bash` do chat (`sandbox.ts`): host legível, só a raiz do
+ * repo gravável, `$HOME`/`/tmp` mascarados, namespaces separados; e o spawn
+ * no host é `(file, args)` SEM shell — não há onde passar o comando cru.
+ * Quando não há bwrap, o gate NÃO roda: a evidência registra a recusa por
+ * comando (`exitCode: null` + o motivo) e o run fica `ok:false` — nunca um
+ * fallback silencioso para execução direta.
+ *
+ * Por que não chamar `runSandboxedBash` direto: aquele wrapper junta
+ * stdout+stderr num só texto e tem timeout fixo de 60s, o que destruiria a
+ * evidência que este módulo existe para preservar (streams SEPARADOS, teto
+ * de 15min, cauda por bytes). Os FLAGS de confinamento foram extraídos para
+ * `buildSandboxedBashArgs` e são reaproveitados aqui — mesma confinação,
+ * outra captura.
+ *
  * CONCORRÊNCIA — `withRepoGateLock` serializa qualquer execução de gate
  * contra o MESMO repositório (raiz do git do cwd), venha ela de tasks ou
  * cards diferentes. Dois `npx vitest run` concorrentes no mesmo working
@@ -47,6 +68,7 @@
 import { spawn, execFile, type SpawnOptions } from "node:child_process";
 import { resolve } from "node:path";
 import { effectivePath } from "./user-env";
+import { buildSandboxedBashArgs, findSandboxBinary } from "./sandbox";
 
 /** Chave do record de gate carimbado pelo app em `tasks.result_json`.
  * Mesmo lugar (e mesma classe de dono) de `failureKind`: o app observa,
@@ -144,7 +166,12 @@ export type GateRunEvidence = {
   commands: GateCommandEvidence[];
 };
 
-export type GateSpawn = (command: string, options: SpawnOptions) => ReturnType<typeof spawn>;
+/** Spawn SEM shell no host: o comando de um gate só vira argv de
+ * `bash -lc` DENTRO do bwrap (ver `sandbox.ts`). A assinatura é
+ * `(file, args, options)` — e não uma string de shell — para que
+ * reintroduzir `shell: true` no host seja impossível por acidente: não há
+ * onde passar a string crua. */
+export type GateSpawn = (file: string, args: string[], options: SpawnOptions) => ReturnType<typeof spawn>;
 
 export type RunTaskGatesInput = {
   taskId: string;
@@ -155,6 +182,9 @@ export type RunTaskGatesInput = {
   spawnFn?: GateSpawn;
   /** Seam de teste — a produção usa `effectivePath()`. */
   pathValue?: string;
+  /** Seam de teste — a produção resolve com `findSandboxBinary()`.
+   * `null` força a recusa; um caminho força aquele binário. */
+  sandboxBinary?: string | null;
 };
 
 const inFlightRuns = new Map<string, Promise<GateRunEvidence>>();
@@ -175,6 +205,37 @@ export function runTaskGates(input: RunTaskGatesInput): Promise<GateRunEvidence>
   return run;
 }
 
+/** AGENT-FACING — DO NOT TRANSLATE. Recusa visível quando não há bubblewrap:
+ * gates são shell de autoria de agente e NÃO rodam sem confinamento. */
+export function describeSandboxUnavailable(): string {
+  return (
+    "[de: stellar] gate NÃO executado: sandbox (bubblewrap/bwrap) indisponível neste sistema. " +
+    "Os gates de uma task são shell de autoria de agente e não rodam sem confinamento — " +
+    "instale o bubblewrap. Nada foi executado."
+  );
+}
+
+/** Evidência de um gate que NÃO foi executado. `exitCode: null` + o motivo
+ * em `stderr` mantém o contrato "nunca mentir sobre o que foi medido": o
+ * run inteiro fica `ok:false` e quem lê a evidência vê que não houve
+ * execução, em vez de um vermelho que parece teste falhado. */
+function refusalEvidence(command: string, reason: string): GateCommandEvidence {
+  return {
+    command,
+    exitCode: null,
+    signal: null,
+    timedOut: false,
+    startedAt: Date.now(),
+    durationMs: 0,
+    stdout: "",
+    stderr: reason,
+    stdoutBytes: 0,
+    stderrBytes: Buffer.byteLength(reason, "utf8"),
+    stdoutTruncated: false,
+    stderrTruncated: false,
+  };
+}
+
 async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   const requestedCwd = resolve(input.cwd);
   const gitRoot = await resolveGitRoot(requestedCwd);
@@ -182,6 +243,9 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   const spawnFn = input.spawnFn ?? (spawn as GateSpawn);
   const timeoutMs = input.timeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
   const env = { ...process.env, PATH: input.pathValue ?? effectivePath() };
+  // Resolvido UMA vez por run: o binário que confina todos os comandos (o
+  // mesmo que a tool `bash` do chat usa). Sem ele, NADA roda — ver abaixo.
+  const sandboxBinary = input.sandboxBinary !== undefined ? input.sandboxBinary : findSandboxBinary();
 
   return withRepoGateLock(lockKeyFor(gitRoot, requestedCwd), async () => {
     // Dentro do lock de propósito: fora dele, `startedAt` seria o instante
@@ -190,8 +254,17 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
     // durado 10min. Os tempos por comando sempre foram reais.
     const startedAt = Date.now();
     const commands: GateCommandEvidence[] = [];
-    for (const command of input.gates) {
-      commands.push(await runOne(command, { cwd: spawnCwd, env, timeoutMs, spawnFn }));
+    if (!sandboxBinary) {
+      // Sem bwrap não existe fallback para execução direta: rodar o shell
+      // do agente sem confinamento é exatamente o defeito que este caminho
+      // deixa de fazer. A recusa é POR COMANDO, para a evidência nomear
+      // cada gate que deixou de rodar.
+      const reason = describeSandboxUnavailable();
+      for (const command of input.gates) commands.push(refusalEvidence(command, reason));
+    } else {
+      for (const command of input.gates) {
+        commands.push(await runOne(command, { root: spawnCwd, env, timeoutMs, spawnFn, sandboxBinary }));
+      }
     }
     return {
       taskId: input.taskId,
@@ -207,7 +280,7 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
 
 function runOne(
   command: string,
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; spawnFn: GateSpawn },
+  opts: { root: string; env: NodeJS.ProcessEnv; timeoutMs: number; spawnFn: GateSpawn; sandboxBinary: string },
 ): Promise<GateCommandEvidence> {
   return new Promise((done) => {
     const startedAt = Date.now();
@@ -216,10 +289,13 @@ function runOne(
     let timedOut = false;
     let settled = false;
 
-    const child = opts.spawnFn(command, {
-      cwd: opts.cwd,
+    // O comando entra como argv de `bash -lc` DENTRO do bwrap; no host não
+    // existe shell nenhum (`shell: true` foi removido de propósito). São os
+    // MESMOS flags que a tool `bash` do chat usa, vindos de `sandbox.ts`.
+    const args = buildSandboxedBashArgs(opts.root, command);
+    const child = opts.spawnFn(opts.sandboxBinary, args, {
+      cwd: opts.root,
       env: opts.env,
-      shell: true,
       // Grupo próprio no POSIX para o timeout derrubar também os filhos do
       // `npx`/shell, não só o processo de frente (órfão rodando a suíte).
       detached: process.platform !== "win32",
