@@ -69,49 +69,61 @@ export function isSandboxAvailable(): boolean {
 
 export type SandboxResult = { ok: boolean; text: string };
 
+/**
+ * The EXACT bwrap argv (everything after the `bwrap` binary) that confines
+ * `command` to write inside `root`. Extracted so any caller that needs a
+ * confinement identical to the chat `bash` tool — today `gate-runner.ts`,
+ * which must keep stdout/stderr separated and its own timeout — can spawn
+ * `bwrap` itself with this argv instead of forking a second, drifting copy
+ * of these flags. Pure: same input, same array, no I/O.
+ */
+export function buildSandboxedBashArgs(root: string, command: string): string[] {
+  const home = homedir();
+  return [
+    "--ro-bind",
+    "/",
+    "/",
+    "--dev",
+    "/dev",
+    "--proc",
+    "/proc",
+    "--tmpfs",
+    "/tmp",
+    // Pre-release audit S5 — `--ro-bind / /` above makes the WHOLE host
+    // filesystem readable inside the sandbox, `$HOME` included: `~/.ssh`,
+    // `secrets.json` (this app's own API keys), any other dotfile. The
+    // `--bind root root` below only ever intended to grant WRITE access
+    // to the project root, never READ access to the rest of `$HOME` —
+    // that was collateral, not a decision. `--tmpfs $HOME` occludes it
+    // with empty scratch space before the root bind below re-mounts the
+    // real project directory back (writable) when `root` lives under
+    // `$HOME`, which is the common case for this app's projects.
+    "--tmpfs",
+    home,
+    "--bind",
+    root,
+    root,
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--unshare-cgroup-try",
+    "--die-with-parent",
+    "--new-session",
+    "--chdir",
+    root,
+    "--",
+    "bash",
+    "-lc",
+    command,
+  ];
+}
+
 /** Runs `command` under bwrap, confined to write inside `root`. Never
  * throws — a spawn failure (bwrap missing/misbehaving) resolves to
  * `ok:false` like any other tool error, same as the rest of chat-tools.ts. */
 export function runSandboxedBash(root: string, command: string): Promise<SandboxResult> {
   return new Promise((resolve) => {
-    const home = homedir();
-    const args = [
-      "--ro-bind",
-      "/",
-      "/",
-      "--dev",
-      "/dev",
-      "--proc",
-      "/proc",
-      "--tmpfs",
-      "/tmp",
-      // Pre-release audit S5 — `--ro-bind / /` above makes the WHOLE host
-      // filesystem readable inside the sandbox, `$HOME` included: `~/.ssh`,
-      // `secrets.json` (this app's own API keys), any other dotfile. The
-      // `--bind root root` below only ever intended to grant WRITE access
-      // to the project root, never READ access to the rest of `$HOME` —
-      // that was collateral, not a decision. `--tmpfs $HOME` occludes it
-      // with empty scratch space before the root bind below re-mounts the
-      // real project directory back (writable) when `root` lives under
-      // `$HOME`, which is the common case for this app's projects.
-      "--tmpfs",
-      home,
-      "--bind",
-      root,
-      root,
-      "--unshare-pid",
-      "--unshare-ipc",
-      "--unshare-uts",
-      "--unshare-cgroup-try",
-      "--die-with-parent",
-      "--new-session",
-      "--chdir",
-      root,
-      "--",
-      "bash",
-      "-lc",
-      command,
-    ];
+    const args = buildSandboxedBashArgs(root, command);
 
     // Audit S6 — the absolute path that was actually probed as executable,
     // never a bare name resolved through PATH. Re-probed per call rather

@@ -1,6 +1,7 @@
 import { afterAll, describe, it, expect } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   DEFAULT_GATE_TIMEOUT_MS,
@@ -16,6 +17,7 @@ import {
   withRepoGateLock,
   type GateRunEvidence,
 } from "../../src/main/gate-runner";
+import { findSandboxBinary } from "../../src/main/sandbox";
 
 /**
  * Gate runner (2026-09-19): o app roda os gates declarados da task como
@@ -408,5 +410,129 @@ describe("gate-runner: evidência — stamp, leitura, strip e carry", () => {
 
   it("DEFAULT_GATE_TIMEOUT_MS é um teto de parede declarado", () => {
     expect(DEFAULT_GATE_TIMEOUT_MS).toBe(15 * 60_000);
+  });
+});
+
+describe("gate-runner: confinamento (achado de segurança 30d858c5)", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("spawn é (bwrap, argv) e NUNCA shell no host; o comando só vira `bash -lc` dentro", async () => {
+    const dir = tempDir("stellar-gate-argv-");
+    dirs.push(dir);
+    const seen: Array<{ file: string; args: string[]; options: Record<string, unknown> }> = [];
+    const spawnSpy = ((file: string, args: string[], options: Record<string, unknown>) => {
+      seen.push({ file, args, options });
+      const child: any = new EventEmitter();
+      child.pid = 999_999;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      setTimeout(() => child.emit("close", 0, null), 0);
+      return child;
+    }) as never;
+
+    const evidence = await runTaskGates({
+      taskId: "t-argv",
+      cwd: dir,
+      gates: ["echo hi"],
+      timeoutMs: 5_000,
+      sandboxBinary: "/usr/bin/bwrap",
+      spawnFn: spawnSpy,
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].file).toBe("/usr/bin/bwrap");
+    // Flags de confinamento vindos de sandbox.ts — inclusive os mascaramentos.
+    expect(seen[0].args).toContain("--ro-bind");
+    expect(seen[0].args).toContain("--tmpfs");
+    expect(seen[0].args).toContain("--unshare-pid");
+    expect(seen[0].args).toContain("--die-with-parent");
+    expect(seen[0].args).toContain("--chdir");
+    expect(seen[0].args).toContain(resolve(dir));
+    // O comando do agente é argv de `bash -lc`, dentro do sandbox.
+    expect(seen[0].args.slice(-3)).toEqual(["bash", "-lc", "echo hi"]);
+    // Sem shell no host: não existe onde enfiar a string crua.
+    expect(seen[0].options.shell).toBeFalsy();
+    expect(seen[0].options.cwd).toBe(resolve(dir));
+    expect(evidence.ok).toBe(true);
+  });
+
+  it("sem bubblewrap: RECUSA por comando — nada roda, e a evidência diz o motivo", async () => {
+    const dir = tempDir("stellar-gate-nosandbox-");
+    dirs.push(dir);
+    let spawnCalls = 0;
+    const spawnSpy = (() => {
+      spawnCalls += 1;
+      return new EventEmitter() as never;
+    }) as never;
+
+    const evidence = await runTaskGates({
+      taskId: "t-no-sandbox",
+      cwd: dir,
+      gates: [nodeEval("process.exit(0)"), nodeEval("process.exit(0)")],
+      timeoutMs: 5_000,
+      sandboxBinary: null,
+      spawnFn: spawnSpy,
+    });
+
+    expect(spawnCalls).toBe(0);
+    expect(evidence.ok).toBe(false);
+    expect(evidence.commands).toHaveLength(2);
+    for (const c of evidence.commands) {
+      expect(c.exitCode).toBeNull();
+      expect(c.timedOut).toBe(false);
+      expect(c.stderr).toMatch(/sandbox/i);
+    }
+  });
+
+  it.skipIf(!findSandboxBinary())("confina de verdade: caminho FORA do root fica oculto", async () => {
+    const root = tempDir("stellar-gate-root-");
+    const outside = tempDir("stellar-gate-outside-");
+    dirs.push(root, outside);
+    writeFileSync(join(root, "marker.txt"), "in\n");
+    writeFileSync(join(outside, "secret.txt"), "x\n");
+    const script = `const fs=require('fs');process.stdout.write((fs.existsSync(${JSON.stringify(
+      join(outside, "secret.txt"),
+    )})?'VISIBLE':'HIDDEN')+'|'+(fs.existsSync('marker.txt')?'IN':'OUT'))`;
+
+    const evidence = await runTaskGates({ taskId: "t-confine", cwd: root, gates: [nodeEval(script)], timeoutMs: 30_000 });
+
+    expect(evidence.commands[0].exitCode).toBe(0);
+    // Fora do root (outro dir em /tmp) some; dentro do root continua visível.
+    expect(evidence.commands[0].stdout).toBe("HIDDEN|IN");
+  });
+
+  it.skipIf(!findSandboxBinary())("oclusão do $HOME: ~/.ssh e o secrets.json do app NÃO são visíveis", async () => {
+    // O gate roda FORA do $HOME (root em /tmp): o único motivo do $HOME real
+    // não aparecer é a oclusão (`--tmpfs $HOME` no argv de sandbox.ts).
+    const root = tempDir("stellar-gate-home-root-");
+    dirs.push(root);
+    const home = homedir();
+    // Canário SEMPRE existente no host — é ele que DISCRIMINA: sem o
+    // `--tmpfs $HOME` (que é justamente o que este teste prende), o
+    // `--ro-bind / /` deixaria o $HOME real legível e o canário apareceria.
+    // Sem canário, um `~/.ssh`/secrets.json ausente passaria como "oculto"
+    // por acidente e o teste não prenderia nada.
+    const canary = join(home, `.stellar-gate-home-probe-${process.pid}-${Date.now()}`);
+    writeFileSync(canary, "canary\n");
+    try {
+      const probe = (p: string) => `test -e ${JSON.stringify(p)} && echo VISIBLE || echo HIDDEN`;
+      const gate = [
+        probe(canary),
+        probe(join(home, ".ssh")),
+        probe(join(home, ".config", "stellar", "secrets.json")),
+      ].join("; ");
+
+      const evidence = await runTaskGates({ taskId: "t-home-occlusion", cwd: root, gates: [gate], timeoutMs: 30_000 });
+
+      expect(evidence.commands[0].exitCode).toBe(0);
+      expect(evidence.commands[0].stdout.trim().split("\n")).toEqual(["HIDDEN", "HIDDEN", "HIDDEN"]);
+      // Sanidade do discriminador: no HOST o canário realmente existe.
+      expect(existsSync(canary)).toBe(true);
+    } finally {
+      rmSync(canary, { force: true });
+    }
   });
 });
