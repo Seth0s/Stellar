@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { t } from "../shared/i18n";
-import { providerCapacity, which } from "./providers";
+import { providerCapacity, which, type McpServerShape } from "./providers";
 import { effectivePath } from "./user-env";
 
 const execFileAsync = promisify(execFile);
@@ -81,6 +81,16 @@ const execFileAsync = promisify(execFile);
  *
  * Falhar aqui nunca impede o spawn: sem MCP o card ainda funciona pelo
  * `acbridge`, que é o que ele já tinha antes disto existir.
+ *
+ * CAMINHO DECLARATIVO (2026-09-19) — os três `REGISTRARS` acima são o
+ * formato ESCRITO À MÃO de cada nativo, porque cada um tem uma CLI com
+ * idiossincrasias medidas (a whitelist de ambiente do cursor, o arquivo por
+ * workspace do agy, a chave `mcp` do opencode). Um provider DINÂMICO não tem
+ * — e não pode ter — código por CLI: a declaração de capacidade dele
+ * (`providers.ts` → `capacity.mcp`) já diz tudo o que é preciso saber para
+ * escrever o registro (onde, sob qual chave, com que forma de entrada), e
+ * `registerDeclaredProvider` abaixo é o único registrador que lê isso.
+ * As mesmas três regras valem para ele, sem exceção.
  */
 
 /** Nome sob o qual o servidor aparece nas duas CLIs. */
@@ -254,11 +264,16 @@ async function registerAntigravity(binary: string, shim: string): Promise<McpReg
 }
 
 /**
- * COMO cada CLI de config persistente recebe o registro. Não é uma lista
- * de "quem tem MCP" — isso é `ProviderCapacity.mcp` — é a implementação
- * por CLI, e `tests/unit/mcp-registration.test.ts` garante que as duas
- * não divergem: todo provider `global-config` tem um registrador aqui e
- * nenhum registrador existe pra provider que não seja `global-config`.
+ * COMO cada CLI NATIVA de config persistente recebe o registro. Não é uma
+ * lista de "quem tem MCP" — isso é `ProviderCapacity.mcp` — é a
+ * implementação por CLI, e `tests/unit/mcp-registration.test.ts` garante que
+ * as duas não divergem: todo provider nativo `global-config` tem um
+ * registrador aqui e nenhum registrador existe pra provider que não seja
+ * `global-config`. Um provider DINÂMICO declarado `global-config` é servido
+ * por `registerDeclaredProvider` (abaixo), não por uma entrada aqui: este
+ * mapa é `(shim) => …`, sem o id do provider, e é exatamente essa assinatura
+ * que diz "a forma desta CLI é escrita à mão". O teste continua valendo
+ * porque ele lê `PROVIDERS`, que em unit test são só os nativos.
  */
 export const REGISTRARS: Record<string, (shim: string) => Promise<McpRegistrationResult>> = {
   cursor: async (shim) => {
@@ -274,6 +289,122 @@ export const REGISTRARS: Record<string, (shim: string) => Promise<McpRegistratio
     return registerAntigravity(binary, shim);
   },
 };
+
+/** `~/…` resolvido contra `registrationHome()` — que é o `~` do teste, e o
+ * home real num launch de verdade. Caminho absoluto passa direto. Relativo é
+ * RECUSADO (`null`): não existe diretório de trabalho significativo para um
+ * config global de CLI, e resolver um relativo contra o cwd de um card
+ * escreveria num lugar que ninguém escolheu. */
+function resolveDeclaredConfigPath(declared: string): string | null {
+  if (declared === "~") return registrationHome();
+  if (declared.startsWith("~/")) return join(registrationHome(), declared.slice(2));
+  return isAbsolute(declared) ? declared : null;
+}
+
+/** A entrada que o Stellar quer escrever, na forma que a CLI declarou. Duas
+ * formas hoje (ver `McpServerShape`): objeto com `command` (a família
+ * `mcpServers` — claude/comandos stdio), ou o `{type:"local", command:[…]}`
+ * do opencode. Nada de `${env:…}` aqui: a interpolação de ambiente é o
+ * contorno MEDIDO da whitelist do cursor, não uma convenção geral — inventá-la
+ * para outra CLI seria declarar uma medição que ninguém fez. */
+function declaredServerEntry(shape: McpServerShape, shim: string): Record<string, unknown> {
+  if (shape === "stdio-command") return { command: shim };
+  return { type: "local", command: [shim], enabled: true };
+}
+
+/** Igualdade só sobre o que o Stellar escreve. Chaves que o usuário tenha
+ * acrescentado à NOSSA entrada são preservadas e não contam — mesma regra do
+ * `cursorEntryIsCurrent`, senão o registro reescreveria a cada spawn. */
+function declaredEntryIsCurrent(existing: unknown, shape: McpServerShape, shim: string): boolean {
+  if (!existing || typeof existing !== "object" || Array.isArray(existing)) return false;
+  const entry = existing as Record<string, unknown>;
+  if (shape === "stdio-command") return entry.command === shim;
+  return entry.type === "local" && Array.isArray(entry.command) && entry.command[0] === shim;
+}
+
+/**
+ * Registrador DECLARATIVO — o caminho de um provider cujo formato não está
+ * escrito em código nenhum, e sim na própria declaração de capacidade
+ * (`configPath` onde, `configKey` sob qual chave, `serverShape` com que
+ * forma). Hoje é o caminho dos providers dinâmicos (cline, commandcode — ver
+ * `providers-dynamic.ts`); um nativo com idiossincrasia medida continua com o
+ * registrador à mão dele em `REGISTRARS`.
+ *
+ * Mesmo contrato dos outros: nada no repositório do usuário, preguiçoso
+ * (quem chama é `ensureMcpRegistered`, no spawn daquele provider) e
+ * idempotente de verdade. O arquivo é lido e mesclado, nunca substituído:
+ * outros servidores, outras chaves de topo e as chaves que o usuário
+ * acrescentou na nossa entrada sobrevivem intactos.
+ *
+ * Não checa se o binário existe (cursor/opencode também não): quem chega aqui
+ * é um card DAQUELE provider sendo spawnado, e falhar aqui nunca impede o
+ * spawn — o `acbridge` cobre o report enquanto isso.
+ *
+ * Exportado para a suíte de verificação poder exercitar o caminho com um
+ * `AGENT_CANVAS_REGISTRATION_HOME` temporário, sem tocar em `~` nenhum.
+ */
+export function registerDeclaredProvider(providerId: string, shim: string): McpRegistrationResult {
+  const declared = providerCapacity(providerId)?.mcp;
+  if (!declared || declared.mechanism !== "global-config") {
+    return { status: "failed", error: `provider "${providerId}" does not declare a persistent MCP config` };
+  }
+  const { configPath, configKey, serverShape } = declared;
+  // Declaração incompleta: falha VISÍVEL, nunca um palpite que escreveria num
+  // arquivo do usuário sem saber a forma da entrada dele.
+  if (!configPath || !configKey || !serverShape) {
+    return {
+      status: "failed",
+      error:
+        `provider "${providerId}" declares global-config without configPath/configKey/serverShape` +
+        " — refusing to write to a user's config file with a guessed shape",
+    };
+  }
+  const file = resolveDeclaredConfigPath(configPath);
+  if (!file) {
+    return {
+      status: "failed",
+      error: `provider "${providerId}" declares a relative configPath ("${configPath}") — a CLI's global config is never relative to a card's cwd`,
+    };
+  }
+
+  let config: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    // Inexistente ou corrompido → tratado como ausente, mesma postura de
+    // `registerCursor`: sobrescrever config alheia com base num parse que
+    // falhou seria pior do que não registrar.
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      config = parsed as Record<string, unknown>;
+    }
+  } catch {
+    config = {};
+  }
+
+  const current = config[configKey];
+  const servers: Record<string, unknown> =
+    current !== null && typeof current === "object" && !Array.isArray(current)
+      ? (current as Record<string, unknown>)
+      : {};
+
+  const existing = servers[SERVER_NAME];
+  if (declaredEntryIsCurrent(existing, serverShape, shim)) return { status: "ok", changed: false };
+
+  // Preserva o que não é nosso: a entrada antiga (válida ou não) é a base, e
+  // só as chaves que o Stellar escreve são sobrescritas.
+  const base = existing !== null && typeof existing === "object" && !Array.isArray(existing)
+    ? (existing as Record<string, unknown>)
+    : {};
+  servers[SERVER_NAME] = { ...base, ...declaredServerEntry(serverShape, shim) };
+  config[configKey] = servers;
+
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  } catch (err) {
+    return { status: "failed", error: t("error.agyWrite", { file, error: String(err) }) };
+  }
+  return { status: "ok", changed: true };
+}
 
 /** Se `ensureMcpRegistered` age para este provider — derivado da
  * declaração de capacidade, nunca de uma lista de ids. */
@@ -295,13 +426,25 @@ export function ensureMcpRegistered(providerId: string, binDir: string): Promise
       return { status: "skipped", reason: t("error.mcpInvoked") };
     }
     const registrar = REGISTRARS[providerId];
-    if (!registrar) {
-      // Declarado `global-config` sem registrador: falha VISÍVEL (vai pro
-      // console.error do chamador), nunca um skip silencioso que deixaria
-      // o card sem MCP achando que tem.
-      return { status: "failed", error: `no MCP registrar for provider "${providerId}" declared global-config` };
+    if (registrar) return registrar(shimPath(binDir));
+    // Sem registrador escrito à mão, mas a PRÓPRIA declaração já diz onde e
+    // como escrever: é o caminho declarativo (providers dinâmicos — cline,
+    // commandcode). Falha visível fica reservada a quem não tem nem código
+    // nem declaração completa, que é o caso que ela existe para pegar.
+    const declared = providerCapacity(providerId)?.mcp;
+    if (
+      declared &&
+      declared.mechanism === "global-config" &&
+      declared.configPath &&
+      declared.configKey &&
+      declared.serverShape
+    ) {
+      return registerDeclaredProvider(providerId, shimPath(binDir));
     }
-    return registrar(shimPath(binDir));
+    // Declarado `global-config` sem registrador: falha VISÍVEL (vai pro
+    // console.error do chamador), nunca um skip silencioso que deixaria
+    // o card sem MCP achando que tem.
+    return { status: "failed", error: `no MCP registrar for provider "${providerId}" declared global-config` };
   })();
 
   attempted.set(providerId, run);

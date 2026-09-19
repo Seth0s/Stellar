@@ -5,6 +5,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import type { ResumeTargetEvidence } from "./session-resume-validation";
 import { decideClaimAmongCandidates, type ReservationView } from "./session-claim-decision";
+import { providerById } from "./providers";
 
 const POLL_MS = 1500;
 
@@ -664,25 +665,49 @@ function findCodexSessionEvidence(resumeId: string): ResumeTargetEvidence {
   return { exists: false, hasContent: false, mtimeMs: null };
 }
 
+/** A DECLARAÇÃO diz que este provider retoma sessão existente? Lida de
+ * `capacity.session` — nunca de uma lista de ids. Inclui
+ * `canImposeSessionId` porque onde a CLI impõe o id ela também o retoma (a
+ * mesma flag cria se ausente e retoma se existente: cursor, cline). */
+function providerDeclaresSessionResume(providerId: string): boolean {
+  const session = providerById(providerId)?.capacity.session;
+  return !!session && (session.canImposeSessionId || session.resumeFlag !== undefined || session.continueFlag !== undefined);
+}
+
+/** Canal de LEITURA por provider — onde cada CLI guarda sessão é MEDIÇÃO
+ * daquela CLI, não política. A tabela substitui o `switch` fechado: quem não
+ * tem canal cai no default DERIVADO da declaração, nunca num "inexistente"
+ * fixo. Um provider novo entra aqui só quando o store dele for medido. */
+const RESUME_EVIDENCE_FINDERS: Record<string, (cwd: string, resumeId: string) => ResumeTargetEvidence> = {
+  claude: findClaudeSessionDirEvidence,
+  antigravity: (_cwd, resumeId) => findAntigravitySessionEvidence(resumeId),
+  cursor: (_cwd, resumeId) => findCursorSessionEvidence(resumeId),
+  opencode: (_cwd, resumeId) => findOpenCodeSessionEvidence(resumeId),
+  codex: (_cwd, resumeId) => findCodexSessionEvidence(resumeId),
+};
+
 /** Ponto único chamado por `pty-registry.ts::spawn` antes de honrar um
  * `resumeId` restaurado. Providers sem conceito de sessão (`bash`) nunca
- * chegam aqui — o chamador já filtra por isso, mesmo critério de
- * `watchForSession` abaixo. */
-export function getResumeTargetEvidence(providerId: string, cwd: string, resumeId: string): ResumeTargetEvidence {
-  switch (providerId) {
-    case "claude":
-      return findClaudeSessionDirEvidence(cwd, resumeId);
-    case "antigravity":
-      return findAntigravitySessionEvidence(resumeId);
-    case "cursor":
-      return findCursorSessionEvidence(resumeId);
-    case "opencode":
-      return findOpenCodeSessionEvidence(resumeId);
-    case "codex":
-      return findCodexSessionEvidence(resumeId);
-    default:
-      return { exists: false, hasContent: false };
-  }
+ * chegam aqui — o chamador já filtra por `capacity.role === "agent"`.
+ *
+ * `null` NÃO é erro: é "não há canal de medição conhecido para este
+ * provider". O default deixou de ser `{exists:false}` (que reprovava o id em
+ * silêncio) e passa a distinguir pela própria declaração:
+ *  - provider que não declara NENHUMA forma de retomada → `{exists:false}`,
+ *    e o spawn limpo resultante é a verdade (não havia o que honrar);
+ *  - provider que DECLARA retomar mas cujo store ninguém mediu (cline,
+ *    commandcode — `providers-dynamic.ts`) → `null`: não há prova de que o
+ *    id esteja errado, então não bloqueia. Bloquear por ausência de medição
+ *    derrubaria a retomada de um provider capaz — o dano que este
+ *    encaminhamento existe pra evitar. */
+export function getResumeTargetEvidence(
+  providerId: string,
+  cwd: string,
+  resumeId: string,
+): ResumeTargetEvidence | null {
+  const find = RESUME_EVIDENCE_FINDERS[providerId];
+  if (find) return find(cwd, resumeId);
+  return providerDeclaresSessionResume(providerId) ? null : { exists: false, hasContent: false };
 }
 
 // Achado ao vivo (2026-09-07) — reverse-engineered `~/.gemini/antigravity-cli/
@@ -775,6 +800,22 @@ async function listAntigravitySessions(cwd: string, spawnedAtMs: number): Promis
   return out;
 }
 
+/** Canal de DESCOBERTA por provider — onde o poller procura sessão nova.
+ * Mesma ideia de `RESUME_EVIDENCE_FINDERS`: localização é medição, e a
+ * presença de um canal é o que define se o watcher faz sentido. Um provider
+ * sem canal (todo dinâmico hoje — cline/commandcode não tiveram o store
+ * medido) simplesmente não é observável, o que é honesto: inventar uma
+ * varredura às cegas só acharia o arquivo de outro card. Onde a CLI impõe o
+ * id (cline) o watcher nem é necessário; onde ela só retoma (commandcode) a
+ * ausência de canal é declarada, não fingida. */
+const SESSION_DISCOVERY_CHANNELS: Record<string, (cwd: string, spawnedAtMs: number) => Promise<SessionCandidate[]>> = {
+  claude: listClaudeSessions,
+  codex: listCodexSessions,
+  cursor: listCursorSessions,
+  antigravity: listAntigravitySessions,
+  opencode: listOpenCodeSessions,
+};
+
 /**
  * Polls the on-disk location each provider writes new sessions to, looking
  * for one created after `spawnedAtMs`. Lives while the card exists and
@@ -800,15 +841,12 @@ export function watchForSession(
     matchStartMs?: number;
   } = {},
 ): () => void {
-  if (
-    providerId !== "claude" &&
-    providerId !== "codex" &&
-    providerId !== "cursor" &&
-    providerId !== "antigravity" &&
-    providerId !== "opencode"
-  ) {
-    return () => {};
-  }
+  // Antes: `providerId !== "claude" && … && providerId !== "opencode"`. Agora
+  // a pergunta é "existe canal de descoberta para este provider?" — a mesma
+  // tabela que alimenta a busca abaixo, uma fonte só, e um dinâmico com canal
+  // medido amanhã é observável sem tocar nesta linha.
+  const discoveryChannel = SESSION_DISCOVERY_CHANNELS[providerId];
+  if (!discoveryChannel) return () => {};
 
   let stopped = false;
   const matchStartMs = options.matchStartMs ?? options.rearmAtMs ?? spawnedAtMs;
@@ -826,20 +864,7 @@ export function watchForSession(
     try {
       const found = await runExclusive(async () => {
         if (stopped) return null;
-        let candidates: SessionCandidate[];
-        if (providerId === "claude") {
-          candidates = await listClaudeSessions(cwd, spawnedAtMs);
-        } else if (providerId === "codex") {
-          candidates = await listCodexSessions(cwd, spawnedAtMs);
-        } else if (providerId === "cursor") {
-          candidates = await listCursorSessions(cwd, spawnedAtMs);
-        } else if (providerId === "antigravity") {
-          candidates = await listAntigravitySessions(cwd, spawnedAtMs);
-        } else if (providerId === "opencode") {
-          candidates = await listOpenCodeSessions(cwd, spawnedAtMs);
-        } else {
-          candidates = [];
-        }
+        const candidates = await discoveryChannel(cwd, spawnedAtMs);
         if (stopped) return null;
         const decision = decideClaimAmongCandidates({
           candidates,

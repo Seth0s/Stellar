@@ -28,7 +28,13 @@ import {
   describeStatusHeldWarning,
   retainStatusAsk,
 } from "./status-write-decision";
-import { decideJudgmentWrite, roleOnTask } from "./judgment-write-decision";
+import {
+  decideCloseCardTaskEffect,
+  decideJudgmentWrite,
+  decideReportVerdictWrite,
+  roleOnTask,
+  type CloseCardLinkedTask,
+} from "./judgment-write-decision";
 import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, interruptionReasonFromResultJson, type FailureSource } from "./failure-kind-decision";
 import { decideExitWithoutReportWrite } from "./exit-lifetime-decision";
 import {
@@ -62,6 +68,7 @@ import {
   allowCommitToSql,
 } from "./task-contract-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
+import { carryGateEvidence, runTaskGates, stampGateEvidenceJson, stripAgentGateEvidence } from "./gate-runner";
 import { decideSpawnReason, deriveSpawnDepth } from "./spawn-record-decision";
 import { decideSpawnMediaPath, type SpawnMediaType } from "./spawn-media-decision";
 import {
@@ -77,6 +84,8 @@ import {
 } from "../task-purpose";
 import { fillReportTaskId, resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { promoteReportVerdict, resolveReporterRole } from "./report-verdict-decision";
+import { decideSpawnIsolation } from "./worktree-isolation-decision";
+import { prepareIsolatedWorktree, removeIsolatedWorktree } from "./worktree-prep";
 import {
   ACBRIDGE_PROTOCOL,
   checkAcbridgeProtocol,
@@ -285,6 +294,16 @@ export type SpawnAgentResult =
   | { ok: false; error: string };
 export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error: string };
 
+/** 2026-09-19 — recusa do `create_task` quando nenhum board resolve: mesma
+ * classe da recusa de `provider não declarado` no `spawn_agent`. Uma task
+ * sem board nasce fora da Fila (que é indexada por board) e não tem
+ * `delete_task` — tasks são imortais por design, então o erro é
+ * irreversível. Medido: 23 tasks numa única sessão de orquestração, todas
+ * criadas a partir de um card que ESTAVA num board (o contexto existia e
+ * não era lido). Exportado pra teste e pra Fila ler o motivo sem copiar. */
+export const TASK_BOARD_UNDECLARED_REASON =
+  "board não resolvido: sem boardId, sem cardId e sem um card chamador em board (requesterId), a task nasceria fora da Fila e não existe delete_task — passe boardId, ou um cardId/requesterId cujo board exista";
+
 export type BusRequest =
   | { cmd: "list" }
   | { cmd: "send"; target?: string; text?: string; requesterId?: string; steer?: boolean }
@@ -377,6 +396,12 @@ export type BusRequest =
       prompt?: string;
       provider?: string;
       cardId?: string;
+      /** Board resolution order (2026-09-19): this explicit value, else the
+       * `cardId`'s board, else the CALLER card's board (`requesterId`) —
+       * context that existed all along and was never read here. Resolvendo
+       * nada, a criação é RECUSADA (`TASK_BOARD_UNDECLARED_REASON`): a task
+       * nasceria fora da Fila e sem `delete_task` pra desfazer. Um board
+       * explícito que não existe continua recusado. */
       boardId?: string;
       /** Working directory for auto-dispatch/retry. Omit/`undefined` =
        * task carries `cwd: null` and spawn falls back to the board root
@@ -420,6 +445,14 @@ export type BusRequest =
       /** Set/clear the task's own cwd for later auto-dispatch. `null`
        * clears back to board-root fallback; omit leaves unchanged. */
       cwd?: string | null;
+      /** Repair path (2026-09-19) for a board-less task: the resolver that
+       * `create_task` refuses to leave empty can be filled in here. Só para
+       * task com `board_id` NULL e board que EXISTE — re-apontar uma task
+       * que já tem board é recusado (`board_id` é escrito uma vez; é a
+       * mesma classe de erro silencioso que este campo fecha). Omitido =
+       * não mexe. Alcançável pelo `acbridge update-task <id> <json>`, que
+       * espalha o JSON cru no request. */
+      boardId?: string;
       result?: unknown;
       incrementRetry?: boolean;
       attemptedProvider?: string;
@@ -492,6 +525,14 @@ export type BusRequest =
       cmd: "spawn_agent";
       provider?: string;
       cwd?: string;
+      /** "worktree" = nasce numa git worktree descartável do repo em `cwd`
+       * (ou do cwd do card chamador), não na árvore compartilhada. A
+       * worktree só tem o que o git rastreia; os caminhos que o
+       * `.gitignore` esconde e o projeto precisa para rodar são declarados
+       * por ele em `.stellar/worktree.json` (lido do checkout de origem) e
+       * copiados — ver `worktree-isolation-decision.ts`. Omitido = árvore
+       * compartilhada, como sempre. Valor desconhecido é RECUSADO. */
+      isolation?: string;
       resumeId?: string;
       requesterId?: string;
       reason?: string;
@@ -1239,6 +1280,94 @@ export function createMessageBus(
     return deriveTaskStatus(row.status, hasLiveImplementer);
   }
 
+  /**
+   * FATOS (não decisão) para `decideCloseCardTaskEffect`: toda task ABERTA
+   * a que este card está ligado — pela `task_cards` E por `tasks.card_id`
+   * (os dois existem: medido, há task com card_id e sem nenhuma linha em
+   * `task_cards`, uma das 7 órfãs). Task já julgada (`done`/`failed`) fica
+   * de fora: não há mais nada a proteger.
+   */
+  function collectCloseCardLinkedTasks(targetCardId: string, requesterId: string): CloseCardLinkedTask[] {
+    const taskIds = new Set<string>();
+    for (const link of callbacks.listTaskCardsForCard(targetCardId) ?? []) taskIds.add(link.task_id);
+    for (const t of callbacks.listTasks()) if (t.card_id === targetCardId) taskIds.add(t.id);
+
+    const linked: CloseCardLinkedTask[] = [];
+    for (const taskId of taskIds) {
+      const task = callbacks.getTask(taskId);
+      if (!task || isJudgmentStatus(task.status)) continue;
+      const cards = task.cards ?? callbacks.getTaskCards(taskId) ?? [];
+      linked.push({
+        taskId,
+        targetCardId,
+        reviewWanted: isReviewWanted(task.review),
+        // `null` num card que É o principal é implementer de fato (é o que
+        // `tasks.card_id` significa) — sem isso, um dos 7 órfãos passaria
+        // como "papel desconhecido".
+        targetRole:
+          roleOnTask(cards, targetCardId) ?? (task.card_id === targetCardId ? TASK_CARD_IMPLEMENTER_ROLE : null),
+        requesterRoleOnTask: roleOnTask(cards, requesterId),
+        otherLiveReviewers: cards.filter(
+          (c) =>
+            c.role === TASK_CARD_REVIEWER_ROLE && c.card_id !== targetCardId && callbacks.isCardAlive(c.card_id),
+        ).length,
+        lastReportOk: lastAcceptedReportOk(targetCardId),
+        targetVerdicts: (task.verdicts ?? [])
+          .filter((v) => v.card_id === targetCardId)
+          .map((v) => ({ role: v.role, verdict: v.verdict })),
+      });
+    }
+    return linked;
+  }
+
+  /** O último report ACEITO do card declara sucesso? `undefined` quando
+   * nunca reportou ou o payload não é objeto — nunca "true por ausência". */
+  function lastAcceptedReportOk(cardId: string): boolean {
+    const row = callbacks.getReport(cardId);
+    if (!row) return false;
+    try {
+      const parsed: unknown = JSON.parse(row.report_json);
+      return (
+        parsed !== null &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        (parsed as { ok?: unknown }).ok === true
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Conclui a task como PARTE do fechamento do card — a operação única
+   * pedida ("fechar card + fechar task"). A escrita é a mesma que
+   * `update_task status=done` faria e passa pelo MESMO funil
+   * (`callbacks.upsertTask` é o `persistTask` de task-write-funnel.ts), então
+   * dependentes desbloqueiam pelo caminho de sempre e a precedência humana
+   * continua sendo decidida no store. Um store que RETÉM a escrita (humano
+   * mexeu por último) devolve `warning`: o card fecha, a task fica aberta, e
+   * o motivo volta tipado em vez de virar silêncio — o mesmo contrato que
+   * `update_task` já usa.
+   */
+  function concludeTaskOnCardClose(taskId: string, requesterId: string): { ok: boolean; warning?: string } {
+    const task = callbacks.getTask(taskId);
+    if (!task) return { ok: false };
+    const boardId = task.board_id ?? callbacks.getCardBoardId(requesterId);
+    const orchestratorId = boardId ? callbacks.getBoardOrchestratorCardId(boardId) : null;
+    const decision = callbacks.upsertTask({
+      ...task,
+      status: "done",
+      updated_at: Date.now(),
+      actor: orchestratorId && orchestratorId === requesterId ? "orchestrator" : "agent",
+      actorCardId: requesterId || null,
+      statusProposed: true,
+    });
+    if (decision.warnAgent) {
+      return { ok: false, warning: describeStatusHeldWarning(decision.status, decision.declaredStatus ?? "done") };
+    }
+    return { ok: decision.status === "done" };
+  }
+
   function linkImplementerToTask(
     task: TaskRow,
     cardId: string,
@@ -1266,6 +1395,47 @@ export function createMessageBus(
       statusProposed: true,
       applyStatusDespiteHold: reopeningFailed,
     });
+  }
+
+  /**
+   * Gate runner (2026-09-19) — o APP roda os gates declarados da task e
+   * carimba a evidência MEDIDA (stdout/stderr/exit-code reais) em
+   * `result_json.gateRun`. O número deixa de vir do agente: um
+   * implementador reportou "373 passed, 1 failed" e o revisor reproduziu
+   * 371 com 2-3 falhas — divergência invisível atrás de uma flake.
+   *
+   * Disparo fire-and-forget a partir do `report` ACEITO: o relatório
+   * responde agora; a suíte roda em subprocesso isolado, serializada pelo
+   * lock por repositório (`gate-runner.ts`), e a evidência aparece no
+   * próximo `get_task`/`list_tasks` (view `full`), não no retorno imediato.
+   *
+   * Um gate que FALHA não muda status nem veredito — o app registra o que
+   * mediu e a decisão continua humana/revisora (auto-`done` é decidido
+   * contra, DESIGN-BACKLOG). Sem `cwd` ou sem gates declarados: nada roda,
+   * nada é inventado. Se a task sumir antes do fim, a evidência é
+   * descartada com ela — não há onde carimbar.
+   */
+  function startTaskGates(task: TaskRow | undefined): void {
+    if (!task) return;
+    const gates = contractFromTaskRow(task).gates;
+    if (!gates || gates.length === 0) return;
+    if (!task.cwd) return;
+    void runTaskGates({ taskId: task.id, cwd: task.cwd, gates })
+      .then((evidence) => {
+        const latest = callbacks.getTask(task.id);
+        if (!latest) return;
+        callbacks.upsertTask({
+          ...latest,
+          result_json: stampGateEvidenceJson(latest.result_json, evidence),
+          updated_at: Date.now(),
+          actor: "app",
+          statusProposed: false,
+        });
+      })
+      .catch(() => {
+        // Nem chegou a executar (erro de resolução/spawn fora do
+        // subprocesso): isso não é evidência de gate nenhum. Não carimba.
+      });
   }
 
   // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 3 — the
@@ -2342,6 +2512,21 @@ export function createMessageBus(
       if (!callbacks.listCards().some((c) => c.id === target)) return { ok: false, error: `no open card with id "${target}"` };
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
+      // CAMADA 4, TERCEIRA PORTA (2026-09-19) — fechar um card era a única
+      // porta que ninguém vigiava, e a mais irreversível: o card morre, o
+      // link morre com ele, e a task ficava aberta sem ninguém. MEDIDO no
+      // banco real: 38 tasks abertas, 28 já sem card principal, 7 delas com
+      // review="wanted" e ZERO reviewer (os 7 órfãos). A regra é pura
+      // (`decideCloseCardTaskEffect`) e roda ANTES do pedido de
+      // consentimento — pedir a um humano para fechar algo que vai ser
+      // recusado seria pior que recusar. Ver o módulo puro pra medição que
+      // escolheu recusar vs auto-fechar.
+      const conclusions: string[] = [];
+      for (const linked of collectCloseCardLinkedTasks(target, requesterId)) {
+        const effect = decideCloseCardTaskEffect(linked);
+        if (effect.action === "refuse") return { ok: false, error: effect.error };
+        if (effect.action === "conclude-task") conclusions.push(effect.taskId);
+      }
       const requesterBoardId = callbacks.getCardBoardId(requesterId);
       const autonomous = requesterBoardId ? callbacks.isBoardAutonomous(requesterBoardId) : false;
       markWaiting(requesterId);
@@ -2356,7 +2541,24 @@ export function createMessageBus(
             clearTimeout(timer);
             pendingCloseCards.delete(requestId);
             unmarkWaiting(requesterId);
-            resolve(allowed ? { ok: true } : { ok: false, error: "denied by user" });
+            if (!allowed) {
+              resolve({ ok: false, error: "denied by user" });
+              return;
+            }
+            // A conclusão só é aplicada DEPOIS do consentimento: um close
+            // negado não pode concluir task nenhuma.
+            const concludedTasks: string[] = [];
+            const warnings: string[] = [];
+            for (const taskId of conclusions) {
+              const result = concludeTaskOnCardClose(taskId, requesterId);
+              if (result.warning) warnings.push(result.warning);
+              else if (result.ok) concludedTasks.push(taskId);
+            }
+            resolve({
+              ok: true,
+              ...(concludedTasks.length > 0 ? { concludedTasks } : {}),
+              ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
+            });
           },
           timer,
         });
@@ -2623,6 +2825,73 @@ export function createMessageBus(
       if (decision.action === "structural") {
         return { ok: false, error: decision.error, field: decision.field };
       }
+      // Requester identity and the task this report is ABOUT are resolved
+      // here, above the retryable branch, because the verdict gate below
+      // must be able to refuse BEFORE any state changes. Both reads are
+      // pure store reads (no mutation), so moving them up changes nothing
+      // for any path that already ran — the retryable branch itself
+      // requires a `linkedTask`, which requires a requesterId, so no
+      // request that used to reach it can now stop at the guard.
+      if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
+      const taskCardLinks = callbacks.listTaskCardsForCard(req.requesterId) ?? [];
+      const linkTaskIds = taskCardLinks.map((l) => l.task_id);
+      const reportTaskId = resolveDeclaredTaskId({
+        primaryTaskIds: linkedTask ? [linkedTask.id] : [],
+        linkTaskIds,
+      });
+      // CAMADA 4, SEGUNDA PORTA — o choke point DE VERDADE (2026-09-19).
+      //
+      // Um `verdict` no payload é julgamento escrito sem `update_task`, e
+      // `decideReportVerdictWrite` é a MESMA função pura que o handler MCP
+      // consulta — chamada de um segundo lugar, nunca copiada. O handler
+      // MCP é só uma das portas: `acbridge report` vai direto por unix
+      // socket até AQUI e nunca passa por lá, então a regra só valia para
+      // metade dos autores de veredito (medido: o card implementer mandava
+      // `aprovado` e o reviewer reprovava tudo — pelo caminho do acbridge
+      // ele nem era barrado).
+      //
+      // Os FATOS vêm dos VÍNCULOS VIVOS (`taskCardLinks`), não do dump
+      // histórico por task nem de `tasks.card_id`. O motivo é medido e é o
+      // mesmo que o resto deste handler já protege: `tasks.card_id` (e
+      // portanto o `reportTaskId` acima, que o prefere) SOBREVIVE ao
+      // delete/recycle do card, então ele pode apontar para uma task MORTA.
+      // Ler o papel por lá fazia o gate julgar o veredito de hoje com o papel
+      // de ontem — um reviewer legítimo era recusado por um vínculo velho de
+      // implementer numa task done (achado ao estender
+      // card-id-recycle-participation). `taskCardLinks` é justamente a lista
+      // epoch-filtrada (`linked_at >= cards.created_at`) que a linha
+      // `reporterRole` logo abaixo usa para carimbar: gate e carimbo passam a
+      // olhar a MESMA verdade, "quem este card é, agora". Quando o
+      // `reportTaskId` não é um vínculo vivo, cai no único vínculo vivo (mesma
+      // postura de `resolveDeclaredTaskId`: um só é inequívoco, dois são
+      // desconhecido — nunca um palpite).
+      //
+      // A evidência julgada é `req.report` (o payload COMO O CHAMADOR
+      // mandou), não o `filled`: `fillReportTaskId` roda depois e carimba
+      // `taskId` por conta do servidor — deixar esse carimbo satisfazer uma
+      // chave declarada no `reportSchema` seria o próprio furo que este
+      // gate existe para fechar (uma chave preenchida por nós não é
+      // evidência de quem julgou). A checagem estrutural de schema acima
+      // também usa o payload pré-carimbo, pela mesma razão.
+      //
+      // Sem veredito não há leitura nenhuma: report comum segue como
+      // sempre. Recusa acontece ANTES do `upsertReport` e antes de subir
+      // `retry_count` — como na porta MCP, que barra antes de chamar o bus.
+      const formalVerdict = promoteReportVerdict(req.report, req.verdict).verdict;
+      if (formalVerdict) {
+        const liveLink =
+          taskCardLinks.find((l) => l.task_id === reportTaskId) ??
+          (taskCardLinks.length === 1 ? taskCardLinks[0] : undefined);
+        const gateTask = liveLink ? callbacks.getTask(liveLink.task_id) : undefined;
+        const gate = decideReportVerdictWrite({
+          verdict: formalVerdict,
+          requesterRoleOnTask: liveLink ? liveLink.role : null,
+          reviewWanted: isReviewWanted(gateTask?.review ?? null),
+          report: req.report,
+          reportSchema: gateTask ? contractFromTaskRow(gateTask).reportSchema : null,
+        });
+        if (gate.action === "refuse") return { ok: false, error: gate.error };
+      }
       if (decision.action === "refuse_retryable") {
         // In-line retry: same session, same card. Increment + stash the
         // declared reason on the task (not a report row, not a status).
@@ -2644,19 +2913,12 @@ export function createMessageBus(
           retriesRemaining: decision.retriesRemaining,
         };
       }
-      if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
       // Stamp the linked task onto the report body when the caller omitted
       // it — same auto-fill class as acbridge's AGENT_CANVAS_TASK_ID, from
       // the store fact (tasks.card_id / task_cards) so MCP callers that
       // never read env still don't copy a truncated id from a briefing.
       // Acceptance already ran on the original payload; this does not
       // invent a task when the card is not linked.
-      const taskCardLinks = callbacks.listTaskCardsForCard(req.requesterId) ?? [];
-      const linkTaskIds = taskCardLinks.map((l) => l.task_id);
-      const reportTaskId = resolveDeclaredTaskId({
-        primaryTaskIds: linkedTask ? [linkedTask.id] : [],
-        linkTaskIds,
-      });
       const filled = fillReportTaskId(req.report, reportTaskId);
       // acbridge `report <json>` has no separate flag — a formal
       // `verdict` inside that JSON is the typed column. Lift it off
@@ -2675,8 +2937,17 @@ export function createMessageBus(
       // live links with different roles: unknown is a fact to record, not
       // a value to guess — never `implementer` by default. The completion
       // proposal (task-board-model.ts) only trusts an `aprovado` whose
-      // role is `reviewer`; an implementer's verdict is still stored
-      // (honest: "the implementer thinks it is done").
+      // role is `reviewer`.
+      //
+      // 2026-09-19: um veredito de implementer normalmente NÃO chega mais
+      // aqui — o gate do veredito, acima, já recusou. As duas checagens não
+      // são a mesma, de propósito: o gate pergunta "papel na task DE QUE
+      // este report fala" (`getTaskCards(reportTaskId)`), enquanto esta
+      // linha grava o papel VIVO do card entre todos os vínculos
+      // (`resolveReporterRole`). Elas só divergem nos casos ambíguos/sem
+      // task que o gate deliberadamente deixa passar (desconhecido é um
+      // fato, não um palpite) — e quando divergem, a linha continua
+      // dizendo honestamente quem escreveu.
       const reporterRole = resolveReporterRole(taskCardLinks);
       const stored: StoredReport = { report, seq: ++reportSeqCounter, verdict: promoted.verdict ?? null, role: reporterRole };
       // DESIGN-BACKLOG.md §2.1 — persiste ANTES de resolver waiters/avisar
@@ -2742,6 +3013,11 @@ export function createMessageBus(
           });
         }
       }
+      // Gate runner — um report ACEITO (sucesso declarado) de uma task com
+      // gates declarados dispara a execução MEDIDA pelo app, em vez de o
+      // orquestrador confiar no número que o agente digitou. `accept_failure`
+      // fica de fora por definição: o agente já declarou que NÃO entregou.
+      if (decision.action === "accept") startTaskGates(runningTask);
       return { ok: true, seq: stored.seq };
     }
 
@@ -2792,20 +3068,23 @@ export function createMessageBus(
       const id = randomUUID();
       // DESIGN-BACKLOG.md item 60, peça 3 — explicit `boardId` wins (the
       // only way to scope a task that has no `cardId` yet, e.g. one
-      // meant to sit `pending` until its deps finish); falls back to the
-      // `cardId`'s own board when only that's given. `null` when
-      // neither is passed — that task is never a candidate for
-      // auto-dispatch, pure external-orchestrator bookkeeping as before
-      // this column existed.
-      const boardId = req.boardId ?? (req.cardId ? (callbacks.getCardBoardId(req.cardId) ?? null) : null);
-      // RODADA 4 — recusa em vez de gravar em silêncio. Só valida quando
-      // `boardId` acabou não-null: um board inferido de `cardId` que já
-      // não resolveu a card nenhum (card fechado, board dele já
-      // deletado) já cai em `null` pela linha acima, então chega aqui
-      // como bookkeeping puro de propósito, nunca precisando de board
-      // nenhum — não é o caso que este check existe pra pegar.
+      // meant to sit `pending` until its deps finish); then the `cardId`'s
+      // own board; then the CALLER's own card (`requesterId`) — context
+      // that existed all along and this handler never read. 2026-09-19:
+      // an agent created 23 board-less tasks in one session, every one of
+      // them from a calling card that WAS on a board. Empty/whitespace
+      // `boardId` collapses to absent, same convention as `cwd`.
+      const explicitBoardId =
+        typeof req.boardId === "string" && req.boardId.trim().length > 0 ? req.boardId.trim() : undefined;
+      const boardId =
+        explicitBoardId ??
+        (req.cardId ? callbacks.getCardBoardId(req.cardId) : undefined) ??
+        (req.requesterId ? callbacks.getCardBoardId(req.requesterId) : undefined) ??
+        null;
+      // RODADA 4 — recusa em vez de gravar em silêncio: um `boardId` que não
+      // resolve a nenhum board é erro do chamador, não bookkeeping.
       if (boardId !== null && !callbacks.boardExists(boardId)) {
-        return { ok: false, error: `no such board "${boardId}" — check list_tasks/the board list before retrying, or omit boardId for a bookkeeping-only task` };
+        return { ok: false, error: `no such board "${boardId}" — check the board list and pass an existing boardId, a cardId on a live board, or call from the card on the board you want (requesterId)` };
       }
       // `purpose` is write-once (the store's ON CONFLICT omits it), so
       // this is the ONLY place a value can enter — which is exactly why
@@ -2835,6 +3114,18 @@ export function createMessageBus(
       });
       if (!contractParse.ok) {
         return { ok: false, error: contractParse.error, field: contractParse.field };
+      }
+      // 2026-09-19 — nenhum board resolvido: RECUSA, nunca grava em
+      // silêncio. A Fila é indexada por board, `board_id` NULL só é
+      // reatribuído quando um board é DELETADO (store), e não existe
+      // `delete_task` (tasks são imortais por design) — a task órfã fica
+      // invisível e presa pra sempre. Mesma classe da recusa de `provider
+      // não declarado`: recusa explícita, com o caminho de conserto no
+      // texto. Depois das validações de valor acima, de propósito: um
+      // `purpose`/`review` inválido continua sendo o erro reportado (é o
+      // dado que o chamador mandou, não a ausência de board).
+      if (boardId === null) {
+        return { ok: false, error: TASK_BOARD_UNDECLARED_REASON };
       }
       const created: TaskRow = {
         id,
@@ -2938,7 +3229,16 @@ export function createMessageBus(
       // derived by the app, never accepted from an agent's `result`.
       // Strip forged kinds; keep any server stamp already on the row.
       let result_json =
-        req.result !== undefined ? mergeAgentResultJson(req.result, existing.result_json) : existing.result_json;
+        req.result !== undefined
+          ? mergeAgentResultJson(stripAgentGateEvidence(req.result), existing.result_json)
+          : existing.result_json;
+      // 2026-09-19 — mesma classe do `failureKind` logo acima, para a
+      // evidência de GATE: `mergeAgentResultJson` reconstrói o objeto a
+      // partir do payload do agente e só preserva `failureKind`, então um
+      // `update_task.result` posterior APAGAVA o `gateRun` que o app mediu
+      // (contrariando o "nem forjar nem apagar" do gate-runner). Testado em
+      // tests/unit/message-bus-gate-evidence.test.ts.
+      result_json = carryGateEvidence(existing.result_json, result_json) ?? result_json;
       // Explicit agent fail is julgada (stays in "falhou", counts in sprint).
       if (statusProposed && req.status === "failed") {
         result_json = stampFailureKindJson(result_json, decideFailureKind("explicit_failed"));
@@ -3001,11 +3301,30 @@ export function createMessageBus(
         const orchId = taskBoardId ? callbacks.getBoardOrchestratorCardId(taskBoardId) : null;
         if (orchId && orchId === req.requesterId) writeActor = "orchestrator";
       }
+      // CAMINHO DE CONSERTO (2026-09-19) — a task órfã que `create_task`
+      // deixou de produzir existe no banco (23 nesta sessão), invisível na
+      // Fila e sem `delete_task`. Aqui ela é pendurada num board de verdade.
+      // `board_id` é escrito UMA vez: re-apontar uma task que já tem board
+      // é recusado (seria a re-derivação silenciosa que a coluna evita);
+      // este caminho só preenche o NULL. Board inexistente recusa, não
+      // grava lixo — mesma classe do check do `create_task`.
+      let board_id = existing.board_id;
+      if (req.boardId !== undefined) {
+        const requested = req.boardId.trim();
+        if (existing.board_id !== null) {
+          return { ok: false, error: `task "${req.taskId}" already belongs to board "${existing.board_id}" — board_id is written once; refusing to re-point it (create a task on the other board instead)` };
+        }
+        if (requested.length === 0 || !callbacks.boardExists(requested)) {
+          return { ok: false, error: `no such board "${requested}"` };
+        }
+        board_id = requested;
+      }
       const updated: TaskRow = {
         ...existing,
         prompt,
         status: statusProposed ? req.status! : existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
+        board_id,
         cwd: req.cwd !== undefined ? (resolveTaskDispatchCwd(req.cwd) ?? null) : existing.cwd,
         review,
         territory_json,
@@ -3434,6 +3753,15 @@ export function createMessageBus(
           error: `role must be one of ${TASK_CARD_ROLES.map((r) => `"${r}"`).join(", ")} (or omitted for implementer), got "${String(req.role)}" — refusing to spawn rather than silently substituting a role`,
         };
       }
+      // isolation (2026-09-19) — `worktree` = o card nasce numa worktree
+      // descartável do projeto, nunca na árvore compartilhada (AGENTS.md
+      // §3.5). Puro e sem efeito; o preparo (git + cópia do declarado) roda
+      // mais abaixo, depois do teto de profundidade. Valor desconhecido é
+      // RECUSADO: um `isolation` não honrado deixaria o card na árvore
+      // compartilhada achando que está isolado.
+      const isolationDecision = decideSpawnIsolation(req.isolation);
+      if (!isolationDecision.ok) return { ok: false, error: isolationDecision.error };
+      const isolation = isolationDecision.isolation;
       // taskId vs brief is resolved here, before depth is spent and
       // before dispatch — a missing task or an ambiguous pair must not
       // open a mute card. The delivered text then goes through
@@ -3459,6 +3787,28 @@ export function createMessageBus(
         return { ok: false, error: `spawn depth limit reached (max ${MAX_SPAWN_DEPTH}) — refusing to spawn another agent` };
       }
       const depth = requesterDepth + 1;
+      // isolation:"worktree" — a worktree é criada AQUI, antes do dispatch,
+      // porque o renderer cria o card com o cwd que chega neste ponto. O
+      // checkout de origem é o cwd do request, ou o do card chamador; sem
+      // nenhum dos dois, RECUSA em vez de adivinhar. Recusa/expiração do
+      // consentimento faz rollback (ver `spawnResult` abaixo).
+      let worktree: { path: string; sourceRoot: string } | undefined;
+      if (isolation === "worktree") {
+        const requesterCwd = requesterId ? callbacks.listCards().find((c) => c.id === requesterId)?.cwd : undefined;
+        const prep = await prepareIsolatedWorktree({
+          sourceCwd: (req.cwd ?? "").trim() || (requesterCwd ?? "").trim(),
+        });
+        if (!prep.ok) return { ok: false, error: prep.error };
+        worktree = { path: prep.path, sourceRoot: prep.sourceRoot };
+        // Declarado e ausente é dado, não falha — mas VISÍVEL: uma worktree
+        // sem `.env` pode falhar um gate por um motivo que o card sozinho
+        // não consegue ver.
+        if (prep.missing.length > 0) {
+          console.error(
+            `worktree isolation: declared paths absent in ${prep.sourceRoot}: ${prep.missing.join(", ")}`,
+          );
+        }
+      }
       // DESIGN-BACKLOG.md item 59 — the ONE place `autoApprove` can ever
       // become true: the requester's own board opted in via the human-
       // only UI toggle. No MCP/acbridge cmd reaches this flag.
@@ -3478,7 +3828,9 @@ export function createMessageBus(
       });
       const spawnParams = {
         provider: req.provider as string,
-        cwd: req.cwd,
+        // The worktree path wins when isolation ran — the renderer creates
+        // the card with THIS cwd, and the PTY is spawned there.
+        cwd: worktree?.path ?? req.cwd,
         resumeId: req.resumeId,
         depth,
         reason: reasonDecision.reason ?? undefined,
@@ -3493,6 +3845,12 @@ export function createMessageBus(
         autonomous && requesterBoardId
           ? await autonomousSpawn(requesterBoardId, requestId, requesterId, spawnParams)
           : await dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
+      // Consent refused/didn't arrive, or the card creation itself failed:
+      // NO card will ever run in this worktree, so it must not survive. A
+      // successful spawn keeps it (the card's own cwd points at it).
+      if (!spawnResult.ok && worktree) {
+        void removeIsolatedWorktree(worktree);
+      }
       if (spawnResult.ok) {
         cardSpawnDepth.set(spawnResult.cardId, depth);
         // Spawn registry — derived fields only; reason already decided.
@@ -3512,7 +3870,9 @@ export function createMessageBus(
               taskId: briefDecision.taskId ?? null,
               provider: req.provider,
               cardKind: "terminal",
-              cwd: req.cwd ?? null,
+              // The EFFECTIVE cwd — a worktree path when isolation ran, not
+              // the source repo the request named.
+              cwd: spawnParams.cwd ?? null,
               origin: reasonDecision.origin,
             });
           } catch (e) {
@@ -4059,6 +4419,32 @@ export function createMessageBus(
     });
   }
 
+  /** Regra (b), 2026-09-19 — a task that ALREADY has a live card linked
+   * must not be auto-dispatched a second time. The engine only ever looked
+   * at `tasks.card_id`: a card the orchestrator spawned and linked through
+   * `task_cards` (the role row, `card_id` untouched) was invisible to it,
+   * so a dep closing opened another card on a task someone was already
+   * implementing — measured: two phantom cards in one day, one of them
+   * already working when it was noticed.
+   *
+   * "Live link" is the store's own criterion (`linked_at >= cards.created_at`,
+   * the epoch `listTaskCardsForCard` already reads for the report-role
+   * stamp), consulted through that same callback instead of a second
+   * timestamp comparison here — one definition of live link, not two.
+   * Recycling a dead card's id keeps the old `linked_at` and falls out;
+   * the alive check on top covers a link whose card exited (rows survive
+   * the close by design, `TaskCardRow`). The `task.card_id` check in
+   * `dispatchIfUnblocked` stays: measured, there are tasks with a
+   * principal card and NO `task_cards` row at all. */
+  function hasLiveLinkedCard(task: TaskRow): boolean {
+    const links = callbacks.getTaskCards(task.id) ?? task.cards ?? [];
+    return links.some(
+      (link) =>
+        callbacks.isCardAlive(link.card_id) &&
+        (callbacks.listTaskCardsForCard(link.card_id) ?? []).some((l) => l.task_id === task.id),
+    );
+  }
+
   /** Called by the write funnel (index.ts → task-write-funnel.ts) — the
    * ONE place that observes a task's status actually changing to `done`,
    * whatever wrote it: `update_task` from an agent, the approve button, a
@@ -4091,13 +4477,20 @@ export function createMessageBus(
   function dispatchIfUnblocked(task: TaskRow, allTasks: TaskRow[]): boolean {
     if (isJudgmentStatus(task.status) || task.status !== "pending" || !task.board_id) return false;
     if (task.card_id && callbacks.isCardAlive(task.card_id)) return false;
+    // Regra (b) — a live card linked only through `task_cards` (no
+    // `card_id` on the task) is just as much "someone is already on this".
+    if (hasLiveLinkedCard(task)) return false;
     if (dispatchingTaskIds.has(task.id)) return false;
     const deps: string[] = task.deps_json ? JSON.parse(task.deps_json) : [];
     if (deps.length === 0) return false;
     if (!callbacks.isBoardAutonomous(task.board_id)) return false;
     const allDone = deps.every((depId) => allTasks.find((t) => t.id === depId)?.status === "done");
     if (!allDone) return false;
-    const lastActor = lastStatusActorFromRow(callbacks.getTask(task.id) ?? task);
+    // The authoritative row, not the caller's snapshot: `onTaskDone` builds
+    // its list once and a concurrent write (the `update_task` that declares
+    // the cwd, a status ask) can land after that.
+    const latest = callbacks.getTask(task.id) ?? task;
+    const lastActor = lastStatusActorFromRow(latest);
     if (lastActor === "human" || lastActor === "orchestrator") return false;
     if (
       (task.diverged_actor === "human" || task.diverged_actor === "orchestrator") &&
@@ -4106,14 +4499,22 @@ export function createMessageBus(
       return false;
     }
 
-    const providerDecision = decideTaskDispatchProvider(task.provider);
+    const providerDecision = decideTaskDispatchProvider(latest.provider);
     if (providerDecision.action === "refuse") {
-      recordDispatchRefusal(task, providerDecision.reason);
+      recordDispatchRefusal(latest, providerDecision.reason);
       return false;
     }
-    const cwdDecision = decideTaskDispatchCwd(task.cwd, ancestorCwdNodes(deps, allTasks), deps);
+    // Regra (a) — `latest.cwd`, nunca a raiz do board em silêncio. The
+    // declared cwd is read from the authoritative row above: a task whose
+    // cwd was declared by an `update_task` that landed after the snapshot
+    // reached here with `cwd: null`, `decideTaskDispatchCwd` returned
+    // `undefined`, and the renderer's `cwd || activeBoardCwd` then opened
+    // the card at the board root with nothing on the task saying so. A task
+    // with no cwd anywhere still falls back to the board root — that
+    // fallback is declared (task-dispatch-decision.ts), not silent.
+    const cwdDecision = decideTaskDispatchCwd(latest.cwd, ancestorCwdNodes(deps, allTasks), deps);
     if (cwdDecision.action === "refuse") {
-      recordDispatchRefusal(task, cwdDecision.reason);
+      recordDispatchRefusal(latest, cwdDecision.reason);
       return false;
     }
 

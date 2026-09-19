@@ -1,0 +1,354 @@
+/* GlobalComposer — barra de input global do board (destino + texto + voz).
+   Docks fora da viewport por padrão; hover na alça (ou foco/texto/gravação)
+   puxa ela pra dentro. Motion na mesma linguagem de animations.css:
+   durações curtas (0.16–0.24s), ease-out, respeita prefers-reduced-motion.
+
+   Formato reaproveitado do `.rail` (mesmo painel/borda/sombra) — raio
+   grande fixo em vez de pill total (999px vira elipse feia assim que o
+   textarea cresce pra 2+ linhas; um raio grande e fixo lê "bem arredondado"
+   em qualquer altura, igual ao composer de referência). */
+
+.wrap {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translate(-50%, calc(100% - 34px));
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 0.22s ease-out;
+}
+
+.wrap.revealed {
+  transform: translate(-50%, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wrap {
+    transition: none;
+  }
+}
+
+.handle {
+  width: 64px;
+  height: 22px;
+  border-radius: 8px 8px 0 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-card);
+  font-family: var(--font-ui);
+  width: 460px;
+  /* Rolar dentro do textarea não pode também dar zoom no canvas por trás —
+     o board escuta wheel na window inteira; sem isso, corrigido no
+     onWheel do textarea (JS, não CSS), então isto é só documentação. */
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.targetBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 140px;
+  flex-shrink: 0;
+}
+
+.targetBtn:hover {
+  border-color: var(--foam);
+}
+
+.targetLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.targetList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.targetRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.targetRow:hover,
+.targetRow.active {
+  background: var(--surface);
+}
+
+.targetEmpty {
+  padding: 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* "+" à esquerda da textarea (referência ChatGPT) — a barra vira uma linha
+   [anexar][texto]; a toolbar (destino/status/voz/enviar) segue embaixo. */
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.textarea {
+  resize: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  line-height: 1.45;
+  padding: 4px 6px;
+  max-height: 220px;
+  min-height: 22px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Exceção deliberada ao anel global de `:focus-visible` (styles/focus.css) —
+   mesmo padrão de `.sticky-textarea` e do textarea do chat: um campo de
+   texto que ocupa a barra inteira não precisa de contorno próprio. A regra
+   base `.textarea { outline: none }` acima EMPATA em especificidade com a
+   global e perde na ordem da cascata; o par `:focus`/`:focus-visible` sobe a
+   especificidade e vence. `focus.css` NÃO é tocado — a exceção é sempre
+   local, como o próprio comentário daquela regra documenta. */
+.textarea:focus,
+.textarea:focus-visible {
+  outline: none;
+}
+
+.textarea::placeholder {
+  color: var(--muted);
+}
+
+/* Tira de miniaturas — acima da toolbar, no estilo do composer do ChatGPT.
+   Escopada aqui (e não reusando as globais `chat-attachment-*` de cards.css)
+   porque aquelas são calibradas pro rodapé COM borda do card de chat
+   (`padding: 8px 10px 0`), e o composer precisa de outra cadência dentro da
+   própria barra; escopar evita acoplar o layout de um componente às classes
+   do outro. A aparência (44px, canto 6px, "x" no canto) é a mesma. */
+.attachStrip {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 2px 6px;
+}
+
+.attachThumb {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  flex: none;
+}
+
+.attachThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.attachRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.iconBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.iconBtn:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.iconBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.iconBtn.recording {
+  color: var(--danger);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes mic-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(239, 107, 107, 0.45);
+    }
+    100% {
+      box-shadow: 0 0 0 9px rgba(239, 107, 107, 0);
+    }
+  }
+
+  .iconBtn.recording::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    animation: mic-pulse 1.1s ease-out infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .spin {
+    display: inline-flex;
+    animation: spin 0.7s linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    display: inline-flex;
+  }
+}
+
+.sendBtn {
+  background: var(--foam);
+  color: var(--on-accent);
+}
+
+.sendBtn:disabled {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.sendBtn:hover:not(:disabled) {
+  background: var(--foam);
+  filter: brightness(1.08);
+}
+
+/* Pílula de status — INLINE na barra de ferramentas, não flutuando acima
+   dela (era o que a lia "fica pra sempre solta na tela" quando não some).
+   Clicável pra dispensar na hora; além disso soma sozinha depois de um
+   tempo (ver STATUS_TTL_MS no componente). */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes status-in {
+    from {
+      opacity: 0;
+      transform: translateY(2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .status {
+    animation: status-in 0.14s ease-out;
+  }
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.status.sending {
+  color: var(--foam);
+}
+
+.status.delivered {
+  color: var(--good);
+}
+
+.status.parked,
+.status.unconfirmed {
+  color: var(--warn);
+}
+
+.status.failed {
+  color: var(--danger);
+}

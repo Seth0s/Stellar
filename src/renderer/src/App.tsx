@@ -26,6 +26,7 @@ import { loadShortcutOverrides, saveShortcutOverrides, setShortcutOverride, clea
 import { t, setLocale, getLocale, type Locale } from "../../shared/i18n";
 import { isAnyModalOpen } from "./modal-scope";
 import { RadialMenu, type RadialAction } from "./RadialMenu";
+import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { Rail } from "./Rail";
 import { Compass } from "./Compass";
 import { Topbar } from "./Topbar";
@@ -223,7 +224,30 @@ function rootDisplayName(root: string): string {
       .pop() || "Projects"
   );
 }
-const PROVIDER_OPTIONS = ["bash", "claude", "codex", "cursor", "antigravity", "opencode"];
+/**
+ * O que a UI mostra até a PRIMEIRA resposta do canal de providers — nada
+ * mais que isso. A lista de verdade vem do main (`useAvailableAgentProviders`
+ * → `agents:check-availability` → `checkAgentAvailability()`, que lê o
+ * registro vivo: os seis nativos MAIS os CLIs dinâmicos carregados no boot,
+ * ex. cline/commandcode). Antes isto era o único valor que existia, e um
+ * provider cadastrado em runtime simplesmente não aparecia no rail nem no
+ * menu radial.
+ *
+ * `bash` está aqui e não vem do canal de propósito: o main o exclui da
+ * checagem de disponibilidade (é sempre o shell do SO, nunca "não
+ * instalado"), mas um card de shell puro continua sendo uma opção legítima
+ * de terminal — é o primeiro item porque era a ordem que a UI já mostrava.
+ */
+const PROVIDER_OPTIONS_FALLBACK = ["bash", "claude", "codex", "cursor", "antigravity", "opencode"];
+
+/** Ids oferecidos pelos pickers, na ordem da UI: shell + todo CLI de agente
+ * que esta build conhece AGORA. */
+function useProviderOptions(): string[] {
+  const available = useAvailableAgentProviders();
+  if (available.length === 0) return PROVIDER_OPTIONS_FALLBACK;
+  return ["bash", ...available.map((p) => p.id)];
+}
+
 // Achado 1 (review adversarial, 2026-09-09) — throttle window for a
 // connector label's auto-refresh (`scheduleConnectorLabelUpdate`); nobody
 // reads a pill faster than this, so coalescing every write inside one
@@ -685,6 +709,10 @@ export function App() {
   const [cards, setCards] = useState<Card[]>([]);
   const [order, setOrder] = useState<string[]>([]);
   const [newProvider, setNewProvider] = useState("bash");
+  // Ids oferecidos pelos dois pickers (rail e menu radial) — do registro vivo
+  // do main, não de uma lista literal: um CLI dinâmico (cline/commandcode,
+  // carregado no boot) aparece aqui como qualquer nativo.
+  const providerOptions = useProviderOptions();
   const [newResumeId, setNewResumeId] = useState("");
   const [newContinueLast, setNewContinueLast] = useState(false);
   const [newModel, setNewModel] = useState("");
@@ -3924,7 +3952,7 @@ export function App() {
         canUngroup={canUngroup}
         onGroup={groupSelected}
         onUngroup={ungroupSelected}
-        providers={PROVIDER_OPTIONS}
+        providers={providerOptions}
         newProvider={newProvider}
         setNewProvider={(p) => {
           // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido",
@@ -4027,7 +4055,7 @@ export function App() {
           x={radialMenu.screen.x}
           y={radialMenu.screen.y}
           tool={tool}
-          providers={PROVIDER_OPTIONS}
+          providers={providerOptions}
           onSelect={selectRadialAction}
           onClose={() => setRadialMenu(null)}
         />

@@ -28,7 +28,7 @@ export function Popover({
    * grows the popover leftward off the anchor's left edge via CSS
    * `right` (not `left`) positioning, so it never needs to measure its
    * own width to avoid overflowing off-screen. */
-  side?: "left" | "right";
+  side?: "left" | "right" | "top";
   /** PathPicker.tsx anchored from inside SessionModal — the base
    * `.popover` z-index (800) sits behind `.modal-root`'s (2000), so that
    * caller passes a class that bumps it back above. */
@@ -77,9 +77,17 @@ export function Popover({
     if (!el) return;
     const margin = 8;
     const rect = el.getBoundingClientRect();
-    const overflowBottom = rect.bottom - (window.innerHeight - margin);
-    if (overflowBottom > 0) {
-      el.style.top = `${Math.max(margin, rect.top - overflowBottom)}px`;
+    // side="top" positions via CSS `bottom` (grows upward, no explicit
+    // `top`) — nudging `top` here would set both and stretch the box
+    // instead of moving it, same class of bug the `right`/`left` guard
+    // below already avoids. Overflow risk for that mode is at the TOP of
+    // the viewport, not the bottom; left unclamped for now (anchor sits
+    // near the bottom edge in every caller so far).
+    if (!el.style.bottom) {
+      const overflowBottom = rect.bottom - (window.innerHeight - margin);
+      if (overflowBottom > 0) {
+        el.style.top = `${Math.max(margin, rect.top - overflowBottom)}px`;
+      }
     }
     // `side="left"` mode positions via CSS `right` (not `left`, see the
     // prop doc below) — nudging the wrong one would set BOTH `left` and
@@ -104,7 +112,9 @@ export function Popover({
   const style: React.CSSProperties = anchor
     ? side === "left"
       ? { top: anchor.top, right: window.innerWidth - anchor.left + gap }
-      : { top: anchor.top, left: anchor.right + gap }
+      : side === "top"
+        ? { bottom: window.innerHeight - anchor.top + gap, left: anchor.left }
+        : { top: anchor.top, left: anchor.right + gap }
     : { top: 60, left: 80 };
 
   // Every caller anchors this from inside a `position: absolute` toolbar

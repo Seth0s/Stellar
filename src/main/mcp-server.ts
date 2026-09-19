@@ -4,11 +4,84 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import * as z from "zod";
 import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus";
+import { PROVIDERS, providerById } from "./providers";
 import { resolveCallerCardId } from "./caller-identity";
 import { reachFromHunks } from "./reach-from-hunks";
 import { reachAcrossLiterals } from "./reach-across-literals";
+import { suggestQAScope } from "./suggest-qa-scope";
 import { decodeReportArgument } from "./report-retry-decision";
-import { TASK_CARD_ROLES, TASK_PURPOSES, TASK_REVIEW_VALUES } from "../task-purpose";
+import { promoteReportVerdict } from "./report-verdict-decision";
+import { decideReportVerdictWrite } from "./judgment-write-decision";
+import { TASK_CARD_IMPLEMENTER_ROLE, TASK_CARD_ROLES, TASK_PURPOSES, TASK_REVIEW_VALUES, isReviewWanted } from "../task-purpose";
+
+/**
+ * CAMADA 4, segunda porta — fatos que `decideReportVerdictWrite` precisa e
+ * o handler MCP não tem. O servidor sabe QUEM chamou (carimbo da URL); em
+ * que task, com que papel e com que contrato vive no store, e chega aqui
+ * pelos mesmos cmds de leitura que um agente usaria — nenhum atalho novo.
+ *
+ * Duas rotas, uma leitura cada:
+ * - `taskId` declarado no payload (a mesma fonte que `resolveDeclaredTaskId`
+ *   prefere no bus) → `get_task`, o único cmd cujo `cards[]` traz `role`.
+ * - sem taskId → `list_tasks` não-terminal: um vínculo implementer ESCREVE
+ *   `tasks.card_id` com o próprio card; um vínculo reviewer nunca escreve
+ *   (ver `link_task_card`). Logo, "sou o card principal de uma task viva"
+ *   é `implementer` por construção — exatamente o caso medido.
+ *
+ * Ambiguidade (mais de uma task principal) devolve `null`, como
+ * `resolveDeclaredTaskId` omite em vez de escolher: desconhecido é um
+ * fato, não um palpite.
+ */
+type ReportVerdictContext = {
+  requesterRoleOnTask: string | null;
+  reportSchema: string[] | null;
+  reviewWanted: boolean;
+};
+
+function readReportSchema(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const keys = value.filter((v): v is string => typeof v === "string");
+  return keys.length > 0 ? keys : null;
+}
+
+function declaredTaskIdFromReport(report: unknown): string | undefined {
+  if (report === null || typeof report !== "object" || Array.isArray(report)) return undefined;
+  const raw = (report as Record<string, unknown>).taskId;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+async function resolveReportVerdictContext(input: {
+  handleRequest: (req: BusRequest) => Promise<BusResponse>;
+  requesterId: string | undefined;
+  declaredTaskId: string | undefined;
+}): Promise<ReportVerdictContext> {
+  const context: ReportVerdictContext = { requesterRoleOnTask: null, reportSchema: null, reviewWanted: false };
+
+  if (input.declaredTaskId) {
+    const res = await input.handleRequest({ cmd: "get_task", taskId: input.declaredTaskId });
+    const task = res.ok ? (res.task as Record<string, unknown> | undefined) : undefined;
+    if (task) {
+      const cards = Array.isArray(task.cards) ? (task.cards as { cardId?: string; role?: string }[]) : [];
+      const link = input.requesterId ? cards.find((c) => c.cardId === input.requesterId) : undefined;
+      context.requesterRoleOnTask = link?.role ?? null;
+      context.reportSchema = readReportSchema(task.reportSchema);
+      context.reviewWanted = isReviewWanted(task.review);
+    }
+  }
+
+  if (context.requesterRoleOnTask === null && input.requesterId) {
+    const res = await input.handleRequest({ cmd: "list_tasks", status: ["pending", "running"], view: "full" });
+    const tasks = res.ok && Array.isArray(res.tasks) ? (res.tasks as Record<string, unknown>[]) : [];
+    const principals = tasks.filter((t) => t.cardId === input.requesterId);
+    if (principals.length === 1) {
+      context.requesterRoleOnTask = TASK_CARD_IMPLEMENTER_ROLE;
+      if (context.reportSchema === null) context.reportSchema = readReportSchema(principals[0].reportSchema);
+      if (!context.reviewWanted) context.reviewWanted = isReviewWanted(principals[0].review);
+    }
+  }
+
+  return context;
+}
 
 /**
  * DESIGN-BACKLOG.md item 21, ponto 9 — the primary agent-facing interface,
@@ -31,6 +104,30 @@ import { TASK_CARD_ROLES, TASK_PURPOSES, TASK_REVIEW_VALUES } from "../task-purp
  * accepts Node's own `IncomingMessage`/`ServerResponse` directly, matching
  * this project's existing style (remote-server.ts).
  */
+/**
+ * Ids que o `spawn_agent` aceita AGORA — derivados do registro VIVO
+ * (`providers.ts`'s `PROVIDERS`, mutado por `registerDynamicProviders`; ver
+ * `providers-dynamic.ts` e o `loadDynamicProviders` do boot).
+ *
+ * O que isto substitui (2026-09-19): um `z.enum(["bash", "claude", …])`
+ * literal aqui. Ele aceitava exatamente os seis nativos e recusava qualquer
+ * CLI de terceiro (cline, commandcode) NO ZOD — antes de a chamada chegar em
+ * `resolveSpawn`, que é quem de fato sabe resolver o binário. O desenho de
+ * provider dinâmico existia e não tinha por onde entrar.
+ *
+ * Medição que decidiu a forma (a pedido da task): este schema é reconstruído
+ * a cada request (`buildServer` tem um único chamador, dentro do handler
+ * HTTP), então uma lista calculada aqui já leria o registro do momento. A
+ * checagem abaixo é de RUNTIME mesmo assim — `superRefine` roda por chamada,
+ * então ela continua correta se alguém um dia memoizar `buildServer` (um
+ * cache por card é um refactor plausível): um enum estaticamente construído
+ * voltaria a RECUSAR um provider registrado depois, que é exatamente a
+ * classe de bug que esta mudança existe para matar.
+ */
+function spawnableProviderIds(): string[] {
+  return PROVIDERS.map((p) => p.id);
+}
+
 export function createMcpServer(opts: { port: number; handleRequest: (req: BusRequest) => Promise<BusResponse> }) {
   /**
    * Achado ao vivo (2026-09-01): "o modo automático não funciona de fato".
@@ -416,7 +513,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           "Acceptance: success is {ok: true, ...}; a report without ok is also accepted (not treated as failure). " +
           "Declared failure is {ok: false, ...}. If that failure is still retryable (you omitted retryable, or sent retryable: true) AND a running task is linked to this card with retry budget left, THIS CALL IS REFUSED — the tool returns {ok: false, retriesRemaining, ...}, the task stays running, retry_count goes up by 1, and you (the same session, same context) correct and call report again. No new card is spawned. " +
           "Honest terminal failure — use when retry cannot help (no credits, investigation concluded negatively, a metric the CLI does not expose): {ok: false, retryable: false, ...}. That is accepted on the first call, the task becomes failed, and no retry is spent. Without retryable: false, the only other accepted exits are success or exhausting max_retries. Do not declare ok: true to escape a real failure. " +
-          "The app does not judge whether your contents are correct. A refused call names the acceptance rule and remaining attempts; a structural refusal (missing report, ok/retryable not a boolean) names the field.",
+          "The app does not judge whether your contents are correct. A refused call names the acceptance rule and remaining attempts; a structural refusal (missing report, ok/retryable not a boolean) names the field. " +
+          "A `verdict` is judgment and is gated separately, before storage: an implementer's own verdict is refused, and a reviewer's verdict must carry the task's reportSchema keys with real content — see the `verdict` field.",
         inputSchema: {
           callerCardId: z
             .string()
@@ -433,19 +531,47 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .enum(["aprovado", "reprovado"])
             .optional()
             .describe(
-              "Formal verdict for a review report — a real, typed field (not just a convention inside `report`'s free JSON). Omit for a plain non-review report. Stored together with YOUR role on the task (task_cards: implementer/reviewer, or unknown when your card is not linked). Only an 'aprovado' from a card linked as reviewer proposes completion on the Fila; an implementer's 'aprovado' is recorded as self-assessment and, while a reviewer is linked to the task, does not propose anything.",
+              "Formal verdict for a review report — a real, typed field (not just a convention inside `report`'s free JSON). Omit for a plain non-review report. A verdict is judgment, so it passes the SAME gate as update_task's done/failed, and is REFUSED before anything is stored when you are not entitled to judge: a card linked as implementer on this task is refused (an implementer's own 'aprovado' is not a review — it was measured three times in one day, always reproved later), and when the task declares review=\"wanted\" only a linked reviewer may set one. Reviewer and reviewer-less outsider keep writing as before; unknown role is not implementer, so it is not barred. A reviewer's verdict must also carry the task's declared reportSchema keys with real content — absent, empty or placeholder values (\"\", [], {}, \"N/A\", \"TBD\") are REFUSED, because a verdict without evidence is worth less than no review. Stored together with YOUR role on the task (task_cards: implementer/reviewer, or unknown when your card is not linked).",
             ),
         },
       },
       async ({ callerCardId, report, verdict }) => {
+        const requesterId = caller(callerCardId);
+        // `report` is `z.unknown()`, so a model may deliver the payload as a
+        // JSON string. Decode a JSON object here — at the one frontend that
+        // does not pre-parse — so both acceptance and persistence see the
+        // same object. A non-object string is passed through untouched.
+        const decoded = decodeReportArgument(report);
+        // CAMADA 4, segunda porta: um `verdict` é julgamento escrito sem
+        // `update_task`, e passa pelo MESMO critério — papel na task. A
+        // regra é pura (`decideReportVerdictWrite`); aqui só se busca o fato
+        // (role/contrato) e se recusa ANTES de o bus gravar qualquer coisa.
+        // Sem veredito formal não há leitura extra: report comum segue como
+        // sempre. `promoteReportVerdict` é reusado só para DETECTAR o
+        // veredito (explícito ou embutido no payload), sem mudar o que é
+        // enviado — o bus continua sendo quem promove e persiste.
+        const formalVerdict = promoteReportVerdict(decoded, verdict).verdict;
+        if (formalVerdict) {
+          const context = await resolveReportVerdictContext({
+            handleRequest: opts.handleRequest,
+            requesterId,
+            declaredTaskId: declaredTaskIdFromReport(decoded),
+          });
+          const gate = decideReportVerdictWrite({
+            verdict: formalVerdict,
+            requesterRoleOnTask: context.requesterRoleOnTask,
+            reviewWanted: context.reviewWanted,
+            report: decoded,
+            reportSchema: context.reportSchema,
+          });
+          if (gate.action === "refuse") {
+            return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: gate.error }) }] };
+          }
+        }
         const res = await opts.handleRequest({
           cmd: "report",
-          requesterId: caller(callerCardId),
-          // `report` is `z.unknown()`, so a model may deliver the payload as a
-          // JSON string. Decode a JSON object here — at the one frontend that
-          // does not pre-parse — so both acceptance and persistence see the
-          // same object. A non-object string is passed through untouched.
-          report: decodeReportArgument(report),
+          requesterId,
+          report: decoded,
           verdict,
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
@@ -530,7 +656,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .array(z.string())
             .optional()
             .describe(
-              "Commands the agent must run before declaring success — structured list. Declared once; appended to the brief. The app never runs or judges them. Omit = undeclared.",
+              "Commands the app RUNS itself after an accepted report (isolated subprocess, per-repo lock), stamping the measured stdout/stderr/exit-code into result_json.gateRun — the number the reviewer trusts is the one the process produced, not the one a report claims. Structured list, declared once; appended to the brief. A failing gate records evidence and does not judge the task (no auto-fail). Omit = undeclared.",
             ),
           allowCommit: z
             .boolean()
@@ -1019,8 +1145,31 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         description:
           "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call). `taskId` is optional: when you pass one, the new card's brief is that task's stored prompt (the same source auto-dispatch uses) and the card is linked to the task as its implementer. Without `taskId`, free `brief` still works exactly as before — including omitting both, which just opens a card. Do not pass `taskId` and `brief` together — EXCEPT with `role: \"reviewer\"`, where `brief` is the review order and the task prompt is what is under review (see `role`).",
         inputSchema: {
-          provider: z.enum(["bash", "claude", "codex", "cursor", "antigravity", "opencode"]).describe("Which provider to spawn"),
+          // Validação em RUNTIME contra o registro vivo (ver
+          // `spawnableProviderIds`): o id tem de existir AGORA — nativo ou
+          // CLI cadastrado no boot —, e a recusa nomeia a lista do momento.
+          // Não é `z.enum`: um enum é construído no schema e recusaria para
+          // sempre qualquer provider registrado depois dele (era o caso dos
+          // dinâmicos, barrados aqui antes de `resolveSpawn`).
+          provider: z
+            .string()
+            .superRefine((id, ctx) => {
+              if (providerById(id)) return;
+              ctx.addIssue({
+                code: "custom",
+                message:
+                  `unknown provider "${id}" — this build can spawn: ${spawnableProviderIds().join(", ")}` +
+                  " (read live from the provider registry: the native CLIs plus any CLI registered at boot)",
+              });
+            })
+            .describe(`Which provider to spawn — one of: ${spawnableProviderIds().join(", ")}`),
           cwd: z.string().optional().describe("Working directory — defaults to the current board's root"),
+          isolation: z
+            .literal("worktree")
+            .optional()
+            .describe(
+              'Spawn the card in a throwaway git worktree of the repo at `cwd` (or of your own card\'s cwd) instead of the shared tree — use it for any work that would otherwise tempt a destructive git command to "isolate" itself (AGENTS.md §3.5). The worktree contains only what git tracks, so the paths the project\'s .gitignore hides but it needs to run (`.env`, a real `vendor/`, `storage/jwt`, …) are declared by the PROJECT at `.stellar/worktree.json` (read from the source checkout) and copied in. The worktree lives under a short path on purpose — Unix sockets cap sun_path at 108 bytes (docs/ORCHESTRATION.md §15). Omit for the normal shared tree; an unknown value is refused. The new card\'s cwd is the worktree path — read it via list_cards; the app does not remove the worktree when the card exits (do it yourself with `git worktree remove` when the tree is done).',
+            ),
           resumeId: z.string().optional().describe("Resume an existing session instead of starting fresh"),
           model: z.string().optional().describe("Model to launch the provider with (its own --model value, e.g. 'opus', 'gpt-5-codex') — omit to use that provider's default. Refused for `bash` (a plain shell has no model). opencode caveat (measured 2026-09-15): the value must be the FULL `<provider>/<catalog-id>` spec, and some providers' catalog ids are already prefixed — cline-pass's catalog key for the model this session ran on is 'cline-pass/glm-5.3', so the working spec is 'cline-pass/cline-pass/glm-5.3'; a spec that doesn't resolve in opencode's catalog makes the CLI fall back to a DEFAULT MODEL IN SILENCE (asked for cline-pass/glm-5.3, the card ran DeepSeek V4.1 Flash) — verify against `opencode models [provider]` before passing one. No pre-spawn validation is done for you here."),
           // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" —
@@ -1080,11 +1229,27 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ),
         },
       },
-      async ({ provider, cwd, resumeId, model, effort, label, callerCardId, reason, wait, waitTimeoutMs, brief, taskId, role }) => {
+      async ({
+        provider,
+        cwd,
+        isolation,
+        resumeId,
+        model,
+        effort,
+        label,
+        callerCardId,
+        reason,
+        wait,
+        waitTimeoutMs,
+        brief,
+        taskId,
+        role,
+      }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
           provider,
           cwd,
+          isolation,
           resumeId,
           requesterId: caller(callerCardId),
           reason,
@@ -1428,6 +1593,39 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
       async ({ cwd, hunks, catalogPath }) => {
         const res = await reachAcrossLiterals({ cwd, hunks, catalogPath });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    // Item 25 do sticky operacional — Roteiro de QA a partir do git log do lote
+    server.registerTool(
+      "suggest_qa_scope",
+      {
+        description:
+          "Suggest QA test scope from the git batch between a base ref (e.g. 'main', 'origin/main') and the current work. " +
+          "Returns the list of commits in the batch, files changed (+/- numstat), grouped areas touched, " +
+          "and a generated QA test checklist so that QA briefs do not rely on human/orchestrator memory.",
+        inputSchema: {
+          baseRef: z
+            .string()
+            .optional()
+            .describe("Base git ref to compare against (e.g. 'main', 'origin/main', 'HEAD~3'). Auto-detects if omitted."),
+          cwd: z
+            .string()
+            .optional()
+            .describe("Repository root or working directory. Defaults to the current working directory."),
+          headRef: z
+            .string()
+            .optional()
+            .describe("Head git ref to compare. Defaults to 'HEAD'."),
+          includeWorkingTree: z
+            .boolean()
+            .optional()
+            .describe("Whether to include uncommitted working tree changes. Defaults to true."),
+        },
+      },
+      async ({ baseRef, cwd, headRef, includeWorkingTree }) => {
+        const res = await suggestQAScope({ baseRef, cwd, headRef, includeWorkingTree });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

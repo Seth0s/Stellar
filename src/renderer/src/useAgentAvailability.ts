@@ -10,8 +10,19 @@ export type AgentAvailability = { id: string; label: string; installed: boolean;
  * padrão de módulo-singleton que `useUpdateStatus.ts` já usa: checagem
  * roda uma vez por vida do app (não uma vez por componente que monta),
  * Topbar consulta o resultado só pra decidir se mostra o aviso.
+ *
+ * 2026-09-19 — o canal `agents:check-availability` SEMPRE devolveu a lista
+ * COMPLETA (`main/providers.ts`'s `checkAgentAvailability`, derivada do
+ * registro vivo: nativos + CLIs dinâmicos carregados no boot). O que este
+ * módulo fazia era jogar a lista fora e guardar só os NÃO instalados — e é
+ * isso que deixava o resto do renderer sem como saber que um provider
+ * dinâmico existe (App.tsx tinha a lista 6 ids literal; TerminalCard tinha
+ * dois Sets). Agora o snapshot preserva as duas coisas: `missing` (API de
+ * sempre, intocada para o aviso da Topbar) e `all`, que é o que os pickers
+ * e o TerminalCard leem. Mesma checagem, mesmo `onAvailabilityStale` —
+ * nenhum canal novo.
  */
-let missing: AgentAvailability[] = [];
+let snapshot: { all: AgentAvailability[]; missing: AgentAvailability[] } = { all: [], missing: [] };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -34,18 +45,26 @@ function ensureInitialized() {
 
 async function recheck() {
   const all = await window.agents.checkAvailability();
-  missing = all.filter((a) => !a.installed);
+  snapshot = { all, missing: all.filter((a) => !a.installed) };
   emit();
+}
+
+function subscribe(cb: () => void) {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
 }
 
 export function useAgentAvailability(): { missing: AgentAvailability[]; recheck: () => void } {
   ensureInitialized();
-  const m = useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb);
-      return () => listeners.delete(cb);
-    },
-    () => missing,
-  );
+  const m = useSyncExternalStore(subscribe, () => snapshot.missing);
   return { missing: m, recheck: () => void recheck() };
+}
+
+/** A lista COMPLETA (instalados e não instalados) do mesmo canal — é dela
+ * que saem os ids oferecidos pelos pickers e as capacidades do
+ * TerminalCard. Vazia até a primeira resposta do main: quem consome decide
+ * o que mostrar nesse intervalo, nunca inventa uma lista paralela. */
+export function useAvailableAgentProviders(): AgentAvailability[] {
+  ensureInitialized();
+  return useSyncExternalStore(subscribe, () => snapshot.all);
 }

@@ -1,7 +1,42 @@
 import { delimiter, join } from "node:path";
 import { effectivePath, isExecutableFile, loginShell } from "./user-env";
 
-export type ProviderId = "bash" | "claude" | "codex" | "cursor" | "antigravity" | "opencode";
+/**
+ * Os SEIS providers nativos, como constantes nomeadas — o autocomplete
+ * importa no punhado de lugares que de fato comparam um id literal
+ * (`resolveSpawn` via `$SHELL`/`ComSpec`, `checkAgentAvailability`
+ * excluindo `bash`, docs vivas). Fora daqui, nada deve cravar um id:
+ * a fonte por provider é a própria declaração (`ProviderDef.capacity`).
+ */
+export const NATIVE_PROVIDER_IDS = {
+  bash: "bash",
+  claude: "claude",
+  codex: "codex",
+  cursor: "cursor",
+  antigravity: "antigravity",
+  opencode: "opencode",
+} as const;
+
+export type NativeProviderId = (typeof NATIVE_PROVIDER_IDS)[keyof typeof NATIVE_PROVIDER_IDS];
+
+/**
+ * Um id de provider é uma STRING, não uma union fechada (2026-09-19).
+ *
+ * O que mudou e por quê: a union fechada era a segunda metade do mesmo
+ * hardcode que a task de "provider dinâmico" veio remover — um CLI de
+ * terceiro (cline, commandcode) não existe no código-fonte em lugar
+ * nenhum, e escolher esse CLI é DADO (`providers-dynamic.ts`, arquivo de
+ * config em `userData`), não uma edição de tipo. Com a union, um provider
+ * que o usuário cadastrou não teria como ser NOMEADO sem mexer no repo.
+ *
+ * O que NÃO mudou: os seis nativos continuam existindo, com o mesmo
+ * `buildArgs` escrito à mão de sempre — nenhum deles passa pelo
+ * sintetizador de args dos dinâmicos. `NATIVE_PROVIDER_IDS` acima preserva
+ * o autocomplete onde ele ainda importa; um id desconhecido continua
+ * falhando onde sempre falhou (`resolveSpawn` → `null` → `binary_not_found`
+ * no pty-registry), nunca em silêncio.
+ */
+export type ProviderId = string;
 
 export type SpawnOpts = {
   resumeId?: string;
@@ -94,17 +129,93 @@ export type SpawnOpts = {
 // fail spawn" rule.
 // ---------------------------------------------------------------------------
 
-/** How (if at all) this provider accepts an injected system/developer prompt. */
+/** How (if at all) this provider accepts an injected system/developer prompt.
+ *
+ * `flag` (2026-09-19) is the plain "there is a real flag that takes the
+ * block" case — declared by a DYNAMIC provider whose CLI was measured to
+ * have one (cline: `-s`), and synthesized into argv by
+ * `providers-dynamic.ts`. It is deliberately NOT the shape the two native
+ * mechanisms below use: `append-system-prompt` (claude) and
+ * `developer_instructions` (codex) each name a wiring that already exists
+ * by hand in that provider's `buildArgs`, and renaming them into `flag`
+ * would only hide which CLI reads what. The distinction that matters to
+ * every consumer is just `mechanism !== "none"` (see
+ * `deriveReportDiscovery`), and every non-`none` mechanism keeps that. */
 export type SystemPromptCapability =
   | { mechanism: "append-system-prompt" }
   | { mechanism: "developer_instructions" }
+  | { mechanism: "flag"; flag: string }
   | { mechanism: "none" };
+
+/**
+ * The shape of ONE server entry inside the persistent config file — what a
+ * registrar writes under `configKey`. Declared, not chosen at write time,
+ * because the CLIs disagree about the entry and the next task (MCP
+ * registration for dynamic providers) has to know which one to emit.
+ */
+export type McpServerShape =
+  /** `{ command: <path> }` (args/env optional) — claude/cursor/cline/
+   * commandcode-style `mcpServers` entry pointing at the stdio shim. */
+  | "stdio-command"
+  /** opencode's `{ type: "local", command: [<path>], enabled: true }`. */
+  | "local-array";
 
 /** How the stellar MCP server is registered for this provider. */
 export type McpRegistrationCapability =
   | { mechanism: "ephemeral-flag" }
-  | { mechanism: "global-config" }
+  | {
+      mechanism: "global-config";
+      /**
+       * Onde o arquivo de config persistente DAQUELE CLI mora, com `~` —
+       * resolvido contra `registrationHome()` em `mcp-registration.ts`
+       * (que é o que a suíte de verificação sobrepõe para não escrever no
+       * `$HOME` real). Opcional porque os TRÊS nativos `global-config`
+       * declarados hoje já têm o caminho escrito no registrador que de
+       * fato o usa — declarar de novo aqui seria uma segunda fonte do
+       * mesmo fato, e o registrador ainda não lê esta declaração. Quem
+       * não tem registrador (todo dinâmico) declara, e é a única fonte.
+       */
+      configPath?: string;
+      /** A chave do arquivo que contém o mapa de servidores (`mcpServers`). */
+      configKey?: string;
+      /** A forma da entrada — ver `McpServerShape`. */
+      serverShape?: McpServerShape;
+    }
   | { mechanism: "none" };
+
+/**
+ * Como o id de sessão chega ao argv — declarado, nunca inferido.
+ *
+ * Antes (até 2026-09-19) isto era a lista fechada
+ * `IMPOSE_SESSION_ID_PROVIDERS` em providers.ts: um provider novo não
+ * tinha como se declarar imponível sem editar o array, e um dinâmico
+ * (registrado em runtime) não apareceria nele de jeito nenhum. Agora a
+ * pergunta é feita ao próprio provider, e `imposeSessionIdProviders()`
+ * deriva a lista de quem respondeu sim.
+ *
+ * As flags estão aqui — e não só os booleanos — porque são elas que o
+ * sintetizador de args de um provider dinâmico emite; um nativo continua
+ * com seu `buildArgs` à mão, então aqui elas são o registro medido do que
+ * aquele buildArgs já faz (claude: `--resume` restaura, `--session-id`
+ * CRIA; cursor: `--resume` faz os dois).
+ */
+export type SessionCapability = {
+  /** `true` só onde a CLI aceita um id escolhido pelo Stellar num spawn
+   * novo (medido em 2026-09-13, task c1064d95). Um provider que não impõe
+   * nunca recebe `imposedSessionId` (`shouldImposeSessionId`). */
+  canImposeSessionId: boolean;
+  /** Flag + valor que RETOMA sessão existente. Ausente onde não existe
+   * (codex: `resume` é subcomando, ver o próprio provider) ou onde não foi
+   * medido — nunca inventamos uma. */
+  resumeFlag?: string;
+  /** Flag + valor que CRIA a sessão com o UUID gerado. Igual a
+   * `resumeFlag` onde a CLI usa uma só (cursor, cline); diferente onde
+   * são duas (claude). Exigida quando `canImposeSessionId` é `true`. */
+  imposeFlag?: string;
+  /** Flag booleana "continue a sessão mais recente". Ausente = o provider
+   * não tem uma (ou não foi medida) e `continueLast` não vira argv. */
+  continueFlag?: string;
+};
 
 // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" — per-provider
 // ranges re-measured 2026-09-12 against the live CLIs (not the comments):
@@ -196,6 +307,11 @@ export type ProviderCapacity = {
    * for every agent CLI; the opencode catalog caveat lives on the
    * provider's own comment. */
   model: ModelCapability;
+
+  /** Como o id de sessão entra no argv — ver `SessionCapability`. O que
+   * `shouldImposeSessionId`/`canImposeSessionId` leem (2026-09-19): a
+   * resposta é do provider, nativo ou dinâmico, não de uma lista. */
+  session: SessionCapability;
 
   /** Como a CLI gerencia instruções (brief e TUI follow-ups) */
   delivery: {
@@ -432,7 +548,16 @@ export type ProviderDef = {
   installCommand: InstallCommand | null;
 };
 
-export const PROVIDERS: ProviderDef[] = [
+/**
+ * A declaração dos seis nativos — o seed CONGELADO do registro.
+ *
+ * Não é a lista que o resto do app lê: quem lê é `PROVIDERS`, logo abaixo,
+ * que começa com estes e ganha os dinâmicos em runtime. Separar as duas
+ * existe para uma coisa só: um provider dinâmico (config do usuário) nunca
+ * pode substituir nem remover um nativo — colidiu, o nativo ganha, e o
+ * dinâmico é reportado como `skipped` (ver `registerDynamicProviders`).
+ */
+const NATIVE_PROVIDERS: readonly ProviderDef[] = [
   // Bash has no system-prompt injection flag and no provider-specific MCP
   // registration. A manually launched agent inherits AGENT_CANVAS_* and
   // `acbridge` on PATH, but the shell cannot turn that into MCP or show
@@ -454,6 +579,8 @@ export const PROVIDERS: ProviderDef[] = [
       acbridgeOnPath: true,
       effort: { mechanism: "none", reason: "shell" },
       model: { mechanism: "none", reason: "shell" },
+      // Um shell não tem sessão de agente para retomar nem id para impor.
+      session: { canImposeSessionId: false },
       delivery: { briefMechanism: "none", submitStartedPattern: undefined },
     },
   },
@@ -471,6 +598,16 @@ export const PROVIDERS: ProviderDef[] = [
       // `EffortCapability` comment above.
       effort: { mechanism: "flag", flag: "--effort", values: ["low", "medium", "high", "xhigh", "max"] },
       model: { mechanism: "flag", flag: "--model" },
+      // Duas flags distintas, medido 2026-09-13: `--resume` só RETOMA uma
+      // sessão que já existe; `--session-id` CRIA com o UUID do Stellar —
+      // é por isso que claude pode impor, e é o caso que a declaração
+      // precisa distinguir (cursor usa uma só para os dois papéis).
+      session: {
+        canImposeSessionId: true,
+        resumeFlag: "--resume",
+        imposeFlag: "--session-id",
+        continueFlag: "--continue",
+      },
       delivery: {
         briefMechanism: "positional",
         submitStartedPattern: /\b(Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Slithering|Esc to interrupt)\b/i,
@@ -564,6 +701,14 @@ export const PROVIDERS: ProviderDef[] = [
       // for a real flag would upgrade this to a flag + range.
       effort: { mechanism: "none", reason: "unmeasured" },
       model: { mechanism: "flag", flag: "-m" },
+      // Sem flags aqui de propósito: o `resume` do codex é SUBCOMANDO
+      // (`resume <id>` / `resume --last`), não flag — uma declaração
+      // flag-shaped não o expressa, e inventar `--resume` para ele seria
+      // declarar uma medição que não existe. O que o app de fato lê desta
+      // declaração é `canImposeSessionId: false` (medido 2026-09-13: codex
+      // recusa um id desconhecido). O buildArgs à mão abaixo continua sendo
+      // a implementação.
+      session: { canImposeSessionId: false },
       delivery: { briefMechanism: "positional", submitStartedPattern: undefined },
     },
     installCommand: {
@@ -623,6 +768,14 @@ export const PROVIDERS: ProviderDef[] = [
       // one. Do not upgrade this to "no-flag" without measuring.
       effort: { mechanism: "none", reason: "unmeasured" },
       model: { mechanism: "flag", flag: "--model" },
+      // UMA flag para os dois papéis (medido): `--resume <uuid>` cria a
+      // sessão quando o id ainda não existe — por isso cursor impõe.
+      session: {
+        canImposeSessionId: true,
+        resumeFlag: "--resume",
+        imposeFlag: "--resume",
+        continueFlag: "--continue",
+      },
       delivery: {
         briefMechanism: "positional",
         submitStartedPattern: /[\u2800-\u28FF]\s*(?:Running|Reading|Grepping)\b/i,
@@ -703,6 +856,12 @@ export const PROVIDERS: ProviderDef[] = [
       // `EffortCapability` comment above.
       effort: { mechanism: "flag", flag: "--effort", values: ["low", "medium", "high"] },
       model: { mechanism: "flag", flag: "--model" },
+      // Não impõe (medido: ignora um id desconhecido e cunha o seu).
+      session: {
+        canImposeSessionId: false,
+        resumeFlag: "--conversation",
+        continueFlag: "--continue",
+      },
       delivery: {
         briefMechanism: "flag",
         briefFlag: "-i",
@@ -770,6 +929,12 @@ export const PROVIDERS: ProviderDef[] = [
       // nothing is invented here either.
       effort: { mechanism: "none", reason: "no-flag" },
       model: { mechanism: "flag", flag: "--model" },
+      // Não impõe (medido 2026-09-13: recusa um id desconhecido).
+      session: {
+        canImposeSessionId: false,
+        resumeFlag: "--session",
+        continueFlag: "--continue",
+      },
       delivery: { briefMechanism: "flag", briefFlag: "--prompt", submitStartedPattern: undefined },
     },
     installCommand: { posix: "npm install -g opencode-ai", windows: "npm install -g opencode-ai" },
@@ -819,14 +984,136 @@ export const PROVIDERS: ProviderDef[] = [
   },
 ];
 
+/**
+ * O REGISTRO VIVO de providers — nativos + dinâmicos (2026-09-19).
+ *
+ * É esta lista (não `NATIVE_PROVIDERS`) que `providerById` /
+ * `providerCapacity` / `checkAgentAvailability` varrem, e é por isso que
+ * registrar um provider em runtime basta para ele funcionar no
+ * `resolveSpawn`/`spawnArgv` inteiros: nada abaixo tem caso especial por
+ * id, tudo passa pela declaração de capacidade daquele provider.
+ *
+ * O que NÃO é dinâmico, de propósito: os `buildArgs` escritos à mão dos
+ * seis nativos (com comentários de medição que valem mais do que
+ * qualquer generalização) e a ordem dos cards na UI, que é do renderer.
+ */
+export const PROVIDERS: ProviderDef[] = [...NATIVE_PROVIDERS];
+
+/** Ids nativos capturados ANTES de qualquer merge — a muralha que impede
+ * um arquivo de config do usuário de sobrescrever claude/codex/… (ver
+ * `registerDynamicProviders`). */
+const NATIVE_PROVIDER_ID_SET: ReadonlySet<string> = new Set(NATIVE_PROVIDERS.map((p) => p.id));
+
+export type RegisterProvidersResult = {
+  /** Registrados agora (ou re-registrados — um reload substitui o def
+   * anterior do MESMO id dinâmico, nunca o do nativo). */
+  registered: ProviderId[];
+  /** Recusados por colisão com um id nativo: o nativo sempre ganha. */
+  skipped: ProviderId[];
+  /** DERRUBADOS do registro vivo nesta carga (só com `pruneMissing`): ids
+   * dinâmicos que estavam registrados e não vieram mais. Um id nativo
+   * nunca aparece aqui. */
+  removed: ProviderId[];
+};
+
+/**
+ * A MEMÓRIA do diff: ids que ESTE módulo registrou pelo caminho dinâmico.
+ *
+ * Nativo nunca entra aqui — `registerDynamicProviders` os recusa antes de
+ * tocar em `PROVIDERS` — então "está neste set" é exatamente "esta entrada
+ * foi criada pelo merge dinâmico". É o que dá ao unregister um alvo exato:
+ * sem isto, "tirar do registro o que não está mais no arquivo" não teria
+ * como distinguir um provider dinâmico removido de um nativo.
+ *
+ * Módulo-level, como `PROVIDERS` — é o mesmo registro, com a mesma vida.
+ */
+const dynamicProviderIds = new Set<string>();
+
+/**
+ * Registra providers dinâmicos no registro vivo. Idempotente por id: uma
+ * segunda chamada com o mesmo id dinâmico SUBSTITUI o def anterior (é
+ * como um reload depois de editar o arquivo de config funciona), sem
+ * nunca tocar num nativo.
+ *
+ * `pruneMissing` (2026-09-19, follow-up da G6) — o que faz a REMOÇÃO
+ * funcionar sem reiniciar. MEDIDO antes disto: tirar um provider pelo
+ * formulário reescrevia o arquivo e ele continuava em `checkAvailability`
+ * (e portanto nos pickers e no `resolveSpawn`) até o app reiniciar, porque
+ * a versão anterior só sabia fazer push/replace. Com a flag ligada, a
+ * lista `defs` é tratada como a lista EFETIVA COMPLETA daquela carga: id
+ * dinâmico que não veio mais é removido de `PROVIDERS`.
+ *
+ * Desligada por padrão de propósito: o nome desta função é "registre
+ * estes", e um chamador com lista parcial não pode perder entradas por
+ * engano. Quem SABE que a lista é completa é o loader
+ * (`providers-dynamic.ts`), e é ele que liga.
+ *
+ * Não faz I/O e não valida spec — quem faz as duas coisas é
+ * `providers-dynamic.ts`, que é a casca deste módulo (mesma divisão
+ * decisão × efeito do resto do repo).
+ */
+export function registerDynamicProviders(
+  defs: readonly ProviderDef[],
+  opts: { pruneMissing?: boolean } = {},
+): RegisterProvidersResult {
+  const registered: ProviderId[] = [];
+  const skipped: ProviderId[] = [];
+  const nextIds = new Set<ProviderId>();
+  for (const def of defs) {
+    if (NATIVE_PROVIDER_ID_SET.has(def.id)) {
+      skipped.push(def.id);
+      continue;
+    }
+    nextIds.add(def.id);
+    const existing = PROVIDERS.findIndex((p) => p.id === def.id);
+    if (existing >= 0) PROVIDERS[existing] = def;
+    else PROVIDERS.push(def);
+    registered.push(def.id);
+  }
+
+  const removed: ProviderId[] = [];
+  if (opts.pruneMissing) {
+    // Diff contra a carga ANTERIOR (o set), não contra `PROVIDERS`: só o
+    // que este caminho registrou pode ser derrubado por este caminho.
+    for (const id of [...dynamicProviderIds]) {
+      if (nextIds.has(id)) continue;
+      dynamicProviderIds.delete(id);
+      // Muralha explícita, além do set: nenhum nativo sai daqui nem se
+      // algum dia parar no set por engano. O `continue` fica ANTES do
+      // splice, e o set já foi limpo acima — o nativo continua no
+      // registro e a memória não fica suja.
+      if (NATIVE_PROVIDER_ID_SET.has(id)) continue;
+      const index = PROVIDERS.findIndex((p) => p.id === id);
+      if (index >= 0) PROVIDERS.splice(index, 1);
+      removed.push(id);
+    }
+  }
+  for (const id of nextIds) dynamicProviderIds.add(id);
+  return { registered, skipped, removed };
+}
+
+/** Os ids que hoje existem SÓ porque o caminho dinâmico os registrou —
+ * leitura para diagnóstico/teste. Nativo não está aqui. */
+export function dynamicProviderIdsSnapshot(): ProviderId[] {
+  return [...dynamicProviderIds];
+}
+
 /** Providers whose CLI accepts a caller-chosen session id on spawn.
- * Measured 2026-09-13 (task c1064d95): only these two. The other three
- * either refuse an unknown id (`codex`, `opencode`) or ignore it and
- * mint their own (`antigravity`). */
-export const IMPOSE_SESSION_ID_PROVIDERS: readonly ProviderId[] = ["claude", "cursor"];
+ * Measured 2026-09-13 (task c1064d95) for the natives: only claude and
+ * cursor; the other three either refuse an unknown id (`codex`,
+ * `opencode`) or ignore it and mint their own (`antigravity`).
+ *
+ * Derivada, nunca uma segunda lista escrita à mão (2026-09-19): a
+ * resposta é do próprio provider (`capacity.session.canImposeSessionId`),
+ * então um dinâmico registrado em runtime aparece aqui sem nenhuma
+ * edição — era exatamente isto que a lista fechada anterior não
+ * conseguia fazer. */
+export function imposeSessionIdProviders(): ProviderId[] {
+  return PROVIDERS.filter((p) => p.capacity.session.canImposeSessionId).map((p) => p.id);
+}
 
 export function canImposeSessionId(providerId: string): boolean {
-  return (IMPOSE_SESSION_ID_PROVIDERS as readonly string[]).includes(providerId);
+  return providerById(providerId)?.capacity.session.canImposeSessionId ?? false;
 }
 
 /**
@@ -945,7 +1232,7 @@ export function resolveSpawn(
 ): { binary: string; args: string[] } | null {
   const provider = providerById(providerId);
   if (!provider) return null;
-  if (provider.id === "bash") {
+  if (provider.id === NATIVE_PROVIDER_IDS.bash) {
     if (process.platform === "win32") {
       return { binary: process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", args: [] };
     }
@@ -974,7 +1261,7 @@ export type AgentAvailability = {
  * faltam instalar. `bash` fica de fora — não é uma CLI de agente
  * instalável, é sempre o shell do próprio SO (ver resolveSpawn acima). */
 export function checkAgentAvailability(): AgentAvailability[] {
-  return PROVIDERS.filter((p) => p.id !== "bash").map((p) => ({
+  return PROVIDERS.filter((p) => p.id !== NATIVE_PROVIDER_IDS.bash).map((p) => ({
     id: p.id,
     label: p.label,
     installed: which(p.binaryNames) !== null,

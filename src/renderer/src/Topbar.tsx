@@ -6,6 +6,7 @@ import { useAgentAvailability } from "./useAgentAvailability";
 import type { SessionTemplate } from "./useBoardStore";
 import { groupByProject, StatusDot, type Board, type BoardCounts as Counts } from "./sessions";
 import { t } from "../../shared/i18n";
+import { GlobalComposer } from "./GlobalComposer";
 
 type ModalState = { mode: "create" } | { mode: "edit"; board: Board } | null;
 
@@ -361,6 +362,7 @@ export function Topbar({
         </button>
       </div>
       </div>
+      <GlobalComposer boardId={activeBoardId} />
     </>
   );
 }

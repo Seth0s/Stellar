@@ -16,6 +16,15 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 // default) — e `get_report` devolve o papel junto com o verdict. Store
 // REAL atrás do bus (não mock): a coluna nova, a migração e o choke point
 // são testados juntos, como rodam no app.
+//
+// 2026-09-19 — o gate do veredito (`decideReportVerdictWrite`) passou a
+// valer TAMBÉM no handler `report` do bus (o caminho do acbridge), não só
+// no MCP. Consequência nesta suíte: um veredito de implementer é RECUSADO
+// antes de qualquer gravação, então onde o veículo antes era "implementer
+// manda aprovado", agora ou o report vai sem veredito (para exercitar o
+// carimbo de papel, que é o que este arquivo cobre) ou a asserção é a
+// própria recusa. O dobro de callbacks passou a implementar `getTaskCards`
+// — sem isso o papel resolvia como desconhecido e todo veredito passava.
 
 function baseTask(id: string, overrides: Partial<TaskRow> = {}): TaskRow {
   const now = Date.now();
@@ -53,6 +62,17 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         if (prop === "upsertReport") return (row: ReportRow) => store.upsertReport(row);
         if (prop === "nextReportSeqSeed") return () => store.nextReportSeqSeed();
         if (prop === "listTaskCardsForCard") return (cardId: string) => store.listTaskCardsForCard(cardId);
+        // Produção tem esta chave (`index.ts`: `getTaskCards: (taskId) =>
+        // store.getTaskCards(taskId)`) — o gate irmão do `update_task` e o
+        // dump da Fila leem dela. Um dobro que OMITE um callback usado em
+        // produção é uma armadilha: durante a implementação do gate do
+        // veredito (2026-09-19) a versão inicial lia o dump por task, este
+        // Proxy devolvia `undefined`, o papel virava desconhecido e TODO
+        // veredito — inclusive de implementer — passava: verde por acidente
+        // do harness, não por comportamento. O gate final lê os vínculos
+        // VIVOS (`listTaskCardsForCard`, epoch-filtrado, já aqui), mas esta
+        // chave fica porque produção a tem.
+        if (prop === "getTaskCards") return (taskId: string) => store.getTaskCards(taskId);
         if (prop === "recordParticipationRound") return (cardId: string, verdict: string | null, at: number) => store.recordParticipationRound(cardId, verdict, at);
         // `report` lê a task vinculada por `tasks.card_id` pra decidir
         // aceitação/retry — o store real responde.
@@ -98,23 +118,38 @@ describe("message-bus + store: report carimba reports.role a partir de task_card
     return { store, bus };
   }
 
-  it("implementer: card principal da task (`tasks.card_id`) reporta 'aprovado' → role 'implementer' gravado ao lado do verdict", async () => {
+  it("implementer: o VEREDITO é recusado pelo gate (mesma regra do MCP) e nada é gravado; report sem veredito segue carimbando role 'implementer'", async () => {
     const { store: s, bus: b } = setup();
     s.upsertTask(baseTask("t-impl", { card_id: "impl-1" }));
 
-    const res = (await b.handleRequest({ cmd: "report", requesterId: "impl-1", report: { ok: true }, verdict: "aprovado" } as BusRequest)) as {
+    // CAMADA 4, segunda porta (2026-09-19): o caminho do acbridge consulta a
+    // MESMA decisão pura que o MCP — implementer não julga o próprio trabalho.
+    const refused = (await b.handleRequest({ cmd: "report", requesterId: "impl-1", report: { ok: true }, verdict: "aprovado" } as BusRequest)) as {
+      ok: boolean;
+      error?: string;
+    };
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain("implementer");
+    // Recusa ANTES de qualquer gravação: nem linha em `reports`, nem rodada.
+    expect(s.getReport("impl-1")).toBeUndefined();
+    expect(s.getTaskVerdicts("t-impl")).toEqual([]);
+
+    // Report SEM veredito é report comum — e é ele que carrega o carimbo de
+    // papel que este arquivo existe para cobrir.
+    const res = (await b.handleRequest({ cmd: "report", requesterId: "impl-1", report: { ok: true } } as BusRequest)) as {
       ok: boolean;
       seq: number;
     };
     expect(res.ok).toBe(true);
 
     const row = s.getReport("impl-1");
-    expect(row?.verdict).toBe("aprovado");
+    expect(row?.verdict).toBeNull();
     expect(row?.role).toBe("implementer");
     expect(rawRole(dir, "impl-1")).toBe("implementer");
     // `task_verdicts` continua recebendo a rodada com o MESMO papel — a
-    // fonte é uma só (`task_cards`), duas linhas.
-    expect(s.getTaskVerdicts("t-impl").map((v) => [v.role, v.verdict])).toEqual([["implementer", "aprovado"]]);
+    // fonte é uma só (`task_cards`), duas linhas. Sem veredito, a rodada
+    // registra `null` (a rodada terminou sem julgamento), não string vazia.
+    expect(s.getTaskVerdicts("t-impl").map((v) => [v.role, v.verdict])).toEqual([["implementer", null]]);
   });
 
   it("reviewer: card vinculado via linkTaskCard como reviewer reporta → role 'reviewer'; o principal segue implementer", async () => {
@@ -122,16 +157,18 @@ describe("message-bus + store: report carimba reports.role a partir de task_card
     s.upsertTask(baseTask("t-rev", { card_id: "impl-2" }));
     s.linkTaskCard("t-rev", "rev-2", "reviewer");
 
-    await b.handleRequest({ cmd: "report", requesterId: "impl-2", report: { ok: true }, verdict: "aprovado" } as BusRequest);
+    // O principal manda um report SEM veredito — o veredito dele seria
+    // recusado pelo gate; quem julga é o reviewer.
+    await b.handleRequest({ cmd: "report", requesterId: "impl-2", report: { ok: true } } as BusRequest);
     const res = (await b.handleRequest({ cmd: "report", requesterId: "rev-2", report: { ok: true, notes: "ok" }, verdict: "reprovado" } as BusRequest)) as {
       ok: boolean;
     };
     expect(res.ok).toBe(true);
 
     expect(s.getReport("rev-2")).toMatchObject({ verdict: "reprovado", role: "reviewer" });
-    expect(s.getReport("impl-2")).toMatchObject({ verdict: "aprovado", role: "implementer" });
+    expect(s.getReport("impl-2")).toMatchObject({ verdict: null, role: "implementer" });
     expect(s.getTaskVerdicts("t-rev").map((v) => [v.card_id, v.role, v.verdict])).toEqual([
-      ["impl-2", "implementer", "aprovado"],
+      ["impl-2", "implementer", null],
       ["rev-2", "reviewer", "reprovado"],
     ]);
   });
@@ -150,13 +187,25 @@ describe("message-bus + store: report carimba reports.role a partir de task_card
     expect(rawRole(dir, "loose-3")).toBeNull();
   });
 
-  it("role ambíguo: card implementer numa task e reviewer em outra → NULL (o report é por card, não diz de qual task fala)", async () => {
+  it("role ambíguo: card implementer numa task e reviewer em outra → NULL na linha por card; e o veredito é recusado (a task resolvida é a do vínculo principal)", async () => {
     const { store: s, bus: b } = setup();
     s.upsertTask(baseTask("t-a", { card_id: "both-4" }));
     s.upsertTask(baseTask("t-b"));
     s.linkTaskCard("t-b", "both-4", "reviewer");
 
-    await b.handleRequest({ cmd: "report", requesterId: "both-4", report: { ok: true }, verdict: "aprovado" } as BusRequest);
+    // Com veredito: o report resolve a task do vínculo PRINCIPAL (t-a), onde
+    // este card é implementer — recusado antes de gravar, nada sobra.
+    const refused = (await b.handleRequest({ cmd: "report", requesterId: "both-4", report: { ok: true }, verdict: "aprovado" } as BusRequest)) as {
+      ok: boolean;
+      error?: string;
+    };
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain("implementer");
+
+    // Sem veredito: report comum, e a linha POR CARD não escolhe um papel
+    // quando os vínculos vivos discordam (null é o fato, não um palpite).
+    const res = (await b.handleRequest({ cmd: "report", requesterId: "both-4", report: { ok: true } } as BusRequest)) as { ok: boolean };
+    expect(res.ok).toBe(true);
 
     expect(s.getReport("both-4")?.role).toBeNull();
     // Mas `task_verdicts` (por task) sabe cada papel — a ambiguidade é só
@@ -196,10 +245,16 @@ describe("message-bus + store: report carimba reports.role a partir de task_card
 
     await b.handleRequest({ cmd: "report", requesterId: "c-7", report: { round: 1 }, verdict: "reprovado" } as BusRequest);
     s.linkTaskCard("t-hist", "c-7", "implementer");
-    await b.handleRequest({ cmd: "report", requesterId: "c-7", report: { round: 2 }, verdict: "aprovado" } as BusRequest);
+    // Depois do relink o card é implementer NESTA task, então o veredito
+    // dele é recusado pelo gate (2026-09-19); o segundo report vai sem
+    // veredito — o que este caso mede é o carimbo de papel no momento da
+    // escrita, não o veredito.
+    const refused = (await b.handleRequest({ cmd: "report", requesterId: "c-7", report: { round: 2 }, verdict: "aprovado" } as BusRequest)) as { ok: boolean };
+    expect(refused.ok).toBe(false);
+    await b.handleRequest({ cmd: "report", requesterId: "c-7", report: { round: 2 } } as BusRequest);
 
     expect(s.getReport("c-7", 0)).toMatchObject({ verdict: "reprovado", role: "reviewer" });
-    expect(s.getReport("c-7")).toMatchObject({ verdict: "aprovado", role: "implementer" });
+    expect(s.getReport("c-7")).toMatchObject({ verdict: null, role: "implementer" });
   });
 });
 
