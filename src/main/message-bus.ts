@@ -48,6 +48,7 @@ import {
   clearLastRefusedStash,
   lastRefusedReasonFromResultJson,
   describeExitWithoutAcceptedReport,
+  decodeReportArgument,
 } from "./report-retry-decision";
 import {
   resolveTaskDispatchCwd,
@@ -63,10 +64,12 @@ import {
   contractFromTaskRow,
   parseTaskContractInput,
   territoryToSql,
+  territoryFromSql,
   gatesToSql,
   reportSchemaToSql,
   allowCommitToSql,
 } from "./task-contract-decision";
+import { decideTerritoryConflict, type ActiveTaskTerritory } from "./territory-conflict-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
 import { carryGateEvidence, runTaskGates, stampGateEvidenceJson, stripAgentGateEvidence } from "./gate-runner";
 import { decideSpawnReason, deriveSpawnDepth } from "./spawn-record-decision";
@@ -82,7 +85,13 @@ import {
   normalizeTaskPurpose,
   normalizeTaskReview,
 } from "../task-purpose";
-import { fillReportTaskId, resolveDeclaredTaskId } from "./card-spawn-env-decision";
+import { fillReportTaskId } from "./card-spawn-env-decision";
+import {
+  decideReportTaskLink,
+  declaredTaskIdFromReportBody,
+  describeAmbiguousTaskRefusal,
+  describeDeclaredTaskNotLinkedRefusal,
+} from "./report-task-link-decision";
 import { promoteReportVerdict, resolveReporterRole } from "./report-verdict-decision";
 import { decideSpawnIsolation } from "./worktree-isolation-decision";
 import { prepareIsolatedWorktree, removeIsolatedWorktree } from "./worktree-prep";
@@ -858,6 +867,32 @@ export function createMessageBus(
      * board at the SQLite layer instead of loading the whole table into
      * Node just to `.filter()` it. */
     listTasksByBoard: (boardId: string) => TaskRow[];
+    /**
+     * PERF (task c9db1d86, medido na 41813ab3 seq 447) — par de `summary`
+     * dos dois callbacks acima: MESMAS linhas, com `prompt`/`result_json`
+     * em `null` já no SELECT, em vez de selecioná-los e descartá-los no
+     * `projectListedTask` no fim. Backed by `store.listTasksSummary` /
+     * `store.listTasksSummaryByBoard`.
+     *
+     * Obrigatórios (não opcionais) de propósito: `tsc` passa a recusar uma
+     * fiação que esqueça um dos dois, em vez do modo de falha silenciosa —
+     * o handler cairia no caminho `full` e o `view:"summary"` voltaria a
+     * não economizar nada sem ninguém perceber.
+     */
+    listTasksSummary: () => TaskRow[];
+    listTasksSummaryByBoard: (boardId: string) => TaskRow[];
+    /**
+     * PERF (task 9dd877c8, medido na 41813ab3 seq 447) — linha mínima
+     * (`id`, `card_id`, `status`) para `scanIdleWithoutReport`, que roda num
+     * timer de 5s para sempre e consumia a tabela inteira, com
+     * `prompt`/`result_json`, para ler dois campos.
+     *
+     * Backed by `store.listTasksForIdleScan`. Obrigatório pelo mesmo motivo
+     * dos dois acima: um callback que o wiring esqueça vira no-op silencioso
+     * (`Array.isArray(undefined)` → lista vazia → o scan para de achar task
+     * vinculada sem nenhum erro aparecer).
+     */
+    listTasksForIdleScan: () => import("./store").TaskIdleRow[];
     getTask: (id: string) => TaskRow | undefined;
     upsertTask: (task: TaskRow) => StatusWriteDecision;
     /** Third path — park/clear a status ask without touching status.
@@ -2127,7 +2162,13 @@ export function createMessageBus(
    * pointer. Exported as a test seam (same pattern as resolveCardExit).
    */
   function scanIdleWithoutReport(): void {
-    const listed = callbacks.listTasks();
+    // PERF (task 9dd877c8) — este scan roda a cada 5s para sempre, e usava
+    // `callbacks.listTasks()` (31 colunas, `prompt`+`result_json` inclusos)
+    // para ler dois campos. Agora lê `id`/`card_id`/`status`. O
+    // `Array.isArray` continua: duble de teste que não implemente o callback
+    // devolve `undefined`, e uma lista vazia é o resultado seguro (nada
+    // notifica), não um crash.
+    const listed = callbacks.listTasksForIdleScan();
     const tasks = Array.isArray(listed) ? listed : [];
     for (const card of listTerminalCards()) {
       const cardId = card.id;
@@ -2806,7 +2847,35 @@ export function createMessageBus(
     if (req.cmd === "report") {
       const listed = callbacks.listTasks();
       const tasks = Array.isArray(listed) ? listed : [];
-      const linkedTask = req.requesterId ? tasks.find((t) => t.card_id === req.requesterId) : undefined;
+      // CAMADA 4 — a task deste report é resolvida UMA vez, antes de
+      // qualquer efeito (task 4fee76d5).
+      //
+      // Antes disto, este handler pegava `tasks.find(t => t.card_id ===
+      // requesterId)` — a task MAIS ANTIGA cujo principal é o card, sem
+      // olhar para a declaração do agente nem para os vínculos de
+      // `task_cards` — e, quando não conseguia decidir, seguia com
+      // `reportTaskId` undefined. Lá embaixo isso virava papel `null`, que
+      // já significava "sem vínculo nenhum", e outsider PODE emitir
+      // veredito: um card com 2+ vínculos deixava de ser implementer e
+      // passava a poder assinar o próprio trabalho. MEDIDO no teste de
+      // caracterização, com o veredito ACEITO nas duas portas.
+      //
+      // O mesmo desempate silencioso decidia também o `reportSchema`
+      // aceito, o orçamento de retry, o carimbo de `taskId` no payload e os
+      // gates disparados — todos passam a seguir a task RESOLVIDA.
+      const taskCardLinks = req.requesterId ? (callbacks.listTaskCardsForCard(req.requesterId) ?? []) : [];
+      const link = decideReportTaskLink({
+        declaredTaskId: declaredTaskIdFromReportBody(decodeReportArgument(req.report)),
+        principalTaskIds: req.requesterId ? tasks.filter((t) => t.card_id === req.requesterId).map((t) => t.id) : [],
+        linkTaskIds: taskCardLinks.map((l) => l.task_id),
+      });
+      if (link.action === "ambiguous") {
+        return { ok: false, error: describeAmbiguousTaskRefusal(link.candidates) };
+      }
+      if (link.action === "declared-not-linked") {
+        return { ok: false, error: describeDeclaredTaskNotLinkedRefusal(link.declared, link.candidates) };
+      }
+      const linkedTask = link.action === "resolve" ? tasks.find((t) => t.id === link.taskId) : undefined;
       const runningTask =
         linkedTask && effectiveTaskStatus(linkedTask) === "running" ? linkedTask : undefined;
       const decision = decideReportAcceptance({
@@ -2833,12 +2902,7 @@ export function createMessageBus(
       // requires a `linkedTask`, which requires a requesterId, so no
       // request that used to reach it can now stop at the guard.
       if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
-      const taskCardLinks = callbacks.listTaskCardsForCard(req.requesterId) ?? [];
-      const linkTaskIds = taskCardLinks.map((l) => l.task_id);
-      const reportTaskId = resolveDeclaredTaskId({
-        primaryTaskIds: linkedTask ? [linkedTask.id] : [],
-        linkTaskIds,
-      });
+      const reportTaskId = link.action === "resolve" ? link.taskId : undefined;
       // CAMADA 4, SEGUNDA PORTA — o choke point DE VERDADE (2026-09-19).
       //
       // Um `verdict` no payload é julgamento escrito sem `update_task`, e
@@ -3402,7 +3466,21 @@ export function createMessageBus(
       // não só "card_id preenchido" — card fechado deixa id stale.
       const parsed = parseListTasksQuery(req);
       if (!parsed.ok) return { ok: false, error: parsed.error };
-      const tasks = req.boardId ? callbacks.listTasksByBoard(req.boardId) : callbacks.listTasks();
+      // PERF (task c9db1d86) — a `view` decide a COLUNA no SELECT, não só o
+      // descarte no fim. Antes desta linha, `view:"summary"` selecionava
+      // `prompt`+`result_json` (82% dos bytes medidos na 41813ab3 seq 447) e
+      // só os jogava fora em `projectListedTask` — o parâmetro que existe pra
+      // economizar economizava só o fio do IPC. `serializeTask` e
+      // `projectListedTask` abaixo ficam intocados: a linha do summary já
+      // chega com as duas em `null`.
+      const tasks =
+        parsed.view === "summary"
+          ? req.boardId
+            ? callbacks.listTasksSummaryByBoard(req.boardId)
+            : callbacks.listTasksSummary()
+          : req.boardId
+            ? callbacks.listTasksByBoard(req.boardId)
+            : callbacks.listTasks();
       const aliveCardIds = new Set(
         tasks
           .map((t) => t.card_id)
@@ -3774,6 +3852,22 @@ export function createMessageBus(
       // Implementer tied to a task: same brief as auto-dispatch (prompt +
       // dep pointer + contract). Reviewer keeps the free review order.
       const taskForBrief = briefDecision.taskId ? callbacks.getTask(briefDecision.taskId) : undefined;
+      // Regra (b), sticky de território (2026-09-20) — um implementador
+      // amarrado a uma task não nasce sobre território que outra task
+      // ATIVA do MESMO board já reivindica. Reviewer fica de fora: revisão
+      // lê o trabalho alheio, não escreve o território declarado dele.
+      // Território ausente na candidata é o caso comum (não declarado é
+      // normal) — checado ANTES de tocar `listTasks`, para não pedir aos
+      // callbacks algo que uma task sem território nunca precisou.
+      const territoryForConflict = taskForBrief ? territoryFromSql(taskForBrief.territory_json) : null;
+      if (taskForBrief && territoryForConflict && role !== TASK_CARD_REVIEWER_ROLE && taskForBrief.board_id) {
+        const conflict = decideTerritoryConflict({
+          taskId: taskForBrief.id,
+          territory: territoryForConflict,
+          activeTasks: activeTaskTerritories(taskForBrief.board_id, taskForBrief.id),
+        });
+        if (!conflict.ok) return { ok: false, error: conflict.error };
+      }
       const deliveredBrief =
         briefDecision.taskId && role !== TASK_CARD_REVIEWER_ROLE && taskForBrief
           ? briefForTask(taskForBrief)
@@ -4445,6 +4539,19 @@ export function createMessageBus(
     );
   }
 
+  /** Território de toda task ATIVA (nunca julgada + implementador vivo, por
+   * `card_id` OU só por `task_cards` — mesmo critério de `hasLiveLinkedCard`
+   * acima) no board dado, exceto `excludeTaskId`. A lista que
+   * `decideTerritoryConflict` compara — mecanismo (b) do sticky de
+   * território (2026-09-20). */
+  function activeTaskTerritories(boardId: string, excludeTaskId: string): ActiveTaskTerritory[] {
+    return callbacks
+      .listTasks()
+      .filter((t) => t.board_id === boardId && t.id !== excludeTaskId && !isJudgmentStatus(t.status))
+      .filter((t) => (t.card_id !== null && callbacks.isCardAlive(t.card_id)) || hasLiveLinkedCard(t))
+      .map((t) => ({ taskId: t.id, territory: territoryFromSql(t.territory_json) }));
+  }
+
   /** Called by the write funnel (index.ts → task-write-funnel.ts) — the
    * ONE place that observes a task's status actually changing to `done`,
    * whatever wrote it: `update_task` from an agent, the approve button, a
@@ -4516,6 +4623,23 @@ export function createMessageBus(
     if (cwdDecision.action === "refuse") {
       recordDispatchRefusal(latest, cwdDecision.reason);
       return false;
+    }
+    // Regra (b), sticky de território (2026-09-20) — auto-dispatch é spawn
+    // igual a `spawn_agent`; mesma recusa quando o território da task colide
+    // com o de outra task ATIVA do mesmo board. Território ausente é o caso
+    // comum — checado antes de tocar `listTasks`, mesma disciplina do
+    // `spawn_agent` acima.
+    const territoryForConflict = territoryFromSql(latest.territory_json);
+    if (territoryForConflict) {
+      const territoryConflict = decideTerritoryConflict({
+        taskId: latest.id,
+        territory: territoryForConflict,
+        activeTasks: activeTaskTerritories(task.board_id, latest.id),
+      });
+      if (!territoryConflict.ok) {
+        recordDispatchRefusal(latest, territoryConflict.error);
+        return false;
+      }
     }
 
     dispatchingTaskIds.add(task.id);

@@ -202,12 +202,26 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
   });
 
   it("taskId já no corpo: o do chamador fica", async () => {
+    // Duas tasks ativas no card, e o corpo declara UMA delas — que é vínculo
+    // vivo. Antes isto declarava um id SINTÉTICO ("already") só para exercitar
+    // o "não sobrescreve"; a task 4fee76d5 tornou isso recusa (declarado que
+    // não é vínculo vivo RECUSA, nunca fallback silencioso), e a intenção
+    // original — o id do chamador não é trocado pelo do principal — continua
+    // medida: o principal é `linked-a` e o corpo diz `linked-b`.
+    const declared = "linked-b";
     const { bus: b } = makeBus({
-      listTasks: () => [{ id: "linked-id", card_id: "child-own", status: "pending" }],
+      listTasks: () => [
+        { id: "linked-a", card_id: "child-own", status: "pending" },
+        { id: declared, card_id: null, status: "pending" },
+      ],
+      listTaskCardsForCard: () => [
+        { task_id: "linked-a", card_id: "child-own", role: "implementer" },
+        { task_id: declared, card_id: "child-own", role: "implementer" },
+      ],
     });
-    await b.handleRequest({ cmd: "report", requesterId: "child-own", report: { ok: true, taskId: "already" } } as BusRequest);
+    await b.handleRequest({ cmd: "report", requesterId: "child-own", report: { ok: true, taskId: declared } } as BusRequest);
     const stored = (await b.handleRequest({ cmd: "get_report", target: "child-own" } as BusRequest)) as { report: unknown };
-    expect(stored.report).toEqual({ ok: true, taskId: "already" });
+    expect(stored.report).toEqual({ ok: true, taskId: declared });
   });
 
   it("o corpo do relatório NÃO é digitado — só o ponteiro curto", async () => {

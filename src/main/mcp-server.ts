@@ -10,8 +10,20 @@ import { reachFromHunks } from "./reach-from-hunks";
 import { reachAcrossLiterals } from "./reach-across-literals";
 import { suggestQAScope } from "./suggest-qa-scope";
 import { decodeReportArgument } from "./report-retry-decision";
+import {
+  buildToolInputSchema,
+  decideDeclaredKeys,
+  type DeclaredKeysDecision,
+  type ToolContractDecl,
+} from "./tool-contract";
+import {
+  decideReportTaskLink,
+  declaredTaskIdFromReportBody,
+  describeAmbiguousTaskRefusal,
+  describeDeclaredTaskNotLinkedRefusal,
+} from "./report-task-link-decision";
 import { promoteReportVerdict } from "./report-verdict-decision";
-import { decideReportVerdictWrite } from "./judgment-write-decision";
+import { decideReportVerdictWrite, emptyReportSchemaFields } from "./judgment-write-decision";
 import { TASK_CARD_IMPLEMENTER_ROLE, TASK_CARD_ROLES, TASK_PURPOSES, TASK_REVIEW_VALUES, isReviewWanted } from "../task-purpose";
 
 /**
@@ -36,6 +48,13 @@ type ReportVerdictContext = {
   requesterRoleOnTask: string | null;
   reportSchema: string[] | null;
   reviewWanted: boolean;
+  /**
+   * Preenchido quando a task do report NÃO pôde ser resolvida sem ambiguidade
+   * (task 4fee76d5). Antes disto o contexto simplesmente ficava com papel
+   * `null`, que significa "sem vínculo" — e outsider PODE emitir veredito,
+   * então 2+ vínculos viravam autorização para o implementer assinar.
+   */
+  refusal?: string;
 };
 
 function readReportSchema(value: unknown): string[] | null {
@@ -44,10 +63,10 @@ function readReportSchema(value: unknown): string[] | null {
   return keys.length > 0 ? keys : null;
 }
 
+/** Delega para a MESMA leitura que o bus usa — uma implementação do "taskId
+ * declarado no corpo", não duas (task 4fee76d5). */
 function declaredTaskIdFromReport(report: unknown): string | undefined {
-  if (report === null || typeof report !== "object" || Array.isArray(report)) return undefined;
-  const raw = (report as Record<string, unknown>).taskId;
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  return declaredTaskIdFromReportBody(report);
 }
 
 async function resolveReportVerdictContext(input: {
@@ -57,29 +76,54 @@ async function resolveReportVerdictContext(input: {
 }): Promise<ReportVerdictContext> {
   const context: ReportVerdictContext = { requesterRoleOnTask: null, reportSchema: null, reviewWanted: false };
 
-  if (input.declaredTaskId) {
-    const res = await input.handleRequest({ cmd: "get_task", taskId: input.declaredTaskId });
+  // Os vínculos por PRINCIPAL deste card (tasks cujo `card_id` é ele). É a
+  // mesma leitura que este handler já fazia para o fallback — agora ela roda
+  // sempre, porque é ela que alimenta a decisão de ambiguidade.
+  let principals: Record<string, unknown>[] = [];
+  if (input.requesterId) {
+    const res = await input.handleRequest({ cmd: "list_tasks", status: ["pending", "running"], view: "full" });
+    const tasks = res.ok && Array.isArray(res.tasks) ? (res.tasks as Record<string, unknown>[]) : [];
+    principals = tasks.filter((t) => t.cardId === input.requesterId);
+  }
+
+  // A MESMA decisão pura que o bus usa (`report-task-link-decision.ts`):
+  // declarado vence; um vínculo é inequívoco; dois ou mais RECUSAM nomeando
+  // as candidatas. Nunca desempata, e nunca degrada para outsider.
+  const link = decideReportTaskLink({
+    declaredTaskId: input.declaredTaskId,
+    principalTaskIds: principals.map((t) => (typeof t.id === "string" ? t.id : "")),
+    linkTaskIds: [],
+  });
+  if (link.action === "ambiguous") {
+    return { ...context, refusal: describeAmbiguousTaskRefusal(link.candidates) };
+  }
+  if (link.action === "declared-not-linked") {
+    return { ...context, refusal: describeDeclaredTaskNotLinkedRefusal(link.declared, link.candidates) };
+  }
+  if (link.action !== "resolve") return context;
+
+  if (link.source === "declared") {
+    const res = await input.handleRequest({ cmd: "get_task", taskId: link.taskId });
     const task = res.ok ? (res.task as Record<string, unknown> | undefined) : undefined;
     if (task) {
       const cards = Array.isArray(task.cards) ? (task.cards as { cardId?: string; role?: string }[]) : [];
-      const link = input.requesterId ? cards.find((c) => c.cardId === input.requesterId) : undefined;
-      context.requesterRoleOnTask = link?.role ?? null;
+      const linkRow = input.requesterId ? cards.find((c) => c.cardId === input.requesterId) : undefined;
+      context.requesterRoleOnTask = linkRow?.role ?? null;
       context.reportSchema = readReportSchema(task.reportSchema);
       context.reviewWanted = isReviewWanted(task.review);
     }
+    return context;
   }
 
-  if (context.requesterRoleOnTask === null && input.requesterId) {
-    const res = await input.handleRequest({ cmd: "list_tasks", status: ["pending", "running"], view: "full" });
-    const tasks = res.ok && Array.isArray(res.tasks) ? (res.tasks as Record<string, unknown>[]) : [];
-    const principals = tasks.filter((t) => t.cardId === input.requesterId);
-    if (principals.length === 1) {
-      context.requesterRoleOnTask = TASK_CARD_IMPLEMENTER_ROLE;
-      if (context.reportSchema === null) context.reportSchema = readReportSchema(principals[0].reportSchema);
-      if (!context.reviewWanted) context.reviewWanted = isReviewWanted(principals[0].review);
-    }
+  // Resolvido por PRINCIPAL: a linha de `list_tasks` já traz o contrato, e o
+  // papel é o de implementer — que é o que o vínculo de principal significa
+  // (postura que este handler já tinha com um único principal).
+  const principal = principals.find((t) => t.id === link.taskId);
+  if (principal) {
+    context.requesterRoleOnTask = TASK_CARD_IMPLEMENTER_ROLE;
+    context.reportSchema = readReportSchema(principal.reportSchema);
+    context.reviewWanted = isReviewWanted(principal.review);
   }
-
   return context;
 }
 
@@ -126,6 +170,151 @@ async function resolveReportVerdictContext(input: {
  */
 function spawnableProviderIds(): string[] {
   return PROVIDERS.map((p) => p.id);
+}
+
+// ---------------------------------------------------------------------------
+// TOOL CONTRACT — o wrapper único (task 197d09bd)
+//
+// Uma tool migrada declara seus campos UMA vez (`ToolContractDecl`) e passa
+// por `contractTool`, que (a) GERA o `inputSchema` dela — estrito, para chave
+// desconhecida virar recusa em vez de silêncio — e (b) roda o contrato antes
+// do handler. Nenhum handler migrado valida forma à mão: se sobrasse um, a
+// próxima tool nova copiaria o handler errado.
+//
+// A recusa sai como RESULTADO da mesma chamada (`{ok:false, error}`), a forma
+// que o gate de veredito já usava — o modelo vê, corrige e chama de novo no
+// MESMO turno. Nada de exceção de protocolo.
+// ---------------------------------------------------------------------------
+
+/** Todo handler de tool devolve isto — o envelope de resultado do MCP. */
+function toolResult(res: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(res) }] };
+}
+
+function refusalResult(error: string) {
+  return toolResult({ ok: false, error });
+}
+
+/**
+ * O wrapper. `preflight` é opcional porque a maioria das tools só tem
+ * exigência ESTÁTICA — que já vem do `inputSchema` gerado — enquanto uma
+ * exigência que depende da TASK (o `reportSchema` de um `report`) só pode
+ * ser decidida por chamada.
+ */
+function contractTool(
+  server: McpServer,
+  input: {
+    contract: ToolContractDecl;
+    description: string;
+    preflight?: (args: Record<string, unknown>) => Promise<DeclaredKeysDecision>;
+    run: (args: Record<string, unknown>) => Promise<unknown>;
+  },
+): void {
+  server.registerTool(
+    input.contract.tool,
+    { description: input.description, inputSchema: buildToolInputSchema(input.contract) },
+    (async (args: Record<string, unknown>) => {
+      if (input.preflight) {
+        const decision = await input.preflight(args ?? {});
+        if (decision.action === "refuse") return refusalResult(decision.error);
+      }
+      return toolResult(await input.run(args ?? {}));
+    }) as never,
+  );
+}
+
+const CARD_STATUS_CONTRACT: ToolContractDecl = {
+  tool: "card_status",
+  fields: [
+    {
+      name: "target",
+      required: true,
+      schema: z.string().describe("The target card's id or label (see list_cards)"),
+      accepted: "o id ou o label de um card aberto (veja list_cards)",
+    },
+  ],
+};
+
+const REPORT_CONTRACT: ToolContractDecl = {
+  tool: "report",
+  fields: [
+    {
+      name: "callerCardId",
+      schema: z
+        .string()
+        .describe(
+          "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: a registered MCP process is identified by its URL stamp; this body field is not trusted when that stamp is absent, so an external client cannot report as a different card just by naming one here.",
+        ),
+      accepted: "o id do seu próprio card (ver AGENT_CANVAS_CARD_ID)",
+    },
+    {
+      name: "report",
+      required: true,
+      schema: z
+        .unknown()
+        .describe(
+          "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans. Pass the payload as a JSON object; a JSON-encoded object string is also accepted and decoded.",
+        ),
+      accepted: "o relatório como objeto JSON (um objeto codificado como string também é aceito)",
+    },
+    {
+      name: "verdict",
+      schema: z
+        .enum(["aprovado", "reprovado"])
+        .describe(
+          "Formal verdict for a review report — a real, typed field (not just a convention inside `report`'s free JSON). Omit for a plain non-review report. A verdict is judgment, so it passes the SAME gate as update_task's done/failed, and is REFUSED before anything is stored when you are not entitled to judge: a card linked as implementer on this task is refused (an implementer's own 'aprovado' is not a review — it was measured three times in one day, always reproved later), and when the task declares review=\"wanted\" only a linked reviewer may set one. Reviewer and reviewer-less outsider keep writing as before; unknown role is not implementer, so it is not barred. A reviewer's verdict must also carry the task's declared reportSchema keys with real content — absent, empty or placeholder values (\"\", [], {}, \"N/A\", \"TBD\") are REFUSED, because a verdict without evidence is worth less than no review. Stored together with YOUR role on the task (task_cards: implementer/reviewer, or unknown when your card is not linked).",
+        ),
+      accepted: 'um dos valores "aprovado" ou "reprovado"',
+    },
+  ],
+};
+
+/**
+ * O preflight do `report` — a exigência DINÂMICA que nenhum `inputSchema`
+ * alcança, porque as chaves obrigatórias vêm da TASK (`tasks.report_schema_json`)
+ * e mudam a cada chamada. É o caso que motivou o validador reutilizável.
+ *
+ * Escopo deliberadamente igual ao do caminho do bus, um grau mais forte:
+ *   - `report` que não é objeto: `ok` — o envelope é do bus, que já recusa
+ *     com mensagem própria (nomear `schema[0]` ali mentiria sobre a causa);
+ *   - `ok: false` (falha declarada): `ok` — a regra existente diz que quem
+ *     declara que NÃO conseguiu entregar não deve o contrato que não
+ *     entregou (`report-retry-decision.ts`, "declared failure skips
+ *     reportSchema"). Espelhar isso é obrigatório, senão o validador
+ *     passaria a recusar relatos de falha legítimos;
+ *   - sem `taskId` declarado no corpo: `ok` — resolve sozinho quem é a task
+ *     continua sendo do bus; adivinhar aqui seria o desempate silencioso
+ *     que a task 4fee76d5 vai fechar.
+ *
+ * O que ele ACRESCENTA ao que já existe: o bus checa PRESENÇA da chave. Um
+ * `{"achados": "placeholder"}` satisfaz presença e não diz nada (medido:
+ * passou pelo servidor sem um pio). Aqui a chave precisa de conteúdo real —
+ * a MESMA predição que o caminho de veredito já usa
+ * (`emptyReportSchemaFields`, injetada, não copiada).
+ */
+async function reportPreflight(
+  args: Record<string, unknown>,
+  handleRequest: (req: BusRequest) => Promise<BusResponse>,
+): Promise<DeclaredKeysDecision> {
+  const report = decodeReportArgument(args.report);
+  if (report === null || typeof report !== "object" || Array.isArray(report)) return { action: "ok" };
+  if ((report as Record<string, unknown>).ok === false) return { action: "ok" };
+  const taskId = declaredTaskIdFromReport(report);
+  if (!taskId) return { action: "ok" };
+  const res = await handleRequest({ cmd: "get_task", taskId });
+  const task = res.ok ? (res.task as Record<string, unknown> | undefined) : undefined;
+  if (!task) return { action: "ok" };
+  return decideDeclaredKeys({
+    tool: "report",
+    declaredBy: `o reportSchema da task ${taskId}`,
+    accepted: "conteúdo real (a evidência medida: o que foi verificado, a saída do gate, o número)",
+    declared: readReportSchema(task.reportSchema),
+    provided: report,
+    // `emptyReportSchemaFields` recebe (report, schema) — o contrato pede
+    // (declared, provided). O adaptador é explícito de propósito: a ordem
+    // trocada seria um bug silencioso, não um erro de tipo óbvio.
+    offendingKeys: (declared, provided) => emptyReportSchemaFields(provided, declared),
+  });
 }
 
 export function createMcpServer(opts: { port: number; handleRequest: (req: BusRequest) => Promise<BusResponse> }) {
@@ -456,20 +645,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
     );
 
-    server.registerTool(
-      "card_status",
-      {
-        description:
-          "Check a terminal card's status: 'running' (actively producing output), 'idle' (alive but no output for a while — sitting at a prompt, likely waiting on you), 'exited', or 'waiting' (blocked on a consent decision, e.g. an open_url/spawn_agent/spawn_card call it made that a human hasn't approved or denied yet). A cheap alternative to polling snapshot/read_card in a loop. 'idle' is a heuristic (no-output-for-Nsec, same imprecision as any turn-detection) — a long 'thinking' pause can occasionally still read as idle.",
-        inputSchema: {
-          target: z.string().describe("The target card's id or label (see list_cards)"),
-        },
-      },
-      async ({ target }) => {
-        const res = await opts.handleRequest({ cmd: "card_status", target });
-        return { content: [{ type: "text", text: JSON.stringify(res) }] };
-      },
-    );
+    contractTool(server, {
+      contract: CARD_STATUS_CONTRACT,
+      description:
+        "Check a terminal card's status: 'running' (actively producing output), 'idle' (alive but no output for a while — sitting at a prompt, likely waiting on you), 'exited', or 'waiting' (blocked on a consent decision, e.g. an open_url/spawn_agent/spawn_card call it made that a human hasn't approved or denied yet). A cheap alternative to polling snapshot/read_card in a loop. 'idle' is a heuristic (no-output-for-Nsec, same imprecision as any turn-detection) — a long 'thinking' pause can occasionally still read as idle.",
+      run: async (args) => opts.handleRequest({ cmd: "card_status", target: args.target as string }),
+    });
 
     server.registerTool(
       "close_card",
@@ -505,43 +686,23 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
     );
 
-    server.registerTool(
-      "report",
-      {
-        description:
-          "Report a structured result back to whoever spawned you, decoupled from process exit — call this when you finish a delegated task, even if you keep running afterward. The caller reads it with read_report, no ANSI/scrollback parsing needed. Requires your own card id. " +
-          "Acceptance: success is {ok: true, ...}; a report without ok is also accepted (not treated as failure). " +
-          "Declared failure is {ok: false, ...}. If that failure is still retryable (you omitted retryable, or sent retryable: true) AND a running task is linked to this card with retry budget left, THIS CALL IS REFUSED — the tool returns {ok: false, retriesRemaining, ...}, the task stays running, retry_count goes up by 1, and you (the same session, same context) correct and call report again. No new card is spawned. " +
-          "Honest terminal failure — use when retry cannot help (no credits, investigation concluded negatively, a metric the CLI does not expose): {ok: false, retryable: false, ...}. That is accepted on the first call, the task becomes failed, and no retry is spent. Without retryable: false, the only other accepted exits are success or exhausting max_retries. Do not declare ok: true to escape a real failure. " +
-          "The app does not judge whether your contents are correct. A refused call names the acceptance rule and remaining attempts; a structural refusal (missing report, ok/retryable not a boolean) names the field. " +
-          "A `verdict` is judgment and is gated separately, before storage: an implementer's own verdict is refused, and a reviewer's verdict must carry the task's reportSchema keys with real content — see the `verdict` field.",
-        inputSchema: {
-          callerCardId: z
-            .string()
-            .optional()
-            .describe(
-              "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: a registered MCP process is identified by its URL stamp; this body field is not trusted when that stamp is absent, so an external client cannot report as a different card just by naming one here.",
-            ),
-          report: z
-            .unknown()
-            .describe(
-              "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans. Pass the payload as a JSON object; a JSON-encoded object string is also accepted and decoded.",
-            ),
-          verdict: z
-            .enum(["aprovado", "reprovado"])
-            .optional()
-            .describe(
-              "Formal verdict for a review report — a real, typed field (not just a convention inside `report`'s free JSON). Omit for a plain non-review report. A verdict is judgment, so it passes the SAME gate as update_task's done/failed, and is REFUSED before anything is stored when you are not entitled to judge: a card linked as implementer on this task is refused (an implementer's own 'aprovado' is not a review — it was measured three times in one day, always reproved later), and when the task declares review=\"wanted\" only a linked reviewer may set one. Reviewer and reviewer-less outsider keep writing as before; unknown role is not implementer, so it is not barred. A reviewer's verdict must also carry the task's declared reportSchema keys with real content — absent, empty or placeholder values (\"\", [], {}, \"N/A\", \"TBD\") are REFUSED, because a verdict without evidence is worth less than no review. Stored together with YOUR role on the task (task_cards: implementer/reviewer, or unknown when your card is not linked).",
-            ),
-        },
-      },
-      async ({ callerCardId, report, verdict }) => {
-        const requesterId = caller(callerCardId);
+    contractTool(server, {
+      contract: REPORT_CONTRACT,
+      description:
+        "Report a structured result back to whoever spawned you, decoupled from process exit — call this when you finish a delegated task, even if you keep running afterward. The caller reads it with read_report, no ANSI/scrollback parsing needed. Requires your own card id. " +
+        "Acceptance: success is {ok: true, ...}; a report without ok is also accepted (not treated as failure). " +
+        "Declared failure is {ok: false, ...}. If that failure is still retryable (you omitted retryable, or sent retryable: true) AND a running task is linked to this card with retry budget left, THIS CALL IS REFUSED — the tool returns {ok: false, retriesRemaining, ...}, the task stays running, retry_count goes up by 1, and you (the same session, same context) correct and call report again. No new card is spawned. " +
+        "Honest terminal failure — use when retry cannot help (no credits, investigation concluded negatively, a metric the CLI does not expose): {ok: false, retryable: false, ...}. That is accepted on the first call, the task becomes failed, and no retry is spent. Without retryable: false, the only other accepted exits are success or exhausting max_retries. Do not declare ok: true to escape a real failure. " +
+        "The app does not judge whether your contents are correct. A refused call names the acceptance rule and remaining attempts; a structural refusal (missing report, ok/retryable not a boolean) names the field. " +
+        "A `verdict` is judgment and is gated separately, before storage: an implementer's own verdict is refused, and a reviewer's verdict must carry the task's reportSchema keys with real content — see the `verdict` field.",
+      preflight: (args) => reportPreflight(args, opts.handleRequest),
+      run: async (args) => {
+        const requesterId = caller(args.callerCardId as string | undefined);
         // `report` is `z.unknown()`, so a model may deliver the payload as a
         // JSON string. Decode a JSON object here — at the one frontend that
         // does not pre-parse — so both acceptance and persistence see the
         // same object. A non-object string is passed through untouched.
-        const decoded = decodeReportArgument(report);
+        const decoded = decodeReportArgument(args.report);
         // CAMADA 4, segunda porta: um `verdict` é julgamento escrito sem
         // `update_task`, e passa pelo MESMO critério — papel na task. A
         // regra é pura (`decideReportVerdictWrite`); aqui só se busca o fato
@@ -550,13 +711,17 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         // sempre. `promoteReportVerdict` é reusado só para DETECTAR o
         // veredito (explícito ou embutido no payload), sem mudar o que é
         // enviado — o bus continua sendo quem promove e persiste.
-        const formalVerdict = promoteReportVerdict(decoded, verdict).verdict;
+        const formalVerdict = promoteReportVerdict(decoded, args.verdict as string | undefined).verdict;
         if (formalVerdict) {
           const context = await resolveReportVerdictContext({
             handleRequest: opts.handleRequest,
             requesterId,
             declaredTaskId: declaredTaskIdFromReport(decoded),
           });
+          // Ambiguidade RECUSA aqui, nomeando as candidatas, ANTES de o bus
+          // fazer qualquer coisa (task 4fee76d5). Sem isto, papel `null`
+          // significava "outsider" e o veredito do implementer passava.
+          if (context.refusal) return { ok: false, error: context.refusal };
           const gate = decideReportVerdictWrite({
             verdict: formalVerdict,
             requesterRoleOnTask: context.requesterRoleOnTask,
@@ -565,18 +730,19 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             reportSchema: context.reportSchema,
           });
           if (gate.action === "refuse") {
-            return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: gate.error }) }] };
+            // Mesmo envelope que `refusalResult` produz — o wrapper abaixo
+            // já envelopa o retorno de `run`, então aqui é o objeto cru.
+            return { ok: false, error: gate.error };
           }
         }
-        const res = await opts.handleRequest({
+        return opts.handleRequest({
           cmd: "report",
           requesterId,
           report: decoded,
-          verdict,
+          verdict: args.verdict as "aprovado" | "reprovado" | undefined,
         });
-        return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
-    );
+    });
 
     server.registerTool(
       "read_report",

@@ -55,6 +55,8 @@ import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import {
   MEASURED_THIRD_PARTY_SPECS,
   PROVIDERS_CONFIG_SCHEMA_VERSION,
+  createProvidersConfigWatcher,
+  formatProvidersReloadLine,
   loadDynamicProviders,
   parseProviderSpec,
   parseProviderSpecs,
@@ -78,7 +80,8 @@ import {
 } from "./fs-tools";
 import { gitStatus } from "./git-tools";
 import { startWatching, stopWatching, stopAllWatchers, setWatchedDirs, getWatchStats } from "./file-watcher";
-import { saveClipboardImage, saveImageBytes, readAttachmentImage, testWriteClipboardImage } from "./clipboard-image";
+import { saveClipboardImage, saveImageBytes, saveAttachmentBytes, readAttachmentImage, testWriteClipboardImage } from "./clipboard-image";
+import { defaultVoiceConfigInput, resolveVoiceConfig, WhisperTranscriber } from "./voice-transcription";
 import { wrapJpegAsPdf } from "./pdf-export";
 import { saveBoardAssetBytes, copyBoardAssetFromPath, resolveBoardAsset } from "./board-assets";
 import { PICK_MEDIA_EXTENSIONS, resolvePickedMediaFile } from "./spawn-media-decision";
@@ -340,6 +343,22 @@ function currentBuildIdentity(): BuildIdentity {
  */
 let mainWindowRendererReachable = true;
 let safeSendFrameDisposedStreak = 0;
+
+/**
+ * A janela principal (a única com preload/UI de verdade) — publicada por
+ * `createWindow`, `null` antes dela e depois de fechada. Existe para os
+ * pushes que NASCEM fora de `createWindow`, sem acesso ao `win` local de lá:
+ * hoje o relatório do watcher de `providers.json`, criado no `whenReady`
+ * (antes da janela) e disparado por evento de arquivo (depois dela).
+ *
+ * Não dá para usar `BrowserWindow.getAllWindows()[0]` no lugar disto: os
+ * cards de navegador têm `BrowserWindow` offscreen próprio (`browser-
+ * registry.ts`), e mandar por `safeSend` numa janela dessas mexeria no
+ * `mainWindowRendererReachable` da janela PRINCIPAL (é estado compartilhado
+ * por desenho, ver o comentário acima) — um frame offscreen morto
+ * silenciaria os sends da janela real.
+ */
+let mainWindow: BrowserWindow | null = null;
 
 function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
   const gate = decideSafeSend({
@@ -707,6 +726,9 @@ function createWindow() {
       sandbox: false,
     },
   });
+  // Ver o doc comment de `mainWindow`: é por aqui que os pushes que nascem
+  // fora deste escopo (o watcher de `providers.json`) chegam na UI.
+  mainWindow = win;
 
   // Audit S3 — see isAppUrl above.
   win.webContents.on("will-navigate", (event, url) => {
@@ -1729,6 +1751,21 @@ function createWindow() {
     // DESIGN-BACKLOG.md §2.1 item 6 — the indexed counterpart, wired now
     // that this file is no longer locked by another agent's work.
     listTasksByBoard: (boardId) => store.listTasksByBoard(boardId),
+    // PERF (task c9db1d86) — the `view:"summary"` counterparts. Both are
+    // declared REQUIRED in message-bus.ts's callbacks type, so `tsc` refuses
+    // a wiring that forgets one instead of letting `list_tasks view:"summary"`
+    // silently fall back to the full SELECT. Deliberately explicit rather
+    // than folded into the two lambdas above: those take no argument, so an
+    // optional `view` parameter on the existing signature would be swallowed
+    // here without a single type error — the exact silent no-op this pair
+    // exists to avoid.
+    listTasksSummary: () => store.listTasksSummary(),
+    listTasksSummaryByBoard: (boardId) => store.listTasksSummaryByBoard(boardId),
+    // PERF (task 9dd877c8) — minimal row for the 5s idle scan
+    // (`scanIdleWithoutReport`), which was reading the whole table to use
+    // `card_id` and `status`. Same "required, so tsc forces the wiring"
+    // reasoning as the pair above.
+    listTasksForIdleScan: () => store.listTasksForIdleScan(),
     getTask: (id) => store.getTask(id),
     // Fase 2, peça 2 — era `store.upsertTask(task)` direto; `persistTask`
     // (funil acima) é o MESMO efeito mais o push pro board aberto e a
@@ -2091,6 +2128,18 @@ function createWindow() {
     return saveImageBytes(base64, mediaType);
   });
   ipcMain.handle("chat:read-attachment-image", (_e, path: string) => readAttachmentImage(path));
+  // Anexo do composer GLOBAL (imagem OU documento) — mesma família, mesmo
+  // diretório efêmero (`clipboard-image.ts`). O limite de tamanho vale aqui
+  // pelo mesmo motivo do chat: quem sabe o custo de gravar é o main.
+  ipcMain.handle("clipboard:save-attachment", (_e, base64: string, fileName: string, mediaType: string) => {
+    if (typeof base64 !== "string" || typeof fileName !== "string" || typeof mediaType !== "string") {
+      return { ok: false, error: t("error.attachmentBadRequest") };
+    }
+    if (base64.length > MAX_CHAT_ATTACHMENT_BASE64_CHARS) {
+      return { ok: false, error: t("error.imageTooLarge") };
+    }
+    return saveAttachmentBytes(base64, fileName, mediaType);
+  });
 
   // Item 57.9 — see board-assets.ts. `save-bytes` for a clipboard paste
   // (only bytes in memory), `copy-from-path` for a real dropped OS file.
@@ -3052,6 +3101,7 @@ function createWindow() {
     // pendurado referenciando um `win` já destruído se `createWindow()`
     // algum dia rodasse mais de uma vez no mesmo processo.
     screen.removeListener("display-metrics-changed", recheckBrowserScaleFactors);
+    if (mainWindow === win) mainWindow = null;
     stopAllWatchers();
     messageBus?.close();
     mcpServer.close();
@@ -3135,7 +3185,72 @@ app.whenReady().then(async () => {
     );
   }
 
-  loadDynamicProviders(newUserData);
+  // GATILHO do hot-reload (task 510df7b9): a leitura do boot vira a LINHA DE
+  // BASE do watcher, e daqui para a frente editar `providers.json` à mão
+  // re-sincroniza o registro vivo — sem reiniciar e sem passar pela tela de
+  // Settings. O watcher mora em `providers-dynamic.ts` (decisão + I/O
+  // juntos, como o loader) e chama o MESMO `loadDynamicProviders` do boot:
+  // poda incluída, e o contrato de "não podar quando a leitura é duvidosa"
+  // (JSON quebrado / formato recusado no topo) incluído — nenhum segundo
+  // caminho de carga existe aqui.
+  //
+  // O relatório sai em dois lugares, porque um deles pode não existir:
+  // `console.info` (visível no terminal de quem roda em dev e, no
+  // empacotado, para quem lança o binário de um terminal — mesma aposta do
+  // aviso de instância única, no topo deste arquivo) e o push
+  // `providers:config-changed` para a janela principal — o canal que a UI de
+  // Settings precisa para dizer "relido: entraram X, saíram Y, a linha N foi
+  // recusada". O push usa a `mainWindow` publicada por `createWindow` (ver o
+  // doc comment dela): o watcher nasce ANTES da janela, os eventos de arquivo
+  // chegam depois.
+  //
+  // Ao contrário do watcher de arquivos do FilesCard (`file-watcher.ts`, um
+  // `fs.watch` por diretório ABERTO na tela), este é um só, pelo diretório do
+  // userData, filtrando o nome do arquivo — e não cresce com nada.
+  //
+  // Consequência aceita e conhecida: `app:add-provider`/`app:remove-provider`
+  // (logo abaixo) gravam nesse MESMO arquivo, então o save do formulário
+  // dispara uma releitura ~300ms depois. Ela é idempotente sobre o conteúdo
+  // que o próprio handler acabou de validar e gravar, e o preço de não ter
+  // dois caminhos de carga divergindo — o formulário não ganha atalho nenhum
+  // no registro por causa disso.
+  const bootProvidersLoad = loadDynamicProviders(newUserData);
+  const providersWatcher = createProvidersConfigWatcher({
+    userDataDir: newUserData,
+    baseline: bootProvidersLoad,
+    onReload: (report) => {
+      // A linha é formatada UMA vez e viaja pronta: o log daqui e o aviso da
+      // tela de Settings mostram a MESMA redação (`formatProvidersReloadLine`,
+      // task ebe8a79c). Se o renderer redigisse a sua, as duas versões do
+      // mesmo fato divergiriam na primeira mudança de formato do relatório.
+      const line = formatProvidersReloadLine(report);
+      console.info(`[providers] ${line}`);
+      if (mainWindow) safeSend(mainWindow, "providers:config-changed", { report, line });
+    },
+  });
+  app.once("will-quit", () => providersWatcher.stop());
+
+  // ---------------------------------------------------------------------
+  // MOTOR DE VOZ (2026-09-20) — whisper.cpp LOCAL, decisão do dono do repo:
+  // o áudio não sai da máquina. `voice-transcription.ts` tem o porquê de cada
+  // escolha (binário já instalado, ffmpeg presente, porta 8199 porque a 8080
+  // é do llama-swap, e "modelo ausente" como estado de primeira classe — a UI
+  // diz o que falta e o comando de download em vez de falhar mudo).
+  //
+  // O server sobe no começo da gravação (`voice:warmup`, esconde o load do
+  // modelo atrás da fala) e MORRE no fim da transcrição — `stop()` no quit é
+  // a rede de segurança, não o caminho normal.
+  // ---------------------------------------------------------------------
+  const voiceTranscriber = new WhisperTranscriber(() =>
+    resolveVoiceConfig(defaultVoiceConfigInput(newUserData, process.env)),
+  );
+  app.once("will-quit", () => voiceTranscriber.stop());
+  ipcMain.handle("voice:status", () => voiceTranscriber.status());
+  ipcMain.handle("voice:warmup", () => voiceTranscriber.warmup());
+  ipcMain.handle("voice:transcribe", (_e, base64: unknown, mimeType: unknown) => {
+    if (typeof base64 !== "string") return { ok: false, error: t("error.attachmentBadRequest") };
+    return voiceTranscriber.transcribe(base64, typeof mimeType === "string" ? mimeType : "");
+  });
 
   // ---------------------------------------------------------------------
   // Providers dinâmicos — a fiação IPC da tela de Settings
