@@ -1659,6 +1659,13 @@ function createWindow() {
     notifyTurnComplete: (cardId) => {
       safeSend(win, "pty:turn-complete", cardId);
     },
+    // O FATO DE TURNO (task 4245c6f5) — leitura e escrita do registry, para
+    // `card_status` parar de deduzir trabalho de bytes. Fica ao lado do
+    // relay acima de propósito: mesmo sinal, dois destinos, e o doc comment
+    // de lá ("nenhum estado novo aqui no main") deixou de valer para o
+    // fato — o push continua sendo só UI.
+    getCardTurnEndedAt: (cardId) => registry.getTurnFacts(cardId)?.turnEndedAt ?? null,
+    markCardTurnComplete: (cardId) => registry.markTurnComplete(cardId),
     // Activity bar — send_to_card writes the body from main, outside
     // the renderer's xterm onData hook. Same channel shape as
     // `pty:turn-complete`: fire-and-forget, keyed by card/PTY id.
