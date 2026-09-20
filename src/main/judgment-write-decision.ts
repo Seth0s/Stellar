@@ -269,8 +269,9 @@ export function decideReportVerdictWrite(input: {
  * avisar nada. MEDIDO no banco real (2026-09-19): 38 tasks abertas, 28 já
  * sem card principal, e 7 delas com `review="wanted"`, sem card e SEM
  * NENHUM reviewer linkado — os 7 órfãos. Em nenhum dos sete sobreviveu um
- * único round de veredito (6 não têm `task_cards` nenhum; 1 tem um round
- * de implementer com `verdict: null`).
+ * único round de veredito (6 não têm `task_cards` nenhum; 1 tem 1 linha em
+ * `task_cards` mas ZERO linhas em `task_verdicts` — não é um veredito
+ * `null` gravado, é ausência de veredito).
  *
  * MEDIÇÃO QUE DECIDE `recusar` vs `auto-fechar` (a pergunta da task):
  * auto-fechar pelo "último report ok:true" NÃO teria salvado NENHUM dos
@@ -340,7 +341,9 @@ export function describeCloseWithoutSuccessRefusal(taskId: string, targetCardId:
     `e o último report ACEITO dele não declara sucesso (ok:true). ` +
     `Fechar agora deixaria a task aberta e órfã (28 das 38 tasks abertas hoje estão assim). ` +
     `Conclua a task antes: update_task com status done/failed, ou request_task_status para o humano — ` +
-    `ou deixe o card reportar ok:true, que aí o próprio close conclui a task junto. Nada foi fechado.`
+    `ou, se quem fecha NÃO for o implementer desta task (reviewer, outsider ou humano), ` +
+    `deixe o card reportar ok:true, que aí o próprio close conclui a task junto (CAMADA 4 ainda vale: ` +
+    `o implementer fechando o próprio card continua sem julgar). Nada foi fechado.`
   );
 }
 

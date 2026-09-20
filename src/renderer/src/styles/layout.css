@@ -2328,27 +2328,56 @@ select.resume-input {
 
 /* ----------------------------------------------------------- connector */
 
-/* Pendentes #188 — conectores agora carregam `kind` até o render (antes
-   ficava só no banco, todo conector desenhava igual). Cor por kind é só
-   leitura visual; nenhum kind muda comportamento de execução/dispatch. */
+/* Pendentes #188 — conectores carregam `kind` até o render (antes ficava só
+   no banco, todo conector desenhava igual).
+
+   UM DESENHO SÓ PARA TODA ARESTA (2026-09-20, task e0815e3b, decisão do dono
+   do repo). A aresta diz sempre a mesma coisa — "este card influenciou
+   aquele" — e o que varia é o GATILHO que a criou, não a natureza dela.
+   Havia uma variante de stroke por kind (`--spawned` sólida --signal,
+   `--depends` --danger, `--context` --violet); a MEDIÇÃO desta task mostrou
+   que isso não separava nada:
+
+     - 14 gatilhos criam conector hoje e produzem DUAS aparências (criar um
+       card × mutar um card existente). `depends` e `context` tinham REGRA e
+       nenhum gatilho que os produzisse: o único escritor é o tool MCP
+       `set_connector_kind`, e não existe UI para isso.
+     - No board real do dono (15 conectores): `modified` 10 (67%), `spawned`
+       5 (33%), `depends` 0, `context` 0, nulo 0. Dois terços das arestas
+       caíam nesta BASE — o kind mais usado não tinha desenho próprio.
+     - E o código de cor já era INCOMPLETO: a ponta da seta
+       (`#connector-arrow`, App.tsx) e a borda da pill do label são --foam
+       FIXO para todo kind, então uma aresta `spawned` era uma linha SÓLIDA
+       --signal terminando numa seta --foam. Unificar conserta essa
+       inconsistência; não é só simplificação.
+
+   ONDE A ORIGEM MORA AGORA: em TEXTO. O `<title>` do path já carrega
+   `kindLabel — label` (tooltip) e a pill do label já existe — 100% dos 15
+   conectores reais têm label. Promover o kind para a pill foi considerado e
+   RECUSADO pelo dono: 73% das arestas saem do mesmo card hub, então prefixo
+   em todas seria texto repetido cobrindo o board.
+
+   O `kind` NÃO É DECORAÇÃO — e o comentário anterior deste bloco estava mais
+   estreito do que devia ao dizer "nenhum kind muda comportamento": ele não
+   muda DISPATCH, mas `report-notify-routing.ts` usa `kind === "spawned"` /
+   `"modified"` para ROTEAR report e diretiva, e
+   `connector-kind-authorization.ts` trata `spawned` como linhagem. A coluna
+   fica (com `set_connector_kind`); o que saiu foi só a PINTURA por kind. As
+   classes `connector-line--${kind}` e `connector-group--${kind}` continuam
+   sendo EMITIDAS por App.tsx como hook de dado — o verify
+   `scripts/verify/smoke-connector-behavior.mjs` asserta exatamente essas
+   classes —, apenas sem regra de estilo nenhuma por kind.
+
+   O pulso (abaixo) NÃO foi tocado: ele segue gated em `kind === "spawned"`,
+   então o MOVIMENTO continua marcando linhagem viva enquanto a estática é
+   uma só. Consequência declarada e aceita na decisão — o pulso é cue de
+   trabalho vivo, não código de cor, e mexer nele reabriria o problema de
+   paint já medido em docs/PERF.md. */
 .connector-line {
   fill: none;
   stroke-width: 2;
   stroke: var(--foam);
   stroke-dasharray: 6 6;
-}
-
-.connector-line--spawned {
-  stroke: var(--signal);
-  stroke-dasharray: none;
-}
-
-.connector-line--depends {
-  stroke: var(--danger);
-}
-
-.connector-line--context {
-  stroke: var(--violet);
 }
 
 /* PERF (docs/PERF.md, 2026-09-15) — o pulso saiu do SVG: `stroke-dashoffset`
