@@ -142,6 +142,44 @@ export function sameSockIdentity(a: SockIdentity | null, b: SockIdentity | null)
   return a !== null && b !== null && a.dev === b.dev && a.ino === b.ino;
 }
 
+/**
+ * O envelope do `report` que NÃO dá para normalizar (task 10cf58d0).
+ *
+ * Uma string LIVRE é um relatório legal (prosa) e não é tocada aqui. O alvo é
+ * a string que começa por `{` — o chamador tentou mandar um OBJETO — e não
+ * parseia: aí não existe objeto para gravar, e persistir guardaria a string
+ * crua, deixando TODOS os campos dela inalcançáveis por consulta, em silêncio
+ * (medido: `reports` seq 515, um `verdict` dentro de string malformada,
+ * coluna `verdict` gravada NULL, o revisor convicto de que tinha assinado).
+ *
+ * NÃO varre a string atrás de chave nenhuma — decisão da entrega irmã
+ * (a477f3d4): um relatório SOBRE este defeito CITA `"verdict"` e seria recusado
+ * se a varredura existisse. Esta checagem só pergunta "parece envelope de
+ * objeto e não parseia"; prosa que cite a chave passa intacta.
+ *
+ * `null` = sem problema (todo objeto, toda prosa, e toda string que decodifica).
+ */
+export function describeUndecodableReportEnvelope(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (trimmed[0] !== "{") return null;
+  // `decodeReportArgument` devolve a MESMA referência quando não decodifica.
+  if (decodeReportArgument(raw) !== raw) return null;
+  let why = "not valid JSON";
+  try {
+    JSON.parse(trimmed);
+  } catch (e) {
+    why = e instanceof Error ? e.message : String(e);
+  }
+  return (
+    `report arrived as a STRING that starts with "{" but is not valid JSON (${why}). ` +
+    "Send it as an OBJECT — the `report` field is a JSON object, e.g. " +
+    `{"ok": true, ...} — or as a valid JSON string. If the text is intentional ` +
+    `free-form, wrap it: {"resumo": "…"}. Nothing was stored, so no field of ` +
+    "this payload (including any verdict) was applied."
+  );
+}
+
 const OPEN_TIMEOUT_MS = 120_000;
 // Shorter than OPEN_TIMEOUT_MS on purpose — a snapshot needs no human
 // decision, just a renderer round-trip + a capturePage() call. If it's
@@ -1422,7 +1460,10 @@ export function createMessageBus(
     const row = callbacks.getReport(cardId);
     if (!row) return false;
     try {
-      const parsed: unknown = JSON.parse(row.report_json);
+      // Lido pelo MESMO decodificador da entrada (task 10cf58d0): uma linha
+      // legada gravada como string-de-JSON passa a valer o objeto que sempre
+      // foi — não é reinterpretar, é desfazer o duplo-encode na leitura.
+      const parsed: unknown = decodeReportArgument(JSON.parse(row.report_json));
       return (
         parsed !== null &&
         typeof parsed === "object" &&
@@ -3002,6 +3043,23 @@ export function createMessageBus(
     }
 
     if (req.cmd === "report") {
+      // ENVELOPE (task 10cf58d0) — UM ponto de decodificação, antes de qualquer
+      // efeito. `report` é campo LIVRE na superfície MCP, então um cliente pode
+      // mandar o payload como STRING de JSON. `acbridge` já faz `JSON.parse`
+      // local (`report: argument must be valid JSON`) e NUNCA manda string —
+      // medido: 48/48 linhas do canal `socket` são objeto —, e o handler MCP
+      // também decodifica; mas o BUS não decodificava, então uma string que
+      // chegasse aqui era persistida como string (`JSON.stringify` de string =
+      // valor string em `report_json`) e todos os campos dela ficavam
+      // inalcançáveis por consulta. Decodificar AQUI faz do bus o ponto único,
+      // qualquer que seja a porta.
+      const incomingReport = decodeReportArgument(req.report);
+      // O caso que MOTIVOU a task: string que PARECE envelope (`{`) e não
+      // decodifica — não há o que normalizar, e persistir gravaria em silêncio
+      // uma linha cujos campos ninguém lê. Recusa ANTES de qualquer escrita,
+      // com a mensagem que ensina (ver `describeUndecodableReportEnvelope`).
+      const envelopeProblem = describeUndecodableReportEnvelope(req.report);
+      if (envelopeProblem) return { ok: false, error: envelopeProblem, field: "report" };
       const listed = callbacks.listTasks();
       const tasks = Array.isArray(listed) ? listed : [];
       // CAMADA 4 — a task deste report é resolvida UMA vez, antes de
@@ -3022,7 +3080,7 @@ export function createMessageBus(
       // gates disparados — todos passam a seguir a task RESOLVIDA.
       const taskCardLinks = req.requesterId ? (callbacks.listTaskCardsForCard(req.requesterId) ?? []) : [];
       const link = decideReportTaskLink({
-        declaredTaskId: declaredTaskIdFromReportBody(decodeReportArgument(req.report)),
+        declaredTaskId: declaredTaskIdFromReportBody(incomingReport),
         principalTaskIds: req.requesterId ? tasks.filter((t) => t.card_id === req.requesterId).map((t) => t.id) : [],
         linkTaskIds: taskCardLinks.map((l) => l.task_id),
       });
@@ -3037,7 +3095,7 @@ export function createMessageBus(
         linkedTask && effectiveTaskStatus(linkedTask) === "running" ? linkedTask : undefined;
       const decision = decideReportAcceptance({
         requesterId: req.requesterId,
-        report: req.report,
+        report: incomingReport,
         linkedTask: runningTask
           ? {
               status: runningTask.status,
@@ -3087,8 +3145,9 @@ export function createMessageBus(
       // postura de `resolveDeclaredTaskId`: um só é inequívoco, dois são
       // desconhecido — nunca um palpite).
       //
-      // A evidência julgada é `req.report` (o payload COMO O CHAMADOR
-      // mandou), não o `filled`: `fillReportTaskId` roda depois e carimba
+      // A evidência julgada é `incomingReport` (o payload como o chamador
+      // mandou, decodificado — ver o topo do handler), não o `filled`:
+      // `fillReportTaskId` roda depois e carimba
       // `taskId` por conta do servidor — deixar esse carimbo satisfazer uma
       // chave declarada no `reportSchema` seria o próprio furo que este
       // gate existe para fechar (uma chave preenchida por nós não é
@@ -3098,7 +3157,7 @@ export function createMessageBus(
       // Sem veredito não há leitura nenhuma: report comum segue como
       // sempre. Recusa acontece ANTES do `upsertReport` e antes de subir
       // `retry_count` — como na porta MCP, que barra antes de chamar o bus.
-      const formalVerdict = promoteReportVerdict(req.report, req.verdict).verdict;
+      const formalVerdict = promoteReportVerdict(incomingReport, req.verdict).verdict;
       if (formalVerdict) {
         const liveLink =
           taskCardLinks.find((l) => l.task_id === reportTaskId) ??
@@ -3108,7 +3167,7 @@ export function createMessageBus(
           verdict: formalVerdict,
           requesterRoleOnTask: liveLink ? liveLink.role : null,
           reviewWanted: isReviewWanted(gateTask?.review ?? null),
-          report: req.report,
+          report: incomingReport,
           reportSchema: gateTask ? contractFromTaskRow(gateTask).reportSchema : null,
         });
         if (gate.action === "refuse") return { ok: false, error: gate.error };
@@ -3121,7 +3180,7 @@ export function createMessageBus(
           callbacks.upsertTask({
             ...runningTask,
             retry_count: decision.retryCount,
-            result_json: stashLastRefusedReport(runningTask.result_json, req.report),
+            result_json: stashLastRefusedReport(runningTask.result_json, incomingReport),
             updated_at: Date.now(),
             actor: "app",
             statusProposed: false,
@@ -3140,7 +3199,7 @@ export function createMessageBus(
       // never read env still don't copy a truncated id from a briefing.
       // Acceptance already ran on the original payload; this does not
       // invent a task when the card is not linked.
-      const filled = fillReportTaskId(req.report, reportTaskId);
+      const filled = fillReportTaskId(incomingReport, reportTaskId);
       // acbridge `report <json>` has no separate flag — a formal
       // `verdict` inside that JSON is the typed column. Lift it off
       // the payload so `report_json` and `reports.verdict` are not
@@ -3223,7 +3282,7 @@ export function createMessageBus(
       if (runningTask) {
         const clearedJson = clearLastRefusedStash(runningTask.result_json);
         if (decision.action === "accept_failure") {
-          markTaskFailed({ ...runningTask, result_json: clearedJson }, errorFromReportPayload(req.report), "explicit_failed");
+          markTaskFailed({ ...runningTask, result_json: clearedJson }, errorFromReportPayload(incomingReport), "explicit_failed");
         } else if (clearedJson !== runningTask.result_json) {
           callbacks.upsertTask({
             ...runningTask,
@@ -3249,8 +3308,15 @@ export function createMessageBus(
       // Sem afterSeq: mais recente. Com afterSeq: próximo (seq > afterSeq),
       // para caminhar histórico append-only depois do fato.
       const storedRow = callbacks.getReport(target, afterSeq);
+      // Normaliza na LEITURA (task 10cf58d0): as linhas antigas gravadas como
+      // string-de-JSON são lidas como o objeto que sempre foram. Conserta o
+      // passado sem tocar no passado — nenhuma escrita em dado histórico, sem
+      // backup e sem migração. As que NÃO decodificam (4 malformadas + 1 prosa
+      // legítima) continuam chegando como string, que é a verdade do que está
+      // gravado; quem consulta em lote deve perguntar a forma antes de assumir
+      // objeto (o próprio `json_type(report_json)` responde).
       const current: StoredReport | undefined = storedRow
-        ? { report: JSON.parse(storedRow.report_json), seq: storedRow.seq, verdict: storedRow.verdict ?? null, role: storedRow.role ?? null }
+        ? { report: decodeReportArgument(JSON.parse(storedRow.report_json)), seq: storedRow.seq, verdict: storedRow.verdict ?? null, role: storedRow.role ?? null }
         : undefined;
       if (current) {
         return { ok: true, report: current.report, seq: current.seq, verdict: current.verdict ?? null, role: current.role ?? null };
