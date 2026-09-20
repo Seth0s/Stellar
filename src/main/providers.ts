@@ -617,6 +617,28 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       posix: "npm install -g @anthropic-ai/claude-code",
       windows: "npm install -g @anthropic-ai/claude-code",
     },
+    // Item 18 do sticky (2026-09-20) — NÃO adiciona uma flag de trust
+    // aqui porque não existe uma para adicionar. Medido contra `claude
+    // --help` (2.1.278): nenhuma flag pré-aprova o cwd do spawn para o
+    // "Quick safety check" (workspace trust dialog) — `--add-dir` só
+    // adiciona diretórios extras ao workspace já em sessão,
+    // `--dangerously-skip-permissions`/`--permission-mode` só afetam
+    // permissão de FERRAMENTA, checagem separada da checagem de trust.
+    // Medido também no bundle instalado (`strings` sobre
+    // `~/.local/share/claude/versions/2.1.278`): a checagem real
+    // (`jSe`, minificado) lê, em ordem, `CLAUDE_CODE_SANDBOXED` (env var
+    // que bypassa a checagem para QUALQUER diretório do processo, não só
+    // este cwd) e depois `projects[cwd].hasTrustDialogAccepted`
+    // persistido no `~/.claude.json` GLOBAL do usuário (mecanismo que o
+    // próprio CLI recomenda na sua mensagem de erro para uso
+    // não-interativo). Nenhum dos dois é apropriado para `buildArgs`
+    // pré-aprovar por spawn: o primeiro é grande demais (bypass
+    // permanente, todo diretório), o segundo escreve em estado global
+    // fora deste par de arquivos e automatizaria em silêncio a decisão
+    // de segurança que o diálogo existe para exigir de um humano. A
+    // correção real fica em pty-registry.ts's `detectTrustPrompt` —
+    // reconhecer o diálogo no scrollback e sinalizar o card como
+    // aguardando consentimento (`onTrustPromptPending`), não bypassá-lo.
     buildArgs: ({ resumeId, continueLast, imposedSessionId, model, effort, systemPrompt, mcpUrl }) => {
       const args: string[] = [];
       // Restore vs impose are different flags (measured): `--resume`
