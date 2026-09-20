@@ -239,6 +239,71 @@ export function describeQuotaDeath(evidence: QuotaDeathEvidence): string {
   );
 }
 
+/**
+ * Diálogo de confiança de workspace (item 18 do sticky, 2026-09-20) — um
+ * card `claude` cujo cwd ainda não está marcado como confiável para no
+ * "Quick safety check" TUI esperando uma tecla que ninguém vai apertar (o
+ * card nasce sem humano no teclado). O processo continua VIVO — não é uma
+ * morte — mas sem reconhecer o texto, o único sinal que sobra pra fora é
+ * silêncio seguido, eventualmente, de um exit ambíguo (relatado no sticky
+ * como "saiu (código 1)"), indistinguível de crash — mesma classe de
+ * problema que `detectQuotaExhaustion` resolve para cota, aqui para
+ * consentimento pendente em vez de morte.
+ *
+ * MEDIDO 2026-09-20 no binário instalado (`claude` 2.1.278, bundle
+ * ELF/bun, `strings` sobre `~/.local/share/claude/versions/2.1.278`):
+ * - Texto exato do prompt (componente `TrustDialog`): "Quick safety
+ *   check: Is this a project you created or one you trust? (Like your
+ *   own code, a well-known open source project, or work from your
+ *   team). If not, take a moment to review what's in this folder
+ *   first." — único, não parafraseado.
+ * - O foco DEFAULT do diálogo é o botão de CANCELAR
+ *   (`focus:"cancel"` no componente de confirmação), não o de
+ *   confirmar ("Yes, I trust this folder") — um Enter automático que
+ *   outro provider aceitaria como "prossiga" aqui cai exatamente no
+ *   cancelamento, que a própria função de callback resolve chamando
+ *   `process.exit(1)` (`m("onboarding_trust_dialog","onboarding_trust_denied"),
+ *   ro(1)` no bundle) — a origem provável do "código 1" que o sticky
+ *   descreve.
+ * - A checagem real de confiança (função minificada `jSe`) segue, em
+ *   ordem: env var `CLAUDE_CODE_SANDBOXED` (bypassa a checagem inteira,
+ *   qualquer diretório) → `sessionTrustAccepted()` (flag de SESSÃO
+ *   interativa, não passável no spawn) → `projects[cwd].hasTrustDialogAccepted`
+ *   persistido no `~/.claude.json` do usuário (o CLI recomenda essa
+ *   chave na própria mensagem de erro para uso não-interativo: "...or
+ *   set projects[...].hasTrustDialogAccepted: true in ~/.claude.json").
+ * - NÃO existe flag de CLI (`claude --help`, 2.1.278 — `--add-dir`,
+ *   `--dangerously-skip-permissions` e `--permission-mode` foram
+ *   auditados e nenhum toca esta checagem) para pré-aprovar um cwd no
+ *   spawn. Os dois mecanismos reais que EXISTEM foram descartados por
+ *   motivo, não por preguiça: `CLAUDE_CODE_SANDBOXED=1` bypassaria a
+ *   checagem para QUALQUER pasta pelo resto do processo (não só o cwd
+ *   deste spawn) e afirma ao CLI algo falso sobre o ambiente; escrever
+ *   `hasTrustDialogAccepted` no config GLOBAL do usuário a cada spawn
+ *   automatizaria em silêncio exatamente a decisão de segurança que o
+ *   diálogo existe para exigir de um humano, e mexeria em estado fora
+ *   deste par de arquivos. Por isso a rota escolhida é reconhecimento +
+ *   sinalização (o card fica "waiting", não "morto"), não bypass.
+ */
+const TRUST_DIALOG_WATCHED_PROVIDERS = new Set(["claude"]);
+const TRUST_DIALOG_PATTERN =
+  /Quick safety check: Is this a project you created or one you trust\?/;
+/** Teto da janela que atravessa fronteira de flush — maior que o padrão
+ * inteiro (~70 chars) para cobrir uma quebra no pior caso, pequeno o
+ * bastante para nunca, sozinho, conter o padrão duas vezes e mascarar uma
+ * resolução real como se o diálogo ainda estivesse na tela. */
+const TRUST_DIALOG_SCAN_CARRY_MAX = 128;
+const TRUST_DIALOG_EXCERPT_MAX = 220;
+
+/** Reconhece o prompt de confiança no texto (ANSI-stripped). Puro;
+ * provider-aware — hoje só `claude` tem esse diálogo específico medido. */
+export function detectTrustPrompt(providerId: string, text: string): { excerpt: string } | null {
+  if (!TRUST_DIALOG_WATCHED_PROVIDERS.has(providerId)) return null;
+  const m = TRUST_DIALOG_PATTERN.exec(text);
+  if (!m) return null;
+  return { excerpt: excerptAround(text, m.index, m[0].length).slice(0, TRUST_DIALOG_EXCERPT_MAX) };
+}
+
 /** Origem da escrita — espelho de `DeliveryWriteOrigin`. Sem default em
  * `write()`: omitir o parâmetro reintroduzia o bug (toda resposta
  * automática do xterm virava tecla humana). Callers must pass explicitly. */
@@ -426,6 +491,21 @@ type Entry = {
    * fechado à mão depois de já ter exibido um banner de cota não pode ser
    * carimbado como cota. Distingue o exit espontâneo do provocado. */
   killRequested: boolean;
+  /** Diálogo de confiança (2026-09-20, item 18) — `true` do flush que
+   * reconheceu o "Quick safety check" até um flush POSTERIOR sem o
+   * padrão (o card recebeu uma tecla e a TUI redesenhou outra tela) ou
+   * até o `onExit` (ver `registryOpts.onTrustPromptPending`). Ao
+   * contrário de `quotaSignal`, este campo é reversível de propósito:
+   * o processo segue vivo e pode voltar a trabalhar normalmente assim
+   * que um humano responder. */
+  trustPromptPending: boolean;
+  /** Janela ANSI-stripped que atravessa fronteira de flush para o
+   * reconhecimento acima — mesma forma de `urlCarry`, teto próprio
+   * (`TRUST_DIALOG_SCAN_CARRY_MAX`). Reposta a cada flush com a cauda do
+   * próprio chunk (não cresce sem limite como `quotaScanCarry`): este
+   * sinal precisa poder DESAPARECER quando o diálogo é respondido, não
+   * só aparecer uma vez. */
+  trustScanCarry: string;
 };
 
 /** Achado ao vivo (2026-09-01): "se eu trocar de sessão os terminais e
@@ -493,6 +573,23 @@ export function createPtyRegistry(registryOpts: {
    * PTY). */
   onResumeInvalid: (id: string, reason: "missing" | "empty", staleResumeId: string) => void;
   onUrlSeen: (id: string, url: string) => void;
+  /**
+   * Item 18 do sticky (2026-09-20) — o card ficou parado no "Quick safety
+   * check" do `claude` (ver `detectTrustPrompt`). `true` quando o diálogo
+   * aparece no scrollback, `false` quando desaparece (resolvido por uma
+   * tecla) OU quando o processo sai enquanto ainda pendente — SEMPRE
+   * antes do `onExit` correspondente, para um consumidor que espelha
+   * este sinal num estado "waiting" (mesma semântica que `card_status` já
+   * documenta para "blocked on a consent decision... a human hasn't
+   * approved or denied yet") poder limpar sua própria contagem antes de
+   * tratar o card como saído. Canal separado de `onData` de propósito —
+   * mesmo motivo do `onResumeInvalid` acima: uma TUI em tela cheia
+   * redesenha por cima de qualquer byte injetado no próprio pty.
+   * Opcional e source-compatible: o consumidor atual (index.ts) segue
+   * compilando sem mudança até decidir ligar este sinal a um status
+   * visível.
+   */
+  onTrustPromptPending?: (id: string, pending: boolean) => void;
   /**
    * Fila derived status (CAMADA 3) depends on `isAlive`, but the renderer
    * is push-never-poll for `task:changed`. Task-row writers alone never
@@ -569,6 +666,24 @@ export function createPtyRegistry(registryOpts: {
           e.quotaSignal = { providerId: e.providerId, label: hit.label, excerpt: hit.excerpt, atMs: Date.now() };
         }
       }
+    }
+    // Diálogo de confiança (2026-09-20, item 18) — ver `detectTrustPrompt`.
+    // Ao contrário da cota acima, roda em TODO flush (nunca congela depois
+    // do primeiro match): o sinal precisa poder desligar quando o card
+    // recebe uma tecla e a TUI avança para outra tela.
+    if (TRUST_DIALOG_WATCHED_PROVIDERS.has(e.providerId)) {
+      // Sem truncar o chunk atual (só a cauda RETIDA do anterior tem
+      // teto) — cortar aqui perderia conteúdo real do flush de agora.
+      const scanWindow = e.trustScanCarry + stripped;
+      const hit = detectTrustPrompt(e.providerId, scanWindow);
+      if (hit && !e.trustPromptPending) {
+        e.trustPromptPending = true;
+        registryOpts.onTrustPromptPending?.(id, true);
+      } else if (!hit && e.trustPromptPending) {
+        e.trustPromptPending = false;
+        registryOpts.onTrustPromptPending?.(id, false);
+      }
+      e.trustScanCarry = stripped.slice(-TRUST_DIALOG_SCAN_CARRY_MAX);
     }
     for (const rawUrl of cleaned.match(URL_PATTERN) ?? []) {
       const url = trimTrailingUnbalancedClosers(rawUrl);
@@ -823,6 +938,8 @@ export function createPtyRegistry(registryOpts: {
       quotaScanCarry: "",
       outputTail: "",
       killRequested: false,
+      trustPromptPending: false,
+      trustScanCarry: "",
     };
     adoptEntry(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
@@ -946,6 +1063,17 @@ export function createPtyRegistry(registryOpts: {
       entry.deferredHumanInput = [];
       dropEntry(id);
       if (openOpencodeCardIds.delete(id) && openOpencodeCardIds.size === 0) notifyLastOpencodeCardClosed();
+      // Diálogo de confiança (2026-09-20, item 18) — se o processo saiu
+      // ainda com o diálogo pendente (ninguém respondeu), o sinal precisa
+      // desligar ANTES do `onExit` abaixo: um consumidor que mapeia
+      // `onTrustPromptPending` para um estado "waiting" (ver o doc comment
+      // do campo em `registryOpts`) precisa poder limpar sua contagem
+      // antes de tratar o card como saído, senão "waiting" sobrevive ao
+      // próprio processo que o causou.
+      if (entry.trustPromptPending) {
+        entry.trustPromptPending = false;
+        registryOpts.onTrustPromptPending?.(id, false);
+      }
       // Morte por cota (2026-09-19) — `flush` acima já varreu a última
       // leva, então `quotaSignal` reflete inclusive um banner impresso no
       // instante da morte. O marcador sai por `onData` ANTES do onExit: o
