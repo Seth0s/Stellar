@@ -1092,6 +1092,9 @@ function createWindow() {
       const task = store.listTasks().find((t) => t.card_id === id);
       const boardId =
         task?.board_id ?? store.getCard(id)?.board_id ?? recentlyClosedCardBoardIds.get(id);
+      // Fatia 3b-2 (ab83ba5f): IMEDIATO de propósito. Isto é vivacidade da
+      // LENDA do card, não escrita de task — a saída de um card precisa
+      // aparecer na hora, e é raro.
       if (boardId) notifyTaskChanged(boardId);
     },
     onSessionFound: (id, sessionId) => {
@@ -1823,12 +1826,21 @@ function createWindow() {
     // chama `onTaskDone` por conta própria depois de `update_task` — seria
     // a segunda cópia da regra que este funil elimina.
     upsertTask: (task) => persistTask(task),
+    // Fora da fatia 3b-2 de propósito (ab83ba5f): interação HUMANA olhando a
+    // tela. 200ms seria invisível, mas a economia grande e MEDIDA mora nos
+    // sites de report/veredito — não misturar as duas coisas.
     setStatusAsk: (taskId, ask) => {
       const result = store.setStatusAsk(taskId, ask);
       const row = store.getTask(taskId);
       if (row) notifyTaskChanged(row.board_id);
       return result;
     },
+    // SPRINTS FICAM IMEDIATOS de propósito (fatia 3b-2, deliberadamente fora):
+    // estes sites também disparam `onSprintsChanged` — canal DIFERENTE do
+    // `task:changed` — e o coalescer atrasa só `task:changed` + o rodapé de
+    // escopo. Coalescer estas três linhas sem separar os canais engoliria o
+    // aviso de sprint junto. Não "termine o trabalho" por simetria: se um dia
+    // valer, o canal de sprint precisa ser tratado em separado.
     listSprints: (boardId) => store.listSprints(boardId),
     openSprint: (boardId) => store.openSprint(boardId),
     closeSprint: (boardId) => {
@@ -1856,9 +1868,12 @@ function createWindow() {
     // `resolveCardExit` (message-bus.ts) já faz pra achar a task de um
     // card — não um novo padrão de custo.
     upsertReport: (row) => {
+      // Fatia 3b-2 (ab83ba5f) — este é um dos 92% do volume medido (288
+      // vereditos + 40 reports numa hora contra 24 carimbos do funil): o
+      // MESMO aviso para a MESMA Fila, agora por janela.
       store.upsertReport(row);
       const task = store.listTasks().find((t) => t.card_id === row.card_id);
-      if (task?.board_id) notifyTaskChanged(task.board_id);
+      if (task?.board_id) taskNotifyCoalescer.notify(task.board_id);
     },
     nextReportSeqSeed: () => store.nextReportSeqSeed(),
     // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
@@ -1873,7 +1888,11 @@ function createWindow() {
         if (seen.has(row.task_id)) continue;
         seen.add(row.task_id);
         const task = store.getTask(row.task_id);
-        if (task?.board_id) notifyTaskChanged(task.board_id);
+        // A CHAVE É O BOARD, não a task — e é isso que faz este laço valer
+        // a pena: ele pode visitar N tasks, mas N tasks do mesmo board
+        // viram UMA janela e UMA entrega. Trocar a chave por `task_id`
+        // trocaria 288 pushes/h por 288 janelas/h, ou seja nada.
+        if (task?.board_id) taskNotifyCoalescer.notify(task.board_id);
       }
     },
     listTaskCardsForCard: (cardId) => store.listTaskCardsForCard(cardId),
@@ -1892,7 +1911,8 @@ function createWindow() {
         pendingParticipationSessions.delete(cardId);
       }
       const task = store.getTask(taskId);
-      if (task) notifyTaskChanged(task.board_id);
+      // Fatia 3b-2 (ab83ba5f): com o link, o mesmo aviso por janela.
+      if (task) taskNotifyCoalescer.notify(task.board_id ?? "");
     },
     listAllConnectors: () => store.listAllConnectors(),
     recordSpawn: (input) => store.recordSpawn(input),
@@ -2341,6 +2361,8 @@ function createWindow() {
       }
       persistTask({ ...existing, status: requested, result_json, updated_at: Date.now(), actor: "human" });
     } else {
+      // Fora da fatia 3b-2: gesto humano (limpar o pedido de status) — mesmo
+      // motivo do `setStatusAsk` no bus, logo acima.
       store.setStatusAsk(taskId, null);
       notifyTaskChanged(existing.board_id);
     }
