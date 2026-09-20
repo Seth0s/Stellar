@@ -87,10 +87,24 @@ describe("SettingsModal", () => {
     expect(dialog.querySelector("[data-settings-board-name]")?.textContent).toBe("Maestro");
     expect(screen.getByText("Aplicativo")).toBeTruthy();
     expect(screen.getByText("Este board")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Geral/ }).getAttribute("aria-current")).toBe("page");
+    // "Sobre", não "Geral" — o rótulo mudou por DECISÃO (task b2a0a4f8: o
+    // conteúdo da página é idioma/build/escopo), e o aria-current está nele
+    // porque o helper renderiza a página `general` explicitamente.
+    expect(screen.getByRole("button", { name: /Sobre/ }).getAttribute("aria-current")).toBe("page");
+    // Nova ordem da nav (task b2a0a4f8): Providers primeiro (default da
+    // engrenagem), Sobre no fim; páginas de board depois da seção própria.
+    expect([...dialog.querySelectorAll(".settings-nav-item")].map((b) => b.getAttribute("data-settings-page"))).toEqual([
+      "providers",
+      "shortcuts",
+      "keys",
+      "devices",
+      "general",
+      "maestro",
+      "agents",
+    ]);
   });
 
-  it("General is the app-scoped page: locale control + build identity + scope note, no board toggles", async () => {
+  it("Sobre (id general, por decisão — ver SettingsModal) is the app-scoped page: locale control + build identity + scope note, no board toggles", async () => {
     renderSettings("general");
 
     expect(screen.getByLabelText("Idioma")).toBeTruthy();
@@ -164,5 +178,13 @@ describe("SettingsModal", () => {
 
     expect(screen.queryByText("Este board")).toBeNull();
     expect(screen.queryByRole("button", { name: /Maestro/ })).toBeNull();
+  });
+
+  it("no board: a board page redirects to the DEFAULT page (providers), which exists without a board", () => {
+    // O fallback antigo levava a "general" porque ela era a default; com
+    // Providers na default (task b2a0a4f8), o redirecionamento o segue —
+    // providers é app-scoped e renderiza sem board.
+    const { onPageChange } = renderSettings("maestro", { board: null });
+    expect(onPageChange).toHaveBeenCalledWith("providers");
   });
 });

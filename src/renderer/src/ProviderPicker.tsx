@@ -1,4 +1,6 @@
+import { t, type MessageKey } from "../../shared/i18n";
 import { Icon, type IconName } from "./icons";
+import type { ProviderGroups, ProviderOption } from "./provider-groups";
 
 const PROVIDER_ICON: Record<string, IconName> = {
   bash: "providerBash",
@@ -14,36 +16,70 @@ const PROVIDER_ICON: Record<string, IconName> = {
  * native `<select>` (bash/claude/codex/cursor as a plain text list)
  * becomes icon buttons, one per provider, generic enough to reuse
  * anywhere else in the app that needs to pick from this same provider
- * set (today just Rail.tsx's terminal popover, but the point of pulling
- * it out is not having to rebuild this again). Falls back to a bare
- * terminal glyph for any provider not in `PROVIDER_ICON` — `providers`
- * is a plain `string[]` (App.tsx's `PROVIDER_OPTIONS`), not a fixed
- * union, so a new provider added there still renders something instead
- * of crashing.
+ * set. Falls back to a bare terminal glyph for any provider not in
+ * `PROVIDER_ICON` — a provider id is a plain `string`, not a fixed
+ * union, so a new provider still renders something instead of crashing.
+ *
+ * NATIVO × GENÉRICO (2026-09-20, relato do dono): a lista era UMA só, com os
+ * CLIs embutidos e os que o usuário declarou indistinguíveis. Os grupos vêm
+ * prontos de `buildProviderGroups` (ver `provider-groups.ts` — a
+ * classificação é a do main, não uma segunda aqui); este componente só os
+ * desenha. `labelled` é a honestidade do intervalo: antes da primeira
+ * resposta do main a lista sai SEM título de grupo, porque ainda não se sabe
+ * quem é genérico — ver `useProviderClassification`.
+ *
+ * O rótulo de cada botão é o `label` DECLARADO no registro do main (ex.:
+ * "Cline"), com o id como fallback — nunca uma string de UI paralela.
  */
 export function ProviderPicker({
-  providers,
+  groups,
+  labelled,
   value,
   onChange,
 }: {
-  providers: string[];
+  groups: ProviderGroups;
+  /** Títulos de grupo só quando a classificação do main já chegou. */
+  labelled: boolean;
   value: string;
   onChange: (provider: string) => void;
 }) {
+  const sections: { key: string; titleKey: MessageKey | null; options: ProviderOption[] }[] =
+    labelled
+      ? [
+          { key: "native", titleKey: "rail.providerGroup.native", options: groups.native },
+          { key: "generic", titleKey: "rail.providerGroup.generic", options: groups.generic },
+        ]
+      : [{ key: "all", titleKey: null, options: [...groups.native, ...groups.generic] }];
+
   return (
     <div className="provider-picker">
-      {providers.map((p) => (
-        <button
-          key={p}
-          type="button"
-          className={`provider-picker-btn${p === value ? " active" : ""}`}
-          title={p}
-          onClick={() => onChange(p)}
-        >
-          <Icon name={PROVIDER_ICON[p] ?? "providerBash"} size={18} />
-          <span>{p}</span>
-        </button>
-      ))}
+      {sections
+        .filter((section) => section.options.length > 0)
+        .map((section) => (
+          <div
+            className="provider-picker-group"
+            key={section.key}
+            data-provider-group={section.key}
+          >
+            {section.titleKey && (
+              <div className="provider-picker-group-title">{t(section.titleKey)}</div>
+            )}
+            <div className="provider-picker-group-items">
+              {section.options.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`provider-picker-btn${option.id === value ? " active" : ""}`}
+                  title={option.label}
+                  onClick={() => onChange(option.id)}
+                >
+                  <Icon name={PROVIDER_ICON[option.id] ?? "providerBash"} size={18} />
+                  <span>{option.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
     </div>
   );
 }
