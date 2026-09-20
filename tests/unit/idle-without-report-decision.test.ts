@@ -58,43 +58,28 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
   });
 
   /**
-   * A REGRESSÃO QUE ABRIU A TASK. Um card que já reportou na vida (o
-   * `hasReport` absoluto, que era true para sempre) e que recebeu trabalho
-   * NOVO sem reportar precisa ser visto de novo: era exatamente este caso que
-   * passava batido — seis vezes num dia, duas no card que escreveu este
-   * arquivo.
+   * A REGRESSÃO QUE ABRIU A TASK, na forma que o portão conhece hoje: o
+   * recorte é o EPISÓDIO, e o portão não tem (nem aceita) nenhum fato
+   * "reportou na vida" que pudesse desarmá-lo. Um card que reportou antes e
+   * recebeu trabalho NOVO sem reportar é notificado de novo — era exatamente
+   * este caso que passava batido: seis vezes num dia, duas no card que
+   * escreveu este arquivo.
+   *
+   * O fato absoluto (`hasReport`) existiu como ENTRADA DEPRECADA por uma
+   * janela datada e foi REMOVIDO quando a fiação da âncora entrou; o teste
+   * abaixo usa a entrada e não compila mais se alguém tentar ressuscitá-la.
    */
-  it("o primeiro report da VIDA não desarma mais: episódio novo sem report → notifica de novo", () => {
-    expect(
-      decideIdleWithoutReport({
-        ...base,
-        hasReport: true, // reportou antes na vida (o fato absoluto, deprecado)
-        reportedSinceWorkGranted: false, // mas NESTE episódio, não
-      }),
-    ).toEqual({ action: "notify" });
-  });
-
-  it("o fato por episódio tem PRECEDÊNCIA sobre o absoluto, nos dois sentidos", () => {
-    // Episódio com report, mesmo sem nenhum report anterior na vida.
-    expect(decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: true })).toEqual({
-      action: "skip",
-      reason: "reported_this_episode",
-    });
-    // Vida com report, episódio sem: notifica (o caso acima, explícito).
-    expect(decideIdleWithoutReport({ ...base, hasReport: true, reportedSinceWorkGranted: false })).toEqual({
+  it("episódio novo sem report → notifica, mesmo que o card já tenha reportado antes", () => {
+    expect(decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false })).toEqual({
       action: "notify",
     });
   });
 
-  it("o absoluto continua valendo como fallback enquanto a fiação nova não entrou (deprecado)", () => {
-    // Sem o fato novo, o comportamento antigo é preservado de propósito: o
-    // chamador atual (message-bus) ainda passa `hasReport`, e trocar isso sem
-    // refiar o chamador mudaria comportamento em silêncio.
-    expect(decideIdleWithoutReport({ ...base, hasReport: true })).toEqual({
+  it("episódio COM report → skip, mesmo sem nenhum report anterior na vida do card", () => {
+    expect(decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: true })).toEqual({
       action: "skip",
       reason: "reported_this_episode",
     });
-    expect(decideIdleWithoutReport({ ...base, hasReport: false })).toEqual({ action: "notify" });
   });
 
   /**

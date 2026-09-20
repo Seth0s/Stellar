@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import type { TaskRow } from "../../src/main/store";
+import { setLocale } from "../../src/shared/i18n";
 
 /**
  * `deriveAutoConnectLabel` — spawn_agent case (2026-09-14).
@@ -52,6 +53,9 @@ describe("deriveAutoConnectLabel", () => {
   let bus: ReturnType<typeof createMessageBus> | null;
 
   afterEach(() => {
+    // A locale do `t()` é módulo-global: o teste de paridade em en (abaixo)
+    // muda e isto devolve o default pros testes seguintes.
+    setLocale("pt-BR");
     bus?.close();
     bus = null;
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -117,6 +121,33 @@ describe("deriveAutoConnectLabel", () => {
       expect(b.deriveAutoConnectLabel({ cmd: "spawn_agent", taskId: t.id, provider: "claude" } as BusRequest)).toBe(
         "implementação",
       );
+    });
+
+    it("purpose integrate → 'integração' (task 5b173f00: a cadeia de ternários caía em null e a pill ficava SEM rótulo)", () => {
+      const t = task({ purpose: "integrate" });
+      const b = makeBus({ getTask: ((id: string) => (id === t.id ? t : undefined)) as never });
+      expect(b.deriveAutoConnectLabel({ cmd: "spawn_agent", taskId: t.id, provider: "claude" } as BusRequest)).toBe(
+        "integração",
+      );
+    });
+
+    it("em en a pill fala o MESMO vocabulário da Fila (a cópia pt-BR divergia: 'implementation' vs 'implementação')", () => {
+      setLocale("en");
+      const t = task({ purpose: "integrate" });
+      const b = makeBus({ getTask: ((id: string) => (id === t.id ? t : undefined)) as never });
+      expect(b.deriveAutoConnectLabel({ cmd: "spawn_agent", taskId: t.id, provider: "claude" } as BusRequest)).toBe(
+        "integration",
+      );
+      // E o substantivo da pill vem de chave própria (`review`), não do
+      // verbo `task.role.reviewer` ("reviews").
+      expect(
+        b.deriveAutoConnectLabel({
+          cmd: "spawn_agent",
+          taskId: t.id,
+          role: "reviewer",
+          provider: "claude",
+        } as BusRequest),
+      ).toBe("review · integration");
     });
   });
 

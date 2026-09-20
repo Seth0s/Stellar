@@ -79,9 +79,11 @@
  * "o report mais recente do card é POSTERIOR à última vez que ele recebeu
  * trabalho". Quem o calcula é o chamador (o bus), comparando o
  * `updated_at`/`seq` do último report (`ReportRow`, store.ts) com o instante
- * da última entrega/input; `hasReport` continua aceito como entrada
- * DEPRECADA só enquanto a fiação nova não entra (message-bus.ts não podia ser
- * tocado: arquivo em revisão por outra task na data desta mudança).
+ * da última entrega/input (`pty-registry.ts`'s `getLastWorkGrantedAt`, já
+ * ligado ao bus por uma linha em `index.ts`). O `hasReport` deprecado que
+ * existiu durante a janela daquela fiação FOI REMOVIDO quando ela entrou:
+ * fallback permanente reabriria a pergunta errada, e um watchdog que parece
+ * vigiar e não vigia é pior que um watchdog ausente.
  *
  * Once-only state lives in the caller (`Set`/`Map` of card ids), por episódio
  * e não por vida: re-armar é o que faz a SEGUNDA falha do mesmo card ser
@@ -120,11 +122,17 @@ export function decideIdleWithoutReport(input: {
   waitingOnConsent: boolean;
   /**
    * O report mais recente do card é POSTERIOR à última vez que ele recebeu
-   * trabalho (input humano ou entrega)? `false` = este episódio ainda não
-   * tem report, MESMO que o card já tenha reportado antes na vida — é a
-   * diferença que faz a segunda falha do mesmo card ser visível.
+   * trabalho (input humano ou entrega)? `false` = este episódio ainda não tem
+   * report, MESMO que o card já tenha reportado antes na vida — é a diferença
+   * que faz a segunda falha do mesmo card ser visível.
+   *
+   * OBRIGATÓRIO: substituiu o `hasReport` absoluto (por VIDA do card), que era
+   * o defeito desta task. O fallback que existiu por uma janela datada — o
+   * repasse da âncora em `message-bus.ts` antes de a linha entrar no
+   * `index.ts` — foi removido quando a janela fechou, porque um watchdog que
+   * parece vigiar e não vigia entrega pior que um watchdog ausente.
    */
-  reportedSinceWorkGranted?: boolean;
+  reportedSinceWorkGranted: boolean;
   /**
    * Turno DECLARADO encerrado sem nenhuma saída depois — o `idle` de
    * `card-status-decision.ts`. Onde existe (hoje: cards do claude, via hook
@@ -132,20 +140,6 @@ export function decideIdleWithoutReport(input: {
    * (bash/commandcode, ou `unknown`), ausente/false e o piso decide.
    */
   declaredIdle?: boolean;
-  /**
-   * @deprecated POR VIDA do card — é o defeito que a task a1201078 consertou.
-   * Só continua aqui como fallback enquanto o chamador atual não passa
-   * `reportedSinceWorkGranted`; `reportedSinceWorkGranted` tem precedência
-   * quando presente.
-   *
-   * REMOÇÃO (critério amarrado a um id, de propósito): sai quando a fiação do
-   * bus entrar — task **a1201078**, o repasse de `reportedSinceWorkGranted` e
-   * `declaredIdle` em `message-bus.ts` (a janela do fato é
-   * `pty-registry.ts`'s `getLastWorkGrantedAt`, já escrito). Se você está
-   * lendo isto daqui a meses e a fiação nunca veio, é AÍ que se procura:
-   * entrada deprecada sem dono vira dívida permanente.
-   */
-  hasReport?: boolean;
   /** Principal implementer link (`tasks.card_id`) on a non-judgment task. */
   hasLinkedRunningTask: boolean;
   alreadyNotified: boolean;
@@ -156,10 +150,10 @@ export function decideIdleWithoutReport(input: {
 }): IdleWithoutReportDecision {
   if (!input.alive) return { action: "skip", reason: "not_alive" };
   if (input.waitingOnConsent) return { action: "skip", reason: "waiting_consent" };
-  // O fato novo tem precedência: "report neste episódio" é a pergunta certa,
-  // e o absoluto por vida é o defeito que esta task consertou.
-  const reportedThisEpisode = input.reportedSinceWorkGranted ?? input.hasReport ?? false;
-  if (reportedThisEpisode) return { action: "skip", reason: "reported_this_episode" };
+  // "Houve report NESTE episódio?" — a pergunta do mecanismo, e a única que
+  // ele faz sobre report. Não existe mais o fato absoluto por vida que
+  // desarmava o watchdog no primeiro report de um card.
+  if (input.reportedSinceWorkGranted) return { action: "skip", reason: "reported_this_episode" };
   if (!input.hasLinkedRunningTask) return { action: "skip", reason: "no_linked_running_task" };
   if (input.alreadyNotified) return { action: "skip", reason: "already_notified" };
   // Fato declarado de fim de turno: não espera piso nenhum — esperar 3min

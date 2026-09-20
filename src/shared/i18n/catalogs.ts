@@ -413,6 +413,11 @@ export const ptBR = {
   "task.interrupted": "interrompida: {reason}",
   "task.role.implementer": "implementa",
   "task.role.reviewer": "revisa",
+  // Substantivo próprio da PILL do conector de spawn (task 5b173f00): a pill
+  // precisa de substantivo ("revisão"/"review") e `task.role.reviewer` é
+  // verbo flexionado para outra frase — reusar por proximidade semântica é
+  // como o texto divergiria na próxima vez.
+  "task.role.reviewerPill": "revisão",
   "task.purpose.investigate": "investigação",
   "task.purpose.implement": "implementação",
   "task.purpose.measure": "medição",
@@ -1318,6 +1323,7 @@ export const en: Record<MessageKey, string> = {
   "task.interrupted": "interrupted: {reason}",
   "task.role.implementer": "implements",
   "task.role.reviewer": "reviews",
+  "task.role.reviewerPill": "review",
   "task.purpose.investigate": "investigation",
   "task.purpose.implement": "implementation",
   "task.purpose.measure": "measurement",

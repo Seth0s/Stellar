@@ -200,4 +200,124 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     await new Promise((r) => setTimeout(r, 200));
     expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
   });
+
+  /**
+   * A ÂNCORA DO EPISÓDIO (task a1201078) no bus. Os quatro casos abaixo são o
+   * contrato da fiação: a pergunta é "houve report NESTE episódio?" — desde a
+   * última vez que o card recebeu trabalho — e não "houve report na vida?".
+   */
+  describe("com a âncora do episódio (getCardLastWorkGrantedAt)", () => {
+    it("já reportou na VIDA, mas o trabalho é NOVO e não houve report → cutuca de novo", async () => {
+      // O defeito que abriu a task: o primeiro report do card desarmava o
+      // watchdog para sempre, e as falhas seguintes passavam em silêncio.
+      const reportAt = Date.now() - 10_000;
+      const workGrantedAt = Date.now() - 5_000; // trabalho concedido DEPOIS do report
+      const { bus: b, written } = makeBus({
+        getCardLastWorkGrantedAt: ((id: string) => (id === "worker-1" ? workGrantedAt : null)) as never,
+        getReport: (() => ({
+          card_id: "worker-1",
+          seq: 7,
+          report_json: JSON.stringify({ ok: true }),
+          updated_at: reportAt,
+        })) as never,
+      });
+
+      b.scanIdleWithoutReport();
+      const bodies = await waitForBodies(written, 1);
+      expect(bodies.filter((t) => t.includes(IDLE_POINTER))).toHaveLength(1);
+    });
+
+    it("report DEPOIS do trabalho concedido → este episódio está cumprido, não cutuca", async () => {
+      const workGrantedAt = Date.now() - 10_000;
+      const reportAt = Date.now() - 5_000;
+      const { bus: b, written } = makeBus({
+        getCardLastWorkGrantedAt: ((id: string) => (id === "worker-1" ? workGrantedAt : null)) as never,
+        getReport: (() => ({
+          card_id: "worker-1",
+          seq: 8,
+          report_json: JSON.stringify({ ok: true }),
+          updated_at: reportAt,
+        })) as never,
+      });
+
+      b.scanIdleWithoutReport();
+      await new Promise((r) => setTimeout(r, 200));
+      expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+    });
+
+    it("segundo episódio: o MESMO trabalho não cutuca duas vezes, mas uma concessão NOVA re-arma", async () => {
+      let workGrantedAt = Date.now() - 5_000;
+      const { bus: b, written } = makeBus({
+        getCardLastWorkGrantedAt: ((id: string) => (id === "worker-1" ? workGrantedAt : null)) as never,
+      });
+
+      b.scanIdleWithoutReport();
+      b.scanIdleWithoutReport();
+      await waitForBodies(written, 1);
+      expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(1);
+
+      // Mesma âncora: continua sendo o mesmo episódio, nada de segundo cutucão.
+      b.scanIdleWithoutReport();
+      await new Promise((r) => setTimeout(r, 150));
+      expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(1);
+
+      // Trabalho concedido de novo (o coordenador mandou outra tarefa):
+      // a âncora muda, o episódio re-arma, e a falha seguinte é visível.
+      workGrantedAt = Date.now();
+      b.scanIdleWithoutReport();
+      const bodies = await waitForBodies(written, 2);
+      expect(bodies.filter((t) => t.includes(IDLE_POINTER))).toHaveLength(2);
+    });
+
+    it("turno DECLARADO (declaredIdle) → cutuca sem esperar o piso de 180s", async () => {
+      // Fato declarado de fim de turno com a ÚLTIMA saída ANTES dele: é o
+      // `idle` de card-status-decision.ts. O relógio de bytes está em 5s, bem
+      // abaixo do piso — e mesmo assim cutuca, porque o fato é declarado.
+      const now = Date.now();
+      const { bus: b, written } = makeBus({
+        getCardLastActivityAt: ((id: string) => (id === "worker-1" ? now - 5_000 : now)) as never,
+        getCardTurnEndedAt: ((id: string) => (id === "worker-1" ? now - 1_000 : null)) as never,
+      });
+
+      b.scanIdleWithoutReport();
+      const bodies = await waitForBodies(written, 1);
+      expect(bodies.filter((t) => t.includes(IDLE_POINTER))).toHaveLength(1);
+    });
+
+    it("saída DEPOIS do fim de turno (turno novo começou) → não cutuca", async () => {
+      const now = Date.now();
+      const { bus: b, written } = makeBus({
+        getCardLastActivityAt: ((id: string) => (id === "worker-1" ? now : now)) as never,
+        getCardTurnEndedAt: ((id: string) => (id === "worker-1" ? now - 1_000 : null)) as never,
+      });
+
+      b.scanIdleWithoutReport();
+      await new Promise((r) => setTimeout(r, 200));
+      expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+    });
+  });
+
+  /**
+   * A ÂNCORA AUSENTE EM TEMPO DE EXECUÇÃO (corrida: a entry do PTY sumiu
+   * entre o `listTerminalCards()` e a leitura do fato — `getLastWorkGrantedAt`
+   * devolve `null` por não haver entry). Este NÃO é mais o caso da janela de
+   * fiação (aquela fechou: o callback é obrigatório e o `hasReport` absoluto
+   * foi removido): é a guarda de corrida, e o que ela trava é NÃO transformar
+   * "não dá para datar o trabalho" em cutucão — um report já gravado conta
+   * como o episódio cumprido.
+   */
+  it("âncora sem data (corrida) → não cutuca quem já reportou", async () => {
+    const { bus: b, written } = makeBus({
+      getCardLastWorkGrantedAt: (() => null) as never,
+      getReport: (() => ({
+        card_id: "worker-1",
+        seq: 9,
+        report_json: JSON.stringify({ ok: true }),
+        updated_at: Date.now(),
+      })) as never,
+    });
+    b.scanIdleWithoutReport();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+  });
 });
