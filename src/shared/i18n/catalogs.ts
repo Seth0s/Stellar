@@ -155,6 +155,12 @@ export const ptBR = {
   "settings.providers.idLocked": "o id não muda numa edição",
   "settings.providers.editPreserved":
     "os campos técnicos medidos (sessão, effort, model, entrega) vêm da declaração anterior e são preservados",
+  "settings.providers.flagsLabel": "flags fixas",
+  "settings.providers.noFlags": "sem flags fixas",
+  "settings.providers.flagsHint":
+    'trocável no providers.json — "baseArgs": [] remove (o schema do arquivo autocompleta)',
+  "settings.providers.bypassBadge": "sobe sem pedir permissão",
+  "settings.providers.nativeFlags": "sem flags fixas próprias — o argv é montado por card (sessão, modelo, effort)",
   "settings.providers.reset": "Voltar ao padrão do app",
   "settings.providers.resetHint":
     "Isto tira a sua entrada de \"{id}\" do providers.json: se houver um padrão medido do app, ele volta a valer; senão, o provider deixa de existir.",
@@ -411,6 +417,7 @@ export const ptBR = {
   "task.purpose.implement": "implementação",
   "task.purpose.measure": "medição",
   "task.purpose.fix": "correção",
+  "task.purpose.integrate": "integração",
   "task.detail.title": "Task {id}",
   "task.detail.createdBy": "criada por {actor}",
   "task.detail.createdUnknown": "origem desconhecida",
@@ -1056,6 +1063,12 @@ export const en: Record<MessageKey, string> = {
   "settings.providers.idLocked": "the id does not change when editing",
   "settings.providers.editPreserved":
     "the measured technical fields (session, effort, model, delivery) come from the previous declaration and are preserved",
+  "settings.providers.flagsLabel": "fixed flags",
+  "settings.providers.noFlags": "no fixed flags",
+  "settings.providers.flagsHint":
+    'overridable in providers.json — "baseArgs": [] removes them (the file\'s schema autocompletes)',
+  "settings.providers.bypassBadge": "starts without permission prompts",
+  "settings.providers.nativeFlags": "no fixed flags of its own — argv is composed per card (session, model, effort)",
   "settings.providers.reset": "Restore app default",
   "settings.providers.resetHint":
     "This removes your \"{id}\" entry from providers.json: if a measured app default exists, it takes over again; otherwise the provider stops existing.",
@@ -1309,6 +1322,7 @@ export const en: Record<MessageKey, string> = {
   "task.purpose.implement": "implementation",
   "task.purpose.measure": "measurement",
   "task.purpose.fix": "fix",
+  "task.purpose.integrate": "integration",
   "task.detail.title": "Task {id}",
   "task.detail.createdBy": "created by {actor}",
   "task.detail.createdUnknown": "unknown origin",

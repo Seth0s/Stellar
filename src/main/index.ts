@@ -49,7 +49,7 @@ import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJs
 import { describeStatusAskResolved } from "./status-write-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
-import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
+import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { deriveParticipationDivergence, deriveTaskStatus } from "../task-status-derive";
 import { checkAgentAvailability, type SpawnOpts } from "./providers";
 import {
@@ -1373,10 +1373,10 @@ function createWindow() {
     // falso positivo.
     deps: string[];
     depStatuses: Record<string, string>;
-    purpose: "investigate" | "implement" | "measure" | "fix" | null;
+    purpose: TaskPurpose | null;
     /** Layer-1 review requirement. `null` = never declared. */
     review: "wanted" | null;
-    depPurposes: Record<string, "investigate" | "implement" | "measure" | "fix" | null>;
+    depPurposes: Record<string, TaskPurpose | null>;
     cardAlive: boolean;
     statusTransitions: { toValue: string; at: number }[];
     /** DESIGN-BACKLOG.md §2.1 Decisão 8 — sinal vivo de divergência.
@@ -1494,7 +1494,7 @@ function createWindow() {
       const report = t.card_id ? reportByCardId.get(t.card_id) : undefined;
       const deps = depsByTask.get(t.id) ?? [];
       const depStatuses: Record<string, string> = {};
-      const depPurposes: Record<string, "investigate" | "implement" | "measure" | "fix" | null> = {};
+      const depPurposes: Record<string, TaskPurpose | null> = {};
       for (const depId of deps) {
         const s = depStatusById[depId];
         if (s !== undefined) depStatuses[depId] = s;
@@ -3333,6 +3333,12 @@ app.whenReady().then(async () => {
       id: spec.id,
       label: spec.label,
       binaryNames: [...spec.binaryNames],
+      // A identidade que a UI não via (task c857539c): com que flags fixas o
+      // provider sobe, e se uma delas desliga os prompts — DECLARADO no spec
+      // e medido por quem o declarou; ausente é "sem claim". Vazio vira
+      // frase na tela ("sem flags fixas"), nunca ausência silenciosa.
+      baseArgs: [...(spec.baseArgs ?? [])],
+      bypassesPermissionPrompts: spec.bypassesPermissionPrompts === true,
       mcpEnabled: spec.capacity.mcp.mechanism === "global-config",
       mcpConfigPath: spec.capacity.mcp.mechanism === "global-config" ? spec.capacity.mcp.configPath : null,
       mcpConfigKey: spec.capacity.mcp.mechanism === "global-config" ? spec.capacity.mcp.configKey : null,

@@ -300,7 +300,18 @@ export type StickyOp =
 export type CardStatusResult = { ok: true; status: "running" | "waiting" | "exited" } | { ok: false; error: string };
 export type SpawnCardKind = "files" | "changes" | "sticky" | "browser" | "remote-window" | "task" | "media";
 export type SpawnAgentResult =
-  | { ok: true; cardId: string; exited?: boolean; exitCode?: number }
+  | {
+      ok: true;
+      cardId: string;
+      exited?: boolean;
+      exitCode?: number;
+      /** Nota informativa, nunca impedimento (task 095158e9, item b):
+       * despachar fora de ordem é decisão LEGÍTIMA do orquestrador — o
+       * brief já carrega o estado de cada dep, e isto só evita que quem
+       * despacha precise abrir o brief pra saber. Presente apenas quando a
+       * task tem deps não-done no momento do despacho. */
+      note?: string;
+    }
   | { ok: false; error: string };
 export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error: string };
 
@@ -1466,7 +1477,16 @@ export function createMessageBus(
     const gates = contractFromTaskRow(task).gates;
     if (!gates || gates.length === 0) return;
     if (!task.cwd) return;
-    void runTaskGates({ taskId: task.id, cwd: task.cwd, gates })
+    void runTaskGates({
+      taskId: task.id,
+      cwd: task.cwd,
+      gates,
+      // O território vai só para ROTULAR o diff capturado (dentro/fora) —
+      // nunca para filtrar. Medido: 75,5% dos arquivos que os agentes
+      // declaram caem fora do território, e o desvio é o que mais interessa
+      // ver no diff (task 7096e8af).
+      territory: contractFromTaskRow(task).territory,
+    })
       .then((evidence) => {
         const latest = callbacks.getTask(task.id);
         if (!latest) return;
@@ -4017,13 +4037,30 @@ export function createMessageBus(
           if (latest) linkImplementerToTask(latest, spawnResult.cardId, "agent", profile);
         }
       }
+      // Nota de deps no RETORNO (task 095158e9, item b) — INFORMAR não é
+      // IMPEDIR: despachar fora de ordem é decisão legítima do orquestrador
+      // (uma medição num território travado, por exemplo), e o brief já
+      // carrega o estado de cada dep. A nota só antecipa o fato para quem
+      // despacha, no momento em que despacha. Lê só o stored (sem reports,
+      // sem I/O); reviewer não recebe dep pointer, então a nota também não
+      // se aplica a ele.
+      const depIds = taskForBrief ? depIdsFromJson(taskForBrief.deps_json) : [];
+      const pendingDeps = depIds.filter((depId) => callbacks.getTask(depId)?.status !== "done").length;
+      const withDepNote = (result: SpawnAgentResult): SpawnAgentResult =>
+        result.ok && pendingDeps > 0
+          ? {
+              ...result,
+              note: `${pendingDeps} of ${depIds.length} dep(s) of this task are not done yet — the card's brief carries each dependency's status and its latest report`,
+            }
+          : result;
+
       // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open
       // past "the human approved and the card exists" (spawnResult above)
       // until the process actually exits, so the caller gets a real
       // completion signal instead of having to poll card_status/snapshot
       // in a loop. Not an error if the wait window runs out first — the
       // spawn itself still succeeded, it's just still running.
-      if (!req.wait || !spawnResult.ok) return spawnResult;
+      if (!req.wait || !spawnResult.ok) return withDepNote(spawnResult);
       const cardId = spawnResult.cardId;
       const exitCode = await new Promise<number | null>((resolve) => {
         const timer = setTimeout(() => {
@@ -4043,7 +4080,7 @@ export function createMessageBus(
         waiters.push(onExit);
         pendingCardExits.set(cardId, waiters);
       });
-      return exitCode === null ? spawnResult : { ...spawnResult, exited: true, exitCode };
+      return exitCode === null ? withDepNote(spawnResult) : withDepNote({ ...spawnResult, exited: true, exitCode });
     }
 
     if (req.cmd === "spawn_card") {

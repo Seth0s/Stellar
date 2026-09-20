@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ProviderPicker } from "@renderer/ProviderPicker";
 import { buildProviderGroups } from "@renderer/provider-groups";
+import { refreshProviderClassification } from "@renderer/useProviderClassification";
+import type { ProvidersPageView } from "../../src/preload/index";
 import { setLocale } from "../../src/shared/i18n";
 
 /**
@@ -34,8 +36,16 @@ function groups() {
   });
 }
 
-beforeEach(() => {
+function emptyView(): ProvidersPageView {
+  return { path: "/x/providers.json", fileRead: true, error: null, rejected: [], skipped: [], rows: [] };
+}
+
+beforeEach(async () => {
   setLocale("pt-BR");
+  // O store de classificação é módulo-global: reseta entre testes pra um
+  // teste não herdar as flags do anterior (e o primeiro render não dispara
+  // leitura de IPC nenhuma — o seed é explícito abaixo).
+  await refreshProviderClassification(emptyView());
 });
 
 describe("ProviderPicker", () => {
@@ -90,5 +100,35 @@ describe("ProviderPicker", () => {
 
     fireEvent.click(screen.getByTitle("Cline"));
     expect(onChange).toHaveBeenCalledWith("cline");
+  });
+
+  it("o title do botão carrega as flags fixas e o efeito MEDIDO declarado — o momento do spawn (task c857539c)", async () => {
+    // É aqui que a ressalva do revisor mora: "todo card commandcode nasce
+    // sem prompt de permissão" tem que estar visível ONDE o card é criado.
+    await refreshProviderClassification({
+      ...emptyView(),
+      rows: [
+        {
+          id: "commandcode",
+          label: "Command Code",
+          binaryNames: ["commandcode"],
+          mcpEnabled: true,
+          mcpConfigPath: null,
+          mcpConfigKey: null,
+          source: "app",
+          skipped: false,
+          baseArgs: ["--yolo"],
+          bypassesPermissionPrompts: true,
+        },
+      ],
+    });
+
+    render(<ProviderPicker groups={groups()} labelled value="bash" onChange={vi.fn()} />);
+
+    const btn = screen.getByTitle("Command Code · flags fixas: --yolo · sobe sem pedir permissão");
+    expect(btn).toBeTruthy();
+    // E sem declaração (cline), o title continua sendo só o label — sem
+    // claim não há frase de efeito.
+    expect(screen.getByTitle("Cline")).toBeTruthy();
   });
 });

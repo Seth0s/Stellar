@@ -201,6 +201,14 @@ describe("derivePurposeChip / describePurposeChip", () => {
     expect(describePurposeChip(chip!)).toBe("investigação → implementação");
   });
 
+  it("`integrate` (item 13 do sticky) nasce de graça: dep de implement vira \"implementação → integração\"", () => {
+    // O NOME da etapa sai da derivação que já existia — nenhum mecanismo
+    // novo, nenhum dispatch gateado: purpose é metadado write-once.
+    const chip = derivePurposeChip("integrate", ["impl", "fix"], { impl: "implement", fix: "fix" }, []);
+    expect(chip).toEqual({ purpose: "integrate", fromPurpose: "implement", hasReviewer: false });
+    expect(describePurposeChip(chip!)).toBe("implementação → integração");
+  });
+
   it("dep sem purpose (task antiga) não inventa seta", () => {
     const chip = derivePurposeChip("fix", ["old"], { old: null }, []);
     expect(chip?.fromPurpose).toBeNull();

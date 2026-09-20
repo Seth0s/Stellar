@@ -25,6 +25,9 @@ const CLINE_APP: ProvidersPageRow = {
   id: "cline",
   label: "Cline",
   binaryNames: ["cline"],
+  // cline não tem flag fixa nem claim de efeito (medido, task c857539c).
+  baseArgs: [],
+  bypassesPermissionPrompts: false,
   mcpEnabled: true,
   mcpConfigPath: "~/.cline/data/settings/cline_mcp_settings.json",
   mcpConfigKey: "mcpServers",
@@ -38,6 +41,10 @@ const MYCLI_FILE: ProvidersPageRow = {
   id: "mycli",
   label: "My CLI",
   binaryNames: ["my-cli"],
+  // Fixture do caso que originou o ticket: flags fixas declaradas E o
+  // efeito medido declarado junto — a UI tem que expor os dois.
+  baseArgs: ["--minha-cli-flag"],
+  bypassesPermissionPrompts: true,
   mcpEnabled: false,
   mcpConfigPath: null,
   mcpConfigKey: null,
@@ -133,6 +140,29 @@ describe("ProvidersPage", () => {
         '[data-role="providers-generics"] [data-provider-id="cline"] [data-role="providers-edit"]',
       ),
     ).toBeTruthy();
+
+    // Flags fixas fazem parte da identidade (task c857539c): vazio vira
+    // FRASE ("sem flags fixas"), nunca ausência silenciosa — foi a omissão
+    // que escondeu o --yolo do commandcode até hoje.
+    expect(document.querySelector('[data-provider-id="cline"]')?.textContent).toContain("sem flags fixas");
+    // O hint APONTA pro providers.json (uma redação só — o schema que o
+    // main publica autocompleta), em vez de reexplicar na página.
+    expect(document.querySelector('[data-provider-id="cline"]')?.textContent).toContain("providers.json");
+
+    // Com flags declaradas: os chips aparecem, e o efeito MEDIDO declarado
+    // nelas vira badge de estilo NORMAL — informação sobre como o card vai
+    // nascer, não alarme.
+    const mycli = document.querySelector('[data-provider-id="mycli"]')!;
+    expect(mycli.textContent).toContain("--minha-cli-flag");
+    expect(mycli.querySelector('[data-role="providers-bypass-badge"]')?.textContent).toBe(
+      "sobe sem pedir permissão",
+    );
+
+    // Nativo: a linha honesta (medido nos seis buildArgs — nenhum tem flag
+    // fixa própria; o argv é montado por card).
+    expect(document.querySelector('[data-role="providers-native-flags"]')?.textContent).toContain(
+      "argv é montado por card",
+    );
   });
 
   it("editar um genérico já configurado reabre o form preenchido e persiste pelo main", async () => {
@@ -201,6 +231,8 @@ describe("ProvidersPage", () => {
       id: "claude",
       label: "Claude do usuário",
       binaryNames: ["claude"],
+      baseArgs: [],
+      bypassesPermissionPrompts: false,
       mcpEnabled: false,
       mcpConfigPath: null,
       mcpConfigKey: null,
