@@ -110,6 +110,7 @@ import {
   type DelegateProvider,
 } from "./chat-tools";
 import { decideSingleInstancePolicy, describeSingleInstanceRefusal } from "./single-instance-decision";
+import { createNotifyCoalescer } from "./notify-coalescer";
 import {
   APP_NAME,
   SOCK_BASENAME,
@@ -854,6 +855,9 @@ function createWindow() {
 
   app.on("before-quit", () => {
     rendererGoneIsQuitting = true;
+    // Fatia 3b (ab83ba5f): o outro caminho de saída. Idempotente — se o
+    // `win.on("close")` já flushou, este não entrega nada de novo.
+    taskNotifyCoalescer.close();
   });
 
   // Packaged: electron-builder's extraResources copies resources/bin next to
@@ -1571,6 +1575,41 @@ function createWindow() {
   function notifyTaskScopeChanged() {
     safeSend(win, "task-board-scope:changed", store.taskCountsByBoard());
   }
+
+  // ---------------------------------------------------------------------
+  // Fiação da fatia 3b (task ab83ba5f): o push da Fila passa a avisar por
+  // JANELA em vez de por escrita.
+  //
+  // MEDIDO antes disto (seq 509): cada push custa 3,75ms de SQLite + 1,48MB
+  // de JSON, e as escritas são BIMODAIS — 153 de 217 intervalos numa hora
+  // são de 0ms (mesmo milissegundo) e o resto são dezenas de segundos.
+  // Coalescer a rajada corta a maior parte dos pushes sem atrasar nada
+  // perceptível (janela de 200ms; 100/250/500 medidos dão o mesmo
+  // resultado, então a escolha da janela não é crítica).
+  //
+  // O CONTRATO do coalescer está em tests/unit/notify-coalescer.test.ts —
+  // inclusive o que importa aqui: `close()` FLUSHA o pendente, nunca limpa
+  // o timer sem entregar (é o único jeito de este conserto virar perda de
+  // dado). Esta fiação não cria NENHUM outro caminho que desarme o timer:
+  // só `close()` o toca, e `close()` entrega.
+  //
+  // `deliver` recebe a CHAVE e reconstrói o estado AGORA (não um payload
+  // congelado no aviso): o push nunca carrega retrato velho, e um board que
+  // deixou de ser o ativo entre o aviso e a entrega é corretamente ignorado
+  // pelo próprio `notifyTaskChanged`.
+  // ---------------------------------------------------------------------
+  const TASK_NOTIFY_WINDOW_MS = 200;
+  const taskNotifyCoalescer = createNotifyCoalescer({
+    windowMs: TASK_NOTIFY_WINDOW_MS,
+    // A chave é o board. `""` é o aviso SEM board (task com `board_id`
+    // null ainda precisa atualizar o rodapé de escopo, que é global) — e
+    // `notifyTaskChanged` já ignora vazio, então só o rodapé sai.
+    deliver: (key) => {
+      notifyTaskChanged(key || null);
+      notifyTaskScopeChanged();
+    },
+  });
+
   // Choke point único pra toda gravação de task (agente via MCP/acbridge,
   // motor interno de retry/auto-dispatch, OU os três gestos humanos da
   // Fila abaixo) — `store.upsertTask` já grava a transição (actor chega
@@ -1592,8 +1631,9 @@ function createWindow() {
     upsertTask: (task) => store.upsertTask(task),
     applyColumnDrop: (dragged, siblings) => store.applyColumnDrop(dragged, siblings),
     afterWrite: (boardId) => {
-      notifyTaskChanged(boardId);
-      notifyTaskScopeChanged();
+      // Fatia 3b (ab83ba5f): aviso por JANELA, não por escrita. O board vai
+      // como chave (o rodapé de escopo sai junto na entrega).
+      taskNotifyCoalescer.notify(boardId ?? "");
     },
     // `messageBus` é criado logo abaixo com `persistTask` como callback —
     // lookup por chamada, não captura, por isso o optional chaining.
@@ -3099,6 +3139,11 @@ function createWindow() {
   // applied by moving the call to the event where `win` is still valid
   // instead of adding another isDestroyed() guard.
   win.on("close", () => {
+    // Fatia 3b (ab83ba5f): o flush ANTES de a janela morrer é a garantia do
+    // contrato do coalescer — um push pendente na janela de 200ms sai agora
+    // (o renderer ainda está vivo neste evento), em vez de ser descartado
+    // junto com o timer. `close()` é idempotente.
+    taskNotifyCoalescer.close();
     browserRegistry.destroyAll();
   });
   win.on("closed", () => {
