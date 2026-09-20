@@ -26,15 +26,33 @@
 //     entry lands as an explicit 0 and any raw px that reappears fails —
 //     updateBaseline writes that 0 itself (pinned by the write-path test).
 //
-// SCAN LIMITS (declared frontier): the spacing scan is LINE-based — one
-// declaration per line, ending in `;`. It does NOT see: a value continued
-// on the next line, a SECOND declaration on the same line (only the first
-// `prop:` of the line is attributed), or a last declaration missing its
-// `;` before `}`. rem/em are out by design (the scale is px-based, §1.5).
+// SCAN LIMITS (declared frontier): the scan is LINE-based — one declaration
+// per line, ending in `;`. It does NOT see: a value continued on the next
+// line, a SECOND declaration on the same line (only the first `prop:` of the
+// line is attributed), or a last declaration missing its `;` before `}`.
+// Applies to every rule below. In the typography rule `rem`/`em` are out by
+// design (a relative size is not a step); here `rem`/`em` are simply not the
+// unit this scale speaks.
 // Under prettier none of these occur in this repo — but a hand-typed line
 // is written before it is formatted; when in doubt, run the checker after
 // formatting. Counts are DECLARATIONS (`padding: 7px 10px` is one), not px
 // instances.
+//
+// LAYER 3 — TYPOGRAPHIC SCALE (task c8cd45fc, part 2 of the design system):
+// raw px `font-size` is a violation, with the SAME three outs and the SAME
+// mechanism as layer 2 — one more entry in SD_RULES with its own baseline
+// section, the same pin/ratchet and the same audited escape. Nothing was
+// re-implemented for it; the machinery is shared by design.
+//
+// FRONTIER OF THE TYPOGRAPHY RULE — only a SINGLE px literal counts
+// (`font-size: 11px`). Deliberately NOT seen: `clamp()`/`calc()` (the
+// `.card-head`/`.card-foot` scale with the card's own width via `cqw`),
+// `var(--sticky-font-size, …)` (the sticky note's OWN user-controlled size)
+// and `em` (the relative cascade of the markdown inside it). Flagging any of
+// those would either break the scaling or move a size the USER owns — and the
+// terminal's per-card size never reaches CSS at all: it is an xterm option set
+// from JS (`useTerminal.ts`'s `BASE_FONT_SIZE`), out of this scan's reach by
+// construction.
 //
 // What is deliberately NOT checked here: coordinates (top/right/bottom/
 // left/inset) are layout GEOMETRY, not rhythm — the precedent is
@@ -69,16 +87,61 @@ function baselinePath(root = PROJECT_ROOT) {
 const RHYTHM_PROP_RE =
   /^(padding|margin|gap|row-gap|column-gap)(-(top|right|bottom|left|x|y|block|inline|block-start|block-end|inline-start|inline-end))?$/;
 
-/** The seed rule set. Typography/radius/motion join here with their own
- * baseline section — same mechanism, new properties. */
-const SD_RULES = [
+/** The one property the `--text-*` scale governs. */
+const FONT_SIZE_PROP_RE = /^font-size$/;
+
+/** px instances inside one declaration value. Zero is exempt: `padding: 0`
+ * needs no token. */
+function pxInstances(value) {
+  const out = [];
+  for (const m of value.matchAll(/(-?\d+(?:\.\d+)?)px\b/gi)) {
+    if (Number(m[1]) === 0) continue;
+    out.push(m[1]);
+  }
+  return out;
+}
+
+/** A font-size is "raw" only when the WHOLE value is a single px literal.
+ * `clamp()`/`calc()` scale with the container, `var(--sticky-font-size, …)` is
+ * the sticky's own user-controlled size and `em` is the relative cascade of
+ * the markdown inside it — none of them is a step, and letting the rule touch
+ * them would either break the scaling or move a size the USER owns. */
+function pxLiteralValue(value) {
+  const m = value.trim().match(/^(-?\d+(?:\.\d+)?)px$/i);
+  if (!m || Number(m[1]) === 0) return [];
+  return [m[1]];
+}
+
+/**
+ * The seed rule set — the mechanism is shared, each domain adds an entry with
+ * its own baseline section: `propRe` (which properties), `raw` (what counts as
+ * a violation in the VALUE) and the same escape marker. Part 1 seeded
+ * "spacing"; part 2 added "typography" without touching the machinery.
+ * Radius/motion join here the same way.
+ */
+export const SD_RULES = [
   {
     id: "spacing",
     description:
       "raw px in rhythm properties (padding/margin/gap) — use --space-* (docs/SYSTEM_DESIGN.md §1.5)",
     propRe: RHYTHM_PROP_RE,
+    raw: pxInstances,
+    tokenFamily: "--space-*",
+    noun: "with raw px in rhythm properties",
+  },
+  {
+    id: "typography",
+    description:
+      "raw px font-size (a single px literal) — use --text-* (docs/SYSTEM_DESIGN.md §1.6)",
+    propRe: FONT_SIZE_PROP_RE,
+    raw: pxLiteralValue,
+    tokenFamily: "--text-*",
+    noun: "with a single px font-size",
   },
 ];
+
+const RULE_SPACING = SD_RULES[0];
+const RULE_TYPOGRAPHY = SD_RULES[1];
 
 /** A declared escape: reason is mandatory, on the same line as the
  * declaration it excuses. Printed in every run — an invisible escape is a
@@ -184,19 +247,8 @@ export function scanDesignTokens(root = PROJECT_ROOT) {
   return { catalog, locals, used, missing, known };
 }
 
-/** px instances inside one declaration value. Zero is exempt: `padding: 0`
- * needs no token. */
-function pxInstances(value) {
-  const out = [];
-  for (const m of value.matchAll(/(-?\d+(?:\.\d+)?)px\b/gi)) {
-    if (Number(m[1]) === 0) continue;
-    out.push(m[1]);
-  }
-  return out;
-}
-
 /**
- * Pure: the spacing-rule verdict for one CSS source. Lines that are comment
+ * Pure: one SD rule's verdict for one CSS source. Lines that are comment
  * chrome (start with `*` or `/*`) never count as declarations, because the
  * scan runs on RAW source — it has to, to see the escape markers.
  *
@@ -204,7 +256,7 @@ function pxInstances(value) {
  * returned so every report prints it. A bare `sd:allow` without a reason
  * comes back as a violation of its own.
  */
-export function scanSpacingSource(src) {
+export function scanRuleSource(src, rule) {
   const violations = [];
   const escapes = [];
   src.split("\n").forEach((line, index) => {
@@ -213,8 +265,8 @@ export function scanSpacingSource(src) {
     const decl = line.match(/^\s*([a-z-]+)\s*:\s*([^;]+);/);
     if (!decl) return;
     const [, prop, value] = decl;
-    if (!RHYTHM_PROP_RE.test(prop)) return;
-    const instances = pxInstances(value);
+    if (!rule.propRe.test(prop)) return;
+    const instances = rule.raw(value);
     if (instances.length === 0) return;
     const escape = line.match(ESCAPE_RE);
     if (escape) {
@@ -247,19 +299,35 @@ export function scanSpacingSource(src) {
   return { violations, escapes };
 }
 
+/** Convenience wrappers — same function, the rule bound. Kept named so the
+ * tests and the reports read as the domain, not as the index of SD_RULES. */
+export function scanSpacingSource(src) {
+  return scanRuleSource(src, RULE_SPACING);
+}
+export function scanTypographySource(src) {
+  return scanRuleSource(src, RULE_TYPOGRAPHY);
+}
+
 /** One SD rule against the whole renderer: violations and escapes per file
  * (tokens.css excluded — its px are DEFINITIONS). */
-export function scanSpacingRule(root = PROJECT_ROOT) {
+export function scanRule(root = PROJECT_ROOT, rule = RULE_SPACING) {
   const rendererRoot = join(root, "src/renderer");
   const perFile = {};
   const escapesByFile = {};
   for (const abs of walkCss(rendererRoot)) {
     const rel = relative(root, abs);
-    const { violations, escapes } = scanSpacingSource(readFileSync(abs, "utf8"));
+    const { violations, escapes } = scanRuleSource(readFileSync(abs, "utf8"), rule);
     if (violations.length > 0) perFile[rel] = violations.length;
     if (escapes.length > 0) escapesByFile[rel] = escapes;
   }
   return { perFile, escapesByFile };
+}
+
+export function scanSpacingRule(root = PROJECT_ROOT) {
+  return scanRule(root, RULE_SPACING);
+}
+export function scanTypographyRule(root = PROJECT_ROOT) {
+  return scanRule(root, RULE_TYPOGRAPHY);
 }
 
 function loadBaseline(root = PROJECT_ROOT) {
@@ -270,7 +338,8 @@ function loadBaseline(root = PROJECT_ROOT) {
 
 /** Frozen-baseline enforcement for one rule: unlisted file must be at 0;
  * listed file may not grow. Pure given perFile + baseline section. */
-export function checkAgainstBaseline(perFile, frozenSection) {
+export function checkAgainstBaseline(perFile, frozenSection, rule = RULE_SPACING) {
+  const family = rule.tokenFamily ?? "--space-*";
   const failures = [];
   const files = new Set([...Object.keys(frozenSection ?? {}), ...Object.keys(perFile)]);
   for (const file of [...files].sort()) {
@@ -282,7 +351,7 @@ export function checkAgainstBaseline(perFile, frozenSection) {
           file,
           now,
           frozen: null,
-          message: "raw px in a file with no frozen baseline — new code uses --space-* (or declares /* sd:allow: reason */)",
+          message: `raw px in a file with no frozen baseline — new code uses ${family} (or declares /* sd:allow: reason */)`,
         });
       }
     } else if (now > frozen) {
@@ -290,7 +359,7 @@ export function checkAgainstBaseline(perFile, frozenSection) {
         file,
         now,
         frozen,
-        message: `grew by ${now - frozen} over the frozen baseline — migrate to --space-* or declare an escape`,
+        message: `grew by ${now - frozen} over the frozen baseline — migrate to ${family} or declare an escape`,
       });
     }
   }
@@ -299,49 +368,59 @@ export function checkAgainstBaseline(perFile, frozenSection) {
 
 /** Scaffolding for the write-path test: rooted so a throwaway tree can
  * exercise the real write. The ratchet-to-zero behavior itself is under
- * test in tests/unit/design-tokens.test.ts. */
+ * test in tests/unit/design-tokens.test.ts. Writes EVERY rule's section, so
+ * adding a rule to SD_RULES needs no change here. */
 export function updateBaseline(root = PROJECT_ROOT) {
   const path = baselinePath(root);
   const baseline = loadBaseline(root);
-  const { perFile } = scanSpacingRule(root);
-  const section = { ...(baseline.rules?.spacing ?? {}) };
-  // Measured counts overwrite the frozen ones…
-  for (const [file, count] of Object.entries(perFile)) section[file] = count;
-  // …a listed file that no longer reports violations lands as an EXPLICIT 0
-  // — that 0 is the pin: the pre-migration debt cannot come back (a bare
-  // absence would let it, which is exactly the hole the write-path test
-  // pins shut);
-  for (const file of Object.keys(section)) {
-    if (perFile[file] === undefined) section[file] = 0;
+  const rules = { ...(baseline.rules ?? {}) };
+  const report = [];
+
+  for (const rule of SD_RULES) {
+    const { perFile } = scanRule(root, rule);
+    const section = { ...(rules[rule.id] ?? {}) };
+    // Measured counts overwrite the frozen ones…
+    for (const [file, count] of Object.entries(perFile)) section[file] = count;
+    // …a listed file that no longer reports violations lands as an EXPLICIT 0
+    // — that 0 is the pin: the pre-migration debt cannot come back (a bare
+    // absence would let it, which is exactly the hole the write-path test
+    // pins shut);
+    for (const file of Object.keys(section)) {
+      if (perFile[file] === undefined) section[file] = 0;
+    }
+    // …and a file that left the tree has no debt to freeze — prune it.
+    for (const file of Object.keys(section)) {
+      if (!existsSync(join(root, file))) delete section[file];
+    }
+    const sorted = Object.fromEntries(Object.entries(section).sort());
+    rules[rule.id] = sorted;
+    const total = Object.values(sorted).reduce((a, b) => a + b, 0);
+    const pinned = Object.values(sorted).filter((v) => v === 0).length;
+    report.push(
+      `${Object.keys(sorted).length} file(s), ${total} frozen violating declaration(s) for rule "${rule.id}"` +
+        (pinned > 0 ? `, ${pinned} file(s) pinned at 0` : ""),
+    );
   }
-  // …and a file that left the tree has no debt to freeze — prune it.
-  for (const file of Object.keys(section)) {
-    if (!existsSync(join(root, file))) delete section[file];
-  }
+
   const next = {
     comment:
-      "Frozen violation counts per design-token rule (task d200c269). A file NOT listed here must be at ZERO — new code uses --space-*. A listed file may not GROW. After migrating a slice, run `node scripts/verify/check-design-tokens.mjs --update-baseline` to freeze the new (lower) count; a file that reached 0 is PINNED clean — its entry stays at an explicit 0 and any raw px that reappears fails the check. Escapes: /* sd:allow: <reason> */ — audited in every run.",
-    rules: { ...baseline.rules, spacing: Object.fromEntries(Object.entries(section).sort()) },
+      "Frozen violation counts per design-token rule (tasks d200c269 spacing, c8cd45fc typography). A file NOT listed here must be at ZERO — new code uses the rule's token family (--space-*, --text-*). A listed file may not GROW. After migrating a slice, run `node scripts/verify/check-design-tokens.mjs --update-baseline` to freeze the new (lower) count; a file that reached 0 is PINNED clean — its entry stays at an explicit 0 and any raw px that reappears fails the check. Escapes: /* sd:allow: <reason> */ — audited in every run.",
+    rules,
   };
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  const total = Object.values(next.rules.spacing).reduce((a, b) => a + b, 0);
-  const pinned = Object.values(next.rules.spacing).filter((v) => v === 0).length;
-  console.log(
-    `check-design-tokens: baseline updated — ${Object.keys(next.rules.spacing).length} file(s), ${total} frozen violating declaration(s) for rule "spacing"` +
-      (pinned > 0 ? `, ${pinned} file(s) pinned at 0` : ""),
-  );
+  for (const line of report) console.log(`check-design-tokens: baseline updated — ${line}`);
 }
 
-function spacingCheck() {
-  const { perFile, escapesByFile } = scanSpacingRule();
+function ruleCheck(rule) {
+  const { perFile, escapesByFile } = scanRule(PROJECT_ROOT, rule);
   const baseline = loadBaseline();
-  const failures = checkAgainstBaseline(perFile, baseline.rules?.spacing);
+  const failures = checkAgainstBaseline(perFile, baseline.rules?.[rule.id], rule);
 
   const total = Object.values(perFile).reduce((a, b) => a + b, 0);
   const escapedTotal = Object.values(escapesByFile).reduce((a, b) => a + b.length, 0);
   console.log(
-    `check-design-tokens: spacing — ${total} violating declaration(s) with raw px in rhythm properties across ${Object.keys(perFile).length} file(s) ` +
-      `(counts are declarations, not px instances), ${escapedTotal} declared escape(s), frozen baseline: ${baseline.rules?.spacing ? "loaded" : "MISSING"}`,
+    `check-design-tokens: ${rule.id} — ${total} violating declaration(s) ${rule.noun} across ${Object.keys(perFile).length} file(s) ` +
+      `(counts are declarations, not px instances), ${escapedTotal} declared escape(s), frozen baseline: ${baseline.rules?.[rule.id] ? "loaded" : "MISSING"}`,
   );
   for (const [file, escapes] of Object.entries(escapesByFile)) {
     for (const e of escapes) {
@@ -349,7 +428,7 @@ function spacingCheck() {
     }
   }
   if (failures.length > 0) {
-    console.error("check-design-tokens: spacing baseline violations:");
+    console.error(`check-design-tokens: ${rule.id} baseline violations:`);
     for (const f of failures) {
       console.error(`  ${f.file} — now ${f.now}, frozen ${f.frozen ?? "absent"}: ${f.message}`);
     }
@@ -384,8 +463,9 @@ function main() {
     );
   }
 
-  const spacingFailures = spacingCheck();
-  if (spacingFailures.length > 0) failed = true;
+  for (const rule of SD_RULES) {
+    if (ruleCheck(rule).length > 0) failed = true;
+  }
 
   if (failed) process.exit(1);
 }

@@ -14,10 +14,13 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  SD_RULES,
   checkAgainstBaseline,
   scanDesignTokens,
   scanSpacingRule,
   scanSpacingSource,
+  scanTypographyRule,
+  scanTypographySource,
   updateBaseline,
 } from "../../scripts/verify/check-design-tokens.mjs";
 
@@ -210,3 +213,76 @@ describe("check-design-tokens spacing rule (d200c269) — o CAMINHO DE ESCRITA (
 function makeTmpDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), `stellar-${prefix}-`));
 }
+
+describe("check-design-tokens typography rule (c8cd45fc) — a regra irmã, mesmo mecanismo", () => {
+  const typography = SD_RULES.find((r: { id: string }) => r.id === "typography")!;
+
+  it("marca font-size px LITERAL (um valor só) e honra a escapatória auditada", () => {
+    const { violations, escapes } = scanTypographySource(
+      [
+        ".a {",
+        "  font-size: 10.5px;",
+        "  line-height: 1.4;",
+        "}",
+        ".b {",
+        "  font-size: 11px; /* sd:allow: alinha com o glifo do chip */",
+        "}",
+      ].join("\n"),
+    );
+    expect(violations).toEqual([{ line: 2, property: "font-size", values: ["10.5"] }]);
+    expect(escapes).toEqual([{ line: 6, property: "font-size", reason: "alinha com o glifo do chip" }]);
+  });
+
+  it("NÃO marca a fronteira por desenho: clamp/calc, var(), em, zero nem outra propriedade", () => {
+    const { violations } = scanTypographySource(
+      [
+        ".a {",
+        "  font-size: clamp(10px, 1.6cqw, 14px);",
+        "  font-size: var(--sticky-font-size, 14px);",
+        "  font-size: 0.9em;",
+        "  font-size: 0;",
+        "  padding: 7px;",
+        "}",
+      ].join("\n"),
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it("motivo em branco é violação nesta regra também (mesmo invariante do marcador)", () => {
+    const { violations, escapes } = scanTypographySource(".a {\n  font-size: 9px; /* sd:allow:  */\n}\n");
+    expect(escapes).toEqual([]);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].reason).toContain("empty reason");
+  });
+
+  it("o tree REAL está dentro da baseline de tipografia e o arquivo migrado está PINADO em 0", () => {
+    const root = fileURLToPath(new URL("../..", import.meta.url));
+    const baseline = JSON.parse(
+      readFileSync(`${root}/scripts/verify/design-tokens-baseline.json`, "utf8"),
+    );
+    const { perFile } = scanTypographyRule(root);
+    expect(checkAgainstBaseline(perFile, baseline.rules.typography, typography)).toEqual([]);
+    // O pino: o arquivo da prova migrou e não pode voltar a ter px.
+    expect(baseline.rules.typography["src/renderer/src/TaskCard.module.css"]).toBe(0);
+    // E a seção da parte 1 segue viva, no valor dela.
+    expect(baseline.rules.spacing["src/renderer/src/styles/layout.css"]).toBe(209);
+  });
+
+  it("updateBaseline escreve a seção da SEGUNDA regra e preserva a da primeira", () => {
+    const dir = makeTmpDir("sd-typography-write");
+    mkdirSync(join(dir, "src", "renderer"), { recursive: true });
+    mkdirSync(join(dir, "scripts", "verify"), { recursive: true });
+    writeFileSync(join(dir, "src", "renderer", "Fake.module.css"), ".a {\n  font-size: 10.5px;\n  padding: 7px;\n}\n", "utf8");
+    writeFileSync(
+      join(dir, "scripts", "verify", "design-tokens-baseline.json"),
+      `${JSON.stringify({ comment: "test baseline", rules: { spacing: { "src/renderer/Fake.module.css": 1 } } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    updateBaseline(dir);
+
+    const written = JSON.parse(readFileSync(join(dir, "scripts", "verify", "design-tokens-baseline.json"), "utf8"));
+    expect(written.rules.typography["src/renderer/Fake.module.css"]).toBe(1);
+    expect(written.rules.spacing["src/renderer/Fake.module.css"]).toBe(1);
+  });
+});

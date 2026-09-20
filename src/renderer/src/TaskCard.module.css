@@ -11,7 +11,7 @@
   grid-template-columns: repeat(4, 1fr);
   min-width: 0;
   min-height: 0;
-  font-size: 12px;
+  font-size: var(--text-4);
 }
 
 .column {
@@ -39,8 +39,8 @@
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  font-size: 10px;
+  letter-spacing: var(--tracking-label);
+  font-size: var(--text-2);
   flex: none;
 }
 
@@ -125,7 +125,7 @@
   border-radius: 8px;
   padding: 8px;
   color: var(--foam);
-  font-size: 10.5px;
+  font-size: var(--text-3);
   text-align: center;
   background: color-mix(in srgb, var(--foam) 10%, transparent);
 }
@@ -171,9 +171,9 @@
 
 .badge {
   flex: none;
-  font-size: 9px;
+  font-size: var(--text-1);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
   color: var(--muted);
   background: var(--surface);
   border-radius: 4px;
@@ -188,7 +188,7 @@
   margin-left: auto;
   flex: none;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--text-2);
 }
 
 /* Proposal chip — replaces the hardcoded implementar|review trail as
@@ -196,9 +196,9 @@
    never a guessed "implementar". Tokens only (foam/border/muted). */
 .purposeChip {
   align-self: flex-start;
-  font-size: 9.5px;
+  font-size: var(--text-1);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-label);
   font-weight: 700;
   color: var(--foam);
   background: color-mix(in srgb, var(--foam) 14%, var(--surface));
@@ -237,7 +237,7 @@
    forma (tamanho/raio/padding) em vez de compartilhar via `composes` —
    este projeto não usa CSS Modules composition em nenhum outro lugar. */
 .pillWait {
-  font-size: 10.5px;
+  font-size: var(--text-3);
   border-radius: 4px;
   padding: 1px 6px;
   color: var(--foam);
@@ -249,7 +249,7 @@
    review adversarial): visualmente distinta da pílula "espera <id>"
    normal, mesma cor de alerta que o resto do app usa pra estado quebrado. */
 .pillBroken {
-  font-size: 10.5px;
+  font-size: var(--text-3);
   border-radius: 4px;
   padding: 1px 6px;
   color: var(--danger);
@@ -261,7 +261,7 @@
    TRACEJADA (protótipo: "agente sugere 1º") a distingue de uma pílula
    "de verdade" (contínua) — ela é um palpite, não um fato decidido. */
 .pillSuggestion {
-  font-size: 10.5px;
+  font-size: var(--text-3);
   border-radius: 4px;
   padding: 1px 6px;
   color: var(--violet);
@@ -283,7 +283,7 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 2px 7px 2px 5px;
-  font-size: 10.5px;
+  font-size: var(--text-3);
   max-width: 100%;
   overflow: hidden;
 }
@@ -293,7 +293,7 @@
    diagonal via `background-clip: text`. */
 .chipGlyph {
   font-family: "PureNerdFont", monospace;
-  font-size: 11px;
+  font-size: var(--text-3);
   line-height: 1;
   flex: none;
   display: inline-flex;
@@ -339,8 +339,8 @@
   padding-left: 4px;
   color: var(--muted);
   text-transform: uppercase;
-  font-size: 9px;
-  letter-spacing: 0.03em;
+  font-size: var(--text-1);
+  letter-spacing: var(--tracking-label);
   flex: none;
 }
 
@@ -354,9 +354,9 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
-  font-size: 9.5px;
+  font-size: var(--text-1);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-label);
 }
 
 .stageSeg {
@@ -381,7 +381,7 @@
    Texto puro, mesma cor `--muted` de idade/etapas inativas — informação
    de apoio, não um destaque. */
 .transitionTrail {
-  font-size: 9.5px;
+  font-size: var(--text-1);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -396,7 +396,7 @@
   background: color-mix(in srgb, var(--warn) 14%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
   color: var(--warn);
-  font-size: 10.5px;
+  font-size: var(--text-3);
   line-height: 1.4;
 }
 
@@ -410,7 +410,7 @@
   background: color-mix(in srgb, var(--foam) 12%, var(--panel));
   border: 1px dashed color-mix(in srgb, var(--foam) 50%, var(--border));
   color: var(--foam);
-  font-size: 10.5px;
+  font-size: var(--text-3);
   line-height: 1.4;
 }
 
@@ -424,7 +424,7 @@
   background: color-mix(in srgb, var(--foam) 16%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--foam) 45%, var(--border));
   color: var(--foam);
-  font-size: 10.5px;
+  font-size: var(--text-3);
   line-height: 1.4;
 }
 
@@ -437,7 +437,7 @@
   display: block;
   margin: 6px 0;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-3);
 }
 
 .statusAskReason {
@@ -456,7 +456,7 @@
   background: color-mix(in srgb, var(--muted) 10%, var(--panel));
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--text-3);
   line-height: 1.4;
   font-family: var(--font-mono);
 }
@@ -470,7 +470,7 @@
   border: 1px solid color-mix(in srgb, var(--good) 40%, var(--border));
   border-radius: 6px;
   padding: 5px 7px;
-  font-size: 11px;
+  font-size: var(--text-3);
   color: var(--text);
 }
 
@@ -494,9 +494,9 @@
 .verdictChip {
   flex: none;
   text-transform: uppercase;
-  font-size: 9px;
+  font-size: var(--text-1);
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-label);
   color: var(--on-accent);
   background: var(--good);
   border-radius: 4px;
@@ -532,7 +532,7 @@
   border: none;
   border-radius: 4px;
   padding: 3px 8px;
-  font-size: 10.5px;
+  font-size: var(--text-3);
   font-weight: 600;
   cursor: pointer;
   flex: none;
@@ -652,9 +652,9 @@
 }
 
 .chartTitle {
-  font-size: 10px;
+  font-size: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-label);
   color: var(--muted);
   margin-bottom: 6px;
 }
@@ -664,7 +664,7 @@
    de exemplo, nunca um número inventado. */
 .chartEmpty {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--text-2);
   line-height: 1.4;
   padding: 8px 0;
 }
@@ -673,7 +673,7 @@
   display: flex;
   gap: 10px;
   margin-top: 6px;
-  font-size: 9.5px;
+  font-size: var(--text-1);
   color: var(--muted);
 }
 
@@ -722,13 +722,13 @@
   margin-top: 4px;
   padding-left: 46px;
   padding-right: 40px;
-  font-size: 9px;
+  font-size: var(--text-1);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
 .statsCoverage {
-  font-size: 10px;
+  font-size: var(--text-2);
   line-height: 1.45;
   color: var(--muted);
   margin-bottom: 8px;
@@ -751,7 +751,7 @@
 }
 
 .statValue {
-  font-size: 13px;
+  font-size: var(--text-5);
   color: var(--text);
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
@@ -759,7 +759,7 @@
 
 .statNote {
   margin-top: 4px;
-  font-size: 10px;
+  font-size: var(--text-2);
   color: var(--muted);
   line-height: 1.35;
 }
@@ -777,19 +777,19 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
 
 .statsProviderKey {
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2);
 }
 
 .statsProviderMeta {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-2);
   text-align: right;
 }
 
@@ -799,7 +799,7 @@
 
 /* Pílulas rodada N / reprovada N× — signal (âmbar) como no protótipo. */
 .pillRound {
-  font-size: 10.5px;
+  font-size: var(--text-3);
   border-radius: 4px;
   padding: 1px 6px;
   color: var(--signal);
@@ -808,7 +808,7 @@
 }
 
 .pillRejection {
-  font-size: 10.5px;
+  font-size: var(--text-3);
   border-radius: 4px;
   padding: 1px 6px;
   color: var(--signal);
@@ -832,7 +832,7 @@
   padding: 5px 7px;
   color: var(--text);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-3);
 }
 
 .createTaskInput:focus {
@@ -848,7 +848,7 @@
   padding: 5px 8px;
   color: var(--text);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-3);
   cursor: pointer;
 }
 
@@ -874,7 +874,7 @@
   align-items: center;
   gap: 4px;
   padding: 4px 8px !important;
-  font-size: 10.5px;
+  font-size: var(--text-3);
 }
 
 /* Botão "Gráficos" (header) — estado pressionado quando o painel está
@@ -892,7 +892,7 @@
 }
 
 .sprintsTitle {
-  font-size: 10.5px;
+  font-size: var(--text-3);
   color: var(--muted);
   text-transform: lowercase;
   margin-bottom: 8px;
@@ -943,7 +943,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-2);
   padding: 2px 8px;
   cursor: pointer;
   font-family: inherit;
@@ -982,7 +982,7 @@
   color: var(--text);
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-3);
   padding: 1px 6px;
 }
 
@@ -992,7 +992,7 @@
   border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
   border-radius: 6px;
   background: color-mix(in srgb, var(--danger) 8%, var(--surface));
-  font-size: 11px;
+  font-size: var(--text-3);
   color: var(--text);
 }
 
@@ -1011,7 +1011,7 @@
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
-  font-size: 11px;
+  font-size: var(--text-3);
   color: var(--foam);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
@@ -1023,14 +1023,14 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
-  font-size: 10.5px;
+  font-size: var(--text-3);
   padding: 2px 8px;
   cursor: pointer;
 }
 
 .sprintCloseError {
   padding: 6px 12px;
-  font-size: 11px;
+  font-size: var(--text-3);
   color: var(--danger);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
@@ -1046,7 +1046,7 @@
   align-items: baseline;
   gap: 8px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-3);
 }
 
 .sprintId {
@@ -1055,7 +1055,7 @@
 
 .sprintState {
   color: var(--foam);
-  font-size: 10px;
+  font-size: var(--text-2);
 }
 
 .sprintRow[data-sprint-open="false"] .sprintState {
@@ -1065,19 +1065,19 @@
 .sprintDuration {
   margin-left: auto;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--text-2);
 }
 
 .sprintWhen {
   margin-top: 4px;
-  font-size: 10px;
+  font-size: var(--text-2);
   color: var(--muted);
   font-family: var(--font-mono);
 }
 
 .sprintCounts {
   margin-top: 6px;
-  font-size: 10.5px;
+  font-size: var(--text-3);
   color: var(--text);
 }
 
@@ -1105,7 +1105,7 @@
 .detailHead h3 {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 15px;
+  font-size: var(--text-6);
   font-weight: 600;
 }
 
@@ -1116,7 +1116,7 @@
   border-radius: 6px;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-4);
   padding: 3px 8px;
   cursor: pointer;
 }
@@ -1139,12 +1139,12 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px 10px;
-  font-size: 11px;
+  font-size: var(--text-3);
   color: var(--muted);
 }
 
 .detailCreator {
-  font-size: 12px;
+  font-size: var(--text-4);
   color: var(--text);
 }
 
@@ -1152,13 +1152,13 @@
   display: block;
   margin-top: 3px;
   color: var(--foam);
-  font-size: 11px;
+  font-size: var(--text-3);
 }
 
 .detailSectionTitle {
-  font-size: 10px;
+  font-size: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
   color: var(--muted);
   margin-bottom: 6px;
 }
@@ -1168,7 +1168,7 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 10px;
-  font-size: 12px;
+  font-size: var(--text-4);
   line-height: 1.45;
   color: var(--text);
   white-space: pre-wrap;
@@ -1181,9 +1181,9 @@
 
 .detailPromptLabel {
   display: block;
-  font-size: 10px;
+  font-size: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-label);
   color: var(--muted);
   margin-bottom: 4px;
 }
@@ -1198,7 +1198,7 @@
   padding: 7px 8px;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-4);
   line-height: 1.4;
 }
 
@@ -1208,13 +1208,13 @@
 }
 
 .detailHint {
-  font-size: 10.5px;
+  font-size: var(--text-2);
   color: var(--muted);
   margin: 6px 0 0;
 }
 
 .detailError {
-  font-size: 11px;
+  font-size: var(--text-3);
   color: var(--danger);
   margin: 6px 0 0;
 }
@@ -1230,7 +1230,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px 8px;
-  font-size: 11px;
+  font-size: var(--text-3);
   color: var(--text);
 }
 
@@ -1242,5 +1242,5 @@
 
 .detailEmpty {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-3);
 }
