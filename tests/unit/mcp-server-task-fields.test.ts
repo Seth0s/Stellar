@@ -55,9 +55,11 @@ describe("mcp-server: purpose / role on the tool surface", () => {
     const schema = await schemaOf("create_task");
     const purpose = schema.properties?.purpose;
     expect(purpose).toBeDefined();
-    expect(purpose!.enum).toEqual(["investigate", "implement", "measure", "fix"]);
+    // A lista vem da FONTE ÚNICA (`src/task-purpose.ts`); o tsc também
+    // impede `PURPOSE_I18N` de ficar sem a chave nova.
+    expect(purpose!.enum).toEqual(["investigate", "implement", "measure", "fix", "integrate"]);
     const d = purpose!.description ?? "";
-    for (const word of ["investigate", "implement", "measure", "fix", "WRITE-ONCE", "Omit", "REFUSED", "role"]) {
+    for (const word of ["investigate", "implement", "measure", "fix", "integrate", "WRITE-ONCE", "Omit", "REFUSED", "role"]) {
       expect(d, `description must mention ${word}`).toContain(word);
     }
   });

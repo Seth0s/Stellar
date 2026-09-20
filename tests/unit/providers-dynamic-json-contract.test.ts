@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  MEASURED_THIRD_PARTY_SPECS,
   PROVIDERS_CONFIG_EXAMPLE,
   PROVIDERS_CONFIG_FILENAME,
   PROVIDERS_SCHEMA_FILENAME,
@@ -242,6 +243,22 @@ describe("o schema publicado", () => {
     expect(schema.properties.schemaVersion.const).toBe(1);
     expect(schema.properties.providers.items.properties.baseArgs.type).toBe("array");
     expect(schema.properties.providers.items.properties.baseArgs.items.minLength).toBe(1);
+    // O efeito é DECLARADO no schema (task c857539c), com a exigência de
+    // medição escrita na description — é o que deixa o dono declarar o
+    // bypass da CLI DELE sem o Stellar deduzir string nenhuma.
+    expect(schema.properties.providers.items.properties.bypassesPermissionPrompts.type).toBe("boolean");
+    expect(schema.properties.providers.items.properties.bypassesPermissionPrompts.description).toContain("MEDIDO");
+  });
+
+  it("o efeito é DECLARADO, nunca deduzido: commandcode true (medido), cline e o exemplo sem claim", () => {
+    const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
+    expect(commandcode?.baseArgs).toEqual(["--yolo"]);
+    expect(commandcode?.bypassesPermissionPrompts).toBe(true);
+    // Sem medição, sem claim: cline não ganhou flag nem efeito.
+    const cline = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "cline");
+    expect(cline?.bypassesPermissionPrompts).toBeUndefined();
+    // E o exemplo publicado não ensina a declarar efeito sem medição.
+    expect(PROVIDERS_CONFIG_EXAMPLE.bypassesPermissionPrompts).toBeUndefined();
   });
 
   it("documenta o `baseArgs` com a posição e o que é recusado (é a instrução do campo)", () => {
@@ -422,6 +439,11 @@ describe("recusas acionáveis: campo + valor aceito + valor recebido", () => {
       name: "baseArgs com item vazio",
       mutate: (s) => setAtPath(s, "baseArgs", ["--ok", ""]),
       expect: ["`baseArgs[1]` must be a non-empty string", 'got ""'],
+    },
+    {
+      name: "bypassesPermissionPrompts com não-boolean",
+      mutate: (s) => setAtPath(s, "bypassesPermissionPrompts", "sim"),
+      expect: ["`bypassesPermissionPrompts` must be a boolean", 'got "sim"'],
     },
     {
       name: "providers que não é array",

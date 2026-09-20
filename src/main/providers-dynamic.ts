@@ -142,6 +142,19 @@ export type DynamicProviderSpec = {
    * assim que o usuário derruba um default do catálogo embutido.
    */
   baseArgs?: string[];
+  /**
+   * Declaração MEDIDA de efeito, não detecção (task c857539c): `true` diz
+   * que as flags fixas desta declaração dispensam os prompts de permissão
+   * da CLI (o caso medido: commandcode + `--yolo`, task 64aed52b). Ausente
+   * = SEM claim — nem o schema nem a UI inferem efeito de string nenhuma,
+   * que é exatamente o que impede a lista de "strings perigosas" por
+   * provider (a ramificação por id que o sistema inteiro existe pra
+   * evitar). Quem declara é quem mediu: o catálogo embutido, com a medição
+   * no comentário ao lado da flag; ou o dono do arquivo, para a CLI dele.
+   * A UI usa isto para EXPOR ("sobe sem pedir permissão"), não para
+   * alarmar — o dono da máquina escolheu a flag de propósito.
+   */
+  bypassesPermissionPrompts?: boolean;
   capacity: {
     role: "agent" | "shell";
     /** Como o id de sessão entra no argv — ver `SessionCapability`. */
@@ -244,6 +257,10 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
     // usuário vence o catálogo embutido) — ou troca por `--auto-accept`,
     // que só dispensa confirmação de edição.
     baseArgs: ["--yolo"],
+    // O efeito declarado (task c857539c): a UI expõe "sobe sem pedir
+    // permissão" a partir deste campo — dado medido ao lado da flag, nunca
+    // detecção de string.
+    bypassesPermissionPrompts: true,
     capacity: {
       role: "agent",
       session: {
@@ -498,6 +515,23 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
     baseArgs = parsedBaseArgs.args;
   }
 
+  // O efeito declarado sobre essas flags (ver o campo em
+  // `DynamicProviderSpec`): booleano opcional, ausente é o caminho normal.
+  let bypassesPermissionPrompts: boolean | undefined;
+  if (value.bypassesPermissionPrompts !== undefined && value.bypassesPermissionPrompts !== null) {
+    if (typeof value.bypassesPermissionPrompts !== "boolean") {
+      return {
+        ok: false,
+        reason: refusal(
+          "bypassesPermissionPrompts",
+          'a boolean — declare true ONLY for a flag you measured to disable the CLI\'s permission prompts; absent means "no claim"',
+          value.bypassesPermissionPrompts,
+        ),
+      };
+    }
+    bypassesPermissionPrompts = value.bypassesPermissionPrompts;
+  }
+
   // Daqui para baixo tudo mora no `capacity` — o espelho do
   // `ProviderCapacity` que o registro vivo de fato consome.
   const capacityRaw = value.capacity;
@@ -727,6 +761,7 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
       binaryNames,
       installCommand,
       ...(baseArgs !== undefined ? { baseArgs } : {}),
+      ...(bypassesPermissionPrompts !== undefined ? { bypassesPermissionPrompts } : {}),
       capacity: {
         role,
         session: {
@@ -1011,6 +1046,12 @@ export function providersConfigSchema(): Record<string, unknown> {
                 "argv: não há split por espaço nem shell, então valores com espaço são legítimos. Recusados: item " +
                 "vazio, `--` (encerraria o parsing de opções) e NUL. [] ou ausente = nenhum.",
             },
+            bypassesPermissionPrompts: asBool(
+              'true = MEDIDO: as flags fixas acima dispensam os prompts de permissão desta CLI (ex.: "--yolo" no ' +
+                "command-code, medido no --help 1.58.1). Declare só para flag que VOCÊ mediu; ausente = sem claim — " +
+                "a UI mostra as flags sem o efeito. Isto é declaração, nunca detecção: o Stellar não deduz efeito " +
+                "de string nenhuma.",
+            ),
             capacity: capacitySchema(),
           },
         },

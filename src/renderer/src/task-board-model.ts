@@ -192,6 +192,7 @@ const PURPOSE_I18N: Record<TaskPurpose, MessageKey> = {
   implement: "task.purpose.implement",
   measure: "task.purpose.measure",
   fix: "task.purpose.fix",
+  integrate: "task.purpose.integrate",
 };
 
 export function describePurposeChip(chip: PurposeChip): string {

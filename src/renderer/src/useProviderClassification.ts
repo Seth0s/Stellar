@@ -26,10 +26,22 @@ import type { ProvidersPageView } from "../../preload/index";
  * vem do boot, do reload da tela de Settings (focus + botão) e das próprias
  * mutações feitas por ela.
  */
+export type ProviderFlagInfo = {
+  /** Flags fixas declaradas no spec (task c857539c) — vazio é legítimo. */
+  baseArgs: string[];
+  /** DECLARADO e medido por quem declarou; false = sem claim. */
+  bypassesPermissionPrompts: boolean;
+};
+
 export type ProviderClassification = {
   ready: boolean;
   dynamicIds: string[];
   skippedIds: string[];
+  /** A identidade que o picker expõe no title do botão (o momento do
+   * spawn) e a página de providers mostra na linha: com que flags fixas o
+   * provider sobe e o efeito declarado nelas. Por id; só genéricos têm
+   * rows — nativo não entra aqui. Vazio até a primeira resposta do main. */
+  flagsById: Record<string, ProviderFlagInfo>;
   error: string | null;
 };
 
@@ -37,6 +49,7 @@ let snapshot: ProviderClassification = {
   ready: false,
   dynamicIds: [],
   skippedIds: [],
+  flagsById: {},
   error: null,
 };
 const listeners = new Set<() => void>();
@@ -63,6 +76,12 @@ export async function refreshProviderClassification(view?: ProvidersPageView): P
       ready: true,
       dynamicIds: resolved.rows.map((row) => row.id),
       skippedIds: [...resolved.skipped],
+      flagsById: Object.fromEntries(
+        resolved.rows.map((row) => [
+          row.id,
+          { baseArgs: row.baseArgs, bypassesPermissionPrompts: row.bypassesPermissionPrompts },
+        ]),
+      ),
       error: null,
     };
   } catch (err) {

@@ -8,9 +8,16 @@
  * 140/148 `task_verdicts.verdict` were null. A silent purpose default
  * would make the Fila lie with more confidence. The UI shows an empty
  * chip; it never invents a value from the prompt text.
+ *
+ * `integrate` (2026-09-20, item 13 do sticky): o entregável é a
+ * CONVERGÊNCIA verificada de um lote de streams — declare `deps` nos ids do
+ * lote e o gate próprio roda sobre a árvore já convergida. É o NOME da
+ * etapa que antes era trabalho invisível do orquestrador; a Fila já
+ * renderiza "implementação → integração" sozinha, derivado dos deps
+ * (`derivePurposeChip`) — purpose não gateia dispatch nenhum.
  */
 
-export const TASK_PURPOSES = ["investigate", "implement", "measure", "fix"] as const;
+export const TASK_PURPOSES = ["investigate", "implement", "measure", "fix", "integrate"] as const;
 export type TaskPurpose = (typeof TASK_PURPOSES)[number];
 
 /** `task_cards.role` — what ONE card does on ONE task. A card role, not a

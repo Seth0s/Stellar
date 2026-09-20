@@ -325,6 +325,14 @@ export function ProvidersPage() {
                         {t("settings.providers.nativeShadowed", { id: option.id })}
                       </span>
                     )}
+                    {/* Medido nos seis buildArgs (task c857539c): nenhum
+                        nativo tem flag fixa própria — o que existe de push
+                        incondicional é instrumentação de entrega composta
+                        por card. A linha diz isso em vez de mostrar um
+                        array vazio que não existe no nativo. */}
+                    <span className="muted" data-role="providers-native-flags">
+                      {t("settings.providers.nativeFlags")}
+                    </span>
                   </span>
                 </div>
               </div>
@@ -347,6 +355,31 @@ export function ProvidersPage() {
                     <code>{row.binaryNames[0]}</code>
                     <span>·</span>
                     <code>{row.id}</code>
+                    {/* A identidade que faltava (task c857539c): com que flags
+                        fixas o provider sobe — vazio vira frase, nunca
+                        ausência silenciosa. O hint APONTA pro providers.json
+                        (o schema que a 64aed52b publica autocompleta) em vez
+                        de reexplicar aqui. Declaração ignorada por colisão
+                        com nativo não mostra flags: ela não roda de jeito
+                        nenhum — o badge `skipped` já diz isso. */}
+                    {!row.skipped && (
+                      <>
+                        <span>·</span>
+                        {row.baseArgs.length > 0 ? (
+                          row.baseArgs.map((flag, index) => (
+                            <code key={`${flag}-${index}`}>{flag}</code>
+                          ))
+                        ) : (
+                          <span>{t("settings.providers.noFlags")}</span>
+                        )}
+                        {row.bypassesPermissionPrompts && (
+                          <span className="providers-badge" data-role="providers-bypass-badge">
+                            {t("settings.providers.bypassBadge")}
+                          </span>
+                        )}
+                        <span className="muted">{t("settings.providers.flagsHint")}</span>
+                      </>
+                    )}
                     <span className={`providers-badge${row.mcpEnabled ? " is-on" : ""}`}>
                       {row.mcpEnabled ? t("settings.providers.mcpOn") : t("settings.providers.mcpOff")}
                     </span>

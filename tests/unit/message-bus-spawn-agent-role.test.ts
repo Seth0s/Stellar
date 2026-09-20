@@ -79,7 +79,11 @@ describe("message-bus: spawn_agent role", () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  async function dispatch(req: BusRequest, task: TaskRow | null = existingTask()) {
+  async function dispatch(
+    req: BusRequest,
+    task: TaskRow | null = existingTask(),
+    extra: Record<string, (...args: never[]) => unknown> = {},
+  ) {
     dir = mkdtempSync(join(tmpdir(), "stellar-spawn-role-"));
     const spawned: Array<Record<string, unknown>> = [];
     const upserted: TaskRow[] = [];
@@ -100,9 +104,10 @@ describe("message-bus: spawn_agent role", () => {
           linked.push({ taskId, cardId, role });
         }) as never,
         listCards: (() => [{ id: "new-card", kind: "terminal", provider: "claude", cwd: "", label: null }]) as never,
+        ...extra,
       }),
     );
-    const res = (await bus.handleRequest(req)) as { ok: boolean; cardId?: string; error?: string };
+    const res = (await bus.handleRequest(req)) as { ok: boolean; cardId?: string; error?: string; note?: string };
     return { res, spawned, upserted, linked };
   }
 
@@ -129,6 +134,34 @@ describe("message-bus: spawn_agent role", () => {
     expect(spawned[0].brief).toBe("implement the thing");
     expect(upserted[0].card_id).toBe("new-card");
     expect(linked).toEqual([{ taskId: task.id, cardId: "new-card", role: "implementer" }]);
+  });
+
+  it("deps não-done: o RETORNO traz a nota — INFORMAR, nunca impedir (task 095158e9, item b)", async () => {
+    // Despachar fora de ordem é decisão legítima do orquestrador: o spawn
+    // SEGUE, e a nota só antecipa o que o brief já carrega.
+    const dep = existingTask({ id: "dep-a", status: "running" });
+    const task = existingTask({ deps_json: JSON.stringify(["dep-a"]) });
+    const { res, spawned } = await dispatch(
+      { cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
+      task,
+      { getTask: ((id: string) => (id === task.id ? task : id === dep.id ? dep : undefined)) as never },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.note).toContain("1 of 1 dep(s) of this task are not done yet");
+    // E o spawn aconteceu de verdade — a nota não bloqueou nada.
+    expect(spawned).toHaveLength(1);
+  });
+
+  it("deps todas done: sem nota (o campo só existe quando há o que informar)", async () => {
+    const dep = existingTask({ id: "dep-a", status: "done" });
+    const task = existingTask({ deps_json: JSON.stringify(["dep-a"]) });
+    const { res } = await dispatch(
+      { cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
+      task,
+      { getTask: ((id: string) => (id === task.id ? task : id === dep.id ? dep : undefined)) as never },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.note).toBeUndefined();
   });
 
   it("role 'reviewer' + brief: linkTaskCard reviewer, card_id intocado, brief é a ordem de revisão", async () => {

@@ -4,6 +4,10 @@ import { homedir } from "node:os";
 // importa no topo) entra no bundle do preload. Mesmo precedente do renderer,
 // que já importa tipos de `src/main` (ex.: `provider-usage`).
 import type { ProvidersReloadReport } from "../main/providers-dynamic";
+// A union de purpose vem da FONTE ÚNICA (`src/task-purpose.ts`): uma segunda
+// lista aqui era drift esperando acontecer — o `integrate` (task 095158e9)
+// fez o tsc apontar as duas cópias de uma vez.
+import type { TaskPurpose } from "../task-purpose";
 
 export type CardRow = {
   id: string;
@@ -865,13 +869,13 @@ export type TaskBoardItem = {
   depStatuses: Record<string, string>;
   /** Proposal (`tasks.purpose`). `null` is NORMAL — empty chip, never a
    * guessed default. Set once at create; the Fila never edits it. */
-  purpose: "investigate" | "implement" | "measure" | "fix" | null;
+  purpose: TaskPurpose | null;
   /** Layer-1 `tasks.review`. `"wanted"` = agent judgment requires a
    * linked reviewer; `null` = never declared (NORMAL). Mutable. */
   review: "wanted" | null;
   /** Purpose of each id in `deps` (same presence rule as `depStatuses`:
    * missing key = dep not found). Used to derive `A → B` when purposes differ. */
-  depPurposes: Record<string, "investigate" | "implement" | "measure" | "fix" | null>;
+  depPurposes: Record<string, TaskPurpose | null>;
   /** Fidelidade visual ao protótipo v5, delta 4 (varredura de atividade) —
    * `registry.isAlive(cardId)` (main/index.ts's `buildTaskBoard`), O(1),
    * síncrono, sem custo de N chamadas. `false` quando `cardId` é `null`
@@ -1492,6 +1496,13 @@ export type ProvidersPageRow = {
   id: string;
   label: string;
   binaryNames: string[];
+  /** Flags fixas declaradas no spec (task c857539c) — vazio é informação
+   * ("sem flags fixas"), nunca omissão. */
+  baseArgs: string[];
+  /** DECLARADO e medido por quem declarou (ex.: --yolo no commandcode);
+   * ausente no spec = false = "sem claim" — a UI não deduz efeito de
+   * string nenhuma. */
+  bypassesPermissionPrompts: boolean;
   mcpEnabled: boolean;
   mcpConfigPath: string | null;
   mcpConfigKey: string | null;

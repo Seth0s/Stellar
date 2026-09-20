@@ -88,7 +88,7 @@ describe("message-bus: create_task purpose (write-once, refused when unknown)", 
       const res = await createTask({ prompt: "x", purpose: bad });
       expect(res.ok, `purpose ${JSON.stringify(bad)} must be refused`).toBe(false);
       expect(res.error).toContain(`got "${bad}"`);
-      expect(res.error).toContain('"investigate", "implement", "measure", "fix"');
+      expect(res.error).toContain('"investigate", "implement", "measure", "fix", "integrate"');
     }
     expect(store.listTasks()).toHaveLength(0);
   });
