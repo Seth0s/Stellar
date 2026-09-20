@@ -1579,23 +1579,65 @@ select.resume-input {
   margin-bottom: 0;
 }
 
+/* A linha rótulo/valor das configurações — UMA só, para todas as abas.
+   Toda aba posiciona os seus campos por esta linha em vez de inventar a
+   sua. São duas colunas de grade: o rótulo (com o hint) fica na coluna
+   flexível, o valor numa coluna de largura fixa — e por isso todas as
+   linhas compartilham as mesmas duas verticais.
+
+   Medido ANTES (2026-09-20, card 97924141, build 901bdeb, 1280×800): era
+   flex com `label { flex: 1 }` e só `select`/`input` com `flex: none`. Um
+   `<code>` sem regra nenhuma conservava a largura intrínseca dele (~374px,
+   a identidade da build) e tirava essa largura DO rótulo, que caía para
+   250px e quebrava o hint em 4 linhas — enquanto a linha de cima, com um
+   select de 176px, deixava 449px pro rótulo. Mesma classe de linha, duas
+   larguras de rótulo, e o valor começando em x diferente em cada uma (679
+   vs 877): era isto o "não está organizada nos campos". A grade fixa a
+   coluna do valor, e é isso que dá ao rótulo uma largura previsível para
+   quebrar o hint sempre do mesmo jeito.
+
+   `--settings-value-w` é o único número que esta linha decide. É largura,
+   não ritmo: um degrau de `--space-*` seria erro de tipo para uma coluna.
+   O valor é alinhado à direita dentro dela — o select já encostava na
+   direita, e agora as leituras técnicas encostam na mesma linha. */
 .settings-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-4) 0;
+  --settings-value-w: 300px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--settings-value-w);
+  align-items: baseline;
+  column-gap: var(--space-6);
+  padding: var(--space-5) 0;
 }
 
 .settings-row label {
-  flex: 1;
   color: var(--text);
 }
 
 .settings-row small {
   display: block;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--text-3);
   margin-top: 1px; /* sd:allow: 1px optical — keeps the hint glued under its label without opening a full --space-1 gap */
+  overflow-wrap: anywhere; /* o hint é prosa: quebra dentro da coluna, nunca estoura */
+}
+
+/* O valor mora na 2ª coluna, encostado à direita. `min-width: 0` +
+   `max-width: 100%` impedem que um valor comprido empurre a coluna: hash e
+   caminho quebram DENTRO dela (ver o `code` abaixo). */
+.settings-row > select,
+.settings-row > input,
+.settings-row > code {
+  grid-column: 2;
+  justify-self: end;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* A linha cujo controle É o rótulo (o checkbox do modo autônomo) não tem
+   coluna de valor: o toggle ocupa as duas, senão o texto dele ficaria
+   preso nos 300px da coluna de valor e quebraria à toa. */
+.settings-row > .autonomous-toggle-label {
+  grid-column: 1 / -1;
 }
 
 .settings-row select,
@@ -1606,11 +1648,54 @@ select.resume-input {
   border-radius: 6px;
   padding: var(--space-2) var(--space-4);
   font: inherit;
-  flex: none;
 }
 
 .settings-row input[type="number"] {
   width: 7.5rem;
+}
+
+/* A identidade da build é leitura técnica, não prosa: mono explícita (sem
+   esta regra o `<code>` caía no padrão do navegador — fonte fixa em 13px,
+   nenhum tratamento do design system) e quebra em QUALQUER ponto, porque
+   quando o valor vira hash/caminho não sobra espaço onde quebrar. */
+.settings-row code {
+  font-family: var(--font-mono);
+  font-size: var(--text-5);
+  color: var(--muted);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* Cada parte da identidade é um bloco que não se parte: a quebra acontece
+   nos " · " entre elas, nunca dentro de uma. Sem isto, os 300px da coluna
+   cortavam "bus protocol 4" no meio e a leitura saía "bus" / "protocol 4"
+   — um caminho ou um hash não têm onde quebrar, e um pedaço de frase
+   sozinho não significa nada. O `overflow-wrap: anywhere` acima continua
+   sendo a rede para o caso de UMA parte já não caber na coluna. */
+.settings-build-part {
+  white-space: nowrap;
+}
+
+/* Nem todo mundo cabe lado a lado — e a grade não pode pagar isso
+   espremendo o rótulo. Medido (2026-09-20): numa janela de 620px o modal
+   fica com 570px e a coluna do rótulo cai para 25px, ou seja o texto sai
+   picado com um caractere por linha. Abaixo daqui o valor desce para a
+   própria linha: o rótulo fica com a largura toda, o hint quebra onde dá,
+   e o valor quebra dentro da coluna (ele já tem `max-width: 100%`). O
+   corte é o ponto em que o rótulo passaria a ficar menor que o valor —
+   800px de janela dá ~218px de rótulo. */
+@media (max-width: 800px) {
+  .settings-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-row > select,
+  .settings-row > input,
+  .settings-row > code {
+    grid-column: 1;
+    justify-self: stretch;
+    text-align: left;
+  }
 }
 
 .settings-note {
