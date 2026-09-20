@@ -164,6 +164,13 @@ export type GateRunEvidence = {
    * exit code do processo — nunca um parse da saída. */
   ok: boolean;
   commands: GateCommandEvidence[];
+  /**
+   * O diff observado pelo app ao fim da rodada (task 7096e8af). DENTRO do
+   * lock de propósito: é o instante em que o app olha o repo com autoridade,
+   * e é a evidência que o revisor lê em vez da lista que o implementador
+   * digitou. Ausente em linha antiga — e isso é normal.
+   */
+  diff?: DiffCaptureEvidence;
 };
 
 /** Spawn SEM shell no host: o comando de um gate só vira argv de
@@ -185,6 +192,12 @@ export type RunTaskGatesInput = {
   /** Seam de teste — a produção resolve com `findSandboxBinary()`.
    * `null` força a recusa; um caminho força aquele binário. */
   sandboxBinary?: string | null;
+  /** TERRITÓRIO DECLARADO da task, só para ROTULAR o diff capturado
+   * (dentro/fora). Nunca filtra: medido, 75,5% dos arquivos declarados caem
+   * fora, e o desvio é justamente o que interessa. */
+  territory?: readonly string[] | null;
+  /** Seam de teste da captura do diff — a produção usa o `git` do host. */
+  gitFn?: GitCaptureFn;
 };
 
 const inFlightRuns = new Map<string, Promise<GateRunEvidence>>();
@@ -236,6 +249,166 @@ function refusalEvidence(command: string, reason: string): GateCommandEvidence {
   };
 }
 
+export type DiffFileEntry = {
+  path: string;
+  /** Código do `git status --porcelain` (M, A, D, ??, R...). */
+  status: string;
+  /** Está dentro do TERRITÓRIO DECLARADO da task? */
+  inTerritory: boolean;
+  /** `false` quando a task não declarou território — aí não há rótulo a dar,
+   * e isso é dito em vez de chutado. */
+  territoryDeclared: boolean;
+};
+
+/**
+ * O DIFF ANEXADO À TASK — uma OBSERVAÇÃO do app, ao lado do que a task
+ * DECLAROU, nunca no lugar disso.
+ *
+ * ---------- POR QUE ISTO NÃO VIOLA O CONTRATO (task 7096e8af) ----------
+ * `task-contract-decision.ts` diz, no cabeçalho: "Absence of every field is
+ * NORMAL. Never invent territory by watching the filesystem, never intercept
+ * `git add`, never judge gate output." A proibição é sobre o app FABRICAR A
+ * DECLARAÇÃO a partir da observação, e este campo vai na direção oposta:
+ *
+ *   1. `territory` continua DECLARADO pelo humano/agente. O diff NUNCA o
+ *      realimenta — derivar território do que o agente tocou seria
+ *      literalmente "invent territory by watching the filesystem", e é a
+ *      "melhoria" futura que este comentário existe para impedir;
+ *   2. o diff é campo SEPARADO e ROTULADO (evidência de MUDANÇA), e não
+ *      substitui nem preenche campo nenhum do contrato;
+ *   3. é leitura PÓS-HOC: sem hook de git, sem `git add`, sem ler o índice —
+ *      e este runner nunca escreve no repo.
+ *
+ * É a MESMA classe de coisa que já está aqui: o app já carimba stdout/stderr/
+ * exit code REAIS do gate. Anexar o diff é mais observação, não julgamento —
+ * e `ok` continua sendo o exit code, nunca um parse de saída.
+ *
+ * MEDIDO (no banco real, 2026-09-20) — por que o território aqui é RÓTULO e
+ * nunca FILTRO: 75,5% dos arquivos declarados em `filesChanged` caem FORA do
+ * território declarado (142 de 188, com 46 de 65 relatórios tendo pelo menos
+ * um fora). Filtrar pelo território apagaria justamente o desvio, que é o
+ * motivo número um de alguém querer ver o diff.
+ */
+export type DiffCaptureEvidence = {
+  gitRoot: string | null;
+  /** `--stat` sempre (pequeno e limitado), quando há repo. */
+  stat: string;
+  /** Corpo do diff, só de arquivos TRACKED. Untracked não tem patch. */
+  patch: string;
+  /** `true` quando o corpo bateu no teto — um diff truncado que não diz que
+   * foi truncado é mentira. */
+  patchTruncated: boolean;
+  /** TODOS os caminhos que mudaram nesta janela, untracked incluídos. */
+  files: DiffFileEntry[];
+  total: number;
+  outsideTerritory: number;
+  /**
+   * O QUE O APP NÃO SABE, dentro do dado e não em nota de rodapé. A árvore é
+   * COMPARTILHADA (cinco cards escrevem no mesmo checkout): o app observa
+   * MUDANÇA, nunca AUTORIA. Qualquer leitura de "fulano tocou X" é mentira.
+   */
+  note: string;
+};
+
+/** Seam de teste da captura: recebe argv do git e devolve stdout cru. */
+export type GitCaptureFn = (
+  args: string[],
+  cwd: string,
+) => Promise<{ ok: boolean; stdout: string; truncated: boolean }>;
+
+function defaultGitCapture(args: string[], cwd: string): Promise<{ ok: boolean; stdout: string; truncated: boolean }> {
+  return new Promise((done) => {
+    const child = spawn("git", args, { cwd });
+    const out = new TailCollector(MAX_CAPTURE_BYTES);
+    child.stdout.on("data", (c: Buffer) => out.push(c));
+    child.on("error", () => done({ ok: false, stdout: "", truncated: false }));
+    child.on("close", (code: number | null) =>
+      // `seen > max` é a marca de truncamento da MESMA disciplina do gate —
+      // nenhuma constante nova, nenhum teto paralelo para divergir.
+      done({ ok: code === 0, stdout: out.toString(), truncated: out.seen > MAX_CAPTURE_BYTES }),
+    );
+  });
+}
+
+/** Rótulo de território para um caminho. Aceita as duas formas que o dado
+ * real tem: caminho puro, e entrada com prosa no fim (`src/main (Fila)`) —
+ * medido: 43 das 366 entradas do banco não são caminho puro. */
+export function isInsideTerritory(file: string, territory: readonly string[]): boolean {
+  const f = file.replace(/^\.\//, "");
+  for (const raw of territory) {
+    const entry = raw.replace(/\s*\(.*\)\s*$/, "").replace(/\/+$/, "").trim();
+    if (!entry) continue;
+    if (f === entry) return true;
+    if (f.startsWith(`${entry}/`)) return true;
+  }
+  return false;
+}
+
+/** A frase que um revisor APRESSADO não pode confundir com autoria. */
+export function describeDiffAuthorship(total: number, outside: number, territoryDeclared: boolean): string {
+  const onde = territoryDeclared
+    ? `${outside} deles fora do território declarado`
+    : "a task não declarou território, então não há como rotular dentro/fora";
+  return (
+    `Estes arquivos mudaram nesta janela do repositório, ${total} no total — ${onde}. ` +
+    `A árvore é compartilhada: o app observa MUDANÇA, não AUTORIA, e não sabe dizer quais destas ` +
+    `mudanças vieram desta task e quais vieram de outro card.`
+  );
+}
+
+export async function captureDiff(opts: {
+  gitRoot: string | null;
+  territory?: readonly string[] | null;
+  gitFn?: GitCaptureFn;
+}): Promise<DiffCaptureEvidence> {
+  const git = opts.gitFn ?? defaultGitCapture;
+  const declared = (opts.territory ?? []).filter((t) => typeof t === "string" && t.trim());
+  const territoryDeclared = declared.length > 0;
+  if (!opts.gitRoot) {
+    return {
+      gitRoot: null,
+      stat: "",
+      patch: "",
+      patchTruncated: false,
+      files: [],
+      total: 0,
+      outsideTerritory: 0,
+      note: "o cwd desta task não é um repositório git — não há diff a observar.",
+    };
+  }
+
+  const status = await git(["status", "--porcelain=v1"], opts.gitRoot);
+  const stat = await git(["diff", "--stat"], opts.gitRoot);
+  const body = await git(["diff"], opts.gitRoot);
+
+  const files: DiffFileEntry[] = [];
+  for (const line of status.stdout.split("\n")) {
+    if (line.trim() === "") continue;
+    // Formato porcelain v1: XY <path>; com rename vem "XY <orig> -> <novo>".
+    const code = line.slice(0, 2).trim() || "??";
+    const raw = line.slice(3).trim();
+    const path = raw.includes(" -> ") ? raw.split(" -> ").pop()!.trim() : raw;
+    if (!path) continue;
+    files.push({
+      path: path.replace(/^"|"$/g, ""),
+      status: code,
+      inTerritory: territoryDeclared ? isInsideTerritory(path, declared) : false,
+      territoryDeclared,
+    });
+  }
+  const outside = files.filter((f) => territoryDeclared && !f.inTerritory).length;
+  return {
+    gitRoot: opts.gitRoot,
+    stat: stat.stdout.slice(0, MAX_CAPTURE_BYTES),
+    patch: body.stdout,
+    patchTruncated: body.truncated,
+    files,
+    total: files.length,
+    outsideTerritory: outside,
+    note: describeDiffAuthorship(files.length, outside, territoryDeclared),
+  };
+}
+
 async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   const requestedCwd = resolve(input.cwd);
   const gitRoot = await resolveGitRoot(requestedCwd);
@@ -266,6 +439,10 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
         commands.push(await runOne(command, { root: spawnCwd, env, timeoutMs, spawnFn, sandboxBinary }));
       }
     }
+    // O diff é capturado DEPOIS dos gates e dentro do mesmo lock: é a
+    // observação do app sobre o que mudou nesta janela, ao lado do contrato
+    // declarado (ver `DiffCaptureEvidence` para o que isto não é).
+    const diff = await captureDiff({ gitRoot, territory: input.territory, gitFn: input.gitFn });
     return {
       taskId: input.taskId,
       requestedCwd,
@@ -274,6 +451,7 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
       finishedAt: Date.now(),
       ok: commands.length > 0 && commands.every((c) => c.exitCode === 0),
       commands,
+      diff,
     };
   });
 }

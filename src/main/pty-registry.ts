@@ -364,6 +364,27 @@ type Entry = {
    * o porteiro trata idle desde este instante, não desde o começo da linha.
    * `null` quando o último input drenou o buffer com Enter. */
   inputLineLastAtMs: number | null;
+  /**
+   * O instante da última escrita que CONCEDEU TRABALHO a este card — humano
+   * ou `delivery` —, NUNCA `auto` (task a1201078). É o fato que cria a
+   * obrigação de reportar, e é ele que o watchdog do SINAL 3
+   * (`idle-without-report-decision.ts`) precisa para perguntar "existe report
+   * NESTE episódio?" em vez de "existe report na vida?" — a pergunta errada
+   * que desarmava o watchdog no primeiro report de um card.
+   *
+   * POR QUE UM FATO NOVO, E NÃO O `inputLineLastAtMs` ACIMA (não reaproveite
+   * nem renomeie aquele): o relógio do porteiro tem OUTRA semântica — por
+   * desenho só a origem HUMANA o alimenta (`delivery` e `auto` não podem
+   * renovar o idle e segurar a fila dos outros, ver `write`), e o porteiro
+   * depende disso. Um card alimentado por `send_to_card` nunca moveria
+   * aquele relógio, então usá-lo como âncora armaria o watchdog AO CONTRÁRIO
+   * (ficaria true para sempre depois do primeiro report). Dois fatos com
+   * donos claros valem mais que um com dois significados.
+   *
+   * Nasce em `spawnedAtMs`: um card que nasce com brief em argv recebeu
+   * trabalho NO SPAWN — começar `null` faria o primeiro episódio de um card
+   * spawnado nunca ser observável. */
+  lastWorkGrantedAtMs: number | null;
   /** DESIGN-BACKLOG.md §0 entrega duplicada rodada 4 — DECSET 2004
    * pedido pelo peer no stream de output. `typeAndSubmit` só envelopa
    * bracketed paste quando isto está `enabled`; na dúvida manda cru. */
@@ -927,6 +948,9 @@ export function createPtyRegistry(registryOpts: {
       cwd,
       inputLineBuffer: "",
       inputLineLastAtMs: null,
+      // O spawn já é uma concessão de trabalho quando o card nasce com brief
+      // em argv — ver o doc comment do campo.
+      lastWorkGrantedAtMs: spawnedAtMs,
       bracketedPasteMode: initialBracketedPasteModeState(),
       deliveryActive: false,
       deferredHumanInput: [],
@@ -1280,9 +1304,35 @@ export function createPtyRegistry(registryOpts: {
     if (entry.inputLineBuffer.length === 0) entry.inputLineLastAtMs = null;
   }
 
+  /**
+   * Esta escrita CONCEDE TRABALHO ao card? (task a1201078.) É a distinção que
+   * separa "alguém pediu algo a este card" de "o terminal respondeu ao
+   * emulador": `human` (o dono digitou) e `delivery` (`send_to_card`/
+   * `typeAndSubmit` entregaram um brief) concedem; `auto` (mouse, CPR,
+   * focus — respostas do EMULADOR à TUI) não concede nada.
+   *
+   * Escrito com a lista POSITIVA de propósito, e não como `origin !== "auto"`:
+   * o dia em que existir uma quarta origem de escrita, uma forma negativa
+   * passaria a conceder trabalho a ela em SILÊNCIO. Positiva, a omissão é
+   * visível — quem adicionar a origem decide, e não herda a decisão de outro.
+   *
+   * Isto é DIFERENTE de `renewsHumanInputGateClock` (duas linhas abaixo no
+   * `write`): lá o dono é o porteiro e só a origem humana conta. Aqui o dono é
+   * a obrigação de reportar, e uma entrega cria essa obrigação igual à
+   * digitação.
+   */
+  function grantsWork(origin: PtyWriteOrigin): boolean {
+    return origin === "human" || origin === "delivery";
+  }
+
   function write(id: string, data: string, origin: PtyWriteOrigin) {
     const entry = entries.get(id);
     if (!entry) return;
+
+    // O FATO antes de qualquer desvio: o que o input humano durante uma
+    // entrega adiada (abaixo) TEM de valer é o instante em que o humano deu o
+    // trabalho, não o instante em que os bytes foram despejados no PTY.
+    if (grantsWork(origin)) entry.lastWorkGrantedAtMs = Date.now();
 
     // Uma entrega já começou depois de passar pelo porteiro. Reter bytes
     // humanos durante o pequeno ciclo texto+Enter+confirmação evita que uma
@@ -1415,6 +1465,19 @@ export function createPtyRegistry(registryOpts: {
   }
 
   /**
+   * Quando este card recebeu trabalho pela última vez (task a1201078) — spawn
+   * com brief, digitação humana ou `delivery`; `auto` não conta. Mesma
+   * convenção "sem entry, `null`" de `getLastActivityAt`/`isAlive`.
+   *
+   * É o fato que o watchdog do SINAL 3 usa para perguntar "existe report NESTE
+   * episódio?" — a fiação no bus é a única parte pendente daquela task (o
+   * `message-bus.ts` estava em revisão por outra task na data desta escrita).
+   */
+  function getLastWorkGrantedAt(id: string): number | null {
+    return entries.get(id)?.lastWorkGrantedAtMs ?? null;
+  }
+
+  /**
    * Declara o fim de turno deste card (task 4245c6f5). Idempotente e barato:
    * chamado do relay de `turn_complete`. Não mexe em `lastActivityAt` de
    * propósito — a comparação entre os dois é justamente o que diz se houve
@@ -1525,5 +1588,5 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount };
+  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getLastWorkGrantedAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount };
 }
