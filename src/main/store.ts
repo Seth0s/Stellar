@@ -1009,6 +1009,23 @@ function migrate(db: Database.Database) {
   }
 }
 
+/**
+ * PERF (task 9dd877c8, medido na 41813ab3 seq 447) — linha mínima para o
+ * scan de idle (`message-bus.ts`'s `scanIdleWithoutReport`), que roda num
+ * timer de 5s para sempre. Ele consome DOIS campos: `card_id` (o `.find()`
+ * que liga card→task) e `status` (via `isJudgmentStatus`). `id` viaja junto
+ * porque é a identidade da linha — não é lido pelo scan hoje.
+ *
+ * O que isto substitui: `callbacks.listTasks()` trazia as 31 colunas,
+ * incluindo `prompt` e `result_json` (82% dos bytes medidos), só para usar
+ * esses dois. Ver `listTasksForIdleScanStmt`.
+ */
+export type TaskIdleRow = {
+  id: string;
+  card_id: string | null;
+  status: string;
+};
+
 export function openStore(userDataDir: string) {
   const db = new Database(join(userDataDir, "agent-canvas.db"));
   // Pre-release audit P3 — no journal mode was ever set (SQLite's
@@ -1564,6 +1581,27 @@ export function openStore(userDataDir: string) {
   const maxIdStmt = db.prepare(buildMaxShortIdSql(db));
 
   const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
+  // PERF (task c9db1d86, medido na 41813ab3 seq 447) — a listagem que
+  // alimenta `list_tasks` com `view:"summary"` pagava o SELECT inteiro e
+  // só descartava `prompt`/`result_json` no fim (`projectListedTask`), ou
+  // seja o parâmetro que existe pra economizar economizava só o fio do IPC.
+  // Medido com 284 tasks: essas duas colunas são 82% dos bytes e o SELECT
+  // completo custa 2,492ms contra 0,596ms sem elas.
+  //
+  // As duas entram como literal `NULL` — NÃO omitidas — pra o tipo da linha
+  // continuar exatamente `TaskRow`: todo consumidor (`serializeTask`
+  // incluso) segue lendo `row.prompt`/`row.result_json` sem ramo novo e
+  // nenhum campo que o summary DEVE manter corre risco de sumir.
+  //
+  // Derivada de `TASK_COLUMNS` de propósito: duas listas de colunas
+  // escritas à mão divergem em silêncio no dia em que alguém acrescentar
+  // uma coluna e esquecer a segunda. O ganho não vem de "coluna ausente" —
+  // vem de o SQLite nunca precisar ler a página das duas colunas grandes.
+  // Invariante coberto por `tests/unit/list-tasks-summary-columns.test.ts`.
+  const TASK_SUMMARY_COLUMNS = TASK_COLUMNS.replace("prompt,", "NULL AS prompt,").replace(
+    "result_json,",
+    "NULL AS result_json,",
+  );
   // DESIGN-BACKLOG.md §2.1 Decisão 8 — o choke point precisa do ÚLTIMO
   // ator de `kind:'status'` ANTES de gravar. Filtra `declaration` e
   // `prompt` de propósito: uma declaração estacionada ou um acréscimo de
@@ -1608,6 +1646,25 @@ export function openStore(userDataDir: string) {
   // consultado por coluna. `listTasksStmt` acima fica intocado: quem
   // chama sem board continua vendo exatamente o que via antes.
   const listTasksByBoardStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE board_id = ? ORDER BY created_at ASC`);
+  // PERF (task c9db1d86) — par de `listTasksStmt`/`listTasksByBoardStmt`
+  // para `list_tasks view:"summary"`: MESMA ordenação, mesmas linhas, só as
+  // duas colunas grandes em `NULL` (ver `TASK_SUMMARY_COLUMNS` acima). Os
+  // statements acima ficam intocados — quem precisa de `prompt` (o quadro
+  // Fila, via `index.ts`'s `listTasksByBoard`) continua pagando por ele.
+  const listTasksSummaryStmt = db.prepare(`SELECT ${TASK_SUMMARY_COLUMNS} FROM tasks ORDER BY created_at ASC`);
+  const listTasksSummaryByBoardStmt = db.prepare(
+    `SELECT ${TASK_SUMMARY_COLUMNS} FROM tasks WHERE board_id = ? ORDER BY created_at ASC`,
+  );
+  // PERF (task 9dd877c8, medido na 41813ab3 seq 447) — o scan de idle de 5s
+  // (`message-bus.ts`'s `scanIdleWithoutReport`) usava `callbacks.listTasks()`
+  // e lia dois campos por linha. Isto é a linha inteira que ele precisa.
+  //
+  // O `ORDER BY created_at ASC` FICA: o scan faz `tasks.find(...)` por
+  // `card_id`, e um card pode ter mais de uma task — a ordenação é o que
+  // garante que ele escolha a MESMA (a mais antiga) que escolhia antes.
+  // Tirar a ordenação seria uma mudança de comportamento silenciosa, não
+  // uma otimização.
+  const listTasksForIdleScanStmt = db.prepare(`SELECT id, card_id, status FROM tasks ORDER BY created_at ASC`);
   const getTaskStmt = db.prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`);
   // `purpose` is on INSERT only. Omitting it from ON CONFLICT is the
   // immutability: a later upsert (update_task, drag, retry) cannot
@@ -2540,6 +2597,14 @@ export function openStore(userDataDir: string) {
     },
     nextIdSeed: (): number => (maxIdStmt.get() as { m: number | null }).m ?? 0,
     listTasks: (): TaskRow[] => listTasksStmt.all() as TaskRow[],
+    // PERF (task c9db1d86) — mesmas linhas de `listTasks`/`listTasksByBoard`,
+    // com `prompt` e `result_json` em `null` no SELECT. É o que
+    // `list_tasks view:"summary"` deve usar: a chamada deixa de pagar
+    // 82% dos bytes medidos (41813ab3 seq 447).
+    listTasksSummary: (): TaskRow[] => listTasksSummaryStmt.all() as TaskRow[],
+    // PERF (task 9dd877c8) — linha mínima para o scan de idle de 5s. Ver
+    // `TaskIdleRow` e `listTasksForIdleScanStmt` acima.
+    listTasksForIdleScan: (): TaskIdleRow[] => listTasksForIdleScanStmt.all() as TaskIdleRow[],
     // Board-wide totals (every sprint). Footer uses this for "outros boards"
     // + labeled "total N" only — never as the primary sprint count. See
     // `taskCountsByBoardStmt` comment above.
@@ -2562,6 +2627,10 @@ export function openStore(userDataDir: string) {
     // callback into message-bus.ts's `list_tasks` cmd, which now uses this
     // instead of filtering `listTasks()` in JS when `boardId` is given.
     listTasksByBoard: (boardId: string): TaskRow[] => listTasksByBoardStmt.all(boardId) as TaskRow[],
+    // PERF (task c9db1d86) — variante `summary` do statement acima, mesmo
+    // `idx_tasks_board_id`. Ver `listTasksSummary` logo acima.
+    listTasksSummaryByBoard: (boardId: string): TaskRow[] =>
+      listTasksSummaryByBoardStmt.all(boardId) as TaskRow[],
     // DESIGN-BACKLOG.md §2.1 "no get_task, por exemplo" — `getTask` (e só
     // ele, nunca `listTasks`/`listTasksByBoard`, pra manter a listagem em
     // massa barata) anexa a trilha completa e os cards vinculados como

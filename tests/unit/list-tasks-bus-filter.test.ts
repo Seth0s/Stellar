@@ -49,6 +49,14 @@ describe("message-bus list_tasks: filtros + projeção", () => {
           get: (_t, prop: string) => {
             if (prop === "listTasks") return () => store.listTasks();
             if (prop === "listTasksByBoard") return (boardId: string) => store.listTasksByBoard(boardId);
+            // PERF (task c9db1d86) — `view:"summary"` deixou de usar o
+            // statement largo e passou a chamar estes dois; sem eles o Proxy
+            // devolvia `undefined` e o handler quebrava em `tasks.map`. O
+            // duble tem que espelhar a interface inteira, não só o caminho
+            // que o teste exercitava quando foi escrito.
+            if (prop === "listTasksSummary") return () => store.listTasksSummary();
+            if (prop === "listTasksSummaryByBoard")
+              return (boardId: string) => store.listTasksSummaryByBoard(boardId);
             if (prop === "listCards") return () => aliveCardIds.map((id) => ({ id }));
             if (prop === "isCardAlive") return (id: string) => alive.has(id);
             if (prop === "listAllConnectors") return () => [];

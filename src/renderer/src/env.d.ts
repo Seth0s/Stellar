@@ -23,6 +23,7 @@ import type {
   BoardAssetsApi,
   SystemApi,
   I18nApi,
+  VoiceApi,
 } from "../../preload/index";
 
 declare global {
@@ -51,5 +52,7 @@ declare global {
     boardAssets: BoardAssetsApi;
     system: SystemApi;
     i18n: I18nApi;
+    /** MOTOR DE VOZ local (whisper.cpp) — `main/voice-transcription.ts`. */
+    voice: VoiceApi;
   }
 }

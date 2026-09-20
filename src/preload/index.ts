@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { homedir } from "node:os";
+// Só TIPO: apagado no build, então nada de `node:fs` (que aquele módulo
+// importa no topo) entra no bundle do preload. Mesmo precedente do renderer,
+// que já importa tipos de `src/main` (ex.: `provider-usage`).
+import type { ProvidersReloadReport } from "../main/providers-dynamic";
 
 export type CardRow = {
   id: string;
@@ -161,6 +165,24 @@ const clipboardImage = {
    * recém-enviada ou uma sessão restaurada). */
   readAttachment: (path: string): Promise<{ ok: true; base64: string } | { ok: false; error: string }> =>
     ipcRenderer.invoke("chat:read-attachment-image", path),
+  /** Anexo do composer GLOBAL (2026-09-20) — imagem ou DOCUMENTO. `fileName`
+   * só é usado pra derivar a extensão (whitelist no main); o nome gravado é
+   * gerado lá. Ver `main/clipboard-image.ts`. */
+  saveAttachment: (base64: string, fileName: string, mediaType: string): Promise<SaveClipboardImageResult> =>
+    ipcRenderer.invoke("clipboard:save-attachment", base64, fileName, mediaType),
+};
+
+/** MOTOR DE VOZ — whisper.cpp LOCAL, nada de rede (ver
+ * `main/voice-transcription.ts`). `status` é o que permite o botão dizer o que
+ * FALTA (engine sem o binário, ou modelo não baixado, com o comando exato) em
+ * vez de não responder; `warmup` sobe o server quando a gravação COMEÇA (o
+ * load do modelo acontece por trás da fala) e ele morre no fim da
+ * transcrição. */
+const voice = {
+  status: (): Promise<import("../main/voice-transcription").VoiceStatus> => ipcRenderer.invoke("voice:status"),
+  warmup: (): Promise<{ ok: true } | { ok: false; error: string }> => ipcRenderer.invoke("voice:warmup"),
+  transcribe: (base64: string, mimeType: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("voice:transcribe", base64, mimeType),
 };
 
 export type ExportCaptureResult = { ok: true; path: string } | { ok: false; error: string };
@@ -1503,6 +1525,18 @@ export type ProvidersMutationResult =
   | { ok: true; view: ProvidersPageView }
   | { ok: false; error: string };
 
+/**
+ * O que chega pelo canal `providers:config-changed` (task ebe8a79c):
+ * o relatório ESTRUTURADO da releitura (para quem precisar decidir por
+ * campo) e a LINHA já formatada em pt-BR pelo main, que é o texto que a UI
+ * mostra. As duas coisas juntas de propósito: o `report` é dado, a `line` é
+ * a redação única — o renderer não reescreve o texto.
+ */
+export type ProvidersConfigChangedPayload = {
+  report: ProvidersReloadReport;
+  line: string;
+};
+
 const system = {
   homeDir: homedir(),
   // Header nativo do Mac (2026-09-08) — Titlebar.tsx precisa saber se os
@@ -1535,6 +1569,27 @@ const system = {
   addProvider: (spec: DynamicProviderInput): Promise<ProvidersMutationResult> =>
     ipcRenderer.invoke("app:add-provider", spec),
   removeProvider: (id: string): Promise<ProvidersMutationResult> => ipcRenderer.invoke("app:remove-provider", id),
+  /**
+   * O watcher de `providers.json` (main, `providers-dynamic.ts`) relê o
+   * arquivo com debounce quando ele muda por FORA — editor de texto, cópia
+   * de arquivo — e empurra o relatório estruturado desta releitura. Antes
+   * disto o canal existia e era empurrado, mas NINGUÉM assinava: o feedback
+   * do usuário era só o `console.info` do main, e a tela de Settings só
+   * descobria a mudança quando voltava o foco.
+   *
+   * `line` vem PRONTA do main (`formatProvidersReloadLine`). É de propósito:
+   * é a mesma redação do log de lá, então não existem duas versões do mesmo
+   * fato para divergirem na primeira mudança de formato. O renderer exibe,
+   * não redige.
+   *
+   * Mesma forma dos outros canais deste preload: devolve a função de
+   * descadastrar, para o efeito do React limpar no unmount.
+   */
+  onProvidersConfigChanged: (cb: (payload: ProvidersConfigChangedPayload) => void) => {
+    const listener = (_event: unknown, payload: ProvidersConfigChangedPayload) => cb(payload);
+    ipcRenderer.on("providers:config-changed", listener);
+    return () => ipcRenderer.removeListener("providers:config-changed", listener);
+  },
 };
 
 /** DESIGN-BACKLOG.md §2.1 i18n fase 1 — locale from `app.getLocale()` with
@@ -1573,6 +1628,7 @@ const bus = {
 
 contextBridge.exposeInMainWorld("pty", pty);
 contextBridge.exposeInMainWorld("clipboardImage", clipboardImage);
+contextBridge.exposeInMainWorld("voice", voice);
 contextBridge.exposeInMainWorld("store", store);
 contextBridge.exposeInMainWorld("fs", fs);
 contextBridge.exposeInMainWorld("git", git);
@@ -1637,6 +1693,8 @@ export type CanvasExportApi = typeof canvasExport;
 export type BoardAssetsApi = typeof boardAssets;
 export type SystemApi = typeof system;
 export type I18nApi = typeof i18n;
+/** MOTOR DE VOZ (whisper.cpp local) — ver `main/voice-transcription.ts`. */
+export type VoiceApi = typeof voice;
 export type StoreApi = typeof store;
 export type FsApi = typeof fs;
 export type GitApi = typeof git;

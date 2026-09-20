@@ -48,7 +48,15 @@ function callbacksWithOverrides(
   return new Proxy(
     {},
     {
-      get: (_target, prop: string) => overrides[prop] ?? reportDefaults[prop] ?? (() => undefined),
+      get: (_target, prop: string) => {
+        // PERF (task 9dd877c8) — o scan de idle passou a ler
+        // `listTasksForIdleScan` (linha mínima: id/card_id/status) em vez da
+        // tabela inteira. O `FakeTaskRow` daqui JÁ é essa forma mínima, então
+        // rotear os dois para o mesmo duble mantém uma única fonte de dados de
+        // task no teste, em vez de duplicar o array em 4 overrides.
+        const key = prop === "listTasksForIdleScan" ? "listTasks" : prop;
+        return overrides[key] ?? reportDefaults[key] ?? (() => undefined);
+      },
     },
   ) as Parameters<typeof createMessageBus>[1];
 }
