@@ -1,0 +1,20 @@
+{
+  "comment": "Frozen violation counts per design-token rule (task d200c269). A file NOT listed here must be at ZERO — new code uses --space-*. A listed file may not GROW. After migrating a slice, run `node scripts/verify/check-design-tokens.mjs --update-baseline` to freeze the new (lower) count; a file that reached 0 is PINNED clean — its entry stays at an explicit 0 and any raw px that reappears fails the check. Escapes: /* sd:allow: <reason> */ — audited in every run.",
+  "rules": {
+    "spacing": {
+      "src/renderer/src/BrowserCard.module.css": 18,
+      "src/renderer/src/BrowserInspector.module.css": 83,
+      "src/renderer/src/ChangesCard.module.css": 7,
+      "src/renderer/src/GlobalComposer.module.css": 22,
+      "src/renderer/src/MediaCard.module.css": 5,
+      "src/renderer/src/RemoteWindowCard.module.css": 3,
+      "src/renderer/src/StickyCard.module.css": 4,
+      "src/renderer/src/StrokeCard.module.css": 1,
+      "src/renderer/src/TaskCard.module.css": 102,
+      "src/renderer/src/TerminalCard.module.css": 24,
+      "src/renderer/src/styles/cards.css": 93,
+      "src/renderer/src/styles/layout.css": 209,
+      "src/renderer/src/styles/markdown.css": 12
+    }
+  }
+}

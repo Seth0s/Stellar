@@ -1260,6 +1260,24 @@ select.resume-input {
    PROVIDER_OPTIONS) still fits a narrow popover instead of overflowing. */
 .provider-picker {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.provider-picker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.provider-picker-group-title {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.provider-picker-group-items {
+  display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
@@ -1405,12 +1423,31 @@ select.resume-input {
 }
 
 /* Settings modal — variant A (prototypes/settings-modal.html). Scope is
-   the navigation, not a per-row badge: Application vs This board. */
+   the navigation, not a per-row badge: Application vs This board.
+
+   Height is STABLE across pages (2026-09-20, task b2a0a4f8 — owner: "o
+   modal muda de tamanho conforme a aba"). The frame answers to the
+   viewport only — `min(720px, 80vh)` — and `.settings-pane` stays the one
+   scroller (see :1557's "the pane is the scroller" rule). Measured in the
+   real app (CDP harness, 1280×800): natural heights general 405 /
+   providers 742 / shortcuts 941 / keys 513 / devices·maestro·agents 405 —
+   the old content-driven pair (min-height 430px + max-height min(80vh,
+   720px)) made the box jump 430↔640 when switching tabs. min-height is
+   gone on purpose: with a 430px floor, a window shorter than ~430px
+   overflows the screen (in CSS, min-height beats max-height). Pages taller
+   than the frame overflow is absorbed by the scroller each page already
+   owns (`.shortcuts-grid`, `.providers-settings-page`), or by the pane
+   itself for the thin pages — visually the same: stable frame, scrolling
+   content. */
+/* Bloco do modal de configuração — PRIMEIRA FATIA migrada pra --space-*
+   (task d200c269, prova da escala): 17 declarações de ritmo em tokens,
+   2 escapatórias declaradas (badge 1px e o micro-aperto do small), ímpares
+   arbitrários snapados ao degrau vizinho (7→8, 14→16, 18→16, 9→8, 11→12,
+   5→4). O resto do arquivo vem em fatias próprias. */
 .modal.settings-modal {
   max-width: 860px;
   width: min(860px, 92vw);
-  min-height: 430px;
-  max-height: min(80vh, 720px);
+  height: min(720px, 80vh);
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1419,8 +1456,8 @@ select.resume-input {
 .settings-modal-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: var(--space-5);
+  padding: var(--space-7);
   border-bottom: 1px solid var(--border);
 }
 
@@ -1438,7 +1475,7 @@ select.resume-input {
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: 99px;
-  padding: 1px 7px;
+  padding: 1px 7px; /* sd:allow: 1px offsets the badge's own 1px border (pill height unchanged); the pair is tuned with the 99px radius */
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1450,7 +1487,7 @@ select.resume-input {
   border: 0;
   color: var(--muted);
   cursor: pointer;
-  padding: 2px 4px;
+  padding: var(--space-1) var(--space-2);
   line-height: 0;
 }
 
@@ -1467,15 +1504,15 @@ select.resume-input {
 
 .settings-nav {
   border-right: 1px solid var(--border);
-  padding: 8px;
+  padding: var(--space-4);
   background: var(--surface);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .settings-nav-sec {
-  padding: 10px 10px 4px;
+  padding: var(--space-5) var(--space-5) var(--space-2);
   font-size: 10px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1485,9 +1522,9 @@ select.resume-input {
 .settings-nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   width: 100%;
-  padding: 7px 10px;
+  padding: var(--space-4) var(--space-5);
   border: 0;
   border-radius: 7px;
   background: none;
@@ -1509,7 +1546,7 @@ select.resume-input {
 }
 
 .settings-pane {
-  padding: 16px 18px;
+  padding: var(--space-7);
   overflow: auto;
   min-width: 0;
   display: flex;
@@ -1545,8 +1582,8 @@ select.resume-input {
 .settings-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 7px 0;
+  gap: var(--space-6);
+  padding: var(--space-4) 0;
 }
 
 .settings-row label {
@@ -1558,7 +1595,7 @@ select.resume-input {
   display: block;
   color: var(--muted);
   font-size: 11.5px;
-  margin-top: 1px;
+  margin-top: 1px; /* sd:allow: 1px optical — keeps the hint glued under its label without opening a full --space-1 gap */
 }
 
 .settings-row select,
@@ -1567,7 +1604,7 @@ select.resume-input {
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 6px;
-  padding: 5px 8px;
+  padding: var(--space-2) var(--space-4);
   font: inherit;
   flex: none;
 }
@@ -1578,21 +1615,21 @@ select.resume-input {
 
 .settings-note {
   display: flex;
-  gap: 9px;
-  padding: 9px 11px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6);
   border-radius: 8px;
   background: color-mix(in srgb, var(--signal) 10%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--signal) 28%, var(--border));
   color: var(--text);
   font-size: 12px;
-  margin: 12px 0 4px;
+  margin: var(--space-6) 0 var(--space-2);
 }
 
 .settings-page-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+  gap: var(--space-4);
+  margin-top: var(--space-7);
   flex: none;
 }
 
@@ -1630,6 +1667,26 @@ select.resume-input {
   font-size: 11px;
   color: var(--muted);
   word-break: break-all;
+}
+
+.providers-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.providers-section-title {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+/* Nativo é leitura: sem ações na linha, então o peso do nome cai e o id
+   ganha o mesmo tratamento dos outros dados técnicos. */
+.providers-row.is-native .providers-row-name {
+  font-weight: 500;
+  color: var(--muted);
 }
 
 .providers-list {
@@ -1704,6 +1761,16 @@ select.resume-input {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* O aviso de reset fica ao lado dos botões, mas é texto de apoio — não
+   compete com eles. */
+.providers-reset-hint {
+  max-width: 260px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--muted);
+  text-align: right;
 }
 
 .providers-empty {
