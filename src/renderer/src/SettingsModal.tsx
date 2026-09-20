@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { t, SUPPORTED_LOCALES, type Locale } from "../../shared/i18n";
 import { Icon, type IconName } from "./icons";
 import { useModal } from "./useModal";
@@ -30,6 +30,14 @@ import type { ShortcutCombo, ShortcutOverrides } from "./shortcut-registry";
  * renaming it would touch files outside this modal's territory for zero
  * behavioral gain. The divergence id ≠ label is declared here instead of
  * being left mute.
+ *
+ * Positioning of the fields is NOT per page: `SettingsField` +
+ * `.settings-row` are the one label/value row, a two-column grid with the
+ * value in a fixed column (the measurements and the "before" state live in
+ * `layout.css`). The owner reported Sobre "quebrada em espaçamento e
+ * quebra de linha" (2026-09-20, task 8ff311e7) — the row used to be flex
+ * with the label taking whatever a value with no rule left it. The tab
+ * order did NOT change: Sobre stays last, by the same decision below.
  *
  * Sobre does NOT invent theme / translucent-cards / terminal-font-size
  * rows from the prototype: dark-first is a design-system decision
@@ -192,6 +200,44 @@ export function SettingsModal({
   );
 }
 
+/**
+ * A linha rótulo/valor das configurações — o posicionamento dos campos
+ * mora AQUI, uma vez, e não em cada aba. Serve as páginas deste modal
+ * hoje e a próxima que precisar de um campo: rótulo + hint à esquerda,
+ * valor à direita, nas mesmas duas verticais de `.settings-row`
+ * (`layout.css`) — que é onde o porquê da grade está medido.
+ *
+ * `htmlFor` associa o rótulo ao controle quando a linha tem um. A
+ * identidade da build não tem — ela é leitura, não campo — e por isso é
+ * a única chamada que não passa `htmlFor` (o `<label>` fica só com o
+ * texto de apoio, como já estava).
+ *
+ * Exceção declarada: a linha cujo controle É o rótulo (o checkbox do modo
+ * autônomo, em `MaestroPage`) não passa por aqui — ela não tem coluna de
+ * valor, e o `.autonomous-toggle-label` ocupa as duas colunas.
+ */
+function SettingsField({
+  label,
+  hint,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  hint: string;
+  htmlFor?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="settings-row">
+      <label htmlFor={htmlFor}>
+        {label}
+        <small>{hint}</small>
+      </label>
+      {children}
+    </div>
+  );
+}
+
 function NavButton({
   item,
   current,
@@ -226,7 +272,11 @@ function AboutPage({
 }) {
   const [override, setOverride] = useState<Locale | null>(null);
   const [systemLocale, setSystemLocale] = useState("");
-  const [buildLabel, setBuildLabel] = useState<string | null>(null);
+  // The identity as PARTS, not one string: it is long enough to wrap, and
+  // it must wrap between the parts (label · version · bus) — never inside
+  // one, which is where "bus / protocol 4" came from. `title` joins them
+  // back for the case where the value is clipped anyway.
+  const [buildParts, setBuildParts] = useState<string[] | null>(null);
 
   useEffect(() => {
     void window.i18n.get().then((info) => {
@@ -234,9 +284,7 @@ function AboutPage({
       setSystemLocale(info.systemLocale);
     });
     void window.system.getBuildIdentity().then((id) => {
-      setBuildLabel(
-        `${id.label} · v${id.version} · bus protocol ${id.busProtocol}`,
-      );
+      setBuildParts([id.label, `v${id.version}`, `bus protocol ${id.busProtocol}`]);
     });
   }, [locale]);
 
@@ -247,11 +295,11 @@ function AboutPage({
 
   return (
     <>
-      <div className="settings-row">
-        <label htmlFor="settings-locale">
-          {t("shortcuts.locale")}
-          <small>{t("settings.general.localeHint")}</small>
-        </label>
+      <SettingsField
+        label={t("shortcuts.locale")}
+        hint={t("settings.general.localeHint")}
+        htmlFor="settings-locale"
+      >
         <select
           id="settings-locale"
           value={override ?? "system"}
@@ -269,16 +317,22 @@ function AboutPage({
             </option>
           ))}
         </select>
-      </div>
-      <div className="settings-row">
-        <label>
-          {t("settings.general.buildIdentity")}
-          <small>{t("settings.general.buildIdentityHint")}</small>
-        </label>
-        <code data-settings-build-identity="" title={buildLabel ?? undefined}>
-          {buildLabel ?? t("settings.general.buildIdentityLoading")}
+      </SettingsField>
+      <SettingsField
+        label={t("settings.general.buildIdentity")}
+        hint={t("settings.general.buildIdentityHint")}
+      >
+        <code data-settings-build-identity="" title={buildParts?.join(" · ")}>
+          {buildParts
+            ? buildParts.map((part, i) => (
+                <Fragment key={part}>
+                  {i > 0 && " · "}
+                  <span className="settings-build-part">{part}</span>
+                </Fragment>
+              ))
+            : t("settings.general.buildIdentityLoading")}
         </code>
-      </div>
+      </SettingsField>
       <div className="settings-note">{t("settings.general.scopeNote")}</div>
     </>
   );
@@ -317,11 +371,11 @@ function AgentsPage({
   onSetConcurrencyCap: (id: string, cap: number | null) => void;
 }) {
   return (
-    <div className="settings-row">
-      <label htmlFor="settings-concurrency">
-        {t("session.concurrency")}
-        <small>{t("settings.concurrencyHint")}</small>
-      </label>
+    <SettingsField
+      label={t("session.concurrency")}
+      hint={t("settings.concurrencyHint")}
+      htmlFor="settings-concurrency"
+    >
       <input
         id="settings-concurrency"
         className="concurrency-cap-input"
@@ -335,6 +389,6 @@ function AgentsPage({
           onSetConcurrencyCap(board.id, raw === "" ? null : Math.max(1, Number(raw)));
         }}
       />
-    </div>
+    </SettingsField>
   );
 }
