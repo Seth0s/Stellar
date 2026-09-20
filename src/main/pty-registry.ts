@@ -425,6 +425,20 @@ type Entry = {
    * receber), então ela também conta como "linha" pra este campo manter
    * o watcher vivo até o arquivo de verdade ser escrito. */
   awaitingResumeAnyInput: boolean;
+  /**
+   * O FATO DE TURNO (task 4245c6f5). `null` enquanto o agente nunca declarou
+   * fim de turno; `Date.now()` no instante em que ele declarou
+   * (`turn_complete`). É o que faltava para `card_status` parar de deduzir
+   * trabalho de BYTES: um TUI parado que repinta mantém `lastActivityAt`
+   * fresco para sempre, e era por isso que cinco cards parados respondiam
+   * `running`.
+   *
+   * `null` é resposta, não buraco: sem esta declaração o estado do card é
+   * `unknown`, e `unknown` é melhor que um palpite entre running e idle.
+   * Quem escreve aqui é `markTurnComplete`, chamado do relay de
+   * `turn_complete` (`index.ts`) — o mesmo sinal que antes ia só para o
+   * renderer, sem nenhum estado no main. */
+  turnEndedAt: number | null;
   /** RODADA 7 (2026-09-10), achado 1 — o piso ATUAL de scan, mutável
    * (ao contrário do que a RODADA 6 assumiu — ver o histórico abaixo).
    * Setado a `Date.now()` na criação da entry. `rearmSessionWatch` é o
@@ -907,6 +921,7 @@ export function createPtyRegistry(registryOpts: {
       killTimer: null,
       lastActivityAt: spawnedAtMs,
       spawnedAtMs,
+      turnEndedAt: null,
       hasReceivedData: false,
       providerId,
       cwd,
@@ -1399,6 +1414,35 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.lastActivityAt ?? null;
   }
 
+  /**
+   * Declara o fim de turno deste card (task 4245c6f5). Idempotente e barato:
+   * chamado do relay de `turn_complete`. Não mexe em `lastActivityAt` de
+   * propósito — a comparação entre os dois é justamente o que diz se houve
+   * saída DEPOIS do turno (isto é, se um turno novo começou).
+   */
+  function markTurnComplete(id: string): void {
+    const entry = entries.get(id);
+    if (!entry) return;
+    entry.turnEndedAt = Date.now();
+  }
+
+  /** Os fatos que `decideCardStatus` (card-status-decision.ts) consome —
+   * `null` com a mesma convenção de `getLastActivityAt`: sem entry viva não
+   * há o que decidir. Ler, não interpretar: a decisão é pura e mora lá. */
+  function getTurnFacts(id: string): {
+    lastActivityAt: number;
+    turnEndedAt: number | null;
+    hasPendingHumanInput: boolean;
+  } | null {
+    const entry = entries.get(id);
+    if (!entry) return null;
+    return {
+      lastActivityAt: entry.lastActivityAt,
+      turnEndedAt: entry.turnEndedAt,
+      hasPendingHumanInput: entry.inputLineBuffer.length > 0,
+    };
+  }
+
   /** PTY child pid for process-ownership identify (`/proc/<pid>/fd`). */
   function getPid(id: string): number | null {
     const entry = entries.get(id);
@@ -1481,5 +1525,5 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount };
+  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount };
 }

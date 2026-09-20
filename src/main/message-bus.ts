@@ -41,6 +41,7 @@ import {
   decideIdleWithoutReport,
   IDLE_WITHOUT_REPORT_POLL_MS,
 } from "./idle-without-report-decision";
+import { decideCardStatus, describeCardStatus } from "./card-status-decision";
 import {
   decideReportAcceptance,
   errorFromReportPayload,
@@ -736,6 +737,16 @@ export function createMessageBus(
      * PTY entry (never spawned/exited/error), matching `isCardAlive`'s
      * own "no entry" convention. */
     getCardLastActivityAt: (cardId: string) => number | null;
+    /**
+     * O FATO DE TURNO (task 4245c6f5) — quando o card declarou `turn_complete`,
+     * ou `null` se nunca declarou. `null` é resposta: é o que faz
+     * `card_status` devolver `unknown` em vez de escolher entre running e
+     * idle por conta própria.
+     */
+    getCardTurnEndedAt: (cardId: string) => number | null;
+    /** Registra o fim de turno (o MESMO instante do relay pro renderer).
+     * Separado do relay de propósito: o push é UI, isto é o FATO. */
+    markCardTurnComplete: (cardId: string) => void;
     /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica
      * na caixa sem submeter" — `typeAndSubmit`'s portão de prontidão
      * (`type-and-submit-decision.ts`'s `decideWriteReadiness`) precisa dos
@@ -2050,16 +2061,6 @@ export function createMessageBus(
     return callbacks.listCards().filter((c) => c.kind === "terminal");
   }
 
-  /** Sticky item "card_status idle" — `false` for a card with no PTY
-   * entry at all (never spawned/already exited) — that's `isCardAlive`'s
-   * job to report, not this one's; callers only ask this once they've
-   * already confirmed the card is alive. */
-  function isCardIdle(cardId: string): boolean {
-    const lastActivityAt = callbacks.getCardLastActivityAt(cardId);
-    if (lastActivityAt === null) return false;
-    return Date.now() - lastActivityAt >= IDLE_THRESHOLD_MS;
-  }
-
   /** Who spawned `cardId` (`kind === "spawned"`, most recent by
    * `updated_at`) — only if that spawner is still alive. `null` is the
    * quiet no-op for both "opened by a human" and "spawner already gone". */
@@ -2827,19 +2828,39 @@ export function createMessageBus(
 
     if (req.cmd === "card_status") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
-      const cards = listTerminalCards();
-      if (!cards.some((c) => c.id === req.target)) return { ok: false, error: `no open terminal card with id "${req.target}"` };
-      // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 2 —
-      // checked BEFORE isAlive: a card blocked on its own consent modal is
-      // still a live process (isAlive true), but reporting "running" here
-      // is exactly the ambiguity this state exists to remove.
-      if (waitingOnConsent.has(req.target)) return { ok: true, status: "waiting" };
-      if (!callbacks.isCardAlive(req.target)) return { ok: true, status: "exited" };
-      return { ok: true, status: isCardIdle(req.target) ? "idle" : "running" };
+      const target = req.target;
+      const card = listTerminalCards().find((c) => c.id === target);
+      if (!card) return { ok: false, error: `no open terminal card with id "${target}"` };
+      // O status é DECIDIDO por fatos (`card-status-decision.ts`), não por
+      // "sem bytes por N segundos" (task 4245c6f5). Aqui só se coleta o que
+      // existe e se devolve — inclusive `unknown`, quando não há fato
+      // suficiente. `provider` vai na resposta de propósito: foi mandar um
+      // brief de agente para um card bash que produziu
+      // `bash: erro de sintaxe próximo ao token inesperado '('`.
+      const status = decideCardStatus({
+        provider: card.provider ?? null,
+        alive: callbacks.isCardAlive(target),
+        waitingOnConsent: waitingOnConsent.has(target),
+        lastActivityAt: callbacks.getCardLastActivityAt(target),
+        turnEndedAt: callbacks.getCardTurnEndedAt(target) ?? null,
+        hasPendingHumanInput: callbacks.getCardWriteReadiness(target)?.hasPendingHumanInput === true,
+        now: Date.now(),
+        idleThresholdMs: IDLE_THRESHOLD_MS,
+      });
+      return {
+        ok: true,
+        status,
+        provider: card.provider ?? null,
+        note: describeCardStatus(status),
+      };
     }
 
     if (req.cmd === "turn_complete") {
       if (!req.cardId) return { ok: false, error: "missing cardId (your own card id)" };
+      // O FATO primeiro (task 4245c6f5): é ele que `card_status` lê depois.
+      // O relay abaixo continua sendo só UI — até esta task, era só isso que
+      // existia, e o main não tinha nenhuma noção de turno.
+      callbacks.markCardTurnComplete(req.cardId);
       callbacks.notifyTurnComplete(req.cardId);
       return { ok: true };
     }
