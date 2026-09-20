@@ -2293,6 +2293,45 @@ export function createMessageBus(
     enqueueCardDelivery(cardId, message, { steer: true });
   }
 
+  /**
+   * Aviso CURTO ao card que acabou de ser ligado a uma task (task 618d179a,
+   * `link_task_card`). Ele NÃO é o enunciado: o enunciado vive no `prompt` da
+   * task e o agente o lê com `get_task`. Repetir o texto aqui só mudaria quem
+   * duplica. O revisor recebe uma variante — o que ele tem em mãos é algo para
+   * REVISAR, não uma ordem de trabalho: é o mesmo motivo que faz
+   * `resolveSpawnBrief` não entregar o `prompt` ao reviewer (ver o doc daquele
+   * módulo), só que aqui a alternativa não é silêncio, é um ponteiro.
+   */
+  function linkedCardNoticeBody(taskId: string, role: string): string {
+    const alvo = role === TASK_CARD_REVIEWER_ROLE ? "task para você revisar" : "task para você";
+    return `${alvo}: ${taskId} (papel: ${role}) — leia o enunciado com get_task.`;
+  }
+
+  /**
+   * Entrega o aviso pelo MESMO caminho dos outros ponteiros: `enqueueCardDelivery`,
+   * o FIFO que `spawn_agent`/report/exit já usam — não uma segunda entrega.
+   * `steer: false`: é recado de sistema, não correção — não injeta no meio de um
+   * turno em andamento; entra na fila e é digitado quando o card volta a aceitar
+   * escrita (o mesmo `steer:false` dos ponteiros de report/saída).
+   *
+   * Devolve o que aconteceu, porque o chamador precisa poder dizer: falhar em
+   * silêncio recriaria o defeito que esta task conserta, e derrubar o LINK por
+   * causa do aviso seria pior (o vínculo é o contrato; o aviso é o extra).
+   */
+  function notifyLinkedCard(cardId: string, taskId: string, role: string, requesterId?: string): string {
+    if (!callbacks.isCardAlive(cardId)) {
+      return "skipped: card has no live terminal — linked, but nothing to read the notice";
+    }
+    const card = listTerminalCards().find((c) => c.id === cardId);
+    if (!card) return `skipped: card "${cardId}" is not a terminal — a notice has no reader`;
+    if (card.provider === "bash") return "skipped: bash has no agent reading the line";
+    const label = requesterId ? callbacks.describeCardLabel(requesterId) : null;
+    const body = formatAgentFacingAuthorship(label, linkedCardNoticeBody(taskId, role));
+    const enqueued = enqueueCardDelivery(cardId, body, { steer: false });
+    if (!("receipt" in enqueued)) return `failed: ${enqueued.error}`;
+    return "queued";
+  }
+
   /** Achado ao vivo (2026-09-01): "eu renomeio os card dos agentes para
    * Stellar, isso só está visual em vez de funcional". Renomear escrevia
    * `cards.label` e parava aí — todo `target` do bus era comparado só
@@ -3639,25 +3678,40 @@ export function createMessageBus(
           error: `role must be one of ${TASK_CARD_ROLES.map((r) => `"${r}"`).join(", ")} (or omitted for implementer), got "${String(req.role)}" — refusing to link rather than silently substituting a role`,
         };
       }
+      // Presos em `const` (não lidos de `req` dentro do closure abaixo): o
+      // estreitamento de `req.cardId`/`req.taskId` não sobrevive ao escopo.
+      const taskId = req.taskId;
+      const cardId = req.cardId;
+      // Papel ANTERIOR deste card NESTA task, lido ANTES da escrita. Um re-link
+      // com o MESMO papel não é informação nova (o handler faz upsert — avisar
+      // seria ruído); um papel DIFERENTE é fato novo e vira aviso.
+      const previousRole =
+        (callbacks.listTaskCardsForCard(cardId) ?? []).find((l) => l.task_id === taskId)?.role ?? null;
+      const decideNotice = () =>
+        previousRole === role
+          ? `skipped: already linked as ${role} — a repeated link is not new information`
+          : notifyLinkedCard(cardId, taskId, role, req.requesterId);
       if (role === TASK_CARD_REVIEWER_ROLE) {
         // A reviewer must not be the principal card: `report` keys the
         // in-line retry budget and `accept_failure` → task failed off
         // `tasks.card_id`, and a reviewer's `{ok:false}` is a verdict on
         // someone else's work, not this task failing. Refuse instead of
         // leaving the two tables disagreeing about the same card.
-        if (task.card_id === req.cardId) {
+        if (task.card_id === cardId) {
           return {
             ok: false,
-            error: `card "${req.cardId}" is task "${req.taskId}"'s principal card (cardId) — detach it first (update_task cardId: null) before linking it as reviewer`,
+            error: `card "${cardId}" is task "${taskId}"'s principal card (cardId) — detach it first (update_task cardId: null) before linking it as reviewer`,
           };
         }
-        const profile = profileFromCardRow(callbacks.getAnyCard(req.cardId));
-        callbacks.linkTaskCard(req.taskId, req.cardId, role, profile);
-        return { ok: true, taskId: req.taskId, cardId: req.cardId, role };
+        const profile = profileFromCardRow(callbacks.getAnyCard(cardId));
+        callbacks.linkTaskCard(taskId, cardId, role, profile);
+        // O aviso sai DEPOIS da escrita: o card que acorda com ele vai chamar
+        // `get_task` e precisa que a linha de papel já exista.
+        return { ok: true, taskId, cardId, role, notice: decideNotice() };
       }
-      const profile = profileFromCardRow(callbacks.getAnyCard(req.cardId));
-      linkImplementerToTask(task, req.cardId, "agent", profile);
-      return { ok: true, taskId: req.taskId, cardId: req.cardId, role };
+      const profile = profileFromCardRow(callbacks.getAnyCard(cardId));
+      linkImplementerToTask(task, cardId, "agent", profile);
+      return { ok: true, taskId, cardId, role, notice: decideNotice() };
     }
 
     if (req.cmd === "request_task_status") {
