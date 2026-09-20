@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   decideJudgmentWrite,
+  decideReportVerdictWrite,
   describeImplementerJudgmentRefusal,
+  emptyReportSchemaFields,
   roleOnTask,
 } from "../../src/main/judgment-write-decision";
 
@@ -47,5 +49,81 @@ describe("roleOnTask", () => {
     expect(roleOnTask(cards, "99")).toBeNull();
     expect(roleOnTask(cards, undefined)).toBeNull();
     expect(roleOnTask(cards, null)).toBeNull();
+  });
+});
+
+/**
+ * Task 8dd43b2c — a palavra "placeholder" passava pelo guard: um revisor
+ * entregou `"achados": "placeholder"` com verdict de REPROVAÇÃO e o
+ * servidor aceitou; quem recusou foi o orquestrador, na mão. A forma
+ * escolhida (valor INTEIRO por vocabulário) e as duas formas REJEITADAS
+ * (substring, limiar de tamanho) estão medidas contra o banco real e
+ * travadas aqui.
+ */
+describe("evidência de veredito: placeholder por VOCABULÁRIO, no valor inteiro", () => {
+  const SCHEMA = ["achados", "evidenciaMedida"];
+
+  it("recusa a palavra inteira que não é evidência — o caso medido", () => {
+    for (const word of ["placeholder", "Placeholder ", "PLACEHOLDER", "lorem ipsum", "wip", "fixme", "a preencher", "xxx", "sample"]) {
+      expect(emptyReportSchemaFields({ achados: word, evidenciaMedida: "suíte verde" }, SCHEMA), word).toEqual(["achados"]);
+    }
+  });
+
+  it("NÃO recusa substring: a frase que DESCREVE um placeholder é evidência legítima (medido: 288/2073 valores aceitos contêm um dos termos)", () => {
+    expect(
+      emptyReportSchemaFields(
+        {
+          achados:
+            "O implementador deixou um placeholder no card e nenhum teste cobre o caminho de erro; o TODO do arquivo continua lá.",
+          evidenciaMedida: "npx vitest run → 192/1988",
+        },
+        SCHEMA,
+      ),
+    ).toEqual([]);
+  });
+
+  it("NÃO recusa por TAMANHO: evidência curta e real passa ('1884 passed', um hash, um caminho)", () => {
+    expect(emptyReportSchemaFields({ achados: "1884 passed", evidenciaMedida: "abc1234" }, SCHEMA)).toEqual([]);
+    expect(emptyReportSchemaFields({ achados: "src/main/store.ts", evidenciaMedida: "commit 8dd43b2" }, SCHEMA)).toEqual([]);
+  });
+
+  it("o veredito de REPROVAÇÃO com evidência placeholder é recusado, e a mensagem nomeia a chave", () => {
+    const decision = decideReportVerdictWrite({
+      verdict: "reprovado",
+      requesterRoleOnTask: "reviewer",
+      reviewWanted: true,
+      report: { achados: "placeholder", evidenciaMedida: "unidades verificadas" },
+      reportSchema: SCHEMA,
+    });
+    expect(decision.action).toBe("refuse");
+    if (decision.action === "refuse") {
+      expect(decision.error).toContain("achados");
+      expect(decision.error).toContain("placeholder");
+    }
+  });
+
+  it("a evidência real do MESMO veredito passa (o guard não pune evidência legítima)", () => {
+    const decision = decideReportVerdictWrite({
+      verdict: "reprovado",
+      requesterRoleOnTask: "reviewer",
+      reviewWanted: true,
+      report: {
+        achados: "Dois relógios na mesma função: o cálculo usa Date.now() e a comparação usa o timestamp do evento.",
+        evidenciaMedida: "tests/unit/fuso.test.ts → 1 falha reproduzida",
+      },
+      reportSchema: SCHEMA,
+    });
+    expect(decision.action).toBe("allow");
+  });
+
+  it("relatório de FALHA sem veredito não passa por este gate (ok:false preservado)", () => {
+    expect(
+      decideReportVerdictWrite({
+        verdict: null,
+        requesterRoleOnTask: "implementer",
+        report: { achados: "", evidenciaMedida: "" },
+        reportSchema: SCHEMA,
+      }),
+    ).toEqual({ action: "allow" });
   });
 });

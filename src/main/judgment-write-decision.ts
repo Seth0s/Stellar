@@ -120,6 +120,23 @@ export function roleOnTask(
  * Words that look like an answer but carry no evidence. Kept deliberately
  * short: each entry is a refusal that a human would agree with, not a
  * style opinion. Compared lowercased and trimmed.
+ *
+ * A PALAVRA INTEIRA, NUNCA SUBSTRING (task 8dd43b2c): um revisor entregou
+ * `"achados": "placeholder"` com verdict de REPROVAÇÃO e o servidor aceitou
+ * em silêncio — quem recusou foi o orquestrador, lendo o texto na mão.
+ * Medição que decide a FORMA (banco real, `reports` × `reportSchema`
+ * declarado da task, 2073 valores de evidência ACEITOS):
+ *   - comparar o valor INTEIRO (trim + lowercase) contra esta lista: 0 falso
+ *     positivo;
+ *   - se fosse SUBSTRING: 288 dos 2073 (14%) seriam acusados — incluindo
+ *     frases que DESCREVEM um placeholder deixado no código, que é
+ *     exatamente o que uma revisão desta própria task escreve;
+ *   - se fosse LIMIAR DE TAMANHO (≤25 chars): 0 falso positivo HOJE (o menor
+ *     aceito tem 27), mas o contrato pede evidência curta e real — "1884
+ *     passed" (12), um hash de commit, um caminho de arquivo — e recusaria
+ *     justamente o que a mensagem de recusa manda escrever. Guard que recusa
+ *     relatório legítimo é pior que o furo.
+ * Tamanho NÃO entrou como critério; vocabulário entrou só como valor inteiro.
  */
 const PLACEHOLDER_REPORT_VALUES = new Set([
   "n/a",
@@ -135,6 +152,29 @@ const PLACEHOLDER_REPORT_VALUES = new Set([
   "…",
   "...",
   "?",
+  // Adições da 8dd43b2c — todas medidas contra os 2073 valores aceitos com
+  // 0 falso positivo como valor inteiro.
+  "placeholder",
+  "lorem ipsum",
+  "lorem",
+  "xxx",
+  "xxxx",
+  "xxxxx",
+  "wip",
+  "fixme",
+  "changeme",
+  "filler",
+  "a preencher",
+  "preencher",
+  "a definir",
+  "to be defined",
+  "to be done",
+  "sample",
+  "exemplo",
+  "foo",
+  "bar",
+  "baz",
+  "asdf",
 ]);
 
 function isRealReportValue(value: unknown): boolean {
@@ -205,7 +245,7 @@ export function describeVerdictEvidenceRefusal(verdict: string, emptyKeys: reado
     `[de: stellar] report verdict "${verdict}" recusado: ` +
     `um veredito de reviewer precisa das chaves do reportSchema com conteúdo real — ` +
     `sem isso o veredito vale menos que nenhuma revisão. ` +
-    `Vazias/placeholder (vazio, [], {}, "N/A", "TBD"): ${emptyKeys.join(", ")}. ` +
+    `Vazias/placeholder (vazio, [], {}, "N/A", "TBD", "placeholder", "lorem ipsum", "WIP"): ${emptyKeys.join(", ")}. ` +
     `Preencha com a evidência MEDIDA (o que foi verificado, a saída real, o número do gate) e reenvie. Nada foi gravado.`
   );
 }
