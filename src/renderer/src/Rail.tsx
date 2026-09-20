@@ -3,6 +3,9 @@ import { Icon, type IconName } from "./icons";
 import { Popover } from "./Popover";
 import { PenPanel } from "./PenPanel";
 import { ProviderPicker } from "./ProviderPicker";
+import { buildProviderGroups } from "./provider-groups";
+import { useAvailableAgentProviders } from "./useAgentAvailability";
+import { useProviderClassification } from "./useProviderClassification";
 import { CARD_ICON, RAIL_CREATE_ORDER, railCreateTitle } from "./cards/registry";
 import type { Tool } from "./card-types";
 import { PROVIDER_EFFORT_VALUES } from "./card-types";
@@ -127,6 +130,18 @@ export function Rail({
   onJumpToCard: (id: string) => void;
   onOpenSettings: () => void;
 }) {
+  // Nativo × genérico: a classificação é do main (ver `useProviderClassification`),
+  // e os rótulos/instalados vêm do mesmo canal de disponibilidade que já
+  // alimenta `providers` (App.tsx's `useProviderOptions`). Nada é cravado aqui.
+  const availableProviders = useAvailableAgentProviders();
+  const providerClassification = useProviderClassification();
+  const providerGroups = buildProviderGroups({
+    orderedIds: providers,
+    available: availableProviders,
+    dynamicIds: providerClassification.dynamicIds,
+    skippedIds: providerClassification.skippedIds,
+  });
+
   const [openPopover, setOpenPopover] = useState<"cards" | "terminal-config" | "ai" | "find" | null>(null);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_COLLAPSED_KEY) === "1");
   const addCardBtnRef = useRef<HTMLButtonElement>(null);
@@ -377,9 +392,16 @@ export function Rail({
                 </div>
               </div>
 
+              {/* Sem label de campo (2026-09-20, relato do dono: "pode remover
+                  a label (provider)"). Os dois títulos de grupo já dizem o que
+                  a lista é, e a label só repetia o nome do conceito. */}
               <div className="popover-field">
-                <label>{t("rail.label.provider")}</label>
-                <ProviderPicker providers={providers} value={newProvider} onChange={setNewProvider} />
+                <ProviderPicker
+                  groups={providerGroups}
+                  labelled={providerClassification.ready}
+                  value={newProvider}
+                  onChange={setNewProvider}
+                />
               </div>
 
               {showAgentFields && (

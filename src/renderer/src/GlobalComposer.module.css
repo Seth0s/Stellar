@@ -219,6 +219,120 @@
   padding: 0;
 }
 
+/* Chip de DOCUMENTO (2026-09-20). Mesma altura (44px) e mesmo raio (6px) da
+   miniatura de imagem, e o mesmo "x" no canto — o que muda é o miolo: ícone
+   + nome + metadados, no lugar do quadrado de preview. Classes PRÓPRIAS, pela
+   mesma razão documentada no `.attachStrip` acima: as globais
+   `chat-attachment-*` de cards.css são calibradas pro rodapé COM borda do
+   card de chat, e o composer tem cadência própria. */
+.attachDoc {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 44px;
+  max-width: 208px;
+  padding: 0 20px 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  flex: none;
+}
+
+.attachDocIcon {
+  display: flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.attachDocText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.attachDocName {
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachDocMeta {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.attachDocRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Linha do que FALTA no motor de voz — "modelo ausente" é estado de primeira
+   classe (pedido do dono: o botão diz o que falta, não falha mudo). Fica
+   dentro da barra, acima da toolbar, como um aviso legível e dispensável; o
+   comando de download é longo de propósito, então não cabe numa pílula. */
+.voiceHint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.voiceHintText {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.voiceHintCopy,
+.voiceHintClose {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  font-size: 10.5px;
+}
+
+.voiceHintCopy {
+  color: var(--foam);
+  white-space: nowrap;
+}
+
+.voiceHintClose {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+}
+
+.voiceHintCopy:hover,
+.voiceHintClose:hover {
+  color: var(--text);
+}
+
 .iconBtn {
   width: 32px;
   height: 32px;

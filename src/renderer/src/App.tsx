@@ -4002,7 +4002,7 @@ export function App() {
         kindIcon={CARD_ICON}
         kindLabel={CARD_LABEL}
         onJumpToCard={jumpToCard}
-        onOpenSettings={() => setSettingsPage("general")}
+        onOpenSettings={() => setSettingsPage("providers")}
       />
       <Topbar
         boards={boards}

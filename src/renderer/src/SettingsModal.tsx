@@ -20,10 +20,18 @@ import type { ShortcutCombo, ShortcutOverrides } from "./shortcut-registry";
  *
  * Pages reuse the existing components (ShortcutsOverlay, SecretsSettingsModal,
  * RemotePairingModal). One implementation, several doors in: `?` opens
- * this modal already on Shortcuts; the rail gear opens General; the
- * topbar QR opens Devices.
+ * this modal already on Shortcuts; the rail gear opens Providers (the
+ * default — 2026-09-20, task b2a0a4f8); the topbar QR opens Devices.
  *
- * Geral does NOT invent theme / translucent-cards / terminal-font-size
+ * The page with id `general` is labeled "Sobre" (About) since that is
+ * what it actually contains — language, build identity and a scope note
+ * — and it sits LAST in the nav. The id stays `general` on purpose: it is
+ * a union member (`SettingsPage`) stored in App.tsx's modal state, and
+ * renaming it would touch files outside this modal's territory for zero
+ * behavioral gain. The divergence id ≠ label is declared here instead of
+ * being left mute.
+ *
+ * Sobre does NOT invent theme / translucent-cards / terminal-font-size
  * rows from the prototype: dark-first is a design-system decision
  * (`tokens.css`), translucent was removed, and terminal font size is
  * per-card (Ctrl+scroll). Language is the real app-wide setting that
@@ -32,6 +40,13 @@ import type { ShortcutCombo, ShortcutOverrides } from "./shortcut-registry";
  * Maestro vs Agentes: autonomous (the orchestration switch) on Maestro;
  * the concurrency cap on Agentes. Both fire immediately, same as when
  * they lived on SessionModal — a safety setting must not wait for Save.
+ *
+ * Modal frame height (task b2a0a4f8): STABLE across pages — measured in
+ * the real app (CDP harness, 1280×800): natural heights general 405 /
+ * providers 742 / shortcuts 941 / keys 513 / devices·maestro·agents 405,
+ * so content-driven height jumped 430↔640 when switching tabs. The frame
+ * now answers to the viewport only (`layout.css`: `height: min(720px,
+ * 80vh)`); `.settings-pane` stays the one scroller.
  */
 
 export type SettingsPage = "general" | "shortcuts" | "keys" | "devices" | "maestro" | "agents" | "providers";
@@ -43,14 +58,19 @@ export type SettingsBoard = {
   concurrency_cap: number | null;
 };
 
-type NavItem = { page: SettingsPage; labelKey: "settings.page.general" | "shortcuts.title" | "settings.page.keys" | "settings.page.devices" | "settings.page.maestro" | "settings.page.agents" | "settings.page.providers"; icon: IconName };
+type NavItem = { page: SettingsPage; labelKey: "settings.page.about" | "shortcuts.title" | "settings.page.keys" | "settings.page.devices" | "settings.page.maestro" | "settings.page.agents" | "settings.page.providers"; icon: IconName };
 
+// Providers first — the rail gear's DEFAULT (task b2a0a4f8, decided on
+// measured grounds: most-used page, and the providers.json watcher makes
+// it the one that reflects an external edit within ~300ms). "Sobre" last.
+// The last item KEEPS the page id `general` on purpose — see the file
+// header for why id and label intentionally diverge.
 const APP_NAV: NavItem[] = [
-  { page: "general", labelKey: "settings.page.general", icon: "settings" },
   { page: "providers", labelKey: "settings.page.providers", icon: "wrench" },
   { page: "shortcuts", labelKey: "shortcuts.title", icon: "keyboard" },
   { page: "keys", labelKey: "settings.page.keys", icon: "apiKey" },
   { page: "devices", labelKey: "settings.page.devices", icon: "remoteControl" },
+  { page: "general", labelKey: "settings.page.about", icon: "settings" },
 ];
 
 const BOARD_NAV: NavItem[] = [
@@ -98,7 +118,10 @@ export function SettingsModal({
   const titleId = "settings-modal-title";
 
   useEffect(() => {
-    if (!board && BOARD_PAGES.has(page)) onPageChange("general");
+    // No board → board pages render nothing, so this redirect must land on
+    // a page that EXISTS without a board. That is the default page
+    // (providers — task b2a0a4f8); maestro/agents never qualify.
+    if (!board && BOARD_PAGES.has(page)) onPageChange("providers");
   }, [board, page, onPageChange]);
 
   return (
@@ -138,7 +161,7 @@ export function SettingsModal({
             )}
           </nav>
           <div className="settings-pane" data-settings-pane={page}>
-            {page === "general" && <GeneralPage locale={locale} onLocaleOverrideChange={onLocaleOverrideChange} />}
+            {page === "general" && <AboutPage locale={locale} onLocaleOverrideChange={onLocaleOverrideChange} />}
             {page === "shortcuts" && (
               <ShortcutsOverlay
                 shortcutOverrides={shortcutOverrides}
@@ -193,7 +216,8 @@ function NavButton({
   );
 }
 
-function GeneralPage({
+// Rendered for page id `general`, labeled "Sobre" — see the file header.
+function AboutPage({
   locale,
   onLocaleOverrideChange,
 }: {

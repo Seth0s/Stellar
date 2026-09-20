@@ -54,8 +54,8 @@ try {
           boardName: document.querySelector('[data-settings-board-name]')?.textContent?.trim(),
           nav,
           secs,
-          generalCurrent: document.querySelector('[data-settings-page="general"]')?.getAttribute('aria-current') === 'page',
-          locale: !!document.querySelector('#settings-locale'),
+          providersCurrent: document.querySelector('[data-settings-page="providers"]')?.getAttribute('aria-current') === 'page',
+          providersPage: !!document.querySelector('.providers-settings-page'),
           thinScroll: document.querySelectorAll('.thin-scroll').length,
           extraModalRoots: document.querySelectorAll('.modal-root').length,
         });
@@ -66,12 +66,19 @@ try {
   check("nome do board no cabeçalho", chrome.boardName, "Settings Modal");
   check("seção Aplicativo na nav", chrome.secs.includes("Aplicativo"), true);
   check("seção Este board na nav", chrome.secs.includes("Este board"), true);
-  check("nav app: general/shortcuts/keys/devices", chrome.nav.slice(0, 4).join(","), "general,shortcuts,keys,devices");
-  check("nav board: maestro/agents", chrome.nav.slice(4).join(","), "maestro,agents");
-  check("rail abre em Geral", chrome.generalCurrent, true);
-  check("Geral tem o seletor de idioma", chrome.locale, true);
+  // task b2a0a4f8 — ordem nova por DECISÃO: Providers primeiro (default da
+  // engrenagem), Sobre (id `general`) no fim da seção Aplicativo.
+  check("nav app: providers/shortcuts/keys/devices/general", chrome.nav.slice(0, 5).join(","), "providers,shortcuts,keys,devices,general");
+  check("nav board: maestro/agents", chrome.nav.slice(5).join(","), "maestro,agents");
+  check("rail abre em Providers (default)", chrome.providersCurrent, true);
+  check("Providers renderizou a página", chrome.providersPage, true);
   check("zero .thin-scroll", chrome.thinScroll, 0);
   check("um único modal-root (páginas reaproveitadas, sem chrome próprio)", chrome.extraModalRoots, 1);
+
+  // Sobre é a página de idioma/build/escopo agora (o rótulo mudou de
+  // "Geral" para "Sobre" por decisão, task b2a0a4f8; o id segue `general`).
+  await page.evalJs(`document.querySelector('[data-settings-page="general"]')?.click()`);
+  check("Sobre tem o seletor de idioma", await waitFor(page, `document.querySelector('#settings-locale')`), true);
 
   await page.evalJs(`document.querySelector('[data-settings-page="shortcuts"]')?.click()`);
   check("página Atalhos é o ShortcutsOverlay", await waitFor(page, `document.querySelector('.shortcuts-grid')`), true);
