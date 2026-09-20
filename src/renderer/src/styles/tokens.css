@@ -65,6 +65,37 @@
   --on-accent: #04141c;
 }
 
+/* ----------------------------------------------------------------------------
+ * Escala de ESPAÇAMENTO (task d200c269, 2026-09-20) — derivada do uso MEDIDO
+ * do repo, não importada de sistema de fora. Medição: 811 px soltos em
+ * propriedade de RITMO (padding/margin/gap) no renderer; 77% já cai exato num
+ * degrau (8px:166, 6px:153, 4px:100, 10px:81, 2px:61, 12px:41, 16px:20, 20px:4).
+ *
+ * Régua de uso: vertical e horizontal de respiro entre elementos irmãos e
+ * dentro de um controle. Ímpares (3/5/7/9/11) são ruído de ausência de sistema
+ * — migram pro degrau vizinho (±1px), nunca inventam degrau novo. 1px é caso À
+ * PARTE (chip com borda de 1px, micro-aperto de label, fio separador —
+ * compensação deliberada, com contexto medido): não é degrau, é escapatória
+ * declarada com motivo na própria linha (marcador sd:allow — ver
+ * docs/SYSTEM_DESIGN.md §1.5). Coordenadas (top/right/bottom/left) NÃO são
+ * ritmo — são geometria de layout (precedente: --titlebar-h) e ficam fora do
+ * validador.
+ *
+ * O validador (scripts/verify/check-design-tokens.mjs) cobra esta escala com
+ * baseline congelada por arquivo: arquivo novo nasce limpo, arquivo existente
+ * não cresce, migrar é ratchet down.
+ * ------------------------------------------------------------------------ */
+:root {
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 16px;
+  --space-8: 20px;
+}
+
 /* Provider/kind accent colors — CardFrame applies these via the `accent`
    prop as CSS `--accent` on the card root. cards.css and kind modules
    read `--accent`. Nothing outside this file should hardcode a hex for

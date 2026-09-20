@@ -15,7 +15,7 @@ O documento anterior neste caminho inventava escala tipográfica, easing nomeado
 
 ## 1. Tokens reais (`tokens.css`)
 
-Não existe token de espaçamento, de blur, nem de escala de tipo. Padding, `font-size` e `backdrop-filter: blur(...)` são literais no CSS. Só o que está abaixo é variável.
+Não existe token de blur nem de escala de tipo. `font-size` e `backdrop-filter: blur(...)` são literais no CSS. Espaçamento **existe desde 2026-09-20** (§1.5) — até então padding era literal, e o parágrafo antigo daqui dizia “não existe token de espaçamento”: era verdade, e deixou de ser. Só o que está abaixo é variável.
 
 ### 1.1 Superfície e texto
 
@@ -71,6 +71,31 @@ Definidos no segundo bloco `:root` de `tokens.css`. Quem aplica o acento é `Car
 | `--accent-task` | `#6f8cff` | TaskCard. Comentário: escolhido para não colidir com `--good` da coluna “concluído”. |
 
 Pares `*-dark` existem só para o glyph metálico (`background-clip: text`, 125deg) de claude / codex / antigravity. bash e cursor ficam `.flat`.
+
+### 1.5 Espaçamento (`--space-*`, task d200c269)
+
+Escala derivada do uso **medido** do repo, não importada de sistema de fora. Medição de 2026-09-20: 811 px soltos em propriedade de RITMO (`padding`/`margin`/`gap`) no renderer; **77% já caía exato num degrau** (8px:166, 6px:153, 4px:100, 10px:81, 2px:61, 12px:41, 16px:20, 20px:4).
+
+| Token | Valor | Absorve (uso medido) |
+| :--- | :--- | :--- |
+| `--space-1` | `2px` | 61 usos; fio fino entre irmãos, micro-gap de nav. |
+| `--space-2` | `4px` | 100 usos; padding compacto de controle/ícone. |
+| `--space-3` | `6px` | 153 usos; padding de chip/pill, gap de lista densa. |
+| `--space-4` | `8px` | 166 usos; o degrau mais comum do arquivo — padding de botão, gap padrão. |
+| `--space-5` | `10px` | 81 usos; padding horizontal de item de menu, gap de header. |
+| `--space-6` | `12px` | 41 usos; gap de form row, respiro médio. |
+| `--space-7` | `16px` | 20 usos; padding de pane/modal, respiro de seção. |
+| `--space-8` | `20px` | 4 usos; respiro largo. |
+
+O que **não** virou degrau, com motivo:
+
+- **1px** (34 usos em ritmo) — é compensação deliberada, com contexto medido: chip com borda de 1px (`padding: 1px 7px` ao lado de `border: 1px`, raio 99 — descontar a borda senão a altura muda), micro-aperto de hint sob o label (`margin-top: 1px`), fio separador (`gap: 1px`). Não é degrau: é **escapatória declarada** (§2.5). legitimar 1px como degrau abriria meio-degrau pra sempre.
+- **3px (37) / 5px (39) / 7px (27) / 9px (9) / 11px (2)** — ruído de ausência de sistema, **não** óptica: as amostras são paddings arbitrários repetidos (“5px 7px” ×6 no TaskCard, “3px 8px” no BrowserInspector, “7px 8px” no GlobalComposer). Migram pro degrau vizinho (±1px), nunca criam degrau novo.
+- **14px (13) / 18px (6)** — entregraus; snap para 12/16 e 16/20 conforme o contexto.
+- **22px e acima** (1-2 usos cada) — one-offs de geometria de seção (offsets de titlebar, paddings de empty-state). Escapatória ou intocados até um segundo uso real.
+- **Negativos** (4 usos) — `calc(var(--space-N) * -1)` ou escapatória.
+
+**Coordenadas (`top`/`right`/`bottom`/`left`/`inset`) não são ritmo** — são geometria de layout, com o precedente do `--titlebar-h`. O validador não as cobra; os `-7px`/`-5px` de centralização não são “ruído”: são posicionamento.
 
 ---
 
@@ -135,6 +160,26 @@ Módulos marcados como agent-facing: `mcp-server.ts`, `providers.ts` (só `ACBRI
 `CARD_KIND_LABEL` aparece no header e em toasts, mas `list_cards` devolve o mesmo `displayName` e `send_to_card` usa o mesmo prefixo. Traduzir quebra o reconhecimento entre cards. Português estável, fora do catálogo.
 
 `CONNECTOR_KIND_LABEL` em `App.tsx` **não** é essa superfície: só tooltip de hover, quatro chaves, locale do produto (`pt-BR`). Não entra no catálogo e não é lida por `list_cards`.
+
+### 2.5 px solto em ritmo é violação — baseline congelada (task d200c269)
+
+[`scripts/verify/check-design-tokens.mjs`](../../scripts/verify/check-design-tokens.mjs) acusa px solto em `padding`/`margin`/`gap` (e sufixos). As **três** saídas, e só elas:
+
+1. O valor é **zero** — `padding: 0` não precisa de token.
+2. A linha declara **escapatória com motivo**: `padding: 1px 7px; /* sd:allow: 1px offsets the badge's own 1px border */`. O motivo é **obrigatório** (um `sd:allow` sem razão é violação própria, com mensagem dizendo isso) e a escapatória é **impressa em todo run** do validador — escapatória invisível é porta dos fundos; auditada, é documentação.
+3. O count do arquivo está **na ou abaixo da baseline congelada** ([`design-tokens-baseline.json`](../../scripts/verify/design-tokens-baseline.json)).
+
+O caminho de adoção é o mecanismo todo:
+
+- **Arquivo fora da baseline: zero obrigatório.** É o dente que impede a próxima linha escrita à mão — código novo nasce na escala.
+- **Arquivo na baseline: não pode crescer.** A dívida existente está congelada (583 declarações em 13 arquivos na congelada de 2026-09-20).
+- **Migrar é ratchet down**, uma fatia por vez: migra o bloco, roda `node scripts/verify/check-design-tokens.mjs --update-baseline`, o count desce e congela de novo. Quando o arquivo **zera**, o `--update-baseline` grava a entrada como **0 explícito** — o arquivo fica **PINADO limpo**: qualquer px que volte falha contra o 0 (o caminho de escrita tem teste próprio, `updateBaseline` em `tests/unit/design-tokens.test.ts`, porque o primeiro implement deixou a entrada velha sobreviver e o pino não mordia — pego em review). Entrada de arquivo que saiu da árvore é podada.
+- A unidade de contagem é a **declaração** (`padding: 7px 10px` = 1 violação, não 2) — é a unidade da correção e da escapatória.
+- **Fronteira do scan, declarada**: é linha a linha — valor continuado na linha seguinte, segunda declaração na mesma linha e última declaração sem `;` antes de `}` passam batido; `rem`/`em` estão fora por desenho. Com prettier nada disso ocorre no repo; linha digitada à mão antes de formatar pode escapar.
+
+A estrutura de regras do validador é **generalizável**: tipografia, raio e movimento entram como regra nova em `SD_RULES` com baseline própria — o mecanismo (baseline + ratchet + escapatória auditada) é o produto, não a escala de um domínio só.
+
+**Fatia migrada como prova**: o bloco do modal de configuração em `layout.css` (17 declarações em tokens, 2 escapatórias declaradas, ímpares snapados com ±1px) — `layout.css` congelou em 228 → 209. As próximas fatias estão na §9.
 
 ---
 
@@ -326,4 +371,37 @@ Isenções da §5.1–5.4 **não** são divergência: lá o código diz por que 
 - **`@keyframes` num `*.module.css` apontando para nome global** → proibido; copiar o keyframe para o módulo.
 - **String de UI hardcoded** → catálogo + `t()`. String que o modelo lê (inclui `CARD_KIND_LABEL` / `deriveCardDisplayName`) → `agent-facing.ts`, não o catálogo.
 - **Animação contínua sem query `prefers-reduced-motion`** → fora da §2.3.
-- **Não existe** token `--blur`, `--space-*`, `--font-size-*`, `--ease`. Inventar regra com esses nomes é o erro que este documento existiu para impedir.
+- **px novo em `padding`/`margin`/`gap`** → `--space-*` (§1.5) ou escapatória `/* sd:allow: motivo */` (§2.5). O validador cobra: arquivo novo com px solto falha; arquivo velho não cresce.
+- **Não existe** token `--blur`, `--font-size-*`, `--ease`. Inventar regra com esses nomes é o erro que este documento existiu para impedir. `--space-*` **existe** desde 2026-09-20 (§1.5) e é cobrado por validador (§2.5) — escrever px em ritmo hoje é violação, não estilo.
+
+---
+
+## 9. Medidos para as próximas regras (ainda NÃO é token)
+
+Dados coletados em 2026-09-20 (task d200c269) para as tasks irmãs do design system — cada uma decide a própria escala com aprovação própria. **Nada daqui é token hoje**, e esta seção existe para a próxima task não refazer o levantamento nem assumir que o que falta está medido.
+
+### 9.1 Tipografia (`font-size`, 263 usos medidos)
+
+`11px`:67 · `12px`:58 · `10px`:54 · `10.5px`:31 · `13px`:23 · `11.5px`:20 · `9.5px`:7 · `12.5px`:7 · `9px`:6 · `15px`:4 · `11.3px`:2 · `14px`:2 · `13.5px`:2 · `8.5px`:1 · `20px`:1 · `17px`:1 · `15.5px`:1
+
+O nó da escala: as **metades** (`10.5`/`11.5`/`12.5`/`9.5` = 65 usos) são 25% do total — uma escala só de inteiros migra tudo com ±0.5px, e decidir se metade de pixel é ruído ou densidade deliberada de UI compacta é a decisão central da task de tipografia. `line-height` **não foi histogramado** — lacuna declarada.
+
+### 9.2 Raio (`border-radius`, 202 usos medidos)
+
+`6px`:75 · `4px`:42 · `8px`:28 · `999px`:25 (PILL é família própria — badge/chip/swatch) · `10px`:6 · `2px`:4 · `3px`:4 · `5px`:4 · `20px`:4 · `12px`:3 · `24px`:1 · `99px`:1 · `999px` fora de pill: não observado
+
+O `--radius` atual (10px) tem **só 6 usos diretos** — a escala de raio nasce mais do histograma (6/4/8) do que do token que existe. O `24px` do GlobalComposer já tem comentário justificando no módulo. Decisão pendente da task: o que acontece com quem usa `var(--radius)` se 10 deixar de ser degrau.
+
+### 9.3 Movimento (durações de `animation`/`transition`, 63 usos medidos)
+
+`0.12s`:32 (o padrão de facto) · `0.14s`:6 · `0.15s`:4 · `0.28s`:4 · `0.22s`:3 · `120ms`:4 · `1.1s`:2 · `0.7s`:2 · `2.4s`:2 · longas `0.3s`–`4s`: uma a duas cada (spinners indeterminados e twinkle; §6 lista o mapa por superfície)
+
+**LACUNA EXPLÍCITA: easing não foi histogramado.** As curvas (`ease-out`, `cubic-bezier(0.16, 1, 0.3, 1)`, `linear`…) existem na §6 como observação por superfície, mas não há contagem de uso — a task de movimento precisa medir antes de propor token, senão repete o erro de scale inventada.
+
+### 9.4 Fila de adoção do espaçamento (fatias, cada uma sua task)
+
+Restante congelado: `layout.css` 209 · `TaskCard.module.css` 102 · `cards.css` 93 · `BrowserInspector.module.css` 83 · `TerminalCard.module.css` 24 · `GlobalComposer.module.css` 22 · `BrowserCard.module.css` 18 · `markdown.css` 12 · Changes 7 · Media 5 · Sticky 4 · RemoteWindow 3 · Stroke 1.
+
+Ordem sugerida: `cards.css` primeiro (chrome compartilhado do CardFrame — o token vale pra todos os kinds de uma vez), depois os módulos por kind (Task é o maior), `layout.css` em blocos por área (titlebar/topbar/rail/home/popover), `markdown.css` por último (conteúdo renderizado, menor ganho). Cada fatia: migra, verifica visual, `--update-baseline`.
+
+Lacuna conhecida fora do validador: **inline styles em TSX** (5 usos de px em ritmo hoje, medidos) — a regra cobre só `.css`; estender o scanner a `style={{ }}` é generalização barata quando valer.
