@@ -85,7 +85,13 @@ import {
   normalizeTaskCardRole,
   normalizeTaskPurpose,
   normalizeTaskReview,
+  type TaskPurpose,
 } from "../task-purpose";
+// A pill do conector fala o MESMO vocabulário da Fila (task 5b173f00): os
+// rótulos derivam do catálogo em vez de uma cópia pt-BR escrita à mão. O
+// main já resolve a mesma locale do renderer (`index.ts`'s
+// `setLocale(resolveLocale(...))`) e sete módulos do main já importam daqui.
+import { t, type MessageKey } from "../shared/i18n";
 import { fillReportTaskId } from "./card-spawn-env-decision";
 import {
   decideReportTaskLink,
@@ -436,8 +442,10 @@ export type BusRequest =
       // — nenhuma UI ainda o escreve, de propósito (ver o relatório
       // final).
       suggestedOrder?: number;
-      /** `tasks.purpose` — what the task IS (`investigate|implement|
-       * measure|fix`), written ONCE here. Deliberately absent from
+      /** `tasks.purpose` — what the task IS: one of `TASK_PURPOSES`
+       * (`src/task-purpose.ts`; não enumere os valores aqui — esta linha
+       * listava quatro e ficou mentirosa quando `integrate` entrou), written
+       * ONCE here. Deliberately absent from
        * `update_task`: the store's ON CONFLICT omits the column, so no
        * later write can relabel it. Omitted = `null` (NORMAL, empty chip).
        * An unknown value is REFUSED, never normalized to null or to a
@@ -758,6 +766,25 @@ export function createMessageBus(
     /** Registra o fim de turno (o MESMO instante do relay pro renderer).
      * Separado do relay de propósito: o push é UI, isto é o FATO. */
     markCardTurnComplete: (cardId: string) => void;
+    /**
+     * A ÂNCORA DO EPISÓDIO (task a1201078) — quando este card recebeu
+     * trabalho pela última vez: spawn com brief, input humano ou `delivery`;
+     * `auto` (mouse/CPR/focus) não conta. Vem de
+     * `pty-registry.ts`'s `getLastWorkGrantedAt`.
+     *
+     * É o que o SINAL 3 usa para perguntar "existe report NESTE episódio?" em
+     * vez de "existe report na vida?" — a pergunta errada que desarmava o
+     * watchdog no PRIMEIRO report de um card e deixava passar todas as falhas
+     * seguintes.
+     *
+     * OBRIGATÓRIO. Ele nasceu opcional por uma janela datada — o repasse de
+     * uma linha em `index.ts` estava fora do território daquela rodada, e
+     * enquanto isso o scan caía no fato ABSOLUTO deprecado `hasReport`. O
+     * repasse entrou, a janela fechou, e o fallback foi removido junto: um
+     * watchdog que PARECE vigiar e não vigia é o pior dos dois mundos, e era
+     * exatamente o risco de entregar isto pela metade.
+     */
+    getCardLastWorkGrantedAt: (cardId: string) => number | null;
     /** DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica
      * na caixa sem submeter" — `typeAndSubmit`'s portão de prontidão
      * (`type-and-submit-decision.ts`'s `decideWriteReadiness`) precisa dos
@@ -1267,9 +1294,21 @@ export function createMessageBus(
   // consent gate open at once. Cleared on resolve AND on the request's own
   // timeout — never left stuck past whichever comes first.
   const waitingOnConsent = new Map<string, number>();
-  /** SINAL 3 — card ids already pointed at the spawner for this
-   * idle-without-report episode. Cleared on accepted report or exit. */
-  const idleWithoutReportNotified = new Set<string>();
+  /**
+   * Once-only POR EPISÓDIO (task a1201078): card id → a âncora do episódio
+   * que já foi cutucado. Era um `Set` por VIDA do card, o que combinava com o
+   * `hasReport` absoluto de então — e junto com ele produzia a doença que
+   * esta task consertou: um card que reportou uma vez nunca mais era
+   * observado, mesmo recebendo trabalho novo.
+   *
+   * Agora a entrada vale para UMA âncora (a de `getLastWorkGrantedAt`, ou o
+   * fim de turno declarado): quando o card recebe trabalho novo, a âncora
+   * muda e o episódio re-arma sozinho. As duas limpezas que já existiam
+   * continuam sendo aposentadoria explícita da entrada (report aceito e
+   * `resolveCardExit`), e o sentinela cobre o caso sem âncora nenhuma.
+   */
+  const NO_EPISODE_ANCHOR = 0;
+  const idleWithoutReportNotified = new Map<string, number>();
   /** Every programmatic message to one PTY shares one FIFO. Reports, task
    * notices, and explicit `send_to_card` calls must not overtake each other,
    * and none may be dropped just because another delivery is in flight. */
@@ -2195,17 +2234,39 @@ export function createMessageBus(
       const cardId = card.id;
       const linkedTask = tasks.find((t) => t.card_id === cardId);
       const lastActivityAt = callbacks.getCardLastActivityAt(cardId);
+      const turnEndedAt = callbacks.getCardTurnEndedAt(cardId);
+      // A ÂNCORA DO EPISÓDIO (task a1201078): desde quando este card deve um
+      // report. Muda a cada trabalho concedido — e é isso que faz a SEGUNDA
+      // falha do mesmo card ser visível, o que o `Set` por id (por vida) não
+      // fazia. Sem âncora de trabalho, o turno declarado serve; sem nenhum dos
+      // dois, o sentinela (uma vez até report/exit limparem, nunca um cutucão
+      // por poll).
+      const workGrantedAt = callbacks.getCardLastWorkGrantedAt(cardId);
+      const episodeAnchor = workGrantedAt ?? turnEndedAt ?? NO_EPISODE_ANCHOR;
+      // O report mais recente do card. `updated_at` é o instante em que a
+      // linha entrou (`reports` é append-only por `seq`), então a comparação
+      // com a âncora responde "houve report NESTE episódio?".
+      const lastReportAt = callbacks.getReport(cardId)?.updated_at ?? null;
       const decision = decideIdleWithoutReport({
         alive: callbacks.isCardAlive(cardId),
         waitingOnConsent: waitingOnConsent.has(cardId),
-        hasReport: !!callbacks.getReport(cardId),
+        // Um card VIVO sempre tem a âncora: o fato nasce com o entry, no
+        // spawn. O `?? 0` cobre a corrida de um entry que sumiu entre o
+        // `listTerminalCards()` e esta leitura — e nesse caso "não dá para
+        // datar o trabalho" NÃO pode virar cutucão, então qualquer report já
+        // gravado conta como este episódio cumprido.
+        reportedSinceWorkGranted: lastReportAt !== null && lastReportAt > (workGrantedAt ?? 0),
+        // O `idle` de `card-status-decision.ts`, com os MESMOS fatos: turno
+        // DECLARADO encerrado e nenhuma saída depois dele. Fato declarado, não
+        // silêncio — por isso o portão não espera o piso quando isto é true.
+        declaredIdle: turnEndedAt !== null && (lastActivityAt === null || lastActivityAt <= turnEndedAt),
         hasLinkedRunningTask: !!linkedTask && !isJudgmentStatus(linkedTask.status),
-        alreadyNotified: idleWithoutReportNotified.has(cardId),
+        alreadyNotified: idleWithoutReportNotified.get(cardId) === episodeAnchor,
         msSinceLastActivity: lastActivityAt === null ? null : Date.now() - lastActivityAt,
       });
       if (decision.action !== "notify") continue;
       // Stamp BEFORE enqueue so a slow FIFO cannot double-fire on the next poll.
-      idleWithoutReportNotified.add(cardId);
+      idleWithoutReportNotified.set(cardId, episodeAnchor);
       notifySpawnerOfUnreportedIdle(cardId);
     }
   }
@@ -2343,6 +2404,26 @@ export function createMessageBus(
     const codePoints = Array.from(flat);
     return codePoints.length > max ? `${codePoints.slice(0, max - 1).join("")}…` : flat;
   }
+  /**
+   * purpose → a CHAVE do catálogo (task 5b173f00). O `Record` é tipado pelo
+   * union: um sexto purpose NÃO COMPILA aqui — a mesma muralha das outras
+   * cópias do vocabulário. E o TEXTO passa a ter uma fonte só: esta função
+   * carregava uma cadeia de ternários com os quatro rótulos pt-BR escritos à
+   * mão, então (a) `integrate` caía em `null` e a pill do conector ficava
+   * SEM rótulo enquanto a Fila mostrava o chip, e (b) em INGLÊS a
+   * divergência já existia antes do `integrate`: a Fila dizia
+   * "implementation" e a pill dizia "implementação". O comentário acima
+   * prometia que a pill e a Fila falam o mesmo vocabulário; agora as duas
+   * derivam do mesmo lugar, nas duas locales.
+   */
+  const PURPOSE_CHIP_KEY: Record<TaskPurpose, MessageKey> = {
+    investigate: "task.purpose.investigate",
+    implement: "task.purpose.implement",
+    measure: "task.purpose.measure",
+    fix: "task.purpose.fix",
+    integrate: "task.purpose.integrate",
+  };
+
   function deriveAutoConnectLabel(req: BusRequest): string | null {
     switch (req.cmd) {
       case "send":
@@ -2374,18 +2455,14 @@ export function createMessageBus(
         const role =
           req.role === undefined ? TASK_CARD_IMPLEMENTER_ROLE : normalizeTaskCardRole(req.role);
         if (req.role !== undefined && role === null) return null;
-        const purposeLabel =
-          purpose === "investigate"
-            ? "investigação"
-            : purpose === "implement"
-              ? "implementação"
-              : purpose === "measure"
-                ? "medição"
-                : purpose === "fix"
-                  ? "correção"
-                  : null;
+        const purposeLabel = purpose ? t(PURPOSE_CHIP_KEY[purpose]) : null;
         if (role === TASK_CARD_REVIEWER_ROLE) {
-          return truncateForLabel(purposeLabel ? `revisão · ${purposeLabel}` : "revisão");
+          // Substantivo próprio da pill (`task.role.reviewerPill`) — NÃO o
+          // `task.role.reviewer` ("revisa"), que é verbo flexionado para
+          // outra frase: reusar por proximidade semântica é como o texto
+          // divergiria na próxima vez.
+          const reviewPill = t("task.role.reviewerPill");
+          return truncateForLabel(purposeLabel ? `${reviewPill} · ${purposeLabel}` : reviewPill);
         }
         return purposeLabel ? truncateForLabel(purposeLabel) : null;
       }
@@ -4044,7 +4121,7 @@ export function createMessageBus(
       // despacha, no momento em que despacha. Lê só o stored (sem reports,
       // sem I/O); reviewer não recebe dep pointer, então a nota também não
       // se aplica a ele.
-      const depIds = taskForBrief ? depIdsFromJson(taskForBrief.deps_json) : [];
+      const depIds = taskForBrief && role !== TASK_CARD_REVIEWER_ROLE ? depIdsFromJson(taskForBrief.deps_json) : [];
       const pendingDeps = depIds.filter((depId) => callbacks.getTask(depId)?.status !== "done").length;
       const withDepNote = (result: SpawnAgentResult): SpawnAgentResult =>
         result.ok && pendingDeps > 0

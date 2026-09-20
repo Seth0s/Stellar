@@ -1708,6 +1708,7 @@ function createWindow() {
     // de lá ("nenhum estado novo aqui no main") deixou de valer para o
     // fato — o push continua sendo só UI.
     getCardTurnEndedAt: (cardId) => registry.getTurnFacts(cardId)?.turnEndedAt ?? null,
+    getCardLastWorkGrantedAt: (cardId) => registry.getLastWorkGrantedAt(cardId),
     markCardTurnComplete: (cardId) => registry.markTurnComplete(cardId),
     // Activity bar — send_to_card writes the body from main, outside
     // the renderer's xterm onData hook. Same channel shape as

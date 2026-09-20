@@ -229,7 +229,11 @@ export type TaskRow = {
   result_json: string | null;
   deps_json: string | null;
   /**
-   * Proposal of the task — what it IS (`investigate`/`implement`/`measure`/`fix`).
+   * Proposal of the task — what it IS: one of `TASK_PURPOSES`
+   * (`src/task-purpose.ts`). Aponte para a union em vez de enumerar os
+   * valores: esta linha listava `investigate|implement|measure|fix` e ficou
+   * mentirosa em silêncio quando `integrate` entrou (task 5b173f00) — a
+   * união é a única lista, e o `tsc` cobre quem derive dela.
    * Written ONCE at create (`upsertTask` INSERT); the ON CONFLICT path
    * never lists this column, so a later `update_task` cannot relabel it.
    * The writer is `create_task.purpose` (mcp-server.ts inputSchema +
@@ -921,7 +925,9 @@ function migrate(db: Database.Database) {
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
-  // Task proposal (`investigate|implement|measure|fix`). Nullable on
+  // Task proposal — one of `TASK_PURPOSES` (src/task-purpose.ts; NÃO
+  // enumere os valores aqui: esta linha já ficou mentirosa uma vez, quando
+  // `integrate` entrou). Nullable on
   // purpose: absence is NORMAL (empty chip), never a silent default.
   // Additive only — existing rows stay NULL. See TaskRow.purpose.
   try {
