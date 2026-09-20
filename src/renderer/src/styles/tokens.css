@@ -96,6 +96,55 @@
   --space-8: 20px;
 }
 
+/* ----------------------------------------------------------------------------
+ * Escala TIPOGRÁFICA (task c8cd45fc, 2026-09-20) — parte 2 do SD, mesma régua
+ * da escala de espaçamento acima: derivada do uso MEDIDO, não importada.
+ *
+ * Medição: 297 declarações de `font-size` no renderer; 287 são um px LITERAL
+ * único (as outras 10 ficam fora da escala por desenho — ver o bloco de
+ * fronteira abaixo). Cada degrau absorve um CLUSTER, não um valor solto:
+ *   9px  (13 usos: 9px:6 + 9.5px:7)          — trilha/legenda micro, chip fino
+ *   10px (85 usos: 10px:54 + 10.5px:31)      — rótulo denso, tabela, gráfico, meta
+ *   11px (89 usos: 11px:67 + 11.5px:20 + 11.3px:2) — pill/chip, aviso, controle
+ *   12px (65 usos: 12px:58 + 12.5px:7)       — input, botão, tab, corpo curto
+ *   13px (27 usos: 13px:23 + 13.5px:2 + 14px:2)    — corpo, valor de stat
+ *   15px (5 usos: 15px:4 + 15.5px:1)         — título de seção (h3 de modal/painel)
+ *
+ * O PREÇO, medido e declarado (docs/SYSTEM_DESIGN.md §1.6 tem a tabela):
+ * 212 das 287 já caíam exato num degrau e 73 MUDAM de tamanho — todas de
+ * ±0,5px. A direção do snap é por CONTEXTO, não por arredondamento: metade
+ * que pertence a pill/chip/aviso vira 11, metade de rótulo denso/tabela vira
+ * 10. Meio pixel NÃO é tier aqui: o mesmo papel aparecia em 10, 10.5 e 11
+ * dentro do MESMO módulo (a família de sprint do TaskCard), que é deriva.
+ *
+ * FRONTEIRA (o que esta escala NÃO alcança, por desenho): só px literal entra.
+ * `clamp()`/`calc()` (o `card-head`/`card-foot` escalam com a largura do card
+ * via cqw), `var(--sticky-font-size, …)` (o tamanho PRÓPRIO da nota) e `em`
+ * (cascata do markdown dentro da nota) ficam fora — é o que mantém os dois
+ * tamanhos controlados pelo usuário fora do alcance. O do TERMINAL nem chega
+ * aqui: é opção do xterm via JS (`useTerminal.ts`'s `BASE_FONT_SIZE`), não CSS.
+ *
+ * Cobrada por validador (scripts/verify/check-design-tokens.mjs, regra
+ * "typography") — mesma baseline congelada por arquivo, mesmo pino, mesma
+ * escapatória auditada da escala de espaçamento.
+ * ------------------------------------------------------------------------ */
+:root {
+  --text-1: 9px;
+  --text-2: 10px;
+  --text-3: 11px;
+  --text-4: 12px;
+  --text-5: 13px;
+  --text-6: 15px;
+
+  /* Tracking dos rótulos MICRO em caixa alta — o único eixo tipográfico além
+   * do tamanho que ganhou token, porque a deriva é medida: 26 dos 36
+   * `letter-spacing` do repo estão em seletor com `text-transform: uppercase`,
+   * num papel só, espalhados em 5 valores (0.02em/0.03em/0.04em/0.06em/0.4px).
+   * Os 5 usos em px são esse mesmo papel: 0.4px num texto de 10px É 0.04em —
+   * a mesma intenção escrita em duas unidades. */
+  --tracking-label: 0.04em;
+}
+
 /* Provider/kind accent colors — CardFrame applies these via the `accent`
    prop as CSS `--accent` on the card root. cards.css and kind modules
    read `--accent`. Nothing outside this file should hardcode a hex for

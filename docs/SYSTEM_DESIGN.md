@@ -15,7 +15,7 @@ O documento anterior neste caminho inventava escala tipográfica, easing nomeado
 
 ## 1. Tokens reais (`tokens.css`)
 
-Não existe token de blur nem de escala de tipo. `font-size` e `backdrop-filter: blur(...)` são literais no CSS. Espaçamento **existe desde 2026-09-20** (§1.5) — até então padding era literal, e o parágrafo antigo daqui dizia “não existe token de espaçamento”: era verdade, e deixou de ser. Só o que está abaixo é variável.
+Não existe token de blur — `backdrop-filter: blur(...)` continua literal no CSS. Espaçamento **existe desde 2026-09-20** (§1.5) e tipografia **desde 2026-09-20** também (§1.6): até então padding e `font-size` eram literais, e o parágrafo antigo daqui dizia “não existe token de espaçamento” e “nem de escala de tipo” — era verdade, e deixou de ser nos dois casos. Só o que está abaixo é variável.
 
 ### 1.1 Superfície e texto
 
@@ -96,6 +96,40 @@ O que **não** virou degrau, com motivo:
 - **Negativos** (4 usos) — `calc(var(--space-N) * -1)` ou escapatória.
 
 **Coordenadas (`top`/`right`/`bottom`/`left`/`inset`) não são ritmo** — são geometria de layout, com o precedente do `--titlebar-h`. O validador não as cobra; os `-7px`/`-5px` de centralização não são “ruído”: são posicionamento.
+
+### 1.6 Tipografia (`--text-*`, task c8cd45fc)
+
+Mesma régua da §1.5: escala derivada do uso **medido**, não importada. Medição de 2026-09-20: **297** declarações de `font-size` no renderer, das quais **287 são um px literal único** — as outras 10 ficam fora por desenho (ver “fronteira”, abaixo). Cada degrau absorve um **cluster**, não um valor solto.
+
+| Token | Valor | Absorve (uso medido) | Papel medido |
+| :--- | :--- | :--- | :--- |
+| `--text-1` | `9px` | 13 usos (`9px`:6 + `9.5px`:7) | trilha/legenda micro, chip fino |
+| `--text-2` | `10px` | 85 usos (`10px`:54 + `10.5px`:31) | rótulo denso, tabela, gráfico, meta |
+| `--text-3` | `11px` | 89 usos (`11px`:67 + `11.5px`:20 + `11.3px`:2) | pill/chip, aviso, controle |
+| `--text-4` | `12px` | 65 usos (`12px`:58 + `12.5px`:7) | input, botão, tab, corpo curto |
+| `--text-5` | `13px` | 27 usos (`13px`:23 + `13.5px`:2 + `14px`:2) | corpo, valor de stat |
+| `--text-6` | `15px` | 5 usos (`15px`:4 + `15.5px`:1) | título de seção (h3 de modal/painel) |
+| `--tracking-label` | `0.04em` | 26 usos | rótulo micro em caixa alta |
+
+**O PREÇO, declarado** — quem abrir o app e achar que algo “mexeu” tem a resposta aqui: **212 das 287 já caíam exato num degrau; 73 MUDAM de tamanho**, todas de ±0,5px:
+
+| Valor | n | Vira | | Valor | n | Vira |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `10.5px` | 31 | `10`/`11` (por contexto) | | `11.3px` | 2 | `11` |
+| `11.5px` | 20 | `11` | | `13.5px` | 2 | `13` |
+| `12.5px` | 7 | `12` | | `14px` | 2 | `13` |
+| `9.5px` | 7 | `9` | | `8.5px` | 1 | `9` |
+| | | | | `15.5px` | 1 | `15` |
+
+`17px` e `20px` (1 uso cada) **não** viraram degrau: um uso não é cluster — ficam para escapatória ou para um segundo uso real, mesma postura da §1.5 com 22px+.
+
+A direção do snap é por **CONTEXTO**, nunca por arredondamento: metade que pertence a pill/chip/aviso/controle vira `11` (é texto de UI legível); metade de rótulo denso, carimbo de tempo, gráfico ou hint vira `10` (junto dos irmãos que já estavam em 10). **Meio pixel não é tier aqui**: o mesmo papel aparecia em `10`, `10.5` e `11` dentro do MESMO módulo — a família de sprint do `TaskCard` usa os três —, e o `BrowserInspector.module.css` sozinho tinha 10 tamanhos distintos com o rótulo em 10, 10.5, 11 e 11.5. Isso é deriva, não densidade deliberada. O único cluster que se sustentaria como tier são os avisos do `TaskCard` (todos `10.5` **e** `line-height: 1.4`) — snaparam junto, com o conjunto, para não deixar um cluster órfão.
+
+**Nomeação: numérica**, e o argumento é a matriz medida papel × tamanho — nenhum tamanho tem UM papel: `11px` serve **7** (10 usos em controle/botão, 12 em tabela/lista/dado, 8 em label/meta, 4 em chip/badge, 4 em input, 3 em título, 2 em corpo) e `12px` serve 6 (10 controle, 5 input, 5 label, 4 tabela, 1 chip, 1 corpo, 1 título). Um nome como `--text-body` mentiria para os `13px` (3 controle, 5 tabela, 2 corpo, 1 input, 1 título) e `--text-caption` mentiria para 9/10/10.5/11. Se o dono quiser semântica mesmo assim, o mapa honesto seria `--text-micro`/`--text-dense`/`--text-secondary`/`--text-control`/`--text-body`/`--text-title` — mas **4 dos 6 nomes não se sustentam** na medição, então não é a recomendação.
+
+**Fronteira — o que esta escala NÃO alcança, por desenho.** A regra cobra só um **px literal único**. Ficam fora: `clamp()`/`calc()` (o `.card-head`/`.card-foot` escalam com a largura do card via `cqw`), `var(--sticky-font-size, …)` (o tamanho PRÓPRIO da nota, controlado pelo usuário) e `em` (a cascata relativa do markdown dentro dela). É essa fronteira que mantém os **dois tamanhos controlados pelo usuário** fora do alcance. O do **terminal** nem chega aqui: é opção do xterm via JS (`useTerminal.ts`'s `BASE_FONT_SIZE`), e os 12 `font-size` do `TerminalCard.module.css` foram conferidos um a um — todos são chrome (`.terminalCard*`), nenhum é o grid.
+
+**Comparabilidade com a §1.5**: a prova desta escala NÃO pôde ser o mesmo arquivo da parte 1 (`layout.css` estava com edição não-commitada de outra task no momento da migração). Para a comparação seguir quantitativa, os números do `layout.css`: **103 declarações** de `font-size` (o maior débito de tipografia) e 9 metades (`10.5px`:2, `11.5px`:5, `12.5px`:1, `9.5px`:1). A fatia provada aqui foi o `TaskCard.module.css`.
 
 ---
 
@@ -180,6 +214,15 @@ O caminho de adoção é o mecanismo todo:
 A estrutura de regras do validador é **generalizável**: tipografia, raio e movimento entram como regra nova em `SD_RULES` com baseline própria — o mecanismo (baseline + ratchet + escapatória auditada) é o produto, não a escala de um domínio só.
 
 **Fatia migrada como prova**: o bloco do modal de configuração em `layout.css` (17 declarações em tokens, 2 escapatórias declaradas, ímpares snapados com ±1px) — `layout.css` congelou em 228 → 209. As próximas fatias estão na §9.
+
+### 2.6 `font-size` px solto é violação — a SEGUNDA regra (task c8cd45fc)
+
+Mesma regra da §2.5, mesma máquina, **nada re-implementado**: uma entrada a mais em `SD_RULES` (`id: "typography"`), com seção própria na mesma baseline congelada. As três saídas são as mesmas: zero (não há `font-size: 0` hoje), escapatória `/* sd:allow: motivo */` auditada em todo run, e o congelado por arquivo. O pino também é o mesmo: arquivo que chega a zero fica com `0` explícito e **qualquer px que volte falha**.
+
+Números: a baseline nasceu com **287** declarações em 13 arquivos; depois da fatia de prova ficou em **225** (12 arquivos) — `TaskCard.module.css` migrou 62 `font-size` e **pinou em 0**. A prova do pino foi reproduzida: reintroduzir um `font-size: 9px` no arquivo migrado devolve `now 1, frozen 0: grew by 1 — migrate to --text-*` e **exit 1**.
+
+- **Fronteira da regra de tipografia, declarada**: só um **px literal único** conta. `clamp()`/`calc()` (`.card-head`/`.card-foot` escalam com `cqw`), `var(--sticky-font-size, …)` (tamanho próprio da nota, do usuário) e `em` (cascata do markdown dentro dela) **não** são vistos — é o que impede a escala de mexer num tamanho que o usuário controla. O do terminal não passa por CSS (opção do xterm em JS).
+- **Fila de adoção da tipografia** (débito congelado hoje): `layout.css` 103 · `cards.css` 42 · `BrowserInspector.module.css` 37 · `TerminalCard.module.css` 12 · `BrowserCard.module.css` 9 · `GlobalComposer.module.css` 9 · `markdown.css` 5 · Changes 2 · RemoteWindow 2 · Sticky 2 · Media 1 · Stroke 1. Mesma regra de fatia da §9.4: migra, confere, `--update-baseline`.
 
 ---
 
@@ -372,19 +415,26 @@ Isenções da §5.1–5.4 **não** são divergência: lá o código diz por que 
 - **String de UI hardcoded** → catálogo + `t()`. String que o modelo lê (inclui `CARD_KIND_LABEL` / `deriveCardDisplayName`) → `agent-facing.ts`, não o catálogo.
 - **Animação contínua sem query `prefers-reduced-motion`** → fora da §2.3.
 - **px novo em `padding`/`margin`/`gap`** → `--space-*` (§1.5) ou escapatória `/* sd:allow: motivo */` (§2.5). O validador cobra: arquivo novo com px solto falha; arquivo velho não cresce.
-- **Não existe** token `--blur`, `--font-size-*`, `--ease`. Inventar regra com esses nomes é o erro que este documento existiu para impedir. `--space-*` **existe** desde 2026-09-20 (§1.5) e é cobrado por validador (§2.5) — escrever px em ritmo hoje é violação, não estilo.
+- **px novo em `font-size`** (um valor px literal) → `--text-*` (§1.6) ou escapatória `/* sd:allow: motivo */` (§2.6). Vale o mesmo: arquivo novo falha, arquivo velho não cresce, arquivo migrado fica pinado em zero.
+- **Não existe** token `--blur` nem `--ease`. Inventar regra com esses nomes é o erro que este documento existiu para impedir. `--space-*` **existe** desde 2026-09-20 (§1.5) e `--text-*`/`--tracking-label` **desde 2026-09-20** (§1.6) — os dois são cobrados por validador (§2.5, §2.6): escrever px em ritmo ou em `font-size` hoje é violação, não estilo.
 
 ---
 
 ## 9. Medidos para as próximas regras (ainda NÃO é token)
 
-Dados coletados em 2026-09-20 (task d200c269) para as tasks irmãs do design system — cada uma decide a própria escala com aprovação própria. **Nada daqui é token hoje**, e esta seção existe para a próxima task não refazer o levantamento nem assumir que o que falta está medido.
+Dados coletados em 2026-09-20 (task d200c269) para as tasks irmãs do design system — cada uma decide a própria escala com aprovação própria. **Nada daqui é token hoje**, com uma exceção já decidida: a **tipografia** virou escala na §1.6 (task c8cd45fc) e a §9.1 registra o que foi medido e o que foi recusado. Raio e movimento seguem abertos — esta seção existe para a próxima task não refazer o levantamento nem assumir que o que falta está medido.
 
-### 9.1 Tipografia (`font-size`, 263 usos medidos)
+### 9.1 Tipografia — o que foi medido e o que virou token (task c8cd45fc)
 
-`11px`:67 · `12px`:58 · `10px`:54 · `10.5px`:31 · `13px`:23 · `11.5px`:20 · `9.5px`:7 · `12.5px`:7 · `9px`:6 · `15px`:4 · `11.3px`:2 · `14px`:2 · `13.5px`:2 · `8.5px`:1 · `20px`:1 · `17px`:1 · `15.5px`:1
+Esta seção deixou de ser “falta medir”: a task de tipografia mediu os quatro eixos e decidiu cada um. **Reconciliação de número, para não sobrar divergência**: o brief contou 289 usos e a versão anterior desta seção, 263; a medição que decide é de **297 declarações de `font-size`**, das quais **287 são px literal** — as outras 10 são `clamp()`/`calc()` (2), `var(--sticky-font-size, …)` (2) e `em` (6), fora da regra por desenho (§1.6).
 
-O nó da escala: as **metades** (`10.5`/`11.5`/`12.5`/`9.5` = 65 usos) são 25% do total — uma escala só de inteiros migra tudo com ±0.5px, e decidir se metade de pixel é ruído ou densidade deliberada de UI compacta é a decisão central da task de tipografia. `line-height` **não foi histogramado** — lacuna declarada.
+- **`font-size`** → **escala `--text-1..6`** (§1.6), com a tabela das **73 ocorrências que mudam de tamanho** lá, valor por valor. Histograma medido: `11px`:67 · `12px`:58 · `10px`:54 · `10.5px`:31 · `13px`:23 · `11.5px`:20 · `9.5px`:7 · `12.5px`:7 · `9px`:6 · `15px`:4 · `11.3px`:2 · `14px`:2 · `13.5px`:2 · `8.5px`:1 · `15.5px`:1 · `17px`:1 · `20px`:1. As **metades** somam 65 usos (25%) e foram julgadas **deriva**, não tier (o mesmo papel em 10/10.5/11 dentro do mesmo módulo).
+- **`line-height`** (29 usos, 8 valores): `1.4`:9 · `1`:6 · `1.5`:5 · `1.45`:3 · `1.35`:3 · `1.55`:1 · `1.3`:1 · `0`:1. Há um cluster real de texto de apoio em **três vizinhos** (1.4 + 1.45 + 1.35 = 15 usos) — deriva, mas superfície fina: **não virou token** (29 declarações não pagam um degrau, e o valor é acoplado ao tamanho, unitless, que já é a prática certa). Revisitar quando uma fatia tocar prosa.
+- **`font-weight`** (47 usos, 4 valores): `600`:26 · `700`:13 · `500`:7 · `400`:1 — exatamente os pesos canônicos, **sem deriva** (ninguém escreve 550). Token aqui **não previne nada**: não virou token, e o validador não policia peso.
+- **`letter-spacing`** (36 usos, 8 valores): `0.04em`:14 · `0.03em`:7 · `0.4px`:5 · `0.06em`:4 · `0.02em`:2 · `-0.04em`:2 · `0.05em`:1 · `0.12em`:1. **26 dos 36 estão em seletor com `text-transform: uppercase`** — um papel só, o rótulo micro em caixa alta — espalhado em 5 valores, e os 5 usos de `0.4px` são esse mesmo papel (`0.4px` num texto de 10px **é** `0.04em`: a mesma intenção em duas unidades). Virou **`--tracking-label: 0.04em`** (§1.6). Os 10 usos **fora** de uppercase não formam um papel: registrados, sem token.
+- **`text-transform`** (30 usos, 2 valores): `uppercase`:28 · `lowercase`:2 — booleano, sem deriva numérica: sem token.
+
+Fila de adoção da tipografia e o débito congelado por arquivo estão na §2.6 (§9.4 continua sendo a fila do **espaçamento**).
 
 ### 9.2 Raio (`border-radius`, 202 usos medidos)
 
