@@ -62,7 +62,18 @@ async function boot({ bounds = null, create = false } = {}) {
   const page = await connectPage(CDP_PORT);
   await delay(1200);
   if (create) {
-    await bootIntoFreshSession(page, "Agentes do Topbar");
+    try {
+      await bootIntoFreshSession(page, "Agentes do Topbar");
+    } catch (err) {
+      // Um boot que FALHA não pode deixar app e perfil para trás — medido
+      // nesta task: o flake do harness (input do modal ausente sob carga)
+      // derrubou a criação da sessão e deixou processo e perfil órfaos, com a
+      // execução parecendo quebrada no produto. Falhar é aceitável; deixar
+      // entulho não é.
+      await stopApp(app);
+      if (process.env.VERIFY_KEEP_USERDATA !== "1") rmSync(USER_DATA_DIR, { recursive: true, force: true });
+      throw err;
+    }
     await delay(600);
   }
   return { app, page };
