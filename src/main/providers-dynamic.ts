@@ -56,7 +56,7 @@
  * `userDataDir` (é `app.getPath("userData")` em produção).
  */
 
-import { readFileSync, renameSync, watch, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   END_OF_OPTIONS,
@@ -1457,31 +1457,33 @@ export function providersConfigSchema(): Record<string, unknown> {
       providers: {
         type: "array",
         description:
-          "Os providers declarados. Um id igual ao de um provider nativo (claude, codex, cursor, antigravity, " +
-          "opencode, bash) é recusado — o nativo sempre ganha. Um id igual ao do catálogo embutido " +
-          "(cline, commandcode) SUBSTITUI a declaração embutida inteira, campo por campo: é assim que você MUDA " +
-          "o que o Stellar já entrega. A consequência de copiar por copiar está nos `examples` abaixo — eles são " +
-          "as declarações REAIS que o app já usa, então só valem a pena se você quiser mudar alguma coisa nelas.",
+          "SUA lista (a chave do usuário — o Stellar NUNCA escreve nela). Nasce vazia, e é aqui que você ajusta " +
+          "o que quiser: um provider novo por completo, ou só os campos que quer MUDAR de um provider que já vem " +
+          "pronto — para isso basta `{ \"id\": \"commandcode\", \"baseArgs\": [\"--yolo\", \"--meu-flag\"] }`, " +
+          "três linhas, e todo o resto continua vindo de `appProviders` (e continua recebendo correção do " +
+          "Stellar). COMO A SOBRESCRITA FUNCIONA, campo a campo: escalares seus vencem; arrays (como `baseArgs`) " +
+          "SUBSTITUEM a lista do app, não concatenam; objetos (`capacity`, `session`, `mcp`…) são mesclados " +
+          "campo a campo, então você só precisa escrever o que muda. Um id que o app não declara é um provider " +
+          "SEU por inteiro — e aí a declaração tem de ser completa. Um id igual ao de um provider NATIVO (claude, " +
+          "codex, cursor, antigravity, opencode, bash) é recusado: o nativo sempre ganha.",
         items: {
           type: "object",
           description:
-            "Um provider. Os `examples` deste schema são as declarações medidas que JÁ VÊM PRONTAS no Stellar " +
-            "(cline e commandcode): o app sobe os dois sem você escrever nada. Copiar uma delas para `providers` " +
-            "cria uma entrada SUA com o mesmo id, e a sua VENCE a embutida — que é o que permite sobrescrever. O " +
-            "custo, medido: a partir da cópia, as correções que o app fizer naquela declaração em versões novas " +
-            "NÃO chegam até ela (sua cópia fica congelada na versão em que você copiou). Copie só se quiser MUDAR " +
-            "algo — para usar, não precisa copiar nada.",
-          required: ["id", "label", "binaryNames", "capacity"],
-          // A receita copiável, GERADA das specs embutidas (ver
-          // `measuredProviderRecipes`): um literal aqui divergiria do código no
-          // primeiro dia, e o schema é reescrito a cada boot, então o que está
-          // publicado é sempre o que este build de fato usa.
+            "Um provider seu — completo, ou só o pedaço que você quer mudar de um provider do app (ver a " +
+            "descrição de `providers` e a chave `appProviders`). Nas duas formas o `id` é obrigatório e é ele que " +
+            "liga a entrada à declaração do app.",
+          required: ["id"],
+          // A RECEITA (task 49796d45, agora GERADA de `appProviders`): com a
+          // sobrescrita parcial, só o `id` é obrigatório aqui — e é este
+          // `examples` que continua mostrando a FORMA COMPLETA de uma
+          // declaração, para quem for escrever um provider novo do zero. Como é
+          // gerado das mesmas specs que o app publica, não pode divergir.
           examples: measuredProviderRecipes(),
           properties: {
             id: {
               type: "string",
               pattern: "^[a-z0-9][a-z0-9-]*$",
-              description: 'Id estável, usado em spawn_agent, no card e no banco (ex.: "minha-cli"). Minúsculas, dígitos e `-`.',
+              description: 'Id estável, usado em spawn_agent, no card e no banco (ex.: "commandcode"). Minúsculas, dígitos e `-`.',
             },
             label: asNonEmptyStr("Nome exibido na UI (Topbar/rail)."),
             binaryNames: {
@@ -1519,11 +1521,23 @@ export function providersConfigSchema(): Record<string, unknown> {
           },
         },
       },
+      appProviders: {
+        type: "array",
+        description:
+          "DO APP — não é sua. A lista (completa) dos providers de terceiros que o Stellar já entrega prontos, " +
+          "reescrita INTEIRA a cada boot. É o MESMO conceito que o badge \"do app\" mostra na aba Provedores, " +
+          "escrito em JSON: cline e commandcode funcionam sem você escrever nada, e o que está aqui é exatamente " +
+          "o que o app usa. NÃO EDITE esta chave: uma mudança aqui é apagada no próximo boot (e o app AVISA no " +
+          "relatório quando percebe que ela não era a que ele escreve). Para mudar alguma coisa num destes " +
+          "providers, escreva a mudança em `providers` (a sua chave), que é a que sempre vence.",
+        items: { type: "object" },
+      },
       _example: {
         type: "object",
         description:
-          "Exemplo completo, NÃO lido pelo Stellar: copie o objeto para dentro de `providers` para ele valer. " +
-          "As descrições de cada campo e os valores aceitos estão neste schema (autocompletar do editor).",
+          "Chave legada: era o exemplo fictício que o arquivo ganhava ao nascer. Não é mais escrita (as " +
+          "declarações reais vêm em `appProviders`), e o app NUNCA a remove de um arquivo que já a tenha — use-a " +
+          "como suas notas; o loader a ignora por não estar em `providers`.",
       },
     },
   };
@@ -1534,51 +1548,161 @@ export function providersConfigSchemaJson(): string {
   return `${JSON.stringify(providersConfigSchema(), null, 2)}\n`;
 }
 
+// ---------------------------------------------------------------------------
+// DUAS CHAVES, DONO EXPLÍCITO — E SOBRESCRITA PARCIAL POR ID (2026-09-20, task
+// 3fe0db6e, desenho aprovado pelo dono do repo).
+//
+// O problema, dito por ele: "cadê a unicidade? O cline e o commandcode não estão
+// no JSON". A instrução de um provider genérico tem de estar num lugar só e
+// visível: o arquivo dele. O que NÃO pode voltar é o que a medição anterior já
+// tinha provado: apagar o arquivo não pode fazer os dois sumirem, e correção do
+// app não pode deixar de chegar.
+//
+// O DESENHO: duas listas, com dono declarado —
+//
+//   "providers":    []          <- do USUÁRIO. Nasce vazio. O app NUNCA escreve.
+//   "appProviders": [ ... ]     <- do APP. Completa, reescrita INTEIRA a cada
+//                                  boot, a partir do catálogo deste build.
+//
+// E a personalização é POR CAMPO, não por entrada: para mudar uma flag do
+// commandcode, o usuário (ou um agente) escreve em `providers`:
+//
+//   { "id": "commandcode", "baseArgs": ["--yolo", "--meu-flag"] }
+//
+// O resto da declaração continua vindo de `appProviders` — e continua recebendo
+// correção do app. Nada é copiado inteiro, então nada congela sem querer.
+//
+// POR QUE ISTO APOSENTA A IMPRESSÃO DIGITAL: com as duas origens em listas
+// separadas, "quem escreveu isto?" tem resposta NA CHAVE. Some junto a pior
+// falha do desenho anterior (o app registrar a impressão sem a marca, se
+// auto-classificar como editado e congelar os dois providers em silêncio) e some
+// o merge de três vias: `appProviders` é reescrita inteira, sem comparação.
+//
+// A REGRA DE MERGE, e ela foi MEDIDA antes de escolhida (8 edições naturais
+// contra os campos que existem hoje, em dois esquemas):
+//   - RASO (substituir cada filho direto de `capacity`) RECUSA 5 das 8 — trocar
+//     o mcp, o esforço, a sessão ou o papel exigiria repetir o resto do
+//     `capacity` inteiro, e esquecer um campo torna a entrada inválida;
+//   - PROFUNDO recusa 0 das 8. Objetos descem recursivamente; arrays e
+//     escalares SUBSTITUEM.
+// Por isso: PROFUNDO. Custo medido do profundo: trocar `mcp` para
+// `{mechanism: "none"}` deixa as chaves do ramo antigo (`configPath`, …) no
+// arquivo. Elas são INERTES — o parser lê só os campos do ramo escolhido, e o
+// def efetivo sai `{mechanism: "none"}` — então a sobra informa, não decide.
+//
+// O QUE O APP NUNCA FAZ: escrever em `providers`. Nem para limpar, nem para
+// migrar, nem para "consertar". É a chave do usuário; uma migração que a
+// tocasse seria o app decidindo pelo dono da máquina.
+// ---------------------------------------------------------------------------
+
+/** A chave do APP: completa, reescrita inteira a cada boot, e o usuário não
+ * precisa escrever nada nela. Ver a regra de merge no bloco acima. */
+export const PROVIDERS_APP_KEY = "appProviders";
+
 /**
- * O spec do exemplo que vai no arquivo inicial. VÁLIDO pelo próprio
- * validador (travado em teste): um exemplo que o loader recusa seria a
- * primeira instrução errada que o usuário leria.
+ * Mescla uma entrada do USUÁRIO sobre a declaração do APP — a sobrescrita
+ * parcial por id. Pura, e é a regra que sustenta R2/R3 ao mesmo tempo: o que o
+ * usuário escreveu vence no campo que ele escreveu; todo o resto continua sendo
+ * o do app (e, portanto, continua recebendo correção nas versões novas).
+ *
+ *   escalares (`label`, `role`, `acbridgeOnPath`, `installCommand: null`) => o do usuário
+ *   arrays (`baseArgs`, `binaryNames`)                                   => SUBSTITUEM (não concatenam)
+ *   objetos (`capacity`, `session`, `mcp`, …)                            => descem recursivamente
  */
-export const PROVIDERS_CONFIG_EXAMPLE: DynamicProviderSpec = {
-  id: "minha-cli",
-  label: "Minha CLI",
-  binaryNames: ["minha-cli"],
-  installCommand: { posix: "npm install -g minha-cli", windows: "npm install -g minha-cli" },
-  baseArgs: ["--yolo"],
-  capacity: {
-    role: "agent",
-    session: { canImposeSessionId: false, resumeFlag: "--resume" },
-    systemPrompt: { mechanism: "none" },
-    mcp: { mechanism: "none" },
-    acbridgeOnPath: true,
-    effort: { mechanism: "none", reason: "no-flag" },
-    model: { mechanism: "none", reason: "shell" },
-    delivery: { briefMechanism: "positional" },
-  },
+export function mergeProviderOverride(
+  base: DynamicProviderSpec,
+  override: Record<string, unknown>,
+): DynamicProviderSpec {
+  return deepMerge(base as unknown as Record<string, unknown>, override) as unknown as DynamicProviderSpec;
+}
+
+/** Objetos descem; TUDO o mais (array, string, number, boolean, `null`)
+ * substitui. `null` é valor, não ausência: `installCommand: null` é uma
+ * declaração ("não sugira instalação") e não pode virar merge. */
+function deepMerge(baseValue: unknown, overrideValue: unknown): unknown {
+  if (!isRecord(baseValue) || !isRecord(overrideValue)) return structuredClone(overrideValue);
+  const out: Record<string, unknown> = { ...baseValue };
+  for (const [key, value] of Object.entries(overrideValue)) {
+    out[key] = key in baseValue ? deepMerge(baseValue[key], value) : structuredClone(value);
+  }
+  return out;
+}
+
+export type ProvidersSeedPlan = {
+  /** O conteúdo que deve ir para o disco. */
+  next: Record<string, unknown>;
+  /** Chaves de instrução que faltavam, na ordem. */
+  addedKeys: string[];
+  /** `appProviders` do arquivo existia e NÃO era o que este build escreve (uma
+   * versão antiga do app, ou uma edição à mão na chave do app). É reportado —
+   * reescrever sem dizer apagaria uma edição de alguém em silêncio. */
+  appProvidersDiverged: boolean;
 };
 
 /**
- * O conteúdo do arquivo quando ele NASCE (primeiro save do app). Em vez de
- * `{ "providers": [] }` — que não instrui nada — sai com `$schema` (para o
- * editor autocompletar) e o exemplo acima em `_example`, que o loader ignora
- * justamente por não estar em `providers`.
+ * A DECISÃO desta task, pura: dado o arquivo como ele está e o catálogo deste
+ * build, o que deve ir para o disco? Sem fs, sem relógio, sem merge de listas.
  *
- * Devolve o OBJETO, não a string, porque quem grava é o main
- * (`writeProvidersConfig`, em `index.ts`), cujo contrato preserva as chaves
- * que não conhece — assim `$schema` e `_example` sobrevivem a toda reedição
- * feita pelo formulário.
+ * `providers` é do usuário e passa INTACTA (é a chave que o app nunca escreve —
+ * nem para "consertar"); `appProviders` é reescrita por inteiro a partir do
+ * catálogo; e as chaves de instrução entram só quando faltam. Nada do usuário é
+ * removido: chaves desconhecidas, entradas próprias e o `_example` legado ficam.
  */
-export function initialProvidersConfig(): Record<string, unknown> {
-  return {
-    $schema: PROVIDERS_SCHEMA_REF,
-    schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION,
-    providers: [],
-    _example: PROVIDERS_CONFIG_EXAMPLE,
-  };
+export function planProvidersConfig(
+  raw: Record<string, unknown>,
+  shipped: readonly DynamicProviderSpec[] = MEASURED_THIRD_PARTY_SPECS,
+): ProvidersSeedPlan {
+  const appProviders = shipped.map((spec) => structuredClone(spec) as unknown as Record<string, unknown>);
+  const previousApp = Array.isArray(raw[PROVIDERS_APP_KEY]) ? raw[PROVIDERS_APP_KEY] : null;
+  const appProvidersDiverged =
+    previousApp !== null && JSON.stringify(previousApp) !== JSON.stringify(appProviders);
+
+  const addedKeys: string[] = [];
+  const next: Record<string, unknown> = {};
+  // `$schema` abre o arquivo (é o primeiro campo que o editor lê); depois as
+  // chaves do usuário, na ordem dele; `providers` e `appProviders` fecham.
+  if (!("$schema" in raw)) addedKeys.push("$schema");
+  next.$schema = "$schema" in raw ? raw.$schema : PROVIDERS_SCHEMA_REF;
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === "$schema" || key === "providers" || key === PROVIDERS_APP_KEY) continue;
+    next[key] = value;
+  }
+  if (!("schemaVersion" in raw)) {
+    addedKeys.push("schemaVersion");
+    next.schemaVersion = PROVIDERS_CONFIG_SCHEMA_VERSION;
+  }
+  // `providers` do usuário: intocada. Ausente vira lista vazia (é o nascimento).
+  next.providers = Array.isArray(raw.providers) ? raw.providers : [];
+  next[PROVIDERS_APP_KEY] = appProviders;
+
+  return { next, addedKeys, appProvidersDiverged };
 }
 
-export function initialProvidersConfigJson(): string {
-  return `${JSON.stringify(initialProvidersConfig(), null, 2)}\n`;
+/**
+ * O conteúdo do arquivo quando ele NASCE (primeiro boot). Em vez do
+ * `{ "providers": [] }` mudo — que não instrui nada — sai com `$schema` (para o
+ * editor autocompletar), a chave do usuário VAZIA e a lista do app completa e
+ * visível: é ela que responde "o que este app entrega pronto", no arquivo que o
+ * dono abre.
+ *
+ * O que NÃO vai mais aqui: o `_example` fictício (`"minha-cli"`), que gastava
+ * 702 dos 878 bytes do arquivo para ser um TERCEIRO exemplar ao lado de dois
+ * REAIS e completos. Quem já tem `_example` no arquivo fica com ele: a migração
+ * nunca tira chave de ninguém.
+ */
+export function initialProvidersConfig(shipped: readonly DynamicProviderSpec[] = MEASURED_THIRD_PARTY_SPECS): Record<string, unknown> {
+  return planProvidersConfig({ schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION }, shipped).next;
+}
+
+export function initialProvidersConfigJson(shipped: readonly DynamicProviderSpec[] = MEASURED_THIRD_PARTY_SPECS): string {
+  return renderProvidersConfig(initialProvidersConfig(shipped));
+}
+
+/** A serialização do arquivo — UMA função, para que "o que eu escreveria" seja
+ * comparável byte a byte com "o que está no disco" (é assim que a escrita vira
+ * idempotente: segunda passada igual ⇒ não escreve ⇒ mtime estável). */
+function renderProvidersConfig(content: Record<string, unknown>): string {
+  return `${JSON.stringify(content, null, 2)}\n`;
 }
 
 export type EnsureProvidersSchemaResult = {
@@ -1639,154 +1763,207 @@ export function ensureProvidersSchemaFile(userDataDir: string): EnsureProvidersS
 // ---------------------------------------------------------------------------
 
 /**
- * As chaves que fazem o arquivo SE EXPLICAR SOZINHO, na ordem em que aparecem
- * no arquivo. `$schema` é o que faz o editor autocompletar e validar; `_example`
- * é uma declaração completa, que o loader IGNORA (não está em `providers`),
- * posta ali para ser copiada.
+ * As chaves de INSTRUÇÃO do arquivo, na ordem em que entram quando faltam.
+ * `$schema` é o que faz o editor autocompletar e validar; `schemaVersion` é o
+ * que o próprio loader exige (um arquivo sem ela é recusado NO TOPO — e, agora
+ * que o app escreve as declarações, deixá-la faltando seria escrever num
+ * arquivo que o loader descarta inteiro).
  */
-export const PROVIDERS_INSTRUCTION_KEYS = ["$schema", "_example"] as const;
+export const PROVIDERS_INSTRUCTION_KEYS = ["$schema", "schemaVersion"] as const;
 
-export type ProvidersSeedPlan = {
-  /** O conteúdo que deve ir para o disco. É o MESMO objeto de `raw` quando
-   * nada falta — nesse caso o chamador não grava nada. */
-  next: Record<string, unknown>;
-  /** Chaves que faltavam, na ordem. Vazio = não há o que gravar. */
-  addedKeys: string[];
-};
-
-/**
- * Decide o que ACRESCENTAR a um `providers.json` que já existe. Pura: sem fs,
- * sem relógio — é isto que o teste exercita direto, e é onde mora a única
- * decisão desta migração.
- *
- * A REGRA, estreita de propósito: só entra o que está FALTANDO. `providers`
- * nunca é tocado (a lista é do usuário), e uma chave que JÁ EXISTE fica como
- * está — mesmo `null`, mesmo apontando para outro schema, mesmo que o usuário
- * tenha reescrito `_example` como bloco de notas. O contrato do arquivo diz
- * que chaves desconhecidas são do dono (`additionalProperties` fica aberto no
- * schema justamente por isso); sobrescrever uma delas seria o app decidindo
- * pelo dono da máquina dentro do único arquivo que ele edita à mão.
- *
- * Consequência aceita e declarada: o `_example` de um arquivo antigo NÃO
- * acompanha os exemplos novos do app. Quem carrega a documentação sempre
- * atualizada é o `providers.schema.json`, que o app reescreve a cada boot — o
- * `_example` é conveniência, não a fonte da instrução.
- */
-export function planProvidersSeed(raw: Record<string, unknown>): ProvidersSeedPlan {
-  const missing = PROVIDERS_INSTRUCTION_KEYS.filter((key) => !(key in raw));
-  if (missing.length === 0) return { next: raw, addedKeys: [] };
-  const seed = initialProvidersConfig();
-  const next: Record<string, unknown> = {};
-  // `$schema` ABRE o arquivo (é o primeiro campo que o editor lê) e
-  // `_example` FECHA — a mesma ordem em que o arquivo nasce. As chaves do
-  // usuário ficam entre as duas, na ordem em que ele mesmo as escreveu, e
-  // nenhuma delas é reordenada.
-  if (missing.includes("$schema")) next.$schema = seed.$schema;
-  for (const [key, value] of Object.entries(raw)) next[key] = value;
-  if (missing.includes("_example")) next._example = seed._example;
-  return { next, addedKeys: [...missing] };
-}
 
 export type EnsureProvidersConfigResult = {
   path: string;
   /**
-   * `created` = não existia e nasceu instruído; `migrated` = existia e ganhou
-   * a(s) chave(s) que faltavam; `unchanged` = já estava completo, nada foi
-   * escrito; `invalid`/`unreadable` = NÃO foi tocado (o motivo vai em `error`);
-   * `unwritable` = a leitura deu certo e a gravação falhou.
+   * `created` = não existia e nasceu com a chave do app preenchida; `applied` =
+   * o arquivo existia e foi escrito (ganhou `appProviders` e/ou as chaves de
+   * instrução); `unchanged` = nada a escrever; `raced` = o arquivo mudou entre a
+   * leitura e a gravação e o app NÃO sobrescreveu; `invalid`/`unreadable` = não
+   * foi tocado (motivo em `error`); `unsupported` = formato que este build não
+   * entende, intocado; `unwritable` = a gravação falhou.
    */
-  action: "created" | "migrated" | "unchanged" | "invalid" | "unreadable" | "unwritable";
-  /** Chaves acrescentadas nesta chamada (vazio em todos os outros casos). */
+  action: "created" | "applied" | "unchanged" | "raced" | "invalid" | "unsupported" | "unreadable" | "unwritable";
+  /** Chaves de instrução acrescentadas nesta chamada. */
   addedKeys: string[];
+  /** O `appProviders` que estava no arquivo não era o que este build escreve
+   * (versão antiga do app, ou edição à mão na chave do app) e foi reescrito. */
+  appProvidersRewritten: boolean;
   /** Impedimento de leitura/escrita, ou JSON inválido. `null` no caminho bom. */
   error: string | null;
 };
 
-/** Gravação ATÔMICA do conteúdo semeado (tmp + rename) — mesma postura do
- * `writeProvidersConfig` do main, e pelo mesmo motivo: um `writeFileSync`
- * interrompido no meio deixaria ilegível um arquivo que o usuário edita à mão
- * por definição, e ele é o único registro dos providers dele. */
+/**
+ * Gravação ATÔMICA (tmp + rename) COM COMPARE-AND-SWAP: relê o arquivo
+ * imediatamente antes do rename e, se ele não for mais o que foi lido no começo
+ * da passada, NÃO sobrescreve (`raced`) — quem editou durante o boot do app
+ * perde o trabalho dele de outro jeito.
+ *
+ * A medida que justifica o CAS (task 3fe0db6e, item ii): sem ele a janela de
+ * perda é a passada INTEIRA (ler o arquivo, decidir e gravar — medido em ms,
+ * porque a decisão percorre as declarações todas), e com ele a janela encolhe
+ * para o intervalo entre a releitura e o `rename` (microssegundos). O rename é
+ * atômico, então o pior caso do CAS é perder uma escrita que caia exatamente
+ * nesse intervalo — e aí o watcher, que nasce DEPOIS deste passo, relê e
+ * reporta a mudança.
+ */
 function writeProvidersSeed(
   path: string,
-  content: Record<string, unknown>,
-  action: "created" | "migrated",
-  addedKeys: string[],
+  expectedText: string | null,
+  plan: ProvidersSeedPlan,
+  action: "created" | "applied",
+  beforeWrite?: () => void,
 ): EnsureProvidersConfigResult {
   try {
+    beforeWrite?.();
+    if (expectedText === null) {
+      if (existsSync(path)) return racedResult(path);
+    } else if (readFileSync(path, "utf8") !== expectedText) {
+      return racedResult(path);
+    }
+  } catch {
+    return racedResult(path);
+  }
+  try {
     const tmp = `${path}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(content, null, 2)}\n`, "utf8");
+    writeFileSync(tmp, renderProvidersConfig(plan.next), "utf8");
     renameSync(tmp, path);
-    return { path, action, addedKeys, error: null };
+    return {
+      path,
+      action,
+      addedKeys: plan.addedKeys,
+      appProvidersRewritten: plan.appProvidersDiverged,
+      error: null,
+    };
   } catch (err) {
     return {
       path,
       action: "unwritable",
       addedKeys: [],
+      appProvidersRewritten: false,
       error: `could not write ${path}: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
 
+function racedResult(path: string): EnsureProvidersConfigResult {
+  return { path, action: "raced", addedKeys: [], appProvidersRewritten: false, error: null };
+}
+
+function emptyResult(
+  path: string,
+  action: "unchanged" | "invalid" | "unsupported" | "unreadable" | "unwritable",
+  error: string | null,
+  appProvidersRewritten = false,
+): EnsureProvidersConfigResult {
+  return { path, action, addedKeys: [], appProvidersRewritten, error };
+}
+
 /**
- * Garante que o `providers.json` EXISTA e SE EXPLIQUE. Nunca lança: arquivo de
- * config não pode derrubar o boot, e o resultado conta o que aconteceu para
- * quem chamou poder mostrar (mesma postura de `loadDynamicProviders`).
+ * Garante que o `providers.json` EXISTA, SE EXPLIQUE **e mostre o que o app
+ * entrega pronto** — sem nunca escrever na chave do usuário. Nunca lança:
+ * arquivo de config não pode derrubar o boot, e o resultado conta o que
+ * aconteceu para quem chamou poder mostrar.
  *
- * Três casos, três posturas:
+ * Quatro casos, quatro posturas:
  *
- *   1. AUSENTE (`ENOENT`) — é o NASCIMENTO: sai com `$schema`, `schemaVersion`,
- *      `providers: []` e `_example` (`initialProvidersConfig`). Apagar o
- *      arquivo não é um estado a preservar: no boot seguinte ele nasce de
- *      novo, instruído.
- *   2. EXISTENTE e completo — NADA é escrito (`unchanged`), em vez de um save
- *      silencioso a cada boot.
- *   3. EXISTENTE e POBRE (o caso medido do dono: 44 bytes, `{ "schemaVersion":
- *      1, "providers": [] }`) — MIGRA: acrescenta só o que falta
- *      (`planProvidersSeed`) e preserva todo o resto, `providers` incluído.
+ *   1. AUSENTE (`ENOENT`) — NASCIMENTO: sai com `$schema`, `schemaVersion`,
+ *      `providers: []` (a chave do usuário, vazia) e `appProviders` com as
+ *      declarações deste build. Apagar o arquivo não é um estado a preservar: no
+ *      boot seguinte ele nasce de novo, e os dois providers de fábrica voltam
+ *      (o catálogo também vive no binário — é o que garante isso).
+ *   2. EXISTENTE e igual ao que o app escreveria — NADA é escrito
+ *      (`unchanged`), em vez de um save silencioso a cada boot.
+ *   3. EXISTENTE e POBRE (o caso medido do dono: 44 bytes) — ganha as chaves que
+ *      faltam e o `appProviders`.
+ *   4. `appProviders` DIFERENTE do que este build escreve (app antigo, ou alguém
+ *      editou a chave do app) — REESCREVE e REPORTA. Reescrever em silêncio
+ *      apagaria a edição de alguém sem dizer.
  *
  * E o que NÃO acontece, que é a parte que importa para quem edita à mão:
- * ARQUIVO COM JSON QUEBRADO (ou ilegível) NÃO é tocado nem "consertado". A
- * tentação de reescrever um arquivo inválido é grande, e é exatamente onde um
- * app destrói o trabalho de quem estava no meio de uma edição — o conteúdo é
- * do usuário, o app REPORT (`invalid`/`unreadable` + `error`) e o registro vivo
- * já fica como estava (o contrato de não-podar de `loadDynamicProviders`).
+ * `providers` (a chave do usuário) NUNCA é escrita por aqui — nem para limpar,
+ * nem para migrar, nem para "consertar". E ARQUIVO COM JSON QUEBRADO (ou
+ * ilegível, ou de um formato que este build não entende) não é tocado: o
+ * conteúdo é do usuário, o app REPORT e o registro vivo já fica como estava (o
+ * contrato de não-podar de `loadDynamicProviders`).
  */
-export function ensureProvidersConfigFile(userDataDir: string): EnsureProvidersConfigResult {
+export function ensureProvidersConfigFile(
+  userDataDir: string,
+  opts: {
+    shipped?: readonly DynamicProviderSpec[];
+    /** Só para teste: chamado IMEDIATAMENTE antes do compare-and-swap, para o
+     * teste dirigir o instante exato da corrida ("o usuário salvou agora").
+     * Mesmo tipo de gancho do `watchDir`/`now` do watcher: um FATO DE TEMPO que
+     * nenhum teste consegue produzir de fora. */
+    beforeWrite?: () => void;
+  } = {},
+): EnsureProvidersConfigResult {
   const path = providersConfigPath(userDataDir);
+  const shipped = opts.shipped ?? MEASURED_THIRD_PARTY_SPECS;
 
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      return {
-        path,
-        action: "unreadable",
-        addedKeys: [],
-        error: `could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
-      };
+      return emptyResult(path, "unreadable", `could not read ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    return writeProvidersSeed(path, initialProvidersConfig(), "created", []);
+    const born = planProvidersConfig({ schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION }, shipped);
+    return writeProvidersSeed(path, null, born, "created", opts.beforeWrite);
   }
 
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch (err) {
-    return {
-      path,
-      action: "invalid",
-      addedKeys: [],
-      error: `${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    return emptyResult(path, "invalid", `${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (!isRecord(raw)) {
-    return { path, action: "invalid", addedKeys: [], error: `${path} is not a JSON object` };
+  if (!isRecord(raw)) return emptyResult(path, "invalid", `${path} is not a JSON object`);
+  // Formato que este build NÃO entende: não se escreve nele. O arquivo pode ser
+  // de uma versão futura, e completá-lo com o NOSSO `schemaVersion` seria
+  // reinterpretar um formato por sorte — a mesma postura do loader, que recusa
+  // o arquivo inteiro nesse caso.
+  if (raw.schemaVersion !== undefined && raw.schemaVersion !== PROVIDERS_CONFIG_SCHEMA_VERSION) {
+    return emptyResult(
+      path,
+      "unsupported",
+      `${path} declares schemaVersion ${JSON.stringify(raw.schemaVersion)}; this build understands only ${PROVIDERS_CONFIG_SCHEMA_VERSION} — file left untouched`,
+    );
   }
 
-  const plan = planProvidersSeed(raw);
-  if (plan.addedKeys.length === 0) return { path, action: "unchanged", addedKeys: [], error: null };
-  return writeProvidersSeed(path, plan.next, "migrated", plan.addedKeys);
+  const plan = planProvidersConfig(raw, shipped);
+  if (renderProvidersConfig(plan.next) === text) return emptyResult(path, "unchanged", null);
+  return writeProvidersSeed(path, text, plan, "applied", opts.beforeWrite);
+}
+
+/**
+ * O relato do passo de boot em UMA linha — pt-BR porque quem lê é o dono da
+ * máquina (mesma postura dos avisos de migração em `index.ts`). Pura e
+ * exportada pro teste, como `formatProvidersReloadLine`.
+ *
+ * O CASO QUE ESTA FUNÇÃO EXISTE PARA NÃO DEIXAR PASSAR: o `appProviders` do
+ * arquivo não era o que este build escreve e foi reescrito. Pode ser só um app
+ * mais antigo (silencioso seria aceitável), mas também pode ser alguém que
+ * editou a chave do app à mão — e aí reescrever sem dizer seria apagar trabalho
+ * de alguém em silêncio. A linha é neutra de propósito: ela conta o FATO, não
+ * acusa quem o causou. `null` = nada a dizer (o caso de todo boot sem mudança).
+ */
+export function formatProvidersSeedNotice(result: EnsureProvidersConfigResult): string | null {
+  const parts: string[] = [];
+  if (result.action === "created") parts.push("criado com a lista do app em `appProviders` (a sua chave, `providers`, nasce vazia)");
+  if (result.action === "applied") {
+    const chaves = result.addedKeys.length > 0 ? ` (completei ${result.addedKeys.join(", ")})` : "";
+    parts.push(`atualizei a lista do app em \`appProviders\`${chaves}`);
+  }
+  if (result.appProvidersRewritten && result.action !== "created") {
+    parts.push(
+      "o `appProviders` que estava no arquivo não era o que este build escreve — reescrevi " +
+        "(a chave `providers`, sua, não foi tocada)",
+    );
+  }
+  if (result.action === "raced") {
+    parts.push("o arquivo mudou enquanto eu o escrevia — NÃO sobrescrevi (o próximo boot reavalia)");
+  }
+  return parts.length === 0 ? null : `${parts.join(" · ")}.`;
 }
 
 export type ProvidersBootstrapResult = {
@@ -1796,19 +1973,23 @@ export type ProvidersBootstrapResult = {
 
 /**
  * O PASSO DE BOOT dos providers: o schema ao lado (conveniência de editor,
- * reescrito quando o app muda) e o arquivo do usuário existente e instruído.
- * Os dois são idempotentes, nenhum lança, e nenhum dos dois mexe no registro
- * vivo — quem registra é `loadDynamicProviders`, que o main chama logo depois.
+ * reescrito quando o app muda) e o arquivo do usuário existente, instruído e
+ * com as declarações de fábrica. Os dois são idempotentes, nenhum lança, e
+ * nenhum dos dois mexe no registro vivo — quem registra é
+ * `loadDynamicProviders`, que o main chama logo depois.
  *
  * Por que UMA função em vez de duas chamadas soltas no `index.ts`: é ESTE
  * símbolo que o gate de fiação procura. A função existe para dar nome à
  * fiação, e o nome existe para um teste poder afirmar "isto é chamado de
  * produção" — que é a pergunta que nenhum gate anterior fazia.
  */
-export function bootstrapProvidersConfig(userDataDir: string): ProvidersBootstrapResult {
+export function bootstrapProvidersConfig(
+  userDataDir: string,
+  opts: { shipped?: readonly DynamicProviderSpec[] } = {},
+): ProvidersBootstrapResult {
   return {
     schema: ensureProvidersSchemaFile(userDataDir),
-    config: ensureProvidersConfigFile(userDataDir),
+    config: ensureProvidersConfigFile(userDataDir, opts),
   };
 }
 
@@ -1818,8 +1999,25 @@ export function bootstrapProvidersConfig(userDataDir: string): ProvidersBootstra
  * recusa sai nomeada; um arquivo de versão desconhecida é recusado
  * inteiro, porque interpretar um formato que não conhecemos "no melhor
  * esforço" é como config de usuário quebra em silêncio.
+ *
+ * `appSpecs` é o catálogo DO APP (o binário) e muda uma coisa só, que é o
+ * coração do desenho de duas chaves: uma entrada do usuário com o mesmo id de
+ * uma do app é uma SOBRESCRITA PARCIAL — ela é mesclada por cima da declaração
+ * do app ANTES de validar, então três linhas
+ * (`{ "id": "commandcode", "baseArgs": [] }`) bastam para mudar um campo, e
+ * todo o resto continua vindo do app (e continua recebendo correção do app).
+ *
+ * Sem `appSpecs` (ou com id que o app não tem) o comportamento é o de sempre:
+ * a entrada é uma declaração COMPLETA do usuário, e vira provider novo.
+ *
+ * A tela usa esta mesma função com o mesmo `appSpecs`, de propósito: o que o
+ * usuário vê na lista é o resultado da MESMA mescla que o registro vivo usa —
+ * se a tela mostrasse a entrada crua, ela mostraria um def que não existe.
  */
-export function parseProviderSpecs(raw: unknown): ParseProviderSpecsResult {
+export function parseProviderSpecs(
+  raw: unknown,
+  opts: { appSpecs?: readonly DynamicProviderSpec[] } = {},
+): ParseProviderSpecsResult {
   if (!isRecord(raw)) {
     return {
       specs: [],
@@ -1857,11 +2055,17 @@ export function parseProviderSpecs(raw: unknown): ParseProviderSpecsResult {
     };
   }
 
+  const appById = new Map((opts.appSpecs ?? []).map((spec) => [spec.id, spec]));
   const specs: DynamicProviderSpec[] = [];
   const rejected: SpecRejection[] = [];
   const seen = new Set<string>();
   raw.providers.forEach((entry, index) => {
-    const parsed = parseProviderSpec(entry);
+    // A SOBRESCRITA PARCIAL: só quando o id existe no app E a entrada pediu
+    // algo. O que o usuário escreveu vence no campo que ele escreveu; o resto
+    // vem da declaração do app (ver `mergeProviderOverride` para a regra).
+    const base = isRecord(entry) && typeof entry.id === "string" ? appById.get(entry.id) : undefined;
+    const candidato: unknown = base === undefined ? entry : mergeProviderOverride(base, entry);
+    const parsed = parseProviderSpec(candidato);
     if (!parsed.ok) {
       rejected.push({ index, id: isRecord(entry) ? nonEmptyString(entry.id) : null, reason: parsed.reason });
       return;
@@ -2029,6 +2233,11 @@ export type LoadDynamicProvidersResult = {
   rejected: SpecRejection[];
   /** Ids que só existem porque o catálogo medido embutido os trouxe. */
   shippedDefaults: ProviderId[];
+  /** TODOS os ids que o APP declara (a lista de `appProviders`) — inclusive os
+   * que o usuário sobrescreveu em parte. É o que a tela usa para dizer "do app"
+   * (o mesmo vocabulário do badge): a ORIGEM da declaração é esta lista, não um
+   * campo dentro da entrada. */
+  appIds: ProviderId[];
   /** Ids dinâmicos que ESTA carga derrubou do registro vivo — não estão
    * mais no arquivo (nem no catálogo). Vazio quando o arquivo não pôde ser
    * lido: nesse caso não se remove nada (ver `loadDynamicProviders`). */
@@ -2100,7 +2309,7 @@ export function loadDynamicProviders(
     }
   }
 
-  const parsed = raw === null ? { specs: [], rejected: [] } : parseProviderSpecs(raw);
+  const parsed = raw === null ? { specs: [], rejected: [] } : parseProviderSpecs(raw, { appSpecs: shipped });
   const userIds = new Set(parsed.specs.map((s) => s.id));
   const shippedEffective = shipped.filter((s) => !userIds.has(s.id));
   const effective = [...shippedEffective, ...parsed.specs];
@@ -2127,6 +2336,7 @@ export function loadDynamicProviders(
     skipped: result.skipped,
     rejected: parsed.rejected,
     shippedDefaults: shippedEffective.map((s) => s.id),
+    appIds: shipped.map((s) => s.id),
     removed: result.removed,
   };
 }

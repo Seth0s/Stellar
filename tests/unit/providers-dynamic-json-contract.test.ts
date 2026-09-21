@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MEASURED_THIRD_PARTY_SPECS,
-  PROVIDERS_CONFIG_EXAMPLE,
+  measuredProviderRecipes,
   PROVIDERS_CONFIG_FILENAME,
   PROVIDERS_SCHEMA_FILENAME,
   PROVIDERS_SCHEMA_REF,
@@ -293,10 +293,19 @@ describe("o schema publicado", () => {
     const schema = providersConfigSchema() as Record<string, any>;
     expect(schema.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
     expect(schema.type).toBe("object");
-    expect(Object.keys(schema.properties)).toEqual(["$schema", "schemaVersion", "providers", "_example"]);
+    // As DUAS listas com dono explícito (task 3fe0db6e): `providers` é do
+    // usuário, `appProviders` é do app. `_example` é legado mantido por
+    // compatibilidade de leitura (nunca removido de um arquivo que o tenha).
+    expect(Object.keys(schema.properties)).toEqual(["$schema", "schemaVersion", "providers", "appProviders", "_example"]);
     expect(schema.properties.schemaVersion.const).toBe(1);
+    // A origem é a LISTA em que a entrada está — e é isso que o schema diz.
+    expect(schema.properties.appProviders.description).toContain("DO APP");
+    expect(schema.properties.providers.description).toContain("SUA lista");
     expect(schema.properties.providers.items.properties.baseArgs.type).toBe("array");
     expect(schema.properties.providers.items.properties.baseArgs.items.minLength).toBe(1);
+    // Só `id` é obrigatório: uma entrada parcial (a sobrescrita por campo) é
+    // legítima — o resto vem de `appProviders`.
+    expect(schema.properties.providers.items.required).toEqual(["id"]);
     // O efeito é DECLARADO no schema (task c857539c), com a exigência de
     // medição escrita na description — é o que deixa o dono declarar o
     // bypass da CLI DELE sem o Stellar deduzir string nenhuma.
@@ -311,8 +320,8 @@ describe("o schema publicado", () => {
     // Sem medição, sem claim: cline não ganhou flag nem efeito.
     const cline = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "cline");
     expect(cline?.bypassesPermissionPrompts).toBeUndefined();
-    // E o exemplo publicado não ensina a declarar efeito sem medição.
-    expect(PROVIDERS_CONFIG_EXAMPLE.bypassesPermissionPrompts).toBeUndefined();
+    // E a receita publicada não ensina a declarar efeito sem medição.
+    expect(measuredProviderRecipes()[0].bypassesPermissionPrompts).toBeUndefined();
   });
 
   it("documenta o `baseArgs` com a posição e o que é recusado (é a instrução do campo)", () => {
@@ -373,27 +382,24 @@ describe("a receita copiável no schema publicado", () => {
     }
   });
 
-  it("a receita AVISA, no próprio texto, que copiar cria entrada que VENCE a embutida", () => {
-    // Sem este aviso, publicar a receita criaria exatamente o problema que a
-    // medição de precedência identificou (caso D): o usuário cola, a cópia
-    // vence, e uma correção futura do app não chega mais até ele.
+  it("a receita AVISA que o jeito certo é SOBRESCREVER UM CAMPO, não copiar a entrada", () => {
+    // O desenho mudou (task 3fe0db6e): com as duas chaves, ninguém precisa
+    // copiar declaração inteira — e a instrução publicada tem de dizer isso,
+    // senão o usuário repete o caso (D) medido antes (a cópia que congela).
     const schema = providersConfigSchema() as Record<string, any>;
-    const warning = `${schema.properties.providers.description} ${schema.properties.providers.items.description}`;
-    expect(warning).toContain("VENCE");
-    expect(warning).toContain("cline");
-    expect(warning).toContain("commandcode");
-    expect(warning).toContain("Copie só se quiser MUDAR");
-    // E diz que USAR não exige copiar nada — o app já entrega os dois prontos.
-    expect(warning).toContain("não precisa copiar");
+    const providers: string = schema.properties.providers.description;
+    expect(providers).toContain("SOBRESCRITA");
+    expect(providers).toContain("SUBSTITUEM"); // arrays substituem, não concatenam
+    expect(providers).toContain("commandcode"); // o exemplo de três linhas
+    // E diz que o app já entrega os dois prontos: não precisa escrever nada.
+    expect(schema.properties.appProviders.description).toContain("do app");
   });
 
-  it("mora no SCHEMA (reescrito a cada boot), não no arquivo do usuário (que só ganha o que falta)", () => {
-    // O `_example` continua sendo o template mínimo de "como escrever o seu" —
-    // a receita medida NÃO entra lá, porque a migração da d9aa8b1a não
-    // sobrescreve chave existente e a receita envelheceria em silêncio.
-    expect(PROVIDERS_CONFIG_EXAMPLE.id).toBe("minha-cli");
-    expect(initialProvidersConfig()).not.toHaveProperty("examples");
+  it("a lista do app também está no SCHEMA `examples` (a forma completa, para um provider novo)", () => {
+    // Com a sobrescrita parcial o `required` é só `id` — então o `examples`
+    // passa a ser o único lugar do schema que mostra uma declaração COMPLETA.
     expect(providersConfigSchema().properties.providers.items).toHaveProperty("examples");
+    expect(measuredProviderRecipes().map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
   });
 
   it("chega ao DISCO com o schema ao lado do arquivo do usuário (é o que o editor lê)", () => {
@@ -407,7 +413,7 @@ describe("a receita copiável no schema publicado", () => {
       "commandcode",
     ]);
     // E o arquivo do usuário aponta para ele — é assim que o editor acha a
-    // receita sem o usuário procurar.
+    // instrução sem o usuário procurar.
     expect(initialProvidersConfig().$schema).toBe(PROVIDERS_SCHEMA_REF);
   });
 });
@@ -417,15 +423,19 @@ describe("a receita copiável no schema publicado", () => {
 // ---------------------------------------------------------------------------
 
 describe("o arquivo inicial (primeiro save)", () => {
-  it("não é um arquivo vazio: aponta o schema e traz o exemplo", () => {
+  it("não é um arquivo vazio: aponta o schema, deixa a SUA lista vazia e mostra a do app", () => {
     const initial = initialProvidersConfig();
     expect(initial.$schema).toBe(PROVIDERS_SCHEMA_REF);
     expect(initial.schemaVersion).toBe(1);
+    // A chave do usuário nasce vazia — o app nunca escreve nela.
     expect(initial.providers).toEqual([]);
-    expect(initial._example).toEqual(PROVIDERS_CONFIG_EXAMPLE);
+    // E a lista do app nasce COMPLETA e visível.
+    expect((initial.appProviders as { id: string }[]).map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
+    // O `_example` fictício saiu (task 3fe0db6e).
+    expect(initial).not.toHaveProperty("_example");
   });
 
-  it("o exemplo NÃO vira provider: `_example` está fora de `providers`", () => {
+  it("a lista do app NÃO é lida como entrada do usuário (e o arquivo é aceito sem recusas)", () => {
     const dir = freshDir();
     writeFileSync(providersConfigPath(dir), initialProvidersConfigJson(), "utf8");
 
@@ -434,19 +444,22 @@ describe("o arquivo inicial (primeiro save)", () => {
     expect(loaded.fileRead).toBe(true);
     expect(loaded.error).toBeNull();
     expect(loaded.rejected).toEqual([]);
+    // `appProviders` é do app: com o catálogo do binário vazio (`shipped: []`),
+    // nada é registrado — a lista do arquivo não vira provider por si só.
     expect(loaded.registered).toEqual([]);
     expect(loaded.removed).toEqual([]);
   });
 
-  it("continua sendo um arquivo que o loader aceita mesmo com chaves extras (`$schema`, `_example`)", () => {
+  it("continua sendo um arquivo que o loader aceita com chaves extras (`$schema`, `_example` legado)", () => {
     const dir = freshDir();
     const withProvider = initialProvidersConfig();
-    withProvider.providers = [PROVIDERS_CONFIG_EXAMPLE];
+    withProvider._example = { id: "minha-cli" };
+    withProvider.providers = [measuredProviderRecipes()[0]];
     writeFileSync(providersConfigPath(dir), `${JSON.stringify(withProvider, null, 2)}\n`, "utf8");
 
     const loaded = loadDynamicProviders(dir, { shipped: [] });
     expect(loaded.rejected).toEqual([]);
-    expect(loaded.registered).toEqual([PROVIDERS_CONFIG_EXAMPLE.id]);
+    expect(loaded.registered).toEqual(["cline"]);
   });
 });
 
@@ -617,8 +630,8 @@ describe("recusas acionáveis: campo + valor aceito + valor recebido", () => {
     expect(reason).toContain("got [1,2]");
   });
 
-  it("arquivo inicial e exemplo seguem passando pelo validador (a instrução não pode ser inválida)", () => {
-    expect(parseProviderSpec(PROVIDERS_CONFIG_EXAMPLE).ok).toBe(true);
+  it("a receita publicada segue passando pelo validador (a instrução não pode ser inválida)", () => {
+    expect(parseProviderSpec(measuredProviderRecipes()[0]).ok).toBe(true);
     expect(getAtPath(providersConfigSchema(), "properties.providers.items.properties.baseArgs")).toBeDefined();
   });
 });
