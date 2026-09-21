@@ -1,7 +1,7 @@
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import type { ResumeTargetEvidence } from "./session-resume-validation";
 import { decideClaimAmongCandidates, type ReservationView } from "./session-claim-decision";
@@ -92,7 +92,7 @@ export function isFreshCandidate(mtimeMs: number, floorMs: number): boolean {
  */
 const claimedSessionIds = new Map<string, number>();
 
-type SessionCandidate = {
+export type SessionCandidate = {
   id: string;
   /**
    * The provider's best cheap timestamp for the candidate's first visible
@@ -288,170 +288,357 @@ function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
-function encodeCwdForClaude(cwd: string): string {
-  return cwd.replace(/\//g, "-");
-}
+// ---------------------------------------------------------------------------
+// O STORE DE SESSÃO É DECLARAÇÃO — a gramática que substitui as tabelas de
+// funções por provider
+//
+// O QUE EXISTIA: dez funções escritas à mão — cinco de descoberta
+// (`listClaudeSessions`, `listCodexSessions`, …) e cinco de leitura
+// (`findClaudeSessionDirEvidence`, …) — mais DUAS tabelas que as indexavam
+// por id (`SESSION_DISCOVERY_CHANNELS`, `RESUME_EVIDENCE_FINDERS`). É o
+// `switch` por provider que o resto do sistema existe para não ter, só que
+// com outro formato: um provider genérico (cline, commandcode) só entrava
+// ali escrevendo função NOVA no código — e deixava de ser genérico no ato.
+// A alternativa à varredura cega não precisa ser código por provider:
+// precisa ser DECLARAÇÃO. `providers-dynamic.ts` já declara o mesmo
+// princípio para o resto ("é DADO declarativo, não código por provider").
+//
+// O LEVANTAMENTO — os cinco nativos lado a lado, nos quatro eixos que um
+// leitor precisa. Ele É o desenho desta gramática:
+//
+//   provider      raiz (como o cwd entra)      id vem de          "nasceu depois" de   cwd
+//   claude        projects/<cwd com / → ->      nome do arquivo    mtime do arquivo     o próprio caminho
+//   codex         sessions/YYYY/MM/DD/          JSON da 1ª linha   mtime do arquivo     JSON da 1ª linha
+//   cursor        chats/<hash>/<id>/            nome do diretório  meta.json createdAtMs meta.json cwd
+//   antigravity   conversations/                nome do arquivo    mtime do arquivo     blob protobuf (*)
+//   opencode      sqlite (coluna `directory`)   coluna `id`        coluna `time_created` coluna `directory`
+//
+// O que se repete em TODOS: raiz → registro → id/cwd/tempo, a mesma
+// checagem de frescor (`isFreshCandidate`) e o mesmo filtro de id já
+// reivindicado (`claimedSessionIds`). O que diverge é só ONDE cada valor
+// sai: nome de arquivo, nome de diretório, JSON (de uma linha ou do
+// arquivo inteiro), coluna de sqlite. Não há heurística em lugar nenhum —
+// cada campo é uma medição da CLI.
+//
+// (*) O ÚNICO CASO ESPECIAL NOMEADO: o cwd do antigravity mora dentro de um
+// blob protobuf (campo length-delimited com uma URI `file://<cwd>`), sem
+// caminho de texto para apontar — daí `{ from: "binaryWorkspaceUri" }`,
+// interpretado por `extractAntigravityWorkspaceUri`. Um caso nomeado COM
+// motivo é aceitável; cinco seriam a tabela de hoje com outro nome.
+//
+// O QUE O SPEC VAI CARREGAR (o formato, para a fiação ser PLUGAR e não
+// redesenhar): a declaração abaixo vira campo do provider, ao lado da
+// `capacity.session` que `providers-dynamic.ts` já valida —
+//
+//     capacity.session.store: SessionStore      // a MESMA forma, sem tradução
+//
+// e um provider genérico passa a se declarar no `providers.json`. O
+// commandcode exatamente como está em `SESSION_STORES`:
+//
+//   "session": { "canImposeSessionId": false, "resumeFlag": "--resume",
+//     "store": { "kind": "files",
+//                "root": "~/.commandcode/projects/{cwd:slug}",
+//                "pattern": "*.meta.json",
+//                "id": { "from": "fileName", "strip": ".meta.json" },
+//                "cwd": { "from": "root" },
+//                "time": { "from": "mtime" },
+//                "read": { "exists": "{id}.jsonl",
+//                          "content": { "minBytes": 16 } } } }
+//
+// A fiação é só isto: `discoverSessionCandidates` e
+// `getResumeTargetEvidence` passam a ler o store do SPEC primeiro
+// (`providerById(id)?.capacity.session.store`) e mantêm `SESSION_STORES` como
+// o catálogo EMBUTIDO. As DUAS camadas são necessárias, e isso já foi medido
+// pelo card do seed (2026-09-20, cinco casos contra o código real): mover o
+// catálogo embutido para o arquivo do usuário é REGRESSÃO — quem apaga o
+// arquivo perde o provider. O campo do spec diz ONDE a sessão mora e tem
+// precedência por id; ele NÃO substitui a camada embutida. Nenhum leitor
+// novo, nenhuma tabela nova — a presença do store É o canal, e um provider
+// sem store continua não observável de propósito: sem âncora medida de cwd e
+// de tempo, varrer às cegas acharia o arquivo de outro card.
+//
+// O que a validação do spec precisa cobrir quando o campo entrar (o parser
+// recusa o spec inteiro DIZENDO o motivo, nunca aceita e larga):
+//   - `kind` ∈ {files, sqlite}, com os campos da variante presentes;
+//   - `timeFormat` ∈ {epoch-ms, iso-8601} quando declarado;
+//   - identificadores SQL com a MESMA forma que `sqlIdentifier` exige;
+//   - `content.minBytes` numérico e > 0;
+//   - `pattern`/`exists` não vazios, e `{id}` só onde faz sentido.
+// ---------------------------------------------------------------------------
 
-async function listClaudeSessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
-  const dir = join(homedir(), ".claude", "projects", encodeCwdForClaude(cwd));
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch {
-    return [];
-  }
-  const out: SessionCandidate[] = [];
-  for (const name of entries) {
-    if (!name.endsWith(".jsonl")) continue;
-    const id = name.slice(0, -".jsonl".length);
-    if (claimedSessionIds.has(id)) continue;
-    const full = join(dir, name);
-    const st = await stat(full).catch(() => null);
-    if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs)) continue;
-    out.push({ id, timestampMs: st.mtimeMs });
-  }
-  return out;
+import {
+  MIN_CONTENT_BYTES,
+  SQL_IDENTIFIER_RE,
+  type SessionCwdSource,
+  type SessionIdSource,
+  type SessionStore,
+  type SessionTimeSource,
+  type SqliteReadSpec,
+  type SqliteStore,
+  type SqliteTimeFormat,
+} from "./session-store-spec";
+
+/**
+ * A LINGUAGEM da declaração mora em `session-store-spec.ts` — forma pura,
+ * sem runtime, importável pelas DUAS camadas que declaram (as specs nativas
+ * em `providers.ts` e as de `providers-dynamic.ts`) sem ciclo e sem inverter
+ * a direção do registro. AQUI fica a FERRAMENTA que a interpreta.
+ *
+ * `SqliteTimeFormat` é reexportado porque já era superfície pública deste
+ * módulo; `SessionStore` idem (o teste que prova a equivalência o importa
+ * daqui desde a task 2ea0269f).
+ */
+export type { SessionStore, SqliteTimeFormat } from "./session-store-spec";
+
+/** A DECLARAÇÃO viva do provider — a única fonte desde a task 2ea0269f.
+ *
+ * O que era uma tabela local (`SESSION_STORES`) virou campo do SPEC: os cinco
+ * nativos declaram em `providers.ts`, e os dois genéricos medidos em
+ * `providers-dynamic.ts` (catálogo embutido, que o arquivo do usuário pode
+ * sobrescrever por id). A presença do store É o canal; a ausência continua
+ * significando "provider não observável", com o motivo escrito em
+ * `session-store-spec.ts`.
+ *
+ * Ler do MESMO lugar que o resto do app lê a capacidade é o ponto da task:
+ * um provider novo passa a ser observável declarando, sem tocar em código.
+ */
+function declaredSessionStore(providerId: string): SessionStore | undefined {
+  return providerById(providerId)?.capacity.session.store;
 }
 
 /**
- * Measured 2026-09-13 (task c1064d95): `session_index.jsonl` is incomplete
- * on this machine (4 lines for dozens of rollouts). Discovery reads
- * `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` and the first
- * `session_meta` line (`cwd` + `session_id`). Never the index.
+ * OS ENCODINGS DE CWD — cada um é uma MEDIÇÃO, com a amostra declarada:
+ *
+ *  - `{cwd:dashes}` (claude): `/` → `-`. Medido contra os diretórios reais de
+ *    `~/.claude/projects/`.
+ *  - `{cwd:slug}` (commandcode): `/` → `-`, tira o `-` inicial, MINÚSCULAS.
+ *    AMOSTRA: os DOIS diretórios de projeto reais desta máquina —
+ *    `/home/lucas/Workplace/Projects` → `home-lucas-workplace-projects` e
+ *    `/home/lucas/Workplace/Projects/Stellar` →
+ *    `home-lucas-workplace-projects-stellar` (o segundo é o que prova as
+ *    minúsculas). O QUE FICA INDETERMINADO: o tratamento de QUALQUER
+ *    caractere que não seja `/` — espaço, acento, ponto, `_`, contrabarra.
+ *    Nenhum dado em disco discrimina: não existe, aqui, um cwd com um desses
+ *    e diretório de projeto criado. Se o seu cwd tiver espaço ou acento,
+ *    NINGUÉM MEDIU essa regra — a conta desta função pode não achar o
+ *    diretório, e o lado em que isso falha é o seguro (sem candidato, não
+ *    premia a sessão errada). A medição que fecha isto é rodar o CLI num cwd
+ *    com um ponto e comparar o diretório criado.
+ *  - `{cwd}` cru: nenhum store medido usa hoje.
+ *
+ * `~` → home. Lê `homedir()` na CHAMADA, nunca no load do módulo: é o que
+ * deixa um teste apontar o store para uma árvore de fixture só mexendo em
+ * `$HOME`.
  */
-async function readCodexSessionMeta(
-  filePath: string,
-): Promise<{ sessionId: string; cwd: string } | null> {
-  let content: string;
-  try {
-    content = await readFile(filePath, "utf8");
-  } catch {
-    return null;
-  }
-  const first = content.split("\n").find((line) => line.trim());
-  if (!first) return null;
-  try {
-    const parsed = JSON.parse(first) as {
-      type?: string;
-      payload?: { session_id?: unknown; cwd?: unknown };
-    };
-    if (parsed.type !== "session_meta") return null;
-    const sessionId = parsed.payload?.session_id;
-    const cwd = parsed.payload?.cwd;
-    if (typeof sessionId !== "string" || typeof cwd !== "string") return null;
-    return { sessionId, cwd };
-  } catch {
-    return null;
-  }
+function expandRoot(root: string, cwd: string): string {
+  const slug = cwd.replace(/\//g, "-").replace(/^-/, "").toLowerCase();
+  const resolved = root
+    .replace("{cwd:dashes}", cwd.replace(/\//g, "-"))
+    .replace("{cwd:slug}", slug)
+    .replace("{cwd}", cwd);
+  return resolved.startsWith("~/") ? join(homedir(), resolved.slice(2)) : resolved;
 }
 
-async function listCodexSessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
-  const root = join(homedir(), ".codex", "sessions");
-  const out: SessionCandidate[] = [];
-  let years: string[];
-  try {
-    years = await readdir(root);
-  } catch {
-    return [];
-  }
-  for (const year of years) {
-    const yearPath = join(root, year);
-    let months: string[];
-    try {
-      months = await readdir(yearPath);
-    } catch {
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Um segmento do glob: `*` = qualquer coisa DENTRO do segmento; `\x` é
+ * literal (é assim que um id entra — ver `substituteId`). */
+function segmentMatches(pattern: string, name: string): boolean {
+  if (pattern === "*") return true;
+  if (!pattern.includes("*") && !pattern.includes("\\")) return pattern === name;
+  let source = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i]!;
+    if (char === "\\" && i + 1 < pattern.length) {
+      source += escapeRegExp(pattern[++i]!);
       continue;
     }
-    for (const month of months) {
-      const monthPath = join(yearPath, month);
-      let days: string[];
+    source += char === "*" ? ".*" : escapeRegExp(char);
+  }
+  return new RegExp(`^${source}$`).test(name);
+}
+
+/** O id entra no padrão de LEITURA como texto literal: um `*` dentro de um
+ * id não pode virar curinga. */
+function substituteId(pattern: string, resumeId: string): string {
+  return pattern.replaceAll("{id}", resumeId.replace(/[*?[\]\\]/g, "\\$&"));
+}
+
+/** Expande o glob da declaração da esquerda para a direita. Um segmento com
+ * `*` vira `readdir` + filtro; um literal vira só um `join`. Este é o mínimo
+ * que os `list*` à mão pediam do filesystem — nomes de diretório e `stat` do
+ * registro —, e é de propósito que a descoberta NÃO use `withFileTypes`: o
+ * `readdir` de nomes é tudo o que ela precisa. */
+async function expandGlob(root: string, segments: readonly string[]): Promise<string[]> {
+  let paths = [root];
+  for (const segment of segments) {
+    const next: string[] = [];
+    for (const dir of paths) {
+      if (!segment.includes("*")) {
+        next.push(join(dir, segment));
+        continue;
+      }
+      let names: string[];
       try {
-        days = await readdir(monthPath);
+        names = await readdir(dir);
       } catch {
         continue;
       }
-      for (const day of days) {
-        const dayPath = join(monthPath, day);
-        let files: string[];
-        try {
-          files = await readdir(dayPath);
-        } catch {
-          continue;
-        }
-        for (const name of files) {
-          if (!name.startsWith("rollout-") || !name.endsWith(".jsonl")) continue;
-          const full = join(dayPath, name);
-          const st = await stat(full).catch(() => null);
-          if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs)) continue;
-          const meta = await readCodexSessionMeta(full);
-          if (!meta || meta.cwd !== cwd || claimedSessionIds.has(meta.sessionId)) continue;
-          out.push({ id: meta.sessionId, timestampMs: st.mtimeMs });
-        }
-      }
+      for (const name of names) if (segmentMatches(segment, name)) next.push(join(dir, name));
     }
+    paths = next;
   }
-  return out;
+  return paths;
 }
 
-async function listCursorSessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
-  const chatsDir = join(homedir(), ".cursor", "chats");
-  let hashDirs: string[];
-  try {
-    hashDirs = await readdir(chatsDir);
-  } catch {
-    return [];
-  }
-  const out: SessionCandidate[] = [];
-  for (const hash of hashDirs) {
-    const hashPath = join(chatsDir, hash);
-    let sessionDirs: string[];
-    try {
-      sessionDirs = await readdir(hashPath);
-    } catch {
-      continue;
-    }
-    for (const sessionId of sessionDirs) {
-      if (claimedSessionIds.has(sessionId)) continue;
-      const metaPath = join(hashPath, sessionId, "meta.json");
-      let meta: { cwd?: string; createdAtMs?: number };
-      try {
-        meta = JSON.parse(await readFile(metaPath, "utf8"));
-      } catch {
-        continue;
-      }
-      if (
-        meta.cwd !== cwd ||
-        typeof meta.createdAtMs !== "number" ||
-        !isFreshCandidate(meta.createdAtMs, spawnedAtMs)
-      ) continue;
-      out.push({ id: sessionId, timestampMs: meta.createdAtMs });
-    }
-  }
-  return out;
+/** Uma leitura de JSON por arquivo e por varredura: o rollout do codex é
+ * lido para o id E para o cwd, e o `meta.json` do cursor para o tempo E para
+ * o cwd. Sem o cache seriam duas leituras onde as funções à mão faziam uma. */
+type JsonCache = Map<string, unknown>;
+
+async function readJsonFile(path: string, cache: JsonCache): Promise<unknown> {
+  if (cache.has(path)) return cache.get(path);
+  const value = await readFile(path, "utf8")
+    .then((text) => JSON.parse(text) as unknown)
+    .catch(() => null);
+  cache.set(path, value);
+  return value;
 }
 
-async function listOpenCodeSessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
-  // opencode (sst/opencode, see providers.ts) keeps its own sessions in a
-  // real sqlite db (`~/.local/share/opencode/opencode.db`, `session` table
-  // — schema confirmed live on this machine via `PRAGMA table_info`), not
-  // in loose files like the others. Opened readonly: this db belongs to a
-  // separate app that may have it open (WAL mode) at the same time.
-  const dbPath = join(homedir(), ".local", "share", "opencode", "opencode.db");
-  let db: Database.Database;
-  try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
-  } catch {
-    return [];
+/** O JSON da PRIMEIRA linha não-vazia. Lê o arquivo inteiro (como a versão
+ * à mão): ler só um prefixo mudaria o comportamento em arquivo truncado,
+ * que é exatamente onde esta leitura importa. */
+async function readFirstJsonLine(path: string, cache: JsonCache): Promise<unknown> {
+  const key = `line\u0000${path}`;
+  if (cache.has(key)) return cache.get(key);
+  const value = await readFile(path, "utf8")
+    .then((content) => {
+      const first = content.split("\n").find((line) => line.trim());
+      return first ? (JSON.parse(first) as unknown) : null;
+    })
+    .catch(() => null);
+  cache.set(key, value);
+  return value;
+}
+
+function valueAt(value: unknown, path: readonly string[]): unknown {
+  let current = value;
+  for (const key of path) {
+    if (current === null || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[key];
   }
+  return current;
+}
+
+/** Id que sai do CAMINHO, sem abrir o arquivo — é o que permite checar
+ * `claimedSessionIds` antes de pagar a leitura do conteúdo, a mesma ordem
+ * que as funções à mão tinham. `null` quando o id só sai do conteúdo. */
+function pathDerivedId(source: SessionIdSource, entryPath: string): string | null {
+  if (source.from === "fileName") {
+    const name = basename(entryPath);
+    return name.endsWith(source.strip) ? name.slice(0, -source.strip.length) : null;
+  }
+  if (source.from === "dirName") return basename(dirname(entryPath));
+  return null;
+}
+
+async function contentDerivedId(
+  source: SessionIdSource,
+  entryPath: string,
+  cache: JsonCache,
+): Promise<string | null> {
+  if (source.from !== "jsonLine") return null;
+  const value = valueAt(await readFirstJsonLine(entryPath, cache), source.path);
+  return typeof value === "string" ? value : null;
+}
+
+async function entryTimestamp(
+  source: SessionTimeSource,
+  entryPath: string,
+  cache: JsonCache,
+): Promise<number | null> {
+  if (source.from === "mtime") {
+    const st = await stat(entryPath).catch(() => null);
+    return st ? st.mtimeMs : null;
+  }
+  const value = valueAt(await readJsonFile(entryPath, cache), source.path);
+  return typeof value === "number" ? value : null;
+}
+
+async function entryMatchesCwd(
+  source: SessionCwdSource,
+  entryPath: string,
+  cwd: string,
+  cache: JsonCache,
+): Promise<boolean> {
+  switch (source.from) {
+    case "root":
+      return true;
+    case "binaryWorkspaceUri":
+      return (await extractAntigravityWorkspaceUri(entryPath)) === `file://${cwd}`;
+    case "json":
+      return valueAt(await readJsonFile(entryPath, cache), source.path) === cwd;
+    case "jsonLine":
+      return valueAt(await readFirstJsonLine(entryPath, cache), source.path) === cwd;
+  }
+}
+
+function sqlIdentifier(name: string): string {
+  if (!SQL_IDENTIFIER_RE.test(name)) throw new Error(`not a SQL identifier: ${name}`);
+  return name;
+}
+
+function openReadonlySqlite(dbPath: string): Database.Database | null {
   try {
-    // `time_created`, not `time_updated`: an old session receiving a later
-    // turn is not evidence that this newly rearmed card created it.
+    return new Database(dbPath, { readonly: true, fileMustExist: true });
+  } catch {
+    return null;
+  }
+}
+
+/** O carimbo da coluna na forma DECLARADA, em epoch-ms. `null` quando o valor
+ * não é daquela forma — nunca um chute pelo tamanho do número, que é o que
+ * faria uma data de 2026 virar 1970 (ou o contrário) em silêncio. */
+function toEpochMs(value: unknown, format: SqliteTimeFormat): number | null {
+  if (format === "epoch-ms") return typeof value === "number" && value > 0 ? value : null;
+  if (typeof value !== "string") return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/** O predicado de frescor na forma declarada. Para ISO-8601 é o `julianday()`
+ * do SQLite (o parser de data dele) em vez de `>` de texto: `>` de texto
+ * funcionaria enquanto todos os valores tivessem a MESMA largura e precisão, e
+ * um `…06Z` contra `…06.776Z` ordena errado no próprio segundo. Um valor que
+ * ele não consiga parsear vira NULL e a linha sai — o lado seguro. */
+function sqliteTimePredicate(column: string, format: SqliteTimeFormat): string {
+  const col = sqlIdentifier(column);
+  return format === "iso-8601" ? `julianday(${col}) > julianday(?)` : `${col} > ?`;
+}
+
+function discoverFromSqlite(store: SqliteStore, cwd: string, spawnedAtMs: number): SessionCandidate[] {
+  const db = openReadonlySqlite(expandRoot(store.db, cwd));
+  if (!db) return [];
+  const timeFormat = store.timeFormat ?? "epoch-ms";
+  try {
+    const { table, idColumn, cwdColumn, timeColumn } = store.discovery;
     const rows = db
-      .prepare("SELECT id, time_created FROM session WHERE directory = ? AND time_created > ?")
-      .all(cwd, spawnedAtMs) as { id: string; time_created: number }[];
-    return rows
-      .filter((row) => !claimedSessionIds.has(row.id) && isFreshCandidate(row.time_created, spawnedAtMs))
-      .map((row) => ({ id: row.id, timestampMs: row.time_created }));
+      .prepare(
+        `SELECT ${sqlIdentifier(idColumn)} AS id, ${sqlIdentifier(timeColumn)} AS time FROM ${sqlIdentifier(table)}` +
+          ` WHERE ${sqlIdentifier(cwdColumn)} = ? AND ${sqliteTimePredicate(timeColumn, timeFormat)}`,
+      )
+      .all(cwd, timeFormat === "iso-8601" ? new Date(spawnedAtMs).toISOString() : spawnedAtMs) as {
+      id: string;
+      time: unknown;
+    }[];
+    const out: SessionCandidate[] = [];
+    for (const row of rows) {
+      const timestampMs = toEpochMs(row.time, timeFormat);
+      if (timestampMs === null || claimedSessionIds.has(row.id)) continue;
+      if (!isFreshCandidate(timestampMs, spawnedAtMs)) continue;
+      out.push({ id: row.id, timestampMs });
+    }
+    return out;
   } catch {
     return [];
   } finally {
@@ -459,56 +646,81 @@ async function listOpenCodeSessions(cwd: string, spawnedAtMs: number): Promise<S
   }
 }
 
+/** O leitor de DESCOBERTA — um só, dirigido pela declaração. A ordem dos
+ * passos é a das funções à mão: id barato (do caminho) → filtro de já
+ * reivindicado → frescor → id do conteúdo → cwd. */
+async function discoverWithStore(
+  store: SessionStore,
+  cwd: string,
+  spawnedAtMs: number,
+): Promise<SessionCandidate[]> {
+  if (store.kind === "sqlite") return discoverFromSqlite(store, cwd, spawnedAtMs);
+  const entries = await expandGlob(expandRoot(store.root, cwd), store.pattern.split("/"));
+  const cache: JsonCache = new Map();
+  const out: SessionCandidate[] = [];
+  for (const entry of entries) {
+    const pathId = pathDerivedId(store.id, entry);
+    if (pathId !== null && claimedSessionIds.has(pathId)) continue;
+    const timestampMs = await entryTimestamp(store.time, entry, cache);
+    if (timestampMs === null || !isFreshCandidate(timestampMs, spawnedAtMs)) continue;
+    const id = pathId ?? (await contentDerivedId(store.id, entry, cache));
+    if (id === null || claimedSessionIds.has(id)) continue;
+    if (!(await entryMatchesCwd(store.cwd, entry, cwd, cache))) continue;
+    out.push({ id, timestampMs });
+  }
+  return out;
+}
+
+/**
+ * A FERRAMENTA que usa os parâmetros declarados: quem tem store é
+ * observável, quem não tem devolve `[]` — sem varredura por heurística.
+ *
+ * Exportada porque é a costura que o spec vai usar quando a declaração
+ * virar campo do provider: um dinâmico com store medido passa a ser
+ * observável sem tocar em código.
+ */
+export async function discoverSessionCandidates(
+  providerId: string,
+  cwd: string,
+  spawnedAtMs: number,
+): Promise<SessionCandidate[]> {
+  const store = declaredSessionStore(providerId);
+  if (!store) return [];
+  return discoverWithStore(store, cwd, spawnedAtMs);
+}
+
+
 /**
  * DESIGN-BACKLOG.md, achado 2 (2026-09-11) — encaminhamento 3: validação na
  * LEITURA, antes de honrar um `resumeId` restaurado (`pty-registry.ts`'s
- * `spawn`, quando `spawnOpts.resumeId` já vem preenchido do DB). Cada
- * provider guarda sessão num formato/lugar diferente — este é o único
- * módulo que já precisa conhecer esses layouts (mesma razão dos `find*`
- * acima), então a leitura de evidência mora aqui; a DECISÃO pura fica em
- * `session-resume-validation.ts` (mesmo split que `decideRearmOnLine` já
- * estabeleceu — I/O de um lado, lógica testável do outro).
+ * `spawn`, quando `spawnOpts.resumeId` já vem preenchido do DB). A DECISÃO
+ * pura fica em `session-resume-validation.ts`; a leitura de disco mora aqui
+ * (mesmo split de `decideRearmOnLine` — I/O de um lado, lógica testável do
+ * outro), e sai da MESMA declaração que a descoberta.
  *
  * Síncrono de propósito: `pty-registry.ts::spawn` monta os argumentos do
  * CLI (incluindo `--resume <id>`) e chama `pty.spawn` de forma síncrona;
- * validar antes precisa terminar antes dessa decisão, e um `stat`/leitura
- * de índice é barato o bastante (uma vez por spawn, nunca num loop) pra
- * não justificar reestruturar `spawn` inteiro em async só por isto.
+ * validar precisa terminar antes dessa decisão, e um `stat` por spawn (nunca
+ * num loop) não justifica reestruturar `spawn` inteiro em async por isto.
  *
- * `hasContent` por provider (guarda de sanidade, NÃO a definição de
- * "turno completo" do encaminhamento 2 — ver o próprio doc comment de
- * `decideResumeValidity`). Duas rodadas de review adversarial (2026-09-11)
- * já provaram furos em versões anteriores desta lista — ver os doc
- * comments de `findCursorSessionEvidence` e `findOpenCodeSessionEvidence`
- * pra cada achado específico:
- *   - claude/antigravity: tamanho do arquivo de sessão. `MIN_CONTENT_BYTES`
- *     é deliberadamente minúsculo (bem abaixo do menor stub real medido —
- *     ~268 bytes pro primeiro write do claude) — o objetivo aqui é só
- *     pegar "não existe conteúdo nenhum" (0 bytes / arquivo truncado),
- *     nunca arriscar marcar uma conversa real e curta como inválida.
- *   - cursor: EXISTÊNCIA de `store.db` dentro do diretório da sessão (não
- *     mais um limiar de bytes — uma versão anterior comparava a soma do
- *     diretório com `MIN_CONTENT_BYTES`, mas até uma sessão vazia real já
- *     tem 138-169 bytes só de `meta.json`, sempre acima do limiar: a
- *     checagem nunca reprovava nada).
- *   - opencode: pelo menos uma linha na tabela `message` pra este
- *     `session_id` (não mais `tokens_input`/`tokens_output`/`cost` da
- *     própria linha — uma versão anterior usava isso, mas essas colunas
- *     continuam zeradas até o FIM do turno, então um prompt real cujo
- *     processo morre antes da resposta terminar era descartado como
- *     "vazio", perdendo conteúdo de verdade).
- *   - codex: o arquivo `rollout-*.jsonl` em `~/.codex/sessions/YYYY/MM/DD`
- *     cujo nome contém o id (mesmo store da descoberta). Tamanho do
- *     arquivo via `fileEvidence`. `session_index.jsonl` não é lido —
- *     medido incompleto (task c1064d95).
+ * O QUE CONTA COMO "TEM CONTEÚDO" é medição de cada CLI e vive na declaração
+ * (`capacity.session.store` do spec, lida por `providerById` — a tabela
+ * paralela `SESSION_STORES` que morava aqui foi deletada na task 2ea0269f),
+ * não numa lista aqui: bytes para claude/antigravity/
+ * codex, EXISTÊNCIA de `store.db` para o cursor e uma linha em `message`
+ * para o opencode. Duas rodadas de review adversarial (2026-09-11) provaram
+ * furos em versões anteriores — a soma de bytes do diretório do cursor
+ * (nunca reprovava nada: `meta.json` sozinho já passa de 16) e
+ * `tokens_*`/`cost` do opencode (zerados até o FIM do turno, reprovavam um
+ * prompt real cujo processo morreu antes da resposta). As duas medições
+ * ficaram no comentário da própria declaração.
  */
-const MIN_CONTENT_BYTES = 16;
 
-function fileEvidence(path: string): ResumeTargetEvidence {
+function fileEvidence(path: string, minBytes: number = MIN_CONTENT_BYTES): ResumeTargetEvidence {
   if (!existsSync(path)) return { exists: false, hasContent: false, mtimeMs: null };
   try {
     const st = statSync(path);
-    return { exists: true, hasContent: st.size >= MIN_CONTENT_BYTES, mtimeMs: st.mtimeMs };
+    return { exists: true, hasContent: st.size >= minBytes, mtimeMs: st.mtimeMs };
   } catch {
     // Achado entre o `existsSync` e o `statSync` (arquivo apagado por
     // fora bem no meio da checagem) — trata como "não existe", nunca
@@ -518,151 +730,89 @@ function fileEvidence(path: string): ResumeTargetEvidence {
   }
 }
 
-function findClaudeSessionDirEvidence(cwd: string, resumeId: string): ResumeTargetEvidence {
-  const path = join(homedir(), ".claude", "projects", encodeCwdForClaude(cwd), `${resumeId}.jsonl`);
-  return fileEvidence(path);
-}
-
-function findAntigravitySessionEvidence(resumeId: string): ResumeTargetEvidence {
-  const path = join(homedir(), ".gemini", "antigravity-cli", "conversations", `${resumeId}.db`);
-  return fileEvidence(path);
-}
-
-/**
- * Review adversarial (2026-09-11), achado 3 — a versão original somava o
- * tamanho de TODOS os arquivos do diretório e comparava com
- * `MIN_CONTENT_BYTES` (16). Furo provado pela PRÓPRIA medição desta
- * investigação: uma sessão cursor vazia (nunca recebeu prompt) já tem
- * `meta.json` sozinho com 138-169 bytes — bem acima de 16 — então a
- * checagem sempre devolvia `hasContent: true`, pra QUALQUER sessão,
- * fantasma ou real. Nunca reprovava nada.
- *
- * Investigado ao vivo (fora do board, diretórios de teste limpos depois):
- * o conteúdo de verdade de uma conversa cursor mora em `store.db` (sqlite,
- * modo WAL) dentro do diretório da sessão — `meta.json`/
- * `prompt_history.json` são só metadados, sempre pequenos, presentes
- * mesmo numa sessão nunca usada. Confirmado com 3 diretórios reais: um
- * vazio (só `meta.json`, 138-169 bytes, sem `store.db` nenhum) e dois
- * com conversa de verdade (ambos com `store.db` presente desde a primeira
- * troca — uma sessão de "say hi" já tinha `store.db-wal` de 230KB). A
- * EXISTÊNCIA de `store.db` já é um sinal binário limpo — a app cursor só
- * cria esse arquivo quando uma conversa de fato começa, nunca no spawn da
- * sessão vazia — então usar tamanho aqui seria reintroduzir o mesmo tipo
- * de número mágico que acabou de provar furado, sem necessidade.
- */
-function findCursorSessionEvidence(resumeId: string): ResumeTargetEvidence {
-  const chatsDir = join(homedir(), ".cursor", "chats");
-  let hashDirs: string[];
-  try {
-    hashDirs = readdirSync(chatsDir);
-  } catch {
-    return { exists: false, hasContent: false, mtimeMs: null };
-  }
-  for (const hash of hashDirs) {
-    const sessionDir = join(chatsDir, hash, resumeId);
-    if (!existsSync(sessionDir)) continue;
-    const storePath = join(sessionDir, "store.db");
-    if (!existsSync(storePath)) {
-      // Diretório da sessão existe, mas sem conversa real — meta.json
-      // sozinho não carrega mtime útil pra stale (sempre presente).
-      return { exists: true, hasContent: false, mtimeMs: null };
+/** O irmão SÍNCRONO do `expandGlob` — mesma declaração, mesmo glob; muda só
+ * o filesystem, porque o `--resume` é decidido de forma síncrona. */
+function expandGlobSync(root: string, segments: readonly string[]): string[] {
+  let paths = [root];
+  for (const segment of segments) {
+    const next: string[] = [];
+    for (const dir of paths) {
+      if (!segment.includes("*")) {
+        next.push(join(dir, segment));
+        continue;
+      }
+      let names: string[];
+      try {
+        names = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of names) if (segmentMatches(segment, name)) next.push(join(dir, name));
     }
-    try {
-      return { exists: true, hasContent: true, mtimeMs: statSync(storePath).mtimeMs };
-    } catch {
-      return { exists: true, hasContent: true, mtimeMs: null };
-    }
+    paths = next;
   }
-  return { exists: false, hasContent: false, mtimeMs: null };
+  return paths;
 }
 
-/**
- * Review adversarial (2026-09-11), achado 2 (falso negativo, o pior tipo)
- * — a versão original usava `tokens_input > 0 || tokens_output > 0 ||
- * cost > 0` da própria linha de `session`. Furo real, reproduzido ao vivo
- * (opencode de verdade, cwd de teste, fora do board): usuário manda um
- * prompt e o processo morre (kill) ANTES do modelo terminar de responder
- * — a linha em `session` nasce com `tokens_input=0, tokens_output=0,
- * cost=0.0` (medido: essas três colunas continuam zeradas mesmo depois de
- * uma mensagem de usuário real já estar gravada) porque opencode só
- * atualiza uso/custo no FIM do turno, não incrementalmente. A checagem
- * antiga descartaria essa sessão como vazia — perda de contexto real, ou
- * seja, exatamente o dano que o encaminhamento 3 existe pra evitar, só
- * que causado pela própria validação.
- *
- * Fix: `message` é uma tabela separada (`session_id` FK), com uma linha
- * por turno — confirmado ao vivo que a linha do usuário já existe ali no
- * mesmo instante em que a sessão nasce, antes de qualquer resposta do
- * modelo. Existência de PELO MENOS UMA linha em `message` é sinal direto
- * de "teve conteúdo real", sem depender de uso/custo terem sido
- * contabilizados.
- */
-function findOpenCodeSessionEvidence(resumeId: string): ResumeTargetEvidence {
-  const dbPath = join(homedir(), ".local", "share", "opencode", "opencode.db");
-  let db: Database.Database;
-  try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
-  } catch {
-    return { exists: false, hasContent: false, mtimeMs: null };
+/** O leitor de LEITURA — a mesma declaração da descoberta, com o id
+ * substituído no padrão. `null` = este store NÃO declara leitura (a resposta
+ * sai da declaração do provider, nunca de evidência inventada). */
+function readWithStore(store: SessionStore, cwd: string, resumeId: string): ResumeTargetEvidence | null {
+  if (store.kind === "sqlite") {
+    const read = store.read;
+    return read ? readSqliteEvidence(store, read, cwd, resumeId) : null;
   }
+  const read = store.read;
+  if (!read) return null;
+  const match = expandGlobSync(
+    expandRoot(store.root, cwd),
+    substituteId(read.exists, resumeId).split("/"),
+  ).find((candidate) => existsSync(candidate));
+  if (!match) return { exists: false, hasContent: false, mtimeMs: null };
+  if ("minBytes" in read.content) return fileEvidence(match, read.content.minBytes);
+  // `file`: o registro é um DIRETÓRIO e o conteúdo é um arquivo dentro dele.
+  // "O diretório da sessão existe" e "a conversa começou" são perguntas
+  // diferentes — é este par que o cursor expõe.
+  const contentPath = join(match, read.content.file);
+  if (!existsSync(contentPath)) return { exists: true, hasContent: false, mtimeMs: null };
   try {
-    // `time_updated` (ms) é o sinal de atividade da própria linha de
-    // sessão — medido como presente no schema local; se a coluna não
-    // existir numa versão mais velha, o catch devolve mtime null e o
-    // ramo stale simplesmente não dispara pra esse provider.
-    const session = db
-      .prepare("SELECT id, time_updated FROM session WHERE id = ?")
-      .get(resumeId) as { id: string; time_updated: number | null } | undefined;
-    if (!session) return { exists: false, hasContent: false, mtimeMs: null };
-    const messageCount = db.prepare("SELECT COUNT(*) as n FROM message WHERE session_id = ?").get(resumeId) as { n: number };
-    const mtimeMs = typeof session.time_updated === "number" && session.time_updated > 0 ? session.time_updated : null;
-    return { exists: true, hasContent: messageCount.n > 0, mtimeMs };
+    return { exists: true, hasContent: true, mtimeMs: statSync(contentPath).mtimeMs };
+  } catch {
+    return { exists: true, hasContent: true, mtimeMs: null };
+  }
+}
+
+function readSqliteEvidence(
+  store: SqliteStore,
+  read: SqliteReadSpec,
+  cwd: string,
+  resumeId: string,
+): ResumeTargetEvidence {
+  const db = openReadonlySqlite(expandRoot(store.db, cwd));
+  if (!db) return { exists: false, hasContent: false, mtimeMs: null };
+  try {
+    const { table, idColumn, timeColumn, contentTable, contentColumn } = read;
+    const row = db
+      .prepare(
+        `SELECT ${sqlIdentifier(timeColumn)} AS time FROM ${sqlIdentifier(table)} WHERE ${sqlIdentifier(idColumn)} = ?`,
+      )
+      .get(resumeId) as { time: unknown } | undefined;
+    if (!row) return { exists: false, hasContent: false, mtimeMs: null };
+    const content = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM ${sqlIdentifier(contentTable)} WHERE ${sqlIdentifier(contentColumn)} = ?`,
+      )
+      .get(resumeId) as { n: number };
+    // A coluna de atividade da própria linha, na forma DECLARADA; se ela não
+    // existir numa versão mais velha do schema, o catch devolve "não existe"
+    // e o ramo stale simplesmente não dispara para este provider.
+    const mtimeMs = toEpochMs(row.time, store.timeFormat ?? "epoch-ms");
+    return { exists: true, hasContent: content.n > 0, mtimeMs };
   } catch {
     return { exists: false, hasContent: false, mtimeMs: null };
   } finally {
     db.close();
   }
-}
-
-function findCodexSessionEvidence(resumeId: string): ResumeTargetEvidence {
-  // Same store as discovery — the rollout file, not session_index.jsonl
-  // (measured incomplete). Filename embeds the session id.
-  const root = join(homedir(), ".codex", "sessions");
-  let years: string[];
-  try {
-    years = readdirSync(root);
-  } catch {
-    return { exists: false, hasContent: false, mtimeMs: null };
-  }
-  for (const year of years) {
-    let months: string[];
-    try {
-      months = readdirSync(join(root, year));
-    } catch {
-      continue;
-    }
-    for (const month of months) {
-      let days: string[];
-      try {
-        days = readdirSync(join(root, year, month));
-      } catch {
-        continue;
-      }
-      for (const day of days) {
-        let files: string[];
-        try {
-          files = readdirSync(join(root, year, month, day));
-        } catch {
-          continue;
-        }
-        for (const name of files) {
-          if (!name.startsWith("rollout-") || !name.endsWith(".jsonl") || !name.includes(resumeId)) continue;
-          return fileEvidence(join(root, year, month, day, name));
-        }
-      }
-    }
-  }
-  return { exists: false, hasContent: false, mtimeMs: null };
 }
 
 /** A DECLARAÇÃO diz que este provider retoma sessão existente? Lida de
@@ -674,18 +824,6 @@ function providerDeclaresSessionResume(providerId: string): boolean {
   return !!session && (session.canImposeSessionId || session.resumeFlag !== undefined || session.continueFlag !== undefined);
 }
 
-/** Canal de LEITURA por provider — onde cada CLI guarda sessão é MEDIÇÃO
- * daquela CLI, não política. A tabela substitui o `switch` fechado: quem não
- * tem canal cai no default DERIVADO da declaração, nunca num "inexistente"
- * fixo. Um provider novo entra aqui só quando o store dele for medido. */
-const RESUME_EVIDENCE_FINDERS: Record<string, (cwd: string, resumeId: string) => ResumeTargetEvidence> = {
-  claude: findClaudeSessionDirEvidence,
-  antigravity: (_cwd, resumeId) => findAntigravitySessionEvidence(resumeId),
-  cursor: (_cwd, resumeId) => findCursorSessionEvidence(resumeId),
-  opencode: (_cwd, resumeId) => findOpenCodeSessionEvidence(resumeId),
-  codex: (_cwd, resumeId) => findCodexSessionEvidence(resumeId),
-};
-
 /** Ponto único chamado por `pty-registry.ts::spawn` antes de honrar um
  * `resumeId` restaurado. Providers sem conceito de sessão (`bash`) nunca
  * chegam aqui — o chamador já filtra por `capacity.role === "agent"`.
@@ -695,18 +833,23 @@ const RESUME_EVIDENCE_FINDERS: Record<string, (cwd: string, resumeId: string) =>
  * silêncio) e passa a distinguir pela própria declaração:
  *  - provider que não declara NENHUMA forma de retomada → `{exists:false}`,
  *    e o spawn limpo resultante é a verdade (não havia o que honrar);
- *  - provider que DECLARA retomar mas cujo store ninguém mediu (cline,
- *    commandcode — `providers-dynamic.ts`) → `null`: não há prova de que o
- *    id esteja errado, então não bloqueia. Bloquear por ausência de medição
+ *  - provider que DECLARA retomar mas cujo store ninguém mediu — ou cujo
+ *    store mediu só a DESCOBERTA, como o cline → `null`: não há prova de que
+ *    o id esteja errado, então não bloqueia. Bloquear por ausência de medição
  *    derrubaria a retomada de um provider capaz — o dano que este
- *    encaminhamento existe pra evitar. */
+ *    encaminhamento existe pra evitar.
+ *
+ * As duas perguntas são independentes por desenho: um store pode fechar a
+ * descoberta e não fechar a leitura (`store.read` ausente), e aí a resposta
+ * volta a ser a da DECLARAÇÃO — nunca uma evidência inventada. */
 export function getResumeTargetEvidence(
   providerId: string,
   cwd: string,
   resumeId: string,
 ): ResumeTargetEvidence | null {
-  const find = RESUME_EVIDENCE_FINDERS[providerId];
-  if (find) return find(cwd, resumeId);
+  const store = declaredSessionStore(providerId);
+  const measured = store ? readWithStore(store, cwd, resumeId) : null;
+  if (measured) return measured;
   return providerDeclaresSessionResume(providerId) ? null : { exists: false, hasContent: false };
 }
 
@@ -776,46 +919,6 @@ export async function extractAntigravityWorkspaceUri(filePath: string): Promise<
 // de re-tentativa e reserva de posse, não renovação de prazo. O poller
 // já vive enquanto `resume_id` for null.
 
-async function listAntigravitySessions(cwd: string, spawnedAtMs: number): Promise<SessionCandidate[]> {
-  const dir = join(homedir(), ".gemini", "antigravity-cli", "conversations");
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch {
-    return [];
-  }
-  const cwdUri = `file://${cwd}`;
-  const out: SessionCandidate[] = [];
-  for (const name of entries) {
-    if (!name.endsWith(".db")) continue; // skip sqlite's own -wal/-shm siblings
-    const id = name.slice(0, -".db".length);
-    if (claimedSessionIds.has(id)) continue;
-    const full = join(dir, name);
-    const st = await stat(full).catch(() => null);
-    if (!st || !isFreshCandidate(st.mtimeMs, spawnedAtMs)) continue;
-    const workspaceUri = await extractAntigravityWorkspaceUri(full);
-    if (workspaceUri !== cwdUri) continue;
-    out.push({ id, timestampMs: st.mtimeMs });
-  }
-  return out;
-}
-
-/** Canal de DESCOBERTA por provider — onde o poller procura sessão nova.
- * Mesma ideia de `RESUME_EVIDENCE_FINDERS`: localização é medição, e a
- * presença de um canal é o que define se o watcher faz sentido. Um provider
- * sem canal (todo dinâmico hoje — cline/commandcode não tiveram o store
- * medido) simplesmente não é observável, o que é honesto: inventar uma
- * varredura às cegas só acharia o arquivo de outro card. Onde a CLI impõe o
- * id (cline) o watcher nem é necessário; onde ela só retoma (commandcode) a
- * ausência de canal é declarada, não fingida. */
-const SESSION_DISCOVERY_CHANNELS: Record<string, (cwd: string, spawnedAtMs: number) => Promise<SessionCandidate[]>> = {
-  claude: listClaudeSessions,
-  codex: listCodexSessions,
-  cursor: listCursorSessions,
-  antigravity: listAntigravitySessions,
-  opencode: listOpenCodeSessions,
-};
-
 /**
  * Polls the on-disk location each provider writes new sessions to, looking
  * for one created after `spawnedAtMs`. Lives while the card exists and
@@ -842,11 +945,10 @@ export function watchForSession(
   } = {},
 ): () => void {
   // Antes: `providerId !== "claude" && … && providerId !== "opencode"`. Agora
-  // a pergunta é "existe canal de descoberta para este provider?" — a mesma
-  // tabela que alimenta a busca abaixo, uma fonte só, e um dinâmico com canal
-  // medido amanhã é observável sem tocar nesta linha.
-  const discoveryChannel = SESSION_DISCOVERY_CHANNELS[providerId];
-  if (!discoveryChannel) return () => {};
+  // a pergunta é "este provider tem STORE declarado?" — a mesma declaração
+  // que alimenta a busca abaixo, uma fonte só: um dinâmico com store medido
+  // amanhã é observável sem tocar nesta linha.
+  if (!declaredSessionStore(providerId)) return () => {};
 
   let stopped = false;
   const matchStartMs = options.matchStartMs ?? options.rearmAtMs ?? spawnedAtMs;
@@ -864,7 +966,7 @@ export function watchForSession(
     try {
       const found = await runExclusive(async () => {
         if (stopped) return null;
-        const candidates = await discoveryChannel(cwd, spawnedAtMs);
+        const candidates = await discoverSessionCandidates(providerId, cwd, spawnedAtMs);
         if (stopped) return null;
         const decision = decideClaimAmongCandidates({
           candidates,

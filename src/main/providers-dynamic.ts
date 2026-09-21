@@ -68,6 +68,15 @@ import {
   type ProviderId,
   type RegisterProvidersResult,
 } from "./providers";
+import {
+  MIN_CONTENT_BYTES,
+  SQL_IDENTIFIER_RE,
+  type FileReadSpec,
+  type SessionCwdSource,
+  type SessionIdSource,
+  type SessionStore,
+  type SessionTimeSource,
+} from "./session-store-spec";
 
 /** Nome do arquivo dentro de `userData` — mesma convenção de `locale.json`
  * / `local-identity.json` / `remote-devices.json` (um JSON por assunto, na
@@ -163,6 +172,17 @@ export type DynamicProviderSpec = {
       resumeFlag?: string;
       imposeFlag?: string;
       continueFlag?: string;
+      /** ONDE ESTA CLI GUARDA SESSÃO (task 2ea0269f) — a declaração que dá
+       * ao rodapé do card de onde vir. A LINGUAGEM é `SessionStore`
+       * (`session-store-spec.ts`, com o levantamento medido ao lado do
+       * leitor) e o único leitor é `session-watch.ts`.
+       *
+       * AUSENTE = este provider não é observável, e isso é honesto: sem
+       * âncora medida de cwd e de tempo, varrer o disco às cegas acharia o
+       * arquivo de outro card. Um store pode declarar só a DESCOBERTA (sem
+       * `read`) — a resposta de leitura continua saindo da declaração, nunca
+       * inventada: são canais diferentes. */
+      store?: SessionStore;
     };
     /** `flag` (o CLI tem uma flag real que recebe o bloco composto por
      * `composeSystemPrompt`) ou `none`. Os dois mecanismos nomeados dos
@@ -212,6 +232,18 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
         canImposeSessionId: true,
         resumeFlag: "--id",
         imposeFlag: "--id",
+        // A DESCOBERTA está fechada; a LEITURA não foi medida — e `read`
+        // ausente quer dizer exatamente isso: a resposta continua saindo da
+        // declaração (`null`: não há prova de que o id esteja errado, então
+        // não bloqueia). Medido (`cline` 3.0.62): `started_at` é ISO-8601
+        // TEXT, e sem o `timeFormat` um `>` numérico daria TODA linha como
+        // fresca (medi: 1 de 1) — o candidato errado premiado.
+        store: {
+          kind: "sqlite",
+          db: "~/.cline/data/db/sessions.db",
+          timeFormat: "iso-8601",
+          discovery: { table: "sessions", idColumn: "session_id", cwdColumn: "cwd", timeColumn: "started_at" },
+        },
       },
       systemPrompt: { mechanism: "flag", flag: "-s" },
       mcp: {
@@ -304,6 +336,26 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
         // nunca gera UUID para ele.
         canImposeSessionId: false,
         resumeFlag: "--resume",
+        // MEDIDO (`command-code` 1.58.1): o store é
+        // `~/.commandcode/projects/<slug do cwd>/`, e o PRÓPRIO CLI lista
+        // sessões filtrando `*.meta.json` e tirando esse sufixo do nome. É
+        // por isso que o padrão é `*.meta.json` e NÃO `*.jsonl`: a mesma
+        // pasta guarda `<id>.jsonl`, `<id>.checkpoints.jsonl`,
+        // `<id>.prompts.jsonl` e outros sidecars, então um `*.jsonl`
+        // proporia `<uuid>.checkpoints` como se fosse sessão.
+        store: {
+          kind: "files",
+          root: "~/.commandcode/projects/{cwd:slug}",
+          pattern: "*.meta.json",
+          id: { from: "fileName", strip: ".meta.json" },
+          // O cwd NÃO está no meta.json (medido: ele carrega só `traceIds` e
+          // `title`) — vem do caminho, como no claude. O header do transcript
+          // TEM cwd e timestamp, mas lê-lo na descoberta custaria abrir até
+          // 3 MB a cada poll.
+          cwd: { from: "root" },
+          time: { from: "mtime" },
+          read: { exists: "{id}.jsonl", content: { minBytes: MIN_CONTENT_BYTES } },
+        },
       },
       systemPrompt: { mechanism: "none" },
       mcp: {
@@ -557,6 +609,231 @@ export function parseBaseArgs(value: unknown): { ok: true; args: string[] } | { 
  * Devolve o spec tipado ou a frase da recusa — sem exceção, para que uma
  * entrada podre no meio do arquivo não apague as outras.
  */
+// ---------------------------------------------------------------------------
+// O STORE DE SESSÃO (task 2ea0269f) — o validador da declaração
+//
+// Mesma postura do resto deste arquivo: recusar DIZENDO o que se esperava e o
+// que chegou, nomeando o campo por inteiro (`capacity.session.store.<...>`),
+// em vez de aceitar e largar. Um store aceito mas malformado não falha alto —
+// ele faz o watcher procurar no lugar errado, que é o dano que a declaração
+// existe para evitar.
+// ---------------------------------------------------------------------------
+
+const SESSION_ID_SOURCES = ["fileName", "dirName", "jsonLine"] as const;
+const SESSION_CWD_SOURCES = ["root", "jsonLine", "json", "binaryWorkspaceUri"] as const;
+const SESSION_TIME_SOURCES = ["mtime", "json"] as const;
+const SESSION_STORE_KINDS = ["files", "sqlite"] as const;
+const SQLITE_TIME_FORMATS = ["epoch-ms", "iso-8601"] as const;
+
+type StoreParse<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+/** Um caminho de navegação em JSON (`["payload", "session_id"]`): não-vazio,
+ * e cada item um nome — um item vazio navegaria para lugar nenhum. */
+function parseJsonPath(value: unknown, field: string): StoreParse<string[]> {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { ok: false, reason: refusal(field, 'a non-empty array of JSON keys (e.g. ["payload", "session_id"])', value === undefined ? RECEIVED_NOTHING : value) };
+  }
+  const path: string[] = [];
+  for (const key of value) {
+    const parsed = nonEmptyString(key);
+    if (parsed === null) return { ok: false, reason: refusal(field, "a non-empty array of JSON keys", key) };
+    path.push(parsed);
+  }
+  return { ok: true, value: path };
+}
+
+function parseIdSource(raw: unknown, field: string): StoreParse<SessionIdSource> {
+  if (!isRecord(raw)) {
+    return { ok: false, reason: refusal(field, `an object with \`from\` one of ${acceptedList(SESSION_ID_SOURCES)}`, raw) };
+  }
+  // Nomeia o CAMPO do enum (`...id.from`), não o objeto que o contém: é onde
+  // o humano põe o cursor, e é o que o teste anti-drift exige que a recusa
+  // cite — uma recusa que não nomeia o campo obriga a caçada por tentativa.
+  if (!isOneOf(raw.from, SESSION_ID_SOURCES)) {
+    return { ok: false, reason: refusal(`${field}.from`, `one of ${acceptedList(SESSION_ID_SOURCES)}`, raw.from === undefined ? RECEIVED_NOTHING : raw.from) };
+  }
+  if (raw.from === "fileName") {
+    const strip = nonEmptyString(raw.strip);
+    if (strip === null) {
+      return { ok: false, reason: refusal(`${field}.strip`, 'the file suffix to remove (e.g. ".jsonl") — required when `from` is "fileName"', raw.strip === undefined ? RECEIVED_NOTHING : raw.strip) };
+    }
+    return { ok: true, value: { from: "fileName", strip } };
+  }
+  if (raw.from === "jsonLine") {
+    const path = parseJsonPath(raw.path, `${field}.path`);
+    if (!path.ok) return path;
+    return { ok: true, value: { from: "jsonLine", path: path.value } };
+  }
+  return { ok: true, value: { from: "dirName" } };
+}
+
+function parseCwdSource(raw: unknown, field: string): StoreParse<SessionCwdSource> {
+  if (raw === "root") return { ok: true, value: { from: "root" } };
+  if (!isRecord(raw)) {
+    return { ok: false, reason: refusal(field, `"root" or an object with \`from\` one of ${acceptedList(SESSION_CWD_SOURCES)}`, raw) };
+  }
+  if (!isOneOf(raw.from, SESSION_CWD_SOURCES)) {
+    return { ok: false, reason: refusal(`${field}.from`, `"root" or one of ${acceptedList(SESSION_CWD_SOURCES)}`, raw.from === undefined ? RECEIVED_NOTHING : raw.from) };
+  }
+  if (raw.from === "root") return { ok: true, value: { from: "root" } };
+  if (raw.from === "binaryWorkspaceUri") return { ok: true, value: { from: "binaryWorkspaceUri" } };
+  const path = parseJsonPath(raw.path, `${field}.path`);
+  if (!path.ok) return path;
+  return raw.from === "json"
+    ? { ok: true, value: { from: "json", path: path.value } }
+    : { ok: true, value: { from: "jsonLine", path: path.value } };
+}
+
+function parseTimeSource(raw: unknown, field: string): StoreParse<SessionTimeSource> {
+  if (!isRecord(raw)) {
+    return { ok: false, reason: refusal(field, `an object with \`from\` one of ${acceptedList(SESSION_TIME_SOURCES)}`, raw) };
+  }
+  if (!isOneOf(raw.from, SESSION_TIME_SOURCES)) {
+    return { ok: false, reason: refusal(`${field}.from`, `one of ${acceptedList(SESSION_TIME_SOURCES)}`, raw.from === undefined ? RECEIVED_NOTHING : raw.from) };
+  }
+  if (raw.from === "mtime") return { ok: true, value: { from: "mtime" } };
+  const path = parseJsonPath(raw.path, `${field}.path`);
+  if (!path.ok) return path;
+  return { ok: true, value: { from: "json", path: path.value } };
+}
+
+/** `{minBytes}` (o próprio registro tem bytes) ou `{file}` (um arquivo DENTRO
+ * do registro — o `store.db` do cursor). */
+function parseFileContent(raw: unknown, field: string): StoreParse<FileReadSpec["content"]> {
+  if (!isRecord(raw)) {
+    return { ok: false, reason: refusal(field, 'an object with `minBytes` (a positive number) or `file` (a name inside the record)', raw) };
+  }
+  if (raw.minBytes !== undefined) {
+    if (typeof raw.minBytes !== "number" || !Number.isFinite(raw.minBytes) || raw.minBytes <= 0) {
+      return { ok: false, reason: refusal(`${field}.minBytes`, "a positive number", raw.minBytes) };
+    }
+    return { ok: true, value: { minBytes: raw.minBytes } };
+  }
+  const file = nonEmptyString(raw.file);
+  if (file === null) {
+    return { ok: false, reason: refusal(`${field}.file`, "a non-empty file name inside the record (e.g. \"store.db\")", raw.file === undefined ? RECEIVED_NOTHING : raw.file) };
+  }
+  return { ok: true, value: { file } };
+}
+
+function parseSqliteColumns(raw: Record<string, unknown>, columns: readonly string[], field: string): StoreParse<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const column of columns) {
+    const name = nonEmptyString(raw[column]);
+    if (name === null) {
+      return { ok: false, reason: refusal(`${field}.${column}`, "a non-empty column name", raw[column] === undefined ? RECEIVED_NOTHING : raw[column]) };
+    }
+    if (!SQL_IDENTIFIER_RE.test(name)) {
+      return { ok: false, reason: refusal(`${field}.${column}`, `a plain SQL identifier (letters, digits, _ — got ${describeValue(name)})`, name) };
+    }
+    out[column] = name;
+  }
+  return { ok: true, value: out };
+}
+
+/** O store de UM provider, validado por inteiro. Exportado para o teste
+ * poder exercitar cada recusa sem montar um arquivo. */
+export function parseSessionStore(raw: unknown): StoreParse<SessionStore> {
+  const field = "capacity.session.store";
+  if (!isRecord(raw)) {
+    return { ok: false, reason: refusal(field, `an object with \`kind\` one of ${acceptedList(SESSION_STORE_KINDS)}`, raw) };
+  }
+  if (!isOneOf(raw.kind, SESSION_STORE_KINDS)) {
+    return { ok: false, reason: refusal(`${field}.kind`, `one of ${acceptedList(SESSION_STORE_KINDS)}`, raw.kind === undefined ? RECEIVED_NOTHING : raw.kind) };
+  }
+
+  if (raw.kind === "sqlite") {
+    const db = nonEmptyString(raw.db);
+    if (db === null) {
+      return { ok: false, reason: refusal(`${field}.db`, 'the database path (e.g. "~/.local/share/opencode/opencode.db")', raw.db === undefined ? RECEIVED_NOTHING : raw.db) };
+    }
+    let timeFormat: (typeof SQLITE_TIME_FORMATS)[number] | undefined;
+    if (raw.timeFormat !== undefined && raw.timeFormat !== null) {
+      if (!isOneOf(raw.timeFormat, SQLITE_TIME_FORMATS)) {
+        return { ok: false, reason: refusal(`${field}.timeFormat`, `one of ${acceptedList(SQLITE_TIME_FORMATS)}`, raw.timeFormat) };
+      }
+      timeFormat = raw.timeFormat;
+    }
+    if (!isRecord(raw.discovery)) {
+      return { ok: false, reason: refusal(`${field}.discovery`, "an object with `table`, `idColumn`, `cwdColumn` and `timeColumn`", raw.discovery) };
+    }
+    const discovery = parseSqliteColumns(raw.discovery, ["table", "idColumn", "cwdColumn", "timeColumn"], `${field}.discovery`);
+    if (!discovery.ok) return discovery;
+
+    let read: Extract<SessionStore, { kind: "sqlite" }>["read"];
+    if (raw.read !== undefined && raw.read !== null) {
+      if (!isRecord(raw.read)) {
+        return { ok: false, reason: refusal(`${field}.read`, "an object with `table`, `idColumn`, `timeColumn`, `contentTable` and `contentColumn`", raw.read) };
+      }
+      const columns = parseSqliteColumns(raw.read, ["table", "idColumn", "timeColumn", "contentTable", "contentColumn"], `${field}.read`);
+      if (!columns.ok) return columns;
+      const c = columns.value as { table: string; idColumn: string; timeColumn: string; contentTable: string; contentColumn: string };
+      read = c;
+    }
+    return {
+      ok: true,
+      value: {
+        kind: "sqlite",
+        db,
+        ...(timeFormat !== undefined ? { timeFormat } : {}),
+        discovery: discovery.value as { table: string; idColumn: string; cwdColumn: string; timeColumn: string },
+        ...(read !== undefined ? { read } : {}),
+      },
+    };
+  }
+
+  const root = nonEmptyString(raw.root);
+  if (root === null) {
+    return { ok: false, reason: refusal(`${field}.root`, 'the directory the CLI writes to, with `~` for home and `{cwd}`, `{cwd:dashes}` or `{cwd:slug}` for the project path', raw.root === undefined ? RECEIVED_NOTHING : raw.root) };
+  }
+  if (root.startsWith("/") && !root.startsWith("~/")) {
+    return { ok: false, reason: refusal(`${field}.root`, 'an ABSOLUTE path (start it with "/" or "~/")', root) };
+  }
+  const pattern = nonEmptyString(raw.pattern);
+  if (pattern === null) {
+    return { ok: false, reason: refusal(`${field}.pattern`, 'a glob RELATIVE to `root` (e.g. "*.jsonl"), one `*` per path segment', raw.pattern === undefined ? RECEIVED_NOTHING : raw.pattern) };
+  }
+  if (pattern.startsWith("/")) {
+    return { ok: false, reason: refusal(`${field}.pattern`, "a glob RELATIVE to `root` — no leading \"/\" (the root is already the anchor)", pattern) };
+  }
+  const id = parseIdSource(raw.id, `${field}.id`);
+  if (!id.ok) return id;
+  const cwd = parseCwdSource(raw.cwd, `${field}.cwd`);
+  if (!cwd.ok) return cwd;
+  const time = parseTimeSource(raw.time, `${field}.time`);
+  if (!time.ok) return time;
+
+  let read: Extract<SessionStore, { kind: "files" }>["read"];
+  if (raw.read !== undefined && raw.read !== null) {
+    if (!isRecord(raw.read)) {
+      return { ok: false, reason: refusal(`${field}.read`, "an object with `exists` (a glob with `{id}`) and `content`", raw.read) };
+    }
+    const exists = nonEmptyString(raw.read.exists);
+    if (exists === null) {
+      return { ok: false, reason: refusal(`${field}.read.exists`, 'a glob with `{id}` naming the record, relative to `root` (e.g. "{id}.jsonl")', raw.read.exists === undefined ? RECEIVED_NOTHING : raw.read.exists) };
+    }
+    if (!exists.includes("{id}")) {
+      return { ok: false, reason: refusal(`${field}.read.exists`, 'a glob with `{id}` in it — without the id there is nothing to look up (use {"..."} for a literal name)', exists) };
+    }
+    const content = parseFileContent(raw.read.content, `${field}.read.content`);
+    if (!content.ok) return content;
+    read = { exists, content: content.value };
+  }
+
+  return {
+    ok: true,
+    value: {
+      kind: "files",
+      root,
+      pattern,
+      id: id.value,
+      cwd: cwd.value,
+      time: time.value,
+      ...(read !== undefined ? { read } : {}),
+    },
+  };
+}
+
 export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProviderSpec } | { ok: false; reason: string } {
   if (!isRecord(value)) {
     return {
@@ -663,6 +940,16 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
       reason: refusal("capacity.session.canImposeSessionId", "a boolean (true or false)", sessionRaw.canImposeSessionId),
     };
   }
+  // ONDE a CLI guarda sessão (task 2ea0269f) — validado como o resto deste
+  // arquivo: um store malformado recusa o spec INTEIRO com o motivo, em vez
+  // de ser aceito e virar uma varredura silenciosamente errada mais tarde.
+  let sessionStore: SessionStore | undefined;
+  if (sessionRaw.store !== undefined && sessionRaw.store !== null) {
+    const parsedStore = parseSessionStore(sessionRaw.store);
+    if (!parsedStore.ok) return { ok: false, reason: parsedStore.reason };
+    sessionStore = parsedStore.value;
+  }
+
   const sessionFlags: Partial<Record<(typeof SESSION_FLAG_KEYS)[number], string>> = {};
   for (const key of SESSION_FLAG_KEYS) {
     const parsed = optionalString(sessionRaw[key]);
@@ -853,6 +1140,7 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
         session: {
           canImposeSessionId: sessionRaw.canImposeSessionId,
           ...sessionFlags,
+          ...(sessionStore !== undefined ? { store: sessionStore } : {}),
         },
         systemPrompt,
         mcp,
@@ -991,6 +1279,81 @@ function capacitySchema(): Record<string, unknown> {
           imposeFlag: asNonEmptyStr('Flag que carrega o id imposto (ex.: "--id"). Obrigatória quando canImposeSessionId é true.'),
           resumeFlag: asNonEmptyStr('Flag que retoma uma sessão existente (ex.: "--resume").'),
           continueFlag: asNonEmptyStr('Flag de "continue a última" (ex.: "--continue").'),
+          // A DECLARAÇÃO QUE FAZ O RODAPÉ DO CARD TER DE ONDE VIR (task
+          // 2ea0269f). A descrição é escrita para quem lê NO EDITOR: os dois
+          // CLIs embutidos aparecem em `examples` com o store deles, e é de
+          // lá que sai a receita de quem quiser declarar o seu.
+          store: {
+            type: "object",
+            description:
+              "ONDE ESTA CLI GUARDA AS SESSÕES. Sem este campo o provider NÃO é observável: o rodapé do card nasce vazio, " +
+              "honestamente — sem âncora medida de cwd e de tempo, varrer o disco às cegas acharia o arquivo de outro card. " +
+              "Os dois CLIs embutidos trazem o store deles em `examples` (copie o mais parecido com o seu e ajuste). " +
+              "`kind:\"files\"` = um registro por arquivo/diretório; `kind:\"sqlite\"` = o índice é um banco da própria CLI.",
+            required: ["kind"],
+            properties: {
+              kind: asEnum(SESSION_STORE_KINDS, '"files" (registro por arquivo/diretório sob uma raiz) or "sqlite" (índice em banco)'),
+              root: asNonEmptyStr(
+                'kind="files": a pasta dos registros. `~` = home; `{cwd}`, `{cwd:dashes}` ou `{cwd:slug}` = o caminho do projeto no encoding que a CLI usa no nome da pasta.',
+              ),
+              pattern: asNonEmptyStr('kind="files": glob RELATIVO a `root` que casa o registro (ex.: "*.jsonl"); um `*` é UM segmento de caminho.'),
+              id: {
+                type: "object",
+                description: 'kind="files": de onde sai o id da sessão — "fileName" (+strip) do nome do arquivo, "dirName" do diretório que o contém, "jsonLine" (+path) do JSON da 1ª linha.',
+                required: ["from"],
+                properties: {
+                  from: asEnum(SESSION_ID_SOURCES, "where the session id comes from"),
+                  strip: asNonEmptyStr('Sufixo a remover do nome (ex.: ".jsonl"); obrigatório com from="fileName".'),
+                  path: { type: "array", items: { type: "string" }, description: 'Caminho JSON até o id (ex.: ["payload", "session_id"]); obrigatório com from="jsonLine".' },
+                },
+              },
+              cwd: {
+                description:
+                  'kind="files": como o registro prova que é DESTE projeto. "root" = a própria pasta já é o cwd (nada a checar); ' +
+                  '{"from":"json"|"jsonLine","path":[...]} = lá dentro. É o que amarra a sessão ao card certo.',
+                anyOf: [
+                  asEnum(["root"], '"root"'),
+                  {
+                    type: "object",
+                    required: ["from", "path"],
+                    properties: {
+                      from: asEnum(["json", "jsonLine"] as const, 'one of "json" or "jsonLine"'),
+                      path: { type: "array", items: { type: "string" } },
+                    },
+                  },
+                ],
+              },
+              time: {
+                description: 'kind="files": o carimbo usado como "criada depois de" — "mtime" do arquivo, ou {"from":"json","path":[...]}.',
+                anyOf: [
+                  asEnum(["mtime"], '"mtime"'),
+                  {
+                    type: "object",
+                    required: ["from", "path"],
+                    properties: { from: asEnum(["json"] as const, '"json"'), path: { type: "array", items: { type: "string" } } },
+                  },
+                ],
+              },
+              db: asNonEmptyStr('kind="sqlite": o caminho do banco (ex.: "~/.cline/data/db/sessions.db"). Lido só em modo leitura.'),
+              timeFormat: asEnum(SQLITE_TIME_FORMATS as readonly string[], '"epoch-ms" (padrão; milissegundos) or "iso-8601" (texto de data)'),
+              discovery: {
+                type: "object",
+                description: 'kind="sqlite": a consulta que lista sessões novas de um projeto.',
+                required: ["table", "idColumn", "cwdColumn", "timeColumn"],
+                properties: {
+                  table: asNonEmptyStr("Nome da tabela."),
+                  idColumn: asNonEmptyStr("Coluna com o id da sessão."),
+                  cwdColumn: asNonEmptyStr("Coluna com o diretório do projeto."),
+                  timeColumn: asNonEmptyStr("Coluna com o carimbo de criação (na forma de `timeFormat`)."),
+                },
+              },
+              read: {
+                description:
+                  "Opcional: valida um id RETOMADO. Ausente = este lado nunca foi medido, e a resposta segue a declaração do provider " +
+                  "(não bloqueia) — descoberta e leitura são canais diferentes e podem ter respostas diferentes.",
+              },
+            },
+          },
         },
       },
       systemPrompt: mechanismObject({
@@ -1603,6 +1966,12 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
         ...(declared.session.resumeFlag ? { resumeFlag: declared.session.resumeFlag } : {}),
         ...(declared.session.imposeFlag ? { imposeFlag: declared.session.imposeFlag } : {}),
         ...(declared.session.continueFlag ? { continueFlag: declared.session.continueFlag } : {}),
+        // ONDE a CLI guarda sessão (task 2ea0269f). Este mapeamento é campo a
+        // campo de propósito, e é por isso que ele é um lugar onde uma
+        // declaração nova pode entrar no schema, passar no validador e NÃO
+        // chegar ao registro vivo — foi exatamente o que aconteceu aqui, e o
+        // teste da gramática (que lê `providerById`, não o spec) pegou.
+        ...(declared.session.store ? { store: declared.session.store } : {}),
       },
       // `submitStartedPattern` fica de fora de propósito: é vocabulário de
       // TELA medido, e não foi medido para nenhum dinâmico. Ausente =

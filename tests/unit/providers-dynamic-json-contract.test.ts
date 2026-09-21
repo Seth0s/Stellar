@@ -15,6 +15,7 @@ import {
   measuredProviderRecipes,
   parseProviderSpec,
   parseProviderSpecs,
+  parseSessionStore,
   providersConfigPath,
   providersConfigSchema,
   providersConfigSchemaJson,
@@ -118,7 +119,23 @@ const MAX_FLAG: DynamicProviderSpec = {
   baseArgs: ["--yolo"],
   capacity: {
     role: "agent",
-    session: { canImposeSessionId: true, imposeFlag: "--id", resumeFlag: "--resume", continueFlag: "--continue" },
+    session: {
+      canImposeSessionId: true,
+      imposeFlag: "--id",
+      resumeFlag: "--resume",
+      continueFlag: "--continue",
+      // O ramo `kind:"files"` (task 2ea0269f): as obrigatoriedades e os enums
+      // aninhados do store só são cobertos por uma base que DECLARE um store.
+      store: {
+        kind: "files",
+        root: "~/.qa/projects/{cwd:dashes}",
+        pattern: "*.jsonl",
+        id: { from: "fileName", strip: ".jsonl" },
+        cwd: { from: "root" },
+        time: { from: "mtime" },
+        read: { exists: "{id}.jsonl", content: { minBytes: 16 } },
+      },
+    },
     systemPrompt: { mechanism: "flag", flag: "-s" },
     mcp: { mechanism: "global-config", configPath: "~/.x/mcp.json", configKey: "mcpServers", serverShape: "stdio-command" },
     acbridgeOnPath: true,
@@ -145,10 +162,46 @@ const MAX_NONE: DynamicProviderSpec = {
   },
 };
 
-const BASES = [MAX_FLAG, MAX_NONE];
+/** O ramo `store.kind: "sqlite"` — `files` (na MAX_FLAG) não cobre
+ * `discovery.*` nem `timeFormat`, que são obrigatório/enum SÓ dele. Uma base
+ * por ramo é o mesmo critério que separa MAX_FLAG de MAX_NONE. */
+const MAX_STORE_SQLITE: DynamicProviderSpec = {
+  id: "qa-contract-sqlite",
+  label: "Contract sqlite",
+  binaryNames: ["qa-contract-sqlite"],
+  installCommand: null,
+  capacity: {
+    role: "agent",
+    session: {
+      canImposeSessionId: false,
+      resumeFlag: "--session",
+      store: {
+        kind: "sqlite",
+        db: "~/.qa/qa.db",
+        timeFormat: "iso-8601",
+        discovery: { table: "sessions", idColumn: "session_id", cwdColumn: "cwd", timeColumn: "started_at" },
+        read: {
+          table: "sessions",
+          idColumn: "session_id",
+          timeColumn: "updated_at",
+          contentTable: "messages",
+          contentColumn: "session_id",
+        },
+      },
+    },
+    systemPrompt: { mechanism: "none" },
+    mcp: { mechanism: "none" },
+    acbridgeOnPath: false,
+    effort: { mechanism: "none", reason: "unmeasured" },
+    model: { mechanism: "flag", flag: "-m" },
+    delivery: { briefMechanism: "none" },
+  },
+};
+
+const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE];
 
 describe("anti-drift: o schema publicado não pode divergir do parser", () => {
-  it("as duas bases do teste são válidas pelo próprio validador", () => {
+  it("as bases do teste são válidas pelo próprio validador", () => {
     for (const base of BASES) {
       const parsed = parseProviderSpec(base);
       expect(parsed.ok, `${base.id}: ${parsed.ok ? "" : parsed.reason}`).toBe(true);
@@ -578,5 +631,81 @@ describe("nomes de arquivo", () => {
     expect(providersSchemaPath(dir)).toBe(join(dir, PROVIDERS_SCHEMA_FILENAME));
     expect(providersConfigPath(dir)).toBe(join(dir, PROVIDERS_CONFIG_FILENAME));
     expect(PROVIDERS_SCHEMA_REF).toBe(`./${PROVIDERS_SCHEMA_FILENAME}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A DECLARAÇÃO DE SESSÃO (task 2ea0269f): `capacity.session.store`
+//
+// O anti-drift acima já prova, contra o SCHEMA, que cada obrigatoriedade e
+// cada enum do store é recusada nomeando o campo. Aqui ficam as regras que
+// não são nem `required` nem `enum` — as que recusam uma declaração
+// sintaticamente válida mas que faria o leitor procurar no lugar errado.
+// ---------------------------------------------------------------------------
+
+describe("o store de sessão é declaração validada, não campo livre", () => {
+  const FILES = {
+    kind: "files",
+    root: "~/.qa/projects/{cwd:slug}",
+    pattern: "*.meta.json",
+    id: { from: "fileName", strip: ".meta.json" },
+    cwd: { from: "root" },
+    time: { from: "mtime" },
+  };
+
+  it("aceita um store completo — e `read` AUSENTE sai ausente, não `read: undefined`", () => {
+    const full = parseSessionStore({ ...FILES, read: { exists: "{id}.jsonl", content: { minBytes: 16 } } });
+    expect(full.ok).toBe(true);
+    if (full.ok) expect(full.value).toEqual({ ...FILES, read: { exists: "{id}.jsonl", content: { minBytes: 16 } } });
+
+    // A diferença entre "não medido" e "medido e vazio" é o que o leitor
+    // consulta para decidir a resposta (`null` × `{exists:false}`): o campo
+    // ausente precisa continuar AUSENTE depois do parse.
+    const noRead = parseSessionStore(FILES);
+    expect(noRead.ok && "read" in noRead.value).toBe(false);
+  });
+
+  it("recusa `pattern` absoluto — é glob RELATIVO à raiz, e diz isso", () => {
+    const parsed = parseSessionStore({ ...FILES, pattern: "/etc/*.jsonl" });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.reason).toContain("capacity.session.store.pattern");
+      expect(parsed.reason).toContain("RELATIVE");
+    }
+  });
+
+  it("recusa `read.exists` sem `{id}`: sem o id não há o que procurar", () => {
+    const parsed = parseSessionStore({ ...FILES, read: { exists: "otimo.jsonl", content: { minBytes: 16 } } });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.reason).toContain("capacity.session.store.read.exists");
+  });
+
+  it("recusa `minBytes` zero ou negativo, e `strip` vazio no id por nome de arquivo", () => {
+    const badFloor = parseSessionStore({ ...FILES, read: { exists: "{id}.jsonl", content: { minBytes: 0 } } });
+    expect(badFloor.ok).toBe(false);
+    if (!badFloor.ok) expect(badFloor.reason).toContain("capacity.session.store.read.content.minBytes");
+
+    const badStrip = parseSessionStore({ ...FILES, id: { from: "fileName", strip: "" } });
+    expect(badStrip.ok).toBe(false);
+    if (!badStrip.ok) expect(badStrip.reason).toContain("capacity.session.store.id.strip");
+  });
+
+  it("recusa nome de coluna que viraria OUTRA consulta (aspa, espaço) — a régua é a do leitor", () => {
+    const parsed = parseSessionStore({
+      kind: "sqlite",
+      db: "~/.qa/qa.db",
+      discovery: { table: "sessions; DROP TABLE x", idColumn: "id", cwdColumn: "cwd", timeColumn: "at" },
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.reason).toContain("capacity.session.store.discovery.table");
+      expect(parsed.reason).toContain("SQL identifier");
+    }
+  });
+
+  it("aceita id por `dirName` (sem strip) e cwd pelo blob do antigravity — os dois casos que não cabem na forma mais comum", () => {
+    const byDir = parseSessionStore({ ...FILES, id: { from: "dirName" }, cwd: { from: "binaryWorkspaceUri" } });
+    expect(byDir.ok).toBe(true);
+    if (byDir.ok) expect(byDir.value).toMatchObject({ id: { from: "dirName" }, cwd: { from: "binaryWorkspaceUri" } });
   });
 });

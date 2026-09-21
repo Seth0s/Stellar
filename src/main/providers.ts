@@ -1,5 +1,6 @@
 import { delimiter, join } from "node:path";
 import { effectivePath, isExecutableFile, loginShell } from "./user-env";
+import { MIN_CONTENT_BYTES, type SessionStore } from "./session-store-spec";
 
 /**
  * Os SEIS providers nativos, como constantes nomeadas — o autocomplete
@@ -215,6 +216,16 @@ export type SessionCapability = {
   /** Flag booleana "continue a sessão mais recente". Ausente = o provider
    * não tem uma (ou não foi medida) e `continueLast` não vira argv. */
   continueFlag?: string;
+  /** ONDE ESTA CLI GUARDA SESSÃO (task 2ea0269f) — a declaração que dá ao
+   * rodapé do card de onde vir. A LINGUAGEM é `SessionStore`
+   * (`session-store-spec.ts`) e o único leitor é `session-watch.ts`; aqui é
+   * só o valor MEDIDO de cada CLI.
+   *
+   * AUSENTE = este provider não é observável, e isso é honesto: sem âncora
+   * medida de cwd e de tempo, varrer o disco às cegas acharia o arquivo de
+   * outro card. Um store pode declarar só a descoberta (sem `read`) — a
+   * resposta de leitura continua saindo da declaração, nunca inventada. */
+  store?: SessionStore;
 };
 
 // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" — per-provider
@@ -607,6 +618,16 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
         resumeFlag: "--resume",
         imposeFlag: "--session-id",
         continueFlag: "--continue",
+        // O cwd É o nome do diretório do projeto — daí `cwd: root`.
+        store: {
+          kind: "files",
+          root: "~/.claude/projects/{cwd:dashes}",
+          pattern: "*.jsonl",
+          id: { from: "fileName", strip: ".jsonl" },
+          cwd: { from: "root" },
+          time: { from: "mtime" },
+          read: { exists: "{id}.jsonl", content: { minBytes: MIN_CONTENT_BYTES } },
+        },
       },
       delivery: {
         briefMechanism: "positional",
@@ -730,7 +751,27 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       // declaração é `canImposeSessionId: false` (medido 2026-09-13: codex
       // recusa um id desconhecido). O buildArgs à mão abaixo continua sendo
       // a implementação.
-      session: { canImposeSessionId: false },
+      session: {
+        canImposeSessionId: false,
+        // Medido 2026-09-13 (task c1064d95): `session_index.jsonl` está
+        // INCOMPLETO nesta máquina (4 linhas para dezenas de rollouts) — a
+        // descoberta lê o próprio rollout, nunca o índice.
+        store: {
+          kind: "files",
+          root: "~/.codex/sessions",
+          pattern: "*/*/*/rollout-*.jsonl",
+          // O `type === "session_meta"` que a versão à mão checava não virou
+          // campo: quem identifica a linha é o CAMINHO (`payload.session_id`
+          // / `payload.cwd`), que só existe nela. Medido: 33/33 rollouts
+          // desta máquina têm `session_meta` como 1ª linha, com os dois.
+          id: { from: "jsonLine", path: ["payload", "session_id"] },
+          cwd: { from: "jsonLine", path: ["payload", "cwd"] },
+          time: { from: "mtime" },
+          // Na LEITURA o id é procurado no NOME do rollout — o que a versão
+          // à mão fazia (`name.includes(resumeId)`).
+          read: { exists: "*/*/*/rollout-*{id}*.jsonl", content: { minBytes: MIN_CONTENT_BYTES } },
+        },
+      },
       delivery: { briefMechanism: "positional", submitStartedPattern: undefined },
     },
     installCommand: {
@@ -797,6 +838,20 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
         resumeFlag: "--resume",
         imposeFlag: "--resume",
         continueFlag: "--continue",
+        store: {
+          kind: "files",
+          root: "~/.cursor/chats",
+          pattern: "*/*/meta.json",
+          id: { from: "dirName" },
+          cwd: { from: "json", path: ["cwd"] },
+          time: { from: "json", path: ["createdAtMs"] },
+          // O sinal de conteúdo é a EXISTÊNCIA de `store.db`, não tamanho:
+          // medido que uma sessão vazia já tem `meta.json` com 138-169
+          // bytes, então um limiar de bytes nunca reprovava nada. O par
+          // exists/hasContent existe porque "o diretório da sessão existe" e
+          // "a conversa começou" são perguntas diferentes.
+          read: { exists: "*/{id}", content: { file: "store.db" } },
+        },
       },
       delivery: {
         briefMechanism: "positional",
@@ -883,6 +938,18 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
         canImposeSessionId: false,
         resumeFlag: "--conversation",
         continueFlag: "--continue",
+        // O cwd mora num blob protobuf (campo length-delimited com uma URI
+        // `file://<cwd>`) — o ÚNICO caso especial NOMEADO da linguagem, e o
+        // motivo está em `session-store-spec.ts`.
+        store: {
+          kind: "files",
+          root: "~/.gemini/antigravity-cli/conversations",
+          pattern: "*.db",
+          id: { from: "fileName", strip: ".db" },
+          cwd: { from: "binaryWorkspaceUri" },
+          time: { from: "mtime" },
+          read: { exists: "{id}.db", content: { minBytes: MIN_CONTENT_BYTES } },
+        },
       },
       delivery: {
         briefMechanism: "flag",
@@ -956,6 +1023,24 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
         canImposeSessionId: false,
         resumeFlag: "--session",
         continueFlag: "--continue",
+        store: {
+          kind: "sqlite",
+          db: "~/.local/share/opencode/opencode.db",
+          // `time_created`, NÃO `time_updated`: uma sessão velha recebendo um
+          // turno novo não é prova de que este card recém-rearmado a criou.
+          discovery: { table: "session", idColumn: "id", cwdColumn: "directory", timeColumn: "time_created" },
+          // `time_updated` é o sinal de atividade da própria linha; o
+          // conteúdo real é uma linha em `message` — medido: a linha do
+          // usuário já existe no instante em que a sessão nasce (tokens e
+          // custo só no FIM do turno, e usá-los reprovaria um prompt real).
+          read: {
+            table: "session",
+            idColumn: "id",
+            timeColumn: "time_updated",
+            contentTable: "message",
+            contentColumn: "session_id",
+          },
+        },
       },
       delivery: { briefMechanism: "flag", briefFlag: "--prompt", submitStartedPattern: undefined },
     },
