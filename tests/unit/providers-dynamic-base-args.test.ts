@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MEASURED_THIRD_PARTY_SPECS,
-  PROVIDERS_CONFIG_EXAMPLE,
+  measuredProviderRecipes,
   dynamicProviderDef,
   loadDynamicProviders,
   parseBaseArgs,
@@ -197,9 +197,13 @@ describe("baseArgs — o default medido do commandcode", () => {
     }
   });
 
-  it("o exemplo publicado do arquivo inicial TAMBÉM passa pelo validador", () => {
-    expect(parseProviderSpec(PROVIDERS_CONFIG_EXAMPLE).ok).toBe(true);
-    expect(PROVIDERS_CONFIG_EXAMPLE.baseArgs).toEqual(["--yolo"]);
+  it("a receita publicada pelo schema (o que o editor mostra) TAMBÉM passa pelo validador", () => {
+    // O `_example` fictício saiu (task 3fe0db6e): a instrução publicada passou a
+    // ser esta receita, gerada de `appProviders` — e ela tem de ser válida pelo
+    // MESMO validador, senão a primeira instrução que o usuário lê é recusada.
+    const [primeira] = measuredProviderRecipes();
+    expect(parseProviderSpec(primeira).ok).toBe(true);
+    expect(primeira.id).toBe("cline");
   });
 });
 

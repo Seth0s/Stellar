@@ -97,8 +97,14 @@ try {
   const born = readConfig();
   check("nasceu com $schema", born.$schema, "./providers.schema.json");
   check("nasceu com schemaVersion 1", born.schemaVersion, 1);
-  check("nasceu com providers vazio", Array.isArray(born.providers) && born.providers.length, 0);
-  check("nasceu com o exemplo dentro (_example)", born._example?.id, "minha-cli");
+  // A CHAVE DO USUÁRIO nasce VAZIA — e é ela que o app nunca escreve.
+  check("nasceu com a chave do usuário vazia", Array.isArray(born.providers) && born.providers.length, 0);
+  // A DO APP nasce completa e VISÍVEL: é o que responde "o que este app entrega
+  // pronto?" no arquivo que o dono abre (a pergunta dele: "cadê a unicidade?").
+  check("nasceu com a lista do app completa", born.appProviders?.map((s) => s.id), (ids) =>
+    JSON.stringify(ids) === JSON.stringify(["cline", "commandcode"]),
+  );
+  check("o _example fictício NÃO é mais escrito", "_example" in born, false);
 
   // O ponto do `$schema` RELATIVO: o editor resolve offline, ao lado do
   // arquivo. Se o caminho publicado não existir no disco, não há autocompletar.
@@ -107,32 +113,66 @@ try {
   const schema = JSON.parse(readFileSync(SCHEMA_PATH, "utf8"));
   check("o schema é o JSON Schema 2020-12", schema.$schema, "https://json-schema.org/draft/2020-12/schema");
   check("o schema descreve o providers.json", typeof schema.title === "string" && schema.title.includes("providers.json"), true);
+  // As duas chaves, com DONO explícito — é o que torna o arquivo
+  // autoexplicativo para quem nunca viu este repo (exigência 3 do aceite).
+  check("o schema diz que `providers` é do usuário", schema.properties.providers.description.includes("SUA lista"), true);
+  check("o schema diz que `appProviders` é do app", schema.properties.appProviders.description.includes("DO APP"), true);
 
   // O MESMO caminho que o botão "editar" usa no app (IPC), não uma cópia nossa.
   const pathFromApp = await first.page.evalJs(`window.system.getProvidersConfigPath()`);
   check("o app aponta para o MESMO arquivo que eu li", pathFromApp, CONFIG_PATH);
-  check("o boot relatou o nascimento", await waitForLog(first, "criado com $schema e _example"), true);
+  check("o boot relatou o nascimento", await waitForLog(first, "criado com a lista do app em `appProviders`"), true);
 } finally {
   await stopApp(first.app);
 }
 
 // -------------------------------------------------------------------------
-// 2) O CASO DO DONO: arquivo já existe, pobre, e COM conteúdo dele dentro.
+// 2) O CASO DO DONO: arquivo já existe, pobre, e COM conteúdo dele dentro —
+//    inclusive uma declaração INTEIRA já copiada para `providers` (a migração
+//    não pode perdê-la, e ela continua vencendo: caso degenerado da parcial).
 // -------------------------------------------------------------------------
+const COPIA_INTEIRA = {
+  id: "commandcode",
+  label: "Cópia antiga do dono",
+  binaryNames: ["commandcode"],
+  baseArgs: ["--meu-jeito"],
+  capacity: {
+    role: "agent",
+    session: { canImposeSessionId: false },
+    systemPrompt: { mechanism: "none" },
+    mcp: { mechanism: "none" },
+    acbridgeOnPath: true,
+    effort: { mechanism: "none", reason: "no-flag" },
+    model: { mechanism: "none", reason: "shell" },
+    delivery: { briefMechanism: "positional" },
+  },
+};
 writeFileSync(
   CONFIG_PATH,
-  JSON.stringify({ ...JSON.parse(POOR_FILE), providers: [USER_PROVIDER], _minhasNotas: "não apague" }, null, 2) + "\n",
+  JSON.stringify(
+    { ...JSON.parse(POOR_FILE), providers: [USER_PROVIDER, COPIA_INTEIRA], _minhasNotas: "não apague" },
+    null,
+    2,
+  ) + "\n",
   "utf8",
 );
 const second = await boot();
 try {
   const migrated = readConfig();
   check("foi COMPLETADO com $schema", migrated.$schema, "./providers.schema.json");
-  check("foi COMPLETADO com o exemplo (_example)", migrated._example?.id, "minha-cli");
-  // A parte que protege o trabalho do usuário: nada dele foi perdido nem reordenado.
-  check("o provider do usuário ficou intacto", migrated.providers, (p) => JSON.stringify(p) === JSON.stringify([USER_PROVIDER]));
+  check("ganhou a lista do app", migrated.appProviders?.map((s) => s.id), (ids) =>
+    JSON.stringify(ids) === JSON.stringify(["cline", "commandcode"]),
+  );
+  // A parte que protege o trabalho do usuário: NADA dele foi perdido — nem a
+  // declaração inteira que ele tinha copiado.
+  check("o provider do usuário ficou intacto", migrated.providers?.[0], (p) =>
+    JSON.stringify(p) === JSON.stringify(USER_PROVIDER),
+  );
+  check("a declaração INTEIRA copiada ficou intacta", migrated.providers?.[1], (p) =>
+    JSON.stringify(p) === JSON.stringify(COPIA_INTEIRA),
+  );
   check("a chave de notas do usuário ficou intacta", migrated._minhasNotas, "não apague");
-  check("o boot relatou a migração", await waitForLog(second, "completado com $schema, _example"), true);
+  check("o boot relatou a atualização", await waitForLog(second, "atualizei a lista do app em `appProviders`"), true);
 } finally {
   await stopApp(second.app);
 }
