@@ -79,7 +79,7 @@ export function RemotePairingModal() {
             <div className="remote-device-list">
               <div className="remote-device-list-heading">{t("remote.devices")}</div>
               {devices.map((d) => (
-                <div key={d.id} className="remote-device-row">
+                <div key={d.id} className="form-row form-row--boxed">
                   <span className="remote-device-name">
                     {d.connections > 0 && <span className="remote-device-online" title={t("remote.online")} />}
                     {d.label}

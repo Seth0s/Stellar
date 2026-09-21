@@ -1,5 +1,5 @@
 {
-  "comment": "Frozen violation counts per design-token rule (tasks d200c269 spacing, c8cd45fc typography). A file NOT listed here must be at ZERO — new code uses the rule's token family (--space-*, --text-*). A listed file may not GROW. After migrating a slice, run `node scripts/verify/check-design-tokens.mjs --update-baseline` to freeze the new (lower) count; a file that reached 0 is PINNED clean — its entry stays at an explicit 0 and any raw px that reappears fails the check. Escapes: /* sd:allow: <reason> */ — audited in every run.",
+  "comment": "Frozen violation counts per design-token rule (tasks d200c269 spacing, c8cd45fc typography, 325d6c66 radius, 153ca424 motion, 16a6abb5 color). A file NOT listed here must be at ZERO — new code uses the rule's token family (--space-*, --text-*, --radius-*, --duration-*, a color token; for color, DERIVATION IS NOT A LITERAL: color-mix(in srgb, var(--token) N%, transparent) is the sanctioned way to tint, and raw is only what a human typed by hand). A listed file may not GROW. After migrating a slice, run `node scripts/verify/check-design-tokens.mjs --update-baseline` to freeze the new (lower) count; a file that reached 0 is PINNED clean — its entry stays at an explicit 0 and any raw value that reappears fails the check. Escapes: /* sd:allow: <reason> */ — audited in every run.",
   "rules": {
     "spacing": {
       "src/renderer/src/BrowserCard.module.css": 18,
@@ -13,7 +13,7 @@
       "src/renderer/src/TaskCard.module.css": 102,
       "src/renderer/src/TerminalCard.module.css": 24,
       "src/renderer/src/styles/cards.css": 93,
-      "src/renderer/src/styles/layout.css": 209,
+      "src/renderer/src/styles/layout.css": 201,
       "src/renderer/src/styles/markdown.css": 12
     },
     "typography": {
@@ -28,8 +28,43 @@
       "src/renderer/src/TaskCard.module.css": 0,
       "src/renderer/src/TerminalCard.module.css": 12,
       "src/renderer/src/styles/cards.css": 42,
-      "src/renderer/src/styles/layout.css": 103,
+      "src/renderer/src/styles/layout.css": 102,
       "src/renderer/src/styles/markdown.css": 5
+    },
+    "radius": {
+      "src/renderer/src/BrowserCard.module.css": 9,
+      "src/renderer/src/BrowserInspector.module.css": 23,
+      "src/renderer/src/ChangesCard.module.css": 1,
+      "src/renderer/src/GlobalComposer.module.css": 12,
+      "src/renderer/src/MediaCard.module.css": 3,
+      "src/renderer/src/RemoteWindowCard.module.css": 1,
+      "src/renderer/src/StickyCard.module.css": 1,
+      "src/renderer/src/TaskCard.module.css": 0,
+      "src/renderer/src/TerminalCard.module.css": 11,
+      "src/renderer/src/styles/cards.css": 36,
+      "src/renderer/src/styles/layout.css": 78,
+      "src/renderer/src/styles/markdown.css": 2
+    },
+    "motion": {
+      "src/renderer/src/BrowserCard.module.css": 1,
+      "src/renderer/src/GlobalComposer.module.css": 4,
+      "src/renderer/src/MediaCard.module.css": 2,
+      "src/renderer/src/StickyCard.module.css": 1,
+      "src/renderer/src/TaskCard.module.css": 2,
+      "src/renderer/src/TerminalCard.module.css": 3,
+      "src/renderer/src/styles/animations.css": 0,
+      "src/renderer/src/styles/cards.css": 6,
+      "src/renderer/src/styles/layout.css": 17
+    },
+    "color": {
+      "src/renderer/src/BrowserCard.module.css": 2,
+      "src/renderer/src/BrowserInspector.module.css": 1,
+      "src/renderer/src/GlobalComposer.module.css": 0,
+      "src/renderer/src/MediaCard.module.css": 4,
+      "src/renderer/src/RemoteWindowCard.module.css": 2,
+      "src/renderer/src/TaskCard.module.css": 0,
+      "src/renderer/src/styles/cards.css": 3,
+      "src/renderer/src/styles/layout.css": 10
     }
   }
 }

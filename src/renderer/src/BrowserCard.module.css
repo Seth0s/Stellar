@@ -167,7 +167,9 @@
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: #fff;
+  /* Tinta escura: `#fff` sobre `--danger` mede 3,01 (reprova AA em texto de
+     10px) contra 6,23 do `--on-accent` — ver §5.4 e §9.6. */
+  color: var(--on-accent);
   background: var(--danger);
 }
 
@@ -188,7 +190,9 @@
   padding: 0;
   border: none;
   border-radius: 9px;
-  color: #fff;
+  /* `--accent-browser` é `--foam`, um azul CLARO: branco aqui mede 1,92 (reprova
+     até o 3:1 de elemento gráfico) contra 9,77 da tinta escura. */
+  color: var(--on-accent);
   background: var(--accent-browser);
   cursor: pointer;
 }
@@ -266,7 +270,8 @@
 /* Pendentes #188 — Design Mode (picker de elemento → chat conectado). */
 .browserCardDesignBtn[data-active="true"] {
   background: var(--accent-browser);
-  color: #fff;
+  /* 1,92 no branco contra 9,77 na tinta escura (§5.4, §9.6). */
+  color: var(--on-accent);
 }
 
 .browserCardDesignInfo {
@@ -352,7 +357,8 @@
 
 .browserCardFavRemove:hover {
   background: var(--danger);
-  color: #fff;
+  /* 3,01 no branco contra 6,23 na tinta escura (§5.4, §9.6). */
+  color: var(--on-accent);
 }
 
 /* Pendentes #188 — envolve o canvas E o mini-inspector embutido
