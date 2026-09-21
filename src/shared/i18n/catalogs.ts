@@ -194,6 +194,7 @@ export const ptBR = {
   "composer.attach.remove": "Remover anexo",
   "composer.attach.unsupportedType": "Não sei anexar \"{name}\" — imagem, PDF ou documento/texto.",
   "composer.attach.tooMany": "Máximo de {max} anexos por mensagem.",
+  "composer.attach.excess": "{count} anexo(s) de fora: o limite é {max} por mensagem.",
   "composer.attach.saveFailed": "Não foi possível preparar o anexo: {error}",
   "composer.attach.noTarget": "Escolha um destino antes de anexar.",
   "composer.attach.shell":
@@ -1107,6 +1108,7 @@ export const en: Record<MessageKey, string> = {
   "composer.attach.remove": "Remove attachment",
   "composer.attach.unsupportedType": "Cannot attach \"{name}\" — image, PDF or document/text.",
   "composer.attach.tooMany": "At most {max} attachments per message.",
+  "composer.attach.excess": "{count} attachment(s) left out: the limit is {max} per message.",
   "composer.attach.saveFailed": "Could not prepare the attachment: {error}",
   "composer.attach.noTarget": "Pick a target before attaching.",
   "composer.attach.shell": "bash is a shell: a path in the text would run as a command, not be read as an attachment.",

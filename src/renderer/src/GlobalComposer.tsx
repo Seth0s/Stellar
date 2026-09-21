@@ -19,13 +19,70 @@ import {
 } from "./attachments";
 import styles from "./GlobalComposer.module.css";
 
-const ELIGIBLE_KINDS = ["terminal", "browser", "chat"];
+/**
+ * Destinos que esta barra OFERECE = destinos que o `bus.send` ENTREGA.
+ *
+ * MEDIDO (task 3f701053): o bus entrega UM kind — `listTerminalCards()` em
+ * message-bus.ts filtra `kind === "terminal"` no cmd `send`. A barra oferecia
+ * TRÊS (`terminal`, `browser`, `chat`); no board de hoje isso são 7 cards de
+ * chat oferecidos que NÃO podem receber. E não é "caro entregar em chat":
+ * seria um TRANSPORTE NOVO — um card de chat não tem PTY nenhum (o caminho
+ * dele é `window.chat.send`, canal do provider com blocos de imagem), então
+ * `isCardAlive`/`getCardWriteReadiness`/`writeToCard` não têm onde escrever.
+ * Enquanto esse transporte não existir do lado do bus, oferecer chat/browser é
+ * oferecer o que se engole — o defeito que esta task fecha pelo lado de cá.
+ * (A recusa POR MOTIVO em `attachments.ts` continua sendo a matriz: ela cobre
+ * os kinds que o picker já não oferece, para o dia em que algum voltar.)
+ */
+const ELIGIBLE_KINDS = ["terminal"];
 const KIND_ICON: Record<string, IconName> = { terminal: "terminal", browser: "browser", chat: "chat" };
 
 /** Teto de anexos por mensagem. Imagem continua com o mesmo número de antes
  * (4); documento entra no MESMO teto — a barra entrega caminhos, e uma lista
  * longa de caminhos no texto vira ruído no prompt. */
 const MAX_ATTACHMENTS_PER_MESSAGE = 4;
+
+/**
+ * HISTÓRICO do composer global (2026-09-20) — o input não tinha NENHUM: seta
+ * para cima não trazia o prompt anterior. MEDIDO antes de escrever: nem o card
+ * de chat (`ChatCard.tsx`'s `onComposerKeyDown`) nem o terminal mantêm
+ * histórico de composer — o `Alt+←/→` que o `shortcut-registry.ts` cita é o
+ * history do próprio Chromium (content layer), e a seta do terminal vai pro
+ * PTY/shell. Não havia, portanto, uma terceira convenção a copiar; a que vale
+ * é a do REPL/shell, também a que o enunciado fixa: seta-para-CIMA só recupera
+ * com o cursor na PRIMEIRA linha, seta-para-BAIXO só na ÚLTIMA — assim o
+ * textarea multi-linha não perde o "mover o cursor" para a seta.
+ *
+ * O que guarda é o TEXTO que a pessoa escreveu, não o corpo com os caminhos de
+ * anexo que o app anexa na entrega: esses são mecanismo, e ressuscitá-los num
+ * rascunho traria um caminho possivelmente morto. Mensagem só-de-anexo não tem
+ * prompt a recuperar e não entra. PERSISTE entre sessões (`localStorage`,
+ * decidido e declarado no relatório) — fechar o app não perde o que se escreveu.
+ * O RASCUNHO não-enviado é outra coisa e NÃO mora aqui (ver `draftRef`): é
+ * justamente o que a navegação tem de preservar.
+ */
+const HISTORY_STORAGE_KEY = "stellar.global-composer.history";
+const HISTORY_MAX = 50;
+
+function readHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === "string" && v.trim() !== "");
+  } catch {
+    return []; // JSON corrompido ou storage indisponível: histórico é conveniência.
+  }
+}
+
+function writeHistory(entries: string[]): void {
+  try {
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Storage cheio/bloqueado não pode quebrar o ENVIO — o histórico é extra.
+  }
+}
 
 /**
  * Um anexo do composer. `path` é o que de fato viaja: o caminho REAL do
@@ -61,6 +118,47 @@ const STATUS_ICON: Record<Exclude<SendState, "idle">, IconName> = {
   unconfirmed: "warning",
   failed: "warning",
 };
+
+/**
+ * TTL por estado. A ASSIMETRIA é o ponto (task 3c696ec9): sucesso — e `parked`,
+ * que é espera e destrava sozinha — sumem por conta própria; `failed` e
+ * `unconfirmed` NÃO TÊM ENTRADA aqui, e a ausência é a política: eles ficam até
+ * o usuário reconhecer (clique) ou até a próxima tentativa. `parked` fora da
+ * lista é deliberado — permanente ali viraria poluição no caso NORMAL, que é
+ * destravar. Uma entrega que FALHOU é a única em que a mensagem não chegou: não
+ * pode se apagar sozinha (o defeito que esta task conserta).
+ */
+const STATUS_TTL_MS: Partial<Record<Exclude<SendState, "idle" | "sending">, number>> = {
+  delivered: 1800,
+  parked: 3200,
+};
+
+/**
+ * A linha que diz QUAL card, QUAL motivo e O QUE tentar — o que "Falhou" sozinho
+ * não diz. O motivo vem do lugar que o mediu: `res.error` quando o bus RECUSOU
+ * na hora, ou o veredito do laço de confirmação quando a FIFO não confirmou;
+ * sem motivo, a linha fica só com o card em vez de inventar uma causa.
+ */
+function describeDeliveryProblem(card: string, reason?: string | null): string {
+  const why = (reason ?? "").trim();
+  return `${why ? `${card}: ${why}` : card} — ${t("common.retry")}`;
+}
+
+/**
+ * O laço de confirmação devolve `confirm.result` dentro do `get_delivery` (o
+ * main o repassa verbatim), mas o tipo do preload não o declara — a MESMA
+ * classe de "a anotação subvende o runtime" que o comentário de `bus.send` já
+ * registra (`delivery`/`id`/`reason` eram "só no runtime" e estavam lá). Lido
+ * por um cast estreito em vez de mexer no preload (fora do território): é o
+ * motivo REAL da falha, não um texto genérico.
+ */
+function deliveryConfirmResult(res: unknown): string | null {
+  if (res === null || typeof res !== "object") return null;
+  const confirm = (res as { confirm?: unknown }).confirm;
+  if (confirm === null || typeof confirm !== "object") return null;
+  const result = (confirm as { result?: unknown }).result;
+  return typeof result === "string" ? result : null;
+}
 
 function cardIcon(card: CardRow): IconName {
   if (card.kind === "terminal" && card.provider && card.provider in PROVIDER_GLYPH) return "terminal";
@@ -123,6 +221,10 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
   const [text, setText] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sendState, setSendState] = useState<SendState>("idle");
+  // Linha de detalhe dos estados PERSISTENTES (`failed`/`unconfirmed`): qual
+  // card, o motivo real e o que tentar. `null` nos efêmeros — a pílula curta
+  // continua curta onde não há o que explicar.
+  const [statusDetail, setStatusDetail] = useState<string | null>(null);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -141,6 +243,21 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
   // segunda mensagem enquanto a primeira ainda está sendo confirmada
   // deixaria os dois polls escrevendo na MESMA pílula de status.
   const sendSeqRef = useRef(0);
+  // Nome do card-alvo no INSTANTE do envio: o poll da FIFO resolve depois, e o
+  // `target` do render pode já ter mudado (ou o card sumido) — a pílula da
+  // falha tem de citar o card para onde o texto FOI, não o selecionado agora.
+  const statusCardRef = useRef("");
+
+  // Histórico (carregado UMA vez do localStorage) + navegação. `navIdxRef` é
+  // quantos passos atrás do mais novo estamos e `null` significa "fora da
+  // navegação, mostrando a caixa viva"; `draftRef` é o rascunho que estava na
+  // caixa quando a navegação começou, para devolvê-lo ao voltar (passar do
+  // mais novo com a seta para baixo). Sem isso, o rascunho some — o defeito
+  // clássico desta feature.
+  const historyRef = useRef<string[] | null>(null);
+  if (historyRef.current === null) historyRef.current = readHistory();
+  const navIdxRef = useRef<number | null>(null);
+  const draftRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -202,6 +319,10 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
   const revealed = hovered || focused || voiceState !== "idle" || pickerOpen || text.length > 0 || sendState !== "idle";
 
   const target = cards.find((c) => c.id === targetId);
+  // Nome curto do alvo para a linha de falha — primitivo (estável) de propósito,
+  // para o `useCallback` do envio não depender do objeto `target`, que nasce de
+  // novo a cada render.
+  const targetLabel = target ? target.label || target.id.slice(0, 6) : "";
 
   // Investigação (2026-09-19): o envio desta barra é `window.bus.send`, que é
   // SÓ TEXTO e SÓ TERMINAL (message-bus.ts, cmd "send"). É por isso que anexo
@@ -210,19 +331,16 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
   const targetKind = target?.kind ?? null;
   const targetProvider = target?.provider ?? null;
 
-  const STATUS_TTL_MS: Record<Exclude<SendState, "idle" | "sending">, number> = {
-    delivered: 1800,
-    parked: 3200,
-    unconfirmed: 3200,
-    failed: 4000,
-  };
-
   const dismissTimerRef = useRef<number | undefined>(undefined);
   const scheduleDismiss = useCallback((state: Exclude<SendState, "idle" | "sending">, mySeq: number) => {
     window.clearTimeout(dismissTimerRef.current);
+    // Sem TTL = PERSISTENTE (ver `STATUS_TTL_MS`): nada é agendado. O que tira
+    // a pílula da tela é o clique (reconhecer) ou o próximo envio — não o tempo.
+    const ttl = STATUS_TTL_MS[state];
+    if (ttl === undefined) return;
     dismissTimerRef.current = window.setTimeout(() => {
       if (sendSeqRef.current === mySeq) setSendState("idle");
-    }, STATUS_TTL_MS[state]);
+    }, ttl);
   }, []);
 
   // Só de olho por uma janela curta (~2.7s, a soma dos delays abaixo) — o
@@ -230,10 +348,14 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
   // que "ainda não confirmou" é a mesma coisa que "deu errado".
   const POLL_DELAYS_MS = [200, 250, 350, 450, 600, 800];
 
-  // NENHUM estado final fica na tela pra sempre — nem os negativos. "Falhou"
-  // parado na interface até o próximo envio manual foi o bug relatado ("o
-  // dialog fica para sempre"): mesmo uma falha real precisa sumir sozinha, só
-  // que com mais tempo de leitura do que uma confirmação positiva.
+  // ATENÇÃO — este comentário dizia o OPOSTO até a task 3c696ec9 ("nenhum
+  // estado final fica na tela pra sempre, nem os negativos / mesmo uma falha
+  // real precisa sumir sozinha"). Aquilo tratava falha como sucesso. O que vale
+  // agora (ver `STATUS_TTL_MS`): o POSITIVO some sozinho; `failed`/`unconfirmed`
+  // ficam. A lição anterior que CONTINUA valendo é a do CSS — a pílula segue
+  // inline na toolbar, nunca flutuando solta na tela (ver o comentário em
+  // `GlobalComposer.module.css`); o que mudou foi QUANDO ela some, não onde ela
+  // mora.
   const pollDelivery = useCallback(
     (id: string, mySeq: number) => {
       let attempt = 0;
@@ -250,8 +372,16 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
         if (res.delivery !== "queued") {
           if (res.delivery === "cancelled") {
             setSendState("idle");
+            setStatusDetail(null);
           } else {
             setSendState(res.delivery);
+            // O motivo real só existe no ponto em que o laço fechou o veredito —
+            // para os estados persistentes ele é dito; os efêmeros não carregam linha.
+            setStatusDetail(
+              res.delivery === "failed" || res.delivery === "unconfirmed"
+                ? describeDeliveryProblem(statusCardRef.current, deliveryConfirmResult(res))
+                : null,
+            );
             scheduleDismiss(res.delivery, mySeq);
           }
           return;
@@ -277,7 +407,22 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
    * caminho é o de lá.
    */
   async function addFiles(files: File[]) {
+    // O teto é POR MENSAGEM, não por lote. Ler `attachments.length` dentro do
+    // laço devolvia o comprimento de ANTES do lote (o state só atualiza depois
+    // dos `await`s), então cinco arquivos num único paste/drop passavam todos.
+    // `room` é semeado do que JÁ está anexado — é isso que faz a SEGUNDA leva
+    // (anexar 3, anexar mais 3) respeitar o mesmo teto; um contador que
+    // reiniciasse a cada chamada quebraria exatamente esse caso.
+    let room = MAX_ATTACHMENTS_PER_MESSAGE - attachments.length;
+    let excess = 0;
     for (const file of files) {
+      // Sem vaga, o arquivo não entra — mas NÃO some em silêncio: conta e o
+      // aviso sai uma vez no fim, com o número e o motivo. Descartar calado
+      // era o mesmo defeito silencioso que a ccab0c58 acabou de consertar.
+      if (room <= 0) {
+        excess += 1;
+        continue;
+      }
       const kind = classifyAttachment(file);
       if (!kind) {
         toast(t("composer.attach.unsupportedType", { name: file.name || file.type || "?" }));
@@ -288,12 +433,19 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
         toast(t(admission.reason));
         continue;
       }
-      if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-        toast(t("composer.attach.tooMany", { max: String(MAX_ATTACHMENTS_PER_MESSAGE) }));
-        return;
-      }
 
-      const realPath = window.boardAssets.getPathForFile(file);
+      // `getPathForFile` LANÇA para um `File` sintético (paste do clipboard,
+      // só em memória) — mesmo motivo e mesmo try/catch de `App.tsx`'s
+      // `getRealPath`. Medido: sem o guard, o throw abortava `addFiles`
+      // inteiro, então o anexo colado sumia SEM chip, SEM toast e SEM envio
+      // — o "mando imagem e não envia" relatado. O throw vira "sem path de
+      // SO", que é o que faz os bytes irem pro diretório efêmero logo abaixo.
+      let realPath: string;
+      try {
+        realPath = window.boardAssets.getPathForFile(file);
+      } catch {
+        realPath = "";
+      }
       let path = realPath;
       if (path === "") {
         const base64 = await blobToBase64(file);
@@ -315,12 +467,76 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
         path,
         previewUrl,
       };
+      // Consome a vaga só quando o anexo de fato entra — um arquivo recusado
+      // (tipo/admissão) não pode "gastar" um slot do teto.
+      room -= 1;
       setAttachments((prev) => [...prev, attachment]);
+    }
+    if (excess > 0) {
+      toast(
+        t("composer.attach.excess", {
+          count: String(excess),
+          max: String(MAX_ATTACHMENTS_PER_MESSAGE),
+        }),
+      );
     }
   }
 
   function removeAttachment(attachmentId: string) {
     setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+  }
+
+  /** Coloca o texto e leva o caret para o FIM — depois do render, como o
+   * `ChatCard.tsx` faz ao inserir quebra. Sem isto, a próxima seta partiria do
+   * meio do texto recuperado e a navegação travaria na primeira linha. */
+  function setTextWithCaretAtEnd(next: string) {
+    setText(next);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) el.selectionStart = el.selectionEnd = el.value.length;
+    });
+  }
+
+  /** Navega o histórico. `up` = mais antigo, `down` = mais novo. Devolve `true`
+   * quando CONSUMIU a tecla (o chamador faz `preventDefault`) e `false` para
+   * deixar a textarea mover o cursor — é o que preserva o multi-linha. */
+  function navigateHistory(dir: "up" | "down"): boolean {
+    const history = historyRef.current ?? [];
+    const el = textareaRef.current;
+    if (!el || history.length === 0) return false;
+    if (el.selectionStart !== el.selectionEnd) return false; // há seleção: deixa o nativo
+    const onFirstLine = !el.value.slice(0, el.selectionStart).includes("\n");
+    const onLastLine = !el.value.slice(el.selectionEnd).includes("\n");
+    if (dir === "up" ? !onFirstLine : !onLastLine) return false;
+
+    const current = navIdxRef.current;
+    if (dir === "down" && current === null) return false; // baixo fora da navegação = cursor normal
+    if (current === null) draftRef.current = el.value; // começa a navegar: guarda o rascunho
+
+    const next = dir === "up" ? (current ?? -1) + 1 : (current ?? 0) - 1;
+    if (next < 0) {
+      // Passou do mais novo de volta pra caixa: devolve o rascunho guardado.
+      navIdxRef.current = null;
+      setTextWithCaretAtEnd(draftRef.current);
+      return true;
+    }
+    const bounded = Math.min(next, history.length - 1);
+    navIdxRef.current = bounded;
+    setTextWithCaretAtEnd(history[history.length - 1 - bounded]);
+    return true;
+  }
+
+  /** Grava no histórico o TEXTO que a pessoa escreveu (não o corpo com os
+   * caminhos de anexo — ver o comentário do módulo). Sem repetição colada e
+   * com teto. Só é chamado quando o bus ACEITOU: uma entrega que falhou deixa
+   * o texto na caixa, e gravá-lo agora duplicaria. */
+  function recordHistory(entry: string) {
+    if (entry.trim() === "") return;
+    const history = historyRef.current ?? [];
+    if (history[history.length - 1] === entry) return;
+    const next = [...history, entry].slice(-HISTORY_MAX);
+    historyRef.current = next;
+    writeHistory(next);
   }
 
   // Só intercepta quando há de fato um arquivo anexável — paste/drop de texto
@@ -362,14 +578,22 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
     }
 
     const mySeq = ++sendSeqRef.current;
+    // Congela o card-alvo para a linha de falha (o poll resolve depois) e limpa
+    // o detalhe anterior: uma tentativa NOVA substitui a falha antiga, não
+    // acumula — a barra tem uma caixa só, e uma lista de falhas seria justamente
+    // a poluição que a lição do CSS recusa.
+    statusCardRef.current = targetLabel || targetId.slice(0, 6);
+    setStatusDetail(null);
     setSendState("sending");
     try {
       const res = await window.bus.send(targetId, body);
       if (sendSeqRef.current !== mySeq) return;
       if (!res.ok) {
         // NUNCA limpar antes da entrega confirmada (bug relatado): o texto e
-        // os anexos continuam na barra, e o motivo vem pela pílula.
+        // os anexos continuam na barra, e o motivo vem pela pílula. O motivo
+        // AQUI é o `res.error` real do bus — antes ele era descartado.
         setSendState("failed");
+        setStatusDetail(describeDeliveryProblem(statusCardRef.current, res.error));
         scheduleDismiss("failed", mySeq);
         return;
       }
@@ -379,6 +603,11 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
       // card.
       setText("");
       setAttachments([]);
+      // O envio virou histórico e a caixa está em branco: qualquer navegação
+      // em curso acabou (senão a próxima seta subiria do índice antigo).
+      recordHistory(text);
+      navIdxRef.current = null;
+      draftRef.current = "";
       if (res.delivery === "queued") {
         pollDelivery(res.id, mySeq);
       } else if (res.delivery === "cancelled") {
@@ -391,15 +620,18 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
       console.error(e);
       if (sendSeqRef.current === mySeq) {
         setSendState("failed");
+        setStatusDetail(describeDeliveryProblem(statusCardRef.current, clipError(e)));
         scheduleDismiss("failed", mySeq);
       }
     }
-  }, [targetId, text, sendState, attachments, targetKind, targetProvider, pollDelivery, scheduleDismiss]);
+  }, [targetId, targetLabel, text, sendState, attachments, targetKind, targetProvider, pollDelivery, scheduleDismiss]);
 
-  // Clique na pílula dispensa na hora, sem esperar o TTL.
+  // Clique na pílula dispensa na hora — é o RECONHECIMENTO do usuário, o único
+  // caminho (além da próxima tentativa) que tira da tela uma falha persistente.
   const dismissStatus = useCallback(() => {
     window.clearTimeout(dismissTimerRef.current);
     ++sendSeqRef.current;
+    setStatusDetail(null);
     setSendState("idle");
   }, []);
 
@@ -633,13 +865,25 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
             className={styles.textarea}
             rows={1}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              // O humano assumiu a caixa: sai da navegação (o setText do
+              // histórico é programático e NÃO dispara onChange, então isto
+              // só roda em digitação de verdade).
+              navIdxRef.current = null;
+            }}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             onPaste={onComposerPaste}
             onDragOver={onComposerDragOver}
             onDrop={onComposerDrop}
             onKeyDown={(e) => {
+              if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                // Só consome quando de fato navega (cursor na 1ª/última linha,
+                // sem seleção); caso contrário devolve a seta pra textarea.
+                if (navigateHistory(e.key === "ArrowUp" ? "up" : "down")) e.preventDefault();
+                return;
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void handleSend();
@@ -695,6 +939,7 @@ export function GlobalComposer({ boardId }: { boardId: string }) {
                 <Icon name={STATUS_ICON[sendState]} size={12} />
               </span>
               {t(STATUS_LABEL_KEYS[sendState])}
+              {statusDetail !== null && <span className={styles.statusDetail}>· {statusDetail}</span>}
             </button>
           )}
 
