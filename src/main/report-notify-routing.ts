@@ -108,6 +108,17 @@
  * already trusts, no second volatile source of truth. Precedence from
  * RODADA 2 is unchanged: live spawner still wins unconditionally;
  * `modified` is never promoted to lineage.
+ *
+ * RODADA 4 (task 5abe8bf5) — a aresta `spawned` é só a aresta VISUAL: ela
+ * morre junto com o card que spawnou (`deleteConnectorsForCard`, main/index.ts)
+ * e, até esta rodada, era a ÚNICA fonte de linhagem do roteamento. Medido no
+ * banco vivo: o registro append-only `spawns` tem 231 destinos e apenas 9
+ * ainda têm aresta visual — 222 perderam o único sinal de linhagem que este
+ * módulo lia, e para eles o roteamento ficava ESTRUTURALMENTE empurrado para
+ * o fallback "último que falou". `spawnerOfRecordId` abaixo é essa linhagem
+ * durável: entra ACIMA do fallback de diretiva e ABAIXO de uma aresta visual
+ * VIVA (que continua sendo o sinal mais recente). Mesmo princípio da RODADA 3
+ * — preferir a linha em SQLite à fonte volátil —, um degrau acima.
  */
 
 /** Minimal connector shape this module needs — matches store.ts's
@@ -166,6 +177,19 @@ export interface ReportRoutingInput {
    * Meaningless when `spawnedById` is `null`. */
   spawnedByAlive: boolean;
   /**
+   * Spawner-of-RECORD from the durable `spawns` registry
+   * (`findSpawnByChild`), or `null`. It is the SAME lineage fact as
+   * `spawnedById`, from the source that survives the spawner card being
+   * closed — the connector is only the visual edge (see this module's
+   * RODADA 4 doc and `spawn_lineage`). Consulted only when there is no LIVE
+   * visual spawn edge; still below a live one, still above the directive
+   * fallback.
+   */
+  spawnerOfRecordId?: string | null;
+  /** Whether `spawnerOfRecordId` is still a live card (`isCardAlive`).
+   * Meaningless when the id is null/absent. */
+  spawnerOfRecordAlive?: boolean;
+  /**
    * Board orchestrator mark (`boards.orchestrator_card_id`), or `null`
    * when the board is unmarked. When present and alive, this is THE
    * report target for the board — not a second router, the same function
@@ -198,6 +222,13 @@ export function decideReportNotifyTarget(input: ReportRoutingInput): ReportRouti
   // sent a message (this module's own hijack scenario, doc comment above).
   if (input.spawnedById && input.spawnedByAlive) {
     return { targetId: input.spawnedById, source: "spawned" };
+  }
+  // RODADA 4 — a aresta visual morreu com o card que spawnou, mas a linhagem
+  // continua GRAVADA (registro `spawns`, append-only). Linhagem conhecida
+  // vence conversa: é isto que impede o card que só passou pela conversa de
+  // virar o destino (o motivo desta task).
+  if (input.spawnerOfRecordId && input.spawnerOfRecordAlive) {
+    return { targetId: input.spawnerOfRecordId, source: "spawned" };
   }
   // Fallback only: no live spawner on record at all — a card a human opened
   // (never had a `spawned` connector), or one whose spawner card was closed,

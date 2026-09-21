@@ -1,6 +1,8 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow, ReportIngressChannel, SpawnRow } from "./store";
 import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import {
@@ -29,11 +31,16 @@ import {
   retainStatusAsk,
 } from "./status-write-decision";
 import {
+  decideArtifactCandidates,
   decideCloseCardTaskEffect,
   decideJudgmentWrite,
   decideReportVerdictWrite,
+  declaredFilesFromReport,
+  describeArtifactPendencies,
   roleOnTask,
+  type ArtifactPendency,
   type CloseCardLinkedTask,
+  type UntrackedArtifact,
 } from "./judgment-write-decision";
 import { decideFailureKind, decideFailureWrite, stampFailureKindJson, failureKindFromResultJson, resolveFailureKind, mergeAgentResultJson, interruptionReasonFromResultJson, type FailureSource } from "./failure-kind-decision";
 import { decideExitWithoutReportWrite } from "./exit-lifetime-decision";
@@ -559,6 +566,11 @@ export type BusRequest =
       view?: "summary" | "full";
     }
   | { cmd: "get_task"; taskId?: string }
+  /** Vínculos VIVOS de um card (`task_cards`, filtrados pela época do
+   * vínculo): `[{taskId, role}]`. Leitura passiva; existe porque a porta MCP
+   * só fala `handleRequest` e precisava desta fonte para resolver o papel de
+   * REVISOR no `report` (task 6bea994a). */
+  | { cmd: "list_task_cards"; cardId?: string }
   /** `task_cards.role` for a card that ALREADY exists (the other write
    * path is `spawn_agent({taskId, role})`, for a card born for the task).
    * `implementer` also makes the card the task's principal `card_id`
@@ -664,6 +676,64 @@ export type BusResponse = Record<string, unknown> & { ok: boolean };
  * agent payload. See `ReportRow.channel`.
  */
 export type HandleRequestOpts = { channel?: ReportIngressChannel | null };
+
+/**
+ * ITEM 21 — FATOS da pendência de limpeza, coletados no fim da task. Os
+ * untracked vêm de `git status --porcelain -uall`, que JÁ esconde o que o
+ * `.gitignore` cobre (nunca `--ignored`: medido neste repo, traria 31.439
+ * linhas de `node_modules`/cache), com tamanho e mtime do disco. `null` quando
+ * o cwd não é repo ou o git falhou — ausência de fato é ausência, não uma
+ * lista vazia de acusação.
+ */
+function collectUntrackedArtifacts(cwd: string): { root: string; files: UntrackedArtifact[] } | null {
+  try {
+    const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+    }).trim();
+    if (!root) return null;
+    const out = execFileSync("git", ["status", "--porcelain=v1", "-uall"], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const files: UntrackedArtifact[] = [];
+    for (const line of out.split("\n")) {
+      if (!line.startsWith("?? ")) continue;
+      const rel = line.slice(3).trim();
+      if (!rel) continue;
+      let bytes = 0;
+      let modifiedAtMs = 0;
+      try {
+        const st = statSync(join(root, rel));
+        bytes = st.size;
+        modifiedAtMs = st.mtimeMs;
+      } catch {
+        // corrida: sumiu entre o status e o stat — a decisão trata 0 como
+        // "desconhecido", nunca como "antigo".
+      }
+      files.push({ path: rel, bytes, modifiedAtMs });
+    }
+    return { root, files };
+  } catch {
+    return null;
+  }
+}
+
+/** A decisão PURA (`decideArtifactCandidates`) com os fatos que o bus tem. */
+function collectCleanupPendencies(task: TaskRow | undefined, payload: unknown): ArtifactPendency[] {
+  const cwd = task?.cwd;
+  if (!cwd) return [];
+  const collected = collectUntrackedArtifacts(cwd);
+  if (!collected) return [];
+  return decideArtifactCandidates({
+    untracked: collected.files,
+    declaredFiles: declaredFilesFromReport(payload),
+    workspaceRoot: collected.root,
+    taskStartedAtMs: task.created_at,
+  });
+}
 
 /**
  * A local Unix socket bridge letting a spawned provider CLI act on the
@@ -2177,14 +2247,22 @@ export function createMessageBus(
 
   /** Feeds `decideReportNotifyTarget` (report-notify-routing.ts) — board
    * orchestrator mark wins when alive; dead mark escalates to human
-   * (`none`); unmarked keeps live `spawned` / inbound `modified`. This
-   * is the production caller that module exists for; do not leave the
-   * pure function without a feeder again. */
+   * (`none`); unmarked keeps live `spawned` / DURABLE spawner-of-record /
+   * inbound `modified`. This is the production caller that module exists
+   * for; do not leave the pure function without a feeder again. */
   function resolveNotifyTarget(cardId: string): string | null {
     const boardId = callbacks.getCardBoardId(cardId);
     const orchId = boardId ? (callbacks.getBoardOrchestratorCardId(boardId) ?? null) : null;
     const connectors = callbacks.listAllConnectors();
     const spawnedById = resolveLiveSpawner(cardId);
+    // Linhagem DURÁVEL (task 5abe8bf5) — a aresta `spawned` é só a aresta
+    // VISUAL: `deleteConnectorsForCard` a leva junto quando o card que spawnou
+    // é fechado, e até esta task era a ÚNICA fonte que este roteamento lia.
+    // O registro `spawns` é append-only e sobrevive (mesma fonte que
+    // `spawn_lineage` já usa para motivo/profundidade) — é a MESMA linhagem,
+    // então alimenta a decisão para que um card que perdeu a aresta não caia
+    // no "último que falou".
+    const spawnerOfRecordId = callbacks.findSpawnByChild(cardId)?.from_card_id ?? null;
     const directiveFromId = pickLatestDirectiveSender(connectors, cardId);
     return decideReportNotifyTarget({
       orchestratorCardId: orchId,
@@ -2193,6 +2271,8 @@ export function createMessageBus(
       directiveFromAlive: directiveFromId !== null && callbacks.isCardAlive(directiveFromId),
       spawnedById,
       spawnedByAlive: spawnedById !== null,
+      spawnerOfRecordId,
+      spawnerOfRecordAlive: spawnerOfRecordId !== null && callbacks.isCardAlive(spawnerOfRecordId),
     }).targetId;
   }
 
@@ -3298,7 +3378,19 @@ export function createMessageBus(
       // orquestrador confiar no número que o agente digitou. `accept_failure`
       // fica de fora por definição: o agente já declarou que NÃO entregou.
       if (decision.action === "accept") startTaskGates(runningTask);
-      return { ok: true, seq: stored.seq };
+      // ITEM 21 — no fim da task, o que ficou UNTRACKED no cwd e o relatório
+      // NÃO declarou em `files`/`filesChanged`, e que nasceu DEPOIS de a task
+      // começar, é pendência de limpeza. SINAL, nunca acusação, e nunca uma
+      // remoção: o app não sabe o que era sonda e o que era entrega esquecida,
+      // e a árvore é compartilhada com os outros cards.
+      const cleanupPendencies = collectCleanupPendencies(runningTask, report);
+      return {
+        ok: true,
+        seq: stored.seq,
+        ...(cleanupPendencies.length > 0
+          ? { cleanupPendencies, cleanupNote: describeArtifactPendencies(cleanupPendencies) }
+          : {}),
+      };
     }
 
     if (req.cmd === "get_report") {
@@ -3722,6 +3814,26 @@ export function createMessageBus(
       const task = callbacks.getTask(req.taskId);
       if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
       return { ok: true, task: serializeTask(task, lastStatusActorFromRow(task)) };
+    }
+
+    if (req.cmd === "list_task_cards") {
+      // Vínculos VIVOS deste card — a MESMA leitura (`listTaskCardsForCard`,
+      // com o filtro de época que impede um id de card reciclado de herdar
+      // vínculo velho) que o handler `report` já usa para resolver a task e
+      // que o `close_card` usa para decidir o que fecha.
+      //
+      // Existe como cmd por um motivo medido (task 6bea994a): a porta MCP só
+      // fala `handleRequest`, e nenhum cmd devolvia isto — então
+      // `decideReportTaskLink` recebia `linkTaskIds: []` HARDCODED e o vínculo
+      // de REVISOR (que vive em `task_cards`, nunca em `tasks.card_id`) não
+      // tinha caminho até o preflight. Leitura pura, sem consentimento:
+      // mesma classe de `get_task`/`list_tasks`.
+      if (!req.cardId) return { ok: false, error: "missing cardId" };
+      const links = (callbacks.listTaskCardsForCard(req.cardId) ?? []).map((link) => ({
+        taskId: link.task_id,
+        role: link.role,
+      }));
+      return { ok: true, links };
     }
 
     if (req.cmd === "link_task_card") {

@@ -150,6 +150,29 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
     expect(written).toHaveLength(0);
   });
 
+  it("sem conector de spawn MAS com registro durável: o ponteiro vai para o spawner-of-record (antes: descartado)", async () => {
+    // A aresta `spawned` morre com o card que spawnou; o registro `spawns`
+    // (append-only) continua. Sem esta linhagem durável o roteamento caía no
+    // fallback e, sem diretiva, o push era DESCARTADO em silêncio — task
+    // 5abe8bf5. Aqui o FEEDER é exercitado: `findSpawnByChild` → decisão.
+    const { bus: b, written } = makeBus({
+      listAllConnectors: () => [] as ConnectorRow[],
+      listCards: () => [{ id: "orch-of-record", kind: "terminal" }],
+      findSpawnByChild: (id: string) =>
+        id === "orphan-child"
+          ? { to_card_id: "orphan-child", from_card_id: "orch-of-record" }
+          : undefined,
+    });
+
+    const res = (await b.handleRequest({ cmd: "report", requesterId: "orphan-child", report: { ok: true } } as BusRequest)) as {
+      ok: boolean;
+    };
+    expect(res.ok).toBe(true);
+
+    await flushDelivery();
+    expect(written.some(([id, data]) => id === "orch-of-record" && data.includes(POINTER_NEEDLE))).toBe(true);
+  });
+
   it("Callbacks não expõe notify* de SO — o caminho do report só digita", async () => {
     // Regressão do pedido do dono: idle/report/exit sem popup. Se alguém
     // reintroduzir notifyCardReported no tipo Callbacks, este cast deixa
