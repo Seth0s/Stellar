@@ -1,62 +1,53 @@
 name: Release
 
-# Fazenda de build + deploy dos pacotes do Stellar.
+# Fazenda de build dos pacotes do Stellar.
 #
-# TOPOLOGIA (decidida na migração; não reabrir aqui):
-#   GitLab (origin, gitlab.idyplatform.com) é a verdade do código -> um
-#   espelho empurra para o GitHub (remote `github`, Seth0s/Stellar) -> é o
-#   GitHub que builda, porque é a única fonte grátis de runner macOS e
-#   Windows -> os artefatos vão por rsync-over-ssh para a VPS -> o nginx
-#   serve de /srv/stellar/download.
+# TOPOLOGIA:
+#   Um push de tag `v*` builda nos três SOs (GitHub é a única fonte grátis de
+#   runner macOS e Windows) e anexa os pacotes à Release da própria tag.
 #
-#   A VPS NÃO builda. Um build de Electron em três SOs come a máquina que
-#   está servindo o site; foi exatamente por isso que o runner de build
-#   saiu de produção.
+# POR QUE GITHUB RELEASE (e não mais rsync para a VPS):
+#   O desenho anterior mandava tudo por rsync-over-ssh para /srv/stellar/download
+#   porque duas alternativas tinham morrido: a GitHub Release saiu junto com o
+#   GitHub deixando de ser fonte da verdade, e `actions/upload-artifact` quebrou
+#   por cota — um release ocupa ~746 MB (mac 335 + linux 269 + win 142) contra os
+#   500 MB do plano.
 #
-# POR QUE NÃO HÁ GITHUB RELEASE NEM ARTIFACT STORAGE:
-#   `.github/workflows/` foi apagado na migração e este arquivo é novo — ele
-#   não restaura o antigo. O pipeline antigo publicava os binários numa
-#   GitHub Release; esse caminho morreu junto com a saída do GitHub como
-#   fonte da verdade. O desenho ANTERIOR a esse usava actions/upload-artifact
-#   e quebrou por cota: um release ocupa ~746 MB (mac 335 + linux 269 + win
-#   142) contra os 500 MB do plano, num repositório privado — que é o caso
-#   deste. Com os dois transportes mortos, o único que sobra é o runner
-#   enviar direto para a VPS. Cada job de build faz o SEU rsync; o job
-#   `deploy` não reenvia pacote nenhum, ele só vira o atalho `latest` depois
-#   que os três chegaram. `--publish never` em todo build: nada toca a API
-#   de Releases em momento algum.
+#   Essa segunda razão não se aplicava a Releases. A cota de storage do Actions
+#   cobre workflow artifacts, Packages e cache; asset de Release não entra nela.
+#   A documentação é explícita: "no limit on the total size of a release, nor
+#   bandwidth usage" — o limite é 2 GiB por arquivo e 1000 assets por release.
+#   Com o repositório público, os runners padrão também passam a ser grátis.
 #
-# LAYOUT NA VPS (tem que bater com o vhost stellar.example.conf do StellarPage):
-#   /srv/stellar/download/<versão>/   <- os pacotes desta release
-#   /srv/stellar/download/latest      <- symlink para a versão corrente
-#   O botão BAIXAR do site aponta para /baixar, que o nginx redireciona para
-#   /download/latest/. Ou seja: o site nunca precisa saber a versão. Virar
-#   `latest` é o ÚLTIMO passo, depois de todos os arquivos estarem lá.
+#   Resultado: quem abre o repositório baixa o app da própria Release, sem
+#   depender da VPS estar de pé nem de chave SSH nenhuma.
 #
-# SEGREDOS: nenhum host, usuário ou chave vive neste YAML; tudo vem de
-# `secrets.*`. A lista completa e como gerar cada um está em docs/DEPLOY.md.
+# ATOMICIDADE (o que o symlink `latest` fazia antes):
+#   `prepare` cria a Release como DRAFT. Draft não aparece para o público e não
+#   vira `latest`. Cada build anexa o seu pacote ao draft. Só o job `publish`,
+#   que depende dos TRÊS builds, confere que os cinco formatos chegaram e tira o
+#   draft. Se qualquer SO falhar, o draft fica lá, invisível, e a release
+#   anterior continua sendo a `latest` — mesma garantia do `mv -T` de antes.
+#
+# SEGREDOS: nenhum. O GITHUB_TOKEN do próprio run tem o `contents: write`
+#   declarado abaixo, que é tudo de que este workflow precisa.
 
 on:
   push:
     tags:
       - "v*"
 
-# Só leitura: este workflow nunca escreve nada no GitHub (nem Release nem
-# artifact). O transporte é a chave SSH de deploy.
+# Escreve na Release da tag — e nada além disso.
 permissions:
-  contents: read
+  contents: write
 
-# Duas tags próximas não se atropelam: uma série de jobs não cancela a outra.
-# O `latest` de uma release antiga que terminasse depois não regride — o job
-# de deploy compara as versões antes de virar o atalho.
+# Duas tags próximas não se atropelam.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   NODE_VERSION: "22"
-  # Caminho ditado pelo vhost do nginx — configuração, não segredo.
-  DEPLOY_ROOT: /srv/stellar/download
 
 jobs:
   # ---------------------------------------------------------------------
@@ -97,32 +88,18 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Versão de release: $version"
 
-      - name: instala a chave de deploy
+      - name: cria a Release da tag como draft (invisível até os três SOs chegarem)
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-
-      - name: cria o diretório remoto da versão (falha cedo se a chave não vale)
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          port="${DEPLOY_PORT:-22}"
-          ssh -i "$HOME/.ssh/deploy_key" -p "$port" \
-            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p '$DEPLOY_ROOT/$VERSION' && ls -ld '$DEPLOY_ROOT/$VERSION'"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG já existe — reaproveitando."
+          else
+            gh release create "$TAG" --draft --title "$TAG" --generate-notes
+            echo "Release $TAG criada como draft."
+          fi
 
   # ---------------------------------------------------------------------
   # build-linux: .deb, .rpm e AppImage.
@@ -171,43 +148,21 @@ jobs:
             echo ".$ext -> ${files[*]}"
           done
 
-      - name: instala a chave de deploy
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-
-      - name: envia os pacotes Linux para a VPS
+      - name: anexa os pacotes Linux ao draft da Release
         shell: bash
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          port="${DEPLOY_PORT:-22}"
-          ssh_opts="-i $HOME/.ssh/deploy_key -p $port -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           shopt -s nullglob
           files=(dist/*.deb dist/*.rpm dist/*.AppImage dist/*.blockmap dist/latest-linux.yml)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::o build não gerou nenhum artefato Linux"
             exit 1
           fi
-          echo "Enviando para $VERSION: ${files[*]}"
-          rsync -rt -e "ssh $ssh_opts" \
-            "${files[@]}" \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ROOT/$VERSION/"
-          # O feed do electron-updater só é enviado se o build o gerou. Aqui
-          # apenas declaramos o que faltou — nunca o fabricamos.
-          [ -e dist/latest-linux.yml ] || echo "::notice::dist/latest-linux.yml não foi gerado por este build (ok enquanto não houver feed)"
+          echo "Anexando a $TAG: ${files[*]}"
+          gh release upload "$TAG" "${files[@]}" --clobber
 
   # ---------------------------------------------------------------------
   # build-mac: .dmg (+ .zip, que é o que o electron-updater usa no mac).
@@ -250,47 +205,27 @@ jobs:
           fi
           echo ".dmg -> ${files[*]}"
 
-      - name: instala a chave de deploy
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-
-      - name: envia os pacotes macOS para a VPS
+      - name: anexa os pacotes macOS ao draft da Release
         shell: bash
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          port="${DEPLOY_PORT:-22}"
-          ssh_opts="-i $HOME/.ssh/deploy_key -p $port -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           shopt -s nullglob
           files=(dist/*.dmg dist/*.zip dist/*.blockmap dist/latest-mac.yml)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::o build não gerou nenhum artefato macOS"
             exit 1
           fi
-          echo "Enviando para $VERSION: ${files[*]}"
-          rsync -rt -e "ssh $ssh_opts" \
-            "${files[@]}" \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ROOT/$VERSION/"
-          [ -e dist/latest-mac.yml ] || echo "::notice::dist/latest-mac.yml não foi gerado por este build (ok enquanto não houver feed)"
+          echo "Anexando a $TAG: ${files[*]}"
+          gh release upload "$TAG" "${files[@]}" --clobber
 
   # ---------------------------------------------------------------------
   # build-windows: instalador NSIS (.exe) + portable (.exe).
-  #   A imagem windows-latest NÃO traz rsync. Para manter rsync-over-ssh nos
-  #   três SOs (e não instalar um transporte diferente só aqui), o MSYS2 já
-  #   presente na imagem é usado para obter rsync/openssh.
+  #   O `gh` já vem na imagem windows-latest, então o upload aqui é o mesmo
+  #   dos outros dois SOs — não é mais preciso o MSYS2 que existia só para
+  #   arranjar rsync/openssh nesta plataforma.
   # ---------------------------------------------------------------------
   build-windows:
     name: build windows (.exe)
@@ -324,126 +259,57 @@ jobs:
           fi
           echo ".exe -> ${files[*]}"
 
-      - name: instala rsync + openssh no MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          install: rsync openssh
-
-      - name: envia os pacotes Windows para a VPS
-        shell: msys2 {0}
+      - name: anexa os pacotes Windows ao draft da Release
+        shell: bash
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-
-          port="${DEPLOY_PORT:-22}"
-          ssh_opts="-i $HOME/.ssh/deploy_key -p $port -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           shopt -s nullglob
           files=(dist/*.exe dist/*.blockmap dist/latest.yml)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::o build não gerou nenhum artefato Windows"
             exit 1
           fi
-          echo "Enviando para $VERSION: ${files[*]}"
-          rsync -rt -e "ssh $ssh_opts" \
-            "${files[@]}" \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ROOT/$VERSION/"
-          [ -e dist/latest.yml ] || echo "::notice::dist/latest.yml não foi gerado por este build (ok enquanto não houver feed)"
+          echo "Anexando a $TAG: ${files[*]}"
+          gh release upload "$TAG" "${files[@]}" --clobber
 
   # ---------------------------------------------------------------------
-  # deploy: depende dos TRÊS builds. Sem `if: always()` de propósito — se
-  # qualquer plataforma falhar, este job é pulado e `latest` NÃO se move.
-  # O diretório da versão pode ficar parcial; o atalho continua na release
-  # anterior, que está inteira. Ver docs/DEPLOY.md ("quando um SO falha").
-  #
-  # Este job não reenvia pacotes: cada build já enviou o seu. Ele existe
-  # para a única coisa que não pode ser paralela — conferir que os três
-  # chegaram e virar o atalho `latest`, por último, de forma atômica.
+  # publish: depende dos TRÊS builds. Sem `if: always()` de propósito — se
+  # qualquer plataforma falhar, este job é pulado, o draft nunca é publicado e
+  # a release anterior continua sendo a `latest`.
   # ---------------------------------------------------------------------
-  deploy:
-    name: deploy (reaponta latest)
+  publish:
+    name: publish (tira o draft)
     needs: [build-linux, build-mac, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - name: instala a chave de deploy
+      - name: confere os cinco formatos e publica
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: confere os três sistemas e reaponta latest (último passo)
-        shell: bash
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          port="${DEPLOY_PORT:-22}"
-          SSH=(ssh -i "$HOME/.ssh/deploy_key" -p "$port" \
-            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST")
+          # 1) Os cinco formatos precisam estar anexados e não-vazios.
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | "\(.name)\t\(.size)"' > assets.tsv
+          echo "Assets anexados:"
+          cat assets.tsv
 
-          # 1) Os três sistemas precisam estar presentes e não-vazios.
-          "${SSH[@]}" bash -s -- "$VERSION" "$DEPLOY_ROOT" <<'REMOTE'
-          set -euo pipefail
-          version="$1"
-          root="$2"
-          d="$root/$version"
-          test -d "$d" || { echo "diretório $d não existe" >&2; exit 1; }
           for ext in deb rpm AppImage dmg exe; do
-            n="$(find "$d" -maxdepth 1 -name "*.$ext" -type f | wc -l)"
-            if [ "$n" -eq 0 ]; then
-              echo "faltando pacote .$ext em $d" >&2
+            if ! cut -f1 assets.tsv | grep -q "\.$ext$"; then
+              echo "::error::faltando pacote .$ext na release $TAG"
               exit 1
             fi
           done
-          if find "$d" -maxdepth 1 -type f -empty | grep -q .; then
-            echo "há arquivo de tamanho zero em $d" >&2
+
+          if awk -F'\t' '$2 == 0 { print; found = 1 } END { exit !found }' assets.tsv; then
+            echo "::error::há asset de tamanho zero na release $TAG"
             exit 1
           fi
-          echo "Os três sistemas estão presentes em $d:"
-          ls -lh "$d"
-          REMOTE
 
-          # 2) Só agora vira o atalho — nunca antes dos arquivos.
-          "${SSH[@]}" bash -s -- "$VERSION" "$DEPLOY_ROOT" <<'REMOTE'
-          set -euo pipefail
-          version="$1"
-          root="$2"
-          current=""
-          if [ -L "$root/latest" ]; then
-            current="$(basename "$(readlink -f "$root/latest")")"
-          fi
-          if [ -n "$current" ] && [ "$current" != "$version" ]; then
-            newest="$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -n1)"
-            if [ "$newest" != "$version" ]; then
-              echo "latest já aponta para $current, que é mais nova que $version — não regride."
-              exit 0
-            fi
-          fi
-          # symlink temporário + mv -T = troca atômica (sem janela de 404).
-          link="$root/.latest.$$"
-          ln -sfn "$version" "$link"
-          mv -T "$link" "$root/latest"
-          echo "latest -> $(readlink "$root/latest")"
-          REMOTE
+          # 2) Só agora a release deixa de ser draft — nunca antes dos arquivos.
+          gh release edit "$TAG" --draft=false --latest
+          echo "Release $TAG publicada."
