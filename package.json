@@ -1,12 +1,12 @@
 {
   "name": "stellar",
-  "version": "0.8.0",
-  "description": "Stellar — a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
-  "license": "Apache-2.0",
+  "version": "0.8.1",
+  "description": "Stellar \u2014 a multi-agent spatial canvas for orchestrating Claude/Codex/Cursor/bash sessions.",
+  "license": "GPL-3.0-or-later",
   "homepage": "https://github.com/Seth0s/Stellar",
   "author": {
-    "name": "Seth0s",
-    "email": "seth0s@users.noreply.github.com"
+    "name": "Lucas Costa Sabino",
+    "email": "lucassabino.rj@gmail.com"
   },
   "private": true,
   "type": "module",
@@ -26,6 +26,7 @@
     "format:check": "prettier --check src",
     "test:unit": "vitest run",
     "check:tokens": "node scripts/verify/check-design-tokens.mjs",
+    "check:types:test": "npx tsc --noEmit -p tsconfig.test.json",
     "verify:ci": "npx tsc --noEmit && npm run lint && npm run test:unit && npm run check:tokens && npm run build",
     "verify:smoke": "for f in scripts/verify/smoke-*.mjs; do node \"$f\" || exit 1; done",
     "verify": "npm run verify:ci && npm run verify:smoke"
