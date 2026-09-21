@@ -271,7 +271,7 @@ describe("check-design-tokens typography rule (c8cd45fc) — a regra irmã, mesm
     // O pino: o arquivo da prova migrou e não pode voltar a ter px.
     expect(baseline.rules.typography["src/renderer/src/TaskCard.module.css"]).toBe(0);
     // E a seção da parte 1 segue viva, no valor dela.
-    expect(baseline.rules.spacing["src/renderer/src/styles/layout.css"]).toBe(201); // ratchet da fatia de primitivas (e165651e), era 209
+    expect(baseline.rules.spacing["src/renderer/src/styles/layout.css"]).toBe(199); // ratchet da quinta linha (f0df8d23), era 201
   });
 
   it("updateBaseline escreve a seção da SEGUNDA regra e preserva a da primeira", () => {
@@ -373,7 +373,7 @@ describe("check-design-tokens radius rule (325d6c66) — a TERCEIRA regra, mesmo
     // E as duas seções anteriores seguem vivas, nos valores delas — a terceira
     // regra não vazou entre elas.
     expect(baseline.rules.spacing["src/renderer/src/TaskCard.module.css"]).toBe(102);
-    expect(baseline.rules.spacing["src/renderer/src/styles/layout.css"]).toBe(201); // ratchet da fatia de primitivas (e165651e), era 209
+    expect(baseline.rules.spacing["src/renderer/src/styles/layout.css"]).toBe(199); // ratchet da quinta linha (f0df8d23), era 201
   });
 
   it("updateBaseline escreve a seção da TERCEIRA regra e preserva as das duas anteriores", () => {
@@ -530,7 +530,7 @@ describe("check-design-tokens motion rule (153ca424) — a QUARTA regra, mesmo m
     // O pino de movimento — a prova é o animations.css, o arquivo do domínio.
     expect(baseline.rules.motion["src/renderer/src/styles/animations.css"]).toBe(0);
     // E as TRÊS seções anteriores seguem vivas, nos valores delas.
-    expect(baseline.rules.spacing["src/renderer/src/styles/layout.css"]).toBe(201); // ratchet da fatia de primitivas (e165651e), era 209
+    expect(baseline.rules.spacing["src/renderer/src/styles/layout.css"]).toBe(199); // ratchet da quinta linha (f0df8d23), era 201
     expect(baseline.rules.typography["src/renderer/src/TaskCard.module.css"]).toBe(0);
     expect(baseline.rules.radius["src/renderer/src/TaskCard.module.css"]).toBe(0);
   });

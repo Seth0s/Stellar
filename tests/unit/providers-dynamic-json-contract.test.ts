@@ -141,7 +141,15 @@ const MAX_FLAG: DynamicProviderSpec = {
     acbridgeOnPath: true,
     effort: { mechanism: "flag", flag: "--effort", values: ["low", "high"] },
     model: { mechanism: "flag", flag: "-m" },
-    delivery: { briefMechanism: "flag", briefFlag: "--prompt" },
+    delivery: {
+      briefMechanism: "flag",
+      briefFlag: "--prompt",
+      // O ramo `turnEnd.mechanism: "screen"` (task 0dd5c145): é ele que carrega
+      // `pattern`, o obrigatório condicional NOVO. Sem uma base que declare um
+      // `turnEnd`, o anti-drift abaixo acusa o caminho como não coberto — que
+      // foi exatamente como este teste pegou o campo novo.
+      turnEnd: { mechanism: "screen", pattern: "Worked for \\d+s" },
+    },
   },
 };
 
@@ -194,7 +202,9 @@ const MAX_STORE_SQLITE: DynamicProviderSpec = {
     acbridgeOnPath: false,
     effort: { mechanism: "none", reason: "unmeasured" },
     model: { mechanism: "flag", flag: "-m" },
-    delivery: { briefMechanism: "none" },
+    // O OUTRO ramo do `turnEnd` (task 0dd5c145): `hook` não carrega `pattern`,
+    // e o enum do schema precisa dos dois valores cobertos por uma base.
+    delivery: { briefMechanism: "none", turnEnd: { mechanism: "hook" } },
   },
 };
 

@@ -12,7 +12,14 @@ import { interruptionReasonFromResultJson } from "../../src/main/failure-kind-de
 /**
  * Auto-dispatch: no `?? "claude"`, cwd inherits from deps, refusal stamps
  * result_json WITHOUT writing status (CAMADA 3).
+ *
+ * A RAIZ DECLARADA do board (`getBoardCwd`) é obrigatória em cada rig desde
+ * 2026-09-21: sem ela o auto-dispatch RECUSA (o irmão exato da recusa do
+ * gate), e um rig que não a declarasse exercitaria um estado que produção não
+ * alcança mais — despachar card sem lugar declarado. Os cwds usados aqui
+ * (`/home/lucas/Workplace/Projects/Stellar`, herdado do pai) caem DENTRO dela.
  */
+const BOARDS_ROOT = "/home/lucas/Workplace/Projects";
 
 function funnelled(decide: (task: TaskRow) => StatusWriteDecision, getBus: () => ReturnType<typeof createMessageBus> | null) {
   return createTaskWriteFunnel({
@@ -100,6 +107,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
         getTask: (id: string) => (id === "dep-done" ? depBefore : id === "ceaabaac-xxxx" ? pending : undefined),
         listTasks: () => [dep, pending],
         isBoardAutonomous: () => true,
+        getBoardCwd: () => BOARDS_ROOT,
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         upsertTask: (task: TaskRow) => persistTask(task),
@@ -151,6 +159,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
         getTask: (id: string) => rows.get(id),
         listTasks: () => [dep, pending],
         isBoardAutonomous: () => true,
+        getBoardCwd: () => BOARDS_ROOT,
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         upsertTask: (task: TaskRow) => persistTask(task),
@@ -187,6 +196,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
         getTask: (id: string) => (id === "dep-done" ? depBefore : id === "no-cwd-task" ? pending : undefined),
         listTasks: () => [dep, pending],
         isBoardAutonomous: () => true,
+        getBoardCwd: () => BOARDS_ROOT,
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         upsertTask: (task: TaskRow) => persistTask(task),
@@ -233,6 +243,7 @@ describe("message-bus: auto-dispatch passa cwd + label da task", () => {
         getTask: (id: string) => rows.get(id),
         listTasks: () => [dep, rows.get("no-provider")!],
         isBoardAutonomous: () => true,
+        getBoardCwd: () => BOARDS_ROOT,
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         upsertTask: (task: TaskRow) => persistTask(task),

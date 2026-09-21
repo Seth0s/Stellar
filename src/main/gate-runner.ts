@@ -63,12 +63,41 @@
  * (`gateRun`), o mesmo envelope que `failureKind` já usa, e um agente
  * NÃO pode forjá-lo: `stripAgentGateEvidence` remove a chave de qualquer
  * `update_task.result` antes de gravar.
+ *
+ * AS TRÊS RECUSAS DURAS (2026-09-21) — e o que NUNCA existe aqui:
+ *   1. SEM RAIZ DECLARADA, nada roda (`describeNoDeclaredRoot`): o estado
+ *      "executar shell de agente sem um lugar declarado" NÃO EXISTE. Fechado
+ *      por decisão do dono, DEPOIS de medir o raio: das 33 tasks sem board
+ *      nenhuma é despachável, as 3 não terminais estão dormentes (sem card e
+ *      sem vínculo) e task sem board não é mais criável; nenhum board ficou
+ *      sem `cwd`. A alternativa era manter um buraco conhecido em EXECUÇÃO
+ *      por simetria ("ausência de raiz = ausência de limite"), e essa troca é
+ *      a errada quando o custo de fechar é zero;
+ *   2. SEM `bubblewrap`, nada roda (`describeSandboxUnavailable`): a recusa é
+ *      por comando e o run fica `ok:false`. Não há fallback para execução
+ *      direta — é o defeito que este módulo deixou de ter;
+ *   3. COM o `cwd` da task FORA da raiz declarada do board, nada roda
+ *      (`describeTaskCwdOutsideRootExecution`): o `cwd` decide ONDE, e um
+ *      diretório que o board não declarou não é lugar de executar shell de
+ *      agente.
+ *   Fora isso, o processo do HOST é SEMPRE o binário do sandbox: o comando só
+ *   existe como argv de `bash -lc` DENTRO do bwrap, e `GateSpawn` tem
+ *   assinatura `(file, args, options)` — não há onde passar uma string de
+ *   shell, então reintroduzir `shell: true` no host é impossível por
+ *   acidente. `tests/unit/gate-runner-containment.test.ts` trava os quatro.
+ *
+ *   Toda recusa é POR COMANDO e vira evidência com `exitCode: null` + o
+ *   motivo, para a Fila nomear o que deixou de rodar em vez de parecer falha
+ *   de teste. A raiz que se aplica a uma task vem de `declaredRootForTask`
+ *   (`task-dispatch-decision.ts`): sem board ela é indefinida, e indefinida
+ *   aqui significa RECUSA, não permissão.
  */
 
 import { spawn, execFile, type SpawnOptions } from "node:child_process";
 import { resolve } from "node:path";
 import { effectivePath } from "./user-env";
 import { buildSandboxedBashArgs, findSandboxBinary } from "./sandbox";
+import { describeTaskCwdOutsideRootExecution, isPathInsideRoot } from "./task-dispatch-decision";
 
 /** Chave do record de gate carimbado pelo app em `tasks.result_json`.
  * Mesmo lugar (e mesma classe de dono) de `failureKind`: o app observa,
@@ -192,6 +221,10 @@ export type RunTaskGatesInput = {
   /** Seam de teste — a produção resolve com `findSandboxBinary()`.
    * `null` força a recusa; um caminho força aquele binário. */
   sandboxBinary?: string | null;
+  /** RAIZ DECLARADA do board (`boards.cwd`) — o gate NÃO roda se o `cwd` da
+   * task estiver fora dela (2026-09-21). Ausente/`""` = sem limite declarado:
+   * não se inventa recusa. Consumidor irmão: o auto-dispatch do bus. */
+  declaredRoot?: string | null;
   /** TERRITÓRIO DECLARADO da task, só para ROTULAR o diff capturado
    * (dentro/fora). Nunca filtra: medido, 75,5% dos arquivos declarados caem
    * fora, e o desvio é justamente o que interessa. */
@@ -225,6 +258,19 @@ export function describeSandboxUnavailable(): string {
     "[de: stellar] gate NÃO executado: sandbox (bubblewrap/bwrap) indisponível neste sistema. " +
     "Os gates de uma task são shell de autoria de agente e não rodam sem confinamento — " +
     "instale o bubblewrap. Nada foi executado."
+  );
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. Recusa quando a task não tem raiz
+ * declarada (sem board, ou board sem `cwd`). Serve os DOIS consumidores de
+ * `cwd` — o gate (execução de shell) e o auto-dispatch (abertura de card) —
+ * com o MESMO texto de causa, porque é a MESMA pergunta: onde esta task pode
+ * rodar? Duas redações seriam duas noções outra vez. */
+export function describeNoDeclaredRoot(where: "gate" | "auto-dispatch" = "gate"): string {
+  return (
+    `[de: stellar] ${where} NÃO executado: a task não tem raiz declarada (sem board, ou board sem cwd). ` +
+    "Sem raiz declarada não existe lugar autorizado onde o app possa agir em nome de um agente — " +
+    "vincule a task a um board com cwd declarado. Nada foi executado."
   );
 }
 
@@ -427,7 +473,22 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
     // durado 10min. Os tempos por comando sempre foram reais.
     const startedAt = Date.now();
     const commands: GateCommandEvidence[] = [];
-    if (!sandboxBinary) {
+    // CONFINAMENTO DO `cwd` (2026-09-21) — o gate roda no `cwd` da task, e o
+    // `cwd` DECIDE ONDE. Um caminho fora da raiz declarada do board é recusa
+    // POR COMANDO, pela mesma razão do sandbox logo abaixo: a evidência diz
+    // qual comando deixou de rodar, em vez de rodá-lo em outro lugar.
+    const declaredRoot =
+      typeof input.declaredRoot === "string" && input.declaredRoot.trim().length > 0 ? input.declaredRoot : null;
+    if (declaredRoot === null) {
+      // SEM RAIZ DECLARADA NÃO SE EXECUTA (decisão do dono, 2026-09-21). Este
+      // ramo é o que fecha o resíduo legado: antes, raiz ausente significava
+      // "sem limite" e os gates de uma task sem board rodavam mesmo assim.
+      const reason = describeNoDeclaredRoot();
+      for (const command of input.gates) commands.push(refusalEvidence(command, reason));
+    } else if (!isPathInsideRoot(requestedCwd, declaredRoot)) {
+      const reason = describeTaskCwdOutsideRootExecution({ where: "gate", cwd: requestedCwd, root: declaredRoot });
+      for (const command of input.gates) commands.push(refusalEvidence(command, reason));
+    } else if (!sandboxBinary) {
       // Sem bwrap não existe fallback para execução direta: rodar o shell
       // do agente sem confinamento é exatamente o defeito que este caminho
       // deixa de fazer. A recusa é POR COMANDO, para a evidência nomear

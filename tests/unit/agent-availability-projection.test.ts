@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import {
   projectEffortValues,
+  projectTurnEndSignal,
   providersReloadNotices,
 } from "../../src/main/agent-availability-projection";
 import { PROVIDERS, providerById } from "../../src/main/providers";
@@ -140,5 +141,45 @@ describe("providersReloadNotices — os dois avisos de um reload", () => {
     const line = "providers.json relido: entraram 1, saíram 0";
     const notices = providersReloadNotices(report, line);
     expect((notices[0]!.args[0] as { line: string }).line).toBe(line);
+  });
+});
+
+/**
+ * O FIM DE TURNO (task 0dd5c145) — o segundo fato de capacidade a atravessar
+ * por este canal, pela mesma regra do `effortValues`: projeta-se o que a UI
+ * consome, nunca o `capacity` inteiro.
+ */
+describe("projectTurnEndSignal — o fim de turno que atravessa", () => {
+  it("o hook atravessa como mecanismo, sem padrão nenhum", () => {
+    expect(projectTurnEndSignal({ mechanism: "hook" })).toEqual({ mechanism: "hook" });
+  });
+
+  it("o padrão de tela atravessa como TEXTO — `RegExp` não serializa em IPC", () => {
+    const projected = projectTurnEndSignal({ mechanism: "screen", pattern: /Worked for \d+s/i });
+    if (projected?.mechanism !== "screen") throw new Error("deveria atravessar como screen");
+    expect(projected.source).toBe("Worked for \\d+s");
+    expect(projected.flags).toBe("i");
+    // O que o renderer REMONTA casa o mesmo que a declaração casava: é o que
+    // torna a viagem de ida e volta inofensiva.
+    const declared = /Worked for \d+s/i;
+    const rebuilt = new RegExp(projected.source, projected.flags);
+    for (const sample of ["Worked for 21s", "worked for 8s", "Thought for 1 second", "nada"]) {
+      expect(rebuilt.test(sample)).toBe(declared.test(sample));
+    }
+  });
+
+  it("ausência de declaração = `null`, e a UI não promete", () => {
+    expect(projectTurnEndSignal(undefined)).toBeNull();
+  });
+
+  it("claude declara hook e codex declara screen — os dois atravessam", () => {
+    expect(projectTurnEndSignal(providerById("claude")?.capacity.delivery.turnEnd)).toEqual({ mechanism: "hook" });
+    expect(projectTurnEndSignal(providerById("codex")?.capacity.delivery.turnEnd)?.mechanism).toBe("screen");
+  });
+
+  it("os outros nativos NÃO declaram — ausência é a verdade, não um vazio", () => {
+    for (const id of ["cursor", "antigravity", "opencode", "bash"]) {
+      expect(projectTurnEndSignal(providerById(id)?.capacity.delivery.turnEnd)).toBeNull();
+    }
   });
 });

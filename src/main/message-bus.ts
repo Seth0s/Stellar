@@ -12,7 +12,7 @@ import {
   unreportedIdlePointerBody,
 } from "./agent-facing-authorship";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, needleVisibleOnScreen, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, needleVisibleOnScreen, deriveComposerZone, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
 import {
   cancelPendingFromRequester,
   decideOriginDeliveryRate,
@@ -21,7 +21,7 @@ import {
   type OriginDeliveryRateSample,
 } from "./delivery-lifecycle-decision";
 import { decideTaskCardSpawn, type TaskCardGuardCard } from "../task-card-guard";
-import type { StatusWriteDecision } from "./status-write-decision";
+import type { StatusWriteActor, StatusWriteDecision } from "./status-write-decision";
 import {
   decideStatusAsk,
   describeStatusAskAlready,
@@ -60,10 +60,13 @@ import {
   decodeReportArgument,
 } from "./report-retry-decision";
 import {
-  resolveTaskDispatchCwd,
   resolveTaskDispatchLabel,
   decideTaskDispatchProvider,
   decideTaskDispatchCwd,
+  decideTaskCwdWithinRoot,
+  declaredRootForTask,
+  isPathInsideRoot,
+  describeTaskCwdOutsideRootExecution,
   type AncestorCwdNode,
 } from "./task-dispatch-decision";
 import { appendDepPointer, depIdsFromJson, summarizeReport, type DepPointerSource, type DepReportSummary } from "./dep-pointer-decision";
@@ -71,16 +74,24 @@ import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
 import {
   appendTaskContract,
   contractFromTaskRow,
+  decideGatesAuthorship,
   parseTaskContractInput,
   territoryToSql,
   territoryFromSql,
   gatesToSql,
+  gatesFromSql,
   reportSchemaToSql,
   allowCommitToSql,
 } from "./task-contract-decision";
 import { decideTerritoryConflict, type ActiveTaskTerritory } from "./territory-conflict-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
-import { carryGateEvidence, runTaskGates, stampGateEvidenceJson, stripAgentGateEvidence } from "./gate-runner";
+import {
+  carryGateEvidence,
+  describeNoDeclaredRoot,
+  runTaskGates,
+  stampGateEvidenceJson,
+  stripAgentGateEvidence,
+} from "./gate-runner";
 import { decideSpawnReason, deriveSpawnDepth } from "./spawn-record-decision";
 import { decideSpawnMediaPath, type SpawnMediaType } from "./spawn-media-decision";
 import {
@@ -970,6 +981,16 @@ export function createMessageBus(
     /** Board orchestrator mark — read-only here. Only the renderer UI
      * writes `boards.orchestrator_card_id`. `null`/undefined = unmarked. */
     getBoardOrchestratorCardId: (boardId: string) => string | null | undefined;
+    /** A RAIZ DECLARADA do board (`boards.cwd` — a sessão real escolhida no
+     * PathPicker), usada para CONFINAR o `cwd` de uma task: ele decide onde o
+     * gate roda e onde um card auto-despachado abre (2026-09-21). Vazio/
+     * `undefined` = board sem cwd DECLARADA, e isso é RECUSA nos DOIS
+     * consumidores: o gate não executa e o auto-dispatch não abre card — não
+     * existe execução sem lugar declarado. (Na ESCRITA o valor ainda passa,
+     * porque ali não há limite a aplicar; quem recusa é a execução.)
+     * Obrigatória de propósito — um callback que a fiação esqueça vira no-op
+     * silencioso, e aqui isso desligaria a regra sem nenhum erro aparecer. */
+    getBoardCwd: (boardId: string) => string | undefined;
     /** RODADA 4 (DESIGN-BACKLOG.md §2.3, fechar a classe do board órfão)
      * — `create_task` valida contra isto antes de gravar: um `boardId`
      * que não existe é recusado (erro explícito ao chamador), nunca
@@ -1122,14 +1143,17 @@ export function createMessageBus(
     ) => void;
     /** TROCA DE CARD (task e8802e32) — delega ao store a transacao que libera
      * a participacao (motivo obrigatorio), move o principal para o sucessor e
-     * devolve a task a `pending` quando nao sobra implementer vivo. Ver a
-     * transacao em store.ts para o porquê de cada uma das escritas. */
+     * devolve a task a `pending` quando nao sobra implementer vivo — PELO
+     * FUNIL (`upsertTask` → `decideStatusWrite`, ator `actor`), então uma
+     * decisão humana prevalece com divergência declarada e a mudança registra
+     * transição. Ver a transacao em store.ts para o porquê de cada escrita. */
     releaseTaskCardFromTask: (input: {
       taskId: string;
       cardId: string;
       reason: string;
       releasedBy: string | null;
       nextImplementerCardId?: string | null;
+      actor: StatusWriteActor;
     }) =>
       | { ok: false; error: string }
       | {
@@ -1138,6 +1162,11 @@ export function createMessageBus(
           nextPrincipalCardId: string | null;
           liveImplementersLeft: number;
           taskStatus: string | null;
+          /** True quando o funil SEGUROU o `pending` (decisão humana venceu) —
+           * a divergência ficou declarada no quadro. */
+          statusHeld: boolean;
+          /** O status declarado contra o hold, quando houve. */
+          declaredStatus: string | null;
         };
     /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — mesmo
      * pass-through direto pro store das 3 linhas acima, mesmo motivo. O
@@ -1639,6 +1668,18 @@ export function createMessageBus(
     });
   }
 
+  /** A raiz declarada que se aplica a uma task, em UM lugar só — consumida
+   * pelos DOIS consumidores de `cwd` (o gate e o auto-dispatch), para não
+   * haver duas noções de "onde esta task pode rodar". Task sem board (ou board
+   * sem cwd) resolve `undefined`, e `undefined` é RECUSA nos DOIS — nunca
+   * permissão: era exatamente essa assimetria (recusar no gate e DESPACHAR
+   * aqui) que o Revisor A achou na reauditoria da 5412f61e. O número que
+   * sustenta a decisão vive em `declaredRootForTask` (33 tasks sem board, 22
+   * delas com gates, nenhuma despachável). */
+  function boardDeclaredRoot(boardId: string | null | undefined): string | undefined {
+    return declaredRootForTask(boardId, boardId ? callbacks.getBoardCwd(boardId) : undefined);
+  }
+
   /**
    * Gate runner (2026-09-19) — o APP roda os gates declarados da task e
    * carimba a evidência MEDIDA (stdout/stderr/exit-code reais) em
@@ -1666,6 +1707,10 @@ export function createMessageBus(
       taskId: task.id,
       cwd: task.cwd,
       gates,
+      // A raiz DECLARADA do board confina o cwd do gate (2026-09-21): fora
+      // dela nada roda, e a evidência diz por quê. Sem board, sem raiz — e
+      // sem raiz o runner RECUSA (não existe execução sem lugar declarado).
+      declaredRoot: boardDeclaredRoot(task.board_id),
       // O território vai só para ROTULAR o diff capturado (dentro/fora) —
       // nunca para filtrar. Medido: 75,5% dos arquivos que os agentes
       // declaram caem fora do território, e o desvio é o que mais interessa
@@ -2027,28 +2072,40 @@ export function createMessageBus(
         // "unknown" → next iteration waits/re-reads only (no Enter).
       }
 
-      // ENTREGA E NEGA — A FAIXA (tasks 3ef2314b + a6f36002). `unsent` por
-      // LEITURA DE TELA só é testemunha confiável de "não chegou" quando o
-      // texto ainda está na ZONA DO COMPOSER (o tail — a mesma janela que a
-      // checagem de chip já usa). O `decideSubmitCheck` procura agulha longa na
-      // TELA INTEIRA, e depois de um submit o TUI ECOA o texto no HISTÓRICO: a
-      // agulha continua visível justamente porque chegou. Fora do tail, o
-      // veredito honesto é "não consegui confirmar" (`unknown` → `unconfirmed`),
-      // nunca "Falhou" — foi o que o dono viu: a mensagem chegar, o agente ler o
-      // anexo, responder, e a barra dizer "Falhou".
+      // ENTREGA E NEGA — A FAIXA (tasks 3ef2314b + a6f36002; zona DERIVADA na
+      // 2b5ad375). `unsent` por LEITURA DE TELA só é testemunha confiável de
+      // "não chegou" quando o texto está NA ZONA DO COMPOSER — e a zona agora
+      // vem da ESTRUTURA (`deriveComposerZone`: a região entre as duas últimas
+      // réguas), nunca da constante `slice(-6)` que a 91432f9 herdou da
+      // checagem de chip. O 6 nunca foi medido: funcionava no claude por
+      // coincidência exata e falhava nos 8 terminais commandcode (chrome de 5),
+      // onde a agulha de histórico caía dentro da janela e a mentira "Falhou"
+      // sobrevivia na via majoritária.
       //
-      // Isto SUBSTITUI (e subsome) o caso específico que a 3ef2314b rebaixava
-      // por `bodyWasPasted`: o chip de bracketed paste ocupa o tail e a agulha
-      // não está lá, então ele cai na MESMA faixa — uma regra só, e a faixa que
-      // sobra é a defensável: `failed` continua querendo dizer "não chegou"
-      // exatamente quando o texto está onde o composer está.
-      const composerZone = lastScreenText.split(/\r?\n/).slice(-6).join("\n");
-      if (previousResult === "unsent" && !needleVisibleOnScreen(composerZone, sentNeedle)) {
-        previousResult = "unknown";
-        confirm.result = "unknown";
-        console.warn(
-          `[message-bus] delivery to card ${target}: screen check ended "unsent" with the text OUTSIDE the composer zone (echo in history, or a collapsed paste chip) — reported as unconfirmed, not failed`,
-        );
+      // POLARIDADE — a regra que a reprovação pediu: `failed` exige evidência
+      // POSITIVA de que o texto está no composer. Estrutura NÃO reconhecível ⇒
+      // `unconfirmed`, NUNCA `failed`: ausência de reconhecimento não pode
+      // produzir acusação. Mesmo critério do ramo do chip em
+      // `decideSubmitCheck`.
+      //
+      // P5 — A TRAVA DO SUB-MOTIVO: só demove quando a última decisão do laço
+      // foi MESMO `unsent`. Se a leitura FALHOU, o laço saiu por ali e
+      // `confirm.result` já é "read-failed", enquanto `previousResult` ficou
+      // velho; demover aqui trocaria "não consegui ler" por uma afirmação sobre
+      // uma tela que não existiu, e o `warn` nomearia uma zona sem leitura
+      // nenhuma atrás (medido: sonda P5).
+      if (targetRole === "agent" && confirm.result === "unsent" && previousResult === "unsent") {
+        const composerZone = deriveComposerZone(lastScreenText);
+        const inComposer = composerZone !== null && needleVisibleOnScreen(composerZone, sentNeedle);
+        if (!inComposer) {
+          previousResult = "unknown";
+          confirm.result = "unknown";
+          console.warn(
+            composerZone === null
+              ? `[message-bus] delivery to card ${target}: a estrutura do composer NÃO foi reconhecida na tela (nem duas réguas) — "unsent" não vira "failed"; reportado como unconfirmed`
+              : `[message-bus] delivery to card ${target}: screen check ended "unsent" with the text OUTSIDE the composer zone (echo in history, or a collapsed paste chip) — reported as unconfirmed, not failed`,
+          );
+        }
       }
 
       // Mid-turn steer: at most ONE provider-declared key after park.
@@ -3568,6 +3625,34 @@ export function createMessageBus(
       if (boardId === null) {
         return { ok: false, error: TASK_BOARD_UNDECLARED_REASON };
       }
+      // CONFINAMENTO DE `cwd` + AUTORIA DE `gates` (decisão do dono, 2026-09-21).
+      // As duas recusam ANTES de qualquer escrita e NOMEIAM o campo, no idioma
+      // de `fieldRefusal`. A raiz é a DECLARADA pelo board (`boards.cwd`).
+      // `gates` são comandos que o APP RODA: sem marca no board a escrita de
+      // hoje é mantida e REGISTRADA (não se brickam 64/Estudos, medidos com a
+      // marca NULL); com marca, só o card marcado declara.
+      const cwdDecision = decideTaskCwdWithinRoot({
+        tool: "create_task",
+        cwd: req.cwd,
+        root: callbacks.getBoardCwd(boardId),
+      });
+      if (cwdDecision.action === "refuse") {
+        return { ok: false, error: cwdDecision.error, field: cwdDecision.field };
+      }
+      const gatesAuthorship = decideGatesAuthorship({
+        tool: "create_task",
+        gates: contractParse.contract.gates,
+        current: null,
+        boardId,
+        orchestratorCardId: callbacks.getBoardOrchestratorCardId(boardId),
+        requesterId: req.requesterId,
+      });
+      if (gatesAuthorship.action === "refuse") {
+        return { ok: false, error: gatesAuthorship.error, field: "gates" };
+      }
+      if (gatesAuthorship.action === "allow-and-record") {
+        console.warn(`[message-bus] ${gatesAuthorship.note}`);
+      }
       const created: TaskRow = {
         id,
         prompt: req.prompt ?? null,
@@ -3575,9 +3660,10 @@ export function createMessageBus(
         status: "pending",
         card_id: req.cardId ?? null,
         board_id: boardId,
-        // Explicit only — never inferred from card/board/repo. Empty string
-        // collapses to null (same as omitted): board-root fallback at dispatch.
-        cwd: resolveTaskDispatchCwd(req.cwd) ?? null,
+        // Validado acima: ou cai DENTRO da raiz declarada do board, ou é
+        // `null` (raiz do board no dispatch, declarado). Nunca inferido de
+        // card/board/repo.
+        cwd: cwdDecision.cwd,
         purpose: req.purpose ?? null,
         review: req.review ?? null,
         territory_json: territoryToSql(contractParse.contract.territory),
@@ -3616,13 +3702,32 @@ export function createMessageBus(
       // task simply stays `pending` as before. `listTasks()` is read AFTER
       // the upsert so the check sees the deps' current status.
       const dispatched = created.status === "pending" && created.deps_json ? dispatchIfUnblocked(created, callbacks.listTasks()) : false;
-      return { ok: true, taskId: id, dispatched };
+      return {
+        ok: true,
+        taskId: id,
+        dispatched,
+        // Board sem marca de orquestrador: a escrita passou (comportamento de
+        // hoje) e o fato volta nomeado ao chamador, em vez de sumir.
+        ...(gatesAuthorship.action === "allow-and-record" ? { warning: gatesAuthorship.note } : {}),
+      };
     }
 
     if (req.cmd === "update_task") {
       if (!req.taskId) return { ok: false, error: "missing taskId" };
       const existing = callbacks.getTask(req.taskId);
       if (!existing) return { ok: false, error: `no such task "${req.taskId}"` };
+      // Board DECLARADO da task, para o confinamento do `cwd` (2026-09-21):
+      // `board_id` é escrito uma vez; se ESTA chamada está preenchendo o NULL
+      // de uma task legada, a raiz é a do board PEDIDO. Sem board resolvido
+      // não há raiz — e sem raiz o bus NÃO recusa a ESCRITA (aqui não há
+      // limite a aplicar); quem recusa é a EXECUÇÃO: o gate não roda e o
+      // auto-dispatch não abre card sem raiz declarada (2026-09-21).
+      const declaredBoardId =
+        existing.board_id ??
+        (typeof req.boardId === "string" && req.boardId.trim().length > 0 ? req.boardId.trim() : undefined) ??
+        (req.requesterId ? callbacks.getCardBoardId(req.requesterId) : undefined);
+      const declaredRoot = declaredBoardId ? callbacks.getBoardCwd(declaredBoardId) : undefined;
+      let gatesAuthorshipNote: string | undefined;
       // CAMADA 4 — implementer linked to THIS task cannot write
       // done/failed (judgment). Refuse and name `request_task_status`
       // (teaching refusal, same class as report-retry-decision). Outsider
@@ -3725,6 +3830,29 @@ export function createMessageBus(
         if (!contractParse.ok) {
           return { ok: false, error: contractParse.error, field: contractParse.field };
         }
+        // AUTORIA DE `gates` (2026-09-21) — a MESMA regra do `create_task`,
+        // na segunda porta. `gates` são comandos que o APP RODA; trocá-los ou
+        // APAGÁ-LOS é autoria do conjunto, e num board marcado só o card
+        // marcado faz isso. O conjunto ATUAL vem da linha, não do payload —
+        // comparar contra o que a task tem é o que distingue "mudou" de
+        // "re-escreveu o mesmo".
+        if (req.gates !== undefined) {
+          const authorship = decideGatesAuthorship({
+            tool: "update_task",
+            gates: contractParse.contract.gates,
+            current: gatesFromSql(existing.gates_json),
+            boardId: declaredBoardId ?? "(sem board)",
+            orchestratorCardId: declaredBoardId ? callbacks.getBoardOrchestratorCardId(declaredBoardId) : null,
+            requesterId: req.requesterId,
+          });
+          if (authorship.action === "refuse") {
+            return { ok: false, error: authorship.error, field: "gates" };
+          }
+          if (authorship.action === "allow-and-record") {
+            gatesAuthorshipNote = authorship.note;
+            console.warn(`[message-bus] ${authorship.note}`);
+          }
+        }
         if (req.territory !== undefined) territory_json = territoryToSql(contractParse.contract.territory);
         if (req.gates !== undefined) gates_json = gatesToSql(contractParse.contract.gates);
         if (req.allowCommit !== undefined) allow_commit = allowCommitToSql(contractParse.contract.allowCommit);
@@ -3760,13 +3888,24 @@ export function createMessageBus(
         }
         board_id = requested;
       }
+      // Confinamento do `cwd` — MESMA regra do `create_task`, na segunda porta
+      // e pelo mesmo motivo: o cwd decide onde o gate roda e onde o card
+      // auto-despachado abre. `null` limpa (volta ao fallback da raiz).
+      let cwdForWrite = existing.cwd;
+      if (req.cwd !== undefined) {
+        const cwdDecision = decideTaskCwdWithinRoot({ tool: "update_task", cwd: req.cwd, root: declaredRoot });
+        if (cwdDecision.action === "refuse") {
+          return { ok: false, error: cwdDecision.error, field: cwdDecision.field };
+        }
+        cwdForWrite = cwdDecision.cwd;
+      }
       const updated: TaskRow = {
         ...existing,
         prompt,
         status: statusProposed ? req.status! : existing.status,
         card_id: req.cardId !== undefined ? req.cardId : existing.card_id,
         board_id,
-        cwd: req.cwd !== undefined ? (resolveTaskDispatchCwd(req.cwd) ?? null) : existing.cwd,
+        cwd: cwdForWrite,
         review,
         territory_json,
         gates_json,
@@ -3820,9 +3959,15 @@ export function createMessageBus(
         resultingStatus: decision.status,
       });
       if (askAfter.resolvedBy === "applied-ask" && existing.requested_status) {
-        return { ok: true, message: describeStatusAskApplied(existing.requested_status), status: decision.status, ...promptWritten };
+        return {
+          ok: true,
+          message: describeStatusAskApplied(existing.requested_status),
+          status: decision.status,
+          ...promptWritten,
+          ...(gatesAuthorshipNote ? { warning: gatesAuthorshipNote } : {}),
+        };
       }
-      return { ok: true, ...promptWritten };
+      return { ok: true, ...promptWritten, ...(gatesAuthorshipNote ? { warning: gatesAuthorshipNote } : {}) };
     }
 
     if (req.cmd === "list_tasks") {
@@ -3913,21 +4058,42 @@ export function createMessageBus(
       if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
       if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
       // CAMADA 4, TERCEIRA PORTA: implementer desta task nao se auto-libera.
+      //
+      // O conjunto lido aqui é ESCOPADO À TASK (`getTaskCards(taskId)`) — a
+      // primeira versão passava `listTaskCardsForCard(requesterId)`, que é
+      // VIVO mas CEGO À TASK: um card reciclado normalmente é reviewer em
+      // OUTRAS tasks (medido no board vivo, seq 607: 8 linhas de reviewer em
+      // tasks done), e o `find()` devolvia esse papel como se fosse o papel
+      // NESTA task → ALLOW → o implementer da task viva liberava a si mesmo.
+      // Dentro de UMA task o par (task_id, card_id) é único, então o papel
+      // lido aqui é o papel real. E o fallback do principal espelha o guard
+      // de fechamento (`collectCloseCardLinkedTasks`): `null` num card que É
+      // `tasks.card_id` é implementer de fato — sem isso a recusa viraria
+      // decorativa para o estado legado "task com card_id e sem linha".
       const release = decideTaskCardRelease({
         taskId: req.taskId,
-        requesterRoleOnTask: roleOnTask(callbacks.listTaskCardsForCard(req.requesterId) ?? [], req.requesterId),
+        requesterRoleOnTask:
+          roleOnTask(callbacks.getTaskCards(req.taskId) ?? [], req.requesterId) ??
+          (task.card_id === req.requesterId ? TASK_CARD_IMPLEMENTER_ROLE : null),
       });
       if (release.action === "refuse") return { ok: false, error: release.error };
       const newCardId = req.newCardId ?? null;
       if (newCardId && !callbacks.listCards().some((c) => c.id === newCardId)) {
         return { ok: false, error: `no open card with id "${newCardId}"` };
       }
+      // O ator da escrita de status é o mesmo do fechamento que conclui task
+      // (`concludeTaskOnCardClose`): o mark de orquestrador do board assina
+      // como `orchestrator`; qualquer outro card, como `agent`. O FUNIL decide
+      // se o `pending` aplica ou é segurado por decisão humana.
+      const boardId = task.board_id ?? callbacks.getCardBoardId(req.requesterId);
+      const orchestratorId = boardId ? callbacks.getBoardOrchestratorCardId(boardId) : null;
       const res = callbacks.releaseTaskCardFromTask({
         taskId: req.taskId,
         cardId: req.target,
         reason,
         releasedBy: req.requesterId,
         nextImplementerCardId: newCardId,
+        actor: orchestratorId && orchestratorId === req.requesterId ? "orchestrator" : "agent",
       });
       if (!res.ok) return { ok: false, error: res.error };
       return {
@@ -3939,6 +4105,12 @@ export function createMessageBus(
         nextPrincipalCardId: res.nextPrincipalCardId,
         liveImplementersLeft: res.liveImplementersLeft,
         taskStatus: res.taskStatus,
+        // A liberação SUCEDOU; o aviso é só sobre o status: se o funil segurou
+        // o `pending` (decisão humana venceu), quem chamou precisa saber que a
+        // task NÃO voltou a pending — divergência declarada no quadro.
+        warning: res.statusHeld
+          ? describeStatusHeldWarning(res.taskStatus ?? "pending", res.declaredStatus ?? "pending")
+          : undefined,
       };
     }
 
@@ -5095,6 +5267,30 @@ export function createMessageBus(
     const cwdDecision = decideTaskDispatchCwd(latest.cwd, ancestorCwdNodes(deps, allTasks), deps);
     if (cwdDecision.action === "refuse") {
       recordDispatchRefusal(latest, cwdDecision.reason);
+      return false;
+    }
+    // CONFINAMENTO DO `cwd` (2026-09-21) — o card auto-despachado abre no cwd
+    // resolvido. São DUAS recusas, como no gate, e pelo mesmo motivo: sem raiz
+    // declarada não há lugar autorizado; com raiz, o cwd tem de cair dentro.
+    // Alcança também uma linha escrita ANTES da regra de escrita existir, e o
+    // cwd herdado de uma cadeia de deps (a raiz é do board, não da task).
+    const declaredRoot = boardDeclaredRoot(task.board_id);
+    // SEM RAIZ DECLARADA NÃO SE DESPACHA — este é o IRMÃO EXATO da recusa do
+    // gate, e era o que faltava para existir UMA noção só de "onde esta task
+    // pode rodar": antes, `undefined` recusava no gate e DESPACHAVA aqui,
+    // abrindo card em `cwdDecision.cwd` sem raiz nenhuma. O caso sem board nem
+    // chega a este ponto (o guarda de `board_id` está no topo da função); o que
+    // este ramo fecha é o board SEM `cwd` declarada.
+    if (!declaredRoot) {
+      recordDispatchRefusal(latest, describeNoDeclaredRoot("auto-dispatch"));
+      return false;
+    }
+    // Raiz declarada, e o cwd resolvido cai FORA dela: mesma recusa.
+    if (cwdDecision.cwd && !isPathInsideRoot(cwdDecision.cwd, declaredRoot)) {
+      recordDispatchRefusal(
+        latest,
+        describeTaskCwdOutsideRootExecution({ where: "auto-dispatch", cwd: cwdDecision.cwd, root: declaredRoot }),
+      );
       return false;
     }
     // Regra (b), sticky de território (2026-09-20) — auto-dispatch é spawn

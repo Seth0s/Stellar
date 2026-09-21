@@ -181,6 +181,21 @@ podendo `spawn_agent`. O que mudou é que **ninguém spawna anônimo**: `reason`
 consegue derivar. Nascimento pela UI humana tem `origin: "human"` e `reason: null`; o
 humano não deve burocracia a ninguém.
 
+**A marca é escrita SÓ pela UI — e, medida, costuma estar VAZIA.** Não existe tool MCP nem
+comando do `acbridge` para ler ou escrever `boards.orchestrator_card_id`, e isso é
+deliberado: o único caminho é o menu ⋮ de um card de terminal ("marcar como orquestrador do
+board"), e a Topbar mostra um chip quando o board está sem marca. O caminho existe e é
+completo; o que falta é uso. Medido em 2026-09-20: a coluna era `NULL` nos três boards em
+atividade.
+
+**Ao assumir um board, essa é a sua primeira pergunta ao humano** — antes de despachar,
+antes de esperar relatório. Enquanto não há marca, o relatório de cada card vai para a
+**linhagem** dele (a aresta `spawned`, depois o registro durável `spawns`) e, quando não há
+linhagem nenhuma, para o **último card que falou com ele** (`send_to_card`) — um alvo que
+depende de quem passou por ali, não de quem é o dono. Com a marca, o board inteiro tem **um**
+alvo estável, e este fallback deixa de ser a regra de fato. Peça ao humano que marque o card
+que assina pelo board — normalmente você.
+
 Consulte a linhagem com `spawn_lineage`: quem criou quem, por quê, com que provider/cwd, e a
 profundidade derivada da cadeia persistida (sobrevive a restart). Teto: `MAX_SPAWN_DEPTH = 3`.
 

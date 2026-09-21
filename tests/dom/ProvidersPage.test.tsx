@@ -32,6 +32,8 @@ const CLINE_APP: ProvidersPageRow = {
   mcpConfigPath: "~/.cline/data/settings/cline_mcp_settings.json",
   mcpConfigKey: "mcpServers",
   source: "app",
+  // A linha É a declaração do app: nada escrito por cima (task edf3b047).
+  appOverride: "none",
   skipped: false,
 };
 
@@ -49,6 +51,7 @@ const MYCLI_FILE: ProvidersPageRow = {
   mcpConfigPath: null,
   mcpConfigKey: null,
   source: "file",
+  appOverride: "none",
   skipped: false,
 };
 
@@ -165,6 +168,54 @@ describe("ProvidersPage", () => {
     );
   });
 
+  // A SOBRESCRITA sobre a declaração do app (task edf3b047). O badge dizia só
+  // a ORIGEM — verdadeira, mas incompleta: uma entrada do app que o usuário
+  // escreveu por cima continuava dizendo "do app", e quem abrisse a tela para
+  // entender por que aquele provider sobe com uma flag que o app não declara
+  // concluía que o app era o responsável. Agora o texto diz as DUAS coisas: de
+  // onde veio e o que foi mexido — e quem decide qual dos três é o main
+  // (`row.appOverride`, projetado da MESMA mescla que o loader usa).
+  it("o badge de origem diz o que o usuário escreveu por cima, não só a origem", async () => {
+    const appUntouched: ProvidersPageRow = { ...CLINE_APP };
+    const appPartial: ProvidersPageRow = {
+      ...CLINE_APP,
+      id: "commandcode",
+      label: "Command Code",
+      appOverride: "partial",
+    };
+    const appWhole: ProvidersPageRow = {
+      ...CLINE_APP,
+      id: "outro-app",
+      label: "Outro App",
+      appOverride: "whole",
+    };
+    const userOnly: ProvidersPageRow = { ...MYCLI_FILE };
+    readProvidersConfig.mockImplementation(async () =>
+      view([appUntouched, appPartial, appWhole, userOnly]),
+    );
+
+    render(<ProvidersPage />);
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-role="providers-row"]').length).toBe(4),
+    );
+
+    const badge = (id: string) =>
+      document.querySelector(`[data-provider-id="${id}"] [data-role="providers-source-badge"]`)
+        ?.textContent;
+
+    // Intocada: a declaração É do app — o vocabulário de sempre, palavra por
+    // palavra ("do app"), sem parêntese nenhum.
+    expect(badge("cline")).toBe("do app");
+    // Sobrescrita parcial: as duas coisas, e o parêntese é o que faltava.
+    expect(badge("commandcode")).toBe("do app (com ajustes seus)");
+    // Por inteiro: o app não contribui com campo nenhum — então não se diz
+    // "do app" (seria falso sobre o def), e sim que a entrada parou de
+    // receber correção dele.
+    expect(badge("outro-app")).toBe("sua por inteiro (sem correção do app)");
+    // Entrada só do usuário: sem badge de origem — como sempre foi.
+    expect(badge("mycli")).toBeUndefined();
+  });
+
   it("editar um genérico já configurado reabre o form preenchido e persiste pelo main", async () => {
     render(<ProvidersPage />);
     await waitFor(() =>
@@ -237,6 +288,7 @@ describe("ProvidersPage", () => {
       mcpConfigPath: null,
       mcpConfigKey: null,
       source: "file",
+      appOverride: "none",
       skipped: true,
     };
     readProvidersConfig.mockImplementation(async () => view([shadow], { skipped: ["claude"] }));

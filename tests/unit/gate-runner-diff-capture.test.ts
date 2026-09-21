@@ -128,6 +128,9 @@ describe("runTaskGates anexa o diff à evidência", () => {
       // `resolveGitRoot` achar o gitRoot. A observação do diff continua sendo
       // o fake — o teste não lê o working tree de verdade.
       cwd: process.cwd(),
+      // Desde 2026-09-21 o runner RECUSA sem raiz declarada; aqui a raiz é o
+      // próprio cwd do repo, que é onde este teste roda.
+      declaredRoot: process.cwd(),
       gates: ["npx tsc --noEmit"],
       // Sem bwrap: os comandos viram recusa (comportamento existente), mas a
       // captura do diff é observação independente do gate.

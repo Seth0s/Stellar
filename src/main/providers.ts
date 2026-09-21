@@ -296,6 +296,36 @@ export type ModelCapability =
 
 export type ProviderRole = "agent" | "shell";
 
+/**
+ * Como ESTE provider sinaliza que um TURNO ACABOU (task 0dd5c145) — declarado
+ * por provider, nunca perguntado por id.
+ *
+ * A regra que isto substitui: até aqui o renderer decidia por
+ * `id === "claude"` (`terminal-turn-signal.ts`), e a afirmação embutida nisso
+ * — "só o claude tem fim de turno" — já era FALSA. O commandcode tem um
+ * sistema de hooks compatível com o do Claude Code (`Stop`, medido no bundle
+ * instalado: `~/.commandcode/settings.json`), e a TUI dele fecha o turno com
+ * um marcador de tela próprio. Medir a AUSÊNCIA de algo no NOSSO repo não
+ * prova a ausência da capacidade do outro lado.
+ *
+ * AUSENTE = este provider não sinaliza fim de turno, e isso é honesto: a UI
+ * não promete o que não existe — a barra de atividade cai no silêncio e
+ * nenhum aviso de SO é disparado por aproximação. Mesma regra da ausência de
+ * `capacity.effort`.
+ *
+ * Os dois mecanismos NÃO são equivalentes para quem consome:
+ *   - `hook` — o CLI entrega o EVENTO (o `Stop` que o `buildArgs` daquele
+ *     provider instala, chamando `acbridge turn-complete`); o sinal chega
+ *     nomeado (`pty:turn-complete`) e é FATO, não leitura de tela;
+ *   - `screen` — marcador de TEXTO no scrollback: mais barato e mais FRÁGIL
+ *     (uma atualização da CLI muda a frase e o sinal some sem avisar
+ *     ninguém). O gate de notificação de SO distingue os dois exatamente por
+ *     isso — ver `TerminalCard.tsx`.
+ */
+export type TurnEndSignal =
+  | { mechanism: "hook" }
+  | { mechanism: "screen"; pattern: RegExp };
+
 export type ProviderCapacity = {
   role: ProviderRole;
   systemPrompt: SystemPromptCapability;
@@ -342,6 +372,12 @@ export type ProviderCapacity = {
      * Fica undefined se não foi medido (evitando inventar regras) ou não for TUI de agente.
      */
     submitStartedPattern?: RegExp;
+
+    /**
+     * Como este provider sinaliza o FIM de um turno — ver `TurnEndSignal`.
+     * Ausente = não sinaliza (ou não foi medido), e a UI não promete.
+     */
+    turnEnd?: TurnEndSignal;
 
     /**
      * Mid-turn holding UI: submit while the agent is busy parks the text
@@ -632,6 +668,10 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       delivery: {
         briefMechanism: "positional",
         submitStartedPattern: /\b(Working|Thinking|Generating|Calculating|Swooping|Finagling|Cogitat(?:ed|ing)?|Moseying|Slithering|Esc to interrupt)\b/i,
+        // O hook `Stop` EFÊMERO que o `buildArgs` acima instala (`--settings`
+        // → `acbridge turn-complete`): o sinal chega NOMEADO por IPC
+        // (`pty:turn-complete`), não por leitura de tela.
+        turnEnd: { mechanism: "hook" },
       },
     },
     installCommand: {
@@ -772,7 +812,17 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
           read: { exists: "*/*/*/rollout-*{id}*.jsonl", content: { minBytes: MIN_CONTENT_BYTES } },
         },
       },
-      delivery: { briefMechanism: "positional", submitStartedPattern: undefined },
+      delivery: {
+        briefMechanism: "positional",
+        submitStartedPattern: undefined,
+        // MEDIDO (o padrão que vivia no renderer, `TURN_END_PATTERNS`): a TUI
+        // fecha o turno com `Worked for …` — `Worked for 1m 06s`,
+        // `Worked for 8m 0s`. O que separa este marcador do trabalho em
+        // andamento é o VERBO, não a linha: o mesmo TUI imprime
+        // `Thought for N seconds` a CADA passo, e é isso que impede um
+        // match no meio do turno.
+        turnEnd: { mechanism: "screen", pattern: /Worked for (?:\d+h\s*)?(?:\d+m\s*)?\d+s/ },
+      },
     },
     installCommand: {
       posix: "npm install -g @openai/codex",

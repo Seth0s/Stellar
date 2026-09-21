@@ -3,6 +3,7 @@
 // list + status dot, just at different scales/density.
 
 import { t } from "../../shared/i18n";
+import type { BoardCounts } from "../../preload/index";
 
 export type Board = {
   id: string;
@@ -13,7 +14,10 @@ export type Board = {
   concurrency_cap: number | null;
   orchestrator_card_id: string | null;
 };
-export type BoardCounts = { agents: number; active: number };
+/** O tipo vem do CONTRATO (`preload/index.ts`), não de uma terceira cópia
+ * (task 49de95ce): esta era a segunda declaração da mesma forma, e as três
+ * (store, preload, aqui) podiam divergir em silêncio. */
+export type { BoardCounts };
 
 /** @deprecated Use t("session.ungrouped") at display sites; kept for grouping key compatibility. */
 export const UNGROUPED_LABEL = "sem projeto";
@@ -41,19 +45,19 @@ export function groupByProject<T extends Board>(boards: T[]): [string, T[]][] {
   return order.map((k) => [k, groups.get(k)!]);
 }
 
-export function StatusDot({ counts }: { counts?: BoardCounts }) {
-  const cls = !counts || counts.agents === 0 ? "" : counts.active > 0 ? "ok" : "";
-  const label = !counts || counts.agents === 0
-    ? t("session.noActiveAgents")
-    : counts.active > 0
-      ? t("session.agentsRunning", { count: counts.active })
-      : t("session.agentsIdle");
-  return (
-    <span
-      className={`card-status-dot${cls ? ` ${cls}` : ""}`}
-      role="status"
-      title={label}
-      aria-label={label}
-    />
-  );
-}
+// O `StatusDot` MORREU AQUI (task 49de95ce) — e a ordem importa para quem vier
+// depois: primeiro ele perdeu a semântica de atividade (o rótulo saía de
+// `counts.active > 0`, e `active` era a MESMA expressão SQL de `agents`:
+// medido, 11 e 11 — o verde era inalcançável de desligar e o tooltip afirmava
+// "N agente(s) em execução" sem que nada tivesse medido isso), e o que sobrou
+// não tinha ESTADO NENHUM que variasse: um bullet sempre neutro ao lado de um
+// número que já diz tudo. Não existe sinal de atividade por BOARD — todo card
+// na tabela tem PTY vivo (fechar apaga a linha) e o `card_status` de provider
+// genérico devolve `unknown`, porque a saída não distingue trabalho de
+// repintura. Decoração que finge ser indicador é a mesma família do contador
+// "N ativos" que esta task removeu; a contagem (e o dropdown de papéis) diz o
+// fato, e o indicador de verdade de cada card continua sendo o do PRÓPRIO card
+// (`.card-status-dot`, com os estados que ele tem de fato, em cards.css).
+//
+// O que fica de lição para o próximo indicador de board: se ele não tem dois
+// estados OBSERVÁVEIS, ele não é indicador.

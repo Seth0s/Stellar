@@ -1,4 +1,4 @@
-import type { EffortCapability } from "./providers";
+import type { EffortCapability, TurnEndSignal } from "./providers";
 import type { ProvidersReloadReport } from "./providers-dynamic";
 
 /**
@@ -36,6 +36,37 @@ import type { ProvidersReloadReport } from "./providers-dynamic";
  */
 export function projectEffortValues(effort: EffortCapability | undefined): string[] {
   return effort?.mechanism === "flag" ? [...effort.values] : [];
+}
+
+/**
+ * Como o renderer aprende que o turno DESTE provider acabou (task 0dd5c145).
+ *
+ * O renderer decidia isso por `id === "claude"` (mais um Set hardcoded), e a
+ * pergunta agora é feita à DECLARAÇÃO (`capacity.delivery.turnEnd`).
+ *
+ * `null` = este provider não sinaliza, e a UI não promete: a barra de
+ * atividade cai no silêncio e nenhum aviso de SO é disparado por aproximação
+ * — mesma regra do `effortValues` vazio.
+ *
+ * POR QUE O PADRÃO ATRAVESSA COMO TEXTO: `RegExp` não é serializável por IPC,
+ * então vai `source` + `flags` e o renderer remonta. É o único jeito de o
+ * pattern-match (que roda no renderer, sobre o stream do PTY) continuar sendo
+ * alimentado por uma declaração que mora no main.
+ *
+ * O mecanismo NÃO se achata num booleano de propósito: `hook` é um EVENTO
+ * entregue pelo CLI e `screen` é leitura de texto — o gate de notificação de
+ * SO trata os dois diferente (ver `TerminalCard.tsx`), e um booleano apagaria
+ * essa diferença.
+ */
+export type TurnEndProjection =
+  | { mechanism: "hook" }
+  | { mechanism: "screen"; source: string; flags: string }
+  | null;
+
+export function projectTurnEndSignal(turnEnd: TurnEndSignal | undefined): TurnEndProjection {
+  if (!turnEnd) return null;
+  if (turnEnd.mechanism === "hook") return { mechanism: "hook" };
+  return { mechanism: "screen", source: turnEnd.pattern.source, flags: turnEnd.pattern.flags };
 }
 
 /** Um aviso do canal, já com os argumentos que o `safeSend` espera. */

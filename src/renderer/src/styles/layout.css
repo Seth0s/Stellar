@@ -376,6 +376,7 @@ body {
 }
 
 .topbar-title,
+.topbar-counts,
 .zoom-pill,
 .modal-root {
   pointer-events: auto;
@@ -468,6 +469,15 @@ body {
   border-color: var(--warn);
 }
 
+/* Estado VAZIO da marca (task a79a708e) — board SEM orquestrador marcado.
+   Distinto do `-missing` acima: lá a marca EXISTE e aponta para um card
+   sumido (por isso `--warn`); aqui NÃO há marca, e ausência não é erro —
+   `--muted`, neutro. Só a cor muda; forma e ritmo vêm do badge base. */
+.topbar-orchestrator-badge-none {
+  color: var(--muted);
+  border-color: var(--muted);
+}
+
 /* DESIGN-BACKLOG.md item 60, peça 1 — floating panel, only rendered while
    the active board's queue is non-empty (SpawnQueuePanel.tsx returns null
    otherwise). Anchored top-right, under the topbar, same surface/border
@@ -536,16 +546,99 @@ body {
   font-size: 11px;
 }
 
+/* CONTADOR DE AGENTES (task 49de95ce) — era um `<span>` DENTRO do
+   `.topbar-title` (um `<button>`: botão dentro de botão é HTML inválido) e
+   virou o controle que abre o dropdown de nomes+papéis. Agora é uma pílula
+   irmã do título, com a MESMA superfície dele, e é por isso que ganhou
+   `pointer-events: auto` acima. `margin-right: auto` no lugar de um wrapper:
+   o `.topbar` é `space-between`, e sem o auto o segundo filho ficaria CENTRADO
+   na barra em vez de colado no título. Valores migrados para tokens no mesmo
+   gesto (gap/margin/padding/fonte eram px crus). */
 .topbar-counts {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-left: 4px;
-  padding-left: 10px;
-  border-left: 1px solid var(--border);
+  gap: var(--space-3);
+  margin-left: var(--space-3);
+  margin-right: auto;
+  padding: var(--space-2) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  box-shadow: var(--shadow-card);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-4);
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.topbar-counts:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 30%, var(--border));
+}
+
+/* O DROPDOWN: um card por linha (id + nome), com os papéis à direita. A lista
+   rola como a das sessões (`.board-list`), porque o board real tem 11 cards e
+   um deles carrega 5 tasks. */
+.topbar-agents-note {
+  color: var(--muted);
+  font-size: var(--text-3);
+  padding: var(--space-1) var(--space-5) var(--space-3);
+}
+
+.topbar-agent-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+  padding: var(--space-2) var(--space-5);
+}
+
+.topbar-agent-row:hover {
+  background: var(--surface);
+}
+
+.topbar-agent-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex: none;
+  max-width: 140px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.topbar-agent-name code,
+.topbar-agent-role code {
+  font-family: var(--font-mono);
+  font-size: var(--text-3);
+  color: var(--muted);
+}
+
+.topbar-agent-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-agent-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  min-width: 0;
+}
+
+.topbar-agent-role {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  color: var(--text);
+  font-size: var(--text-3);
+}
+
+/* Sem sinal, sem cor: o card sem task aberta aparece SEM papel — e "ocioso"
+   seria a afirmação que nada mediu (é o que esta task removeu do contador). */
+.topbar-agent-none {
+  color: var(--muted);
+  font-size: var(--text-3);
 }
 
 .board-list {
@@ -1905,11 +1998,22 @@ select.resume-input {
   padding: 0 12px;
 }
 
+/* NÃO é uma primitiva, e a medição está no report da task f0df8d23: são 2
+   sítios no TSX, os dois NESTA página, e a forma é própria — identidade em
+   DUAS linhas (nome + meta) à esquerda e uma coluna de ações à direita, com a
+   superfície pertencendo à `.providers-list`, não à linha. §8.1: primitiva se
+   paga com 4+ sítios; `.form-row--boxed` (o "texto | ação" de verdade) cobre o
+   caso irmão do device. Fica pelo VOCABULÁRIO, não pelo layout.
+
+   `10px` → `--space-5` (exato). `9px 0` → `--space-4 0`: `9px` não é degrau e a
+   §1.5 o manda ao vizinho (±1px); `--space-4` é o degrau cujo papel medido é
+   padding (o dominante do arquivo) — `--space-5` é documentado como padding
+   HORIZONTAL de item de menu, que não é este caso. */
 .providers-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 0;
+  gap: var(--space-5);
+  padding: var(--space-4) 0;
   border-bottom: 1px solid var(--border);
 }
 

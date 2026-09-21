@@ -382,7 +382,7 @@ describe("fiação de produção — alguém CHAMA isto?", () => {
 
   it("o passo de boot vem ANTES do load e do watcher (nada de reload espúrio no boot)", () => {
     const bootstrapAt = indexCode.indexOf("bootstrapProvidersConfig(newUserData)");
-    const bootLoadAt = indexCode.indexOf("const bootProvidersLoad = loadDynamicProviders(newUserData)");
+    const bootLoadAt = indexCode.indexOf("const bootProvidersLoad = loadDynamicProviders(newUserData, { shipped: SHIPPED_APP_SPECS })");
     const watcherAt = indexCode.indexOf("createProvidersConfigWatcher({");
     expect(bootstrapAt).toBeGreaterThan(0);
     expect(bootLoadAt).toBeGreaterThan(0);
@@ -397,5 +397,28 @@ describe("fiação de produção — alguém CHAMA isto?", () => {
     // (que não existe mais), ela diria "seu" para o que é do app.
     expect(indexCode).toMatch(/loaded\.appIds/);
     expect(indexCode).not.toMatch(/source === "app"/);
+  });
+
+  it("a origem 'do app' (view) e o caminho (A)/(B) do handler leem o MESMO catálogo", () => {
+    // Parecer do Revisor A (task 1cac9dcd) — o acoplamento frágil que esta
+    // asserção desarma: a VIEW decidia "do app" pela lista do LOADER
+    // (`loaded.appIds`, derivada do `shipped` que ele usou) e o HANDLER, por um
+    // `MEASURED_THIRD_PARTY_SPECS.find` escrito de novo ali. Os dois conjuntos
+    // coincidiam POR ACIDENTE — o default do loader é este mesmo catálogo.
+    //
+    // Se um dia o `shipped` virar configurável, um id que a tela mostra como
+    // "do app" cairia no caminho (A) do `app:add-provider`, que grava a
+    // declaração INTEIRA — e o provider voltaria a CONGELAR, que é o defeito
+    // que a 1cac9dcd removeu. Por isso o catálogo tem UM nome, e ele vai
+    // EXPLÍCITO para todo load (nada depende do default).
+    expect(indexCode).toMatch(/const SHIPPED_APP_SPECS = MEASURED_THIRD_PARTY_SPECS;/);
+
+    const loads = indexCode.match(/loadDynamicProviders\([^)]*\)/g) ?? [];
+    expect(loads.length).toBeGreaterThan(0);
+    for (const call of loads) expect(call).toContain("shipped: SHIPPED_APP_SPECS");
+
+    // O handler escolhe o caminho por esse nome — e não deriva o seu de novo.
+    expect(indexCode).toMatch(/SHIPPED_APP_SPECS\.find\(/);
+    expect(indexCode).not.toMatch(/MEASURED_THIRD_PARTY_SPECS\.(find|map|filter)\(/);
   });
 });

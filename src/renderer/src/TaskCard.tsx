@@ -126,7 +126,7 @@ function TaskScopeFooter({
  * "implementer" é escrito automaticamente hoje (nenhuma tool de MCP expõe
  * `linkTaskCard` ainda, ver DESIGN-BACKLOG.md §2.1), mas o campo é uma
  * string livre — qualquer outro valor cai no fallback (o próprio texto). */
-function describeCardRole(role: string): string {
+export function describeCardRole(role: string): string {
   if (role === "implementer") return t("task.role.implementer");
   if (role === "reviewer") return t("task.role.reviewer");
   return role;

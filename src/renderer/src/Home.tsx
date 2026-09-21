@@ -3,7 +3,7 @@ import { ConstellationBg } from "./ConstellationBg";
 import { Icon } from "./icons";
 import { SessionModal } from "./SessionModal";
 import { StellarMark } from "./StellarMark";
-import { groupByProject, StatusDot, type Board, type BoardCounts } from "./sessions";
+import { groupByProject, type Board, type BoardCounts } from "./sessions";
 import type { SessionTemplate } from "./useBoardStore";
 import type { BoardRow } from "../../preload/index";
 import { t, formatRelativeTime, getLocale } from "../../shared/i18n";
@@ -132,10 +132,7 @@ export function Home({
                         </span>
                         <span className="home-session-name">{b.name}</span>
                         <span className="home-session-counts">
-                          <StatusDot counts={counts} />
-                          {counts
-                            ? t("home.agentsCount", { agents: counts.agents, active: counts.active })
-                            : t("home.agentsZero")}
+                          {counts ? t("home.agentsCount", { agents: counts.agents }) : t("home.agentsZero")}
                         </span>
                         {/* item 2 — "tirar as datas pra fora do card": only
                             the relative "último acesso" stays on the card

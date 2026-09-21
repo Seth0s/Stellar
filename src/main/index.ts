@@ -50,9 +50,9 @@ import { describeStatusAskResolved } from "./status-write-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
-import { deriveParticipationDivergence, deriveTaskStatus } from "../task-status-derive";
+import { deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
 import { checkAgentAvailability, providerById, type SpawnOpts } from "./providers";
-import { projectEffortValues, providersReloadNotices } from "./agent-availability-projection";
+import { projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
 import {
   MEASURED_THIRD_PARTY_SPECS,
   PROVIDERS_CONFIG_SCHEMA_VERSION,
@@ -62,11 +62,13 @@ import {
   formatProvidersReloadLine,
   formatProvidersSeedNotice,
   loadDynamicProviders,
+  mergeProviderOverride,
   parseProviderSpec,
   parseProviderSpecs,
   providersConfigPath,
   type DynamicProviderSpec,
 } from "./providers-dynamic";
+import { buildProviderOverrideEntry } from "./provider-override-entry";
 import { shouldStampParticipationSession } from "./participation-session-decision";
 import { resolveDeclaredTaskId } from "./card-spawn-env-decision";
 import { refreshUserEnv, setSystemLanguageHint, userEnvSnapshot } from "./user-env";
@@ -165,6 +167,30 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const isDev = !app.isPackaged;
+
+/**
+ * O CATÁLOGO DO APP, com UM nome só (task 1cac9dcd, parecer do Revisor A).
+ *
+ * DUAS pontas respondem "este id é do app?" e elas não podem divergir:
+ *
+ *   - a VIEW rotula a linha como "do app" pela lista que o LOADER entregou
+ *     (`loaded.appIds`, que o loader deriva do `shipped` que ele usou);
+ *   - o HANDLER escolhe entre o caminho (A) e o (B) do `app:add-provider` — e
+ *     é o (B) que grava a entrada CURTA, a que NÃO congela o provider.
+ *
+ * Cada uma lia a sua fonte: a view pelo `shipped` do loader, o handler por um
+ * `MEASURED_THIRD_PARTY_SPECS.find` escrito de novo ali. Os dois conjuntos
+ * COINCIDIAM POR ACIDENTE — o default do loader é este mesmo catálogo. No dia
+ * em que o `shipped` virar configurável, um id que a tela mostra como "do app"
+ * cairia no caminho (A) e o provider voltaria a CONGELAR, que é exatamente o
+ * defeito que esta task removeu.
+ *
+ * Agora as duas leem ESTE nome: ele vai EXPLÍCITO para todo
+ * `loadDynamicProviders` (sem depender do default) e é o mesmo valor que o
+ * handler procura. `tests/unit/providers-config-seed.test.ts` quebra se
+ * alguma das duas pontas voltar a ter a sua própria lista.
+ */
+const SHIPPED_APP_SPECS = MEASURED_THIRD_PARTY_SPECS;
 
 // Fase B (atalhos), round 2 — os dois combos que `before-input-event`
 // (mais abaixo, `createWindow`) realmente casa contra, lidos direto do
@@ -1601,6 +1627,77 @@ function createWindow() {
       };
     });
   }
+  /** Uma linha do dropdown de agentes do Topbar. Espelha
+   * `preload/index.ts`'s `BoardAgentRoleRow` (mesmo shape, sem import cruzado
+   * main/preload — a mesma convenção de `TaskBoardItem` logo acima, mantida em
+   * sincronia à mão: um campo esquecido aqui só quebra no renderer, e o `tsc`
+   * do preload aponta qual). */
+  type BoardAgentRoleRow = {
+    cardId: string;
+    /** Rótulo do card, como a UI o mostra. `null` = o card não tem nome; a
+     * tela mostra o id — nunca um nome inventado. */
+    label: string | null;
+    provider: string;
+    /** Os papéis VIVOS deste card, um por task em participação. Vazio é
+     * informação: o card não tem papel nenhum agora. */
+    roles: { taskId: string; role: string }[];
+  };
+
+  /** O vocabulário de "task em participação" — o declarado em
+   * `task-status-derive.ts` (`TaskParticipationStatus`). Anotado com o TIPO de
+   * lá de propósito: se a união mudar, o `tsc` aponta aqui. (O predicado irmão
+   * do `isJudgmentStatus` — `isParticipationStatus` — não existe ainda; este
+   * conjunto é a cópia e a dívida está nomeada no relatório da 49de95ce.) */
+  const LIVE_TASK_STATUSES: readonly TaskParticipationStatus[] = ["pending", "running"];
+
+  /**
+   * O que o dropdown de agentes do Topbar mostra (task 49de95ce): para cada
+   * card de AGENTE deste board, os papéis que ele carrega AGORA.
+   *
+   * POR QUE ELE SUBSTITUI O CONTADOR "N ATIVOS". A contagem afirmava atividade
+   * a partir de um número que era o MESMO dos dois lados (`cardCountsStmt`, em
+   * store.ts: `agents` e `active` são A MESMA expressão SQL — medido), e o app
+   * não sabe dizer "trabalhando" para a maioria dos cards: o `card_status` de
+   * provider genérico devolve `unknown`, com a nota de que a saída não
+   * distingue trabalho de repintura. O que se sabe, e é o que se projeta:
+   * QUEM é o card e QUAIS papéis ele tem nas tasks ainda abertas.
+   *
+   * O CONJUNTO é o mesmo que o contador de "agentes" conta (terminal, provider
+   * != bash — inclusive os que não têm papel nenhum: card SEM papel é o caso
+   * honesto, e o renderer diz isso em vez de inventar "ocioso").
+   *
+   * DE ONDE VEM "VIVO": de `listTaskCardsForCard`, que é o critério do STORE
+   * (liberação + época do id reciclado) — o mesmo que o guard de fechamento e o
+   * carimbo de papel usam. Nenhuma segunda regra aqui: a projeção cruza esse
+   * vínculo com o status da task (acima). A versão de UMA consulta por board
+   * (`listLiveTaskCardsForBoard`) nasce no store quando a fatia da e8802e32
+   * soltar o arquivo — que é justamente a dona do critério de vivo. Até lá:
+   * uma leitura por card, no GESTO de abrir o dropdown, nunca em push nem em
+   * laço (11 cards neste board, medido).
+   */
+  function buildBoardAgentRoles(boardId: string): BoardAgentRoleRow[] {
+    const liveTaskIds = new Set(
+      store
+        .listTasksByBoard(boardId)
+        .filter((t) => LIVE_TASK_STATUSES.some((s) => s === t.status))
+        .map((t) => t.id),
+    );
+    return store
+      .listCards(boardId)
+      .filter((card) => card.kind === "terminal" && card.provider !== "bash")
+      .map((card) => ({
+        cardId: card.id,
+        // `null` quando o card não tem rótulo: a tela mostra o id e NÃO
+        // inventa nome — mesma ausência honesta do chip da Fila.
+        label: card.label,
+        provider: card.provider,
+        roles: store
+          .listTaskCardsForCard(card.id)
+          .filter((link) => liveTaskIds.has(link.task_id))
+          .map((link) => ({ taskId: link.task_id, role: link.role })),
+      }));
+  }
+
   function notifyTaskChanged(boardId: string | null) {
     if (!boardId || boardId !== activeBoardId) return;
     safeSend(win, "task:changed", boardId, buildTaskBoard(boardId));
@@ -1799,6 +1896,13 @@ function createWindow() {
       })),
     isBoardAutonomous: (boardId) => store.getBoard(boardId)?.autonomous ?? false,
     getBoardOrchestratorCardId: (boardId) => store.getBoard(boardId)?.orchestrator_card_id ?? null,
+    // A RAIZ DECLARADA do board (`boards.cwd`) — confina o `cwd` de uma task,
+    // no gate e no auto-dispatch (2026-09-21). `""` (board sem cwd) e board
+    // inexistente caem no MESMO lugar: sem raiz declarada a EXECUÇÃO recusa —
+    // o gate não roda e o card não é despachado. A ESCRITA do `cwd`, essa,
+    // ainda passa: ali não há limite a aplicar. Ver o comentário na interface
+    // de callbacks.
+    getBoardCwd: (boardId) => store.getBoard(boardId)?.cwd || undefined,
     // RODADA 4 — ver o comentário grande da entrada `boardExists` na
     // interface de callbacks (message-bus.ts).
     boardExists: (boardId) => store.getBoard(boardId) !== undefined,
@@ -2150,6 +2254,10 @@ function createWindow() {
     checkAgentAvailability().map((agent) => ({
       ...agent,
       effortValues: projectEffortValues(providerById(agent.id)?.capacity.effort),
+      // O fim de turno (task 0dd5c145): a pergunta vai à DECLARAÇÃO, e não a
+      // um `id === "claude"` do lado do renderer. `null` = este provider não
+      // sinaliza, e a UI não promete.
+      turnEndSignal: projectTurnEndSignal(providerById(agent.id)?.capacity.delivery.turnEnd),
     })),
   );
   ipcMain.handle("spawn:agent-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>
@@ -2392,7 +2500,21 @@ function createWindow() {
     messageBus?.notifyConcurrencyCapChanged(id);
     return result;
   });
-  ipcMain.handle("store:card-counts", () => store.cardCounts());
+  // O que atravessa é o CAMPO QUE A UI CONSOME, com nome próprio — nunca o
+  // objeto do store inteiro (task 49de95ce). `store.cardCounts()` ainda monta
+  // `active` a partir da coluna duplicada (ver `cardCountsStmt`), e deixá-la
+  // atravessar reabriria a porta para o próximo leitor confiar nela: o
+  // contrato do preload já não a tem, e agora o payload também não. A coluna
+  // sai do SQL quando a fatia da e8802e32 soltar o store.ts (é o mesmo arquivo
+  // que ela está consertando); aí esta projeção vira passagem.
+  ipcMain.handle("store:card-counts", () =>
+    Object.fromEntries(
+      Object.entries(store.cardCounts()).map(([boardId, counts]) => [boardId, { agents: counts.agents }]),
+    ),
+  );
+  // O dropdown de agentes do Topbar (task 49de95ce) — gesto de abrir, nunca
+  // push: a lista de papéis muda com o quadro, e quem a pede é a tela.
+  ipcMain.handle("store:board-agent-roles", (_e, boardId: string) => buildBoardAgentRoles(boardId));
   ipcMain.handle("store:next-id-seed", () => store.nextIdSeed());
   // Item 30 — sessions sidebar (every chat card, live or archived) +
   // archive/unarchive (closing a ChatCard archives instead of deleting).
@@ -3406,7 +3528,7 @@ app.whenReady().then(async () => {
     console.warn(`[providers] schema ao lado do providers.json não pôde ser escrito: ${providersBootstrap.schema.error}`);
   }
 
-  const bootProvidersLoad = loadDynamicProviders(newUserData);
+  const bootProvidersLoad = loadDynamicProviders(newUserData, { shipped: SHIPPED_APP_SPECS });
   const providersWatcher = createProvidersConfigWatcher({
     userDataDir: newUserData,
     baseline: bootProvidersLoad,
@@ -3519,9 +3641,87 @@ app.whenReady().then(async () => {
    */
   function providersPageView() {
     const path = providersConfigPath(newUserData);
-    const loaded = loadDynamicProviders(newUserData);
+    const loaded = loadDynamicProviders(newUserData, { shipped: SHIPPED_APP_SPECS });
     const file = readProvidersConfigFile(path);
     const fileEntries = file.kind === "ok" ? file.providers : [];
+
+    // A SOBRESCRITA que a entrada do usuário faz sobre a declaração do app
+    // (task edf3b047). O badge "do app" diz a ORIGEM — e a origem é a mesma
+    // nos três casos (o id é o da lista do app). O que muda o comportamento é
+    // OUTRA pergunta, que a tela não tinha como responder: essa entrada ainda
+    // É o que o app declara, ou o usuário escreveu por cima — de um campo a
+    // todos eles? Isto se PROJETA aqui, com nome próprio, do material que já
+    // está nesta função (a entrada CRUA do arquivo e o catálogo do app): o
+    // renderer não deriva origem nem comparação nenhuma.
+    const appSpecById = new Map(SHIPPED_APP_SPECS.map((spec) => [spec.id, spec]));
+    /** Objeto JSON — o que a mescla trata como RAMO (array e `null` são FOLHA,
+     * exatamente como em `mergeProviderOverride`). */
+    const isJsonObject = (value: unknown): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value);
+    /**
+     * `true` quando a entrada do usuário cobre TODO campo da declaração do app.
+     *
+     * É a medida que a tela precisa nomear à parte, e a razão é de
+     * COMPORTAMENTO, não de rótulo: a mescla não deixa nenhum campo do app
+     * passar, então o def efetivo é inteiramente do usuário e ele para de
+     * receber correção do app — o oposto de "escrevi um campo por cima", onde
+     * todo o resto continua vindo do app e continua sendo corrigido. O caminho
+     * que leva a esse estado é convidativo, não hipotético: a receita
+     * publicada no schema (`providers.items.examples`) é a declaração
+     * COMPLETA, pronta para copiar, e a `description` avisa justamente que
+     * copiar cria uma entrada que vence a do app (caso (D) medido na
+     * 3fe0db6e).
+     *
+     * A REGRA é a MESMA da mescla que decide o def de verdade: ramo desce
+     * chave a chave; escalar, array e `null` são folha — presentes na entrada,
+     * estão cobertos. Chave ausente em qualquer nível é campo que continua
+     * chegando do app (hoje e na próxima correção), logo não está coberto.
+     *
+     * CONSEQUÊNCIA HONESTA, e é de propósito: um campo que o app passar a
+     * declarar numa versão nova não está coberto por uma cópia de hoje, então
+     * ele chega — e este mesmo teste devolve `false` na releitura seguinte,
+     * quando a linha volta a dizer "do app (com ajustes seus)". O que uma
+     * entrada inteira congela são os campos que ela escreveu.
+     *
+     * DÍVIDA NOMEADA (review da edf3b047): este predicado é a SEGUNDA
+     * declaração da regra de mescla neste repo. A casa dela é
+     * `providers-dynamic.ts` — `mergeProviderOverride`/`deepMerge`, que é quem
+     * de fato monta o def — e ele ficou inline porque aquele módulo estava
+     * off-territory nesta fatia. Consequência aceita e não escondida: se o
+     * `deepMerge` mudar de regra, o badge passa a mentir em SILÊNCIO. O
+     * conserto é exportar a cobertura de lá e consumi-la aqui; fica para a
+     * próxima fatia de providers.
+     */
+    function coversWholeDeclaration(appValue: unknown, entryValue: unknown): boolean {
+      if (!isJsonObject(appValue) || !isJsonObject(entryValue)) return true;
+      return Object.entries(appValue).every(
+        ([key, value]) =>
+          Object.prototype.hasOwnProperty.call(entryValue, key) &&
+          coversWholeDeclaration(value, entryValue[key]),
+      );
+    }
+    // A PRIMEIRA entrada de cada id LEGÍVEL — o id que a linha carrega.
+    // LIMITE CONHECIDO, escrito porque o código faz isto e não outra coisa: o
+    // loader tem regra mais fina (id repetido é recusado com `duplicate id`, e
+    // o que fica é o PRIMEIRO QUE VALIDA), então no caso patológico de duas
+    // entradas com o mesmo id e a primeira recusada por completude o badge
+    // descreveria a recusada enquanto a linha vem da segunda. O caso exige
+    // duplicar o id à mão e a entrada recusada aparece na própria tela (bloco
+    // de recusas) — mas o limite é este, não "igual ao loader".
+    const rawEntryById = new Map<string, Record<string, unknown>>();
+    for (const entry of fileEntries) {
+      if (!isJsonObject(entry) || typeof entry.id !== "string") continue;
+      if (rawEntryById.has(entry.id)) continue;
+      rawEntryById.set(entry.id, entry);
+    }
+    const appOverrideOf = (id: string): "none" | "partial" | "whole" => {
+      const appSpec = appSpecById.get(id);
+      const entry = rawEntryById.get(id);
+      // Sem declaração do app (id que só o usuário declara) ou sem entrada
+      // dele (a linha É a declaração do app): não há sobrescrita nenhuma.
+      if (appSpec === undefined || entry === undefined) return "none";
+      return coversWholeDeclaration(appSpec, entry) ? "whole" : "partial";
+    };
 
     const row = (spec: DynamicProviderSpec, source: "file" | "app") => ({
       id: spec.id,
@@ -3537,6 +3737,11 @@ app.whenReady().then(async () => {
       mcpConfigPath: spec.capacity.mcp.mechanism === "global-config" ? spec.capacity.mcp.configPath : null,
       mcpConfigKey: spec.capacity.mcp.mechanism === "global-config" ? spec.capacity.mcp.configKey : null,
       source,
+      // Quanto da declaração do app esta linha carrega (ver
+      // `coversWholeDeclaration`): "none" | "partial" | "whole". A ORIGEM
+      // continua sendo `source` — este campo diz o que o usuário escreveu por
+      // cima, não de onde a linha veio.
+      appOverride: appOverrideOf(spec.id),
       // O loader recusou este id porque um NATIVO já o possui — a tela
       // precisa dizer isso, senão o usuário "cadastra" e nada acontece.
       skipped: loaded.skipped.includes(spec.id),
@@ -3548,7 +3753,7 @@ app.whenReady().then(async () => {
       // usuário (a sobrescrita por campo que a própria tela promete na dica)
       // seria recusada aqui e a linha sumiria da lista — ou, pior, apareceria
       // como um provider sem os campos que o app completa.
-      { appSpecs: MEASURED_THIRD_PARTY_SPECS },
+      { appSpecs: SHIPPED_APP_SPECS },
     );
     // A ORIGEM de uma linha é a LISTA em que ela está (task 3fe0db6e): o id que
     // o app declara em `appProviders` é "do app" — mesmo quando o usuário
@@ -3558,7 +3763,7 @@ app.whenReady().then(async () => {
     const shippedIds = new Set(loaded.shippedDefaults);
     const rows = [
       ...fromFile.specs.map((s) => row(s, appIds.has(s.id) ? ("app" as const) : ("file" as const))),
-      ...MEASURED_THIRD_PARTY_SPECS.filter((s) => shippedIds.has(s.id)).map((s) => row(s, "app" as const)),
+      ...SHIPPED_APP_SPECS.filter((s) => shippedIds.has(s.id)).map((s) => row(s, "app" as const)),
     ].sort((a, b) => a.id.localeCompare(b.id));
 
     return {
@@ -3610,10 +3815,19 @@ app.whenReady().then(async () => {
    * põe o `binDir` no PATH de TODO card, então o `acbridge` está lá — é o
    * que sustenta o `report` de um provider sem MCP (ver `deriveReportChannel`).
    *
-   * Um id que JÁ existe (no arquivo ou no catálogo embutido) não é
-   * rebaixado: o que o form não expressa é PRESERVADO da declaração
-   * anterior, então editar o rótulo de um `cline` não apaga a capacidade
-   * medida dele.
+   * Dois caminhos, e a diferença entre eles é o que mantém um provider VIVO
+   * (task 1cac9dcd):
+   *
+   *   - id que o APP declara (cline, commandcode): a entrada gravada é CURTA —
+   *     o `id` e só os campos que o form mudou. É o formato da sobrescrita
+   *     parcial por id (3fe0db6e), então tudo o que o usuário não tocou
+   *     continua vindo da declaração do app E continua recebendo as correções
+   *     das versões novas. A entrada anterior do usuário, se houver, é
+   *     preservada — o app não reescreve a chave dele;
+   *   - id que o app NÃO declara (provider novo, ou um só do usuário): segue
+   *     sendo uma declaração COMPLETA, porque não há do que herdar. O que o
+   *     form não expressa é PRESERVADO da entrada anterior, então editar o
+   *     rótulo de um provider próprio não apaga a capacidade dele.
    */
   ipcMain.handle("app:add-provider", (_e, input: unknown) => {
     const path = providersConfigPath(newUserData);
@@ -3635,15 +3849,20 @@ app.whenReady().then(async () => {
       : [];
     const mcpInput = candidate.mcp === null || candidate.mcp === undefined ? null : candidate.mcp;
     let mcp: DynamicProviderSpec["capacity"]["mcp"] = { mechanism: "none" };
+    /** Os dois caminhos como o FORM os mandou. Ficam fora do `if` porque a
+     * comparação de "tocado" do caminho (B) precisa deles — ver
+     * `buildProviderOverrideEntry`. */
+    let mcpConfigPath = "";
+    let mcpConfigKey = "";
     if (mcpInput !== null) {
       if (typeof mcpInput !== "object" || Array.isArray(mcpInput)) {
         return { ok: false, error: "`mcp` must be null or an object with configPath/configKey" };
       }
-      const configPath = typeof (mcpInput as { configPath?: unknown }).configPath === "string" ? (mcpInput as { configPath: string }).configPath.trim() : "";
-      const configKey = typeof (mcpInput as { configKey?: unknown }).configKey === "string" ? (mcpInput as { configKey: string }).configKey.trim() : "";
-      if (!configPath) return { ok: false, error: "`mcp.configPath` is required when MCP is enabled" };
-      if (!configKey) return { ok: false, error: "`mcp.configKey` is required when MCP is enabled" };
-      mcp = { mechanism: "global-config", configPath, configKey, serverShape: "stdio-command" };
+      mcpConfigPath = typeof (mcpInput as { configPath?: unknown }).configPath === "string" ? (mcpInput as { configPath: string }).configPath.trim() : "";
+      mcpConfigKey = typeof (mcpInput as { configKey?: unknown }).configKey === "string" ? (mcpInput as { configKey: string }).configKey.trim() : "";
+      if (!mcpConfigPath) return { ok: false, error: "`mcp.configPath` is required when MCP is enabled" };
+      if (!mcpConfigKey) return { ok: false, error: "`mcp.configKey` is required when MCP is enabled" };
+      mcp = { mechanism: "global-config", configPath: mcpConfigPath, configKey: mcpConfigKey, serverShape: "stdio-command" };
     }
 
     const fresh: DynamicProviderSpec = {
@@ -3669,24 +3888,75 @@ app.whenReady().then(async () => {
     const previousRaw = existing.find(
       (entry) => entry !== null && typeof entry === "object" && (entry as { id?: unknown }).id === id,
     );
-    const previousParsed = previousRaw === undefined ? null : parseProviderSpec(previousRaw);
-    const base: DynamicProviderSpec | null = previousParsed?.ok
-      ? previousParsed.spec
-      : (MEASURED_THIRD_PARTY_SPECS.find((spec) => spec.id === id) ?? null);
-    const merged: DynamicProviderSpec = base
-      ? {
-          ...base,
-          id,
-          label,
-          binaryNames,
-          capacity: { ...base.capacity, mcp: parsed.spec.capacity.mcp },
-        }
-      : parsed.spec;
-
+    const raw = file.kind === "ok" ? file.raw : {};
     const others = existing.filter(
-      (entry) => !(entry !== null && typeof entry === "object" && (entry as { id?: unknown }).id === merged.id),
+      (entry) => !(entry !== null && typeof entry === "object" && (entry as { id?: unknown }).id === id),
     );
-    writeProvidersConfig(path, file.kind === "ok" ? file.raw : {}, [...others, merged]);
+
+    // (A) ID QUE O APP NÃO DECLARA (um provider novo, ou um que só o usuário
+    // tem): continua sendo uma declaração COMPLETA — não há do que herdar, e
+    // uma entrada curta seria recusada pelo loader, porque os campos
+    // obrigatórios viriam de lugar nenhum. O que o form não expressa é
+    // PRESERVADO da entrada anterior, então editar o rótulo de um provider
+    // próprio não apaga a capacidade que ele já tinha.
+    const appSpec = SHIPPED_APP_SPECS.find((spec) => spec.id === id) ?? null;
+    if (appSpec === null) {
+      const previousParsed = previousRaw === undefined ? null : parseProviderSpec(previousRaw);
+      const base: DynamicProviderSpec | null = previousParsed?.ok ? previousParsed.spec : null;
+      const merged: DynamicProviderSpec = base
+        ? {
+            ...base,
+            id,
+            label,
+            binaryNames,
+            capacity: { ...base.capacity, mcp: parsed.spec.capacity.mcp },
+          }
+        : parsed.spec;
+      writeProvidersConfig(path, raw, [...others, merged]);
+      return { ok: true, view: providersPageView() };
+    }
+
+    // (B) SOBRESCRITA DE UM PROVIDER QUE O APP DECLARA: entra CURTA (task
+    // 1cac9dcd) — o `id` e SÓ os campos que o form de fato mudou, no mesmo
+    // formato que a sobrescrita parcial por id entende. É o que mantém o
+    // provider VIVO: o que o usuário não tocou continua vindo da declaração
+    // do app e continua recebendo as correções das versões novas. Gravar a
+    // declaração inteira aqui (o que este caminho fazia) cobre todos os campos
+    // dela e congela o provider na versão em que foi editado — foi por esse
+    // buraco que a ausência do `--skip-onboarding` no commandcode passou.
+    //
+    // O "tocado" é medido contra o spec EFETIVO desta linha — o mesmo que a
+    // tela mostrou e que `startEdit` devolveu ao form (o MESMO
+    // `parseProviderSpecs` + `appSpecs` que `providersPageView` usa) —, não
+    // contra a declaração do app. O porquê está em
+    // `provider-override-entry.ts`: o input de binário é singular, e comparar
+    // contra a lista do app derrubava o fallback `command-code` sem ninguém
+    // ter tocado nele.
+    const shown =
+      parseProviderSpecs(
+        {
+          schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION,
+          providers: previousRaw === undefined ? [] : [previousRaw],
+        },
+        { appSpecs: SHIPPED_APP_SPECS },
+      ).specs[0] ?? appSpec;
+    const { entry, touched } = buildProviderOverrideEntry({
+      form: { id, label, binaryNames, mcp: mcpInput === null ? null : { configPath: mcpConfigPath, configKey: mcpConfigKey } },
+      shown,
+      nextMcp: parsed.spec.capacity.mcp,
+      existingRaw:
+        previousRaw !== null && typeof previousRaw === "object" && !Array.isArray(previousRaw)
+          ? (previousRaw as Record<string, unknown>)
+          : null,
+    });
+    // Nada mudou: não há entrada para gravar, e gravar uma vazia só deixaria
+    // no arquivo do usuário uma linha que não declara nada.
+    if (touched.length === 0) return { ok: true, view: providersPageView() };
+    // O loader valida a MESMA mescla antes de registrar: uma entrada que ele
+    // recusaria não pode ser gravada como se fosse boa.
+    const overApp = parseProviderSpec(mergeProviderOverride(appSpec, entry));
+    if (!overApp.ok) return { ok: false, error: overApp.reason };
+    writeProvidersConfig(path, raw, [...others, entry]);
     return { ok: true, view: providersPageView() };
   });
 

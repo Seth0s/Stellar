@@ -231,6 +231,49 @@ describe("ponta a ponta: a sobrescrita parcial vale no registro vivo", () => {
     expect(providerById("claude")?.label).toBe("Claude");
   });
 
+  // -------------------------------------------------------------------------
+  // O QUARTO ESTADO (task edf3b047): a entrada que cobre a declaração do app
+  // INTEIRA. Não é "um caso a mais de ajuste" — a diferença é de comportamento,
+  // e é esta a MEDIÇÃO que justifica a tela ter um aviso próprio para ele:
+  // nenhum campo do app chega nessa entrada, então ela PARA DE RECEBER CORREÇÃO
+  // do app. O contraste com a sobrescrita parcial está no mesmo teste, porque é
+  // o contraste que define o estado.
+  //
+  // O caminho até aqui não é hipotético: a receita publicada no schema
+  // (`providers.items.examples`) é a declaração COMPLETA, pronta para copiar.
+  // -------------------------------------------------------------------------
+  it("cópia da declaração INTEIRA: a correção do app não chega em campo nenhum", () => {
+    const dir = freshDir();
+    const v1 = MEASURED_THIRD_PARTY_SPECS.map((s) => structuredClone(s) as DynamicProviderSpec);
+    // A receita colada em `providers` (só a chave do usuário é tocada).
+    writeConfig(dir, [structuredClone(v1.find((s) => s.id === "commandcode")!)], v1);
+    loadDynamicProviders(dir, { shipped: v1 });
+    expect(providerById("commandcode")?.buildArgs({})).toEqual(["--yolo", "--skip-onboarding"]);
+
+    // O app corrige numa versão nova — um campo raso e um bem fundo.
+    const v2 = MEASURED_THIRD_PARTY_SPECS.map((s) => structuredClone(s) as DynamicProviderSpec);
+    const corrigido = v2.find((s) => s.id === "commandcode")!;
+    corrigido.baseArgs = ["--yolo", "--skip-onboarding", "--novo"];
+    corrigido.capacity.session.resumeFlag = "--retomar";
+    loadDynamicProviders(dir, { shipped: v2 });
+
+    const copia = providerById("commandcode");
+    expect(copia?.buildArgs({})).toEqual(["--yolo", "--skip-onboarding"]); // a cópia venceu
+    expect(copia?.capacity.session.resumeFlag).toBe("--resume"); // e a correção funda também não chegou
+
+    // O CONTRASTE: quem escreveu UM campo continua recebendo a correção do
+    // resto — é o que separa "com ajustes seus" (o app ainda fornece e corrige)
+    // de "por inteiro" (nada mais vem do app).
+    const dir2 = freshDir();
+    writeConfig(dir2, [{ id: "commandcode", baseArgs: ["--meu-jeito"] }], v1);
+    loadDynamicProviders(dir2, { shipped: v1 });
+    loadDynamicProviders(dir2, { shipped: v2 });
+
+    const parcial = providerById("commandcode");
+    expect(parcial?.buildArgs({})).toEqual(["--meu-jeito"]); // o campo do usuário vence
+    expect(parcial?.capacity.session.resumeFlag).toBe("--retomar"); // a correção do app chegou
+  });
+
   it("a tela usa a MESMA mescla (o que ela mostra é o def que existe)", () => {
     const dir = freshDir();
     writeConfig(dir, [{ id: "commandcode", baseArgs: [] }]);
