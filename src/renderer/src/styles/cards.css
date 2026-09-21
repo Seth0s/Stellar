@@ -286,7 +286,7 @@
 .card-status-dot.ok {
   background: var(--good);
   border-radius: 50%;
-  box-shadow: 0 0 0 1px rgba(74, 216, 122, 0.3);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--good) 30%, transparent);
 }
 
 .card-status-dot.warn {
@@ -1238,11 +1238,11 @@
 }
 
 .chat-diff-line.add {
-  background: rgba(74, 216, 122, 0.09);
+  background: color-mix(in srgb, var(--good) 9%, transparent);
   color: #b7f0c7;
 }
 .chat-diff-line.del {
-  background: rgba(239, 107, 107, 0.09);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
   color: #f5c2c2;
 }
 .chat-diff-line.ctx {

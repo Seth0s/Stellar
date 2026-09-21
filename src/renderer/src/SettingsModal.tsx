@@ -32,7 +32,7 @@ import type { ShortcutCombo, ShortcutOverrides } from "./shortcut-registry";
  * being left mute.
  *
  * Positioning of the fields is NOT per page: `SettingsField` +
- * `.settings-row` are the one label/value row, a two-column grid with the
+ * `.form-row` are the one label/value row, a two-column grid with the
  * value in a fixed column (the measurements and the "before" state live in
  * `layout.css`). The owner reported Sobre "quebrada em espaçamento e
  * quebra de linha" (2026-09-20, task 8ff311e7) — the row used to be flex
@@ -204,7 +204,7 @@ export function SettingsModal({
  * A linha rótulo/valor das configurações — o posicionamento dos campos
  * mora AQUI, uma vez, e não em cada aba. Serve as páginas deste modal
  * hoje e a próxima que precisar de um campo: rótulo + hint à esquerda,
- * valor à direita, nas mesmas duas verticais de `.settings-row`
+ * valor à direita, nas mesmas duas verticais de `.form-row`
  * (`layout.css`) — que é onde o porquê da grade está medido.
  *
  * `htmlFor` associa o rótulo ao controle quando a linha tem um. A
@@ -228,7 +228,7 @@ function SettingsField({
   children: ReactNode;
 }) {
   return (
-    <div className="settings-row">
+    <div className="form-row">
       <label htmlFor={htmlFor}>
         {label}
         <small>{hint}</small>
@@ -346,7 +346,7 @@ function MaestroPage({
   onToggleAutonomous: (id: string, autonomous: boolean) => void;
 }) {
   return (
-    <div className="settings-row">
+    <div className="form-row">
       <label className="autonomous-toggle-label">
         <input
           type="checkbox"

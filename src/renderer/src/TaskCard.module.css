@@ -46,7 +46,7 @@
 
 .columnCount {
   background: var(--panel);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 6px;
   color: var(--text);
 }
@@ -60,7 +60,7 @@
 .wipBadge {
   background: transparent;
   border: 1px solid var(--good);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 6px;
   color: var(--good);
   font-variant-numeric: tabular-nums;
@@ -90,7 +90,7 @@
 .item {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-4);
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -122,7 +122,7 @@
    verdade. */
 .dropGhost {
   border: 1px dashed var(--foam);
-  border-radius: 8px;
+  border-radius: var(--radius-4);
   padding: 8px;
   color: var(--foam);
   font-size: var(--text-3);
@@ -176,7 +176,7 @@
   letter-spacing: var(--tracking-label);
   color: var(--muted);
   background: var(--surface);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   padding: 1px 5px;
 }
 
@@ -203,7 +203,7 @@
   color: var(--foam);
   background: color-mix(in srgb, var(--foam) 14%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--foam) 40%, var(--border));
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   padding: 2px 7px;
 }
 
@@ -238,7 +238,7 @@
    este projeto não usa CSS Modules composition em nenhum outro lugar. */
 .pillWait {
   font-size: var(--text-3);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   padding: 1px 6px;
   color: var(--foam);
   background: color-mix(in srgb, var(--foam) 14%, var(--surface));
@@ -250,7 +250,7 @@
    normal, mesma cor de alerta que o resto do app usa pra estado quebrado. */
 .pillBroken {
   font-size: var(--text-3);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   padding: 1px 6px;
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 16%, var(--surface));
@@ -262,7 +262,7 @@
    "de verdade" (contínua) — ela é um palpite, não um fato decidido. */
 .pillSuggestion {
   font-size: var(--text-3);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   padding: 1px 6px;
   color: var(--violet);
   background: color-mix(in srgb, var(--violet) 10%, var(--surface));
@@ -281,7 +281,7 @@
   gap: 4px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 2px 7px 2px 5px;
   font-size: var(--text-3);
   max-width: 100%;
@@ -352,7 +352,7 @@
 .stageTrail {
   display: flex;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   overflow: hidden;
   font-size: var(--text-1);
   text-transform: uppercase;
@@ -392,7 +392,7 @@
    (D8, indicadores acessíveis). Não afirma push no PTY. */
 .humanMoveNotice {
   padding: 5px 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   background: color-mix(in srgb, var(--warn) 14%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
   color: var(--warn);
@@ -406,7 +406,7 @@
    humano nem com o danger de estado quebrado. */
 .divergenceNotice {
   padding: 5px 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   background: color-mix(in srgb, var(--foam) 12%, var(--panel));
   border: 1px dashed color-mix(in srgb, var(--foam) 50%, var(--border));
   color: var(--foam);
@@ -420,7 +420,7 @@
 .statusAskNotice,
 .statusAsk {
   padding: 5px 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   background: color-mix(in srgb, var(--foam) 16%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--foam) 45%, var(--border));
   color: var(--foam);
@@ -452,7 +452,7 @@
 /* DESIGN-BACKLOG.md "Falha TIPADA" — motivo de interrupção na coluna a fazer. */
 .interruptNotice {
   padding: 5px 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   background: color-mix(in srgb, var(--muted) 10%, var(--panel));
   border: 1px solid var(--border);
   color: var(--muted);
@@ -468,7 +468,7 @@
   gap: 6px;
   background: color-mix(in srgb, var(--good) 14%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--good) 40%, var(--border));
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   padding: 5px 7px;
   font-size: var(--text-3);
   color: var(--text);
@@ -499,7 +499,7 @@
   letter-spacing: var(--tracking-label);
   color: var(--on-accent);
   background: var(--good);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   padding: 1px 5px;
 }
 
@@ -510,8 +510,11 @@
 
 .verdictChip[data-tone="danger"] {
   background: var(--danger);
-  /* §5.4 — badge on danger uses white, not --on-accent (dark-on-dark). */
-  color: #fff;
+  /* Tinta ESCURA, não branca: medido, `#fff` sobre `--danger` dá 3,01 e o
+     `--on-accent` dá 6,23. O comentário antigo dizia que o `--on-accent` seria
+     "dark-on-dark" e que por isso este badge usava branco — a medição mostrou o
+     contrário (§5.4 e §9.6). */
+  color: var(--on-accent);
 }
 
 .verdictChip[data-tone="none"] {
@@ -530,7 +533,7 @@
   background: var(--good);
   color: var(--on-accent);
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   padding: 3px 8px;
   font-size: var(--text-3);
   font-weight: 600;
@@ -646,7 +649,7 @@
 .chartBox {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-4);
   padding: 8px;
   min-width: 0;
 }
@@ -682,7 +685,7 @@
   display: inline-block;
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-1);
   margin-right: 3px;
   vertical-align: middle;
 }
@@ -699,7 +702,7 @@
   display: inline-block;
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-1);
   margin-right: 3px;
   vertical-align: middle;
   background: var(--good);
@@ -709,7 +712,7 @@
   display: inline-block;
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-1);
   margin-right: 3px;
   vertical-align: middle;
   background: var(--danger);
@@ -745,7 +748,7 @@
 .statCard {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-4);
   padding: 8px;
   min-width: 0;
 }
@@ -800,7 +803,7 @@
 /* Pílulas rodada N / reprovada N× — signal (âmbar) como no protótipo. */
 .pillRound {
   font-size: var(--text-3);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   padding: 1px 6px;
   color: var(--signal);
   background: color-mix(in srgb, var(--signal) 14%, var(--surface));
@@ -809,7 +812,7 @@
 
 .pillRejection {
   font-size: var(--text-3);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   padding: 1px 6px;
   color: var(--signal);
   background: color-mix(in srgb, var(--signal) 14%, var(--surface));
@@ -828,7 +831,7 @@
   min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   padding: 5px 7px;
   color: var(--text);
   font: inherit;
@@ -844,7 +847,7 @@
   flex: none;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   padding: 5px 8px;
   color: var(--text);
   font: inherit;
@@ -917,7 +920,7 @@
 
 .sprintRow {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   padding: 8px 10px;
   background: var(--bg);
   width: 100%;
@@ -941,7 +944,7 @@
 .sprintActionBtn {
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   color: var(--muted);
   font-size: var(--text-2);
   padding: 2px 8px;
@@ -978,7 +981,7 @@
   min-width: 0;
   background: var(--surface);
   border: 1px solid var(--foam);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   color: var(--text);
   font: inherit;
   font-family: var(--font-mono);
@@ -990,7 +993,7 @@
   margin-top: 10px;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   background: color-mix(in srgb, var(--danger) 8%, var(--surface));
   font-size: var(--text-3);
   color: var(--text);
@@ -1021,7 +1024,7 @@
   margin-left: auto;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-2);
   color: var(--text);
   font-size: var(--text-3);
   padding: 2px 8px;
@@ -1113,7 +1116,7 @@
   margin-left: auto;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   color: var(--muted);
   font: inherit;
   font-size: var(--text-4);
@@ -1166,7 +1169,7 @@
 .detailPromptBlock {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   padding: 8px 10px;
   font-size: var(--text-4);
   line-height: 1.45;
@@ -1194,7 +1197,7 @@
   resize: vertical;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-3);
   padding: 7px 8px;
   color: var(--text);
   font: inherit;

@@ -46,7 +46,7 @@ body {
  * unconditionally creates a new CSS stacking context, so individual card
  * z-index values can NOT interleave across the `.world`/`.cards-layer`
  * boundary during the coexistence period — each layer's whole subtree
- * stacks as one block against the other's. Explicit `z-index: 1` (not
+ * stacks as one block against the other's. An explicit z-index (not
  * relying on implicit DOM order) makes migrated cards always render
  * ABOVE non-migrated ones — a deliberate, documented, TEMPORARY
  * limitation of migrating card kinds one at a time; resolves on its own
@@ -57,7 +57,7 @@ body {
   left: 0;
   width: 1px;
   height: 1px;
-  z-index: 1;
+  z-index: var(--layer-board);
 }
 
 .board-overlay {
@@ -83,7 +83,9 @@ body {
   justify-content: space-between;
   background: var(--ink);
   border-bottom: 1px solid var(--border);
-  z-index: 1000;
+  /* A moldura da JANELA: acima de tudo, inclusive do modal. Sem moldura do
+     sistema, arrastar/minimizar/fechar não têm plano B (ver tokens.css). */
+  z-index: var(--layer-window-frame);
   -webkit-app-region: drag;
 }
 
@@ -150,7 +152,7 @@ body {
   left: 12px;
   top: calc(50% + (var(--titlebar-h) + 60px) / 2);
   transform: translateY(-50%);
-  z-index: 500;
+  z-index: var(--layer-chrome);
   display: flex;
   align-items: center;
   pointer-events: none;
@@ -251,7 +253,12 @@ body {
               color 0.15s ease,
               border-color 0.15s ease,
               box-shadow 0.2s ease;
-  z-index: 501;
+  /* 1 é LOCAL, não degrau da escala: este toggle vive DENTRO do
+     `.rail-container`, que cria contexto de empilhamento (`transform` + z-index)
+     — de dentro não existe "ficar acima do 500", só acima dos irmãos DAQUI
+     (`.rail` e `.rail-mini`, que não têm z-index). O antigo `501` sugeria a
+     intenção contrária; o efeito sempre foi este. */
+  z-index: 1;
 }
 
 .rail-toggle:hover {
@@ -364,7 +371,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  z-index: 500;
+  z-index: var(--layer-chrome);
   pointer-events: none;
 }
 
@@ -413,7 +420,7 @@ body {
   box-shadow: var(--shadow-card);
   cursor: pointer;
   transition: background-color 0.12s ease;
-  z-index: 500;
+  z-index: var(--layer-chrome);
 }
 
 .topbar-home:hover {
@@ -469,7 +476,11 @@ body {
   position: fixed;
   top: calc(var(--titlebar-h) + 52px);
   right: 12px;
-  z-index: 40;
+  /* Papel próprio, acima do board e abaixo do chrome. Antes era um `40` solto
+     que não empatava com nada: o topo dele é `calc(--titlebar-h + 52px)`, que
+     coincide com o fim da banda da topbar, então qualquer crescimento dela o
+     escondia (40 < 500). Sem colisão hoje, frágil por construção. */
+  z-index: var(--layer-spawn-queue);
   max-width: 280px;
   max-height: 220px;
   overflow-y: auto;
@@ -940,7 +951,7 @@ select.resume-input {
   flex-direction: column;
   gap: 6px;
   align-items: center;
-  z-index: 900;
+  z-index: var(--layer-toast);
   pointer-events: none;
 }
 
@@ -974,7 +985,11 @@ select.resume-input {
   align-items: center;
   gap: 6px;
   max-width: 90vw;
-  z-index: 900;
+  /* Mesmo papel do toast (aviso transitório acima do chrome E acima do
+     composer), mas com uma diferença que importa: este banner é INTERATIVO.
+     Enquanto ele ficava abaixo do composer (900 < 1000), o botão de atualizar
+     caía atrás da barra e ficava INCLICÁVEL — hit-testing, não estética. */
+  z-index: var(--layer-toast);
 }
 
 .update-banner-row {
@@ -1106,27 +1121,32 @@ select.resume-input {
   border-radius: var(--radius);
   box-shadow: var(--shadow-float);
   padding: 10px;
-  z-index: 800;
+  /* POPOVER VIVE ACIMA DE TODO CHROME ANCORÁVEL — é esta regra, e não um `+1`
+     no sítio que brigar, que resolve a classe: o popover do composer precisa
+     apenas DESTA camada (antes exigia um 1100 próprio, que sumiu), e um popover
+     ancorado no titlebar deixa de ser impossível por construção. */
+  z-index: var(--layer-popover);
   min-width: 220px;
   max-width: min(90vw, 320px);
   color: var(--text);
   font-size: 13px;
 }
 
-/* PathPicker.tsx, anchored from inside SessionModal — `.modal-root` is
-   z-index 2000, above this popover's default 800. */
+/* PathPicker.tsx, ancorado DENTRO do SessionModal. Este é um PAPEL diferente do
+   popover comum, e por isso tem degrau próprio: o modal está acima do popover
+   normal por desenho, então um popover ancorado dentro dele precisa ficar acima
+   do MODAL. (O `2100` que existia aqui era o mesmo papel escrito como número.) */
 .popover--modal {
-  z-index: 2100;
+  z-index: var(--layer-popover-modal);
 }
 
-/* GlobalComposer.tsx — o popover de "Destino" é portado pro <body> como
-   todo `.popover`, mas o `.wrap` do composer é z-index 1000 e fica em cima
-   dele: o base 800 perdia e o menu renderizava ATRÁS da barra. Mesmo padrão
-   de `.popover--modal` acima, só com o número do z-index que o composer
-   realmente precisa. */
-.popover--composer {
-  z-index: 1100;
-}
+/* O `.popover--composer` foi REMOVIDO nesta task (7413df99). Ele existia com
+   `z-index: 1100` porque o `.wrap` do composer ficava acima do popover base
+   (`1000 > 800`) e o menu de "Destino" renderizava ATRÁS da barra. Com a escala
+   de camadas o composer é `--layer-chrome` e o popover é `--layer-popover`, que
+   já resolve — a classe inteira parou de precisar de um número por sítio. Não
+   recrie o `--composer` com outro número: se um popover perder para algo, o
+   conserto é a CAMADA desse algo, não um `+1` aqui. */
 
 .popover-row {
   display: flex;
@@ -1596,24 +1616,24 @@ select.resume-input {
    coluna do valor, e é isso que dá ao rótulo uma largura previsível para
    quebrar o hint sempre do mesmo jeito.
 
-   `--settings-value-w` é o único número que esta linha decide. É largura,
+   `--form-row-value-w` é o único número que esta linha decide. É largura,
    não ritmo: um degrau de `--space-*` seria erro de tipo para uma coluna.
    O valor é alinhado à direita dentro dela — o select já encostava na
    direita, e agora as leituras técnicas encostam na mesma linha. */
-.settings-row {
-  --settings-value-w: 300px;
+.form-row {
+  --form-row-value-w: 300px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--settings-value-w);
+  grid-template-columns: minmax(0, 1fr) var(--form-row-value-w);
   align-items: baseline;
   column-gap: var(--space-6);
   padding: var(--space-5) 0;
 }
 
-.settings-row label {
+.form-row label {
   color: var(--text);
 }
 
-.settings-row small {
+.form-row small {
   display: block;
   color: var(--muted);
   font-size: var(--text-3);
@@ -1624,9 +1644,9 @@ select.resume-input {
 /* O valor mora na 2ª coluna, encostado à direita. `min-width: 0` +
    `max-width: 100%` impedem que um valor comprido empurre a coluna: hash e
    caminho quebram DENTRO dela (ver o `code` abaixo). */
-.settings-row > select,
-.settings-row > input,
-.settings-row > code {
+.form-row > select,
+.form-row > input,
+.form-row > code {
   grid-column: 2;
   justify-self: end;
   min-width: 0;
@@ -1636,12 +1656,12 @@ select.resume-input {
 /* A linha cujo controle É o rótulo (o checkbox do modo autônomo) não tem
    coluna de valor: o toggle ocupa as duas, senão o texto dele ficaria
    preso nos 300px da coluna de valor e quebraria à toa. */
-.settings-row > .autonomous-toggle-label {
+.form-row > .autonomous-toggle-label {
   grid-column: 1 / -1;
 }
 
-.settings-row select,
-.settings-row input[type="number"] {
+.form-row select,
+.form-row input[type="number"] {
   background: var(--ink);
   border: 1px solid var(--border);
   color: var(--text);
@@ -1650,7 +1670,7 @@ select.resume-input {
   font: inherit;
 }
 
-.settings-row input[type="number"] {
+.form-row input[type="number"] {
   width: 7.5rem;
 }
 
@@ -1658,7 +1678,7 @@ select.resume-input {
    esta regra o `<code>` caía no padrão do navegador — fonte fixa em 13px,
    nenhum tratamento do design system) e quebra em QUALQUER ponto, porque
    quando o valor vira hash/caminho não sobra espaço onde quebrar. */
-.settings-row code {
+.form-row code {
   font-family: var(--font-mono);
   font-size: var(--text-5);
   color: var(--muted);
@@ -1676,6 +1696,48 @@ select.resume-input {
   white-space: nowrap;
 }
 
+/* ---------------------------------------------------------------------------
+ * `.form-row` — A PRIMITIVA, e a REGRA DE VARIANTE que vem antes dela.
+ *
+ * `.form-row` é UMA linha de formulário: rótulo (com hint) à esquerda, controle
+ * à direita, duas verticais compartilhadas. Cinco sítios a usam hoje.
+ *
+ * QUANDO NÃO USAR — e isto é a parte que importa, porque sem ela a próxima
+ * pessoa ou força um caso que não cabe, ou cria a quinta cópia:
+ *   - linha de DEFINIÇÃO (termo à ESQUERDA, descrição à direita, sem controle)
+ *     → é a `.shortcuts-row`, com o `kbd` no lugar do rótulo. Outra forma;
+ *   - CARTÃO com cabeçalho dentro (um contêiner, não uma linha) → é a
+ *     `.secrets-provider-row`. Outro papel;
+ *   - item de lista com identidade própria (card, chip, célula de grade).
+ * Nesses casos o que se compartilha é o VOCABULÁRIO de espaçamento (os tokens),
+ * não o layout. (Modelo desta regra: o comentário do `GlobalComposer.module.css`
+ * sobre não reusar `.chat-attachment-*` — quando a diferença é real, escreve-se
+ * POR QUE, e a exceção deixa de parecer esquecimento.)
+ *
+ * VARIANTES DECLARADAS, e só estas duas:
+ *   1. a LARGURA da coluna de controle é a variável da própria linha
+ *      (`--form-row-value-w`, 300px). Largura não é ritmo: é número de layout,
+ *      e um degrau de `--space-*` aqui seria erro de tipo;
+ *   2. `.form-row--boxed` — a mesma linha como CAIXA: superfície própria
+ *      (fundo/borda/raio) e o controle empurrado para a direita com
+ *      `space-between` em vez da grade. A diferença é real e medida, por isso
+ *      é variante e não cópia.
+ * ------------------------------------------------------------------------ */
+.form-row--boxed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.form-row--boxed + .form-row--boxed {
+  margin-top: var(--space-2);
+}
+
 /* Nem todo mundo cabe lado a lado — e a grade não pode pagar isso
    espremendo o rótulo. Medido (2026-09-20): numa janela de 620px o modal
    fica com 570px e a coluna do rótulo cai para 25px, ou seja o texto sai
@@ -1685,13 +1747,13 @@ select.resume-input {
    corte é o ponto em que o rótulo passaria a ficar menor que o valor —
    800px de janela dá ~218px de rótulo. */
 @media (max-width: 800px) {
-  .settings-row {
+  .form-row {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-row > select,
-  .settings-row > input,
-  .settings-row > code {
+  .form-row > select,
+  .form-row > input,
+  .form-row > code {
     grid-column: 1;
     justify-self: stretch;
     text-align: left;
@@ -2011,7 +2073,7 @@ select.resume-input {
 .modal-root {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: var(--layer-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2032,6 +2094,15 @@ select.resume-input {
   min-width: 320px;
   max-width: 480px;
   box-shadow: var(--shadow-float);
+  /* Teto de altura com a MESMA aritmética que o resto do layout usa para
+     reservar a faixa da moldura (`.home`, topbar, compass, painel de spawn e o
+     `max-height` do rail) — inventar uma segunda forma de reservar a mesma
+     faixa é como elas divergem. Sem este teto, um diálogo de conteúdo longo
+     crescia além da janela sem rota para o fundo; com a moldura da janela no
+     topo (task 7413df99), o excesso passaria POR BAIXO dela. 48px = 24 de
+     respiro acima e 24 abaixo. */
+  max-height: calc(100vh - var(--titlebar-h) - 48px);
+  overflow-y: auto;
 }
 
 .modal h3 {
@@ -2082,11 +2153,15 @@ select.resume-input {
   margin-bottom: 16px;
 }
 
+/* NÃO é uma `.form-row`, de propósito: é um CARTÃO que contém um cabeçalho e
+   os campos de um provedor (ver a regra de variante junto da primitiva). O que
+   ela compartilha com a primitiva é só o VOCABULÁRIO: `6px` → `--space-3`,
+   `10px 12px` → `--space-5 var(--space-6)` (task e165651e). A forma fica. */
 .secrets-provider-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2095,7 +2170,7 @@ select.resume-input {
 .secrets-provider-row-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4); /* era 8px cru — mesmo valor, agora pelo vocabulário */
 }
 
 .secrets-provider-name {
@@ -2244,10 +2319,20 @@ select.resume-input {
 .shortcuts-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* `8px` cru vira `--space-4` — MESMO valor, agora pelo vocabulário. */
+  gap: var(--space-4);
   font-size: 13px;
   color: var(--text);
-  padding: 3px 0;
+  /* O `3px` não é degrau e precisou de decisão (task e165651e), porque lista
+     empilhada acumula: são ~25 linhas num grid de 2 colunas dentro de um
+     scroller, então cada 1px de padding muda até ~25px por coluna na altura
+     de rolagem (e nada corta — o container rola, então o custo é comprimento,
+     não perda). Escolha: `--space-2` (4px, +1px por linha). O motivo é a folga
+     ENTRE linhas: o `kbd` tem ~19px, então com 4px de padding a distância entre
+     duas linhas fica em 8px; com `--space-1` (2px) ficaria em 4px e as linhas
+     passariam a ler como um bloco só — o oposto do que uma lista de atalhos
+     precisa. E 4px é o degrau dominante do repo (--space-2, 42 usos). */
+  padding: var(--space-2) 0;
 }
 
 .shortcuts-row kbd {
@@ -2606,7 +2691,10 @@ select.resume-input {
   border: 1.5px dashed var(--signal);
   background: color-mix(in srgb, var(--signal) 10%, transparent);
   pointer-events: none;
-  z-index: 500;
+  /* Ferramenta TRANSITÓRIA do board, não mobília: fica acima do chrome para a
+     barra de ações do export (PNG/SVG) seguir clicável quando a seleção encostar
+     no rail ou na topbar — que é o que já acontecia antes por ordem de DOM. */
+  z-index: var(--layer-board-overlay);
 }
 
 .export-selection-toolbar {
@@ -2733,7 +2821,11 @@ select.resume-input {
 .radial-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 900;
+  /* Acima de todo CONTEÚDO do app (chrome, toast, popover) — antes ele ficava
+     em 900 e titlebar/composer (1000) continuavam ACIMA dele e clicáveis, então
+     um clique na barra não fechava o menu e ainda acionava o controle de baixo.
+     Não cobre a MOLDURA da janela: um menu também não segura a janela. */
+  z-index: var(--layer-radial);
   /* Transparent on purpose — the canvas underneath should still read as
      "still there", this is a menu, not a modal takeover. */
   background: transparent;
@@ -2898,20 +2990,13 @@ select.resume-input {
   margin-bottom: 6px;
 }
 
-.remote-device-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-}
-
-.remote-device-row + .remote-device-row {
-  margin-top: 4px;
-}
+/* A linha do dispositivo pareado virou `.form-row.form-row--boxed` (task
+   e165651e): era a MESMA ideia da linha de formulário — texto à esquerda,
+   ação à direita — com duas diferenças reais (superfície própria e
+   `space-between` em vez da grade de duas colunas), e agora é a variante
+   declarada em vez de uma quinta cópia. A classe `.remote-device-row` foi
+   removida do CSS e do TSX; ela existia com `gap: 8px` e `padding: 6px 8px`
+   crus, que morreram com ela. */
 
 .remote-device-name {
   display: flex;
@@ -2970,6 +3055,12 @@ select.resume-input {
   position: absolute;
   inset: 0;
   top: var(--titlebar-h);
+  /* Contexto próprio (z-index 0 cria contexto; `auto` não criaria): os
+     `0/0/1/1/1` das camadas internas do Home passam a ser ORDENAÇÃO INTERNA em
+     vez de disputarem o contexto root contra o board e o chrome — que era um
+     acidente, não um desenho. Sem mudança visual: o Home substitui o board, então
+     não há sobreposição a alterar. */
+  z-index: 0;
   /* item 2 (DESIGN-BACKLOG.md) — used to be the scroll container itself,
      which dragged `.home-bg`/`.home-stars` along with the list ("quebra o
      background") and left the OS's own full-height scrollbar as the only
@@ -3299,7 +3390,7 @@ select.resume-input {
 .compass-strip {
   position: absolute;
   top: calc(var(--titlebar-h) + 12px);
-  z-index: 500;
+  z-index: var(--layer-chrome);
   height: 26px;
   pointer-events: none;
 }

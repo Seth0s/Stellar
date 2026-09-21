@@ -57,6 +57,12 @@
   gap: 2px;
   padding: 4px;
   border-radius: 10px;
+  /* Cor CRUA de propósito, e EXCLUÍDA do conjunto migrável da task 16a6abb5:
+     este toolbar é uma superfície com `backdrop-filter` (linha acima), e o
+     `docs/PERF.md` §5 lista superfícies compostas como hipótese de consumo de
+     VRAM. Mexer nesta cor é mudança de COMPOSIÇÃO, não de organização, e exige
+     verificação ao vivo. Não "conserte" isto achando que foi esquecimento: está
+     declarado na §9.6. */
   background: rgba(20, 20, 24, 0.78);
   backdrop-filter: blur(6px);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
