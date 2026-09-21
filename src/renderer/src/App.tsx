@@ -3273,16 +3273,17 @@ export function App() {
   // Excludes provider === "bash" (DESIGN-BACKLOG.md item 43) — the topbar
   // reads this as "N agente(s)", and a plain shell isn't an agent; without
   // this a board full of bash terminals inflated the agent count.
+  //
+  // O `active` QUE MORAVA AQUI SAIU (task 49de95ce). Ele era OUTRA coisa que o
+  // `active` do store: aqui contava "card de agente com PTY vivo" (fora
+  // `error`/`exited`), e não "trabalhando" — mas o campo ia para a tela com o
+  // rótulo "ativos", e pela mesma razão que o do store caiu (ver
+  // `BoardCounts` no preload) ele não podia ficar: PTY vivo não é trabalho, e
+  // um TUI parado repinta. O fato que ELE dava — o PTY daquele card morreu —
+  // continua onde sempre esteve: no indicador do PRÓPRIO card.
   const activeTerminalCards = cards.filter((c) => c.kind === "terminal" && c.provider !== "bash");
   const effectiveBoardCounts: Record<string, BoardCounts> = activeBoardId
-    ? {
-        ...boardCounts,
-        [activeBoardId]: {
-          agents: activeTerminalCards.length,
-          active: activeTerminalCards.filter((c) => liveStatus[c.id] !== "error" && liveStatus[c.id] !== "exited")
-            .length,
-        },
-      }
+    ? { ...boardCounts, [activeBoardId]: { agents: activeTerminalCards.length } }
     : boardCounts;
 
   // PERF (docs/PERF.md, 2026-09-15) — a marcha do traço dos conectores só

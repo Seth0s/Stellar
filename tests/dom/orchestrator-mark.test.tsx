@@ -28,6 +28,10 @@ vi.mock("@renderer/useTerminal", () => ({
 
 vi.mock("@renderer/useAgentAvailability", () => ({
   useAgentAvailability: () => ({ missing: [], checking: false }),
+  // O TerminalCard lê o sinal de fim de turno pela projeção do canal de
+  // disponibilidade (task 0dd5c145). Lista vazia = nenhum provider sinaliza,
+  // que é o estado honesto antes de o main responder.
+  useAvailableAgentProviders: () => [],
 }));
 
 import { TerminalCard } from "@renderer/TerminalCard";
@@ -174,6 +178,10 @@ describe("orchestrator mark — topbar indicator", () => {
     expect(badge).toBeTruthy();
     expect(badge.getAttribute("data-missing")).toBeNull();
     expect(badge.title).toContain("330");
+    // A marca existe: o chip de estado VAZIO não pode estar na tela. As duas
+    // metades são complementares por construção (a79a708e) — um teste que
+    // afirmasse só o badge descreveria metade da tela.
+    expect(document.querySelector('[data-role="topbar-orchestrator-empty"]')).toBeNull();
     expect(screen.getByText(/orquestrador|orchestrator/i)).toBeTruthy();
   });
 
@@ -189,10 +197,17 @@ describe("orchestrator mark — topbar indicator", () => {
     expect(badge.getAttribute("data-missing")).toBe("true");
     expect(badge.textContent?.toLowerCase()).toMatch(/ausente|missing/);
     expect(badge.title).toContain("dead-99");
+    // Marca SETADA (apontando para um card que sumiu) não é board SEM marca —
+    // o chip vazio não entra; o que se mostra é o órfão, honestamente.
+    expect(document.querySelector('[data-role="topbar-orchestrator-empty"]')).toBeNull();
   });
 
-  it("shows no badge when the board is unmarked", () => {
+  it("board SEM marca: o chip de estado vazio aparece e o badge NÃO — as duas metades", () => {
     render(topbarStub({ boards: [{ ...baseBoard, orchestrator_card_id: null }] }));
+    const empty = document.querySelector('[data-role="topbar-orchestrator-empty"]') as HTMLElement;
+    expect(empty).toBeTruthy();
+    expect(empty.title.length).toBeGreaterThan(0);
+    expect(empty.textContent?.toLowerCase()).toMatch(/orquestrador|orchestrator/);
     expect(document.querySelector('[data-role="topbar-orchestrator-badge"]')).toBeNull();
   });
 });

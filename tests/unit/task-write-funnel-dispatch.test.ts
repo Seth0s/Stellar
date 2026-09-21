@@ -78,6 +78,7 @@ function buildRig(dir: string, opts: { autonomous: boolean }) {
       boardExists: () => true,
       getCardBoardId: () => undefined,
       isBoardAutonomous: () => opts.autonomous,
+      getBoardCwd: () => "/tmp", // raiz declarada do rig: sem ela o auto-dispatch RECUSA (2026-09-21)
       isCardAlive: () => true,
       countRunningAgentsOnBoard: () => 0,
       getBoardConcurrencyCap: () => 4,

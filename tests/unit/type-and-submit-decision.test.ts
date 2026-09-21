@@ -38,6 +38,19 @@ import {
 
 const CURSOR_PARKED = /\bfollow-ups\b[\s\S]*?\benter\s+steer\b/i;
 
+/** Régua da moldura do composer (task 2b5ad375): a zona deixou de ser a
+ * constante `slice(-6)` e passou a ser a faixa ENTRE as duas últimas réguas.
+ * Fixtures que dizem "preso NO composer" precisam desenhar a moldura — sem ela
+ * a resposta honesta passou a ser `unknown`, não `unsent`. */
+const rule = "─".repeat(24);
+
+/** Composer real: a faixa fechada pelas réguas, com o corpo dentro dela e as
+ * DUAS linhas de rodapé que a medição encontrou (42/42 amostras) — com um
+ * rodapé só a moldura não é reconhecida (`=== COMPOSER_FOOTER_LINES`). */
+function composer(body = ""): string {
+  return [rule, `❯ ${body}`.trimEnd(), rule, "  status do rodapé", "  dica do rodapé"].join("\n");
+}
+
 // DESIGN-BACKLOG.md §0 "Texto entregue a um card recem-spawnado fica na
 // caixa sem submeter" + "Cards recebem a mesma task duas vezes".
 
@@ -154,8 +167,8 @@ describe("looksLikeSubmitStarted / needleVisibleOnScreen / delta", () => {
   });
 
   it("review A: timer [10s]→[11s] no mesmo Working NÃO é appeared (não marca sent)", () => {
-    const before = "task running\n[10s] Working\n> ";
-    const after = "task running\n[11s] Working\n[Pasted text #2 +14 lines]";
+    const before = ["task running", "[10s] Working", rule, "❯ ", rule, "  status do rodapé", "  dica do rodapé"].join("\n");
+    const after = ["task running", "[11s] Working", rule, "❯ [Pasted text #2 +14 lines]", rule, "  status do rodapé", "  dica do rodapé"].join("\n");
     expect(appearedSinceBaseline(before, after, CLAUDE_PATTERN)).toBe(false);
     expect(submitStartedAppearedSince(before, after, CLAUDE_PATTERN)).toBe(false);
     expect(
@@ -179,7 +192,7 @@ describe("decideSubmitCheck", () => {
   };
 
   it("paste chip no composer (sem follow-ups/Working novos) => unsent", () => {
-    expect(decideSubmitCheck({ ...base, screenText: "[Pasted text #1 +40 lines]" })).toBe("unsent");
+    expect(decideSubmitCheck({ ...base, screenText: composer("[Pasted text #1 +40 lines]") })).toBe("unsent");
   });
 
 
@@ -201,7 +214,7 @@ describe("decideSubmitCheck", () => {
       decideSubmitCheck({
         ...base,
         screenTextBeforeWrite: stale,
-        screenText: `${stale}[Pasted text #2 +14 lines]`,
+        screenText: [stale, composer("[Pasted text #2 +14 lines]")].join("\n"),
         hasNewActivitySinceWrite: true,
         submitStartedPattern: CLAUDE_PATTERN,
       }),
@@ -478,7 +491,9 @@ describe("shouldPressEnterOnAttempt", () => {
     const after = [
       "  → [Pasted text #1 +10 lines]",
       "enter steer · ↑ select/edit · esc cancel",
-      "[Pasted text #2 +14 lines]",
+      // O chip NOVO está DENTRO da moldura: é isso, e não a posição na cauda,
+      // que "preso no composer" significa desde a zona derivada (2b5ad375).
+      composer("[Pasted text #2 +14 lines]"),
     ].join("\n");
 
     const input: SubmitCheckInput = {
@@ -489,7 +504,7 @@ describe("shouldPressEnterOnAttempt", () => {
       submitStartedPattern: CURSOR_PATTERN,
     };
 
-    // Agora, como o chip "Pasted text" está no TAIL (últimas 6 linhas), a função devolve "unsent".
+    // Agora, como o chip "Pasted text" está DENTRO da moldura do composer, a função devolve "unsent".
     const decision = decideSubmitCheck(input);
     expect(decision).toBe("unsent");
 
@@ -540,6 +555,9 @@ describe("shouldPressEnterOnAttempt", () => {
       "old",
       "enter steer",
       "loading...",
+      // Composer LOCALIZADO e limpo: o chip acima ficou no histórico, fora da
+      // faixa entre as réguas.
+      composer(),
     ].join("\n");
 
     const decision = decideSubmitCheck({

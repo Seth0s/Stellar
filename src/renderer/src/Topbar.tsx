@@ -4,9 +4,17 @@ import { Popover } from "./Popover";
 import { SessionModal } from "./SessionModal";
 import { useAgentAvailability } from "./useAgentAvailability";
 import type { SessionTemplate } from "./useBoardStore";
-import { groupByProject, StatusDot, type Board, type BoardCounts as Counts } from "./sessions";
+import { groupByProject, type Board, type BoardCounts as Counts } from "./sessions";
 import { t } from "../../shared/i18n";
 import { GlobalComposer } from "./GlobalComposer";
+// O papel de um vínculo task↔card fala a MESMA língua do chip da Fila
+// (`describeCardRole`, TaskCard.tsx) — exportado de lá em vez de reescrito
+// aqui: uma segunda tabela de papel é justamente o defeito que esta sessão
+// passou o dia consertando. O id curto de task também é o do quadro (`slice`
+// de 8, `shortTaskId`), não uma segunda convenção.
+import { describeCardRole } from "./TaskCard";
+import { shortTaskId } from "./task-board-model";
+import type { BoardAgentRoleRow } from "../../preload/index";
 
 type ModalState = { mode: "create" } | { mode: "edit"; board: Board } | null;
 
@@ -90,6 +98,29 @@ export function Topbar({
   const [fullscreen, setFullscreen] = useState(false);
   const { missing: missingAgents } = useAgentAvailability();
 
+  // O dropdown de AGENTES (task 49de95ce) — o que substitui o "N ativos".
+  // `null` = ninguém leu ainda (estado honesto, e distinto de "lista vazia").
+  const [agentsListOpen, setAgentsListOpen] = useState(false);
+  const [agentsList, setAgentsList] = useState<BoardAgentRoleRow[] | null>(null);
+  const agentsListBtnRef = useRef<HTMLButtonElement>(null);
+
+  // A lista é pedida no GESTO de abrir, nunca em push nem em poll: os papéis
+  // andam com o quadro, e quem os projeta é o main (`store:board-agent-roles`).
+  // Trocar de board ou reabrir re-lê, e o estado volta a `null` enquanto a
+  // resposta não chega — mostrar a lista do board ANTERIOR por um frame seria
+  // dizer o que não se sabe.
+  useEffect(() => {
+    if (!agentsListOpen) return;
+    let cancelled = false;
+    setAgentsList(null);
+    void window.store.boardAgentRoles(activeBoardId).then((rows) => {
+      if (!cancelled) setAgentsList(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentsListOpen, activeBoardId]);
+
   // 2026-08-27 revisit — real fullscreen (F11, Titlebar.tsx hides the
   // header for it) already worked, but had NO visible trigger at all
   // (deliberately removed earlier as "redundant with F11") — the user
@@ -152,13 +183,103 @@ export function Topbar({
               {orchestratorCardPresent ? t("topbar.orchestrator") : t("topbar.orchestratorMissing")}
             </span>
           )}
-          {activeCounts && (
-            <span className="topbar-counts">
-              <StatusDot counts={activeCounts} />
-              {t("home.agentsCount", { agents: activeCounts.agents, active: activeCounts.active })}
+          {/* Estado VAZIO da marca (task a79a708e) — o TERCEIRO caso, que não
+              existia: board sem orquestrador marcado. Não confundir com o
+              `-missing` acima (a marca existe e aponta para um card que
+              sumiu): aqui NÃO há marca, e é o estado medido em 3 de 3 boards —
+              o que empurra todo relatório para a linhagem e o "último que
+              falou". Neutro de propósito (não `--warn`): ausência não é erro.
+              Não é controle — o app não deixa um agente escrever a marca, e
+              daqui não haveria qual card escolher; o que faz é dizer o que
+              falta (§3 do docs/ORCHESTRATION.md). */}
+          {activeBoard && !activeBoard.orchestrator_card_id && (
+            <span
+              className="topbar-orchestrator-badge topbar-orchestrator-badge-none"
+              data-role="topbar-orchestrator-empty"
+              title={t("topbar.orchestratorNoneTitle")}
+            >
+              {t("topbar.orchestratorNone")}
             </span>
           )}
         </button>
+        {/* O CONTADOR como controle próprio (task 49de95ce). Ele morava DENTRO
+          do `topbar-title` — que é um `<button>` — e botão dentro de botão é
+          HTML inválido (quebra em leitor de tela antes de quebrar à vista);
+          além disso, o clique abria o seletor de sessões, não os papéis.
+          Irmão do título, com popover próprio. O TEXTO continua o fato de
+          sempre (cards de terminal com provider != bash — o que o SQL conta);
+          o que saiu foi o "· N ativos", que era o MESMO número com uma palavra
+          afirmando atividade que nada mediu. */}
+        {activeCounts && (
+          <button
+            ref={agentsListBtnRef}
+            type="button"
+            className="topbar-counts"
+            data-role="topbar-agents"
+            aria-expanded={agentsListOpen}
+            title={t("topbar.agentsTitle")}
+            onClick={() => setAgentsListOpen((o) => !o)}
+          >
+            {activeCounts.agents > 0
+              ? t("home.agentsCount", { agents: activeCounts.agents })
+              : t("home.agentsZero")}
+          </button>
+        )}
+        {/* O dropdown: NOME e PAPÉIS, porque papel não é atributo do card — é
+          POR TASK. Medido no board do dono: 6 dos 11 cards eram implementer
+          numa task e reviewer em outra ao mesmo tempo, e um card carregava 5
+          tasks em participação. Por isso "card → lista de (task, papel)", com
+          scroll, e não "nome → papel" (que faria esses 6 aparecerem duas
+          vezes). Card sem task aberta aparece SEM papel — não existe "ocioso"
+          aqui. */}
+        <Popover
+          anchorRef={agentsListBtnRef}
+          open={agentsListOpen}
+          onClose={() => setAgentsListOpen(false)}
+          dataRole="topbar-agents-list"
+        >
+          <div className="board-list-heading">{t("topbar.agentsHeading")}</div>
+          {agentsList === null ? (
+            <div className="topbar-agents-note">{t("topbar.agentsLoading")}</div>
+          ) : agentsList.length === 0 ? (
+            <div className="topbar-agents-note">{t("topbar.agentsNone")}</div>
+          ) : (
+            <div className="board-list topbar-agents-list">
+              {agentsList.map((row) => (
+                <div
+                  className="topbar-agent-row"
+                  key={row.cardId}
+                  data-role="topbar-agent-row"
+                  data-card-id={row.cardId}
+                >
+                  <span className="topbar-agent-name">
+                    <code>{row.cardId}</code>
+                    {row.label && <span className="topbar-agent-label">{row.label}</span>}
+                  </span>
+                  <span className="topbar-agent-roles">
+                    {row.roles.length === 0 ? (
+                      <span className="topbar-agent-none">{t("topbar.agentsNoRole")}</span>
+                    ) : (
+                      row.roles.map((link) => (
+                        <span
+                          className="topbar-agent-role"
+                          key={link.taskId}
+                          data-role="topbar-agent-role"
+                          title={t("topbar.agentsRoleTask", {
+                            role: describeCardRole(link.role),
+                            task: link.taskId,
+                          })}
+                        >
+                          {describeCardRole(link.role)} <code>{shortTaskId(link.taskId)}</code>
+                        </span>
+                      ))
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Popover>
       {/* Just the switcher now (DESIGN-BACKLOG.md item 11) — pick a session,
           jump to its pencil to edit, or "+ nova sessão" for the dedicated
           create modal. Editing/renaming/deleting a session both moved out
@@ -187,10 +308,7 @@ export function Topbar({
                         {b.id === activeBoardId && <Icon name="check" size={14} />}
                       </span>
                       <span className="board-row-counts">
-                        <StatusDot counts={counts} />
-                        {counts
-                          ? t("home.agentsCount", { agents: counts.agents, active: counts.active })
-                          : t("home.agentsZero")}
+                        {counts ? t("home.agentsCount", { agents: counts.agents }) : t("home.agentsZero")}
                       </span>
                     </button>
                     <button data-role="edit-session" title={t("topbar.editSession")} onClick={() => setModal({ mode: "edit", board: b })}>

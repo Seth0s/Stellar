@@ -252,7 +252,46 @@ export type BoardRow = {
   orchestrator_card_id: string | null;
 };
 
-export type BoardCounts = { agents: number; active: number };
+/**
+ * Quantos cards de AGENTE este board tem abertos (task 49de95ce).
+ *
+ * `agents` conta cards de terminal com provider != bash — verificado no SQL
+ * (`cardCountsStmt`, em `main/store.ts`): uma linha existe em `cards` enquanto
+ * o card está aberto (fechar apaga a linha), então isto É verificável.
+ *
+ * O CAMPO `active` FOI REMOVIDO, e o motivo é o defeito que a task consertou:
+ * ele não era um sinal, era o MESMO número — as duas colunas da consulta eram
+ * a MESMA expressão SQL (`SUM(... provider != 'bash' ...)`), medido no banco do
+ * dono (11 e 11, o print que abriu a task). Quem o lia (o `StatusDot` e o
+ * contador do Topbar) afirmava "N em execução" a partir de um alias. O app não
+ * sabe dizer "trabalhando" para a maioria dos cards: o `card_status` de
+ * provider genérico devolve `unknown`, porque a saída não distingue trabalho
+ * de repintura. O que não se sabe não se afirma — e o que SE sabe por card
+ * (nome + papéis nas tasks abertas) está em `BoardAgentRoleRow`, abaixo.
+ */
+export type BoardCounts = { agents: number };
+
+/**
+ * Uma linha do dropdown de agentes do Topbar: QUEM é o card e QUAIS papéis ele
+ * carrega agora.
+ *
+ * Um card tem VÁRIOS papéis ao mesmo tempo — medido no board do dono: 6 dos 11
+ * cards de agente eram implementer numa task e reviewer em outra, e um card
+ * carregava 5 tasks em participação. Por isso a forma é "card → lista de
+ * (task, papel)", nunca "nome → papel".
+ *
+ * `roles` VAZIO é o caso honesto do card sem task aberta: a tela mostra o card
+ * sem papel nenhum, em vez de inventar "ocioso" — que seria exatamente a
+ * afirmação não-verificável que esta task removeu.
+ */
+export type BoardAgentRoleRow = {
+  cardId: string;
+  /** Rótulo do card como a UI o mostra. `null` = sem rótulo (a tela mostra o
+   * id). */
+  label: string | null;
+  provider: string;
+  roles: { taskId: string; role: string }[];
+};
 
 /** DESIGN-BACKLOG.md §2.1 "próxima rodada" — globais pro app inteiro
  * (decisão explícita do usuário), `url` como identidade única. */
@@ -337,6 +376,11 @@ setActive: (id: string | null): void => ipcRenderer.send("board:active", id),
     remove: (url: string): Promise<void> => ipcRenderer.invoke("store:favorites:remove", url),
   },
   cardCounts: (): Promise<Record<string, BoardCounts>> => ipcRenderer.invoke("store:card-counts"),
+  /** O dropdown de agentes do Topbar (task 49de95ce) — pedido no GESTO de
+   * abrir, não em push: a lista de papéis anda com o quadro, e quem a pede é a
+   * tela. O main projeta (nome + papéis vivos), o renderer só desenha. */
+  boardAgentRoles: (boardId: string): Promise<BoardAgentRoleRow[]> =>
+    ipcRenderer.invoke("store:board-agent-roles", boardId),
   /** DESIGN-BACKLOG.md item 30 — sessions sidebar (every chat card, live
    * or archived, across every board) + archive/unarchive. Closing a
    * ChatCard archives instead of deleting (App.tsx's closeCard); every
@@ -1340,6 +1384,21 @@ export type AgentAvailability = {
    * atravessa.
    */
   effortValues: string[];
+  /**
+   * PROJEÇÃO de `capacity.delivery.turnEnd` (main/providers.ts →
+   * `main/agent-availability-projection.ts`): como este provider sinaliza o
+   * FIM de um turno. `null` = não sinaliza, e aí a UI não promete — a barra de
+   * atividade cai no silêncio e nenhum aviso de SO é disparado por
+   * aproximação.
+   *
+   * O `source`/`flags` do padrão viajam como TEXTO porque `RegExp` não
+   * atravessa IPC; o consumidor remonta. Espelhado à mão aqui pela mesma razão
+   * do `AgentAvailability` acima — este arquivo não importa módulo do main.
+   */
+  turnEndSignal:
+    | { mechanism: "hook" }
+    | { mechanism: "screen"; source: string; flags: string }
+    | null;
 };
 
 /** Achado ao vivo, 2026-09-03 — checagem proativa de CLIs de agente
@@ -1524,6 +1583,22 @@ export type ProvidersPageRow = {
   mcpConfigPath: string | null;
   mcpConfigKey: string | null;
   source: "file" | "app";
+  /** A SOBRESCRITA desta linha sobre a declaração do app (task edf3b047) —
+   * a pergunta que o badge "do app" sozinho não respondia.
+   *
+   *   "none"    — não há sobrescrita: ou a linha É a declaração do app
+   *               (intocada), ou o id nem é declarado por ele;
+   *   "partial" — a entrada do usuário escreveu alguns campos; o resto
+   *               continua vindo do app, e continua recebendo correção;
+   *   "whole"   — a entrada cobre a declaração do app INTEIRA: nenhum campo
+   *               do app chega a ela, e por isso ela para de receber
+   *               correção do app.
+   *
+   * Quem decide é o main — a mesma mescla que o loader usa para montar o def
+   * vivo. O renderer só escolhe o TEXTO do badge: nenhuma comparação de
+   * entrada aqui. `source` continua sendo a ORIGEM (a lista em que a entrada
+   * está); este campo diz o que foi mexido nela. */
+  appOverride: "none" | "partial" | "whole";
   skipped: boolean;
 };
 

@@ -83,7 +83,10 @@ function evidence(ok: boolean, stdout: string): GateRunEvidence {
   };
 }
 
-function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters<typeof createMessageBus>[1] {
+function callbacksBackedByStore(
+  store: ReturnType<typeof openStore>,
+  opts: { boardCwd?: string } = {},
+): Parameters<typeof createMessageBus>[1] {
   return new Proxy(
     {},
     {
@@ -106,6 +109,11 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         if (prop === "describeCardLabel") return (id: string) => `card ${id}`;
         if (prop === "getCardBoardId") return () => "default";
         if (prop === "getBoardOrchestratorCardId") return () => null;
+        // A RAIZ DECLARADA do board. Desde 2026-09-21 o runner RECUSA executar
+        // sem ela ("executar shell de agente sem um lugar declarado" deixou de
+        // existir), então um duplo que devolva `undefined` aqui faz o gate
+        // deste arquivo NÃO rodar — e é isso que o teste novo prende.
+        if (prop === "getBoardCwd") return () => opts.boardCwd;
         if (prop === "listAllConnectors") return () => [];
         if (prop === "recordSpawn") return () => ({ id: "spawn-stub" });
         if (prop === "findSpawnByChild") return () => undefined;
@@ -143,10 +151,17 @@ describe("message-bus: evidência de gate é do app", () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  function setup() {
+  /** O default vive no OBJETO do parâmetro (não num `??` interno): assim
+   * `{ declaredBoardRoot: undefined }` significa "board sem raiz declarada", e
+   * não cai de volta no default — foi exatamente esse `??` que fez a primeira
+   * versão do teste abaixo passar verde pelo motivo errado. */
+  function setup(opts: { declaredBoardRoot?: string } = { declaredBoardRoot: tmpdir() }) {
     dir = mkdtempSync(join(tmpdir(), "stellar-gate-evidence-"));
     store = openStore(dir);
-    bus = createMessageBus(join(dir, "a.sock"), callbacksBackedByStore(store));
+    // A raiz declarada do board é o `tmpdir`: os `workDir` de cada teste são
+    // criados DENTRO dela. Sem raiz o runner recusa (2026-09-21), e um teste
+    // que não declarasse a sua exercitaria um estado que produção não alcança.
+    bus = createMessageBus(join(dir, "a.sock"), callbacksBackedByStore(store, { boardCwd: opts.declaredBoardRoot }));
     return { store, bus };
   }
 
@@ -247,6 +262,33 @@ describe("message-bus: evidência de gate é do app", () => {
       // persistido (CAMADA 3 — participação é derivada na leitura), então o
       // que se afirma é o que importa: o gate NÃO virou veredito.
       expect(s.getTask("t-fail")!.status).toBe("pending");
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("board SEM raiz declarada: o gate NÃO executa, e a evidência nomeia o motivo", async () => {
+    // DECISÃO DO DONO (2026-09-21) na PORTA DO BUS: `boardDeclaredRoot` devolve
+    // indefinido para uma task sem board, e indefinido agora é RECUSA. Antes
+    // deste teste o mesmo caminho rodava o gate sem limite de raiz — o resíduo
+    // legado (33 tasks sem board, 22 com gates, medido no banco real).
+    const { store: s, bus: b } = setup({ declaredBoardRoot: undefined });
+    const workDir = mkdtempSync(join(tmpdir(), "stellar-gate-noroot-"));
+    s.upsertTask(
+      baseTask("t-noroot", {
+        cwd: workDir,
+        gates_json: JSON.stringify([nodeEval("process.stdout.write('NAO-PODIA-TER-RODADO')")]),
+      }),
+    );
+
+    await b.handleRequest({ cmd: "report", requesterId: "card-t-noroot", report: { ok: true } } as BusRequest);
+    try {
+      const measured = await waitForGate(s, "t-noroot");
+      expect(measured).not.toBeNull();
+      expect(measured!.ok).toBe(false);
+      expect(measured!.commands[0].exitCode).toBeNull();
+      expect(measured!.commands[0].stdout).not.toContain("NAO-PODIA-TER-RODADO");
+      expect(measured!.commands[0].stderr).toContain("raiz declarada");
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

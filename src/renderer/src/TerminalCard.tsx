@@ -14,6 +14,9 @@ import {
 } from "./shortcut-registry";
 import { getEffectiveCombo } from "./shortcut-config";
 import type { IdentifySessionResult } from "../../preload/index";
+import { useAvailableAgentProviders } from "./useAgentAvailability";
+import { SHELL_PROVIDER_ID } from "./attachments";
+import type { TurnEndProjection } from "../../main/agent-availability-projection";
 
 export type { Rect };
 
@@ -27,15 +30,17 @@ export type { Rect };
  * — não estava em `NOTIFICATION_DISABLED_PROVIDERS`, então caía no ramo de
  * notificação LIGADA: aviso de SO disparado pela aproximação de silêncio de
  * bytes, que é justamente o que aquele gate existe para evitar. Um id novo
- * agora cai no ramo CONSERVADOR por construção, porque a pergunta feita é
- * "esta CLI PROVOU que sabe terminar um turno?", não "ela está na lista de
- * exceções?".
+ * agora cai no ramo CONSERVADOR por construção: a pergunta é feita à
+ * DECLARAÇÃO ("esta CLI sinaliza fim de turno?"), não a uma lista de exceções.
  *
- * `bash` continua notificando: não é um agente com turnos, nunca fez parte
- * deste problema (sempre notificou pela aproximação antiga — ver
- * smoke-terminal-focus-notification.mjs).
+ * O que NÃO mudou: `bash` continua notificando — não é um agente com turnos,
+ * nunca fez parte deste problema (sempre notificou pela aproximação antiga —
+ * ver smoke-terminal-focus-notification.mjs). Ele é o ÚNICO id que sobra
+ * LITERAL aqui, e o motivo é conhecido: `checkAgentAvailability` o EXCLUI do
+ * canal de disponibilidade (é o shell do SO, não uma CLI instalável), então a
+ * declaração não teria como chegar até ele. Enquanto não existir projeção de
+ * shell, é este o preço — e ele está nomeado, num lugar só.
  */
-const OS_NOTIFICATION_PROVEN = new Set(["claude", "bash"]);
 /** Quem o MAIN sabe inspecionar ao vivo: `session-identify.ts` tem um caso
  * por provider e devolve `none` para qualquer outro — num CLI dinâmico o
  * botão existiria e falharia sempre. Mesma postura conservadora: só aparece
@@ -46,8 +51,15 @@ const SESSION_IDENTIFY_IMPLEMENTED = new Set(["claude", "codex", "cursor", "anti
  * função de um arquivo de componente quebra o Fast Refresh dele (regra
  * `react-refresh/only-export-components`). O gate do TerminalCard chama
  * exatamente estas funções, então não existe segunda cópia da regra. */
-function providerSupportsOsNotification(providerId: string): boolean {
-  return OS_NOTIFICATION_PROVEN.has(providerId);
+function providerSupportsOsNotification(providerId: string, turnEnd: TurnEndProjection): boolean {
+  // `hook` é EVENTO entregue pelo CLI (o `Stop` que o buildArgs daquele
+  // provider instala) — medido, confiável. Marcador de TELA NÃO basta para um
+  // aviso de SO (o caso do codex): uma atualização da CLI muda a frase e o
+  // aviso para de chegar sem ninguém notar. O pattern-match continua valendo
+  // para a BARRA DE ATIVIDADE, que erra para menos; um aviso que nunca chega
+  // é pior.
+  if (turnEnd?.mechanism === "hook") return true;
+  return providerId === SHELL_PROVIDER_ID;
 }
 function providerSupportsSessionIdentify(providerId: string): boolean {
   return SESSION_IDENTIFY_IMPLEMENTED.has(providerId);
@@ -413,6 +425,10 @@ function TerminalCardInner({
   // fato acontece — evita notificar no MOUNT (onde `isActive` também
   // começa false, e o efeito abaixo roda uma vez de qualquer jeito).
   const wasActiveRef = useRef(false);
+  /** O sinal de fim de turno DESTE provider, da DECLARAÇÃO (task 0dd5c145) —
+   * ver `terminal-turn-signal.ts`. `null` = não sinaliza. */
+  const turnEndSignal =
+    useAvailableAgentProviders().find((entry) => entry.id === providerId)?.turnEndSignal ?? null;
   // `isFocusedRef` tracks the current `isFocused` prop via ref so the
   // isActive-only effect can read it without re-running on focus changes.
   // Suppresses the notification when the card is top-of-z-order AND the
@@ -428,28 +444,16 @@ function TerminalCardInner({
     if (!wasActiveRef.current) return;
     wasActiveRef.current = false;
     if (!bellEnabled) return;
-    // Pedido ao vivo (2026-09-06) — "pros providers sem hook oficial, por
-    // enquanto desativa as notificações": as CLIs de agente sem um sinal
-    // real de fim de turno — `codex`/`cursor`/`antigravity`/`opencode`,
-    // nenhuma tem hook oficial (confirmado investigando os binários) —
-    // ficam sem notificação por ora. `codex` ganhou um pattern-match de
-    // output (useTerminal.ts's TURN_END_PATTERNS) bom o bastante pra não
-    // apagar a barra de atividade à toa, mas ainda uma heurística sobre
-    // texto renderizado (uma CLI atualizada pode mudar a frase e nunca
-    // mais bater, sem aviso nenhum disso aqui) — não confiável o bastante
-    // pra uma notificação de SO ainda. `claude` (hook real) segue normal;
-    // `bash` também segue normal — não é um agente com "turnos", nunca
-    // fez parte deste problema, sempre notificou pela aproximação de
-    // silêncio antiga (ver smoke-terminal-focus-notification.mjs).
-    // Reavaliar codex depois de validar o pattern-match ao vivo por um
-    // tempo.
-    //
-    // 2026-09-19 — a condição inverteu (ver `OS_NOTIFICATION_PROVEN`): a
-    // pergunta é "esta CLI provou que termina turno?", então um provider
-    // dinâmico (cline/commandcode), que não tem hook medido nenhum, fica de
-    // fora sozinho. Antes o teste era "está na lista dos desabilitados?",
-    // e um id desconhecido passava direto pra notificação.
-    if (!providerSupportsOsNotification(providerId)) return;
+    // Por que ESTE gate existe (o histórico curto, 2026-09-06): sem ele, a
+    // notificação de SO era disparada pela APROXIMAÇÃO de silêncio de bytes —
+    // e um card que só parou de imprimir por um instante notificava à toa. O
+    // que decide agora é a DECLARAÇÃO do provider
+    // (`capacity.delivery.turnEnd`), e a distinção entre `hook` e `screen`
+    // está documentada em `providerSupportsOsNotification`, logo acima: o
+    // `codex` tem um marcador de TELA e continua fora de propósito (uma
+    // atualização da CLI muda a frase e o aviso para de chegar sem avisar), e
+    // o `bash` continua dentro porque não é um agente com turnos.
+    if (!providerSupportsOsNotification(providerId, turnEndSignal)) return;
     // Suppress notification when this card is the focused one and the
     // window itself has OS focus — user is actively looking at it.
     if (isFocusedRef.current && document.hasFocus()) return;

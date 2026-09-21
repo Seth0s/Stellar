@@ -59,6 +59,7 @@ describe("troca de card (e8802e32) — store", () => {
       cardId: "old",
       reason: "provider commandcode inviável — trocando para claude",
       releasedBy: "orch",
+      actor: "agent",
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -76,6 +77,7 @@ describe("troca de card (e8802e32) — store", () => {
       cardId: "old",
       reason: "morte por cota",
       releasedBy: "orch",
+      actor: "agent",
       nextImplementerCardId: "new",
     });
     expect(res.ok).toBe(true);

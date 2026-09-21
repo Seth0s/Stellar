@@ -113,6 +113,7 @@ describe("auto-dispatch não pare card fantasma", () => {
           id === "dep-done" ? { ...dep, status: "running" } : id === "child" ? stored : undefined,
         listTasks: () => [dep, snapshot],
         isBoardAutonomous: () => true,
+        getBoardCwd: () => "/tmp", // raiz declarada do rig: sem ela o auto-dispatch RECUSA (2026-09-21)
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         upsertTask: (task: TaskRow) => persistTask(task),
@@ -150,6 +151,7 @@ describe("auto-dispatch não pare card fantasma", () => {
         listTaskCardsForCard: (id: string) => (id === "777" ? [link] : []),
         isCardAlive: (id: string) => id === "777",
         isBoardAutonomous: () => true,
+        getBoardCwd: () => "/tmp", // raiz declarada do rig: sem ela o auto-dispatch RECUSA (2026-09-21)
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         upsertTask: (task: TaskRow) => persistTask(task),
@@ -187,6 +189,7 @@ describe("auto-dispatch não pare card fantasma", () => {
         listTaskCardsForCard: (id: string) => (id === "777" ? [link] : []),
         isCardAlive: () => false,
         isBoardAutonomous: () => true,
+        getBoardCwd: () => "/tmp", // raiz declarada do rig: sem ela o auto-dispatch RECUSA (2026-09-21)
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         upsertTask: (task: TaskRow) => persistTask(task),
@@ -227,6 +230,7 @@ describe("auto-dispatch não pare card fantasma", () => {
         listTaskCardsForCard: () => [],
         isCardAlive: () => true,
         isBoardAutonomous: () => true,
+        getBoardCwd: () => "/tmp", // raiz declarada do rig: sem ela o auto-dispatch RECUSA (2026-09-21)
         countRunningAgentsOnBoard: () => 0,
         getBoardConcurrencyCap: () => 4,
         upsertTask: (task: TaskRow) => persistTask(task),

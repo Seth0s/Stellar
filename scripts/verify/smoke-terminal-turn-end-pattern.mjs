@@ -1,11 +1,13 @@
 // Pedido ao vivo (2026-09-06) — "pros providers sem hook oficial, por
 // enquanto desativa as notificações, e melhore o sistema atual com lógica:
 // no codex sempre acaba um turno quando aparece 'Worked for 1m 06s'".
-// useTerminal.ts's TURN_END_PATTERNS now treats that exact line as a real
-// turn-end signal for `codex` — same bypass of the 900ms silence timer
-// `hasRealTurnSignal` already gave `claude` via its Stop hook, just sourced
-// from rendered output instead of a real hook (codex has none for "main
-// agent turn ended" — confirmed investigating the actual binary).
+// Esse marcador virou DECLARAÇÃO (task 0dd5c145): `providers.ts`'s
+// `capacity.delivery.turnEnd` do codex carrega este padrão, a projeção do
+// canal de disponibilidade o entrega ao renderer e `useTerminal.ts` o aplica —
+// mesmo bypass do relógio de 900ms de silêncio que o `claude` já tinha pelo
+// hook `Stop`, só que vindo de TEXTO renderizado em vez de um evento (o codex
+// não tem hook para "o turno do agente principal acabou" — confirmado
+// investigando o binário).
 //
 // Can't drive a real `codex` turn here (costs real API tokens, needs auth) —
 // this swaps in a tiny fake `codex` executable (a bash script, no real CLI

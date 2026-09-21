@@ -47,6 +47,9 @@ function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => 
         if (prop === "listCards") return () => [];
         if (prop === "getCardBoardId") return () => undefined;
         if (prop === "isBoardAutonomous") return () => false;
+        // Raiz DECLARADA do rig: sem ela o auto-dispatch RECUSA (2026-09-21),
+        // e todo cwd usado neste arquivo é null — a raiz só precisa existir.
+        if (prop === "getBoardCwd") return () => "/tmp";
         return () => undefined;
       },
     },

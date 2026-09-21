@@ -930,7 +930,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe(
-              "Working directory for auto-dispatch of this task. Omit to keep the board-root fallback (same as before). Pass the repo path when the task must NOT open at the board root — otherwise a dependent spawn can land on 'trust this folder' and exit 129.",
+              "Working directory for auto-dispatch of this task. Omit to keep the board-root fallback (same as before). Pass the repo path when the task must NOT open at the board root — otherwise a dependent spawn can land on 'trust this folder' and exit 129. It MUST fall inside the board's DECLARED root (the board's own cwd): a path outside it is REFUSED naming `cwd`, because this is the directory the gate runs in and the directory an auto-dispatched card opens at.",
             ),
           deps: z.array(z.string()).optional().describe("Ids of other tasks this one depends on — auto-dispatched once all are 'done', but only if this task's board is autonomous"),
           maxRetries: z
@@ -973,7 +973,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .array(z.string())
             .optional()
             .describe(
-              "Commands the app RUNS itself after an accepted report (isolated subprocess, per-repo lock), stamping the measured stdout/stderr/exit-code into result_json.gateRun — the number the reviewer trusts is the one the process produced, not the one a report claims. Structured list, declared once; appended to the brief. A failing gate records evidence and does not judge the task (no auto-fail). Omit = undeclared.",
+              "Commands the app RUNS itself after an accepted report (isolated subprocess, per-repo lock), stamping the measured stdout/stderr/exit-code into result_json.gateRun — the number the reviewer trusts is the one the process produced, not the one a report claims. Structured list, declared once; appended to the brief. A failing gate records evidence and does not judge the task (no auto-fail). Omit = undeclared. AUTHORSHIP: on a board with an orchestrator mark, ONLY the marked card may set or change this set — any other caller is REFUSED naming `gates` (clearing the set is authorship too). On a board with no mark, today's behavior is kept and the fact is recorded.",
             ),
           allowCommit: z
             .boolean()
@@ -1045,7 +1045,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .nullable()
             .optional()
             .describe(
-              "Set or clear this task's working directory for auto-dispatch. null clears back to the board-root fallback; omit leaves unchanged.",
+              "Set or clear this task's working directory for auto-dispatch. null clears back to the board-root fallback; omit leaves unchanged. It MUST fall inside the board's DECLARED root — a path outside it is REFUSED naming `cwd` (this is the directory the gate runs in and an auto-dispatched card opens at).",
             ),
           result: z.unknown().optional().describe("Any JSON value — the task's outcome"),
           incrementRetry: z.boolean().optional().describe("Bump the task's retry counter by 1 — e.g. after deciding to retry a task whose agent exited without reporting"),
@@ -1077,7 +1077,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .array(z.string())
             .nullable()
             .optional()
-            .describe("Set/clear gates list. null clears; omit leaves unchanged."),
+            .describe(
+              "Set/clear gates list. null clears; omit leaves unchanged. On a board with an orchestrator mark, ONLY that marked card may change the set (clearing included) — any other caller is REFUSED naming `gates`; on a board with no mark, today's behavior is kept and the fact is recorded.",
+            ),
           allowCommit: z
             .boolean()
             .nullable()

@@ -412,6 +412,23 @@ export async function bootIntoFreshSession(page, name = "Sessão de Teste", { sp
   if (!btn) throw new Error("Home '+ nova sessão' button not found");
   await page.click(btn.x, btn.y);
   await delay(300);
+  // O INPUT É ESPERADO, NÃO PRESUMIDO (medido na 49de95ce): o `delay(300)`
+  // acima é um palpite sobre quando o modal monta, e sob carga (quatro streams
+  // buildando na mesma máquina) ele não basta — aí `querySelector` devolvia
+  // `null` e o `setter.call(null, …)` levantava "TypeError: Illegal
+  // invocation", um erro que NÃO nomeia nada e faz o smoke parecer quebrado no
+  // produto. Esperar pelo input, e falhar nomeando o que faltou, é o mesmo
+  // tratamento que o botão logo acima já recebe.
+  let hasInput = false;
+  const inputDeadline = Date.now() + 5000;
+  while (Date.now() < inputDeadline) {
+    hasInput = await page.evalJs(`!!document.querySelector(${JSON.stringify(SEL.sessionName)})`);
+    if (hasInput) break;
+    await delay(100);
+  }
+  if (!hasInput) {
+    throw new Error(`SessionModal input (${SEL.sessionName}) never appeared after clicking "+ nova sessão"`);
+  }
   await page.evalJs(`
     (() => {
       const inp = document.querySelector(${JSON.stringify(SEL.sessionName)});

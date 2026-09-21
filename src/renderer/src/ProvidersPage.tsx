@@ -383,7 +383,25 @@ export function ProvidersPage() {
                     <span className={`providers-badge${row.mcpEnabled ? " is-on" : ""}`}>
                       {row.mcpEnabled ? t("settings.providers.mcpOn") : t("settings.providers.mcpOff")}
                     </span>
-                    {row.source === "app" && <span className="providers-badge">{t("settings.providers.sourceApp")}</span>}
+                    {/* A ORIGEM e a SOBRESCRITA (task edf3b047). "do app" era
+                        verdade só sobre a origem: uma entrada do app que o
+                        usuário escreveu por cima continuava dizendo "do app",
+                        e quem abrisse a tela para entender por que aquele
+                        provider sobe com uma flag estranha concluía que o app
+                        era o responsável. Os três estados vêm PRONTOS do main
+                        (`row.appOverride`, a mesma mescla que o loader usa):
+                        aqui só se escolhe o texto de cada um. */}
+                    {row.source === "app" && (
+                      <span className="providers-badge" data-role="providers-source-badge">
+                        {t(
+                          row.appOverride === "whole"
+                            ? "settings.providers.appOverrideWhole"
+                            : row.appOverride === "partial"
+                              ? "settings.providers.appOverridePartial"
+                              : "settings.providers.sourceApp",
+                        )}
+                      </span>
+                    )}
                     {row.skipped && <span className="providers-badge is-warn">{t("settings.providers.skipped")}</span>}
                   </span>
                 </div>

@@ -235,6 +235,112 @@ export function appendTaskContract(brief: string | undefined, contract: TaskCont
   return base.length > 0 ? `${base}\n\n${block}` : block;
 }
 
+/* ============ AUTORIA DE `gates` (decisão do dono, 2026-09-21) ============
+ *
+ * `gates` são comandos que o APP RODA (`gate-runner.ts`). A porta MCP aceita
+ * `gates` de QUALQUER card — medido no banco real: 171 tasks com gates, 6
+ * cards distintos autorando, 38 delas no board 118 criadas por cards que NÃO
+ * são o orquestrador. Não havia autorização nenhuma, só validação de FORMA.
+ *
+ * A regra, e a razão da sua FORMA:
+ *   - board COM marca (`boards.orchestrator_card_id`) → só o card marcado
+ *     declara gates; qualquer outro é RECUSADO nomeando o campo;
+ *   - board SEM marca → comportamento de hoje (aceita) e REGISTRA. Medido:
+ *     os boards 64 (Maestro) e 97924025 (Estudos) estão com a marca NULL —
+ *     uma regra incondicional os brickaria, que é o defeito que isto evita.
+ *
+ * O gatilho é a MUDANÇA do conjunto, não o valor: LIMPAR os gates é tanta
+ * autoria quanto escrevê-los (um implementador que apaga os próprios gates
+ * escapa da verificação), então `null`/`[]` sobre um conjunto existente
+ * também é recusado. Escrever o MESMO conjunto não é autoria — não muda o que
+ * roda, e recusar aí só criaria atrito.
+ *
+ * A leitura do papel é ESCOPADA à task quando o chamador precisar de papel
+ * (`getTaskCards(taskId)`); esta função não lê nada — recebe a marca.
+ */
+
+/** Igualdade de conjunto ORDENADA: ordem é execução (mudar a ordem muda o
+ * que roda e em que ordem), então uma permutação é um conjunto novo. */
+function sameGateSet(a: readonly string[] | null, b: readonly string[] | null): boolean {
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  return left.every((gate, i) => gate === right[i]);
+}
+
+export type GatesAuthorshipDecision =
+  | { action: "allow" }
+  | { action: "allow-and-record"; note: string }
+  | { action: "refuse"; error: string };
+
+export function decideGatesAuthorship(input: {
+  tool?: string;
+  /** Conjunto que a chamada quer gravar (já normalizado pelo parse do contrato). */
+  gates: string[] | null | undefined;
+  /** Conjunto que a task TEM hoje (`null` no create). */
+  current: string[] | null | undefined;
+  boardId: string;
+  orchestratorCardId: string | null | undefined;
+  requesterId: string | null | undefined;
+}): GatesAuthorshipDecision {
+  if (sameGateSet(input.gates ?? null, input.current ?? null)) return { action: "allow" };
+  const mark =
+    typeof input.orchestratorCardId === "string" && input.orchestratorCardId.trim().length > 0
+      ? input.orchestratorCardId.trim()
+      : null;
+  if (!mark) {
+    return {
+      action: "allow-and-record",
+      note: describeGatesAuthorshipUndeclaredBoard({
+        boardId: input.boardId,
+        requesterId: input.requesterId,
+      }),
+    };
+  }
+  if (input.requesterId && input.requesterId === mark) return { action: "allow" };
+  return {
+    action: "refuse",
+    error: describeGatesAuthorshipRefusal({
+      tool: input.tool,
+      gates: input.gates ?? [],
+      boardId: input.boardId,
+      orchestratorCardId: mark,
+      requesterId: input.requesterId ?? null,
+    }),
+  };
+}
+
+export function describeGatesAuthorshipRefusal(input: {
+  tool?: string;
+  gates: readonly string[];
+  boardId: string;
+  orchestratorCardId: string;
+  requesterId: string | null;
+}): string {
+  const who = input.requesterId ?? "um chamador anônimo (sem requesterId)";
+  return (
+    `[de: stellar] ${input.tool ?? "create_task/update_task"} recusado: \`gates\` são comandos que o APP RODA, ` +
+    `e no board "${input.boardId}" só o card marcado como orquestrador (${input.orchestratorCardId}) os declara — ` +
+    `quem chamou foi ${who}. O conjunto mudaria para ${input.gates.length} comando(s), e nada dele foi gravado. ` +
+    `Chame do card do orquestrador, ou peça ao humano para marcar um orquestrador no board — ` +
+    `se o que você quer é pedir uma mudança, use request_task_status. Nada foi gravado.`
+  );
+}
+
+/** O registro de um board sem marca: a escrita PASSA (comportamento de hoje,
+ * não se brickam 64 e Estudos) e o fato fica dito, em vez de sumir. */
+export function describeGatesAuthorshipUndeclaredBoard(input: {
+  boardId: string;
+  requesterId: string | null | undefined;
+}): string {
+  const who = input.requesterId ?? "anônimo";
+  return (
+    `board "${input.boardId}" não tem orquestrador marcado (boards.orchestrator_card_id NULL): ` +
+    `\`gates\` escritos por ${who} foram ACEITOS (comportamento de hoje) e REGISTRADOS aqui. ` +
+    `Marque um orquestrador no board para que só ele declare gates — sem marca, esta regra não tem a quem recorrer.`
+  );
+}
+
 /**
  * First required reportSchema key missing from a plain-object report.
  * Presence = own enumerable key (value may be null/false/0). Arrays and

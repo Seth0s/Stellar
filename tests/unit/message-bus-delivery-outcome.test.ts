@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { deriveComposerZone, needleVisibleOnScreen } from "../../src/main/type-and-submit-decision";
 
 /**
  * Enxutação 2026-09-13 (DESIGN-BACKLOG.md §0, "deliverCard é o único motor
@@ -26,6 +27,43 @@ type DeliveryStatus = {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Régua da moldura do composer — a linha é SÓ traço. Medida ao vivo nos dois
+ * providers (`❯` fechado por duas dessas). É a âncora de `deriveComposerZone`. */
+const rule = "─".repeat(24);
+
+/** Uma tela de composer REAL para os fixtures que precisam de `failed`: a
+ * faixa entre as duas réguas, que é onde a zona derivada olha. Fixture sem
+ * régua nenhuma deixou de significar `failed` quando a zona passou a ser
+ * derivada — e era irreal de qualquer forma (nenhum TUI desenha composer sem
+ * moldura). */
+function composerScreen(body = ""): string {
+  return [
+    rule,
+    `❯ ${body}`.trimEnd(),
+    rule,
+    "  Opus 5 (1M context) | Projects",
+    "  ╵╵ auto mode on (shift+tab to cycle)",
+  ].join("\n");
+}
+
+/**
+ * A JANELA REAL — o duplo tem de ler como a produção lê.
+ *
+ * `getTerminalText` (src/renderer/src/terminal-registry.ts:69-78) APARA as
+ * linhas vazias do FIM e só DEPOIS corta as últimas `lines` ("o buffer é
+ * preenchido com vazias abaixo do cursor"). O duplo entregava a tela VERBATIM,
+ * e isso é infidelidade que ANULA o verde (task 2b5ad375, achado do Revisor C):
+ * a tela do teste do commit tem 3 vazias no fim — verbatim ela "prova"
+ * `unconfirmed`, e com a janela que a produção realmente entrega (5 linhas) ela
+ * dá `failed`. Medir a janela nova contra o mesmo leitor mentiroso não serve.
+ */
+function windowOf(raw: string, lines?: number): string {
+  const out = raw.split("\n");
+  while (out.length > 0 && out[out.length - 1] === "") out.pop();
+  const start = lines && lines > 0 ? Math.max(0, out.length - lines) : 0;
+  return out.slice(start).join("\n");
 }
 
 describe("message-bus: get_delivery carrega o veredito da confirmação", () => {
@@ -76,9 +114,12 @@ describe("message-bus: get_delivery carrega o veredito da confirmação", () => 
         inputLineLastAtMs: null,
         ...(opts.paste ? { bracketedPasteMode: opts.paste.atPrompt, bracketedPasteOffEvents: offEvents } : {}),
       }),
-      onReadCardRequest: (requestId: string) => {
+      onReadCardRequest: (requestId: string, _target: string, lines?: number) => {
         const text = opts.screen(reads++);
-        bus?.resolveReadCard(requestId, text === null ? { ok: false, error: "no card" } : { ok: true, text });
+        bus?.resolveReadCard(
+          requestId,
+          text === null ? { ok: false, error: "no card" } : { ok: true, text: windowOf(text, lines) },
+        );
       },
       describeCardLabel: (id: string) => id,
       nextReportSeqSeed: () => 0,
@@ -101,7 +142,10 @@ describe("message-bus: get_delivery carrega o veredito da confirmação", () => 
     // Baseline "> " then, forever, the text sitting in the composer.
     const { bus: b, writes } = makeBus({
       provider: "claude",
-      screen: (i) => (i === 0 ? "> " : "> consertar o roteamento do push agora"),
+      // Composer REAL (a faixa entre as réguas): o corpo fica DENTRO dela e o
+      // cursor não aceitou — a tela é testemunha POSITIVA de "não chegou", que
+      // é a única coisa que autoriza `failed` depois da 2b5ad375.
+      screen: (i) => (i === 0 ? composerScreen() : composerScreen("consertar o roteamento do push agora")),
     });
     const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "consertar o roteamento do push agora" } as BusRequest)) as DeliveryStatus;
     expect(sent.delivery).toBe("queued");
@@ -215,7 +259,7 @@ describe("message-bus: get_delivery carrega o veredito da confirmação", () => 
       'olha isso aqui, o que você acha dessa imagem? "/tmp/stellar-pastes/paste-1.png" "/tmp/stellar-pastes/paste-2.png" "/tmp/stellar-pastes/paste-3.png"';
     const { bus: b } = makeBus({
       provider: "claude",
-      screen: (i) => (i === 0 ? "> " : `> ${body}`),
+      screen: (i) => (i === 0 ? composerScreen() : composerScreen(body)),
     });
     const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
     const status = await settle(b, sent.id!);
@@ -262,7 +306,9 @@ describe("message-bus: get_delivery carrega o veredito da confirmação", () => 
     // o composer está. Aqui "não chegou" é o que a tela sustenta.
     const { bus: b } = makeBus({
       provider: "claude",
-      screen: (i) => (i === 0 ? "❯ " : ["❯ ", "⏺ pronto", "", "", echoBody, ""].join("\n")),
+      // O corpo está DENTRO da moldura do composer (entre as réguas) e o eco
+      // NÃO aconteceu: aqui "não chegou" é o que a tela sustenta.
+      screen: (i) => (i === 0 ? composerScreen() : ["⏺ pronto", rule, echoBody, rule, "  Opus 5 (1M context)", "  ╵╵ auto mode on"].join("\n")),
     });
     const sent = (await b.handleRequest({ cmd: "send", target: "t", text: echoBody } as BusRequest)) as DeliveryStatus;
     const status = await settle(b, sent.id!);
@@ -350,5 +396,331 @@ describe("message-bus: get_delivery carrega o veredito da confirmação", () => 
       steered: true,
     });
     expect(writes.filter((w) => w === "\r")).toHaveLength(2);
+  });
+});
+
+/**
+ * AS SONDAS DO REVISOR C COMO INVARIANTES PERMANENTES (task 2b5ad375).
+ *
+ * Ele as rodou como `tests/unit/zz-audit-band.test.ts` e as removeu ao
+ * terminar; aqui elas deixam de ser descartáveis. O formato NÃO é "inverter
+ * cada asserção para fixar o resultado de hoje": são PARES que descrevem a
+ * MESMA situação semântica — dois providers, ou a mesma tela a duas alturas de
+ * corpo — que têm de devolver o MESMO veredito. O par nasce vermelho e fica
+ * verde com a zona derivada, sem marcar nada skip.
+ *
+ * A REGRA DE POLARIDADE que todos eles juntos travam: `failed` exige evidência
+ * POSITIVA de que o texto está no composer. Estrutura não reconhecível, ou
+ * texto fora da moldura, é `unconfirmed` — a ausência de reconhecimento não
+ * pode produzir acusação (era exatamente o contrário antes daqui).
+ */
+describe("message-bus: a faixa do composer é derivada da estrutura (2b5ad375)", () => {
+  let dir: string | undefined;
+  let bus: ReturnType<typeof createMessageBus> | undefined;
+
+  afterEach(() => {
+    bus?.close();
+    bus = undefined;
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  /** O mesmo harness do describe acima. `screen` recebe o índice da leitura e
+   * devolve o BUFFER CRU — é `windowOf` que aplica a janela da produção. */
+  function makeBus(opts: { provider: string; screen: (readIndex: number) => string | null }) {
+    dir = mkdtempSync(join(tmpdir(), "stellar-bus-composer-zone-"));
+    const readySince = Date.now() - 1_000;
+    let reads = 0;
+    const writes: string[] = [];
+    const callbacks = {
+      listCards: () => [{ id: "t", kind: "terminal", provider: opts.provider, cwd: "", label: null, displayName: opts.provider }],
+      writeToCard: () => undefined,
+      writeToCardWithOrigin: (_id: string, text: string) => {
+        writes.push(text);
+      },
+      beginCardDelivery: () => true,
+      endCardDelivery: () => undefined,
+      isCardAlive: () => true,
+      getCardLastActivityAt: () => Date.now(),
+      getCardWriteReadiness: () => ({
+        spawnedAtMs: readySince,
+        hasReceivedData: true,
+        lastActivityAtMs: readySince,
+        hasPendingHumanInput: false,
+        inputLineLastAtMs: null,
+      }),
+      onReadCardRequest: (requestId: string, _target: string, lines?: number) => {
+        const text = opts.screen(reads++);
+        bus?.resolveReadCard(
+          requestId,
+          text === null ? { ok: false, error: "no card" } : { ok: true, text: windowOf(text, lines) },
+        );
+      },
+      describeCardLabel: (id: string) => id,
+      nextReportSeqSeed: () => 0,
+    } as unknown as Parameters<typeof createMessageBus>[1];
+    bus = createMessageBus(join(dir, "agent-canvas.sock"), callbacks);
+    return { bus, writes };
+  }
+
+  async function settle(b: NonNullable<typeof bus>, id: string, ms = 4000): Promise<DeliveryStatus> {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const status = (await b.handleRequest({ cmd: "get_delivery", id } as BusRequest)) as DeliveryStatus;
+      if (status.delivery !== "queued") return status;
+      if (Date.now() >= deadline) return status;
+      await delay(20);
+    }
+  }
+
+  const body =
+    'olha isso aqui, o que você acha dessa imagem? "/tmp/stellar-pastes/paste-1.png" "/tmp/stellar-pastes/paste-2.png"';
+
+  /** Tela do commandcode — chrome de 5 linhas, medidas ao vivo (8 dos 15
+   * terminais de agente). Montada com EXATAMENTE 8 linhas: é a janela que
+   * `readCardText(8)` entrega, e é onde o eco em `transcript[2]` caía DENTRO
+   * das últimas 6 da janela herdada (o defeito medido pelo Revisor C). */
+  function commandcodeScreen(transcript: string[]): string {
+    return [
+      ...transcript,
+      rule,
+      "❯ Ask your question...",
+      rule,
+      "  » permission bypass on [shift+tab]",
+      "  ? for shortcuts · taste on",
+    ].join("\n");
+  }
+
+  it("P2 — A VIA MAJORITÁRIA (commandcode, sem submitStartedPattern): eco no histórico => unconfirmed, NÃO failed", async () => {
+    // Antes da zona derivada este era o caso que sobrevivia: o chrome do
+    // commandcode come 5 das 8 linhas, `slice(-6)` começava no índice 2 e o eco
+    // caía DENTRO da janela — não era demovido e o veredito fechava `failed`
+    // ("a mentira sobrevive nos 8 dos 15 terminais citados como justificativa").
+    const { bus: b } = makeBus({
+      provider: "commandcode",
+      screen: (i) => (i === 0 ? commandcodeScreen([]) : commandcodeScreen(["trabalho anterior", "⠶ concluído", `❯ ${body}`])),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm?.result).toBe("unknown");
+  });
+
+  it("P2/CLAUDE — a MESMA situação no outro provider: o par concorda (não depende de quem é)", async () => {
+    const { bus: b } = makeBus({
+      provider: "claude",
+      screen: (i) =>
+        i === 0
+          ? composerScreen()
+          : ["trabalho anterior", "⏺ concluído", `❯ ${body}`, rule, "❯ ", rule, "  Opus 5 (1M context)"].join("\n"),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm?.result).toBe("unknown");
+  });
+
+  it("JANELA FIEL — o mesmo conteúdo com e sem vazias de rodapé dá o MESMO veredito (o duplo lê como a produção)", async () => {
+    // A tela do teste que fechava o caso tinha 3 vazias no fim: verbatim ela
+    // "provava" unconfirmed, e com a janela real (5 linhas) dava failed. O par
+    // abaixo falha se o duplo voltar a entregar a tela crua.
+    const trimmed = ["❯ " + body, "⏺ pronto", rule, "❯ ", rule, "  Opus 5 (1M context)", "  ╵╵ auto mode on"].join("\n");
+    const padded = trimmed + "\n\n\n";
+    const verdicts: (string | undefined)[] = [];
+    for (const screen of [trimmed, padded]) {
+      const { bus: b } = makeBus({ provider: "claude", screen: (i) => (i === 0 ? composerScreen() : screen) });
+      const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+      verdicts.push((await settle(b, sent.id!)).delivery);
+    }
+    expect(verdicts[0]).toBe(verdicts[1]);
+  });
+
+  it("ALTURA DO CORPO — moldura COMPLETA: `failed` enquanto ela couber na janela (k+4 <= 8), com k=4 discriminando", async () => {
+    // RECEITA MEDIDA pelo Revisor C. A versão anterior deste teste NÃO tinha
+    // dentes: ela usava corpo + UMA régua, e com uma régua só o
+    // `deriveComposerZone` devolve `null` nas DUAS alturas — as duas caíam em
+    // "estrutura irreconhecível => unconfirmed", a igualdade passava sem tocar
+    // na invariante e o teste ficava VERDE sob a mutação. O que prova a
+    // dependência da janela herdada era a asserção unitária, não o caminho de
+    // integração que a igualdade percorria.
+    //
+    // Aqui a moldura é COMPLETA (duas réguas) e a asserção é do VALOR. Com
+    // rodapé de 2, a moldura cabe na janela de 8 enquanto o interior tiver
+    // k <= 4 (k + 4 <= 8). k=4 é o caso que DISCRIMINA: na árvore real a zona
+    // é derivada e a agulha está DENTRO dela (=> failed/unsent); com a janela
+    // herdada, a régua de cima sai das últimas 6 e daria unconfirmed/unknown.
+    // k=5 NÃO serve como asserção: aí a régua de cima sai da JANELA e
+    // `unconfirmed` é a resposta CORRETA.
+    const framed = (k: number) =>
+      [
+        rule,
+        `❯ ${body}`,
+        ...Array.from({ length: k - 1 }, (_, i) => `  …linha ${i + 1} do corpo colado`),
+        rule,
+        "  Opus 5 (1M context) | Projects",
+        "  ╵╵ auto mode on (shift+tab to cycle)",
+      ].join("\n");
+
+    for (const k of [1, 2, 3, 4]) {
+      const screen = framed(k);
+      expect(screen.split("\n").length, `k=${k}`).toBe(k + 4);
+      expect(deriveComposerZone(screen), `k=${k}`).not.toBeNull();
+      const { bus: b } = makeBus({ provider: "claude", screen: (i) => (i === 0 ? composerScreen() : screen) });
+      const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+      const status = await settle(b, sent.id!);
+      // O texto está preso DENTRO da moldura: `failed` é a verdade, e a janela
+      // herdada concordaria em k=1..3 — em k=4 ela é que erra.
+      expect(status.delivery, `interior de ${k} linha(s)`).toBe("failed");
+      expect(status.confirm?.result, `interior de ${k} linha(s)`).toBe("unsent");
+    }
+
+    // O DISCRIMINADOR, explícito: em k=4 (a moldura ocupando a janela inteira)
+    // a janela herdada mandaria a agulha para fora e diria o contrário.
+    const k4 = framed(4);
+    expect(needleVisibleOnScreen(k4.split(/\r?\n/).slice(-6).join("\n"), body)).toBe(false); // herdada => unconfirmed
+    expect(needleVisibleOnScreen(deriveComposerZone(k4)!, body)).toBe(true); // derivada => failed
+  }, 30_000); // 4 entregas sequenciais (~1,3s cada): passa do teto default de 5s
+
+  it("H1 (a CLASSE, não a posição) — régua de baixo a 1 linha do fim: também recusa derivar => unconfirmed", async () => {
+    // A variante que o `<=` deixava passar, medida por ele na árvore real:
+    // `[régua, saída, '❯ eco', régua, saída]` — a régua de baixo está a 1 do
+    // fim, DENTRO do aceite antigo. Ali a zona saía derivada, o eco caía dentro
+    // e o veredito fechava `failed`. Só o comparador EXATO (`=== 2`, medido em
+    // 42/42 amostras) mata a classe; matar a posição (régua a 4) não bastava.
+    const variant = [rule, "saída do agente", `❯ ${body}`, rule, "mais saída"].join("\n");
+    expect(deriveComposerZone(variant)).toBeNull();
+    const { bus: b } = makeBus({ provider: "claude", screen: (i) => (i === 0 ? composerScreen() : variant) });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm?.result).toBe("unknown");
+  });
+
+  it("H1 — duas réguas de TRANSCRIPT com o eco no meio e o composer FORA da janela => unconfirmed, NUNCA failed", async () => {
+    // Achado do Revisor C (a mentira original por outra porta): aqui o par de
+    // réguas NÃO é a moldura do composer, é transcript. Sem o critério de
+    // distância a função reconhecia esse par, o eco caía "dentro da zona" e o
+    // veredito fechava `failed`.
+    const transcriptRules = [
+      rule, // régua de transcript
+      `❯ ${body}`, // o eco cai ENTRE as duas
+      rule, // régua de transcript
+      "⏺ Li o arquivo.",
+      "linha de transcript",
+      "linha de transcript",
+      "linha de transcript",
+      "linha de transcript", // a moldura do composer ficou FORA da janela lida
+    ].join("\n");
+    // A régua de baixo do par está a 5 linhas do fim — longe de
+    // COMPOSER_FOOTER_LINES (2, medido em 36/36 amostras): não é composer.
+    expect(deriveComposerZone(transcriptRules)).toBeNull();
+
+    const { bus: b } = makeBus({ provider: "claude", screen: (i) => (i === 0 ? composerScreen() : transcriptRules) });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm?.result).toBe("unknown");
+  });
+
+  it("C3 — chip SEM moldura: 1 Enter em vez de 4 (a escada de retry mudou) e jamais `delivered`", async () => {
+    // PERDA DECLARADA (medida pelo Revisor C): sem moldura localizável o chip
+    // não sustenta `unsent`, então um paste preso deixa de receber as 4
+    // tentativas e leva 1. A direção já foi endossada pelo dono (2026-09-11:
+    // 5 pastes ⇒ exit 143), mas o custo é real e fica escrito: o preço de não
+    // mentir é tentar menos. Com moldura o chip continua levando 4 (`unsent`).
+    const { bus: b, writes } = makeBus({
+      provider: "claude",
+      screen: (i) => (i === 0 ? composerScreen() : ["❯ [Pasted text #1 +9 lines]", "  ⏎ to send"].join("\n")),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(writes.filter((w) => w === "\r")).toHaveLength(1);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.delivery).not.toBe("delivered");
+  });
+
+  it("A JANELA CORTA as últimas N — fixture com MAIS de 8 linhas (a metade do espelho que nenhuma outra exerce)", async () => {
+    // `windowOf` faz DUAS coisas: apara as vazias do fim e corta as últimas N.
+    // Todas as outras fixtures têm <= 8 linhas, então só a primeira metade era
+    // exercida (segunda ressalva do Revisor C, aceita). Aqui a tela tem 12
+    // linhas + uma vazia: o leitor entrega as últimas 8.
+    const history = Array.from({ length: 4 }, (_, i) => `historico antigo ${i + 1}`);
+    const longScreen = [
+      ...history,
+      "trabalho recente",
+      `❯ ${body}`,
+      rule,
+      "❯ Ask your question...",
+      rule,
+      "  » permission bypass on [shift+tab]",
+      "  ? for shortcuts · taste on",
+      "",
+    ].join("\n");
+    expect(longScreen.split("\n").length).toBeGreaterThan(8);
+    const windowed = windowOf(longScreen, 8);
+    expect(windowed.split("\n")).toHaveLength(8);
+    expect(windowed).not.toContain("historico antigo 1"); // saiu da janela
+
+    const { bus: b } = makeBus({ provider: "commandcode", screen: (i) => (i === 0 ? composerScreen() : longScreen) });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    // O eco caiu FORA da janela de 8: ninguém pode vê-lo, e o composer está
+    // vazio — a resposta honesta é "não consegui confirmar".
+    expect(status.delivery).toBe("unconfirmed");
+  });
+
+  it("ACEITAÇÃO (a via majoritária, janela real): SEM submitStartedPattern e com evidência POSITIVA no composer => failed", async () => {
+    // `failed` continua significando "não chegou" — derivado, não herdado. O
+    // provider aqui não tem `submitStartedPattern` medido (9 dos 15), e a tela
+    // é a janela REAL (o duplo apara como `getTerminalText`).
+    const { bus: b } = makeBus({ provider: "opencode", screen: (i) => (i === 0 ? composerScreen() : composerScreen(body)) });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("failed");
+    expect(status.confirm?.result).toBe("unsent");
+  });
+
+  it("POLARIDADE — estrutura NÃO reconhecível nunca vira failed (nem vira sent)", async () => {
+    // Sem duas réguas não há zona: não sei onde está o composer, então não
+    // acuso. Antes, a AUSÊNCIA de reconhecimento é que produzia a acusação.
+    const { bus: b } = makeBus({
+      provider: "opencode",
+      screen: (i) => (i === 0 ? "❯ " : ["linha solta", "", body].join("\n")),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm?.result).toBe("unknown");
+  });
+
+  it("P2 é VERMELHA sem a zona derivada — a janela herdada incluía o eco (a prova de que o teste pega o defeito)", () => {
+    const screen = commandcodeScreen(["trabalho anterior", "⠶ concluído", `❯ ${body}`]);
+    // O que a produção lia ANTES desta task: as últimas 6 linhas cruas.
+    const inherited = screen.split(/\r?\n/).slice(-6).join("\n");
+    expect(needleVisibleOnScreen(inherited, body)).toBe(true); // não demovia → `failed`
+    // O que ela lê agora: a faixa entre as duas últimas réguas.
+    const derived = deriveComposerZone(screen);
+    expect(derived).not.toBeNull();
+    expect(needleVisibleOnScreen(derived!, body)).toBe(false); // demove → `unconfirmed`
+  });
+
+  it("P5 — a leitura FALHAR depois de um unsent preserva `read-failed` (o warn não inventa zona)", async () => {
+    // O `previousResult` do laço fica velho quando a leitura morre; se a faixa
+    // olhasse só ele, trocaria "não consegui ler" por uma afirmação sobre uma
+    // tela que não existiu.
+    let seen = 0;
+    const { bus: b } = makeBus({
+      provider: "claude",
+      screen: (i) => {
+        seen = i;
+        if (i === 0) return composerScreen();
+        if (i === 1) return composerScreen(body); // unsent, com evidência
+        return null; // e então a leitura FALHA
+      },
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(seen).toBeGreaterThan(0);
+    expect(status.confirm?.result).toBe("read-failed");
   });
 });

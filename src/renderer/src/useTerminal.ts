@@ -17,7 +17,8 @@ import {
   type TerminalActivityEvent,
   type XtermOutgoingSource,
 } from "./terminal-activity-decision";
-import { TURN_END_BUFFER_MAX, TURN_END_PATTERNS, providerHasRealTurnSignal } from "./terminal-turn-signal";
+import { TURN_END_BUFFER_MAX, readTurnEndSignal, type TurnEndReader } from "./terminal-turn-signal";
+import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { decideTerminalFit } from "./terminal-fit-decision";
 
 const DEFAULT_COLS = 80;
@@ -269,7 +270,8 @@ export function useTerminal(
    * Pedido ao vivo (2026-09-02, "Terminal, Revisitado") — sinal por trás
    * da barra de atividade do header (TerminalCard.tsx). Desliga por:
    *   - providers sem sinal real: `ACTIVITY_IDLE_MS` sem bytes novos;
-   *   - providers com sinal real (claude hook / TURN_END_PATTERNS): o
+   *   - providers com sinal real (hook declarado / marcador de TELA
+   *     declarado — ver `capacity.delivery.turnEnd`): o
    *     sinal (onTurnComplete / pattern / onExit / interrupt) é o
    *     desligamento. Silêncio NÃO é evidência de ociosidade nesses
    *     providers depois que a capacidade do sinal foi PROVADA neste
@@ -300,11 +302,32 @@ export function useTerminal(
   const turnOpenRef = useRef(false);
   const isActiveRef = useRef(false);
   const applyActivityRef = useRef<(event: TerminalActivityEvent) => void>(() => {});
-  /** Buffer rolante pro pattern-match de fim de turno (`TURN_END_PATTERNS`
-   * acima) — ver Effect 1. Resetado a cada (re)spawn e a cada match, pra
+  /** Buffer rolante pro pattern-match de fim de turno (o marcador de TELA
+   * declarado em `capacity.delivery.turnEnd`) — ver Effect 1. Resetado a cada
+   * (re)spawn e a cada match, pra
    * nunca acumular além do necessário nem re-disparar num chunk seguinte
    * não relacionado que ainda contenha a cauda do marcador antigo. */
   const turnEndBufferRef = useRef("");
+  /** O sinal de fim de turno DESTE provider, lido da DECLARAÇÃO (task
+   * 0dd5c145) pela projeção do canal de disponibilidade. Mora num ref — e não
+   * numa const capturada no spawn — por dois motivos: a lista chega por IPC e
+   * pode chegar DEPOIS deste PTY subir (ler "não sinaliza" por corrida tiraria
+   * o sinal do claude/codex), e mudar de valor não pode re-rodar o Effect que
+   * spawna (o PTY morreria e renasceria). */
+  const availableProviders = useAvailableAgentProviders();
+  const turnEndRef = useRef<TurnEndReader>(readTurnEndSignal(null));
+  turnEndRef.current = readTurnEndSignal(
+    availableProviders.find((entry) => entry.id === providerId)?.turnEndSignal ?? null,
+  );
+  const W = window as unknown as Record<string, unknown>;
+  const D = (W.__turnEndDiag as Record<string, unknown>) ?? (W.__turnEndDiag = {});
+  Object.assign(D, {
+    id: providerId,
+    pattern: turnEndRef.current.pattern?.source ?? null,
+    has: turnEndRef.current.hasRealTurnSignal,
+    providers: availableProviders.length,
+    ids: availableProviders.map((e) => e.id).join(","),
+  });
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
@@ -397,15 +420,10 @@ export function useTerminal(
     turnSignalSeenRef.current = reset.signalProven;
     turnOpenRef.current = reset.turnOpen;
     isActiveRef.current = reset.isActive;
-    // Prototipo (2026-09-06) — "unificar detecção de turno": pro provider
-    // `claude`, `providers.ts`'s `buildArgs` registra um hook `Stop` real
-    // (--settings efêmero) que chama `acbridge turn-complete` no fim de
-    // verdade do turno. Estendido no mesmo dia pra qualquer provider com
-    // um marcador de texto confirmado em `TURN_END_PATTERNS` (só codex
-    // por enquanto, ver comentário lá). Depois que o sinal prova
-    // capacidade neste PTY, silêncio NÃO desliga a barra.
-    const turnEndPattern = TURN_END_PATTERNS[providerId];
-    const hasRealTurnSignal = providerHasRealTurnSignal(providerId);
+    // O sinal de fim de turno é DECLARADO por provider (`providers.ts`'s
+    // `capacity.delivery.turnEnd`, traduzido em `terminal-turn-signal.ts`) e
+    // lido do REF a cada evento — ver o comentário do `turnEndRef`. Depois que
+    // o sinal prova capacidade neste PTY, silêncio NÃO desliga a barra.
     function clearIdleTimer() {
       if (idleTimerRef.current) {
         clearTimeout(idleTimerRef.current);
@@ -420,7 +438,7 @@ export function useTerminal(
           turnOpen: turnOpenRef.current,
         },
         event,
-        hasRealTurnSignal,
+        turnEndRef.current.hasRealTurnSignal,
       );
       isActiveRef.current = decided.next.isActive;
       turnSignalSeenRef.current = decided.next.signalProven;
@@ -442,9 +460,16 @@ export function useTerminal(
       if (id !== ptyIdRef.current) return;
       writeMasked(data);
       setHasReceivedOutput(true);
+      const turnEndPattern = turnEndRef.current.pattern;
+      const D = (window as unknown as Record<string, unknown>).__turnEndDiag as Record<string, unknown>;
+      D.dataEvents = ((D.dataEvents as number) ?? 0) + 1;
+      D.lastChunk = String(data).slice(-60);
       if (turnEndPattern) {
         turnEndBufferRef.current = (turnEndBufferRef.current + data).slice(-TURN_END_BUFFER_MAX);
+        D.bufTail = turnEndBufferRef.current.slice(-60);
+        D.bufLen = turnEndBufferRef.current.length;
         if (turnEndPattern.test(turnEndBufferRef.current)) {
+          D.matched = ((D.matched as number) ?? 0) + 1;
           turnEndBufferRef.current = "";
           // Pattern-match é o sinal deste provider — prova capacidade.
           markTurnSignalSeen();

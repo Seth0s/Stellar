@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { resolveLocalIdentity } from "./local-identity";
 import type { LocalIdentity } from "./local-identity-decision";
-import { decideStatusWrite, retainStatusAsk, type StatusWriteDecision } from "./status-write-decision";
+import { decideStatusWrite, retainStatusAsk, type StatusWriteActor, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
 import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveTaskStatus } from "../task-status-derive";
@@ -2264,6 +2264,16 @@ export function openStore(userDataDir: string) {
   // that predate the columns — no backfill), fall back to the terminal-
   // status guard so recycle into done/failed history stays blocked.
   // `getTaskCards(taskId)` stays unfiltered for the Fila/history chips.
+  //
+  // Task terminada (seq 607): a época sozinha deixava VIVA uma linha de
+  // implementer em task done/failed — a participação dela TERMINOU com a
+  // task (o guard de fechamento nem olha task julgada), e a linha poluía
+  // consumidores que leem papel deste conjunto. EXCEÇÃO MEDIDA: o reviewer
+  // que se vincula DEPOIS da task done continua vivo — é o caso 494→ef31
+  // (o veredito dele tem de achar a task), então o filtro é por papel.
+  // E ORDER BY determinístico (`linked_at ASC, rowid ASC`, o mesmo
+  // desempate de `getTaskVerdictsStmt`): `find()` num conjunto sem ordem é
+  // sorte — foi assim que o papel errado venceu no gate de liberação.
   const listTaskCardsForCardStmt = db.prepare(`
     SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at, tc.provider, tc.model, tc.effort, tc.requested_resume_id, tc.session_id, tc.released_at, tc.released_reason, tc.released_by
     FROM task_cards tc
@@ -2280,6 +2290,8 @@ export function openStore(userDataDir: string) {
           THEN tc.linked_at >= c.created_at
         ELSE t.status NOT IN ('done', 'failed')
       END
+      AND (t.status NOT IN ('done', 'failed') OR tc.role = 'reviewer')
+    ORDER BY tc.linked_at ASC, tc.rowid ASC
   `);
   /** Full card-side history (including terminal tasks). Diagnostics and
    * audits only — never the report / participation write path. */
@@ -2301,6 +2313,19 @@ export function openStore(userDataDir: string) {
    *       Fila — nunca ao limbo.
    * `WHERE released_at IS NULL` recusa liberar duas vezes: idempotencia
    * silenciosa aqui esconderia um erro de quem chama.
+   *
+   * FUNIL (seq 607): a escrita de status passa pelo MESMO choke point de
+   * `update_task`/arrastar — `upsertTaskInternal` (o corpo de `upsertTask`,
+   * extraído justamente para uso DENTRO de `db.transaction`, como
+   * `applyColumnDrop` já fazia) → `decideStatusWrite`. A primeira versão
+   * gravava `pending` por UPDATE cru: um `failed` decidido pelo humano
+   * virava `pending` SEM transição nenhuma e SEM consultar o hold — uma
+   * decisão humana sumia sem deixar rastro. Pelo funil, a decisão humana
+   * prevalece (hold + divergência `pending` declarada) e toda mudança
+   * registra `kind:status`. A task é RELIDA DEPOIS do movimento do ponteiro
+   * principal: upsertar a linha antiga desfaria a escrita (2) na mesma
+   * transação. `actor` vem do bus (mesma regra de `concludeTaskOnCardClose`):
+   * o mark de orquestrador assina `orchestrator`; os demais, `agent`.
    */
   const releaseTaskCardStmt = db.prepare(`
     UPDATE task_cards
@@ -2312,7 +2337,6 @@ export function openStore(userDataDir: string) {
   );
   const getTaskPrincipalStmt = db.prepare("SELECT card_id FROM tasks WHERE id = ?");
   const setTaskPrincipalStmt = db.prepare("UPDATE tasks SET card_id = @card_id, updated_at = @updated_at WHERE id = @id");
-  const setTaskStatusStmt = db.prepare("UPDATE tasks SET status = @status, updated_at = @updated_at WHERE id = @id");
 
   const releaseTaskCardFromTask = db.transaction(
     (
@@ -2322,6 +2346,7 @@ export function openStore(userDataDir: string) {
         reason: string;
         releasedBy: string | null;
         nextImplementerCardId?: string | null;
+        actor: StatusWriteActor;
       },
     ):
       | { ok: false; error: string }
@@ -2331,6 +2356,8 @@ export function openStore(userDataDir: string) {
           nextPrincipalCardId: string | null;
           liveImplementersLeft: number;
           taskStatus: string | null;
+          statusHeld: boolean;
+          declaredStatus: string | null;
         } => {
       const reason = (input.reason ?? "").trim();
       if (!reason) return { ok: false as const, error: "release requires a reason" };
@@ -2368,16 +2395,37 @@ export function openStore(userDataDir: string) {
       }
       const liveLeft = (countLiveImplementersStmt.get(input.taskId) as { n: number }).n;
       let taskStatus: string | null = null;
+      let statusHeld = false;
+      let declaredStatus: string | null = null;
       if (liveLeft === 0) {
-        // `pending` = a Fila mostra a task esperando card. DECLARADO: esta
-        // escrita direta NAO consulta o hold humano (`diverged_status`), que
-        // e' um follow-up — o caminho de `update_task` continua sendo o
-        // funil com precedencia; aqui o que nao pode acontecer e' a task
-        // sumir do radar.
-        setTaskStatusStmt.run({ id: input.taskId, status: "pending", updated_at: at });
-        taskStatus = "pending";
+        // `pending` = a Fila mostra a task esperando card — mas PELO FUNIL:
+        // decisão humana prevalece (hold + divergência declarada, com o
+        // `kind:declaration` que deixa o rastro), mudança aplicada registra
+        // `kind:status`. Nunca UPDATE cru.
+        const current = getTaskStmt.get(input.taskId) as TaskRow | undefined;
+        if (current) {
+          const decision = upsertTaskInternal({
+            ...current,
+            status: "pending",
+            updated_at: at,
+            actor: input.actor,
+            actorCardId: input.releasedBy,
+            statusProposed: true,
+          });
+          taskStatus = decision.status;
+          statusHeld = decision.recordDeclaration;
+          declaredStatus = decision.declaredStatus;
+        }
       }
-      return { ok: true as const, releasedAt: at, nextPrincipalCardId: next, liveImplementersLeft: liveLeft, taskStatus };
+      return {
+        ok: true as const,
+        releasedAt: at,
+        nextPrincipalCardId: next,
+        liveImplementersLeft: liveLeft,
+        taskStatus,
+        statusHeld,
+        declaredStatus,
+      };
     },
   );
 
@@ -2901,15 +2949,30 @@ export function openStore(userDataDir: string) {
     /** TROCA DE CARD (task e8802e32): libera a participacao de `cardId` na
      * task com motivo OBRIGATORIO e, na MESMA transacao, move o ponteiro
      * principal para `nextImplementerCardId` (quando havia um) e devolve a
-     * task a `pending` se nao sobrar implementer vivo. Ver a transacao para
-     * o porquê de cada uma das tres escritas. */
+     * task a `pending` se nao sobrar implementer vivo — PELO FUNIL
+     * (`upsertTaskInternal` → `decideStatusWrite`, ator `actor`), então uma
+     * decisão humana prevalece com divergência declarada e toda mudança
+     * registra transição `kind:status`. Ver a transacao para o porquê de
+     * cada uma das escritas. */
     releaseTaskCardFromTask: (input: {
       taskId: string;
       cardId: string;
       reason: string;
       releasedBy: string | null;
       nextImplementerCardId?: string | null;
-    }) => releaseTaskCardFromTask(input),
+      actor: StatusWriteActor;
+    }) =>
+      releaseTaskCardFromTask(input) as
+        | { ok: false; error: string }
+        | {
+            ok: true;
+            releasedAt: number;
+            nextPrincipalCardId: string | null;
+            liveImplementersLeft: number;
+            taskStatus: string | null;
+            statusHeld: boolean;
+            declaredStatus: string | null;
+          },
     linkTaskCard: (
       taskId: string,
       cardId: string,

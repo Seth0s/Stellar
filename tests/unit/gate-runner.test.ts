@@ -40,6 +40,17 @@ function nodeEval(script: string): string {
   return `node -e ${JSON.stringify(script)}`;
 }
 
+/**
+ * TODO gate deste arquivo confina no PRÓPRIO `cwd`. Desde 2026-09-21 o runner
+ * RECUSA executar sem raiz declarada (decisão do dono: "executar shell de
+ * agente sem um lugar declarado" deixou de existir), então um teste que não
+ * declarasse a sua estaria exercitando um estado que produção não alcança
+ * mais — o teste mentiria sobre o que o runner faz.
+ */
+function confinedGates(input: Parameters<typeof runTaskGates>[0]): Promise<GateRunEvidence> {
+  return runTaskGates({ ...input, declaredRoot: input.declaredRoot ?? input.cwd });
+}
+
 describe("gate-runner: exit-code e streams REAIS", () => {
   const dirs: string[] = [];
   const dir = tempDir("stellar-gate-");
@@ -50,7 +61,7 @@ describe("gate-runner: exit-code e streams REAIS", () => {
   });
 
   it("stdout e stderr ficam SEPARADOS e o exit code é o do processo", async () => {
-    const evidence = await runTaskGates({
+    const evidence = await confinedGates({
       taskId: "t-streams",
       cwd: dir,
       gates: [nodeEval("process.stdout.write('OUT-LINE'); process.stderr.write('ERR-LINE'); process.exit(3)")],
@@ -70,7 +81,7 @@ describe("gate-runner: exit-code e streams REAIS", () => {
   });
 
   it("todos os comandos com exit 0 => ok true; um só que falha => ok false", async () => {
-    const all = await runTaskGates({
+    const all = await confinedGates({
       taskId: "t-all-ok",
       cwd: dir,
       gates: [nodeEval("process.exit(0)"), nodeEval("process.exit(0)")],
@@ -79,7 +90,7 @@ describe("gate-runner: exit-code e streams REAIS", () => {
     expect(all.ok).toBe(true);
     expect(all.commands.map((c) => c.exitCode)).toEqual([0, 0]);
 
-    const oneBad = await runTaskGates({
+    const oneBad = await confinedGates({
       taskId: "t-one-bad",
       cwd: dir,
       gates: [nodeEval("process.exit(0)"), nodeEval("process.exit(1)")],
@@ -97,7 +108,7 @@ describe("gate-runner: exit-code e streams REAIS", () => {
     // marcador ausente é a prova de que o grupo inteiro caiu.
     const grandchild = `setTimeout(()=>{require('fs').writeFileSync(${JSON.stringify(orphanMarker)},'x')},1500)`;
     const script = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'ignore'});setTimeout(()=>{},60000)`;
-    const evidence = await runTaskGates({
+    const evidence = await confinedGates({
       taskId: "t-timeout",
       cwd: dir,
       gates: [nodeEval(script)],
@@ -117,7 +128,7 @@ describe("gate-runner: exit-code e streams REAIS", () => {
 
   it("truncagem é declarada: guarda a CAUDA e conta os bytes REAIS vistos", async () => {
     const payloadBytes = MAX_CAPTURE_BYTES + 4096;
-    const evidence = await runTaskGates({
+    const evidence = await confinedGates({
       taskId: "t-truncate",
       cwd: dir,
       gates: [nodeEval(`process.stdout.write('a'.repeat(${payloadBytes}))`)],
@@ -132,13 +143,13 @@ describe("gate-runner: exit-code e streams REAIS", () => {
   });
 
   it("mesma task em voo não enfileira a suíte duas vezes (dedupe por taskId)", async () => {
-    const t0 = runTaskGates({
+    const t0 = confinedGates({
       taskId: "t-inflight",
       cwd: dir,
       gates: [nodeEval("setTimeout(() => {}, 500)")],
       timeoutMs: 30_000,
     });
-    const t1 = runTaskGates({
+    const t1 = confinedGates({
       taskId: "t-inflight",
       cwd: dir,
       gates: [nodeEval("setTimeout(() => {}, 500)")],
@@ -148,7 +159,7 @@ describe("gate-runner: exit-code e streams REAIS", () => {
     await t0;
 
     // Depois de assentar, uma nova chamada roda de novo (não fica presa).
-    const t2 = runTaskGates({ taskId: "t-inflight", cwd: dir, gates: [nodeEval("process.exit(0)")], timeoutMs: 30_000 });
+    const t2 = confinedGates({ taskId: "t-inflight", cwd: dir, gates: [nodeEval("process.exit(0)")], timeoutMs: 30_000 });
     expect(t2).not.toBe(t0);
     await t2;
   });
@@ -156,7 +167,7 @@ describe("gate-runner: exit-code e streams REAIS", () => {
   it("cwd fora de um repositório: gitRoot null e o gate roda no próprio cwd", async () => {
     const plain = tempDir("stellar-gate-nogit-");
     dirs.push(plain);
-    const evidence = await runTaskGates({
+    const evidence = await confinedGates({
       taskId: "t-nogit",
       cwd: plain,
       gates: [nodeEval("process.stdout.write(process.cwd())")],
@@ -269,8 +280,8 @@ describe("gate-runner: lock por repositório", () => {
     const gate = nodeEval(script);
     try {
       const [a, b] = await Promise.all([
-        runTaskGates({ taskId: "t-lock-a", cwd: repoDir, gates: [gate], timeoutMs: 30_000 }),
-        runTaskGates({ taskId: "t-lock-b", cwd: repoDir, gates: [gate], timeoutMs: 30_000 }),
+        confinedGates({ taskId: "t-lock-a", cwd: repoDir, gates: [gate], timeoutMs: 30_000 }),
+        confinedGates({ taskId: "t-lock-b", cwd: repoDir, gates: [gate], timeoutMs: 30_000 }),
       ]);
       expect(a.ok).toBe(true);
       expect(b.ok).toBe(true);
@@ -302,8 +313,8 @@ describe("gate-runner: lock por repositório", () => {
       // do PEDIDO — junto do 1º — e a duração do 2º engoliria o hold do
       // vizinho. Lido dentro, ele é depois do lock.
       const [a, b] = await Promise.all([
-        runTaskGates({ taskId: "t-at-a", cwd: repoDir, gates: [hold], timeoutMs: 30_000 }),
-        runTaskGates({ taskId: "t-at-b", cwd: repoDir, gates: [hold], timeoutMs: 30_000 }),
+        confinedGates({ taskId: "t-at-a", cwd: repoDir, gates: [hold], timeoutMs: 30_000 }),
+        confinedGates({ taskId: "t-at-b", cwd: repoDir, gates: [hold], timeoutMs: 30_000 }),
       ]);
 
       const firstFinished = Math.min(a.finishedAt, b.finishedAt);
@@ -433,7 +444,7 @@ describe("gate-runner: confinamento (achado de segurança 30d858c5)", () => {
       return child;
     }) as never;
 
-    const evidence = await runTaskGates({
+    const evidence = await confinedGates({
       taskId: "t-argv",
       cwd: dir,
       gates: ["echo hi"],
@@ -468,7 +479,7 @@ describe("gate-runner: confinamento (achado de segurança 30d858c5)", () => {
       return new EventEmitter() as never;
     }) as never;
 
-    const evidence = await runTaskGates({
+    const evidence = await confinedGates({
       taskId: "t-no-sandbox",
       cwd: dir,
       gates: [nodeEval("process.exit(0)"), nodeEval("process.exit(0)")],
@@ -497,7 +508,7 @@ describe("gate-runner: confinamento (achado de segurança 30d858c5)", () => {
       join(outside, "secret.txt"),
     )})?'VISIBLE':'HIDDEN')+'|'+(fs.existsSync('marker.txt')?'IN':'OUT'))`;
 
-    const evidence = await runTaskGates({ taskId: "t-confine", cwd: root, gates: [nodeEval(script)], timeoutMs: 30_000 });
+    const evidence = await confinedGates({ taskId: "t-confine", cwd: root, gates: [nodeEval(script)], timeoutMs: 30_000 });
 
     expect(evidence.commands[0].exitCode).toBe(0);
     // Fora do root (outro dir em /tmp) some; dentro do root continua visível.
@@ -525,7 +536,7 @@ describe("gate-runner: confinamento (achado de segurança 30d858c5)", () => {
         probe(join(home, ".config", "stellar", "secrets.json")),
       ].join("; ");
 
-      const evidence = await runTaskGates({ taskId: "t-home-occlusion", cwd: root, gates: [gate], timeoutMs: 30_000 });
+      const evidence = await confinedGates({ taskId: "t-home-occlusion", cwd: root, gates: [gate], timeoutMs: 30_000 });
 
       expect(evidence.commands[0].exitCode).toBe(0);
       expect(evidence.commands[0].stdout.trim().split("\n")).toEqual(["HIDDEN", "HIDDEN", "HIDDEN"]);

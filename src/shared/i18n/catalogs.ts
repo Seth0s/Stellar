@@ -73,8 +73,12 @@ export const ptBR = {
   "home.noSessions": "nenhuma sessão ainda",
   "home.newSession": "+ nova sessão",
   "home.editSession": "Editar sessão",
-  "home.agentsCount": "{agents} agentes · {active} ativos",
-  "home.agentsZero": "0 agentes",
+  // O "· {active} ativos" saiu (task 49de95ce): `active` era a MESMA expressão
+  // SQL de `agents` (medido: 11 e 11), então o segundo número era uma repetição
+  // com uma palavra que afirmava atividade que nada mediu. O que sobra é o que
+  // se sabe: cards de AGENTE abertos neste board (fechar um card apaga a linha).
+  "home.agentsCount": "{agents} agentes abertos",
+  "home.agentsZero": "sem agentes",
   "home.createFirst": "criar a primeira",
   "rail.show": "Mostrar barra lateral",
   "rail.hide": "Ocultar barra lateral",
@@ -115,6 +119,19 @@ export const ptBR = {
   "settings.providers.mcpOn": "MCP habilitado",
   "settings.providers.mcpOff": "MCP desativado",
   "settings.providers.sourceApp": "do app",
+  // A sobrescrita sobre a declaração do app (task edf3b047). "do app" dizia só
+  // a ORIGEM (verdadeira: a declaração veio do app) e escondia o fato que muda
+  // o comportamento — que a entrada deixou de ser exatamente o que o app
+  // declara. Os dois textos abaixo dizem as DUAS coisas: de onde veio e o que
+  // foi mexido. "por inteiro" é o caso em que a entrada cobre a declaração do
+  // app toda: aí o app não corrige mais a entrada, e o parêntese diz isso.
+  //
+  // O FATO DECISIVO é o parêntese ("sem correção do app"): "por inteiro" só
+  // explica o MECANISMO. Se um dia a linha extra que ele custa a 620px
+  // incomodar, "sua, sem correção do app" preserva o fato decisivo (review da
+  // edf3b047; medido: 139px contra os 197px deste texto).
+  "settings.providers.appOverridePartial": "do app (com ajustes seus)",
+  "settings.providers.appOverrideWhole": "sua por inteiro (sem correção do app)",
   "settings.providers.skipped": "ignorado: id de um provider nativo",
   "settings.providers.removed": "Provider \"{id}\" removido.",
   "settings.providers.removeFailed": "Não foi possível remover: {error}",
@@ -278,9 +295,25 @@ export const ptBR = {
   "topbar.orchestratorMissing": "orquestrador ausente",
   "topbar.orchestratorMissingTitle":
     "Marca aponta para o card {id}, que não está neste board — remova a marca ou marque outro card; o app não limpa sozinho",
+  // Estado VAZIO (task a79a708e) — board SEM marca, distinto do `-missing`
+  // acima. O chip diz o que falta; o título diz o preço de deixar faltando.
+  "topbar.orchestratorNone": "sem orquestrador marcado",
+  "topbar.orchestratorNoneTitle":
+    "Board sem orquestrador marcado. Sem a marca, cada relatório vai para a linhagem do card (aresta `spawned`, registro `spawns`) e, na falta dela, para o último card que falou com ele. A marca é escrita SÓ pela UI — marque um card pelo menu ⋮ dele; nenhum agente nem o próprio app a escreve.",
   "topbar.sessions": "SESSÕES",
   "topbar.newSession": "+ nova sessão",
   "topbar.editSession": "Editar sessão",
+  // O dropdown de AGENTES (task 49de95ce) — o que substituiu o "N ativos". O
+  // título diz o que o clique abre, e o que ele abre é o que o app SABE: nome
+  // do card e papel nas tasks abertas. Nada aqui afirma atividade.
+  "topbar.agentsTitle": "Cards de agente deste board — nome e papéis nas tasks abertas",
+  "topbar.agentsHeading": "AGENTES DESTE BOARD",
+  "topbar.agentsLoading": "lendo…",
+  "topbar.agentsNone": "nenhum card de agente neste board",
+  // Ausência honesta: o card não tem task aberta nenhuma, então não tem papel.
+  // "ocioso" seria a afirmação não-verificável que esta task removeu.
+  "topbar.agentsNoRole": "sem papel",
+  "topbar.agentsRoleTask": "{role} — task {task}",
   "topbar.missingCli": "{count} CLI{s} de agente não encontrada{s} — clique para instalar",
   "topbar.missingCliTitle": "CLIs NÃO ENCONTRADAS",
   "topbar.installHint":
@@ -317,9 +350,6 @@ export const ptBR = {
   "session.autonomousWarning":
     "⚠ ativo: agentes deste board podem spawnar outros e abrir URLs sem confirmação, até o teto de concorrência",
   "session.ungrouped": "sem projeto",
-  "session.agentsRunning": "{count} agente(s) em execução",
-  "session.agentsIdle": "Agentes inativos",
-  "session.noActiveAgents": "Sem agentes ativos",
   "toast.sessionCreated": "sessão \"{name}\" criada",
   "toast.autonomousOn": "modo autônomo ativado",
   "toast.autonomousOff": "modo autônomo desativado",
@@ -991,8 +1021,10 @@ export const en: Record<MessageKey, string> = {
   "home.noSessions": "no sessions yet",
   "home.newSession": "+ new session",
   "home.editSession": "Edit session",
-  "home.agentsCount": "{agents} agents · {active} active",
-  "home.agentsZero": "0 agents",
+  // See the pt-BR catalog: the "· {active} active" half was the same SQL
+  // expression as `agents`, asserting activity nothing measured.
+  "home.agentsCount": "{agents} open agents",
+  "home.agentsZero": "no agents",
   "home.createFirst": "create the first one",
   "rail.show": "Show sidebar",
   "rail.hide": "Hide sidebar",
@@ -1032,6 +1064,10 @@ export const en: Record<MessageKey, string> = {
   "settings.providers.mcpOn": "MCP enabled",
   "settings.providers.mcpOff": "MCP disabled",
   "settings.providers.sourceApp": "from the app",
+  // See the pt-BR catalog: the badge has to say where the declaration came
+  // from AND what was written over it.
+  "settings.providers.appOverridePartial": "from the app (with your changes)",
+  "settings.providers.appOverrideWhole": "entirely yours (no app updates)",
   "settings.providers.skipped": "skipped: id belongs to a native provider",
   "settings.providers.removed": "Provider \"{id}\" removed.",
   "settings.providers.removeFailed": "Could not remove: {error}",
@@ -1191,9 +1227,20 @@ export const en: Record<MessageKey, string> = {
   "topbar.orchestratorMissing": "orchestrator missing",
   "topbar.orchestratorMissingTitle":
     "Mark points at card {id}, which is not on this board — clear the mark or mark another card; the app will not clear it silently",
+  "topbar.orchestratorNone": "no orchestrator marked",
+  "topbar.orchestratorNoneTitle":
+    "Board with no orchestrator marked. Without the mark, each report goes to the card's lineage (`spawned` edge, `spawns` registry) and, failing that, to the last card that talked to it. The mark is written by the UI ONLY — mark a card from its ⋮ menu; no agent and the app itself never write it.",
   "topbar.sessions": "SESSIONS",
   "topbar.newSession": "+ new session",
   "topbar.editSession": "Edit session",
+  // See the pt-BR catalog: what the click opens is what the app KNOWS — card
+  // name and role on open tasks. Nothing here claims activity.
+  "topbar.agentsTitle": "Agent cards on this board — name and roles on open tasks",
+  "topbar.agentsHeading": "AGENTS ON THIS BOARD",
+  "topbar.agentsLoading": "reading…",
+  "topbar.agentsNone": "no agent cards on this board",
+  "topbar.agentsNoRole": "no role",
+  "topbar.agentsRoleTask": "{role} — task {task}",
   "topbar.missingCli": "{count} agent CLI{s} not found — click to install",
   "topbar.missingCliTitle": "CLIs NOT FOUND",
   "topbar.installHint":
@@ -1229,9 +1276,6 @@ export const en: Record<MessageKey, string> = {
   "session.autonomousWarning":
     "⚠ on: agents on this board can spawn others and open URLs without asking, up to the concurrency cap",
   "session.ungrouped": "no project",
-  "session.agentsRunning": "{count} agent(s) running",
-  "session.agentsIdle": "Idle agents",
-  "session.noActiveAgents": "No active agents",
   "toast.sessionCreated": "session \"{name}\" created",
   "toast.autonomousOn": "autonomous mode enabled",
   "toast.autonomousOff": "autonomous mode disabled",

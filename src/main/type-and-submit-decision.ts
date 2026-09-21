@@ -565,9 +565,83 @@ export function decideSteerCheck(input: {
   return "sent";
 }
 
+/** Régua horizontal de moldura — a linha é SÓ traço (depois de aparada).
+ * Medidas ao vivo (2026-09-21, 12 amostras em 2 providers): o composer de
+ * claude e de commandcode é a faixa FECHADA por duas dessas. */
+export const COMPOSER_RULE_LINE = /^\s*[─━═]{6,}\s*$/;
+
+/** Quantas linhas de rodapé o TUI desenha ABAIXO da régua de baixo do composer.
+ * Medido ao vivo em 2026-09-21 — 42/42 amostras (6 cards do Revisor C + 36
+ * minhas, 2 providers), SEMPRE exatamente 2 (claude: régua/status/dica;
+ * commandcode: régua/atalho/atalho). Zero amostras em 0, 1 ou 3+.
+ *
+ * É o VALOR medido, não um teto com folga — e é por isso que o comparador em
+ * `deriveComposerZone` é `===` e não `<=` (ver H1 abaixo). */
+export const COMPOSER_FOOTER_LINES = 2;
+
+/**
+ * A ZONA DO COMPOSER — derivada da ESTRUTURA da tela, nunca de um número.
+ *
+ * O DEFEITO QUE ISTO MATA (task 2b5ad375, reprovação da a6f36002 pelo
+ * Revisor C): a faixa que decide `failed` × `unconfirmed` recortava
+ * `slice(-6)` — e o 6 era HERDADO, não medido: nasceu do par "8 linhas de
+ * leitura menos 2 de margem" da checagem de chip, que faz outro trabalho.
+ * Ele funcionava no claude POR COINCIDÊNCIA EXATA (o chrome dele come 6 das
+ * 8 linhas) e falhava no commandcode (chrome de 5 = 8 dos 15 terminais de
+ * agente): a agulha de histórico caía DENTRO da janela e não era demovida,
+ * então a mentira "Falhou" sobrevivia na via majoritária.
+ *
+ * A âncora medida: o composer é a região ENTRE AS DUAS ÚLTIMAS RÉGUAS.
+ *   claude:      `régua / '❯ ' / régua / status / dica`
+ *   commandcode: `régua / '❯ Ask your question...' / régua / atalhos`
+ * Escala com a altura do chrome em vez de fixar um número, e cobre os dois
+ * providers sem campo novo no spec.
+ *
+ * H1 — A MENTIRA PELA OUTRA PORTA (achado do Revisor C). Se as duas últimas
+ * réguas da janela forem de TRANSCRIPT e a moldura do composer tiver ficado
+ * FORA dela, "reconhecer" esse par entregaria ao veredito `failed` um eco que
+ * está entre réguas de transcript — a mentira original, por outra porta.
+ *
+ * O critério vem da MEDIÇÃO e é EXATO, não uma folga: em 42/42 amostras vivas
+ * a régua de baixo do composer ficou a EXATAMENTE 2 linhas do fim, zero em 0, 1
+ * ou 3+. Por isso o comparador é `===`.
+ *
+ * A PRIMEIRA VERSÃO DESTE GUARDA USAVA `<=` E NÃO FECHAVA A CLASSE: ela matava
+ * a POSIÇÃO de um caso medido (régua a 4 do fim), e deixava passar a variante
+ * `[régua, saída, '❯ eco', régua, saída]` — régua de baixo a 1, dentro do
+ * aceite — que voltava a fechar `failed`. Medido por ele em duas rodadas
+ * independentes na árvore real. Foi a troca de `<=` por `===` que fechou.
+ *
+ * CUSTO DECLARADO do `===`: um transitório de tela SEM rodapé (distância 0 ou
+ * 1) passa a dar `unconfirmed` em vez de `failed`. A direção é a segura — não
+ * acusa. E o limite do corpo cabe no número: com rodapé de 2, a moldura só cabe
+ * na janela de 8 linhas enquanto o interior tiver ≤ 4 (`k + 4 <= 8`).
+ *
+ * `null` = estrutura NÃO reconhecível (menos de duas réguas na janela, ou o
+ * par achado longe do fim). Quem consome tem de tratar isso como "não sei",
+ * NUNCA como "não chegou": a ausência de reconhecimento não pode produzir
+ * acusação — é a polaridade que esta função existe para inverter.
+ */
+export function deriveComposerZone(screenText: string): string | null {
+  const lines = screenText.split(/\r?\n/);
+  const rules: number[] = [];
+  for (let i = 0; i < lines.length; i++) if (COMPOSER_RULE_LINE.test(lines[i])) rules.push(i);
+  if (rules.length < 2) return null;
+  const lower = rules[rules.length - 1]!;
+  if (lines.length - 1 - lower !== COMPOSER_FOOTER_LINES) return null;
+  return lines.slice(rules[rules.length - 2]! + 1, lower).join("\n");
+}
+
 /** Is `sentNeedle` still visible on screen? Long needles: anywhere.
- * Short needles (<8): only the last few lines (composer zone) — a short
- * notice must not be declared `"sent"` just because activity exists. */
+ * Short needles (<8): only the last few lines — a short notice must not be
+ * declared `"sent"` just because activity exists.
+ *
+ * LIMITE DECLARADO (task 2b5ad375): este `slice(-6)` continua aqui e NÃO é a
+ * zona do composer — é a pergunta mais antiga e diferente "esta notícia curta
+ * ainda está perto do rodapé?", usada pela detecção de park e pelo steer.
+ * Quem pergunta "está no composer?" passa o texto de `deriveComposerZone`
+ * como `screenText` (a zona é pequena, o `slice(-6)` vira a zona inteira) —
+ * é assim que a faixa de `failed` a usa desde esta task. */
 export function needleVisibleOnScreen(screenText: string, sentNeedle: string): boolean {
   const needle = sentNeedle.trim().replace(/\s+/g, " ");
   if (!needle) return false;
@@ -612,19 +686,21 @@ export function decideSubmitCheck(input: SubmitCheckInput): SubmitCheckResult {
   // Regra do Vazio: se o provider não definiu vocabulário (ou não medimos), pula essa verificação.
   if (input.submitStartedPattern && submitStartedAppearedSince(before, after, input.submitStartedPattern)) return "sent";
 
-  // Collapsed paste chip still in the COMPOSER (no NEW park/Working).
-  // Fix: distinguishing history vs composer zone avoids returning "unsent"
-  // when an old "[Pasted text]" chip is just sitting in the history while
-  // the TUI legitimately accepted the input.
+  // Chip de paste colapsado: pode estar PRESO no composer (o cursor não
+  // aceitou) ou apenas no HISTÓRICO de um paste anterior que já entrou. Quem
+  // separa os dois é a zona DERIVADA — nunca a constante que havia aqui.
   //
-  // Heurística Declarada: `message-bus.ts` invoca `readCardText(8)`, então
-  // a tela (`after`) tem no máximo 8 linhas. Recortar as últimas 6
-  // (`slice(-6)`) cria uma margem de 2 linhas: se o chip "[Pasted text]"
-  // subiu o suficiente para sair das últimas 6 linhas visíveis, assumimos
-  // que ele não está mais prendendo o cursor (foi pro histórico). É frouxo,
-  // mas funciona na mecânica visual de TUI sem depender de âncoras frágeis.
-  const tail = after.split(/\r?\n/).slice(-6).join("\n");
-  if (/pasted text/i.test(tail)) return "unsent";
+  // Três ramos, e o do meio é o que a polaridade exige: com chip na tela e
+  // estrutura NÃO reconhecível, a resposta honesta é `"unknown"` (não sei
+  // onde está o composer), e NÃO o `"sent"` que o fluxo normal daria. Um chip
+  // é indício de algo possivelmente preso; sem zona localizada ele não pode
+  // ser declarado entregue.
+  if (/pasted text/i.test(after)) {
+    const chipZone = deriveComposerZone(after);
+    if (chipZone === null) return "unknown";
+    if (/pasted text/i.test(chipZone)) return "unsent";
+    // chip só no histórico, composer localizado e limpo → segue o fluxo.
+  }
 
   const visible = needleVisibleOnScreen(after, input.sentNeedle);
 

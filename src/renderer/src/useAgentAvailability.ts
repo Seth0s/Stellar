@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { TurnEndProjection } from "../../main/agent-availability-projection";
 
 export type AgentAvailability = {
   id: string;
@@ -13,6 +14,13 @@ export type AgentAvailability = {
    * produtor garante faz o próximo leitor programar contra um `undefined`
    * que não existe. */
   effortValues: string[];
+  /** PROJEÇÃO de `capacity.delivery.turnEnd` (ver o handler de
+   * `agents:check-availability` e `main/agent-availability-projection.ts`):
+   * como este provider sinaliza o FIM de um turno. `null` = não sinaliza, e a
+   * UI NÃO promete — mesma regra do `effortValues` vazio. Os dois mecanismos
+   * não são equivalentes (`hook` é evento, `screen` é texto), e quem decide o
+   * que fazer com cada um é `terminal-turn-signal.ts` / `TerminalCard.tsx`. */
+  turnEndSignal: TurnEndProjection;
 };
 
 /**

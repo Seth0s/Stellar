@@ -202,7 +202,17 @@ export type DynamicProviderSpec = {
       | { mechanism: "flag"; flag: string; values: string[] }
       | { mechanism: "none"; reason: "shell" | "no-flag" | "unmeasured" };
     model: { mechanism: "flag"; flag: string } | { mechanism: "none"; reason: "shell" };
-    delivery: { briefMechanism: "positional" | "flag" | "none"; briefFlag?: string };
+    delivery: {
+      briefMechanism: "positional" | "flag" | "none";
+      briefFlag?: string;
+      /**
+       * Como esta CLI sinaliza o FIM de um turno (task 0dd5c145). Ausente =
+       * não sinaliza, e a UI NÃO promete — mesma regra da ausência de esforço.
+       * `pattern` é a FONTE da regex, em texto (ver
+       * `DELIVERY_TURN_END_MECHANISMS` para o porquê).
+       */
+      turnEnd?: { mechanism: "hook" } | { mechanism: "screen"; pattern: string };
+    };
   };
 };
 
@@ -371,7 +381,33 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
         values: ["low", "medium", "high", "xhigh", "max"],
       },
       model: { mechanism: "flag", flag: "-m" },
-      delivery: { briefMechanism: "positional" },
+      // O FIM DE TURNO, por TELA (task 0dd5c145). O commandcode TAMBÉM tem um
+      // sistema de `Stop` hooks compatível com o do Claude Code (medido no
+      // bundle 1.58.1: `~/.commandcode/settings.json` + o do projeto, eventos
+      // `Stop`/`PreToolUse`/`PostToolUse`, com o `hookSpecificOutput` daquele
+      // schema) — mas instalar um hook que EXECUTA COMANDO na config GLOBAL
+      // de um produto de terceiros é vetor de execução, e os cards JÁ ABERTOS
+      // só o pegariam no próximo spawn. Decisão do dono: marcador de TELA, que
+      // resolve hoje e degrada honestamente — se a CLI mudar a frase, o sinal
+      // some, que é o MESMO custo já aceito para o codex.
+      //
+      // O QUE FOI MEDIDO (texto de scrollback, `read_card`): o verbo separa
+      // passo de turno. `Worked for …` FECHA o turno — amostras `Worked for
+      // 2m 6s` e `Worked for 8m 0s` —, enquanto `Thought for N seconds`
+      // aparece a CADA passo: 18 ocorrências num card em turno, com ZERO
+      // `Worked for` no meio. É o verbo que impede o match no meio do turno.
+      //
+      // INFERÊNCIA DECLARADA — não é medição direta, e quem reescrever isto
+      // precisa saber: o ramo ` seconds?` (a palavra, para durações abaixo de
+      // um minuto) NÃO foi observado no verbo `Worked`. Ele foi inferido de
+      // `Thought for 1 second` / `Thought for 21 seconds` — as 18 amostras do
+      // verbo IRMÃO da MESMA TUI —, mais um `Worked for 21 seconds` lido de um
+      // SNAPSHOT (imagem), que é evidência mais fraca que texto. Se aparecer um
+      // `Worked for 45 seconds` e este padrão errar, a causa está aqui.
+      delivery: {
+        briefMechanism: "positional",
+        turnEnd: { mechanism: "screen", pattern: "Worked for (?:\\d+h\\s*)?(?:\\d+m\\s*)?\\d+(?:s| seconds?)" },
+      },
     },
   },
 ];
@@ -525,6 +561,14 @@ export const EFFORT_MECHANISMS = ["flag", "none"] as const;
 export const EFFORT_NONE_REASONS = ["shell", "no-flag", "unmeasured"] as const;
 export const MODEL_MECHANISMS = ["flag", "none"] as const;
 export const DELIVERY_BRIEF_MECHANISMS = ["positional", "flag", "none"] as const;
+/** Como um provider DINÂMICO declara o FIM de turno (task 0dd5c145) — o
+ * espelho, no arquivo, do `TurnEndSignal` dos nativos (`providers.ts`).
+ *
+ * A diferença de forma é de ARMAZENAMENTO, não de ideia: aqui o padrão é
+ * TEXTO (fonte de regex), e não `RegExp`, porque este spec é ESCRITO EM DISCO
+ * (`appProviders`, reescrito a cada boot). Um `RegExp` serializaria para `{}` e
+ * a declaração morreria na ida e volta. Quem compila é `dynamicProviderDef`. */
+export const DELIVERY_TURN_END_MECHANISMS = ["hook", "screen"] as const;
 /** O único `reason` aceito para `model.mechanism: "none"` (espelha
  * `ProviderCapacity.model`). */
 export const MODEL_NONE_REASONS = ["shell"] as const;
@@ -1126,6 +1170,57 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
     };
   }
 
+  // O FIM DE TURNO (task 0dd5c145) — OPCIONAL, e AUSENTE é o default honesto
+  // ("não sinaliza"). A fonte da regex é COMPILADA aqui, na porta: uma
+  // declaração inválida é recusada com motivo, em vez de virar um
+  // `new RegExp` que explode dentro do registro vivo, no meio de um boot.
+  if (deliveryRaw.turnEnd !== undefined) {
+    const rawTurnEnd = deliveryRaw.turnEnd;
+    if (!isRecord(rawTurnEnd)) {
+      return {
+        ok: false,
+        reason: refusal("capacity.delivery.turnEnd", 'an object with `mechanism` ("hook" or "screen")', rawTurnEnd),
+      };
+    }
+    if (rawTurnEnd.mechanism === "hook") {
+      delivery.turnEnd = { mechanism: "hook" };
+    } else if (rawTurnEnd.mechanism === "screen") {
+      const pattern = nonEmptyString(rawTurnEnd.pattern);
+      if (!pattern) {
+        return {
+          ok: false,
+          reason: refusal(
+            "capacity.delivery.turnEnd.pattern",
+            'a non-empty regex SOURCE string (ex.: "Worked for \\\\d+s"); required when mechanism is "screen"',
+            rawTurnEnd.pattern,
+          ),
+        };
+      }
+      try {
+        new RegExp(pattern);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: refusal(
+            "capacity.delivery.turnEnd.pattern",
+            "a source that compiles as a regular expression",
+            `${pattern} (${err instanceof Error ? err.message : String(err)})`,
+          ),
+        };
+      }
+      delivery.turnEnd = { mechanism: "screen", pattern };
+    } else {
+      return {
+        ok: false,
+        reason: refusal(
+          "capacity.delivery.turnEnd.mechanism",
+          `one of ${acceptedList(DELIVERY_TURN_END_MECHANISMS)}`,
+          rawTurnEnd.mechanism,
+        ),
+      };
+    }
+  }
+
   return {
     ok: true,
     spec: {
@@ -1425,6 +1520,22 @@ function capacitySchema(): Record<string, unknown> {
         mechanismKey: "briefMechanism",
         flagField: "briefFlag",
         flagDescription: 'Flag que recebe o brief (ex.: "--prompt").',
+        // O FIM DE TURNO, por TELA (task 0dd5c145) — o MESMO helper de
+        // mecanismo, então o `if/then` do schema exige `pattern` só quando o
+        // mecanismo declarado é `screen` (e nenhum quando é `hook`).
+        extra: {
+          turnEnd: mechanismObject({
+            description:
+              "Como esta CLI sinaliza o FIM de um turno. AUSENTE (o default) = não sinaliza, e a UI não " +
+              "promete nada: a barra de atividade cai no silêncio e nenhum aviso é disparado por aproximação.",
+            mechanisms: DELIVERY_TURN_END_MECHANISMS,
+            flagValue: "screen",
+            flagField: "pattern",
+            flagDescription:
+              "FONTE de regex em TEXTO (o arquivo é JSON e não carrega `RegExp`) que casa o marcador de " +
+              'fim de turno na tela — ex.: "Worked for \\\\d+s".',
+          }),
+        },
       }),
     },
   };
@@ -2184,6 +2295,22 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
       delivery: {
         briefMechanism: declared.delivery.briefMechanism,
         ...(declared.delivery.briefFlag ? { briefFlag: declared.delivery.briefFlag } : {}),
+        // O FIM DE TURNO (task 0dd5c145) — COMPILADO aqui: o arquivo guarda a
+        // FONTE como texto (JSON não carrega `RegExp`) e o registro vivo
+        // carrega o `RegExp`. Este `...` é o que faz a declaração CHEGAR ao
+        // renderer pela projeção; sem ele, o campo passa no schema, passa no
+        // validador e morre aqui em silêncio — a classe exata do bug do
+        // `session.store`, e o motivo de o gate de round-trip existir
+        // (`tests/unit/providers-dynamic-round-trip.test.ts`, que foi provado
+        // VERMELHO removendo exatamente este bloco).
+        ...(declared.delivery.turnEnd
+          ? {
+              turnEnd:
+                declared.delivery.turnEnd.mechanism === "hook"
+                  ? { mechanism: "hook" as const }
+                  : { mechanism: "screen" as const, pattern: new RegExp(declared.delivery.turnEnd.pattern) },
+            }
+          : {}),
       },
     },
     buildArgs: synthesizeBuildArgs(spec),
