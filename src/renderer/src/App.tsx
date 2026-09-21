@@ -75,7 +75,7 @@ import type {
   StickyCardData,
   Tool,
 } from "./card-types";
-import { PROVIDER_EFFORT_VALUES, STICKY_FONT_SIZE_DEFAULT, clampStickyFontSize, parseStickyFontSize } from "./card-types";
+import { STICKY_FONT_SIZE_DEFAULT, clampStickyFontSize, parseStickyFontSize } from "./card-types";
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
 import { decideTaskCardSpawn } from "../../task-card-guard";
@@ -713,6 +713,10 @@ export function App() {
   // do main, não de uma lista literal: um CLI dinâmico (cline/commandcode,
   // carregado no boot) aparece aqui como qualquer nativo.
   const providerOptions = useProviderOptions();
+  // A lista COMPLETA (não só os ids), para ler o que o main PROJETA por
+  // provider — hoje a faixa de esforço declarada. `useProviderOptions` acima
+  // devolve só ids, e projetar a lista de novo aqui seria uma segunda cópia.
+  const availableAgentProviders = useAvailableAgentProviders();
   const [newResumeId, setNewResumeId] = useState("");
   const [newContinueLast, setNewContinueLast] = useState(false);
   const [newModel, setNewModel] = useState("");
@@ -3958,12 +3962,17 @@ export function App() {
           // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido",
           // 2026-09-10 — a value valid for the PREVIOUS provider (e.g.
           // claude's "medium") can be meaningless or refused for the new
-          // one (antigravity only takes low/high — see
-          // PROVIDER_EFFORT_VALUES's own comment). Clear it here, at the
-          // one place the provider actually changes, rather than letting
-          // a stale value ride along to a provider that never offered it
-          // as an option in the first place.
-          if (!(PROVIDER_EFFORT_VALUES[p] ?? []).includes(newEffort)) setNewEffort("");
+          // one (antigravity takes only low|medium|high). Clear it here, at
+          // the one place the provider actually changes, rather than letting
+          // a stale value ride along to a provider that never offered it as
+          // an option in the first place.
+          //
+          // Os valores vêm da projeção do canal de disponibilidade (task
+          // 07b05f43) — a MESMA fonte que o Rail usa para montar o select.
+          // Provider sem esforço declarado chega como lista vazia, então
+          // qualquer valor é limpo, que é o comportamento de sempre.
+          const nextEffortValues = availableAgentProviders.find((a) => a.id === p)?.effortValues ?? [];
+          if (!nextEffortValues.includes(newEffort)) setNewEffort("");
           setNewProvider(p);
         }}
         newResumeId={newResumeId}
