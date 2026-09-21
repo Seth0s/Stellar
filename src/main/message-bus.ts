@@ -12,7 +12,7 @@ import {
   unreportedIdlePointerBody,
 } from "./agent-facing-authorship";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
-import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
+import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, needleVisibleOnScreen, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
 import {
   cancelPendingFromRequester,
   decideOriginDeliveryRate,
@@ -35,6 +35,7 @@ import {
   decideCloseCardTaskEffect,
   decideJudgmentWrite,
   decideReportVerdictWrite,
+  decideTaskCardRelease,
   declaredFilesFromReport,
   describeArtifactPendencies,
   roleOnTask,
@@ -579,6 +580,21 @@ export type BusRequest =
    * `{ok:false}` report is a verdict, not the task failing. Role omitted
    * = implementer; unknown role = REFUSED. */
   | { cmd: "link_task_card"; taskId?: string; cardId?: string; role?: string; requesterId?: string }
+  /** TROCA DE CARD EM TASK ABERTA (task e8802e32): LIBERA a participacao de
+   * `target` nesta task, com `reason` OBRIGATORIO, e — quando `newCardId` vem
+   * — passa o bastao: o novo card entra como implementer e o ponteiro
+   * principal (`tasks.card_id`) VAI PARA ELE. Sem `newCardId`, se nao sobrar
+   * implementer vivo, a task volta a `pending` VISIVEL na Fila. Tudo numa
+   * transacao no store. Implementer desta task NAO se auto-libera
+   * (`decideTaskCardRelease`). */
+  | {
+      cmd: "release_task_card";
+      taskId?: string;
+      target?: string;
+      reason?: string;
+      newCardId?: string;
+      requesterId?: string;
+    }
   | {
       cmd: "request_task_status";
       taskId?: string;
@@ -1104,6 +1120,25 @@ export function createMessageBus(
         sessionId?: string | null;
       },
     ) => void;
+    /** TROCA DE CARD (task e8802e32) — delega ao store a transacao que libera
+     * a participacao (motivo obrigatorio), move o principal para o sucessor e
+     * devolve a task a `pending` quando nao sobra implementer vivo. Ver a
+     * transacao em store.ts para o porquê de cada uma das escritas. */
+    releaseTaskCardFromTask: (input: {
+      taskId: string;
+      cardId: string;
+      reason: string;
+      releasedBy: string | null;
+      nextImplementerCardId?: string | null;
+    }) =>
+      | { ok: false; error: string }
+      | {
+          ok: true;
+          releasedAt: number;
+          nextPrincipalCardId: string | null;
+          liveImplementersLeft: number;
+          taskStatus: string | null;
+        };
     /** DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — mesmo
      * pass-through direto pro store das 3 linhas acima, mesmo motivo. O
      * cmd `report`/`get_report` (mais abaixo) continua sendo quem faz
@@ -1946,6 +1981,8 @@ export function createMessageBus(
       // Enter. `null` before attempt 0 → always press once. `"unknown"` /
       // `"parked"` never press in this loop (steer is a separate single key).
       let previousResult: ReturnType<typeof decideSubmitCheck> | null = null;
+      // Última tela lida — a faixa do veredito final precisa dela (ver abaixo).
+      let lastScreenText = "";
       for (let attempt = 0; attempt < SEND_ENTER_MAX_ATTEMPTS; attempt++) {
         confirm.attempts = attempt + 1;
         await delay(SEND_ENTER_DELAY_MS);
@@ -1955,6 +1992,7 @@ export function createMessageBus(
         }
         await delay(SEND_ENTER_CONFIRM_DELAY_MS);
         const check = await readCardText(target, 8);
+        lastScreenText = check.ok ? check.text : lastScreenText;
         // Falha de leitura (timeout, card sumiu) não é evidência de que o
         // submit falhou — para de retentar em vez de adivinhar. Único
         // `break` fora da decisão pura — inalterado, não regride. O que
@@ -1987,6 +2025,30 @@ export function createMessageBus(
         if (previousResult === "sent" || previousResult === "parked") break;
         // "unsent" → next iteration presses Enter again.
         // "unknown" → next iteration waits/re-reads only (no Enter).
+      }
+
+      // ENTREGA E NEGA — A FAIXA (tasks 3ef2314b + a6f36002). `unsent` por
+      // LEITURA DE TELA só é testemunha confiável de "não chegou" quando o
+      // texto ainda está na ZONA DO COMPOSER (o tail — a mesma janela que a
+      // checagem de chip já usa). O `decideSubmitCheck` procura agulha longa na
+      // TELA INTEIRA, e depois de um submit o TUI ECOA o texto no HISTÓRICO: a
+      // agulha continua visível justamente porque chegou. Fora do tail, o
+      // veredito honesto é "não consegui confirmar" (`unknown` → `unconfirmed`),
+      // nunca "Falhou" — foi o que o dono viu: a mensagem chegar, o agente ler o
+      // anexo, responder, e a barra dizer "Falhou".
+      //
+      // Isto SUBSTITUI (e subsome) o caso específico que a 3ef2314b rebaixava
+      // por `bodyWasPasted`: o chip de bracketed paste ocupa o tail e a agulha
+      // não está lá, então ele cai na MESMA faixa — uma regra só, e a faixa que
+      // sobra é a defensável: `failed` continua querendo dizer "não chegou"
+      // exatamente quando o texto está onde o composer está.
+      const composerZone = lastScreenText.split(/\r?\n/).slice(-6).join("\n");
+      if (previousResult === "unsent" && !needleVisibleOnScreen(composerZone, sentNeedle)) {
+        previousResult = "unknown";
+        confirm.result = "unknown";
+        console.warn(
+          `[message-bus] delivery to card ${target}: screen check ended "unsent" with the text OUTSIDE the composer zone (echo in history, or a collapsed paste chip) — reported as unconfirmed, not failed`,
+        );
       }
 
       // Mid-turn steer: at most ONE provider-declared key after park.
@@ -3834,6 +3896,50 @@ export function createMessageBus(
         role: link.role,
       }));
       return { ok: true, links };
+    }
+
+    if (req.cmd === "release_task_card") {
+      // TROCA DE CARD EM TASK ABERTA (task e8802e32). Toda recusa acontece
+      // ANTES de qualquer escrita; a liberacao em si e' UMA transacao no
+      // store (linha liberada + principal movido + status, ou nada).
+      if (!req.taskId) return { ok: false, error: "missing taskId" };
+      if (!req.target) return { ok: false, error: "missing target (the card being released)" };
+      const reason = (req.reason ?? "").trim();
+      // Motivo OBRIGATORIO: liberacao sem motivo e' indistinguivel de bug.
+      if (!reason) {
+        return { ok: false, error: "missing reason — releasing a card without saying why is indistinguishable from a bug" };
+      }
+      const task = callbacks.getTask(req.taskId);
+      if (!task) return { ok: false, error: `no such task "${req.taskId}"` };
+      if (!req.requesterId) return { ok: false, error: "missing requesterId (your own card id)" };
+      // CAMADA 4, TERCEIRA PORTA: implementer desta task nao se auto-libera.
+      const release = decideTaskCardRelease({
+        taskId: req.taskId,
+        requesterRoleOnTask: roleOnTask(callbacks.listTaskCardsForCard(req.requesterId) ?? [], req.requesterId),
+      });
+      if (release.action === "refuse") return { ok: false, error: release.error };
+      const newCardId = req.newCardId ?? null;
+      if (newCardId && !callbacks.listCards().some((c) => c.id === newCardId)) {
+        return { ok: false, error: `no open card with id "${newCardId}"` };
+      }
+      const res = callbacks.releaseTaskCardFromTask({
+        taskId: req.taskId,
+        cardId: req.target,
+        reason,
+        releasedBy: req.requesterId,
+        nextImplementerCardId: newCardId,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        taskId: req.taskId,
+        releasedCardId: req.target,
+        reason,
+        releasedBy: req.requesterId,
+        nextPrincipalCardId: res.nextPrincipalCardId,
+        liveImplementersLeft: res.liveImplementersLeft,
+        taskStatus: res.taskStatus,
+      };
     }
 
     if (req.cmd === "link_task_card") {

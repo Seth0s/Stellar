@@ -179,6 +179,97 @@ describe("message-bus: get_delivery carrega o veredito da confirmação", () => 
     expect(writes.filter((w) => w === "\r")).toHaveLength(4);
   });
 
+  it("corpo LONGO/paste (anexos empurram o corpo além de 120 chars): 'unsent' na tela vira UNCONFIRMED, não failed", async () => {
+    // Task 3ef2314b — o dono viu a mensagem CHEGAR (o agente leu o anexo e
+    // respondeu) e a barra dizer "Falhou · unsent". O corpo com 3 caminhos de
+    // anexo passa de `shouldUseBracketedPaste` (120 chars), o TUI colapsa num
+    // chip e a releitura de 8 linhas não distingue "ainda no composer" de "já
+    // consumido". Nessa faixa o desfecho honesto é "não consegui confirmar".
+    const body =
+      'olha isso aqui, o que você acha dessa imagem? "/tmp/stellar-pastes/paste-1.png" "/tmp/stellar-pastes/paste-2.png" "/tmp/stellar-pastes/paste-3.png"';
+    expect(body.length).toBeGreaterThanOrEqual(120); // é esta condição que liga o envelope
+
+    const { bus: b, writes } = makeBus({
+      provider: "claude",
+      // Peer pediu DECSET 2004h e o chip do paste continua dentro das últimas
+      // linhas lidas — a evidência é ambígua por construção.
+      paste: { atPrompt: true, acceptsOnEnter: true },
+      screen: (i) => (i === 0 ? "> " : ["❯ [Pasted text #1 +3 lines]", "  ⏎ to send"].join("\n")),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    expect(sent.delivery).toBe("queued");
+
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed"); // NÃO "failed": a tela não prova que não chegou
+    expect(status.confirm?.result).toBe("unknown");
+    expect(status.confirm?.composerCleared).toBe(true);
+    // E o corpo de fato saiu como PASTE — é essa faixa que cria a ambiguidade.
+    expect(writes[0].startsWith("\x1b[200~")).toBe(true);
+  });
+
+  it("CONTROLE do par: o MESMO corpo sem o envelope de paste (peer não pediu 2004h) segue 'failed' como sempre", async () => {
+    // Sem bracketed paste o corpo vai cru, a tela é testemunha confiável e o
+    // "unsent" continua querendo dizer "não chegou" — nada muda para quem não
+    // está na faixa do paste.
+    const body =
+      'olha isso aqui, o que você acha dessa imagem? "/tmp/stellar-pastes/paste-1.png" "/tmp/stellar-pastes/paste-2.png" "/tmp/stellar-pastes/paste-3.png"';
+    const { bus: b } = makeBus({
+      provider: "claude",
+      screen: (i) => (i === 0 ? "> " : `> ${body}`),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: body } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("failed");
+    expect(status.confirm?.result).toBe("unsent");
+  });
+
+  // A FAIXA (task a6f36002): corpo CURTO, fora do paste, cuja tela tem o texto
+  // ECOADO no histórico (ela chegou) e o composer vazio embaixo. O
+  // `decideSubmitCheck` procura agulha longa na TELA INTEIRA e fecha "unsent";
+  // a leitura não distingue eco de histórico de texto no composer.
+  const echoBody =
+    'o que é isso? "/tmp/stellar-pastes/paste-1.png" "/tmp/stellar-pastes/paste-2.png" "/tmp/stellar-pastes/paste-3.png"';
+  const echoScreen = [
+    `❯ ${echoBody}`,
+    "⏺ Li o arquivo. É um padrão de grade de pontos claros sobre fundo escuro.",
+    "",
+    "──────────────────────────────────────────────",
+    "❯ ",
+    "",
+    "",
+    "",
+  ].join("\n");
+
+  it("AGULHA no HISTÓRICO, corpo curto sem paste (o caso do dono: claude + 3 anexos) => unconfirmed, não failed", async () => {
+    expect(echoBody.length).toBeLessThan(120); // fora da faixa do paste: sem envelope
+    const { bus: b } = makeBus({ provider: "claude", screen: (i) => (i === 0 ? "❯ " : echoScreen) });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: echoBody } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed"); // a mensagem CHEGOU; "Falhou" era mentira
+    expect(status.confirm?.result).toBe("unknown");
+  });
+
+  it("provider SEM submitStartedPattern medido (opencode, a Regra do Vazio) cai na MESMA faixa", async () => {
+    const { bus: b } = makeBus({ provider: "opencode", screen: (i) => (i === 0 ? "❯ " : echoScreen) });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: echoBody } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("unconfirmed");
+    expect(status.confirm?.result).toBe("unknown");
+  });
+
+  it("A FAIXA QUE SOBRA: o texto na ZONA DO COMPOSER continua 'failed' — a tela aí é testemunha", async () => {
+    // Mesmo corpo, mas o eco NÃO aconteceu: o texto está na última linha, onde
+    // o composer está. Aqui "não chegou" é o que a tela sustenta.
+    const { bus: b } = makeBus({
+      provider: "claude",
+      screen: (i) => (i === 0 ? "❯ " : ["❯ ", "⏺ pronto", "", "", echoBody, ""].join("\n")),
+    });
+    const sent = (await b.handleRequest({ cmd: "send", target: "t", text: echoBody } as BusRequest)) as DeliveryStatus;
+    const status = await settle(b, sent.id!);
+    expect(status.delivery).toBe("failed");
+    expect(status.confirm?.result).toBe("unsent");
+  });
+
   it("leitura de tela falha => unconfirmed/read-failed, sem adivinhar", async () => {
     const { bus: b } = makeBus({ provider: "claude", screen: (i) => (i === 0 ? "> " : null) });
     const sent = (await b.handleRequest({ cmd: "send", target: "t", text: "consertar o roteamento do push agora" } as BusRequest)) as DeliveryStatus;

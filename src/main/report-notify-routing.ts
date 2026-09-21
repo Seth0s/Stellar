@@ -119,6 +119,37 @@
  * durável: entra ACIMA do fallback de diretiva e ABAIXO de uma aresta visual
  * VIVA (que continua sendo o sinal mais recente). Mesmo princípio da RODADA 3
  * — preferir a linha em SQLite à fonte volátil —, um degrau acima.
+ *
+ * RODADA 5 (task 98c99324) — o limite que a RODADA 4 declarou: se o
+ * spawner-of-record está MORTO, a decisão ainda caía no fallback "último que
+ * falou". Fechado com `none` explícito (ver o ramo), e a medição no board
+ * vivo decidiu — não a elegância:
+ *
+ *   - `spawns` tem 231 linhas e 231 destinos distintos: 147 de origem AGENTE
+ *     (`from_card_id` preenchido) e 84 de origem HUMANA (NULL). Só os 147 têm
+ *     spawner-of-record; um card humano nunca entra neste ramo.
+ *   - 19 terminais abertos: 9 têm spawner de registro VIVO (roteiam por
+ *     `spawned`), **0 têm spawner de registro MORTO**, 10 não têm registro.
+ *     Ou seja, o estado desta rodada está ESTRUTURALMENTE aberto e hoje
+ *     VAZIO — a escolha abaixo afeta 0 cards, então foi decidida pelo que
+ *     acontece quando ele ocorrer, não pela frequência.
+ *   - o board inteiro tem 11 conectores (9 `spawned`, 2 `modified`), um único
+ *     alvo de `modified`, e **nenhum card com registro E diretiva ao mesmo
+ *     tempo**. É por isso que o fallback parecia certo: hoje ele nem tem para
+ *     onde cair. Um `send_to_card` posterior criaria a aresta que faltava e
+ *     transformaria o acaso em sequestro — `none` explícito corta isso.
+ *   - a alternativa (c) "dono vivo da task" foi medida e RECUSADA: entre os
+ *     147 spawns de agente, o criador da task é o próprio spawner em 71
+ *     (redundante — mesmo id, morto), DIVERGE em 16 e não existe em 60.
+ *   - a alternativa (d) "mark do board" não é um degrau abaixo: é o PRIMEIRO
+ *     ramo desta função. Boards 64 e 97924025 têm mark NULL; o 118 tem
+ *     97924064 vivo — e nos três, quando o mark existe e vive, esta rodada
+ *     nunca é alcançada.
+ *
+ * `none` aqui é resposta honesta, não descarte: o report continua no disco e
+ * legível por `read_report` (a RODADA 3 existe para não perder o report
+ * quando há alvo; aqui não há alvo conhecido). O que não se faz é entregar a
+ * um terceiro.
  */
 
 /** Minimal connector shape this module needs — matches store.ts's
@@ -229,6 +260,26 @@ export function decideReportNotifyTarget(input: ReportRoutingInput): ReportRouti
   // virar o destino (o motivo desta task).
   if (input.spawnerOfRecordId && input.spawnerOfRecordAlive) {
     return { targetId: input.spawnerOfRecordId, source: "spawned" };
+  }
+  // RODADA 5 — a linhagem é CONHECIDA e o dono dela está MORTO: `none`
+  // explícito, e NÃO o fallback de diretiva logo abaixo. É o mesmo argumento
+  // do ramo do mark do board, um degrau abaixo: quando o alvo CORRETO é
+  // conhecido e não está lá, cair para "o último que falou" entrega o report
+  // a um terceiro — o sequestro que a RODADA 2 fechou uma casa acima. Cair
+  // aqui por acidente (porque nenhuma aresta `modified` existe) é o que
+  // acontecia antes; a diferença é que agora não depende do acaso.
+  //
+  // Não cai para o mark porque o mark JÁ é o primeiro ramo (logo acima): se
+  // houvesse mark vivo, esta linha nunca seria alcançada.
+  //
+  // O dono VIVO da task era a alternativa (c), e foi recusado pelo NÚMERO,
+  // não por elegância: entre os 147 spawns de origem agente, o card que criou
+  // a task coincide com o spawner de registro em 71 (redundante — seria o
+  // mesmo id morto), DIVERGE em 16 e não existe em 60. Um alvo que só
+  // coincide 48% das vezes e falta em 41% não é um fato de roteamento; usá-lo
+  // seria a heurística que este módulo recusa por princípio.
+  if (input.spawnerOfRecordId) {
+    return { targetId: null, source: "none" };
   }
   // Fallback only: no live spawner on record at all — a card a human opened
   // (never had a `spawned` connector), or one whose spawner card was closed,

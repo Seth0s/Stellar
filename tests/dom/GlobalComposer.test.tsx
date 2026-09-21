@@ -185,14 +185,48 @@ describe("GlobalComposer — anexo", () => {
   });
 });
 
-/**
- * Teto de anexos POR MENSAGEM (4). O defeito era ler `attachments.length`
- * dentro do laço: cada arquivo do lote via o comprimento de ANTES dele, então
- * um lote inteiro passava. Os dois casos que travam o conserto são o LOTE e as
- * DUAS LEVAS — um contador local que reiniciasse a cada chamada passaria no
- * primeiro e quebraria o segundo. Os três gestos (seletor, drop, paste) entram
- * porque chegam por caminhos diferentes ao mesmo `addFiles`.
- */
+/** Limpeza no ACEITE (task 3ef2314b) — a barra esvazia texto E anexos quando o
+ * bus ACEITA, antes de qualquer veredito da FIFO. */
+describe("GlobalComposer — limpeza no ACEITE, não no veredito", () => {
+  it("anexos NÃO ficam presos quando a entrega é ACEITA e só depois o veredito falha", async () => {
+    // Task 3ef2314b: a barra limpa texto E anexos no ACEITE do bus (antes do
+    // veredito da FIFO). Então um veredito posterior `unconfirmed`/`failed`
+    // NÃO deixa os anexos presos — se o dono viu o badge com o veredito na
+    // tela, o que estava ali era um rascunho NOVO (a pílula persiste de
+    // propósito), não o anexo do envio já aceito.
+    send.mockResolvedValue({ ok: true, delivery: "queued", id: "d1" });
+    (window.bus.getDelivery as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      delivery: "unconfirmed",
+      id: "d1",
+      target: "card-agent",
+      confirm: { result: "unsent" },
+    });
+    render(<GlobalComposer boardId="board-1" />);
+    await pickTarget("Claude");
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const files = [1, 2, 3].map((n) => new File([new Uint8Array([n])], `foto${n}.png`, { type: "image/png" }));
+    Object.defineProperty(input, "files", { value: files, configurable: true });
+    fireEvent.change(input);
+    await waitFor(() => expect(attachmentCountForTest()).toBe(3));
+
+    fireEvent.click(document.querySelector('[data-role="composer-send"]') as HTMLElement);
+
+    // Aceito pelo bus: a barra esvazia JÁ aqui, antes de qualquer veredito.
+    await waitFor(() => expect(attachmentCountForTest()).toBe(0));
+    // E o veredito posterior aparece como "Sem confirmação", não "Falhou".
+    await waitFor(() =>
+      expect(document.querySelector('[data-role="composer-status"]')?.textContent).toContain("Sem confirmação"),
+    );
+    expect(attachmentCountForTest()).toBe(0);
+  });
+});
+
+function attachmentCountForTest(): number {
+  return document.querySelectorAll('[data-role="composer-attachments"] > *').length;
+}
+
 describe("GlobalComposer — o picker só oferece quem RECEBE", () => {
   it("card de chat e de navegador NÃO aparecem como destino (o bus não entrega neles)", async () => {
     // O `bus.send` entrega só `kind === "terminal"`; a barra oferecia três
@@ -213,6 +247,14 @@ describe("GlobalComposer — o picker só oferece quem RECEBE", () => {
   });
 });
 
+/**
+ * Teto de anexos POR MENSAGEM (4). O defeito era ler `attachments.length`
+ * dentro do laço: cada arquivo do lote via o comprimento de ANTES dele, então
+ * um lote inteiro passava. Os dois casos que travam o conserto são o LOTE e as
+ * DUAS LEVAS — um contador local que reiniciasse a cada chamada passaria no
+ * primeiro e quebraria o segundo. Os três gestos (seletor, drop, paste) entram
+ * porque chegam por caminhos diferentes ao mesmo `addFiles`.
+ */
 describe("GlobalComposer — teto de anexos por mensagem", () => {
   const png = (n: number) => new File([new Uint8Array([n])], `foto${n}.png`, { type: "image/png" });
 

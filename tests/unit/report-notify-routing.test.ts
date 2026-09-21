@@ -173,16 +173,56 @@ describe("RODADA 4 — linhagem durável (registro `spawns`) vence o 'último qu
     ).toEqual({ targetId: "aresta-visual", source: "spawned" });
   });
 
-  it("LIMITE DECLARADO: registro MORTO não salva — cai pro fallback de diretiva, como antes", () => {
+  // RODADA 5 (task 98c99324) — este era o teste do LIMITE DECLARADO pela
+  // RODADA 4 ("registro morto cai pro fallback de diretiva"). O limite foi
+  // fechado: linhagem conhecida com dono morto vira `none` explícito.
+  it("registro MORTO => none explícito (linhagem conhecida manda, não a conversa)", () => {
     expect(
       decideReportNotifyTarget({
         ...noOne,
-        directiveFromId: "reorchestrator-2",
+        spawnerOfRecordId: "registro-morto",
+        spawnerOfRecordAlive: false,
+      }),
+    ).toEqual({ targetId: null, source: "none" });
+  });
+
+  it("RODADA 5 = o sequestro: registro MORTO + diretiva VIVA => NÃO vai pro último que falou", () => {
+    // O caso que a RODADA 2 fechou uma casa acima. Um `send_to_card` de um
+    // terceiro cria a aresta `modified`; sem o ramo novo, o report iria pra
+    // ele, que só passou na conversa.
+    expect(
+      decideReportNotifyTarget({
+        ...noOne,
+        directiveFromId: "terceiro-que-falou",
         directiveFromAlive: true,
         spawnerOfRecordId: "registro-morto",
         spawnerOfRecordAlive: false,
       }),
-    ).toEqual({ targetId: "reorchestrator-2", source: "directive" });
+    ).toEqual({ targetId: null, source: "none" });
+  });
+
+  it("registro MORTO com mark VIVO: o mark continua ganhando (o ramo novo não o alcança)", () => {
+    expect(
+      decideReportNotifyTarget({
+        ...noOne,
+        orchestratorCardId: "orc",
+        orchestratorAlive: true,
+        spawnerOfRecordId: "registro-morto",
+        spawnerOfRecordAlive: false,
+      }),
+    ).toEqual({ targetId: "orc", source: "orchestrator" });
+  });
+
+  it("registro VIVO continua ganhando da diretiva (o degrau de cima não mudou)", () => {
+    expect(
+      decideReportNotifyTarget({
+        ...noOne,
+        directiveFromId: "d",
+        directiveFromAlive: true,
+        spawnerOfRecordId: "registro-vivo",
+        spawnerOfRecordAlive: true,
+      }),
+    ).toEqual({ targetId: "registro-vivo", source: "spawned" });
   });
 
   it("sem registro (ausente) o comportamento é o de antes — nada de novo dispara", () => {
