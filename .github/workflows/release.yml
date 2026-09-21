@@ -288,6 +288,10 @@ jobs:
       - name: confere os cinco formatos e publica
         env:
           GH_TOKEN: ${{ github.token }}
+          # Este job não faz checkout — não precisa da árvore. Sem ela o `gh`
+          # não tem git remote de onde inferir o repositório e morre com
+          # "not a git repository"; GH_REPO diz qual é, sem clonar nada.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
