@@ -1,6 +1,0 @@
-store.ts: coluna boards.orchestrator_card_id + TaskActor orchestrator + setBoardOrchestratorCardId + clear on deleteCard
-2026-09-14T10:16:49-03:00
----
-tsc limpo
-vitest território: board-orchestrator-mark + judgment + report-notify = 36 PASS
-UI: menu terminal + ConfirmModal + badge card + badge topbar
