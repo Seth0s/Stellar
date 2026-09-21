@@ -637,8 +637,49 @@ export function describeArtifactPendencies(pendencies: readonly ArtifactPendency
 }
 
 /**
+ * TROCA DE CARD EM TASK ABERTA (task e8802e32) — QUEM pode LIBERAR uma
+ * participação.
+ *
+ * O guard de fechamento (ecd36437) existe para a task não ficar órfã, e a
+ * liberação é a saída que faltava: "a task continua, e OUTRO card a fará".
+ * Ela NÃO pode virar a porta dos fundos do próprio guard — mesma classe de
+ * CAMADA 4, numa terceira porta:
+ *   - IMPLEMENTER não se auto-libera (seria fugir do guard): recusa nomeando
+ *     o papel. Participação vence o mark, como em `decideJudgmentWrite`.
+ *   - reviewer, outsider/sem-vínculo (inclui o humano) e o mark de
+ *     orquestrador do board liberam — não barrar `unknown` é a postura do
+ *     repo; quem executa a liberação no bus ainda exige o MOTIVO.
+ */
+export function describeReleaseByImplementerRefusal(taskId: string): string {
+  return (
+    `[de: stellar] release_task_card da task "${taskId}" recusado: ` +
+    `integrante implementer desta task não se auto-libera — seria a porta dos fundos do guard de fechamento ` +
+    `(a task ficaria aberta sem quem a faça). ` +
+    `Quem libera é o orquestrador ou o humano: use request_task_status para pedir, ` +
+    `ou deixe um card de FORA da task (ou o mark do orquestrador do board) chamar com um motivo. Nada foi gravado.`
+  );
+}
+
+export function decideTaskCardRelease(input: {
+  taskId: string;
+  /** Papel do chamador NESTA task (`task_cards`); null = sem vínculo/unknown. */
+  requesterRoleOnTask: JudgmentRequesterRole;
+}): JudgmentWriteDecision {
+  if (input.requesterRoleOnTask === TASK_CARD_IMPLEMENTER_ROLE) {
+    return { action: "refuse", error: describeReleaseByImplementerRefusal(input.taskId) };
+  }
+  return { action: "allow" };
+}
+
+/**
  * O que o fechamento do card deve fazer com UMA task aberta à qual ele
  * está ligado. Puro: o chamador só coleta fatos e aplica.
+ *
+ * NÃO conhece `released`: uma participação liberada sai do conjunto VIVO
+ * (`listTaskCardsForCard`) e portanto nunca chega aqui como vínculo — o
+ * fechamento do card liberado deixa de ver a task e não a conclui (decisão 1
+ * da task e8802e32). Ler a linha liberada do histórico seria justamente
+ * reintroduzir o caso que a liberação existe para resolver.
  */
 export function decideCloseCardTaskEffect(input: CloseCardLinkedTask): CloseCardTaskEffect {
   const targetApprovedAsReviewer = (() => {

@@ -60,6 +60,7 @@ import {
   createProvidersConfigWatcher,
   ensureProvidersConfigFile,
   formatProvidersReloadLine,
+  formatProvidersSeedNotice,
   loadDynamicProviders,
   parseProviderSpec,
   parseProviderSpecs,
@@ -315,12 +316,46 @@ if (singleInstancePolicy.quitIfLost && !gotSingleInstanceLock) {
   app.quit();
 }
 
+/** A versão do APP, independente de COMO o processo foi lançado.
+ *
+ * `app.getVersion()` responde a versão do `package.json` do diretório de app
+ * que o Electron resolveu — que é o do repo quando o app sobe como
+ * `electron .`, mas NÃO quando sobe como `electron out/main/index.js` (o modo
+ * que a suíte de verificação e uma conferência manual de build usam). Nos dois
+ * casos medidos em 2026-09-20 o mesmo binário respondeu `0.8.0` num e `0.0` no
+ * outro: a tela de procedência estava mostrando a versão do MODO DE EXECUÇÃO.
+ * Numa tela de procedência um número errado é pior que nenhum, então a versão
+ * é lida do `package.json` do próprio app pelos caminhos que não mudam de
+ * modo — o `out/main` sobe dois níveis para a raiz do app (dev) ou para a raiz
+ * do asar (empacotado) — e o nome do pacote confere que é o nosso, não o de
+ * um `package.json` estranho que por acaso está no caminho. Se nenhum
+ * responde, devolve `"unknown"` em vez de inventar número. */
+function appVersion(): string {
+  const candidates = [
+    join(__dirname, "..", "..", "package.json"),
+    join(app.getAppPath(), "package.json"),
+    join(process.cwd(), "package.json"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, "utf8")) as {
+        name?: string;
+        version?: string;
+      };
+      if (pkg.name === "stellar" && pkg.version) return pkg.version;
+    } catch {
+      /* candidato ausente ou ilegível — tenta o próximo */
+    }
+  }
+  return "unknown";
+}
+
 /** Identity of THIS process — shared by Settings UI, MCP `build_identity`,
  * and `hello` / `acbridge version`. See build-identity.ts. */
 function currentBuildIdentity(): BuildIdentity {
   return resolveBuildIdentity({
     isPackaged: app.isPackaged,
-    version: app.getVersion(),
+    version: appVersion(),
     busProtocol: ACBRIDGE_PROTOCOL,
     // electron-vite / packaged launches keep cwd at the project or install
     // root; when that isn't a git work tree, probe returns commit:null.
@@ -1918,6 +1953,15 @@ function createWindow() {
       // Fatia 3b-2 (ab83ba5f): com o link, o mesmo aviso por janela.
       if (task) taskNotifyCoalescer.notify(task.board_id ?? "");
     },
+    // TROCA DE CARD (task e8802e32) — a transacao vive no store; aqui so a
+    // ponte. A Fila precisa ver a mudanca sem reload (o chip de papel muda e
+    // a task pode voltar a `pending`), entao o mesmo push do link.
+    releaseTaskCardFromTask: (input) => {
+      const res = store.releaseTaskCardFromTask(input);
+      const task = store.getTask(input.taskId);
+      if (task) taskNotifyCoalescer.notify(task.board_id ?? "");
+      return res;
+    },
     listAllConnectors: () => store.listAllConnectors(),
     recordSpawn: (input) => store.recordSpawn(input),
     findSpawnByChild: (toCardId) => store.findSpawnByChild(toCardId),
@@ -3338,19 +3382,21 @@ app.whenReady().then(async () => {
   // existe e ainda não há janela: nada aqui depende de UI.
   //
   // O log é HONESTO sobre o que aconteceu e não alarma o que é normal: nascer
-  // e ser completado são fatos de uma vez (o segundo, uma vez por arquivo
-  // pobre que já existia); `unchanged` é o caso de todo boot seguinte e não
-  // vira linha. Arquivo ilegível/quebrado sai como AVISO, com o caminho e o
-  // motivo, porque é a única situação em que o usuário precisa olhar — e o
-  // arquivo fica intocado de propósito.
+  // e ser completado são fatos de uma vez; `unchanged` é o caso de todo boot
+  // seguinte e não vira linha. Arquivo ilegível/quebrado sai como AVISO, com o
+  // caminho e o motivo, porque é a única situação em que o usuário precisa
+  // olhar — e o arquivo fica intocado de propósito.
+  //
+  // A REDAÇÃO da linha mora em `formatProvidersSeedNotice` (task 3fe0db6e), e
+  // não aqui: aquele relatório tem um caso que NÃO pode passar em silêncio —
+  // uma entrada de fábrica que o usuário editou é PRESERVADA e para de receber
+  // atualizações, e ele precisa saber disso (com o id e com a saída). Uma
+  // segunda redação no main divergiria da primeira na primeira mudança de
+  // formato, que é o mesmo motivo pelo qual a linha do watcher também viaja
+  // pronta (`formatProvidersReloadLine`).
   const providersBootstrap = bootstrapProvidersConfig(newUserData);
-  if (providersBootstrap.config.action === "created" || providersBootstrap.config.action === "migrated") {
-    const what =
-      providersBootstrap.config.action === "created"
-        ? "criado com $schema e _example"
-        : `completado com ${providersBootstrap.config.addedKeys.join(", ")} (o resto do arquivo ficou como estava)`;
-    console.info(`[providers] ${providersBootstrap.config.path} ${what}.`);
-  }
+  const seedNotice = formatProvidersSeedNotice(providersBootstrap.config);
+  if (seedNotice !== null) console.info(`[providers] ${providersBootstrap.config.path} ${seedNotice}`);
   if (providersBootstrap.config.error !== null) {
     console.warn(
       `[providers] ${providersBootstrap.config.action}: ${providersBootstrap.config.error} — NÃO toquei no arquivo.`,
@@ -3496,10 +3542,22 @@ app.whenReady().then(async () => {
       skipped: loaded.skipped.includes(spec.id),
     });
 
-    const fromFile = parseProviderSpecs({ schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION, providers: fileEntries });
+    const fromFile = parseProviderSpecs(
+      { schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION, providers: fileEntries },
+      // O MESMO `appSpecs` que o loader usa: sem ele, uma entrada PARCIAL do
+      // usuário (a sobrescrita por campo que a própria tela promete na dica)
+      // seria recusada aqui e a linha sumiria da lista — ou, pior, apareceria
+      // como um provider sem os campos que o app completa.
+      { appSpecs: MEASURED_THIRD_PARTY_SPECS },
+    );
+    // A ORIGEM de uma linha é a LISTA em que ela está (task 3fe0db6e): o id que
+    // o app declara em `appProviders` é "do app" — mesmo quando o usuário
+    // sobrescreveu um campo dele. É o mesmo vocabulário do badge da tela
+    // ("do app"), e é o que o loader sabe: `appIds`.
+    const appIds = new Set(loaded.appIds);
     const shippedIds = new Set(loaded.shippedDefaults);
     const rows = [
-      ...fromFile.specs.map((s) => row(s, "file" as const)),
+      ...fromFile.specs.map((s) => row(s, appIds.has(s.id) ? ("app" as const) : ("file" as const))),
       ...MEASURED_THIRD_PARTY_SPECS.filter((s) => shippedIds.has(s.id)).map((s) => row(s, "app" as const)),
     ].sort((a, b) => a.id.localeCompare(b.id));
 

@@ -511,6 +511,14 @@ export type TaskCardRow = {
   card_id: string;
   role: string;
   linked_at?: number | null;
+  /** LIBERACAO (task e8802e32): `null` = participacao VIVA. Quando setado,
+   * a linha sai do conjunto VIVO (`listTaskCardsForCard`) e do guard de
+   * fechamento, mas CONTINUA no historico (`getTaskCards`) — a historia de
+   * quem participou e' o que `verdicts` preserva de proposito.
+   * `released_reason` e' OBRIGATORIO na escrita (quem libera diz o porquê). */
+  released_at?: number | null;
+  released_reason?: string | null;
+  released_by?: string | null;
   /** Fact recorded at link/spawn — what actually ran. null = undeclared/legacy. */
   provider?: string | null;
   model?: string | null;
@@ -942,6 +950,17 @@ function migrate(db: Database.Database) {
     db.exec(`ALTER TABLE task_cards ADD COLUMN linked_at INTEGER`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
+  }
+  // LIBERACAO de participacao (task e8802e32) — ver `TaskCardRow.released_at`.
+  // `released_at` e `released_by` sao o FATO e a autoria; `released_reason` e
+  // OBRIGATORIO por contrato (liberacao sem motivo e' indistinguivel de bug).
+  // Additive, nullable, no backfill — same posture as `linked_at`.
+  for (const col of ["released_at INTEGER", "released_reason TEXT", "released_by TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE task_cards ADD COLUMN ${col}`);
+    } catch (e) {
+      if (!String(e).includes("duplicate column name")) throw e;
+    }
   }
   // Execution profile on the participation — see TaskCardRow. Additive,
   // nullable, no backfill (same posture as linked_at).
@@ -2214,10 +2233,15 @@ export function openStore(userDataDir: string) {
       model = COALESCE(excluded.model, task_cards.model),
       effort = COALESCE(excluded.effort, task_cards.effort),
       requested_resume_id = COALESCE(excluded.requested_resume_id, task_cards.requested_resume_id),
-      session_id = COALESCE(excluded.session_id, task_cards.session_id)
+      session_id = COALESCE(excluded.session_id, task_cards.session_id),
+      -- Re-linkar um card LIBERADO o devolve a participacao VIVA: a
+      -- liberacao e' um estado da linha, nao uma lapide (task e8802e32).
+      released_at = NULL,
+      released_reason = NULL,
+      released_by = NULL
   `);
   const listTaskCardsStmt = db.prepare(
-    "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id FROM task_cards WHERE task_id = ?",
+    "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id, released_at, released_reason, released_by FROM task_cards WHERE task_id = ?",
   );
   // "Histórico de veredito por participação" — o outro lado da mesma
   // junção: `recordParticipationRound` (abaixo) recebe só um `cardId` (é
@@ -2241,11 +2265,16 @@ export function openStore(userDataDir: string) {
   // status guard so recycle into done/failed history stays blocked.
   // `getTaskCards(taskId)` stays unfiltered for the Fila/history chips.
   const listTaskCardsForCardStmt = db.prepare(`
-    SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at, tc.provider, tc.model, tc.effort, tc.requested_resume_id, tc.session_id
+    SELECT tc.task_id, tc.card_id, tc.role, tc.linked_at, tc.provider, tc.model, tc.effort, tc.requested_resume_id, tc.session_id, tc.released_at, tc.released_reason, tc.released_by
     FROM task_cards tc
     JOIN tasks t ON t.id = tc.task_id
     LEFT JOIN cards c ON c.id = tc.card_id
     WHERE tc.card_id = ?
+      -- LIBERADO nao e' VIVO (task e8802e32): sai do conjunto do guard e do
+      -- carimbo de papel, e CONTINUA no historico (getTaskCards). O reciclo
+      -- ja' e' coberto pela epoca abaixo; a liberacao e' um segundo motivo de
+      -- nao-vivo, e um id reciclado nao pode herdar uma linha liberada.
+      AND tc.released_at IS NULL
       AND CASE
         WHEN tc.linked_at IS NOT NULL AND c.created_at IS NOT NULL
           THEN tc.linked_at >= c.created_at
@@ -2255,7 +2284,101 @@ export function openStore(userDataDir: string) {
   /** Full card-side history (including terminal tasks). Diagnostics and
    * audits only — never the report / participation write path. */
   const listTaskCardsForCardHistoryStmt = db.prepare(
-    "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id FROM task_cards WHERE card_id = ?",
+    "SELECT task_id, card_id, role, linked_at, provider, model, effort, requested_resume_id, session_id, released_at, released_reason, released_by FROM task_cards WHERE card_id = ?",
+  );
+
+  /**
+   * TROCA DE CARD EM TASK ABERTA (task e8802e32) — a liberacao passa por
+   * AQUI, numa transacao, porque TRES escritas tem de andar juntas ou
+   * nenhuma:
+   *   (1) a linha de `task_cards` ganha `released_*` (motivo OBRIGATORIO);
+   *   (2) se o card liberado era o PRINCIPAL (`tasks.card_id`), o ponteiro
+   *       VAI PARA O SUCESSOR — sem isso a resolucao de task do `report`
+   *       pela porta MCP (que le `tasks.card_id`) continua apontando para o
+   *       card velho, e o novo implementer nao consegue reportar nem
+   *       assinar;
+   *   (3) se NAO sobra implementer VIVO, a task volta a `pending` VISIVEL na
+   *       Fila — nunca ao limbo.
+   * `WHERE released_at IS NULL` recusa liberar duas vezes: idempotencia
+   * silenciosa aqui esconderia um erro de quem chama.
+   */
+  const releaseTaskCardStmt = db.prepare(`
+    UPDATE task_cards
+    SET released_at = @released_at, released_reason = @released_reason, released_by = @released_by
+    WHERE task_id = @task_id AND card_id = @card_id AND released_at IS NULL
+  `);
+  const countLiveImplementersStmt = db.prepare(
+    "SELECT COUNT(*) as n FROM task_cards WHERE task_id = ? AND role = 'implementer' AND released_at IS NULL",
+  );
+  const getTaskPrincipalStmt = db.prepare("SELECT card_id FROM tasks WHERE id = ?");
+  const setTaskPrincipalStmt = db.prepare("UPDATE tasks SET card_id = @card_id, updated_at = @updated_at WHERE id = @id");
+  const setTaskStatusStmt = db.prepare("UPDATE tasks SET status = @status, updated_at = @updated_at WHERE id = @id");
+
+  const releaseTaskCardFromTask = db.transaction(
+    (
+      input: {
+        taskId: string;
+        cardId: string;
+        reason: string;
+        releasedBy: string | null;
+        nextImplementerCardId?: string | null;
+      },
+    ):
+      | { ok: false; error: string }
+      | {
+          ok: true;
+          releasedAt: number;
+          nextPrincipalCardId: string | null;
+          liveImplementersLeft: number;
+          taskStatus: string | null;
+        } => {
+      const reason = (input.reason ?? "").trim();
+      if (!reason) return { ok: false as const, error: "release requires a reason" };
+      const at = Date.now();
+      const changed = releaseTaskCardStmt.run({
+        task_id: input.taskId,
+        card_id: input.cardId,
+        released_at: at,
+        released_reason: reason,
+        released_by: input.releasedBy,
+      }).changes;
+      if (changed === 0) {
+        return {
+          ok: false as const,
+          error: `card "${input.cardId}" is not a live participant of task "${input.taskId}"`,
+        };
+      }
+      const next = input.nextImplementerCardId ?? null;
+      if (next) {
+        linkTaskCardStmt.run({
+          task_id: input.taskId,
+          card_id: next,
+          role: "implementer",
+          linked_at: at,
+          provider: null,
+          model: null,
+          effort: null,
+          requested_resume_id: null,
+          session_id: null,
+        });
+      }
+      const principal = (getTaskPrincipalStmt.get(input.taskId) as { card_id: string | null } | undefined)?.card_id ?? null;
+      if (principal === input.cardId) {
+        setTaskPrincipalStmt.run({ id: input.taskId, card_id: next, updated_at: at });
+      }
+      const liveLeft = (countLiveImplementersStmt.get(input.taskId) as { n: number }).n;
+      let taskStatus: string | null = null;
+      if (liveLeft === 0) {
+        // `pending` = a Fila mostra a task esperando card. DECLARADO: esta
+        // escrita direta NAO consulta o hold humano (`diverged_status`), que
+        // e' um follow-up — o caminho de `update_task` continua sendo o
+        // funil com precedencia; aqui o que nao pode acontecer e' a task
+        // sumir do radar.
+        setTaskStatusStmt.run({ id: input.taskId, status: "pending", updated_at: at });
+        taskStatus = "pending";
+      }
+      return { ok: true as const, releasedAt: at, nextPrincipalCardId: next, liveImplementersLeft: liveLeft, taskStatus };
+    },
   );
 
   /**
@@ -2775,6 +2898,18 @@ export function openStore(userDataDir: string) {
      * history/evidence. Do not use for role stamping. */
     listTaskCardsForCardHistory: (cardId: string): TaskCardRow[] =>
       listTaskCardsForCardHistoryStmt.all(cardId) as TaskCardRow[],
+    /** TROCA DE CARD (task e8802e32): libera a participacao de `cardId` na
+     * task com motivo OBRIGATORIO e, na MESMA transacao, move o ponteiro
+     * principal para `nextImplementerCardId` (quando havia um) e devolve a
+     * task a `pending` se nao sobrar implementer vivo. Ver a transacao para
+     * o porquê de cada uma das tres escritas. */
+    releaseTaskCardFromTask: (input: {
+      taskId: string;
+      cardId: string;
+      reason: string;
+      releasedBy: string | null;
+      nextImplementerCardId?: string | null;
+    }) => releaseTaskCardFromTask(input),
     linkTaskCard: (
       taskId: string,
       cardId: string,
