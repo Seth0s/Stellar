@@ -75,24 +75,22 @@ export type TerminalCardData = BaseCard & {
   taskId?: string | null;
 };
 
-/** DESIGN-BACKLOG.md §2.1 "effort do card não é persistido", 2026-09-10 —
- * per-provider effort ranges, confirmed live against each CLI's own
- * `--help`/error output (not assumed — see providers.ts's `SpawnOpts.
- * effort` doc comment). Used by Rail.tsx's terminal-creation popover to
- * only ever OFFER a value a provider actually accepts, instead of letting
- * a human pick e.g. "xhigh" for antigravity and finding out later it was
- * refused (message-bus.ts's `spawn_agent` handler enforces the same
- * per-provider range for agent-driven spawns, which don't go through this
- * popover at all). Every provider not listed here doesn't read `effort`
- * — no options offered, same as before this map existed.
+/** A faixa de esforço por provider SAIU DAQUI (2026-09-20, task 07b05f43).
  *
- * 2026-09-12: antigravity widened from `low|high` to `low|medium|high`
- * after a live re-measure of `agy --help` (v1.2.2) — the older range was
- * a stale comment, not the CLI. */
-export const PROVIDER_EFFORT_VALUES: Record<string, readonly string[]> = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
-  antigravity: ["low", "medium", "high"],
-};
+ * O que estava neste lugar era `capacity.effort.values` de claude e
+ * antigravity COPIADO valor por valor — e a cópia teve de ser sincronizada à
+ * mão quando o antigravity mudou de faixa (2026-09-12, registrado no próprio
+ * comentário que morava aqui). Pior que a duplicação era a omissão: cline e
+ * commandcode DECLARAM `--thinking`/`--effort` com cinco valores cada e a UI
+ * não oferecia NENHUM, porque este mapa não tinha entrada para eles — quem
+ * usa um provider genérico não conseguia escolher esforço.
+ *
+ * Agora os valores vêm da projeção do canal de disponibilidade
+ * (`AgentAvailability.effortValues`, `preload/index.ts`; o mapeamento vive em
+ * `main/agent-availability-projection.ts`). A ORDEM é a da declaração (os
+ * valores são escritos do menor para o maior) e VAZIO significa "este
+ * provider não declara esforço" — a UI lê isso como "não oferece o
+ * controle", nunca como um select sem opções. Ver `Rail.tsx`. */
 
 export type FilesCardData = BaseCard & { kind: "files"; root: string };
 export type ChangesCardData = BaseCard & { kind: "changes"; root: string };

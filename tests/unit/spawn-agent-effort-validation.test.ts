@@ -1,9 +1,10 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
-import { PROVIDER_EFFORT_VALUES } from "../../src/renderer/src/card-types";
+import { projectEffortValues } from "../../src/main/agent-availability-projection";
+import { PROVIDERS, providerById } from "../../src/main/providers";
 
 // DESIGN-BACKLOG.md §2.1 "effort do card não é persistido" — ranges
 // re-measured 2026-09-12 against the live CLIs (not the comments):
@@ -166,17 +167,40 @@ describe("message-bus.ts: spawn_agent effort validation por provider", () => {
     }
   });
 
-  // Cross-module invariant, not a duplicate of the implementation: the
-  // UI's own offer list (card-types.ts's PROVIDER_EFFORT_VALUES, used by
-  // Rail.tsx's terminal-creation popover so a human can't even PICK an
-  // invalid value) and message-bus.ts's independent refusal gate must
-  // agree on each provider's range. If they ever drift apart, this
-  // fails — either the popover would offer something the server refuses,
-  // or the server would accept something the popover never offers.
-  it.each(["claude", "antigravity"] as const)(
-    "PROVIDER_EFFORT_VALUES.%s e o gate de spawn_agent concordam em toda a gama",
-    async (provider) => {
-      const candidates = ["low", "medium", "high", "xhigh", "max", "garbage"];
+  // Cross-module invariant, not a duplicate of the implementation: a UI que
+  // OFERECE esforço e o gate independente do `spawn_agent` têm de concordar
+  // sobre a faixa de cada provider. Se os dois se afastarem, isto falha —
+  // ou o popover ofereceria um valor que o servidor recusa, ou o servidor
+  // aceitaria um valor que o popover nunca oferece.
+  //
+  // A fonte do lado da UI MUDOU (task 07b05f43): era
+  // `PROVIDER_EFFORT_VALUES`, um mapa COPIADO no renderer que só conhecia
+  // claude e antigravity; agora é a PROJEÇÃO da própria declaração
+  // (`AgentAvailability.effortValues` → `projectEffortValues`), a mesma que o
+  // Rail usa para montar o select. Isto deixa o invariante mais forte do que
+  // era: antes ele comparava o gate com uma CÓPIA que podia estar velha por
+  // conta própria (e estava: cline e commandcode declaram esforço e o mapa
+  // não tinha entrada para eles); agora ele compara o gate com a leitura da
+  // MESMA declaração, e por isso cobre TODOS os providers que declaram faixa
+  // — nativos e genéricos.
+  beforeAll(async () => {
+    // O catálogo embutido entra como no boot do app: sem isto os dois CLIs
+    // genéricos não estão no registro e o invariante não os cobriria.
+    const { loadDynamicProviders } = await import("../../src/main/providers-dynamic");
+    loadDynamicProviders("/tmp/stellar-spawn-effort-no-userdata");
+  });
+
+  it("a faixa oferecida pela UI (projeção) e o gate de spawn_agent concordam, para TODO provider que declara esforço", async () => {
+    const candidates = ["low", "medium", "high", "xhigh", "max", "none", "garbage"];
+    const declaring = PROVIDERS.map((p) => p.id).filter(
+      (id) => providerById(id)!.capacity.effort.mechanism === "flag",
+    );
+    // A lista não é fixa de propósito: um provider novo que passe a declarar
+    // faixa entra neste invariante sem ninguém editar o teste.
+    expect(declaring).toEqual(expect.arrayContaining(["claude", "antigravity", "cline", "commandcode"]));
+
+    for (const provider of declaring) {
+      const offered = projectEffortValues(providerById(provider)!.capacity.effort);
       for (const effort of candidates) {
         let dispatched = false;
         const bus = createMessageBus(
@@ -195,12 +219,15 @@ describe("message-bus.ts: spawn_agent effort validation por provider", () => {
           // `onSpawnAgentRequest` at all is the signal this test needs.
           void bus.handleRequest({ cmd: "spawn_agent", provider, effort, reason: "test", requesterId: "card-1" } as BusRequest);
           await new Promise((r) => setTimeout(r, 20));
-          const offeredByUi = (PROVIDER_EFFORT_VALUES[provider] ?? []).includes(effort);
-          expect(dispatched).toBe(offeredByUi);
+          expect({ provider, effort, dispatched }).toEqual({
+            provider,
+            effort,
+            dispatched: offered.includes(effort),
+          });
         } finally {
           bus.close();
         }
       }
-    },
-  );
+    }
+  });
 });

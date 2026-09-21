@@ -1323,7 +1323,24 @@ const updater = {
     ipcRenderer.invoke("updater:test-emit-available", version, releaseNotes),
 };
 
-export type AgentAvailability = { id: string; label: string; installed: boolean; installCommand: string | null };
+export type AgentAvailability = {
+  id: string;
+  label: string;
+  installed: boolean;
+  installCommand: string | null;
+  /**
+   * PROJEÇÃO de `capacity.effort.values` — os valores que a UI pode
+   * OFERECER, na ORDEM declarada (a declaração é escrita do menor para o
+   * maior). Vazio = este provider não declara esforço, e aí a UI NÃO oferece
+   * o controle: ausência nunca vira um select vazio.
+   *
+   * Nome PRÓPRIO da UI de propósito: o renderer não conhece o formato do
+   * spec, só o que consome. Ver o handler de `agents:check-availability` em
+   * `main/index.ts` — é lá que o mapeamento vive, e é ele que decide o que
+   * atravessa.
+   */
+  effortValues: string[];
+};
 
 /** Achado ao vivo, 2026-09-03 — checagem proativa de CLIs de agente
  * instaladas, consultada pelo Topbar ao entrar num board (ver

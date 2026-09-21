@@ -51,11 +51,14 @@ import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { deriveParticipationDivergence, deriveTaskStatus } from "../task-status-derive";
-import { checkAgentAvailability, type SpawnOpts } from "./providers";
+import { checkAgentAvailability, providerById, type SpawnOpts } from "./providers";
+import { projectEffortValues, providersReloadNotices } from "./agent-availability-projection";
 import {
   MEASURED_THIRD_PARTY_SPECS,
   PROVIDERS_CONFIG_SCHEMA_VERSION,
+  bootstrapProvidersConfig,
   createProvidersConfigWatcher,
+  ensureProvidersConfigFile,
   formatProvidersReloadLine,
   loadDynamicProviders,
   parseProviderSpec,
@@ -2080,7 +2083,31 @@ function createWindow() {
   // Topbar.tsx/useAgentAvailability.ts). Substitui o antigo aviso que só
   // aparecia DEPOIS de tentar (e falhar) spawnar o card — quebrava o
   // fluxo (removido de TerminalCard.tsx/useTerminal.ts).
-  ipcMain.handle("agents:check-availability", () => checkAgentAvailability());
+  // A PROJEÇÃO DA CAPACIDADE (2026-09-20) — o renderer NÃO recebe
+  // `capacity`, e por isso cada fato de capacidade que a UI precisa virava
+  // uma SEGUNDA TABELA hardcoded do lado de lá: `card-types.ts`'s
+  // PROVIDER_EFFORT_VALUES era `capacity.effort.values` de claude e
+  // antigravity copiado valor por valor (e exigiu sincronização à mão quando
+  // o antigravity mudou de faixa em 2026-09-12), enquanto cline e
+  // commandcode declaram as suas e a UI não oferecia nenhuma.
+  //
+  // O que se projeta é o que a UI CONSOME, com nome próprio — nunca o
+  // `capacity` inteiro, que acoplaria o renderer ao formato interno do spec
+  // e vazaria campos que só o main usa (role, mcp, delivery, session…).
+  //
+  // `effortValues`: os valores oferecíveis, na ORDEM DECLARADA (as
+  // declarações são escritas do menor para o maior; um `Set`/`sort` aqui
+  // perderia isso). Vazio = o provider não declara esforço (`bash`, cursor,
+  // codex) e a UI simplesmente NÃO oferece o controle — ausência nunca vira
+  // um select vazio. É o único campo projetado hoje; o fim de turno (B1) e o
+  // prompt de sistema (B3) entram por este mesmo caminho quando as decisões
+  // deles forem tomadas — não antes, para não projetar campo sem consumidor.
+  ipcMain.handle("agents:check-availability", () =>
+    checkAgentAvailability().map((agent) => ({
+      ...agent,
+      effortValues: projectEffortValues(providerById(agent.id)?.capacity.effort),
+    })),
+  );
   ipcMain.handle("spawn:agent-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>
     messageBus!.resolveSpawnAgent(requestId, result),
   );
@@ -3289,6 +3316,50 @@ app.whenReady().then(async () => {
   // que o próprio handler acabou de validar e gravar, e o preço de não ter
   // dois caminhos de carga divergindo — o formulário não ganha atalho nenhum
   // no registro por causa disso.
+  // ---------------------------------------------------------------------
+  // O ARQUIVO DO USUÁRIO NASCE INSTRUÍDO — e o que já existe é completado
+  // (task d9aa8b1a). O relato: o botão "editar" do Settings abria um
+  // `providers.json` de 44 bytes, `{ "schemaVersion": 1, "providers": [] }`,
+  // sem `$schema` (então sem autocompletar) e sem o exemplo — num arquivo para
+  // o qual a própria UI acabou de apontar o usuário como o lugar de sobrescrever
+  // o `baseArgs` (task c857539c).
+  //
+  // A CAUSA era fiação, não desenho: `initialProvidersConfig` e
+  // `ensureProvidersSchemaFile` existiam desde a 64aed52b, documentadas e
+  // testadas, e sem um único chamador de produção — por isso este passo, e por
+  // isso o gate em tests/unit/providers-config-seed.test.ts, que pergunta
+  // "alguém chama isto?".
+  //
+  // ORDEM, e ela importa duas vezes: ANTES do `loadDynamicProviders` abaixo,
+  // para a linha de base do watcher ser lida de um arquivo já semeado (gravar
+  // depois seria escrever com o observador armado, e um boot com um reload
+  // espúrio no relatório); e ANTES do `createProvidersConfigWatcher`, pelo
+  // mesmo motivo. Aqui também é o único ponto do boot em que `newUserData` já
+  // existe e ainda não há janela: nada aqui depende de UI.
+  //
+  // O log é HONESTO sobre o que aconteceu e não alarma o que é normal: nascer
+  // e ser completado são fatos de uma vez (o segundo, uma vez por arquivo
+  // pobre que já existia); `unchanged` é o caso de todo boot seguinte e não
+  // vira linha. Arquivo ilegível/quebrado sai como AVISO, com o caminho e o
+  // motivo, porque é a única situação em que o usuário precisa olhar — e o
+  // arquivo fica intocado de propósito.
+  const providersBootstrap = bootstrapProvidersConfig(newUserData);
+  if (providersBootstrap.config.action === "created" || providersBootstrap.config.action === "migrated") {
+    const what =
+      providersBootstrap.config.action === "created"
+        ? "criado com $schema e _example"
+        : `completado com ${providersBootstrap.config.addedKeys.join(", ")} (o resto do arquivo ficou como estava)`;
+    console.info(`[providers] ${providersBootstrap.config.path} ${what}.`);
+  }
+  if (providersBootstrap.config.error !== null) {
+    console.warn(
+      `[providers] ${providersBootstrap.config.action}: ${providersBootstrap.config.error} — NÃO toquei no arquivo.`,
+    );
+  }
+  if (providersBootstrap.schema.error !== null) {
+    console.warn(`[providers] schema ao lado do providers.json não pôde ser escrito: ${providersBootstrap.schema.error}`);
+  }
+
   const bootProvidersLoad = loadDynamicProviders(newUserData);
   const providersWatcher = createProvidersConfigWatcher({
     userDataDir: newUserData,
@@ -3300,7 +3371,16 @@ app.whenReady().then(async () => {
       // mesmo fato divergiriam na primeira mudança de formato do relatório.
       const line = formatProvidersReloadLine(report);
       console.info(`[providers] ${line}`);
-      if (mainWindow) safeSend(mainWindow, "providers:config-changed", { report, line });
+      // Os DOIS avisos que este reload deve emitir vêm de onde são testáveis
+      // (agent-availability-projection.ts): o segundo faz o snapshot do
+      // renderer acompanhar o arquivo em vez de congelar no boot — sem ele o
+      // rail, o menu radial e os pickers continuam mostrando o mundo velho (e
+      // a faixa de esforço editada fica com o valor antigo na tela).
+      if (mainWindow) {
+        for (const notice of providersReloadNotices(report, line)) {
+          safeSend(mainWindow, notice.channel, ...notice.args);
+        }
+      }
     },
   });
   app.once("will-quit", () => providersWatcher.stop());
@@ -3440,12 +3520,17 @@ app.whenReady().then(async () => {
   /**
    * Escape hatch do briefing: abre o JSON cru no editor do SO — este app não
    * constrói editor de JSON. O arquivo precisa EXISTIR para o editor abrir
-   * com conteúdo, então um arquivo ausente nasce aqui, vazio e válido.
+   * com conteúdo, então um arquivo ausente nasce aqui — e nasce pela MESMA
+   * função do boot (`ensureProvidersConfigFile`), não por um segundo caminho
+   * de escrita: era `writeProvidersConfig(path, {}, [])`, que produzia
+   * exatamente o arquivo mudo de 44 bytes que a task d9aa8b1a veio consertar.
+   * Aqui o caso é raro (só acontece se o usuário apagar o arquivo com o app
+   * aberto), mas o conteúdo não pode ser diferente do que o boot produz.
    */
   ipcMain.handle("app:open-providers-config", async () => {
     const path = providersConfigPath(newUserData);
     const file = readProvidersConfigFile(path);
-    if (file.kind === "missing") writeProvidersConfig(path, {}, []);
+    if (file.kind === "missing") ensureProvidersConfigFile(newUserData);
     const openError = await shell.openPath(path);
     return { ok: openError === "", error: openError === "" ? null : openError };
   });
