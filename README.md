@@ -13,6 +13,13 @@ and projects.
 - **Real terminals**, multiple providers (Claude, Codex, Cursor, bash),
   resumable/continuable, spawned from a linear rail or a radial
   right-click/press-hold menu (which also switches tools).
+- **An MCP server that exposes the board to the agents running on it** —
+  an agent can list cards, read another card's output, spawn a card,
+  send a message to one, and report a structured result. Agents on the
+  same board can see and steer each other.
+- **Browser cards driven over the Chrome DevTools Protocol** — navigate,
+  query the DOM, click, type, scroll, read console and network. An agent
+  can use a real browser as a tool, not a screenshot of one.
 - **File explorer** with per-type icons, inline rename/delete/create,
   markdown preview.
 - **Mobile remote control** — pair a phone over the LAN (QR code,
@@ -58,7 +65,17 @@ npm run verify   # tsc + build + the full CDP/Electron smoke suite
 - [`DESIGN-BACKLOG.md`](DESIGN-BACKLOG.md) — the product backlog, one
   numbered item per feature/fix, each closed only once verified live.
 
+## Contributing
+
+Pull requests are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for
+the checks to run before opening one, and accept the
+[Contributor License Agreement](CLA.md) in your first pull request — you
+keep the copyright on what you write.
+
 ## License
 
-Apache License 2.0 — see [`LICENSE`](LICENSE). Free to use, modify, and
-redistribute, with attribution and the license notice kept intact.
+GNU General Public License v3.0 or later — see [`LICENSE`](LICENSE).
+
+You may use, study, modify and redistribute Stellar freely. If you
+distribute a modified version, you must ship its complete source under
+the same licence, so every derivative stays open.
