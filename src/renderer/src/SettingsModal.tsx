@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { t, SUPPORTED_LOCALES, type Locale } from "../../shared/i18n";
 import { Icon, type IconName } from "./icons";
+import { StellarMark } from "./StellarMark";
 import { useModal } from "./useModal";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { SecretsSettingsModal } from "./SecretsSettingsModal";
@@ -272,11 +273,13 @@ function AboutPage({
 }) {
   const [override, setOverride] = useState<Locale | null>(null);
   const [systemLocale, setSystemLocale] = useState("");
-  // The identity as PARTS, not one string: it is long enough to wrap, and
-  // it must wrap between the parts (label · version · bus) — never inside
-  // one, which is where "bus / protocol 4" came from. `title` joins them
-  // back for the case where the value is clipped anyway.
-  const [buildParts, setBuildParts] = useState<string[] | null>(null);
+  // A identidade chega em DOIS pedaços, e por motivos diferentes: a VERSÃO é a
+  // resposta de relance ("que app é este e em que versão?") e fica no bloco de
+  // cima; os PARTS são procedência (commit/data e protocolo do bus) e quebram
+  // ENTRE si, nunca dentro de um — é de onde saía o "bus / protocol 4". A
+  // versão NÃO se repete embaixo: repetir é convidar os dois números a
+  // divergirem, e o de baixo só é bom se for o mesmo.
+  const [build, setBuild] = useState<{ version: string; parts: string[] } | null>(null);
 
   useEffect(() => {
     void window.i18n.get().then((info) => {
@@ -284,9 +287,18 @@ function AboutPage({
       setSystemLocale(info.systemLocale);
     });
     void window.system.getBuildIdentity().then((id) => {
-      setBuildParts([id.label, `v${id.version}`, `bus protocol ${id.busProtocol}`]);
+      setBuild({ version: id.version, parts: [id.label, `bus protocol ${id.busProtocol}`] });
     });
   }, [locale]);
+
+  // `unknown` é a resposta honesta da main quando nenhum `package.json` do app
+  // respondeu: numa tela de procedência, dizer que não sabe é melhor que
+  // mostrar um número errado (ver `appVersion()` em `main/index.ts`).
+  const versionText = build
+    ? build.version === "unknown"
+      ? t("settings.about.versionUnknown")
+      : `v${build.version}`
+    : t("settings.general.buildIdentityLoading");
 
   const LOCALE_LABEL: Record<Locale, string> = {
     "pt-BR": t("settings.locale.ptBR"),
@@ -295,6 +307,38 @@ function AboutPage({
 
   return (
     <>
+      {/* IDENTIDADE — bloco, não linha de formulário: ícone (a MESMA arte de
+          `build/icon.svg`, via `StellarMark`), nome e versão de relance. A
+          versão anterior tentava dizer isto numa `.form-row`, com a tela
+          virando três dados espremidos em 300px de mono. É o caso da REGRA DE
+          VARIANTE (§8.1 do SYSTEM_DESIGN): Sobre não é `label|controle`.
+          "Stellar" não é traduzido: é nome próprio, igual nos dois idiomas. */}
+      <div className="about-identity" data-settings-identity="">
+        <StellarMark size={40} />
+        <div className="about-identity-name">Stellar</div>
+        <div className="about-identity-version" data-settings-version="">
+          {versionText}
+        </div>
+      </div>
+
+      {/* PROCEDÊNCIA — em largura cheia e legível, com o aviso que existe para
+          o caso real de hoje: o dono testando uma build sem saber se o conserto
+          estava dentro. Este texto NÃO sai. */}
+      <div className="about-build" data-settings-build-identity="">
+        <div className="about-build-label">{t("settings.general.buildIdentity")}</div>
+        <div className="about-build-parts">
+          {build
+            ? build.parts.map((part, i) => (
+                <Fragment key={part}>
+                  {i > 0 && " · "}
+                  <span className="settings-build-part">{part}</span>
+                </Fragment>
+              ))
+            : t("settings.general.buildIdentityLoading")}
+        </div>
+        <p className="about-build-hint">{t("settings.general.buildIdentityHint")}</p>
+      </div>
+
       <SettingsField
         label={t("shortcuts.locale")}
         hint={t("settings.general.localeHint")}
@@ -317,21 +361,6 @@ function AboutPage({
             </option>
           ))}
         </select>
-      </SettingsField>
-      <SettingsField
-        label={t("settings.general.buildIdentity")}
-        hint={t("settings.general.buildIdentityHint")}
-      >
-        <code data-settings-build-identity="" title={buildParts?.join(" · ")}>
-          {buildParts
-            ? buildParts.map((part, i) => (
-                <Fragment key={part}>
-                  {i > 0 && " · "}
-                  <span className="settings-build-part">{part}</span>
-                </Fragment>
-              ))
-            : t("settings.general.buildIdentityLoading")}
-        </code>
       </SettingsField>
       <div className="settings-note">{t("settings.general.scopeNote")}</div>
     </>

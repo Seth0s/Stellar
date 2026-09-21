@@ -1643,10 +1643,10 @@ select.resume-input {
 
 /* O valor mora na 2ª coluna, encostado à direita. `min-width: 0` +
    `max-width: 100%` impedem que um valor comprido empurre a coluna: hash e
-   caminho quebram DENTRO dela (ver o `code` abaixo). */
+   caminho quebram DENTRO dela. (A identidade da build saiu daqui: é bloco, não
+   linha — ver `.about-*`.) */
 .form-row > select,
-.form-row > input,
-.form-row > code {
+.form-row > input {
   grid-column: 2;
   justify-self: end;
   min-width: 0;
@@ -1674,24 +1674,85 @@ select.resume-input {
   width: 7.5rem;
 }
 
-/* A identidade da build é leitura técnica, não prosa: mono explícita (sem
-   esta regra o `<code>` caía no padrão do navegador — fonte fixa em 13px,
-   nenhum tratamento do design system) e quebra em QUALQUER ponto, porque
-   quando o valor vira hash/caminho não sobra espaço onde quebrar. */
-.form-row code {
+/* ---------------------------------------------------------------------------
+ * A SEÇÃO SOBRE — um BLOCO DE IDENTIDADE, não uma linha de formulário.
+ *
+ * É a REGRA DE VARIANTE (§8.1 do SYSTEM_DESIGN) aplicada a este caso: Sobre
+ * não é `label|controle`, é identidade e procedência, lidas de relance. A
+ * versão anterior espremia os três dados de build na coluna de 300px da
+ * `.form-row` — cabia (medido: overflow 0), mas lia como corte. O conserto
+ * NÃO é uma terceira variante da primitiva: é um bloco com desenho próprio.
+ *
+ * O ícone é o `StellarMark`, a MESMA arte de `build/icon.svg` (o que o
+ * empacotador usa) — o componente que o Titlebar e a Home já usam, para não
+ * existir um segundo logo.
+ * ------------------------------------------------------------------------ */
+.about-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4) 0 var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.about-identity-name {
+  font-size: var(--text-6);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.about-identity-version {
+  /* Empurrado para a direita e em mono, no MESMO corpo do nome: é o dado que
+     o dono procura de relance ("que versão é esta?"), e é o único lugar onde
+     ele aparece — a linha de build abaixo carrega commit, data e protocolo,
+     não a versão de novo. */
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-6);
+  color: var(--foam);
+}
+
+/* Bloco de procedência: delimitado em cima e embaixo. Sem a borda de baixo, a
+   linha "Idioma" (que é ajuste, não procedência) encostava no aviso e as duas
+   coisas liam como uma seção só. */
+.about-build {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-6) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.about-build-label {
+  font-size: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--muted);
+}
+
+/* Leitura técnica em largura CHEIA, não numa coluna: mono explícita e quebra
+   em qualquer ponto (quando o valor vira hash/caminho não sobra espaço onde
+   quebrar). */
+.about-build-parts {
   font-family: var(--font-mono);
   font-size: var(--text-5);
-  color: var(--muted);
-  text-align: right;
+  line-height: 1.5;
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 
-/* Cada parte da identidade é um bloco que não se parte: a quebra acontece
-   nos " · " entre elas, nunca dentro de uma. Sem isto, os 300px da coluna
-   cortavam "bus protocol 4" no meio e a leitura saía "bus" / "protocol 4"
-   — um caminho ou um hash não têm onde quebrar, e um pedaço de frase
-   sozinho não significa nada. O `overflow-wrap: anywhere` acima continua
-   sendo a rede para o caso de UMA parte já não caber na coluna. */
+.about-build-hint {
+  font-size: var(--text-3);
+  line-height: 1.4;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Cada parte da identidade é um bloco que não se parte: a quebra acontece nos
+   " · " entre elas, nunca dentro de uma — um caminho ou um hash não têm onde
+   quebrar, e um pedaço de frase sozinho não significa nada. Nasceu quando a
+   linha vivia na coluna de 300px; continua valendo no bloco em largura cheia,
+   e o `overflow-wrap: anywhere` acima é a rede para a parte que não couber. */
 .settings-build-part {
   white-space: nowrap;
 }
@@ -1752,8 +1813,7 @@ select.resume-input {
   }
 
   .form-row > select,
-  .form-row > input,
-  .form-row > code {
+  .form-row > input {
     grid-column: 1;
     justify-self: stretch;
     text-align: left;
@@ -1998,11 +2058,19 @@ select.resume-input {
 /* Botões desta página caíam fora de `.modal-actions` (o escopo real de
    `.primary`/`.ghost`) porque não vivem dentro de um modal-footer — sem
    isso o browser desenhava o controle nativo (fundo branco, texto preto).
-   Mesma receita visual de `.modal-actions button`/`.primary`/`.ghost`,
-   só que aplicada aos três containers de botão desta página. */
-.providers-page-head-actions button,
-.providers-row-actions button,
-.providers-form-actions button {
+   Mesma receita visual de `.modal-actions button`/`.primary`/`.ghost`.
+
+   O escopo é a PÁGINA, não os três containers de botão dela. A primeira
+   versão listava `.providers-page-head-actions`, `.providers-row-actions` e
+   `.providers-form-actions`, e por isso o "Adicionar provider" — que é filho
+   DIRETO da página, fora dos três — continuou nativo: medido no app em
+   2026-09-20, `background: rgb(239,239,239)`, `border: 2px outset`,
+   `border-radius: 0`, `padding: 1px 6px`, `font-size: 16px`, ou seja o padrão
+   do UA, apesar de o elemento ter `class="primary"`. Não faltava classe:
+   faltava a regra alcançar o sítio. Com o escopo na página os três containers
+   seguem cobertos (são filhos dela) e o quarto sítio entra — sem uma sexta
+   variação da receita, que é o que a §8.1 do SYSTEM_DESIGN proíbe. */
+.providers-settings-page button {
   border-radius: 6px;
   padding: 6px 14px;
   font-size: 12.5px;
@@ -2012,32 +2080,24 @@ select.resume-input {
   color: var(--text);
 }
 
-.providers-page-head-actions .ghost,
-.providers-row-actions .ghost,
-.providers-form-actions .ghost {
+.providers-settings-page .ghost {
   background: none;
   color: var(--muted);
 }
 
-.providers-page-head-actions .primary,
-.providers-row-actions .primary,
-.providers-form-actions .primary {
+.providers-settings-page .primary {
   background: var(--foam);
   color: var(--on-accent);
   border-color: var(--foam);
 }
 
-.providers-page-head-actions .danger,
-.providers-row-actions .danger,
-.providers-form-actions .danger {
+.providers-settings-page .danger {
   background: var(--danger);
   color: var(--on-accent);
   border-color: var(--danger);
 }
 
-.providers-page-head-actions button:disabled,
-.providers-row-actions button:disabled,
-.providers-form-actions button:disabled {
+.providers-settings-page button:disabled {
   opacity: 0.5;
   cursor: default;
 }
