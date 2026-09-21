@@ -256,7 +256,42 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
     // `"baseArgs": []` para este id no `providers.json` (o arquivo do
     // usuário vence o catálogo embutido) — ou troca por `--auto-accept`,
     // que só dispensa confirmação de edição.
-    baseArgs: ["--yolo"],
+    //
+    // MEDIDO (mesma máquina, `command-code` 1.58.1) — a segunda flag fixa, e
+    // a razão dela estar aqui é que um card spawnado não tem quem responda
+    // diálogo: sem ela o CLI abre, ANTES da view principal, o modal "Build
+    // Your Coding Taste — Found 2 sessions from Claude Code for this project.
+    // Analyze those sessions to build your coding taste package?".
+    //
+    //   $ command-code --help | grep onboarding
+    //     --skip-onboarding   Skip taste onboarding (for automated runs)
+    //
+    // O diálogo não é cosmético: escolher "1. Yes, learn" (o default do
+    // Enter) manda o CLI LER E PROCESSAR as transcrições de trabalho do dono
+    // da máquina — os jsonl de sessão que OUTROS agentes (Claude Code, Codex,
+    // Cursor) escreveram neste projeto. Um onboarding que consome isso sem o
+    // dono pedir é efeito que o Stellar não pode causar ao spawnar um card:
+    // não é preferência de configuração, é o processo que o Stellar abriu.
+    //
+    // O A/B foi medido, não deduzido, num HOME isolado (o estado do dono não
+    // foi lido nem escrito, e as "2 sessões" eram jsonl fabricados dentro
+    // desse HOME): sem a flag, o modal aparece e o log do CLI registra
+    // "[Onboarding] starting taste learning (has_sessions)"; com a flag, o
+    // CLI vai direto ao prompt de entrada e o log não tem UMA linha de
+    // onboarding — e nenhum `tasteOnboarding` é gravado no projeto.
+    //
+    // NÃO MEDIDO, dito para ninguém supor o contrário: (a) que a flag cubra
+    // qualquer onboarding futuro que este CLI venha a ganhar — ela cobre o de
+    // HOJE (o de taste, que é o que o `--help` nomeia); (b) que exista flag
+    // mais estreita que desligue só a análise de sessões: não existe (`--help`
+    // não tem nenhuma outra de onboarding). `--no-session`, que aparece nas
+    // sondas, NÃO entra: ele desliga a persistência da sessão (in-memory only)
+    // e um card sem histórico perde o `/resume`.
+    //
+    // Ordem dos dois itens: independentes entre si (`--yolo` é permissão,
+    // isto é onboarding), então a ordem não é semântica — `--yolo` primeiro
+    // só preserva a ordem em que foram medidas.
+    baseArgs: ["--yolo", "--skip-onboarding"],
     // O efeito declarado (task c857539c): a UI expõe "sobe sem pedir
     // permissão" a partir deste campo — dado medido ao lado da flag, nunca
     // detecção de string.
@@ -288,6 +323,57 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
     },
   },
 ];
+
+// ---------------------------------------------------------------------------
+// A RECEITA COPIÁVEL (2026-09-20, task 49796d45): as declarações MEDIDAS
+// publicadas como EXEMPLO, sem saírem da camada embutida.
+//
+// O pedido do dono, textual, ao abrir o `providers.json` pelo botão de editar:
+// "o cline e o commandcode não estão, e não tem o schema e explicação nele".
+// Ele queria VER os dois CLIs que já funcionam nesta máquina, e o arquivo não
+// ensinava nada.
+//
+// O QUE **NÃO** SE FAZ AQUI, e é a medição que sustenta esta task: mover os
+// specs de `MEASURED_THIRD_PARTY_SPECS` para o arquivo do usuário COLAPSA a
+// precedência de três níveis (nativo > arquivo > embutido) em dois. Medido
+// contra este módulo: (C) o usuário apaga o arquivo e o `commandcode`
+// DESAPARECE do registro, quando hoje ele volta pelo catálogo embutido; (D) um
+// cline VELHO no arquivo VENCE o embutido e o app perde a capacidade de
+// corrigir aquela declaração numa versão nova; (B) o `shippedDefaults`
+// esvazia. O JSON é override e instrução; o embutido é ORIGEM.
+//
+// A SAÍDA, então, é de APRESENTAÇÃO, e ela mora no `providers.schema.json`:
+//
+//   - o schema é reescrito pelo app a CADA BOOT (`ensureProvidersSchemaFile`,
+//     que compara o conteúdo e só grava quando difere), então a receita NUNCA
+//     envelhece. O `_example` do arquivo do usuário, por decisão da task
+//     d9aa8b1a, só recebe o que FALTA — colocar a receita lá seria envelhecê-la
+//     em silêncio, que é justamente o problema que aquela decisão evitou;
+//   - ela é GERADA daqui (`measuredProviderRecipes`), não um literal ao lado:
+//     uma segunda cópia divergiria no primeiro dia;
+//   - o `providers.json` do usuário aponta para o schema na primeira linha
+//     (`$schema`), então o editor a mostra sozinho — o dono não precisa
+//     procurar;
+//   - e o arquivo do USUÁRIO continua com `providers` intocado: nenhuma
+//     camada muda por causa disto.
+//
+// A receita também AVISA o que acontece se for copiada (ver a `description` de
+// `providers.items`): copiar cria uma entrada de usuário que VENCE a embutida
+// — o caso (D) acima. Sem esse aviso, publicar a receita criaria o problema
+// que a medição identificou.
+// ---------------------------------------------------------------------------
+
+/**
+ * As declarações medidas, como RECEITA — uma CÓPIA, para que o schema publicado
+ * não possa ser mutado por quem o lê (o schema sai daqui direto para
+ * `JSON.stringify`, e um `examples` apontando para os objetos vivos seria uma
+ * porta para qualquer um que mexesse no schema mexer no catálogo).
+ *
+ * Hoje são as duas que o app já entrega prontas: cline e commandcode.
+ */
+export function measuredProviderRecipes(): DynamicProviderSpec[] {
+  return MEASURED_THIRD_PARTY_SPECS.map((spec) => structuredClone(spec));
+}
 
 // ---------------------------------------------------------------------------
 // Decisão pura: validação do arquivo. A regra é a mesma do gate de spawn
@@ -1010,10 +1096,24 @@ export function providersConfigSchema(): Record<string, unknown> {
         description:
           "Os providers declarados. Um id igual ao de um provider nativo (claude, codex, cursor, antigravity, " +
           "opencode, bash) é recusado — o nativo sempre ganha. Um id igual ao do catálogo embutido " +
-          "(cline, commandcode) SUBSTITUI a declaração embutida inteira, campo por campo.",
+          "(cline, commandcode) SUBSTITUI a declaração embutida inteira, campo por campo: é assim que você MUDA " +
+          "o que o Stellar já entrega. A consequência de copiar por copiar está nos `examples` abaixo — eles são " +
+          "as declarações REAIS que o app já usa, então só valem a pena se você quiser mudar alguma coisa nelas.",
         items: {
           type: "object",
+          description:
+            "Um provider. Os `examples` deste schema são as declarações medidas que JÁ VÊM PRONTAS no Stellar " +
+            "(cline e commandcode): o app sobe os dois sem você escrever nada. Copiar uma delas para `providers` " +
+            "cria uma entrada SUA com o mesmo id, e a sua VENCE a embutida — que é o que permite sobrescrever. O " +
+            "custo, medido: a partir da cópia, as correções que o app fizer naquela declaração em versões novas " +
+            "NÃO chegam até ela (sua cópia fica congelada na versão em que você copiou). Copie só se quiser MUDAR " +
+            "algo — para usar, não precisa copiar nada.",
           required: ["id", "label", "binaryNames", "capacity"],
+          // A receita copiável, GERADA das specs embutidas (ver
+          // `measuredProviderRecipes`): um literal aqui divergiria do código no
+          // primeiro dia, e o schema é reescrito a cada boot, então o que está
+          // publicado é sempre o que este build de fato usa.
+          examples: measuredProviderRecipes(),
           properties: {
             id: {
               type: "string",
@@ -1153,6 +1253,200 @@ export function ensureProvidersSchemaFile(userDataDir: string): EnsureProvidersS
   } catch (err) {
     return { path, written: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// ---------------------------------------------------------------------------
+// O ARQUIVO NASCE INSTRUÍDO, E O QUE JÁ EXISTE É COMPLETADO (2026-09-20, task
+// d9aa8b1a).
+//
+// O relato do dono: "o schema não está no providers.json, eu fui clicar para
+// editar; o cline e o commandcode não estão, e não tem o schema e explicação
+// nele". E a causa medida: `initialProvidersConfig` e `ensureProvidersSchemaFile`
+// existiam desde a 64aed52b, documentados e testados, e NÃO TINHAM UM CHAMADOR
+// em código de produção — o arquivo real do dono tinha 44 bytes
+// (`{ "schemaVersion": 1, "providers": [] }`), exatamente o caso que a primeira
+// foi escrita para evitar. O bloco abaixo é a metade que faltava: quem chama.
+//
+// A LIÇÃO, registrada aqui porque é a parte que vale mais que o conserto: os
+// testes chamavam as duas funções DIRETO, então passavam; o `tsc` não reclama
+// porque elas são exportadas; e a revisão leu o desenho e aprovou. Uma função
+// exportada, testada e sem chamador atravessa todos os portões que existiam —
+// por isso a fiação ganhou UM símbolo (`bootstrapProvidersConfig`) e um gate
+// que pergunta "alguém chama isto?" (tests/unit/providers-config-seed.test.ts).
+// ---------------------------------------------------------------------------
+
+/**
+ * As chaves que fazem o arquivo SE EXPLICAR SOZINHO, na ordem em que aparecem
+ * no arquivo. `$schema` é o que faz o editor autocompletar e validar; `_example`
+ * é uma declaração completa, que o loader IGNORA (não está em `providers`),
+ * posta ali para ser copiada.
+ */
+export const PROVIDERS_INSTRUCTION_KEYS = ["$schema", "_example"] as const;
+
+export type ProvidersSeedPlan = {
+  /** O conteúdo que deve ir para o disco. É o MESMO objeto de `raw` quando
+   * nada falta — nesse caso o chamador não grava nada. */
+  next: Record<string, unknown>;
+  /** Chaves que faltavam, na ordem. Vazio = não há o que gravar. */
+  addedKeys: string[];
+};
+
+/**
+ * Decide o que ACRESCENTAR a um `providers.json` que já existe. Pura: sem fs,
+ * sem relógio — é isto que o teste exercita direto, e é onde mora a única
+ * decisão desta migração.
+ *
+ * A REGRA, estreita de propósito: só entra o que está FALTANDO. `providers`
+ * nunca é tocado (a lista é do usuário), e uma chave que JÁ EXISTE fica como
+ * está — mesmo `null`, mesmo apontando para outro schema, mesmo que o usuário
+ * tenha reescrito `_example` como bloco de notas. O contrato do arquivo diz
+ * que chaves desconhecidas são do dono (`additionalProperties` fica aberto no
+ * schema justamente por isso); sobrescrever uma delas seria o app decidindo
+ * pelo dono da máquina dentro do único arquivo que ele edita à mão.
+ *
+ * Consequência aceita e declarada: o `_example` de um arquivo antigo NÃO
+ * acompanha os exemplos novos do app. Quem carrega a documentação sempre
+ * atualizada é o `providers.schema.json`, que o app reescreve a cada boot — o
+ * `_example` é conveniência, não a fonte da instrução.
+ */
+export function planProvidersSeed(raw: Record<string, unknown>): ProvidersSeedPlan {
+  const missing = PROVIDERS_INSTRUCTION_KEYS.filter((key) => !(key in raw));
+  if (missing.length === 0) return { next: raw, addedKeys: [] };
+  const seed = initialProvidersConfig();
+  const next: Record<string, unknown> = {};
+  // `$schema` ABRE o arquivo (é o primeiro campo que o editor lê) e
+  // `_example` FECHA — a mesma ordem em que o arquivo nasce. As chaves do
+  // usuário ficam entre as duas, na ordem em que ele mesmo as escreveu, e
+  // nenhuma delas é reordenada.
+  if (missing.includes("$schema")) next.$schema = seed.$schema;
+  for (const [key, value] of Object.entries(raw)) next[key] = value;
+  if (missing.includes("_example")) next._example = seed._example;
+  return { next, addedKeys: [...missing] };
+}
+
+export type EnsureProvidersConfigResult = {
+  path: string;
+  /**
+   * `created` = não existia e nasceu instruído; `migrated` = existia e ganhou
+   * a(s) chave(s) que faltavam; `unchanged` = já estava completo, nada foi
+   * escrito; `invalid`/`unreadable` = NÃO foi tocado (o motivo vai em `error`);
+   * `unwritable` = a leitura deu certo e a gravação falhou.
+   */
+  action: "created" | "migrated" | "unchanged" | "invalid" | "unreadable" | "unwritable";
+  /** Chaves acrescentadas nesta chamada (vazio em todos os outros casos). */
+  addedKeys: string[];
+  /** Impedimento de leitura/escrita, ou JSON inválido. `null` no caminho bom. */
+  error: string | null;
+};
+
+/** Gravação ATÔMICA do conteúdo semeado (tmp + rename) — mesma postura do
+ * `writeProvidersConfig` do main, e pelo mesmo motivo: um `writeFileSync`
+ * interrompido no meio deixaria ilegível um arquivo que o usuário edita à mão
+ * por definição, e ele é o único registro dos providers dele. */
+function writeProvidersSeed(
+  path: string,
+  content: Record<string, unknown>,
+  action: "created" | "migrated",
+  addedKeys: string[],
+): EnsureProvidersConfigResult {
+  try {
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(content, null, 2)}\n`, "utf8");
+    renameSync(tmp, path);
+    return { path, action, addedKeys, error: null };
+  } catch (err) {
+    return {
+      path,
+      action: "unwritable",
+      addedKeys: [],
+      error: `could not write ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Garante que o `providers.json` EXISTA e SE EXPLIQUE. Nunca lança: arquivo de
+ * config não pode derrubar o boot, e o resultado conta o que aconteceu para
+ * quem chamou poder mostrar (mesma postura de `loadDynamicProviders`).
+ *
+ * Três casos, três posturas:
+ *
+ *   1. AUSENTE (`ENOENT`) — é o NASCIMENTO: sai com `$schema`, `schemaVersion`,
+ *      `providers: []` e `_example` (`initialProvidersConfig`). Apagar o
+ *      arquivo não é um estado a preservar: no boot seguinte ele nasce de
+ *      novo, instruído.
+ *   2. EXISTENTE e completo — NADA é escrito (`unchanged`), em vez de um save
+ *      silencioso a cada boot.
+ *   3. EXISTENTE e POBRE (o caso medido do dono: 44 bytes, `{ "schemaVersion":
+ *      1, "providers": [] }`) — MIGRA: acrescenta só o que falta
+ *      (`planProvidersSeed`) e preserva todo o resto, `providers` incluído.
+ *
+ * E o que NÃO acontece, que é a parte que importa para quem edita à mão:
+ * ARQUIVO COM JSON QUEBRADO (ou ilegível) NÃO é tocado nem "consertado". A
+ * tentação de reescrever um arquivo inválido é grande, e é exatamente onde um
+ * app destrói o trabalho de quem estava no meio de uma edição — o conteúdo é
+ * do usuário, o app REPORT (`invalid`/`unreadable` + `error`) e o registro vivo
+ * já fica como estava (o contrato de não-podar de `loadDynamicProviders`).
+ */
+export function ensureProvidersConfigFile(userDataDir: string): EnsureProvidersConfigResult {
+  const path = providersConfigPath(userDataDir);
+
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      return {
+        path,
+        action: "unreadable",
+        addedKeys: [],
+        error: `could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    return writeProvidersSeed(path, initialProvidersConfig(), "created", []);
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    return {
+      path,
+      action: "invalid",
+      addedKeys: [],
+      error: `${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!isRecord(raw)) {
+    return { path, action: "invalid", addedKeys: [], error: `${path} is not a JSON object` };
+  }
+
+  const plan = planProvidersSeed(raw);
+  if (plan.addedKeys.length === 0) return { path, action: "unchanged", addedKeys: [], error: null };
+  return writeProvidersSeed(path, plan.next, "migrated", plan.addedKeys);
+}
+
+export type ProvidersBootstrapResult = {
+  schema: EnsureProvidersSchemaResult;
+  config: EnsureProvidersConfigResult;
+};
+
+/**
+ * O PASSO DE BOOT dos providers: o schema ao lado (conveniência de editor,
+ * reescrito quando o app muda) e o arquivo do usuário existente e instruído.
+ * Os dois são idempotentes, nenhum lança, e nenhum dos dois mexe no registro
+ * vivo — quem registra é `loadDynamicProviders`, que o main chama logo depois.
+ *
+ * Por que UMA função em vez de duas chamadas soltas no `index.ts`: é ESTE
+ * símbolo que o gate de fiação procura. A função existe para dar nome à
+ * fiação, e o nome existe para um teste poder afirmar "isto é chamado de
+ * produção" — que é a pergunta que nenhum gate anterior fazia.
+ */
+export function bootstrapProvidersConfig(userDataDir: string): ProvidersBootstrapResult {
+  return {
+    schema: ensureProvidersSchemaFile(userDataDir),
+    config: ensureProvidersConfigFile(userDataDir),
+  };
 }
 
 /**

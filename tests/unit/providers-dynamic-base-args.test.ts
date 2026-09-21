@@ -152,12 +152,37 @@ describe("baseArgs — posição e determinismo no argv", () => {
 });
 
 describe("baseArgs — o default medido do commandcode", () => {
-  it("o catálogo embutido declara `--yolo` (medido em `command-code --help`, 1.58.1)", () => {
+  it("o catálogo embutido declara `--yolo` e `--skip-onboarding` (medidos em `command-code --help`, 1.58.1)", () => {
     const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
-    expect(commandcode?.baseArgs).toEqual(["--yolo"]);
+    expect(commandcode?.baseArgs).toEqual(["--yolo", "--skip-onboarding"]);
 
     const provider = dynamicProviderDef(commandcode!);
-    expect(provider.buildArgs({})).toEqual(["--yolo"]);
+    expect(provider.buildArgs({})).toEqual(["--yolo", "--skip-onboarding"]);
+  });
+
+  it("`--skip-onboarding` é declaração, não opção: sem ela o spawn abre um modal que ninguém pode responder", () => {
+    // Medição da task 82c00c5d, num HOME isolado (estado do dono intocado, as
+    // "sessões" eram jsonl fabricados dentro desse HOME): sem a flag, o
+    // 1.58.1 abre "Build Your Coding Taste — Found 2 sessions from Claude Code
+    // for this project" ANTES da view principal, e o caminho do Enter
+    // ("1. Yes, learn", o default) manda o CLI processar as transcrições de
+    // OUTROS agentes neste projeto. Com a flag, o CLI vai direto ao prompt e
+    // não grava `tasteOnboarding` nenhum. Um card spawnado não tem quem
+    // responda o modal, então o Stellar responde pelo que ele causa.
+    const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
+    expect(commandcode?.baseArgs).toContain("--skip-onboarding");
+    // O cline não ganhou nada equivalente — não foi medido para ele.
+    expect(MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "cline")?.baseArgs).toBeUndefined();
+  });
+
+  it("`--no-session` ficou FORA de propósito: desligaria a persistência e o card perderia o `/resume`", () => {
+    // Ele aparece nas sondas da task 97d6ceff, e é justamente por aparecer que
+    // este teste existe: um card sem histórico em disco não pode ser retomado
+    // (o id de sessão do commandcode, aliás, só retoma sessão EXISTENTE — ver
+    // a capacidade de sessão deste spec). Não entra só porque foi medido em
+    // outro contexto.
+    const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
+    expect(commandcode?.baseArgs).not.toContain("--no-session");
   });
 
   it("o cline NÃO ganhou flag de permissão: não foi medido equivalente para ele", () => {
@@ -258,13 +283,18 @@ describe("ponta a ponta: o catálogo embutido chega ao argv real do spawn", () =
     return dir;
   }
 
-  it("commandcode, registrado pelo loader, spawna com `--yolo` antes do `--` e do brief", () => {
+  it("commandcode, registrado pelo loader, spawna com as flags fixas antes do `--` e do brief", () => {
     const dir = freshDir();
     loadDynamicProviders(dir); // catálogo embutido, arquivo ausente: o caso do usuário novo
 
     const provider = providerById("commandcode");
     expect(provider).toBeDefined();
-    expect(spawnArgv(provider!, { brief: "implemente a task" })).toEqual(["--yolo", "--", "implemente a task"]);
+    expect(spawnArgv(provider!, { brief: "implemente a task" })).toEqual([
+      "--yolo",
+      "--skip-onboarding",
+      "--",
+      "implemente a task",
+    ]);
   });
 
   it("o arquivo do usuário vence o default embutido no spawn real (`baseArgs: []`)", () => {

@@ -1,6 +1,19 @@
 import { useSyncExternalStore } from "react";
 
-export type AgentAvailability = { id: string; label: string; installed: boolean; installCommand: string | null };
+export type AgentAvailability = {
+  id: string;
+  label: string;
+  installed: boolean;
+  installCommand: string | null;
+  /** PROJEÇÃO de `capacity.effort.values` (ver o handler de
+   * `agents:check-availability` e `main/agent-availability-projection.ts`):
+   * os valores oferecíveis, NA ORDEM DECLARADA. Vazio = este provider não
+   * declara esforço, e aí a UI não oferece o controle. Campo obrigatório de
+   * propósito: o main SEMPRE o manda, e um tipo que subdeclara o que o
+   * produtor garante faz o próximo leitor programar contra um `undefined`
+   * que não existe. */
+  effortValues: string[];
+};
 
 /**
  * Achado ao vivo, 2026-09-03 — pedido explícito do usuário: um aviso de

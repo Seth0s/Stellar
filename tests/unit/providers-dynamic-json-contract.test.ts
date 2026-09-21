@@ -12,6 +12,7 @@ import {
   initialProvidersConfig,
   initialProvidersConfigJson,
   loadDynamicProviders,
+  measuredProviderRecipes,
   parseProviderSpec,
   parseProviderSpecs,
   providersConfigPath,
@@ -252,7 +253,7 @@ describe("o schema publicado", () => {
 
   it("o efeito é DECLARADO, nunca deduzido: commandcode true (medido), cline e o exemplo sem claim", () => {
     const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
-    expect(commandcode?.baseArgs).toEqual(["--yolo"]);
+    expect(commandcode?.baseArgs).toEqual(["--yolo", "--skip-onboarding"]);
     expect(commandcode?.bypassesPermissionPrompts).toBe(true);
     // Sem medição, sem claim: cline não ganhou flag nem efeito.
     const cline = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "cline");
@@ -273,6 +274,88 @@ describe("o schema publicado", () => {
     const json = providersConfigSchemaJson();
     expect(json.endsWith("\n")).toBe(true);
     expect(JSON.parse(json)).toEqual(providersConfigSchema());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A RECEITA COPIÁVEL (task 49796d45)
+//
+// O dono clicou em "editar" e não achou cline nem commandcode no arquivo. A
+// metade de camada desta task está travada fora daqui: mover os specs para o
+// `providers.json` do usuário COLAPSA a precedência de três níveis (medido:
+// apagar o arquivo faz o `commandcode` sumir; uma cópia velha vence o embutido
+// e o app perde a capacidade de corrigi-la). O que estes testes travam é a
+// metade de APRESENTAÇÃO: a receita é GERADA das specs embutidas, publicada no
+// schema que o app reescreve a cada boot, e AVISA o custo de copiar.
+// ---------------------------------------------------------------------------
+
+describe("a receita copiável no schema publicado", () => {
+  it("os `examples` SÃO as specs embutidas — gerados, não um literal ao lado", () => {
+    // Se alguém trocar a geração por um literal, este teste é o que cai no dia
+    // em que o catálogo mudar (é o anti-drift da receita, o mesmo padrão que o
+    // resto do arquivo usa contra o parser).
+    const items = getAtPath(providersConfigSchema(), "properties.providers.items") as Record<string, unknown>;
+    expect(items.examples).toEqual(MEASURED_THIRD_PARTY_SPECS);
+    expect(measuredProviderRecipes().map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
+  });
+
+  it("são CÓPIAS: mutar o que o schema publica não pode mexer no catálogo vivo", () => {
+    const examples = measuredProviderRecipes();
+    examples[0].label = "mutado pelo leitor";
+    examples[0].capacity.delivery.briefMechanism = "none";
+    expect(MEASURED_THIRD_PARTY_SPECS[0].label).not.toBe("mutado pelo leitor");
+    expect(MEASURED_THIRD_PARTY_SPECS[0].capacity.delivery.briefMechanism).toBe("positional");
+  });
+
+  it("cada receita é COPIÁVEL: passa pelo MESMO validador e pelo MESMO schema do arquivo do usuário", () => {
+    for (const recipe of measuredProviderRecipes()) {
+      const parsed = parseProviderSpec(recipe);
+      expect(parsed.ok, `${recipe.id}: ${parsed.ok ? "" : parsed.reason}`).toBe(true);
+      // O gesto literal de colar: um arquivo com ela dentro tem de ser
+      // declaração VÁLIDA — receita que o loader recusa seria a primeira
+      // instrução errada que o usuário leria.
+      const pasted = parseProviderSpecs({ schemaVersion: 1, providers: [recipe] });
+      expect(pasted.specs.map((spec) => spec.id)).toEqual([recipe.id]);
+      expect(pasted.rejected).toEqual([]);
+    }
+  });
+
+  it("a receita AVISA, no próprio texto, que copiar cria entrada que VENCE a embutida", () => {
+    // Sem este aviso, publicar a receita criaria exatamente o problema que a
+    // medição de precedência identificou (caso D): o usuário cola, a cópia
+    // vence, e uma correção futura do app não chega mais até ele.
+    const schema = providersConfigSchema() as Record<string, any>;
+    const warning = `${schema.properties.providers.description} ${schema.properties.providers.items.description}`;
+    expect(warning).toContain("VENCE");
+    expect(warning).toContain("cline");
+    expect(warning).toContain("commandcode");
+    expect(warning).toContain("Copie só se quiser MUDAR");
+    // E diz que USAR não exige copiar nada — o app já entrega os dois prontos.
+    expect(warning).toContain("não precisa copiar");
+  });
+
+  it("mora no SCHEMA (reescrito a cada boot), não no arquivo do usuário (que só ganha o que falta)", () => {
+    // O `_example` continua sendo o template mínimo de "como escrever o seu" —
+    // a receita medida NÃO entra lá, porque a migração da d9aa8b1a não
+    // sobrescreve chave existente e a receita envelheceria em silêncio.
+    expect(PROVIDERS_CONFIG_EXAMPLE.id).toBe("minha-cli");
+    expect(initialProvidersConfig()).not.toHaveProperty("examples");
+    expect(providersConfigSchema().properties.providers.items).toHaveProperty("examples");
+  });
+
+  it("chega ao DISCO com o schema ao lado do arquivo do usuário (é o que o editor lê)", () => {
+    const dir = freshDir();
+    const result = ensureProvidersSchemaFile(dir);
+    expect(result.error).toBeNull();
+
+    const onDisk = JSON.parse(readFileSync(providersSchemaPath(dir), "utf8"));
+    expect(onDisk.properties.providers.items.examples.map((spec: { id: string }) => spec.id)).toEqual([
+      "cline",
+      "commandcode",
+    ]);
+    // E o arquivo do usuário aponta para ele — é assim que o editor acha a
+    // receita sem o usuário procurar.
+    expect(initialProvidersConfig().$schema).toBe(PROVIDERS_SCHEMA_REF);
   });
 });
 

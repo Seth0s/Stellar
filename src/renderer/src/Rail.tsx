@@ -8,7 +8,6 @@ import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { useProviderClassification } from "./useProviderClassification";
 import { CARD_ICON, RAIL_CREATE_ORDER, railCreateTitle } from "./cards/registry";
 import type { Tool } from "./card-types";
-import { PROVIDER_EFFORT_VALUES } from "./card-types";
 import { t, type MessageKey } from "../../shared/i18n";
 
 type RailCard = { id: string; kind: string; label: string | null };
@@ -150,6 +149,11 @@ export function Rail({
   const penBtnRef = useRef<HTMLButtonElement>(null);
 
   const showAgentFields = newProvider !== "bash";
+  // Os valores de esforço DESTE provider, como o main os projetou da própria
+  // declaração (`capacity.effort.values` → `AgentAvailability.effortValues`).
+  // Vazio = ele não declara esforço, e o campo simplesmente não aparece —
+  // nunca um select sem opções. A ORDEM vem da declaração e é a que se vê.
+  const effortValues = availableProviders.find((p) => p.id === newProvider)?.effortValues ?? [];
 
   useEffect(() => {
     localStorage.setItem(RAIL_COLLAPSED_KEY, collapsed ? "1" : "0");
@@ -432,21 +436,23 @@ export function Rail({
                     <input className="resume-input" value={newModel} onChange={(e) => setNewModel(e.target.value)} />
                   </div>
                   {/* DESIGN-BACKLOG.md §2.1 "effort do card não é
-                      persistido", 2026-09-10 — only offered for providers
-                      that actually read `--effort` (PROVIDER_EFFORT_VALUES,
-                      confirmed live per provider, not guessed). The select
-                      only ever lists values that provider accepts, so this
-                      popover structurally can't hand a value the app
-                      already knows would be refused (message-bus.ts's
-                      spawn_agent handler enforces the same antigravity
-                      range for agent-driven spawns, which never go through
-                      this UI). */}
-                  {PROVIDER_EFFORT_VALUES[newProvider] && (
+                      persistido", 2026-09-10 — só é oferecido para quem
+                      DECLARA esforço. Os valores vêm da projeção do canal de
+                      disponibilidade (task 07b05f43): antes desta task eram
+                      um mapa copiado aqui no renderer, que só conhecia
+                      claude e antigravity — cline e commandcode declaram as
+                      suas e não apareciam. O select só lista valores que o
+                      provider aceita, então este popover estruturalmente não
+                      entrega um valor que o app já sabe que seria recusado
+                      (message-bus.ts's spawn_agent handler aplica a MESMA
+                      faixa declarada para spawns vindos de agente, que não
+                      passam por esta UI). */}
+                  {effortValues.length > 0 && (
                     <div className="popover-field">
                       <label>{t("rail.label.effort")}</label>
                       <select className="resume-input" value={newEffort} onChange={(e) => setNewEffort(e.target.value)}>
                         <option value="">{t("rail.providerDefault")}</option>
-                        {PROVIDER_EFFORT_VALUES[newProvider].map((v) => (
+                        {effortValues.map((v) => (
                           <option key={v} value={v}>
                             {v}
                           </option>
