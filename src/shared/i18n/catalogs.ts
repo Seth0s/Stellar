@@ -173,6 +173,9 @@ export const ptBR = {
   "settings.general.buildIdentityHint":
     "Commit e data desta instância — compare com o git do repo antes de assumir que um conserto está vivo. Não interrompe; só informa.",
   "settings.general.buildIdentityLoading": "Lendo…",
+  /* Resposta honesta da main quando nenhum package.json do app respondeu —
+     numa tela de procedência, "não sei" vale mais que um número errado. */
+  "settings.about.versionUnknown": "versão desconhecida",
   "settings.locale.ptBR": "Português (Brasil)",
   "settings.locale.en": "English",
   "settings.concurrencyHint": "A fila segura o que passar do teto.",
@@ -1087,6 +1090,7 @@ export const en: Record<MessageKey, string> = {
   "settings.general.buildIdentityHint":
     "Commit and build time of this instance — compare with the repo's git before assuming a fix is live. Informational only; never interrupts.",
   "settings.general.buildIdentityLoading": "Loading…",
+  "settings.about.versionUnknown": "version unknown",
   "settings.locale.ptBR": "Português (Brasil)",
   "settings.locale.en": "English",
   "settings.concurrencyHint": "The queue holds anything over the cap.",
