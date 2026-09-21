@@ -13,6 +13,7 @@ import { decodeReportArgument } from "./report-retry-decision";
 import {
   buildToolInputSchema,
   decideDeclaredKeys,
+  decideMisplacedCallFields,
   type DeclaredKeysDecision,
   type ToolContractDecl,
 } from "./tool-contract";
@@ -80,10 +81,25 @@ async function resolveReportVerdictContext(input: {
   // mesma leitura que este handler já fazia para o fallback — agora ela roda
   // sempre, porque é ela que alimenta a decisão de ambiguidade.
   let principals: Record<string, unknown>[] = [];
+  // Os vínculos VIVOS em `task_cards` — a fonte que a decisão pura pede em
+  // `linkTaskIds`. Sem esta leitura o REVISOR não tinha como ser resolvido:
+  // ele nunca é `tasks.card_id`, e a chamada passava `linkTaskIds: []`
+  // HARDCODED (task 6bea994a). Medido no servidor real: um revisor vinculado
+  // declarando o `taskId` — a convenção do board, e o que a própria recusa de
+  // ambiguidade manda fazer — recebia `declared-not-linked` com a frase falsa
+  // "Este card não tem vínculo ativo nenhum", e o report nunca chegava ao bus.
+  let links: { taskId: string; role: string }[] = [];
   if (input.requesterId) {
-    const res = await input.handleRequest({ cmd: "list_tasks", status: ["pending", "running"], view: "full" });
-    const tasks = res.ok && Array.isArray(res.tasks) ? (res.tasks as Record<string, unknown>[]) : [];
+    const [tasksRes, linksRes] = await Promise.all([
+      input.handleRequest({ cmd: "list_tasks", status: ["pending", "running"], view: "full" }),
+      input.handleRequest({ cmd: "list_task_cards", cardId: input.requesterId }),
+    ]);
+    const tasks = tasksRes.ok && Array.isArray(tasksRes.tasks) ? (tasksRes.tasks as Record<string, unknown>[]) : [];
     principals = tasks.filter((t) => t.cardId === input.requesterId);
+    const linkRows = linksRes.ok && Array.isArray(linksRes.links) ? (linksRes.links as { taskId?: unknown; role?: unknown }[]) : [];
+    links = linkRows
+      .filter((l): l is { taskId: string; role: string } => typeof l.taskId === "string" && l.taskId.length > 0 && typeof l.role === "string")
+      .map((l) => ({ taskId: l.taskId, role: l.role }));
   }
 
   // A MESMA decisão pura que o bus usa (`report-task-link-decision.ts`):
@@ -92,7 +108,7 @@ async function resolveReportVerdictContext(input: {
   const link = decideReportTaskLink({
     declaredTaskId: input.declaredTaskId,
     principalTaskIds: principals.map((t) => (typeof t.id === "string" ? t.id : "")),
-    linkTaskIds: [],
+    linkTaskIds: links.map((l) => l.taskId),
   });
   if (link.action === "ambiguous") {
     return { ...context, refusal: describeAmbiguousTaskRefusal(link.candidates) };
@@ -115,9 +131,31 @@ async function resolveReportVerdictContext(input: {
     return context;
   }
 
+  // Resolvido por VÍNCULO (`task_cards`) sem declaração no corpo: um vínculo
+  // é inequívoco. O papel vem do PRÓPRIO vínculo — a mesma fonte que o bus usa
+  // (`liveLink.role`), e já filtrada pela época, então um id de card reciclado
+  // não herda papel velho. O contrato da task (review/reportSchema) vem da
+  // leitura por id, como no ramo declarado, porque o vínculo vivo pode apontar
+  // para uma task já fora da lista viva (revisor vinculado a task `done` é
+  // caso permitido de propósito — store.ts, `listTaskCardsForCard`).
+  if (link.source === "link") {
+    const roleRow = links.find((l) => l.taskId === link.taskId);
+    context.requesterRoleOnTask = roleRow?.role ?? null;
+    const res = await input.handleRequest({ cmd: "get_task", taskId: link.taskId });
+    const task = res.ok ? (res.task as Record<string, unknown> | undefined) : undefined;
+    if (task) {
+      context.reportSchema = readReportSchema(task.reportSchema);
+      context.reviewWanted = isReviewWanted(task.review);
+    }
+    return context;
+  }
+
   // Resolvido por PRINCIPAL: a linha de `list_tasks` já traz o contrato, e o
   // papel é o de implementer — que é o que o vínculo de principal significa
-  // (postura que este handler já tinha com um único principal).
+  // (postura que este handler já tinha com um único principal). NÃO trocar
+  // esta linha por uma leitura de `task_cards`: uma task com `card_id` e sem
+  // linha nenhuma (as órfãs medidas) cairia para papel `null`, que é lido como
+  // outsider, e o implementador voltaria a poder assinar o próprio trabalho.
   const principal = principals.find((t) => t.id === link.taskId);
   if (principal) {
     context.requesterRoleOnTask = TASK_CARD_IMPLEMENTER_ROLE;
@@ -200,12 +238,20 @@ function refusalResult(error: string) {
  * exigência ESTÁTICA — que já vem do `inputSchema` gerado — enquanto uma
  * exigência que depende da TASK (o `reportSchema` de um `report`) só pode
  * ser decidida por chamada.
+ *
+ * `decodeFreeForm` existe para a tool cujo payload pode chegar como string
+ * de JSON (`report`, ver `decodeReportArgument`): a varredura de campo
+ * deslocado precisa ver o MESMO valor que o handler vai ver, senão ela é
+ * cega exatamente no caso que a motivou. Roda ANTES do `preflight` de
+ * propósito — é puro, não lê nada do bus, e "seu veredito não está no lugar
+ * que a tool lê" precede qualquer pergunta sobre QUEM pode julgar.
  */
 function contractTool(
   server: McpServer,
   input: {
     contract: ToolContractDecl;
     description: string;
+    decodeFreeForm?: (raw: unknown) => unknown;
     preflight?: (args: Record<string, unknown>) => Promise<DeclaredKeysDecision>;
     run: (args: Record<string, unknown>) => Promise<unknown>;
   },
@@ -214,6 +260,12 @@ function contractTool(
     input.contract.tool,
     { description: input.description, inputSchema: buildToolInputSchema(input.contract) },
     (async (args: Record<string, unknown>) => {
+      const misplaced = decideMisplacedCallFields({
+        contract: input.contract,
+        args: args ?? {},
+        ...(input.decodeFreeForm ? { decode: input.decodeFreeForm } : {}),
+      });
+      if (misplaced.action === "refuse") return refusalResult(misplaced.error);
       if (input.preflight) {
         const decision = await input.preflight(args ?? {});
         if (decision.action === "refuse") return refusalResult(decision.error);
@@ -221,6 +273,99 @@ function contractTool(
       return toolResult(await input.run(args ?? {}));
     }) as never,
   );
+}
+
+// ---------------------------------------------------------------------------
+// FORMA DE ENTRADA — o choke point único do shape (task 0ccd479a)
+//
+// Medido em 2026-09-20 contra o servidor REAL: das 51 tools publicadas, 49
+// publicavam shape SOLTO (`additionalProperties` ausente) e só 2 — as duas
+// migradas para o contrato — publicavam shape estrito. O orquestrador chamou
+// `create_task({ content: "<enunciado>" })`; o campo é `prompt`; o tool
+// respondeu `ok: true`, gravou a task e DESCARTOU o texto. Medição do estrago
+// no banco real: 8 tasks com `prompt` NULL (7 delas com card linkado, 3 ainda
+// pendentes) — onze criações naquele dia, e quem notou foi um agente lendo o
+// ledger, não o mecanismo.
+//
+// A CAUSA NÃO É o call site ter declarado o shape à mão — é o próprio SDK.
+// Para um shape cru ele constrói `z.object(shape)` SEM `.strict()`
+// (`server/zod-compat.js`, `objectFromShape`), e o zod descarta chave
+// desconhecida em silêncio. Consertar `create_task` (ou os dois) seria tampar
+// 2 das 49 portas: os outros 47 continuariam aceitando `content`, `targt`,
+// `boardid` e engolindo em silêncio. Este ponto único garante o invariante
+// para TODO tool, inclusive o que ainda não existe.
+//
+// Duas decisões dentro dele, cada uma com o porquê:
+//
+//   - A MENSAGEM sai daqui, uma só para os 51, e o conjunto ACEITO é nomeado
+//     junto com a chave recebida (era o pedido: quem chamou precisa saber o
+//     que mandou, o que o tool aceita e em que turno corrigir). O prefixo
+//     `Unrecognized key:` é conservado de propósito: é a redação que a task
+//     197d09bd fixou como padrão do repo.
+//   - `.strict()` vale para o TOPO do objeto. Chave arbitrária DENTRO de campo
+//     livre (`update_task.result`, `report.report`) continua aceita — medido, e
+//     travado por teste: apertar aquela fronteira recusaria 33 dos 139
+//     `result_json` reais, que usam `gates`/`review` como CONTEÚDO legítimo.
+// ---------------------------------------------------------------------------
+
+/** Recusa de chave desconhecida no TOPO, no idioma que o resto do repo usa
+ * para falar com o modelo: o que veio, o que é aceito, e o que fazer agora. */
+function unknownKeyMessage(issue: { code?: string; keys?: string[] }, accepted: string[]): string | undefined {
+  if (issue.code !== "unrecognized_keys") return undefined;
+  const keys = issue.keys ?? [];
+  const received = keys.map((key) => `"${key}"`).join(", ");
+  const what = keys.length === 1 ? "Unrecognized key: " : "Unrecognized keys: ";
+  const accepts =
+    accepted.length === 0
+      ? "este tool não aceita campo nenhum"
+      : `este tool aceita: ${accepted.map((name) => `\`${name}\``).join(", ")}`;
+  return (
+    `${what}${received} — ${accepts}. ` +
+    "O nome fora dessa lista seria descartado em silêncio, então a chamada é RECUSADA antes de gravar qualquer coisa: " +
+    "corrija o nome do campo (ou tire o campo) e chame de novo no mesmo turno; nada foi gravado."
+  );
+}
+
+/** Um valor é schema zod (e não shape cru) quando sabe se parsear. */
+function isZodSchema(value: object): boolean {
+  return typeof (value as { safeParse?: unknown }).safeParse === "function" || "_zod" in value;
+}
+
+/**
+ * A forma crua de um objeto zod, ou `undefined` quando o valor não é um
+ * objeto-de-campos (aí ele passa intacto: não é assunto deste ponto).
+ */
+function rawShapeOf(schema: unknown): Record<string, z.ZodType> | undefined {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return undefined;
+  if (!isZodSchema(schema)) return schema as Record<string, z.ZodType>;
+  const shape = (schema as { shape?: unknown }).shape;
+  return shape && typeof shape === "object" && !Array.isArray(shape) ? (shape as Record<string, z.ZodType>) : undefined;
+}
+
+/** O `inputSchema` que este servidor publica: ESTRITO, com a mensagem única. */
+function strictInputSchema(schema: unknown): unknown {
+  const shape = rawShapeOf(schema);
+  if (!shape) return schema;
+  const accepted = Object.keys(shape);
+  return z.object(shape, { error: (issue) => unknownKeyMessage(issue, accepted) }).strict();
+}
+
+/**
+ * Instala o choke point no servidor: todo `registerTool` deste arquivo passa
+ * por aqui, então nenhum call site precisa lembrar de `.strict()` — e um tool
+ * novo escrito no formato antigo (shape cru) já nasce estrito. Zera a
+ * distância entre os 2 tools migrados e os 49 declarados à mão.
+ */
+function installStrictInputShapes(server: McpServer): void {
+  const register = server.registerTool.bind(server);
+  server.registerTool = ((...call: unknown[]) => {
+    const [name, config] = call;
+    if (config !== null && typeof config === "object" && "inputSchema" in config) {
+      const patched = { ...(config as Record<string, unknown>), inputSchema: strictInputSchema((config as { inputSchema?: unknown }).inputSchema) };
+      return (register as (...args: unknown[]) => unknown)(name, patched, call[2]);
+    }
+    return (register as (...args: unknown[]) => unknown)(...call);
+  }) as typeof server.registerTool;
 }
 
 const CARD_STATUS_CONTRACT: ToolContractDecl = {
@@ -250,10 +395,11 @@ const REPORT_CONTRACT: ToolContractDecl = {
     {
       name: "report",
       required: true,
+      freeForm: true,
       schema: z
         .unknown()
         .describe(
-          "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans. Pass the payload as a JSON object; a JSON-encoded object string is also accepted and decoded.",
+          "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans. Pass the payload as a JSON object; a JSON-encoded object string is also accepted and decoded. Do not put a field OF THIS CALL inside the payload — a `verdict` (or `callerCardId`) written here instead of as its own argument is REFUSED by name, because the tool reads those from the call and would otherwise store your verdict as null.",
         ),
       accepted: "o relatório como objeto JSON (um objeto codificado como string também é aceito)",
     },
@@ -390,6 +536,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     // permanece anônima; o explícito não pode escolher um board autônomo.
     const caller = (explicit?: string) => resolveCallerCardId({ urlCardId, explicitCallerCardId: explicit });
     const server = new McpServer({ name: "stellar", version: "1.0.0" }, { instructions: SERVER_INSTRUCTIONS });
+    // Antes do primeiro `registerTool` deste arquivo: ver o bloco do choke
+    // point acima (todo shape publicado por este servidor sai estrito dali).
+    installStrictInputShapes(server);
 
     server.registerTool(
       "list_cards",
@@ -694,7 +843,9 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         "Declared failure is {ok: false, ...}. If that failure is still retryable (you omitted retryable, or sent retryable: true) AND a running task is linked to this card with retry budget left, THIS CALL IS REFUSED — the tool returns {ok: false, retriesRemaining, ...}, the task stays running, retry_count goes up by 1, and you (the same session, same context) correct and call report again. No new card is spawned. " +
         "Honest terminal failure — use when retry cannot help (no credits, investigation concluded negatively, a metric the CLI does not expose): {ok: false, retryable: false, ...}. That is accepted on the first call, the task becomes failed, and no retry is spent. Without retryable: false, the only other accepted exits are success or exhausting max_retries. Do not declare ok: true to escape a real failure. " +
         "The app does not judge whether your contents are correct. A refused call names the acceptance rule and remaining attempts; a structural refusal (missing report, ok/retryable not a boolean) names the field. " +
-        "A `verdict` is judgment and is gated separately, before storage: an implementer's own verdict is refused, and a reviewer's verdict must carry the task's reportSchema keys with real content — see the `verdict` field.",
+        "A `verdict` is judgment and is gated separately, before storage: an implementer's own verdict is refused, and a reviewer's verdict must carry the task's reportSchema keys with real content — see the `verdict` field." +
+        " A `verdict` written INSIDE the payload (or `callerCardId` there) is REFUSED before anything else: those are fields of THIS CALL — the tool reads them from the call, so a payload copy would be stored as no verdict at all (measured: reports seq 515, verdict stored null while the reviewer believed it had signed).",
+      decodeFreeForm: decodeReportArgument,
       preflight: (args) => reportPreflight(args, opts.handleRequest),
       run: async (args) => {
         const requesterId = caller(args.callerCardId as string | undefined);

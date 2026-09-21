@@ -139,6 +139,59 @@ describe("decideReportNotifyTarget", () => {
   });
 });
 
+describe("RODADA 4 — linhagem durável (registro `spawns`) vence o 'último que falou'", () => {
+  it("O CASO DA TASK: sem aresta visual, spawner-of-record vivo + diretiva de TERCEIRO viva => o spawner ganha", () => {
+    // A aresta `spawned` morreu com o card que spawnou; a diretiva mais
+    // recente é de um revisor que só passou pela conversa. Antes desta
+    // rodada o report ia para o revisor; agora vai para a linhagem gravada.
+    expect(
+      decideReportNotifyTarget({
+        ...noOne,
+        directiveFromId: "revisor-que-passou",
+        directiveFromAlive: true,
+        spawnerOfRecordId: "orquestrador-da-linhagem",
+        spawnerOfRecordAlive: true,
+      }),
+    ).toEqual({ targetId: "orquestrador-da-linhagem", source: "spawned" });
+  });
+
+  it("só o registro, sem diretiva nenhuma => o registro", () => {
+    expect(
+      decideReportNotifyTarget({ ...noOne, spawnerOfRecordId: "orch", spawnerOfRecordAlive: true }),
+    ).toEqual({ targetId: "orch", source: "spawned" });
+  });
+
+  it("ordem: aresta visual VIVA continua ganhando do registro (o sinal mais recente manda)", () => {
+    expect(
+      decideReportNotifyTarget({
+        ...noOne,
+        spawnedById: "aresta-visual",
+        spawnedByAlive: true,
+        spawnerOfRecordId: "registro-antigo",
+        spawnerOfRecordAlive: true,
+      }),
+    ).toEqual({ targetId: "aresta-visual", source: "spawned" });
+  });
+
+  it("LIMITE DECLARADO: registro MORTO não salva — cai pro fallback de diretiva, como antes", () => {
+    expect(
+      decideReportNotifyTarget({
+        ...noOne,
+        directiveFromId: "reorchestrator-2",
+        directiveFromAlive: true,
+        spawnerOfRecordId: "registro-morto",
+        spawnerOfRecordAlive: false,
+      }),
+    ).toEqual({ targetId: "reorchestrator-2", source: "directive" });
+  });
+
+  it("sem registro (ausente) o comportamento é o de antes — nada de novo dispara", () => {
+    expect(
+      decideReportNotifyTarget({ ...noOne, directiveFromId: "d", directiveFromAlive: true }),
+    ).toEqual({ targetId: "d", source: "directive" });
+  });
+});
+
 describe("pickLatestDirectiveSender", () => {
   const edge = (
     partial: Partial<DirectiveConnectorEdge> & Pick<DirectiveConnectorEdge, "from_card_id" | "to_card_id" | "updated_at">,

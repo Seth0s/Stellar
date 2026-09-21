@@ -70,6 +70,13 @@ export type ToolFieldDecl = {
    * parte "must be ..." da frase de recusa.
    */
   readonly accepted: string;
+  /**
+   * O campo é o PAYLOAD de forma livre desta tool (`report.report`,
+   * `update_task.result`): forma declarada `z.unknown()`, conteúdo por conta
+   * do chamador. Só um campo assim pode esconder um campo de CHAMADA dentro
+   * de si — ver `decideMisplacedCallFields`.
+   */
+  readonly freeForm?: boolean;
 };
 
 export type ToolContractDecl = {
@@ -188,4 +195,115 @@ export function decideDeclaredKeys(input: {
 function readKey(container: unknown, key: string): unknown {
   if (container === null || typeof container !== "object" || Array.isArray(container)) return undefined;
   return (container as Record<string, unknown>)[key];
+}
+
+/**
+ * --------------- CAMPO DE CHAMADA ESCRITO DENTRO DO PAYLOAD ---------------
+ * Medido 2026-09-20 neste board (task a477f3d4): o card revisor 97924132
+ * chamou `report` com `verdict` DENTRO do objeto de payload, em vez do campo
+ * `verdict` da chamada. A tool respondeu `ok: true`, o report entrou
+ * (`reports` seq 515, canal http), `reports.verdict` ficou NULL e a task
+ * seguiu `running`. O revisor só percebeu no relatório seguinte e gastou uma
+ * rodada INTEIRA reemitindo o mesmo veredito (seq 519, que narra o caso por
+ * escrito: "o campo verdict foi embutido dentro do payload em vez de viajar
+ * no campo próprio da chamada — o report foi aceito e o verdict gravou
+ * null"). Do lado dele a chamada deu certo: é a MESMA classe de falha que o
+ * shape estrito fechou para chave DESCONHECIDA (`list_tasks({boardid})`
+ * respondia todos os boards), com uma diferença que decide o desenho — aqui
+ * a chave é CONHECIDA, no lugar errado, e o zod não tem como ver isso:
+ * `report` é declarado `z.unknown()`, então QUALQUER chave é legítima ali
+ * dentro por construção.
+ *
+ * A REGRA é mecânica e não escreve nome de tool nem de campo à mão: um campo
+ * DECLARADO da tool que não é o próprio payload, aparecendo como chave
+ * dentro do payload, é um campo de CHAMADA no lugar errado — a tool o lê da
+ * CHAMADA, nunca de dentro do payload, então ali dentro ele não é lido.
+ *
+ * Duas precisões deliberadas, cada uma medida:
+ *
+ *   - Recusa só quando o campo da chamada está AUSENTE. Com os dois
+ *     presentes (`{report:{verdict:"aprovado"}, verdict:"aprovado"}`) nada se
+ *     perde: o explícito vence e o embutido é removido do payload
+ *     (`promoteReportVerdict`). Recusar aí seria recusa gratuita num caminho
+ *     que funciona.
+ *   - `key === payloadField.name` não conta: um payload com a chave `report`
+ *     dentro de si é o aninhamento do próprio campo, ambíguo com prosa
+ *     livre, não um campo de chamada deslocado.
+ *
+ * POR QUE ESTA PORTA: o `verdict` embutido é um caminho SUPORTADO do
+ * acbridge (`report <json>` tem UM argumento — ver `report-verdict-decision.ts`),
+ * e é o bus que o promove; lá a chave é o único jeito de nomear o campo
+ * tipado que o CLI não tem. No MCP o campo tipado EXISTE na chamada, então
+ * ali o mesmo key é erro de quem chamou — e é ali que a recusa ensina sem
+ * tirar nada de ninguém.
+ *
+ * LIMITE DECLARADO: a varredura só enxerga payload OBJETO, ou string que
+ * decodifica para objeto (`decode`). No seq 515 medido o envelope veio como
+ * string de JSON MALFORMADA (10cf58d0 — `decodeReportArgument` desiste e
+ * passa a string adiante): os dois defeitos coincidiram e a chave embutida
+ * ficou invisível para esta função. Fechar o envelope é a outra task; esta
+ * fecha a metade "chave conhecida no lugar errado".
+ */
+export type MisplacedCallField = {
+  /** O campo da CHAMADA que apareceu dentro do payload. */
+  readonly field: string;
+  /** O campo de payload onde ele foi encontrado. */
+  readonly payloadField: string;
+  /** O valor que veio no lugar errado (para a recusa mostrar o recebido). */
+  readonly got: unknown;
+};
+
+/** A varredura pura. Vazia = nada deslocado; nunca lança. */
+export function misplacedCallFields(input: {
+  contract: ToolContractDecl;
+  args: Record<string, unknown>;
+  /** Decodifica um payload entregue como string (`decodeReportArgument`). */
+  decode?: (raw: unknown) => unknown;
+}): MisplacedCallField[] {
+  const payloads = input.contract.fields.filter((field) => field.freeForm);
+  // Tool sem payload de forma livre não tem onde esconder campo de chamada.
+  if (payloads.length === 0) return [];
+  const declared = new Set(input.contract.fields.map((field) => field.name));
+  const found: MisplacedCallField[] = [];
+  for (const payload of payloads) {
+    const raw = input.args[payload.name];
+    const value = input.decode ? input.decode(raw) : raw;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+      if (key === payload.name) continue;
+      if (!declared.has(key)) continue;
+      // Já veio como campo da chamada: o explícito vence e o valor não se
+      // perde — ver o cabeçalho.
+      if (input.args[key] !== undefined) continue;
+      found.push({ field: key, payloadField: payload.name, got: inner });
+    }
+  }
+  return found;
+}
+
+/**
+ * A recusa — nomeia as três coisas que a tornam acionável no mesmo turno:
+ * O QUE veio (`verdict`), ONDE veio (dentro do payload `report`, com o valor
+ * recebido) e ONDE vai (como campo próprio da chamada, com o que ele aceita).
+ */
+export function decideMisplacedCallFields(input: {
+  contract: ToolContractDecl;
+  args: Record<string, unknown>;
+  decode?: (raw: unknown) => unknown;
+}): DeclaredKeysDecision {
+  const found = misplacedCallFields(input);
+  if (found.length === 0) return { action: "ok" };
+  const acceptedOf = (name: string) => input.contract.fields.find((field) => field.name === name)?.accepted ?? "a forma declarada para este campo";
+  const parts = found.map(
+    (item) =>
+      `\`${item.field}\` veio DENTRO do payload \`${item.payloadField}\` (recebido: ${describeReceived(item.got)}; como campo da chamada aceita ${acceptedOf(item.field)})`,
+  );
+  return {
+    action: "refuse",
+    error:
+      `[de: stellar] ${input.contract.tool} recusado: ${parts.join("; ")}. ` +
+      `Esses nomes são campos da CHAMADA, não conteúdo do payload — ali dentro não são lidos, e o valor se perderia em silêncio. ` +
+      `Mande cada um como campo próprio da chamada, ao lado de \`${found[0]!.payloadField}\`, e deixe o payload só com o conteúdo. ` +
+      `Corrija e chame de novo no mesmo turno; nada foi gravado.`,
+  };
 }

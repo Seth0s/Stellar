@@ -388,6 +388,255 @@ export function describeCloseWithoutSuccessRefusal(taskId: string, targetCardId:
 }
 
 /**
+ * ITEM 21 — O AGENTE DEIXA ARTEFATO DE TRABALHO NA ÁRVORE.
+ *
+ * Território cobre ONDE escrever, não o que limpar ao sair: um `scratch.php` na
+ * raiz do Backend (sonda de contagem de queries de um N+1) e um `diff.txt` de
+ * 520 linhas na raiz do Admin quase entraram num `git add` largo. Nenhum dos
+ * dois violava território.
+ *
+ * A regra é um SINAL, nunca uma acusação, e por isso ela é pura aqui: o
+ * chamador coleta os fatos (git + stat) e só o que sobra é listado. Nunca
+ * apagar — o app não sabe o que era sonda e o que era entrega esquecida, e a
+ * árvore é compartilhada (outro card pode ter escrito no mesmo intervalo).
+ *
+ * As três exclusões, cada uma medida:
+ *   - DECLARADO no relatório (`files`/`filesChanged`) não é pendência: é a
+ *     entrega. A comparação é por sufixo de caminho para tolerar declaração
+ *     absoluta (`/repo/src/x.ts`) contra o untracked relativo (`src/x.ts`).
+ *   - ANTERIOR à task não é artefato DELA (`modifiedAtMs < taskStartedAtMs`):
+ *     sem a janela temporal, todo untracked pré-existente vira ruído.
+ *   - DEPENDÊNCIA/BUILD/CACHE nunca entra (`node_modules`, `dist`, …). O
+ *     `git status` já esconde o que o `.gitignore` cobre — esta é a segunda
+ *     linha, para repo que não ignora. Medido neste repo: `--ignored` traria
+ *     31.439 entradas; `--porcelain` puro, 4.
+ *   - ESTRUTURA não é artefato (4ª exclusão, `isStructuralSourceFile`): dir de
+ *     código + extensão de código = entregável em andamento, mesmo novíssimo.
+ *     A RAIZ nunca é estrutural — é onde os dois casos reais estavam.
+ */
+export type UntrackedArtifact = {
+  /** Caminho relativo à raiz do repositório, como `git status` reporta. */
+  path: string;
+  /** Bytes no disco; 0 quando o stat falhou. */
+  bytes: number;
+  /** Última modificação em ms epoch; 0 quando desconhecida. */
+  modifiedAtMs: number;
+};
+
+export type ArtifactPendency = UntrackedArtifact;
+
+/**
+ * Diretórios que NUNCA são artefato: dependência, build, cache e as áreas de
+ * rascunho/config do próprio ambiente. O `git status` já esconde o que o
+ * `.gitignore` cobre — esta lista é a segunda linha, e é EXPORTADA para o gate
+ * anti-drift (`artifact-pendencies.test.ts`) medir contra o repo REAL em vez
+ * de confiar nesta mão.
+ */
+export const NON_ARTIFACT_DIRS: readonly string[] = [
+  "node_modules",
+  ".git",
+  "dist",
+  "out",
+  "build",
+  "coverage",
+  ".vite",
+  ".cache",
+  ".turbo",
+  ".next",
+  "__pycache__",
+  "tmp",
+  ".claude",
+];
+const NON_ARTIFACT_SEGMENTS = new Set(NON_ARTIFACT_DIRS);
+
+/**
+ * A QUARTA EXCLUSÃO — e é a que dá PRECISÃO (medido: sem ela, 7 de 7
+ * falso-positivo nesta árvore). Os dois casos REAIS (`scratch.php` e um
+ * `diff.txt` de 520 linhas, ambos na RAIZ) têm o que os 7 falsos não têm: não
+ * pertencem à ESTRUTURA. Um untracked que vive num diretório de código do
+ * projeto E tem extensão de código do projeto é entregável em andamento (de
+ * outro card ou deste) — não artefato. Artefato é o que cai FORA da estrutura:
+ * a RAIZ do repo (onde os dois casos estavam), extensão estranha, nome de
+ * sonda.
+ *
+ * A raiz é deliberadamente NUNCA estrutural: um `.ts` solto na raiz não
+ * pertence ao projeto e É candidato, por mais que a extensão seja de código —
+ * o que desqualifica é o PAR (diretório de código + extensão de código).
+ *
+ * NOME DE SONDA VENCE A ESTRUTURA (4ª exclusão, parte 2): a sonda que MEDIU
+ * esta task (`tests/unit/zz-measure2.test.ts`) era invisível ao próprio
+ * detector — o caso de uso, não uma ressalva. Uma sonda chamada `zz-probe.ts`
+ * em `src/` é artefato mesmo estando no par estrutural; a precisão vinha da
+ * EXTENSÃO, e o nome agora desempata. As listas abaixo são exportadas: o gate
+ * anti-drift as confronta com `git ls-files`.
+ */
+export const STRUCTURAL_CODE_DIRS: readonly string[] = [
+  "src",
+  "tests",
+  "scripts",
+  "resources",
+  "prototypes",
+  "docs",
+  ".github",
+];
+const STRUCTURAL_CODE_DIR_SET = new Set(STRUCTURAL_CODE_DIRS);
+
+export const PROJECT_CODE_EXTS: readonly string[] = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".css",
+  ".json",
+  ".md",
+  ".astro",
+  ".png",
+  ".html",
+  ".yml",
+  ".sh",
+  ".py",
+];
+const PROJECT_CODE_EXT_SET = new Set(PROJECT_CODE_EXTS);
+
+/**
+ * Marcadores de sonda no NOME — ANCORADOS EM FRONTEIRA, nunca substring.
+ *
+ * MEDIDO sobre os 689 basenames de `git ls-files`: o casamento por SUBSTRING
+ * acusava 2 arquivos VIVOS e legítimos — `scripts/measure-reach-gabarito.ts`
+ * (casava `measure`) e `tests/unit/verify-tmp-sweep.test.ts` (casava `tmp`).
+ * O repo usa `measure-*` e `-tmp-` de verdade, então um `scripts/measure-foo.ts`
+ * novo nasceria falso-positivo — e gritar em arquivo legítimo é o modo de
+ * falha que reprovou o desenho original (7/7). Com a âncora — começa-por
+ * (`zz-`, `scratch`, `probe`, `debug`, `tmp-`), TOKEN pontuado (`.bak`,
+ * `.orig`, `.tmp`) ou delimitado (`-measure-`) — os dois vivos deixam de casar
+ * e as sondas seguem pegas: **0 de 689**.
+ *
+ * LIMITE DECLARADO (não coberto de propósito): uma sonda de nome ARBITRÁRIO
+ * dentro de diretório de código (`src/main/helper.ts`) segue invisível — o
+ * nome não a denuncia. Cobrir isso exigiria outra classe de evidência
+ * (autoria, janela), fora do escopo deste detector.
+ */
+const PROBE_NAME_PREFIXES: readonly string[] = ["zz-", "scratch", "probe", "debug", "tmp-"];
+const PROBE_NAME_TOKENS: readonly string[] = [".bak", ".orig", ".tmp"];
+const PROBE_NAME_DELIMITED: readonly string[] = ["-measure-"];
+
+/** Exportado para o gate anti-drift: nenhum nome RASTREADO pode casar. */
+export function isProbeName(rel: string): boolean {
+  const base = rel.slice(rel.lastIndexOf("/") + 1).toLowerCase();
+  if (PROBE_NAME_PREFIXES.some((prefix) => base.startsWith(prefix))) return true;
+  // Token PONTUADO: `.tmp` casa `x.tmp` e `x.tmp.ts`, mas NUNCA `verify-tmp-sweep`.
+  if (PROBE_NAME_TOKENS.some((token) => base.endsWith(token) || base.includes(`${token}.`))) return true;
+  return PROBE_NAME_DELIMITED.some((marker) => base.includes(marker));
+}
+
+function isStructuralSourceFile(rel: string): boolean {
+  const segments = rel.split("/");
+  if (segments.length < 2) return false; // RAIZ: onde scratch.php/diff.txt vivem.
+  // Sonda: É candidato mesmo em diretório de código — é o caso de uso.
+  if (isProbeName(rel)) return false;
+  if (!STRUCTURAL_CODE_DIR_SET.has(segments[0]!)) return false;
+  const dot = rel.lastIndexOf(".");
+  const ext = dot > rel.lastIndexOf("/") ? rel.slice(dot).toLowerCase() : "";
+  return PROJECT_CODE_EXT_SET.has(ext);
+}
+
+/** Gate anti-drift: o repo REAL decide se as listas estão completas. */
+export function isCoveredRepoDir(segment: string): boolean {
+  return STRUCTURAL_CODE_DIR_SET.has(segment) || NON_ARTIFACT_SEGMENTS.has(segment);
+}
+
+export function isProjectCodeExt(ext: string): boolean {
+  return PROJECT_CODE_EXT_SET.has(ext.toLowerCase());
+}
+
+function normalizeRel(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").trim();
+}
+
+function declaredCovers(path: string, declared: readonly string[], root: string): boolean {
+  const norm = normalizeRel(path);
+  if (!norm) return false;
+  const rootNorm = normalizeRel(root);
+  for (const raw of declared) {
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    const d = normalizeRel(raw);
+    const rel = rootNorm && d.startsWith(`${rootNorm}/`) ? d.slice(rootNorm.length + 1) : d;
+    if (!rel) continue;
+    if (norm === rel || norm.endsWith(`/${rel}`) || rel.endsWith(`/${norm}`)) return true;
+  }
+  return false;
+}
+
+/**
+ * Os arquivos que o relatório DECLAROU, pelas convenções que o board já usa:
+ * um array `files` (schema `["ok","files","evidence"]`) ou `filesChanged`
+ * (array ou prosa — separada por crase, vírgula ou quebra). Uma prosa que cita
+ * um caminho a mais só REDUZ candidatos, que é a direção segura para um sinal.
+ */
+export function declaredFilesFromReport(report: unknown): string[] {
+  if (report === null || typeof report !== "object" || Array.isArray(report)) return [];
+  const payload = report as Record<string, unknown>;
+  const out: string[] = [];
+  for (const key of ["files", "filesChanged", "arquivos"]) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) if (typeof entry === "string" && entry.trim()) out.push(entry.trim());
+      continue;
+    }
+    if (typeof value === "string" && value.trim()) {
+      for (const part of value.split(/[`\n,]/)) if (part.trim()) out.push(part.trim());
+    }
+  }
+  return out;
+}
+
+/** Só o que sobra das três exclusões é pendência — e sai ordenado por caminho. */
+export function decideArtifactCandidates(input: {
+  untracked: readonly UntrackedArtifact[];
+  declaredFiles: readonly string[];
+  workspaceRoot: string;
+  /** `tasks.created_at`: arquivo mais velho que isto não nasceu desta task. */
+  taskStartedAtMs: number;
+}): ArtifactPendency[] {
+  const out: ArtifactPendency[] = [];
+  for (const file of input.untracked) {
+    const norm = normalizeRel(file.path);
+    if (!norm) continue;
+    if (norm.split("/").some((segment) => NON_ARTIFACT_SEGMENTS.has(segment))) continue;
+    // Pertencer à ESTRUTURA (dir de código + extensão de código) não é
+    // artefato, por mais novo que seja — é entregável em andamento. Ver
+    // `isStructuralSourceFile`.
+    if (isStructuralSourceFile(norm)) continue;
+    if (file.modifiedAtMs > 0 && input.taskStartedAtMs > 0 && file.modifiedAtMs < input.taskStartedAtMs) continue;
+    if (declaredCovers(norm, input.declaredFiles, input.workspaceRoot)) continue;
+    out.push({ path: norm, bytes: file.bytes, modifiedAtMs: file.modifiedAtMs });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * AGENT-FACING — DO NOT TRANSLATE. A pendência é DITA, com caminho, tamanho e
+ * desde quando, e com a ressalva explícita: a árvore é compartilhada e o app
+ * não apaga nada sozinho. Silêncio foi o defeito que esta família de tasks
+ * (ccab0c58, 3b1c9273, 3c696ec9) já curou três vezes hoje.
+ */
+export function describeArtifactPendencies(pendencies: readonly ArtifactPendency[]): string {
+  if (pendencies.length === 0) return "";
+  const lines = pendencies.map((p) => {
+    const when = p.modifiedAtMs > 0 ? new Date(p.modifiedAtMs).toISOString() : "mtime desconhecido";
+    return `- ${p.path} (${p.bytes} B, desde ${when})`;
+  });
+  return (
+    `[de: stellar] ${pendencies.length} arquivo(s) UNTRACKED que o relatório NÃO declarou e que existem desde o início desta task ficaram na árvore ` +
+    `— PENDÊNCIA DE LIMPEZA (nada foi apagado):\n${lines.join("\n")}\n` +
+    `SINAL, não acusação: a árvore é compartilhada e outro card pode ter escrito no mesmo intervalo. ` +
+    `Confira antes de remover — o app nunca apaga arquivo de trabalho sozinho.`
+  );
+}
+
+/**
  * O que o fechamento do card deve fazer com UMA task aberta à qual ele
  * está ligado. Puro: o chamador só coleta fatos e aplica.
  */
