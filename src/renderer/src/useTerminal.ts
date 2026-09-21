@@ -319,15 +319,6 @@ export function useTerminal(
   turnEndRef.current = readTurnEndSignal(
     availableProviders.find((entry) => entry.id === providerId)?.turnEndSignal ?? null,
   );
-  const W = window as unknown as Record<string, unknown>;
-  const D = (W.__turnEndDiag as Record<string, unknown>) ?? (W.__turnEndDiag = {});
-  Object.assign(D, {
-    id: providerId,
-    pattern: turnEndRef.current.pattern?.source ?? null,
-    has: turnEndRef.current.hasRealTurnSignal,
-    providers: availableProviders.length,
-    ids: availableProviders.map((e) => e.id).join(","),
-  });
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FullWidthFitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
@@ -461,15 +452,9 @@ export function useTerminal(
       writeMasked(data);
       setHasReceivedOutput(true);
       const turnEndPattern = turnEndRef.current.pattern;
-      const D = (window as unknown as Record<string, unknown>).__turnEndDiag as Record<string, unknown>;
-      D.dataEvents = ((D.dataEvents as number) ?? 0) + 1;
-      D.lastChunk = String(data).slice(-60);
       if (turnEndPattern) {
         turnEndBufferRef.current = (turnEndBufferRef.current + data).slice(-TURN_END_BUFFER_MAX);
-        D.bufTail = turnEndBufferRef.current.slice(-60);
-        D.bufLen = turnEndBufferRef.current.length;
         if (turnEndPattern.test(turnEndBufferRef.current)) {
-          D.matched = ((D.matched as number) ?? 0) + 1;
           turnEndBufferRef.current = "";
           // Pattern-match é o sinal deste provider — prova capacidade.
           markTurnSignalSeen();
