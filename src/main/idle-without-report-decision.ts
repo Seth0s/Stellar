@@ -41,6 +41,69 @@
  * bytes não são evidência de trabalho em TUI nenhum), e um cutucão baseado
  * numa grandeza que virou `unknown` é pior que nenhum.
  *
+ * A SEGUNDA PERGUNTA, que faltava (task 14b8b224): não basta "este card devia
+ * um report?" — é preciso "ALGUÉM podia ter reportado?". Medido no board em
+ * 2026-09-22: quatro cards `provider: bash` VAZIOS, vinculados a tasks pelo
+ * orquestrador, foram acusados de "idle sem chamar report" minutos depois. Não
+ * houve falha nenhuma: não havia agente. E a âncora não separa os dois casos —
+ * `lastWorkGrantedAtMs` NASCE com a entry (`pty-registry.ts`, no spawn), então
+ * TODO card vivo carrega âncora desde o berço e "não houve report desde o
+ * trabalho" é vacuamente verdadeiro para quem nunca recebeu trabalho nenhum. A
+ * resposta mora em `hasAgentReadingLine` (`card-status-decision.ts`), a fonte
+ * única da pergunta "tem agente lendo esta linha?" — e o portão abaixo só
+ * silencia com a prova EXPLÍCITA (`hasAgentReader === false`), nunca por fato
+ * ausente: um alarme que some é pior que um alarme errado.
+ *
+ * A VERDADE VAZIA — e a hipótese ERRADA que ela substituiu (2026-09-22, a
+ * lição que mais vale desta task). O diagnóstico inicial do defeito foi "o
+ * vínculo conta como receber trabalho". MEDIDO: NÃO CONTA.
+ * `lastWorkGrantedAtMs` NASCE com a entry, no spawn (`pty-registry.ts:953`), e
+ * só é renovado por write com origin `human`/`delivery` (`grantsWork`,
+ * 1324-1326) — e o vínculo de um card `bash` não escreve nada, porque
+ * `notifyLinkedCard` (`message-bus.ts`) retorna ANTES de qualquer entrega.
+ * O que disparou nos quatro cards foi o PISO: `reportedSinceWorkGranted ===
+ * false` era VACUAMENTE verdadeiro (âncora desde o berço + nenhum trabalho
+ * concedido jamais), e "não houve report desde o trabalho" virou "DEVIA um
+ * report" para quem nunca pôde reportar.
+ *
+ * QUEM LER ISTO DAQUI A UM MÊS: não reconstrua a hipótese do vínculo — ela foi
+ * medida e recusada, com o caminho do código acima. O defeito é a VERDADE VAZIA
+ * TRATADA COMO FATO, que é a mesma classe que este módulo já pagou uma vez (o
+ * `hasReport` por vida do card) e a razão pela qual a pergunta "alguém podia
+ * ter reportado?" teve de virar um fato explícito (`hasAgentReader`).
+ *
+ * A TERCEIRA FRASE — SILÊNCIO INFERIDO x SILÊNCIO DECLARADO (task 14b8b224,
+ * caso (b)). O SEGUNDO falso positivo, medido no próprio board: o alarme
+ * disparou para um card COM agente que estava parado PORQUE o orquestrador
+ * mandou parar (esperando o conserto de outra task). "Esperando instrução" e
+ * "morreu calado" são idênticos OLHANDO PARA O CARD — e a pergunta que o
+ * orquestrador propôs para separá-los não tem resposta neste app:
+ *
+ *   - o STORE não guarda mensagem recebida por card. MEDIDO: as tabelas são
+ *     cards/connectors/boards/tasks/task_transitions/task_cards/reports/
+ *     task_verdicts/sprints/browser_favorites/spawns/local_identity — não há
+ *     `deliveries`/`messages`; as entregas vivem num índice EM MEMÓRIA (o
+ *     próprio `list_deliveries` se descreve assim), e `cards.messages_json` é
+ *     histórico de card `kind='chat'` (medido: 0 bytes num card terminal).
+ *   - o FATO que existe em memória (`getCardLastWorkGrantedAt`, o último
+ *     trabalho concedido) NÃO separa — ele é a condição que ARMA o watchdog.
+ *     Quem está trabalhando e quem abandonou têm, os dois, "houve entrega
+ *     depois do último report". Usá-lo como skip silenciaria todo card que já
+ *     recebeu trabalho, que é o mecanismo inteiro.
+ *
+ * O QUE SEPARA é o FATO DE TURNO: `declaredIdle`. Com ele, o card DECLAROU o
+ * fim do turno e não reportou — a acusação está sustentada pelo que o próprio
+ * card emitiu (hoje o único produtor é o hook `Stop` do claude, `providers.ts`;
+ * `acbridge turn-complete` existe no PATH de todo card, mas nenhum outro CLI o
+ * chama). Sem ele — cline, commandcode, e qualquer agente parado no composer —
+ * o que o app tem é um RELÓGIO DE BYTES, grandeza que este repo já desqualificou
+ * como evidência de trabalho (ver `card-status-decision.ts`: sem fato de turno,
+ * o estado honesto é `unknown`, "não inventamos").
+ *
+ * Por isso a ação `notify_unproven`: o mesmo sinal, a frase do tamanho da
+ * prova. O texto diz o que sabe ("sem chamar report há Nmin") e pede a
+ * conferência — em vez de afirmar um abandono que o app não pode ver.
+ *
  * O PISO DE 180s FICA, e só para o caminho SEM fato de turno.
  * `IDLE_WITHOUT_REPORT_MS = 180_000` é o mesmo teto de "silêncio ≠ trabalho"
  * já usado na barra de atividade (`ACTIVITY_UNPROVEN_SIGNAL_IDLE_MS` em
@@ -111,6 +174,18 @@ export type IdleWithoutReportSkipReason =
 
 export type IdleWithoutReportDecision =
   | { action: "notify" }
+  /** SILÊNCIO INFERIDO, sem fato de turno (task 14b8b224, caso (b)): o card
+   *  está quieto além do piso e nada declarou o fim do turno. Aqui o app NÃO
+   *  sabe distinguir "terminou e não reportou" de "está trabalhando" nem de
+   *  "está à espera de instrução" — e é por isso que a frase desta ação é
+   *  factual ("sem report há X"), nunca a acusação. Ver o bloco A TERCEIRA
+   *  FRASE no cabeçalho do módulo para a medição que separa os dois casos. */
+  | { action: "notify_unproven" }
+  /** O card está ocioso e vinculado, mas NÃO há agente lendo a linha: não é
+   *  "não reportou" (ninguém poderia ter reportado), é "o vínculo existe e
+   *  ninguém o executa". Mesma pergunta, resposta DIFERENTE — e por isso uma
+   *  frase diferente, nunca a acusação (task 14b8b224). */
+  | { action: "notify_no_agent" }
   | { action: "skip"; reason: IdleWithoutReportSkipReason };
 
 /**
@@ -145,6 +220,18 @@ export function decideIdleWithoutReport(input: {
   alreadyNotified: boolean;
   /** `null` when the PTY registry has no activity clock for this card. */
   msSinceLastActivity: number | null;
+  /**
+   * TEM agente lendo a linha deste card? A resposta vem de
+   * `hasAgentReadingLine` (`card-status-decision.ts`) — a fonte ÚNICA dessa
+   * pergunta, a mesma que o aviso de vínculo faz.
+   *
+   * OBRIGATÓRIO de propósito, e o silêncio exige `=== false` EXPLÍCITO: um
+   * fato AUSENTE (call site que esqueceu) NÃO silencia o watchdog — ele volta
+   * ao comportamento antigo (acusar). Trocar um alarme errado por um alarme que
+   * some seria pior: um watchdog que não vigia entrega menos que watchdog
+   * nenhum, que é a lição que este módulo já pagou uma vez.
+   */
+  hasAgentReader: boolean;
   /** Override for tests; production uses IDLE_WITHOUT_REPORT_MS. */
   idleWithoutReportMs?: number;
 }): IdleWithoutReportDecision {
@@ -156,14 +243,24 @@ export function decideIdleWithoutReport(input: {
   if (input.reportedSinceWorkGranted) return { action: "skip", reason: "reported_this_episode" };
   if (!input.hasLinkedRunningTask) return { action: "skip", reason: "no_linked_running_task" };
   if (input.alreadyNotified) return { action: "skip", reason: "already_notified" };
+  // A FRASE segue o leitor e a PROVA, não o relógio (task 14b8b224). Três
+  // respostas, cada uma do tamanho do que o app sabe:
+  //   - sem leitor  → não é "não reportou" (ninguém podia reportar);
+  //   - turno DECLARADO encerrado + nenhum report → a acusação está sustentada
+  //     por um fato que o próprio card emitiu;
+  //   - só silêncio (sem fato de turno) → INFERIDO: frase factual, sem acusar.
+  const due = (): IdleWithoutReportDecision => {
+    if (input.hasAgentReader === false) return { action: "notify_no_agent" };
+    return input.declaredIdle ? { action: "notify" } : { action: "notify_unproven" };
+  };
   // Fato declarado de fim de turno: não espera piso nenhum — esperar 3min
   // para reagir a algo que o card DECLAROU seria arbitrário.
-  if (input.declaredIdle) return { action: "notify" };
+  if (input.declaredIdle) return due();
   // Sem fato de turno (bash/commandcode à mão), o silêncio é o único sinal.
   if (input.msSinceLastActivity === null) return { action: "skip", reason: "activity_unknown" };
   const floor = input.idleWithoutReportMs ?? IDLE_WITHOUT_REPORT_MS;
   if (input.msSinceLastActivity < floor) {
     return { action: "skip", reason: "not_idle_long_enough" };
   }
-  return { action: "notify" };
+  return due();
 }
