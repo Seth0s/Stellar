@@ -91,6 +91,13 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
         if (prop === "getTaskCards") return (taskId: string) => store.getTaskCards(taskId);
+        // O rig não tem pty-registry, então a liveness dos dois ids que ele
+        // usa é DECLARADA — e explicitamente, porque este arquivo é sobre id
+        // RECICLADO: "478" é o id reciclado (a encarnação nova, criada
+        // depois) e "494" é o card do primeiro caso. Sem esta linha o guarda
+        // de identidade do `report` (task 34e27f66) recusaria os dois por "o
+        // card não existe" e nenhum dos casos chegaria ao veredito.
+        if (prop === "isCardAlive") return (cardId: string) => cardId === "478" || cardId === "494";
         return () => undefined;
       },
     },

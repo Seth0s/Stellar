@@ -50,6 +50,13 @@ describe("message-bus: envelope do report (10cf58d0)", () => {
         listTasks: () => [],
         listTaskCardsForCard: () => [],
         listCards: () => [],
+        // O rig não tem pty-registry: todo id que ele nomeia É um card vivo.
+        // Sem esta linha o guarda de identidade do `report` (task 34e27f66)
+        // recusaria "card-1" por "o card não existe" e nada seria gravado — o
+        // envelope, que é o que este arquivo testa, nunca seria alcançado. O
+        // guarda é exercitado, com os dois lados, em
+        // report-card-identity-existence.test.ts.
+        isCardAlive: () => true,
         listAllConnectors: () => [],
         nextReportSeqSeed: () => 0,
         upsertReport: (row: ReportRow) => reports.push(row),

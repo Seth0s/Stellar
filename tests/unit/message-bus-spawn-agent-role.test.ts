@@ -114,7 +114,11 @@ describe("message-bus: spawn_agent role", () => {
   it("role omitido: card_id + task_cards implementer via linkImplementerToTask", async () => {
     const task = existingTask();
     const { res, spawned, upserted, linked } = await dispatch({ cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest);
-    expect(res).toEqual({ ok: true, cardId: "new-card" });
+    // `toMatchObject` (task bf1fb0a7): a resposta passou a carregar também o
+    // que aconteceu com o brief (`briefDelivered`/`briefMode`/`briefNote`), e a
+    // frase exata é pinada em message-bus-spawn-brief-honesty.test.ts. O que
+    // ESTE teste guarda é o vínculo (card_id + role), não a redação.
+    expect(res).toMatchObject({ ok: true, cardId: "new-card", briefDelivered: true, briefMode: "argv" });
     expect(spawned[0].brief).toBe("implement the thing");
     expect(upserted).toHaveLength(1);
     expect(upserted[0].card_id).toBe("new-card");
@@ -174,7 +178,7 @@ describe("message-bus: spawn_agent role", () => {
       brief: "review the diff of this task; report a verdict",
       reason: "test", requesterId: "orch",
     } as BusRequest);
-    expect(res).toEqual({ ok: true, cardId: "new-card" });
+    expect(res).toMatchObject({ ok: true, cardId: "new-card", briefDelivered: true, briefMode: "argv" });
     expect(spawned[0].brief).toBe("review the diff of this task; report a verdict");
     // The spawned card still knows which task it serves (AGENT_CANVAS_TASK_ID).
     expect(spawned[0].taskId).toBe(task.id);

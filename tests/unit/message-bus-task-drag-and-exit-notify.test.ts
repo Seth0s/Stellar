@@ -333,6 +333,13 @@ describe("message-bus: histórico de veredito por participação — os dois cho
       sockPath,
       callbacksWithOverrides({
         onReadCardRequest: (requestId: string) => bus?.resolveReadCard(requestId, { ok: true, text: "" }),
+        // O rig não tem pty-registry: todo id que ele nomeia É um card vivo —
+        // é o que permite os três `cmd: 'report'` deste bloco chegarem ao
+        // `recordParticipationRound`, que é o que eles testam. Sem esta linha
+        // o guarda de identidade os recusaria por "o card não existe" (task
+        // 34e27f66); o guarda em si é exercitado, dos dois lados, em
+        // report-card-identity-existence.test.ts.
+        isCardAlive: () => true,
         ...overrides,
       }),
     );

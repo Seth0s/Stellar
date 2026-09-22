@@ -286,6 +286,12 @@ describe("message-bus + store: seq monotônica e relatório sobrevivem a um rest
         if (prop === "findSpawnByChild") return () => undefined;
         if (prop === "listSpawnsByParent") return () => [];
           if (prop === "listCards") return () => [];
+          // O rig não tem pty-registry: todo id que ele nomeia É um card vivo.
+          // Sem esta linha o guarda de identidade do `report` (task 34e27f66)
+          // recusaria "reviewer-1"/"reviewer-2"/"reviewer-3" e o seq nunca
+          // seria atribuído — que é justamente o que este arquivo testa sobre
+          // restart.
+          if (prop === "isCardAlive") return () => true;
           return () => undefined;
         },
       },

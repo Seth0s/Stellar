@@ -28,6 +28,12 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         if (prop === "findSpawnByChild") return () => undefined;
         if (prop === "listSpawnsByParent") return () => [];
         if (prop === "listCards") return () => [];
+        // O rig não tem pty-registry: todo id que ele nomeia É um card vivo.
+        // Sem esta linha o Proxy devolveria `undefined` para `isCardAlive`, e
+        // o guarda de identidade do `report` (task 34e27f66) recusaria um
+        // relatório legítimo por "o card não existe" — o guarda é exercitado,
+        // com os dois lados, em report-card-identity-existence.test.ts.
+        if (prop === "isCardAlive") return () => true;
         return () => undefined;
       },
     },

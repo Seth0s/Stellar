@@ -29,6 +29,12 @@ function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => 
       reportsByCard.set(row.card_id, rows);
     }) as never,
     nextReportSeqSeed: (() => 0) as never,
+    // O rig não tem pty-registry: todo id que ele nomeia É um card vivo. Sem
+    // isto o `Proxy` devolveria `undefined` para `isCardAlive` e o guarda de
+    // identidade do `report` (task 34e27f66) recusaria relatórios legítimos
+    // deste arquivo por "o card não existe" — o guarda é exercitado, com os
+    // dois lados, em report-card-identity-existence.test.ts.
+    isCardAlive: (() => true) as never,
   };
   return new Proxy(
     {},
@@ -85,7 +91,10 @@ describe("message-bus: report persiste JSON e digita o ponteiro no PTY do orques
     const connectors: ConnectorRow[] = [{ kind: "spawned", from_card_id: "spawner-1", to_card_id: "child-1", updated_at: Date.now() }];
     const { bus: b, written } = makeBus({
       listAllConnectors: () => connectors,
-      isCardAlive: (id: string) => id === "spawner-1",
+      // Duas vidas, não uma: o SPAWNER (o ponteiro vai pro PTY dele) e o
+      // PRÓPRIO reporter, que agora tem de ser um card vivo para o guarda de
+      // identidade do `report` deixar a chamada passar (task 34e27f66).
+      isCardAlive: (id: string) => id === "spawner-1" || id === "child-1",
       describeCardLabel: (id: string) => (id === "child-1" ? "Child One" : id),
     });
 

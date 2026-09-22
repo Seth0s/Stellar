@@ -10,6 +10,8 @@ import {
   REPORT_AVAILABLE_POINTER_BODY,
   unreportedExitPointerBody,
   unreportedIdlePointerBody,
+  unreportedNoAgentPointerBody,
+  unreportedUnprovenIdlePointerBody,
 } from "./agent-facing-authorship";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, needleVisibleOnScreen, deriveComposerZone, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
@@ -52,7 +54,7 @@ import {
   decideIdleWithoutReport,
   IDLE_WITHOUT_REPORT_POLL_MS,
 } from "./idle-without-report-decision";
-import { decideCardStatus, describeCardStatus } from "./card-status-decision";
+import { decideCardStatus, describeCardStatus, hasAgentReadingLine, isShellProvider } from "./card-status-decision";
 import {
   decideReportAcceptance,
   errorFromReportPayload,
@@ -116,6 +118,9 @@ import {
 import { t, type MessageKey } from "../shared/i18n";
 import { fillReportTaskId } from "./card-spawn-env-decision";
 import {
+  decideDeclaredCardExistence,
+} from "./declared-card-existence-decision";
+import {
   decideReportTaskLink,
   declaredTaskIdFromReportBody,
   describeAmbiguousTaskRefusal,
@@ -136,6 +141,14 @@ import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
 import { argvCarriesDeclaredBrief, providerCapacity } from "./providers";
 import { decideSpawnProfile } from "./spawn-profile-decision";
+import { describeSpawnBriefDelivery, type SpawnBriefMode } from "./spawn-brief-delivery-decision";
+import {
+  SPAWN_IDEMPOTENCY_WINDOW_MS,
+  decideSpawnIdempotency,
+  normalizeSpawnIdempotencyKey,
+  pruneSpawnIdempotency,
+  type SpawnIdempotencyEntry,
+} from "./spawn-idempotency-decision";
 import { filterListedTasks, parseListTasksQuery, projectListedTask, type ListedTask } from "./list-tasks-query";
 import {
   deriveParticipationDivergence,
@@ -371,6 +384,28 @@ export type SpawnAgentResult =
       cardId: string;
       exited?: boolean;
       exitCode?: number;
+      /**
+       * O QUE ACONTECEU COM O BRIEF (task bf1fb0a7) — ver
+       * spawn-brief-delivery-decision.ts para a medição que originou isto.
+       * `briefDelivered` só é `true` quando o texto está no LAUNCH do processo
+       * (argv): é a única entrega que não depende de nada posterior. No
+       * caminho digitado ele é `false` por definição, e `briefDeliveryId` é o
+       * que torna o veredito consultável (`get_delivery`) em vez de
+       * adivinhado. Ausente num `ok:false` — ali não existe entrega a relatar.
+       */
+      briefDelivered?: boolean;
+      briefMode?: SpawnBriefMode;
+      briefDeliveryId?: string;
+      briefNote?: string;
+      /**
+       * `true` quando esta resposta é a de uma chamada ANTERIOR reusada pela
+       * chave de idempotência (mesmo chamador + mesma `idempotencyKey`, dentro
+       * da janela) — o `cardId` NÃO é um card novo. Sem isto o chamador não
+       * consegue distinguir "criei um card" de "já tinha criado"; é a mesma
+       * disciplina de dizer a verdade sobre o que ficou de pé que motivou os
+       * campos de brief acima.
+       */
+      idempotentReplay?: boolean;
       /** Nota informativa, nunca impedimento (task 095158e9, item b):
        * despachar fora de ordem é decisão LEGÍTIMA do orquestrador — o
        * brief já carrega o estado de cada dep, e isto só evita que quem
@@ -678,6 +713,18 @@ export type BusRequest =
        * spawn-brief-decision.ts. Without `taskId`, or with an unknown
        * value, the spawn is REFUSED. */
       role?: string;
+      /**
+       * Chave de idempotência do CHAMADOR (task bf1fb0a7): mesma chave, mesmo
+       * chamador, dentro de `SPAWN_IDEMPOTENCY_WINDOW_MS` → o MESMO card, não
+       * um segundo. Existe por causa de uma medição: num board autônomo no
+       * teto a chamada fica na fila por minutos, o watchdog do cliente aborta,
+       * e o card nasce DEPOIS — medido no board 118 em 2026-09-21, duas
+       * chamadas que resolveram no mesmo segundo, 4 e 7,5 minutos depois de
+       * emitidas (`97924157`/`97924159`). Retentar ali é legítimo e, sem
+       * chave, cria dois cards para o mesmo trabalho na MESMA árvore. Ver
+       * spawn-idempotency-decision.ts.
+       */
+      idempotencyKey?: string;
     }
   | {
       cmd: "spawn_card";
@@ -1431,6 +1478,26 @@ export function createMessageBus(
   type StoredReport = { report: unknown; seq: number; verdict?: string | null; role?: string | null };
   const pendingReportWaiters = new Map<string, Array<{ afterSeq: number; resolve: (stored: StoredReport) => void }>>();
   const pendingSpawnAgents = new Map<string, { resolve: (result: SpawnAgentResult) => void; timer: NodeJS.Timeout }>();
+  /**
+   * Onde o brief de cada spawn em voo foi parar (task bf1fb0a7). Escrito no
+   * `dispatchSpawnAgentRequest` — que é quem sabe `canArgv`/`tooLarge` — e lido
+   * (com `delete`) quando a resposta do `spawn_agent` é montada. Sem isto, a
+   * chamada devolvia a mesma string `{ok:true, cardId}` para "o texto nasceu no
+   * argv", "o texto está só na fila" e "não me deram texto nenhum".
+   * Ver spawn-brief-delivery-decision.ts.
+   */
+  const spawnBriefOutcomes = new Map<
+    string,
+    { hasBrief: boolean; canArgv: boolean; tooLarge: boolean; deliveryId?: string }
+  >();
+  /**
+   * Idempotência do `spawn_agent`, por (chamador, chave). O valor é SEMPRE a
+   * mesma promise da primeira chamada — uma segunda chamada com a mesma chave
+   * não dispara um segundo card; ela espera (ou recebe) o resultado da
+   * primeira. `result` guarda o resultado FINAL já decorado, para que a
+   * retentativa receba a mesma verdade, e não uma versão degradada dela.
+   */
+  const spawnIdempotency = new Map<string, SpawnIdempotencyEntry & { promise: Promise<SpawnAgentResult> }>();
   const pendingSpawnCards = new Map<string, { resolve: (result: SpawnCardResult) => void; timer: NodeJS.Timeout }>();
   // DESIGN-BACKLOG.md item 60, peça 1 — one FIFO queue per autonomous
   // board. `params` is exactly what `onSpawnAgentRequest` needs, captured
@@ -2456,13 +2523,19 @@ export function createMessageBus(
    * `enqueueCardDelivery` path as report / exit — no OS popup, no poke of
    * the idle card itself (that would inject into a possibly-thinking turn).
    * Caller stamps `idleWithoutReportNotified` so this fires once per episode.
+   *
+   * A FRASE vem de quem chamou (task 14b8b224): o MESMO sinal tem duas
+   * respostas verdadeiras, e qual delas é a certa depende de haver agente lendo
+   * — a acusação ("não reportou") ou o aviso útil ("o vínculo está vivo e
+   * ninguém o executa"). Escolher aqui dentro seria decidir de novo, com menos
+   * fatos, algo que o portão puro já decidiu.
    */
-  function notifySpawnerOfUnreportedIdle(cardId: string): void {
+  function notifySpawnerOfUnreportedIdle(cardId: string, body: string): void {
     const spawnerId = resolveNotifyTarget(cardId);
     if (!spawnerId) return;
     if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
     const label = callbacks.describeCardLabel(cardId);
-    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, unreportedIdlePointerBody()));
+    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, body));
   }
 
   /**
@@ -2492,6 +2565,31 @@ export function createMessageBus(
       // por poll).
       const workGrantedAt = callbacks.getCardLastWorkGrantedAt(cardId);
       const episodeAnchor = workGrantedAt ?? turnEndedAt ?? NO_EPISODE_ANCHOR;
+      // UM relógio só para esta passada: o mesmo instante alimenta o piso, a
+      // idade que vai na frase do silêncio inferido e o `now` do card_status.
+      const now = Date.now();
+      const idleMs = lastActivityAt === null ? null : now - lastActivityAt;
+      // A SEGUNDA PERGUNTA (task 14b8b224): TEM AGENTE LENDO ESTA LINHA? Um
+      // card de shell com prompt livre não tem — e acusá-lo de "não reportar" é
+      // cobrar de quem nunca pôde reportar (o aviso de vínculo já respondia
+      // "skipped: ... has no agent reading the line" no mesmo boot). A resposta
+      // mora em `hasAgentReadingLine` (card-status-decision.ts), com os MESMOS
+      // fatos que o `card_status` publica — inclusive o limiar, importado de lá
+      // em vez de reescrito aqui. O thunk só é chamado para provider de shell:
+      // para os outros a resposta é trivialmente "tem agente" e o scan (que roda
+      // a cada 5s) não paga a leitura do write-readiness.
+      const hasAgentReader = hasAgentReadingLine(card.provider ?? null, () =>
+        decideCardStatus({
+          provider: card.provider ?? null,
+          alive: callbacks.isCardAlive(cardId),
+          waitingOnConsent: waitingOnConsent.has(cardId),
+          lastActivityAt,
+          turnEndedAt,
+          hasPendingHumanInput: callbacks.getCardWriteReadiness(cardId)?.hasPendingHumanInput === true,
+          now,
+          idleThresholdMs: IDLE_THRESHOLD_MS,
+        }),
+      );
       // O report mais recente do card. `updated_at` é o instante em que a
       // linha entrou (`reports` é append-only por `seq`), então a comparação
       // com a âncora responde "houve report NESTE episódio?".
@@ -2511,12 +2609,24 @@ export function createMessageBus(
         declaredIdle: turnEndedAt !== null && (lastActivityAt === null || lastActivityAt <= turnEndedAt),
         hasLinkedRunningTask: !!linkedTask && !isJudgmentStatus(linkedTask.status),
         alreadyNotified: idleWithoutReportNotified.get(cardId) === episodeAnchor,
-        msSinceLastActivity: lastActivityAt === null ? null : Date.now() - lastActivityAt,
+        msSinceLastActivity: idleMs,
+        hasAgentReader,
       });
-      if (decision.action !== "notify") continue;
+      if (decision.action === "skip") continue;
       // Stamp BEFORE enqueue so a slow FIFO cannot double-fire on the next poll.
       idleWithoutReportNotified.set(cardId, episodeAnchor);
-      notifySpawnerOfUnreportedIdle(cardId);
+      // A FRASE É DO TAMANHO DA PROVA (task 14b8b224): sem leitor é uma coisa,
+      // silêncio DECLARADO (turno encerrado pelo próprio card) é outra, e
+      // silêncio INFERIDO — só o relógio — é uma terceira, que não pode afirmar
+      // abandono. O texto de cada uma mora em agent-facing-authorship.ts.
+      notifySpawnerOfUnreportedIdle(
+        cardId,
+        decision.action === "notify_no_agent"
+          ? unreportedNoAgentPointerBody()
+          : decision.action === "notify_unproven"
+            ? unreportedUnprovenIdlePointerBody(idleMs ?? 0)
+            : unreportedIdlePointerBody(),
+      );
     }
   }
 
@@ -2538,7 +2648,20 @@ export function createMessageBus(
   function notifyHumanMovedTask(cardId: string, message: string): void {
     if (!callbacks.isCardAlive(cardId)) return;
     const card = listTerminalCards().find((c) => c.id === cardId);
-    if (!card || card.provider === "bash") return;
+    // A pergunta é "o leitor DESTE card é um shell?" (a lista mora em
+    // card-status-decision.ts) — não um literal `=== "bash"` reescrito aqui
+    // (task 14b8b224: uma pergunta, uma resposta).
+    //
+    // POR QUE ESTE SITE FICA CONSERVADOR, e não usa `hasAgentReadingLine`
+    // (decisão do dono do repo, 2026-09-22 — NÃO unifique "por elegância"):
+    // aqui a pergunta é "posso DIGITAR neste card?", não "tem agente lendo?".
+    // Num alvo de shell a entrega é digitada E SUBMETIDA (`deliveryWriteOpensTurn`,
+    // `DeliveryTargetRole = "shell"`), ou seja: o texto vira COMANDO. Um card
+    // bash com bytes (um `cargo build` rodando) não é prova de leitor — é a
+    // situação em que um brief de duas mil palavras seria executado, linha a
+    // linha, pelo shell. O watchdog pode (e deve) considerar esse card um
+    // possível leitor para não silenciar; a ENTREGA não pode apostar nisso.
+    if (!card || isShellProvider(card.provider ?? null)) return;
     enqueueCardDelivery(cardId, message, { steer: true });
   }
 
@@ -2573,7 +2696,25 @@ export function createMessageBus(
     }
     const card = listTerminalCards().find((c) => c.id === cardId);
     if (!card) return `skipped: card "${cardId}" is not a terminal — a notice has no reader`;
-    if (card.provider === "bash") return "skipped: bash has no agent reading the line";
+    // O leitor DECLARADO deste card é um shell: o aviso seria DIGITADO e
+    // SUBMETIDO como comando (é a mesma física do send_to_card, que num alvo
+    // shell executa o texto). Não é "não reportou" nem "não leu": é "um aviso
+    // não solicitado viraria comando". O vínculo é feito do mesmo jeito — quem
+    // cobra a existência de leitor é o watchdog, e ele usa a MESMA pergunta
+    // (`hasAgentReadingLine`, card-status-decision.ts) com a evidência da tela,
+    // que aqui não existe (task 14b8b224).
+    //
+    // FICA CONSERVADOR DE PROPÓSITO — decisão do dono do repo, 2026-09-22, e o
+    // custo está medido: a pergunta daqui é "posso DIGITAR neste card?", não
+    // "tem agente lendo?". NÃO unifique com `hasAgentReadingLine` para
+    // economizar uma linha: num alvo de shell a entrega é digitada E SUBMETIDA
+    // (`DeliveryTargetRole = "shell"`), então um card bash com bytes — um
+    // `cargo build`, um `ls -R` — passaria a receber avisos não solicitados que
+    // o shell tentaria EXECUTAR (um brief de duas mil palavras vira comando, e
+    // a primeira linha é a que dói).
+    if (isShellProvider(card.provider ?? null)) {
+      return "skipped: the declared reader of this card is a shell — an unsolicited notice would be submitted as a command (linked anyway)";
+    }
     const label = requesterId ? callbacks.describeCardLabel(requesterId) : null;
     const body = formatAgentFacingAuthorship(label, linkedCardNoticeBody(taskId, role));
     const enqueued = enqueueCardDelivery(cardId, body, { steer: false });
@@ -3268,6 +3409,34 @@ export function createMessageBus(
       // com a mensagem que ensina (ver `describeUndecodableReportEnvelope`).
       const envelopeProblem = describeUndecodableReportEnvelope(req.report);
       if (envelopeProblem) return { ok: false, error: envelopeProblem, field: "report" };
+      // A IDENTIDADE EXISTE? (task 34e27f66) — a PRIMEIRA checagem do
+      // handler, e antes de qualquer leitura que use o `requesterId`.
+      //
+      // MEDIDO no board vivo (2026-09-22): este handler só exigia um
+      // `requesterId` NÃO-VAZIO, então um id que não corresponde a card
+      // nenhum era aceito inteiro e o relatório ia para o banco sob um
+      // fantasma (`ok:true` de volta para o autor). Seis relatórios de DOIS
+      // cards diferentes ficaram empilhados sob `97924181` — um id cujo
+      // card real o dono abriu às 12:45:02 e fechou, e cujo fechamento
+      // APAGA a linha de `cards`.
+      //
+      // A checagem é `isCardAlive` (o `isAlive` do pty-registry: existe
+      // entrada de PTY) e não `listCards()`, por duas razões medidas:
+      // `listCards()` é escopado no board ABERTO (index.ts:1800 — trocar de
+      // sessão desmonta os cards da anterior), então um card vivo de outro
+      // board seria recusado por engano; e "existe" aqui quer dizer "existe
+      // processo", porque um card sem PTY não consegue chamar nada.
+      //
+      // Isto NÃO conserta a herança de identidade do daemon compartilhado
+      // do cline (não é consertável do lado do Stellar — ver o doc de
+      // `declared-card-existence-decision.ts`): conserta o que torna o
+      // defeito silencioso. A recusa nomeia o id e promete o que agora é
+      // verdade — nada foi gravado.
+      const identity = decideDeclaredCardExistence({
+        declaredCardId: req.requesterId,
+        cardExists: req.requesterId ? callbacks.isCardAlive(req.requesterId) === true : false,
+      });
+      if (identity.action === "refuse") return { ok: false, error: identity.error };
       const listed = callbacks.listTasks();
       const tasks = Array.isArray(listed) ? listed : [];
       // CAMADA 4 — a task deste report é resolvida UMA vez, antes de
@@ -4577,6 +4746,32 @@ export function createMessageBus(
           : briefDecision.brief;
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
+      // IDEMPOTÊNCIA (task bf1fb0a7) — mesmo chamador + mesma chave, dentro da
+      // janela, é a MESMA chamada: devolve o que a primeira devolveu (ou espera
+      // por ela) em vez de criar um segundo card. Fica ANTES do teto de
+      // profundidade e do preparo de worktree de propósito: uma retentativa não
+      // pode gastar orçamento nem criar uma segunda árvore isolada. Ver
+      // spawn-idempotency-decision.ts para a medição que a originou.
+      const idempotencyKey = normalizeSpawnIdempotencyKey(req.idempotencyKey);
+      const idempotencyId = idempotencyKey ? `${requesterId}\u0000${idempotencyKey}` : null;
+      if (idempotencyId) {
+        const existing = spawnIdempotency.get(idempotencyId);
+        const decision = decideSpawnIdempotency({
+          entries: existing ? [existing] : [],
+          key: idempotencyKey,
+          requesterId,
+          nowMs: Date.now(),
+        });
+        if (decision.action === "replay" && existing) {
+          // `idempotentReplay` — o cardId NÃO é card novo; sem esta marca o
+          // chamador não distingue "criei" de "já tinha criado".
+          const settled = existing.result as SpawnAgentResult | undefined;
+          if (settled) return settled.ok ? { ...settled, idempotentReplay: true } : settled;
+          const inFlight = await existing.promise;
+          const later = (existing.result as SpawnAgentResult | undefined) ?? inFlight;
+          return later.ok ? { ...later, idempotentReplay: true } : later;
+        }
+      }
       // Pre-release audit S4 — ignores `req.depth` entirely; see
       // `cardSpawnDepth`'s own comment above for why.
       const requesterDepth = requesterId ? (cardSpawnDepth.get(requesterId) ?? 0) : 0;
@@ -4638,10 +4833,25 @@ export function createMessageBus(
         taskId: briefDecision.taskId,
         connectorLabel,
       };
-      const spawnResult: SpawnAgentResult =
+      const dispatchPromise: Promise<SpawnAgentResult> =
         autonomous && requesterBoardId
-          ? await autonomousSpawn(requesterBoardId, requestId, requesterId, spawnParams)
-          : await dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
+          ? autonomousSpawn(requesterBoardId, requestId, requesterId, spawnParams)
+          : dispatchSpawnAgentRequest(requestId, requesterId, spawnParams, false);
+      // Registro da chave: a partir daqui uma retentativa com a mesma chave
+      // espera ESTA promise em vez de disparar outra. Poda na escrita — a
+      // janela é orçamento de retentativa, não cache permanente.
+      let idempotencyEntry: (SpawnIdempotencyEntry & { promise: Promise<SpawnAgentResult> }) | null = null;
+      if (idempotencyId && idempotencyKey) {
+        const atMs = Date.now();
+        for (const [key, entry] of spawnIdempotency) {
+          if (pruneSpawnIdempotency([entry], atMs, SPAWN_IDEMPOTENCY_WINDOW_MS).length === 0) {
+            spawnIdempotency.delete(key);
+          }
+        }
+        idempotencyEntry = { key: idempotencyKey, requesterId, atMs, promise: dispatchPromise };
+        spawnIdempotency.set(idempotencyId, idempotencyEntry);
+      }
+      const spawnResult: SpawnAgentResult = await dispatchPromise;
       // Consent refused/didn't arrive, or the card creation itself failed:
       // NO card will ever run in this worktree, so it must not survive. A
       // successful spawn keeps it (the card's own cwd points at it).
@@ -4716,13 +4926,48 @@ export function createMessageBus(
             }
           : result;
 
+      /**
+       * Onde este spawn ficou, dito em fatos (task bf1fb0a7): o brief está no
+       * argv (entrega), está só na fila (promessa, com recibo consultável), ou
+       * não existe (o chamador não mandou nenhum). O `withDepNote` continua
+       * sendo a última palavra sobre deps — as duas coisas convivem, e esta é a
+       * razão de `finalize` existir: UM lugar onde a resposta fica completa e
+       * onde ela é guardada para uma retentativa idempotente ler a MESMA
+       * verdade, não uma versão degradada dela.
+       */
+      const briefOutcome = spawnBriefOutcomes.get(requestId);
+      spawnBriefOutcomes.delete(requestId);
+      const finalize = (result: SpawnAgentResult): SpawnAgentResult => {
+        const decorated: SpawnAgentResult =
+          result.ok && briefOutcome
+            ? {
+                ...result,
+                ...describeSpawnBriefDelivery({
+                  hasBrief: briefOutcome.hasBrief,
+                  canArgv: briefOutcome.canArgv,
+                  tooLarge: briefOutcome.tooLarge,
+                  typedDeliveryId: briefOutcome.deliveryId,
+                }),
+              }
+            : result;
+        const final = withDepNote(decorated);
+        if (idempotencyEntry) {
+          if (final.ok) idempotencyEntry.result = final;
+          // Tentativa que NÃO criou card não prende a chave: a retentativa do
+          // chamador tem de poder tentar de novo (a chave protege contra efeito
+          // duplicado, não contra repetir uma falha que não criou nada).
+          else if (idempotencyId) spawnIdempotency.delete(idempotencyId);
+        }
+        return final;
+      };
+
       // DESIGN-BACKLOG.md item 58, M4 — `wait: true` holds this call open
       // past "the human approved and the card exists" (spawnResult above)
       // until the process actually exits, so the caller gets a real
       // completion signal instead of having to poll card_status/snapshot
       // in a loop. Not an error if the wait window runs out first — the
       // spawn itself still succeeded, it's just still running.
-      if (!req.wait || !spawnResult.ok) return withDepNote(spawnResult);
+      if (!req.wait || !spawnResult.ok) return finalize(spawnResult);
       const cardId = spawnResult.cardId;
       const exitCode = await new Promise<number | null>((resolve) => {
         const timer = setTimeout(() => {
@@ -4742,7 +4987,7 @@ export function createMessageBus(
         waiters.push(onExit);
         pendingCardExits.set(cardId, waiters);
       });
-      return exitCode === null ? withDepNote(spawnResult) : withDepNote({ ...spawnResult, exited: true, exitCode });
+      return exitCode === null ? finalize(spawnResult) : finalize({ ...spawnResult, exited: true, exitCode });
     }
 
     if (req.cmd === "spawn_card") {
@@ -5026,26 +5271,38 @@ export function createMessageBus(
     let passedBrief = params.brief;
     let typedBrief: string | undefined;
 
-    if (params.brief) {
-      // Empirical, not the declaration alone: a stale `briefMechanism`
-      // that buildArgs does not implement used to set canArgv=true, skip
-      // the typing fallback, and drop the brief in silence. Probe the
-      // actual argv. Declaration still answers HOW; this answers WHETHER.
-      const canArgv = argvCarriesDeclaredBrief(params.provider, params.brief);
-      // 131071 is ARG_MAX on typical Linux; leave some padding for other args/env
-      const isTooLarge = Buffer.byteLength(params.brief, "utf8") > 130000;
-      if (!canArgv || isTooLarge) {
-        passedBrief = undefined;
-        typedBrief = params.brief;
-      }
+    const hasBrief = typeof params.brief === "string" && params.brief.length > 0;
+    // Empírico, não a declaração sozinha: um `briefMechanism` velho que
+    // buildArgs não implementa usava setar canArgv=true, pular o fallback de
+    // digitação, e largar o brief em silêncio. Sonda o argv de verdade.
+    // Declaração ainda responde COMO; isto responde SE.
+    const canArgv = hasBrief ? argvCarriesDeclaredBrief(params.provider, params.brief as string) : false;
+    // 131071 é o ARG_MAX típico do Linux; sobra padding para os outros args/env
+    const isTooLarge = hasBrief ? Buffer.byteLength(params.brief as string, "utf8") > 130000 : false;
+    if (hasBrief && (!canArgv || isTooLarge)) {
+      passedBrief = undefined;
+      typedBrief = params.brief;
     }
+    // O fato que a resposta vai ter de dizer (task bf1fb0a7). Guardado ANTES do
+    // dispatch porque o caminho da fila autônoma pode levar minutos até existir
+    // uma resposta para decorar.
+    spawnBriefOutcomes.set(requestId, { hasBrief, canArgv, tooLarge: isTooLarge });
 
     return new Promise<SpawnAgentResult>((resolve) => {
       markWaiting(requesterId);
       const timer = setTimeout(() => {
         pendingSpawnAgents.delete(requestId);
+        spawnBriefOutcomes.delete(requestId);
         unmarkWaiting(requesterId);
-        resolve({ ok: false, error: "timed out waiting for a decision" });
+        // A frase tem de dizer o que NÃO aconteceu: nada foi criado por esta
+        // chamada. Antes disto o texto era o mesmo de uma falha sem efeito
+        // nenhum, e uma resposta de consentimento tardia criava um card que a
+        // mensagem já tinha negado.
+        resolve({
+          ok: false,
+          error:
+            "timed out waiting for a spawn decision — no card was created by this call; if a consent/renderer answer arrives later the card MAY still appear (do not retry blindly — pass the same idempotencyKey)",
+        });
       }, SPAWN_TIMEOUT_MS);
       pendingSpawnAgents.set(requestId, {
         resolve: (result) => {
@@ -5053,7 +5310,9 @@ export function createMessageBus(
           pendingSpawnAgents.delete(requestId);
           unmarkWaiting(requesterId);
           if (result.ok && typedBrief) {
-            enqueueCardDelivery(result.cardId, typedBrief);
+            const enqueued = enqueueCardDelivery(result.cardId, typedBrief);
+            const outcome = spawnBriefOutcomes.get(requestId);
+            if (outcome && "receipt" in enqueued) outcome.deliveryId = enqueued.receipt.id;
           }
           resolve(result);
         },
@@ -5077,7 +5336,16 @@ export function createMessageBus(
       const timer = setTimeout(() => {
         removeFromQueue(boardId, requestId);
         notifyQueueChanged(boardId);
-        resolveOuter({ ok: false, error: "queued spawn timed out waiting for a free slot" });
+        spawnBriefOutcomes.delete(requestId);
+        resolveOuter({
+          ok: false,
+          // O teto da fila é 10 min e o watchdog do cliente costuma ser menor
+          // (medido: 300s). Dizer só "timed out" deixava o chamador sem saber
+          // se havia card — e a resposta honesta aqui é que NÃO há: a entrada
+          // saiu da fila, nada foi criado por esta chamada.
+          error:
+            "queued spawn timed out waiting for a free slot on this autonomous board — the queue entry was removed and NO card was created; the card the caller's own client may have given up on does not exist",
+        });
       }, DEFAULT_QUEUE_TIMEOUT_MS);
       const entry: SpawnQueueEntry = {
         id: requestId,
@@ -5729,6 +5997,10 @@ export function createMessageBus(
     pendingReportWaiters.clear();
     for (const { timer } of pendingSpawnAgents.values()) clearTimeout(timer);
     pendingSpawnAgents.clear();
+    // Mesma vida dos waiters acima: a chave de idempotência e o fato do brief
+    // são memória de UMA execução do bus, não estado persistido.
+    spawnBriefOutcomes.clear();
+    spawnIdempotency.clear();
     for (const { timer } of pendingSpawnCards.values()) clearTimeout(timer);
     pendingSpawnCards.clear();
     for (const list of spawnQueue.values()) for (const { timer } of list) clearTimeout(timer);
