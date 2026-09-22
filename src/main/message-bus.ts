@@ -139,9 +139,20 @@ import {
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { navigationUrlError } from "./browser-registry";
 import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-tools";
-import { argvCarriesDeclaredBrief, providerCapacity } from "./providers";
+import { argvCarriesDeclaredBrief, providerById, providerCapacity } from "./providers";
 import { decideSpawnProfile } from "./spawn-profile-decision";
 import { describeSpawnBriefDelivery, type SpawnBriefMode } from "./spawn-brief-delivery-decision";
+import {
+  attributeSessionsToCards,
+  decideUnreportedWork,
+  clockFromSessionStore,
+  type CoverageCard,
+  type CoverageSession,
+} from "./unreported-work-decision";
+import {
+  describeQueuedSpawnArrival,
+  shouldNoticeQueuedSpawnArrival,
+} from "./spawn-queue-notice-decision";
 import {
   SPAWN_IDEMPOTENCY_WINDOW_MS,
   decideSpawnIdempotency,
@@ -432,6 +443,15 @@ export type BusRequest =
   | { cmd: "get_delivery"; id?: string }
   | { cmd: "list_deliveries"; target?: string; requesterId?: string; delivery?: string }
   | { cmd: "cancel_deliveries"; id?: string; requesterId?: string }
+  /**
+   * Task 5d47312c — a CONFRONTAÇÃO "o card trabalhou e não deixou rastro":
+   * cruza quem nasceu (`spawns`), quem tem relatório (`reports`) e o rastro que
+   * cada harness deixou no store que ele próprio declara. Sob demanda (um
+   * comando), porque ler o store de cada harness custa I/O: medido, 46 stores em
+   * ~0,6s no board vivo. `limit` corta só a LISTA devolvida — as contagens são
+   * sempre do board inteiro, e `findingsTruncated` diz quando cortou.
+   */
+  | { cmd: "unreported_work"; limit?: number }
   | { cmd: "open"; url?: string; requesterId?: string; reason?: string }
   | { cmd: "close_card"; target?: string; requesterId?: string; reason?: string }
   | {
@@ -1101,6 +1121,35 @@ export function createMessageBus(
      * concurrency_status, but board-scoped instead of global, since
      * autonomous mode's cap is enforced per board. */
     countRunningAgentsOnBoard: (boardId: string) => number;
+    /**
+     * Task 5d47312c — o lado STELLAR da confrontação: quem nasceu (durável, via
+     * `spawns`), quem tem relatório (`reportCount`) e quem ainda está vivo.
+     * Opcional para que os dublês de teste que não o usam continuem válidos; o
+     * cmd `unreported_work` responde com um erro nomeado quando ele falta.
+     */
+    listCoverageCards?: () => Array<{
+      cardId: string;
+      provider: string | null;
+      cwd: string | null;
+      createdAtMs: number;
+      taskId: string | null;
+      reportCount: number;
+      live: number;
+    }>;
+    /**
+     * O lado HARNESS: os registros de sessão declarados pelo provider, naquele
+     * cwd, a partir do piso. Injetado (não importado) pelo mesmo motivo de todo
+     * o resto: o bus não faz I/O de disco, e um teste que exercita a decisão não
+     * deve tocar o home de ninguém.
+     */
+    discoverCoverageSessions?: (
+      provider: string,
+      cwd: string,
+      floorMs: number,
+    ) => Promise<CoverageSession[]>;
+    /** Quantos relatórios estão sob um id que nunca nasceu — o indício de que a
+     * atribuição da captura não é à prova d'água (ver o doc do módulo puro). */
+    countOrphanReports?: () => number;
     /** DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 3 — direct
      * pass-through to store.ts (better-sqlite3 is synchronous, no round
      * trip needed here either). */
@@ -3052,6 +3101,88 @@ export function createMessageBus(
         return { ok: true, cancelledIds };
       }
       return { ok: false, error: "pass id or requesterId" };
+    }
+
+    if (req.cmd === "unreported_work") {
+      // Task 5d47312c — a confrontação, SOB DEMANDA. Um comando, não um aviso
+      // contínuo: ler o store de cada harness custa I/O (medido: 46 stores em
+      // ~0,6s no board vivo) e a tese se prova com o comando mais barato.
+      const sources = callbacks.listCoverageCards?.();
+      if (!sources) {
+        return { ok: false, error: "unreported_work unavailable: this process wired no coverage sources" };
+      }
+      const discover = callbacks.discoverCoverageSessions;
+      if (!discover) {
+        return { ok: false, error: "unreported_work unavailable: this process wired no session discovery" };
+      }
+      const limit = typeof req.limit === "number" && req.limit > 0 ? Math.min(req.limit, 500) : 40;
+
+      const cards: CoverageCard[] = sources.map((s) => {
+        const provider = s.provider ?? "";
+        const providerDef = providerById(provider);
+        const store = providerDef?.capacity.session.store ?? null;
+        // Sem cwd não há onde procurar: a descoberta é POR cwd por desenho (sem
+        // isso, varrer o disco acharia o arquivo de outro card).
+        const cwd = s.cwd && s.cwd.trim().length > 0 ? s.cwd : null;
+        return {
+          cardId: s.cardId,
+          provider,
+          cwd,
+          createdAtMs: s.createdAtMs,
+          taskId: s.taskId,
+          hasReport: s.reportCount > 0,
+          live: s.live === 1,
+          storeDeclared: store !== null && cwd !== null,
+          clock: clockFromSessionStore(store),
+        };
+      });
+
+      // Uma varredura por (provider, cwd) — e SÓ onde há algo a confrontar: um
+      // store em que todo card já reportou não tem pergunta nenhuma a fazer.
+      const groups = new Map<string, CoverageCard[]>();
+      for (const c of cards) {
+        if (!c.storeDeclared || !c.cwd) continue;
+        const key = `${c.provider}\u0000${c.cwd}`;
+        const list = groups.get(key);
+        if (list) list.push(c);
+        else groups.set(key, [c]);
+      }
+
+      const t0 = Date.now();
+      const attributed = new Map<string, { session: CoverageSession; deltaMs: number | null }>();
+      let storesScanned = 0;
+      let storesSkipped = 0;
+      for (const group of groups.values()) {
+        if (!group.some((c) => !c.hasReport)) {
+          storesSkipped += 1;
+          continue;
+        }
+        const floorMs = group.reduce((min, c) => Math.min(min, c.createdAtMs), Number.POSITIVE_INFINITY);
+        const candidates = await discover(group[0].provider, group[0].cwd as string, floorMs);
+        storesScanned += 1;
+        for (const [cardId, hit] of attributeSessionsToCards({ cards: group, candidates })) {
+          attributed.set(cardId, hit);
+        }
+      }
+      const scanMs = Date.now() - t0;
+
+      const orphanReports = callbacks.countOrphanReports?.() ?? 0;
+      const { findings, counts } = decideUnreportedWork({
+        cards,
+        attributed,
+        misattributionSuspected: orphanReports > 0,
+      });
+      return {
+        ok: true,
+        counts,
+        findings: findings.slice(0, limit),
+        findingsTruncated: findings.length > limit,
+        scanMs,
+        storesScanned,
+        storesSkipped,
+        orphanReports,
+        misattributionSuspected: orphanReports > 0,
+      };
     }
 
     if (req.cmd === "open") {
@@ -5400,7 +5531,31 @@ export function createMessageBus(
     if (running >= cap) return;
     const entry = list.shift()!;
     notifyQueueChanged(boardId);
-    dispatchSpawnAgentRequest(entry.id, entry.requesterId, entry.params, true).then(entry.resolve);
+    const waitedMs = Date.now() - entry.requestedAt;
+    const dispatched = dispatchSpawnAgentRequest(entry.id, entry.requesterId, entry.params, true);
+    // CARD FANTASMA (task bf1fb0a7) — a segunda via do cardId. Quando a fila
+    // finalmente despacha, o chamador JÁ PODE ter desistido (watchdog de 300s
+    // medido no cliente do orquestrador; as duas chamadas de 2026-09-21
+    // resolveram 444s e 238s depois de emitidas, e o card nasceu depois do
+    // abort). Sem isto, o único caminho dele para saber que o card existe é
+    // adivinhar — foi assim que o mesmo enunciado foi entregue a dois cards na
+    // mesma árvore. Aviso de sistema (sem requesterId no delivery): não é do
+    // autor, não pode ser cancelado pela morte dele, e o destino é o próprio
+    // chamador. Ver spawn-queue-notice-decision.ts.
+    void dispatched.then((result) => {
+      if (result.ok && entry.requesterId && shouldNoticeQueuedSpawnArrival(waitedMs)) {
+        enqueueCardDelivery(
+          entry.requesterId,
+          describeQueuedSpawnArrival({
+            cardId: result.cardId,
+            provider: entry.params.provider,
+            waitedMs,
+            label: entry.params.label,
+          }),
+        );
+      }
+    });
+    void dispatched.then(entry.resolve);
   }
 
   /** DESIGN-BACKLOG.md item 60, peça 3 — the one entry point BOTH

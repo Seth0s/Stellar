@@ -114,6 +114,18 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
       3: "2f6e3e0fd6ee73d3",
       // Protocol 4 — `spawn_agent` ganhou `isolation` (worktree), na CLI e no bus.
       4: "2c258ea01178965b",
+      // Protocol 5 — `spawn-agent` passou a carregar `reason` (paridade com o
+      // MCP: o bus RECUSA spawn de agente sem ele, e a CLI é a segunda porta) e
+      // `idempotencyKey` (mesma chave + mesmo chamador = MESMO card). Medido
+      // antes do bump: sem `reason` a CLI era recusada inteira a partir de um
+      // card ("missing reason — spawn by an agent requires reason"), e sem a
+      // chave uma retentativa depois de um timeout fabricava um segundo agente
+      // na mesma árvore (task bf1fb0a7).
+      5: "95f63df660354d72",
+      // Protocol 6 — `unreported-work` entrou na CLI (a confrontação "trabalhou e
+      // não deixou rastro" também pelo acbridge, não só pelo MCP): cmd novo é
+      // mudança de superfície. Task 5d47312c.
+      6: "08c8aa2bef365977",
     };
     expect(
       hash,

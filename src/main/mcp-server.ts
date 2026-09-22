@@ -1399,6 +1399,24 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     );
 
     server.registerTool(
+      "unreported_work",
+      {
+        description:
+          "THE COVERAGE CHECK: confront the harness's OWN session stores against what Stellar captured, and list cards that worked without leaving a report. For every card this app ever spawned (`spawns`, durable) that has no row in `reports`, it reads the session store the provider itself declares (`capacity.session.store` — same declaration the session watcher uses, no disk sweep) and answers: did a session exist in that cwd, close enough to the card's birth to be its own? Verdicts: 'worked_unreported' (a session exists and no report — this is the case the tool exists for), 'no_session' (observable, but nothing was left behind: NOT an accusation), 'unobservable' (this provider declares no session store — a declared limit, not a finding). It does NOT tell you WHY a card stayed silent: dying on quota, being closed by a human, finishing and forgetting and never starting look the same in this data, and the `why` field of every finding says so. `clock` says what the provider's timestamp MEANS: 'birth' (cursor/opencode/cline — delta is session age) or 'last-activity' (claude/antigravity, whose file is rewritten every turn — delta is when it was last written). Reading the stores costs I/O, so this is on demand, never a background warning; `scanMs` reports what it cost and `misattributionSuspected` warns when this DB has reports attributed to an id that never spawned (the capture itself may be wrong, so 'no report' is not proof of silence).",
+        inputSchema: {
+          limit: z
+            .number()
+            .optional()
+            .describe("Max findings to return (default 40, cap 500). The COUNTS are always for the whole board; `findingsTruncated` says when the list was cut."),
+        },
+      },
+      async ({ limit }) => {
+        const res = await opts.handleRequest({ cmd: "unreported_work", ...(limit !== undefined ? { limit } : {}) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
       "board_mode",
       {
         description:

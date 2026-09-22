@@ -75,7 +75,7 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // src/main/acbridge-protocol-decision.ts — o vitest trava os dois
 // (tests/unit/acbridge-protocol.test.ts). Bump quando a forma de um
 // request muda (cmd/campo novo), e só então.
-const ACBRIDGE_PROTOCOL = 4;
+const ACBRIDGE_PROTOCOL = 6;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -122,8 +122,8 @@ const USAGE =
   "link-task-card <taskId> <cardId> [implementer|reviewer] | " +
   "list-connectors | set-connector-kind <connectorId> <context|depends|null> | " +
   "set-connector-label <connectorId> <label...|null> | " +
-  "concurrency-status [cap] | board-mode <cardId> | " +
-  "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree] | " +
+  "concurrency-status [cap] | board-mode <cardId> | unreported-work [limit] | " +
+  "spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree] [--reason <text>] [--idempotency-key <key>] | " +
   "spawn-card <files|changes|sticky|browser|remote-window> [cwd|url] [--anchor <cardId>] [--side <left|right|top|bottom>] | " +
   "browser-click <cardId> <selector> | browser-type <cardId> <selector> <text...> | " +
   "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
@@ -402,6 +402,17 @@ if (cmd === "version") {
   const cap = capStr === undefined ? undefined : Number(capStr);
   if (cap !== undefined && Number.isNaN(cap)) fail("concurrency-status: cap must be a number");
   request = { cmd: "concurrency_status", cap };
+} else if (cmd === "unreported-work") {
+  // Task 5d47312c — a CONFRONTAÇÃO "o card trabalhou e não deixou rastro",
+  // SOB DEMANDA: ler o store de cada harness custa I/O (46 stores ~0,6s
+  // medidos no board vivo), então isto é um comando, não um aviso contínuo —
+  // que é também o mais barato para provar a tese. Sem argumento o limite da
+  // LISTA é o do bus (40); as contagens são sempre do board inteiro, e
+  // `findingsTruncated` diz quando a lista foi cortada.
+  const [limitArg] = rest;
+  const limit = limitArg === undefined ? undefined : Number(limitArg);
+  if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) fail("usage: acbridge unreported-work [limit]");
+  request = { cmd: "unreported_work", ...(limit !== undefined ? { limit } : {}) };
 } else if (cmd === "board-mode") {
   const [target] = rest;
   if (!target) fail("usage: acbridge board-mode <cardId>");
@@ -421,7 +432,7 @@ if (cmd === "version") {
   // mesmo tempo. `--brief` é UM argumento (aspas no shell); a regra
   // taskId-ou-brief (e a exceção pro reviewer) vive no bus, não aqui.
   const positional = [];
-  let model, effort, taskId, role, brief, isolation;
+  let model, effort, taskId, role, brief, isolation, reason, idempotencyKey;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--model") model = rest[++i];
     else if (rest[i] === "--effort") effort = rest[++i];
@@ -433,14 +444,29 @@ if (cmd === "version") {
     // que o chamador pediu, nunca normaliza. O card nasce no caminho da
     // worktree (leia em `acbridge list`).
     else if (rest[i] === "--isolation") isolation = rest[++i];
+    // `--reason` (2026-09-22, task bf1fb0a7) — PARIDADE QUE FALTAVA, medida com
+    // o acbridge real: `spawn-agent` não mandava `reason` nenhum, e o bus recusa
+    // spawn de agente sem ele ("missing reason — spawn by an agent requires
+    // reason"), então a CLI era inútil para spawnar A PARTIR de um card (que é
+    // quando `AGENT_CANVAS_CARD_ID` existe). Sem esta flag, a
+    // `--idempotency-key` logo abaixo nem chegaria a ser alcançada.
+    else if (rest[i] === "--reason") reason = rest[++i];
+    // `--idempotency-key` (2026-09-22, task bf1fb0a7) — paridade com o MCP
+    // `spawn_agent.idempotencyKey`. A CLI é a SEGUNDA porta para o mesmo
+    // caminho de spawn (agentes sem MCP, cards bash): sem esta flag, quem
+    // spawna por aqui não tinha como se proteger de duplicar um card numa
+    // retentativa depois de um timeout — a janela que a chave existe para
+    // fechar. Mesma regra de sempre: quem decide é o bus, a CLI só repassa
+    // (chave vazia/só-espaço chega lá como ausência).
+    else if (rest[i] === "--idempotency-key") idempotencyKey = rest[++i];
     else positional.push(rest[i]);
   }
   const [provider, cwd, resumeId] = positional;
   if (!provider)
     fail(
-      "usage: acbridge spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree]",
+      "usage: acbridge spawn-agent <provider> [cwd] [resumeId] [--model <model>] [--effort <low|medium|high|xhigh|max>] [--task <taskId>] [--role <implementer|reviewer>] [--brief <text>] [--isolation worktree] [--reason <text>] [--idempotency-key <key>]",
     );
-  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, taskId, role, brief, isolation, requesterId: ownCardId };
+  request = { cmd: "spawn_agent", provider, cwd, resumeId, model, effort, taskId, role, brief, isolation, reason, idempotencyKey, requesterId: ownCardId };
 } else if (cmd === "spawn-card") {
   // Pendentes #188 ("spawn_card por coordenadas") — `--anchor`/`--side` are
   // optional trailing flags, stripped out before the positional kind/
@@ -637,10 +663,23 @@ socket.on("close", () => {
     console.log("updated");
   } else if (cmd === "concurrency-status") {
     console.log(JSON.stringify({ running: res.running, cap: res.cap, atCap: res.atCap }));
+  } else if (cmd === "unreported-work") {
+    // JSON inteiro: o valor está nas CONTAGENS + nas frases de limite, não num
+    // id solto. Mesma forma do `list-tasks`/`get-delivery`.
+    console.log(JSON.stringify(res));
   } else if (cmd === "board-mode") {
     console.log(String(res.autonomous));
   } else if (cmd === "spawn-agent") {
-    console.log(res.cardId);
+    // Era só `res.cardId` — e assim a SEGUNDA porta do spawn jogava fora
+    // exatamente os fatos que a primeira passou a devolver (task bf1fb0a7):
+    // `briefDelivered`/`briefMode` (o texto nasceu no argv, está só na fila, ou
+    // o chamador não mandou nenhum) e `idempotentReplay` (este cardId NÃO é
+    // card novo). Quem spawna pela CLI lia um id solto e não tinha como
+    // distinguir "criei" de "já tinha criado" — a mesma afirmação que o sistema
+    // não pode sustentar, só que aqui a informação era descartada no print.
+    // JSON inteiro: mesma forma que o MCP devolve, e o mesmo que os outros cmds
+    // desta CLI já fazem (`list-tasks`, `get-delivery`, `concurrency-status`).
+    console.log(JSON.stringify(res));
   } else if (cmd === "spawn-card") {
     console.log(res.cardId);
   } else if (cmd === "browser-click") {

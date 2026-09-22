@@ -2802,6 +2802,38 @@ export function openStore(userDataDir: string) {
   const listSpawnsByParentStmt = db.prepare(
     `SELECT ${SPAWN_COLUMNS} FROM spawns WHERE from_card_id = ? ORDER BY created_at ASC`,
   );
+  /**
+   * As três fontes do lado STELLAR da confrontação (task 5d47312c), numa
+   * consulta só: quem nasceu (`spawns` — append-only, sobrevive ao fechamento do
+   * card), quem tem relatório (`reports`) e quem ainda está vivo (`cards`).
+   *
+   * `spawns` é a espinha porque é o único registro DURÁVEL do nascimento: um
+   * card fechado perde a linha de `cards`, mas continua sabendo-se que nasceu,
+   * com que provider e em que cwd — que é o que a varredura do store precisa.
+   *
+   * `reportCount` é CONTAGEM, não `EXISTS`: o leitor precisa poder dizer "tem
+   * relatório" sem abrir o JSON de cada um (e um card pode ter 23 linhas).
+   */
+  const coverageSourcesStmt = db.prepare(`
+    SELECT s.to_card_id AS cardId,
+           s.provider AS provider,
+           s.cwd AS cwd,
+           s.created_at AS createdAtMs,
+           s.task_id AS taskId,
+           (SELECT COUNT(*) FROM reports r WHERE r.card_id = s.to_card_id) AS reportCount,
+           CASE WHEN c.id IS NULL THEN 0 ELSE 1 END AS live
+      FROM spawns s
+      LEFT JOIN cards c ON c.id = s.to_card_id
+     ORDER BY s.created_at ASC
+  `);
+  /** Relatórios atribuídos a um card id que NUNCA nasceu por `spawns` — o
+   * indício de captura errada que a confrontação tem de declarar (ver
+   * `unreported-work-decision.ts`, `misattribution`). */
+  const orphanReportsStmt = db.prepare(`
+    SELECT COUNT(*) AS n FROM reports r
+     WHERE NOT EXISTS (SELECT 1 FROM spawns s WHERE s.to_card_id = r.card_id)
+  `);
+
 
   return {
     listCards: (boardId: string): CardRow[] => listStmt.all(boardId) as CardRow[],
@@ -2902,6 +2934,24 @@ export function openStore(userDataDir: string) {
     /** Cards this one spawned, oldest first. */
     listSpawnsByParent: (fromCardId: string): SpawnRow[] =>
       listSpawnsByParentStmt.all(fromCardId) as SpawnRow[],
+    /**
+     * Task 5d47312c — o lado STELLAR da confrontação com os stores dos
+     * harnesses. `reportCount > 0` é a única coisa que separa "contou" de "não
+     * contou", e é o que `unreported-work-decision.ts` cruza com a sessão que o
+     * harness deixou. Não filtra nada: quem decide o que é ruído é a decisão
+     * pura, não a query (e a contagem completa é o que dá o número do board).
+     */
+    listCoverageSources: (): {
+      cardId: string;
+      provider: string | null;
+      cwd: string | null;
+      createdAtMs: number;
+      taskId: string | null;
+      reportCount: number;
+      live: number;
+    }[] => coverageSourcesStmt.all() as never,
+    /** Quantos relatórios estão atribuídos a um id que nunca nasceu. */
+    countOrphanReports: (): number => (orphanReportsStmt.get() as { n: number }).n,
     // `autonomous` is stored as SQLite's usual 0/1 INTEGER (no native
     // boolean type) — converted to/from a real `boolean` here so nothing
     // downstream (MCP JSON responses included) ever sees a raw 0/1.
