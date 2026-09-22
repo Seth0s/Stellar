@@ -488,6 +488,19 @@ export const ptBR = {
   "task.verdict.chip.propose": "propõe concluir",
   "task.verdict.chip.approved": "aprovado",
   "task.verdict.chip.rejected": "reprovado",
+  // Reparo de LEITURA do passado (task 156e6d08, 2026-09-22): antes de
+  // 7315c53 o veredito de um report era carimbado em TODOS os vínculos vivos
+  // do card, e 420 linhas do banco real apontam para uma task que o report
+  // nunca nomeou. Estes dois rótulos são o que as linhas carimbadas dizem
+  // agora — e o texto da nota existe pra o próximo leitor entender que o dado
+  // VELHO é que era falso, não que a rodada terminou sem veredito.
+  "task.verdict.chip.misstamped": "carimbo de outra task",
+  "task.verdict.chip.unknown": "não sei de qual task",
+  "task.verdict.note.declared": "o report desta rodada nomeou esta task",
+  "task.verdict.note.soleLink": "a rodada carimbou um vínculo só — não havia outra task",
+  "task.verdict.note.misstamped": "gravado como {stored}, mas o report desta rodada nomeou a task {id}: este carimbo veio do fan-out antigo, não é desta task",
+  "task.verdict.note.unknown": "{n} vínculos na mesma rodada e nenhum nomeado no report — exatamente um é real, e não dá para saber qual",
+  "task.verdict.note.unknownNamed": "a rodada nomeou {id}, que não é uma task deste banco — com {n} vínculos, não dá para saber qual é real",
   "shortcuts.group.tools": "Ferramentas",
   "shortcuts.group.window": "Janela",
   "shortcuts.group.card": "Card",
@@ -1446,6 +1459,16 @@ export const en: Record<MessageKey, string> = {
   "task.verdict.chip.propose": "proposes done",
   "task.verdict.chip.approved": "approved",
   "task.verdict.chip.rejected": "rejected",
+  // READ-side repair of the past (task 156e6d08): before 7315c53 a report's
+  // verdict was stamped on every live link of the card. These two labels are
+  // what the stamped rows read as now.
+  "task.verdict.chip.misstamped": "stamped on another task",
+  "task.verdict.chip.unknown": "can't tell whose",
+  "task.verdict.note.declared": "this round's report named this task",
+  "task.verdict.note.soleLink": "the round stamped a single link — there was no other task",
+  "task.verdict.note.misstamped": "stored as {stored}, but this round's report named task {id}: the stamp came from the old fan-out, it is not this task's",
+  "task.verdict.note.unknown": "{n} links in the same round and none named in the report — exactly one is real, and there is no way to tell which",
+  "task.verdict.note.unknownNamed": "the round named {id}, which is not a task in this database — with {n} links, there is no way to tell which is real",
   "shortcuts.group.tools": "Tools",
   "shortcuts.group.window": "Window",
   "shortcuts.group.card": "Card",

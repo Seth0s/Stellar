@@ -36,6 +36,7 @@ import {
   describeStatusDivergence,
   describeStatusAskNotice,
   describeVerdictChip,
+  describeVerdictProvenance,
   formatSprintTimestamp,
   formatSprintDuration,
   describeSprintCounts,
@@ -306,6 +307,44 @@ describe("deriveCompletionProposal", () => {
     expect(deriveCompletionProposal("failed", ["implementer"], [impl("aprovado", 1)])).toBeNull();
     expect(deriveCompletionProposal("pending", ["reviewer"], [rev("aprovado", 1)])).toBeNull();
   });
+
+  // Task 156e6d08 — o consumidor que AGIA sobre o carimbo falso. Antes da
+  // regra de leitura, o `aprovado` que o fan-out antigo carimbou em 15 tasks
+  // chegava aqui como veredito real e a barra "concluir" aparecia na task
+  // errada. Agora a rodada chega com o que se pode ATRIBUIR à task: o carimbo
+  // chega `verdict: null` e não propõe nada.
+  it("rodada carimbada em outra task não propõe conclusão — a procedência vem junto do veredito", () => {
+    const artifact = {
+      cardId: "rev-1",
+      role: "reviewer",
+      verdict: null,
+      at: 2,
+      storedVerdict: "aprovado",
+      rule: "declared_other_task" as const,
+      declaredTaskId: "outra-task",
+      roundLinks: 6,
+    };
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [artifact])).toBeNull();
+    // E o carimbo não APAGA a rodada de verdade da mesma task: com o aprovado
+    // real na lista (antes ou depois do carimbo), a barra continua vindo dele.
+    const real = { cardId: "rev-1", role: "reviewer", verdict: "aprovado", at: 1, rule: "declared_this_task" as const };
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [real, artifact])?.at).toBe(1);
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [artifact, real])?.at).toBe(1);
+  });
+
+  it("rodada indecidível (N vínculos, sem nome) também não propõe — 'não sei' nunca vira barra verde", () => {
+    const unknown = {
+      cardId: "rev-1",
+      role: "reviewer",
+      verdict: null,
+      at: 3,
+      storedVerdict: "aprovado",
+      rule: "undeclared_round" as const,
+      roundLinks: 8,
+    };
+    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [unknown])).toBeNull();
+    expect(deriveCompletionProposal("running", ["implementer"], [unknown])).toBeNull();
+  });
 });
 
 // Chip honesty (2026-09-14): green APROVADO is reviewer-only. Implementer
@@ -344,6 +383,84 @@ describe("describeVerdictChip", () => {
     setLocale("en");
     expect(describeVerdictChip("implementer", "aprovado")).toEqual({ label: "proposes done", tone: "muted" });
     expect(describeVerdictChip("reviewer", "aprovado")).toEqual({ label: "approved", tone: "good" });
+  });
+
+  // Task 156e6d08 — a PROCEDÊNCIA vence o valor: uma linha que o fan-out
+  // antigo carimbou na task errada não pode aparecer como "sem veredito",
+  // porque isso a tornaria indistinguível de uma rodada que legitimamente
+  // terminou sem veredito. Sem `rule` (chamador antigo) o comportamento é o
+  // de sempre — é o que os casos acima continuam prendendo.
+  it("carimbo de outra task: rótulo próprio, tom neutro, mesmo com veredito nulo", () => {
+    expect(describeVerdictChip("reviewer", null, "declared_other_task")).toEqual({
+      label: "carimbo de outra task",
+      tone: "none",
+    });
+    setLocale("en");
+    expect(describeVerdictChip("reviewer", null, "declared_other_task")).toEqual({
+      label: "stamped on another task",
+      tone: "none",
+    });
+  });
+
+  it("rodada indecidível: 'não sei de qual task' — o vazio não fica mudo", () => {
+    expect(describeVerdictChip("reviewer", null, "undeclared_round")).toEqual({
+      label: "não sei de qual task",
+      tone: "none",
+    });
+  });
+
+  it("procedência real não muda o chip (declared_this_task / sole_link / no_verdict)", () => {
+    expect(describeVerdictChip("reviewer", "aprovado", "declared_this_task")).toEqual({
+      label: "aprovado",
+      tone: "good",
+    });
+    expect(describeVerdictChip("implementer", "aprovado", "sole_link")).toEqual({
+      label: "propõe concluir",
+      tone: "muted",
+    });
+    expect(describeVerdictChip("reviewer", null, "no_verdict")).toEqual({ label: "sem veredito", tone: "none" });
+  });
+});
+
+describe("describeVerdictProvenance — o dado velho era o falso, e a tela diz isso", () => {
+  beforeEach(() => setLocale("pt-BR"));
+
+  it("carimbo de fan-out: diz o valor GRAVADO e a task que o report nomeou", () => {
+    const note = describeVerdictProvenance({
+      cardId: "c1",
+      role: "reviewer",
+      verdict: null,
+      at: 1,
+      storedVerdict: "aprovado",
+      rule: "declared_other_task",
+      declaredTaskId: "abcdef01-2345-6789-abcd-ef0123456789",
+    });
+    expect(note).toContain("gravado como aprovado");
+    expect(note).toContain("abcdef01");
+  });
+
+  it("indecidível com N vínculos: nomeia o número, e não sugere qual é o real", () => {
+    expect(describeVerdictProvenance({ cardId: "c1", role: "reviewer", verdict: null, at: 1, rule: "undeclared_round", roundLinks: 8 })).toContain("8 vínculos");
+    // Nomeou um id que não é task: a nota diz isso, em vez de fingir que não nomeou nada.
+    expect(
+      describeVerdictProvenance({
+        cardId: "c1",
+        role: "reviewer",
+        verdict: null,
+        at: 1,
+        rule: "undeclared_round",
+        declaredTaskId: "30d858c5",
+        roundLinks: 8,
+      }),
+    ).toContain("30d858c5");
+  });
+
+  it("rodada real e rodada sem veredito: explicação curta, ou nenhuma", () => {
+    expect(describeVerdictProvenance({ cardId: "c1", role: "reviewer", verdict: "aprovado", at: 1, rule: "declared_this_task" })).toContain("nomeou esta task");
+    expect(describeVerdictProvenance({ cardId: "c1", role: "reviewer", verdict: "reprovado", at: 1, rule: "sole_link" })).toContain("um vínculo só");
+    expect(describeVerdictProvenance({ cardId: "c1", role: "reviewer", verdict: null, at: 1, rule: "no_verdict" })).toBeNull();
+    // Sem `rule` (main e renderer de versões diferentes no meio de um reload).
+    expect(describeVerdictProvenance({ cardId: "c1", role: "reviewer", verdict: "aprovado", at: 1 })).toBeNull();
   });
 });
 

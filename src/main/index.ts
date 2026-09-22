@@ -46,6 +46,7 @@ import { deriveCardDisplayName } from "../shared/card-identity";
 import { t, setLocale, resolveLocale, isLocale, type Locale } from "../shared/i18n";
 import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
+import type { TaskVerdictReadRule } from "./task-verdict-read-decision";
 import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
 import { describeStatusAskResolved } from "./status-write-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
@@ -1471,9 +1472,21 @@ function createWindow() {
     requestedReason: string | null;
     requestedBy: string | null;
     requestedAt: number | null;
-    /** RODADA 4 — histórico de participação (`task_verdicts`), com
-     * provider do card pra gráfico 1 / pílulas. */
-    verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
+    /** RODADA 4 — histórico de participação (`task_verdicts`), com provider do
+     * card pra gráfico 1 / pílulas, e LIDO pela regra da task 156e6d08:
+     * `verdict` = o que se pode atribuir a esta task, `storedVerdict` = o que a
+     * coluna diz, `rule` = por quê (ver `task-verdict-read-decision.ts`). */
+    verdicts: {
+      cardId: string;
+      role: string;
+      verdict: string | null;
+      at: number;
+      provider: string | null;
+      storedVerdict: string | null;
+      rule: TaskVerdictReadRule;
+      declaredTaskId: string | null;
+      roundLinks: number;
+    }[];
     /** Ator da 1ª transição de status — `human` ⇒ criada pela UI do quadro. */
     firstActor: "app" | "agent" | "human" | "orchestrator" | null;
     /** DESIGN-BACKLOG.md "Falha TIPADA" — motivo visível quando a task
@@ -1557,10 +1570,12 @@ function createWindow() {
     }
     // RODADA 4 — vereditos + firstActor (pílulas / gráficos / aviso de
     // task humana pega). Duas consultas por board, mesmo padrão do resto.
-    const verdictsByTask = new Map<
-      string,
-      { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[]
-    >();
+    // Task 156e6d08: a linha chega LIDA do store (`TaskVerdictReadRow`) —
+    // `verdict` é o que se pode ATRIBUIR a esta task, e `storedVerdict` +
+    // `rule` viajam junto pra a tela poder dizer de onde veio. O renderer
+    // não recalcula nada: a regra é uma só, em
+    // `task-verdict-read-decision.ts`.
+    const verdictsByTask = new Map<string, TaskBoardItem["verdicts"]>();
     for (const row of store.listVerdictsForBoard(boardId)) {
       const list = verdictsByTask.get(row.task_id) ?? [];
       list.push({
@@ -1569,6 +1584,10 @@ function createWindow() {
         verdict: row.verdict,
         at: row.at,
         provider: row.card_provider,
+        storedVerdict: row.storedVerdict,
+        rule: row.rule,
+        declaredTaskId: row.declaredTaskId,
+        roundLinks: row.roundLinks,
       });
       verdictsByTask.set(row.task_id, list);
     }

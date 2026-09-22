@@ -6,6 +6,8 @@ import type { LocalIdentity } from "./local-identity-decision";
 import { decideStatusWrite, retainStatusAsk, type StatusWriteActor, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
 import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
+import { normalizeDeclaredTaskId } from "./report-task-link-decision";
+import { deriveTaskVerdictReading, type TaskVerdictReading } from "./task-verdict-read-decision";
 import { coerceStoredTaskStatus, deriveTaskStatus } from "../task-status-derive";
 
 export type CardRow = {
@@ -398,9 +400,13 @@ export type TaskRow = {
   /** Transiente, só de LEITURA — mesmo motivo/anexação que `transitions`
    * acima. "Histórico de veredito por participação": o log append-only
    * de `task_verdicts` (ver `TaskVerdictRow`'s comentário grande), em
-   * ordem cronológica. Exposto no MCP só por aqui (`get_task`), nunca
-   * por uma tool que escreve — a restrição não-negociável do item. */
-  verdicts?: TaskVerdictRow[];
+   * ordem cronológica. Cada linha vem LIDA (`TaskVerdictReadRow`): o
+   * `verdict` que chega aqui é o que se pode ATRIBUIR a esta task, não o
+   * que a coluna diz — a regra (e os 420 carimbos históricos de fan-out
+   * que ela cala) está em `task-verdict-read-decision.ts`. Exposto no MCP
+   * só por aqui (`get_task`), nunca por uma tool que escreve — a restrição
+   * não-negociável do item. */
+  verdicts?: TaskVerdictReadRow[];
 };
 
 /** `actor` de `task_transitions` — quem causou a transição. "app" é o
@@ -571,6 +577,32 @@ export type TaskCardRow = {
  * item no DESIGN-BACKLOG: "poder ESCREVER veredito transforma registro
  * em narrativa"). */
 export type TaskVerdictRow = { id: string; task_id: string; card_id: string; role: string; verdict: string | null; at: number };
+
+/** Uma linha de `task_verdicts` LIDA — a linha crua (`TaskVerdictRow`) mais a
+ * conclusão de `deriveTaskVerdictReading` sobre ela. Os DOIS campos que falam
+ * de veredito convivem de propósito: `storedVerdict` é o que a coluna diz
+ * (nunca reescrito — nenhum UPDATE, nenhuma migração), `verdict` é o que se
+ * pode atribuir a ESTA task. Eles divergem exatamente nos 420 carimbos de
+ * fan-out; a regra inteira, com os números medidos, mora no comentário grande
+ * de `task-verdict-read-decision.ts` — aqui só se junta linha + conclusão.
+ *
+ * `provider` fica de fora: quem lê o board junta o perfil do card por conta
+ * própria (`listVerdictsForBoard`). */
+export type TaskVerdictReadRow = TaskVerdictRow & TaskVerdictReading;
+
+/** A linha CRUA do statement de leitura (`VERDICT_READ_COLUMNS`): os campos da
+ * tabela mais as duas colunas de evidência, ANTES de virarem conclusão. Local
+ * de propósito — nenhum consumidor deve ler `declared_raw` (`json_extract` sem
+ * normalizar) nem `report_found` (0/1 do SQLite) direto. */
+type VerdictReadRawRow = TaskVerdictRow & { report_found: number; declared_raw: string | number | null };
+
+/** Chave do grupo de fan-out: `(card_id, at)` identifica a RODADA — as linhas
+ * gravadas pela mesma chamada de `recordParticipationRound`. */
+function verdictRoundKey(cardId: string, at: number): string {
+  return `${cardId}|${at}`;
+}
+
+
 
 /** Lean task row frozen into `sprints.snapshot_json` at close — enough
  * for the Fila card to render a read-only board of that sprint without
@@ -2515,9 +2547,91 @@ export function openStore(userDataDir: string) {
     INSERT INTO task_verdicts (id, task_id, card_id, role, verdict, at)
     VALUES (@id, @task_id, @card_id, @role, @verdict, @at)
   `);
+  // ---- A LEITURA REPARADA (task 156e6d08) -----------------------------
+  // A projeção abaixo é a MESMA nos dois leitores (a task e o board) e é onde
+  // a linha crua encontra a evidência de que a rodada precisava para dizer de
+  // quem era o veredito. Nada aqui ESCREVE: nenhum UPDATE, nenhuma migração —
+  // a tabela continua dizendo o que sempre disse, e o que muda é o que se
+  // conclui dela. A regra (e os números medidos) mora em
+  // `task-verdict-read-decision.ts`; aqui mora só a busca dos fatos.
+  //
+  //   - `report_found`: o report daquela rodada ainda existe. O par é
+  //     `(card_id, updated_at == tv.at)` — os dois são gravados pelo MESMO
+  //     handler (`message-bus.ts`'s `cmd === "report"`, com o mesmo `now`),
+  //     então o timestamp identifica a rodada sem ambiguidade (medido: 576
+  //     reports, ZERO pares `(card_id, updated_at)` repetidos).
+  //   - `declared_raw`: o `taskId` que o payload da rodada escreveu, extraído
+  //     AQUI e não em TS por custo MEDIDO — mandar o `report_json` inteiro
+  //     custaria ~2,3 MB por push do board (504 linhas com veredito × 4,5 KB
+  //     de payload médio) para decidir ~130 grupos. `json_valid` antes do
+  //     `json_extract` porque payload malformado faz o `json_extract`
+  //     LEVANTAR e derrubar a consulta inteira; e o valor cru NÃO é a
+  //     declaração — quem normaliza é `normalizeDeclaredTaskId`, a MESMA
+  //     função do caminho de escrita. As duas rotas foram conferidas linha a
+  //     linha nos 576 reports do banco vivo: 0 divergências.
+  //
+  // O TAMANHO DA RODADA (quantas linhas o mesmo `(card_id, at)` carimbou) NÃO
+  // vira subquery correlacionada: medido, ela custa 165 ms no board (1709
+  // linhas × scan de `task_verdicts`), contra 0,9 ms do `GROUP BY` inteiro
+  // logo abaixo, que `readVerdictRows` transforma num Map. O número é o
+  // mesmo; o que muda é quem paga a conta.
+  const VERDICT_READ_COLUMNS = `
+    tv.id, tv.task_id, tv.card_id, tv.role, tv.verdict, tv.at,
+    EXISTS(SELECT 1 FROM reports r WHERE r.card_id = tv.card_id AND r.updated_at = tv.at) AS report_found,
+    (SELECT CASE WHEN json_valid(r.report_json) THEN json_extract(r.report_json, '$.taskId') END
+       FROM reports r WHERE r.card_id = tv.card_id AND r.updated_at = tv.at) AS declared_raw
+  `;
+
   const getTaskVerdictsStmt = db.prepare(
-    "SELECT id, task_id, card_id, role, verdict, at FROM task_verdicts WHERE task_id = ? ORDER BY at ASC, rowid ASC",
+    `SELECT ${VERDICT_READ_COLUMNS} FROM task_verdicts tv WHERE tv.task_id = ? ORDER BY tv.at ASC, tv.rowid ASC`,
   );
+  const verdictRoundSizesStmt = db.prepare(
+    "SELECT card_id, at, COUNT(*) AS n FROM task_verdicts GROUP BY card_id, at",
+  );
+  /** Um id declarado só vale como declaração se nomear uma task DESTE banco:
+   * 17 rodadas medidas declaram um id de 8 caracteres copiado de briefing
+   * ("30d858c5"), que não é task nenhuma — e resolver isso por prefixo seria o
+   * palpite que a fatia inteira existe para não dar. */
+  const taskExistsStmt = db.prepare("SELECT 1 FROM tasks WHERE id = ?");
+  /** Linha crua do statement de leitura → linha + conclusão da regra. O
+   * `report_json` nunca sai daqui (só o `declared_raw` já extraído); o que
+   * cruza é a CONCLUSÃO, com a evidência que a sustenta (`rule`,
+   * `declaredTaskId`, `roundLinks`, `reportFound`). Genérico no tipo de
+   * entrada pra o leitor do board carregar junto as colunas extras que ele
+   * pediu (`card_provider`) sem uma segunda consulta. */
+  function readVerdictRows<T extends VerdictReadRawRow>(
+    rows: readonly T[],
+  ): (Omit<T, "report_found" | "declared_raw"> & TaskVerdictReadRow)[] {
+    if (rows.length === 0) return [];
+    const roundSizes = new Map<string, number>();
+    for (const g of verdictRoundSizesStmt.all() as { card_id: string; at: number; n: number }[]) {
+      roundSizes.set(verdictRoundKey(g.card_id, g.at), g.n);
+    }
+    // Cache por chamada: uma rodada de fan-out repete o MESMO id declarado em
+    // até 17 linhas (medido), e `taskExistsStmt` é uma ida ao banco.
+    const namesTask = new Map<string, boolean>();
+    return rows.map((row) => {
+      const declaredTaskId = normalizeDeclaredTaskId(row.declared_raw) ?? null;
+      let declaredNamesTask = false;
+      if (declaredTaskId !== null) {
+        declaredNamesTask = namesTask.get(declaredTaskId) ?? taskExistsStmt.get(declaredTaskId) !== undefined;
+        namesTask.set(declaredTaskId, declaredNamesTask);
+      }
+      const reading = deriveTaskVerdictReading({
+        taskId: row.task_id,
+        storedVerdict: row.verdict,
+        declaredTaskId,
+        declaredNamesTask,
+        // O `GROUP BY` acima cobre toda linha da tabela, então a chave sempre
+        // existe; o `1` é cinto, não regra (e nunca alcançado).
+        roundLinks: roundSizes.get(verdictRoundKey(row.card_id, row.at)) ?? 1,
+        reportFound: row.report_found === 1,
+      });
+      const { report_found: _reportFound, declared_raw: _declaredRaw, ...rest } = row;
+      return { ...rest, ...reading };
+    });
+  }
+
 
   /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" — o
    * ÚNICO ponto que escreve em `task_verdicts`. Chamado de dois lugares,
@@ -2608,12 +2722,15 @@ export function openStore(userDataDir: string) {
       AND r.seq = (SELECT MAX(r2.seq) FROM reports r2 WHERE r2.card_id = r.card_id)
   `);
 
-  // RODADA 4 — histórico de veredito por board (pílulas + gráficos 1/2).
-  // Provider: COALESCE(task_cards.provider, cards.provider) — same
-  // survival rule as taskCardsForBoardStmt. Card deleted ⇒ still have
-  // the class when the participation profile was stamped.
+  // RODADA 4 — histórico de veredito por board (pílulas + gráficos 1/2 + a
+  // barra de proposta de conclusão). Provider: COALESCE(task_cards.provider,
+  // cards.provider) — same survival rule as taskCardsForBoardStmt. Card
+  // deleted ⇒ still have the class when the participation profile was
+  // stamped. A projeção é a MESMA de `getTaskVerdictsStmt`
+  // (`VERDICT_READ_COLUMNS`): o board e a task não podem ler o passado com
+  // regras diferentes — foi uma divergência dessas que produziu a 4fee76d5.
   const verdictsForBoardStmt = db.prepare(`
-    SELECT tv.task_id, tv.card_id, tv.role, tv.verdict, tv.at,
+    SELECT ${VERDICT_READ_COLUMNS},
       COALESCE(tc.provider, c.provider) as card_provider
     FROM task_verdicts tv
     JOIN tasks t ON t.id = tv.task_id
@@ -2904,7 +3021,7 @@ export function openStore(userDataDir: string) {
         ...row,
         transitions: getTaskTransitionsStmt.all(id) as TaskTransitionRow[],
         cards: listTaskCardsStmt.all(id) as TaskCardRow[],
-        verdicts: getTaskVerdictsStmt.all(id) as TaskVerdictRow[],
+        verdicts: readVerdictRows(getTaskVerdictsStmt.all(id) as VerdictReadRawRow[]),
       };
     },
     // Ver o comentário grande de `getTaskStatusStmt` acima.
@@ -3092,7 +3209,8 @@ export function openStore(userDataDir: string) {
     // `applyColumnDrop` logo acima dela.
     recordParticipationRound: (cardId: string, verdict: string | null, at: number, taskId?: string | null): TaskVerdictRow[] =>
       recordParticipationRound(cardId, verdict, at, taskId),
-    getTaskVerdicts: (taskId: string): TaskVerdictRow[] => getTaskVerdictsStmt.all(taskId) as TaskVerdictRow[],
+    getTaskVerdicts: (taskId: string): TaskVerdictReadRow[] =>
+      readVerdictRows(getTaskVerdictsStmt.all(taskId) as VerdictReadRawRow[]),
     // DESIGN-BACKLOG.md §2.1 Fase 2, peça 4 — ver o comentário grande dos
     // três `Stmt` acima. `last_actor` é `null` tanto pra uma task sem
     // NENHUMA transição gravada (predata `task_transitions`) quanto pra
@@ -3119,19 +3237,16 @@ export function openStore(userDataDir: string) {
         card_orphaned: number;
       })[],
     listReportsForBoard: (boardId: string): ReportRow[] => reportsForBoardStmt.all(boardId) as ReportRow[],
-    /** RODADA 4 — vereditos do board inteiro (uma consulta), com provider
-     * do card pra o gráfico 1. Mesmo padrão de `listStatusTransitionsForBoard`. */
+    /** RODADA 4 — vereditos do board inteiro (uma consulta), com provider do
+     * card pra o gráfico 1. Mesmo padrão de `listStatusTransitionsForBoard`.
+     * Cada linha vem LIDA (`TaskVerdictReadRow`) pela mesma regra do
+     * `get_task` — ver `task-verdict-read-decision.ts`. */
     listVerdictsForBoard: (
       boardId: string,
-    ): { task_id: string; card_id: string; role: string; verdict: string | null; at: number; card_provider: string | null }[] =>
-      verdictsForBoardStmt.all(boardId) as {
-        task_id: string;
-        card_id: string;
-        role: string;
-        verdict: string | null;
-        at: number;
-        card_provider: string | null;
-      }[],
+    ): (TaskVerdictReadRow & { card_provider: string | null })[] =>
+      readVerdictRows(
+        verdictsForBoardStmt.all(boardId) as (VerdictReadRawRow & { card_provider: string | null })[],
+      ),
     /** Ator da 1ª transição `kind:'status'` — `human` ⇒ criada pela UI. */
     listFirstActorsForBoard: (boardId: string): { task_id: string; first_actor: TaskActor | null }[] =>
       firstActorsForBoardStmt.all(boardId) as { task_id: string; first_actor: TaskActor | null }[],

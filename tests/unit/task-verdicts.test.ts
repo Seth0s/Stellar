@@ -73,7 +73,13 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       const written = store.recordParticipationRound("card-a", "aprovado", at, "t1");
 
       expect(written).toEqual([{ id: expect.any(String), task_id: "t1", card_id: "card-a", role: "implementer", verdict: "aprovado", at }]);
-      expect(store.getTaskVerdicts("t1")).toEqual(written);
+      // A linha lida é a MESMA rodada que a escrita devolveu, mais a
+      // procedência (task 156e6d08) — os campos de `TaskVerdictRow` batem.
+      expect(store.getTaskVerdicts("t1")).toMatchObject(written);
+      // Sem report gravado nesta rodada: cai em `sole_link` (a rodada tinha um
+      // vínculo só), e `reportFound: false` registra que não havia o que
+      // consultar.
+      expect(store.getTaskVerdicts("t1")[0]).toMatchObject({ rule: "sole_link", verdict: "aprovado", storedVerdict: "aprovado", reportFound: false });
     } finally {
       store.close();
     }
@@ -126,8 +132,15 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       const written = store.recordParticipationRound("card-multi", null, 500);
 
       expect(written).toHaveLength(2);
-      expect(store.getTaskVerdicts("t4a")).toEqual([{ id: expect.any(String), task_id: "t4a", card_id: "card-multi", role: "implementer", verdict: null, at: 500 }]);
-      expect(store.getTaskVerdicts("t4b")).toEqual([{ id: expect.any(String), task_id: "t4b", card_id: "card-multi", role: "reviewer", verdict: null, at: 500 }]);
+      // `toMatchObject` e não `toEqual`: a linha LIDA ganhou procedência
+      // (task 156e6d08 — `rule`/`storedVerdict`/`declaredTaskId`/`roundLinks`/
+      // `reportFound`). Todo campo da RODADA continua preso aqui.
+      expect(store.getTaskVerdicts("t4a")).toMatchObject([
+        { id: expect.any(String), task_id: "t4a", card_id: "card-multi", role: "implementer", verdict: null, at: 500, rule: "no_verdict", storedVerdict: null },
+      ]);
+      expect(store.getTaskVerdicts("t4b")).toMatchObject([
+        { id: expect.any(String), task_id: "t4b", card_id: "card-multi", role: "reviewer", verdict: null, at: 500, rule: "no_verdict", storedVerdict: null },
+      ]);
     } finally {
       store.close();
     }

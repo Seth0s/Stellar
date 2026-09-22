@@ -159,6 +159,58 @@ describe("decideCloseCardTaskEffect", () => {
     });
   });
 
+  // S12 (task 156e6d08): o round que o fan-out antigo carimbou NESTA task é
+  // de OUTRA task — não é assinatura deste revisor aqui. Antes da regra de
+  // leitura ele chegava como `aprovado` e CONCLUÍA a task; agora chega
+  // `verdict: null` + `rule: declared_other_task`, e o revisor sai sem
+  // assinar: recusa, como S4.
+  it("S12: carimbo de fan-out (declared_other_task) NÃO conclui nem serve de assinatura — recusa", () => {
+    const result = decideCloseCardTaskEffect({
+      ...base,
+      reviewWanted: true,
+      targetRole: "reviewer",
+      targetVerdicts: [
+        { role: "reviewer", verdict: null, rule: "declared_other_task" },
+      ],
+    });
+    expect(result).toEqual({
+      action: "refuse",
+      error: describeReviewerLeavingUnsignedRefusal("T1", "C1"),
+    });
+  });
+
+  // S13: rodada indecidível (N vínculos, o report não nomeou nenhum) é
+  // "não sei", e "não sei" não sustenta assinatura — também recusa.
+  it("S13: rodada indecidível (undeclared_round) recusa, não 'já julgou'", () => {
+    const result = decideCloseCardTaskEffect({
+      ...base,
+      reviewWanted: true,
+      targetRole: "reviewer",
+      targetVerdicts: [{ role: "reviewer", verdict: null, rule: "undeclared_round" }],
+    });
+    expect(result).toEqual({
+      action: "refuse",
+      error: describeReviewerLeavingUnsignedRefusal("T1", "C1"),
+    });
+  });
+
+  // S14: e o carimbo não APAGA a assinatura de verdade: um aprovado real
+  // (declared_this_task) seguido de um carimbo antigo continua concluindo a
+  // task com o fechamento. A rodada que nem fala desta task não pode ser a
+  // "última palavra" sobre ela.
+  it("S14: aprovado REAL seguido de carimbo antigo continua concluindo a task", () => {
+    const result = decideCloseCardTaskEffect({
+      ...base,
+      reviewWanted: true,
+      targetRole: "reviewer",
+      targetVerdicts: [
+        { role: "reviewer", verdict: "aprovado", rule: "declared_this_task" },
+        { role: "reviewer", verdict: null, rule: "declared_other_task" },
+      ],
+    });
+    expect(result).toEqual({ action: "conclude-task", taskId: "T1", reason: "reviewer-signature" });
+  });
+
   // S11: sem review, ok:true, quem pede NÃO é o implementer (reviewer,
   // outsider, ou papel desconhecido) — conclui a task junto com o
   // fechamento, o caso que a mensagem de S9 promete.

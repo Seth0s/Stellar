@@ -19,6 +19,7 @@ import {
   describePurposeChip,
   deriveCompletionProposal,
   describeVerdictChip,
+  describeVerdictProvenance,
   shortTaskId,
   formatTaskAge,
   waitingOnDep,
@@ -593,7 +594,14 @@ function TaskDetailModal({
             ) : (
               <div className={styles.detailList}>
                 {task.verdicts.map((v, i) => {
-                  const chip = describeVerdictChip(v.role, v.verdict);
+                  // A rodada chega LIDA do main (task 156e6d08): `v.verdict` é
+                  // o que se pode atribuir a ESTA task e `v.rule` diz por quê.
+                  // O chip e a nota andam juntos de propósito — uma linha
+                  // carimbada pelo fan-out antigo não pode virar "sem
+                  // veredito" na tela, porque isso a confundiria com uma
+                  // rodada que legitimamente terminou sem veredito.
+                  const chip = describeVerdictChip(v.role, v.verdict, v.rule);
+                  const provenance = describeVerdictProvenance(v);
                   return (
                   <div key={`${v.cardId}-${v.at}-${i}`} className={styles.detailVerdict} data-part="task-detail-verdict">
                     <span>{t("task.detail.verdictRound", { n: i + 1 })}</span>
@@ -604,6 +612,11 @@ function TaskDetailModal({
                     </span>
                     {v.provider && <span className={styles.age}>{v.provider}</span>}
                     <span className={styles.detailVerdictWhen}>{formatPromptWhen(v.at)}</span>
+                    {provenance && (
+                      <span className={styles.detailVerdictNote} data-part="verdict-provenance">
+                        {provenance}
+                      </span>
+                    )}
                   </div>
                   );
                 })}

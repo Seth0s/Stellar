@@ -39,6 +39,8 @@
 
 import { isJudgmentStatus } from "../task-status-derive";
 import { TASK_CARD_IMPLEMENTER_ROLE, TASK_CARD_REVIEWER_ROLE } from "../task-purpose";
+import type { TaskVerdictReadRule } from "./task-verdict-read-decision";
+import { isRoundAttributableToTask } from "./task-verdict-read-decision";
 
 export type JudgmentRequesterRole = typeof TASK_CARD_IMPLEMENTER_ROLE | typeof TASK_CARD_REVIEWER_ROLE | string | null;
 
@@ -338,8 +340,14 @@ export type CloseCardLinkedTask = {
   otherLiveReviewers: number;
   /** The target card's last ACCEPTED report declared `ok: true`. */
   lastReportOk: boolean;
-  /** Verdict rounds recorded on THIS task for the card being closed, chronological. */
-  targetVerdicts: readonly { role: string; verdict: string | null }[];
+  /** Rodadas gravadas NESTA task para o card que está fechando, cronológicas.
+   *
+   * `verdict` já chega LIDO (`task-verdict-read-decision.ts`, task 156e6d08):
+   * `null` quando o veredito não é atribuível a esta task. `rule` diz por quê,
+   * e é o que permite esta decisão não tratar um CARIMBO DE FAN-OUT como
+   * assinatura deste card nesta task. Ausente (chamador/teste antigo) = a
+   * rodada é desta task, que é o comportamento de antes da fatia. */
+  targetVerdicts: readonly { role: string; verdict: string | null; rule?: TaskVerdictReadRule }[];
 };
 
 export type CloseCardTaskEffect =
@@ -712,14 +720,28 @@ export function describeThirdPartyReleaseRefusal(taskId: string, requesterId: st
  * reintroduzir o caso que a liberação existe para resolver.
  */
 export function decideCloseCardTaskEffect(input: CloseCardLinkedTask): CloseCardTaskEffect {
+  // Uma rodada que o fan-out antigo carimbou em OUTRA task (`declared_other_task`)
+  // não é assinatura deste card NESTA task, e uma rodada indecidível
+  // (`undeclared_round`) não sustenta afirmação nenhuma sobre ela. Antes desta
+  // fatia as duas contavam como "já julgou" (o carimbo era lido como veredito
+  // real) — e o efeito era fechar uma task que ninguém tinha julgado. O
+  // predicado é o MESMO que a proposta de conclusão usa (uma definição só).
+  const isRoundOfThisTask = isRoundAttributableToTask;
   const targetApprovedAsReviewer = (() => {
     for (let i = input.targetVerdicts.length - 1; i >= 0; i--) {
       const round = input.targetVerdicts[i]!;
-      if (round.role === TASK_CARD_REVIEWER_ROLE) return round.verdict === "aprovado";
+      if (round.role !== TASK_CARD_REVIEWER_ROLE) continue;
+      // A rodada de OUTRA task não é a última palavra DESTE revisor aqui: ela
+      // nem fala desta task. Pular (em vez de parar) impede que um carimbo
+      // antigo apague um `aprovado` de verdade gravado antes dele.
+      if (!isRoundOfThisTask(round.rule)) continue;
+      return round.verdict === "aprovado";
     }
     return false;
   })();
-  const targetJudgedAsReviewer = input.targetVerdicts.some((r) => r.role === TASK_CARD_REVIEWER_ROLE);
+  const targetJudgedAsReviewer = input.targetVerdicts.some(
+    (r) => r.role === TASK_CARD_REVIEWER_ROLE && isRoundOfThisTask(r.rule),
+  );
 
   if (input.reviewWanted) {
     if (input.targetRole === TASK_CARD_REVIEWER_ROLE) {
