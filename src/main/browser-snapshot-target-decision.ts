@@ -1,3 +1,5 @@
+import { clickPointHitSource } from "./browser-click-decision";
+
 /**
  * `browser_snapshot`: o controle de formulário que ESCOLHE o input escondido.
  *
@@ -121,6 +123,7 @@ export function isCheckableInput(inputType: string | null): boolean {
  */
 export function snapshotTargetProbeSource(): string {
   return `
+    ${clickPointHitSource()}
     function __stellarStyleVisible(el) {
       if (!el || el.getClientRects().length === 0) return false;
       const st = getComputedStyle(el);
@@ -146,13 +149,16 @@ export function snapshotTargetProbeSource(): string {
         py >= 0 &&
         px <= window.innerWidth &&
         py <= window.innerHeight;
-      const hit = inViewport ? document.elementFromPoint(px, py) : null;
+      // A MESMA pergunta que o caminho do clique faz antes de disparar:
+      // clickPointHitSource() e um lugar so para "o clique neste ponto cai
+      // neste elemento". Nada de uma segunda nocao de clicavel aqui.
+      const pointHitsSelf = __stellarPointHitsSelf(el, px, py, inViewport);
       const associated = __stellarAssociatedLabel(el);
       return {
         tag: String(el.tagName || "").toLowerCase(),
         selfVisible: __stellarStyleVisible(el),
         pointInViewport: inViewport,
-        pointHitsSelf: !!hit && (hit === el || el.contains(hit) || hit.contains(el)),
+        pointHitsSelf: pointHitsSelf,
         label: associated
           ? { kind: associated.kind, visible: __stellarStyleVisible(associated.label) }
           : null,
