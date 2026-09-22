@@ -40,7 +40,34 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
   };
 
   it("notify only when alive, linked, no report this episode, past floor, not waiting, not yet notified", () => {
-    expect(decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false })).toEqual({ action: "notify" });
+    // SEM fato de turno (`declaredIdle` ausente) e sem prova de leitor ausente:
+    // o silêncio é INFERIDO, e a ação carrega isso (task 14b8b224, caso (b)).
+    expect(decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false, hasAgentReader: true })).toEqual({
+      action: "notify_unproven",
+    });
+  });
+
+  it("turno DECLARADO encerrado + nenhum report → a acusação, sustentada pelo fato que o card emitiu", () => {
+    // `declaredIdle` é o `turn_end` que o próprio card mandou (hoje: hook Stop do
+    // claude). Aqui acusar não é palpite: o card DISSE que parou e não reportou.
+    // E é o único caso em que a frase antiga ("idle sem chamar report.") vale.
+    expect(
+      decideIdleWithoutReport({
+        ...base,
+        reportedSinceWorkGranted: false,
+        hasAgentReader: true,
+        declaredIdle: true,
+      }),
+    ).toEqual({ action: "notify" });
+  });
+
+  it("o silêncio INFERIDO não é acusação: a mesma entrada sem fato de turno vira a frase factual", () => {
+    // A distinção que o segundo falso positivo exigiu: o app não sabe separar
+    // "esperando instrução" de "morreu calado" olhando o card — então não afirma.
+    const comFato = decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false, hasAgentReader: true, declaredIdle: true });
+    const semFato = decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false, hasAgentReader: true });
+    expect(comFato).not.toEqual(semFato);
+    expect(semFato).toEqual({ action: "notify_unproven" });
   });
 
   it("never notifies a card waiting on consent", () => {
@@ -70,9 +97,14 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
    * abaixo usa a entrada e não compila mais se alguém tentar ressuscitá-la.
    */
   it("episódio novo sem report → notifica, mesmo que o card já tenha reportado antes", () => {
-    expect(decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false })).toEqual({
-      action: "notify",
-    });
+    // Este teste é sobre a ÂNCORA (o episódio), não sobre a prova do silêncio:
+    // fixo `declaredIdle` para exercitar o caminho em que a acusação é
+    // sustentada por um fato de turno que o card emitiu. Sem esse fato, a
+    // resposta do mesmo episódio é a factual (`notify_unproven`) — ver o bloco
+    // do silêncio inferido.
+    expect(
+      decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false, declaredIdle: true }),
+    ).toEqual({ action: "notify" });
   });
 
   it("episódio COM report → skip, mesmo sem nenhum report anterior na vida do card", () => {
@@ -150,6 +182,104 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
     expect(decideIdleWithoutReport({ ...base, msSinceLastActivity: null })).toEqual({
       action: "skip",
       reason: "activity_unknown",
+    });
+  });
+
+  /**
+   * "CARD SEM AGENTE LENDO" NÃO É "CARD QUE NÃO REPORTOU" (task 14b8b224).
+   *
+   * Medido no board: quatro cards `bash` VAZIOS receberam vínculo de task e
+   * foram acusados, minutos depois, de "idle sem chamar report" — enquanto o
+   * aviso do MESMO vínculo respondia "skipped: bash has no agent reading the
+   * line". A obrigação de reportar só existe para quem PODE reportar; acusar um
+   * shell de não ter reportado é a contradição interna que esta task remove.
+   *
+   * A resposta não é "bash nunca alarma" (a saída fácil, e errada: o app
+   * documenta que um TUI roda DENTRO de um card bash, e esse caso é alarme
+   * legítimo) — é `hasAgentReader`, o fato que `hasAgentReadingLine`
+   * (card-status-decision.ts) responde para os dois lados.
+   */
+  describe("sem agente lendo (hasAgentReader) — a acusação não é a única frase", () => {
+    it("card de shell sem agente → NÃO acusa: o ponteiro é o outro (o vínculo está vivo, falta agente)", () => {
+      expect(
+        decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false, hasAgentReader: false }),
+      ).toEqual({ action: "notify_no_agent" });
+    });
+
+    it("card bash COM agente lendo (TUI dentro) → o silêncio dele é julgado como o de qualquer agente", () => {
+      // Ser bash não decide nada: com leitor, o card entra na MESMA régua dos
+      // outros. Sem fato de turno, essa régua responde a frase factual — não a
+      // acusação (que só vale com turno declarado).
+      expect(
+        decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false, hasAgentReader: true }),
+      ).toEqual({ action: "notify_unproven" });
+      expect(
+        decideIdleWithoutReport({
+          ...base,
+          reportedSinceWorkGranted: false,
+          hasAgentReader: true,
+          declaredIdle: true,
+        }),
+      ).toEqual({ action: "notify" });
+    });
+
+    it("o silêncio exige a prova EXPLÍCITA: fato ausente não silencia (volta ao erro barulhento)", () => {
+      // `undefined` = ninguém informou. Tratar ausência como "sem leitor"
+      // trocaria um alarme errado por um alarme que SOME — e o segundo é pior:
+      // um watchdog que não vigia entrega menos que watchdog nenhum.
+      // Sem fato de turno junto, a resposta é a INFERIDA (factual), não a
+      // acusação: o que não se perde é o SINAL.
+      expect(decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: false })).toEqual({
+        action: "notify_unproven",
+      });
+      expect(
+        decideIdleWithoutReport({
+          ...base,
+          reportedSinceWorkGranted: false,
+          hasAgentReader: undefined as unknown as boolean,
+        }),
+      ).toEqual({ action: "notify_unproven" });
+    });
+
+    it("o piso continua valendo para o card sem agente — vincular é o fluxo NORMAL, não um aviso imediato", () => {
+      // Quem prepara cards e vincula ANTES de subir o CLI não pode receber o
+      // aviso no mesmo segundo. O momento útil é "passou o piso e ninguém leu".
+      expect(
+        decideIdleWithoutReport({
+          ...base,
+          reportedSinceWorkGranted: false,
+          hasAgentReader: false,
+          msSinceLastActivity: IDLE_WITHOUT_REPORT_MS - 1,
+        }),
+      ).toEqual({ action: "skip", reason: "not_idle_long_enough" });
+    });
+
+    it("os portões anteriores continuam vencendo: report deste episódio, consentimento e task", () => {
+      expect(
+        decideIdleWithoutReport({ ...base, reportedSinceWorkGranted: true, hasAgentReader: false }),
+      ).toEqual({ action: "skip", reason: "reported_this_episode" });
+      expect(
+        decideIdleWithoutReport({ ...base, waitingOnConsent: true, hasAgentReader: false }),
+      ).toEqual({ action: "skip", reason: "waiting_consent" });
+      expect(
+        decideIdleWithoutReport({
+          ...base,
+          reportedSinceWorkGranted: false,
+          hasAgentReader: false,
+          hasLinkedRunningTask: false,
+        }),
+      ).toEqual({ action: "skip", reason: "no_linked_running_task" });
+    });
+
+    it("turno DECLARADO encerrado sem leitor também não acusa (a frase segue o leitor, não o relógio)", () => {
+      expect(
+        decideIdleWithoutReport({
+          ...base,
+          reportedSinceWorkGranted: false,
+          hasAgentReader: false,
+          declaredIdle: true,
+        }),
+      ).toEqual({ action: "notify_no_agent" });
     });
   });
 });

@@ -61,3 +61,40 @@ export function unreportedExitPointerBody(exitCode: number): string {
 export function unreportedIdlePointerBody(): string {
   return "idle sem chamar report.";
 }
+
+/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+ *
+ * SINAL 3, a OUTRA frase (task 14b8b224): o card está ocioso e vinculado a uma
+ * task, mas não há agente lendo a linha — então "não reportou" seria falso (não
+ * havia quem reportasse). O que o dono precisa saber é o que fazer: o vínculo
+ * está vivo e o card não executa nada.
+ *
+ * Por que NÃO é silêncio: um card de shell que nunca recebe agente ficaria
+ * esquecido com uma task viva, e é exatamente esse o risco que a peça 7 do
+ * rastreamento (90080872) existe para não deixar acontecer. Por que NÃO é a
+ * frase de cima: acusar quem não tem leitor ensina o orquestrador a ignorar o
+ * alarme — e é assim que o sinal verdadeiro morre. */
+export function unreportedNoAgentPointerBody(): string {
+  return "ocioso e sem agente lendo (shell com prompt livre) — suba um agente neste card ou re-vincule a task.";
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+ *
+ * SINAL 3, a TERCEIRA frase (task 14b8b224, caso (b)): o card tem agente, está
+ * vinculado, e ficou quieto além do piso — mas NADA declarou o fim do turno.
+ * Nesse estado o app não sabe distinguir "terminou e não reportou" de "está
+ * trabalhando" nem de "está à espera de instrução" (medição no cabeçalho de
+ * idle-without-report-decision.ts: o store não guarda mensagem recebida por
+ * card, e o fato que existe em memória é o que ARMA o watchdog).
+ *
+ * Então a frase diz o que sabe — há quanto tempo o card está quieto — e pede a
+ * conferência, em vez de afirmar abandono. Quem confere é quem tem tela: o
+ * orquestrador (`read_card`), não o relógio de bytes.
+ *
+ * Por que não silêncio: o card que MORREU calado tem exatamente esta assinatura.
+ * Um watchdog que se cala nos dois casos perde o verdadeiro — e o que se
+ * aprende a ignorar é o alarme que erra, que é o que esta frase conserta. */
+export function unreportedUnprovenIdlePointerBody(idleMs: number): string {
+  const minutes = Math.max(1, Math.round(idleMs / 60_000));
+  return `sem chamar report há ${minutes}min e sem fato de turno — silêncio, não abandono: confira o card antes de retomar.`;
+}

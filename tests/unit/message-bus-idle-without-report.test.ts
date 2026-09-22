@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 import { IDLE_WITHOUT_REPORT_MS } from "../../src/main/idle-without-report-decision";
-import { unreportedIdlePointerBody } from "../../src/main/agent-facing-authorship";
+import {
+  unreportedIdlePointerBody,
+  unreportedNoAgentPointerBody,
+  unreportedUnprovenIdlePointerBody,
+} from "../../src/main/agent-facing-authorship";
 
 /**
  * SINAL 3 — bus wiring: scanIdleWithoutReport notifies the spawner once,
@@ -24,7 +28,13 @@ type FakeTaskRow = {
 
 type FakeReportRow = { card_id: string; seq: number; report_json: string; updated_at: number };
 
+/** A frase do silêncio DECLARADO (turno encerrado pelo card) — só os dois
+ * testes de `declaredIdle` abaixo a esperam. */
 const IDLE_POINTER = unreportedIdlePointerBody();
+/** A frase do silêncio INFERIDO (só o relógio). O duble deixa o card quieto por
+ * `IDLE_WITHOUT_REPORT_MS + 1s` → 3min na frase. */
+const UNPROVEN_POINTER = unreportedUnprovenIdlePointerBody(IDLE_WITHOUT_REPORT_MS + 1_000);
+const NO_AGENT_POINTER = unreportedNoAgentPointerBody();
 
 function callbacksWithOverrides(
   overrides: Record<string, (...args: never[]) => unknown>,
@@ -141,11 +151,11 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     b.scanIdleWithoutReport();
     b.scanIdleWithoutReport();
     const bodies = await waitForBodies(written, 1);
-    const idleLines = bodies.filter((t) => t.includes(IDLE_POINTER));
+    const idleLines = bodies.filter((t) => t.includes(UNPROVEN_POINTER));
     expect(idleLines).toHaveLength(1);
-    expect(idleLines[0]).toBe(`[de: worker] ${IDLE_POINTER}`);
+    expect(idleLines[0]).toBe(`[de: worker] ${UNPROVEN_POINTER}`);
     expect(written.filter(([id, data]) => id === "worker-1" && data !== "\r")).toHaveLength(0);
-    expect(written.filter(([id, data]) => id === "spawner-1" && data.includes(IDLE_POINTER))).toHaveLength(1);
+    expect(written.filter(([id, data]) => id === "spawner-1" && data.includes(UNPROVEN_POINTER))).toHaveLength(1);
   });
 
   it("has report (healthy idle waiting for follow-up) → skip", async () => {
@@ -159,14 +169,14 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     });
     b.scanIdleWithoutReport();
     await new Promise((r) => setTimeout(r, 200));
-    expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+    expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(0);
   });
 
   it("after notify, accepted report → further idle scans do not re-fire the idle pointer", async () => {
     const { bus: b, written } = makeBus();
     b.scanIdleWithoutReport();
     await waitForBodies(written, 1);
-    expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(1);
+    expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(1);
 
     await b.handleRequest({
       cmd: "report",
@@ -177,9 +187,9 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     b.scanIdleWithoutReport();
     b.scanIdleWithoutReport();
     await new Promise((r) => setTimeout(r, 400));
-    const newIdle = written.slice(afterReport).filter(([, d]) => d.includes(IDLE_POINTER));
+    const newIdle = written.slice(afterReport).filter(([, d]) => d.includes(UNPROVEN_POINTER));
     expect(newIdle).toHaveLength(0);
-    expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(1);
+    expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(1);
   });
 
   it("no linked task → skip", async () => {
@@ -188,7 +198,7 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     });
     b.scanIdleWithoutReport();
     await new Promise((r) => setTimeout(r, 200));
-    expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+    expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(0);
   });
 
   it("judgment task (done) → skip", async () => {
@@ -198,7 +208,7 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     });
     b.scanIdleWithoutReport();
     await new Promise((r) => setTimeout(r, 200));
-    expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+    expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(0);
   });
 
   /**
@@ -224,7 +234,7 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
 
       b.scanIdleWithoutReport();
       const bodies = await waitForBodies(written, 1);
-      expect(bodies.filter((t) => t.includes(IDLE_POINTER))).toHaveLength(1);
+      expect(bodies.filter((t) => t.includes(UNPROVEN_POINTER))).toHaveLength(1);
     });
 
     it("report DEPOIS do trabalho concedido → este episódio está cumprido, não cutuca", async () => {
@@ -242,7 +252,7 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
 
       b.scanIdleWithoutReport();
       await new Promise((r) => setTimeout(r, 200));
-      expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+      expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(0);
     });
 
     it("segundo episódio: o MESMO trabalho não cutuca duas vezes, mas uma concessão NOVA re-arma", async () => {
@@ -254,19 +264,19 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
       b.scanIdleWithoutReport();
       b.scanIdleWithoutReport();
       await waitForBodies(written, 1);
-      expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(1);
+      expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(1);
 
       // Mesma âncora: continua sendo o mesmo episódio, nada de segundo cutucão.
       b.scanIdleWithoutReport();
       await new Promise((r) => setTimeout(r, 150));
-      expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(1);
+      expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(1);
 
       // Trabalho concedido de novo (o coordenador mandou outra tarefa):
       // a âncora muda, o episódio re-arma, e a falha seguinte é visível.
       workGrantedAt = Date.now();
       b.scanIdleWithoutReport();
       const bodies = await waitForBodies(written, 2);
-      expect(bodies.filter((t) => t.includes(IDLE_POINTER))).toHaveLength(2);
+      expect(bodies.filter((t) => t.includes(UNPROVEN_POINTER))).toHaveLength(2);
     });
 
     it("turno DECLARADO (declaredIdle) → cutuca sem esperar o piso de 180s", async () => {
@@ -306,6 +316,40 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
    * "não dá para datar o trabalho" em cutucão — um report já gravado conta
    * como o episódio cumprido.
    */
+  /**
+   * A FIAÇÃO DO "SEM AGENTE LENDO" (task 14b8b224) — o defeito medido no board:
+   * quatro cards `provider: bash` VAZIOS, vinculados a tasks, acusados de
+   * "idle sem chamar report" por um agente que nunca existiu. Aqui o card do
+   * teste é um shell quieto (prompt livre, tela em branco) e o ponteiro tem de
+   * ser o OUTRO — a acusação não pode aparecer.
+   *
+   * O caso oposto (bash COM TUI dentro → acusação normal) é decidido pelo mesmo
+   * fato e está em `card-agent-reader-decision.test.ts`; o card `cursor` do
+   * teste acima ("idle + linked + no report → one pointer") é o outro lado vivo
+   * desta fiação: provider de agente continua sendo acusado.
+   */
+  it("card bash VAZIO (prompt livre) → ponteiro de 'sem agente lendo', NUNCA a acusação", async () => {
+    const { bus: b, written } = makeBus({
+      listCards: () =>
+        [
+          { id: "spawner-1", kind: "terminal", provider: "claude", cwd: "", label: "MASTER", displayName: "MASTER" },
+          { id: "worker-1", kind: "terminal", provider: "bash", cwd: "", label: "worker", displayName: "worker" },
+        ] as never,
+    });
+    b.scanIdleWithoutReport();
+    b.scanIdleWithoutReport();
+    const bodies = await waitForBodies(written, 1);
+    const noAgentLines = bodies.filter((t) => t.includes(NO_AGENT_POINTER));
+    expect(noAgentLines).toHaveLength(1);
+    expect(noAgentLines[0]).toBe(`[de: worker] ${NO_AGENT_POINTER}`);
+    // A frase errada: nenhuma acusação de "não reportou" para quem não tem
+    // agente — e nem a inferida, que é a outra ponta da mesma pergunta. É este
+    // par de asserções que morre se o fato sumir da fiação.
+    expect(bodies.filter((t) => t.includes(UNPROVEN_POINTER))).toHaveLength(0);
+    expect(bodies.filter((t) => t.includes(IDLE_POINTER))).toHaveLength(0);
+    expect(written.filter(([id, data]) => id === "worker-1" && data !== "\r")).toHaveLength(0);
+  });
+
   it("âncora sem data (corrida) → não cutuca quem já reportou", async () => {
     const { bus: b, written } = makeBus({
       getCardLastWorkGrantedAt: (() => null) as never,
@@ -318,6 +362,6 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
     });
     b.scanIdleWithoutReport();
     await new Promise((r) => setTimeout(r, 200));
-    expect(written.filter(([, d]) => d.includes(IDLE_POINTER))).toHaveLength(0);
+    expect(written.filter(([, d]) => d.includes(UNPROVEN_POINTER))).toHaveLength(0);
   });
 });

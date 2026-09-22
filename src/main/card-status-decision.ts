@@ -64,11 +64,58 @@ export type CardStatusFacts = {
 };
 
 /** `bash` é o único provider com semântica de shell de linha: não repinta.
- * Exportado para o teste anti-drift da descrição da tool poder citá-lo. */
+ * Exportado para o teste anti-drift da descrição da tool poder citá-lo — e
+ * para os caminhos que precisam perguntar "o leitor DECLARADO deste card é um
+ * shell?" (task 14b8b224). Nenhum call site escreve `=== "bash"` à mão: a lista
+ * mora aqui e `isShellProvider` responde por ela. */
 export const SHELL_PROVIDER_IDS = ["bash"] as const;
 
-function isShellProvider(provider: string | null): boolean {
+export function isShellProvider(provider: string | null): boolean {
   return provider !== null && (SHELL_PROVIDER_IDS as readonly string[]).includes(provider);
+}
+
+/**
+ * "TEM AGENTE LENDO A LINHA DESTE CARD?" — a pergunta que o watchdog de ocioso
+ * não fazia, e a fonte ÚNICA para ela (task 14b8b224).
+ *
+ * O DEFEITO, medido no board (2026-09-22): quatro cards `provider: bash` VAZIOS
+ * (tela em branco, nem prompt desenhado) receberam vínculo de task e, minutos
+ * depois, os quatro foram acusados de "idle sem chamar report" — por um agente
+ * que nunca existiu. No mesmo instante o aviso do vínculo respondia
+ * `"skipped: bash has no agent reading the line"`: o app SABIA que não havia
+ * leitor e cobrou o report dele mesmo assim. Duas respostas opostas para a
+ * mesma pergunta, no mesmo boot — e a confusão custa caro porque a peça 7 do
+ * rastreamento vai AGIR sobre estes sinais (propor respawn de trabalho que
+ * nunca começou).
+ *
+ * A ASSIMETRIA É DELIBERADA: só a PROVA de ausência conta como ausência.
+ *
+ *   - provider de AGENTE (`claude`, `cursor`, `cline`, …): o processo do card É
+ *     o agente → `true`, sem olhar a tela;
+ *   - provider de SHELL (`bash`): `true` A NÃO SER que o app tenha a prova de um
+ *     prompt de shell livre — o `at-prompt` de `decideCardStatus`. Um card bash
+ *     COM um TUI dentro repinta (medido, ver o cabeçalho deste módulo) → não é
+ *     `at-prompt` → tem leitor → alarme legítimo. A distinção é "tem agente
+ *     lendo", NÃO "é bash".
+ *
+ * `shellStatus` é um THUNK de propósito: a resposta para um provider de agente
+ * não depende da tela, e o scan de ocioso (que roda a cada 5s) não deve pagar a
+ * leitura do write-readiness para perguntar por um card que já sabe a resposta.
+ * O atalho é sobre QUANDO perguntar; a resposta continua morando aqui.
+ *
+ * OS DOIS ERROS QUE SOBRAM, declarados (nenhum dos dois é novo — os dois são o
+ * que `card-status-decision.ts` já publica):
+ *   - BARULHENTO: um card bash rodando um comando comum é INDISTINGUÍVEL de um
+ *     TUI por estes fatos (o comentário do ramo de shell mede isso), então
+ *     mantém o alarme. Preferir o erro barulhento é o que impede este sinal de
+ *     morrer por silêncio errado;
+ *   - MUDO: um TUI que fique quieto além de `idleThresholdMs` lê `at-prompt` e
+ *     é tratado como sem leitor — herdado do modelo de `card_status`, que só
+ *     afirma `unknown` enquanto há bytes.
+ */
+export function hasAgentReadingLine(provider: string | null, shellStatus: () => CardStatus): boolean {
+  if (!isShellProvider(provider)) return true;
+  return shellStatus() !== "at-prompt";
 }
 
 export function decideCardStatus(facts: CardStatusFacts): CardStatus {
