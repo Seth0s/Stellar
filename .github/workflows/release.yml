@@ -62,6 +62,11 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A lista de commits abaixo precisa da tag ANTERIOR e do histórico até
+          # ela: o checkout raso padrão (depth 1) faz `git describe "${TAG}^"`
+          # falhar e a release sai dizendo "primeira release" (medido na v0.8.3).
+          fetch-depth: 0
 
       - name: deriva a versão da tag e confere contra o package.json
         id: version
