@@ -131,7 +131,16 @@ try {
     `),
   );
 
-  await page.evalJs(`window.pty.write(${JSON.stringify(bashId)}, ${JSON.stringify("echo caso1\\n")})`);
+  // O TERCEIRO ARGUMENTO NÃO É DECORATIVO (medido 2026-09-22, task
+  // 71128571): `window.pty.write` cai em `ipcMain.handle("pty:write")`
+  // (main/index.ts), que faz `if (origin !== "human" && origin !==
+  // "delivery" && origin !== "auto") return;` — sem ele o byte nunca chega
+  // ao PTY, e esta linha virava um no-op silencioso. O CASO 1 falhava em
+  // "isActive true logo após escrever" (got false) por ISSO, e a checagem
+  // seguinte passava de graça (isActive já era false, então "desligou" era
+  // verdade vazia). `"human"` é o que um humano digitando produz.
+  await page.evalJs(`window.pty.write(${JSON.stringify(bashId)}, ${JSON.stringify("echo caso1\n")}, "human")`);
+
   await delay(300);
   check("CASO 1 (bash): isActive true logo após escrever", await isActiveFor(page, bashId), true);
 

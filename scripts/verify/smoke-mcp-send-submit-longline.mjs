@@ -22,6 +22,7 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-send-submit-longline-${CDP_PORT}`, import.meta.url).pathname;
 const MARKER = "CONFIRMADO-LONGLINE-88301";
 
+
 let nextRpcId = 1;
 async function mcpCall(method, params) {
   const res = await fetch(MCP_URL, {
@@ -86,12 +87,13 @@ async function centerOf(page, selector) {
   return res;
 }
 
-const { check, finish } = makeChecker();
+const { check, skip, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 try {
   const page = await connectPage(CDP_PORT);
   await new Promise((r) => setTimeout(r, 1000));
   await bootIntoFreshSession(page, "Send Submit Long Line Teste");
+
   await new Promise((r) => setTimeout(r, 500));
 
   // Cria o card "claude" pelo caminho da UI: abre o popover de CRIAÇÃO (o
@@ -114,6 +116,40 @@ try {
     `),
   );
   check("card 'claude' real foi criado", claudeCardId !== null, true);
+
+  // PRECONDIÇÃO MEDIDA — ver o irmão smoke-mcp-send-submit para a medição
+  // completa (2026-09-22, task 71128571): um `claude` que nunca foi confiado
+  // neste diretório para no diálogo "Is this a project you created or one you
+  // trust?" e nada que o app digite ali vira turno. Ambiente, não defeito do
+  // app — por isso SKIP declarado, nunca verde.
+  async function claudeSaysNoTurnIsPossible() {
+    const rc = await toolJson("read_card", { target: claudeCardId });
+    const text = typeof rc.text === "string" ? rc.text : "";
+    if (/Yes, I trust this folder/.test(text) || /one you trust\?/.test(text)) {
+      return `o CLI real está parado no diálogo de confiança do diretório (read_card: ${JSON.stringify(text.replace(/\s+/g, " ").trim().slice(0, 200))})`;
+    }
+    if (/Not logged in|Please log in|\/login/i.test(text)) {
+      return `o CLI real não está autenticado nesta máquina (read_card: ${JSON.stringify(text.replace(/\s+/g, " ").trim().slice(0, 200))})`;
+    }
+    return null;
+  }
+
+  let blockedBeforeSend = null;
+  const bootDeadline = Date.now() + 15000;
+  while (Date.now() < bootDeadline) {
+    blockedBeforeSend = await claudeSaysNoTurnIsPossible();
+    if (blockedBeforeSend !== null) break;
+    const drawn = await toolJson("read_card", { target: claudeCardId });
+    if (typeof drawn.text === "string" && drawn.text.trim().length > 0) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (blockedBeforeSend !== null) {
+    skip(
+      "o agente real recebeu, processou e respondeu com o marker (linha longa, submetida de verdade)",
+      blockedBeforeSend,
+    );
+    skip("...e não ficou preso como paste não-submetido", blockedBeforeSend);
+  }
 
   await page.evalJs(`
     (() => {
@@ -156,12 +192,21 @@ try {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  check("o agente real recebeu, processou e respondeu com o marker (linha longa, submetida de verdade)", found, true);
-  check(
-    "...e não ficou preso como paste não-submetido",
-    await page.evalJs(`document.body.innerText.includes('Pasted text')`),
-    false,
-  );
+  if (blockedBeforeSend === null) {
+    check("o agente real recebeu, processou e respondeu com o marker (linha longa, submetida de verdade)", found, true);
+    // A checagem de "preso como paste" era `document.body.innerText.includes(
+    // 'Pasted text')` — e o terminal é um CANVAS: o texto do xterm nunca está
+    // no innerText do documento, então ela era verde para sempre, medisse o
+    // que medisse. O lugar onde o placeholder aparece é o buffer do card, que
+    // é o que `read_card` devolve.
+    const screenEnd = await toolJson("read_card", { target: claudeCardId });
+    const placeholderOnScreen = typeof screenEnd.text === "string" && screenEnd.text.includes("Pasted text");
+    check("...e não ficou preso como paste não-submetido (lido do buffer do card, não do innerText)", placeholderOnScreen, false);
+    if (!found) {
+      const tail = typeof screenEnd.text === "string" ? screenEnd.text.replace(/\s+/g, " ").trim().slice(-200) : "";
+      console.log(`  tela do card no fim (read_card, últimos 200 chars): ${JSON.stringify(tail)}`);
+    }
+  }
 
   page.close();
 } finally {

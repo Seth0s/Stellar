@@ -89,6 +89,18 @@ try {
   await bootIntoFreshSession(page, "Provider OpenCode Teste");
   await new Promise((r) => setTimeout(r, 600));
 
+  // Contador de bytes do PTY, pelo mesmo canal que o xterm.js consome. Não é
+  // a checagem — é o diagnóstico que faltava: se o `read_card` voltar vazio,
+  // a diferença entre "0 byte" (o PTY nunca recebeu nada) e "18 kB" (a TUI
+  // desenhou e o texto ainda não estava na tela) é a diferença entre acusar
+  // o app e acusar a amostra.
+  await page.evalJs(`
+    (() => {
+      window.__bytes = {};
+      window.pty.onData((id, data) => { window.__bytes[id] = (window.__bytes[id] ?? "") + data; });
+    })()
+  `);
+
   // ---- 1. UI: opencode aparece no provider picker do popover de terminal ----
   // Abre o popover de CRIAÇÃO (rail → "Adicionar card" → Terminal): o clique
   // que estava aqui era num CARD de terminal, que não abre popover nenhum.
@@ -117,11 +129,29 @@ try {
       })()
     `),
   );
-  const uiCardText = await toolJson("read_card", { target: uiCardId });
+  // A tela do opencode é uma TUI em TELA ALTERNATIVA: o primeiro quadro é
+  // fundo pintado (linhas só com espaços, que `translateToString(true)`
+  // devolve como vazio) e o texto só aparece quando a TUI termina de
+  // desenhar. Medido em 2026-09-22 (task 71128571, com
+  // investigate-real-binary-pty.mjs): a PTY entrega 18007 bytes e o
+  // `read_card` devolve 0 caractere em t≈1,7s, 3936 a partir de t≈3,7s. A
+  // versão anterior fazia UMA leitura em t≈3,2s e acusava o app pelo que
+  // era o instante da amostra — agora ela ESPERA, com teto, em vez de
+  // amostrar uma vez.
+  let uiCardText = { ok: false, text: "" };
+  const readDeadline = Date.now() + 30000;
+  while (Date.now() < readDeadline) {
+    uiCardText = await toolJson("read_card", { target: uiCardId });
+    if (typeof uiCardText.text === "string" && uiCardText.text.trim().length > 0) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
   check("read_card no terminal opencode resolve ok", uiCardText.ok, true);
+  const uiCardTextLen = typeof uiCardText.text === "string" ? uiCardText.text.trim().length : -1;
+  const uiCardBytes = await page.evalJs(`(window.__bytes[${JSON.stringify(uiCardId)}] ?? "").length`);
+  console.log(`  medido: ${uiCardBytes} bytes entregues pela PTY, ${uiCardTextLen} caracteres no buffer do card`);
   check(
     "...e devolve texto REAL não-vazio da PTY (opencode realmente desenhou algo, não uma tela em branco)",
-    typeof uiCardText.text === "string" && uiCardText.text.trim().length > 0,
+    uiCardTextLen > 0,
     true,
   );
 
