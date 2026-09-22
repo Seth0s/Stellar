@@ -356,7 +356,17 @@ process.on("exit", () => {
     try {
       rmSync(dir, { recursive: true, force: true });
     } catch {
-      // já foi (stopApp) ou o disco está cheio — não é motivo para falhar o run
+      // MEDIDO (2026-09-22): o rm falha quando o Electron filho ainda está
+      // vivo com o sqlite aberto — e o que sobra é o pior dos dois mundos:
+      // o `agent-canvas.db` some e o DIRETÓRIO fica (seis cascas vazias em
+      // /tmp, do mesmo tamanho de antes: o vazamento parecia consertado).
+      // Antes de sair, dispara o que sobrevive a este processo: um `rm -rf`
+      // DESTACADO, que roda depois que o filho morre.
+      try {
+        spawn("/bin/rm", ["-rf", dir], { detached: true, stdio: "ignore" }).unref();
+      } catch {
+        // sem /bin/rm não há o que fazer aqui — o sweep por TTL pega depois
+      }
     }
   }
 });
