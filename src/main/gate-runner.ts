@@ -344,8 +344,24 @@ export type DiffCaptureEvidence = {
   /** `true` quando o corpo bateu no teto — um diff truncado que não diz que
    * foi truncado é mentira. */
   patchTruncated: boolean;
-  /** TODOS os caminhos que mudaram nesta janela, untracked incluídos. */
+  /** Os caminhos que mudaram nesta janela, untracked incluídos.
+   *
+   * "TODOS" é o que se quer dizer — e por isso o truncamento vem DECLARADO ao
+   * lado (`filesTruncated`) em vez de ficar implícito: a lista passa pelo mesmo
+   * teto de captura do patch, e uma promessa de completude que não se pode
+   * cumprir é a mesma mentira que um patch cortado sem marca (task 56604aca,
+   * decisão do dono: o teto do patch nunca foi alcançado até ser, e a lista não
+   * vai esperar o mesmo acontecer com ela).
+   *
+   * MEDIDO no dado real: a maior lista observada tem 48 caminhos (~3 KB) contra
+   * 16 KB de teto — folga de 5x. "Hoje não chega perto" não é garantia; quem lê
+   * `total`/`outsideTerritory` para AFIRMAR "N arquivos mudaram" precisa olhar
+   * este campo antes. */
   files: DiffFileEntry[];
+  /** `true` quando a LISTA de caminhos bateu no teto (os últimos em ordem
+   * alfabética teriam sido descartados). Nunca inferido de `total`: o campo
+   * diz, e quem exibe conta com ele. */
+  filesTruncated: boolean;
   total: number;
   outsideTerritory: number;
   /**
@@ -365,13 +381,19 @@ export type GitCaptureFn = (
 function defaultGitCapture(args: string[], cwd: string): Promise<{ ok: boolean; stdout: string; truncated: boolean }> {
   return new Promise((done) => {
     const child = spawn("git", args, { cwd });
-    const out = new TailCollector(MAX_CAPTURE_BYTES);
+    // CABEÇA, não cauda (task 56604aca): a saída do git aqui é uma listagem em
+    // ordem ALFABÉTICA (`diff`, `diff --stat`, `status --porcelain`), e a parte
+    // informativa é o começo. MEDIDO com a cauda: dos 48 arquivos sujos de uma
+    // árvore real, o patch capturado guardava 2 a 6 — e ZERO de `src/main` em
+    // 29 patches, porque o teto ficava com `tests/*`. O teto não estava só
+    // cortando: estava cortando exatamente os arquivos que alguém quer separar.
+    const out = new HeadCollector(MAX_CAPTURE_BYTES);
     child.stdout.on("data", (c: Buffer) => out.push(c));
     child.on("error", () => done({ ok: false, stdout: "", truncated: false }));
+    // `truncated` mora no COLETOR (`seen > max`): a mesma marca do gate, com a
+    // mesma constante — nenhuma disciplina paralela para divergir.
     child.on("close", (code: number | null) =>
-      // `seen > max` é a marca de truncamento da MESMA disciplina do gate —
-      // nenhuma constante nova, nenhum teto paralelo para divergir.
-      done({ ok: code === 0, stdout: out.toString(), truncated: out.seen > MAX_CAPTURE_BYTES }),
+      done({ ok: code === 0, stdout: out.toString(), truncated: out.truncated }),
     );
   });
 }
@@ -416,7 +438,10 @@ export async function captureDiff(opts: {
       stat: "",
       patch: "",
       patchTruncated: false,
+      // Lista vazia AQUI é completa: não há repositório, logo não há caminho a
+      // listar — truncamento seria dizer que se perdeu algo que nunca existiu.
       files: [],
+      filesTruncated: false,
       total: 0,
       outsideTerritory: 0,
       note: "o cwd desta task não é um repositório git — não há diff a observar.",
@@ -449,6 +474,7 @@ export async function captureDiff(opts: {
     patch: body.stdout,
     patchTruncated: body.truncated,
     files,
+    filesTruncated: status.truncated,
     total: files.length,
     outsideTerritory: outside,
     note: describeDiffAuthorship(files.length, outside, territoryDeclared),
@@ -588,8 +614,50 @@ function killGroup(pid: number | undefined): void {
   }
 }
 
-/** Buffer de cauda limitado por bytes: guarda os ÚLTIMOS `max` bytes e
- * conta o total visto, para a truncagem ser declarada, não muda. */
+/**
+ * Coletor de CABEÇA — o espelho do `TailCollector`, e a escolha entre os dois
+ * é do DADO, não de gosto (task 56604aca):
+ *
+ *   - SAÍDA DE GATE (stdout/stderr de teste): a parte informativa é o FIM — o
+ *     resumo, o erro fatal, o "3 failed". `TailCollector`, e continua.
+ *   - SAÍDA DE GIT: é uma listagem em ordem alfabética, e a parte informativa é
+ *     o COMEÇO (cabeçalho de arquivo, cabeçalho de hunk, o caminho). Com a
+ *     cauda, `src/main/*` — os arquivos que a atribuição precisa separar —
+ *     nunca entrava no patch. Ver a medição em `defaultGitCapture`.
+ *
+ * O corte pode partir um caractere multibyte na borda (um U+FFFD no fim do
+ * texto retido) — propriedade que o `TailCollector` já tinha na borda oposta,
+ * herdada do mesmo desenho: corta-se por byte, e o dado diz que truncou.
+ */
+export class HeadCollector {
+  private chunks: Buffer[] = [];
+  private kept = 0;
+  seen = 0;
+
+  constructor(private readonly max: number) {}
+
+  push(chunk: Buffer): void {
+    this.seen += chunk.length;
+    if (this.kept >= this.max) return; // cheio: só conta, não guarda
+    const room = this.max - this.kept;
+    const keptChunk = chunk.length <= room ? chunk : chunk.subarray(0, room);
+    this.chunks.push(keptChunk);
+    this.kept += keptChunk.length;
+  }
+
+  get truncated(): boolean {
+    return this.seen > this.max;
+  }
+
+  toString(): string {
+    return Buffer.concat(this.chunks).toString("utf8");
+  }
+}
+
+/** Buffer de cauda limitado por bytes: guarda os ÚLTIMOS `max` bytes e conta o
+ * total visto, para a truncagem ser declarada, não muda. É o coletor do
+ * STDOUT/STDERR DE GATE (a parte informativa de um teste é o fim). Saída de git
+ * usa o `HeadCollector` — ver a medição lá em cima. */
 class TailCollector {
   private chunks: Buffer[] = [];
   private kept = 0;

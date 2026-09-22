@@ -223,6 +223,9 @@ describe("deriveAutoConnectLabel", () => {
           getTask: ((id: string) => (id === t.id ? t : undefined)) as never,
           getCardBoardId: (() => "b1") as never,
           isBoardAutonomous: (() => true) as never,
+          // Autorização de papel (05055482): o spawn de revisor exige a marca
+          // do board da task — neste teste de RÓTULO, "orch" é a marca.
+          getBoardOrchestratorCardId: (() => "orch") as never,
           linkTaskCard: (() => undefined) as never,
           onSpawnAgentRequest: ((requestId: string, _r: string, params: Record<string, unknown>) => {
             spawned.push(params);

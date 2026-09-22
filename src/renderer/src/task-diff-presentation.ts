@@ -34,8 +34,10 @@
  *      Uma segunda redação aqui divergiria em silêncio no dia em que alguém
  *      melhorasse uma das duas. Tudo o mais que o módulo devolve é ESTRUTURA
  *      (caminho, código de status, marcador) ou CHAVE de i18n.
- *   3. TRUNCAMENTO QUE NÃO SE ANUNCIA É MENTIRA. `patchTruncated` sobe cru e
- *      tem chave própria para o componente dizer; untracked não tem patch no
+ *   3. TRUNCAMENTO QUE NÃO SE ANUNCIA É MENTIRA — e são DOIS, com chaves
+ *      próprias: `patchTruncated` (o patch perde o FIM desde o conserto do
+ *      teto) e `filesTruncated` (a LISTA de caminhos perde os últimos, e a
+ *      contagem vem de uma lista incompleta). Untracked não tem patch no
  *      `git diff` e ganha a sua leitura em vez de um vazio mudo.
  *   4. SEM TERRITÓRIO DECLARADO NÃO HÁ RÓTULO. Cada arquivo sai
  *      `territory: "unlabeled"` e o resumo troca para a leitura de "sem
@@ -62,8 +64,15 @@ export const TASK_DIFF_KEYS = {
   noTerritory: "task.diff.noTerritory",
   /** "nenhuma mudança observada no checkout nesta janela" */
   noFiles: "task.diff.noFiles",
-  /** "patch truncado — mostrando o fim" */
+  /** "patch truncado — mostrando o COMEÇO" (o texto era "mostrando o fim"
+   * enquanto o coletor do git guardava a cauda; o conserto da task 56604aca
+   * inverteu o lado retido, e a copy tinha ficado para trás — uma frase que
+   * promete o que o código não faz, que é a classe que esta sessão conserta). */
   patchTruncated: "task.diff.patchTruncated",
+  /** "a lista de arquivos está truncada — há mais mudanças do que as listadas"
+   * (aviso PRÓPRIO, não o do patch: aqui o que falta são caminhos do FIM da
+   * lista, e a contagem `total` também é a de uma lista incompleta). */
+  filesTruncated: "task.diff.filesTruncated",
   /** "arquivo novo: o diff do git não tem patch dele" */
   untracked: "task.diff.untracked",
 } as const;
@@ -113,6 +122,9 @@ export type TaskDiffView = {
   files: TaskDiffFileView[];
   patch: string;
   patchTruncated: boolean;
+  /** A LISTA pode estar incompleta (teto de captura): quem exibe `total` ou
+   * conta arquivos precisa olhar isto antes de afirmar um número. */
+  filesTruncated: boolean;
   summary: TaskDiffSummary;
 };
 
@@ -128,6 +140,7 @@ function absent(): TaskDiffView {
     files: [],
     patch: "",
     patchTruncated: false,
+    filesTruncated: false,
     summary: { kind: "no-files" },
   };
 }
@@ -168,6 +181,7 @@ export function decideTaskDiffPresentation(evidence: DiffCaptureEvidence | null 
     files,
     patch: evidence.patch,
     patchTruncated: evidence.patchTruncated,
+    filesTruncated: evidence.filesTruncated,
     summary,
   };
 }

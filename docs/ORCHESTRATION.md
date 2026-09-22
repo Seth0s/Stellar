@@ -511,6 +511,43 @@ npx vitest run               # suíte unitária + dom
 npm run verify               # tsc + build + suíte CDP/Electron contra o app real
 ```
 
+### O que CADA gate cobre — e o que nenhum deles cobre
+
+**"`tsc` + `vitest`" soa como cobertura total e não é.** A tabela abaixo é a fonte única
+dessa resposta, medida em 2026-09-21 (task `9870a781`) — não deduzida:
+
+| Comando | O que ele REALMENTE cobre | O que ele NÃO cobre |
+|---|---|---|
+| `npx tsc --noEmit` | tipagem de `src/` — `tsconfig.json` tem `include: ["src"]` | **tipagem de `tests/`: nenhuma linha de teste é tipada** |
+| `npx vitest run` | que as funções fazem o que o teste diz — mas roda com **esbuild, que transpila sem tipar** | tipagem de teste; e não executa o app |
+| `npm run check:types:test` | tipagem de `tests/` **e** de `src/` (`tsconfig.test.json`) | não está no `verify:ci` — ver abaixo |
+| `npm run check:tokens` | `var()` que não existe em `tokens.css`; escalas de espaçamento/tipografia/raio | nada de tipos |
+| `npm run build` | que o bundle compila | não tipa teste |
+| `npm run verify:smoke` | o **app real** por CDP (Electron de verdade) | exige display; é local-only |
+
+**O buraco que esta tabela existe para tornar visível:** uma fatia que quebrasse SOMENTE um
+arquivo de teste saía `exit=0` no `tsc` **e** verde na suíte. Foi assim que um controle
+negativo — feito para pegar exatamente isso — enganou quem o escreveu.
+
+**`npm run check:types:test` NÃO entra no `verify:ci` hoje, de propósito: ele nasce
+VERMELHO.** Medido: **118 erros de tipo em 44 arquivos de teste** (41 deles `TS2352`, cast
+de duplo de teste; 20 `TS2345`; 16 `TS2339`). Ele **não acrescenta erro nenhum em `src/`**
+além do que o gate real já reporta — a soma de `src` bate com o `tsc` padrão, que é o que
+prova que o tsconfig de teste é um superconjunto fiel, e não um segundo juízo sobre o
+mesmo código. O custo de tempo é baixo — 7,3s → 9,7s — mas um gate vermelho no CI treina
+todo mundo a ignorar vermelho, que é o defeito que `verify:smoke` já evita ficar. **A dívida
+é fatia própria; até ela ser paga, esse comando é uma medição, não um portão.**
+
+Duas medições que a task fixou, e que importam para ler o número acima:
+
+- **`include: ["src"]` não tem razão de projeto.** Está assim desde o commit inicial
+  (`b7cfc95`, 25/08) e nunca foi estreitado; não há evidência de motivo deliberado.
+- **A causa óbvia não era a causa:** dos 139 erros do primeiro estado, **20 eram um único
+  buraco de configuração** — `tsconfig.json` não declara os aliases `@renderer/*` e
+  `@main/*` que o `vitest.config.ts` define, então o `tsc` não resolvia um import sequer
+  deles. `tsconfig.test.json` declara os dois (com caminho relativo: `baseUrl` mudaria a
+  resolução de `src` também, e o gate de `src` passaria a discordar de si mesmo).
+
 **Teste não é execução.** Rodar a suíte prova que as funções fazem o que o teste diz; não
 prova que o app faz. Para mudanças que atravessam processos (IPC, PTY, MCP, entrega), a
 prova é um smoke em Electron real — há vários em `scripts/verify/`.

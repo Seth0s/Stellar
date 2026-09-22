@@ -9,7 +9,7 @@
 // está genuinamente instalado aqui — então a prova real possível é mais
 // forte: o processo sobe, fica vivo, e produz output de verdade na PTY
 // (via `read_card`, texto real do xterm.js — não uma imagem/OCR).
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, clickProviderInPicker, openTerminalCreatePopover } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
@@ -90,12 +90,14 @@ try {
   await new Promise((r) => setTimeout(r, 600));
 
   // ---- 1. UI: opencode aparece no provider picker do popover de terminal ----
-  const terminalBtn = await centerOf(page, '[data-kind="terminal"]');
-  await page.click(terminalBtn.x, terminalBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
-  const opencodeBtnCoords = await centerOf(page, '.provider-picker-btn[title="opencode"]');
-  check("opencode aparece no provider picker do popover de terminal", opencodeBtnCoords !== null, true);
-  await page.click(opencodeBtnCoords.x, opencodeBtnCoords.y);
+  // Abre o popover de CRIAÇÃO (rail → "Adicionar card" → Terminal): o clique
+  // que estava aqui era num CARD de terminal, que não abre popover nenhum.
+  await openTerminalCreatePopover(page);
+  const pickerLabels = JSON.parse(
+    await page.evalJs(`JSON.stringify([...document.querySelectorAll('.provider-picker-btn')].map((b) => b.textContent.trim()))`),
+  );
+  check("opencode aparece no provider picker do popover de terminal", pickerLabels.includes("OpenCode"), true);
+  await clickProviderInPicker(page, "opencode");
   await new Promise((r) => setTimeout(r, 200));
   const criarBtn = await centerOf(page, ".popover-actions button.primary");
   await page.click(criarBtn.x, criarBtn.y);

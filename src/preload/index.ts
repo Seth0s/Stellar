@@ -462,8 +462,85 @@ export type GitStatus =
   | { repo: false }
   | { repo: true; branch: string; insertions: number; deletions: number; entries: GitEntry[] };
 
+/** UM arquivo sujo, com o que se sabe sobre quem o declarou (task 56604aca).
+ * A força vem em `state` — e "unknown" é resposta legítima: preferir "não sei"
+ * a um palpite é o desenho, não uma falha. */
+export type GitAttributionFile = {
+  path: string;
+  state: "declared" | "disputed" | "window" | "mention" | "unknown";
+  /** Quem declarou — a lista INTEIRA quando é disputa. */
+  declared: { cardId: string; label: string | null; updatedAt: number }[];
+  disputed: boolean;
+  /** A janela em que apareceu sujo, com os cards que agiram nela. `cardIds`
+   * vazio = larga demais para apontar alguém (e isso é dito). */
+  window: { from: number; to: number; cardIds: string[] } | null;
+  /** Menções em prosa ancoradas — PISTA, nunca caminho. */
+  mentions: { cardId: string; label: string | null; short: boolean }[];
+};
+
+export type GitAttribution = {
+  repo: boolean;
+  root?: string;
+  branch?: string;
+  dirty?: { path: string; tracked: boolean }[];
+  files?: GitAttributionFile[];
+  /** Cards que TINHAM `filesChanged` no schema e não declararam nada. */
+  silentCards?: { cardId: string; label: string | null }[];
+  /** Relatórios que não puderam ser lidos (array/string) — declarado. */
+  unreadableReports?: { cardId: string; shape: string }[];
+  /** Os gates que a fatia roda, das tasks dos cards candidatos. */
+  gates?: string[];
+};
+
+export type GitSliceStep = {
+  kind: string;
+  file: string | null;
+  command: string;
+  exitCode: number | null;
+  ok: boolean;
+  stdoutTail: string;
+  stderrTail: string;
+  durationMs: number;
+};
+
+export type GitSliceResult =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      outcome: {
+        verdict: "compila" | "nao-compila" | "nao-montou";
+        worktree: string;
+        routes: { path: string; route: "tracked-patch" | "untracked-copy" }[];
+        steps: GitSliceStep[];
+        cleaned: boolean;
+        cleanupError: string | null;
+        refused: string | null;
+      };
+    };
+
 const git = {
   status: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke("git:status", cwd),
+  /** A atribuição por ARQUIVO: declaração, janela e o que não se sabe. */
+  attribution: (root: string): Promise<GitAttribution> =>
+    ipcRenderer.invoke("git:attribution", root),
+  /** A verificação da fatia em worktree — ESCRITA: quem chama passa pelo
+   * consentimento ANTES (o mesmo `ConfirmModal` das outras ações com efeito). */
+  verifySlice: (root: string, paths: string[]): Promise<GitSliceResult> =>
+    ipcRenderer.invoke("git:verify-slice", root, paths),
+  /** O MESMO plano da verificação, sem executar: os comandos que o card mostra
+   * e que o humano pode copiar (o modo orientado é o piso útil). */
+  slicePlan: (
+    root: string,
+    paths: string[],
+  ): Promise<
+    | { ok: false; error: string }
+    | {
+        ok: true;
+        routes: { path: string; route: "tracked-patch" | "untracked-copy" }[];
+        commands: { kind: string; file: string | null; command: string }[];
+        gates: string[];
+      }
+  > => ipcRenderer.invoke("git:slice-plan", root, paths),
 };
 
 /** DESIGN-BACKLOG.md §2.1 — cópia local dos tipos de browser-cdp.ts,

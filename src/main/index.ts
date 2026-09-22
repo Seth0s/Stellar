@@ -84,7 +84,18 @@ import {
   searchFileNames,
   writeFile,
 } from "./fs-tools";
-import { gitStatus } from "./git-tools";
+import { buildSlicePlan, gitStatus, runSlicePlan } from "./git-tools";
+// A ATRIBUIÇÃO POR ARQUIVO (task 56604aca) — pura, testada à parte: o main só
+// lê as linhas do store e entrega.
+import {
+  decideDiffAttribution,
+  type AttributionCard,
+  type AttributionReport,
+  type AttributionSnapshot,
+  type AttributionTask,
+} from "./diff-attribution";
+import type { SliceEntry } from "./slice-verify-plan";
+import { isPathInsideRoot } from "./task-dispatch-decision";
 import { startWatching, stopWatching, stopAllWatchers, setWatchedDirs, getWatchStats } from "./file-watcher";
 import { saveClipboardImage, saveImageBytes, saveAttachmentBytes, readAttachmentImage, testWriteClipboardImage } from "./clipboard-image";
 import { defaultVoiceConfigInput, resolveVoiceConfig, WhisperTranscriber } from "./voice-transcription";
@@ -2024,8 +2035,8 @@ function createWindow() {
     // então o push precisa rodar DEPOIS da gravação — o `upsertReport`
     // logo acima notifica ANTES desta linha no fluxo de `report`, e
     // sem este notify o push sai sem a rodada nova.
-    recordParticipationRound: (cardId, verdict, at) => {
-      const written = store.recordParticipationRound(cardId, verdict, at);
+    recordParticipationRound: (cardId, verdict, at, taskId) => {
+      const written = store.recordParticipationRound(cardId, verdict, at, taskId);
       const seen = new Set<string>();
       for (const row of written) {
         if (seen.has(row.task_id)) continue;
@@ -2243,20 +2254,23 @@ function createWindow() {
   // `capacity` inteiro, que acoplaria o renderer ao formato interno do spec
   // e vazaria campos que só o main usa (role, mcp, delivery, session…).
   //
-  // `effortValues`: os valores oferecíveis, na ORDEM DECLARADA (as
-  // declarações são escritas do menor para o maior; um `Set`/`sort` aqui
-  // perderia isso). Vazio = o provider não declara esforço (`bash`, cursor,
-  // codex) e a UI simplesmente NÃO oferece o controle — ausência nunca vira
-  // um select vazio. É o único campo projetado hoje; o fim de turno (B1) e o
-  // prompt de sistema (B3) entram por este mesmo caminho quando as decisões
-  // deles forem tomadas — não antes, para não projetar campo sem consumidor.
+  // O QUE ATRAVESSA HOJE — dois campos, um por consumidor REAL:
+  //
+  //   - `effortValues`: os valores oferecíveis, na ORDEM DECLARADA (as
+  //     declarações são escritas do menor para o maior; um `Set`/`sort` aqui
+  //     perderia isso). Vazio = o provider não declara esforço (`bash`, cursor,
+  //     codex) e a UI simplesmente NÃO oferece o controle — ausência nunca vira
+  //     um select vazio;
+  //   - `turnEndSignal` (task 0dd5c145): como o provider sinaliza o FIM de um
+  //     turno. `null` = não sinaliza, e a UI não promete.
+  //
+  // Um campo entra aqui quando existe um CONSUMIDOR para ele — nunca antes,
+  // para não projetar campo sem consumidor. O prompt de sistema (B3) segue na
+  // fila.
   ipcMain.handle("agents:check-availability", () =>
     checkAgentAvailability().map((agent) => ({
       ...agent,
       effortValues: projectEffortValues(providerById(agent.id)?.capacity.effort),
-      // O fim de turno (task 0dd5c145): a pergunta vai à DECLARAÇÃO, e não a
-      // um `id === "claude"` do lado do renderer. `null` = este provider não
-      // sinaliza, e a UI não promete.
       turnEndSignal: projectTurnEndSignal(providerById(agent.id)?.capacity.delivery.turnEnd),
     })),
   );
@@ -2889,7 +2903,181 @@ function createWindow() {
   ipcMain.handle("fs:create", (_e, root: string, parentPath: string, name: string, kind: "file" | "folder") =>
     createEntry(root, parentPath, name, kind),
   );
+
+  /**
+   * A ATRIBUIÇÃO POR ARQUIVO (task 56604aca, fase 1): quem DECLAROU, quando
+   * apareceu sujo, e o que NÃO se sabe. Escopo por REPO — só os cards cujo
+   * `cwd` cai dentro da raiz podiam ter tocado esta árvore (medido: os cards
+   * carregam `cwd`, e um card do IdyPlatform não alcança o Stellar).
+   *
+   * O que NÃO entra, dito em vez de omitido: as TRANSIÇÕES não nomeiam card no
+   * acessório do store (`listStatusTransitionsForBoard` devolve task_id/from/to/
+   * at, sem `card_id`), então a janela usa as duas ações que nomeiam — o
+   * relatório (`reports.updated_at`) e o snapshot do gate. Fechar isso exige
+   * coluna a mais no acessório, e o `store.ts` está em outra stream.
+   */
+  async function diffAttributionFor(root: string) {
+    const status = await gitStatus(root);
+    if (!status.repo) return { repo: false as const };
+
+    const boards = store.listBoards();
+    const cards: AttributionCard[] = [];
+    for (const board of boards) {
+      for (const card of store.listCards(board.id)) {
+        if (card.kind !== "terminal" || !isPathInsideRoot(card.cwd, root)) continue;
+        cards.push({ cardId: card.id, label: card.label });
+      }
+    }
+    const inScope = new Set(cards.map((c) => c.cardId));
+    const tasks: AttributionTask[] = [];
+    const reports: AttributionReport[] = [];
+    const snapshots: AttributionSnapshot[] = [];
+    for (const board of boards) {
+      for (const task of store.listTasksByBoard(board.id)) {
+        if (!task.card_id || !inScope.has(task.card_id)) continue;
+        tasks.push({
+          taskId: task.id,
+          cardId: task.card_id,
+          reportSchema: parseInlineJson(task.report_schema_json),
+        });
+        const snap = snapshotOf(task.result_json, task.id, task.card_id, task.updated_at);
+        if (snap) snapshots.push(snap);
+      }
+      for (const report of store.listReportsForBoard(board.id)) {
+        if (!inScope.has(report.card_id)) continue;
+        reports.push({ cardId: report.card_id, reportJson: report.report_json, updatedAt: report.updated_at });
+      }
+    }
+
+    const dirty = status.entries.map((entry) => ({ path: entry.path, tracked: entry.status !== "??" }));
+    const attribution = decideDiffAttribution({
+      repoRoot: root,
+      paths: dirty.map((d) => d.path),
+      cards,
+      tasks,
+      reports,
+      snapshots,
+      // Ver o comentário acima: o acessório de transições não carrega o card.
+      transitions: [],
+    });
+
+    // Os gates da fatia vêm do `gates_json` das tasks dos cards CANDIDATOS: o
+    // card não inventa gate nenhum, e gate de quem não é candidato não entra.
+    const candidateCards = new Set<string>();
+    for (const file of attribution.files) {
+      for (const candidate of file.declared) candidateCards.add(candidate.cardId);
+      for (const id of file.window?.cardIds ?? []) candidateCards.add(id);
+    }
+    const gates: string[] = [];
+    for (const board of boards) {
+      for (const task of store.listTasksByBoard(board.id)) {
+        if (!task.card_id || !candidateCards.has(task.card_id)) continue;
+        for (const gate of parseInlineJson(task.gates_json) ?? []) {
+          if (gate.trim() && !gates.includes(gate)) gates.push(gate);
+        }
+      }
+    }
+    // APLANADO de propósito: o contrato (`GitAttribution` no preload) espera
+    // `files`/`silentCards`/`unreadableReports` no TOPO — um `attribution`
+    // aninhado aqui deixaria o card sem chips e sem erro nenhum (foi o que o
+    // smoke pegou: 42 arquivos sujos e zero estados na tela).
+    return { repo: true as const, root, branch: status.branch, dirty, gates, ...attribution };
+  }
+
+  /** JSON inline do store (colunas `*_json`): nunca lança, nunca inventa. */
+  function parseInlineJson(raw: string | null | undefined): string[] | null {
+    if (!raw) return null;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return null;
+      return parsed.filter((entry): entry is string => typeof entry === "string");
+    } catch {
+      return null;
+    }
+  }
+
+  /** O snapshot que o gate capturou nesta task (`gateRun.diff.files`, que NÃO é
+   * truncada — é dela que a janela sai). */
+  function snapshotOf(
+    resultJson: string | null,
+    taskId: string,
+    cardId: string | null,
+    at: number,
+  ): AttributionSnapshot | null {
+    if (!resultJson) return null;
+    try {
+      const parsed: unknown = JSON.parse(resultJson);
+      if (typeof parsed !== "object" || parsed === null) return null;
+      const diff = (parsed as Record<string, unknown>).gateRun;
+      if (typeof diff !== "object" || diff === null) return null;
+      const files = (diff as Record<string, unknown>).diff;
+      if (typeof files !== "object" || files === null) return null;
+      const list = (files as Record<string, unknown>).files;
+      if (!Array.isArray(list)) return null;
+      const paths = list
+        .map((f) => (typeof f === "object" && f !== null ? (f as Record<string, unknown>).path : null))
+        .filter((p): p is string => typeof p === "string");
+      return { taskId, cardId, at, files: paths };
+    } catch {
+      return null;
+    }
+  }
+
+  /** O plano da fatia SEM executar: os comandos e as vias, para o card mostrar
+   * (e para o humano copiar). Mesma fábrica do plano executado. */
+  async function slicePlanFor(root: string, paths: string[]) {
+    const selection = new Set(paths);
+    const status = await gitStatus(root);
+    if (!status.repo) return { ok: false as const, error: "não é um repositório git" };
+    const entries: SliceEntry[] = status.entries
+      .filter((entry) => selection.has(entry.path))
+      .map((entry) => ({ path: entry.path, tracked: entry.status !== "??" }));
+    if (entries.length === 0) return { ok: false as const, error: "nenhum arquivo selecionado" };
+    const view = await diffAttributionFor(root);
+    const { plan } = buildSlicePlan({
+      repoRoot: root,
+      entries,
+      gates: view.repo ? view.gates : [],
+    });
+    return {
+      ok: true as const,
+      routes: plan.routes,
+      commands: plan.steps.map((step) => ({ kind: step.kind, file: step.file, command: step.argv.join(" ") })),
+      gates: view.repo ? view.gates : [],
+    };
+  }
+
+  /** A VERIFICAÇÃO DA FATIA (fase 1): monta a cópia em worktree, aplica os
+   * arquivos pela VIA própria e roda os gates declarados LÁ. É ESCRITA — o
+   * consentimento é do renderer, e o trabalho todo vive no worktree. */
+  async function verifySliceFor(root: string, paths: string[]) {
+    const selection = new Set(paths);
+    const status = await gitStatus(root);
+    if (!status.repo) return { ok: false as const, error: "não é um repositório git" };
+    const entries: SliceEntry[] = status.entries
+      .filter((entry) => selection.has(entry.path))
+      .map((entry) => ({ path: entry.path, tracked: entry.status !== "??" }));
+    if (entries.length === 0) return { ok: false as const, error: "nenhum arquivo selecionado" };
+    const view = await diffAttributionFor(root);
+    const { plan } = buildSlicePlan({
+      repoRoot: root,
+      entries,
+      gates: view.repo ? view.gates : [],
+    });
+    const outcome = await runSlicePlan(plan);
+    return { ok: true as const, outcome };
+  }
+
   ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
+  ipcMain.handle("git:attribution", (_e, root: string) => diffAttributionFor(root));
+  ipcMain.handle("git:verify-slice", async (_e, root: string, paths: string[]) => verifySliceFor(root, paths));
+  /**
+   * O MODO ORIENTADO: o MESMO plano, sem executar nada. É o piso útil — um
+   * card que mostra o comando e o patch vale sozinho, para quem recusa o
+   * consentimento ou prefere rodar à mão. Sai da MESMA fábrica do plano de
+   * execução, senão as duas divergiriam no primeiro passo novo.
+   */
+  ipcMain.handle("git:slice-plan", async (_e, root: string, paths: string[]) => slicePlanFor(root, paths));
   ipcMain.handle("fs:watch-start", (_e, root: string, clientId: string) => startWatching(root, clientId));
   ipcMain.handle("fs:watch-set-dirs", (_e, root: string, clientId: string, dirs: string[]) =>
     setWatchedDirs(root, clientId, dirs),

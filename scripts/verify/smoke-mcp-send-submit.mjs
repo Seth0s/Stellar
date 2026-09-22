@@ -14,7 +14,7 @@
 // marker the agent was asked to reply with. If the fix regresses (the
 // old single-write behavior comes back), the marker never appears
 // because the message never actually submits.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, clickProviderInPicker, openTerminalCreatePopover } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
@@ -95,12 +95,11 @@ try {
   await bootIntoFreshSession(page, "MCP Send Submit Teste");
   await new Promise((r) => setTimeout(r, 500));
 
-  const terminalBtn = await centerOf(page, '[data-kind="terminal"]');
-  await page.click(terminalBtn.x, terminalBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
-  const claudeBtnCoords = await centerOf(page, '.provider-picker-btn[title="claude"]');
-  if (!claudeBtnCoords) throw new Error("botão de provider 'claude' não encontrado no popover de criação de terminal");
-  await page.click(claudeBtnCoords.x, claudeBtnCoords.y);
+  // Cria o card "claude" pelo caminho da UI: abre o popover de CRIAÇÃO (o
+  // clique que estava aqui era num CARD de terminal, que não abre popover
+  // nenhum) e escolhe o provider pelo RÓTULO — ver `clickProviderInPicker`.
+  await openTerminalCreatePopover(page);
+  await clickProviderInPicker(page, "claude");
   await new Promise((r) => setTimeout(r, 200));
   const criarBtn = await centerOf(page, ".popover-actions button.primary");
   await page.click(criarBtn.x, criarBtn.y);

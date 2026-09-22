@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { captureDiff, describeDiffAuthorship, isInsideTerritory, runTaskGates } from "../../src/main/gate-runner";
 
 /**
@@ -93,11 +97,110 @@ describe("captureDiff", () => {
     expect(diff.patch).toBe("corpo cortado");
   });
 
+  // O TETO VALE PARA A LISTA TAMBÉM (task 56604aca): o patch já dizia que
+  // truncou, a lista de caminhos não dizia — e ela é justamente de onde sai
+  // "N arquivos mudaram". Hoje a maior lista medida tem 48 caminhos (~3 KB)
+  // contra 16 KB de teto, e é exatamente esse "hoje não chega perto" que o teto
+  // do patch já desmentiu uma vez.
+  it("a lista de caminhos DECLARA o próprio truncamento, em vez de prometer completude", async () => {
+    const diff = await captureDiff({
+      gitRoot: "/repo",
+      territory: [],
+      gitFn: fakeGit({
+        "status --porcelain=v1": { stdout: STATUS, truncated: true },
+        diff: { stdout: "corpo" },
+      }),
+    });
+
+    expect(diff.filesTruncated).toBe(true);
+    // O que chegou continua na lista: o truncamento é um AVISO, nunca um filtro.
+    expect(diff.files.map((f) => f.path)).toContain("docs/fora-do-territorio.md");
+    // E sem truncamento o campo diz que não — nunca inferido do tamanho.
+    const inteira = await captureDiff({
+      gitRoot: "/repo",
+      territory: [],
+      gitFn: fakeGit({ "status --porcelain=v1": { stdout: STATUS } }),
+    });
+    expect(inteira.filesTruncated).toBe(false);
+  });
+
+  it("sem repositório, lista vazia é COMPLETA — truncamento seria perder o que não existiu", async () => {
+    const diff = await captureDiff({ gitRoot: null });
+    expect(diff.filesTruncated).toBe(false);
+  });
+
   it("cwd que não é repo: nada de diff, e a ausência é explicada", async () => {
     const diff = await captureDiff({ gitRoot: null, territory: ["x"] });
     expect(diff.gitRoot).toBeNull();
     expect(diff.files).toEqual([]);
     expect(diff.note).toContain("não é um repositório git");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// O TETO DE CAPTURA (task 56604aca) — este bloco usa `git` DE VERDADE, e é o
+// único lugar da suíte onde o coletor roda: todos os testes acima passam um
+// `gitFn` falso, que devolve string já pronta e por isso NUNCA exercita o teto.
+//
+// O que ele trava, e é a razão de existir: a captura guardava a CAUDA do diff,
+// e a cauda de uma árvore real com 48 arquivos sujos tinha 2 a 6 arquivos — e
+// ZERO de `src/main` em 29 patches medidos. Ou seja, o arquivo que alguém
+// precisa separar era exatamente o que o teto comia.
+// ---------------------------------------------------------------------------
+describe("o teto do diff guarda a CABEÇA, não a cauda", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length > 0) rmSync(dirs.pop()!, { recursive: true, force: true });
+  });
+
+  /** Repo de verdade com N arquivos alterados cujo diff passa de 16 KB. */
+  function repoWithBigDiff(count: number): string {
+    const dir = mkdtempSync(join(tmpdir(), "stellar-diffcap-"));
+    dirs.push(dir);
+    const git = (args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
+    git(["init", "-q"]);
+    git(["config", "user.email", "teste@teste"]);
+    git(["config", "user.name", "teste"]);
+    const names = Array.from({ length: count }, (_, i) => `f${String(i).padStart(2, "0")}.txt`);
+    for (const n of names) writeFileSync(join(dir, n), "base\n");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "base"]);
+    // Cada arquivo ganha ~3,6 KB de diff: 8 arquivos já passam dos 16 KB.
+    for (const n of names) writeFileSync(join(dir, n), "y\n".repeat(900));
+    return dir;
+  }
+
+  it("o patch retido tem os PRIMEIROS arquivos; o que se perde é a cauda", async () => {
+    const dir = repoWithBigDiff(8);
+
+    const diff = await captureDiff({ gitRoot: dir, territory: null });
+
+    expect(diff.patchTruncated).toBe(true);
+    // A cabeça está lá: o primeiro arquivo em ordem alfabética.
+    expect(diff.patch).toContain("diff --git a/f00.txt");
+    // A cauda é o que se perde — e é isso que o conserto assume.
+    expect(diff.patch).not.toContain("diff --git a/f07.txt");
+    // A LISTA de caminhos não é truncada por isso: 8 mudanças, 8 entradas.
+    expect(diff.files.map((f) => f.path).sort()).toEqual([
+      "f00.txt",
+      "f01.txt",
+      "f02.txt",
+      "f03.txt",
+      "f04.txt",
+      "f05.txt",
+      "f06.txt",
+      "f07.txt",
+    ]);
+  });
+
+  it("sem estourar o teto nada muda: patch inteiro, sem marca de truncamento", async () => {
+    const dir = repoWithBigDiff(1);
+
+    const diff = await captureDiff({ gitRoot: dir, territory: null });
+
+    expect(diff.patchTruncated).toBe(false);
+    expect(diff.patch).toContain("diff --git a/f00.txt");
+    expect(diff.patch).toContain("+y");
   });
 });
 

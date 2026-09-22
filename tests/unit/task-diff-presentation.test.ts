@@ -29,6 +29,7 @@ function evidence(over: Partial<DiffCaptureEvidence> = {}): DiffCaptureEvidence 
     patch: "diff --git a/x b/x",
     patchTruncated: false,
     files: [],
+    filesTruncated: false,
     total: 0,
     outsideTerritory: 0,
     note: "o app observa MUDANÇA, nunca AUTORIA: a árvore é compartilhada.",
@@ -119,7 +120,19 @@ describe("invariante 3 — TRUNCAMENTO E UNTRACKED NÃO PODEM MENTIR", () => {
       evidence({ patchTruncated: true, files: [file("src/a.ts", " M", DECLARED)], total: 1 }),
     );
     expect(view.patchTruncated).toBe(true);
+    // O TEXTO mudou com o conserto do teto (task 56604aca): o patch truncado
+    // agora mostra o COMEÇO (o coletor de git guarda a cabeça), não o fim.
     expect(TASK_DIFF_KEYS.patchTruncated).toBe("task.diff.patchTruncated");
+  });
+
+  it("filesTruncated também sobe cru: a LISTA pode estar incompleta, e isso é dito", () => {
+    const view = decideTaskDiffPresentation(
+      evidence({ filesTruncated: true, files: [file("src/a.ts", " M", DECLARED)], total: 1 }),
+    );
+    expect(view.filesTruncated).toBe(true);
+    // Chave própria: o aviso da lista não é o mesmo aviso do patch (o patch
+    // cortado perde o FIM; a lista cortada perde os últimos caminhos).
+    expect(TASK_DIFF_KEYS.filesTruncated).toBe("task.diff.filesTruncated");
   });
 
   it("untracked ganha a leitura própria; tracked não é marcado como novo", () => {

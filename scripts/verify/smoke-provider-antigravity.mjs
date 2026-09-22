@@ -16,7 +16,7 @@
 // encontrado" sem tocar em código de produto.
 import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, clickProviderInPicker, openTerminalCreatePopover } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
@@ -118,7 +118,14 @@ if (realAgyDir) {
 }
 
 const { check, finish } = makeChecker();
-const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
+// A RASPARIA DO PATH SOZINHA NÃO BASTA (task 0247900f, medido): `composePath`
+// REÚNE `knownBinDirs()` no fim do PATH efetivo, e ele inclui
+// `join(homedir(), ".local", "bin")` — de onde o `agy` vinha de volta, fazendo
+// o card subir DE VERDADE e a checagem "falha de forma honesta" medir o
+// contrário do que queria. `isolatedHome: true` desliga a rede na raiz (é de
+// `homedir()` que ela deriva); a raspada abaixo continua, documentando a
+// intenção e cobrindo o PATH herdado.
+const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR, isolatedHome: true });
 process.env.PATH = originalPath; // só o processo filho já lançado precisava do PATH raspado
 try {
   const page = await connectPage(CDP_PORT);
@@ -127,12 +134,14 @@ try {
   await new Promise((r) => setTimeout(r, 600));
 
   // ---- 1. UI: antigravity aparece no provider picker do popover de terminal ----
-  const terminalBtn = await centerOf(page, '[data-kind="terminal"]');
-  await page.click(terminalBtn.x, terminalBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
-  const antigravityBtnCoords = await centerOf(page, '.provider-picker-btn[title="antigravity"]');
-  check("antigravity aparece no provider picker do popover de terminal", antigravityBtnCoords !== null, true);
-  await page.click(antigravityBtnCoords.x, antigravityBtnCoords.y);
+  // Abre o popover de CRIAÇÃO (rail → "Adicionar card" → Terminal): o clique
+  // que estava aqui era num CARD de terminal, que não abre popover nenhum.
+  await openTerminalCreatePopover(page);
+  const pickerLabels = JSON.parse(
+    await page.evalJs(`JSON.stringify([...document.querySelectorAll('.provider-picker-btn')].map((b) => b.textContent.trim()))`),
+  );
+  check("antigravity aparece no provider picker do popover de terminal", pickerLabels.includes("Antigravity"), true);
+  await clickProviderInPicker(page, "antigravity");
   await new Promise((r) => setTimeout(r, 200));
   const criarBtn = await centerOf(page, ".popover-actions button.primary");
   await page.click(criarBtn.x, criarBtn.y);

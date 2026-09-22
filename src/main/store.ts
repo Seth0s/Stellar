@@ -2483,16 +2483,24 @@ export function openStore(userDataDir: string) {
    * histórico de outra incarnação NÃO fecha rodada nova. Card sem NENHUMA
    * linha viva em `task_cards`: 0 linhas lidas, 0 gravadas — silêncio
    * correto, não bug. */
-  const recordParticipationRound = db.transaction((cardId: string, verdict: string | null, at: number): TaskVerdictRow[] => {
-    const links = listTaskCardsForCardStmt.all(cardId) as TaskCardRow[];
-    const written: TaskVerdictRow[] = [];
-    for (const link of links) {
-      const row: TaskVerdictRow = { id: randomUUID(), task_id: link.task_id, card_id: cardId, role: link.role, verdict, at };
-      insertTaskVerdictStmt.run(row);
-      written.push(row);
-    }
-    return written;
-  });
+  const recordParticipationRound = db.transaction(
+    (cardId: string, verdict: string | null, at: number, taskId?: string | null): TaskVerdictRow[] => {
+      const links = listTaskCardsForCardStmt.all(cardId) as TaskCardRow[];
+      if (links.length === 0) return [];
+      if (verdict !== null && !taskId) {
+        throw new Error("Cannot record a verdict without a declared taskId");
+      }
+      const scoped =
+        typeof taskId === "string" && taskId.length > 0 ? links.filter((link) => link.task_id === taskId) : links;
+      const written: TaskVerdictRow[] = [];
+      for (const link of scoped) {
+        const row: TaskVerdictRow = { id: randomUUID(), task_id: link.task_id, card_id: cardId, role: link.role, verdict, at };
+        insertTaskVerdictStmt.run(row);
+        written.push(row);
+      }
+      return written;
+    },
+  );
 
   // DESIGN-BACKLOG.md §2.1 Fase 2, peça 4 — anatomia da task no quadro
   // precisa, POR BOARD (nunca por task individual — o mesmo N+1 que a
@@ -3008,8 +3016,8 @@ export function openStore(userDataDir: string) {
     // (definida antes do `return`, junto dos prepared statements) —
     // exposta aqui como método do store, mesma convenção de
     // `applyColumnDrop` logo acima dela.
-    recordParticipationRound: (cardId: string, verdict: string | null, at: number): TaskVerdictRow[] =>
-      recordParticipationRound(cardId, verdict, at),
+    recordParticipationRound: (cardId: string, verdict: string | null, at: number, taskId?: string | null): TaskVerdictRow[] =>
+      recordParticipationRound(cardId, verdict, at, taskId),
     getTaskVerdicts: (taskId: string): TaskVerdictRow[] => getTaskVerdictsStmt.all(taskId) as TaskVerdictRow[],
     // DESIGN-BACKLOG.md §2.1 Fase 2, peça 4 — ver o comentário grande dos
     // três `Stmt` acima. `last_actor` é `null` tanto pra uma task sem

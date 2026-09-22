@@ -26,14 +26,20 @@ describe("designContextText", () => {
 
 describe("sendDesignPick", () => {
   it("delivers the formatted body once and never writes Enter itself", async () => {
-    const sendToCard = vi.fn(async () => ({ ok: true as const }));
+    // O DUPLO DECLARA A FORMA DA COISA QUE SUBSTITUI (task 231050a7): sem os
+    // parâmetros, `mock.calls[0]` era `[]`, `[1]` não existia (TS2493), o valor
+    // saía `undefined` e o teste precisava de `as string` para fingir que era o
+    // corpo. `sendDesignPick` chama o `sendToCard` com (targetId, texto) — é
+    // essa a assinatura que o duplo tem de ter. Nenhum comportamento mudou: o
+    // teste já afirmava `toHaveBeenCalledWith` nos dois argumentos.
+    const sendToCard = vi.fn(async (_targetId: string, _text: string) => ({ ok: true as const }));
     sendDesignPick(sendToCard, "term-1", pick, "https://example.test");
     await vi.waitFor(() => expect(sendToCard).toHaveBeenCalledOnce());
     expect(sendToCard).toHaveBeenCalledWith(
       "term-1",
       `<button class="primary"> — button.primary\nhttps://example.test · 120×40px`,
     );
-    const delivered = sendToCard.mock.calls[0][1] as string;
+    const delivered = sendToCard.mock.calls[0][1];
     expect(delivered).not.toContain("\r");
   });
 });

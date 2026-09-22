@@ -102,7 +102,6 @@ export function decideJudgmentWrite(input: {
   // Board-orchestrator mark does NOT widen this gate — the marked card
   // is simply an outsider (or reviewer) whose actor stamp becomes
   // `orchestrator` at the write site when it is allowed.
-  void TASK_CARD_REVIEWER_ROLE;
   return { action: "allow" };
 }
 
@@ -662,13 +661,44 @@ export function describeReleaseByImplementerRefusal(taskId: string): string {
 
 export function decideTaskCardRelease(input: {
   taskId: string;
-  /** Papel do chamador NESTA task (`task_cards`); null = sem vínculo/unknown. */
   requesterRoleOnTask: JudgmentRequesterRole;
+  requesterId: string | null | undefined;
+  targetCardId: string;
+  orchestratorCardId: string | null | undefined;
 }): JudgmentWriteDecision {
-  if (input.requesterRoleOnTask === TASK_CARD_IMPLEMENTER_ROLE) {
-    return { action: "refuse", error: describeReleaseByImplementerRefusal(input.taskId) };
+  const reqId = requesterOrNull(input.requesterId);
+
+  // Marca libera quem quiser
+  if (isBoardMark(reqId, input.orchestratorCardId)) return { action: "allow" };
+  
+  // Humano pela UI: principal NOMEADO, nunca ausencia.
+  if (reqId === HUMAN_PRINCIPAL_ID) return { action: "allow" };
+  if (reqId === null) {
+    return { action: "refuse", error: describeAnonymousRefusal("release_task_card", input.taskId) };
   }
-  return { action: "allow" };
+
+  // Se o chamador é o próprio card sendo liberado
+  if (reqId === input.targetCardId) {
+    if (input.requesterRoleOnTask === TASK_CARD_IMPLEMENTER_ROLE) {
+      return { action: "refuse", error: describeReleaseByImplementerRefusal(input.taskId) };
+    }
+    return { action: "allow" }; // Revisor pode se auto-liberar
+  }
+
+  // O chamador é um TERCEIRO. Ele não pode expulsar ninguém.
+  // Mesmo que seja o principal tentando expulsar o revisor, a regra do sistema é: 
+  // "no board da task só o card marcado como orquestrador (ou o humano) faz". 
+  // O principal não é dono do board, não tem autoridade para expulsar cards de uma task.
+  return { action: "refuse", error: describeThirdPartyReleaseRefusal(input.taskId, reqId, input.targetCardId) };
+}
+
+export function describeThirdPartyReleaseRefusal(taskId: string, requesterId: string, targetCardId: string): string {
+  return (
+    `[de: stellar] release_task_card da task "${taskId}" recusado: ` +
+    `expulsar o card "${targetCardId}" da task é ato de coordenação — no board da task só o ` +
+    `card marcado como orquestrador (ou o humano) libera outros cards; quem chamou foi "${requesterId}". ` +
+    `O próprio card pode pedir para sair (se for revisor), ou pedir ao orquestrador. Nada foi gravado.`
+  );
 }
 
 /**
@@ -718,4 +748,215 @@ export function decideCloseCardTaskEffect(input: CloseCardLinkedTask): CloseCard
   });
   if (judgment.action === "refuse") return { action: "refuse", error: judgment.error };
   return { action: "conclude-task", taskId: input.taskId, reason: "success-report" };
+}
+
+function requesterOrNull(requesterId: string | null | undefined): string | null {
+  const trimmed = requesterId?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * O humano operando fora de um card tem IDENTIDADE PROPRIA, e nao "ausencia de
+ * identidade". Nao e um card: e um principal NOMEADO, para que nenhuma das tres
+ * portas precise tratar AUSENCIA como autoridade.
+ *
+ * Por que isto existe, medido em 2026-09-22: a versao anterior destas portas
+ * devolvia `allow` para `requesterId === null`, com o argumento de que o humano
+ * via UI/CLI chega sem identidade. A medicao derrubou o argumento — `preload` e
+ * `renderer` NAO expoem `link_task_card` nem `release_task_card`, e o handler do
+ * bus ja recusa `!requesterId` antes da decisao. Ou seja: o chamador anonimo que
+ * justificava a chave mestra NAO EXISTE, e o `allow` so enfraquecia a invariante.
+ *
+ * A regra da casa e a mesma de todas as outras decisoes desta area: ausencia de
+ * informacao nunca vira permissao (o arquivo DISPUTADO lista todos, o papel
+ * ambiguo grava NULL, a linha indecidivel diz "desconhecido"). Quem opera pela
+ * UI declara ESTE principal; quem opera de um card declara o proprio id.
+ */
+export const HUMAN_PRINCIPAL_ID = "human:ui";
+
+/** Ausencia de identidade NUNCA e autoridade — a recusa diz o que declarar. */
+function describeAnonymousRefusal(tool: string, taskId: string): string {
+  return (
+    `[de: stellar] ${tool} recusado na task "${taskId}": chamador sem identidade. ` +
+    `Ausencia de identidade nao e autoridade — declare quem chama: um card declara ` +
+    `o proprio id (\`callerCardId\`), e o humano operando fora de um card declara ` +
+    `"${HUMAN_PRINCIPAL_ID}". Nada foi gravado.`
+  );
+}
+
+/** A marca confere? `null`/vazio dos dois lados NÃO é match — board sem marca = ninguém é a marca */
+function isBoardMark(requesterId: string | null, orchestratorCardId: string | null | undefined): boolean {
+  if (!requesterId || !orchestratorCardId) return false;
+  return requesterId === orchestratorCardId;
+}
+
+
+export type TaskCardLinkAuthorshipDecision =
+  | { action: "allow" }
+  | { action: "refuse"; error: string };
+
+/** Porta 1 — `link_task_card` (o vínculo de participação na task).
+ *
+ * allow: a marca do board da task; e a reivindicação de task SEM principal
+ * (adoção de órfã) por card IDENTIFICADO. refuse: chamador anônimo; auto-vínculo
+ * como reviewer (P1 e o agravante do bypass — é o único passo que falta para
+ * um implementer se liberar sozinho); vínculo de TERCEIROS por quem não é a marca.
+ */
+export function decideTaskCardLinkAuthorship(input: {
+  taskId: string;
+  role: string;
+  requesterId: string | null | undefined;
+  cardId: string;
+  taskCardId: string | null | undefined;
+  orchestratorCardId: string | null | undefined;
+}): TaskCardLinkAuthorshipDecision {
+  const requesterId = requesterOrNull(input.requesterId);
+  if (isBoardMark(requesterId, input.orchestratorCardId)) return { action: "allow" };
+  if (requesterId === HUMAN_PRINCIPAL_ID) return { action: "allow" };
+  if (requesterId === null) {
+    return { action: "refuse", error: describeAnonymousRefusal("link_task_card", input.taskId) };
+  }
+
+  if (requesterId === input.cardId) {
+    if (input.role === TASK_CARD_REVIEWER_ROLE) {
+      return {
+        action: "refuse",
+        error: describeSelfReviewerLinkRefusal(input.taskId, requesterId),
+      };
+    }
+    // Reivindicação: adotar task órfã (sem principal) como implementer.
+    if (!input.taskCardId) return { action: "allow" };
+    return {
+      action: "refuse",
+      error: describeSelfImplementerLinkRefusal(input.taskId, input.taskCardId),
+    };
+  }
+  return {
+    action: "refuse",
+    error: describeThirdPartyLinkRefusal(input.taskId, requesterId, input.role),
+  };
+}
+
+export function describeAnonymousRoleWriteRefusal(tool: string, taskId: string): string {
+  return (
+    `[de: stellar] ${tool} recusado: chamador anônimo (sem requesterId) não presume autoridade ` +
+    `sobre os papéis da task "${taskId}" — atribuir participação é do orquestrador marcado do board ` +
+    `(boards.orchestrator_card_id) ou do humano por um canal identificado. ` +
+    `Nada foi gravado.`
+  );
+}
+
+export function describeSelfReviewerLinkRefusal(taskId: string, requesterId: string): string {
+  return (
+    `[de: stellar] link_task_card recusado: o card "${requesterId}" não se declara REVISOR da task "${taskId}" — ` +
+    `auto-atribuição de revisão é o caminho que fecha a própria disciplina de revisão ` +
+    `(medido: self-link reviewer + update_task done fechava a task sem revisão nenhuma, ` +
+    `e um implementer não-principal se liberava sozinho em dois passos). ` +
+    `Quem atribui revisor é o orquestrador marcado do board ou o humano: ` +
+    `peça via request_task_status, ou ao orquestrador. Nada foi gravado.`
+  );
+}
+
+export function describeSelfImplementerLinkRefusal(taskId: string, taskCardId: string): string {
+  return (
+    `[de: stellar] link_task_card recusado: o card não se atribui como implementer da task "${taskId}", ` +
+    `que JÁ tem principal ("${taskCardId}") — trocar o responsável é do orquestrador ` +
+    `(release_task_card, com motivo) ou do humano. Reivindicar task SEM principal continua ` +
+    `aberto: é adoção de órfã, não roubo. Nada foi gravado.`
+  );
+}
+
+export function describeThirdPartyLinkRefusal(taskId: string, requesterId: string, role: string): string {
+  return (
+    `[de: stellar] link_task_card recusado: atribuir o papel "${role}" a OUTRO card é autoria de ` +
+    `participação — no board da task "${taskId}" só o card marcado como orquestrador (ou o humano) linka. ` +
+    `Quem chamou foi "${requesterId}" (medido: cards não-marcados linkaram até o card do orquestrador ` +
+    `a tasks, por acidente). Peça ao orquestrador do board, ou marque um no UI do board. Nada foi gravado.`
+  );
+}
+
+export type PrincipalRepointDecision =
+  | { action: "allow" }
+  | { action: "refuse"; error: string };
+
+/** Porta 2 — `update_task { cardId }` (o ponteiro principal). */
+export function decidePrincipalRepointAuthorship(input: {
+  taskId: string;
+  requesterId: string | null | undefined;
+  currentCardId: string | null | undefined;
+  newCardId: string | null;
+  orchestratorCardId: string | null | undefined;
+}): PrincipalRepointDecision {
+  const requesterId = requesterOrNull(input.requesterId);
+  if (isBoardMark(requesterId, input.orchestratorCardId)) return { action: "allow" };
+  if (requesterId === HUMAN_PRINCIPAL_ID) return { action: "allow" };
+  // ANTES das comparacoes: com `requesterId` nulo, `input.newCardId === requesterId`
+  // e `null === null` numa task orfa — a reivindicacao passaria para ninguem.
+  if (requesterId === null) {
+    return { action: "refuse", error: describeAnonymousRefusal("update_task", input.taskId) };
+  }
+
+  if (input.currentCardId && requesterId === input.currentCardId) {
+    return { action: "allow" }; // o principal entrega o bastão ou se destaca
+  }
+  if (input.newCardId === requesterId && !input.currentCardId) {
+    return { action: "allow" }; // reivindicação de órfã
+  }
+  return {
+    action: "refuse",
+    error: describePrincipalRepointRefusal(input.taskId, requesterId, input.currentCardId, input.newCardId),
+  };
+}
+
+export function describePrincipalRepointRefusal(
+  taskId: string,
+  // `null` e um chamador REAL desta porta, nao um caso impossivel: o humano e o
+  // CLI atravessam sem identidade injetada (foi por isso que a recusa cega de
+  // anonimo saiu daqui). A mensagem entao NOMEIA a ausencia em vez de imprimir
+  // `"null"` entre aspas, que leria como se houvesse um card chamado null.
+  requesterId: string | null,
+  currentCardId: string | null | undefined,
+  newCardId: string | null,
+): string {
+  const current = currentCardId ? `"${currentCardId}"` : "NULL";
+  const next = newCardId ? `"${newCardId}"` : "NULL";
+  const who = requesterId ? `"${requesterId}"` : "um chamador anonimo (sem requesterId)";
+  return (
+    `[de: stellar] update_task recusado: re-apontar o principal da task "${taskId}" ` +
+    `de ${current} para ${next} é troca de responsável — no board da task só o card marcado ` +
+    `como orquestrador (ou o humano) faz; quem chamou foi ${who} ` +
+    `(medido: update_task {cardId: si mesmo} movia o ponteiro e criava a linha de implementer sozinha). ` +
+    `O principal atual entrega o bastão por aqui mesmo; quem não é, pede ao orquestrador ` +
+    `ou usa release_task_card quando for o caso. Nada foi gravado.`
+  );
+}
+
+export type ReviewerSpawnDecision =
+  | { action: "allow" }
+  | { action: "refuse"; error: string };
+
+/** Porta 3 — `spawn_agent { taskId, role: "reviewer" }` */
+export function decideReviewerSpawnAuthorship(input: {
+  taskId: string;
+  requesterId: string | null | undefined;
+  orchestratorCardId: string | null | undefined;
+  consentSkipped: boolean;
+}): ReviewerSpawnDecision {
+  const requesterId = requesterOrNull(input.requesterId);
+  if (isBoardMark(requesterId, input.orchestratorCardId)) return { action: "allow" };
+  if (requesterId === null) return { action: "allow" }; // modal humano aparece
+  if (!input.consentSkipped) return { action: "allow" }; // modal humano aparece
+  return {
+    action: "refuse",
+    error: describeReviewerSpawnRefusal(input.taskId),
+  };
+}
+
+export function describeReviewerSpawnRefusal(taskId: string): string {
+  return (
+    `[de: stellar] spawn_agent recusado: spawnar card já vinculado como REVISOR da task "${taskId}" ` +
+    `em board autônomo pula o consentimento humano — e o brief do filho é texto seu, ` +
+    `então é o mesmo que link_task_card de si mesmo (o P1). Quem spawna revisor autonomamente ` +
+    `é o orquestrador marcado do board. Nada foi gravado.`
+  );
 }

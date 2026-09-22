@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type TaskRow } from "../../src/main/store";
-import { decideTaskCardRelease } from "../../src/main/judgment-write-decision";
+import { decideTaskCardRelease, HUMAN_PRINCIPAL_ID } from "../../src/main/judgment-write-decision";
 
 /**
  * TROCA DE CARD EM TASK ABERTA (task e8802e32) — o terceiro mundo que o guard
@@ -129,15 +129,31 @@ describe("troca de card (e8802e32) — store", () => {
 
 describe("troca de card (e8802e32) — quem pode liberar (porta dos fundos da ecd36437)", () => {
   it("6) IMPLEMENTER NÃO se auto-libera — recusa nomeando o papel", () => {
-    const decision = decideTaskCardRelease({ taskId: "t1", requesterRoleOnTask: "implementer" });
+    const decision = decideTaskCardRelease({ taskId: "t1", requesterRoleOnTask: "implementer", requesterId: "self-card", targetCardId: "self-card", orchestratorCardId: "other" });
     expect(decision.action).toBe("refuse");
     if (decision.action !== "refuse") return;
     expect(decision.error).toContain("implementer");
     expect(decision.error).toContain("Nada foi gravado");
   });
 
-  it("reviewer e outsider (humano/sem vínculo) liberam", () => {
-    expect(decideTaskCardRelease({ taskId: "t1", requesterRoleOnTask: "reviewer" }).action).toBe("allow");
-    expect(decideTaskCardRelease({ taskId: "t1", requesterRoleOnTask: null }).action).toBe("allow");
+  it("reviewer se auto-libera; o humano libera pelo principal NOMEADO", () => {
+    expect(decideTaskCardRelease({ taskId: "t1", requesterRoleOnTask: "reviewer", requesterId: "c1", targetCardId: "c1", orchestratorCardId: "mark" }).action).toBe("allow");
+    // O humano fora de um card tem IDENTIDADE, e a declara.
+    expect(decideTaskCardRelease({ taskId: "t1", requesterRoleOnTask: null, requesterId: HUMAN_PRINCIPAL_ID, targetCardId: "c1", orchestratorCardId: "mark" }).action).toBe("allow");
+  });
+
+  it("AUSENCIA de identidade NAO libera ninguem — a chave mestra do anonimo foi fechada", () => {
+    // Esta asserção existe porque a versão anterior devolvia `allow` para
+    // `requesterId: null`, e isso dava a quem OMITISSE a identidade um poder que
+    // nenhum card identificado tem: expulsar o implementer de qualquer task.
+    // Medido em 2026-09-22: `preload` e `renderer` não expõem release, e o
+    // handler do bus já recusa `!requesterId` antes — o "humano anônimo" que
+    // justificava a permissão não existia como chamador.
+    const decision = decideTaskCardRelease({ taskId: "t1", requesterRoleOnTask: null, requesterId: null, targetCardId: "c1", orchestratorCardId: "mark" });
+    expect(decision.action).toBe("refuse");
+    if (decision.action !== "refuse") return;
+    expect(decision.error).toContain("sem identidade");
+    expect(decision.error).toContain(HUMAN_PRINCIPAL_ID);
+    expect(decision.error).toContain("Nada foi gravado");
   });
 });
