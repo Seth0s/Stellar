@@ -1,5 +1,13 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { app, ipcMain, type BrowserWindow } from "electron";
-import { decideUpdateFeed } from "./update-feed-decision";
+import {
+  UPDATE_FEED_FILENAME,
+  UPDATE_FEED_OVERRIDE_ENV,
+  decideUpdateFeed,
+  type UpdateFeedState,
+} from "./update-feed-decision";
+import { decideUpdateInstall, type UpdateInstallState } from "./update-install-decision";
 // `electron-updater` is CommonJS with no static `exports.autoUpdater` a
 // named ESM import can see — the bundled main process (ESM output,
 // electron-vite) crashed the whole app on boot with "Named export
@@ -32,9 +40,55 @@ const { autoUpdater } = electronUpdaterPkg;
  * mostra, em vez de um "sem novidades" que seria mentira. Quando a VPS
  * subir, basta devolver `publish` ao package.json.
  */
-/** `build.publish` do package.json embutido. Vazio enquanto a
- * distribuição por VPS não existe (saída do GitHub, 2026-09-15). */
-const FEED_PUBLISH_CONFIG: unknown = undefined;
+/**
+ * OS FATOS que decidem o feed, lidos do PACOTE EM EXECUÇÃO — nunca de um
+ * literal TypeScript (task 5fb0c21b: uma fonte só, `build.publish` →
+ * `resources/app-update.yml`).
+ */
+function readFeedFacts(): { appUpdateYmlPresent: boolean; overrideUrl: string | null } {
+  const override = process.env[UPDATE_FEED_OVERRIDE_ENV];
+  return {
+    appUpdateYmlPresent: existsSync(join(process.resourcesPath, UPDATE_FEED_FILENAME)),
+    overrideUrl: override === undefined || override.trim() === "" ? null : override.trim(),
+  };
+}
+
+/** `resources/package-type` (escrito pelo target fpm do electron-builder) — é o
+ *  que faz a lib escolher `RpmUpdater`/`DebUpdater` em vez do AppImageUpdater.
+ *  Ausente = a lib DESLIGA o updater num Linux que não é AppImage (medido em
+ *  `AppImageUpdater.isUpdaterActive`). */
+function readPackageType(): string | null {
+  try {
+    return readFileSync(join(process.resourcesPath, "package-type"), "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+/** A URL da release mais recente, quando a identidade do feed esta no
+ * `app-update.yml` que o build gerou — a MESMA fonte do feed, nao um segundo
+ * literal. Com override (verificacao) nao ha release para linkar. */
+function releaseUrlFor(source: "app-update.yml" | "override"): string | null {
+  if (source === "override") return null;
+  try {
+    const yml = readFileSync(join(process.resourcesPath, UPDATE_FEED_FILENAME), "utf8");
+    const owner = /^owner:\s*(.+)$/m.exec(yml)?.[1]?.trim();
+    const repo = /^repo:\s*(.+)$/m.exec(yml)?.[1]?.trim();
+    if (!owner || !repo) return null;
+    return `https://github.com/${owner}/${repo}/releases/latest`;
+  } catch {
+    return null;
+  }
+}
+
+function installState(): UpdateInstallState {
+  return decideUpdateInstall({
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    appImageEnv: process.env.APPIMAGE !== undefined && process.env.APPIMAGE !== "",
+    packageType: readPackageType(),
+  });
+}
 
 export function registerUpdater(win: BrowserWindow) {
   autoUpdater.autoDownload = false;
@@ -45,14 +99,22 @@ export function registerUpdater(win: BrowserWindow) {
     win.webContents.send(channel, ...args);
   }
 
-  autoUpdater.on("update-available", (info) =>
+  autoUpdater.on("update-available", (info) => {
+    // A LINHA QUE A PROVA LÊ (task 5fb0c21b): o evento REAL do
+    // electron-updater, com a versão que o feed ofereceu — o registro do lado
+    // do MAIN que o smoke do feed local confere (o renderer tem o seu, via
+    // CDP). É diagnóstico honesto: em uso normal ela sai uma vez por boot no
+    // primeiro aviso.
+    console.info(
+      `[updater] update-available ${info.version} (feed: ${readFeedFacts().overrideUrl ?? UPDATE_FEED_FILENAME})`,
+    );
     // `info.releaseNotes` can be a string (GitHub provider — the release
     // body, as written) or an array of per-version note objects
     // depending on provider/update path; only the plain-string shape is
     // rendered (item 6 addendum — no markdown parser pulled back in just
     // for this, `UpdateBanner` shows it as preformatted text).
-    send("updater:available", info.version, typeof info.releaseNotes === "string" ? info.releaseNotes : null),
-  );
+    send("updater:available", info.version, typeof info.releaseNotes === "string" ? info.releaseNotes : null);
+  });
   autoUpdater.on("error", (err) => console.warn("[updater]", err.message));
   autoUpdater.on("update-downloaded", () => send("updater:downloaded"));
 
@@ -63,31 +125,49 @@ export function registerUpdater(win: BrowserWindow) {
     if (!app.isPackaged) return { checked: false };
     // Sem feed configurado não há o que checar, e dizer isso é o ponto —
     // ver update-feed-decision.ts.
-    const feed = decideUpdateFeed(FEED_PUBLISH_CONFIG);
-    if (!feed.configured) return { checked: false, unavailable: feed.message };
+    const facts = readFeedFacts();
+    const feed: UpdateFeedState = decideUpdateFeed(facts);
+    if (!feed.configured) {
+      return { checked: false, unavailable: feed.message, feed, install: installState(), releaseUrl: null };
+    }
+    // O OVERRIDE (verificação) aponta a lib para outro feed sem tocar no
+    // pacote: `setFeedURL` é o caminho público do electron-updater para isso.
+    if (feed.source === "override" && facts.overrideUrl !== null) {
+      autoUpdater.setFeedURL({ provider: "generic", url: facts.overrideUrl });
+    }
     try {
       await autoUpdater.checkForUpdates();
-      return { checked: true };
+      return {
+        checked: true,
+        feed,
+        install: installState(),
+        releaseUrl: releaseUrlFor(feed.source),
+        currentVersion: app.getVersion(),
+      };
     } catch (err) {
       console.warn("[updater] check failed:", err);
-      // Achado ao vivo (2026-09-03): repo de publish (`Seth0s/Stellar`) é
-      // privado por decisão do usuário — toda checagem sem token dá 404
-      // no feed `releases.atom`, sempre, não é uma falha transitória.
-      // electron-updater devolve isso como `HttpError` (statusCode 404)
-      // com uma mensagem que embute o corpo/headers crus da resposta e um
-      // texto genérico de "confira seu token de autenticação" — enganoso
-      // aqui (não existe token nenhum embutido no app pra conferir) e
-      // feio o bastante pra assustar quem só está usando o app. Tratado
-      // como "sem checagem disponível" (mesmo formato de sucesso sem
-      // update, sem `error`) em vez de virar `checkError` visível — repo
-      // privado não é um estado de erro pro usuário, é a configuração
-      // atual. Qualquer OUTRA falha (rede, rate-limit, etc.) continua
-      // surfaceando normalmente.
+      // O 404 ERA ENGOLIDO, e isso deixou de valer (task 5fb0c21b): o
+      // tratamento antigo (2026-09-03) existia porque o repo de publish era
+      // PRIVADO e toda checagem sem token dava 404 — "configuração atual", não
+      // erro. Com o repo PÚBLICO (`Seth0s/Stellar`, releases com
+      // `latest-linux.yml`), 404 significa que o feed NÃO ESTÁ no lugar: release
+      // sem o asset, tag apagada, feed quebrado. Engolir isso devolveria o
+      // mesmo formato de "checou e não há novidade" — a mentira que
+      // `update-feed-decision.ts` existe para não repetir. Então 404 vira ERRO
+      // com uma mensagem que diz o que provavelmente aconteceu.
       if (err instanceof Error && "statusCode" in err && (err as { statusCode?: number }).statusCode === 404) {
-        return { checked: false };
+        return {
+          checked: false,
+          error:
+            "O feed de atualização respondeu 404 — a release mais recente provavelmente está sem o arquivo `latest-linux.yml`.",
+          feed,
+          install: installState(),
+          releaseUrl: null,
+          currentVersion: app.getVersion(),
+        };
       }
       const message = err instanceof Error ? err.message : String(err);
-      return { checked: false, error: message };
+      return { checked: false, error: message, feed, install: installState(), releaseUrl: releaseUrlFor(feed.source), currentVersion: app.getVersion() };
     }
   });
 
@@ -104,6 +184,11 @@ export function registerUpdater(win: BrowserWindow) {
 
   ipcMain.handle("updater:install", async () => {
     if (!app.isPackaged) return { ok: false, error: "dev build" };
+    // A VERDADE ANTES DA TENTATIVA (task 5fb0c21b, item 2): no formato que o
+    // dono usa (rpm sem `package-type`) a lib nem chega a instalar — dizer
+    // "baixe o rpm" é melhor que um botão que baixa e falha no meio.
+    const install = installState();
+    if (!install.canInstall) return { ok: false, error: install.message, install };
     try {
       await autoUpdater.downloadUpdate();
       autoUpdater.quitAndInstall();

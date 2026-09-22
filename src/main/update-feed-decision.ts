@@ -1,42 +1,52 @@
 /**
  * Existe um feed de atualização para este build consultar?
  *
- * Contexto (2026-09-15): o projeto saiu do GitHub para um GitLab próprio
- * (`gitlab.idyplatform.com`). O `electron-updater` lia o feed de
- * `latest*.yml` publicado numa GitHub Release, gerado por
- * `.github/workflows/release.yml` — os dois deixaram de existir no mesmo
- * dia. A distribuição passa a ser por uma VPS que ainda não está de pé.
+ * UMA FONTE SÓ (task 5fb0c21b): o app NÃO redeclara owner/repo em TypeScript. A
+ * declaração mora no `build.publish` do package.json, o electron-builder a
+ * materializa em `resources/app-update.yml` dentro do pacote, e este módulo
+ * pergunta se ESSE arquivo existe. Antes havia um literal TS
+ * (`FEED_PUBLISH_CONFIG = undefined`) que podia divergir da build sem ninguém
+ * notar — duas fontes para a mesma pergunta, o defeito que este repo corrigiu
+ * várias vezes.
  *
- * O PERIGO AQUI NÃO É FICAR SEM UPDATE, É FICAR SEM UPDATE EM SILÊNCIO.
- * Antes desta mudança havia um tratamento especial para HTTP 404 (o repo
- * de publish era privado) que devolvia `{checked:false}` — o mesmo
- * formato de "checou e não há novidade". Era correto para AQUELE caso e
- * vira mentira agora: sem feed nenhum, o app diria "sem novidades" para
- * sempre, e o usuário nunca saberia que precisa baixar na mão.
+ * O OVERRIDE (`STELLAR_UPDATE_FEED_URL`) existe para a PROVA: um feed local em
+ * `http://127.0.0.1:PORT` permite exercitar o evento real `update-available`
+ * num build EMPACOTADO e isolado, sem tocar no feed de produção e sem depender
+ * de publicar release nenhuma. Ele é declarado como override na resposta para
+ * que a UI (e quem lê um relato) saiba que aquele feed não é o de produção.
  *
- * Por isso a ausência de feed é um ESTADO PRÓPRIO, com motivo declarado,
- * e não um sucesso vazio. Quando a VPS existir, basta `publish` voltar ao
- * `package.json` — esta função passa a devolver `configured: true` sem
- * mais nada mudar.
+ * HISTÓRIA QUE NÃO PODE VOLTAR (2026-09-15): o projeto saiu do GitHub e o feed
+ * ficou ausente em silêncio — o app dizia "sem novidades" para sempre. A
+ * ausência de feed é um ESTADO PRÓPRIO com motivo declarado, nunca um sucesso
+ * vazio.
  */
 export type UpdateFeedState =
-  | { configured: true }
+  | { configured: true; source: "app-update.yml" | "override" }
   | { configured: false; reason: "no-feed"; message: string };
 
-/**
- * @param publishConfig o bloco `build.publish` do package.json embutido no
- *   app (undefined/null quando não há publicação configurada).
- */
-export function decideUpdateFeed(publishConfig: unknown): UpdateFeedState {
-  const hasProvider =
-    publishConfig != null &&
-    (Array.isArray(publishConfig) ? publishConfig.length > 0 : typeof publishConfig === "object");
-  if (hasProvider) return { configured: true };
+/** O nome do arquivo que o electron-builder escreve a partir do
+ *  `build.publish`. É a ÚNICA fonte da identidade do feed dentro do app. */
+export const UPDATE_FEED_FILENAME = "app-update.yml";
+
+/** A variável de ambiente que aponta a checagem para outro feed. Existe para a
+ *  verificação de verdade (build empacotado + feed local), nunca para uso
+ *  normal — e a resposta diz que está ligada, para ninguém confundir. */
+export const UPDATE_FEED_OVERRIDE_ENV = "STELLAR_UPDATE_FEED_URL";
+
+export function decideUpdateFeed(input: {
+  /** `resources/app-update.yml` existe no pacote em execução? */
+  appUpdateYmlPresent: boolean;
+  /** URL do override, ou `null`. */
+  overrideUrl: string | null;
+}): UpdateFeedState {
+  if (input.overrideUrl !== null && input.overrideUrl.trim() !== "") {
+    return { configured: true, source: "override" };
+  }
+  if (input.appUpdateYmlPresent) return { configured: true, source: "app-update.yml" };
   return {
     configured: false,
     reason: "no-feed",
-    // Dito para quem usa o app, não para quem o escreveu: o que não vai
-    // acontecer, e o que a pessoa deve fazer no lugar.
+    // Dito para quem usa o app, não para quem o escreveu.
     message: "Atualização automática desligada nesta build — baixe a versão nova manualmente.",
   };
 }
