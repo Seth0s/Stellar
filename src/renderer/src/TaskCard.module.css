@@ -1243,6 +1243,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Procedência da rodada (task 156e6d08) — linha própria, largura toda
+   (`flex-basis: 100%`) porque o texto explica o veredito ao lado: espremido
+   na mesma linha ele vira ruído. Tom neutro: não é aviso, é registro. */
+.detailVerdictNote {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: var(--text-3);
+}
+
 .detailEmpty {
   color: var(--muted);
   font-size: var(--text-3);

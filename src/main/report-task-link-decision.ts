@@ -50,12 +50,26 @@ function uniqueNonEmpty(ids: readonly (string | null | undefined)[]): string[] {
   return out;
 }
 
+/** O VALOR CRU de um `taskId` vira declaração, ou não vira nada. Ponte ÚNICA
+ * entre "o que estava no payload" e "o que o servidor considera declarado":
+ * `declaredTaskIdFromReportBody` (o objeto já parseado, caminho de ESCRITA) e
+ * a extração `json_extract(report_json, '$.taskId')` dos statements de
+ * leitura (store.ts) passam os dois por AQUI. Sem isto, "declarado" teria
+ * duas definições no repo — e foi a divergência entre duas resoluções da
+ * mesma pergunta que produziu a task 4fee76d5.
+ *
+ * Só `string` não-vazia (aparada) declara. Número, booleano, objeto e
+ * ausência caem em `undefined`: `undefined` é "não declarou", nunca "declarou
+ * algo inválido" — quem tem um id assim não tem id. */
+export function normalizeDeclaredTaskId(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
 /** O `taskId` que o agente escreveu no corpo do report, se houver. Aceita o
  * objeto cru; um report que não é objeto não declara nada. */
 export function declaredTaskIdFromReportBody(report: unknown): string | undefined {
   if (report === null || typeof report !== "object" || Array.isArray(report)) return undefined;
-  const raw = (report as Record<string, unknown>).taskId;
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  return normalizeDeclaredTaskId((report as Record<string, unknown>).taskId);
 }
 
 export function decideReportTaskLink(input: {

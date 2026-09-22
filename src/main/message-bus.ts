@@ -1656,9 +1656,14 @@ export function createMessageBus(
             c.role === TASK_CARD_REVIEWER_ROLE && c.card_id !== targetCardId && callbacks.isCardAlive(c.card_id),
         ).length,
         lastReportOk: lastAcceptedReportOk(targetCardId),
+        // Task 156e6d08: `v.verdict` já vem LIDO do store (o que se pode
+        // atribuir a esta task) e `v.rule` diz por quê — a decisão de fechar o
+        // card precisa das duas: um carimbo de fan-out antigo tem
+        // `verdict: null` e `rule: "declared_other_task"`, e não é assinatura
+        // deste card nesta task (ver `decideCloseCardTaskEffect`).
         targetVerdicts: (task.verdicts ?? [])
           .filter((v) => v.card_id === targetCardId)
-          .map((v) => ({ role: v.role, verdict: v.verdict })),
+          .map((v) => ({ role: v.role, verdict: v.verdict, rule: v.rule })),
       });
     }
     return linked;
@@ -1902,7 +1907,23 @@ export function createMessageBus(
       // aqui (nenhum cmd deste arquivo escreve verdict/rodada a partir
       // do que um chamador manda de volta — a escrita mora só em
       // `recordParticipationRound`, chamada pelos dois choke points).
-      verdicts: row.verdicts?.map((v) => ({ cardId: v.card_id, role: v.role, verdict: v.verdict, at: v.at })),
+      //
+      // Task 156e6d08: `verdict` já vem LIDO do store — é o que se pode
+      // ATRIBUIR a esta task. `storedVerdict` é o que a coluna
+      // `task_verdicts.verdict` diz, e `rule` diz por quê; os dois andam
+      // juntos porque uma linha que o fan-out antigo carimbou na task errada
+      // não pode virar "sem veredito" aos olhos de um agente, que não teria
+      // como distinguir isso de uma rodada sem veredito nenhum.
+      verdicts: row.verdicts?.map((v) => ({
+        cardId: v.card_id,
+        role: v.role,
+        verdict: v.verdict,
+        at: v.at,
+        storedVerdict: v.storedVerdict,
+        rule: v.rule,
+        declaredTaskId: v.declaredTaskId,
+        roundLinks: v.roundLinks,
+      })),
     };
   }
 

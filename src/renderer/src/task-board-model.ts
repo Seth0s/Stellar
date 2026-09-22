@@ -1,5 +1,9 @@
 import { t, type MessageKey } from "../../shared/i18n";
 import { cardHasReviewer, normalizeTaskPurpose, type TaskPurpose } from "../../task-purpose";
+// O predicado e o nome dos estados vêm do módulo da regra (main), que não tem
+// dependência nenhuma — o renderer não reimplementa a leitura do passado.
+// `import type` some no build; a função é uma linha pura e compartilhada.
+import { isRoundAttributableToTask, type TaskVerdictReadRule } from "../../main/task-verdict-read-decision";
 
 export type { TaskPurpose };
 
@@ -232,7 +236,12 @@ export function describePurposeChip(chip: PurposeChip): string {
  *   agents cannot close, so "auto-aprovado" would lie. Fila shows
  *   `describeReviewWantedNotice` instead.
  * - Role fora de implementer/reviewer (desconhecido, ou lixo): nunca
- *   propõe — papel que não se conhece não sustenta uma proposta. */
+ *   propõe — papel que não se conhece não sustenta uma proposta.
+ * - Task 156e6d08: `verdict` aqui é o que se pode ATRIBUIR à task (o store lê
+ *   a tabela pela regra de `task-verdict-read-decision.ts`), não o que a
+ *   coluna diz. Um `aprovado` carimbado em 15 tasks pelo fan-out antigo chega
+ *   como `null` e não propõe nada — que é exatamente o ponto da fatia: a barra
+ *   de conclusão era o consumidor que agia sobre o carimbo falso. */
 export type CompletionProposal = {
   verdict: "aprovado";
   /** `reviewer` = veredito de quem revisa; `self` = o implementador
@@ -244,7 +253,24 @@ export type CompletionProposal = {
   at: number;
 };
 
-type VerdictRound = { cardId: string; role: string; verdict: string | null; at: number };
+/** Uma rodada de participação como o quadro a recebe: `verdict` já vem LIDO
+ * do main (`TaskVerdictReadRow`), e `rule`/`storedVerdict`/`declaredTaskId`
+ * são a procedência que a tela mostra ao lado do veredito (task 156e6d08 —
+ * linha reparada não vira "real" em silêncio). */
+export type VerdictRound = {
+  cardId: string;
+  role: string;
+  verdict: string | null;
+  at: number;
+  /** O que a coluna `task_verdicts.verdict` diz, quando o store mandou. */
+  storedVerdict?: string | null;
+  /** Por que a leitura concluiu o que concluiu. */
+  rule?: TaskVerdictReadRule;
+  /** A task que o report da rodada nomeou (só faz diferença quando difere). */
+  declaredTaskId?: string | null;
+  /** Quantas linhas a rodada carimbou. */
+  roundLinks?: number;
+};
 
 function latestRound(rounds: readonly VerdictRound[]): VerdictRound | null {
   // Último por `at`; empate → o que veio depois na lista (a query já
@@ -261,7 +287,14 @@ export function deriveCompletionProposal(
   reviewWanted = false,
 ): CompletionProposal | null {
   if (status !== "running") return null;
-  const reviewerRounds = verdicts.filter((v) => v.role === "reviewer");
+  // Task 156e6d08 — só rodadas ATRIBUÍVEIS a esta task contam como afirmação
+  // sobre ela (predicado em `task-verdict-read-decision.ts`, o MESMO que a
+  // decisão de fechar o card usa). Duas consequências, as duas desejadas: o
+  // carimbo de fan-out não cria barra verde na task errada, e ele também não
+  // APAGA uma rodada de verdade gravada antes dele — antes desta fatia o
+  // carimbo chegava como `aprovado` e era a "última palavra" na lista.
+  const attributed = verdicts.filter((v) => isRoundAttributableToTask(v.rule));
+  const reviewerRounds = attributed.filter((v) => v.role === "reviewer");
   if (cardHasReviewer(cardRoles) || reviewerRounds.length > 0) {
     const last = latestRound(reviewerRounds);
     if (!last || last.verdict !== "aprovado") return null;
@@ -269,7 +302,7 @@ export function deriveCompletionProposal(
   }
   // Declared review requirement without a reviewer yet: no self bar.
   if (reviewWanted) return null;
-  const last = latestRound(verdicts.filter((v) => v.role === "implementer"));
+  const last = latestRound(attributed.filter((v) => v.role === "implementer"));
   if (!last || last.verdict !== "aprovado") return null;
   return { verdict: "aprovado", origin: "self", cardId: last.cardId, at: last.at };
 }
@@ -289,7 +322,20 @@ export type VerdictChipTone = "good" | "muted" | "danger" | "none";
 export function describeVerdictChip(
   role: string | null | undefined,
   verdict: string | null | undefined,
+  rule?: TaskVerdictReadRule,
 ): { label: string; tone: VerdictChipTone } {
+  // PRIMEIRO a procedência, porque ela muda o SIGNIFICADO do que está gravado:
+  // sem isto, uma linha que o fan-out antigo carimbou na task errada voltaria
+  // a aparecer como "sem veredito" — indistinguível de uma rodada que
+  // legitimamente terminou sem veredito, que é justamente a confusão que a
+  // task 156e6d08 veio desfazer. Tom neutro (`none`) nos dois: nada aqui é
+  // julgamento, é o que se sabe sobre o registro.
+  if (rule === "declared_other_task") {
+    return { label: t("task.verdict.chip.misstamped"), tone: "none" };
+  }
+  if (rule === "undeclared_round") {
+    return { label: t("task.verdict.chip.unknown"), tone: "none" };
+  }
   if (verdict == null || verdict === "") {
     return { label: t("task.detail.verdictNone"), tone: "none" };
   }
@@ -304,6 +350,36 @@ export function describeVerdictChip(
     return { label: t("task.verdict.chip.rejected"), tone: "danger" };
   }
   return { label: verdict, tone: "none" };
+}
+
+/** DE ONDE VEM O VEREDITO — a procedência de UMA rodada, em texto, pro detalhe
+ * da task (task 156e6d08). `null` quando não há nada a dizer: uma rodada sem
+ * veredito nenhum não precisa explicar por que não tem um.
+ *
+ * O caso que importa é o do carimbo antigo: ele diz o valor GRAVADO junto com
+ * o motivo de a task não poder reivindicá-lo, pra quem chegar depois entender
+ * que o dado velho é que era falso (o pedido literal da fatia) — e não que a
+ * rodada "não teve veredito", que é outra coisa. */
+export function describeVerdictProvenance(round: VerdictRound): string | null {
+  switch (round.rule) {
+    case "declared_this_task":
+      return t("task.verdict.note.declared");
+    case "sole_link":
+      return t("task.verdict.note.soleLink");
+    case "declared_other_task":
+      return t("task.verdict.note.misstamped", {
+        stored: round.storedVerdict ?? "",
+        id: shortTaskId(round.declaredTaskId ?? ""),
+      });
+    case "undeclared_round":
+      return round.declaredTaskId
+        ? t("task.verdict.note.unknownNamed", { id: shortTaskId(round.declaredTaskId), n: round.roundLinks ?? 0 })
+        : t("task.verdict.note.unknown", { n: round.roundLinks ?? 0 });
+    default:
+      // `no_verdict` — e qualquer linha que chegue sem `rule` (renderer e main
+      // de versões diferentes no meio de um hot-reload): nada a dizer.
+      return null;
+  }
 }
 
 /** Fila notice when `review="wanted"` and no reviewer is linked yet —

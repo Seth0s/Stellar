@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 // importa no topo) entra no bundle do preload. Mesmo precedente do renderer,
 // que já importa tipos de `src/main` (ex.: `provider-usage`).
 import type { ProvidersReloadReport } from "../main/providers-dynamic";
+import type { TaskVerdictReadRule } from "../main/task-verdict-read-decision";
 // A union de purpose vem da FONTE ÚNICA (`src/task-purpose.ts`): uma segunda
 // lista aqui era drift esperando acontecer — o `integrate` (task 095158e9)
 // fez o tsc apontar as duas cópias de uma vez.
@@ -1024,9 +1025,26 @@ export type TaskBoardItem = {
   requestedReason: string | null;
   requestedBy: string | null;
   requestedAt: number | null;
-  /** RODADA 4 — `task_verdicts` (append-only). `provider` do card no
-   * momento da leitura (LEFT JOIN); null se o card foi deletado. */
-  verdicts: { cardId: string; role: string; verdict: string | null; at: number; provider: string | null }[];
+  /** RODADA 4 — `task_verdicts` (append-only), LIDA pela regra de
+   * `task-verdict-read-decision.ts` (task 156e6d08). `provider` do card no
+   * momento da leitura (LEFT JOIN); null se o card foi deletado.
+   *
+   * `verdict` é o que se pode ATRIBUIR a esta task; `storedVerdict` é o que a
+   * coluna diz (eles divergem nos carimbos de fan-out do passado); `rule` diz
+   * por que, e `declaredTaskId`/`roundLinks` são a evidência. Quem mostrar um
+   * veredito mostra a regra junto — linha reparada não vira "real" em
+   * silêncio. */
+  verdicts: {
+    cardId: string;
+    role: string;
+    verdict: string | null;
+    at: number;
+    provider: string | null;
+    storedVerdict: string | null;
+    rule: TaskVerdictReadRule;
+    declaredTaskId: string | null;
+    roundLinks: number;
+  }[];
   /** Ator da 1ª transição `kind:'status'` — `human` ⇒ criada pela UI. */
   firstActor: "app" | "agent" | "human" | "orchestrator" | null;
   /** Motivo visível de interrupção (falha tipada → voltou pra a fazer). */
