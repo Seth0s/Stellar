@@ -142,6 +142,44 @@ function describeTarget(target: ClickTargetDescriptor | null): string {
  * existir uma versão que descreve o alvo e outra que descreve o que foi
  * clicado.
  */
+/**
+ * A definição ÚNICA de "um clique NESTE ponto cai NESTE elemento".
+ *
+ * Vive aqui, e não numa cópia, porque quem pergunta isso em dois lugares sou
+ * eu mesmo: o caminho do clique (antes de disparar o `sendInputEvent`, em
+ * `__stellarSample`) e o `browser_snapshot` (para decidir em QUE elemento o
+ * `ref` de um controle de formulário escondido deve ser carimbado — task
+ * 4bdb257e). Duas cópias dessa regra seriam duas noções de "o que é
+ * clicável", e elas divergiriam no primeiro conserto de um lado só.
+ *
+ * `relation` responde o parentesco entre o alvo e o que o `elementFromPoint`
+ * devolveu: `self` (o próprio), `descendant` (um filho — normal: botão com
+ * `<span>` dentro, `<label>` com o `<input>` dentro), `ancestor` (um pai —
+ * `pointer-events:none` faz isso, e um clique humano cairia igual), `other`
+ * (outra coisa: overlay, modal, sticky header) ou `none` (nada ali).
+ *
+ * `__stellarPointHitsSelf` é a pergunta em um passo: o ponto está na
+ * viewport E o que está lá é o alvo/um parente dele.
+ */
+export function clickPointHitSource(): string {
+  return `
+    function __stellarRelation(target, hit) {
+      if (!hit) return "none";
+      if (!target) return "other";
+      if (hit === target) return "self";
+      if (target.contains(hit)) return "descendant";
+      if (hit.contains(target)) return "ancestor";
+      return "other";
+    }
+    function __stellarPointHitsSelf(target, px, py, inViewport) {
+      if (!target || !inViewport) return false;
+      const hit = document.elementFromPoint(px, py);
+      const relation = __stellarRelation(target, hit);
+      return relation === "self" || relation === "descendant" || relation === "ancestor";
+    }
+  `;
+}
+
 export function clickExtractorSource(): string {
   return `
     function __stellarDescribe(el) {
@@ -154,14 +192,7 @@ export function clickExtractorSource(): string {
         text: String(raw).replace(/\\s+/g, " ").trim().slice(0, ${CLICK_DESCRIBE_MAX_CHARS}),
       };
     }
-    function __stellarRelation(target, hit) {
-      if (!hit) return "none";
-      if (!target) return "other";
-      if (hit === target) return "self";
-      if (target.contains(hit)) return "descendant";
-      if (hit.contains(target)) return "ancestor";
-      return "other";
-    }
+    ${clickPointHitSource()}
     function __stellarSample(target, px, py, matched) {
       var hit = document.elementFromPoint(px, py);
       return {
