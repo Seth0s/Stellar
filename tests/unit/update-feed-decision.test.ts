@@ -31,19 +31,25 @@ describe("decideUpdateFeed — a pergunta é sobre o pacote em execução", () =
   });
 
   it("o override (verificação) vence e DIZ que é override — feed de prova não se confunde com o de produção", () => {
-    expect(decideUpdateFeed({ appUpdateYmlPresent: false, overrideUrl: "http://127.0.0.1:9/feed" })).toEqual({
+    expect(
+      decideUpdateFeed({ appUpdateYmlPresent: false, overrideUrl: "http://127.0.0.1:9/feed" }),
+    ).toEqual({
       configured: true,
       source: "override",
     });
     // E com o arquivo presente também: o override é o que manda na prova.
-    expect(decideUpdateFeed({ appUpdateYmlPresent: true, overrideUrl: "http://127.0.0.1:9/feed" })).toEqual({
+    expect(
+      decideUpdateFeed({ appUpdateYmlPresent: true, overrideUrl: "http://127.0.0.1:9/feed" }),
+    ).toEqual({
       configured: true,
       source: "override",
     });
   });
 
   it("override em branco não conta como feed", () => {
-    expect(decideUpdateFeed({ appUpdateYmlPresent: false, overrideUrl: "   " })).toMatchObject({ configured: false });
+    expect(decideUpdateFeed({ appUpdateYmlPresent: false, overrideUrl: "   " })).toMatchObject({
+      configured: false,
+    });
   });
 
   it("os nomes do arquivo e da variável são os que o resto do main usa (uma fonte, sem literal espalhado)", () => {

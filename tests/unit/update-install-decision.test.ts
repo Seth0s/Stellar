@@ -17,7 +17,12 @@ import { decideUpdateInstall } from "../../src/main/update-install-decision";
  * rpm", não um botão que baixa e falha.
  */
 describe("decideUpdateInstall — o formato da instalação decide", () => {
-  const ownerInstall = { platform: "linux", isPackaged: true, appImageEnv: false, packageType: null };
+  const ownerInstall = {
+    platform: "linux",
+    isPackaged: true,
+    appImageEnv: false,
+    packageType: null,
+  };
 
   it("O CASO DO DONO: rpm instalado SEM `package-type` -> não se atualiza sozinho, e a mensagem diz o que fazer", () => {
     const state = decideUpdateInstall(ownerInstall);
