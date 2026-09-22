@@ -64,6 +64,31 @@ export function unreportedIdlePointerBody(): string {
 
 /** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
  *
+ * A QUARTA FRASE (task d77b524b) — e por que ela existe, já que o enunciado
+ * mandava reusar uma das três se servisse. As três são:
+ *
+ *   1. "relatório disponível — chame read_report…" → o card FALOU e reportou;
+ *   2. "saiu (código N) sem chamar report." → o card MORREU;
+ *   3. "idle sem chamar report." → o card falou, ficou quieto e devia report.
+ *
+ * Nenhuma das três é verdadeira aqui: o card NÃO morreu (segue vivo), NÃO ficou
+ * ocioso depois de trabalhar (nunca produziu um byte), e não há report pendente
+ * — ele pode não estar vinculado a task nenhuma (foi spawnado com um brief).
+ * Dizer "idle sem chamar report" seria acusar de ócio um processo que talvez
+ * esteja preso ANTES de desenhar a primeira tela; e o dono decidiu, nesta task,
+ * AVISAR e NUNCA MATAR — a frase tem de caber nessa decisão. Então ela diz o
+ * que se sabe (nenhum byte, quantos segundos), o que NÃO se sabe (por quê) e o
+ * que NÃO foi feito (nada foi encerrado). */
+export function silentBootPointerBody(waitedSec: number): string {
+  return (
+    `subiu e não produziu nenhum byte em ${waitedSec}s — o processo está VIVO e calado, e nada foi encerrado. ` +
+    "Pode ser credencial faltando (CLI pendurada antes do primeiro desenho), prompt de login, ou binário preso; " +
+    "confira a tela antes de decidir."
+  );
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+ *
  * SINAL 3, a OUTRA frase (task 14b8b224): o card está ocioso e vinculado a uma
  * task, mas não há agente lendo a linha — então "não reportou" seria falso (não
  * havia quem reportasse). O que o dono precisa saber é o que fazer: o vínculo
