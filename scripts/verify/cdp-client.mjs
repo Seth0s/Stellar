@@ -596,22 +596,43 @@ export async function spawnCard(page, kind) {
 }
 
 /** Tiny assertion helper — smoke scripts print PASS/FAIL per check and
- * exit 1 if anything failed, instead of each hand-rolling that. */
+ * exit 1 if anything failed, instead of each hand-rolling that.
+ *
+ * `skip(label, reason)` — task 71128571. Existe porque um smoke que depende
+ * de BINÁRIO REAL (claude, opencode) pode não conseguir medir o que promete
+ * neste ambiente, e as duas saídas antigas eram mentira: PASS verde afirma o
+ * que ninguém mediu; FAIL vermelho acusa o app por algo que é do ambiente.
+ * Um skip vai para a tela com o motivo medido, e `finish()` sai com código 2
+ * — NÃO 0 — porque `scripts/verify/run-smokes.mjs` (e qualquer runner) lê o
+ * conjunto: 0 = tudo medido e verde, 1 = falha de verdade, 2 = alguma coisa
+ * ficou SEM MEDIR. Skip nunca é verde.
+ *
+ * Codes: 0 = every check passed, nothing skipped; 1 = at least one FAIL;
+ * 2 = no FAIL but at least one declared SKIP. */
 export function makeChecker() {
   let failed = 0;
+  let skipped = 0;
   function check(label, actual, expected) {
     const ok = typeof expected === "function" ? expected(actual) : actual === expected;
     console.log(`${ok ? "PASS" : "FAIL"} — ${label}${ok ? "" : ` (got ${JSON.stringify(actual)})`}`);
     if (!ok) failed++;
   }
+  function skip(label, reason) {
+    console.log(`SKIP (NÃO MEDIDO) — ${label} — motivo: ${reason}`);
+    skipped++;
+  }
   function finish() {
     if (failed > 0) {
-      console.log(`\n${failed} check(s) failed.`);
+      console.log(`\n${failed} check(s) failed.${skipped > 0 ? ` ${skipped} skipped.` : ""}`);
       process.exit(1);
+    }
+    if (skipped > 0) {
+      console.log(`\nall checks passed — MAS ${skipped} check(s) ficaram SEM MEDIR (ver SKIP acima).`);
+      process.exit(2);
     }
     console.log("\nall checks passed.");
   }
-  return { check, finish };
+  return { check, skip, finish };
 }
 
 /**
@@ -653,16 +674,63 @@ export async function openTerminalCreatePopover(page) {
  * rótulo declarado + as flags medidas (task c857539c), então aquele seletor
  * nunca casa — e oito smokes o usavam, todos parados na mesma linha sem
  * ninguém notar (`npm run verify:smoke` para no primeiro que falha).
+ *
+ * QUANDO O CASAMENTO POR TEXTO É AMBÍGUO, ISTO RECUSA — NUNCA ESCOLHE (task
+ * 0247900f, condição do revisor). Trocar "nunca casa" por "casa no errado sem
+ * avisar" seria trocar um vermelho honesto por um verde mentiroso, e o helper
+ * está em oito sítios: o modo de falha se propagaria por toda a superfície de
+ * smoke. Duas ambiguidades, dois guardas, os dois medidos com `providers.json`
+ * no perfil do run (investigate-picker-ambiguity.mjs, modos m2 e m3):
+ *
+ *   1. a FONTE já é ambígua — dois providers com o mesmo rótulo (a mutação do
+ *      revisor: o rótulo do `codex` virando o do `antigravity`). Recusa antes
+ *      de olhar o DOM, nomeando os donos do rótulo. Este guarda olha a fonte
+ *      porque a TELA pode estar desatualizada em relação a ela: a tela vem do
+ *      snapshot do renderer e esta consulta vai ao main ao vivo, e no instante
+ *      em que as duas divergem um ÚNICO botão com o rótulo compartilhado é o
+ *      do OUTRO provider — o clique errado silencioso que o revisor descreveu.
+ *   2. a TELA tem mais de um botão com o rótulo. Recusa nomeando os
+ *      CANDIDATOS (o `title` de cada botão), não só o rótulo.
+ *
+ * NÃO EXISTE DESEMPATE DETERMINÍSTICO AQUI, e vale registrar por quê: o botão
+ * do picker não carrega o id do provider em atributo nenhum (ProviderPicker.tsx
+ * só publica `class`, `title` e o texto), a ordem do DOM não é contrato de
+ * nada, e o `title` do vizinho não distingue dois providers de mesmo rótulo —
+ * ele COMEÇA por esse rótulo. Quem quiser desempatar precisa do id no DOM
+ * (um `data-provider`), que é mudança de `src/` — fora do território desta
+ * task, e a proposta vai no relatório em vez de um palpite no helper.
  */
 export async function clickProviderInPicker(page, providerId) {
   const coords = JSON.parse(
     await page.evalJs(`
       (async () => {
         const all = await window.agents.checkAvailability();
-        const label = all.find((entry) => entry.id === ${JSON.stringify(providerId)})?.label ?? null;
-        if (label === null) return JSON.stringify(null);
+        const entry = all.find((entry) => entry.id === ${JSON.stringify(providerId)}) ?? null;
+        if (entry === null) return JSON.stringify(null);
+        const label = entry.label;
+        // (1) A FONTE JÁ É AMBÍGUA. Dois providers com o MESMO rótulo tornam o
+        // casamento por texto incapaz de dizer qual e qual -- e olhar so a tela
+        // não basta: ela vem do snapshot do renderer, enquanto esta consulta vai
+        // ao main AO VIVO, e no instante em que as duas divergem um UNICO botao
+        // com o rótulo compartilhado e o do OUTRO provider. Recusa antes de
+        // olhar o DOM, nomeando os donos do rótulo.
+        const sharing = all.filter((other) => other.label === label).map((other) => other.id);
+        if (sharing.length > 1) {
+          return JSON.stringify({
+            error: \`rótulo "\${label}" é compartilhado por \${sharing.length} providers (\${sharing.join(", ")}) -- casar por texto não diz qual é o pedido (\${${JSON.stringify(providerId)}}); recusando clique em vez de escolher o primeiro.\`,
+          });
+        }
         const matches = [...document.querySelectorAll('.provider-picker-btn')].filter((b) => b.textContent.trim() === label);
-        if (matches.length > 1) return JSON.stringify({ error: \`vários providers exibem o mesmo rótulo na UI ("\${label}"); ambíguo, recusando clique.\` });
+        if (matches.length > 1) {
+          // (2) A TELA TEM MAIS DE UM. Nunca "o primeiro do DOM": ordem do DOM
+          // não é contrato de nada. O erro NOMEIA os candidatos -- o title de
+          // cada botão e o rótulo + as flags medidas --, porque "ambiguo" sem os
+          // candidatos obriga o próximo a investigar tudo de novo.
+          const candidates = matches.map((b) => b.getAttribute('title') ?? b.textContent.trim());
+          return JSON.stringify({
+            error: \`rótulo "\${label}" casa \${matches.length} botões no picker (\${candidates.map((c, i) => \`#\${i + 1}: \${c}\`).join(" | ")}) -- sem desempate determinístico; recusando clique.\`,
+          });
+        }
         if (matches.length === 0) return JSON.stringify(null);
         const btn = matches[0];
         const r = btn.getBoundingClientRect();
@@ -683,3 +751,96 @@ export async function clickProviderInPicker(page, providerId) {
   }
   await page.click(coords.x, coords.y);
 }
+
+/**
+ * NÃO EXISTE HELPER PARA MUDAR O CWD DO BOARD DO SMOKE — e a tentativa está
+ * documentada aqui para ninguém refazê-la (medido 2026-09-22, task 71128571).
+ *
+ * O board que `bootIntoFreshSession` cria nasce em `$HOME`: `App.tsx` passa
+ * `defaultCwd={DEFAULT_CWD}` para a Home, e `DEFAULT_CWD =
+ * window.system.homeDir` (linha 205) — constante, não o `workspaceRoot` do
+ * estado. Escrever `ac.workspaceRoot` no `localStorage` e recarregar (a
+ * primeira versão deste helper) muda a RAIZ que a Home exibe e navega, mas
+ * NÃO o cwd do board criado depois: medido, o card continuou subindo em
+ * `/home/lucas` (`read_card` mostrando "Accessing workspace: /home/lucas").
+ * O caminho real seria dirigir a árvore do `PathPicker` dentro do
+ * `SessionModal` até o diretório desejado — viável, e não feito.
+ *
+ * Por que isso importa: com cwd `$HOME`, o `claude` real para no diálogo de
+ * confiança do diretório (`~/.claude.json` desta máquina tem 18 projetos e
+ * nenhum é `/home/lucas`), então nenhum turno acontece e qualquer smoke que
+ * prometa "o agente respondeu" não pode cumprir a promessa ali — ver
+ * `skip()` em `makeChecker` e os dois smoke-mcp-send-submit, que DECLARAM
+ * isso em vez de fingir verde. Responder o diálogo (seta + Enter) marcaria o
+ * `$HOME` do dono como confiável no `~/.claude.json` real: efeito colateral
+ * na máquina de quem roda, nunca em silêncio num smoke.
+ */
+
+/**
+ * Liga o modo autônomo do board ativo pelo CAMINHO REAL da UI.
+ *
+ * Existe porque o checkbox mudou de lugar e ~11 smokes ficaram apontando
+ * para o lugar antigo: até a 077c00f o toggle vivia no `SessionModal` de
+ * editar sessão (é o que o lápis do Topbar abre), e essa entrega o mudou
+ * para `Configurações → Maestro` (`SettingsModal.tsx`'s `MaestroPage`),
+ * deixando o `SessionModal` sem nenhum `.autonomous-toggle-label`. Os
+ * smokes continuaram clicando no lápis e esperando o checkbox ali — e,
+ * como `npm run verify:smoke` parava no primeiro vermelho, isso ficou
+ * escondido. Um smoke que só precisa do modo LIGADO usa isto.
+ *
+ * O botão da engrenagem não tem `data-role` (Rail.tsx só dá `class` e um
+ * `title`/`aria-label` que mudam com o idioma) — por isso a cadeia de
+ * tentativas abaixo, que termina no ÚLTIMO `.rail-btn` da rail (posição do
+ * botão em Rail.tsx hoje). Se nada casar, o erro diz o que a rail exibia.
+ */
+export async function enableAutonomousMode(page) {
+  const settingsBtn = JSON.parse(
+    await page.evalJs(`
+      (() => {
+        const rail = [...document.querySelectorAll('.rail-btn')];
+        const byRole = document.querySelector('[data-role="rail-settings"]');
+        const btn = byRole
+          ?? rail.find((b) => (b.getAttribute('title') ?? '') === 'Configurações' || (b.getAttribute('title') ?? '') === 'Settings')
+          ?? rail.find((b) => (b.getAttribute('aria-label') ?? '') === 'Abrir configurações' || (b.getAttribute('aria-label') ?? '') === 'Open settings')
+          ?? rail[rail.length - 1];
+        if (!btn) return JSON.stringify({ error: 'nenhum .rail-btn na rail; a rail existe?', rail: rail.map((b) => b.getAttribute('title')) });
+        const r = btn.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  if (settingsBtn?.error) throw new Error(`enableAutonomousMode: ${settingsBtn.error} (${JSON.stringify(settingsBtn.rail)})`);
+  await page.click(settingsBtn.x, settingsBtn.y);
+
+  let modal = false;
+  const modalDeadline = Date.now() + 5000;
+  while (Date.now() < modalDeadline && !modal) {
+    modal = await page.evalJs(`!!document.querySelector('[data-settings-modal]')`);
+    if (!modal) await delay(100);
+  }
+  if (!modal) throw new Error("enableAutonomousMode: o modal de configurações não abriu (rail → engrenagem)");
+
+  await page.evalJs(`document.querySelector('[data-settings-page="maestro"]')?.click()`);
+  let hasToggle = false;
+  const toggleDeadline = Date.now() + 5000;
+  while (Date.now() < toggleDeadline && !hasToggle) {
+    hasToggle = await page.evalJs(`!!document.querySelector('.autonomous-toggle-label input[type="checkbox"]')`);
+    if (!hasToggle) await delay(100);
+  }
+  if (!hasToggle) {
+    const pages = await page.evalJs(`JSON.stringify([...document.querySelectorAll('[data-settings-page]')].map((b) => b.getAttribute('data-settings-page')))`);
+    throw new Error(`enableAutonomousMode: a página Maestro não tem checkbox de autonomia (nav: ${pages})`);
+  }
+
+  await page.evalJs(`document.querySelector('.autonomous-toggle-label input[type="checkbox"]').click()`);
+  let checked = false;
+  const checkedDeadline = Date.now() + 5000;
+  while (Date.now() < checkedDeadline && !checked) {
+    checked = await page.evalJs(`document.querySelector('.autonomous-toggle-label input[type="checkbox"]').checked === true`);
+    if (!checked) await delay(100);
+  }
+  await page.evalJs(`document.querySelector('[data-settings-close]')?.click()`);
+  await delay(250);
+  if (!checked) throw new Error("enableAutonomousMode: o checkbox de autonomia não ficou marcado depois do clique real");
+}
+

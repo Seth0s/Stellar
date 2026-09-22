@@ -5,7 +5,7 @@
 // against the real DOM (.modal presence/absence), not just the MCP
 // response — a wrong auto-approve that skips the modal only shows up if
 // you actually look for the modal.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, openTerminalCreatePopover } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, openTerminalCreatePopover, enableAutonomousMode } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
@@ -13,8 +13,32 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-autonomous-mode-${CDP_PORT}`, import.meta.url).pathname;
 
 let nextRpcId = 1;
-async function mcpCall(method, params) {
-  const res = await fetch(MCP_URL, {
+/**
+ * O card cujo processo está discando (vira `?card=` em toda chamada). Fica
+ * nulo só até o board 1 existir — ver `mcpUrl` abaixo.
+ */
+let CALLER_ID = null;
+/**
+ * IDENTIDADE VEM DO CARIMBO DA URL, NÃO DO CORPO (medido 2026-09-22, task
+ * 71128571). Este smoke discava `http://127.0.0.1:<porta>/mcp` sem `?card=`
+ * e mandava `callerCardId` no corpo — e é exatamente isso que
+ * `mcp-server.ts` recusa desde o achado de escalada de privilégio (card
+ * 337, 2026-09-11): "uma URL sem `?card=` — smoke test que disca a porta
+ * direto ou cliente MCP externo — fica anônima; o corpo não pode escolher
+ * um card autônomo e pular consentimento". Anônimo, `autonomous` é SEMPRE
+ * falso, então TODO spawn abria o modal de consentimento e as checagens
+ * "resolve ok:true sem modal" reprovavam num board que ESTAVA autônomo
+ * (`board_mode` respondia autonomous:true e o selo aparecia no topbar).
+ *
+ * `callerCardId` no corpo continua sendo mandado (é o que um agente real
+ * faz), mas quem estabelece a identidade é o carimbo — igual ao processo do
+ * card, cujo MCP é registrado com essa URL.
+ */
+function mcpUrl(callerCardId) {
+  return callerCardId ? `${MCP_URL}?card=${encodeURIComponent(callerCardId)}` : MCP_URL;
+}
+async function mcpCall(method, params, callerCardId = null) {
+  const res = await fetch(mcpUrl(callerCardId), {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: nextRpcId++, method, params }),
@@ -29,14 +53,23 @@ async function mcpCall(method, params) {
   const jsonLine = text.split("\n").find((l) => l.startsWith("data:"))?.slice(5).trim() ?? text;
   return JSON.parse(jsonLine);
 }
-async function callTool(name, args) {
-  const rpc = await mcpCall("tools/call", { name, arguments: args });
+async function callTool(name, args, callerCardId = CALLER_ID) {
+  const rpc = await mcpCall("tools/call", { name, arguments: args }, callerCardId);
   if (rpc.error) throw new Error(`MCP error calling ${name}: ${JSON.stringify(rpc.error)}`);
   return rpc.result;
 }
-async function toolJson(name, args) {
-  const result = await callTool(name, args);
-  return JSON.parse(result.content[0].text);
+async function toolJson(name, args, callerCardId = CALLER_ID) {
+  const result = await callTool(name, args, callerCardId);
+  const text = result?.content?.[0]?.text ?? "";
+  try {
+    return JSON.parse(text);
+  } catch {
+    // O servidor devolve o erro de validação como TEXTO no content (não como
+    // `rpc.error`), então o `JSON.parse` estourava com "Unexpected token 'M'"
+    // e escondia a mensagem real ("Unrecognized key: ..."). Nomear a tool e
+    // mostrar o texto é a diferença entre diagnosticar e adivinhar.
+    throw new Error(`tool ${name} respondeu com erro em vez de JSON: ${text.slice(0, 300)}`);
+  }
 }
 async function hasModal(page) {
   return JSON.parse(await page.evalJs(`JSON.stringify(!!document.querySelector('.modal'))`));
@@ -112,6 +145,9 @@ try {
   // devolve TODOS os cards vivos agora, não só terminais, então a primeira
   // posição da lista deixou de ser garantidamente o bash seedado.
   const board1BashId = board1Cards.cards.find((c) => c.kind === "terminal").id;
+  // Daqui em diante toda chamada sai CARIMBADA com este card (`?card=`), que
+  // é como o processo de um card real disca — ver `mcpUrl` no topo.
+  CALLER_ID = board1BashId;
 
   const modeBefore = await toolJson("board_mode", { target: board1BashId });
   check(
@@ -129,28 +165,16 @@ try {
   await baselinePromise;
   await new Promise((r) => setTimeout(r, 300));
 
-  // Liga o modo autônomo via UI REAL — clique no título do topbar, lápis
-  // de editar, checkbox, fechar. Nenhuma tool MCP faz isso.
-  const titleBtn = await centerOf(page, ".topbar-title");
-  await page.click(titleBtn.x, titleBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
-  const pencilBtn = await centerOf(page, '.board-row.active button[data-role="edit-session"]');
-  await page.click(pencilBtn.x, pencilBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
-  const checkbox = await centerOf(page, '.autonomous-toggle-label input[type="checkbox"]');
-  await page.click(checkbox.x, checkbox.y);
-  await new Promise((r) => setTimeout(r, 300));
-  const cancelBtn = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const b = [...document.querySelectorAll('.modal-actions button')].find((x) => x.textContent.trim() === 'Cancelar');
-        const r = b.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-      })()
-    `),
-  );
-  await page.click(cancelBtn.x, cancelBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
+  // Liga o modo autônomo pelo CAMINHO REAL da UI — e o caminho MUDOU. O
+  // que estava aqui (clique no título do topbar → lápis de editar sessão →
+  // checkbox) parou de existir na 077c00f, que tirou o toggle do
+  // `SessionModal` e o pôs em `Configurações → Maestro`; o lápis hoje abre
+  // um modal SEM `.autonomous-toggle-label`, e este smoke morria em
+  // `TypeError: Cannot read properties of null (reading 'x')`. Toda a
+  // cadeia (rail → engrenagem → página maestro → checkbox → fechar) vive
+  // em `enableAutonomousMode` (cdp-client.mjs), que falha nomeando o passo
+  // que faltou em vez de estourar num `null`.
+  await enableAutonomousMode(page);
 
   const modeAfter = await toolJson("board_mode", { target: board1BashId });
   check("depois do clique real na UI, board_mode reflete autonomous:true", modeAfter.autonomous, true);
@@ -216,20 +240,46 @@ try {
   await new Promise((r) => setTimeout(r, 1000));
   check("teto de concorrência livre antes da cadeia de profundidade", (await toolJson("board_mode", { target: board1BashId })).queueLength, 0);
 
-  const fakeDepthGuard = await toolJson("spawn_agent", { provider: "bash", callerCardId: board1BashId, depth: 3, reason: "declara depth 3, real é 0" });
-  check("um depth:3 autodeclarado por um card de profundidade real 0 NÃO é confiado — resolve ok normalmente", fakeDepthGuard.ok, true);
-  // Precisa entrar na exclusão do board2BashId lá embaixo, mesmo motivo do
-  // `autoSpawnedIds.push` acima — são mais cards reais do board1.
-  if (fakeDepthGuard.ok) autoSpawnedIds.push(fakeDepthGuard.cardId);
+  // O CAMPO `depth` NÃO EXISTE MAIS (medido 2026-09-22, task 71128571): o
+  // audit S4 tirou o número declarado pelo chamador, e o schema de hoje
+  // RECUSA a call nomeando o campo — "Unrecognized key: \"depth\" — este tool
+  // aceita: provider, cwd, isolation, resumeId, … ── o nome fora dessa lista
+  // seria descartado em silêncio, então a chamada é RECUSADA antes de gravar
+  // qualquer coisa". O que estava aqui (`depth: 3` → esperava `ok: true`)
+  // passou a derrubar o smoke inteiro num SyntaxError. A checagem agora mede
+  // a recusa, que é o comportamento mais forte dos dois.
+  let depthRefusal = null;
+  try {
+    await toolJson(
+      "spawn_agent",
+      { provider: "bash", callerCardId: board1BashId, depth: 3, reason: "declara depth 3, campo que não existe mais" },
+      board1BashId,
+    );
+  } catch (err) {
+    depthRefusal = String(err?.message ?? err);
+  }
+  check("spawn_agent RECUSA o campo `depth` (não há mais número declarado pelo chamador — S4)", /depth/.test(depthRefusal ?? ""), true);
+  if (depthRefusal === null) console.log("  esperava a recusa de `depth`; a call foi aceita");
+  else console.log(`  recusa medida: ${JSON.stringify(depthRefusal.slice(0, 160))}`);
 
   let chainCardId = board1BashId;
   for (let i = 1; i <= 3; i++) {
-    const hop = await toolJson("spawn_agent", { provider: "bash", callerCardId: chainCardId, reason: `cadeia real de profundidade ${i}` });
+    // O carimbo acompanha a CADEIA: cada hop disca como o card anterior (é
+    // assim que a profundidade real é medida — `?card=` do processo).
+    const hop = await toolJson(
+      "spawn_agent",
+      { provider: "bash", callerCardId: chainCardId, reason: `cadeia real de profundidade ${i}` },
+      chainCardId,
+    );
     check(`cadeia real de profundidade ${i} resolve ok`, hop.ok && typeof hop.cardId === "string", true);
     chainCardId = hop.cardId;
     autoSpawnedIds.push(hop.cardId);
   }
-  const depthGuard = await toolJson("spawn_agent", { provider: "bash", callerCardId: chainCardId, reason: "profundidade 4, deveria recusar" });
+  const depthGuard = await toolJson(
+    "spawn_agent",
+    { provider: "bash", callerCardId: chainCardId, reason: "profundidade 4, deveria recusar" },
+    chainCardId,
+  );
   check("MAX_SPAWN_DEPTH ainda recusa em modo autônomo (razão distinta do teto de concorrência)", depthGuard.error?.includes("depth"), true);
 
   // DESIGN-BACKLOG.md item 60, peça 5 — modo autônomo completo: reverte o
@@ -239,7 +289,10 @@ try {
   check("open_url resolve ok:true SEM modal em modo autônomo (peça 5)", openResult.ok, true);
   check("...de fato sem nenhum modal no DOM", await hasModal(page), false);
 
-  const spawnCardResult = await toolJson("spawn_card", { kind: "sticky", callerCardId: board1BashId });
+  // `reason` virou OBRIGATÓRIO em spawn_card (medido 2026-09-22: sem ele a
+  // call é recusada antes de gravar — "expected string, received undefined at
+  // reason"). O smoke chamava sem.
+  const spawnCardResult = await toolJson("spawn_card", { kind: "sticky", callerCardId: board1BashId, reason: "smoke item 60 peça 5" });
   check("spawn_card resolve ok:true SEM modal em modo autônomo (peça 5)", spawnCardResult.ok && typeof spawnCardResult.cardId === "string", true);
   check("...de fato sem nenhum modal no DOM", await hasModal(page), false);
 
@@ -298,7 +351,16 @@ try {
     const board2Mode = await toolJson("board_mode", { target: board2BashId });
     check("um board novo nasce autonomous:false mesmo com outro board já autônomo", board2Mode.autonomous, false);
 
-    const board2SpawnPromise = callTool("spawn_agent", { provider: "bash", callerCardId: board2BashId, reason: "board isolado" });
+    // O carimbo é o do card do BOARD 2: quem disca é ele, não o card do
+    // board autônomo — é justamente o isolamento entre boards que esta
+    // checagem mede (com o carimbo errado, o auto-approve do board 1
+    // valeria aqui e o modal não apareceria).
+    const board2SpawnPromise = callTool(
+      "spawn_agent",
+      { provider: "bash", callerCardId: board2BashId, reason: "board isolado" },
+      board2BashId,
+    );
+
     await new Promise((r) => setTimeout(r, 500));
     check("um card de OUTRO board (não-autônomo) ainda pede consentimento — o modo não vaza entre boards", await hasModal(page), true);
     await clickModalButton(page, "Negar");

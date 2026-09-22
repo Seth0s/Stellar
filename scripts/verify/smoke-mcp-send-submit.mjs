@@ -22,6 +22,7 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-mcp-send-submit-${CDP_PORT}`, import.meta.url).pathname;
 const MARKER = "CONFIRMADO-M2-77219";
 
+
 let nextRpcId = 1;
 async function mcpCall(method, params) {
   const res = await fetch(MCP_URL, {
@@ -87,12 +88,13 @@ async function centerOf(page, selector) {
   return res;
 }
 
-const { check, finish } = makeChecker();
+const { check, skip, finish } = makeChecker();
 const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR });
 try {
   const page = await connectPage(CDP_PORT);
   await new Promise((r) => setTimeout(r, 1000));
   await bootIntoFreshSession(page, "MCP Send Submit Teste");
+
   await new Promise((r) => setTimeout(r, 500));
 
   // Cria o card "claude" pelo caminho da UI: abre o popover de CRIAÇÃO (o
@@ -116,6 +118,44 @@ try {
   );
   check("card 'claude' real foi criado", claudeCardId !== null, true);
 
+  // PRECONDIÇÃO, MEDIDA — não presumida: o CLI real precisa estar numa
+  // CONVERSA. Um `claude` que nunca foi confiado neste diretório para no
+  // diálogo "Is this a project you created or one you trust?" e nada que o
+  // app digite ali vira turno: a medição de 2026-09-22 (task 71128571) viu
+  // 1027 bytes de quadro parado e `delivery: "delivered"` — o envio chegou,
+  // e não havia pergunta para responder. Isto NÃO é defeito do app; é o
+  // ambiente, e por isso o resultado é um SKIP declarado, nunca um verde.
+  async function claudeSaysNoTurnIsPossible() {
+    const rc = await toolJson("read_card", { target: claudeCardId });
+    const text = typeof rc.text === "string" ? rc.text : "";
+    if (/Yes, I trust this folder/.test(text) || /one you trust\?/.test(text)) {
+      return `o CLI real está parado no diálogo de confiança do diretório (read_card: ${JSON.stringify(text.replace(/\s+/g, " ").trim().slice(0, 200))})`;
+    }
+    if (/Not logged in|Please log in|\/login/i.test(text)) {
+      return `o CLI real não está autenticado nesta máquina (read_card: ${JSON.stringify(text.replace(/\s+/g, " ").trim().slice(0, 200))})`;
+    }
+    return null;
+  }
+
+  // Espera o CLI desenhar antes de decidir (a tela vazia não decide nada): ou
+  // o bloqueio aparece, ou a TUI pintou algo — o que só pode ser decidido
+  // DEPOIS de alguma coisa estar na tela.
+  let blockedBeforeSend = null;
+  const bootDeadline = Date.now() + 15000;
+  while (Date.now() < bootDeadline) {
+    blockedBeforeSend = await claudeSaysNoTurnIsPossible();
+    if (blockedBeforeSend !== null) break;
+    const drawn = await toolJson("read_card", { target: claudeCardId });
+    if (typeof drawn.text === "string" && drawn.text.trim().length > 0) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (blockedBeforeSend !== null) {
+    skip(
+      "o agente real recebeu, processou e respondeu com o marker (mensagem genuinamente submetida, não presa como paste)",
+      blockedBeforeSend,
+    );
+  }
+
   await page.evalJs(`
     (() => {
       window.__chunks = '';
@@ -133,7 +173,7 @@ try {
   ].join("\n");
 
   let found = false;
-  for (let attempt = 1; attempt <= 3 && !found; attempt++) {
+  for (let attempt = 1; attempt <= 3 && !found && blockedBeforeSend === null; attempt++) {
     await page.evalJs(`window.__chunks = ''`);
     const sendResult = await toolJson("send_to_card", { target: claudeCardId, text: payload });
     check(`send_to_card (tentativa ${attempt}) retorna ok`, sendResult.ok, true);
@@ -150,13 +190,36 @@ try {
     if (!found) {
       // Ainda preso no composer como paste não-submetido é o sintoma
       // exato do bug original — checa isso pra deixar o diagnóstico
-      // explícito no output antes de tentar de novo.
-      const stuckAsPaste = await page.evalJs(`document.body.innerText.includes('Pasted text')`);
+      // explícito no output antes de tentar de novo. Lido do BUFFER do
+      // card (`read_card`), não do `document.body.innerText`: o terminal é
+      // um canvas, e o placeholder nunca esteve no innerText do documento —
+      // essa leitura era falsa para sempre.
+      const screen = await toolJson("read_card", { target: claudeCardId });
+      const stuckAsPaste = typeof screen.text === "string" && screen.text.includes("Pasted text");
       console.log(`tentativa ${attempt} sem sinal do marker; preso como paste não-submetido: ${stuckAsPaste}`);
     }
   }
 
-  check("o agente real recebeu, processou e respondeu com o marker (mensagem genuinamente submetida, não presa como paste)", found, true);
+  // Sem `blockedBeforeSend`, o veredito é do APP — e o FAIL traz a tela junto,
+  // porque "o marker não apareceu" sem a tela não é diagnóstico.
+  if (blockedBeforeSend === null) {
+    const screenAfter = await toolJson("read_card", { target: claudeCardId });
+    const tail = typeof screenAfter.text === "string" ? screenAfter.text.replace(/\s+/g, " ").trim().slice(-200) : "";
+    const blockedAfter = await claudeSaysNoTurnIsPossible();
+    if (!found && blockedAfter !== null) {
+      skip(
+        "o agente real recebeu, processou e respondeu com o marker (mensagem genuinamente submetida, não presa como paste)",
+        blockedAfter,
+      );
+    } else {
+      check(
+        "o agente real recebeu, processou e respondeu com o marker (mensagem genuinamente submetida, não presa como paste)",
+        found,
+        true,
+      );
+      if (!found) console.log(`  tela do card no fim (read_card, últimos 200 chars): ${JSON.stringify(tail)}`);
+    }
+  }
 
   page.close();
 } finally {
