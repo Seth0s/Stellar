@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { Popover } from "./Popover";
 import { SessionModal } from "./SessionModal";
+import { ArchivedCardsPanel } from "./ArchivedCardsPanel";
 import { useAgentAvailability } from "./useAgentAvailability";
 import type { SessionTemplate } from "./useBoardStore";
 import { groupByProject, type Board, type BoardCounts as Counts } from "./sessions";
@@ -87,6 +88,8 @@ export function Topbar({
 }) {
   const [open, setOpen] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
+  /** Vista dos arquivados do board ativo (task d3c005dc). */
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
   const [zoomDraft, setZoomDraft] = useState("");
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -330,8 +333,25 @@ export function Topbar({
           >
             {t("topbar.newSession")}
           </button>
+          {/* Vista dos ARQUIVADOS (task d3c005dc). Fica aqui, junto do que já
+              lida com SESSÃO, porque é onde um card arquivado do board ativo
+              reaparece: até esta task ele não tinha lugar nenhum fora da
+              sidebar de chats. */}
+          <button
+            type="button"
+            data-role="open-archived"
+            onClick={() => {
+              setOpen(false);
+              setArchivedOpen(true);
+            }}
+          >
+            {t("archived.title")}
+          </button>
         </div>
       </Popover>
+      {archivedOpen && activeBoardId && (
+        <ArchivedCardsPanel boardId={activeBoardId} onClose={() => setArchivedOpen(false)} />
+      )}
       {modal?.mode === "create" && (
         <SessionModal
           mode="create"

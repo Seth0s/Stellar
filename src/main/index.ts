@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
 import { decideTraceTailForStorage } from "./card-trace";
+import { deleteCardForever } from "./card-delete";
 import {
   decidePtyHoldAppend,
   decideRendererGone,
@@ -1121,6 +1122,14 @@ function createWindow() {
   // subsequent link can stamp it — otherwise session_id stays null on
   // the very path that discovers it first.
   const pendingParticipationSessions = new Map<string, string>();
+  /** Ver `card-delete.ts` — o conjunto do apagamento de verdade, em UM corpo.
+   * As duas portas (o `delete_card` do agente e o `store:delete` da UI)
+   * chamam esta função; a divergência de conectores que esta task mediu (2
+   * órfãos) só era possível porque cada porta tinha o seu próprio corpo. */
+  function deleteCardDirect(id: string) {
+    deleteCardForever(store, id);
+  }
+
   function rememberBoardIdBeforeDelete(cardId: string) {
     const boardId = store.getCard(cardId)?.board_id;
     if (!boardId) return;
@@ -1983,10 +1992,7 @@ function createWindow() {
           }
         : undefined;
     },
-    deleteCardDirect: (id) => {
-      store.deleteConnectorsForCard(id);
-      store.deleteCard(id);
-    },
+    deleteCardDirect,
     updateStickyContentDirect: (id, content, mode) => {
       const row = store.getCard(id);
       if (!row) return { ok: false, error: `no card with id "${id}"` };
@@ -2508,7 +2514,17 @@ function createWindow() {
   ipcMain.handle("store:upsert", (_e, card: CardRow) => store.upsertCard(card));
   ipcMain.handle("store:delete", (_e, id: string) => {
     rememberBoardIdBeforeDelete(id);
-    return store.deleteCard(id);
+    // APAGAR DE VERDADE TEM UM CONJUNTO SÓ, E ELE JÁ ESTAVA ESCRITO AQUI AO
+    // LADO (task d3c005dc). Até esta linha, esta porta chamava
+    // `store.deleteCard` direto e deixava os CONECTORES para trás, enquanto a
+    // porta do agente (`delete_card` → `deleteCardDirect`) os levava junto —
+    // duas portas para a mesma ação com conjuntos diferentes. Diverge, medido:
+    // 2 conectores órfãos no board do dono apontando para cards que não
+    // existem mais. Agora as duas portas chamam o MESMO `deleteCardDirect`
+    // (`deleteConnectorsForCard` + `deleteCard`), e o
+    // `rememberBoardIdBeforeDelete` fica: ele é do renderer (para saber qual
+    // board recarregar), não do apagamento.
+    return deleteCardDirect(id);
   });
 
   ipcMain.handle("store:connectors:list", (_e, boardId: string) => store.listConnectors(boardId));
@@ -2617,6 +2633,9 @@ function createWindow() {
   // Item 30 — sessions sidebar (every chat card, live or archived) +
   // archive/unarchive (closing a ChatCard archives instead of deleting).
   ipcMain.handle("store:list-chat-sessions", () => store.listChatSessions());
+  // Task d3c005dc — a vista de ARQUIVADOS do board ativo. Escopada por board
+  // (diferente de `store:list-chat-sessions`, que é global e só chat).
+  ipcMain.handle("store:list-archived", (_e, boardId: string) => store.listArchivedCards(boardId));
   /**
    * O FECHO GUARDA O RASTRO (task 4e4ec327). Chamado ANTES de arquivar: o
    * registry ainda pode ter a entrada viva, e se já não tiver, tem a última — o

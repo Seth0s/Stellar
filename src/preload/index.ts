@@ -394,6 +394,10 @@ setActive: (id: string | null): void => ipcRenderer.send("board:active", id),
    * ChatCard archives instead of deleting (App.tsx's closeCard); every
    * other card kind still hard-deletes exactly as before. */
   listChatSessions: (): Promise<CardRow[]> => ipcRenderer.invoke("store:list-chat-sessions"),
+  /** Arquivados do BOARD ATIVO, qualquer kind (task d3c005dc) — o que a vista
+   * de arquivados lê. `listChatSessions` não serve para isso: é só `kind='chat'`
+   * e varre todos os boards. */
+  listArchivedCards: (boardId: string): Promise<CardRow[]> => ipcRenderer.invoke("store:list-archived", boardId),
   archiveCard: (id: string): Promise<void> => ipcRenderer.invoke("store:archive-card", id),
   unarchiveCard: (id: string): Promise<void> => ipcRenderer.invoke("store:unarchive-card", id),
 };
