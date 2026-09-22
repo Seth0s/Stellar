@@ -104,17 +104,10 @@ const server = createServer((req, res) => {
     <div id="atrasado"></div>
     <span hidden id="escondido">invisivel</span>
 
-    <!-- Achado ao vivo (2026-09-03, rodando eslint pela primeira vez):
-         accessibleName() (browser-registry.ts) usa /\s+/ dentro de um
-         template literal injetado via executeJavaScript — sem o segundo
-         backslash, o parser JS engole o \s e a regex que chega no
-         navegador vira /s+/ (casa a LETRA "s", não espaço em branco).
-         Os IDs abaixo ("first"/"second") só produzem o resultado certo
-         se o split for por espaço de verdade — com o bug antigo, viram
-         "fir"/"t "/"econd" (nenhum bate um getElementById real). O
-         texto "multiple   spaces  here" só colapsa pro esperado se o
-         replace for por espaço — com o bug, cada "s" some e sobra
-         espaço extra no lugar dela. -->
+    <!-- Superfície do nome acessível: dois spans ESCONDIDOS referenciados por
+         aria-labelledby (o nome tem de sair do texto deles, não do innerText
+         renderizado) e um texto com espaços múltiplos, que o nome tem de
+         colapsar. -->
     <span hidden id="first">Primeiro</span>
     <span hidden id="second">Segundo</span>
     <button id="multilabel" aria-labelledby="first second"></button>
@@ -171,32 +164,47 @@ async function centerOf(page, selector) {
   return res;
 }
 
+/** Espera o seletor existir de verdade (o app leva um tempo variavel para
+ * montar o board e o popover; um `querySelector` cedo demais devolve null e
+ * o smoke parece quebrado no produto). */
+async function waitForSelector(page, selector, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = await page.evalJs(`!!document.querySelector(${JSON.stringify(selector)})`);
+    if (found === true) return;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error(`selector ${selector} never appeared within ${timeoutMs}ms`);
+}
+
 async function createBrowserCard(page, url) {
-  const browserBtn = await centerOf(page, '.rail-btn[title="Novo navegador"]');
-  await page.click(browserBtn.x, browserBtn.y);
-  await new Promise((r) => setTimeout(r, 500));
-  const barCoords = JSON.parse(
-    await page.evalJs(`
-      (() => {
-        const inputs = document.querySelectorAll('[data-role="browser-address"] input');
-        const el = inputs[inputs.length - 1];
-        const r = el.getBoundingClientRect();
-        return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2});
-      })()
-    `),
+  // O rail era achado pelo TITULO (`.rail-btn[title="Novo navegador"]`), que
+  // e LOCALIZADO: em locale en o titulo e "Web Browser", o clique caia fora,
+  // o card ficava em `about:blank` e o smoke inteiro media uma pagina vazia —
+  // 20 falhas que nao tinham nada a ver com o produto (medido em 2026-09-22,
+  // e o mesmo defeito ja documentado em cdp-client.mjs para
+  // `.provider-picker-btn[title=...]`). O card entra pelo que NAO se traduz:
+  // o botao do rail e a linha do popover por `data-kind`.
+  await waitForSelector(page, '[data-role="rail-add-card"]');
+  const railBtn = JSON.parse(
+    await page.evalJs(`(() => {
+      const b = document.querySelector('[data-role="rail-add-card"]');
+      const r = b.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`),
   );
-  await page.click(barCoords.x, barCoords.y);
-  await page.evalJs(`
-    (() => {
-      const inputs = document.querySelectorAll('[data-role="browser-address"] input');
-      const inp = inputs[inputs.length - 1];
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      setter.call(inp, ${JSON.stringify(url)});
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-    })()
-  `);
-  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  await page.click(railBtn.x, railBtn.y);
+  await new Promise((r) => setTimeout(r, 400));
+  await waitForSelector(page, '.popover-row[data-kind="browser"]');
+  const browserRow = JSON.parse(
+    await page.evalJs(`(() => {
+      const b = document.querySelector('.popover-row[data-kind="browser"]');
+      const r = b.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    })()`),
+  );
+  await page.click(browserRow.x, browserRow.y);
+  await waitForSelector(page, '[data-role="browser-address"] input');
   await new Promise((r) => setTimeout(r, 800));
 
   const boardId = JSON.parse(await page.evalJs(`window.store.boards.list().then((b) => JSON.stringify(b[0].id))`));
@@ -205,7 +213,34 @@ async function createBrowserCard(page, url) {
       window.store.list(${JSON.stringify(boardId)}).then((cards) => JSON.stringify(cards.filter((c) => c.kind === 'browser').map((c) => c.id)))
     `),
   );
-  return browserCards[browserCards.length - 1];
+  const cardId = browserCards[browserCards.length - 1];
+
+  // Navegação pela MESMA chamada que a barra de endereços faz depois de
+  // parsear o texto (`window.browser.navigate`) — digitar na barra e mandar
+  // Enter era o outro trecho que media a página errada: medido em 2026-09-22,
+  // o card ficava em `about:blank` e o smoke media o vazio (o Enter sintético
+  // depende de foco/tecla que o card offscreen não recebe de forma confiável).
+  await page.evalJs(`window.browser.navigate(${JSON.stringify(cardId)}, ${JSON.stringify(url)})`);
+  // A prova de que a fixture carregou é medida NA PÁGINA do card (um botão que
+  // só existe na fixture), não no `url` do store — este último não é campo em
+  // que se possa confiar para "o documento carregou".
+  const deadline = Date.now() + 10000;
+  let loaded = false;
+  while (Date.now() < deadline) {
+    const probe = await toolJson("browser_eval", { target: cardId, js: "!!document.getElementById('btn')" });
+    // `browser_eval` devolve `JSON.stringify(raw)`: um booleano chega como a
+    // STRING "true", não como `true` (a mesma armadilha documentada no smoke
+    // do clique). Comparar com `=== true` dava falso negativo — o guarda
+    // dizia que a fixture não carregou com a página já carregada.
+    if (probe.result === true || String(probe.result) === "true") {
+      loaded = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  if (!loaded) throw new Error(`the browser card never loaded the fixture at ${url} — measuring now would measure an empty page`);
+  await new Promise((r) => setTimeout(r, 600));
+  return cardId;
 }
 
 const { check, finish } = makeChecker();
@@ -322,12 +357,9 @@ try {
   check("...usando aria-label num botão de ícone", snap.elements.some((el) => el.name === "Fechar painel"), true);
   check("...e o <label> associado num input", snap.elements.some((el) => el.name === "Título da nota" && el.role === "textbox"), true);
   check("elemento invisível fica de fora (mirá-lo daria um clique que não acontece)", snap.elements.some((el) => el.name === "invisivel"), false);
-  // Achado ao vivo (2026-09-03) — regex sem escape duplo dentro do
-  // template literal injetado (ver comentário no HTML acima): as duas
-  // checagens abaixo FALHAVAM antes do fix (confirmado revertendo
-  // browser-registry.ts e rodando de novo) — "Primeiro Segundo" virava
-  // nome vazio (split por "s" nunca acha os ids reais "first"/"second")
-  // e o texto de "espaços" saía com as letras "s" comidas.
+  // O que estas duas medem: o nome vem dos ids de `aria-labelledby` separados
+  // por ESPAÇO (os spans estão `hidden`, então o nome tem de sair do textContent
+  // deles) e o texto visível é colapsado sem comer letra nenhuma.
   check("aria-labelledby com múltiplos ids resolve nome certo (split por espaço, não por 's')", snap.elements.some((el) => el.name === "Primeiro Segundo"), true);
   check("texto com múltiplos espaços colapsa certo sem comer a letra 's'", snap.elements.some((el) => el.name === "multiple spaces here"), true);
 
