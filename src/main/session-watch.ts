@@ -101,6 +101,22 @@ export type SessionCandidate = {
    * candidates do not need a timestamp here.
    */
   timestampMs?: number;
+  /**
+   * EVIDÊNCIA do registro, para quem precisa dizer "este card trabalhou" sem
+   * adivinhar (task 5d47312c — a confrontação entre o store do harness e o que
+   * o Stellar capturou). O `stat` que produz `timestampMs` já era feito; o
+   * caminho e o tamanho saem do MESMO syscall nos stores de arquivo, então
+   * expor isto não custa I/O nenhum. `null` em store de sqlite, onde a linha
+   * não tem "tamanho de arquivo" — e inventar um número para preencher o campo
+   * seria a mentira que este campo existe para evitar.
+   *
+   * O que isto NÃO prova, e quem lê tem de saber: um arquivo grande pode ser um
+   * turno enorme sem trabalho nenhum, e um arquivo pequeno pode ser o começo de
+   * um trabalho real interrompido cedo. É evidência de ESCRITA, não de
+   * resultado.
+   */
+  path?: string;
+  sizeBytes?: number | null;
 };
 
 type RearmReservation = {
@@ -636,7 +652,9 @@ function discoverFromSqlite(store: SqliteStore, cwd: string, spawnedAtMs: number
       const timestampMs = toEpochMs(row.time, timeFormat);
       if (timestampMs === null || claimedSessionIds.has(row.id)) continue;
       if (!isFreshCandidate(timestampMs, spawnedAtMs)) continue;
-      out.push({ id: row.id, timestampMs });
+      // Sem `path`/`sizeBytes`: uma LINHA de sqlite não tem tamanho de arquivo, e
+      // o `null` explícito é a ausência declarada (ver `SessionCandidate`).
+      out.push({ id: row.id, timestampMs, sizeBytes: null });
     }
     return out;
   } catch {
@@ -666,7 +684,15 @@ async function discoverWithStore(
     const id = pathId ?? (await contentDerivedId(store.id, entry, cache));
     if (id === null || claimedSessionIds.has(id)) continue;
     if (!(await entryMatchesCwd(store.cwd, entry, cwd, cache))) continue;
-    out.push({ id, timestampMs });
+    // Um `stat` por candidato ACEITO (não por entrada varrida): o mesmo dado que
+    // já sustentava o frescor, agora explícito para quem confronta evidência.
+    const st = await stat(entry).catch(() => null);
+    out.push({
+      id,
+      timestampMs,
+      path: entry,
+      sizeBytes: st ? st.size : null,
+    });
   }
   return out;
 }

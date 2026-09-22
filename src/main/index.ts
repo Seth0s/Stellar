@@ -29,7 +29,7 @@ import {
   type RendererGoneDecision,
 } from "./renderer-gone-decision";
 import { identifyCurrentSession } from "./session-identify";
-import { isSessionIdClaimed } from "./session-watch";
+import { discoverSessionCandidates, isSessionIdClaimed } from "./session-watch";
 import { decideIdentifyApply, decideIdentifyCardGate, decideIdentifyChoiceApply } from "./session-identify-apply";
 // Fase B (atalhos), round 2 — `matchesCombo`/`getShortcutCombo` vêm de
 // `renderer/src/shortcut-registry.ts` de propósito: é um módulo puro (zero
@@ -2123,6 +2123,22 @@ function createWindow() {
     },
     listAllConnectors: () => store.listAllConnectors(),
     recordSpawn: (input) => store.recordSpawn(input),
+    /**
+     * Task 5d47312c — o lado STELLAR e o lado HARNESS da confrontação
+     * "trabalhou e não deixou rastro". O I/O fica AQUI (o bus não lê disco nem
+     * SQL): as três fontes do Stellar saem de uma consulta só, e a descoberta no
+     * harness é a MESMA função que o watcher de sessão usa — mesma declaração
+     * `capacity.session.store`, nenhuma varredura por heurística e nenhum grep
+     * recursivo no diretório do dono.
+     */
+    listCoverageCards: () => store.listCoverageSources(),
+    countOrphanReports: () => store.countOrphanReports(),
+    discoverCoverageSessions: async (provider, cwd, floorMs) =>
+      (await discoverSessionCandidates(provider, cwd, floorMs)).map((c) => ({
+        sessionId: c.id,
+        timestampMs: c.timestampMs ?? null,
+        sizeBytes: c.sizeBytes ?? null,
+      })),
     findSpawnByChild: (toCardId) => store.findSpawnByChild(toCardId),
     listSpawnsByParent: (fromCardId) => store.listSpawnsByParent(fromCardId),
     // A lacuna que este comentário descrevia (2026-09-09: `set_connector_kind`
