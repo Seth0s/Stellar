@@ -68,8 +68,9 @@ import {
   type ProviderId,
   type RegisterProvidersResult,
 } from "./providers";
+import builtinProvidersJson from "./data/providers.builtin.json";
+import type { ReadinessProbe } from "./provider-readiness-decision";
 import {
-  MIN_CONTENT_BYTES,
   SQL_IDENTIFIER_RE,
   type FileReadSpec,
   type SessionCwdSource,
@@ -111,6 +112,20 @@ export type DynamicProviderSpec = {
   binaryNames: string[];
   /** Sugestão de instalação por SO (`null` = nunca "não instalado"). */
   installCommand: { posix: string; windows: string } | null;
+  /**
+   * COMO SABER QUE ESTE PROVIDER ESTÁ *PRONTO* — e não só instalado (task
+   * 1777060e). Ausente = o app NÃO SABE, e a disponibilidade responde
+   * `unknown` em vez de afirmar (o defeito que a task remove: "o binário
+   * existe" tratado como "dá para usar").
+   *
+   * É DADO, e é por provider porque o caminho que responde "pronto" sem
+   * chamar modelo varia por harness. Medido no `omp` (18.2.8):
+   * `auth-broker status --json` responde `{"ok":false,"reason":"not_configured"}`
+   * em 0,69s com exit 0 — o campo manda, não o exit code. O `hint` é o comando
+   * que o HUMANO roda para sair do estado, declarado por quem mediu o CLI:
+   * a UI não inventa texto de comando.
+   */
+  readiness?: ReadinessProbe | null;
   /**
    * Args FIXOS do binário — "flags que esta CLI sempre precisa", declaradas
    * uma vez e presentes em TODO spawn deste provider (2026-09-20, task
@@ -217,216 +232,67 @@ export type DynamicProviderSpec = {
 };
 
 /**
- * O catálogo MEDIDO embutido (task 4938e154) — os dois CLIs de terceiro
- * que já foram medidos nesta máquina.
+ * O CATÁLOGO DO APP É DADO, NÃO CÓDIGO (task 3fe0db6e, desenho (E) aprovado).
  *
- * Por que embutido, e não só no arquivo do usuário: sem isto, "cadastrar
- * cline" seria um passo manual de cada instalação do Stellar, e o recurso
- * nasceria desligado. É DADO declarativo, não código por provider — o que
- * o desenho veio remover é o `buildArgs`/branch hardcoded, e aqui não
- * existe nenhum. O usuário continua podendo sobrescrever ou acrescentar
- * qualquer id pelo `providers.json` (um id igual ao de cá VENCE).
+ * As duas declarações que o Stellar entrega prontas (cline, commandcode) vivem
+ * em `data/providers.builtin.json` — arquivo de DADOS versionado, ao lado do
+ * código, com o MESMO formato do `providers.json` do usuário. O TypeScript fica
+ * com a GRAMÁTICA (o tipo `DynamicProviderSpec`, `parseProviderSpec`,
+ * `dynamicProviderDef`, o schema publicado); a DECLARAÇÃO é dado.
+ *
+ * POR QUE (medido, e a razão é o dono ter olhado o resultado e recusado o
+ * desenho anterior): declaração enterrada em código é declaração que ninguém
+ * confere. O defeito do `cline` (task 6c42314) nasceu assim — a spec afirmava
+ * `canImposeSessionId: true` com `imposeFlag: "--id"` e um comentário dizendo
+ * "Medido, não presumido"; o `--help` da PRÓPRIA CLI diz `--id <session-id>
+ * Resume an existing session by ID`, e o app passou a mandar a CLI RETOMAR
+ * sessão que nunca existiu. Em dado, a mesma correção é uma linha de JSON,
+ * diffável e confrontável com o `--help` na revisão.
+ *
+ * POR QUE O CATÁLOGO CONTINUA EMBARCADO NO APP, e não no arquivo do usuário:
+ * duas exigências medidas proíbem que a origem seja o `providers.json` —
+ * (1) apagar o arquivo do usuário não pode fazer cline/commandcode sumirem;
+ * (2) correção do app numa declaração não editada tem de chegar a quem nunca a
+ * editou. As duas só fecham se a declaração existir FORA do arquivo do usuário;
+ * dado embarcado é o único ponto que atende às duas E tira a declaração do
+ * código. O usuário continua sobrescrevendo campo a campo pelo `providers.json`
+ * (um id igual ao de cá VENCE por campo — ver `mergeProviderOverride`).
+ *
+ * O `omp` NÃO entra aqui: `--resume` com o nome inteiro do arquivo como id não
+ * foi medido (sem credencial o processo pendura antes de responder), e embarcar
+ * campo não medido para TODOS os usuários é o que "medido, não presumido"
+ * proíbe. Ele vive no arquivo do dono até alguém medir.
  */
-export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
-  {
-    id: "cline",
-    label: "Cline",
-    binaryNames: ["cline"],
-    installCommand: { posix: "npm install -g cline", windows: "npm install -g cline" },
-    capacity: {
-      role: "agent",
-      session: {
-        // NAO IMPOE — e a versao anterior desta spec dizia que sim, com a
-        // frase "Medido, nao presumido". Estava errada, e a correcao vem de
-        // duas medicoes na MESMA versao que ela cita (`cline` 3.0.62):
-        //
-        //   1. O proprio help: `--id <session-id>   Resume an existing
-        //      session by ID`. E flag de RETOMAR. Nao existe caminho para
-        //      criar sessao com id escolhido.
-        //   2. O FORMATO nem bate. Os ids que o cline cria sao
-        //      `<epoch_ms>_<5 chars>` — lidos do store dele
-        //      (`~/.cline/data/db/sessions.db`): `1790084894395_2jj9i` e
-        //      `1789831746771_seq4z`. O Stellar impunha UUID.
-        //
-        // O sintoma que o dono relatou: "o cline fica com problema de sessao,
-        // parece que o Stellar esta inserindo id de sessao onde nao existe".
-        // Estava certo — o app mandava a CLI RETOMAR uma sessao que nunca
-        // existiu, e a CLI ignorava EM SILENCIO e criava a propria.
-        //
-        // `resumeFlag` FICA: retomar por `--id` e o uso legitimo da flag.
-        // O precedente ao lado e o opencode, que declara `false` com a nota
-        // "Nao impoe (medido 2026-09-13: recusa um id desconhecido)".
-        canImposeSessionId: false,
-        resumeFlag: "--id",
-        // A DESCOBERTA está fechada; a LEITURA não foi medida — e `read`
-        // ausente quer dizer exatamente isso: a resposta continua saindo da
-        // declaração (`null`: não há prova de que o id esteja errado, então
-        // não bloqueia). Medido (`cline` 3.0.62): `started_at` é ISO-8601
-        // TEXT, e sem o `timeFormat` um `>` numérico daria TODA linha como
-        // fresca (medi: 1 de 1) — o candidato errado premiado.
-        store: {
-          kind: "sqlite",
-          db: "~/.cline/data/db/sessions.db",
-          timeFormat: "iso-8601",
-          discovery: { table: "sessions", idColumn: "session_id", cwdColumn: "cwd", timeColumn: "started_at" },
-        },
+let builtinSpecsCache: ParseProviderSpecsResult | null = null;
+
+/**
+ * O catálogo lido do dado, COM as recusas nomeadas.
+ *
+ * Existe por uma medição da própria task: devolver só `.specs` faz uma
+ * declaração recusada DESAPARECER em silêncio do registro (medido com a mutação
+ * `cline.canImposeSessionId = true`, que o validador recusa por falta de
+ * `imposeFlag`: o provider sumia e nada acusava). Quem chama esta versão pode
+ * REPORTAR; `tests/unit/providers-data-contract.test.ts` exige zero recusas.
+ */
+export function shippedProviderSpecsResult(): ParseProviderSpecsResult {
+  if (builtinSpecsCache === null) {
+    builtinSpecsCache = parseProviderSpecs(
+      {
+        schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION,
+        providers: (builtinProvidersJson as { providers?: unknown }).providers ?? [],
       },
-      systemPrompt: { mechanism: "flag", flag: "-s" },
-      mcp: {
-        mechanism: "global-config",
-        configPath: "~/.cline/data/settings/cline_mcp_settings.json",
-        configKey: "mcpServers",
-        serverShape: "stdio-command",
-      },
-      acbridgeOnPath: true,
-      effort: {
-        mechanism: "flag",
-        flag: "--thinking",
-        values: ["none", "low", "medium", "high", "xhigh"],
-      },
-      model: { mechanism: "flag", flag: "-m" },
-      // Brief posicional e `--` honrado, medido — mesmo caminho de
-      // claude/cursor (ver `END_OF_OPTIONS`).
-      delivery: { briefMechanism: "positional" },
-    },
-  },
-  {
-    id: "commandcode",
-    label: "Command Code",
-    binaryNames: ["commandcode", "command-code"],
-    installCommand: { posix: "npm install -g command-code", windows: "npm install -g command-code" },
-    // MEDIDO (nesta máquina, `command-code` 1.58.1) — é o que torna este
-    // provider utilizável como card, e por que ele passa a vir declarado:
-    //
-    //   $ command-code --help | grep yolo
-    //     --yolo    Bypass all permission prompts (alias for
-    //               --dangerously-skip-permissions)
-    //
-    // Sem essa flag, o provider pedia confirmação a CADA comando de shell e
-    // a CADA ferramenta MCP — inviável para um agente que roda sozinho num
-    // card, que foi exatamente o relato do dono do repo (task 64aed52b).
-    // Rodando `cmd --yolo` à mão num card bash, o mesmo agente trabalha sem
-    // atrito: a declaração só reproduz a invocação medida.
-    //
-    // O QUE ISSO CUSTA, dito por inteiro porque é uma permissão: um card
-    // `commandcode` nasce sem NENHUM prompt de permissão da CLI, igual a
-    // quem digita `--yolo` na mão. Quem quiser os prompts de volta declara
-    // `"baseArgs": []` para este id no `providers.json` (o arquivo do
-    // usuário vence o catálogo embutido) — ou troca por `--auto-accept`,
-    // que só dispensa confirmação de edição.
-    //
-    // MEDIDO (mesma máquina, `command-code` 1.58.1) — a segunda flag fixa, e
-    // a razão dela estar aqui é que um card spawnado não tem quem responda
-    // diálogo: sem ela o CLI abre, ANTES da view principal, o modal "Build
-    // Your Coding Taste — Found 2 sessions from Claude Code for this project.
-    // Analyze those sessions to build your coding taste package?".
-    //
-    //   $ command-code --help | grep onboarding
-    //     --skip-onboarding   Skip taste onboarding (for automated runs)
-    //
-    // O diálogo não é cosmético: escolher "1. Yes, learn" (o default do
-    // Enter) manda o CLI LER E PROCESSAR as transcrições de trabalho do dono
-    // da máquina — os jsonl de sessão que OUTROS agentes (Claude Code, Codex,
-    // Cursor) escreveram neste projeto. Um onboarding que consome isso sem o
-    // dono pedir é efeito que o Stellar não pode causar ao spawnar um card:
-    // não é preferência de configuração, é o processo que o Stellar abriu.
-    //
-    // O A/B foi medido, não deduzido, num HOME isolado (o estado do dono não
-    // foi lido nem escrito, e as "2 sessões" eram jsonl fabricados dentro
-    // desse HOME): sem a flag, o modal aparece e o log do CLI registra
-    // "[Onboarding] starting taste learning (has_sessions)"; com a flag, o
-    // CLI vai direto ao prompt de entrada e o log não tem UMA linha de
-    // onboarding — e nenhum `tasteOnboarding` é gravado no projeto.
-    //
-    // NÃO MEDIDO, dito para ninguém supor o contrário: (a) que a flag cubra
-    // qualquer onboarding futuro que este CLI venha a ganhar — ela cobre o de
-    // HOJE (o de taste, que é o que o `--help` nomeia); (b) que exista flag
-    // mais estreita que desligue só a análise de sessões: não existe (`--help`
-    // não tem nenhuma outra de onboarding). `--no-session`, que aparece nas
-    // sondas, NÃO entra: ele desliga a persistência da sessão (in-memory only)
-    // e um card sem histórico perde o `/resume`.
-    //
-    // Ordem dos dois itens: independentes entre si (`--yolo` é permissão,
-    // isto é onboarding), então a ordem não é semântica — `--yolo` primeiro
-    // só preserva a ordem em que foram medidas.
-    baseArgs: ["--yolo", "--skip-onboarding"],
-    // O efeito declarado (task c857539c): a UI expõe "sobe sem pedir
-    // permissão" a partir deste campo — dado medido ao lado da flag, nunca
-    // detecção de string.
-    bypassesPermissionPrompts: true,
-    capacity: {
-      role: "agent",
-      session: {
-        // Medido: só retoma sessão EXISTENTE. Um id imposto seria recusado,
-        // então `canImposeSessionId: false` — e `shouldImposeSessionId`
-        // nunca gera UUID para ele.
-        canImposeSessionId: false,
-        resumeFlag: "--resume",
-        // MEDIDO (`command-code` 1.58.1): o store é
-        // `~/.commandcode/projects/<slug do cwd>/`, e o PRÓPRIO CLI lista
-        // sessões filtrando `*.meta.json` e tirando esse sufixo do nome. É
-        // por isso que o padrão é `*.meta.json` e NÃO `*.jsonl`: a mesma
-        // pasta guarda `<id>.jsonl`, `<id>.checkpoints.jsonl`,
-        // `<id>.prompts.jsonl` e outros sidecars, então um `*.jsonl`
-        // proporia `<uuid>.checkpoints` como se fosse sessão.
-        store: {
-          kind: "files",
-          root: "~/.commandcode/projects/{cwd:slug}",
-          pattern: "*.meta.json",
-          id: { from: "fileName", strip: ".meta.json" },
-          // O cwd NÃO está no meta.json (medido: ele carrega só `traceIds` e
-          // `title`) — vem do caminho, como no claude. O header do transcript
-          // TEM cwd e timestamp, mas lê-lo na descoberta custaria abrir até
-          // 3 MB a cada poll.
-          cwd: { from: "root" },
-          time: { from: "mtime" },
-          read: { exists: "{id}.jsonl", content: { minBytes: MIN_CONTENT_BYTES } },
-        },
-      },
-      systemPrompt: { mechanism: "none" },
-      mcp: {
-        mechanism: "global-config",
-        configPath: "~/.commandcode/mcp.json",
-        configKey: "mcpServers",
-        serverShape: "stdio-command",
-      },
-      acbridgeOnPath: true,
-      effort: {
-        mechanism: "flag",
-        flag: "--effort",
-        values: ["low", "medium", "high", "xhigh", "max"],
-      },
-      model: { mechanism: "flag", flag: "-m" },
-      // O FIM DE TURNO, por TELA (task 0dd5c145). O commandcode TAMBÉM tem um
-      // sistema de `Stop` hooks compatível com o do Claude Code (medido no
-      // bundle 1.58.1: `~/.commandcode/settings.json` + o do projeto, eventos
-      // `Stop`/`PreToolUse`/`PostToolUse`, com o `hookSpecificOutput` daquele
-      // schema) — mas instalar um hook que EXECUTA COMANDO na config GLOBAL
-      // de um produto de terceiros é vetor de execução, e os cards JÁ ABERTOS
-      // só o pegariam no próximo spawn. Decisão do dono: marcador de TELA, que
-      // resolve hoje e degrada honestamente — se a CLI mudar a frase, o sinal
-      // some, que é o MESMO custo já aceito para o codex.
-      //
-      // O QUE FOI MEDIDO (texto de scrollback, `read_card`): o verbo separa
-      // passo de turno. `Worked for …` FECHA o turno — amostras `Worked for
-      // 2m 6s` e `Worked for 8m 0s` —, enquanto `Thought for N seconds`
-      // aparece a CADA passo: 18 ocorrências num card em turno, com ZERO
-      // `Worked for` no meio. É o verbo que impede o match no meio do turno.
-      //
-      // INFERÊNCIA DECLARADA — não é medição direta, e quem reescrever isto
-      // precisa saber: o ramo ` seconds?` (a palavra, para durações abaixo de
-      // um minuto) NÃO foi observado no verbo `Worked`. Ele foi inferido de
-      // `Thought for 1 second` / `Thought for 21 seconds` — as 18 amostras do
-      // verbo IRMÃO da MESMA TUI —, mais um `Worked for 21 seconds` lido de um
-      // SNAPSHOT (imagem), que é evidência mais fraca que texto. Se aparecer um
-      // `Worked for 45 seconds` e este padrão errar, a causa está aqui.
-      delivery: {
-        briefMechanism: "positional",
-        turnEnd: { mechanism: "screen", pattern: "Worked for (?:\\d+h\\s*)?(?:\\d+m\\s*)?\\d+(?:s| seconds?)" },
-      },
-    },
-  },
-];
+      {},
+    );
+  }
+  return builtinSpecsCache;
+}
+
+/** O catálogo que ESTE build entrega, já validado pela mesma gramática que o
+ * arquivo do usuário usa. É a fonte de `shipped` em todo `loadDynamicProviders`
+ * e o que a tela rotula como "do app". */
+export function shippedProviderSpecs(): DynamicProviderSpec[] {
+  return shippedProviderSpecsResult().specs;
+}
 
 // ---------------------------------------------------------------------------
 // A RECEITA COPIÁVEL (2026-09-20, task 49796d45): as declarações MEDIDAS
@@ -438,7 +304,7 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
 // ensinava nada.
 //
 // O QUE **NÃO** SE FAZ AQUI, e é a medição que sustenta esta task: mover os
-// specs de `MEASURED_THIRD_PARTY_SPECS` para o arquivo do usuário COLAPSA a
+// specs do CATÁLOGO DO APP para o arquivo do usuário COLAPSA a
 // precedência de três níveis (nativo > arquivo > embutido) em dois. Medido
 // contra este módulo: (C) o usuário apaga o arquivo e o `commandcode`
 // DESAPARECE do registro, quando hoje ele volta pelo catálogo embutido; (D) um
@@ -476,7 +342,7 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
  * Hoje são as duas que o app já entrega prontas: cline e commandcode.
  */
 export function measuredProviderRecipes(): DynamicProviderSpec[] {
-  return MEASURED_THIRD_PARTY_SPECS.map((spec) => structuredClone(spec));
+  return shippedProviderSpecs().map((spec) => structuredClone(spec));
 }
 
 // ---------------------------------------------------------------------------
@@ -940,6 +806,38 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
 
   // O efeito declarado sobre essas flags (ver o campo em
   // `DynamicProviderSpec`): booleano opcional, ausente é o caminho normal.
+  // A PRONTIDÃO DECLARADA (task 1777060e). Sem ela, o app só sabe "o binário
+  // existe" — e é isso que fazia um provider pela metade (omp, sem credencial)
+  // aparecer como disponível. O teto de `timeoutMs` é apertado de propósito:
+  // um probe de 10s seria validação de trabalho, que o spec do opencode já
+  // recusou por orçamento (~1,7s medidos).
+  let readiness: DynamicProviderSpec["readiness"] = null;
+  if (value.readiness !== undefined && value.readiness !== null) {
+    const raw = value.readiness;
+    if (!isRecord(raw)) {
+      return { ok: false, reason: refusal("readiness", 'an object like { "kind": "command", "args": ["auth-broker", "status", "--json"], "okPath": "ok", "timeoutMs": 2000 }', raw) };
+    }
+    if (raw.kind !== "command") {
+      return { ok: false, reason: refusal("readiness.kind", 'only "command" today', raw.kind) };
+    }
+    const args = nonEmptyStringArray(raw.args);
+    if (args === null || args.length === 0) {
+      return { ok: false, reason: refusal("readiness.args", 'a non-empty array of strings (one item = one argv element, no shell)', raw.args) };
+    }
+    const okPath = nonEmptyString(raw.okPath);
+    if (okPath === null) {
+      return { ok: false, reason: refusal("readiness.okPath", 'the name of the boolean field of the JSON that means "ready" (e.g. "ok")', raw.okPath) };
+    }
+    if (typeof raw.timeoutMs !== "number" || !Number.isFinite(raw.timeoutMs) || raw.timeoutMs <= 0 || raw.timeoutMs > 10_000) {
+      return { ok: false, reason: refusal("readiness.timeoutMs", "a positive number of milliseconds, at most 10000 (a probe is a read, not a validation)", raw.timeoutMs) };
+    }
+    const hint = raw.hint === undefined || raw.hint === null ? null : nonEmptyString(raw.hint);
+    if (raw.hint !== undefined && raw.hint !== null && hint === null) {
+      return { ok: false, reason: refusal("readiness.hint", "a non-empty string (the command a human runs) or null", raw.hint) };
+    }
+    readiness = { kind: "command", args, okPath, timeoutMs: raw.timeoutMs, hint };
+  }
+
   let bypassesPermissionPrompts: boolean | undefined;
   if (value.bypassesPermissionPrompts !== undefined && value.bypassesPermissionPrompts !== null) {
     if (typeof value.bypassesPermissionPrompts !== "boolean") {
@@ -1244,6 +1142,7 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
       label,
       binaryNames,
       installCommand,
+      ...(readiness !== null ? { readiness } : {}),
       ...(baseArgs !== undefined ? { baseArgs } : {}),
       ...(bypassesPermissionPrompts !== undefined ? { bypassesPermissionPrompts } : {}),
       capacity: {
@@ -1638,6 +1537,45 @@ export function providersConfigSchema(): Record<string, unknown> {
                 "argv: não há split por espaço nem shell, então valores com espaço são legítimos. Recusados: item " +
                 "vazio, `--` (encerraria o parsing de opções) e NUL. [] ou ausente = nenhum.",
             },
+            readiness: {
+              type: ["object", "null"],
+              required: ["kind", "args", "okPath", "timeoutMs"],
+              properties: {
+                kind: asEnum(["command"], "Como este provider diz que está PRONTO (e não só instalado)."),
+                args: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string", minLength: 1 },
+                  description:
+                    'Args do PRÓPRIO binário deste provider (um item = um elemento de argv, sem shell) que respondem ' +
+                    'o estado sem chamar modelo. Ex. medido no omp 18.2.8: ["auth-broker", "status", "--json"].',
+                },
+                okPath: asNonEmptyStr(
+                  'Nome do campo BOOLEANO do JSON que o comando imprime e que significa "pronto" (ex.: "ok"). O ' +
+                    'veredito vem do CAMPO, nunca do exit code: medido, o omp responde `{"ok":false,"reason":"not_configured"}` ' +
+                    'com exit 0.',
+                ),
+                timeoutMs: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  maximum: 10000,
+                  description:
+                    "Teto da sonda em ms. CURTO de propósito (máx. 10000): é LEITURA de estado, não validação de " +
+                    'trabalho — o spec do opencode já recusou validação por orçamento (~1,7s medidos).',
+                },
+                hint: {
+                  type: ["string", "null"],
+                  description:
+                    'Comando que o HUMANO roda para sair do estado (ex.: "omp auth-broker login"). É DADO: declare o ' +
+                    "que você mediu — a UI não inventa texto de comando por provider. null = a tela não promete caminho.",
+                },
+              },
+              description:
+                'COMO SABER QUE ESTE PROVIDER ESTÁ *PRONTO*, e não só instalado (task 1777060e). Sem esta chave, a ' +
+                'disponibilidade responde `unknown` — instalado e NÃO verificado — em vez de afirmar. Medido: o `omp` ' +
+                "resolve no PATH, responde `--version`, e PENDURA quando chamado porque não tem credencial; com 'installed' " +
+                "sozinho a tela oferecia o provider e o card ficava calado para sempre.",
+            },
             bypassesPermissionPrompts: asBool(
               'true = MEDIDO: as flags fixas acima dispensam os prompts de permissão desta CLI (ex.: "--yolo" no ' +
                 "command-code, medido no --help 1.58.1). Declare só para flag que VOCÊ mediu; ausente = sem claim — " +
@@ -1777,7 +1715,7 @@ export type ProvidersSeedPlan = {
  */
 export function planProvidersConfig(
   raw: Record<string, unknown>,
-  shipped: readonly DynamicProviderSpec[] = MEASURED_THIRD_PARTY_SPECS,
+  shipped: readonly DynamicProviderSpec[] = shippedProviderSpecs(),
 ): ProvidersSeedPlan {
   const appProviders = shipped.map((spec) => structuredClone(spec) as unknown as Record<string, unknown>);
   const previousApp = Array.isArray(raw[PROVIDERS_APP_KEY]) ? raw[PROVIDERS_APP_KEY] : null;
@@ -1817,11 +1755,11 @@ export function planProvidersConfig(
  * REAIS e completos. Quem já tem `_example` no arquivo fica com ele: a migração
  * nunca tira chave de ninguém.
  */
-export function initialProvidersConfig(shipped: readonly DynamicProviderSpec[] = MEASURED_THIRD_PARTY_SPECS): Record<string, unknown> {
+export function initialProvidersConfig(shipped: readonly DynamicProviderSpec[] = shippedProviderSpecs()): Record<string, unknown> {
   return planProvidersConfig({ schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION }, shipped).next;
 }
 
-export function initialProvidersConfigJson(shipped: readonly DynamicProviderSpec[] = MEASURED_THIRD_PARTY_SPECS): string {
+export function initialProvidersConfigJson(shipped: readonly DynamicProviderSpec[] = shippedProviderSpecs()): string {
   return renderProvidersConfig(initialProvidersConfig(shipped));
 }
 
@@ -2025,7 +1963,7 @@ export function ensureProvidersConfigFile(
   } = {},
 ): EnsureProvidersConfigResult {
   const path = providersConfigPath(userDataDir);
-  const shipped = opts.shipped ?? MEASURED_THIRD_PARTY_SPECS;
+  const shipped = opts.shipped ?? shippedProviderSpecs();
 
   let text: string;
   try {
@@ -2268,6 +2206,11 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
     label: spec.label,
     binaryNames: [...spec.binaryNames],
     installCommand: spec.installCommand ? { ...spec.installCommand } : null,
+    // A prontidão viaja como DADO até a checagem de disponibilidade: é ela que
+    // decide se `installed: true` vira `ready`, `not-ready` ou `unknown`
+    // (provider-readiness-decision.ts). Sem probe, o def carrega `null` e a
+    // resposta honesta é `unknown`.
+    readiness: spec.readiness ? { ...spec.readiness, args: [...spec.readiness.args] } : null,
     capacity: {
       role: declared.role,
       systemPrompt:
@@ -2433,7 +2376,7 @@ export function loadDynamicProviders(
   opts: { shipped?: readonly DynamicProviderSpec[] } = {},
 ): LoadDynamicProvidersResult {
   const file = providersConfigPath(userDataDir);
-  const shipped = opts.shipped ?? MEASURED_THIRD_PARTY_SPECS;
+  const shipped = opts.shipped ?? shippedProviderSpecs();
 
   let raw: unknown = null;
   let fileRead = false;

@@ -626,6 +626,11 @@ export const ptBR = {
   "pen.exit": "sair",
   "radial.back": "Voltar",
   "radial.notInstalled": "{id} (não instalado)",
+  // PRONTO x INSTALADO (task 1777060e). `not-ready` NÃO desabilita nada: diz o
+  // que falta, com o comando DECLARADO pelo provider — melhor que um badge
+  // cinzento, e melhor que deixar o dono descobrir com um card que pendura.
+  "radial.notReady": "{id} (instalado, mas não está pronto — rode: {hint})",
+  "radial.notReadyNoHint": "{id} (instalado, mas não está pronto)",
   "radial.remoteWindow": "Janela externa",
   "radial.pointer": "Ponteiro",
   "radial.pen": "Caneta",
@@ -1601,6 +1606,9 @@ export const en: Record<MessageKey, string> = {
   "pen.exit": "exit",
   "radial.back": "Back",
   "radial.notInstalled": "{id} (not installed)",
+  // READY x INSTALLED (task 1777060e).
+  "radial.notReady": "{id} (installed but not ready — run: {hint})",
+  "radial.notReadyNoHint": "{id} (installed but not ready)",
   "radial.remoteWindow": "External window",
   "radial.pointer": "Pointer",
   "radial.pen": "Pen",

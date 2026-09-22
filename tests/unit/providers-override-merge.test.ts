@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  MEASURED_THIRD_PARTY_SPECS,
+  shippedProviderSpecs,
   PROVIDERS_APP_KEY,
   mergeProviderOverride,
   parseProviderSpec,
@@ -41,13 +41,13 @@ function freshDir(): string {
   dirs.push(dir);
   return dir;
 }
-const base = (): DynamicProviderSpec => structuredClone(MEASURED_THIRD_PARTY_SPECS.find((s) => s.id === "commandcode")!) as DynamicProviderSpec;
+const base = (): DynamicProviderSpec => structuredClone(shippedProviderSpecs().find((s) => s.id === "commandcode")!) as DynamicProviderSpec;
 const override = (parsed: { ok: true; spec: DynamicProviderSpec } | { ok: false; reason: string }): DynamicProviderSpec => {
   if (!parsed.ok) throw new Error(parsed.reason);
   return parsed.spec;
 };
 /** Um arquivo no userData com `providers` do usuário e `appProviders` do app. */
-function writeConfig(dir: string, providers: unknown[], appSpecs: DynamicProviderSpec[] = MEASURED_THIRD_PARTY_SPECS.map((s) => structuredClone(s) as DynamicProviderSpec)) {
+function writeConfig(dir: string, providers: unknown[], appSpecs: DynamicProviderSpec[] = shippedProviderSpecs().map((s) => structuredClone(s) as DynamicProviderSpec)) {
   writeFileSync(
     providersConfigPath(dir),
     `${JSON.stringify({ $schema: "./providers.schema.json", schemaVersion: 1, providers, [PROVIDERS_APP_KEY]: appSpecs }, null, 2)}\n`,
@@ -167,14 +167,14 @@ describe("ponta a ponta: a sobrescrita parcial vale no registro vivo", () => {
 
   it("o que o usuário NÃO tocou continua vindo do app — e continua recebendo correção", () => {
     const dir = freshDir();
-    const v1 = MEASURED_THIRD_PARTY_SPECS.map((s) => structuredClone(s) as DynamicProviderSpec);
+    const v1 = shippedProviderSpecs().map((s) => structuredClone(s) as DynamicProviderSpec);
     writeConfig(dir, [{ id: "commandcode", baseArgs: ["--meu-jeito"] }], v1);
 
     loadDynamicProviders(dir, { shipped: v1 });
     expect(providerById("commandcode")?.buildArgs({})).toEqual(["--meu-jeito"]);
 
     // O app corrige o ESFORÇO numa versão nova (campo que o usuário não pediu):
-    const v2 = MEASURED_THIRD_PARTY_SPECS.map((s) => structuredClone(s) as DynamicProviderSpec);
+    const v2 = shippedProviderSpecs().map((s) => structuredClone(s) as DynamicProviderSpec);
     const cc = v2.find((s) => s.id === "commandcode")!;
     cc.capacity.effort = { mechanism: "none", reason: "no-flag" };
     loadDynamicProviders(dir, { shipped: v2 });
@@ -244,14 +244,14 @@ describe("ponta a ponta: a sobrescrita parcial vale no registro vivo", () => {
   // -------------------------------------------------------------------------
   it("cópia da declaração INTEIRA: a correção do app não chega em campo nenhum", () => {
     const dir = freshDir();
-    const v1 = MEASURED_THIRD_PARTY_SPECS.map((s) => structuredClone(s) as DynamicProviderSpec);
+    const v1 = shippedProviderSpecs().map((s) => structuredClone(s) as DynamicProviderSpec);
     // A receita colada em `providers` (só a chave do usuário é tocada).
     writeConfig(dir, [structuredClone(v1.find((s) => s.id === "commandcode")!)], v1);
     loadDynamicProviders(dir, { shipped: v1 });
     expect(providerById("commandcode")?.buildArgs({})).toEqual(["--yolo", "--skip-onboarding"]);
 
     // O app corrige numa versão nova — um campo raso e um bem fundo.
-    const v2 = MEASURED_THIRD_PARTY_SPECS.map((s) => structuredClone(s) as DynamicProviderSpec);
+    const v2 = shippedProviderSpecs().map((s) => structuredClone(s) as DynamicProviderSpec);
     const corrigido = v2.find((s) => s.id === "commandcode")!;
     corrigido.baseArgs = ["--yolo", "--skip-onboarding", "--novo"];
     corrigido.capacity.session.resumeFlag = "--retomar";
@@ -285,7 +285,7 @@ describe("ponta a ponta: a sobrescrita parcial vale no registro vivo", () => {
 
     const comCatalogo = parseProviderSpecs(
       { schemaVersion: 1, providers: [{ id: "commandcode", baseArgs: [] }] },
-      { appSpecs: MEASURED_THIRD_PARTY_SPECS as unknown as DynamicProviderSpec[] },
+      { appSpecs: shippedProviderSpecs() as unknown as DynamicProviderSpec[] },
     );
     expect(comCatalogo.rejected).toEqual([]);
     expect(comCatalogo.specs[0].baseArgs).toEqual([]);

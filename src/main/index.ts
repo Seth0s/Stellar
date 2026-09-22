@@ -53,10 +53,9 @@ import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
-import { checkAgentAvailability, providerById, type SpawnOpts } from "./providers";
+import { checkAgentAvailability, providerById, refreshProviderReadiness, type SpawnOpts } from "./providers";
 import { projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
 import {
-  MEASURED_THIRD_PARTY_SPECS,
   PROVIDERS_CONFIG_SCHEMA_VERSION,
   bootstrapProvidersConfig,
   createProvidersConfigWatcher,
@@ -68,6 +67,8 @@ import {
   parseProviderSpec,
   parseProviderSpecs,
   providersConfigPath,
+  shippedProviderSpecs,
+  shippedProviderSpecsResult,
   type DynamicProviderSpec,
 } from "./providers-dynamic";
 import { buildProviderOverrideEntry } from "./provider-override-entry";
@@ -192,18 +193,22 @@ const isDev = !app.isPackaged;
  *     é o (B) que grava a entrada CURTA, a que NÃO congela o provider.
  *
  * Cada uma lia a sua fonte: a view pelo `shipped` do loader, o handler por um
- * `MEASURED_THIRD_PARTY_SPECS.find` escrito de novo ali. Os dois conjuntos
- * COINCIDIAM POR ACIDENTE — o default do loader é este mesmo catálogo. No dia
- * em que o `shipped` virar configurável, um id que a tela mostra como "do app"
- * cairia no caminho (A) e o provider voltaria a CONGELAR, que é exatamente o
- * defeito que esta task removeu.
+ * `.find` escrito de novo ali. Os dois conjuntos COINCIDIAM POR ACIDENTE — o
+ * default do loader é este mesmo catálogo. No dia em que o `shipped` virar
+ * configurável, um id que a tela mostra como "do app" cairia no caminho (A) e o
+ * provider voltaria a CONGELAR, que é exatamente o defeito que esta task removeu.
  *
  * Agora as duas leem ESTE nome: ele vai EXPLÍCITO para todo
  * `loadDynamicProviders` (sem depender do default) e é o mesmo valor que o
  * handler procura. `tests/unit/providers-config-seed.test.ts` quebra se
  * alguma das duas pontas voltar a ter a sua própria lista.
+ *
+ * O VALOR dele vem do DADO (`data/providers.builtin.json`, task 3fe0db6e): a
+ * declaração é dado versionado e o TypeScript ficou com a gramática. O nome
+ * continua sendo UM, e por isso nada mais neste arquivo precisa saber de onde
+ * a lista veio.
  */
-const SHIPPED_APP_SPECS = MEASURED_THIRD_PARTY_SPECS;
+const SHIPPED_APP_SPECS = shippedProviderSpecs();
 
 // Fase B (atalhos), round 2 — os dois combos que `before-input-event`
 // (mais abaixo, `createWindow`) realmente casa contra, lidos direto do
@@ -2327,13 +2332,23 @@ function createWindow() {
   // Um campo entra aqui quando existe um CONSUMIDOR para ele — nunca antes,
   // para não projetar campo sem consumidor. O prompt de sistema (B3) segue na
   // fila.
-  ipcMain.handle("agents:check-availability", () =>
-    checkAgentAvailability().map((agent) => ({
+  ipcMain.handle("agents:check-availability", () => {
+    // O REFRESH DA PRONTIDÃO em background (task 1777060e): a resposta sai
+    // AGORA com o que já se sabe (`unknown` no primeiro pedido, para quem
+    // declara probe) e a sonda roda fora do caminho — 0,69s medidos no `omp`
+    // congelariam o main se fossem síncronos. Quando algo MUDA de estado, o
+    // renderer re-consulta pelo canal que JÁ existe (`agents:availability-stale`,
+    // o mesmo do watcher de providers): nenhum canal novo.
+    void refreshProviderReadiness().then(({ changed }) => {
+      if (changed.length === 0) return;
+      if (mainWindow) safeSend(mainWindow, "agents:availability-stale", `readiness:${changed.join(",")}`);
+    });
+    return checkAgentAvailability().map((agent) => ({
       ...agent,
       effortValues: projectEffortValues(providerById(agent.id)?.capacity.effort),
       turnEndSignal: projectTurnEndSignal(providerById(agent.id)?.capacity.delivery.turnEnd),
-    })),
-  );
+    }));
+  });
   ipcMain.handle("spawn:agent-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>
     messageBus!.resolveSpawnAgent(requestId, result),
   );
@@ -3822,6 +3837,32 @@ app.whenReady().then(async () => {
   // segunda redação no main divergiria da primeira na primeira mudança de
   // formato, que é o mesmo motivo pelo qual a linha do watcher também viaja
   // pronta (`formatProvidersReloadLine`).
+  // O CATÁLOGO DO APP AGORA É DADO (`data/providers.builtin.json`, task
+  // 3fe0db6e). Declaração recusada pelo validador NÃO pode sumir em silêncio do
+  // registro — é o mesmo contrato do arquivo do usuário, e `providers-data-
+  // contract.test.ts` exige zero recusas deste arquivo. Este log é a versão de
+  // RUNTIME da mesma exigência: o teste guarda a árvore, isto guarda o binário
+  // de quem já instalou.
+  const shippedResult = shippedProviderSpecsResult();
+  if (shippedResult.rejected.length > 0) {
+    console.error(
+      `[providers] catálogo do app com ${shippedResult.rejected.length} declaração(ões) RECUSADA(S) — os providers abaixo não sobem: ` +
+        shippedResult.rejected.map((r) => `"${r.id ?? "?"}": ${r.reason}`).join(" · "),
+    );
+  }
+
+  // A PRONTIDÃO dos providers com probe declarado é sondada UMA vez no boot,
+  // fora do caminho (task 1777060e): quem abrir a tela depois recebe o estado
+  // real em vez de `unknown`. Falha de sonda não derruba nada — vira `unknown`,
+  // que é a resposta honesta.
+  void refreshProviderReadiness().then(({ changed, probed }) => {
+    if (probed.length > 0) {
+      console.info(
+        `[providers] prontidão sondada: ${probed.join(", ")}${changed.length > 0 ? ` (mudou: ${changed.join(", ")})` : ""}`,
+      );
+    }
+  });
+
   const providersBootstrap = bootstrapProvidersConfig(newUserData);
   const seedNotice = formatProvidersSeedNotice(providersBootstrap.config);
   if (seedNotice !== null) console.info(`[providers] ${providersBootstrap.config.path} ${seedNotice}`);

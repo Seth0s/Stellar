@@ -1475,6 +1475,19 @@ export type AgentAvailability = {
   installed: boolean;
   installCommand: string | null;
   /**
+   * PRONTO? — e não só instalado (task 1777060e). Espelha o mesmo campo de
+   * `main/providers.ts`; a medição que o originou (omp instalado e sem
+   * credencial, pendurando) está em `main/provider-readiness-decision.ts`.
+   * Campo obrigatório de propósito, como os de baixo: o main SEMPRE manda.
+   */
+  readiness: "missing" | "ready" | "not-ready" | "unknown";
+  /** O que sustenta o estado (para a tela e para o relato). */
+  readinessEvidence: string;
+  /** O comando que o humano roda para sair do estado, quando o provider declara
+   *  um (`main/providers-dynamic.ts`'s `readiness.hint`). `null` = a UI não
+   *  promete caminho nenhum. */
+  readinessHint: string | null;
+  /**
    * PROJEÇÃO de `capacity.effort.values` — os valores que a UI pode
    * OFERECER, na ORDEM declarada (a declaração é escrita do menor para o
    * maior). Vazio = este provider não declara esforço, e aí a UI NÃO oferece

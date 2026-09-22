@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  MEASURED_THIRD_PARTY_SPECS,
+  shippedProviderSpecs,
   measuredProviderRecipes,
   PROVIDERS_CONFIG_FILENAME,
   PROVIDERS_SCHEMA_FILENAME,
@@ -208,7 +208,27 @@ const MAX_STORE_SQLITE: DynamicProviderSpec = {
   },
 };
 
-const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE];
+/**
+ * UMA BASE COM `readiness` (task 1777060e). O gate acima exige que TODO campo
+ * obrigatório do schema seja recusado pelo parser NOMEANDO o campo — e para
+ * `readiness.kind/args/okPath/timeoutMs` isso só é produzível a partir de uma
+ * base que DECLARE um probe válido (tirar um subcampo de um objeto ausente não
+ * produz recusa nenhuma, e o gate acusa o buraco — foi assim que ele pegou esta
+ * adição de schema, antes de a sonda existir no parser).
+ */
+const MAX_READINESS: DynamicProviderSpec = {
+  ...(structuredClone(MAX_NONE) as DynamicProviderSpec),
+  id: "qa-contract-readiness",
+  readiness: {
+    kind: "command",
+    args: ["auth-broker", "status", "--json"],
+    okPath: "ok",
+    timeoutMs: 2_000,
+    hint: "qa-contract auth-broker login",
+  },
+};
+
+const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE, MAX_READINESS];
 
 describe("anti-drift: o schema publicado não pode divergir do parser", () => {
   it("as bases do teste são válidas pelo próprio validador", () => {
@@ -324,11 +344,11 @@ describe("o schema publicado", () => {
   });
 
   it("o efeito é DECLARADO, nunca deduzido: commandcode true (medido), cline e o exemplo sem claim", () => {
-    const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
+    const commandcode = shippedProviderSpecs().find((entry) => entry.id === "commandcode");
     expect(commandcode?.baseArgs).toEqual(["--yolo", "--skip-onboarding"]);
     expect(commandcode?.bypassesPermissionPrompts).toBe(true);
     // Sem medição, sem claim: cline não ganhou flag nem efeito.
-    const cline = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "cline");
+    const cline = shippedProviderSpecs().find((entry) => entry.id === "cline");
     expect(cline?.bypassesPermissionPrompts).toBeUndefined();
     // E a receita publicada não ensina a declarar efeito sem medição.
     expect(measuredProviderRecipes()[0].bypassesPermissionPrompts).toBeUndefined();
@@ -367,7 +387,7 @@ describe("a receita copiável no schema publicado", () => {
     // em que o catálogo mudar (é o anti-drift da receita, o mesmo padrão que o
     // resto do arquivo usa contra o parser).
     const items = getAtPath(providersConfigSchema(), "properties.providers.items") as Record<string, unknown>;
-    expect(items.examples).toEqual(MEASURED_THIRD_PARTY_SPECS);
+    expect(items.examples).toEqual(shippedProviderSpecs());
     expect(measuredProviderRecipes().map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
   });
 
@@ -375,8 +395,8 @@ describe("a receita copiável no schema publicado", () => {
     const examples = measuredProviderRecipes();
     examples[0].label = "mutado pelo leitor";
     examples[0].capacity.delivery.briefMechanism = "none";
-    expect(MEASURED_THIRD_PARTY_SPECS[0].label).not.toBe("mutado pelo leitor");
-    expect(MEASURED_THIRD_PARTY_SPECS[0].capacity.delivery.briefMechanism).toBe("positional");
+    expect(shippedProviderSpecs()[0].label).not.toBe("mutado pelo leitor");
+    expect(shippedProviderSpecs()[0].capacity.delivery.briefMechanism).toBe("positional");
   });
 
   it("cada receita é COPIÁVEL: passa pelo MESMO validador e pelo MESMO schema do arquivo do usuário", () => {

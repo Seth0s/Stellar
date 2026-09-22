@@ -6,6 +6,14 @@ export type AgentAvailability = {
   label: string;
   installed: boolean;
   installCommand: string | null;
+  /** PRONTO? (task 1777060e) — ver `main/provider-readiness-decision.ts`. Quatro
+   *  estados: `missing`/`ready`/`not-ready`/`unknown`. `unknown` é o honesto de
+   *  um provider que não declara probe (instalado e NÃO verificado). */
+  readiness: "missing" | "ready" | "not-ready" | "unknown";
+  /** O que sustenta o estado (viaja para a tela e para o relato). */
+  readinessEvidence: string;
+  /** O comando que o humano roda para sair do estado, declarado pelo provider. */
+  readinessHint: string | null;
   /** PROJEÇÃO de `capacity.effort.values` (ver o handler de
    * `agents:check-availability` e `main/agent-availability-projection.ts`):
    * os valores oferecíveis, NA ORDEM DECLARADA. Vazio = este provider não

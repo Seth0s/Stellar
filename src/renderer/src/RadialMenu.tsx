@@ -2,9 +2,9 @@ import { useState } from "react";
 import { t, type MessageKey } from "../../shared/i18n";
 import type { Tool } from "./card-types";
 import { Icon, type IconName } from "./icons";
-import { useAgentAvailability } from "./useAgentAvailability";
+import { useAgentAvailability, useAvailableAgentProviders } from "./useAgentAvailability";
 import { computeIndicator, itemAngle, type IndicatorDisplay } from "./radial-indicator";
-import { deriveRadialProviderItems } from "./radial-providers";
+import { deriveRadialProviderItems, radialProviderTitle } from "./radial-providers";
 import { resolveRingGeometry } from "./radial-ring-geometry";
 
 /**
@@ -149,7 +149,13 @@ export function RadialMenu({
   const [level, setLevel] = useState<Level>("root");
 
   const { missing } = useAgentAvailability();
-  const providerItems = deriveRadialProviderItems(providers, missing);
+  // A lista COMPLETA vem do hook que já existe (não de um segundo caminho): é
+  // dela que sai a prontidão de cada provider (task 1777060e).
+  const all = useAvailableAgentProviders();
+  // A prontidão viaja junto (task 1777060e): `not-ready` NÃO desabilita o item —
+  // o humano ainda pode abrir o card e autenticar por dentro; o que muda é a
+  // frase, que passa a dizer POR QUE ele não vai funcionar.
+  const providerItems = deriveRadialProviderItems(providers, missing, all);
 
   // Item 2 — "Terminal" no radial precisa de um passo a mais": clicking it
   // no longer fires `onSelect` immediately (which used to spawn a bash
@@ -261,7 +267,14 @@ export function RadialMenu({
         <button
           key={item.id}
           className={`radial-item radial-item--spawn${item.installed ? "" : " radial-item--disabled"}`}
-          title={item.installed ? item.id : t("radial.notInstalled", { id: item.id })}
+          title={
+            // `null` = nada de especial a dizer, e o tooltip é o id — que é
+            // EXATAMENTE o que a tela fazia antes desta task. Todo provider
+            // nativo fica em `unknown` (nenhum declara probe), então converter
+            // `unknown` em texto encheria o radial de ruído: a propriedade é
+            // testada em `radial-providers.test.ts` (radialProviderTitle).
+            radialProviderTitle(item, t) ?? item.id
+          }
           disabled={!item.installed}
           style={{ "--tx": `${dx}px`, "--ty": `${dy}px`, "--item-size": `${itemSize}px` } as React.CSSProperties}
           onClick={() => item.installed && onSelect("terminal", item.id)}
