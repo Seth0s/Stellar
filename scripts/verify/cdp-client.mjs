@@ -127,6 +127,13 @@ export async function pickFreePort() {
  * por cegueira. A varredura respeita o TTL mesmo assim, para o escape
  * hatch não virar o vazamento de volta.
  */
+/**
+ * TODO perfil criado por `startApp` fica registrado aqui até o `stopApp`
+ * correspondente — a rede de último recurso do `process.on("exit")` no fim
+ * deste arquivo (um run que termina por `process.exit()` não roda `finally`).
+ */
+const pendingUserDataDirs = new Set();
+
 const USER_DATA_TTL_MS = 6 * 60 * 60 * 1000;
 
 export function sweepStaleUserData(dir = join(PROJECT_ROOT, ".verify-tmp"), ttlMs = USER_DATA_TTL_MS) {
@@ -187,6 +194,11 @@ export async function startApp({
   // wiping away what the first launch wrote. Defaults to the old
   // always-wipe behavior for every other caller.
   if (!preserveUserData) rmSync(userDataDir, { recursive: true, force: true });
+  // Perfil registrado para a limpeza de ÚLTIMO RECURSO (ver
+  // `discardPendingUserData` no fim do arquivo): um run que termina por
+  // `process.exit()` — o que `makeChecker().finish()` faz quando alguma
+  // checagem falha — não roda `finally` nenhum.
+  if (!preserveUserData && process.env.VERIFY_KEEP_USERDATA !== "1") pendingUserDataDirs.add(userDataDir);
   // O `$HOME` próprio (ver `isolatedHome` acima): nasce vazio ao lado do
   // userData, então `homedir()` do app aponta para um diretório sem nenhuma
   // CLI instalada e a rede do `knownBinDirs()` não tem o que entregar.
@@ -320,7 +332,34 @@ export async function stopApp(app) {
   if (app.userDataDir && !app.preserveUserData && process.env.VERIFY_KEEP_USERDATA !== "1") {
     rmSync(app.userDataDir, { recursive: true, force: true });
   }
+  if (app.userDataDir) pendingUserDataDirs.delete(app.userDataDir);
 }
+
+/**
+ * A limpeza que o `finally` do smoke NÃO garante (medido, 2026-09-22).
+ *
+ * `makeChecker().finish()` chama `process.exit(1)` quando alguma checagem
+ * falha — e `process.exit()` não roda `finally` nenhum. Resultado medido: os
+ * runs VERMELHOS de um smoke deixavam o perfil inteiro em `/tmp`
+ * (`stellar-verify-*`, com `agent-canvas.db` dentro) enquanto os verdes
+ * limpavam, e ninguém percebia, porque num run verde não sobra nada. Seis
+ * perfis de uma única sessão.
+ *
+ * `process.on("exit")` roda mesmo em `process.exit()` (só limpeza SÍNCRONA, que
+ * é o caso aqui), então a rede de último recurso mora no arnês e vale para
+ * TODO smoke — em vez de virar uma linha que cada arquivo novo precisa
+ * lembrar de repetir. `preserveUserData` e `VERIFY_KEEP_USERDATA=1` continuam
+ * fora, de propósito: são os dois casos em que o perfil é a evidência.
+ */
+process.on("exit", () => {
+  for (const dir of pendingUserDataDirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // já foi (stopApp) ou o disco está cheio — não é motivo para falhar o run
+    }
+  }
+});
 
 /** A live CDP connection to the app's one page target — `send` for raw
  * protocol calls, `evalJs` for the common "run this expression in the

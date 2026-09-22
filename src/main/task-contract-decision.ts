@@ -234,6 +234,69 @@ export function appendTaskContract(brief: string | undefined, contract: TaskCont
   const base = typeof brief === "string" ? brief.trimEnd() : "";
   return base.length > 0 ? `${base}\n\n${block}` : block;
 }
+/* ============ `gates` NUMA PLATAFORMA SEM SANDBOX (task b928f5f3) ============
+ *
+ * Depoimento do dono, medido por ele: "NENHUM gate declarado em task neste
+ * board JAMAIS RODOU". `gate-runner.ts` recusa rodar gates sem `bwrap` (a
+ * recusa é deliberada e continua certa: gate é shell de AUTORIA DE AGENTE), e
+ * `bwrap` é Linux — não existe em macOS nem em Windows. Num Mac, declarar
+ * `gates` numa task era aceito em SILÊNCIO, e a recusa só aparecia no
+ * RELATÓRIO, depois de a task ter corrido e o esforço já ter sido gasto.
+ *
+ * O defeito não é confinar demais: é ACEITAR uma declaração que o sistema não
+ * pode cumprir. Um campo `gates` que nunca vai rodar é pior que um campo
+ * ausente — promete evidência que não existe. Por isso a recusa acontece na
+ * DECLARAÇÃO, e não na execução: é a primeira porta em que a promessa nasce.
+ *
+ * A regra, e a razão da sua forma:
+ *   - `sandboxAvailable` (a mesma pergunta que `sandbox.ts` já responde, sem
+ *     uma segunda fonte de verdade sobre a plataforma) → segue tudo como era;
+ *   - sem sandbox e COM gates → RECUSA nomeando o campo e a saída honesta;
+ *   - sem sandbox e SEM gates → aceita. Task sem gate é normal, e LIMPAR um
+ *     conjunto que já existe é o caminho de conserto desta recusa — recusar a
+ *     limpeza deixaria a máquina presa na promessa que ela não pode cumprir.
+ *
+ * NÃO PROPÕE desligar o confinamento, nem confinamento equivalente por
+ * plataforma: esta função só diz a verdade sobre o que a plataforma atual
+ * consegue executar (o `sandbox-exec` do macOS e o AppContainer do Windows
+ * ficaram FORA do escopo aprovado).
+ */
+
+export type GatesSandboxDecision = { action: "allow" } | { action: "refuse"; error: string };
+
+/** `gates` não-vazio numa plataforma sem confinamento é promessa impossível.
+ * Puro: a disponibilidade do sandbox entra como parâmetro, para o teste poder
+ * exercitar a plataforma que ninguém tem em mãos. */
+export function decideGatesSandboxAvailability(input: {
+  tool?: string;
+  /** Conjunto que a chamada quer gravar (já normalizado: `[]` vira `null`). */
+  gates: string[] | null | undefined;
+  /** `isSandboxAvailable()` do lado de quem chama — a plataforma inteira. */
+  sandboxAvailable: boolean;
+}): GatesSandboxDecision {
+  if (input.sandboxAvailable) return { action: "allow" };
+  if (!input.gates || input.gates.length === 0) return { action: "allow" };
+  return {
+    action: "refuse",
+    error: describeGatesSandboxUnavailable({ tool: input.tool, gates: input.gates }),
+  };
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. English verbs in Portuguese sentences,
+ * `[de: stellar]`, same shape as every other refusal the bus returns, and it
+ * TEACHES: names the measured fact and the way out. */
+export function describeGatesSandboxUnavailable(input: { tool?: string; gates: readonly string[] }): string {
+  return (
+    `[de: stellar] ${input.tool ?? "create_task/update_task"} recusado: \`gates\` são comandos que o APP RODA, ` +
+    `e o app só os roda confinados — neste sistema não há sandbox (bubblewrap/bwrap), então os ` +
+    `${input.gates.length} gate(s) declarados NÃO rodariam. Aceitar isso seria registrar uma promessa que esta ` +
+    `plataforma não pode cumprir: a task correria inteira e a recusa só apareceria no relatório, como "gate NÃO executado". ` +
+    `Declare a task SEM \`gates\` e cubra o mesmo terreno em gatesOutput do relatório, rodando os comandos você mesmo ` +
+    `(o resultado é auto-declarado, mas é honesto e visível), ou rode a task num Linux com bubblewrap instalado. ` +
+    `Nada foi gravado.`
+  );
+}
+
 
 /* ============ AUTORIA DE `gates` (decisão do dono, 2026-09-21) ============
  *

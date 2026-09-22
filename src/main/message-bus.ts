@@ -80,6 +80,7 @@ import {
   appendTaskContract,
   contractFromTaskRow,
   decideGatesAuthorship,
+  decideGatesSandboxAvailability,
   parseTaskContractInput,
   territoryToSql,
   territoryFromSql,
@@ -88,6 +89,7 @@ import {
   reportSchemaToSql,
   allowCommitToSql,
 } from "./task-contract-decision";
+import { isSandboxAvailable } from "./sandbox";
 import { decideTerritoryConflict, type ActiveTaskTerritory } from "./territory-conflict-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
 import {
@@ -3974,6 +3976,22 @@ export function createMessageBus(
       if (cwdDecision.action === "refuse") {
         return { ok: false, error: cwdDecision.error, field: cwdDecision.field };
       }
+      // GATES NUMA PLATAFORMA SEM SANDBOX (task b928f5f3) — a declaração é
+      // recusada AQUI, na criação, e não no relatório: o app roda gates
+      // confinados e não há confinamento possível sem `bwrap` (Linux). Aceitar
+      // produziria uma task inteira cujo único desfecho é "gate NÃO executado".
+      // ANTES da autoria de propósito: num board sem marca a autoria ACEITA e
+      // registra, e um gate que não pode rodar não deve passar por essa porta.
+      // Limpar os gates (`null` depois do parse) segue permitido — remover a
+      // promessa é o caminho de conserto desta recusa.
+      const gatesSandbox = decideGatesSandboxAvailability({
+        tool: "create_task",
+        gates: contractParse.contract.gates,
+        sandboxAvailable: isSandboxAvailable(),
+      });
+      if (gatesSandbox.action === "refuse") {
+        return { ok: false, error: gatesSandbox.error, field: "gates" };
+      }
       const gatesAuthorship = decideGatesAuthorship({
         tool: "create_task",
         gates: contractParse.contract.gates,
@@ -4188,6 +4206,18 @@ export function createMessageBus(
         // comparar contra o que a task tem é o que distingue "mudou" de
         // "re-escreveu o mesmo".
         if (req.gates !== undefined) {
+          // A MESMA recusa de plataforma da criação (task b928f5f3), pela
+          // MESMA decisão: aqui a porta é a outra, e uma task já criada
+          // também não pode ganhar gates que nunca vão rodar. Limpar
+          // (`gates: []` → `null` no parse) continua passando: é o conserto.
+          const sandbox = decideGatesSandboxAvailability({
+            tool: "update_task",
+            gates: contractParse.contract.gates,
+            sandboxAvailable: isSandboxAvailable(),
+          });
+          if (sandbox.action === "refuse") {
+            return { ok: false, error: sandbox.error, field: "gates" };
+          }
           const authorship = decideGatesAuthorship({
             tool: "update_task",
             gates: contractParse.contract.gates,
