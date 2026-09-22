@@ -1462,7 +1462,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "spawn_agent",
       {
         description:
-          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call). `taskId` is optional: when you pass one, the new card's brief is that task's stored prompt (the same source auto-dispatch uses) and the card is linked to the task as its implementer. Without `taskId`, free `brief` still works exactly as before — including omitting both, which just opens a card. Do not pass `taskId` and `brief` together — EXCEPT with `role: \"reviewer\"`, where `brief` is the review order and the task prompt is what is under review (see `role`).",
+          "Ask the human to spawn ANOTHER agent/terminal card (a second provider working alongside you). Requires human approval, and is refused outright past a small recursion depth (an agent spawning an agent spawning an agent...) — the server tracks this itself from `callerCardId`'s own real depth, so there's nothing to declare or get wrong here (pre-release audit S4 — depth used to be a caller-supplied number, so a spawned agent could just re-claim depth 0 on its next call). `taskId` is optional: when you pass one, the new card's brief is that task's stored prompt (the same source auto-dispatch uses) and the card is linked to the task as its implementer. Without `taskId`, free `brief` still works exactly as before — including omitting both, which just opens a card. Do not pass `taskId` and `brief` together — EXCEPT with `role: \"reviewer\"`, where `brief` is the review order and the task prompt is what is under review (see `role`). RESPONSE says what stood up AND what happened to the brief: `briefMode` is \"argv\" (`briefDelivered: true` — the process was launched with it), \"typed\" (`briefDelivered: false` — the text is only QUEUED for typing, poll `get_delivery(briefDeliveryId)` for the settled verdict) or \"none\" (`briefDelivered: false` — you sent no `brief`/`taskId`, so the card is born MUTE and will sit idle until you `send_to_card` it: that is a deliberate state, not a lost text). A `{ok:false}` from this tool means THIS call created no card. When you passed `idempotencyKey` and this response is the earlier call's, it carries `idempotentReplay: true` — `cardId` is NOT a new card.",
         inputSchema: {
           // Validação em RUNTIME contra o registro vivo (ver
           // `spawnableProviderIds`): o id tem de existir AGORA — nativo ou
@@ -1546,6 +1546,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "What the NEW card does on `taskId` — only meaningful with `taskId`; passing it without one is refused. Omit (or 'implementer') = the card does the task's work: it becomes the task's principal cardId, its brief is the task's stored prompt, and its report {ok:false} counts against the task's retry budget — exactly today's behavior, so nothing changes if you never pass this. 'reviewer' = the card judges someone else's work on this task: it is recorded with role reviewer (get_task `cards`/`verdicts`, the Fila's ' ↔ review' chip), the principal cardId is left on the implementer, and its brief is your free `brief` (the review order — what to check, where the diff is, how to report a verdict); the task prompt is NOT delivered, because a reviewer handed the work statement would start implementing. A reviewer spawned without `brief` opens linked but mute — send the order with send_to_card. To make an already-open card a reviewer instead, use link_task_card. Any value outside implementer/reviewer is REFUSED (no spawn).",
             ),
+          idempotencyKey: z
+            .string()
+            .optional()
+            .describe(
+              "Your own retry key for THIS spawn: same key + same caller card, within 10 minutes, returns the SAME card instead of creating a second one — and never waits in the queue twice. Use it whenever you might retry after a timeout (e.g. your client's own watchdog aborting a call): without it, a retry after an abort creates a second agent card on the same tree for the same work, which is how silent overwrites get manufactured. A key is scoped to your card, so reusing a string that another card also uses does not collide with it. Only the CARD is deduplicated: a failed attempt (nothing created) does not hold the key, so you can retry it normally.",
+            ),
         },
       },
       async ({
@@ -1563,6 +1569,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         brief,
         taskId,
         role,
+        idempotencyKey,
       }) => {
         const res = await opts.handleRequest({
           cmd: "spawn_agent",
@@ -1580,6 +1587,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           brief,
           taskId,
           role,
+          idempotencyKey,
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },

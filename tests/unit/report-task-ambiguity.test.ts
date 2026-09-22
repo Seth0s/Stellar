@@ -174,6 +174,12 @@ describe("4fee76d5 — ambiguidade de vínculo no report (caracterização)", ()
               if (prop === "upsertTask") return (row: never) => store.upsertTask(row);
               if (prop === "listAllConnectors") return () => [];
               if (prop === "listCards") return () => [];
+              // O rig não tem pty-registry: todo id que ele nomeia É um card
+              // vivo. Sem esta linha o guarda de identidade do `report` (task
+              // 34e27f66) recusaria CARD_BUS por "o card não existe" e a
+              // ambiguidade — que é o que este caso testa — nunca seria
+              // alcançada.
+              if (prop === "isCardAlive") return () => true;
               return () => undefined;
             },
           },
