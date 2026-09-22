@@ -243,13 +243,29 @@ export async function runSlicePlan(
       } catch (err) {
         cleaned = false;
         cleanupError = err instanceof Error ? err.message : String(err);
-        // Última rede: se o `worktree remove` falhou, o diretório é removido do
-        // disco para não deixar lixo — o registro do worktree no `.git` pode
-        // ficar, e isso é dito em `cleanupError`, não escondido.
+      }
+      // ÚLTIMA REDE — disparada pelo FATO MEDIDO (`!cleaned`), nunca pela forma
+      // como a falha chegou. A versão anterior só a disparava dentro do `catch`,
+      // e o `catch` era CÓDIGO MORTO no caminho real: `defaultSliceSpawn` não
+      // LANÇA em `git worktree remove` saindo 128 — ele RESOLVE com o exit code
+      // (só `child.on("error")` é que resolve com `exitCode: null`). Medido na
+      // 2ª rodada com um spawn da forma da produção: o diretório do worktree
+      // ficava no disco e `cleaned` saía `false` calado sobre o vazamento.
+      //
+      // Só se chega aqui depois da recusa de worktree DENTRO do repo (o `return`
+      // acima): esta remoção forçada nunca aponta para dentro da árvore do dono.
+      if (!cleaned) {
         try {
           rmSync(plan.worktree, { recursive: true, force: true });
-        } catch {
-          /* reportado acima */
+          // O diretório saiu; o REGISTRO do worktree no `.git` pode ficar (é o
+          // que o `git worktree prune` limpa, e não se roda git destrutivo por
+          // conta própria aqui). Dito no erro, não escondido — e `cleaned`
+          // continua `false`, que é a verdade: o `worktree remove` falhou.
+          cleanupError = `${cleanupError} · diretório removido à força do disco (o registro no .git pode ficar)`;
+        } catch (rmErr) {
+          cleanupError = `${cleanupError} · E a remoção forçada do diretório falhou: ${
+            rmErr instanceof Error ? rmErr.message : String(rmErr)
+          }`;
         }
       }
     }
