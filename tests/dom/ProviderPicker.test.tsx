@@ -25,6 +25,10 @@ const AVAILABLE = ORDERED.filter((id) => id !== "bash").map((id) => ({
         : id[0].toUpperCase() + id.slice(1),
   installed: true,
   installCommand: null,
+  // O main SEMPRE manda os tres (task 1777060e): a fixture nao pode subdeclarar.
+  readiness: "unknown" as const,
+  readinessEvidence: "instalado; nenhum probe de prontidao declarado",
+  readinessHint: null,
 }));
 
 function groups() {

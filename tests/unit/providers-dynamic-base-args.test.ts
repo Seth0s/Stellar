@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  MEASURED_THIRD_PARTY_SPECS,
+  shippedProviderSpecs,
   measuredProviderRecipes,
   dynamicProviderDef,
   loadDynamicProviders,
@@ -15,6 +15,7 @@ import {
   type DynamicProviderSpec,
 } from "../../src/main/providers-dynamic";
 import { providerById, spawnArgv } from "../../src/main/providers";
+import builtinData from "../../src/main/data/providers.builtin.json";
 
 /**
  * `baseArgs` — argv fixo declarável (task 64aed52b, parte A).
@@ -153,7 +154,7 @@ describe("baseArgs — posição e determinismo no argv", () => {
 
 describe("baseArgs — o default medido do commandcode", () => {
   it("o catálogo embutido declara `--yolo` e `--skip-onboarding` (medidos em `command-code --help`, 1.58.1)", () => {
-    const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
+    const commandcode = shippedProviderSpecs().find((entry) => entry.id === "commandcode");
     expect(commandcode?.baseArgs).toEqual(["--yolo", "--skip-onboarding"]);
 
     const provider = dynamicProviderDef(commandcode!);
@@ -169,10 +170,10 @@ describe("baseArgs — o default medido do commandcode", () => {
     // OUTROS agentes neste projeto. Com a flag, o CLI vai direto ao prompt e
     // não grava `tasteOnboarding` nenhum. Um card spawnado não tem quem
     // responda o modal, então o Stellar responde pelo que ele causa.
-    const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
+    const commandcode = shippedProviderSpecs().find((entry) => entry.id === "commandcode");
     expect(commandcode?.baseArgs).toContain("--skip-onboarding");
     // O cline não ganhou nada equivalente — não foi medido para ele.
-    expect(MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "cline")?.baseArgs).toBeUndefined();
+    expect(shippedProviderSpecs().find((entry) => entry.id === "cline")?.baseArgs).toBeUndefined();
   });
 
   it("`--no-session` ficou FORA de propósito: desligaria a persistência e o card perderia o `/resume`", () => {
@@ -181,17 +182,67 @@ describe("baseArgs — o default medido do commandcode", () => {
     // (o id de sessão do commandcode, aliás, só retoma sessão EXISTENTE — ver
     // a capacidade de sessão deste spec). Não entra só porque foi medido em
     // outro contexto.
-    const commandcode = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode");
+    const commandcode = shippedProviderSpecs().find((entry) => entry.id === "commandcode");
     expect(commandcode?.baseArgs).not.toContain("--no-session");
   });
 
   it("o cline NÃO ganhou flag de permissão: não foi medido equivalente para ele", () => {
-    const cline = MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "cline");
+    const cline = shippedProviderSpecs().find((entry) => entry.id === "cline");
     expect(cline?.baseArgs).toBeUndefined();
   });
 
+  /**
+   * A FRONTEIRA ENTRE ASSERÇÃO DE RELAÇÃO E ASSERÇÃO DE VALOR (task 3fe0db6e,
+   * decisão do orquestrador): a canalização se prova por RELAÇÃO (o argv segue o
+   * que o ARQUIVO declara, sem repetir o valor no teste — assim uma mudança
+   * legítima do dado não obriga a editar o teste); o VALOR só se fixa onde ele
+   * codifica um FATO MEDIDO sobre a CLI de fora, que não pode regredir calado —
+   * é o caso do `--skip-onboarding` acima, que só existe porque a ausência dele
+   * fez o onboarding ingerir 187 transcripts do dono.
+   */
+  it("canalização: o argv do provider COMEÇA pelo que o arquivo de dados declara", () => {
+    // Relação, não valor (e é prefixo, não igualdade): `baseArgs` entra logo
+    // depois do binário e ANTES de tudo que o Stellar deriva — inclusive o
+    // prompt de sistema dos providers que o carregam por flag. O que este teste
+    // prova é a CANALIZAÇÃO: o arquivo manda, o argv segue.
+    for (const entry of builtinData.providers as DynamicProviderSpec[]) {
+      const declared = entry.baseArgs ?? [];
+      const def = dynamicProviderDef(entry);
+      expect(
+        def.buildArgs({}).slice(0, declared.length),
+        `baseArgs de "${entry.id}" não chegou ao argv`,
+      ).toEqual(declared);
+      // E o argv REAL do spawn também começa por eles (o brief entra no fim).
+      const argv = spawnArgv(def, { brief: "b" });
+      expect(argv.slice(0, declared.length), `argv de "${entry.id}"`).toEqual(declared);
+    }
+  });
+
+  it("canalização: uma entrada do usuário SEM baseArgs herda o baseArgs do arquivo de dados", () => {
+    // A outra ponta da mesma relação: o catálogo do app é a BASE do merge, e
+    // quem passa essa base é `shipped` — agora lido do dado. Se o loader
+    // deixasse de alimentar a base com o arquivo, isto cai.
+    const commandcode = (builtinData.providers as DynamicProviderSpec[]).find(
+      (s) => s.id === "commandcode",
+    )!;
+    const merged = parseProviderSpecs(
+      { schemaVersion: 1, providers: [{ id: "commandcode" }] },
+      { appSpecs: shippedProviderSpecs() },
+    ).specs[0];
+    expect(merged?.baseArgs).toEqual(commandcode.baseArgs);
+
+    const dir = mkdtempSync(join(tmpdir(), "stellar-data-baseargs-"));
+    try {
+      expect(loadDynamicProviders(dir, { shipped: shippedProviderSpecs() }).registered).toContain(
+        "commandcode",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("o próprio catálogo embutido passa pelo validador (os spec são literais à mão)", () => {
-    for (const shipped of MEASURED_THIRD_PARTY_SPECS) {
+    for (const shipped of shippedProviderSpecs()) {
       const parsed = parseProviderSpec(shipped);
       expect(parsed.ok, `shipped spec ${shipped.id} deve ser válido: ${parsed.ok ? "" : parsed.reason}`).toBe(true);
     }
@@ -209,13 +260,13 @@ describe("baseArgs — o default medido do commandcode", () => {
 
 describe("baseArgs — o usuário sobrescreve o default", () => {
   it("`[]` derruba o default embutido (declaração explícita de \"nenhum\")", () => {
-    const parsed = parseProviderSpec({ ...MEASURED_THIRD_PARTY_SPECS[1], baseArgs: [] });
+    const parsed = parseProviderSpec({ ...shippedProviderSpecs()[1], baseArgs: [] });
     expect(parsed.ok).toBe(true);
     expect(dynamicProviderDef(parsed.ok ? parsed.spec : spec("x")).buildArgs({})).toEqual([]);
   });
 
   it("uma flag diferente vence a embutida", () => {
-    const parsed = parseProviderSpec({ ...MEASURED_THIRD_PARTY_SPECS[1], baseArgs: ["--auto-accept"] });
+    const parsed = parseProviderSpec({ ...shippedProviderSpecs()[1], baseArgs: ["--auto-accept"] });
     expect(parsed.ok).toBe(true);
     const provider = dynamicProviderDef(parsed.ok ? parsed.spec : spec("x"));
     expect(provider.buildArgs({})).toEqual(["--auto-accept"]);
@@ -307,7 +358,7 @@ describe("ponta a ponta: o catálogo embutido chega ao argv real do spawn", () =
       providersConfigPath(dir),
       JSON.stringify({
         schemaVersion: 1,
-        providers: [{ ...MEASURED_THIRD_PARTY_SPECS.find((entry) => entry.id === "commandcode")!, baseArgs: [] }],
+        providers: [{ ...shippedProviderSpecs().find((entry) => entry.id === "commandcode")!, baseArgs: [] }],
       }),
       "utf8",
     );

@@ -1,5 +1,7 @@
 import { delimiter, join } from "node:path";
 import { effectivePath, isExecutableFile, loginShell } from "./user-env";
+import { decideProviderReadiness, type ProviderReadinessState, type ReadinessProbe } from "./provider-readiness-decision";
+import { readinessCache, runReadinessProbe } from "./provider-readiness-probe";
 import { MIN_CONTENT_BYTES, type SessionStore } from "./session-store-spec";
 
 /**
@@ -593,6 +595,14 @@ export type ProviderDef = {
    * auto-run) terminal. `null` for `bash` — always resolves via $SHELL/
    * ComSpec, never "not installed". */
   installCommand: InstallCommand | null;
+  /**
+   * O PROBE DE PRONTIDÃO declarado por este provider (task 1777060e): como saber
+   * que ele está PRONTO, e não só instalado. Ausente/`null` = não declarado, e a
+   * disponibilidade responde `unknown` — nunca `ready` por otimismo. Só o
+   * provider DINÂMICO declara (é dado do spec); os nativos não declaram nada
+   * hoje, e por isso aparecem como `unknown`.
+   */
+  readiness?: ReadinessProbe | null;
 };
 
 /**
@@ -1410,6 +1420,24 @@ export type AgentAvailability = {
   label: string;
   installed: boolean;
   installCommand: string | null;
+  /**
+   * PRONTO? — e não só instalado (task 1777060e). Quatro respostas, cada uma do
+   * tamanho da evidência: `missing` (o binário não resolve), `ready` (o probe
+   * DECLARADO respondeu que está pronto), `not-ready` (o probe respondeu que
+   * não), `unknown` (instalado e o app não sabe: sem probe declarado, ou o
+   * probe não respondeu).
+   *
+   * POR QUE ISTO EXISTE: medido com o `omp` instalado e sem credencial — o
+   * `installed: true` sozinho fazia a tela oferecer o provider, o spawn "dar
+   * certo" e o card ficar calado para sempre (`omp -p ...` pendura). Ver
+   * `provider-readiness-decision.ts` para a medição inteira.
+   */
+  readiness: ProviderReadinessState;
+  /** O que sustenta o estado (viaja para a tela e para o relato). */
+  readinessEvidence: string;
+  /** O comando que o HUMANO roda para sair do estado, quando o provider
+   *  declara um. `null` = a UI não promete caminho nenhum. */
+  readinessHint: string | null;
 };
 
 /** Checagem proativa (DESIGN-BACKLOG.md — "aviso antes mesmo de abrir um
@@ -1418,10 +1446,56 @@ export type AgentAvailability = {
  * faltam instalar. `bash` fica de fora — não é uma CLI de agente
  * instalável, é sempre o shell do próprio SO (ver resolveSpawn acima). */
 export function checkAgentAvailability(): AgentAvailability[] {
-  return PROVIDERS.filter((p) => p.id !== NATIVE_PROVIDER_IDS.bash).map((p) => ({
-    id: p.id,
-    label: p.label,
-    installed: which(p.binaryNames) !== null,
-    installCommand: providerInstallCommand(p.id),
-  }));
+  const now = Date.now();
+  return PROVIDERS.filter((p) => p.id !== NATIVE_PROVIDER_IDS.bash).map((p) => {
+    const installed = which(p.binaryNames) !== null;
+    const probe = p.readiness ?? null;
+    // Caminho SÍNCRONO: lê a última resposta do cache e não sonda nada — uma
+    // sonda de 0,69s aqui congelaria o main (é `which()`, síncrono). Enquanto
+    // não houver resposta, a decisão pura devolve `unknown`.
+    const decision = decideProviderReadiness({ installed, probe, result: readinessCache.get(p.id, now) });
+    return {
+      id: p.id,
+      label: p.label,
+      installed,
+      installCommand: providerInstallCommand(p.id),
+      readiness: decision.state,
+      readinessEvidence: decision.evidence,
+      readinessHint: probe?.hint ?? null,
+    };
+  });
+}
+
+/**
+ * SONDA em background os providers cujo probe declarado está vencido (ou nunca
+ * rodou), e devolve o que MUDOU de estado.
+ *
+ * É assíncrona de propósito: o custo medido do probe do `omp` é 0,69s e o
+ * caminho de leitura é síncrono. Quem chama (o boot e o handler de
+ * `agents:check-availability`, em `index.ts`) recebe os ids que mudaram e usa o
+ * MESMO push de disponibilidade que já existe — nenhum canal novo.
+ *
+ * Nunca imprime credencial: o probe só lê um campo booleano do JSON do próprio
+ * tool, e o que sai daqui é o veredito e a razão NOMEADA por ele.
+ */
+export async function refreshProviderReadiness(
+  now: () => number = Date.now,
+): Promise<{ changed: ProviderId[]; probed: ProviderId[] }> {
+  const changed: ProviderId[] = [];
+  const probed: ProviderId[] = [];
+  for (const p of PROVIDERS) {
+    if (p.id === NATIVE_PROVIDER_IDS.bash) continue;
+    const probe = p.readiness ?? null;
+    if (probe === null) continue;
+    if (!readinessCache.needsRefresh(p.id, now())) continue;
+    const binary = which(p.binaryNames);
+    if (binary === null) continue;
+    const before = checkAgentAvailability().find((row) => row.id === p.id)?.readiness;
+    const result = await runReadinessProbe(binary, probe);
+    readinessCache.set(p.id, result, now());
+    probed.push(p.id);
+    const after = checkAgentAvailability().find((row) => row.id === p.id)?.readiness;
+    if (after !== before) changed.push(p.id);
+  }
+  return { changed, probed };
 }

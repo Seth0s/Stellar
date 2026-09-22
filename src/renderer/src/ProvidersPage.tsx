@@ -28,7 +28,7 @@ import type { ProvidersPageRow, ProvidersPageView } from "../../preload/index";
  * configurado"): `app:add-provider` já tem a semântica certa — um id que já
  * existe (no arquivo OU no catálogo embutido, ex. cline/commandcode) NÃO é
  * rebaixado: o que o form não expressa é preservado da declaração anterior
- * (`main/index.ts`'s merge sobre `MEASURED_THIRD_PARTY_SPECS`). Então editar
+ * (`main/index.ts`'s merge sobre o catálogo do app, hoje DADO em `src/main/data/providers.builtin.json`). Então editar
  * é o MESMO canal: o form reabre PREENCHIDO com a linha e submete com o id
  * travado. Persiste em `providers.json` como entrada do usuário, e a
  * precedência do loader (nativo > arquivo > catálogo embutido,

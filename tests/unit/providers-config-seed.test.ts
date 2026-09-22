@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  MEASURED_THIRD_PARTY_SPECS,
+  shippedProviderSpecs,
   PROVIDERS_APP_KEY,
   PROVIDERS_CONFIG_SCHEMA_VERSION,
   PROVIDERS_SCHEMA_FILENAME,
@@ -54,7 +54,7 @@ function readConfig(dir: string): Record<string, any> {
 const POOR_FILE = `{ "schemaVersion": 1, "providers": [] }`;
 
 const v1 = (): DynamicProviderSpec[] =>
-  MEASURED_THIRD_PARTY_SPECS.map((spec) => structuredClone(spec) as DynamicProviderSpec);
+  shippedProviderSpecs().map((spec) => structuredClone(spec) as DynamicProviderSpec);
 /** O catálogo de uma versão NOVA do app: o commandcode ganhou uma flag. */
 function v2Catalogue(): DynamicProviderSpec[] {
   const specs = v1();
@@ -403,7 +403,7 @@ describe("fiação de produção — alguém CHAMA isto?", () => {
     // Parecer do Revisor A (task 1cac9dcd) — o acoplamento frágil que esta
     // asserção desarma: a VIEW decidia "do app" pela lista do LOADER
     // (`loaded.appIds`, derivada do `shipped` que ele usou) e o HANDLER, por um
-    // `MEASURED_THIRD_PARTY_SPECS.find` escrito de novo ali. Os dois conjuntos
+    // `shippedProviderSpecs().find` escrito de novo ali. Os dois conjuntos
     // coincidiam POR ACIDENTE — o default do loader é este mesmo catálogo.
     //
     // Se um dia o `shipped` virar configurável, um id que a tela mostra como
@@ -411,7 +411,20 @@ describe("fiação de produção — alguém CHAMA isto?", () => {
     // declaração INTEIRA — e o provider voltaria a CONGELAR, que é o defeito
     // que a 1cac9dcd removeu. Por isso o catálogo tem UM nome, e ele vai
     // EXPLÍCITO para todo load (nada depende do default).
-    expect(indexCode).toMatch(/const SHIPPED_APP_SPECS = MEASURED_THIRD_PARTY_SPECS;/);
+    //
+    // A LIÇÃO DO PARÊNTESE (task 3fe0db6e, o 13º falso-verde desta base): o
+    // `()` de uma chamada dentro de REGEX é GRUPO VAZIO, não parêntese literal.
+    // Quando o catálogo saiu do TypeScript e virou dado (`shippedProviderSpecs()`
+    // em vez do literal), esta linha e a de baixo passaram a casar TEXTO DIFERENTE
+    // do que existe para proibir, e a de baixo continuou VERDE: medido —
+    // `/shippedProviderSpecs()\.(find|map|filter)\(/` casa `shippedProviderSpecs.find(`,
+    // que NÃO existe, e NÃO casa `shippedProviderSpecs().find(`, que é o alvo.
+    // Todo `()` dentro de regex é `\(\)`; e um `not.toMatch` que não casa nada
+    // pelo motivo errado é indistinguível de uma garantia.
+    expect(indexCode).toMatch(/const SHIPPED_APP_SPECS = shippedProviderSpecs\(\)/);
+    // O catálogo não voltou a ser literal de TypeScript: o nome antigo não pode
+    // reaparecer em lugar nenhum do main.
+    expect(indexCode).not.toMatch(/MEASURED_THIRD_PARTY_SPECS/);
 
     const loads = indexCode.match(/loadDynamicProviders\([^)]*\)/g) ?? [];
     expect(loads.length).toBeGreaterThan(0);
@@ -419,6 +432,6 @@ describe("fiação de produção — alguém CHAMA isto?", () => {
 
     // O handler escolhe o caminho por esse nome — e não deriva o seu de novo.
     expect(indexCode).toMatch(/SHIPPED_APP_SPECS\.find\(/);
-    expect(indexCode).not.toMatch(/MEASURED_THIRD_PARTY_SPECS\.(find|map|filter)\(/);
+    expect(indexCode).not.toMatch(/shippedProviderSpecs\(\)\.(find|map|filter)\(/);
   });
 });

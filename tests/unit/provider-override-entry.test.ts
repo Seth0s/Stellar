@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  MEASURED_THIRD_PARTY_SPECS,
+  shippedProviderSpecs,
   PROVIDERS_APP_KEY,
   loadDynamicProviders,
   parseProviderSpecs,
@@ -36,7 +36,7 @@ function freshDir(): string {
 }
 
 const appSpec = (id = "commandcode"): DynamicProviderSpec =>
-  structuredClone(MEASURED_THIRD_PARTY_SPECS.find((spec) => spec.id === id)!) as DynamicProviderSpec;
+  structuredClone(shippedProviderSpecs().find((spec) => spec.id === id)!) as DynamicProviderSpec;
 
 /**
  * O que o form MANDA quando o usuário não toca em nada — o prefill que

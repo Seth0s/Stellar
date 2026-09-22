@@ -1,0 +1,119 @@
+{
+  "providers": [
+    {
+      "id": "cline",
+      "label": "Cline",
+      "binaryNames": ["cline"],
+      "installCommand": {
+        "posix": "npm install -g cline",
+        "windows": "npm install -g cline"
+      },
+      "capacity": {
+        "role": "agent",
+        "session": {
+          "canImposeSessionId": false,
+          "resumeFlag": "--id",
+          "store": {
+            "kind": "sqlite",
+            "db": "~/.cline/data/db/sessions.db",
+            "timeFormat": "iso-8601",
+            "discovery": {
+              "table": "sessions",
+              "idColumn": "session_id",
+              "cwdColumn": "cwd",
+              "timeColumn": "started_at"
+            }
+          }
+        },
+        "systemPrompt": {
+          "mechanism": "flag",
+          "flag": "-s"
+        },
+        "mcp": {
+          "mechanism": "global-config",
+          "configPath": "~/.cline/data/settings/cline_mcp_settings.json",
+          "configKey": "mcpServers",
+          "serverShape": "stdio-command"
+        },
+        "acbridgeOnPath": true,
+        "effort": {
+          "mechanism": "flag",
+          "flag": "--thinking",
+          "values": ["none", "low", "medium", "high", "xhigh"]
+        },
+        "model": {
+          "mechanism": "flag",
+          "flag": "-m"
+        },
+        "delivery": {
+          "briefMechanism": "positional"
+        }
+      }
+    },
+    {
+      "id": "commandcode",
+      "label": "Command Code",
+      "binaryNames": ["commandcode", "command-code"],
+      "installCommand": {
+        "posix": "npm install -g command-code",
+        "windows": "npm install -g command-code"
+      },
+      "baseArgs": ["--yolo", "--skip-onboarding"],
+      "bypassesPermissionPrompts": true,
+      "capacity": {
+        "role": "agent",
+        "session": {
+          "canImposeSessionId": false,
+          "resumeFlag": "--resume",
+          "store": {
+            "kind": "files",
+            "root": "~/.commandcode/projects/{cwd:slug}",
+            "pattern": "*.meta.json",
+            "id": {
+              "from": "fileName",
+              "strip": ".meta.json"
+            },
+            "cwd": {
+              "from": "root"
+            },
+            "time": {
+              "from": "mtime"
+            },
+            "read": {
+              "exists": "{id}.jsonl",
+              "content": {
+                "minBytes": 16
+              }
+            }
+          }
+        },
+        "systemPrompt": {
+          "mechanism": "none"
+        },
+        "mcp": {
+          "mechanism": "global-config",
+          "configPath": "~/.commandcode/mcp.json",
+          "configKey": "mcpServers",
+          "serverShape": "stdio-command"
+        },
+        "acbridgeOnPath": true,
+        "effort": {
+          "mechanism": "flag",
+          "flag": "--effort",
+          "values": ["low", "medium", "high", "xhigh", "max"]
+        },
+        "model": {
+          "mechanism": "flag",
+          "flag": "-m"
+        },
+        "delivery": {
+          "briefMechanism": "positional",
+          "turnEnd": {
+            "mechanism": "screen",
+            "pattern": "Worked for (?:\\d+h\\s*)?(?:\\d+m\\s*)?\\d+(?:s| seconds?)"
+          }
+        }
+      }
+    }
+  ]
+}

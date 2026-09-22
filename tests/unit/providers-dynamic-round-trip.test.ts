@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  MEASURED_THIRD_PARTY_SPECS,
+  shippedProviderSpecs,
   PROVIDERS_APP_KEY,
   dynamicProviderDef,
   parseProviderSpec,
@@ -40,11 +40,11 @@ function liveCapacity(capacity: DynamicProviderSpec["capacity"]): unknown {
 }
 
 const commandcodeSpec = (): DynamicProviderSpec =>
-  structuredClone(MEASURED_THIRD_PARTY_SPECS.find((s) => s.id === "commandcode")!) as DynamicProviderSpec;
+  structuredClone(shippedProviderSpecs().find((s) => s.id === "commandcode")!) as DynamicProviderSpec;
 
 describe("round-trip spec declarado → registro vivo", () => {
   it("TODO campo declarado em `capacity` chega ao def, com o mesmo valor", () => {
-    for (const shipped of MEASURED_THIRD_PARTY_SPECS) {
+    for (const shipped of shippedProviderSpecs()) {
       const declared = structuredClone(shipped) as DynamicProviderSpec;
       const def = dynamicProviderDef(declared);
       expect(def.capacity, `${shipped.id}: o def vivo divergiu do declarado`).toEqual(liveCapacity(declared.capacity));
@@ -70,7 +70,7 @@ describe("round-trip spec declarado → registro vivo", () => {
     // O caminho real: o app reescreve `appProviders` a cada boot e o loader
     // relê. Se o spec carregasse `RegExp`, a serialização o tornaria `{}` e a
     // declaração morreria aqui — em silêncio.
-    const plan = planProvidersConfig({}, MEASURED_THIRD_PARTY_SPECS);
+    const plan = planProvidersConfig({}, shippedProviderSpecs());
     const onDisk = JSON.parse(JSON.stringify(plan.next)) as Record<string, unknown>;
     const reparsed = parseProviderSpecs({
       schemaVersion: 1,
