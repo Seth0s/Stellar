@@ -734,6 +734,13 @@ export const ptBR = {
   "terminal.identifyMenu": "Identificar sessão",
   "terminal.cardMenu": "Mais ações",
   "terminal.shortcutsHint": "Atalhos deste terminal",
+  // Task b3f90d1d — o header mostra TASK + PAPEL dos vínculos VIVOS deste
+  // card. A ausência é honesta: com zero vínculos o grupo não é renderizado
+  // (nada de "ocioso"/"idle"), e NÃO há afirmação de atividade — o único
+  // vocabulário de status desta base é `task.column.doing` ("em andamento"),
+  // que é exatamente a inferência que a task b41ac547 tirou do Topbar.
+  "terminal.taskLinks.aria": "Vínculos deste card: {list}",
+  "terminal.taskLinks.open": "Abrir a task {label}",
   "terminal.shortcutsHintTitle": "Atalhos do terminal (mesmo registro das Configurações)",
   "terminal.markOrchestrator": "Marcar como orquestrador do board…",
   "terminal.clearOrchestrator": "Remover marca de orquestrador",
@@ -1699,6 +1706,8 @@ export const en: Record<MessageKey, string> = {
   "terminal.identifyMenu": "Identify session",
   "terminal.cardMenu": "More actions",
   "terminal.shortcutsHint": "Shortcuts for this terminal",
+  "terminal.taskLinks.aria": "This card's links: {list}",
+  "terminal.taskLinks.open": "Open task {label}",
   "terminal.shortcutsHintTitle": "Terminal shortcuts (same registry as Settings)",
   "terminal.markOrchestrator": "Mark as board orchestrator…",
   "terminal.clearOrchestrator": "Remove orchestrator mark",

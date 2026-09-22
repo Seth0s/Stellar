@@ -15,8 +15,24 @@ import {
 import { getEffectiveCombo } from "./shortcut-config";
 import type { IdentifySessionResult } from "../../preload/index";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
+import { describeCardRole } from "./TaskCard";
+import { shortTaskId } from "./task-board-model";
 import { SHELL_PROVIDER_ID } from "./attachments";
 import type { TurnEndProjection } from "../../main/agent-availability-projection";
+
+/**
+ * Quantos vínculos cabem no header antes do indicador "+N" (task b3f90d1d).
+ *
+ * O NÚMERO medido no board vivo, card de terminal não-bash: 0 vínculos em 6
+ * cards, 1 em 3, 2 em 1, 3 em 3, 4 em 1 — ou seja, 4 dos 7 cards COM vínculo
+ * têm mais de um. Dois chips cabem no lado do rótulo mesmo no card estreito
+ * (a identidade já está limitada a 42% e as ações ficam à direita); três ou
+ * quatro não cabem a 620px e seriam cortados pelo `overflow: hidden` de
+ * `.card-head-label` — corte silencioso, que é o que o indicador explícito
+ * existe para impedir. Valor PROVISÓRIO até a medição de largura real
+ * (getComputedStyle a 1280px e 620px) que a task pede.
+ */
+const MAX_INLINE_TASK_LINKS = 2;
 
 export type { Rect };
 
@@ -111,6 +127,7 @@ function TerminalCardInner({
   onClose,
   onCloseAnimationEnd,
   onRename,
+  onOpenTask,
   onResumeIdDiscovered,
   onOpenUrl,
   onConnectorStart,
@@ -165,6 +182,9 @@ function TerminalCardInner({
   onClose: () => void;
   onCloseAnimationEnd?: () => void;
   onRename: (label: string) => void;
+  /** Pedido de ABRIR a task deste vínculo (task b3f90d1d) — o App resolve
+   * para o `TaskDetailModal` da Fila, que é privado daquele card. */
+  onOpenTask?: (taskId: string) => void;
   onResumeIdDiscovered: (resumeId: string) => void;
   onOpenUrl: (url: string) => void;
   onConnectorStart?: (e: React.PointerEvent) => void;
@@ -348,6 +368,54 @@ function TerminalCardInner({
   // sempre existiu pra evitar).
   const lastFittedRectRef = useRef({ w: rect.w, h: rect.h });
   const lastRealFitAtRef = useRef(0);
+
+  /**
+   * VÍNCULOS VIVOS DESTE CARD — task + papel, no header (task b3f90d1d).
+   *
+   * POR QUE NÃO REUSA `taskId` (a prop que já existe) NEM O PUSH DIRETO:
+   *   - a prop `taskId` é um retrato do SPAWN (App.tsx a escreve a partir de
+   *     `params.taskId` e ninguém a reescreve quando o vínculo nasce, é
+   *     liberado ou a task fecha) — é literalmente a "task antiga sem
+   *     atualização automática" que o dono relatou;
+   *   - o push `task:changed` já traz `TaskBoardItem[]` com um `cards[]` por
+   *     task, e seria tentador ler dali. MEDIDO: aquele `cards[]` vem de
+   *     `taskCardsForBoardStmt` (store.ts), que NÃO filtra `released_at`,
+   *     NÃO filtra época e NÃO filtra task terminal — é o conjunto de
+   *     HISTÓRICO da Fila. Usá-lo aqui mostraria vínculo LIBERADO como se
+   *     fosse vivo, e um header com vínculo velho é pior que nenhum.
+   *   - a fonte viva é a MESMA que o dropdown do Topbar consome
+   *     (`store:board-agent-roles`, task 49de95ce): mesmo critério, alcance
+   *     de um card.
+   * O PUSH entra só como GATILHO de releitura — o mesmo evento que já avisa
+   * a Fila em `linkTaskCard`/`releaseTaskCardFromTask`, então o header não
+   * depende de um canal novo.
+   */
+  const [taskLinks, setTaskLinks] = useState<{ taskId: string; role: string }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const read = () => {
+      // O bridge do preload pode NÃO existir (o jsdom dos testes de DOM não
+      // o instala). Informação de header é decorativa: sem bridge, zero
+      // vínculos — ausência honesta — nunca um card quebrado por causa do
+      // próprio rótulo.
+      const api = (window as { store?: typeof window.store }).store;
+      void api?.cardAgentRoles?.(id)?.then((rows) => {
+        if (alive) setTaskLinks(rows?.[0]?.roles ?? []);
+      });
+    };
+    read();
+    const off = (window as { tasks?: typeof window.tasks }).tasks?.onChanged?.(() => read());
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, [id]);
+
+  // Toda a lista, sempre — o `title`/`aria-label` do grupo é o que garante
+  // que a compactação do header não ESCONDA vínculo nenhum (task b3f90d1d).
+  const taskLinksLabel = taskLinks
+    .map((l) => `${describeCardRole(l.role)} ${shortTaskId(l.taskId)}`)
+    .join(" · ");
   // Distingue "acabou de começar a arrastar" de "continuando o mesmo
   // arrasto" — sem isso, um card parado por minutos e então arrastado
   // faria seu PRIMEIRO tick já contar como "mais de 200ms desde o
@@ -579,6 +647,47 @@ function TerminalCardInner({
                 title={t("terminal.orchestratorBadgeTitle")}
               >
                 {t("terminal.orchestratorBadge")}
+              </span>
+            )}
+            {taskLinks.length > 0 && (
+              <span
+                className="card-head-tasks"
+                data-role="terminal-task-links"
+                aria-label={t("terminal.taskLinks.aria", { list: taskLinksLabel })}
+                title={taskLinksLabel}
+              >
+                {taskLinks.slice(0, MAX_INLINE_TASK_LINKS).map((link) => (
+                  <button
+                    type="button"
+                    // `data-no-drag`: o clique não pode também iniciar um
+                    // arraste de header (mesma razão do `<input>` do
+                    // CardTag) — o CardFrame exclui o que tem este atributo.
+                    data-no-drag
+                    className="card-head-task"
+                    key={`${link.taskId}-${link.role}`}
+                    title={t("terminal.taskLinks.open", { label: `${describeCardRole(link.role)} ${shortTaskId(link.taskId)}` })}
+                    onClick={() => onOpenTask?.(link.taskId)}
+                  >
+                    {describeCardRole(link.role)} <code>{shortTaskId(link.taskId)}</code>
+                  </button>
+                ))}
+                {taskLinks.length > MAX_INLINE_TASK_LINKS && (
+                  // Indicador de "há mais" EXPLÍCITO (task b3f90d1d): um
+                  // sufixo de texto passaria por parte do id. O número é o
+                  // resto NÃO mostrado; o `title` do grupo lista os vínculos
+                  // todos, e clicar aqui abre o PRIMEIRO que não coube — o
+                  // indicador leva a algum lugar em vez de só avisar.
+                  <button
+                    type="button"
+                    data-no-drag
+                    className="card-head-task-more"
+                    data-role="terminal-task-links-more"
+                    title={taskLinksLabel}
+                    onClick={() => onOpenTask?.(taskLinks[MAX_INLINE_TASK_LINKS]!.taskId)}
+                  >
+                    +{taskLinks.length - MAX_INLINE_TASK_LINKS}
+                  </button>
+                )}
               </span>
             )}
           </span>
