@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { t, type MessageKey } from "../../shared/i18n";
+import { Markdown } from "./Markdown";
 import { deriveVersionJump } from "./update-jump";
 import { useUpdateStatus } from "./useUpdateStatus";
 
@@ -19,7 +20,8 @@ import { useUpdateStatus } from "./useUpdateStatus";
  * banner itself stays a single compact line by default.
  */
 export function UpdateBanner() {
-  const { version, releaseNotes, dismissed, dismiss, install, releaseUrl, currentVersion } = useUpdateStatus();
+  const { version, changelog, commits, dismissed, dismiss, install, releaseUrl, currentVersion } =
+    useUpdateStatus();
   // O SELO DO SALTO (task 5fb0c21b): patch/minor/major, derivado puro
   // (`update-jump.ts`). Sem as duas versões comparáveis não há selo — ausência
   // nunca vira "patch" por omissão.
@@ -34,8 +36,12 @@ export function UpdateBanner() {
     <div className="update-banner">
       <div className="update-banner-row">
         <span>{t("update.available", { version })}</span>
-        {jump && <span className={`update-banner-jump update-banner-jump--${jump}`}>{t(`update.jump.${jump}` as MessageKey)}</span>}
-        {releaseNotes && (
+        {jump && (
+          <span className={`update-banner-jump update-banner-jump--${jump}`}>
+            {t(`update.jump.${jump}` as MessageKey)}
+          </span>
+        )}
+        {changelog !== "" && (
           <button className="update-banner-notes-toggle" onClick={() => setShowNotes((v) => !v)}>
             {showNotes ? t("update.hideNotes") : t("update.showNotes")}
           </button>
@@ -46,9 +52,16 @@ export function UpdateBanner() {
           // medido do main (`decideUpdateInstall`). Oferecer "instalar e
           // reiniciar" aqui seria um botão que baixa e falha no meio.
           <span className="update-banner-manual">
-            <span className="update-banner-manual-why">{install.message ?? t("update.installManual")}</span>
+            <span className="update-banner-manual-why">
+              {install.message ?? t("update.installManual")}
+            </span>
             {releaseUrl && (
-              <a className="update-banner-manual-link" href={releaseUrl} target="_blank" rel="noreferrer">
+              <a
+                className="update-banner-manual-link"
+                href={releaseUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
                 {t("update.downloadManual")}
               </a>
             )}
@@ -72,12 +85,33 @@ export function UpdateBanner() {
             {installing ? t("update.installing") : t("update.installRestart")}
           </button>
         )}
-        <button className="update-banner-later" disabled={installing} onClick={dismiss} title={t("update.laterTitle")}>
+        <button
+          className="update-banner-later"
+          disabled={installing}
+          onClick={dismiss}
+          title={t("update.laterTitle")}
+        >
           {t("update.remindLater")}
         </button>
       </div>
       {error && <span className="update-banner-error">{error}</span>}
-      {showNotes && releaseNotes && <pre className="update-banner-notes">{releaseNotes}</pre>}
+      {showNotes && changelog !== "" && (
+        // MARKDOWN COM O SANITIZADOR QUE O APP JÁ USA (task 5fb0c21b, item 3):
+        // `Markdown` é o mesmo componente do StickyCard (marked + dompurify,
+        // lazy). Antes isto era um `<pre>` cru.
+        <Markdown content={changelog} className="update-banner-notes" />
+      )}
+      {commits.length > 0 && (
+        // OS COMMITS VÊM DO CORPO DA RELEASE (item 4) — sem API em runtime.
+        <details className="update-banner-commits">
+          <summary>{t("update.showCommits", { count: commits.length })}</summary>
+          <ul>
+            {commits.map((commit) => (
+              <li key={commit}>{commit}</li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }

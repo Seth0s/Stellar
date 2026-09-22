@@ -8,6 +8,8 @@ import {
   type UpdateFeedState,
 } from "./update-feed-decision";
 import { decideUpdateInstall, type UpdateInstallState } from "./update-install-decision";
+import { parseReleaseNotes } from "../shared/release-notes";
+import { readUpdatePrefs, writeRemindLaterVersion } from "./update-prefs";
 // `electron-updater` is CommonJS with no static `exports.autoUpdater` a
 // named ESM import can see — the bundled main process (ESM output,
 // electron-vite) crashed the whole app on boot with "Named export
@@ -109,11 +111,15 @@ export function registerUpdater(win: BrowserWindow) {
       `[updater] update-available ${info.version} (feed: ${readFeedFacts().overrideUrl ?? UPDATE_FEED_FILENAME})`,
     );
     // `info.releaseNotes` can be a string (GitHub provider — the release
-    // body, as written) or an array of per-version note objects
-    // depending on provider/update path; only the plain-string shape is
-    // rendered (item 6 addendum — no markdown parser pulled back in just
-    // for this, `UpdateBanner` shows it as preformatted text).
-    send("updater:available", info.version, typeof info.releaseNotes === "string" ? info.releaseNotes : null);
+    // body, as written) or an array of per-version note objects depending on
+    // provider/update path. O CORPO é o caso do provider GitHub e é ele que
+    // traz a seção de commits (ver `shared/release-notes.ts`); o formato de
+    // array não é interpretado aqui — sem lista, o dropdown simplesmente não
+    // aparece, em vez de inventar commit.
+    const notes = parseReleaseNotes(
+      typeof info.releaseNotes === "string" ? info.releaseNotes : null,
+    );
+    send("updater:available", info.version, notes.changelog, notes.commits);
   });
   autoUpdater.on("error", (err) => console.warn("[updater]", err.message));
   autoUpdater.on("update-downloaded", () => send("updater:downloaded"));
@@ -128,7 +134,13 @@ export function registerUpdater(win: BrowserWindow) {
     const facts = readFeedFacts();
     const feed: UpdateFeedState = decideUpdateFeed(facts);
     if (!feed.configured) {
-      return { checked: false, unavailable: feed.message, feed, install: installState(), releaseUrl: null };
+      return {
+        checked: false,
+        unavailable: feed.message,
+        feed,
+        install: installState(),
+        releaseUrl: null,
+      };
     }
     // O OVERRIDE (verificação) aponta a lib para outro feed sem tocar no
     // pacote: `setFeedURL` é o caminho público do electron-updater para isso.
@@ -143,6 +155,7 @@ export function registerUpdater(win: BrowserWindow) {
         install: installState(),
         releaseUrl: releaseUrlFor(feed.source),
         currentVersion: app.getVersion(),
+        remindLaterVersion: readUpdatePrefs(app.getPath("userData")).remindLaterVersion,
       };
     } catch (err) {
       console.warn("[updater] check failed:", err);
@@ -155,7 +168,11 @@ export function registerUpdater(win: BrowserWindow) {
       // mesmo formato de "checou e não há novidade" — a mentira que
       // `update-feed-decision.ts` existe para não repetir. Então 404 vira ERRO
       // com uma mensagem que diz o que provavelmente aconteceu.
-      if (err instanceof Error && "statusCode" in err && (err as { statusCode?: number }).statusCode === 404) {
+      if (
+        err instanceof Error &&
+        "statusCode" in err &&
+        (err as { statusCode?: number }).statusCode === 404
+      ) {
         return {
           checked: false,
           error:
@@ -167,7 +184,14 @@ export function registerUpdater(win: BrowserWindow) {
         };
       }
       const message = err instanceof Error ? err.message : String(err);
-      return { checked: false, error: message, feed, install: installState(), releaseUrl: releaseUrlFor(feed.source), currentVersion: app.getVersion() };
+      return {
+        checked: false,
+        error: message,
+        feed,
+        install: installState(),
+        releaseUrl: releaseUrlFor(feed.source),
+        currentVersion: app.getVersion(),
+      };
     }
   });
 
@@ -177,10 +201,20 @@ export function registerUpdater(win: BrowserWindow) {
   // renderer UI (banner/changelog/dot) against the real event in dev.
   // Guarded the same way every other updater IPC handler already is
   // (`app.isPackaged`) — inert, a no-op, in any real build a user runs.
-  ipcMain.handle("updater:test-emit-available", (_e, version: string, releaseNotes: string | null) => {
-    if (app.isPackaged) return;
-    send("updater:available", version, releaseNotes);
+  /** "Lembrar mais tarde" PERSISTIDO (task 5fb0c21b, item 5): o renderer diz
+   *  qual versão adiar e o main grava. `null` limpa (o usuário voltou atrás). */
+  ipcMain.handle("updater:remind-later", (_e, version: string | null) => {
+    const next = writeRemindLaterVersion(app.getPath("userData"), version);
+    return { ok: true, remindLaterVersion: next.remindLaterVersion };
   });
+
+  ipcMain.handle(
+    "updater:test-emit-available",
+    (_e, version: string, releaseNotes: string | null) => {
+      if (app.isPackaged) return;
+      send("updater:available", version, releaseNotes);
+    },
+  );
 
   ipcMain.handle("updater:install", async () => {
     if (!app.isPackaged) return { ok: false, error: "dev build" };
