@@ -32,9 +32,12 @@
  * verdade para ele é "baixe o rpm novo", não um botão que falha.
  */
 export type UpdateInstallState =
-  | { canInstall: true; how: "appimage" | "rpm" | "deb";
+  | {
+      canInstall: true;
+      how: "appimage" | "rpm" | "deb";
       /** `true` quando a instalação passa por elevação (pkexec/sudo). */
-      needsElevation: boolean }
+      needsElevation: boolean;
+    }
   | { canInstall: false; reason: "not-a-package" | "dev-build" | "not-linux"; message: string };
 
 const PACKAGE_TYPE_TO_HOW: Record<string, "rpm" | "deb"> = { rpm: "rpm", deb: "deb" };
@@ -50,15 +53,24 @@ export function decideUpdateInstall(input: {
   packageType: string | null;
 }): UpdateInstallState {
   if (!input.isPackaged) {
-    return { canInstall: false, reason: "dev-build", message: "Build de desenvolvimento: atualização automática não se aplica." };
+    return {
+      canInstall: false,
+      reason: "dev-build",
+      message: "Build de desenvolvimento: atualização automática não se aplica.",
+    };
   }
   if (input.platform !== "linux") {
     // win32 (NSIS) e darwin (zip/dmg) têm caminho próprio na lib e não passam
     // por `package-type`; não foram medidos nesta máquina — declarado assim.
-    return { canInstall: true, how: input.platform === "darwin" ? "appimage" : "rpm", needsElevation: false };
+    return {
+      canInstall: true,
+      how: input.platform === "darwin" ? "appimage" : "rpm",
+      needsElevation: false,
+    };
   }
   if (input.appImageEnv) return { canInstall: true, how: "appimage", needsElevation: false };
-  const how = input.packageType === null ? null : PACKAGE_TYPE_TO_HOW[input.packageType.trim().toLowerCase()];
+  const how =
+    input.packageType === null ? null : PACKAGE_TYPE_TO_HOW[input.packageType.trim().toLowerCase()];
   if (how === undefined || how === null) {
     // Exatamente o caso do dono: sem `package-type`, a lib escolhe o
     // AppImageUpdater e DESLIGA (isUpdaterActive false). Dizer "baixe" aqui não
