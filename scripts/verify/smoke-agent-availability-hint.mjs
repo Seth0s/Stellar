@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, clickProviderInPicker, openTerminalCreatePopover } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-agent-availability-hint-${CDP_PORT}`, import.meta.url).pathname;
@@ -68,6 +68,21 @@ async function centerOf(page, selector) {
   return res;
 }
 
+// O PATH hermético SOZINHO NÃO ESCONDE NADA (task 0247900f, medido): este
+// smoke ficou vermelho na PRIMEIRA checagem (o badge de CLI ausente) porque
+// `user-env.ts`'s `composePath` REÚNE `knownBinDirs()` no fim do PATH efetivo
+// — por decisão, como rede — e `knownBinDirs()` inclui
+// `join(homedir(), ".local", "bin")`, que é onde o `agy` mora nesta máquina.
+// O app punha o diretório de volta e a checagem media o contrário do que
+// queria. A prova que localizou a causa: a MESMA rodada com `HOME=$(mktemp -d)`
+// passa as nove primeiras checagens.
+//
+// `isolatedHome: true` é o conserto, e ele vem do `cdp-client` porque é um
+// idioma (a 0dd5c145 mediu `commandcode` do mesmo jeito): `homedir()` lê
+// `$HOME`, então um `$HOME` vazio desliga a rede INTEIRA. O PATH hermético
+// continua aqui, com o mesmo papel de antes (garantir que claude/codex/agent
+// sejam achados DENTRO do shim dir e que o resto do sistema funcione).
+//
 // Achado ao vivo (2026-09-03, escrevendo este teste) — nesta máquina
 // `claude`/`codex`/`agent`(cursor)/`agy`(antigravity) são todos shims na
 // MESMA pasta (`~/.local/bin`), então o truque antigo (remover só o
@@ -99,7 +114,14 @@ for (const name of ["claude", "codex", "agent", "cursor-agent"]) {
 // existe em nenhum desses três, então continua genuinamente ausente).
 const hermeticPath = `${SHIM_BIN_DIR}:/usr/bin:/bin:/usr/local/bin`;
 const { check, finish } = makeChecker();
-const app = await startApp({ cdpPort: CDP_PORT, userDataDir: USER_DATA_DIR, extraEnv: { PATH: hermeticPath } });
+const app = await startApp({
+  cdpPort: CDP_PORT,
+  userDataDir: USER_DATA_DIR,
+  extraEnv: { PATH: hermeticPath },
+  // A METADE QUE O PATH NÃO FAZ — ver o bloco acima: sem o `$HOME` próprio, o
+  // `agy` volta pela rede do `knownBinDirs()` e a primeira checagem cai.
+  isolatedHome: true,
+});
 try {
   const page = await connectPage(CDP_PORT);
   await new Promise((r) => setTimeout(r, 1000));
@@ -187,12 +209,12 @@ try {
   // spawnar mostra o erro honesto, mas SEM o botão de instalação embutido
   // (removido — a checagem proativa acima é o único lugar que oferece
   // instalar agora).
-  const terminalBtn = await centerOf(page, '[data-kind="terminal"]');
-  await page.click(terminalBtn.x, terminalBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
-  const antigravityBtnCoords = await centerOf(page, '.provider-picker-btn[title="antigravity"]');
-  if (!antigravityBtnCoords) throw new Error("botão de provider 'antigravity' não encontrado no popover de criação de terminal");
-  await page.click(antigravityBtnCoords.x, antigravityBtnCoords.y);
+  // Abre o popover de CRIAÇÃO (rail → "Adicionar card" → Terminal) e só então
+  // escolhe o provider: o passo que estava aqui clicava num CARD de terminal já
+  // existente, que não abre popover nenhum — o picker vinha vazio e a linha
+  // seguinte (o `[title="antigravity"]` que nunca casava) escondia isso.
+  await openTerminalCreatePopover(page);
+  await clickProviderInPicker(page, "antigravity");
   await new Promise((r) => setTimeout(r, 200));
   const criarBtn = await centerOf(page, ".popover-actions button.primary");
   await page.click(criarBtn.x, criarBtn.y);

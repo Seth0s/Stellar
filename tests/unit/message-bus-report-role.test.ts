@@ -73,7 +73,7 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         // VIVOS (`listTaskCardsForCard`, epoch-filtrado, já aqui), mas esta
         // chave fica porque produção a tem.
         if (prop === "getTaskCards") return (taskId: string) => store.getTaskCards(taskId);
-        if (prop === "recordParticipationRound") return (cardId: string, verdict: string | null, at: number) => store.recordParticipationRound(cardId, verdict, at);
+        if (prop === "recordParticipationRound") return (cardId: string, verdict: string | null, at: number, taskId?: string | null) => store.recordParticipationRound(cardId, verdict, at, taskId);
         // `report` lê a task vinculada por `tasks.card_id` pra decidir
         // aceitação/retry — o store real responde.
         if (prop === "listTasks") return () => store.listTasks();
@@ -211,7 +211,7 @@ describe("message-bus + store: report carimba reports.role a partir de task_card
     // Mas `task_verdicts` (por task) sabe cada papel — a ambiguidade é só
     // da linha por card.
     expect(s.getTaskVerdicts("t-a")[0]?.role).toBe("implementer");
-    expect(s.getTaskVerdicts("t-b")[0]?.role).toBe("reviewer");
+    expect(s.getTaskVerdicts("t-b")).toHaveLength(0);
   });
 
   it("get_report devolve `role` junto do `verdict` (sem wait, com wait, e caminhando por afterSeq)", async () => {

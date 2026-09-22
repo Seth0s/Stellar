@@ -113,6 +113,9 @@ describe("message-bus: link_task_card", () => {
           return applied(t.status);
         },
         linkTaskCard: (taskId: string, cardId: string, role: string) => linked.push({ taskId, cardId, role }),
+        // Autorização de papel (05055482): requesterId presente no caminho
+        // acbridge é a marca do board — é o fluxo que o teste exercita.
+        getBoardOrchestratorCardId: (() => "orch") as never,
         listAllConnectors: () => [],
         recordSpawn: () => ({ id: "spawn-stub" }),
         findSpawnByChild: () => undefined,
@@ -136,7 +139,15 @@ describe("message-bus: link_task_card", () => {
         getCardLastActivityAt: () => Date.now(),
       }),
     );
-    const res = (await bus.handleRequest({ cmd: "link_task_card", ...req } as BusRequest)) as Record<string, unknown>;
+    const res = (await bus.handleRequest({
+      cmd: "link_task_card",
+      // Autorização de papel (05055482): o chamador padrão destes testes é a
+      // marca do board ("orch") — o que está sob teste aqui é a mecânica do
+      // aviso e da escrita, não a autoridade. Chamadas que passam o próprio
+      // requesterId (o caminho acbridge abaixo) sobrescrevem isto.
+      requesterId: "orch",
+      ...req,
+    } as BusRequest)) as Record<string, unknown>;
     return { res, upserted, linked, writes };
   }
 

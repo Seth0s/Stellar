@@ -14,11 +14,32 @@
 // Always launches an isolated instance (its own --user-data-dir and
 // --remote-debugging-port) — NEVER attaches to the user's own `npm run
 // dev` session. See AGENTS.md for why that rule exists in this project.
+//
+// DUAS ARMADILHAS QUE PAGAM UMA RODADA PERDIDA (task 0247900f), e as duas já
+// derrubaram smokes que pareciam estar medindo outra coisa:
+//
+// 1. O PATH NÃO É A ÚNICA PORTA PARA UM BINÁRIO. `user-env.ts`'s
+//    `composePath` REÚNE `knownBinDirs()` no FIM do PATH efetivo — por
+//    decisão, como rede ("toda CLI instalada pelo usuário tem de ser achada
+//    mesmo num launch pelo Finder"). E `knownBinDirs()` inclui
+//    `join(homedir(), ".local", "bin")`, onde vivem os symlinks de
+//    `claude`/`codex`/`agent`/`agy`/`commandcode` nesta máquina. Esconder
+//    esse diretório no `extraEnv.PATH` NÃO esconde a CLI: o app põe de volta.
+//    Um smoke que quer "esta CLI NÃO existe" — ou que quer substituí-la por um
+//    shim — precisa de `startApp({ isolatedHome: true })`, que dá um `$HOME`
+//    próprio ao Electron filho (é de `homedir()` que a rede deriva, então ela
+//    desliga inteira). Foi assim que a 0dd5c145 mediu `commandcode`.
+//
+// 2. `.provider-picker-btn[title="<id>"]` NÃO CASA. O `title` do botão é o
+//    RÓTULO declarado (+ as flags medidas, task c857539c), nunca o id — o
+//    seletor em oito smokes parou de casar sem ninguém notar, porque
+//    `npm run verify:smoke` PARA no primeiro que falha e ele é o primeiro.
+//    Use `clickProviderInPicker(page, providerId)`.
 
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { rmSync, readdirSync, statSync } from "node:fs";
+import { rmSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "node:net";
 
@@ -141,6 +162,18 @@ export async function startApp({
   extraEnv = {},
   timeoutMs = 15000,
   preserveUserData = false,
+  /**
+   * Dá um `$HOME` PRÓPRIO (vazio, recém-criado) ao Electron filho. É o que
+   * desliga a REDE do `knownBinDirs()` de que o cabeçalho deste arquivo fala:
+   * sem isto, uma CLI instalada em `~/.local/bin` continua sendo achada mesmo
+   * que o smoke a remova do `extraEnv.PATH` — e um smoke que forja a CLI por um
+   * shim acaba subindo a CLI DE VERDADE.
+   *
+   * NÃO ligue em quem depende do `$HOME` real: `smoke-user-env-path.mjs` testa
+   * justamente a recuperação do PATH pela rede, então o `$HOME` de verdade é
+   * parte do que ele mede.
+   */
+  isolatedHome = false,
 }) {
   // Every run starts from a clean profile — `userDataDir` isn't wiped
   // between invocations otherwise, so board/card state (SQLite) piles up
@@ -154,6 +187,14 @@ export async function startApp({
   // wiping away what the first launch wrote. Defaults to the old
   // always-wipe behavior for every other caller.
   if (!preserveUserData) rmSync(userDataDir, { recursive: true, force: true });
+  // O `$HOME` próprio (ver `isolatedHome` acima): nasce vazio ao lado do
+  // userData, então `homedir()` do app aponta para um diretório sem nenhuma
+  // CLI instalada e a rede do `knownBinDirs()` não tem o que entregar.
+  const isolatedHomeDir = isolatedHome ? `${userDataDir}-home` : null;
+  if (isolatedHomeDir !== null) {
+    rmSync(isolatedHomeDir, { recursive: true, force: true });
+    mkdirSync(isolatedHomeDir, { recursive: true });
+  }
   // Órfãos de runs que nunca chegaram ao `stopApp` (agente que saiu no
   // meio, SIGKILL, disco cheio). Barato: um `readdir` + `stat` por run.
   sweepStaleUserData();
@@ -212,6 +253,9 @@ export async function startApp({
         ...process.env,
         AGENT_CANVAS_REMOTE_PORT: String(cdpPort + 30000),
         AGENT_CANVAS_MCP_PORT: String(cdpPort + 40000),
+        // O `$HOME` próprio, quando pedido — ANTES do `extraEnv` para que um
+        // teste que precise de um `HOME` específico ainda possa sobrepor.
+        ...(isolatedHomeDir === null ? {} : { HOME: isolatedHomeDir }),
         // Por último de propósito: um teste que precisa de mais uma
         // variável (hoje `AGENT_CANVAS_REGISTRATION_HOME`, que redireciona
         // o `~` onde o registro de MCP das CLIs é escrito) passa por aqui
@@ -568,4 +612,74 @@ export function makeChecker() {
     console.log("\nall checks passed.");
   }
   return { check, finish };
+}
+
+/**
+ * Abre o popover de CRIAÇÃO DE TERMINAL (rail → "Adicionar card" → Terminal) e
+ * devolve com o PICKER DE PROVIDER na tela. NÃO clica "Criar terminal": quem
+ * chama escolhe o provider antes (`clickProviderInPicker`).
+ *
+ * Existe porque o passo que alguns smokes faziam aqui — clicar num CARD de
+ * terminal já existente — não abre popover nenhum, e o picker vinha VAZIO.
+ */
+export async function openTerminalCreatePopover(page) {
+  const steps = [
+    [SEL.railAddCard, "rail's 'Adicionar card' button"],
+    [SEL.popoverKind("terminal"), "terminal option in the add-card popover"],
+  ];
+  for (const [selector, what] of steps) {
+    const coords = JSON.parse(
+      await page.evalJs(`
+        (() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return JSON.stringify(null);
+          const r = el.getBoundingClientRect();
+          return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+        })()
+      `),
+    );
+    if (!coords) throw new Error(`${what} not found`);
+    await page.click(coords.x, coords.y);
+    await delay(250);
+  }
+}
+
+/**
+ * Clica o provider no picker do popover de criação de terminal (o popover já
+ * precisa estar aberto — ver `openTerminalCreatePopover`).
+ *
+ * O RÓTULO VEM DO PRÓPRIO APP (`agents:check-availability`), e o botão é
+ * achado pelo TEXTO visível. Não por `[title="<id>"]`: o `title` do botão é o
+ * rótulo declarado + as flags medidas (task c857539c), então aquele seletor
+ * nunca casa — e oito smokes o usavam, todos parados na mesma linha sem
+ * ninguém notar (`npm run verify:smoke` para no primeiro que falha).
+ */
+export async function clickProviderInPicker(page, providerId) {
+  const coords = JSON.parse(
+    await page.evalJs(`
+      (async () => {
+        const all = await window.agents.checkAvailability();
+        const label = all.find((entry) => entry.id === ${JSON.stringify(providerId)})?.label ?? null;
+        if (label === null) return JSON.stringify(null);
+        const matches = [...document.querySelectorAll('.provider-picker-btn')].filter((b) => b.textContent.trim() === label);
+        if (matches.length > 1) return JSON.stringify({ error: \`vários providers exibem o mesmo rótulo na UI ("\${label}"); ambíguo, recusando clique.\` });
+        if (matches.length === 0) return JSON.stringify(null);
+        const btn = matches[0];
+        const r = btn.getBoundingClientRect();
+        return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      })()
+    `),
+  );
+  if (coords && coords.error) {
+    throw new Error(coords.error);
+  }
+  if (!coords) {
+    // O que ESTAVA na tela, para o próximo não ter de adivinhar: o nome do
+    // provider pode ter mudado, ou o popover não estava aberto.
+    const visible = await page.evalJs(
+      `JSON.stringify([...document.querySelectorAll('.provider-picker-btn')].map((b) => b.textContent.trim()))`,
+    );
+    throw new Error(`provider "${providerId}" not found in the provider picker (visible: ${visible})`);
+  }
+  await page.click(coords.x, coords.y);
 }

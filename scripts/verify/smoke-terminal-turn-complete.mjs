@@ -19,7 +19,7 @@
 //      foi dispensado de propósito) até o sinal real chegar.
 import net from "node:net";
 import { join } from "node:path";
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, clickProviderInPicker, openTerminalCreatePopover } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
@@ -144,12 +144,11 @@ try {
   );
 
   // ---- CASO 2: claude — prova que o timer de 900ms é dispensado ----
-  const terminalBtn = await centerOf(page, '.rail-btn[title="Novo terminal"]');
-  await page.click(terminalBtn.x, terminalBtn.y);
-  await delay(300);
-  const claudeBtnCoords = await centerOf(page, '.provider-picker-btn[title="claude"]');
-  if (!claudeBtnCoords) throw new Error("botão de provider 'claude' não encontrado");
-  await page.click(claudeBtnCoords.x, claudeBtnCoords.y);
+  await openTerminalCreatePopover(page);
+  // O provider é escolhido pelo RÓTULO declarado, resolvido do próprio app:
+  // o `[title="claude"]` que estava aqui nunca casou (o `title` do botão é o
+  // rótulo + as flags, desde a c857539c).
+  await clickProviderInPicker(page, "claude");
   await delay(200);
   const criarBtn = await centerOf(page, ".popover-actions button.primary");
   await page.click(criarBtn.x, criarBtn.y);

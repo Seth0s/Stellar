@@ -5,7 +5,7 @@
 // against the real DOM (.modal presence/absence), not just the MCP
 // response — a wrong auto-approve that skips the modal only shows up if
 // you actually look for the modal.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, openTerminalCreatePopover } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const MCP_PORT = CDP_PORT + 40000;
@@ -274,9 +274,9 @@ try {
   // propósito (achado real ao vivo, ver git blame de seedCards) — precisa
   // criar um terminal explicitamente, mesmo passo que
   // cdp-client.mjs's bootIntoFreshSession já faz pro board inicial.
-  const terminalBtn = await centerOf(page, '[data-kind="terminal"]');
-  await page.click(terminalBtn.x, terminalBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
+  // O clique que estava aqui era num CARD de terminal — que não abre popover
+  // nenhum (e no board "Vazio" nem existe card para clicar).
+  await openTerminalCreatePopover(page);
   const criarTerminalBtn = await centerOf(page, ".popover-actions button.primary");
   await page.click(criarTerminalBtn.x, criarTerminalBtn.y);
 

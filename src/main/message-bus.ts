@@ -34,7 +34,10 @@ import {
   decideArtifactCandidates,
   decideCloseCardTaskEffect,
   decideJudgmentWrite,
+  decidePrincipalRepointAuthorship,
   decideReportVerdictWrite,
+  decideReviewerSpawnAuthorship,
+  decideTaskCardLinkAuthorship,
   decideTaskCardRelease,
   declaredFilesFromReport,
   describeArtifactPendencies,
@@ -1187,8 +1190,14 @@ export function createMessageBus(
      * NUNCA ter chamado `report` — `verdict: null` pela causa oposta).
      * Nenhum terceiro lugar chama isto — não existe tool de MCP nem cmd
      * de bus que escreva aqui além destes dois, por decisão explícita
-     * (MCP só leitura para este dado, via `get_task`). */
-    recordParticipationRound: (cardId: string, verdict: string | null, at: number) => void;
+     * (MCP só leitura para este dado, via `get_task`).
+     *
+     * `taskId` — o eixo da 1172cb32. A porta do `report` PASSA a task que
+     * resolveu (e a rodada é dela, uma linha só); a porta da SAÍDA não tem
+     * task para passar e mantém o fan-out sobre os vínculos, que ali é a
+     * verdade. Sem este parâmetro o veredito de um report era carimbado em
+     * todos os vínculos vivos do card. */
+    recordParticipationRound: (cardId: string, verdict: string | null, at: number, taskId?: string | null) => void;
     /** Seeda `reportSeqCounter` (abaixo) do que já está persistido — sem
      * isto, um restart zeraria o contador e o PRÓXIMO relatório sairia com
      * seq baixa (1, 2, ...) enquanto relatórios de ANTES do restart ainda
@@ -3280,7 +3289,7 @@ export function createMessageBus(
       const taskCardLinks = req.requesterId ? (callbacks.listTaskCardsForCard(req.requesterId) ?? []) : [];
       const link = decideReportTaskLink({
         declaredTaskId: declaredTaskIdFromReportBody(incomingReport),
-        principalTaskIds: req.requesterId ? tasks.filter((t) => t.card_id === req.requesterId).map((t) => t.id) : [],
+        principalTaskIds: req.requesterId ? tasks.filter((t) => t.card_id === req.requesterId && !["done", "failed"].includes(t.status)).map((t) => t.id) : [],
         linkTaskIds: taskCardLinks.map((l) => l.task_id),
       });
       if (link.action === "ambiguous") {
@@ -3452,7 +3461,12 @@ export function createMessageBus(
       // este é o único lugar que grava um report vindo de fora, então é
       // o único lugar que precisa lembrar de chamar isto — ver o
       // comentário grande de `recordParticipationRound` no callback.
-      callbacks.recordParticipationRound(req.requesterId, stored.verdict ?? null, now);
+      //
+      // `reportTaskId` — a rodada é DAQUELA task (1172cb32): sem passar isto, o
+      // veredito de UM report era gravado nos vínculos vivos todos (364 das 481
+      // linhas com veredito apontavam para uma task que o report não declarou).
+      // A resolução já aconteceu acima, no preflight da 6bea994a.
+      callbacks.recordParticipationRound(req.requesterId, stored.verdict ?? null, now, reportTaskId);
       // Parte 2b — cada waiter carrega o próprio `afterSeq`; só resolve
       // (e sai da fila) quem esse relatório novo de fato satisfaz. Os que
       // sobram (raro — normalmente há no máximo um waiter por card)
@@ -3759,6 +3773,22 @@ export function createMessageBus(
           reviewWanted: isReviewWanted(reviewForGate),
         });
         if (judgment.action === "refuse") return { ok: false, error: judgment.error };
+      }
+      // AUTORIA DO PONTEIRO PRINCIPAL (task 05055482 — porta 2): `cardId`
+      // troca `tasks.card_id` — e até aqui qualquer chamador apontava para
+      // SI MESMO, movendo o ponteiro e criando a linha de implementer
+      // sozinha (P2 medido). A marca do board DA TASK autoriza qualquer
+      // troca; o próprio principal entrega o bastão; task SEM principal é
+      // reivindicável. Fora disso, recusa. Ver `decidePrincipalRepointAuthorship`.
+      if (req.cardId !== undefined && req.cardId !== existing.card_id) {
+        const repoint = decidePrincipalRepointAuthorship({
+          taskId: req.taskId,
+          requesterId: req.requesterId,
+          currentCardId: existing.card_id,
+          newCardId: req.cardId,
+          orchestratorCardId: callbacks.getBoardOrchestratorCardId(existing.board_id ?? ""),
+        });
+        if (repoint.action === "refuse") return { ok: false, error: repoint.error };
       }
       // DESIGN-BACKLOG.md item 58, roteiro de orquestração peça 5 — pure
       // bookkeeping an external orchestrator's own retry/reassignment loop
@@ -4070,8 +4100,13 @@ export function createMessageBus(
       // de fechamento (`collectCloseCardLinkedTasks`): `null` num card que É
       // `tasks.card_id` é implementer de fato — sem isso a recusa viraria
       // decorativa para o estado legado "task com card_id e sem linha".
+      const boardId = task.board_id ?? callbacks.getCardBoardId(req.requesterId ?? "");
+      const orchestratorId = boardId ? callbacks.getBoardOrchestratorCardId(boardId) : null;
       const release = decideTaskCardRelease({
         taskId: req.taskId,
+        requesterId: req.requesterId,
+        targetCardId: req.target,
+        orchestratorCardId: orchestratorId,
         requesterRoleOnTask:
           roleOnTask(callbacks.getTaskCards(req.taskId) ?? [], req.requesterId) ??
           (task.card_id === req.requesterId ? TASK_CARD_IMPLEMENTER_ROLE : null),
@@ -4085,8 +4120,6 @@ export function createMessageBus(
       // (`concludeTaskOnCardClose`): o mark de orquestrador do board assina
       // como `orchestrator`; qualquer outro card, como `agent`. O FUNIL decide
       // se o `pending` aplica ou é segurado por decisão humana.
-      const boardId = task.board_id ?? callbacks.getCardBoardId(req.requesterId);
-      const orchestratorId = boardId ? callbacks.getBoardOrchestratorCardId(boardId) : null;
       const res = callbacks.releaseTaskCardFromTask({
         taskId: req.taskId,
         cardId: req.target,
@@ -4134,6 +4167,25 @@ export function createMessageBus(
           error: `role must be one of ${TASK_CARD_ROLES.map((r) => `"${r}"`).join(", ")} (or omitted for implementer), got "${String(req.role)}" — refusing to link rather than silently substituting a role`,
         };
       }
+      // AUTORIA DE PAPEL (task 05055482 — o furo 3): a primeira versão deste
+      // handler checava task, card e enum do papel e NADA checava quem chama.
+      // Medido (sonda no bus + store reais): qualquer card se declarava
+      // reviewer e assinava o próprio trabalho (P1), e um card linkou o card
+      // do ORQUESTRADOR a duas tasks por acidente. A autoridade é a marca do
+      // board DA TASK (o precedente da 5412f61e para `gates`); o carimbo da
+      // identidade vem de fora do alcance do modelo (caller-identity.ts).
+      // Exceções declaradas: anônimo (canal humano/externo — o card linkado
+      // recebe o aviso) e a reivindicação de task SEM principal (adoção de
+      // órfã, sem poder de julgamento). Ver `decideTaskCardLinkAuthorship`.
+      const linkAuthorship = decideTaskCardLinkAuthorship({
+        taskId: req.taskId,
+        role,
+        requesterId: req.requesterId,
+        cardId: req.cardId,
+        taskCardId: task.card_id,
+        orchestratorCardId: callbacks.getBoardOrchestratorCardId(task.board_id ?? ""),
+      });
+      if (linkAuthorship.action === "refuse") return { ok: false, error: linkAuthorship.error };
       // Presos em `const` (não lidos de `req` dentro do closure abaixo): o
       // estreitamento de `req.cardId`/`req.taskId` não sobrevive ao escopo.
       const taskId = req.taskId;
@@ -4480,6 +4532,29 @@ export function createMessageBus(
       // Implementer tied to a task: same brief as auto-dispatch (prompt +
       // dep pointer + contract). Reviewer keeps the free review order.
       const taskForBrief = briefDecision.taskId ? callbacks.getTask(briefDecision.taskId) : undefined;
+      // AUTORIA DE REVISOR NO SPAWN (task 05055482 — porta 3): o card filho é
+      // controlado por quem o spawna (o brief é texto do requisitante), então
+      // "revisor que eu spawnei" é a auto-atribuição da porta 1 com um passo a
+      // mais — e em board AUTÔNOMO o modal de consentimento é PULADO, não
+      // sobrando humano nenhum no circuito (medido: `autonomousSpawn`). A
+      // marca do board DA TASK autoriza; em board não-autônomo o modal segue
+      // sendo a autorização (fluxo de hoje intacto). Recusa ANTES do
+      // dispatch: nenhum card nasce, nenhum consentimento é gasto. O spawn
+      // SEM role (implementer) não passa por aqui — é o caminho do agente que
+      // cria um filho e não pode quebrar. Ver `decideReviewerSpawnAuthorship`.
+      if (role === TASK_CARD_REVIEWER_ROLE && briefDecision.taskId) {
+        const spawnRequesterId = req.requesterId ?? null;
+        const spawnRequesterBoardId = spawnRequesterId
+          ? callbacks.getCardBoardId(spawnRequesterId)
+          : undefined;
+        const reviewerSpawn = decideReviewerSpawnAuthorship({
+          taskId: briefDecision.taskId,
+          requesterId: spawnRequesterId,
+          orchestratorCardId: callbacks.getBoardOrchestratorCardId(taskForBrief?.board_id ?? ""),
+          consentSkipped: spawnRequesterBoardId ? callbacks.isBoardAutonomous(spawnRequesterBoardId) : false,
+        });
+        if (reviewerSpawn.action === "refuse") return { ok: false, error: reviewerSpawn.error };
+      }
       // Regra (b), sticky de território (2026-09-20) — um implementador
       // amarrado a uma task não nasce sobre território que outra task
       // ATIVA do MESMO board já reivindica. Reviewer fica de fora: revisão

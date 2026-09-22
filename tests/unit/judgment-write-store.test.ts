@@ -155,7 +155,7 @@ describe("CAMADA 4: integrante não julga (store real)", () => {
     // Detach principal before linking reviewer (bus rule); store link is fine
     // for the gate — we only need the role row.
     rig.store.linkTaskCard("t1", "rev-1", "reviewer");
-    rig.store.recordParticipationRound("rev-1", "aprovado", Date.now());
+    rig.store.recordParticipationRound("rev-1", "aprovado", Date.now(), "t1");
 
     const res = await rig.bus.handleRequest({
       cmd: "update_task",

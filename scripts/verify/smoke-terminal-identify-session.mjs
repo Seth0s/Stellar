@@ -2,7 +2,7 @@
 // card footer (and the ⋯ menu), one card, IPC in main. Measures the three
 // UI outcomes the owner named: found (id lands in the footer), none
 // (says what was missing), and that a card with an id never gets the button.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, pickFreePort, clickProviderInPicker, openTerminalCreatePopover } from "./cdp-client.mjs";
 
 const CDP_PORT = await pickFreePort();
 const USER_DATA_DIR = new URL(`../../.verify-tmp/smoke-terminal-identify-session-${CDP_PORT}`, import.meta.url).pathname;
@@ -40,17 +40,14 @@ try {
   check("seeded bash card has no identify button (no session concept)", bashIdentify.buttons, 0);
   check("seeded bash card has no ⋯ identify menu", bashIdentify.menus, 0);
 
-  const addBtn = await centerOf(page, '[data-role="rail-add-card"]');
-  check("rail add-card button exists", addBtn !== null, true);
-  await page.click(addBtn.x, addBtn.y);
-  await delay(300);
-  const terminalOpt = await centerOf(page, '.popover-row[data-kind="terminal"]');
-  check("add-card popover lists terminal", terminalOpt !== null, true);
-  await page.click(terminalOpt.x, terminalOpt.y);
-  await delay(300);
-  const claudeBtn = await centerOf(page, '.provider-picker-btn[title="claude"]');
-  check("claude provider picker exists", claudeBtn !== null, true);
-  await page.click(claudeBtn.x, claudeBtn.y);
+  await openTerminalCreatePopover(page);
+  const pickerLabels = JSON.parse(
+    await page.evalJs(`JSON.stringify([...document.querySelectorAll('.provider-picker-btn')].map((b) => b.textContent.trim()))`),
+  );
+  // O picker casa pelo RÓTULO declarado: o `[title="claude"]` que estava aqui
+  // nunca casou (o `title` do botão é o rótulo + as flags, desde a c857539c).
+  check("claude provider picker exists", pickerLabels.includes("Claude"), true);
+  await clickProviderInPicker(page, "claude");
   await delay(200);
   const criarBtn = await centerOf(page, ".popover-actions button.primary");
   check("create-terminal submit exists", criarBtn !== null, true);

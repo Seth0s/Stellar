@@ -19,7 +19,7 @@
 // Sinal usado: `terminal-registry.ts`'s `getTerminalFontSize(cardId)`,
 // exposto em `window.__getTerminalFontSize` — lê `term.options.fontSize`
 // direto da instância viva do xterm.js.
-import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession } from "./cdp-client.mjs";
+import { startApp, stopApp, connectPage, makeChecker, bootIntoFreshSession, clickProviderInPicker, openTerminalCreatePopover } from "./cdp-client.mjs";
 
 const CDP_PORT = 9468;
 const USER_DATA_DIR = new URL("../../.verify-tmp/smoke-terminal-font-zoom", import.meta.url).pathname;
@@ -88,12 +88,11 @@ try {
   // O bash padrão semeado por bootIntoFreshSession já serve de card sob
   // teste. Cria um segundo terminal, provider "claude" (instalado de
   // verdade nesta máquina), como comparação.
-  const terminalBtn = await centerOf(page, '.rail-btn[title="Novo terminal"]');
-  await page.click(terminalBtn.x, terminalBtn.y);
-  await new Promise((r) => setTimeout(r, 300));
-  const claudeBtnCoords = await centerOf(page, '.provider-picker-btn[title="claude"]');
-  if (!claudeBtnCoords) throw new Error("botão de provider 'claude' não encontrado no popover de criação de terminal");
-  await page.click(claudeBtnCoords.x, claudeBtnCoords.y);
+  await openTerminalCreatePopover(page);
+  // O provider é escolhido pelo RÓTULO declarado, resolvido do próprio app: o
+  // `[title="claude"]` que estava aqui nunca casou (o `title` do botão é o
+  // rótulo + as flags, desde a c857539c).
+  await clickProviderInPicker(page, "claude");
   await new Promise((r) => setTimeout(r, 200));
   const criarBtn = await centerOf(page, ".popover-actions button.primary");
   await page.click(criarBtn.x, criarBtn.y);

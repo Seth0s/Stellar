@@ -70,7 +70,7 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       store.upsertTask(baseTaskFields("t1", { card_id: "card-a" }));
 
       const at = Date.now();
-      const written = store.recordParticipationRound("card-a", "aprovado", at);
+      const written = store.recordParticipationRound("card-a", "aprovado", at, "t1");
 
       expect(written).toEqual([{ id: expect.any(String), task_id: "t1", card_id: "card-a", role: "implementer", verdict: "aprovado", at }]);
       expect(store.getTaskVerdicts("t1")).toEqual(written);
@@ -100,9 +100,9 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
     try {
       store.upsertTask(baseTaskFields("t3", { card_id: "card-c" }));
 
-      store.recordParticipationRound("card-c", "reprovado", 1000);
-      store.recordParticipationRound("card-c", "reprovado", 2000);
-      store.recordParticipationRound("card-c", "aprovado", 3000);
+      store.recordParticipationRound("card-c", "reprovado", 1000, "t3");
+      store.recordParticipationRound("card-c", "reprovado", 2000, "t3");
+      store.recordParticipationRound("card-c", "aprovado", 3000, "t3");
 
       const rows = store.getTaskVerdicts("t3");
       expect(rows).toHaveLength(3);
@@ -123,11 +123,11 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       store.upsertTask(baseTaskFields("t4b"));
       store.linkTaskCard("t4b", "card-multi", "reviewer");
 
-      const written = store.recordParticipationRound("card-multi", "aprovado", 500);
+      const written = store.recordParticipationRound("card-multi", null, 500);
 
       expect(written).toHaveLength(2);
-      expect(store.getTaskVerdicts("t4a")).toEqual([{ id: expect.any(String), task_id: "t4a", card_id: "card-multi", role: "implementer", verdict: "aprovado", at: 500 }]);
-      expect(store.getTaskVerdicts("t4b")).toEqual([{ id: expect.any(String), task_id: "t4b", card_id: "card-multi", role: "reviewer", verdict: "aprovado", at: 500 }]);
+      expect(store.getTaskVerdicts("t4a")).toEqual([{ id: expect.any(String), task_id: "t4a", card_id: "card-multi", role: "implementer", verdict: null, at: 500 }]);
+      expect(store.getTaskVerdicts("t4b")).toEqual([{ id: expect.any(String), task_id: "t4b", card_id: "card-multi", role: "reviewer", verdict: null, at: 500 }]);
     } finally {
       store.close();
     }
@@ -159,10 +159,10 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
     const store = openStore(dir);
     try {
       store.upsertTask(baseTaskFields("t5", { card_id: "card-d" }));
-      store.recordParticipationRound("card-d", "reprovado", 100);
+      store.recordParticipationRound("card-d", "reprovado", 100, "t5");
 
       store.linkTaskCard("t5", "card-d", "reviewer");
-      store.recordParticipationRound("card-d", "aprovado", 200);
+      store.recordParticipationRound("card-d", "aprovado", 200, "t5");
 
       const rows = store.getTaskVerdicts("t5");
       expect(rows.map((r) => r.role)).toEqual(["implementer", "reviewer"]);
@@ -187,8 +187,8 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
     const store = openStore(dir);
     try {
       store.upsertTask(baseTaskFields("t6", { card_id: "card-e" }));
-      store.recordParticipationRound("card-e", "reprovado", 1);
-      store.recordParticipationRound("card-e", "aprovado", 2);
+      store.recordParticipationRound("card-e", "reprovado", 1, "t6");
+      store.recordParticipationRound("card-e", "aprovado", 2, "t6");
 
       const task = store.getTask("t6")!;
       expect(task.verdicts).toHaveLength(2);
@@ -251,7 +251,7 @@ describe("store.ts: task_verdicts / recordParticipationRound (histórico de vere
       // Status must be non-terminal: live participation ignores done/failed
       // links (card-id recycle fix, 2026-09-13). Migration itself is what
       // this test covers — recording still has to work on an open task.
-      store.recordParticipationRound("card-old", "aprovado", Date.now());
+      store.recordParticipationRound("card-old", "aprovado", Date.now(), "pre-existing-task");
       expect(store.getTask("pre-existing-task")!.verdicts).toHaveLength(1);
     } finally {
       store.close();

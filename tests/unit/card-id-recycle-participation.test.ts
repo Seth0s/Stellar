@@ -82,7 +82,7 @@ function callbacksBackedByStore(store: ReturnType<typeof openStore>): Parameters
         if (prop === "nextReportSeqSeed") return () => store.nextReportSeqSeed();
         if (prop === "listTaskCardsForCard") return (cardId: string) => store.listTaskCardsForCard(cardId);
         if (prop === "recordParticipationRound")
-          return (cardId: string, verdict: string | null, at: number) => store.recordParticipationRound(cardId, verdict, at);
+          return (cardId: string, verdict: string | null, at: number, taskId?: string | null) => store.recordParticipationRound(cardId, verdict, at, taskId);
         if (prop === "listTasks") return () => store.listTasks();
         if (prop === "upsertTask") return (row: TaskRow) => store.upsertTask(row);
         if (prop === "listAllConnectors") return () => [];

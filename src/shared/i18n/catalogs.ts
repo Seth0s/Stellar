@@ -628,6 +628,44 @@ export const ptBR = {
   "changes.notGit": "não é um repositório git",
   "changes.clean": "sem alterações",
   "changes.refresh": "atualizar",
+  // A ATRIBUIÇÃO e a FATIA (task 56604aca, fase 1). Vocabulário: o card diz
+  // DECLARADO quando um autor escreveu o caminho no relatório, JANELA quando só
+  // se sabe o intervalo em que apareceu sujo, PISTA quando é menção em prosa —
+  // e "não sei" quando não há nenhum dos três. Nunca "é do card X" por palpite.
+  "changes.attribution.declared": "declarado por {who}",
+  "changes.attribution.disputed": "disputado por {count}: {who}",
+  "changes.attribution.window": "apareceu entre {from} e {to} · {count} candidato(s)",
+  "changes.attribution.windowNobody": "apareceu entre {from} e {to} · sem ação observada na janela",
+  "changes.attribution.mention": "mencionado por {who} — pista de prosa, não declaração",
+  "changes.attribution.unknown": "não sei",
+  "changes.slice.fileGranularity":
+    "Fatia por ARQUIVO ({count} selecionado(s)): ela leva junto qualquer hunk de terceiro nesses arquivos — a classificação por conteúdo (§11 passo 1 do ORCHESTRATION.md) é mais fina e continua sendo sua.",
+  "changes.slice.silentCards":
+    "{count} card(s) tinham `filesChanged` no schema e não declararam arquivo nenhum: {who}",
+  "changes.slice.unreadable":
+    "{count} relatório(s) não puderam ser lidos (forma inesperada): {who}",
+  "changes.slice.gates": "Gates desta fatia (declarados pelas tasks dos cards candidatos): {gates}",
+  "changes.slice.noGates":
+    "Nenhum gate declarado por card candidato — a fatia monta, mas não há o que rodar.",
+  "changes.slice.gateCoverage":
+    "Cobertura medida: `tsc` tipa `src/`; `vitest` roda os testes SEM tipá-los. (A fonte única de cobertura será a task 9870a781.)",
+  "changes.slice.verify": "Verificar esta fatia em árvore limpa",
+  "changes.slice.orient": "Copiar comando",
+  "changes.slice.running": "Verificando…",
+  "changes.slice.copied": "Comandos copiados.",
+  "changes.slice.verdictOk": "compila sozinho",
+  "changes.slice.verdictNo": "NÃO compila sozinho",
+  "changes.slice.verdictMounted": "não deu para montar a fatia (ver o passo que falhou)",
+  "changes.slice.failed": "não deu para verificar: {error}",
+  "changes.slice.routes": "Por onde cada arquivo entrou:",
+  "changes.slice.routeTracked": "tracked: patch aplicado",
+  "changes.slice.routeUntracked": "untracked: copiado + `add -N` na cópia",
+  "changes.slice.cleaned": "worktree removido.",
+  "changes.slice.cleanupFailed": "FALHA ao remover o worktree: {error}",
+  "changes.slice.confirmTitle": "Verificar a fatia em árvore limpa",
+  "changes.slice.confirmMessage":
+    "Isto cria um worktree temporário em /tmp, liga o node_modules por symlink, aplica {count} arquivo(s) com a via de cada um e roda os gates LÁ ({gates}). Nada é escrito em {root}: o `add -N` roda dentro da cópia, e o worktree é removido no fim — inclusive se falhar.",
+  "changes.slice.confirm": "Verificar",
   "path.namePlaceholder": "nome da pasta",
   "path.newFolder": "Nova pasta aqui",
   "path.chooseRoot": "Escolher outra pasta raiz…",
@@ -1548,6 +1586,42 @@ export const en: Record<MessageKey, string> = {
   "changes.notGit": "not a git repository",
   "changes.refresh": "refresh",
   "changes.clean": "no changes",
+  // See the pt-BR catalog: DECLARED / WINDOW / HINT / "don't know" — never a
+  // guess about which card a file belongs to.
+  "changes.attribution.declared": "declared by {who}",
+  "changes.attribution.disputed": "disputed by {count}: {who}",
+  "changes.attribution.window": "appeared between {from} and {to} · {count} candidate(s)",
+  "changes.attribution.windowNobody":
+    "appeared between {from} and {to} · no observed action in the window",
+  "changes.attribution.mention": "mentioned by {who} — a prose hint, not a declaration",
+  "changes.attribution.unknown": "don't know",
+  "changes.slice.fileGranularity":
+    "FILE-level slice ({count} selected): it drags along any third-party hunk in those files — classifying by content (ORCHESTRATION.md §11 step 1) is finer and remains yours.",
+  "changes.slice.silentCards":
+    "{count} card(s) had `filesChanged` in the schema and declared no file at all: {who}",
+  "changes.slice.unreadable": "{count} report(s) could not be read (unexpected shape): {who}",
+  "changes.slice.gates": "Gates for this slice (declared by the candidate cards' tasks): {gates}",
+  "changes.slice.noGates":
+    "No gate declared by any candidate card — the slice mounts, but there is nothing to run.",
+  "changes.slice.gateCoverage":
+    "Measured coverage: `tsc` types `src/`; `vitest` runs the tests WITHOUT type-checking them. (The single source of coverage will be task 9870a781.)",
+  "changes.slice.verify": "Verify this slice in a clean worktree",
+  "changes.slice.orient": "Copy command",
+  "changes.slice.running": "Verifying…",
+  "changes.slice.copied": "Commands copied.",
+  "changes.slice.verdictOk": "compiles on its own",
+  "changes.slice.verdictNo": "does NOT compile on its own",
+  "changes.slice.verdictMounted": "the slice could not be mounted (see the failing step)",
+  "changes.slice.failed": "could not verify: {error}",
+  "changes.slice.routes": "How each file got in:",
+  "changes.slice.routeTracked": "tracked: patch applied",
+  "changes.slice.routeUntracked": "untracked: copied + `add -N` in the copy",
+  "changes.slice.cleaned": "worktree removed.",
+  "changes.slice.cleanupFailed": "FAILED to remove the worktree: {error}",
+  "changes.slice.confirmTitle": "Verify the slice in a clean worktree",
+  "changes.slice.confirmMessage":
+    "This creates a temporary worktree in /tmp, links node_modules by symlink, applies {count} file(s) each by its own route and runs the gates THERE ({gates}). Nothing is written in {root}: `add -N` runs inside the copy, and the worktree is removed at the end — even on failure.",
+  "changes.slice.confirm": "Verify",
   "path.namePlaceholder": "folder name",
   "path.newFolder": "New folder here",
   "path.chooseRoot": "Choose another root folder…",

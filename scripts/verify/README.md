@@ -22,6 +22,13 @@ real Electron window and is **declared** as local-only until someone
 demonstrates a scripted boot on xvfb — a permanently-red xvfb job
 trained everyone to ignore red.
 
+**O que cada gate cobre — e o que nenhum deles cobre — está em
+[`docs/ORCHESTRATION.md` §12](../../docs/ORCHESTRATION.md#12-verificação-honesta),
+que é a fonte única.** O resumo que importa aqui: `verify:ci` **não
+tipa `tests/`** (`tsconfig.json` inclui só `src`, e o vitest roda com
+esbuild, que transpila sem tipar). A medição de `npm run check:types:test`
+e o número da dívida vivem lá; não duplique.
+
 Requires `npm run build` (or `electron-vite build`) to have produced
 `out/` first before any `smoke-*.mjs` — `npm run verify` does that.
 
