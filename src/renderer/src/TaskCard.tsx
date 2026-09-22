@@ -1273,6 +1273,8 @@ function TaskCardInner({
   onConnectorStart,
   onSelectStart,
   onApproveCompletion,
+  openTaskRequestId,
+  onOpenTaskHandled,
   screenProjected,
   panX,
   panY,
@@ -1317,6 +1319,13 @@ function TaskCardInner({
    * dentro deste próprio componente (precisa dos refs das 4 colunas
    * irmãs, não faz sentido como prop vindo de fora). */
   onApproveCompletion: (taskId: string) => void;
+  /** Pedido de ABRIR uma task vindo de FORA deste card (task b3f90d1d) — o
+   * chip do header de um card de terminal. O App é o ancestral comum dos
+   * dois cards, e é ele que carrega o pedido; aqui ele é CONSUMIDO e
+   * limpo (`onOpenTaskHandled`), porque "já abri" também é um fato que o
+   * App precisa saber para não reabrir a mesma task em todo re-render. */
+  openTaskRequestId?: string | null;
+  onOpenTaskHandled?: () => void;
   screenProjected?: boolean;
   panX?: number;
   panY?: number;
@@ -1338,6 +1347,18 @@ function TaskCardInner({
   useEffect(() => {
     if (openTaskId && !openTask) setOpenTaskId(null);
   }, [openTaskId, openTask]);
+  // Pedido EXTERNO de abrir a task (chip do header de um card de terminal,
+  // task b3f90d1d). Só abre se a task existir no board carregado: um pedido
+  // para uma task que não está aqui abriria um modal vazio — e "não achei"
+  // é resposta, não motivo para abrir outra coisa. O `onOpenTaskHandled`
+  // limpa o pedido no App para ele não reabrir a cada re-render.
+  useEffect(() => {
+    if (!openTaskRequestId) return;
+    if (boardTasks.some((item) => item.id === openTaskRequestId)) {
+      setOpenTaskId(openTaskRequestId);
+    }
+    onOpenTaskHandled?.();
+  }, [openTaskRequestId, boardTasks, onOpenTaskHandled]);
   const groups = groupTasksByColumn(boardTasks);
   // FASE 2, peça 3 — `onDropTask` é chamado de dentro de um listener de
   // `window` registrado no INÍCIO do arraste (`beginTaskDrag`); se um push

@@ -1706,7 +1706,26 @@ function createWindow() {
    * uma leitura por card, no GESTO de abrir o dropdown, nunca em push nem em
    * laço (11 cards neste board, medido).
    */
-  function buildBoardAgentRoles(boardId: string): BoardAgentRoleRow[] {
+  /**
+   * A MESMA pergunta, um card de cada vez — para o HEADER do card de
+   * terminal (task b3f90d1d), que é por definição sobre UM card.
+   *
+   * Por que existe uma segunda ENTRADA e não uma segunda fonte: o cálculo
+   * abaixo é o mesmo de `buildBoardAgentRoles` (extraído para cá, um só
+   * corpo para os dois). O que muda é o alcance — o header não tem o
+   * `boardId` do board ativo, e ler o board inteiro por card, a cada evento
+   * de task, custaria 13× o que a mesma tela já custa (13 cards de terminal
+   * não-bash neste board). O precedente do custo está escrito logo acima:
+   * "uma leitura por card, no GESTO de abrir o dropdown, nunca em push nem
+   * em laço".
+   *
+   * A FRESCORIDADE não vem daqui: quem empurra é o MESMO
+   * `taskNotifyCoalescer` que já avisa a Fila em `linkTaskCard`
+   * (index.ts, "o Fila deriva o ↔ review arrow dessas linhas, então precisa
+   * vê-la sem reload") e em `releaseTaskCardFromTask`. O header assina esse
+   * push e relê — é a razão de o vínculo nunca aparecer velho.
+   */
+  function agentRoleRowsFor(boardId: string, onlyCardId?: string): BoardAgentRoleRow[] {
     const liveTaskIds = new Set(
       store
         .listTasksByBoard(boardId)
@@ -1716,6 +1735,7 @@ function createWindow() {
     return store
       .listCards(boardId)
       .filter((card) => card.kind === "terminal" && card.provider !== "bash")
+      .filter((card) => !onlyCardId || card.id === onlyCardId)
       .map((card) => ({
         cardId: card.id,
         // `null` quando o card não tem rótulo: a tela mostra o id e NÃO
@@ -1727,6 +1747,10 @@ function createWindow() {
           .filter((link) => liveTaskIds.has(link.task_id))
           .map((link) => ({ taskId: link.task_id, role: link.role })),
       }));
+  }
+
+  function buildBoardAgentRoles(boardId: string): BoardAgentRoleRow[] {
+    return agentRoleRowsFor(boardId);
   }
 
   function notifyTaskChanged(boardId: string | null) {
@@ -2549,6 +2573,15 @@ function createWindow() {
   // O dropdown de agentes do Topbar (task 49de95ce) — gesto de abrir, nunca
   // push: a lista de papéis muda com o quadro, e quem a pede é a tela.
   ipcMain.handle("store:board-agent-roles", (_e, boardId: string) => buildBoardAgentRoles(boardId));
+  // Mesma fonte, um card (task b3f90d1d). `getAnyCard` resolve o board do
+  // card — o header não recebe `boardId` e inventar um segundo caminho para
+  // "qual board está ativo" no renderer seria justamente a segunda fonte
+  // que este arquivo evita.
+  ipcMain.handle("store:card-agent-roles", (_e, cardId: string) => {
+    const card = store.getCard(cardId);
+    if (!card) return [];
+    return agentRoleRowsFor(card.board_id, cardId);
+  });
   ipcMain.handle("store:next-id-seed", () => store.nextIdSeed());
   // Item 30 — sessions sidebar (every chat card, live or archived) +
   // archive/unarchive (closing a ChatCard archives instead of deleting).

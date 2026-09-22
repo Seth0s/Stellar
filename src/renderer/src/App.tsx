@@ -857,6 +857,16 @@ export function App() {
   /** Confirm before marking a card as board orchestrator — hard to do
    * by accident; clearing is one menu click without this gate. */
   const [pendingOrchestratorMarkId, setPendingOrchestratorMarkId] = useState<string | null>(null);
+  /**
+   * Pedido de ABRIR a task, vindo do chip do header de um card de terminal
+   * (task b3f90d1d). Vive no App porque o alvo — `TaskDetailModal` — é
+   * estado PRIVADO do card da Fila (`TaskCard.tsx`), e um card de terminal
+   * não pode alcançar o estado interno de outro. O App é o ancestral comum:
+   * o terminal sobe o pedido, a Fila o consome e o limpa. Não é uma segunda
+   * fonte de dados de task — é só o pedido de UI atravessando o nível que
+   * os dois cards compartilham.
+   */
+  const [pendingOpenTaskId, setPendingOpenTaskId] = useState<string | null>(null);
   const [reflowing, setReflowing] = useState(false);
   /** Live per-card status (item 1) — only ever populated for the currently
    * loaded board's terminal cards (see TerminalCard's onStatusChange); every
@@ -3391,6 +3401,7 @@ export function App() {
                 initialInput={c.initialInput}
                 brief={c.brief}
                 taskId={c.taskId ?? null}
+                onOpenTask={setPendingOpenTaskId}
                 visible={isInView(c.rect, visibleRect)}
                 seenUrls={seenUrls[c.id] ?? EMPTY_URLS}
                 interactionMode={interactionMode}
@@ -3756,6 +3767,8 @@ export function App() {
                 closing={closingIds.has(c.id)}
                 displayName={displayName}
                 tasks={activeBoardId ? taskBoards[activeBoardId] ?? [] : []}
+                openTaskRequestId={pendingOpenTaskId}
+                onOpenTaskHandled={() => setPendingOpenTaskId(null)}
                 // RODADA 2 — badge de WIP (peça 4). `boards` já é estado
                 // carregado (useBoardStore.ts), mesma fonte que
                 // `activeBoardCwd` acima já lê — zero consulta nova só

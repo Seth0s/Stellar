@@ -382,6 +382,13 @@ setActive: (id: string | null): void => ipcRenderer.send("board:active", id),
    * tela. O main projeta (nome + papéis vivos), o renderer só desenha. */
   boardAgentRoles: (boardId: string): Promise<BoardAgentRoleRow[]> =>
     ipcRenderer.invoke("store:board-agent-roles", boardId),
+  /** O card de UM terminal — o HEADER do card de terminal (task b3f90d1d).
+   * Mesma projeção e mesma fonte de `boardAgentRoles`, alcance de um card: o
+   * header não tem `boardId`, e o main resolve o board pelo próprio card.
+   * Quem dispara a RELEITURA é o push `task:changed` que já existe (o mesmo
+   * que a Fila usa), não um segundo canal. */
+  cardAgentRoles: (cardId: string): Promise<BoardAgentRoleRow[]> =>
+    ipcRenderer.invoke("store:card-agent-roles", cardId),
   /** DESIGN-BACKLOG.md item 30 — sessions sidebar (every chat card, live
    * or archived, across every board) + archive/unarchive. Closing a
    * ChatCard archives instead of deleting (App.tsx's closeCard); every

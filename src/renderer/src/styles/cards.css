@@ -268,6 +268,63 @@
   flex: none;
 }
 
+/* Task b3f90d1d — TASK + PAPEL dos vínculos VIVOS do card, no header.
+   Nenhum token novo: usa os mesmos papéis de cor do header (`--border`,
+   `--muted`, `--text`) e o `--font-mono` que já existe para o id curto (o
+   monoespaçado é o que faz dois ids de 8 dígitos serem distinguíveis de
+   relance). O grupo PARTICIPA do encolhimento (`min-width: 0` +
+   `overflow: hidden`) como o resto de `.card-head-label`: quando não cabe,
+   quem aparece é o `+N` — nunca um chip cortado pela metade sem aviso. */
+.card-head-tasks {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Seletores com DOIS níveis de propósito: os chips e o "+N" são <button>
+   (o clique abre a task, decisão do dono), e `.card-head button`
+   (cards.css, acima) tem especificidade (0,1,1) com padding 4px e
+   font-size 15px — o visual do sino/gota/fechar. `.card-head .card-head-task`
+   (0,2,0) vence e mantém a pílula pequena; sem isto o chip herdaria o
+   tamanho de um botão de ícone. */
+.card-head .card-head-task {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--muted);
+  font-size: var(--text-2);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.card-head .card-head-task code {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2);
+}
+
+/* O indicador de "há mais" é um elemento PRÓPRIO e visualmente distinto
+   (borda + peso), de propósito: como sufixo de texto ele leria como parte
+   do id da task, que é o erro que a task pediu para não cometer. Clicável:
+   abre o primeiro vínculo que não coube no header. */
+.card-head .card-head-task-more {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--text);
+  font-size: var(--text-2);
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
 /* D8 — Indicadores de Status Acessíveis para Daltonismo (Geometria + Cor):
    - Ativo/OK: Círculo sólido verde com anel sutil
    - Alerta/Pendente: Diamante rotacionado amarelo
