@@ -8,6 +8,7 @@ import {
   type ClickTargetFacts,
 } from "./browser-native-dialog-decision";
 import {
+  clickDipScale,
   clickDrift,
   clickPointSource,
   clickResolveSource,
@@ -16,6 +17,11 @@ import {
   type ClickSample,
   type ClickTargetDescriptor,
 } from "./browser-click-decision";
+import {
+  decideSnapshotTarget,
+  snapshotTargetProbeSource,
+  type SnapshotControlFacts,
+} from "./browser-snapshot-target-decision";
 
 /**
  * Formato explícito do payload de `onFrame` (docs/PERF.md §9.4): quem
@@ -67,7 +73,22 @@ export type ConsoleEntry = { level: string; message: string; at: number };
  * `session.cookies.get`, evitando duplicar a mesma leitura por dois
  * caminhos diferentes. */
 export type LocalSessionStorage = { local: [string, string][]; session: [string, string][] };
-export type PageElement = { ref: string; role: string; name: string; tag: string; disabled?: boolean; checked?: boolean; value?: string };
+export type PageElement = {
+  ref: string;
+  role: string;
+  name: string;
+  tag: string;
+  disabled?: boolean;
+  checked?: boolean;
+  /** Grupo de rádio/checkbox (o atributo `name`) — sem ele, "checked: false"
+   * numa tela com 40 rádios não informa de que pergunta se trata. */
+  group?: string;
+  /** O `ref` aponta para o `<label>` associado, não para o controle: é o label
+   * que o clique deste controle de fato atinge (input escondido de propósito
+   * pelo padrão de checkbox/rádio customizado). */
+  via?: "label";
+  value?: string;
+};
 export type NetworkEntry = { method: string; url: string; status: number | null; error?: string; at: number };
 /** Aba Application do mini-inspector — ver `getCookies` abaixo pro porquê
  * de vir de `session.cookies.get` (main process) e não de `evalJs`. */
@@ -1439,6 +1460,18 @@ export function createBrowserRegistry(callbacks: {
     return { ok: true };
   }
 
+  /** O fator px-lógicos -> DIP. A página reporta o proprio viewport em px
+   * logicos (`viewport` da amostra) e o Electron sabe o tamanho REAL do
+   * conteudo da janela: a razao entre os dois e o fator, medido, nao
+   * adivinhado. Ver `clickDipScale` (medido: sem ele, um clique pedido em
+   * (670, 47.5) chegava em (335, 24) e marcava a LINHA DE CIMA). */
+  function dipScaleFor(id: string, viewport: { width: number; height: number }): number {
+    const entry = entries.get(id);
+    if (!entry) return 1;
+    const [contentWidth] = entry.win.getContentSize();
+    return clickDipScale(contentWidth, viewport.width);
+  }
+
   /** A decisão é pura (`decideNativeDialogRisk`); aqui só se monta a
    * recusa tipada que as tools devolvem. `target` é como o agente nomeou o
    * alvo (seletor ou ponto) — a mensagem precisa apontar pro que ele
@@ -1538,7 +1571,8 @@ export function createBrowserRegistry(callbacks: {
       const guard = nativeDialogGuard(sample.hitFacts, `the point (${x}, ${y})`);
       if (!guard.ok) return clickRefusal(guard.error);
     }
-    const sent = sendClick(id, sample.point.x, sample.point.y);
+    const scale = dipScaleFor(id, sample.viewport);
+    const sent = sendClick(id, sample.point.x * scale, sample.point.y * scale);
     if (!sent.ok) return clickRefusal(sent.error);
     return {
       ok: true,
@@ -1664,7 +1698,8 @@ export function createBrowserRegistry(callbacks: {
       const guard = nativeDialogGuard(fact, describe);
       if (!guard.ok) return clickRefusal(guard.error);
     }
-    const sent = sendClick(id, current.value.point.x, current.value.point.y);
+    const scale = dipScaleFor(id, current.value.viewport);
+    const sent = sendClick(id, current.value.point.x * scale, current.value.point.y * scale);
     if (!sent.ok) return clickRefusal(sent.error);
     return {
       ok: true,
@@ -2011,12 +2046,71 @@ export function createBrowserRegistry(callbacks: {
    *    erro que uma numeração estável convidaria.
    */
   const SNAPSHOT_MAX_ELEMENTS = 400;
+  /** Teto de candidatos EXAMINADOS (não listados): uma página com milhares de
+   * nós interativos não deve custar um `elementFromPoint` por nó. */
+  const SNAPSHOT_MAX_CANDIDATES = 4000;
+
+  /** Fatos crus de cada candidato, coletados na página. `selfKey`/`labelKey`
+   * são o que permite DEDUPE: dois rádios dentro do mesmo `<label>` (markup
+   * inválido, mas plausível) apontariam para o mesmo alvo, e listar duas vezes
+   * o mesmo elemento seria um segundo ref para a mesma coisa. */
+  type SnapshotCandidate = {
+    index: number;
+    selfKey: string;
+    labelKey: string | null;
+    facts: SnapshotControlFacts;
+    role: string;
+    name: string;
+    tag: string;
+    inputType: string | null;
+    checked?: boolean;
+    group?: string;
+    value?: string;
+    disabled?: boolean;
+  };
+
+  /**
+   * Achado ao vivo (2026-09-01): "não existe snapshot por árvore de
+   * acessibilidade / ref pra mirar um elemento sem já saber o seletor" — o
+   * agente teve que cair pra `browser_eval` com
+   * `querySelectorAll` + comparação manual de `textContent` pra achar o
+   * botão "Adicionar nota".
+   *
+   * Isto é o mínimo que resolve o problema real, não uma árvore de
+   * acessibilidade de verdade: lista o que é INTERATIVO e ALCANÇÁVEL, com o
+   * nome que um humano lê na tela, e carimba `data-stellar-ref` no elemento
+   * que um clique de fato atinge, pra que `browser_click`/`browser_type`
+   * possam mirar por `ref` depois.
+   *
+   * Três decisões que o formato exige:
+   *
+   *  - **Nome acessível na ordem certa**: `aria-label`, depois o `<label>`
+   *    associado, depois `placeholder`/`title`/`alt`/`value`, e só então o
+   *    texto visível. Um botão de ícone só tem `aria-label`; um input só
+   *    tem label ou placeholder. Cair direto no `innerText` acharia
+   *    "" pra metade dos controles de uma UI real.
+   *  - **O que dá para alcançar, e ONDE o clique cai** (task 4bdb257e): a
+   *    pergunta de visibilidade é feita sobre o controle E sobre o `<label>`
+   *    associado, e o `ref` vai no elemento que o clique atinge — ver
+   *    `browser-snapshot-target-decision.ts` para a tabela MEDIDA das formas
+   *    de esconder. Um menu fechado continua de fora; um rádio escondido com
+   *    label estilizado por cima entra, que é o padrão real de
+   *    checkbox/rádio customizado.
+   *  - **Os refs são reemitidos a cada chamada**, e o carimbo anterior é
+   *    limpo. Um ref é válido até a próxima navegação ou re-render, igual
+   *    ao Playwright MCP: guardar ref velho e clicar depois é justamente o
+   *    erro que uma numeração estável convidaria.
+   */
   async function pageSnapshot(id: string): Promise<{ ok: true; url: string; title: string; elements: PageElement[]; truncated: boolean } | { ok: false; error: string }> {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
     try {
+      // Passo 1: coletar FATOS. A decisão de quais entram — e em que elemento
+      // o `ref` é carimbado — é do processo main, pura e testada fora do
+      // navegador (`decideSnapshotTarget`).
       const raw: unknown = await entry.win.webContents.executeJavaScript(`
         (() => {
+          ${snapshotTargetProbeSource()}
           const SEL = [
             "a[href]", "button", "input", "select", "textarea", "summary",
             "[role=button]", "[role=link]", "[role=checkbox]", "[role=radio]",
@@ -2024,11 +2118,6 @@ export function createBrowserRegistry(callbacks: {
             "[contenteditable=true]", "[onclick]", "[tabindex]:not([tabindex='-1'])",
           ].join(",");
           for (const old of document.querySelectorAll("[data-stellar-ref]")) old.removeAttribute("data-stellar-ref");
-          function visible(el) {
-            if (el.getClientRects().length === 0) return false;
-            const st = getComputedStyle(el);
-            return st.visibility !== "hidden" && st.display !== "none" && Number(st.opacity) !== 0;
-          }
           function accessibleName(el) {
             const aria = el.getAttribute("aria-label");
             if (aria && aria.trim()) return aria.trim();
@@ -2075,24 +2164,116 @@ export function createBrowserRegistry(callbacks: {
             }
             return "generic";
           }
-          const out = [];
-          let n = 0;
+          const candidates = [];
+          const targets = [];
+          const labelOrdinals = new Map();
+          let index = 0;
           for (const el of document.querySelectorAll(SEL)) {
-            if (!visible(el)) continue;
-            if (out.length >= ${SNAPSHOT_MAX_ELEMENTS}) return { url: location.href, title: document.title, elements: out, truncated: true };
-            const ref = "e" + ++n;
-            el.setAttribute("data-stellar-ref", ref);
-            const item = { ref, role: roleOf(el), name: accessibleName(el), tag: el.tagName.toLowerCase() };
+            if (index >= ${SNAPSHOT_MAX_CANDIDATES}) break;
+            const i = index++;
+            const full = __stellarSnapshotFacts(el);
+            const labelEl = full.labelElement;
+            let labelKey = null;
+            if (labelEl) {
+              if (!labelOrdinals.has(labelEl)) labelOrdinals.set(labelEl, labelOrdinals.size);
+              labelKey = "l" + labelOrdinals.get(labelEl);
+            }
+            const tag = String(el.tagName || "").toLowerCase();
+            const inputType = tag === "input" ? String(el.type || "text").toLowerCase() : null;
+            const item = {
+              index: i,
+              selfKey: "s" + i,
+              labelKey: labelKey,
+              facts: {
+                tag: tag,
+                selfVisible: full.selfVisible,
+                pointInViewport: full.pointInViewport,
+                pointHitsSelf: full.pointHitsSelf,
+                label: full.label,
+              },
+              role: roleOf(el),
+              name: accessibleName(el),
+              tag: tag,
+              inputType: inputType,
+            };
             if (el.disabled) item.disabled = true;
-            if (typeof el.checked === "boolean" && el.checked) item.checked = true;
-            if (el.value !== undefined && el.value !== "" && el.type !== "password") item.value = String(el.value).slice(0, 120);
-            out.push(item);
+            if (inputType === "checkbox" || inputType === "radio") {
+              // SEMPRE (true E false): numa tela com 40 rádios, "checked: false"
+              // sozinho não informa nada — é o atributo group que diz de que
+              // pergunta cada um é. value só quando o atributo existe de
+              // verdade (o "on" implícito de um rádio é ruído em 40 linhas).
+              item.checked = Boolean(el.checked);
+              if (el.name) item.group = String(el.name);
+              if (el.hasAttribute("value")) item.value = String(el.value).slice(0, 120);
+            } else if (el.value !== undefined && el.value !== "" && el.type !== "password") {
+              item.value = String(el.value).slice(0, 120);
+            }
+            candidates.push(item);
+            targets.push({ self: el, label: labelEl });
           }
-          return { url: location.href, title: document.title, elements: out, truncated: false };
+          window.__stellarSnapshotTargets = targets;
+          return { url: location.href, title: document.title, candidates: candidates };
         })()
       `);
-      const parsed = raw as { url: string; title: string; elements: PageElement[]; truncated: boolean };
-      return { ok: true, ...parsed };
+      const probed = raw as { url: string; title: string; candidates: SnapshotCandidate[] };
+      // A DECISÃO, pura: quais entram e em que elemento o ref é carimbado.
+      const elements: PageElement[] = [];
+      const usedKeys = new Set<string>();
+      const stamps: Array<{ index: number; key: string; ref: string; onLabel: boolean }> = [];
+      for (const candidate of probed.candidates) {
+        const decision = decideSnapshotTarget(candidate.facts);
+        if (!decision.list) continue;
+        const onLabel = decision.refOn === "label";
+        const key = onLabel ? candidate.labelKey : candidate.selfKey;
+        if (!key || usedKeys.has(key)) continue;
+        if (elements.length >= SNAPSHOT_MAX_ELEMENTS) break;
+        usedKeys.add(key);
+        const ref = `e${elements.length + 1}`;
+        stamps.push({ index: candidate.index, key, ref, onLabel });
+        const item: PageElement = { ref, role: candidate.role, name: candidate.name, tag: candidate.tag };
+        if (candidate.disabled) item.disabled = true;
+        if (candidate.checked !== undefined) item.checked = candidate.checked;
+        if (candidate.group !== undefined) item.group = candidate.group;
+        if (candidate.value !== undefined) item.value = candidate.value;
+        if (decision.refOn === "label") item.via = "label";
+        elements.push(item);
+      }
+      // Passo 2: carimbar cada ref no alvo escolhido (o próprio controle ou o
+      // label que o clique atinge) — é isto que faz `browser_click {ref}` mirar
+      // exatamente o que a resposta nomeou.
+      const stampedCount: unknown = await entry.win.webContents.executeJavaScript(`
+        (() => {
+          const targets = window.__stellarSnapshotTargets || [];
+          const stamps = ${JSON.stringify(stamps)};
+          let applied = 0;
+          for (const stamp of stamps) {
+            const target = targets[stamp.index];
+            if (!target) continue;
+            const el = stamp.onLabel ? target.label : target.self;
+            if (!el) continue;
+            el.setAttribute("data-stellar-ref", stamp.ref);
+            applied++;
+          }
+          delete window.__stellarSnapshotTargets;
+          return applied;
+        })()
+      `);
+      if (stampedCount !== stamps.length) {
+        // Um ref não carimbado é um ref que `browser_click` não acha: a resposta
+        // diz a verdade sobre isso em vez de devolver a lista como se tudo
+        // estivesse mirável (a página mudou entre ler e carimbar).
+        return {
+          ok: false,
+          error: `the page changed while the snapshot was being read: only ${String(stampedCount)} of ${stamps.length} refs could be stamped, so some of them would not be clickable. Call browser_snapshot again.`,
+        };
+      }
+      return {
+        ok: true,
+        url: probed.url,
+        title: probed.title,
+        elements,
+        truncated: probed.candidates.length >= SNAPSHOT_MAX_CANDIDATES,
+      };
     } catch (err) {
       return { ok: false, error: `failed to snapshot the page: ${String(err)}` };
     }

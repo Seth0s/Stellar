@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CLICK_DRIFT_TOLERANCE_PX,
+  clickDipScale,
   clickDrift,
   decideClickVerdict,
   describeLayoutMoved,
@@ -129,6 +130,22 @@ describe("decideClickVerdict — o que a resposta pode afirmar", () => {
     expect(targetOutsideViewport({ x: 1340, y: 852 }, viewport)).toBe(false);
     expect(targetOutsideViewport({ x: 1340.5, y: 852 }, viewport)).toBe(true);
     expect(targetOutsideViewport({ x: -1, y: 10 }, viewport)).toBe(true);
+  });
+
+  it("o fator px-logicos -> DIP e a RAZAO medida, nao um palpite", () => {
+    // Medido: viewport logico 1340 e conteudo 2680 DIP => cliques chegavam na
+    // METADE (670 -> 335, 47.5 -> 24) e marcavam a linha de cima.
+    expect(clickDipScale(2680, 1340)).toBe(2);
+    // A outra geometria medida: 2680 DIP / 2680 CSS => fator 1 (por isso o
+    // defeito nao aparecia em todo run).
+    expect(clickDipScale(2680, 2680)).toBe(1);
+  });
+
+  it("leitura invalida do conteudo nao inventa fator: cai no comportamento antigo (1)", () => {
+    expect(clickDipScale(0, 1340)).toBe(1);
+    expect(clickDipScale(2680, 0)).toBe(1);
+    expect(clickDipScale(Number.NaN, 1340)).toBe(1);
+    expect(clickDipScale(99999, 10)).toBe(1);
   });
 
   it("clickDrift devolve o vetor do movimento e `null` quando não há rect de alvo", () => {

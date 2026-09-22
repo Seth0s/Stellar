@@ -430,6 +430,35 @@ export function decideClickVerdict(site: ClickSite): ClickVerdict {
 }
 
 /**
+ * A conversão de espaço de coordenadas — e o defeito que ela escondia.
+ *
+ * `getBoundingClientRect`/`elementFromPoint` falam em px LÓGICOS (CSS) da
+ * página; `sendInputEvent` fala no espaço da JANELA (DIP). MEDIDO ao vivo
+ * (smoke do snapshot de formulário, 2026-09-22): numa página cujo viewport
+ * lógico tem 1340px e cuja janela offscreen rasteriza 2680 DIP, um clique
+ * pedido em (670, 47.5) chegou à página como `clientX=335, clientY=24` — ou
+ * seja, EXATAMENTE METADE, e o clique marcou o rádio da LINHA DE CIMA, não o
+ * pedido. É a mesma forma do incidente do dono: num formulário de 40
+ * perguntas, errar por um fator marca perguntas que ninguém mirou.
+ *
+ * O fator não é adivinhado: é a razão medida entre o tamanho REAL do conteúdo
+ * da janela (DIP, lido do Electron) e o viewport LÓGICO que a própria página
+ * reporta (`innerWidth`). Quando os dois coincidem (medido numa das rodadas:
+ * 2680 DIP / 2680 CSS), o fator é 1 e nada muda — foi por isso que o defeito
+ * passou desapercebido antes: ele só aparece na geometria em que os dois
+ * divergem.
+ */
+export function clickDipScale(contentWidthDip: number, innerWidthCss: number): number {
+  if (!Number.isFinite(contentWidthDip) || !Number.isFinite(innerWidthCss)) return 1;
+  if (contentWidthDip <= 0 || innerWidthCss <= 0) return 1;
+  const scale = contentWidthDip / innerWidthCss;
+  // Fora do razoável é leitura quebrada, não geometria: melhor 1 (o
+  // comportamento antigo) que inventar um fator de uma medição inválida.
+  if (!Number.isFinite(scale) || scale <= 0 || scale > 8) return 1;
+  return scale;
+}
+
+/**
  * Compara o rect resolvido com o re-lido imediatamente antes do disparo.
  * `null` para clique por ponto. Tolerância:
  * `CLICK_DRIFT_TOLERANCE_PX` — sub-pixel não move o alvo para baixo do
