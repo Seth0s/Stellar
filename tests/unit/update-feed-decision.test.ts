@@ -1,35 +1,53 @@
 import { describe, it, expect } from "vitest";
-import { decideUpdateFeed } from "../../src/main/update-feed-decision";
+import {
+  UPDATE_FEED_FILENAME,
+  UPDATE_FEED_OVERRIDE_ENV,
+  decideUpdateFeed,
+} from "../../src/main/update-feed-decision";
 
 /**
- * A saída do GitHub (2026-09-15) tirou o feed de updates do ar. O risco
- * não é ficar sem update — é o app dizer "sem novidades" para sempre,
- * que era exatamente o que o tratamento antigo de 404 faria agora.
+ * O FEED TEM UMA FONTE SÓ (task 5fb0c21b): `build.publish` no package.json é
+ * materializado pelo electron-builder em `resources/app-update.yml`, e o app
+ * pergunta por ESSE arquivo — não por um literal TypeScript que podia divergir
+ * da build sem ninguém notar (era `FEED_PUBLISH_CONFIG = undefined`).
+ *
+ * E "sem feed" continua sendo um ESTADO PRÓPRIO com motivo, nunca um sucesso
+ * vazio: a lição de 2026-09-15, quando o app dizia "sem novidades" para sempre.
  */
-describe("decideUpdateFeed", () => {
-  it("sem publish configurado, a ausência é um estado próprio — não um sucesso vazio", () => {
-    const state = decideUpdateFeed(undefined);
+describe("decideUpdateFeed — a pergunta é sobre o pacote em execução", () => {
+  it("o arquivo que o builder escreve É a fonte: presente -> configurado", () => {
+    expect(decideUpdateFeed({ appUpdateYmlPresent: true, overrideUrl: null })).toEqual({
+      configured: true,
+      source: "app-update.yml",
+    });
+  });
+
+  it("sem o arquivo e sem override -> estado DECLARADO de sem-feed (nunca 'sem novidades')", () => {
+    const state = decideUpdateFeed({ appUpdateYmlPresent: false, overrideUrl: null });
     expect(state.configured).toBe(false);
     if (state.configured) throw new Error("unreachable");
     expect(state.reason).toBe("no-feed");
+    expect(state.message).toContain("baixe a versão nova");
   });
 
-  it("a mensagem diz o que NÃO vai acontecer e o que fazer no lugar", () => {
-    const state = decideUpdateFeed(null);
-    if (state.configured) throw new Error("unreachable");
-    expect(state.message).toMatch(/desligada/i);
-    expect(state.message).toMatch(/manualmente/i);
+  it("o override (verificação) vence e DIZ que é override — feed de prova não se confunde com o de produção", () => {
+    expect(decideUpdateFeed({ appUpdateYmlPresent: false, overrideUrl: "http://127.0.0.1:9/feed" })).toEqual({
+      configured: true,
+      source: "override",
+    });
+    // E com o arquivo presente também: o override é o que manda na prova.
+    expect(decideUpdateFeed({ appUpdateYmlPresent: true, overrideUrl: "http://127.0.0.1:9/feed" })).toEqual({
+      configured: true,
+      source: "override",
+    });
   });
 
-  it("com provider configurado volta a ser feed normal — a VPS só precisa preencher isto", () => {
-    expect(decideUpdateFeed({ provider: "generic", url: "https://exemplo/releases" })).toEqual({ configured: true });
+  it("override em branco não conta como feed", () => {
+    expect(decideUpdateFeed({ appUpdateYmlPresent: false, overrideUrl: "   " })).toMatchObject({ configured: false });
   });
 
-  it("aceita a forma de lista que o electron-builder também permite", () => {
-    expect(decideUpdateFeed([{ provider: "generic", url: "https://exemplo" }])).toEqual({ configured: true });
-  });
-
-  it("lista vazia é ausência, não configuração", () => {
-    expect(decideUpdateFeed([]).configured).toBe(false);
+  it("os nomes do arquivo e da variável são os que o resto do main usa (uma fonte, sem literal espalhado)", () => {
+    expect(UPDATE_FEED_FILENAME).toBe("app-update.yml");
+    expect(UPDATE_FEED_OVERRIDE_ENV).toBe("STELLAR_UPDATE_FEED_URL");
   });
 });

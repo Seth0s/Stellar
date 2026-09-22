@@ -3683,3 +3683,29 @@ select.resume-input {
   pointer-events: auto;
 }
 
+
+/* O SELO DO SALTO e o caminho manual (task 5fb0c21b). Valores por TOKEN de
+   propósito: são regras novas, e regra nova não entra somando violação à
+   baseline congelada do check-design-tokens. */
+.update-banner-jump {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-5);
+  padding: 1px 6px;
+  color: var(--muted);
+}
+
+.update-banner-jump--major {
+  color: var(--accent);
+}
+
+.update-banner-manual {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.update-banner-manual-link {
+  color: var(--accent);
+  text-decoration: underline;
+}

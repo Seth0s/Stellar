@@ -22,11 +22,31 @@ export type UpdateStatus = {
    * Diferente de `checkError`: não é falha, é configuração — e precisa
    * aparecer, senão o app promete silenciosamente um update que nunca vem. */
   updatesUnavailable: string | null;
+  /** Dá para INSTALAR nesta instalação? (task 5fb0c21b, item 2) — `canInstall:
+   * false` com o motivo é o caso do dono (rpm sem `package-type`): a tela diz
+   * "baixe a nova" em vez de oferecer um botão que falha. `null` = o main não
+   * respondeu isso (versão antiga). */
+  install: { canInstall: boolean; how?: string; needsElevation?: boolean; message?: string } | null;
+  /** Página da release, derivada do MESMO `app-update.yml` que configura o
+   *  feed — não um segundo literal de owner/repo no renderer. */
+  releaseUrl: string | null;
+  /** A versão RODANDO, para o selo do salto (patch/minor/major). */
+  currentVersion: string | null;
 };
 
 const REMIND_LATER_MS = 4 * 60 * 60 * 1000;
 
-let status: UpdateStatus = { version: null, releaseNotes: null, dismissed: false, checking: false, checkError: null, updatesUnavailable: null };
+let status: UpdateStatus = {
+  version: null,
+  releaseNotes: null,
+  dismissed: false,
+  checking: false,
+  checkError: null,
+  updatesUnavailable: null,
+  install: null,
+  releaseUrl: null,
+  currentVersion: null,
+};
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -59,7 +79,14 @@ function ensureInitialized() {
 async function runCheck() {
   setStatus({ checking: true, checkError: null });
   const result = await window.updater.check();
-  setStatus({ checking: false, checkError: result.error ?? null, updatesUnavailable: result.unavailable ?? null });
+  setStatus({
+    checking: false,
+    checkError: result.error ?? null,
+    updatesUnavailable: result.unavailable ?? null,
+    install: result.install ?? null,
+    releaseUrl: result.releaseUrl ?? null,
+    currentVersion: result.currentVersion ?? null,
+  });
 }
 
 export function useUpdateStatus(): UpdateStatus & { dismiss: () => void; undismiss: () => void; checkNow: () => void } {

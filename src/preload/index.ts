@@ -1454,7 +1454,27 @@ const remote = {
  * unconditionally at boot. `onAvailable`/`onDownloaded` only ever fire in
  * a packaged build with a real update actually found. */
 const updater = {
-  check: (): Promise<{ checked: boolean; error?: string; unavailable?: string }> => ipcRenderer.invoke("updater:check"),
+  /** O resultado do check carrega, alem do veredito, os FATOS que a tela precisa
+   *  para nao mentir (task 5fb0c21b): `install` diz se esta INSTALACAO consegue
+   *  se atualizar sozinha (medido: um rpm sem `resources/package-type` nao
+   *  consegue — a lib desliga o updater), `releaseUrl` e a pagina da release
+   *  derivada do MESMO `app-update.yml` que configura o feed, e
+   *  `currentVersion` permite a tela calcular o TAMANHO do salto (patch/minor/
+   *  major). Campo ausente = versao antiga do main; a tela trata como ausente. */
+  check: (): Promise<{
+    checked: boolean;
+    error?: string;
+    unavailable?: string;
+    feed?: { configured: boolean; source?: "app-update.yml" | "override" };
+    install?: {
+      canInstall: boolean;
+      how?: "appimage" | "rpm" | "deb";
+      needsElevation?: boolean;
+      message?: string;
+    };
+    releaseUrl?: string | null;
+    currentVersion?: string;
+  }> => ipcRenderer.invoke("updater:check"),
   install: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke("updater:install"),
   onAvailable: (cb: (version: string, releaseNotes: string | null) => void) => {
     const listener = (_e: unknown, version: string, releaseNotes: string | null) => cb(version, releaseNotes);
