@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { app, ipcMain, type BrowserWindow } from "electron";
 import {
   UPDATE_FEED_FILENAME,
@@ -10,6 +11,13 @@ import {
 import { decideUpdateInstall, type UpdateInstallState } from "./update-install-decision";
 import { parseReleaseNotes } from "../shared/release-notes";
 import { readUpdatePrefs, writeRemindLaterVersion } from "./update-prefs";
+import {
+  MAC_SWAP_LOG_FILENAME,
+  bundlePathFromExe,
+  macSwapNodeIo,
+  performMacSwap,
+  pickMacZipSha512,
+} from "./mac-update-swap";
 // `electron-updater` is CommonJS with no static `exports.autoUpdater` a
 // named ESM import can see — the bundled main process (ESM output,
 // electron-vite) crashed the whole app on boot with "Named export
@@ -92,6 +100,16 @@ function installState(): UpdateInstallState {
   });
 }
 
+/** O sha512 do zip do mac, guardado pelo último check (o feed é quem declara). */
+let lastMacZipSha512: string | null = null;
+
+/**
+ * Onde a troca no mac escreve cada passo. O caminho é DITO na UI (`swapLogPath`
+ * na resposta do install) — é o arquivo que o testador do Mac manda se algo
+ * falhar. Nada de credencial nem de caminho pessoal além do userData.
+ */
+const macSwapLogPath = (): string => join(app.getPath("userData"), MAC_SWAP_LOG_FILENAME);
+
 export function registerUpdater(win: BrowserWindow) {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -148,7 +166,11 @@ export function registerUpdater(win: BrowserWindow) {
       autoUpdater.setFeedURL({ provider: "generic", url: facts.overrideUrl });
     }
     try {
-      await autoUpdater.checkForUpdates();
+      const check = await autoUpdater.checkForUpdates();
+      // O sha512 do ZIP do mac, declarado pelo feed — é ele que a troca confere
+      // ANTES de usar o pacote (o `MacUpdater` escolhe o zip do mesmo jeito:
+      // `findFile(files, "zip", ["pkg", "dmg"])`).
+      lastMacZipSha512 = pickMacZipSha512(check?.updateInfo?.files ?? []);
       return {
         checked: true,
         feed,
@@ -223,12 +245,94 @@ export function registerUpdater(win: BrowserWindow) {
     // "baixe o rpm" é melhor que um botão que baixa e falha no meio.
     const install = installState();
     if (!install.canInstall) return { ok: false, error: install.message, install };
+
+    // ---- MAC: A TROCA É NOSSA (task d0fef4e7) ----
+    // A lib NÃO instala aqui (Squirrel/ShipIt exige bundle assinado); o que ela
+    // faz é baixar o zip. Depois disso quem troca é o script de
+    // `mac-update-swap.ts`, fora deste processo.
+    if (install.how === "mac-swap") {
+      const bundle = bundlePathFromExe(app.getPath("exe"));
+      if (bundle === null) {
+        return {
+          ok: false,
+          error:
+            "Não consegui identificar o bundle .app em execução — baixe a versão nova pela release.",
+          install,
+        };
+      }
+      try {
+        await autoUpdater.downloadUpdate();
+        const downloaded = (
+          autoUpdater as unknown as { downloadedUpdateHelper?: { file?: string } }
+        ).downloadedUpdateHelper;
+        const zipPath = downloaded?.file;
+        if (typeof zipPath !== "string" || !existsSync(zipPath)) {
+          return {
+            ok: false,
+            error:
+              "O electron-updater não disse onde baixou o pacote — baixe a versão nova pela release.",
+            install,
+            swapLogPath: macSwapLogPath(),
+          };
+        }
+        const expected = lastMacZipSha512 ?? "";
+        if (expected === "") {
+          return {
+            ok: false,
+            error: "A checagem não deixou o sha512 do pacote — não vou instalar sem conferir.",
+            install,
+            swapLogPath: macSwapLogPath(),
+          };
+        }
+        const workDir = mkdtempSync(join(tmpdir(), "stellar-swap-"));
+        const result = await performMacSwap(
+          {
+            zipPath,
+            expectedSha512: expected,
+            currentBundle: bundle,
+            newVersion: autoUpdater.currentVersion.version,
+            logPath: macSwapLogPath(),
+            workDir,
+          },
+          macSwapNodeIo,
+        );
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: `${result.error} (passo: ${result.failedStep})`,
+            install,
+            swapLogPath: macSwapLogPath(),
+          };
+        }
+        // A resposta do IPC precisa SAIR antes do quit, senão o renderer não
+        // mostra nada e o usuário fica sem saber o que aconteceu.
+        setTimeout(() => app.quit(), 600);
+        return {
+          ok: true,
+          install,
+          swapLogPath: macSwapLogPath(),
+          swap: {
+            newBundle: result.newBundle,
+            needsElevation: result.needsElevation,
+            steps: result.steps,
+          },
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+          install,
+          swapLogPath: macSwapLogPath(),
+        };
+      }
+    }
+
     try {
       await autoUpdater.downloadUpdate();
       autoUpdater.quitAndInstall();
-      return { ok: true };
+      return { ok: true, install };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      return { ok: false, error: err instanceof Error ? err.message : String(err), install };
     }
   });
 }

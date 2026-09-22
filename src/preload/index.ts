@@ -1478,7 +1478,10 @@ const updater = {
      *  nela e volta para uma versão MAIS NOVA. */
     remindLaterVersion?: string | null;
   }> => ipcRenderer.invoke("updater:check"),
-  install: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke("updater:install"),
+  // `swapLogPath` só vem no darwin: é o arquivo que a troca escreve e que o
+  // testador manda se algo falhar (task d0fef4e7).
+  install: (): Promise<{ ok: boolean; error?: string; swapLogPath?: string }> =>
+    ipcRenderer.invoke("updater:install"),
   /** O aviso traz as duas partes JÁ SEPARADAS pelo main (task 5fb0c21b):
    *  `changelog` é o corpo da release SEM a seção de commits, e `commits` é a
    *  lista que o `release.yml` escreve no corpo (o parser mora em

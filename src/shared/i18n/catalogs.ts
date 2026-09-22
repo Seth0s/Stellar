@@ -573,6 +573,8 @@ export const ptBR = {
   "update.downloadManual": "baixar a versão nova",
   "update.installManual": "esta instalação não se atualiza sozinha",
   "update.installFail": "falha ao instalar",
+  // A troca no mac (task d0fef4e7): o log é o que o testador manda.
+  "update.swapLogHint": "log da troca:",
   "update.installing": "instalando…",
   "update.installRestart": "instalar e reiniciar",
   "update.later": "depois",
@@ -1572,6 +1574,7 @@ export const en: Record<MessageKey, string> = {
   "update.downloadManual": "download the new version",
   "update.installManual": "this install cannot update itself",
   "update.installFail": "install failed",
+  "update.swapLogHint": "swap log:",
   "update.installing": "installing…",
   "update.installRestart": "install and restart",
   "update.later": "later",

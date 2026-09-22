@@ -28,6 +28,9 @@ export function UpdateBanner() {
   const jump = version && currentVersion ? deriveVersionJump(currentVersion, version) : null;
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // O caminho do log da troca no mac: a falha diz ONDE olhar, e o testador
+  // manda esse arquivo (task d0fef4e7).
+  const [swapLog, setSwapLog] = useState<string | null>(null);
   const [showNotes, setShowNotes] = useState(false);
 
   if (!version || dismissed) return null;
@@ -76,9 +79,12 @@ export function UpdateBanner() {
                 if (!result.ok) {
                   setInstalling(false);
                   setError(result.error ?? t("update.installFail"));
+                  // A SAÍDA (task d0fef4e7, passo 4): falhou = o app velho está
+                  // intacto, e o usuário sai pela release. Nada de beco sem saída.
+                  setSwapLog(result.swapLogPath ?? null);
                 }
-                // On success the app quits+relaunches on its own
-                // (autoUpdater.quitAndInstall) — nothing left to do here.
+                // On success the app quits+relaunches on its own. No darwin quem
+                // reinicia é o script da troca (mac-update-swap.ts), não a lib.
               });
             }}
           >
@@ -94,7 +100,30 @@ export function UpdateBanner() {
           {t("update.remindLater")}
         </button>
       </div>
-      {error && <span className="update-banner-error">{error}</span>}
+      {error && (
+        <span className="update-banner-error">
+          {error}
+          {swapLog !== null && (
+            <span className="update-banner-swap-log">
+              {" "}
+              {t("update.swapLogHint")} <code>{swapLog}</code>
+            </span>
+          )}
+          {releaseUrl !== null && (
+            <>
+              {" "}
+              <a
+                className="update-banner-manual-link"
+                href={releaseUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t("update.downloadManual")}
+              </a>
+            </>
+          )}
+        </span>
+      )}
       {showNotes && changelog !== "" && (
         // MARKDOWN COM O SANITIZADOR QUE O APP JÁ USA (task 5fb0c21b, item 3):
         // `Markdown` é o mesmo componente do StickyCard (marked + dompurify,

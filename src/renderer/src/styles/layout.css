@@ -1138,6 +1138,16 @@ select.resume-input {
   padding: 0 4px;
 }
 
+/* A troca no mac falhou: o caminho do log que o testador manda (d0fef4e7). */
+.update-banner-swap-log {
+  color: var(--muted);
+}
+
+.update-banner-swap-log code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .update-banner-notes {
   background: var(--panel);
   border: 1px solid var(--border);

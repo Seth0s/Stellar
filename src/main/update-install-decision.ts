@@ -34,7 +34,11 @@
 export type UpdateInstallState =
   | {
       canInstall: true;
-      how: "appimage" | "rpm" | "deb";
+      /**
+       * COMO esta instalação troca o binário. `mac-swap` não é detalhe de
+       * rótulo: no darwin NÃO é a lib que instala (ver `mac-update-swap.ts`).
+       */
+      how: "appimage" | "rpm" | "deb" | "nsis" | "mac-swap";
       /** `true` quando a instalação passa por elevação (pkexec/sudo). */
       needsElevation: boolean;
     }
@@ -59,13 +63,27 @@ export function decideUpdateInstall(input: {
       message: "Build de desenvolvimento: atualização automática não se aplica.",
     };
   }
+  if (input.platform === "darwin") {
+    // MAC: MEDIDO (task d0fef4e7) — a lib NÃO instala aqui. O `MacUpdater`
+    // entrega o zip a um servidor local e chama `nativeUpdater.quitAndInstall()`
+    // (`out/MacUpdater.js:211-233`): quem aplica é o Squirrel.Mac/ShipIt, que
+    // exige bundle ASSINADO — e o build desta casa sai sem assinatura
+    // (`CSC_IDENTITY_AUTO_DISCOVERY=false`). O caminho próprio é a TROCA que
+    // fazemos por conta própria (`mac-update-swap.ts`). Antes disto a resposta
+    // era `how: "appimage"` para darwin: um rótulo emprestado, sem medição.
+    return { canInstall: true, how: "mac-swap", needsElevation: false };
+  }
+  if (input.platform === "win32") {
+    // Windows NÃO muda nesta task: o NSIS roda sem assinatura, então o caminho
+    // da lib segue valendo. O rótulo é `nsis` — antes dizia `rpm`, que era um
+    // nome errado para o mesmo veredito.
+    return { canInstall: true, how: "nsis", needsElevation: false };
+  }
   if (input.platform !== "linux") {
-    // win32 (NSIS) e darwin (zip/dmg) têm caminho próprio na lib e não passam
-    // por `package-type`; não foram medidos nesta máquina — declarado assim.
     return {
-      canInstall: true,
-      how: input.platform === "darwin" ? "appimage" : "rpm",
-      needsElevation: false,
+      canInstall: false,
+      reason: "not-linux",
+      message: `Plataforma ${input.platform} não é suportada para atualização automática.`,
     };
   }
   if (input.appImageEnv) return { canInstall: true, how: "appimage", needsElevation: false };

@@ -58,6 +58,38 @@ describe("decideUpdateInstall — o formato da instalação decide", () => {
     expect(decideUpdateInstall({ ...ownerInstall, packageType: "lixo" }).canInstall).toBe(false);
   });
 
+  it("DARWIN -> `mac-swap` (medido: a lib delega ao Squirrel, que exige bundle assinado)", () => {
+    // Não é "appimage" emprestado: no mac a troca é NOSSA (baixar, conferir
+    // sha512, extrair com ditto, trocar por script destacado).
+    expect(
+      decideUpdateInstall({
+        platform: "darwin",
+        isPackaged: true,
+        appImageEnv: false,
+        packageType: null,
+      }),
+    ).toEqual({
+      canInstall: true,
+      how: "mac-swap",
+      needsElevation: false,
+    });
+  });
+
+  it("WINDOWS -> `nsis` e sem elevação (NSIS roda sem assinatura; não muda nesta task)", () => {
+    expect(
+      decideUpdateInstall({
+        platform: "win32",
+        isPackaged: true,
+        appImageEnv: false,
+        packageType: null,
+      }),
+    ).toEqual({
+      canInstall: true,
+      how: "nsis",
+      needsElevation: false,
+    });
+  });
+
   it("build de desenvolvimento não finge que atualiza", () => {
     const state = decideUpdateInstall({ ...ownerInstall, isPackaged: false, appImageEnv: true });
     expect(state.canInstall).toBe(false);
