@@ -39,7 +39,9 @@
  * despacho com base nele.
  */
 
-export type CardStatus = "running" | "idle" | "at-prompt" | "unknown" | "waiting" | "exited";
+import { FIRST_OUTPUT_DEADLINE_MS } from "./silent-boot-decision";
+
+export type CardStatus = "running" | "idle" | "at-prompt" | "unknown" | "waiting" | "exited" | "no-output";
 
 export type CardStatusFacts = {
   /** Provider do card (`"bash"`, `"claude"`, ...). `null` = desconhecido. */
@@ -61,6 +63,15 @@ export type CardStatusFacts = {
   now: number;
   /** Silêncio de bytes que caracteriza "parado" num shell de linha. */
   idleThresholdMs: number;
+  /**
+   * Já chegou ALGUM byte deste PTY? (`hasReceivedData` do registry.) Ausente =
+   * sem fato — e sem fato não se inventa o estado novo (task d77b524b).
+   */
+  hasEverProducedOutput?: boolean;
+  /** Quando o PTY nasceu, para medir a idade contra o limite de primeira saída. */
+  spawnedAtMs?: number | null;
+  /** Limite de primeira saída; default `FIRST_OUTPUT_DEADLINE_MS` (30s, medido). */
+  firstOutputDeadlineMs?: number;
 };
 
 /** `bash` é o único provider com semântica de shell de linha: não repinta.
@@ -124,6 +135,17 @@ export function decideCardStatus(facts: CardStatusFacts): CardStatus {
   // processo vivo (isAlive true), e dizer "running" ali é exatamente a
   // ambiguidade que este estado existe para remover.
   if (facts.waitingOnConsent) return "waiting";
+  // O CARD QUE NUNCA FALOU (task d77b524b): nenhum byte desde o nascimento e o
+  // limite de primeira saída já passou. Vem antes de tudo o que fala de turno
+  // porque nenhum fato de turno pode ser verdade sem uma primeira saída — e
+  // porque `unknown` (a resposta de hoje para este caso) é indistinguível de
+  // "está trabalhando", que é a mentira que o dono decidiu trocar por um aviso.
+  // AUSÊNCIA DE FATO NÃO ENTRA: só com `hasEverProducedOutput === false`
+  // EXPLÍCITO, e com idade datável. Sem isso, o caminho antigo responde.
+  if (facts.hasEverProducedOutput === false && typeof facts.spawnedAtMs === "number") {
+    const deadlineMs = facts.firstOutputDeadlineMs ?? FIRST_OUTPUT_DEADLINE_MS;
+    if (facts.now - facts.spawnedAtMs >= deadlineMs) return "no-output";
+  }
 
   const quietFor =
     facts.lastActivityAt === null ? null : facts.now - facts.lastActivityAt;
@@ -198,5 +220,7 @@ export function describeCardStatus(status: CardStatus): string {
       return "bloqueado numa decisão de consentimento";
     case "exited":
       return "processo encerrado";
+    case "no-output":
+      return "subiu e não produziu NENHUM byte desde o nascimento (nem a moldura do TUI) — o processo está vivo e calado; nada foi encerrado. Confira a tela: credencial faltando, prompt de login, ou binário preso antes do primeiro desenho";
   }
 }

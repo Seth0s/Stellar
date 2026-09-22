@@ -10,6 +10,7 @@ import {
   REPORT_AVAILABLE_POINTER_BODY,
   unreportedExitPointerBody,
   unreportedIdlePointerBody,
+  silentBootPointerBody,
   unreportedNoAgentPointerBody,
   unreportedUnprovenIdlePointerBody,
 } from "./agent-facing-authorship";
@@ -144,6 +145,7 @@ import { MAX_FILE_BYTES, PathEscapeError, readFileAllowingAbsolute } from "./fs-
 import { argvCarriesDeclaredBrief, providerById, providerCapacity } from "./providers";
 import { decideSpawnProfile } from "./spawn-profile-decision";
 import { describeSpawnBriefDelivery, type SpawnBriefMode } from "./spawn-brief-delivery-decision";
+import { FIRST_OUTPUT_DEADLINE_MS, decideSilentBoot } from "./silent-boot-decision";
 import {
   attributeSessionsToCards,
   decideUnreportedWork,
@@ -1608,6 +1610,13 @@ export function createMessageBus(
    */
   const NO_EPISODE_ANCHOR = 0;
   const idleWithoutReportNotified = new Map<string, number>();
+  /**
+   * Cards que já receberam o aviso de "subiu e nunca falou" (task d77b524b).
+   * UM aviso por card, nunca repetido: o scan roda a cada 5s. O ESTADO não
+   * precisa de limpeza — ele é derivado (`hasReceivedData`), então o primeiro
+   * byte o apaga sozinho, que é o pedido 3 do enunciado.
+   */
+  const silentBootNotified = new Set<string>();
   /** Every programmatic message to one PTY shares one FIFO. Reports, task
    * notices, and explicit `send_to_card` calls must not overtake each other,
    * and none may be dropped just because another delivery is in flight. */
@@ -2591,6 +2600,20 @@ export function createMessageBus(
   }
 
   /**
+   * AGENT half of "subiu e nunca falou" (task d77b524b). MESMO resolvedor de
+   * linhagem e MESMO `enqueueCardDelivery` do watchdog de ocioso — a decisão do
+   * dono foi AVISAR pelo canal que já existe, nunca matar. Nenhum poke no card
+   * calado (injetar num processo preso não o desprende).
+   */
+  function notifySpawnerOfSilentBoot(cardId: string, waitedSec: number): void {
+    const spawnerId = resolveNotifyTarget(cardId);
+    if (!spawnerId) return;
+    if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
+    const label = callbacks.describeCardLabel(cardId);
+    enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, silentBootPointerBody(waitedSec)));
+  }
+
+  /**
    * AGENT half of SINAL 3 (idle without report). Same lineage resolver and
    * `enqueueCardDelivery` path as report / exit — no OS popup, no poke of
    * the idle card itself (that would inject into a possibly-thinking turn).
@@ -2641,6 +2664,24 @@ export function createMessageBus(
       // idade que vai na frase do silêncio inferido e o `now` do card_status.
       const now = Date.now();
       const idleMs = lastActivityAt === null ? null : now - lastActivityAt;
+      // O CARD QUE NUNCA FALOU (task d77b524b) — o buraco que o SINAL 3 não
+      // cobre: ele fala de quem ficou QUIETO DEPOIS de trabalhar. Um PTY que
+      // não emitiu byte nenhum faz outra pergunta, e a decisão pura mora em
+      // silent-boot-decision.ts (com a medição que escolheu os 30s). O estado
+      // visível não precisa de limpeza aqui: `card_status` o deriva do MESMO
+      // fato (`hasReceivedData`), então o primeiro byte o apaga sozinho.
+      const readiness = callbacks.getCardWriteReadiness(cardId);
+      const silentBoot = decideSilentBoot({
+        alive: callbacks.isCardAlive(cardId),
+        hasReceivedOutput: readiness?.hasReceivedData === true,
+        msSinceSpawn: readiness ? now - readiness.spawnedAtMs : null,
+      });
+      if (silentBoot.action === "notify" && !silentBootNotified.has(cardId)) {
+        // Stamp ANTES do enqueue (mesma disciplina do SINAL 3): uma FIFO lenta
+        // não pode virar rajada no poll seguinte.
+        silentBootNotified.add(cardId);
+        notifySpawnerOfSilentBoot(cardId, Math.max(1, Math.round((now - (readiness?.spawnedAtMs ?? now)) / 1000)));
+      }
       // A SEGUNDA PERGUNTA (task 14b8b224): TEM AGENTE LENDO ESTA LINHA? Um
       // card de shell com prompt livre não tem — e acusá-lo de "não reportar" é
       // cobrar de quem nunca pôde reportar (o aviso de vínculo já respondia
@@ -3517,15 +3558,21 @@ export function createMessageBus(
       // suficiente. `provider` vai na resposta de propósito: foi mandar um
       // brief de agente para um card bash que produziu
       // `bash: erro de sintaxe próximo ao token inesperado '('`.
+      const readiness = callbacks.getCardWriteReadiness(target);
       const status = decideCardStatus({
         provider: card.provider ?? null,
         alive: callbacks.isCardAlive(target),
         waitingOnConsent: waitingOnConsent.has(target),
         lastActivityAt: callbacks.getCardLastActivityAt(target),
         turnEndedAt: callbacks.getCardTurnEndedAt(target) ?? null,
-        hasPendingHumanInput: callbacks.getCardWriteReadiness(target)?.hasPendingHumanInput === true,
+        hasPendingHumanInput: readiness?.hasPendingHumanInput === true,
         now: Date.now(),
         idleThresholdMs: IDLE_THRESHOLD_MS,
+        // O FATO do card que nunca falou (task d77b524b): `undefined` quando não
+        // há entry viva (sem fato, sem estado novo) — nunca `false` inventado.
+        hasEverProducedOutput: readiness ? readiness.hasReceivedData : undefined,
+        spawnedAtMs: readiness?.spawnedAtMs ?? null,
+        firstOutputDeadlineMs: FIRST_OUTPUT_DEADLINE_MS,
       });
       return {
         ok: true,
