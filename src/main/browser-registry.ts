@@ -3,11 +3,19 @@ import { t } from "../shared/i18n";
 import { createCdpSession, type CdpSession, type CdpAttachResult, type CdpSendResult } from "./browser-cdp";
 import { decideBrowserFrame, hasDirtyArea, shouldCropFrame } from "./browser-frame-decision";
 import {
-  COLLECT_CLICK_TARGET_FACTS_JS,
   decideNativeDialogRisk,
   describeNativeDialogRefusal,
   type ClickTargetFacts,
 } from "./browser-native-dialog-decision";
+import {
+  clickDrift,
+  clickPointSource,
+  clickResolveSource,
+  clickVerifySource,
+  decideClickVerdict,
+  type ClickSample,
+  type ClickTargetDescriptor,
+} from "./browser-click-decision";
 
 /**
  * Formato explícito do payload de `onFrame` (docs/PERF.md §9.4): quem
@@ -1444,34 +1452,103 @@ export function createBrowserRegistry(callbacks: {
     return { ok: false, error: describeNativeDialogRefusal(risk.reason, target) };
   }
 
-  /** Alvo de um clique por COORDENADA: não há seletor nenhum, então o
-   * elemento é `document.elementFromPoint(x, y)` — o MESMO que o Chromium
-   * vai acertar no `mouseDown`/`mouseUp` logo depois. Nada sob o ponto:
-   * o clique cai no vazio, não abre diálogo nenhum. Se a inspeção falhar
-   * (webContents sumindo/navegando), não se inventa suspeita: o clique
-   * segue como antes do guard. */
-  async function guardPointClick(id: string, x: number, y: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** Uma frase só para "esse seletor não é CSS válido", compartilhada por
+   * `withSelector` e pelo caminho de clique: o agente precisa da MESMA
+   * resposta ao mesmo erro, venha de click, scroll ou query — e precisa saber
+   * que o motor aqui é o `querySelector` da página, não o CSS estendido do
+   * Playwright. */
+  function selectorErrorText(selector: string, detail: string): string {
+    return (
+      `invalid CSS selector ${JSON.stringify(selector)}: ${detail}. ` +
+      `Selectors here go straight to the page's own document.querySelector — plain CSS only. ` +
+      `Playwright/Puppeteer extensions (:has-text(...), text=..., >> , xpath=...) are NOT supported; ` +
+      `use a CSS selector, or browser_eval if you need to match on text content.`
+    );
+  }
+
+  /** Envelope das fontes que rodam no contexto da página (mesmo primitivo
+   * `executeJavaScript`): normaliza o que veio em
+   * `__selectorError`/`__noMatch`/`__value`, com a MESMA classificação de erro
+   * de `withSelector`. */
+  async function runInPage<T>(
+    id: string,
+    selector: string | null,
+    source: string,
+  ): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
     try {
-      const raw: unknown = await entry.win.webContents.executeJavaScript(`
-        (() => {
-          const el = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
-          return el ? { __facts: (${COLLECT_CLICK_TARGET_FACTS_JS})(el) } : { __noElement: true };
-        })()
-      `);
-      const tagged = raw as { __noElement?: boolean; __facts?: ClickTargetFacts };
-      if (!tagged?.__facts) return { ok: true };
-      return nativeDialogGuard(tagged.__facts, `the point (${x}, ${y})`);
-    } catch {
-      return { ok: true };
+      const raw: unknown = await entry.win.webContents.executeJavaScript(source);
+      const tagged = raw as { __selectorError?: string; __noMatch?: boolean; __value?: T };
+      if (tagged?.__selectorError !== undefined) {
+        return { ok: false, error: selectorErrorText(selector ?? "", tagged.__selectorError) };
+      }
+      if (tagged?.__noMatch) {
+        return { ok: false, error: `no element matches selector ${JSON.stringify(selector)}` };
+      }
+      return { ok: true, value: tagged.__value as T };
+    } catch (err) {
+      return {
+        ok: false,
+        error: `failed to evaluate selector ${JSON.stringify(selector)} in the page: ${String(err)}`,
+      };
     }
   }
 
-  async function clickAtPoint(id: string, x: number, y: number): Promise<{ ok: true } | { ok: false; error: string }> {
-    const guard = await guardPointClick(id, x, y);
-    if (!guard.ok) return guard;
-    return sendClick(id, x, y);
+  /** Resultado de um clique: quando `ok`, o alvo vai NOMEADO (tag/id/role/
+   * texto) junto das coordenadas — `{ok, x, y}` sozinho é indistinguível de
+   * "acertou outra coisa", que é o defeito que este caminho veio consertar.
+   * Quando não, `clicked: false` e uma frase que nomeia o fato medido. */
+  type ClickOutcome =
+    | {
+        ok: true;
+        clicked: true;
+        x: number;
+        y: number;
+        target: ClickTargetDescriptor;
+        matched: number;
+        warning: string | null;
+      }
+    | { ok: false; clicked: false; error: string };
+
+  function clickRefusal(error: string): { ok: false; clicked: false; error: string } {
+    return { ok: false, clicked: false, error };
+  }
+
+  /** Clique por PONTO cru: o chamador pediu "o que estiver ali". Não há
+   * intenção a comparar, então a resposta diz o que FOI atingido (ou recusa,
+   * quando não há nada ali / o ponto está fora da viewport). A guarda de
+   * diálogo nativo continua saindo da MESMA amostra que já localizou o ponto
+   * — o elemento que a inspeção vê é exatamente o que o `mouseDown`/`mouseUp`
+   * vai acertar. */ 
+  async function clickAtPoint(id: string, x: number, y: number): Promise<ClickOutcome> {
+    const sampled = await runInPage<ClickSample>(id, null, clickPointSource(x, y));
+    if (!sampled.ok) return clickRefusal(sampled.error);
+    const sample = sampled.value;
+    const verdict = decideClickVerdict({
+      intent: { kind: "point" },
+      point: sample.point,
+      hit: sample.hit,
+      relation: sample.relation,
+      viewport: sample.viewport,
+      drift: null,
+    });
+    if (!verdict.ok) return clickRefusal(verdict.error);
+    if (sample.hitFacts) {
+      const guard = nativeDialogGuard(sample.hitFacts, `the point (${x}, ${y})`);
+      if (!guard.ok) return clickRefusal(guard.error);
+    }
+    const sent = sendClick(id, sample.point.x, sample.point.y);
+    if (!sent.ok) return clickRefusal(sent.error);
+    return {
+      ok: true,
+      clicked: true,
+      x: sample.point.x,
+      y: sample.point.y,
+      target: verdict.target,
+      matched: 0,
+      warning: null,
+    };
   }
 
   /** Resolve o centro real do elemento via `executeJavaScript`
@@ -1521,14 +1598,7 @@ export function createBrowserRegistry(callbacks: {
       `);
       const tagged = raw as { __selectorError?: string; __noMatch?: boolean; __value?: T };
       if (tagged?.__selectorError !== undefined) {
-        return {
-          ok: false,
-          error:
-            `invalid CSS selector ${JSON.stringify(selector)}: ${tagged.__selectorError}. ` +
-            `Selectors here go straight to the page's own document.querySelector — plain CSS only. ` +
-            `Playwright/Puppeteer extensions (:has-text(...), text=..., >> , xpath=...) are NOT supported; ` +
-            `use a CSS selector, or browser_eval if you need to match on text content.`,
-        };
+        return { ok: false, error: selectorErrorText(selector, tagged.__selectorError) };
       }
       if (tagged?.__noMatch) return { ok: false, error: `no element matches selector ${JSON.stringify(selector)}` };
       return { ok: true, value: tagged.__value as T };
@@ -1537,28 +1607,74 @@ export function createBrowserRegistry(callbacks: {
     }
   }
 
-  async function clickSelector(
-    id: string,
-    selector: string,
-  ): Promise<{ ok: true; x: number; y: number } | { ok: false; error: string }> {
-    // Os fatos do guard saem da MESMA avaliação que já resolve o centro do
-    // elemento: nenhuma ida extra à página, e o que se inspeciona é
-    // exatamente o elemento que será clicado (não uma segunda busca, que
-    // poderia cair noutro nó depois de um re-render).
-    const found = await withSelector<{ x: number; y: number; facts: ClickTargetFacts }>(
-      id,
-      selector,
-      `el.scrollIntoView({ block: "center", inline: "center" });
-       const r = el.getBoundingClientRect();
-       return { x: r.x + r.width / 2, y: r.y + r.height / 2, facts: (${COLLECT_CLICK_TARGET_FACTS_JS})(el) };`,
-    );
-    if (!found.ok) return found;
-    const { x, y, facts } = found.value;
-    const guard = nativeDialogGuard(facts, `selector ${JSON.stringify(selector)}`);
-    if (!guard.ok) return guard;
-    const sent = sendClick(id, x, y);
-    if (!sent.ok) return sent;
-    return { ok: true, x, y };
+  /** Clique por SELETOR (é por aqui que `ref` do `browser_snapshot` também
+   * entra — `refSelector` o transforma num `[data-stellar-ref=...]`).
+   *
+   * Três leituras da página, nesta ordem, e cada uma existe por causa de um
+   * defeito medido (ver o doc comment de `browser-click-decision.ts`):
+   *
+   * 1. RESOLVER: `querySelector` + `scrollIntoView({behavior:"instant"})` +
+   *    espera o layout PARAR (duas amostras seguidas com o mesmo rect). Sem o
+   *    `instant`, `scroll-behavior: smooth` fazia o rect ser lido antes do
+   *    scroll andar — medido, o clique caiu em `html` e a tool respondeu
+   *    `ok: true`.
+   * 2. RE-VERIFICAR imediatamente antes do disparo: re-resolve o mesmo
+   *    seletor e re-lê o rect. A diferença entre as duas leituras é o
+   *    `drift`; se a página andou mais que a tolerância, NÃO se clica — a
+   *    recusa nomeia o movimento. É o pedido literal do incidente: "re-resolver
+   *    antes do dispatch e abortar se o boundingClientRect mudou".
+   * 3. DECIDIR (`decideClickVerdict`): ponto fora da viewport, nada no ponto,
+   *    ou coisa DIFERENTE no ponto (overlay/modal/sticky header) → recusa
+   *    nomeada, sem `sendInputEvent`. Senão, clica e devolve o alvo nomeado.
+   *
+   * O alvo NUNCA é clicado por JS sintético (`el.click()`): medido, um
+   * clique sintético chega na página com `isTrusted: false` e sem os eventos
+   * de mouse de verdade — o caminho aqui continua sendo
+   * `Input.dispatchMouseEvent` via `sendClick`.
+   */
+  async function clickSelector(id: string, selector: string): Promise<ClickOutcome> {
+    const describe = `selector ${JSON.stringify(selector)}`;
+    // 1. resolve + rola + espera estabilizar
+    const resolved = await runInPage<ClickSample>(id, selector, clickResolveSource(selector));
+    if (!resolved.ok) return clickRefusal(resolved.error);
+    // 2. re-resolve imediatamente antes do disparo
+    const current = await runInPage<ClickSample>(id, selector, clickVerifySource(selector));
+    if (!current.ok) return clickRefusal(current.error);
+    const target = current.value.target ?? resolved.value.target;
+    if (!target) return clickRefusal(`no element matches selector ${JSON.stringify(selector)}`);
+    // 3. a frase que o medido sustenta
+    const verdict = decideClickVerdict({
+      intent: { kind: "element", describe, target, matched: current.value.matched },
+      point: current.value.point,
+      hit: current.value.hit,
+      relation: current.value.relation,
+      viewport: current.value.viewport,
+      drift: clickDrift(resolved.value.rect, current.value.rect),
+    });
+    if (!verdict.ok) return clickRefusal(verdict.error);
+    // A guarda de diálogo nativo sai das MESMAS amostras que já resolveram e
+    // verificaram o ponto: nenhuma ida extra à página, e o que se inspeciona é
+    // exatamente o elemento (e o que está sob o ponto) que será clicado. Os
+    // dois, porque o clique cai no que está no ponto (um filho do alvo, por
+    // exemplo) e é ali que pode viver o padrão "botão estilizado + input de
+    // arquivo escondido".
+    const facts = [resolved.value.targetFacts, current.value.hitFacts];
+    for (const fact of facts) {
+      if (!fact) continue;
+      const guard = nativeDialogGuard(fact, describe);
+      if (!guard.ok) return clickRefusal(guard.error);
+    }
+    const sent = sendClick(id, current.value.point.x, current.value.point.y);
+    if (!sent.ok) return clickRefusal(sent.error);
+    return {
+      ok: true,
+      clicked: true,
+      x: current.value.point.x,
+      y: current.value.point.y,
+      target: verdict.target,
+      matched: verdict.matched,
+      warning: verdict.warning,
+    };
   }
 
   /** `selector` given: focus that field first (via `clickSelector`) so

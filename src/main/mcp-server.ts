@@ -1688,7 +1688,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "browser_click",
       {
         description:
-          "Click inside an already-open browser card. Prefer `selector` (a CSS selector — robust to scroll/zoom/resize, resolved against the live page) over raw `x`/`y` (the page's own logical pixel coordinates, only reliable right after a `browser_query` on that exact spot).",
+          "Click inside an already-open browser card. Prefer `selector` (plain CSS, resolved against the live page) or a `ref` from browser_snapshot over raw `x`/`y`. The card scrolls the target into view and RE-READS the page immediately before dispatching: if the target's rect moved, or something else (overlay, modal, sticky header) sits on top of it, or the point falls outside the page's viewport, the click is REFUSED — `{ok:false, clicked:false, error}` naming the measured reason — and nothing is dispatched. On success the answer NAMES what was clicked: `{ok:true, clicked:true, x, y, target:{tag,id,role,text}, matched, warning}` — `warning` appears when the selector matched more than one element (the first in document order was clicked). A coordinate returned by one call describes what was at that point at that instant, NOT the identity of an element: re-read it with browser_query, or click by selector/ref again.",
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
           selector: z.string().optional().describe("CSS selector of the element to click — takes precedence over x/y if both given. Plain CSS only (the page's own document.querySelector); Playwright-style :has-text(...)/text=/>> are not supported — use browser_eval to match on text content"),
