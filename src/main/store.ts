@@ -1545,6 +1545,16 @@ export function openStore(userDataDir: string) {
   const listChatSessionsStmt = db.prepare(
     "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at, created_at FROM cards WHERE kind = 'chat' ORDER BY updated_at DESC",
   );
+  // Task d3c005dc — os ARQUIVADOS do board, qualquer kind. `listCards` (acima)
+  // filtra `archived_at IS NULL`, e era por isso que um card arquivado não
+  // tinha lugar nenhum na tela fora da sidebar de chats (`listChatSessions`,
+  // que é só `kind='chat'` e de TODOS os boards). Esta é a leitura que a vista
+  // de arquivados usa: escopada no board, mais recente primeiro, e o
+  // `archived_at` vem na linha porque é ele que a tela mostra ("quando foi
+  // arquivado") — nenhuma segunda consulta por linha.
+  const listArchivedCardsStmt = db.prepare(
+    "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at, created_at FROM cards WHERE board_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC",
+  );
   const archiveCardStmt = db.prepare("UPDATE cards SET archived_at = ? WHERE id = ?");
   // Task 4e4ec327 — o RASTRO. `card_id` é PK: um card tem um rastro (o do
   // fecho). Untracked de propósito quanto a FK: o rastro precisa sobreviver ao
@@ -2867,6 +2877,11 @@ export function openStore(userDataDir: string) {
       deleteStmt.run(id);
     },
     listChatSessions: (): CardRow[] => listChatSessionsStmt.all() as CardRow[],
+    /** Arquivados de UM board, qualquer kind (task d3c005dc). O irmão
+     * `listCards` filtra `archived_at IS NULL` e o irmão `listChatSessions`
+     * é só chat e de todos os boards: nenhum dos dois responde "o que deste
+     * board está arquivado". */
+    listArchivedCards: (boardId: string): CardRow[] => listArchivedCardsStmt.all(boardId) as CardRow[],
     archiveCard: (id: string, at: number) => archiveCardStmt.run(at, id),
     unarchiveCard: (id: string) => unarchiveCardStmt.run(id),
     // Task 4e4ec327 — o rastro do fecho. `saveCardTrace` é chamado pelo
