@@ -1474,13 +1474,25 @@ const updater = {
     };
     releaseUrl?: string | null;
     currentVersion?: string;
+    /** A versão que o usuário adiou, persistida — o banner nasce escondido
+     *  nela e volta para uma versão MAIS NOVA. */
+    remindLaterVersion?: string | null;
   }> => ipcRenderer.invoke("updater:check"),
   install: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke("updater:install"),
-  onAvailable: (cb: (version: string, releaseNotes: string | null) => void) => {
-    const listener = (_e: unknown, version: string, releaseNotes: string | null) => cb(version, releaseNotes);
+  /** O aviso traz as duas partes JÁ SEPARADAS pelo main (task 5fb0c21b):
+   *  `changelog` é o corpo da release SEM a seção de commits, e `commits` é a
+   *  lista que o `release.yml` escreve no corpo (o parser mora em
+   *  `shared/release-notes.ts`). Lista vazia = a release não trouxe a seção, e a
+   *  tela não promete dropdown. */
+  onAvailable: (cb: (version: string, changelog: string, commits: string[]) => void) => {
+    const listener = (_e: unknown, version: string, changelog: string, commits: string[]) =>
+      cb(version, changelog, commits);
     ipcRenderer.on("updater:available", listener);
     return () => ipcRenderer.removeListener("updater:available", listener);
   },
+  /** "Lembrar mais tarde" PERSISTIDO por versão (task 5fb0c21b, item 5). */
+  remindLater: (version: string | null): Promise<{ ok: boolean; remindLaterVersion: string | null }> =>
+    ipcRenderer.invoke("updater:remind-later", version),
   onDownloaded: (cb: () => void) => {
     const listener = () => cb();
     ipcRenderer.on("updater:downloaded", listener);

@@ -101,6 +101,36 @@ jobs:
             echo "Release $TAG criada como draft."
           fi
 
+          # A LISTA DE COMMITS NO CORPO DA RELEASE (task 5fb0c21b, item 4).
+          #
+          # POR QUE AQUI E NÃO EM RUNTIME: o app lê esta lista do corpo da
+          # release, que já chega no `releaseNotes` do electron-updater — a API
+          # do GitHub tem 60 req/h sem token e o app não embute token nenhum.
+          #
+          # POR QUE NÃO BASTA O `--generate-notes`: medido na v0.8.2, ele
+          # entrega SÓ `**Full Changelog**: .../compare/v0.8.1...v0.8.2`. A nota
+          # gerada é mantida (é útil), e a lista entra DEPOIS, entre marcadores
+          # de formato fixo: `<!-- stellar:commits -->` … `<!-- /stellar:commits -->`
+          # (`src/shared/release-notes.ts` é o parser, e o teste dele é a prova).
+          PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          gh release view "$TAG" --json body --jq .body > /tmp/stellar-release-body.md
+          # Idempotente: uma seção de uma rodada anterior sai antes de entrar a nova.
+          sed -i '/<!-- stellar:commits -->/,/<!-- \/stellar:commits -->/d' /tmp/stellar-release-body.md
+          {
+            echo ""
+            echo "<!-- stellar:commits -->"
+            echo "### Commits"
+            if [ -n "$PREV_TAG" ]; then
+              git log --no-merges --pretty=format:'- %h %s' "${PREV_TAG}..${TAG}"
+            else
+              echo "- (primeira release — sem tag anterior para comparar)"
+            fi
+            echo ""
+            echo "<!-- /stellar:commits -->"
+          } >> /tmp/stellar-release-body.md
+          gh release edit "$TAG" --notes-file /tmp/stellar-release-body.md
+          echo "Release $TAG: lista de commits (${PREV_TAG:-<nenhuma>}..$TAG) escrita no corpo."
+
   # ---------------------------------------------------------------------
   # build-linux: .deb, .rpm e AppImage.
   #   - `.rpm` exige rpmbuild; `fpm` (usado por rpm/deb) é baixado pelo
