@@ -1051,6 +1051,28 @@ export type TaskIdleRow = {
   status: string;
 };
 
+/** O RASTRO PERSISTIDO DE UM CARD FECHADO (task 4e4ec327) — a linha que faz o
+ * fechamento parar de apagar o que o card fez. `tail` é a cauda ANSI-stripped
+ * que o registry já mantinha em memória, passada pela redação antes de virar
+ * linha; `redacted` diz se a redação alterou alguma coisa (nunca implícito). */
+export type CardTraceRow = {
+  card_id: string;
+  board_id: string;
+  closed_at: number;
+  /** `0` = a TELA não foi guardada (o default). O texto em `tail` é vazio de
+   * propósito — ausência declarada, não cauda sem redação. */
+  screen_stored: number;
+  tail: string;
+  tail_bytes: number;
+  tail_at_cap: number;
+  redacted: number;
+  spawned_at_ms: number | null;
+  last_activity_at: number | null;
+  turn_ended_at: number | null;
+  quota_death: number;
+  kill_requested: number;
+};
+
 export function openStore(userDataDir: string) {
   const db = new Database(join(userDataDir, "agent-canvas.db"));
   // Pre-release audit P3 — no journal mode was ever set (SQLite's
@@ -1088,6 +1110,23 @@ export function openStore(userDataDir: string) {
       archived_at INTEGER,
       effort TEXT,
       created_at INTEGER
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS card_traces (
+      card_id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL,
+      closed_at INTEGER NOT NULL,
+      screen_stored INTEGER NOT NULL,
+      tail TEXT NOT NULL,
+      tail_bytes INTEGER NOT NULL,
+      tail_at_cap INTEGER NOT NULL,
+      redacted INTEGER NOT NULL,
+      spawned_at_ms INTEGER,
+      last_activity_at INTEGER,
+      turn_ended_at INTEGER,
+      quota_death INTEGER NOT NULL,
+      kill_requested INTEGER NOT NULL
     );
   `);
   db.exec(`
@@ -1475,6 +1514,25 @@ export function openStore(userDataDir: string) {
     "SELECT id, board_id, kind, provider, cwd, x, y, w, h, resume_id, model, effort, system_prompt, group_id, label, updated_at, messages_json, archived_at, created_at FROM cards WHERE kind = 'chat' ORDER BY updated_at DESC",
   );
   const archiveCardStmt = db.prepare("UPDATE cards SET archived_at = ? WHERE id = ?");
+  // Task 4e4ec327 — o RASTRO. `card_id` é PK: um card tem um rastro (o do
+  // fecho). Untracked de propósito quanto a FK: o rastro precisa sobreviver ao
+  // DELETE de `cards` no caso em que ele é o ÚLTIMO vestígio.
+  const saveCardTraceStmt = db.prepare(`
+    INSERT INTO card_traces (card_id, board_id, closed_at, screen_stored, tail, tail_bytes, tail_at_cap, redacted,
+      spawned_at_ms, last_activity_at, turn_ended_at, quota_death, kill_requested)
+    VALUES (@card_id, @board_id, @closed_at, @screen_stored, @tail, @tail_bytes, @tail_at_cap, @redacted,
+      @spawned_at_ms, @last_activity_at, @turn_ended_at, @quota_death, @kill_requested)
+    ON CONFLICT(card_id) DO UPDATE SET
+      board_id = excluded.board_id, closed_at = excluded.closed_at,
+      screen_stored = excluded.screen_stored, tail = excluded.tail,
+      tail_bytes = excluded.tail_bytes, tail_at_cap = excluded.tail_at_cap, redacted = excluded.redacted,
+      spawned_at_ms = excluded.spawned_at_ms, last_activity_at = excluded.last_activity_at,
+      turn_ended_at = excluded.turn_ended_at, quota_death = excluded.quota_death,
+      kill_requested = excluded.kill_requested
+  `);
+  const getCardTraceStmt = db.prepare("SELECT * FROM card_traces WHERE card_id = ?");
+  const listCardTracesStmt = db.prepare("SELECT * FROM card_traces WHERE board_id = ? ORDER BY closed_at DESC");
+  const deleteCardTraceStmt = db.prepare("DELETE FROM card_traces WHERE card_id = ?");
   const unarchiveCardStmt = db.prepare("UPDATE cards SET archived_at = NULL WHERE id = ?");
 
   const listConnectorsStmt = db.prepare(
@@ -2651,11 +2709,27 @@ export function openStore(userDataDir: string) {
       // Orphan delegation is forbidden: closing the marked card drops the
       // board mark so the next judgment/report path degrades to unmarked.
       clearOrchestratorMarkForCardStmt.run(Date.now(), id);
+      // Task 4e4ec327 — EXCLUSÃO DE VERDADE LEVA O RASTRO JUNTO. Arquivar
+      // preserva a cauda; esta porta (o `delete_card` do MCP / ação explícita do
+      // dono) é a única que apaga, e ela apaga TUDO — inclusive o texto do
+      // rastro. Arquivamento sem caminho de exclusão seria acumulação forçada de
+      // dados sobre o trabalho do dono.
+      deleteCardTraceStmt.run(id);
       deleteStmt.run(id);
     },
     listChatSessions: (): CardRow[] => listChatSessionsStmt.all() as CardRow[],
     archiveCard: (id: string, at: number) => archiveCardStmt.run(at, id),
     unarchiveCard: (id: string) => unarchiveCardStmt.run(id),
+    // Task 4e4ec327 — o rastro do fecho. `saveCardTrace` é chamado pelo
+    // fechamento (index.ts) DEPOIS de redigir; `deleteCardTrace` existe para a
+    // porta de exclusão real: apagar de verdade tem de apagar o rastro também,
+    // senão "excluir" vira mentira com o texto do dono dentro.
+    saveCardTrace: (row: CardTraceRow) => saveCardTraceStmt.run(row),
+    getCardTrace: (cardId: string): CardTraceRow | undefined =>
+      getCardTraceStmt.get(cardId) as CardTraceRow | undefined,
+    listCardTraces: (boardId: string): CardTraceRow[] =>
+      listCardTracesStmt.all(boardId) as CardTraceRow[],
+    deleteCardTrace: (cardId: string) => deleteCardTraceStmt.run(cardId),
     listConnectors: (boardId: string): ConnectorRow[] => listConnectorsStmt.all(boardId) as ConnectorRow[],
     listAllConnectors: (): ConnectorRow[] => listAllConnectorsStmt.all() as ConnectorRow[],
     /** Most recent `send_to_card` auto-connect into `toCardId`, or null.

@@ -309,6 +309,32 @@ export function detectTrustPrompt(providerId: string, text: string): { excerpt: 
  * automática do xterm virava tecla humana). Callers must pass explicitly. */
 export type PtyWriteOrigin = DeliveryWriteOrigin;
 
+/** O RASTRO QUE SOBREVIVE AO CARD (task 4e4ec327). O que o registry sabia do
+ * card no instante em que a entrada saiu — para o FECHAMENTO poder persistir em
+ * vez de perder. A `tail` já vem ANSI-stripped e capada pelo próprio registry
+ * (`QUOTA_TAIL_MAX`): é a mesma cauda que o doc de `outputTail` diz ser
+ * "entregue no exit quando a morte é por cota, para o app decidir persistir" — e
+ * que o app, hoje, joga fora.
+ *
+ * O QUE ISTO NÃO É: a tela inteira. A tela vive no buffer do xterm do RENDERER,
+ * e o main não consegue lê-lo (`index.ts` → `onReadCardRequest` é round-trip
+ * para o renderer). O teto real de um scrollback de agente medido neste board
+ * ficou em ~5-11 KB, e o teto configurado do xterm é 10 000 linhas (~1 MB). */
+export type PtyTraceSnapshot = {
+  cardId: string;
+  /** Cauda ANSI-stripped, já capada (`QUOTA_TAIL_MAX`). */
+  tail: string;
+  tailBytes: number;
+  /** `true` quando a cauda bateu no teto — ou seja, bytes MAIS ANTIGOS foram
+   * descartados pelo próprio registry. Dito, não implícito. */
+  tailAtCap: boolean;
+  spawnedAtMs: number;
+  lastActivityAt: number;
+  turnEndedAt: number | null;
+  quotaDeath: boolean;
+  killRequested: boolean;
+};
+
 type Entry = {
   proc: pty.IPty;
   cols: number;
@@ -653,8 +679,51 @@ export function createPtyRegistry(registryOpts: {
     entries.set(id, entry);
     if (!wasAlive) registryOpts.onLivenessChanged?.(id, true);
   }
+  /**
+   * A ÚLTIMA COISA QUE O REGISTRY SOUBE DE CADA CARD QUE SAIU (task 4e4ec327).
+   * `dropEntry` é o ÚNICO lugar por onde uma entrada sai — kill e exit passam os
+   * dois por aqui —, então é aqui que o rastro é guardado. Sem isto o fechamento
+   * chegaria tarde: o kill do desmonte do card acontece no renderer ANTES de o
+   * main tratar o pedido de fechamento, e a entrada já não existiria mais.
+   *
+   * Mapa CURTO e capado de propósito: é rastro de TRÂNSITO entre a saída e a
+   * persistência, não um arquivo. Quem guarda para valer é a tabela do store.
+   */
+  const TRACE_STASH_MAX = 64;
+  const lastTraceByCard = new Map<string, PtyTraceSnapshot>();
+  function snapshotTrace(id: string, e: Entry): PtyTraceSnapshot {
+    return {
+      cardId: id,
+      tail: e.outputTail,
+      tailBytes: e.outputTail.length,
+      tailAtCap: e.outputTail.length >= QUOTA_TAIL_MAX,
+      spawnedAtMs: e.spawnedAtMs,
+      lastActivityAt: e.lastActivityAt,
+      turnEndedAt: e.turnEndedAt,
+      quotaDeath: e.quotaSignal !== null,
+      killRequested: e.killRequested,
+    };
+  }
+  function stashTrace(id: string): void {
+    const e = entries.get(id);
+    if (!e) return;
+    lastTraceByCard.set(id, snapshotTrace(id, e));
+    while (lastTraceByCard.size > TRACE_STASH_MAX) {
+      const oldest = lastTraceByCard.keys().next().value;
+      if (oldest === undefined) break;
+      lastTraceByCard.delete(oldest);
+    }
+  }
+  /** Rastro do card: o da entrada VIVA, ou o guardado quando ela saiu. `null`
+   * quando nunca houve entrada (card não-terminal, ou já fora do stash). */
+  function traceForCard(id: string): PtyTraceSnapshot | null {
+    const live = entries.get(id);
+    if (live) return snapshotTrace(id, live);
+    return lastTraceByCard.get(id) ?? null;
+  }
   function dropEntry(id: string): boolean {
     if (!entries.has(id)) return false;
+    stashTrace(id);
     entries.delete(id);
     registryOpts.onLivenessChanged?.(id, false);
     return true;
@@ -1588,5 +1657,5 @@ export function createPtyRegistry(registryOpts: {
     return entries.get(id)?.seenUrls.size ?? 0;
   }
 
-  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getLastWorkGrantedAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount };
+  return { spawn, write, beginDelivery, endDelivery, resize, interrupt, kill, killAll, isAlive, getLastActivityAt, getLastWorkGrantedAt, markTurnComplete, getTurnFacts, getPid, getClaimedSessionId, getWriteReadiness, dumpHumanInputGate, seenUrlsCount, traceForCard };
 }
