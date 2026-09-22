@@ -17,6 +17,7 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPtyRegistry } from "./pty-registry";
+import { decideTraceTailForStorage } from "./card-trace";
 import {
   decidePtyHoldAppend,
   decideRendererGone,
@@ -2533,7 +2534,56 @@ function createWindow() {
   // Item 30 — sessions sidebar (every chat card, live or archived) +
   // archive/unarchive (closing a ChatCard archives instead of deleting).
   ipcMain.handle("store:list-chat-sessions", () => store.listChatSessions());
-  ipcMain.handle("store:archive-card", (_e, id: string) => store.archiveCard(id, Date.now()));
+  /**
+   * O FECHO GUARDA O RASTRO (task 4e4ec327). Chamado ANTES de arquivar: o
+   * registry ainda pode ter a entrada viva, e se já não tiver, tem a última — o
+   * `dropEntry` guarda um stash curto justamente porque o kill do desmonte do
+   * card chega antes deste handler.
+   *
+   * Um card NÃO-terminal (sticky, files, browser) não tem PTY e portanto não tem
+   * rastro: nesse caso nada é gravado, e isso é ausência honesta, não linha vazia
+   * fingindo que houve tela.
+   */
+  function persistCardTrace(cardId: string): void {
+    const row = store.getCard(cardId);
+    if (!row) return;
+    const snapshot = registry.traceForCard(cardId);
+    if (!snapshot) return;
+    // A TELA SÓ QUANDO LIGADA — o default é NÃO guardar (decisão do dono,
+    // 2026-09-22): o rastro guarda o FATOS do registry sempre (metadado não
+    // carrega texto nenhum), e o texto da tela só passa a existir quando alguém
+    // liga `screenEnabled` explicitamente. Quando ligado, a cauda passa pela
+    // redação e o teto é o precedente que o app já declarou
+    // (`RENDERER_GONE_PTY_HOLD`), não um número novo.
+    const screen = decideTraceTailForStorage({ tail: snapshot.tail });
+    store.saveCardTrace({
+      card_id: cardId,
+      board_id: row.board_id,
+      closed_at: Date.now(),
+      screen_stored: screen.screenStored ? 1 : 0,
+      tail: screen.text,
+      tail_bytes: screen.text.length,
+      tail_at_cap: snapshot.tailAtCap ? 1 : 0,
+      redacted: screen.redacted ? 1 : 0,
+      spawned_at_ms: snapshot.spawnedAtMs,
+      last_activity_at: snapshot.lastActivityAt,
+      turn_ended_at: snapshot.turnEndedAt,
+      quota_death: snapshot.quotaDeath ? 1 : 0,
+      kill_requested: snapshot.killRequested ? 1 : 0,
+    });
+  }
+
+  ipcMain.handle("store:archive-card", (_e, id: string) => {
+    persistCardTrace(id);
+    const result = store.archiveCard(id, Date.now());
+    // Um card ARQUIVADO não pode continuar segurando a marca de orquestrador do
+    // board: a marca autoriza orquestração, e um card morto não pode orquestrar
+    // nada. `deleteCard` já limpava; o caminho de arquivamento não limpava — o
+    // board ficava marcado por um card que não existe mais na tela. Degradar para
+    // "sem marca" é o estado documentado e honesto.
+    store.clearOrchestratorMarkForCard(id);
+    return result;
+  });
   ipcMain.handle("store:unarchive-card", (_e, id: string) => store.unarchiveCard(id));
 
   // DESIGN-BACKLOG.md §2.1 Fase 2 — o quadro de tasks é o primeiro

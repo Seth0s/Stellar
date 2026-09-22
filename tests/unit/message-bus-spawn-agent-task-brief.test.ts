@@ -137,7 +137,7 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
       { cmd: "spawn_agent", provider: "claude", taskId: task.id, reason: "test", requesterId: "orch" } as BusRequest,
       { getTask: ((id: string) => (id === task.id ? task : undefined)) as never },
     );
-    expect(res).toEqual({ ok: true, cardId: "spawned-card" });
+    expect(res).toMatchObject({ ok: true, cardId: "spawned-card", briefDelivered: true, briefMode: "argv" });
     expect(spawned).toHaveLength(1);
     expect(spawned[0].params.brief).toBe("derive the brief from this prompt");
     expect(spawned[0].params.taskId).toBe(task.id);

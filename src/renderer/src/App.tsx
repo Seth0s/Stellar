@@ -36,6 +36,7 @@ import { Home } from "./Home";
 import { ToastHost } from "./ToastHost";
 import { toast } from "./useToast";
 import { decideConnectorLabelSchedule } from "./connector-label-throttle";
+import { decideCardClose } from "./card-close-decision";
 import { decideConnectorMotion } from "./connector-motion-decision";
 import { decideConnectorPulse, connectorPulseFrames } from "./connector-pulse-decision";
 import {
@@ -2740,23 +2741,31 @@ export function App() {
     // already gone from state makes both calls (again) idempotent — only
     // the true first invocation ever touches the store.
     if (closedKind === undefined) return;
-    // Item 30 — a chat card's history is worth keeping around for the
-    // sessions sidebar; every other kind still hard-deletes exactly as
-    // before (a terminal's PTY, a browser's page, a file tree — nothing
-    // there is meaningful to "reopen" the way a conversation is).
-    if (closedKind === "chat") {
+    // Task 4e4ec327 — o GESTO de fechar não é um pedido de exclusão: a linha
+    // fica (arquivada) e o card sai do board porque `listCards` filtra
+    // `archived_at IS NULL`. Medido antes de mudar: apagar a linha deixava 423
+    // reports, 339 task_cards e 1750 task_verdicts apontando para cards que não
+    // existem mais, e o `label` do card — o nome que o humano usa — morria com
+    // ela, enquanto `spawns` sobrevivia sem guardá-lo. A única porta que apaga
+    // agora é o pedido explícito (`delete_card` do MCP / ação do dono).
+    // (`closedKind === undefined` acima continua sendo o portão de
+    // idempotência das duas invocações deste mesmo fecho.)
+    const closeDecision = decideCardClose({ kind: closedKind });
+    if (closeDecision.action === "archive") {
       void window.store.archiveCard(id);
+    } else {
+      void window.store.delete(id);
+    }
+    if (closedKind === "chat") {
       // Pre-release audit B2 — a write/bash consent still pending for
       // THIS card has no UI left to ever resolve it (its ChatCard is
       // gone); tell main so it denies rather than wedging that
       // provider's tool loop forever.
       window.chat.notifyCardClosed(id);
-    } else {
-      void window.store.delete(id);
-      // store.deleteCard already cleared boards.orchestrator_card_id;
-      // keep renderer board state honest.
-      clearOrchestratorMarkIfCard(id);
     }
+    // Um card FECHADO não pode continuar segurando a marca de orquestrador do
+    // board, independente de a linha ter sido arquivada ou apagada.
+    clearOrchestratorMarkIfCard(id);
     void window.store.connectors.deleteForCard(id);
     clearConnectorLabelThrottleForCard(id);
   }
