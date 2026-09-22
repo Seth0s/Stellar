@@ -236,12 +236,28 @@ export const MEASURED_THIRD_PARTY_SPECS: readonly DynamicProviderSpec[] = [
     capacity: {
       role: "agent",
       session: {
-        // `--id <uuid>`: retoma de verdade, e a sessão nasce com o id que o
-        // Stellar gerou — a mesma semântica do `--resume` do cursor (uma
-        // flag para os dois papéis). Medido, não presumido.
-        canImposeSessionId: true,
+        // NAO IMPOE — e a versao anterior desta spec dizia que sim, com a
+        // frase "Medido, nao presumido". Estava errada, e a correcao vem de
+        // duas medicoes na MESMA versao que ela cita (`cline` 3.0.62):
+        //
+        //   1. O proprio help: `--id <session-id>   Resume an existing
+        //      session by ID`. E flag de RETOMAR. Nao existe caminho para
+        //      criar sessao com id escolhido.
+        //   2. O FORMATO nem bate. Os ids que o cline cria sao
+        //      `<epoch_ms>_<5 chars>` — lidos do store dele
+        //      (`~/.cline/data/db/sessions.db`): `1790084894395_2jj9i` e
+        //      `1789831746771_seq4z`. O Stellar impunha UUID.
+        //
+        // O sintoma que o dono relatou: "o cline fica com problema de sessao,
+        // parece que o Stellar esta inserindo id de sessao onde nao existe".
+        // Estava certo — o app mandava a CLI RETOMAR uma sessao que nunca
+        // existiu, e a CLI ignorava EM SILENCIO e criava a propria.
+        //
+        // `resumeFlag` FICA: retomar por `--id` e o uso legitimo da flag.
+        // O precedente ao lado e o opencode, que declara `false` com a nota
+        // "Nao impoe (medido 2026-09-13: recusa um id desconhecido)".
+        canImposeSessionId: false,
         resumeFlag: "--id",
-        imposeFlag: "--id",
         // A DESCOBERTA está fechada; a LEITURA não foi medida — e `read`
         // ausente quer dizer exatamente isso: a resposta continua saindo da
         // declaração (`null`: não há prova de que o id esteja errado, então

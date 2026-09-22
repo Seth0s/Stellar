@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { MEASURED_THIRD_PARTY_SPECS } from "../../src/main/providers-dynamic";
 import {
   ACBRIDGE_HINT,
   PROVIDERS,
@@ -393,6 +394,36 @@ describe("providers: impose session id (claude/cursor)", () => {
     expect(canImposeSessionId("cursor")).toBe(true);
     for (const id of ["codex", "antigravity", "opencode", "bash"]) {
       expect(canImposeSessionId(id)).toBe(false);
+    }
+  });
+
+  // O NOME DESTE BLOCO DIZIA "only claude and cursor" e a fixture acima
+  // percorria SO os built-in — os specs DINAMICOS
+  // (`MEASURED_THIRD_PARTY_SPECS`) nunca eram verificados. Foi por esse buraco
+  // que o `cline` viveu com `canImposeSessionId: true` sobre uma flag que o
+  // help dele descreve como `--id <session-id>  Resume an existing session by
+  // ID`: o app mandava RETOMAR uma sessao que nunca existiu, e a CLI ignorava
+  // em silencio. Uma assercao que nao percorre o conjunto que ela nomeia passa
+  // por vacuidade — e o defeito mora exatamente no que ficou de fora.
+  it("nenhum spec DINAMICO impoe sessao — o conjunto que a assercao acima nao percorria", () => {
+    expect(MEASURED_THIRD_PARTY_SPECS.length).toBeGreaterThan(1);
+    for (const spec of MEASURED_THIRD_PARTY_SPECS) {
+      expect(
+        { id: spec.id, impoe: spec.capacity.session.canImposeSessionId },
+        `spec dinamico "${spec.id}" declara impor sessao; so claude e cursor tem canal medido para isso`,
+      ).toEqual({ id: spec.id, impoe: false });
+    }
+  });
+
+  // Guarda de FORMA, independente de quem: declarar `imposeFlag` sem poder
+  // impor e a incoerencia que produziu o defeito do cline (a flag ficou
+  // declarada nos dois papeis, `resumeFlag` e `imposeFlag`, com a mesma
+  // string). Impor exige flag; nao impor exige nao ter flag de impor.
+  it("imposeFlag so existe onde canImposeSessionId e true", () => {
+    for (const spec of MEASURED_THIRD_PARTY_SPECS) {
+      const s = spec.capacity.session;
+      if (!s.canImposeSessionId) expect(s.imposeFlag, `"${spec.id}"`).toBeUndefined();
+      else expect(s.imposeFlag, `"${spec.id}"`).toBeTruthy();
     }
   });
 
