@@ -1,3 +1,5 @@
+import type { CardDeliveryState } from "./type-and-submit-decision";
+
 /**
  * DESIGN-BACKLOG.md §2.1 SINAL 3 — watchdog for the gap between
  * `card_status: idle` and `exit_without_report`.
@@ -167,6 +169,11 @@ export type IdleWithoutReportSkipReason =
   /** Já existe report NESTE episódio (desde a última vez que o card recebeu
    *  trabalho) — o guard de falso positivo. */
   | "reported_this_episode"
+  /** O card respondeu a quem o dirige — pelo único canal de quem não pode
+   *  chamar `report` — DEPOIS de receber o trabalho deste episódio. Ver o
+   *  campo `answeredDirectorSinceWorkGranted`: não é report, não é julgamento,
+   *  e não silencia saída nem boot silencioso. */
+  | "answered_director_this_episode"
   | "no_linked_running_task"
   | "already_notified"
   | "activity_unknown"
@@ -189,6 +196,25 @@ export type IdleWithoutReportDecision =
   | { action: "skip"; reason: IdleWithoutReportSkipReason };
 
 /**
+ * O que conta como "o card respondeu a quem o dirige" (task fc68f565).
+ *
+ * Dois estados, e o resto é ausência honesta:
+ *   - `delivered` — o texto foi digitado e o agente leu (o caso feliz);
+ *   - `parked` — o texto foi digitado e ficou na fila mid-turn do DESTINO, ou
+ *     seja, está no card de quem dirige e vai ser lido quando o turno terminar.
+ *     O autor já fez a parte dele; cobrar a resposta dele seria cobrar o que já
+ *     foi entregue (ver `send-settle-decision.ts`, que chama isso de "já está
+ *     lá, não reenvie").
+ *
+ * Fora: `queued` (não foi digitado ainda), `failed` e `cancelled` (não chegou),
+ * e `unconfirmed` — sem evidência não se afirma resposta, do mesmo jeito que
+ * este módulo se recusa a afirmar abandono sem prova.
+ */
+export function isAnswerLanded(state: CardDeliveryState): boolean {
+  return state === "delivered" || state === "parked";
+}
+
+/**
  * Decide whether this card's idle-without-report episode should notify
  * the spawner. Pure — no I/O, no mutation of the once-set.
  */
@@ -208,6 +234,39 @@ export function decideIdleWithoutReport(input: {
    * parece vigiar e não vigia entrega pior que um watchdog ausente.
    */
   reportedSinceWorkGranted: boolean;
+  /**
+   * O card JÁ RESPONDEU a quem o DIRIGE neste episódio — por `send_to_card`
+   * para o mesmo card que receberia este aviso, depois da última vez que
+   * recebeu trabalho?
+   *
+   * Task fc68f565, e a medição que a abriu (2026-09-23, banco copiado + os
+   * stores de sessão, janela de 48h): 53 avisos de ociosidade entregues. 44
+   * eram de cards `cline` — a população que NÃO CONSEGUE chamar `report`
+   * (identidade compartilhada do daemon; ver `declared-card-existence-decision.ts`),
+   * cujo único canal é `send_to_card` para quem os dirige. Em 8 deles o card já
+   * tinha falado com o diretor pelo canal correto antes do aviso; em 37 (70%)
+   * a entrega existia mas chegou rotulada `card #<id-que-não-existe>`, ou seja,
+   * o app não conseguiu atribuí-la a ninguém. Nos dois casos o aviso cobrava de
+   * quem já havia respondido — o fato que faltava era só "esta resposta conta".
+   *
+   * O QUE ESTE FATO *NÃO* É, e é a parte que importa para quem vier depois:
+   * NÃO é um report. Nada é gravado em `reports`, nenhum veredito nasce dele e
+   * nenhuma task muda de status por causa dele (a decisão do dono, medida na
+   * mesma janela: o `report` daqueles cards foi RECUSADO justamente por vir de
+   * uma identidade que não existe — um julgamento que nasce de um texto livre
+   * seria pior que o aviso que ele silencia).
+   *
+   * NÃO SUPRIME os outros dois sinais: `exit_without_report` e o boot silencioso
+   * continuam inteiros — eles são fatos do PROCESSO (morreu, nunca falou), e um
+   * send do card não é prova de nenhum dos dois.
+   *
+   * E NÃO É UM FATO DE CONFIANÇA CEGA: quem o calcula é o bus, que só o liga
+   * quando a resposta foi para o MESMO card que receberia este aviso
+   * (`resolveNotifyTarget`, a mesma função que escolhe o destinatário) e depois
+   * da âncora do episódio. Se a direção mudou, o novo destinatário não sabe de
+   * nada e o aviso segue.
+   */
+  answeredDirectorSinceWorkGranted: boolean;
   /**
    * Turno DECLARADO encerrado sem nenhuma saída depois — o `idle` de
    * `card-status-decision.ts`. Onde existe (hoje: cards do claude, via hook
@@ -241,6 +300,12 @@ export function decideIdleWithoutReport(input: {
   // ele faz sobre report. Não existe mais o fato absoluto por vida que
   // desarmava o watchdog no primeiro report de um card.
   if (input.reportedSinceWorkGranted) return { action: "skip", reason: "reported_this_episode" };
+  // A OUTRA forma de cumprir o episódio, para quem NÃO pode chamar `report`
+  // (task fc68f565). Vem logo depois do report de propósito: as duas respondem
+  // a MESMA pergunta — "o card já cumpriu o que este episódio pede?" — e é por
+  // isso que a segunda também é `skip`, e não uma frase nova. O que ela NÃO faz
+  // está no doc do campo: nada é gravado, nada é julgado.
+  if (input.answeredDirectorSinceWorkGranted) return { action: "skip", reason: "answered_director_this_episode" };
   if (!input.hasLinkedRunningTask) return { action: "skip", reason: "no_linked_running_task" };
   if (input.alreadyNotified) return { action: "skip", reason: "already_notified" };
   // A FRASE segue o leitor e a PROVA, não o relógio (task 14b8b224). Três

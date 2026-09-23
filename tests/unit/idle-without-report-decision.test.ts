@@ -3,6 +3,7 @@ import {
   IDLE_WITHOUT_REPORT_MS,
   IDLE_WITHOUT_REPORT_POLL_MS,
   decideIdleWithoutReport,
+  isAnswerLanded,
 } from "../../src/main/idle-without-report-decision";
 import { ACTIVITY_UNPROVEN_SIGNAL_IDLE_MS } from "../../src/renderer/src/terminal-activity-decision";
 
@@ -147,6 +148,95 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
       action: "skip",
       reason: "already_notified",
     });
+  });
+
+  /**
+   * A SEGUNDA FORMA DE CUMPRIR O EPISÓDIO (task fc68f565) — nasceu VERMELHO:
+   * antes disto o portão não conhecia o fato e acusava o card que já tinha
+   * respondido a quem o dirige.
+   *
+   * A medição que o abriu (2026-09-23, banco copiado + stores de sessão, 48h):
+   * 53 avisos de ociosidade; 44 deles de cards `cline`, que NÃO CONSEGUEM chamar
+   * `report` (identidade compartilhada do daemon) e cujo único canal é
+   * `send_to_card` para quem os dirige. 70% desses avisos vieram depois de uma
+   * entrega ao mesmo diretor que o app não conseguiu nem atribuir. O fato que
+   * faltava era exatamente este: "esta resposta conta".
+   */
+  it("o card que JÁ RESPONDEU a quem o dirige neste episódio → skip (não é report, não é julgamento)", () => {
+    expect(
+      decideIdleWithoutReport({
+        ...base,
+        reportedSinceWorkGranted: false,
+        answeredDirectorSinceWorkGranted: true,
+        declaredIdle: true,
+        hasAgentReader: true,
+      }),
+    ).toEqual({ action: "skip", reason: "answered_director_this_episode" });
+    // E vale também para o silêncio INFERIDO (sem fato de turno): a resposta é
+    // fato do card, não do relógio de bytes.
+    expect(
+      decideIdleWithoutReport({
+        ...base,
+        reportedSinceWorkGranted: false,
+        answeredDirectorSinceWorkGranted: true,
+        hasAgentReader: true,
+      }),
+    ).toEqual({ action: "skip", reason: "answered_director_this_episode" });
+  });
+
+  it("a resposta NÃO vence o que é mais forte, e o report continua vindo antes", () => {
+    // Report deste episódio é o fato de primeira classe: a razão devolvida é a
+    // dele, e não a da resposta (a ordem dos portões é contrato, não detalhe).
+    expect(
+      decideIdleWithoutReport({
+        ...base,
+        reportedSinceWorkGranted: true,
+        answeredDirectorSinceWorkGranted: true,
+      }),
+    ).toEqual({ action: "skip", reason: "reported_this_episode" });
+    // Consentimento continua vencendo tudo: o card está parado PORQUE o app
+    // está esperando o humano, e nem report nem resposta mudam isso.
+    expect(
+      decideIdleWithoutReport({
+        ...base,
+        waitingOnConsent: true,
+        reportedSinceWorkGranted: false,
+        answeredDirectorSinceWorkGranted: true,
+      }),
+    ).toEqual({ action: "skip", reason: "waiting_consent" });
+  });
+
+  it("sem o fato, o portão continua acusando — a resposta não pode silenciar por ausência", () => {
+    expect(
+      decideIdleWithoutReport({
+        ...base,
+        reportedSinceWorkGranted: false,
+        answeredDirectorSinceWorkGranted: false,
+        declaredIdle: true,
+        hasAgentReader: true,
+      }),
+    ).toEqual({ action: "notify" });
+    expect(
+      decideIdleWithoutReport({
+        ...base,
+        reportedSinceWorkGranted: false,
+        answeredDirectorSinceWorkGranted: false,
+        hasAgentReader: true,
+      }),
+    ).toEqual({ action: "notify_unproven" });
+  });
+
+  it("isAnswerLanded: só o que foi DIGITADO no card de quem dirige conta como resposta", () => {
+    // `delivered` (o agente leu) e `parked` (está na fila mid-turn do destino —
+    // "já está lá, não reenvie", send-settle-decision.ts) são resposta.
+    expect(isAnswerLanded("delivered")).toBe(true);
+    expect(isAnswerLanded("parked")).toBe(true);
+    // AUSÊNCIA HONESTA: fila (ainda não digitado), falha, cancelamento e o
+    // "sem prova" não podem virar "o card respondeu" — é a mesma disciplina de
+    // `notify_unproven`, aplicada ao outro lado do sinal.
+    for (const state of ["queued", "failed", "cancelled", "unconfirmed"] as const) {
+      expect(isAnswerLanded(state)).toBe(false);
+    }
   });
 
   it("a ordem dos portões é estável: consentimento e report vêm antes de task/once e de qualquer relógio", () => {
