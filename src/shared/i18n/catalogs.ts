@@ -181,6 +181,13 @@ export const ptBR = {
   "settings.providers.reset": "Voltar ao padrão do app",
   "settings.providers.resetHint":
     "Isto tira a sua entrada de \"{id}\" do providers.json: se houver um padrão medido do app, ele volta a valer; senão, o provider deixa de existir.",
+  // A MESMA AÇÃO, com o outro significado (task 4c41368f). Aqui existe padrão
+  // do app por trás, então a dica diz as DUAS coisas que o ponto 3 do enunciado
+  // exige: o que se perde (o que o usuário escreveu por cima) e o que volta (a
+  // declaração do app, corrigida de novo). É o vocabulário do badge da
+  // edf3b047 — "com ajustes seus" / "sem correção do app" — e não um terceiro.
+  "settings.providers.resetOverrideHint":
+    "Isto tira a sua entrada de \"{id}\" do providers.json: os ajustes que você escreveu por cima (o \"baseArgs\", por exemplo) somem, e o provider volta a vir da declaração do app — com correção do app de novo.",
   "settings.providers.resetConfirm": "Voltar ao padrão",
   "settings.providers.restored": "Padrão declarado de \"{id}\" restaurado.",
   "settings.general.localeHint": "Detectado do sistema; a escolha fica salva",
@@ -1235,6 +1242,11 @@ export const en: Record<MessageKey, string> = {
   "settings.providers.reset": "Restore app default",
   "settings.providers.resetHint":
     "This removes your \"{id}\" entry from providers.json: if a measured app default exists, it takes over again; otherwise the provider stops existing.",
+  // Same action, the other meaning (task 4c41368f) — see the pt-BR catalog: this
+  // is the case where an app default does exist behind it, so the hint names
+  // both what is lost and what comes back.
+  "settings.providers.resetOverrideHint":
+    "This removes your \"{id}\" entry from providers.json: the changes you wrote over the app's declaration (\"baseArgs\", for example) are gone, and the provider comes from the app's declaration again — receiving app fixes once more.",
   "settings.providers.resetConfirm": "Restore default",
   "settings.providers.restored": "Declared default for \"{id}\" restored.",
   "settings.general.localeHint": "Detected from the system; the choice is saved",

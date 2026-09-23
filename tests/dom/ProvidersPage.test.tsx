@@ -277,6 +277,78 @@ describe("ProvidersPage", () => {
     );
   });
 
+  /**
+   * O BECO SEM SAÍDA (task 4c41368f). O botão de reset só era desenhado quando
+   * `row.source === "file"` — e uma SOBRESCRITA tem `source: "app"` (a origem
+   * de uma linha é a LISTA em que ela está, index.ts:4204-4212). Medido no app
+   * rodando antes deste conserto: `cline` (cópia inteira) e `commandcode`
+   * (sobrescrita parcial) apareciam com `edit=true, reset=false`, e o único
+   * caminho de volta era editar o `providers.json` à mão — na mesma linha em
+   * que o badge da edf3b047 diz "sem correção do app".
+   *
+   * Quem decide o botão é `appOverride`, o MESMO campo que decide o badge: numa
+   * linha do app que o usuário NÃO tocou ele é "none" e não há entrada para
+   * remover (o handler recusaria com "no entry for provider"), então lá o botão
+   * continua ausente. As três linhas convivem neste teste justamente para
+   * prender as duas metades.
+   */
+  it("o reset existe também para quem SOBRESCREVEU um provider do app", async () => {
+    const appUntouched: ProvidersPageRow = { ...CLINE_APP };
+    const appOverridden: ProvidersPageRow = {
+      ...CLINE_APP,
+      id: "commandcode",
+      label: "Command Code",
+      appOverride: "partial",
+    };
+    const userOnly: ProvidersPageRow = { ...MYCLI_FILE };
+    readProvidersConfig.mockImplementation(async () =>
+      view([appUntouched, appOverridden, userOnly]),
+    );
+    // A visão que o main devolve DEPOIS: a entrada do usuário saiu e a linha
+    // continua ali — agora vinda INTEIRA da declaração do app (`appOverride`
+    // volta a "none"). É a diferença entre "restaurado" e "removido", que o
+    // toast da própria página já distingue.
+    removeProvider.mockResolvedValue({
+      ok: true,
+      view: view([appUntouched, { ...appOverridden, appOverride: "none" }, userOnly]),
+    });
+
+    render(<ProvidersPage />);
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-role="providers-row"]').length).toBe(3),
+    );
+
+    const resetOf = (id: string) =>
+      document.querySelector(`[data-provider-id="${id}"] [data-role="providers-reset"]`);
+    // A sobrescrita ganha o botão — era exatamente isto que faltava.
+    expect(resetOf("commandcode")).toBeTruthy();
+    // A linha do app intocada NÃO ganha: não há entrada do usuário para tirar.
+    expect(resetOf("cline")).toBeNull();
+    // E a só do usuário continua como sempre foi.
+    expect(resetOf("mycli")).toBeTruthy();
+
+    // A CONFIRMAÇÃO fala do caso DESTA linha: o que se perde é o ajuste do
+    // usuário e o que volta é a declaração do app — a língua do badge.
+    fireEvent.click(resetOf("commandcode")!);
+    const hint = document.querySelector('[data-provider-id="commandcode"] .providers-reset-hint');
+    expect(hint?.textContent).toContain("baseArgs");
+    expect(hint?.textContent).toContain("correção do app de novo");
+    // E não é a dica do caso sem padrão atrás.
+    expect(hint?.textContent).not.toContain("deixa de existir");
+
+    fireEvent.click(screen.getByRole("button", { name: "Voltar ao padrão" }));
+    await waitFor(() => expect(removeProvider).toHaveBeenCalledWith("commandcode"));
+    // O padrão declarado volta a valer: o id segue na lista, agora sem
+    // sobrescrita nenhuma (o badge volta a dizer só "do app").
+    await waitFor(() =>
+      expect(
+        document.querySelector(
+          '[data-provider-id="commandcode"] [data-role="providers-source-badge"]',
+        )?.textContent,
+      ).toBe("do app"),
+    );
+  });
+
   it("id que colide com um nativo não é editável — a declaração é inerte", async () => {
     const shadow: ProvidersPageRow = {
       id: "claude",

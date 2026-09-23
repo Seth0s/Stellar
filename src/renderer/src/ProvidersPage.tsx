@@ -408,7 +408,20 @@ export function ProvidersPage() {
                 <div className="providers-row-actions">
                   {confirmReset === row.id ? (
                     <>
-                      <span className="providers-reset-hint">{t("settings.providers.resetHint", { id: row.id })}</span>
+                      {/* A DICA FALA DO CASO DESTA LINHA (task 4c41368f): numa
+                          SOBRESCRITA o que se perde é o ajuste do usuário e o
+                          que volta é a correção do app — a mesma língua do
+                          badge ("com ajustes seus" / "sem correção do app").
+                          Na linha só do usuário a dica de sempre continua: lá
+                          não há padrão do app por trás. */}
+                      <span className="providers-reset-hint">
+                        {t(
+                          row.appOverride !== "none"
+                            ? "settings.providers.resetOverrideHint"
+                            : "settings.providers.resetHint",
+                          { id: row.id },
+                        )}
+                      </span>
                       <button type="button" className="danger" onClick={() => void reset(row)} disabled={busy}>
                         {t("settings.providers.resetConfirm")}
                       </button>
@@ -432,7 +445,18 @@ export function ProvidersPage() {
                           {t("settings.providers.edit")}
                         </button>
                       )}
-                      {row.source === "file" && (
+                      {/* O RESET NÃO É SÓ DE QUEM É SÓ DO USUÁRIO (task
+                          4c41368f). O portão era `row.source === "file"` — e
+                          uma SOBRESCRITA tem `source: "app"` (a origem de uma
+                          linha é a LISTA em que ela está, index.ts:4204-4212),
+                          então quem sobrescreveu um id do app ficava sem o
+                          botão: o único caminho de volta era editar o JSON à
+                          mão. Quem decide é `appOverride`, que já vem pronto do
+                          main e já alimenta o badge da edf3b047: "none" nas
+                          linhas do app que o usuário NÃO tocou — e aí o botão
+                          continua ausente, porque não há entrada para remover
+                          (o handler responderia "no entry for provider"). */}
+                      {(row.source === "file" || row.appOverride !== "none") && (
                         <button
                           type="button"
                           className="ghost"
