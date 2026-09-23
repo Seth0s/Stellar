@@ -89,3 +89,44 @@ export function impositionFollowUp(
       return "wait";
   }
 }
+
+/** A linha que o app GASTA quando a declaração não se sustenta. */
+export function describeImpositionContradiction(input: {
+  providerId: string;
+  cardId: string;
+  cwd: string;
+  imposedId: string;
+}): string {
+  return (
+    `[session-imposition] ${input.providerId} declarou canImposeSessionId: true, mas o id imposto ` +
+    `${input.imposedId} não apareceu no store declarado (card ${input.cardId}, cwd ${input.cwd}) — ` +
+    `a imposição não pegou: soltei a reivindicação e armei o watcher para descobrir a sessão real.`
+  );
+}
+
+/**
+ * A APLICAÇÃO do veredito, com os efeitos injetados — é esta função que a
+ * ligação chama, e é por isso que a ligação é testável sem PTY nenhum.
+ *
+ * `not-imposed` faz as TRÊS coisas que a task pede: solta o id imposto
+ * (senão ele fica preso no refcount como se alguém o usasse), arma o watcher
+ * que aquele caminho PULAVA (é ele que descobre a sessão de verdade) e loga a
+ * contradição — a declaração é uma afirmação, e uma afirmação contradita por
+ * medição tem de aparecer em algum lugar.
+ */
+export function applyImpositionVerification(
+  verification: ImpositionVerification,
+  actions: {
+    releaseImposedId: (id: string) => void;
+    rearmWatcher: () => void;
+    logContradiction: (line: string) => void;
+  },
+  context: { providerId: string; cardId: string; cwd: string },
+): "rearmed" | "kept" | "waited" {
+  if (impositionFollowUp(verification) === "wait") return "waited";
+  if (verification.verdict !== "not-imposed") return "kept";
+  actions.releaseImposedId(verification.id);
+  actions.rearmWatcher();
+  actions.logContradiction(describeImpositionContradiction({ ...context, imposedId: verification.id }));
+  return "rearmed";
+}
