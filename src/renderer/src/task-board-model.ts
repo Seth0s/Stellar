@@ -105,9 +105,20 @@ export function compareTasks(a: TaskOrderable, b: TaskOrderable): number {
   return a.createdAt - b.createdAt;
 }
 
-export function groupTasksByColumn<T extends TaskOrderable & { status: string }>(tasks: readonly T[]): Record<TaskColumn, T[]> {
+/** A COLUNA de uma task é decidida pelos DOIS fatos, não por um só
+ * (CAMADA 4, task b41ac547): julgamento (`done`/`failed`) manda; senão,
+ * participação VIVA é a coluna `doing`; senão, `todo`. O `status` que
+ * chega aqui é a verdade do banco, então perguntar-lhe "está em
+ * andamento?" já não responde — e responder isso lendo um `status`
+ * híbrido era a mentira que fazia o orquestrador despachar em cima dela. */
+export function columnForTask(task: { status: string; cardAlive?: boolean }): TaskColumn {
+  if (isTaskCardLive(task.status, task.cardAlive === true)) return "doing";
+  return columnForStatus(task.status);
+}
+
+export function groupTasksByColumn<T extends TaskOrderable & { status: string; cardAlive?: boolean }>(tasks: readonly T[]): Record<TaskColumn, T[]> {
   const groups: Record<TaskColumn, T[]> = { todo: [], doing: [], done: [], failed: [] };
-  for (const t of tasks) groups[columnForStatus(t.status)].push(t);
+  for (const t of tasks) groups[columnForTask(t)].push(t);
   for (const col of COLUMN_ORDER) groups[col].sort(compareTasks);
   return groups;
 }
@@ -147,10 +158,15 @@ export type TaskStage = "implementar" | "review";
  * LIMITAÇÃO CONHECIDA, documentada em vez de escondida: sem um "round id"
  * no relatório, isto não distingue "revisando a primeira entrega" de
  * "revisando a quinta depois de 4 reprovações" — só sabe dizer que alguma
- * entrega já aconteceu para a rodada atual. Só se aplica a uma task
- * `running` (`doing`); qualquer outro status não tem etapa. */
-export function deriveStage(status: string, hasReport: boolean): TaskStage | null {
-  if (status !== "running") return null;
+ * entrega já aconteceu para a rodada atual. Só se aplica a uma task EM
+ * PARTICIPAÇÃO (não julgada + card vivo) — CAMADA 4 (task b41ac547): o
+ * segundo fato entra por parâmetro, porque `status` já é a verdade do banco
+ * e não responde mais "está em andamento?" sozinho. */
+export function deriveStage(
+  task: { status: string; cardAlive?: boolean },
+  hasReport: boolean,
+): TaskStage | null {
+  if (!isTaskCardLive(task.status, task.cardAlive === true)) return null;
   return hasReport ? "review" : "implementar";
 }
 
@@ -281,12 +297,15 @@ function latestRound(rounds: readonly VerdictRound[]): VerdictRound | null {
 }
 
 export function deriveCompletionProposal(
-  status: string,
+  task: { status: string; cardAlive?: boolean },
   cardRoles: readonly string[],
   verdicts: readonly VerdictRound[],
   reviewWanted = false,
 ): CompletionProposal | null {
-  if (status !== "running") return null;
+  // CAMADA 4 (task b41ac547) — "em andamento" se pergunta aos DOIS fatos
+  // (não julgada + card vivo), não a um `status` que agora é a verdade do
+  // banco. Sem isto a barra de conclusão sumiria de toda task com card vivo.
+  if (!isTaskCardLive(task.status, task.cardAlive === true)) return null;
   // Task 156e6d08 — só rodadas ATRIBUÍVEIS a esta task contam como afirmação
   // sobre ela (predicado em `task-verdict-read-decision.ts`, o MESMO que a
   // decisão de fechar o card usa). Duas consequências, as duas desejadas: o
@@ -784,14 +803,15 @@ export function computeColumnDrop<T extends TaskOrderable & { id: string }>(
  * automatizada (`vitest` roda `environment: "node"`, sem jsdom).
  */
 
-/** Varredura de atividade (delta 4, CAMADA 3) — `running` is DERIVED on
- * read from live implementer participation (`tasks.card_id` +
- * `registry.isAlive`). By the time `status` reaches the renderer it is
- * already effective (pending + live card → running). The sweep therefore
- * keys off effective `running` AND `cardAlive`, not a stale written
- * column. `cardAlive` chega pronto do main process (O(1) Map lookup). */
+/** Varredura de atividade (delta 4) — a variante CAMADA 4 (task b41ac547):
+ * `status` já chega do main process como a verdade do BANCO, e o segundo
+ * fato chega à parte (`cardAlive`). "Vivo" continua exigindo os DOIS: o
+ * processo por trás vivo E a task não julgada (um card ainda vivo numa task
+ * `done` é o revisor, não trabalho). Antes isto perguntava
+ * `status === "running"`, que só era verdade porque o main process fundia
+ * liveness dentro de `status`; agora a pergunta é feita ao fato certo. */
 export function isTaskCardLive(status: string, cardAlive: boolean): boolean {
-  return status === "running" && cardAlive;
+  return cardAlive && status !== "done" && status !== "failed";
 }
 
 /** Pílulas de meta (delta 5 + rodada 4) — a cor é que carrega o

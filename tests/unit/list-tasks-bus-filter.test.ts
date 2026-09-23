@@ -71,7 +71,11 @@ describe("message-bus list_tasks: filtros + projeção", () => {
     );
   }
 
-  it("status=running + hasCard: stored pending com card vivo deriva running, sem prompt/result", async () => {
+  it("status=pending + hasCard: a verdade do BANCO no `status`, a participação no `hasCard`", async () => {
+    // CAMADA 4 (task b41ac547): este teste pinava a FUSÃO — pedia
+    // `status:"running"` e recebia uma linha `pending` no banco porque o card
+    // estava vivo. A pergunta honesta por participação é `hasCard`, e o
+    // `status` responde pelo que está gravado (aqui, `pending`).
     dir = mkdtempSync(join(tmpdir(), "stellar-list-tasks-query-bus-"));
     const store = openStore(dir);
     const now = Date.now();
@@ -86,7 +90,7 @@ describe("message-bus list_tasks: filtros + projeção", () => {
       const res = (await bus.handleRequest({
         cmd: "list_tasks",
         boardId: "board-a",
-        status: "running",
+        status: "pending",
         hasCard: true,
         view: "summary",
       } as BusRequest)) as { ok: boolean; tasks: Array<Record<string, unknown>> };
@@ -95,9 +99,21 @@ describe("message-bus list_tasks: filtros + projeção", () => {
       expect(res.tasks).toHaveLength(1);
       expect(res.tasks[0]!.id).toBe("live");
       expect(res.tasks[0]!.cardId).toBe("c1");
-      expect(res.tasks[0]!.status).toBe("running");
+      // O status é o do banco; o segundo fato viaja no campo próprio.
+      expect(res.tasks[0]!.status).toBe("pending");
+      expect(res.tasks[0]!.cardAlive).toBe(true);
       expect(res.tasks[0]!).not.toHaveProperty("prompt");
       expect(res.tasks[0]!).not.toHaveProperty("result");
+
+      // E `status:"running"` não acha nada: `running` nunca é autoritativo,
+      // então filtrar por ele não é o jeito de perguntar por participação.
+      const byFused = (await bus.handleRequest({
+        cmd: "list_tasks",
+        boardId: "board-a",
+        status: "running",
+        view: "summary",
+      } as BusRequest)) as { tasks: unknown[] };
+      expect(byFused.tasks).toHaveLength(0);
     } finally {
       bus.close();
       store.close();

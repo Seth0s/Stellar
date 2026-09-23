@@ -3313,8 +3313,11 @@ export function App() {
     anyLiveAgentCard: activeTerminalCards.some(
       (c) => liveStatus[c.id] !== "error" && liveStatus[c.id] !== "exited",
     ),
+    // CAMADA 4 (task b41ac547): "o board está trabalhando" já não se lê de
+    // `status` (que agora é a verdade do banco) — lê-se do fato de
+    // participação, o mesmo `cardAlive` que a Fila usa.
     anyTaskRunning: ((activeBoardId ? taskBoards[activeBoardId] : undefined) ?? []).some(
-      (t) => t.status === "running",
+      (t) => t.cardAlive === true,
     ),
   });
 

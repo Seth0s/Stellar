@@ -36,6 +36,31 @@ export function coerceStoredTaskStatus(status: string): string {
   return status === "running" ? "pending" : status;
 }
 
+/**
+ * O SEGUNDO FATO, com nome próprio (task b41ac547). "Existe implementer
+ * VIVO ligado a esta task AGORA" — e nada mais que isso. NÃO é "está
+ * trabalhando": o app não sabe dizer isso, e o próprio `card_status` o
+ * admite ("unknown — a saída não distingue trabalho de repintura"). Quem
+ * precisa deste fato PEDE por ele, com este nome; não o funde com
+ * `status` para depois ler o híbrido.
+ */
+export function hasLiveImplementer(
+  cardId: string | null | undefined,
+  isCardAlive: (cardId: string) => boolean,
+): boolean {
+  return !!cardId && isCardAlive(cardId);
+}
+
+/**
+ * A projeção de PARTICIPAÇÃO (pending ⇄ running) — para quem pergunta "há
+ * participação agora?" e não vai devolver o valor como se fosse `status`.
+ * DEPOIS da task b41ac547 este valor NÃO é mais o `status` que o agente lê:
+ * `serializeTask` publica a verdade do banco mais `cardAlive` em campo
+ * próprio. Consumidores internos legítimos hoje: `deriveParticipationDivergence`
+ * (o hold humano contra participação viva) e a aceitação de report (o teto
+ * de retry vale para uma task em participação). Um `status` híbrido entregue
+ * a quem DESPACHA foi o custo medido desta fusão.
+ */
 export function deriveTaskStatus(storedStatus: string, hasLiveImplementer: boolean): DerivedTaskStatus {
   if (isJudgmentStatus(storedStatus)) return storedStatus;
   return hasLiveImplementer ? "running" : "pending";

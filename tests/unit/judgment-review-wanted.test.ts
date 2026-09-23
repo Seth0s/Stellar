@@ -256,7 +256,7 @@ describe("decideJudgmentWrite + Fila presentation for review=wanted", () => {
 
   it("Fila: no self auto-aprovado when review wanted; notice while no reviewer", () => {
     const self = deriveCompletionProposal(
-      "running",
+      { status: "running", cardAlive: true },
       ["implementer"],
       [{ cardId: "impl-1", role: "implementer", verdict: "aprovado", at: 10 }],
       true,

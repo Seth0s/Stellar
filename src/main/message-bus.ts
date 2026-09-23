@@ -183,8 +183,10 @@ import {
 } from "./spawn-idempotency-decision";
 import { filterListedTasks, parseListTasksQuery, projectListedTask, type ListedTask } from "./list-tasks-query";
 import {
+  coerceStoredTaskStatus,
   deriveParticipationDivergence,
   deriveTaskStatus,
+  hasLiveImplementer,
   isJudgmentStatus,
   storedStatusAfterImplementerLink,
   type StatusActor,
@@ -1707,9 +1709,13 @@ export function createMessageBus(
     return null;
   }
 
-  function effectiveTaskStatus(row: TaskRow): string {
-    const hasLiveImplementer = !!(row.card_id && callbacks.isCardAlive(row.card_id));
-    return deriveTaskStatus(row.status, hasLiveImplementer);
+  /**
+   * A projeção de participação, para quem pergunta "há participação agora?"
+   * (a divergência em `serializeTask`). NÃO é mais o `status` entregue ao
+   * agente — ver `serializeTask` (task b41ac547).
+   */
+  function participationProjection(row: TaskRow): string {
+    return deriveTaskStatus(row.status, hasLiveImplementer(row.card_id, callbacks.isCardAlive));
   }
 
   /**
@@ -1909,8 +1915,19 @@ export function createMessageBus(
   // real values for a caller. CAMADA 3 — `status`/`diverged*` derived
   // from `tasks.card_id` + isCardAlive on read.
   function serializeTask(row: TaskRow, lastStatusActor?: StatusActor | null) {
-    const storedStatus = row.status;
-    const effectiveStatus = effectiveTaskStatus(row);
+    // CAMADA 4 (task b41ac547) — DOIS FATOS, DOIS CAMPOS. `status` publicado
+    // aqui é a verdade do BANCO (`running` nunca é autoritativo: as linhas
+    // legadas passam por `coerceStoredTaskStatus`), e "existe implementer
+    // vivo" viaja em `cardAlive`, com nome próprio. Antes, este campo
+    // fundia os dois (`deriveTaskStatus`) e o MCP AFIRMAVA `running` a
+    // partir de "o processo existe" — enquanto o `card_status` do mesmo app
+    // se recusa a afirmar isso ("unknown: a saída não distingue trabalho de
+    // repintura"). Quem DESPACHA lê `status`; foi medido (task b41ac547).
+    // A projeção de participação continua existindo, mas só para o consumo
+    // INTERNO abaixo (a divergência), nunca como `status` entregue.
+    const storedStatus = coerceStoredTaskStatus(row.status);
+    const cardAlive = hasLiveImplementer(row.card_id, callbacks.isCardAlive);
+    const effectiveStatus = participationProjection(row);
     const lastActor = lastStatusActor ?? lastStatusActorFromRow(row);
     const { divergedStatus, divergedActor } = deriveParticipationDivergence({
       storedStatus,
@@ -1924,7 +1941,11 @@ export function createMessageBus(
       id: row.id,
       prompt: row.prompt,
       provider: row.provider,
-      status: effectiveStatus,
+      status: storedStatus,
+      // O SEGUNDO FATO, com nome próprio: `tasks.card_id` está vivo agora.
+      // Não afirma trabalho (o app não sabe dizer isso), só participação —
+      // e é o que a Fila já projetava à parte (`src/main/index.ts`).
+      cardAlive,
       cardId: row.card_id,
       boardId: row.board_id,
       cwd: row.cwd,
@@ -3773,17 +3794,27 @@ export function createMessageBus(
         return { ok: false, error: describeDeclaredTaskNotLinkedRefusal(link.declared, link.candidates) };
       }
       const linkedTask = link.action === "resolve" ? tasks.find((t) => t.id === link.taskId) : undefined;
-      const runningTask =
-        linkedTask && effectiveTaskStatus(linkedTask) === "running" ? linkedTask : undefined;
+      // O teto de retry vale para uma task EM PARTICIPAÇÃO — e isto é o
+      // segundo fato (`hasLiveImplementer`), perguntado pelo nome próprio,
+      // não lido de um `status` híbrido. Antes, este ponto lia
+      // `deriveTaskStatus(...) === "running"` e passava o `status` fundido
+      // adiante: com `status` virando a verdade do banco, o `"running"`
+      // literal que `decideReportAcceptance` procurava NUNCA mais casaria, e
+      // o teto de retry ficaria desligado em silêncio para todos os agentes
+      // (nenhum teste pegava — os rigs passavam linha `status: "running"`,
+      // que produção não consegue mais gravar). Agora o fato viaja com o
+      // nome dele e não há como "manter o campo antigo" sem o tsc reclamar.
+      const inParticipation = !!linkedTask && !isJudgmentStatus(linkedTask.status) && hasLiveImplementer(linkedTask.card_id, callbacks.isCardAlive);
+      const participatingTask = inParticipation ? linkedTask : undefined;
       const decision = decideReportAcceptance({
         requesterId: req.requesterId,
         report: incomingReport,
-        linkedTask: runningTask
+        linkedTask: participatingTask
           ? {
-              status: runningTask.status,
-              retry_count: runningTask.retry_count,
-              max_retries: runningTask.max_retries,
-              reportSchema: contractFromTaskRow(runningTask).reportSchema,
+              inParticipation: true,
+              retry_count: participatingTask.retry_count,
+              max_retries: participatingTask.max_retries,
+              reportSchema: contractFromTaskRow(participatingTask).reportSchema,
             }
           : undefined,
         defaultMaxRetries: DEFAULT_MAX_RETRIES,
@@ -3858,11 +3889,11 @@ export function createMessageBus(
         // In-line retry: same session, same card. Increment + stash the
         // declared reason on the task (not a report row, not a status).
         // Never spawn, never persist this report, never wake waiters.
-        if (runningTask) {
+        if (participatingTask) {
           callbacks.upsertTask({
-            ...runningTask,
+            ...participatingTask,
             retry_count: decision.retryCount,
-            result_json: stashLastRefusedReport(runningTask.result_json, incomingReport),
+            result_json: stashLastRefusedReport(participatingTask.result_json, incomingReport),
             updated_at: Date.now(),
             actor: "app",
             statusProposed: false,
@@ -3972,13 +4003,13 @@ export function createMessageBus(
       // An accepted report supersedes any refused-round stash. Clear it
       // here so a later exit cannot revive a reason that was already
       // replaced. Status is untouched on a plain accept.
-      if (runningTask) {
-        const clearedJson = clearLastRefusedStash(runningTask.result_json);
+      if (participatingTask) {
+        const clearedJson = clearLastRefusedStash(participatingTask.result_json);
         if (decision.action === "accept_failure") {
-          markTaskFailed({ ...runningTask, result_json: clearedJson }, errorFromReportPayload(incomingReport), "explicit_failed");
-        } else if (clearedJson !== runningTask.result_json) {
+          markTaskFailed({ ...participatingTask, result_json: clearedJson }, errorFromReportPayload(incomingReport), "explicit_failed");
+        } else if (clearedJson !== participatingTask.result_json) {
           callbacks.upsertTask({
-            ...runningTask,
+            ...participatingTask,
             result_json: clearedJson,
             updated_at: Date.now(),
             actor: "app",
@@ -3990,13 +4021,13 @@ export function createMessageBus(
       // gates declarados dispara a execução MEDIDA pelo app, em vez de o
       // orquestrador confiar no número que o agente digitou. `accept_failure`
       // fica de fora por definição: o agente já declarou que NÃO entregou.
-      if (decision.action === "accept") startTaskGates(runningTask);
+      if (decision.action === "accept") startTaskGates(participatingTask);
       // ITEM 21 — no fim da task, o que ficou UNTRACKED no cwd e o relatório
       // NÃO declarou em `files`/`filesChanged`, e que nasceu DEPOIS de a task
       // começar, é pendência de limpeza. SINAL, nunca acusação, e nunca uma
       // remoção: o app não sabe o que era sonda e o que era entrega esquecida,
       // e a árvore é compartilhada com os outros cards.
-      const cleanupPendencies = collectCleanupPendencies(runningTask, report);
+      const cleanupPendencies = collectCleanupPendencies(participatingTask, report);
       return {
         ok: true,
         seq: stored.seq,
