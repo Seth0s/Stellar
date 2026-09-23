@@ -446,10 +446,27 @@ describe("providers: impose session id (claude/cursor)", () => {
     expect(imposed).not.toContain("--resume");
   });
 
-  it("cursor uses --resume for both restore and impose", () => {
+  it("cursor uses --new-session-id to impose and --resume to restore (flags DISTINTAS)", () => {
+    // Re-medido 2026-09-22 (task 201bd13b) em `cursor-agent` 2026.09.18. Este
+    // teste AFIRMAVA o contrário — "--resume for both restore and impose" — com
+    // base na medição de 2026-09-13, e com isso dava por verificado o defeito:
+    // mandar `--resume <uuid novo>` pede para RETOMAR uma sessão que não existe.
+    // Medido hoje, executando a CLI instalada:
+    //   `--new-session-id nao-e-uuid` -> Error: Invalid --new-session-id ...
+    //     expected a UUIDv4.
+    //   `--new-session-id <uuid> --resume <uuid>` ->
+    //     Error: --new-session-id cannot be combined with --resume or --continue.
+    // Ou seja: quem cria com o id escolhido é `--new-session-id`, e a CLI proíbe
+    // combinar as duas.
     const cursor = providerById("cursor")!;
     expect(cursor.buildArgs({ resumeId: "old" }).slice(0, 2)).toEqual(["--resume", "old"]);
-    expect(cursor.buildArgs({ imposedSessionId: "new-uuid" }).slice(0, 2)).toEqual(["--resume", "new-uuid"]);
+    expect(cursor.buildArgs({ imposedSessionId: "new-uuid" }).slice(0, 2)).toEqual([
+      "--new-session-id",
+      "new-uuid",
+    ]);
+    // Impor NUNCA manda a flag de retomar (o defeito em argv).
+    expect(cursor.buildArgs({ imposedSessionId: "new-uuid" })).not.toContain("--resume");
+    expect(cursor.capacity.session.imposeFlag).not.toBe(cursor.capacity.session.resumeFlag);
   });
 
   it("codex/antigravity/opencode ignore imposedSessionId (cannot impose)", () => {

@@ -50,6 +50,12 @@ export type SpawnOpts = {
    * real CLIs: `claude` accepts `--session-id <uuid>` and creates the
    * session with that id; `cursor` accepts `--resume <uuid>` even when
    * the id does not exist yet and creates the session with it.
+   *
+   * RE-MEDIDO 2026-09-22 (task 201bd13b), em `cursor-agent` 2026.09.18: a
+   * frase acima descreve a CLI de 2026-09-13. Hoje `--resume` é "Select a
+   * session to resume" e a imposição tem flag PRÓPRIA (`--new-session-id`,
+   * UUIDv4, exclusiva com `--resume`) — é ela que `buildArgs` manda. Uma
+   * medição de CLI não expira sozinha: quem a cita declara a VERSÃO.
    * Never set together with a restore `resumeId`. `codex` /
    * `antigravity` / `opencode` reject or ignore an unknown id — do not
    * set this for them (see `canImposeSessionId`).
@@ -891,12 +897,32 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       // one. Do not upgrade this to "no-flag" without measuring.
       effort: { mechanism: "none", reason: "unmeasured" },
       model: { mechanism: "flag", flag: "--model" },
-      // UMA flag para os dois papéis (medido): `--resume <uuid>` cria a
-      // sessão quando o id ainda não existe — por isso cursor impõe.
+      // DUAS flags, e não uma (medido 2026-09-22, cursor-agent 2026.09.18):
+      //
+      //   `--resume [chatId]`  -> "Select a session to resume" (RETOMAR)
+      //   `--new-session-id`   -> exige UUIDv4, e é MUTUAMENTE EXCLUSIVA com
+      //                           `--resume`/`--continue`: é a de IMPOR.
+      //
+      // Como isto foi medido, porque importa: a flag de imposição NÃO aparece
+      // no `--help` (por isso a medição por help, que basta para o cline, não
+      // bastava aqui). Medido EXECUTANDO a CLI instalada:
+      //   `cursor-agent --new-session-id nao-e-uuid -p x` ->
+      //     `Error: Invalid --new-session-id "nao-e-uuid": expected a UUIDv4.`
+      //   `cursor-agent --new-session-id <uuid> --resume <uuid> -p x` ->
+      //     `Error: --new-session-id cannot be combined with --resume or --continue.`
+      // e confirmado no parser do próprio CLI (`.../versions/<ver>/7021.index.js`).
+      //
+      // A declaração anterior dizia `imposeFlag: "--resume"` com a frase
+      // "medido: `--resume <uuid>` cria a sessão quando o id ainda não existe"
+      // (medição de 2026-09-13, OUTRA versão da CLI). Hoje existe uma flag cujo
+      // CONTRATO é criar com o id escolhido — e `randomUUID()` do Stellar é v4,
+      // que é exatamente o que ela exige. O que NÃO medi: se `--resume` com um
+      // id desconhecido ainda cria na versão de hoje (exigiria uma execução
+      // autenticada, gastando quota e escrevendo sessão no store do dono).
       session: {
         canImposeSessionId: true,
         resumeFlag: "--resume",
-        imposeFlag: "--resume",
+        imposeFlag: "--new-session-id",
         continueFlag: "--continue",
         store: {
           kind: "files",
@@ -949,10 +975,13 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     // none + acbridgeOnPath) — see decideBashCardDiscovery.
     buildArgs: ({ resumeId, continueLast, imposedSessionId, model }) => {
       const args: string[] = [];
-      // Measured: `--resume <uuid>` creates the session when the id does
-      // not exist yet. Same flag for restore and impose.
+      // RETOMAR e IMPOR são flags diferentes (medido 2026-09-22 — ver a nota
+      // longa em `capacity.session`, acima): `--resume` escolhe uma sessão
+      // existente; quem cria com o id escolhido é `--new-session-id`. Mandar
+      // `--resume <uuid novo>` pedia para RETOMAR uma sessão que não existe.
+      // O CLI proíbe as duas juntas, então nunca se manda as duas.
       if (resumeId) args.push("--resume", resumeId);
-      else if (imposedSessionId) args.push("--resume", imposedSessionId);
+      else if (imposedSessionId) args.push("--new-session-id", imposedSessionId);
       else if (continueLast) args.push("--continue");
       if (model) args.push("--model", model);
       // Positional prompt (`agent [options] [command] [prompt...]`) —
