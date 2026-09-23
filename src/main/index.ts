@@ -2231,12 +2231,12 @@ function createWindow() {
       const sel = ref ? browserRegistry.refSelector(ref) : selector;
       return sel ? browserRegistry.clickSelector(cardId, sel) : Promise.resolve(browserRegistry.clickAtPoint(cardId, x!, y!));
     },
-    browserType: (cardId, text, selector, ref) =>
-      browserRegistry.typeText(cardId, text, ref ? browserRegistry.refSelector(ref) : selector),
+    browserType: (cardId, text, selector, ref, replace) =>
+      browserRegistry.typeText(cardId, text, ref ? browserRegistry.refSelector(ref) : selector, replace === true),
     browserScroll: (cardId, dx, dy, selector, ref) =>
       browserRegistry.scroll(cardId, dx, dy, ref ? browserRegistry.refSelector(ref) : selector),
     browserQuery: (cardId, selector, ref) => browserRegistry.query(cardId, ref ? browserRegistry.refSelector(ref) : selector!),
-    browserEval: (cardId, js) => browserRegistry.evalJs(cardId, js),
+    browserEval: (cardId, js, timeoutMs) => browserRegistry.evalJs(cardId, js, timeoutMs),
     browserSnapshot: (cardId) => browserRegistry.pageSnapshot(cardId),
     browserConsole: (cardId, level, limit) => browserRegistry.getConsole(cardId, level, limit),
     browserNetwork: (cardId, opts) => browserRegistry.getNetwork(cardId, opts),

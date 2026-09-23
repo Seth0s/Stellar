@@ -126,6 +126,9 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
       // não deixou rastro" também pelo acbridge, não só pelo MCP): cmd novo é
       // mudança de superfície. Task 5d47312c.
       6: "08c8aa2bef365977",
+      // Protocol 7 — `browser-type` ganhou `--replace` e `browser-eval` ganhou
+      // `--timeout <ms>` (tasks 770abd6e e 56624e6b): campo novo na CLI.
+      7: "4e0147ad8ba34fea",
     };
     expect(
       hash,
