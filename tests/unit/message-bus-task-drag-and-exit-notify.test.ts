@@ -13,7 +13,7 @@ import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
 type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: string; updated_at: number };
 type FakeTaskRow = { id: string; card_id: string | null; status: string };
 
-const EXIT_POINTER_NEEDLE = "sem chamar report";
+const EXIT_POINTER_NEEDLE = "without calling report";
 
 function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
   return new Proxy(
@@ -195,7 +195,7 @@ describe("message-bus: SINAL 2 — resolveCardExit marca a task e digita o ponte
     expect(bodies[0][0]).toBe("spawner-e5");
     expect(bodies[0][1]).toContain("[de: Implementer]");
     expect(bodies[0][1]).toContain(EXIT_POINTER_NEEDLE);
-    expect(bodies[0][1]).toContain("código 1");
+    expect(bodies[0][1]).toContain("code 1");
   });
 
   it("[qualificação] SEM task vinculada, mas com LINHAGEM de spawn_agent: digita o ponteiro", async () => {

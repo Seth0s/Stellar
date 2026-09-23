@@ -79,30 +79,30 @@ export function decideAcbridgeProtocol(check: ProtocolCheck, ours: number = ACBR
       return {
         accept: true,
         warning:
-          `acbridge sem carimbo de protocolo (anterior ao protocolo ${ours}) falando com um bus no protocolo ${ours}. ` +
-          "O request é aceito, mas o acbridge instalado está atrasado em relação ao Stellar em execução — " +
-          "campos e comandos novos não existem nele. Reinstale/rebuild o pacote ou rode o acbridge do repo.",
+          `acbridge with no protocol stamp (older than protocol ${ours}) talking to a bus on protocol ${ours}. ` +
+          "The request is accepted, but the installed acbridge is behind the running Stellar — " +
+          "new fields and commands do not exist in it. Reinstall/rebuild the package, or run the acbridge from the repo.",
       };
     case "acbridge-older":
       return {
         accept: true,
         warning:
-          `acbridge no protocolo ${check.theirs}, bus no protocolo ${ours}: o acbridge está atrasado. ` +
-          "O request é aceito (subconjunto), mas comandos/campos novos não existem nesse acbridge. " +
-          "Reinstale/rebuild o pacote ou rode o acbridge do repo.",
+          `acbridge on protocol ${check.theirs}, bus on protocol ${ours}: the acbridge is behind. ` +
+          "The request is accepted (as a subset), but new commands/fields do not exist in that acbridge. " +
+          "Reinstall/rebuild the package, or run the acbridge from the repo.",
       };
     case "acbridge-newer":
       return {
         accept: false,
         error:
-          `protocol mismatch: acbridge no protocolo ${check.theirs}, bus no protocolo ${ours}: o Stellar em execução é mais velho que este acbridge ` +
-          "e deixaria cair campos que não conhece sem avisar. Request recusado. Reinicie o Stellar com a build que casa com este acbridge " +
-          "(dev e empacotado compartilham o mesmo socket — veja qual instância bindou primeiro).",
+          `protocol mismatch: acbridge on protocol ${check.theirs}, bus on protocol ${ours}: the running Stellar is older than this acbridge ` +
+          "and would drop fields it does not know without warning. Request refused. Restart Stellar with the build that matches this acbridge " +
+          "(dev and packaged share the same socket — check which instance bound first).",
       };
     case "malformed":
       return {
         accept: false,
-        error: `protocol mismatch: carimbo de protocolo inválido (${JSON.stringify(check.raw)}); esperado um inteiro >= 1.`,
+        error: `protocol mismatch: invalid protocol stamp (${JSON.stringify(check.raw)}); expected an integer >= 1.`,
       };
   }
 }

@@ -96,7 +96,7 @@ describe("card que subiu e nunca falou (d77b524b)", () => {
     expect(avisos).toHaveLength(1);
     expect(avisos[0].text).toContain("Calado");
     // A frase diz o que se sabe e o que NÃO se sabe — nada de acusar abandono.
-    expect(avisos[0].text).toMatch(/nenhum byte/i);
+    expect(avisos[0].text).toMatch(/no byte at all/i);
     // UM aviso por card: o scan roda a cada 5s e não pode virar metralhadora.
     bus!.scanIdleWithoutReport();
     bus!.scanIdleWithoutReport();
@@ -122,7 +122,7 @@ describe("card que subiu e nunca falou (d77b524b)", () => {
       note: string;
     };
     expect(status.status).toBe("no-output");
-    expect(status.note).toMatch(/nenhum byte/i);
+    expect(status.note).toMatch(/NOT ONE byte/i);
   });
 
   it("card morto ou dentro da janela: nada de aviso (o SINAL 2 e a paciência cuidam disso)", async () => {

@@ -319,7 +319,7 @@ describe("message-bus: SINAL 3 — idle without report notifies spawner once", (
   /**
    * A FIAÇÃO DO "SEM AGENTE LENDO" (task 14b8b224) — o defeito medido no board:
    * quatro cards `provider: bash` VAZIOS, vinculados a tasks, acusados de
-   * "idle sem chamar report" por um agente que nunca existiu. Aqui o card do
+   * "idle without calling report" por um agente que nunca existiu. Aqui o card do
    * teste é um shell quieto (prompt livre, tela em branco) e o ponteiro tem de
    * ser o OUTRO — a acusação não pode aparecer.
    *

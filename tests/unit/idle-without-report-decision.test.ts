@@ -50,7 +50,7 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
   it("turno DECLARADO encerrado + nenhum report → a acusação, sustentada pelo fato que o card emitiu", () => {
     // `declaredIdle` é o `turn_end` que o próprio card mandou (hoje: hook Stop do
     // claude). Aqui acusar não é palpite: o card DISSE que parou e não reportou.
-    // E é o único caso em que a frase antiga ("idle sem chamar report.") vale.
+    // E é o único caso em que a frase antiga ("idle without calling report.") vale.
     expect(
       decideIdleWithoutReport({
         ...base,
@@ -189,7 +189,7 @@ describe("idle-without-report-decision — SINAL 3 gate", () => {
    * "CARD SEM AGENTE LENDO" NÃO É "CARD QUE NÃO REPORTOU" (task 14b8b224).
    *
    * Medido no board: quatro cards `bash` VAZIOS receberam vínculo de task e
-   * foram acusados, minutos depois, de "idle sem chamar report" — enquanto o
+   * foram acusados, minutos depois, de "idle without calling report" — enquanto o
    * aviso do MESMO vínculo respondia "skipped: bash has no agent reading the
    * line". A obrigação de reportar só existe para quem PODE reportar; acusar um
    * shell de não ter reportado é a contradição interna que esta task remove.

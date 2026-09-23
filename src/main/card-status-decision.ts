@@ -204,23 +204,23 @@ export function decideCardStatus(facts: CardStatusFacts): CardStatus {
   return "unknown";
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE. A frase que o agente lê para entender um
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd. A frase que o agente lê para entender um
  * estado que não é `running`/`idle` (`at-prompt`, `unknown`). */
 export function describeCardStatus(status: CardStatus): string {
   switch (status) {
     case "at-prompt":
-      return "shell no prompt, livre para receber comando (não é um agente: não tem turno)";
+      return "shell at its prompt, free to receive a command (not an agent: it has no turn)";
     case "unknown":
-      return "não dá para dizer: a saída não distingue trabalho de repintura (TUI parado repinta, e um TUI pode estar dentro de um card bash) — confira na tela antes de decidir despacho";
+      return "cannot tell: output does not distinguish work from repaint (a parked TUI repaints, and a TUI can be running inside a bash card) — check the screen before deciding dispatch";
     case "idle":
-      return "turno encerrado ou parado esperando você";
+      return "turn ended, or sitting at an input line waiting on you";
     case "running":
-      return "turno declarado encerrado e saída chegando DEPOIS disso — um turno novo começou";
+      return "turn declared complete and output arriving AFTER that — a new turn began";
     case "waiting":
-      return "bloqueado numa decisão de consentimento";
+      return "blocked on a consent decision";
     case "exited":
-      return "processo encerrado";
+      return "process exited";
     case "no-output":
-      return "subiu e não produziu NENHUM byte desde o nascimento (nem a moldura do TUI) — o processo está vivo e calado; nada foi encerrado. Confira a tela: credencial faltando, prompt de login, ou binário preso antes do primeiro desenho";
+      return "came up and produced NOT ONE byte since birth (not even a TUI frame) — the process is alive and silent; nothing was terminated. Check the screen: a missing credential, a login prompt, or a binary stuck before its first draw";
   }
 }
