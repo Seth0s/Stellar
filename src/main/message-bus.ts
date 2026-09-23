@@ -56,6 +56,7 @@ import { decideExitWithoutReportWrite } from "./exit-lifetime-decision";
 import {
   decideIdleWithoutReport,
   IDLE_WITHOUT_REPORT_POLL_MS,
+  isAnswerLanded,
 } from "./idle-without-report-decision";
 import { decideCardStatus, describeCardStatus, hasAgentReadingLine, isShellProvider } from "./card-status-decision";
 import {
@@ -1641,6 +1642,29 @@ export function createMessageBus(
   const NO_EPISODE_ANCHOR = 0;
   const idleWithoutReportNotified = new Map<string, number>();
   /**
+   * A RESPOSTA DO CARD A QUEM O DIRIGE (task fc68f565) — a outra forma de
+   * cumprir o episódio, para quem não pode chamar `report`.
+   *
+   * A chave é o card que RESPONDEU; o valor é `{ at, directorId }`. Guardar o
+   * diretor, e não só o instante, é o que mantém a decisão honesta: o silêncio
+   * só vale se quem receberia o aviso AGORA for o mesmo que já foi respondido.
+   * Se a direção mudou (o card foi readotado por outro orquestrador, a marca do
+   * board mudou), o novo destinatário não sabe de nada e o aviso segue.
+   *
+   * Não é um diário: é o mesmo tipo de estado do `idleWithoutReportNotified`
+   * (por episódio, em memória), limpo no report aceito, na saída do card e no
+   * `close()`. Nada disto vai para o banco nem para `reports` — um send não
+   * produz julgamento nenhum.
+   */
+  const answeredDirectorAt = new Map<string, { at: number; directorId: string }>();
+  /** Ids de entrega já avaliados por `observeAnswersToDirector` — o carimbo de
+   *  instante é uma OBSERVAÇÃO por passada, não um campo que o FIFO guarde. */
+  const answersObserved = new Set<string>();
+  /** A primeira passada só lê (ver o doc de `observeAnswersToDirector`). */
+  let answeredObservedSeeded = false;
+  /** Instante da passada ANTERIOR — o piso do carimbo da resposta. */
+  let answersLastPassAtMs: number | null = null;
+  /**
    * Cards que já receberam o aviso de "subiu e nunca falou" (task d77b524b).
    * UM aviso por card, nunca repetido: o scan roda a cada 5s. O ESTADO não
    * precisa de limpeza — ele é derivado (`hasReceivedData`), então o primeiro
@@ -2683,6 +2707,62 @@ export function createMessageBus(
   }
 
   /**
+   * A RESPOSTA DO CARD A QUEM O DIRIGE (task fc68f565) — a segunda forma de
+   * cumprir um episódio, para a população que NÃO CONSEGUE chamar `report`.
+   *
+   * A fonte é o próprio registro de entregas (`deliveryRecords`), que já é a
+   * verdade do app sobre "isto foi DIGITADO num card" — é dele que `get_delivery`
+   * responde. Ele não guarda o instante de cada item, então o instante é
+   * OBSERVADO aqui: cada passada carimba com `now` o item que assentou desde a
+   * passada anterior. O carimbo pode chegar 5s ATRASADO, nunca adiantado — e
+   * contra o piso de 180s isso não muda decisão nenhuma.
+   *
+   * A PRIMEIRA passada é SÓ LEITURA: o que já estava assentado antes desta
+   * varredura começar não ganha carimbo, porque não há instante conhecido para
+   * ele e inventar "agora" silenciaria um aviso VERDADEIRO (o card pode ter
+   * respondido ao episódio ANTERIOR e continuar devendo o atual — a lição que
+   * este módulo já pagou quando a janela era "por vida do card").
+   *
+   * Nada aqui grava: nem `reports`, nem veredito, nem status de task. Um send
+   * não é julgamento (decisão do dono, medida na task).
+   */
+  function observeAnswersToDirector(now: number): void {
+    // O INSTANTE DA RESPOSTA NÃO EXISTE no registro de entregas (ver o doc
+    // acima), então ele é OBSERVADO entre duas passadas: um item que a passada
+    // anterior não viu nasceu DEPOIS dela. O carimbo é, portanto, o instante da
+    // passada ANTERIOR — um LIMITE INFERIOR, nunca um palpite otimista.
+    //
+    // O preço, dito por inteiro: a resposta que sai dentro do mesmo intervalo de
+    // poll em que o card recebeu o trabalho (≤5s) não é creditada a esse
+    // episódio. O ganho é o outro lado, e é o que decide: com o carimbo
+    // otimista, uma resposta do episódio ANTERIOR observada logo depois de um
+    // trabalho NOVO silenciaria um aviso verdadeiro — o defeito que este módulo
+    // já pagou uma vez, agora por uma janela de 5s em vez de por vida.
+    const floor = answersLastPassAtMs ?? now;
+    if (!answeredObservedSeeded) {
+      for (const record of deliveryRecords.values()) answersObserved.add(record.id);
+      answeredObservedSeeded = true;
+      answersLastPassAtMs = now;
+      return;
+    }
+    for (const record of deliveryRecords.values()) {
+      if (answersObserved.has(record.id)) continue;
+      if (record.delivery === "queued") continue; // ainda não foi digitado
+      answersObserved.add(record.id);
+      if (!isAnswerLanded(record.delivery)) continue; // falhou, cancelado ou sem prova
+      const requesterId = record.requesterId;
+      if (!requesterId) continue; // ponteiro de sistema (report/saída/idle) não tem autor
+      // O ALVO é guardado como fato observado; a pergunta de DIREÇÃO é feita na
+      // hora de decidir (no scan), com a direção de AGORA — não a de então. É de
+      // propósito: se o card foi readotado por outro orquestrador depois de
+      // responder, quem receberia o aviso agora não sabe daquela resposta, e o
+      // aviso tem de sair.
+      answeredDirectorAt.set(requesterId, { at: floor, directorId: record.target });
+    }
+    answersLastPassAtMs = now;
+  }
+
+  /**
    * Scan alive terminals for SINAL 3. Pure gate in
    * idle-without-report-decision.ts; this only feeds facts and fires the
    * pointer. Exported as a test seam (same pattern as resolveCardExit).
@@ -2696,7 +2776,21 @@ export function createMessageBus(
     // notifica), não um crash.
     const listed = callbacks.listTasksForIdleScan();
     const tasks = Array.isArray(listed) ? listed : [];
-    for (const card of listTerminalCards()) {
+    const terminalCards = listTerminalCards();
+    // UM relógio só para esta passada — o mesmo instante alimenta a observação
+    // da resposta (task fc68f565), o piso, a idade da frase e o `card_status`.
+    const scanNow = Date.now();
+    observeAnswersToDirector(scanNow);
+    // Poda do estado da resposta: card que não é mais terminal não tem episódio
+    // a cumprir, e o mapa é por card VIVO (mesma disciplina do resto do sinal).
+    // Fica na varredura porque este é o único ponto desta peça.
+    if (answeredDirectorAt.size > 0) {
+      const liveIds = new Set(terminalCards.map((c) => c.id));
+      for (const id of [...answeredDirectorAt.keys()]) {
+        if (!liveIds.has(id)) answeredDirectorAt.delete(id);
+      }
+    }
+    for (const card of terminalCards) {
       const cardId = card.id;
       const linkedTask = tasks.find((t) => t.card_id === cardId);
       const lastActivityAt = callbacks.getCardLastActivityAt(cardId);
@@ -2711,7 +2805,7 @@ export function createMessageBus(
       const episodeAnchor = workGrantedAt ?? turnEndedAt ?? NO_EPISODE_ANCHOR;
       // UM relógio só para esta passada: o mesmo instante alimenta o piso, a
       // idade que vai na frase do silêncio inferido e o `now` do card_status.
-      const now = Date.now();
+      const now = scanNow;
       const idleMs = lastActivityAt === null ? null : now - lastActivityAt;
       // O CARD QUE NUNCA FALOU (task d77b524b) — o buraco que o SINAL 3 não
       // cobre: ele fala de quem ficou QUIETO DEPOIS de trabalhar. Um PTY que
@@ -2765,6 +2859,23 @@ export function createMessageBus(
         // datar o trabalho" NÃO pode virar cutucão, então qualquer report já
         // gravado conta como este episódio cumprido.
         reportedSinceWorkGranted: lastReportAt !== null && lastReportAt > (workGrantedAt ?? 0),
+        // A OUTRA forma de cumprir o episódio (task fc68f565): o card respondeu
+        // a quem o DIRIGE — o único canal de quem não consegue chamar `report`.
+        // Três condições, e as três são fatos, não estimativa:
+        //   1. existe resposta observada deste card (o mapa);
+        //   2. ela é POSTERIOR à âncora — o mesmo `?? 0` do report acima, pela
+        //      mesma razão: o card VIVO sempre tem âncora, e o `?? 0` cobre só
+        //      a corrida de um entry que sumiu;
+        //   3. ela foi para o MESMO card que receberia este aviso AGORA. Se a
+        //      direção mudou, quem recebe não sabe de nada e o aviso segue.
+        // A consulta de direção só acontece quando (1) e (2) já valem — o scan
+        // roda a cada 5s e não paga esse preço por card vivo.
+        answeredDirectorSinceWorkGranted: (() => {
+          const answer = answeredDirectorAt.get(cardId);
+          if (!answer) return false;
+          if (!(answer.at > (workGrantedAt ?? 0))) return false;
+          return resolveNotifyTarget(cardId) === answer.directorId;
+        })(),
         // O `idle` de `card-status-decision.ts`, com os MESMOS fatos: turno
         // DECLARADO encerrado e nenhuma saída depois dele. Fato declarado, não
         // silêncio — por isso o portão não espera o piso quando isto é true.
