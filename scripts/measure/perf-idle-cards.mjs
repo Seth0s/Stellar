@@ -56,6 +56,30 @@ const EXEC = arg("--exec", null);
 // linha, em vez de palpites sobre animações.
 const PROFILE = process.argv.includes("--profile");
 const PROFILE_SECONDS = Number(arg("--profile-seconds", "10"));
+// `--app-args "--flag1 --flag2"`: passthrough para o Electron. H2 usa isto para
+// abrir o alvo `--inspect` do MAIN e ler `app.getGPUFeatureStatus()`.
+const APP_ARGS = (arg("--app-args", "") || "").split(" ").filter(Boolean);
+// Pagina do card de navegador: data URL com animacao CSS, para o pipeline de
+// frames ter o que pintar SEM rede (H3).
+// O APP RECUSA `data:` (medido: "the embedded browser only opens http(s) URLs"),
+// então o harness serve a página de teste em 127.0.0.1 — sem rede externa, e com
+// uma animação CSS para o pipeline de frames ter o que pintar.
+const BROWSER_PAGE = `<!doctype html><body style="margin:0;background:#111">
+<div style="width:120px;height:120px;background:#f80;animation:s 1s linear infinite"></div>
+<style>@keyframes s{to{transform:rotate(360deg)}}</style></body>`;
+async function startBrowserServer() {
+  const { createServer } = await import("node:http");
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(BROWSER_PAGE);
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { server, url: `http://127.0.0.1:${server.address().port}/` };
+}
+const BROWSER_URL = arg(
+  "--browser-url",
+  "data:text/html,<body style='margin:0;background:%23111'><div style='width:120px;height:120px;background:%23f80;animation:s 1s linear infinite'></div><style>@keyframes s{to{transform:rotate(360deg)}}</style></body>",
+);
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Lê utime+stime (ticks), RSS (kB) e o `--type=` do cmdline de um pid. */
@@ -214,13 +238,66 @@ async function profileRenderer(cdpPort, seconds) {
   return { top, delta, totalSamples: total, seconds: dt };
 }
 
+
+/**
+ * H2: le `app.getGPUFeatureStatus()` NO PROCESSO MAIN.
+ *
+ * O main do Electron não é alvo de CDP a menos que se passe `--inspect`; com ele
+ * há um alvo `node` em /json/list, e um `Runtime.evaluate` lá roda no main - sem
+ * precisar de IPC novo (a medição usa a porta de inspeção, que é descartável).
+ * O import dinâmico é de propósito: o main é empacotado como ESM, então `require`
+ * pode não existir no escopo do evaluate.
+ */
+async function readGpuStatus(inspectPort, exprIndex = 0) {
+  const alvo = (await (await fetch(`http://127.0.0.1:${inspectPort}/json/list`)).json()).find(
+    (t) => t.type === "node" || String(t.url || "").includes("node"),
+  );
+  if (!alvo) return null;
+  const ws = new WebSocket(alvo.webSocketDebuggerUrl);
+  await new Promise((r) => ws.addEventListener("open", r, { once: true }));
+  const resultado = await new Promise((resolve) => {
+    ws.addEventListener("message", (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.id === 1) resolve(msg.result);
+    });
+    ws.send(
+      JSON.stringify({
+        id: 1,
+        method: "Runtime.evaluate",
+        params: {
+          expression: [
+            'globalThis.require ? JSON.stringify(require("electron").app.getGPUFeatureStatus()) : null',
+            'JSON.stringify(process.mainModule.require("electron").app.getGPUFeatureStatus())',
+            'import("electron").then((m) => JSON.stringify(m.app.getGPUFeatureStatus()))',
+          ][exprIndex],
+          awaitPromise: true,
+          returnByValue: true,
+        },
+      }),
+    );
+  });
+  ws.close();
+  if (resultado?.exceptionDetails) {
+    return { erro: String(resultado.exceptionDetails.text || resultado.exceptionDetails.exception?.description || "") };
+  }
+  const valor = resultado?.result?.value;
+  if (typeof valor !== "string") return null;
+  try {
+    return JSON.parse(valor);
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   if (!existsSync(FIXTURE)) throw new Error(`fixture ausente: ${FIXTURE}`);
   const userDataDir = join(tmpdir(), `stellar-perf-${process.pid}`);
   const cdpPort = await pickFreePort();
   console.log(`[perf] instância ISOLADA: userData=${userDataDir} cdp=${cdpPort} cards=${CARDS} provider=${PROVIDER}${REAL_IDLE ? " (ocioso, sem prompt)" : ` rate=${RATE}fps`}`);
 
-  const app = await startApp({ cdpPort, userDataDir, timeoutMs: 60_000 });
+  // Declarado FORA do try: o finally precisa fechar o servidor da página.
+  let browserServer = null;
+  const app = await startApp({ cdpPort, userDataDir, timeoutMs: 60_000, extraArgs: APP_ARGS });
   let page = null;
   try {
     page = await connectPage(cdpPort);
@@ -239,6 +316,8 @@ async function main() {
     })()`);
     if (!boardId) throw new Error("board não pôde ser criado na instância isolada");
 
+    let browserUrl = BROWSER_URL;
+
     // Cards: o MESMO caminho da UI (persistir a linha + subir o PTY), pela API do
     // renderer — sem consentimento de agente e sem passar pelo bus de mensagens.
     for (let i = 0; i < CARDS; i += 1) {
@@ -253,12 +332,20 @@ async function main() {
       })()`);
     }
 
+
     if (WITH_BROWSER) {
+      const servidor = await startBrowserServer();
+      browserServer = servidor.server;
+      browserUrl = servidor.url;
       await page.evalJs(`(async () => {
         const now = Date.now();
         await window.store.upsert({ id: "perf-browser", provider: "browser", cwd: "/tmp", x: 40, y: 420, w: 700, h: 360,
           updated_at: now, resume_id: null, model: null, system_prompt: null, kind: "browser", board_id: ${JSON.stringify(boardId)},
           group_id: null, label: "perf-browser", messages_json: null, archived_at: null, effort: null, created_at: now });
+        // O IPC que a UI usa (H3): sem isto o card era so uma LINHA no banco e o
+        // WebContentsView - o que de fato custa frames - nunca nascia. O app RECUSA
+        // o esquema data: ("only opens http(s) URLs"), por isso o harness serve a pagina.
+        await window.browser.create("perf-browser", ${JSON.stringify(browserUrl)});
         return true;
       })()`);
     }
@@ -307,6 +394,22 @@ async function main() {
         console.log(`  ${linha.selfMs.toFixed(1).padStart(7)} ms  ${linha.pct.toFixed(1).padStart(5)}%  ${linha.nome}`);
       }
       console.log(`[perf] Blink no mesmo intervalo: ${JSON.stringify(perfil.delta)}`);
+    }
+
+    const inspectArg = APP_ARGS.find((a) => a.startsWith("--inspect="));
+    let gpuStatus = null;
+    if (inspectArg) {
+      // Tenta as formas em ordem e para na primeira que responder: o contexto do
+      // inspector do MAIN não garante `require` (o main é empacotado como ESM) e
+      // também pode recusar `import()`; a mensagem de erro de cada tentativa é
+      // preservada em vez de virar "não respondeu".
+      for (let expr = 0; expr < 3 && (gpuStatus === null || gpuStatus.erro); expr += 1) {
+        gpuStatus = await readGpuStatus(inspectArg.split("=")[1], expr);
+      }
+    }
+    if (inspectArg) {
+      console.log(`\n[perf] GPU status (main, app.getGPUFeatureStatus()):`);
+      console.log(gpuStatus ? `  ${JSON.stringify(gpuStatus)}` : "  (alvo node nao respondeu)");
     }
 
     const cliAntes = new Map(cliPids(app.proc.pid, PROVIDER).map((pid) => [pid, readProcIo(pid)]));
@@ -385,6 +488,7 @@ async function main() {
       totalRssMb: totalRss,
       byType: [...byType.values()],
       ...(perfil ? { profile: perfil } : {}),
+      ...(gpuStatus ? { gpuStatus } : {}),
       ptyFrameLog,
       ...(REAL_IDLE ? { cliWcharBytesPerSec, ptyBytesPerSec } : {}),
     };
@@ -412,6 +516,7 @@ async function main() {
     }
     if (JSON_OUT) writeFileSync(JSON_OUT, `${JSON.stringify(result, null, 2)}\n`);
   } finally {
+    browserServer?.close();
     await stopApp(app);
     console.log(`[perf] userData isolado destruído: ${!existsSync(userDataDir)}`);
   }
