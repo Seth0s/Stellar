@@ -75,7 +75,7 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // src/main/acbridge-protocol-decision.ts — o vitest trava os dois
 // (tests/unit/acbridge-protocol.test.ts). Bump quando a forma de um
 // request muda (cmd/campo novo), e só então.
-const ACBRIDGE_PROTOCOL = 6;
+const ACBRIDGE_PROTOCOL = 7;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -496,8 +496,12 @@ if (cmd === "version") {
   request = { cmd: "browser_click", target, selector };
 } else if (cmd === "browser-type") {
   const [target, selector, ...textParts] = rest;
-  if (!target || !selector || textParts.length === 0) fail("usage: acbridge browser-type <cardId> <selector> <text...>");
-  request = { cmd: "browser_type", target, selector, text: textParts.join(" ") };
+  // `--replace` como PRIMEIRO pedaço do texto: limpa o campo antes de digitar
+  // (paridade com o `replace: true` da tool MCP — mesma decisão no app).
+  const replace = textParts[0] === "--replace";
+  const palavras = replace ? textParts.slice(1) : textParts;
+  if (!target || !selector || palavras.length === 0) fail("usage: acbridge browser-type <cardId> <selector> [--replace] <text...>");
+  request = { cmd: "browser_type", target, selector, text: palavras.join(" "), replace };
 } else if (cmd === "browser-scroll") {
   const [target, dxStr, dyStr, selector] = rest;
   if (!target) fail("usage: acbridge browser-scroll <cardId> <dx> <dy> [selector]");
@@ -532,8 +536,16 @@ if (cmd === "version") {
   request = { cmd: "browser_wait_for", target, ...(kind === "text" ? { text: value } : { selector: value }) };
 } else if (cmd === "browser-eval") {
   const [target, ...jsParts] = rest;
-  if (!target || jsParts.length === 0) fail("usage: acbridge browser-eval <cardId> <js...>");
-  request = { cmd: "browser_eval", target, js: jsParts.join(" ") };
+  // `--timeout <ms>` como primeiros pedaços: limite próprio do eval (paridade
+  // com o `timeoutMs` da tool MCP). Sem ele, o default é do app.
+  let timeoutMs;
+  if (jsParts[0] === "--timeout") {
+    timeoutMs = Number(jsParts[1]);
+    if (!Number.isFinite(timeoutMs)) fail("browser-eval: --timeout precisa de um número em ms");
+    jsParts.splice(0, 2);
+  }
+  if (!target || jsParts.length === 0) fail("usage: acbridge browser-eval <cardId> [--timeout <ms>] <js...>");
+  request = { cmd: "browser_eval", target, js: jsParts.join(" "), timeoutMs };
 } else {
   fail(`${USAGE}\n${BASH_CARD_NOTE}`);
 }

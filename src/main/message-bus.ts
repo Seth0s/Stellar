@@ -473,10 +473,10 @@ export type BusRequest =
   // auto-conector, ver `AUTO_CONNECT_CMDS` abaixo. Ausente em
   // `browser_query` (leitura, nunca conecta nada).
   | { cmd: "browser_click"; target?: string; x?: number; y?: number; selector?: string; ref?: string; requesterId?: string }
-  | { cmd: "browser_type"; target?: string; text?: string; selector?: string; ref?: string; requesterId?: string }
+  | { cmd: "browser_type"; target?: string; text?: string; selector?: string; ref?: string; replace?: boolean; requesterId?: string }
   | { cmd: "browser_scroll"; target?: string; dx?: number; dy?: number; selector?: string; ref?: string; requesterId?: string }
   | { cmd: "browser_query"; target?: string; selector?: string; ref?: string }
-  | { cmd: "browser_eval"; target?: string; js?: string; requesterId?: string }
+  | { cmd: "browser_eval"; target?: string; js?: string; timeoutMs?: number; requesterId?: string }
   | { cmd: "browser_snapshot"; target?: string }
   | { cmd: "browser_console"; target?: string; level?: string; limit?: number }
   | { cmd: "browser_network"; target?: string; status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }
@@ -926,10 +926,10 @@ export function createMessageBus(
      * session/localStorage reachable) — accepted risk, documented in the
      * MCP tool's own `description` (mcp-server.ts), not hidden here. */
     browserClick: (cardId: string, x?: number, y?: number, selector?: string, ref?: string) => Promise<BusResponse>;
-    browserType: (cardId: string, text: string, selector?: string, ref?: string) => Promise<BusResponse>;
+    browserType: (cardId: string, text: string, selector?: string, ref?: string, replace?: boolean) => Promise<BusResponse>;
     browserScroll: (cardId: string, dx: number, dy: number, selector?: string, ref?: string) => Promise<BusResponse>;
     browserQuery: (cardId: string, selector?: string, ref?: string) => Promise<BusResponse>;
-    browserEval: (cardId: string, js: string) => Promise<BusResponse>;
+    browserEval: (cardId: string, js: string, timeoutMs?: number) => Promise<BusResponse>;
     browserSnapshot: (cardId: string) => Promise<BusResponse>;
     browserConsole: (cardId: string, level?: string, limit?: number) => BusResponse;
     browserNetwork: (cardId: string, opts: { status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }) => BusResponse;
@@ -3496,7 +3496,7 @@ export function createMessageBus(
     if (req.cmd === "browser_type") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
       if (req.text === undefined) return { ok: false, error: "missing text" };
-      return callbacks.browserType(req.target, req.text, req.selector, req.ref);
+      return callbacks.browserType(req.target, req.text, req.selector, req.ref, req.replace === true);
     }
 
     if (req.cmd === "browser_scroll") {
@@ -3513,7 +3513,7 @@ export function createMessageBus(
     if (req.cmd === "browser_eval") {
       if (!req.target) return { ok: false, error: "missing target cardId" };
       if (!req.js) return { ok: false, error: "missing js" };
-      return callbacks.browserEval(req.target, req.js);
+      return callbacks.browserEval(req.target, req.js, req.timeoutMs);
     }
 
     if (req.cmd === "browser_snapshot") {

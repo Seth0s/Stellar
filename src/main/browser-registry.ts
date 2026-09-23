@@ -22,6 +22,12 @@ import {
   snapshotTargetProbeSource,
   type SnapshotControlFacts,
 } from "./browser-snapshot-target-decision";
+import { decideTypeMode, typeSelectContentSource, typeTargetFactsSource, type TypeTargetFacts } from "./browser-type-mode-decision";
+import {
+  awaitExpressionSource,
+  describeEvalTimeout,
+  normalizeEvalTimeout,
+} from "./browser-eval-timeout-decision";
 
 /**
  * Formato explícito do payload de `onFrame` (docs/PERF.md §9.4): quem
@@ -1717,15 +1723,62 @@ export function createBrowserRegistry(callbacks: {
    * whatever happened to be focused already. Uses `insertText` — same
    * IME-safe, "whole string at once" method item 26 already established
    * (see its own doc comment above), never synthesized char by char. */
-  async function typeText(id: string, text: string, selector?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  async function typeText(
+    id: string,
+    text: string,
+    selector?: string,
+    replace = false,
+  ): Promise<{ ok: true; replaced: boolean } | { ok: false; error: string }> {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
     if (selector) {
       const clicked = await clickSelector(id, selector);
       if (!clicked.ok) return clicked;
     }
+    // A decisão de poder SUBSTITUIR é pura e vem dos fatos da página: um
+    // `selectAll()` num alvo não editável seleciona o DOCUMENTO, e o
+    // `insertText` seguinte substituiria a página inteira (ver
+    // `browser-type-mode-decision.ts`). O append não consulta nada — o
+    // caminho de hoje fica exatamente como era.
+    const describe = selector ? `selector ${JSON.stringify(selector)}` : "the focused element";
+    const readFacts = async () => {
+      const probe = await runInPage<TypeTargetFacts>(id, selector ?? null, typeTargetFactsSource(selector ?? null));
+      return probe.ok ? probe.value : null;
+    };
+    let facts = await readFacts();
+    if (replace && facts?.editable && !facts.focused) {
+      // Espera o foco POUSAR (com teto): sem isto o `selectAll()` às vezes roda
+      // antes de o clique focar o campo, seleciona nada, e o `insertText`
+      // seguinte volta a concatenar — intermittentemente, que é pior de
+      // diagnosticar do que sempre.
+      const deadline = Date.now() + 1000;
+      while (Date.now() < deadline && facts && !facts.focused) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        facts = await readFacts();
+      }
+    }
+    const decision = decideTypeMode({ replace, describe, facts });
+    if (decision.action === "refuse") return { ok: false, error: decision.error };
+    if (decision.replace) {
+      // Foco + seleção do conteúdo, na MESMA avaliação da página (sem corrida
+      // com o foco assíncrono do clique), e o `insertText` que já existia
+      // entra por cima: substitui em UM `beforeinput` de `insertText`, com
+      // ZERO tecla sintética — IME-safe (ver `typeSelectContentSource`).
+      const selected = await runInPage<{ selected: number }>(id, selector ?? null, typeSelectContentSource(selector ?? null));
+      if (!selected.ok) return { ok: false, error: selected.error };
+      if (!(selected.value.selected > 0)) {
+        // Recusar é melhor que concatenar em silêncio: o defeito que este
+        // parâmetro existe para consertar é EXATAMENTE o append silencioso.
+        return {
+          ok: false,
+          error:
+            `browser_type refused with \`replace: true\`: ${describe} is empty or its content could not be selected, so ` +
+            `there was nothing to replace and typing would append. Nothing was typed.`,
+        };
+      }
+    }
     insertText(id, text);
-    return { ok: true };
+    return { ok: true, replaced: decision.replace };
   }
 
   /** `selector` given: scrolls that element's own container (a nested
@@ -1812,11 +1865,41 @@ export function createBrowserRegistry(callbacks: {
   // poder visível pro agente em vez de escondê-lo atrás de uma descrição
   // genérica.
   const MAX_EVAL_RESULT_CHARS = 20_000;
-  async function evalJs(id: string, js: string): Promise<{ ok: true; result: string; truncated: boolean } | { ok: false; error: string }> {
+  /**
+   * `browser_eval` — com ESPERA por `.then` (não por identidade de Promise) e
+   * limite PRÓPRIO. Ver `browser-eval-timeout-decision.ts` para os dois modos
+   * de falha medidos (o objeto interno do Zone.js devolvido como se fosse
+   * valor, e a espera que escorria até o idle timeout de 300s do MCP).
+   *
+   * O envelope `async` com `await` garante que o valor que volta para o
+   * processo main seja uma Promise de VERDADE, mesmo com a Promise global
+   * trocada por Zone.js/polyfill — é o `await` da linguagem (máquina interna),
+   * não o construtor do framework.
+   */
+  async function evalJs(
+    id: string,
+    js: string,
+    timeoutMsInput?: number,
+  ): Promise<{ ok: true; result: string; truncated: boolean } | { ok: false; error: string }> {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const timeoutMs = normalizeEvalTimeout(timeoutMsInput);
     try {
-      const raw: unknown = await entry.win.webContents.executeJavaScript(js);
+      const raw: unknown = await Promise.race([
+        entry.win.webContents.executeJavaScript(awaitExpressionSource(js)),
+        new Promise<never>((_resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("__stellar_eval_timeout__")), timeoutMs);
+          // Não segura o event loop por causa de um eval que já desistiu.
+          if (typeof timer.unref === "function") timer.unref();
+        }),
+      ]).catch((err: unknown) => {
+        if (String(err).includes("__stellar_eval_timeout__")) {
+          // O script SEGUE rodando na página (nada o interrompe) — a mensagem
+          // diz isso em vez de fingir que foi cancelado.
+          throw new Error(describeEvalTimeout({ waitedMs: timeoutMs, timeoutMs }));
+        }
+        throw err;
+      });
       let result: string;
       try {
         result = JSON.stringify(raw) ?? String(raw);

@@ -1738,11 +1738,15 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .string()
             .optional()
             .describe("Element id from browser_snapshot (e.g. \"e7\") — takes precedence over selector. The reliable way to target something you found by its visible name rather than by guessing a selector; refs are reissued by every browser_snapshot and stop being valid after a navigation or re-render."),
+          replace: z
+            .boolean()
+            .optional()
+            .describe("true = CLEAR the field first, then type (the text replaces what was there). Default is append — typing after whatever is already in the field, which is what this tool did before and is still right when you are continuing a value by hand. Use `replace: true` whenever the field may already have content (re-typing a name, fixing a value): measured live, typing over an existing value silently produced \"Idy PlatformIdy Platform\". Clearing uses the real editing command (the same as Ctrl+A) and the text still goes in as ONE insertText, so IME input is not affected. It is refused, naming why, when the target is not an editable field (a div, a readonly/disabled input) — nothing would be typed rather than the document being selected and replaced."),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, text, selector, ref, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "browser_type", target, text, selector, ref, requesterId: caller(callerCardId) });
+      async ({ target, text, selector, ref, replace, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "browser_type", target, text, selector, ref, replace, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -1870,11 +1874,15 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         inputSchema: {
           target: z.string().describe("The browser card's id or label (see list_cards)"),
           js: z.string().describe("JavaScript to evaluate in the page's context — the expression's value becomes the result"),
+          timeoutMs: z
+            .number()
+            .optional()
+            .describe("How long to wait for the expression to settle, in ms (default 10000, floor 200, ceiling 120000). A returned promise/thenable IS awaited (detected by `.then`, so Zone.js/polyfill-patched promises work too), and an expression that never settles is refused with an error naming how long it waited — the script keeps running in the page, so nothing is left half-typed by the wait itself. Raise this when the eval legitimately takes long (waiting for a render, scrolling a big page)."),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
-      async ({ target, js, callerCardId }) => {
-        const res = await opts.handleRequest({ cmd: "browser_eval", target, js, requesterId: caller(callerCardId) });
+      async ({ target, js, timeoutMs, callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "browser_eval", target, js, timeoutMs, requesterId: caller(callerCardId) });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
