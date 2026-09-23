@@ -223,10 +223,29 @@ export function ConstellationBg() {
       }
     }
 
+/**
+ * Arredonda para o MEIO PIXEL. Usado para decidir se vale ESCREVER no DOM: um
+ * `transform` que difere menos que isso rasteriza identicamente, então escrever
+ * de novo só custa recálculo de estilo (medido: 603 recálculos e 225 layouts a
+ * cada 10 s com ZERO cards, só por causa destas escritas — task 27e13021).
+ */
+function quantizeHalfPx(valor: number): number {
+  return Math.round(valor * 2) / 2;
+}
+
     let raf = 0;
     let lastFrame = performance.now();
     function frame(now: number) {
       raf = requestAnimationFrame(frame);
+
+      // JANELA OCULTA NÃO ANIMA (task 27e13021): com a janela minimizada ou em
+      // segundo plano o campo não é visto por ninguém, e continuar calculando
+      // física + escrevendo DOM era CPU paga para pintar o que ninguém olha.
+      // O relógio é reancorado na volta para o campo não "pular" o tempo parado.
+      if (document.hidden) {
+        lastFrame = now;
+        return;
+      }
 
       // Throttle da LÓGICA (não do agendamento) a ~30fps — ver comentário
       // de LOGIC_INTERVAL_MS acima. `requestAnimationFrame` continua sendo
@@ -255,7 +274,18 @@ export function ConstellationBg() {
         applyPush(off, dispX, dispY, speed);
         // Delta relativo ao cx/cy-base já declarado no JSX (star.x/star.y)
         // — ver comentário de LOGIC_INTERVAL_MS acima.
-        el.style.transform = `translate(${dispX + off.x - star.x}px, ${dispY + off.y - star.y}px)`;
+        //
+        // SÓ ESCREVE QUANDO MUDA (task 27e13021): o perfil do renderer mediu
+        // 603 recálculos de estilo e 225 layouts a cada 10 s com ZERO cards, e
+        // a causa é esta linha — uma escrita de `transform` por estrela por
+        // tick. O valor é quantizado ao MEIO PIXEL antes de comparar: um
+        // deslocamento menor que isso rasteriza idêntico, então pular a escrita
+        // não muda o que se vê — e some com a maior parte dos recálculos quando
+        // o campo apenas deriva devagar.
+        const tx = quantizeHalfPx(dispX + off.x - star.x);
+        const ty = quantizeHalfPx(dispY + off.y - star.y);
+        const valor = `translate(${tx}px, ${ty}px)`;
+        if (el.style.transform !== valor) el.style.transform = valor;
       });
 
       CLUSTER_INSTANCES.forEach((cluster, ci) => {
@@ -275,10 +305,19 @@ export function ConstellationBg() {
           // comentário de LOGIC_INTERVAL_MS acima. A polyline continua via
           // atributo `points` (poucos elementos, cada vértice desloca
           // independente — não representável como um único transform).
-          if (el) el.style.transform = `translate(${fx - bx}px, ${fy - by}px)`;
+          if (el) {
+            const valor = `translate(${quantizeHalfPx(fx - bx)}px, ${quantizeHalfPx(fy - by)}px)`;
+            if (el.style.transform !== valor) el.style.transform = valor;
+          }
         });
         const line = clusterLineElsRef.current[ci];
-        if (line) line.setAttribute("points", pts.map(([x, y]) => `${x},${y}`).join(" "));
+        if (line) {
+          // Mesma razão da estrela: `setAttribute` a cada tick é um recálculo
+          // garantido, mesmo quando nenhum vértice mudou o suficiente para
+          // aparecer. Compara a string antes de tocar no DOM.
+          const pontos = pts.map(([x, y]) => `${quantizeHalfPx(x)},${quantizeHalfPx(y)}`).join(" ");
+          if (line.getAttribute("points") !== pontos) line.setAttribute("points", pontos);
+        }
       });
     }
 

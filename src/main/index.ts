@@ -1149,14 +1149,52 @@ function createWindow() {
     handleRequest: (req: BusRequest) => messageBus!.handleRequest(req, { channel: "http" }),
   });
 
+  // CONTADOR DE MECANISMO (`STELLAR_PTY_FRAME_DEBUG=1`): quantas mensagens
+  // `pty:data` saem por segundo. Existe por duas razões medidas:
+  //   1. CPU medida em máquina compartilhada NÃO serve para julgar mudança — o
+  //      baseline deste harness variou de 0,3% a 20,7% com o MESMO build, por
+  //      carga de outro card;
+  //   2. foi ESTE contador que matou o candidato "coalescer `pty:data` por frame"
+  //      (task 27e13021). A 60 fps e a 200 fps de repintura o número de mensagens
+  //      é o mesmo (~1.250 por 5 s): o caminho de LEITURA do PTY já entrega lotes
+  //      (~50 chunks/s por card), então um coalescer de aplicação não teria o que
+  //      agrupar. O coalescer foi medido, não deu ganho e foi removido; o contador
+  //      fica, que é o que permite responder de novo em uma linha.
+  const ptyFrameDebug = process.env.STELLAR_PTY_FRAME_DEBUG === "1";
+  let ptyDataSends = 0;
+  let ptyDataBytes = 0;
+  // RECEBIDO no pty-registry: conta TODO byte/chunk que o Stellar recebe do PTY,
+  // ANTES do desvio de "frame morto" — é o número que a calibração pede. Sem
+  // este par, um renderer inalcançável (que manda tudo para `holdPtyData`) daria
+  // 0,00 KB/s e a medição mentiria sobre a taxa real da CLI.
+  let ptyRxChunks = 0;
+  let ptyRxBytes = 0;
+  if (ptyFrameDebug) {
+    setInterval(() => {
+      // stderr de propósito: é o canal que o harness de medição coleta. Bytes E
+      // mensagens, porque são perguntas diferentes: a calibração (task 27e13021)
+      // mostrou que um cline OCIOSO escreve ordens de grandeza mais que a TUI
+      // sintética do harness — sem os bytes aqui, a taxa real não teria denominador.
+      console.warn(`[pty-frame] rx_chunks=${ptyRxChunks} rx_bytes=${ptyRxBytes} sends=${ptyDataSends} send_bytes=${ptyDataBytes}`);
+      ptyDataSends = 0;
+      ptyDataBytes = 0;
+      ptyRxChunks = 0;
+      ptyRxBytes = 0;
+    }, 5000).unref?.();
+  }
+
   const registry = createPtyRegistry({
     onData: (id, data) => {
+      ptyRxChunks += 1;
+      ptyRxBytes += data.length;
       // Hold while the frame is dead — scrollback is agent work product;
       // discard would erase output produced during the gap. Cap + tail
       // truncate in decidePtyHoldAppend. remote mirror still gets live bytes.
       if (!mainWindowRendererReachable) {
         holdPtyData(id, data);
       } else {
+        ptyDataSends += 1;
+        ptyDataBytes += data.length;
         safeSend(win, "pty:data", id, data);
       }
       remoteServer?.broadcastPtyData(id, data);
