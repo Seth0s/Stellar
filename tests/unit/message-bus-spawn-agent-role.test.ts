@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
+import { writeBoardContext } from "../../src/main/board-context";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
@@ -85,6 +86,11 @@ describe("message-bus: spawn_agent role", () => {
     extra: Record<string, (...args: never[]) => unknown> = {},
   ) {
     dir = mkdtempSync(join(tmpdir(), "stellar-spawn-role-"));
+    // O CONTEXTO DO BOARD É ORTOGONAL AQUI (task 04826bdc): desde o protocolo de
+    // brief como DADO, um board SEM arquivo entrega o protocolo junto do brief —
+    // este rig testa o BRIEF, então o board dele tem contexto VAZIO escrito de
+    // propósito (o mesmo que um humano ter esvaziado o arquivo).
+    writeBoardContext(dir, "b1", { rules: [], traps: [] });
     const spawned: Array<Record<string, unknown>> = [];
     const upserted: TaskRow[] = [];
     const linked: Array<{ taskId: string; cardId: string; role: string }> = [];
