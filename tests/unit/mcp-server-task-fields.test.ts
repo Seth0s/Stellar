@@ -80,7 +80,7 @@ describe("mcp-server: purpose / role on the tool surface", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("create_task com purpose fora do enum: recusado pelo schema, o bus nunca é chamado", async () => {
+  it("create_task com purpose fora do enum: refused pelo schema, o bus nunca é chamado", async () => {
     seen.length = 0;
     const res = await client.callTool({ name: "create_task", arguments: { prompt: "x", purpose: "banana" } });
     expect(res.isError).toBe(true);
@@ -115,7 +115,7 @@ describe("mcp-server: purpose / role on the tool surface", () => {
     expect((seen[1] as { review: unknown }).review).toBeNull();
   });
 
-  it("spawn_agent.role: enum implementer|reviewer, descrição diz o default, o que reviewer muda e o que é recusado", async () => {
+  it("spawn_agent.role: enum implementer|reviewer, descrição diz o default, o que reviewer muda e o que é refused", async () => {
     const schema = await schemaOf("spawn_agent");
     const role = schema.properties?.role;
     expect(role).toBeDefined();
@@ -209,8 +209,8 @@ describe("mcp-server: campo de chamada dentro do payload", () => {
     expect(body.error).toContain("`verdict`");
     expect(body.error).toContain("`report`");
     expect(body.error).toContain("APROVADO");
-    expect(body.error).toContain("nada foi gravado");
-    // Nenhum report chegou ao bus: nada foi gravado (nem veredito, nem linha).
+    expect(body.error).toContain("nothing was written");
+    // Nenhum report chegou ao bus: nothing was written (nem veredito, nem linha).
     expect(seen.filter((r) => r.cmd === "report")).toHaveLength(0);
   });
 
@@ -229,7 +229,7 @@ describe("mcp-server: campo de chamada dentro do payload", () => {
     expect(seen.filter((r) => r.cmd === "report")).toHaveLength(0);
   });
 
-  it("`callerCardId` dentro do payload também é recusado, nomeando os dois campos", async () => {
+  it("`callerCardId` dentro do payload também é refused, nomeando os dois campos", async () => {
     seen.length = 0;
     const res = await callReport({ report: { ok: true, verdict: "aprovado", callerCardId: "c9" } });
     const body = JSON.parse(res.content[0]!.text) as { ok: boolean; error?: string };

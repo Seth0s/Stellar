@@ -101,24 +101,25 @@ export function decideReportTaskLink(input: {
   return { action: "unknown" };
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE. Ambiguidade NOMEIA as candidatas: o
- * agente escolhe, o servidor nunca escolhe por ele. Não fundir esta frase
- * com a de `declared-not-linked` — são causas diferentes. */
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd (agents have no locale). Ambiguity
+ * NAMES the candidates: the agent chooses, the server never chooses for it.
+ * Do not merge this sentence with `declared-not-linked` — different causes. */
 export function describeAmbiguousTaskRefusal(candidates: readonly string[]): string {
   return (
-    `[de: stellar] report recusado: este card está ligado a ${candidates.length} tasks ativas ao mesmo tempo ` +
-    `(${candidates.join(", ")}) e não dá para saber de qual delas é este relatório. ` +
-    `Diga qual, escrevendo "taskId" DENTRO do objeto do report (ex.: {"ok":true,"taskId":"${candidates[0]}"}), ` +
-    `e chame de novo no mesmo turno. Nada foi gravado — adivinhar aqui seria assinar a task errada.`
+    `[de: stellar] report refused: this card is linked to ${candidates.length} active tasks at the same time ` +
+    `(${candidates.join(", ")}) and there is no way to tell which one this report is about. ` +
+    `Say which, by writing "taskId" INSIDE the report object (e.g. {"ok":true,"taskId":"${candidates[0]}"}), ` +
+    `and call again in the same turn. Nothing was written — guessing here would be signing the wrong task.`
   );
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE. Declarado que não é vínculo vivo: recusa
- * em vez de cair para outro vínculo, que responderia sobre outra task. */
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd. Declared but not a live link:
+ * refuse instead of falling back to another link, which would answer about
+ * another task. */
 export function describeDeclaredTaskNotLinkedRefusal(declared: string, candidates: readonly string[]): string {
-  const list = candidates.length > 0 ? `Os vínculos ativos deste card são: ${candidates.join(", ")}.` : "Este card não tem vínculo ativo nenhum.";
+  const list = candidates.length > 0 ? `This card's active links are: ${candidates.join(", ")}.` : "This card has no active link at all.";
   return (
-    `[de: stellar] report recusado: o relatório declara taskId "${declared}", que NÃO é um vínculo ativo deste card. ` +
-    `${list} Corrija o taskId e chame de novo no mesmo turno. Nada foi gravado.`
+    `[de: stellar] report refused: the report declares taskId "${declared}", which is NOT an active link of this card. ` +
+    `${list} Fix the taskId and call again in the same turn. Nothing was written.`
   );
 }

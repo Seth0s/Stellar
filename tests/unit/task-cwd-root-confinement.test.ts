@@ -14,9 +14,9 @@ import type { TaskRow } from "../../src/main/store";
  * decide onde o GATE roda (`gate-runner.ts`) e onde um card auto-despachado
  * abre (`task-dispatch-decision.ts`). Até aqui ele só passava por `trim`.
  *
- * A regra: um `cwd` declarado tem de cair DENTRO da raiz declarada do board
+ * A regra: um `cwd` declarado tem de cair DENTRO da declared root do board
  * (`boards.cwd` — a sessão real escolhida no PathPicker). Fora dela é
- * recusado NOMEANDO o campo, no idioma das outras recusas, e nada é gravado.
+ * refused NOMEANDO o campo, no idioma das outras recusas, e nada é gravado.
  *
  * O corte é por CAMINHO, não por identidade: vale para qualquer card, e é
  * por isso que ele é o primeiro (a identidade é justamente o que costuma
@@ -110,7 +110,7 @@ describe("decideTaskCwdWithinRoot", () => {
     });
   });
 
-  it("board SEM raiz declarada → ok: ausência de raiz não vira recusa inventada", () => {
+  it("board SEM declared root → ok: ausência de raiz não vira recusa inventada", () => {
     expect(decideTaskCwdWithinRoot({ tool: "create_task", cwd: "/tmp/anywhere", root: "" })).toEqual({
       action: "ok",
       cwd: "/tmp/anywhere",
@@ -129,11 +129,11 @@ describe("decideTaskCwdWithinRoot", () => {
     expect(decision.error).toContain("`cwd`");
     expect(decision.error).toContain(ROOT);
     expect(decision.error).toContain("/home/lucas/wt/idy-x");
-    expect(decision.error).toContain("Nada foi gravado");
+    expect(decision.error).toContain("Nothing was written");
   });
 });
 
-describe("declaredRootForTask — sem raiz declarada vira RECUSA, não permissão", () => {
+describe("declaredRootForTask — sem declared root vira RECUSA, não permissão", () => {
   /**
    * MEDIDO no banco real em 2026-09-21: **33 tasks sem board, 22 delas COM
    * gates**. Elas resolvem `declaredRoot` indefinido — e indefinido, desde a
@@ -152,7 +152,7 @@ describe("declaredRootForTask — sem raiz declarada vira RECUSA, não permissã
     expect(declaredRootForTask("", "/lucas/Workplace/Projects")).toBeUndefined();
   });
 
-  it("board COM raiz declarada → a raiz; board legado sem cwd → nada (não se inventa)", () => {
+  it("board COM declared root → a raiz; board legado sem cwd → nada (não se inventa)", () => {
     expect(declaredRootForTask("118", "/home/lucas/Workplace/Projects")).toBe("/home/lucas/Workplace/Projects");
     expect(declaredRootForTask("64", "")).toBeUndefined();
     expect(declaredRootForTask("64", "   ")).toBeUndefined();
@@ -162,7 +162,7 @@ describe("declaredRootForTask — sem raiz declarada vira RECUSA, não permissã
 
 describe("auto-dispatch — a MESMA regra do gate, uma função acima (2026-09-21)", () => {
   /**
-   * O IRMÃO QUE FALTAVA. O gate passou a RECUSAR sem raiz declarada; o
+   * O IRMÃO QUE FALTAVA. O gate passou a RECUSAR sem declared root; o
    * auto-dispatch, na mesma situação, ainda DESPACHAVA — abrindo card no
    * `cwdDecision.cwd` sem raiz nenhuma. Duas noções opostas para a mesma
    * pergunta ("onde esta task pode rodar?"), com um comentário afirmando que
@@ -220,7 +220,7 @@ describe("auto-dispatch — a MESMA regra do gate, uma função acima (2026-09-2
     } as BusRequest)) as { ok: boolean; taskId: string; dispatched: boolean };
   }
 
-  it("board SEM raiz declarada: NÃO despacha o dependente e REGISTRA o motivo", async () => {
+  it("board SEM declared root: NÃO despacha o dependente e REGISTRA o motivo", async () => {
     const b = makeDispatchBus(undefined);
     const res = await createDependent(b, "/tmp/qualquer");
 
@@ -229,10 +229,10 @@ describe("auto-dispatch — a MESMA regra do gate, uma função acima (2026-09-2
     expect(spawnParams).toHaveLength(0);
     const refused = upserted.find((t) => t.id === res.taskId && t.result_json);
     expect(refused).toBeDefined();
-    expect(interruptionReasonFromResultJson(refused!.result_json)).toContain("raiz declarada");
+    expect(interruptionReasonFromResultJson(refused!.result_json)).toContain("declared root");
   });
 
-  it("board COM raiz declarada e cwd DENTRO dela: despacha normalmente", async () => {
+  it("board COM declared root e cwd DENTRO dela: despacha normalmente", async () => {
     const b = makeDispatchBus(ROOT);
     const res = await createDependent(b, `${ROOT}/Stellar`);
 
@@ -292,11 +292,11 @@ describe("auto-dispatch — a MESMA regra do gate, uma função acima (2026-09-2
     expect(spawnParams).toHaveLength(0);
     const refused = upserted.find((t) => t.id === "legacy-out" && t.result_json);
     expect(refused).toBeDefined();
-    expect(interruptionReasonFromResultJson(refused!.result_json)).toContain("FORA da raiz declarada");
+    expect(interruptionReasonFromResultJson(refused!.result_json)).toContain("OUTSIDE the board's declared root");
   });
 });
 
-describe("create_task — cwd confinado à raiz declarada do board", () => {
+describe("create_task — cwd confinado à declared root do board", () => {
   let dir: string;
   let bus: ReturnType<typeof createMessageBus> | null;
   let upserted: TaskRow[];
@@ -336,7 +336,7 @@ describe("create_task — cwd confinado à raiz declarada do board", () => {
     expect(res.ok).toBe(false);
     expect(String(res.error)).toContain("`cwd`");
     expect(String(res.error)).toContain(ROOT);
-    expect(String(res.error)).toContain("Nada foi gravado");
+    expect(String(res.error)).toContain("Nothing was written");
     expect(upserted).toEqual([]);
   });
 
@@ -359,7 +359,7 @@ describe("create_task — cwd confinado à raiz declarada do board", () => {
     expect(upserted[0].cwd).toBeNull();
   });
 
-  it("board sem raiz declarada → grava (não inventa recusa onde não há raiz)", async () => {
+  it("board sem declared root → grava (não inventa recusa onde não há raiz)", async () => {
     const b = makeBus(undefined);
     const res = (await b.handleRequest({
       cmd: "create_task",

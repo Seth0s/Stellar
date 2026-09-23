@@ -146,9 +146,9 @@ export function fieldRefusal(input: {
   got: unknown;
 }): string {
   return (
-    `[de: stellar] ${input.tool} recusado: \`${input.field}\` deve ser ${input.accepted} — ` +
-    `recebido: ${describeReceived(input.got)}. ` +
-    `Corrija este campo e chame de novo no mesmo turno; nada foi gravado.`
+    `[de: stellar] ${input.tool} refused: \`${input.field}\` must be ${input.accepted} — ` +
+    `received: ${describeReceived(input.got)}. ` +
+    `Fix this field and call again in the same turn; nothing was written.`
   );
 }
 
@@ -186,9 +186,9 @@ export function decideDeclaredKeys(input: {
   return {
     action: "refuse",
     error:
-      `[de: stellar] ${input.tool} recusado: ${input.declaredBy} exige ${keys} com ${input.accepted} — ` +
-      `recebido: ${offending.map((key) => `${key} ${describeReceived(readKey(input.provided, key))}`).join(", ")}. ` +
-      `Preencha com a evidência MEDIDA e chame de novo no mesmo turno; nada foi gravado.`,
+      `[de: stellar] ${input.tool} refused: ${input.declaredBy} requires ${keys} with ${input.accepted} — ` +
+      `received: ${offending.map((key) => `${key} ${describeReceived(readKey(input.provided, key))}`).join(", ")}. ` +
+      `Fill it with the MEASURED evidence and call again in the same turn; nothing was written.`,
   };
 }
 
@@ -293,17 +293,17 @@ export function decideMisplacedCallFields(input: {
 }): DeclaredKeysDecision {
   const found = misplacedCallFields(input);
   if (found.length === 0) return { action: "ok" };
-  const acceptedOf = (name: string) => input.contract.fields.find((field) => field.name === name)?.accepted ?? "a forma declarada para este campo";
+  const acceptedOf = (name: string) => input.contract.fields.find((field) => field.name === name)?.accepted ?? "the declared form for this field";
   const parts = found.map(
     (item) =>
-      `\`${item.field}\` veio DENTRO do payload \`${item.payloadField}\` (recebido: ${describeReceived(item.got)}; como campo da chamada aceita ${acceptedOf(item.field)})`,
+      `\`${item.field}\` came INSIDE the payload \`${item.payloadField}\` (received: ${describeReceived(item.got)}; as a call field it accepts ${acceptedOf(item.field)})`,
   );
   return {
     action: "refuse",
     error:
-      `[de: stellar] ${input.contract.tool} recusado: ${parts.join("; ")}. ` +
-      `Esses nomes são campos da CHAMADA, não conteúdo do payload — ali dentro não são lidos, e o valor se perderia em silêncio. ` +
-      `Mande cada um como campo próprio da chamada, ao lado de \`${found[0]!.payloadField}\`, e deixe o payload só com o conteúdo. ` +
-      `Corrija e chame de novo no mesmo turno; nada foi gravado.`,
+      `[de: stellar] ${input.contract.tool} refused: ${parts.join("; ")}. ` +
+      `Those names are fields of the CALL, not payload content — inside it they are not read, and the value would be lost in silence. ` +
+      `Send each one as its own field of the call, next to \`${found[0]!.payloadField}\`, and leave only the content in the payload. ` +
+      `Fix it and call again in the same turn; nothing was written.`,
   };
 }

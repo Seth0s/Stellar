@@ -62,7 +62,7 @@ describe("tool-contract: declaração, recusa e o schema publicado", () => {
       expect(msg).toContain("`boardId`");
       expect(msg).toContain("o id de um board");
       expect(msg).toContain('"118"');
-      expect(msg).toContain("nada foi gravado");
+      expect(msg).toContain("nothing was written");
     });
 
     it("describeReceived distingue ausente de null, e não despeja um array gigante", () => {
@@ -135,7 +135,7 @@ describe("tool-contract: declaração, recusa e o schema publicado", () => {
       expect(seen).toHaveLength(0);
     });
 
-    it("campo obrigatório ausente é recusado nomeando o campo — e a chamada não lança", async () => {
+    it("campo obrigatório ausente é refused nomeando o campo — e a chamada não lança", async () => {
       seen.length = 0;
       const res = (await client.callTool({ name: "card_status", arguments: {} as never })) as {
         isError?: boolean;
@@ -204,13 +204,13 @@ describe("tool-contract: declaração, recusa e o schema publicado", () => {
       expect(body.ok).toBe(false);
       // A mensagem é a do contrato: nomeia as chaves, o aceito e o recebido.
       expect(body.error).toContain("`achados`");
-      expect(body.error).toContain("conteúdo real");
+      expect(body.error).toContain("real content");
       expect(body.error).toContain("T1");
       // Nenhum `report` chegou ao bus — só a leitura da task.
       expect(seen.filter((r) => r.cmd === "report")).toHaveLength(0);
     });
 
-    it("token de placeholder (\"N/A\") e lista vazia também são recusados", async () => {
+    it("token de placeholder (\"N/A\") e lista vazia também são refuseds", async () => {
       seen.length = 0;
       const res = await call({ taskId: "T1", achados: "N/A", evidenciaMedida: [] });
       expect(JSON.parse(res.content[0]!.text)).toMatchObject({ ok: false });

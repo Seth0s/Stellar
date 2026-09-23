@@ -171,8 +171,8 @@ describe("report: a identidade declarada tem de existir (task 34e27f66)", () => 
     // A recusa NOMEIA o id declarado — sem isso o autor não tem como saber
     // que a identidade dele é que está errada (e não o payload).
     expect(res.error).toContain("97924181");
-    expect(res.error).toContain("NÃO existe");
-    expect(res.error).toContain("Nada foi gravado");
+    expect(res.error).toContain("does NOT exist");
+    expect(res.error).toContain("Nothing was written");
 
     // A asserção que importa: o banco. `ok:false` com uma linha gravada
     // mentiria do mesmo jeito que o `ok:true` de antes.
@@ -238,7 +238,7 @@ describe("report: a identidade declarada tem de existir (task 34e27f66)", () => 
     // Fundir os dois casos (anônimo × id que não existe) apagaria a
     // distinção que o defeito precisava: "não declarei" não é "declarei um
     // card fantasma".
-    expect(res.error).not.toContain("NÃO existe");
+    expect(res.error).not.toContain("does NOT exist");
   });
 
   it("CONTROLE: card vivo COM vínculo de task reporta, e o vínculo não vaza para o fantasma", async () => {
@@ -263,7 +263,7 @@ describe("report: a identidade declarada tem de existir (task 34e27f66)", () => 
       report: { ok: true, taskId: "56604aca" },
     } as BusRequest)) as { ok: boolean; error?: string };
     expect(phantom.ok).toBe(false);
-    expect(phantom.error).toContain("NÃO existe");
+    expect(phantom.error).toContain("does NOT exist");
     expect(store!.getTask("56604aca")?.card_id).toBe("97924184");
 
 
@@ -286,7 +286,7 @@ describe("report: a identidade declarada tem de existir (task 34e27f66)", () => 
     } as BusRequest)) as { ok: boolean; error?: string };
 
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("NÃO existe");
+    expect(res.error).toContain("does NOT exist");
     expect(reportRows(dir!, "97924181")).toEqual([]);
   });
 });
@@ -345,7 +345,7 @@ describe("report: a recusa pela porta do MCP (o caminho do shim)", () => {
 
     expect(res.ok).toBe(false);
     expect(res.error).toContain(PHANTOM);
-    expect(res.error).toContain("NÃO existe");
+    expect(res.error).toContain("does NOT exist");
     expect(reportRows(dir, PHANTOM)).toEqual([]);
     expect(store.nextReportSeqSeed()).toBe(0);
   });

@@ -34,10 +34,10 @@ describe("decideGatesSandboxAvailability — gates numa plataforma sem sandbox",
     expect(decision.error).toContain("gates");
     expect(decision.error).toContain("bubblewrap");
     expect(decision.error).toContain("2"); // os dois gates declarados
-    expect(decision.error).toContain("Nada foi gravado");
+    expect(decision.error).toContain("Nothing was written");
     // A saída HONESTA: declarar sem gates e rodar por conta própria. A
     // mensagem não pode prometer que o gate vai rodar depois.
-    expect(decision.error).toContain("SEM `gates`");
+    expect(decision.error).toContain("WITHOUT `gates`");
     expect(decision.error).not.toContain("vai rodar");
   });
 
@@ -59,10 +59,10 @@ describe("decideGatesSandboxAvailability — gates numa plataforma sem sandbox",
 
   it("a recusa diz POR QUÊ e o que fazer, no idioma do resto das recusas do bus", () => {
     const text = describeGatesSandboxUnavailable({ tool: "update_task", gates: ["npm test"] });
-    expect(text.startsWith("[de: stellar] update_task recusado")).toBe(true);
-    expect(text).toContain("não há sandbox");
+    expect(text.startsWith("[de: stellar] update_task refused")).toBe(true);
+    expect(text).toContain("no sandbox");
     expect(text).toContain("1 gate(s)");
-    expect(text).toContain("Nada foi gravado");
+    expect(text).toContain("Nothing was written");
   });
 
   it("recusa no create_task e no update_task, a MESMA decisão (uma porta não é a outra)", () => {

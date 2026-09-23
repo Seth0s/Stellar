@@ -197,10 +197,10 @@ export function decideTaskCwdWithinRoot(input: {
 /** A recusa da ESCRITA — nomeia o campo, no idioma de `fieldRefusal`. */
 export function describeTaskCwdOutsideRoot(input: { tool: string; cwd: string; root: string }): string {
   return (
-    `[de: stellar] ${input.tool} recusado: \`cwd\` deve ser um caminho DENTRO da raiz declarada do board ` +
-    `(${input.root}) — recebido: "${input.cwd}". O cwd decide onde o gate roda e onde um card auto-despachado abre; ` +
-    `fora da raiz o app estaria executando num diretório que o board não declarou. ` +
-    `Passe um caminho sob ${input.root}, ou omita o \`cwd\` para cair na raiz do board. Nada foi gravado.`
+    `[de: stellar] ${input.tool} refused: \`cwd\` must be a path INSIDE the board's declared root ` +
+    `(${input.root}) — received: "${input.cwd}". The cwd decides where the gate runs and where an auto-dispatched card opens; ` +
+    `outside the root the app would be running in a directory the board did not declare. ` +
+    `Pass a path under ${input.root}, or omit \`cwd\` to fall back to the board root. Nothing was written.`
   );
 }
 
@@ -216,8 +216,8 @@ export function describeTaskCwdOutsideRootExecution(input: {
   root: string;
 }): string {
   return (
-    `[de: stellar] ${input.where}: \`cwd\` "${input.cwd}" está FORA da raiz declarada do board (${input.root}) — ` +
-    `não executado. O cwd de uma task decide onde o gate roda e onde um card auto-despachado abre; fora da raiz ` +
-    `o app estaria executando num diretório que o board não declarou. Nada foi executado.`
+    `[de: stellar] ${input.where}: \`cwd\` "${input.cwd}" is OUTSIDE the board's declared root (${input.root}) — ` +
+    `not executed. A task's cwd decides where the gate runs and where an auto-dispatched card opens; outside the root ` +
+    `the app would be running in a directory the board did not declare. Nothing was executed.`
   );
 }

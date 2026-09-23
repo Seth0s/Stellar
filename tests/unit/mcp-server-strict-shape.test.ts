@@ -10,7 +10,7 @@ import type { BusRequest, BusResponse } from "../../src/main/message-bus";
  *
  *   - `list_tasks({ boardid: "118" })` com `d` minúsculo respondia `ok:true` e
  *     devolvia TODOS os boards (fechado por shape estrito — pinado aqui);
- *   - `report` com `verdict` DENTRO do payload respondeu `ok:true` e gravou
+ *   - `report` com `verdict` came INSIDE the payload respondeu `ok:true` e gravou
  *     `reports.verdict = NULL` (task a477f3d4, o guard de campo deslocado);
  *   - `create_task({ content: "<enunciado>" })` respondeu `ok:true`, gravou a
  *     task e DESCARTOU o texto: `get_task` devolve `prompt: null`.
@@ -146,7 +146,7 @@ describe("mcp-server: chave desconhecida no topo", () => {
       seen.length = 0;
       const misplaced = await call("report", { report: { ok: true, verdict: "aprovado" } });
       expect(bodyOf(misplaced).ok).toBe(false);
-      expect(bodyOf(misplaced).error).toContain("DENTRO do payload");
+      expect(bodyOf(misplaced).error).toContain("came INSIDE the payload");
       expect(seen.filter((r) => r.cmd === "report")).toHaveLength(0);
     });
   });

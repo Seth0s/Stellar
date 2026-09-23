@@ -119,16 +119,16 @@ describe("item 21 — describeArtifactPendencies", () => {
     expect(describeArtifactPendencies([])).toBe("");
   });
 
-  it("diz caminho, bytes e 'desde quando', e se declara SINAL (nada foi apagado)", () => {
+  it("diz caminho, bytes e 'desde quando', e se declara SIGNAL (nothing was deleted)", () => {
     const msg = describeArtifactPendencies([
       { path: "scratch.php", bytes: 42, modifiedAtMs: 1_700_000_000_000 },
     ]);
     expect(msg).toContain("scratch.php");
     expect(msg).toContain("42 B");
     expect(msg).toContain("desde ");
-    expect(msg).toContain("PENDÊNCIA DE LIMPEZA");
-    expect(msg).toContain("nada foi apagado");
-    expect(msg).toContain("SINAL");
+    expect(msg).toContain("CLEANUP PENDING");
+    expect(msg).toContain("nothing was deleted");
+    expect(msg).toContain("SIGNAL");
   });
 });
 

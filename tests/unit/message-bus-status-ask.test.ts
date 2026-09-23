@@ -86,7 +86,7 @@ describe("message-bus: request_task_status (terceiro caminho)", () => {
       requestedStatus: "done",
       divergedStatus: "done",
     });
-    expect(String(res.message)).toContain("registrado");
+    expect(String(res.message)).toContain("recorded");
     expect(asks).toHaveLength(1);
     expect(asks[0]).toMatchObject({
       taskId: "t-locked",
@@ -138,7 +138,7 @@ describe("message-bus: request_task_status (terceiro caminho)", () => {
 
     const res = await bus.handleRequest({ cmd: "update_task", taskId: "t-locked", status: "done", requesterId: "orch" } as BusRequest);
     expect(res.ok).toBe(true);
-    expect(String(res.warning)).toContain("prevalece");
+    expect(String(res.warning)).toContain("prevails");
     expect(String(res.warning)).toContain("request_task_status");
   });
 
@@ -170,7 +170,7 @@ describe("message-bus: request_task_status (terceiro caminho)", () => {
 
     const res = await bus.handleRequest({ cmd: "update_task", taskId: "t-locked", status: "running" } as BusRequest);
     expect(res).toMatchObject({ ok: true, status: "running" });
-    expect(String(res.message)).toContain("encerrado");
+    expect(String(res.message)).toContain("closed");
     expect(String(res.message)).toContain("running");
   });
 });

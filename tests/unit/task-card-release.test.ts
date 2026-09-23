@@ -133,7 +133,7 @@ describe("troca de card (e8802e32) — quem pode liberar (porta dos fundos da ec
     expect(decision.action).toBe("refuse");
     if (decision.action !== "refuse") return;
     expect(decision.error).toContain("implementer");
-    expect(decision.error).toContain("Nada foi gravado");
+    expect(decision.error).toContain("Nothing was written");
   });
 
   it("reviewer se auto-libera; o humano libera pelo principal NOMEADO", () => {
@@ -147,13 +147,13 @@ describe("troca de card (e8802e32) — quem pode liberar (porta dos fundos da ec
     // `requesterId: null`, e isso dava a quem OMITISSE a identidade um poder que
     // nenhum card identificado tem: expulsar o implementer de qualquer task.
     // Medido em 2026-09-22: `preload` e `renderer` não expõem release, e o
-    // handler do bus já recusa `!requesterId` antes — o "humano anônimo" que
+    // handler do bus já recusa `!requesterId` antes — o "humano anonymous" que
     // justificava a permissão não existia como chamador.
     const decision = decideTaskCardRelease({ taskId: "t1", requesterRoleOnTask: null, requesterId: null, targetCardId: "c1", orchestratorCardId: "mark" });
     expect(decision.action).toBe("refuse");
     if (decision.action !== "refuse") return;
-    expect(decision.error).toContain("sem identidade");
+    expect(decision.error).toContain("without identity");
     expect(decision.error).toContain(HUMAN_PRINCIPAL_ID);
-    expect(decision.error).toContain("Nada foi gravado");
+    expect(decision.error).toContain("Nothing was written");
   });
 });

@@ -112,12 +112,12 @@ describe("porta 1 — link_task_card: quem atribui papel (05055482)", () => {
     } as BusRequest)) as { ok: boolean; error?: string };
     expect(link.ok).toBe(false);
     if (link.ok) return;
-    expect(link.error).toContain("REVISOR");
-    expect(link.error).toContain("Nada foi gravado");
+    expect(link.error).toContain("REVIEWER");
+    expect(link.error).toContain("Nothing was written");
     // A linha não existe: a auto-atribuição não vira participação.
     expect(store.getTaskCards("tw").find((l) => l.card_id === "rogue")).toBeUndefined();
 
-    // E a cadeia P1 inteira morre: sem papel de revisor, o done é recusado
+    // E a cadeia P1 inteira morre: sem papel de revisor, o done é refused
     // pelo gate review="wanted" (CAMADA 4).
     const done = (await bus.handleRequest({
       cmd: "update_task", taskId: "tw", status: "done", requesterId: "rogue",
@@ -153,7 +153,7 @@ describe("porta 1 — link_task_card: quem atribui papel (05055482)", () => {
     expect(res.error).toContain("implementer");
   });
 
-  it("O ACIDENTE MEDIDO: card não-marcado não linka TERCEIROS (nem o card do orquestrador)", async () => {
+  it("O ACIDENTE MEDIDO: card não-marcado não linka TERCEIROS (nem o card do orchestrator)", async () => {
     dir = mkdtempSync(join(tmpdir(), "role-auth-acc-"));
     rig = buildRig(dir, { orchestratorCardId: "mark-1" });
     const { store, bus } = rig;
@@ -198,18 +198,18 @@ describe("porta 1 — link_task_card: quem atribui papel (05055482)", () => {
     expect(byMark.ok).toBe(true);
     expect(store.getTaskCards("tp").find((l) => l.card_id === "rev-1")?.role).toBe("reviewer");
 
-    // A versão anterior deixava o anônimo PASSAR, com o argumento de que "si
-    // mesmo" não se aplica sem identidade. O argumento cobre P1 e P2 (onde o
+    // A versão anterior deixava o anonymous PASSAR, com o argumento de que "si
+    // mesmo" não se aplica without identity. O argumento cobre P1 e P2 (onde o
     // ataque é apontar para si), mas não cobre impor vínculo a OUTRO — para
     // isso não é preciso ser ninguém. Medido em 2026-09-22: nem `preload` nem
-    // `renderer` expõem esta porta, então o "humano anônimo" não existia como
+    // `renderer` expõem esta porta, então o "humano anonymous" não existia como
     // chamador; a permissão só enfraquecia a invariante. Quem opera fora de um
     // card declara `HUMAN_PRINCIPAL_ID`.
     const anonymous = (await bus.handleRequest({
       cmd: "link_task_card", taskId: "tp", cardId: "rev-1", role: "implementer",
     } as BusRequest)) as { ok: boolean; error?: string };
     expect(anonymous.ok).toBe(false);
-    expect(anonymous.error).toContain("sem identidade");
+    expect(anonymous.error).toContain("without identity");
 
     // E o humano NOMEADO passa — a porta distingue "nao disse quem e" de "e o humano".
     const byHuman = (await bus.handleRequest({
@@ -244,7 +244,7 @@ describe("porta 2 — update_task {cardId}: quem move o principal (05055482)", (
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toContain("principal");
-    expect(res.error).toContain("Nada foi gravado");
+    expect(res.error).toContain("Nothing was written");
     expect(store.getTask("tw2")?.card_id).toBe("victim2");
     // A linha de implementer do ladrão não nasce sozinha.
     expect(store.getTaskCards("tw2").find((l) => l.card_id === "rogue2")).toBeUndefined();
@@ -308,7 +308,7 @@ describe("porta 3 — spawn_agent {role: reviewer}: quem spawna revisor (0505548
     } as BusRequest)) as { ok: boolean; error?: string };
     expect(res.ok).toBe(false);
     if (res.ok) return;
-    expect(res.error).toContain("REVISOR");
+    expect(res.error).toContain("REVIEWER");
     // NENHUM card foi criado: a recusa acontece ANTES do dispatch/consent.
     expect(spawnCalls).toHaveLength(0);
     expect(store.getTaskCards("tw3").filter((l) => l.role === "reviewer")).toHaveLength(0);
@@ -393,13 +393,13 @@ describe("porta 3 real — release_task_card: quem libera quem (05055482)", () =
     const res = await bus.handleRequest(reqRelease);
     // Deve ser RECUSADO
     expect(res.ok).toBe(false);
-    expect((res as any).error).toMatch(/release_task_card.*recusado/i);
+    expect((res as any).error).toMatch(/release_task_card.*refused/i);
 
     // O principal da task continua sendo a vítima
     expect(store.getTask(task.id)?.card_id).toBe("c-vitima");
   });
 
-  it("PINS do release: a marca libera o implementer; o próprio principal não se auto-libera; anônimo passa pelo bypass para cair no erro principal caso seja ilegítimo", async () => {
+  it("PINS do release: a marca libera o implementer; o próprio principal não se auto-libera; anonymous passa pelo bypass para cair no erro principal caso seja ilegítimo", async () => {
     dir = mkdtempSync(join(tmpdir(), "stellar-role-auth-p3-pins-"));
     rig = buildRig(dir, { orchestratorCardId: "c-marca" });
     const { store, bus } = rig;
@@ -412,7 +412,7 @@ describe("porta 3 real — release_task_card: quem libera quem (05055482)", () =
     
     let res = await bus.handleRequest({ cmd: "release_task_card", taskId: task.id, target: "c-vitima", reason: "sair", requesterId: "c-vitima" } as any);
     expect(res.ok).toBe(false);
-    expect((res as any).error).toMatch(/implementer.*não se auto-libera/i);
+    expect((res as any).error).toMatch(/implementer.*does not release itself/i);
 
     // 2. A marca libera a vitima (sucesso)
     res = await bus.handleRequest({ cmd: "release_task_card", taskId: task.id, target: "c-vitima", reason: "expulsar", requesterId: "c-marca" } as any);

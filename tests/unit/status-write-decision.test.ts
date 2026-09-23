@@ -208,7 +208,7 @@ describe("decideStatusAsk (terceiro caminho — agente pede, humano decide)", ()
 
   it("aviso de hold aponta o caminho novo sem recusar a escrita direta", () => {
     expect(describeStatusHeldWarning("pending", "done")).toContain("request_task_status");
-    expect(describeStatusHeldWarning("pending", "done")).toContain("prevalece");
+    expect(describeStatusHeldWarning("pending", "done")).toContain("prevails");
   });
 });
 

@@ -114,7 +114,7 @@ describe("6bea994a — identidade de report pelo vínculo de revisor", () => {
   it("O CASO DO DEFEITO: revisor vinculado assina declarando o taskId — aceito, e chega ao bus", async () => {
     // O estado real do board: o vínculo vive em `task_cards`, não em
     // `tasks.card_id`. Antes do conserto esta chamada era recusada com a frase
-    // falsa "Este card não tem vínculo ativo nenhum".
+    // This card has no active link at all.
     tasks = [task(TASK)];
     links = [{ taskId: TASK, role: "reviewer" }];
 
@@ -191,7 +191,7 @@ describe("6bea994a — identidade de report pelo vínculo de revisor", () => {
     // teste fixa é que a resolução da task continua acontecendo (a recusa é a
     // do papel, e não a de identidade).
     expect(body(res).ok).toBe(false);
-    expect(body(res).error).not.toContain("não tem vínculo ativo");
+    expect(body(res).error).not.toContain("no active link at all");
 
     // Sem veredito formal, o mesmo card entrega normalmente.
     reports = [];

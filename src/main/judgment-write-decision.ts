@@ -54,9 +54,9 @@ export type JudgmentWriteDecision =
  */
 export function describeImplementerJudgmentRefusal(proposedStatus: string): string {
   return (
-    `[de: stellar] update_task status "${proposedStatus}" recusado: ` +
-    `integrante implementer desta task não grava julgamento (done/failed). ` +
-    `Use request_task_status para pedir a mudança — orquestrador, reviewer ou humano julgam.`
+    `[de: stellar] update_task status "${proposedStatus}" refused: ` +
+    `an implementer member of this task does not write judgment (done/failed). ` +
+    `Use request_task_status to ask for the change — orchestrator, reviewer or human judge.`
   );
 }
 
@@ -67,11 +67,11 @@ export function describeImplementerJudgmentRefusal(proposedStatus: string): stri
  */
 export function describeReviewWantedJudgmentRefusal(proposedStatus: string): string {
   return (
-    `[de: stellar] update_task status "${proposedStatus}" recusado: ` +
-    `review="wanted" nesta task — só um card com role=reviewer grava julgamento (done/failed). ` +
-    `Implementer, outsider e orquestrador (assinatura delegada) são recusados. ` +
-    `Vincule um reviewer (spawn_agent/link_task_card com role=reviewer) e deixe-o julgar, ` +
-    `ou use request_task_status para pedir ao humano.`
+    `[de: stellar] update_task status "${proposedStatus}" refused: ` +
+    `review="wanted" on this task — only a card with role=reviewer writes judgment (done/failed). ` +
+    `Implementer, outsider and orchestrator (delegated signature) are refused. ` +
+    `Link a reviewer (spawn_agent/link_task_card with role=reviewer) and let it judge, ` +
+    `or use request_task_status to ask the human.`
   );
 }
 
@@ -213,11 +213,11 @@ export function emptyReportSchemaFields(report: unknown, schema: readonly string
  */
 export function describeImplementerVerdictRefusal(verdict: string): string {
   return (
-    `[de: stellar] report verdict "${verdict}" recusado: ` +
-    `este card está vinculado como implementer nesta task — implementer não emite veredito sobre o próprio trabalho ` +
-    `(autoaprovação não é revisão). ` +
-    `Quem julga é um card com role=reviewer (spawn_agent/link_task_card com role=reviewer), ` +
-    `ou use request_task_status para pedir a mudança ao humano. Nada foi gravado.`
+    `[de: stellar] report verdict "${verdict}" refused: ` +
+    `this card is linked as implementer on this task — an implementer does not issue a verdict on its own work ` +
+    `(self-approval is not review). ` +
+    `Whoever judges is a card with role=reviewer (spawn_agent/link_task_card with role=reviewer), ` +
+    `or use request_task_status to ask the human for the change. Nothing was written.`
   );
 }
 
@@ -228,11 +228,11 @@ export function describeImplementerVerdictRefusal(verdict: string): string {
  */
 export function describeNonReviewerVerdictRefusal(verdict: string): string {
   return (
-    `[de: stellar] report verdict "${verdict}" recusado: ` +
-    `review="wanted" nesta task — só um card com role=reviewer emite veredito. ` +
-    `Implementer, outsider e orquestrador (assinatura delegada) são recusados. ` +
-    `Vincule um reviewer (spawn_agent/link_task_card com role=reviewer) e deixe-o julgar, ` +
-    `ou use request_task_status para pedir ao humano. Nada foi gravado.`
+    `[de: stellar] report verdict "${verdict}" refused: ` +
+    `review="wanted" on this task — only a card with role=reviewer issues a verdict. ` +
+    `Implementer, outsider and orchestrator (delegated signature) are refused. ` +
+    `Link a reviewer (spawn_agent/link_task_card with role=reviewer) and let it judge, ` +
+    `or use request_task_status to ask the human. Nothing was written.`
   );
 }
 
@@ -243,11 +243,11 @@ export function describeNonReviewerVerdictRefusal(verdict: string): string {
  */
 export function describeVerdictEvidenceRefusal(verdict: string, emptyKeys: readonly string[]): string {
   return (
-    `[de: stellar] report verdict "${verdict}" recusado: ` +
-    `um veredito de reviewer precisa das chaves do reportSchema com conteúdo real — ` +
-    `sem isso o veredito vale menos que nenhuma revisão. ` +
-    `Vazias/placeholder (vazio, [], {}, "N/A", "TBD", "placeholder", "lorem ipsum", "WIP"): ${emptyKeys.join(", ")}. ` +
-    `Preencha com a evidência MEDIDA (o que foi verificado, a saída real, o número do gate) e reenvie. Nada foi gravado.`
+    `[de: stellar] report verdict "${verdict}" refused: ` +
+    `a reviewer's verdict needs the reportSchema keys with real content — ` +
+    `without that the verdict is worth less than no review. ` +
+    `Empty/placeholder (empty, [], {}, "N/A", "TBD", "placeholder", "lorem ipsum", "WIP"): ${emptyKeys.join(", ")}. ` +
+    `Fill it with the MEASURED evidence (what was verified, the real output, the gate number) and send again. Nothing was written.`
   );
 }
 
@@ -359,12 +359,12 @@ export type CloseCardTaskEffect =
  * fechar este card é exatamente o gerador medido dos 7 órfãos. */
 export function describeStrandedReviewTaskCloseRefusal(taskId: string, targetCardId: string): string {
   return (
-    `[de: stellar] close_card de "${targetCardId}" recusado: o card é o implementer da task "${taskId}", ` +
-    `que exige review ("wanted") e NÃO tem nenhum reviewer VIVO linkado. ` +
-    `Fechar agora deixa a task sem quem possa assinar done — foi assim que 7 tasks ficaram órfãs. ` +
-    `Vincule/spawne um reviewer (link_task_card ou spawn_agent com role=reviewer), ` +
-    `ou use update_task review:null se a exigência não vale mais, ou request_task_status para o humano decidir. ` +
-    `Nada foi fechado.`
+    `[de: stellar] close_card of "${targetCardId}" refused: the card is the implementer of task "${taskId}", ` +
+    `which requires review ("wanted") and has NO live linked reviewer. ` +
+    `Closing now leaves the task with nobody who can sign done — that is how 7 tasks were left orphaned. ` +
+    `Link/spawn a reviewer (link_task_card or spawn_agent with role=reviewer), ` +
+    `or use update_task review:null if the requirement no longer applies, or request_task_status for the human to decide. ` +
+    `Nothing was closed.`
   );
 }
 
@@ -372,11 +372,11 @@ export function describeStrandedReviewTaskCloseRefusal(taskId: string, targetCar
  * veredito: a task fica presa (mesmo dano, pela outra ponta). */
 export function describeReviewerLeavingUnsignedRefusal(taskId: string, targetCardId: string): string {
   return (
-    `[de: stellar] close_card de "${targetCardId}" recusado: o card é o ÚNICO reviewer vivo da task "${taskId}" ` +
-    `(review="wanted") e não tem veredito registrado nesta task. ` +
-    `Fechar agora prende a task sem quem assine. ` +
-    `Registre o veredito primeiro (report com verdict aprovado/reprovado) e feche em seguida — ` +
-    `um aprovado de reviewer conclui a task JUNTO com o fechamento. Nada foi fechado.`
+    `[de: stellar] close_card of "${targetCardId}" refused: the card is the ONLY live reviewer of task "${taskId}" ` +
+    `(review="wanted") and has no verdict recorded on this task. ` +
+    `Closing now traps the task with nobody to sign. ` +
+    `Record the verdict first (report with verdict aprovado/reprovado) and close right after — ` +
+    `a reviewer's aprovado concludes the task TOGETHER with the close. Nothing was closed.`
   );
 }
 
@@ -384,13 +384,13 @@ export function describeReviewerLeavingUnsignedRefusal(taskId: string, targetCar
  * de sucesso: o fechamento tem que ser explícito, não silencioso. */
 export function describeCloseWithoutSuccessRefusal(taskId: string, targetCardId: string): string {
   return (
-    `[de: stellar] close_card de "${targetCardId}" recusado: o card está linkado à task aberta "${taskId}", ` +
-    `e o último report ACEITO dele não declara sucesso (ok:true). ` +
-    `Fechar agora deixaria a task aberta e órfã (28 das 38 tasks abertas hoje estão assim). ` +
-    `Conclua a task antes: update_task com status done/failed, ou request_task_status para o humano — ` +
-    `ou, se quem fecha NÃO for o implementer desta task (reviewer, outsider ou humano), ` +
-    `deixe o card reportar ok:true, que aí o próprio close conclui a task junto (CAMADA 4 ainda vale: ` +
-    `o implementer fechando o próprio card continua sem julgar). Nada foi fechado.`
+    `[de: stellar] close_card of "${targetCardId}" refused: the card is linked to open task "${taskId}", ` +
+    `and its last ACCEPTED report does not declare success (ok:true). ` +
+    `Closing now would leave the task open and orphaned (28 of the 38 open tasks today are like this). ` +
+    `Conclude the task first: update_task with status done/failed, or request_task_status for the human — ` +
+    `or, if whoever closes is NOT the implementer of this task (reviewer, outsider or human), ` +
+    `let the card report ok:true, in which case the close itself concludes the task (LAYER 4 still applies: ` +
+    `the implementer closing its own card still does not judge). Nothing was closed.`
   );
 }
 
@@ -636,10 +636,10 @@ export function describeArtifactPendencies(pendencies: readonly ArtifactPendency
     return `- ${p.path} (${p.bytes} B, desde ${when})`;
   });
   return (
-    `[de: stellar] ${pendencies.length} arquivo(s) UNTRACKED que o relatório NÃO declarou e que existem desde o início desta task ficaram na árvore ` +
-    `— PENDÊNCIA DE LIMPEZA (nada foi apagado):\n${lines.join("\n")}\n` +
-    `SINAL, não acusação: a árvore é compartilhada e outro card pode ter escrito no mesmo intervalo. ` +
-    `Confira antes de remover — o app nunca apaga arquivo de trabalho sozinho.`
+    `[de: stellar] ${pendencies.length} UNTRACKED file(s) that the report did NOT declare and that have existed since this task started were left in the tree ` +
+    `— CLEANUP PENDING (nothing was deleted):\n${lines.join("\n")}\n` +
+    `SIGNAL, not accusation: the tree is shared and another card may have written in the same window. ` +
+    `Check before removing — the app never deletes work files on its own.`
   );
 }
 
@@ -659,11 +659,11 @@ export function describeArtifactPendencies(pendencies: readonly ArtifactPendency
  */
 export function describeReleaseByImplementerRefusal(taskId: string): string {
   return (
-    `[de: stellar] release_task_card da task "${taskId}" recusado: ` +
-    `integrante implementer desta task não se auto-libera — seria a porta dos fundos do guard de fechamento ` +
-    `(a task ficaria aberta sem quem a faça). ` +
-    `Quem libera é o orquestrador ou o humano: use request_task_status para pedir, ` +
-    `ou deixe um card de FORA da task (ou o mark do orquestrador do board) chamar com um motivo. Nada foi gravado.`
+    `[de: stellar] release_task_card of task "${taskId}" refused: ` +
+    `an implementer member of this task does not release itself — that would be the back door of the close guard ` +
+    `(the task would stay open with nobody doing it). ` +
+    `Whoever releases is the orchestrator or the human: use request_task_status to ask, ` +
+    `or let a card from OUTSIDE the task (or the board orchestrator mark) call with a reason. Nothing was written.`
   );
 }
 
@@ -702,10 +702,10 @@ export function decideTaskCardRelease(input: {
 
 export function describeThirdPartyReleaseRefusal(taskId: string, requesterId: string, targetCardId: string): string {
   return (
-    `[de: stellar] release_task_card da task "${taskId}" recusado: ` +
-    `expulsar o card "${targetCardId}" da task é ato de coordenação — no board da task só o ` +
-    `card marcado como orquestrador (ou o humano) libera outros cards; quem chamou foi "${requesterId}". ` +
-    `O próprio card pode pedir para sair (se for revisor), ou pedir ao orquestrador. Nada foi gravado.`
+    `[de: stellar] release_task_card of task "${taskId}" refused: ` +
+    `removing card "${targetCardId}" from the task is a coordination act — on the task's board only the ` +
+    `card marked as orchestrator (or the human) releases other cards; the caller was "${requesterId}". ` +
+    `The card itself may ask to leave (if it is a reviewer), or ask the orchestrator. Nothing was written.`
   );
 }
 
@@ -799,10 +799,10 @@ export const HUMAN_PRINCIPAL_ID = "human:ui";
 /** Ausencia de identidade NUNCA e autoridade — a recusa diz o que declarar. */
 function describeAnonymousRefusal(tool: string, taskId: string): string {
   return (
-    `[de: stellar] ${tool} recusado na task "${taskId}": chamador sem identidade. ` +
-    `Ausencia de identidade nao e autoridade — declare quem chama: um card declara ` +
-    `o proprio id (\`callerCardId\`), e o humano operando fora de um card declara ` +
-    `"${HUMAN_PRINCIPAL_ID}". Nada foi gravado.`
+    `[de: stellar] ${tool} refused on task "${taskId}": caller without identity. ` +
+    `Absence of identity is never authority — declare who is calling: a card declares ` +
+    `its own id (\`callerCardId\`), and the human operating outside a card declares ` +
+    `"${HUMAN_PRINCIPAL_ID}". Nothing was written.`
   );
 }
 
@@ -861,39 +861,39 @@ export function decideTaskCardLinkAuthorship(input: {
 
 export function describeAnonymousRoleWriteRefusal(tool: string, taskId: string): string {
   return (
-    `[de: stellar] ${tool} recusado: chamador anônimo (sem requesterId) não presume autoridade ` +
-    `sobre os papéis da task "${taskId}" — atribuir participação é do orquestrador marcado do board ` +
-    `(boards.orchestrator_card_id) ou do humano por um canal identificado. ` +
-    `Nada foi gravado.`
+    `[de: stellar] ${tool} refused: an anonymous caller (no requesterId) does not presume authority ` +
+    `over the roles of task "${taskId}" — attributing participation belongs to the board's marked orchestrator ` +
+    `(boards.orchestrator_card_id) or to the human through an identified channel. ` +
+    `Nothing was written.`
   );
 }
 
 export function describeSelfReviewerLinkRefusal(taskId: string, requesterId: string): string {
   return (
-    `[de: stellar] link_task_card recusado: o card "${requesterId}" não se declara REVISOR da task "${taskId}" — ` +
-    `auto-atribuição de revisão é o caminho que fecha a própria disciplina de revisão ` +
-    `(medido: self-link reviewer + update_task done fechava a task sem revisão nenhuma, ` +
-    `e um implementer não-principal se liberava sozinho em dois passos). ` +
-    `Quem atribui revisor é o orquestrador marcado do board ou o humano: ` +
-    `peça via request_task_status, ou ao orquestrador. Nada foi gravado.`
+    `[de: stellar] link_task_card refused: card "${requesterId}" does not declare itself REVIEWER of task "${taskId}" — ` +
+    `self-assigning review is the path that closes the review discipline itself ` +
+    `(measured: self-link reviewer + update_task done closed the task with no review at all, ` +
+    `and a non-principal implementer released itself alone in two steps). ` +
+    `Whoever assigns a reviewer is the board's marked orchestrator or the human: ` +
+    `ask via request_task_status, or ask the orchestrator. Nothing was written.`
   );
 }
 
 export function describeSelfImplementerLinkRefusal(taskId: string, taskCardId: string): string {
   return (
-    `[de: stellar] link_task_card recusado: o card não se atribui como implementer da task "${taskId}", ` +
-    `que JÁ tem principal ("${taskCardId}") — trocar o responsável é do orquestrador ` +
-    `(release_task_card, com motivo) ou do humano. Reivindicar task SEM principal continua ` +
-    `aberto: é adoção de órfã, não roubo. Nada foi gravado.`
+    `[de: stellar] link_task_card refused: the card does not assign itself as implementer of task "${taskId}", ` +
+    `which ALREADY has a principal ("${taskCardId}") — changing the owner belongs to the orchestrator ` +
+    `(release_task_card, with a reason) or to the human. Claiming a task WITHOUT a principal stays ` +
+    `open: that is adopting an orphan, not stealing one. Nothing was written.`
   );
 }
 
 export function describeThirdPartyLinkRefusal(taskId: string, requesterId: string, role: string): string {
   return (
-    `[de: stellar] link_task_card recusado: atribuir o papel "${role}" a OUTRO card é autoria de ` +
-    `participação — no board da task "${taskId}" só o card marcado como orquestrador (ou o humano) linka. ` +
-    `Quem chamou foi "${requesterId}" (medido: cards não-marcados linkaram até o card do orquestrador ` +
-    `a tasks, por acidente). Peça ao orquestrador do board, ou marque um no UI do board. Nada foi gravado.`
+    `[de: stellar] link_task_card refused: assigning role "${role}" to ANOTHER card is authorship of ` +
+    `participation — on task "${taskId}"'s board only the card marked as orchestrator (or the human) links. ` +
+    `The caller was "${requesterId}" (measured: unmarked cards linked even the orchestrator's card ` +
+    `to tasks, by accident). Ask the board orchestrator, or mark one in the board UI. Nothing was written.`
   );
 }
 
@@ -944,12 +944,12 @@ export function describePrincipalRepointRefusal(
   const next = newCardId ? `"${newCardId}"` : "NULL";
   const who = requesterId ? `"${requesterId}"` : "um chamador anonimo (sem requesterId)";
   return (
-    `[de: stellar] update_task recusado: re-apontar o principal da task "${taskId}" ` +
-    `de ${current} para ${next} é troca de responsável — no board da task só o card marcado ` +
-    `como orquestrador (ou o humano) faz; quem chamou foi ${who} ` +
-    `(medido: update_task {cardId: si mesmo} movia o ponteiro e criava a linha de implementer sozinha). ` +
-    `O principal atual entrega o bastão por aqui mesmo; quem não é, pede ao orquestrador ` +
-    `ou usa release_task_card quando for o caso. Nada foi gravado.`
+    `[de: stellar] update_task refused: repointing the principal of task "${taskId}" ` +
+    `from ${current} to ${next} is a change of owner — on the task's board only the card marked ` +
+    `as orchestrator (or the human) does it; the caller was ${who} ` +
+    `(measured: update_task {cardId: itself} moved the pointer and created the implementer row on its own). ` +
+    `The current principal hands over the baton right here; whoever is not, asks the orchestrator ` +
+    `or uses release_task_card when that is the case. Nothing was written.`
   );
 }
 
@@ -976,9 +976,9 @@ export function decideReviewerSpawnAuthorship(input: {
 
 export function describeReviewerSpawnRefusal(taskId: string): string {
   return (
-    `[de: stellar] spawn_agent recusado: spawnar card já vinculado como REVISOR da task "${taskId}" ` +
-    `em board autônomo pula o consentimento humano — e o brief do filho é texto seu, ` +
-    `então é o mesmo que link_task_card de si mesmo (o P1). Quem spawna revisor autonomamente ` +
-    `é o orquestrador marcado do board. Nada foi gravado.`
+    `[de: stellar] spawn_agent refused: spawning a card already linked as REVIEWER of task "${taskId}" ` +
+    `on an autonomous board skips human consent — and the child's brief is your own text, ` +
+    `so it is the same as link_task_card on yourself (finding P1). Whoever spawns a reviewer autonomously ` +
+    `is the board's marked orchestrator. Nothing was written.`
   );
 }
