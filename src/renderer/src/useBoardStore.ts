@@ -3,6 +3,16 @@ import { cascadeSlot, type WorldTransform } from "./board-model";
 import type { Card, Connector } from "./card-types";
 import { toast } from "./useToast";
 import type { BoardCounts, BoardRow, CardRow } from "../../preload/index";
+import {
+  boardTaskDefaultsToSql,
+  diffPreset,
+  presetSettingsFromBoard,
+  type BoardPreset,
+} from "../../main/board-preset-decision";
+// O default de concorrência do APP (o mesmo número que a Fila usa para o badge
+// de WIP, em `task-board-model.ts`): um cap `null` no board significa "usa este
+// número", então sem ele a UI diria "custom" num board que nunca foi mexido.
+import { DEFAULT_CONCURRENCY_CAP } from "./task-board-model";
 import { t } from "../../shared/i18n";
 
 const ACTIVE_BOARD_KEY = "ac.activeBoardId";
@@ -289,6 +299,64 @@ export function useBoardStore(
     toast(cap === null ? t("toast.concurrencyDefault") : t("toast.concurrencyCap", { cap }));
   }
 
+  /**
+   * BOARD PRESETS, FASE 2 (task 83f4cfa3) — aplicar um preset no board.
+   *
+   * As três regras do enunciado, encarnadas aqui:
+   *   1. escreve EXATAMENTE o que a UI mostrou: a lista de mudanças vem da
+   *      MESMA `diffPreset` que desenhou o "isto vai mudar", e cada ajuste
+   *      entra pelo IPC que um clique à mão usa — nada escondido, e nada
+   *      escrito quando não há o que mudar (preset já aplicado = zero IPC);
+   *   2. não toca card em execução nem task existente: este hook nem alcança
+   *      esses estados — o efeito é só sobre defaults do que vem a seguir, e
+   *      os callbacks de card/task não são chamados daqui;
+   *   3. UM toast para a ação inteira. As funções acima avisam uma a uma porque
+   *      cada clique é uma decisão; aplicar um preset é UMA decisão com N
+   *      efeitos, e quatro toasts fariam o humano perder o que mudou.
+   *
+   * O encoding das colunas (`JSON` / `0-1`) vem do módulo puro, o mesmo que o
+   * main usa na escrita: o estado local não pode ter um dialeto próprio, senão
+   * o badge do preset passa a discordar do banco.
+   */
+  function applyBoardPreset(id: string, preset: BoardPreset) {
+    const board = boards.find((b) => b.id === id);
+    if (!board) return;
+    const changes = diffPreset(presetSettingsFromBoard(board, DEFAULT_CONCURRENCY_CAP), preset.settings);
+    if (changes.length === 0) {
+      // Já está assim: aplicar não escreve nada (e não diz que mexeu).
+      toast(t("toast.presetAlready", { preset: preset.label }));
+      return;
+    }
+    const changed = new Set(changes.map((c) => c.setting));
+
+    if (changed.has("autonomous")) {
+      setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, autonomous: preset.settings.autonomous } : b)));
+      void window.store.boards.setAutonomous(id, preset.settings.autonomous);
+    }
+    if (changed.has("concurrencyCap")) {
+      setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, concurrency_cap: preset.settings.concurrencyCap } : b)));
+      void window.store.boards.setConcurrencyCap(id, preset.settings.concurrencyCap);
+    }
+    const defaultsWrite = {
+      review: preset.settings.defaultReview,
+      reportSchema: preset.settings.defaultReportSchema,
+      allowCommit: preset.settings.defaultAllowCommit,
+    };
+    if (changed.has("defaultReview") || changed.has("defaultReportSchema") || changed.has("defaultAllowCommit")) {
+      setBoards((prev) => prev.map((b) => (b.id === id ? { ...b, ...boardTaskDefaultsToSql(defaultsWrite) } : b)));
+      void window.store.boards.setDefaults(id, defaultsWrite).then((res) => {
+        if (!res.ok) {
+          // Recusa (forma inválida ou board sumiu entre o clique e a escrita):
+          // a UI volta a ler o banco em vez de manter o otimismo — "aplicado"
+          // nunca pode ser dito sobre uma escrita que não aconteceu.
+          void window.store.boards.list().then(setBoards);
+          return;
+        }
+      });
+    }
+    toast(t("toast.presetApplied", { preset: preset.label, count: changes.length }));
+  }
+
   /** Board orchestrator mark — UI-only, same immediate-fire pattern as
    * setBoardAutonomous. `cardId: null` clears. Replacing is intentional
    * (one card per board). */
@@ -365,6 +433,7 @@ export function useBoardStore(
     deleteBoard,
     setBoardAutonomous,
     setBoardConcurrencyCap,
+    applyBoardPreset,
     setBoardOrchestratorCard,
     clearOrchestratorMarkIfCard,
   };

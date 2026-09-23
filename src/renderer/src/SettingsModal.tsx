@@ -7,6 +7,14 @@ import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { SecretsSettingsModal } from "./SecretsSettingsModal";
 import { RemotePairingModal } from "./RemotePairingModal";
 import { ProvidersPage } from "./ProvidersPage";
+import {
+  diffPreset,
+  matchPreset,
+  presetSettingsFromBoard,
+  type BoardPreset,
+  type BoardPresetSettings,
+} from "../../main/board-preset-decision";
+import { DEFAULT_CONCURRENCY_CAP } from "./task-board-model";
 import type { ShortcutCombo, ShortcutOverrides } from "./shortcut-registry";
 
 /**
@@ -65,7 +73,42 @@ export type SettingsBoard = {
   name: string;
   autonomous: boolean;
   concurrency_cap: number | null;
+  /** BOARD PRESETS, FASE 2 — os defaults de contrato do board, do jeito que o
+   * banco os guarda (JSON TEXT / 0-1 INTEGER). Opcionais: são lidos pelo módulo
+   * puro (`presetSettingsFromBoard`), que já tolera ausência. */
+  default_review?: string | null;
+  default_report_schema_json?: string | null;
+  default_allow_commit?: number | null;
 };
+
+/** Rótulo humano de cada ajuste do diff ("isto vai mudar: …"). */
+const PRESET_SETTING_LABEL: Record<keyof BoardPresetSettings, Parameters<typeof t>[0]> = {
+  autonomous: "settings.presets.setting.autonomous",
+  concurrencyCap: "settings.presets.setting.concurrencyCap",
+  defaultReview: "settings.presets.setting.defaultReview",
+  defaultReportSchema: "settings.presets.setting.defaultReportSchema",
+  defaultAllowCommit: "settings.presets.setting.defaultAllowCommit",
+};
+
+/**
+ * O valor de um ajuste em texto HUMANO. `null` é sempre "não declarado" — a UI
+ * nunca escreve "desligado" para o que ninguém decidiu, porque essa é
+ * exatamente a diferença que o default carrega (`false` = não commitar;
+ * `null` = ninguém decidiu).
+ */
+function describePresetValue(
+  setting: keyof BoardPresetSettings,
+  value: BoardPresetSettings[keyof BoardPresetSettings],
+): string {
+  if (value === null) return t("settings.presets.value.unset");
+  if (setting === "autonomous") return value ? t("settings.presets.value.on") : t("settings.presets.value.off");
+  if (setting === "defaultReview") return t("settings.presets.value.reviewWanted");
+  if (setting === "defaultAllowCommit") {
+    return value ? t("settings.presets.value.allowCommitTrue") : t("settings.presets.value.allowCommitFalse");
+  }
+  if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : t("settings.presets.value.unset");
+  return String(value);
+}
 
 type NavItem = { page: SettingsPage; labelKey: "settings.page.about" | "shortcuts.title" | "settings.page.keys" | "settings.page.devices" | "settings.page.maestro" | "settings.page.agents" | "settings.page.providers"; icon: IconName };
 
@@ -102,6 +145,7 @@ export function SettingsModal({
   onLocaleOverrideChange,
   onToggleAutonomous,
   onSetConcurrencyCap,
+  onApplyPreset,
 }: {
   page: SettingsPage;
   onPageChange: (page: SettingsPage) => void;
@@ -115,6 +159,10 @@ export function SettingsModal({
   onLocaleOverrideChange: (next: Locale | null) => void;
   onToggleAutonomous: (id: string, autonomous: boolean) => void;
   onSetConcurrencyCap: (id: string, cap: number | null) => void;
+  /** BOARD PRESETS, FASE 2 — aplica o preset inteiro. A escrita mora no
+   * `useBoardStore` (que é quem tem o estado dos boards): este modal desenha o
+   * diff e pede, nunca escreve por conta própria. */
+  onApplyPreset: (id: string, preset: BoardPreset) => void;
 }) {
   const closeInterceptorRef = useRef<(() => boolean) | null>(null);
   const onCloseRef = useRef(onClose);
@@ -184,7 +232,7 @@ export function SettingsModal({
             {page === "devices" && <RemotePairingModal />}
             {page === "providers" && <ProvidersPage />}
             {page === "maestro" && board && (
-              <MaestroPage board={board} onToggleAutonomous={onToggleAutonomous} />
+              <MaestroPage board={board} onToggleAutonomous={onToggleAutonomous} onApplyPreset={onApplyPreset} />
             )}
             {page === "agents" && board && (
               <AgentsPage board={board} onSetConcurrencyCap={onSetConcurrencyCap} />
@@ -370,25 +418,149 @@ function AboutPage({
 function MaestroPage({
   board,
   onToggleAutonomous,
+  onApplyPreset,
 }: {
   board: SettingsBoard;
   onToggleAutonomous: (id: string, autonomous: boolean) => void;
+  onApplyPreset: (id: string, preset: BoardPreset) => void;
 }) {
+  const [presets, setPresets] = useState<BoardPreset[] | null>(null);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  // Os presets vêm do MAIN (um ponto de leitura só — ver main/board-presets.ts):
+  // uma cópia do JSON no renderer divergiria no primeiro ajuste mexido, e a UI
+  // diria "Produtivo" com os números de outro preset.
+  useEffect(() => {
+    void window.store.boardPresets().then(setPresets);
+  }, []);
+
+  const settings = presetSettingsFromBoard(board, DEFAULT_CONCURRENCY_CAP);
+  const matched = presets ? matchPreset(settings, presets) : null;
+  // `matchPreset` devolve o preset OU `{id:"custom"}` — sem rótulo. A leitura
+  // nomeada ("este board está em X") só existe quando o ajuste REALMENTE bate:
+  // nunca escrevemos o nome de um preset que os ajustes já não satisfazem.
+  const matchedLabel =
+    !presets
+      ? t("settings.presets.loading")
+      : matched && "label" in matched
+        ? matched.label
+        : t("settings.presets.custom");
+  const pending = pendingId && presets ? (presets.find((p) => p.id === pendingId) ?? null) : null;
+  const changes = pending ? diffPreset(settings, pending.settings) : [];
+
   return (
-    <div className="form-row">
-      <label className="autonomous-toggle-label">
-        <input
-          type="checkbox"
-          checked={board.autonomous}
-          onChange={(e) => onToggleAutonomous(board.id, e.target.checked)}
-        />
-        <span>
-          {t("session.autonomous")}
-          <small>{t("session.autonomousHint")}</small>
-          {board.autonomous && <small className="field-error-msg">{t("session.autonomousWarning")}</small>}
-        </span>
-      </label>
-    </div>
+    <>
+      {/* BOARD PRESETS (task 83f4cfa3) — a ORQUESTRAÇÃO do board num só lugar:
+          modo autônomo, teto de concorrência e os defaults de contrato. Fica no
+          Maestro (e não numa aba nova) porque é aqui que o switch de orquestração
+          já mora — e o diff NOMEIA cada ajuste que muda, inclusive o teto, que
+          tem seu próprio campo na aba Agentes. */}
+      <div className="preset-block" data-preset-block="">
+        <div className="preset-title">{t("settings.presets.title")}</div>
+        <div className="preset-current" data-preset-current={matched?.id ?? "loading"}>
+          {t("settings.presets.current")} <strong>{matchedLabel}</strong>
+        </div>
+        <p className="settings-note">{t("settings.presets.hint")}</p>
+
+        <ul className="preset-list">
+          {(presets ?? []).map((preset) => {
+            const isCurrent = matched?.id === preset.id;
+            return (
+              <li
+                key={preset.id}
+                className={`preset-option${isCurrent ? " is-current" : ""}${pendingId === preset.id ? " is-pending" : ""}`}
+                data-preset-option={preset.id}
+              >
+                <button
+                  type="button"
+                  className="preset-option-btn"
+                  data-preset-id={preset.id}
+                  aria-pressed={pendingId === preset.id}
+                  onClick={() => setPendingId((prev) => (prev === preset.id ? null : preset.id))}
+                >
+                  {preset.label}
+                  {isCurrent && <span className="preset-badge">{t("settings.presets.badgeCurrent")}</span>}
+                </button>
+                <p className="preset-option-summary">{preset.summary}</p>
+                {/* Custo dito HONESTAMENTE: o texto vem do dado, e o link é a
+                    página dos três jeitos. Nenhum número de token nasce aqui —
+                    "custa muitas vezes mais" é o que se sabe. */}
+                <p className="preset-option-cost" data-preset-cost={preset.id}>
+                  {preset.costNotice}
+                  {preset.docsUrl && (
+                    <>
+                      {" "}
+                      <a href={preset.docsUrl} target="_blank" rel="noreferrer" data-preset-docs={preset.id}>
+                        {t("settings.presets.docsLink")}
+                      </a>
+                    </>
+                  )}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+
+        {pending && (
+          <div className="preset-diff" data-preset-diff={pending.id}>
+            {changes.length === 0 ? (
+              <p className="preset-diff-none" data-preset-no-change="">
+                {t("settings.presets.noChange")}
+              </p>
+            ) : (
+              <>
+                <div className="preset-diff-title">{t("settings.presets.willChange")}</div>
+                <ul className="preset-diff-list">
+                  {changes.map((change) => (
+                    <li key={change.setting} data-preset-change={change.setting}>
+                      <span className="preset-diff-label">{t(PRESET_SETTING_LABEL[change.setting])}</span>
+                      <span className="preset-diff-from">{describePresetValue(change.setting, change.from)}</span>
+                      {" → "}
+                      <span className="preset-diff-to">{describePresetValue(change.setting, change.to)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {/* A promessa que a UI tem de fazer em texto: nada do que já está
+                rodando muda — o preset é default do que vem a seguir. */}
+            <p className="settings-note">{t("settings.presets.scopeNote")}</p>
+            <div className="preset-diff-actions">
+              <button
+                type="button"
+                className="preset-apply"
+                data-preset-apply={pending.id}
+                disabled={changes.length === 0}
+                onClick={() => {
+                  onApplyPreset(board.id, pending);
+                  setPendingId(null);
+                }}
+              >
+                {t("settings.presets.apply")}
+              </button>
+              <button type="button" data-preset-cancel="" onClick={() => setPendingId(null)}>
+                {t("common.cancel")}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="form-row">
+        <label className="autonomous-toggle-label">
+          <input
+            type="checkbox"
+            checked={board.autonomous}
+            onChange={(e) => onToggleAutonomous(board.id, e.target.checked)}
+          />
+          <span>
+            {t("session.autonomous")}
+            <small>{t("session.autonomousHint")}</small>
+            {board.autonomous && <small className="field-error-msg">{t("session.autonomousWarning")}</small>}
+          </span>
+        </label>
+      </div>
+    </>
   );
 }
 

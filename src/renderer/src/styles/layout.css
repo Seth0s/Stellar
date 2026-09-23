@@ -1935,6 +1935,154 @@ select.resume-input {
   margin: var(--space-6) 0 var(--space-2);
 }
 
+/* ------------------------------------------- Settings → Maestro → Presets
+   BOARD PRESETS, FASE 2 (task 83f4cfa3). O seletor é uma LISTA de opções, não
+   um dropdown: a decisão carrega custo (o "Máximo" custa muitas vezes mais), e
+   um `<select>` esconderia justamente o texto que faz o humano escolher com
+   informação. Cada opção é uma linha com nome, resumo, custo e — no Máximo — o
+   link da doc; o diff aparece embaixo, antes de aplicar.
+
+   Regra desta família: `.preset-*` só existe aqui, e nada de hex novo — as
+   cores vêm dos tokens (`--surface`, `--border`, `--muted`, `--signal`). */
+.preset-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+.preset-title {
+  font-size: var(--text-4);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.preset-current {
+  font-size: var(--text-5);
+  color: var(--text);
+}
+
+.preset-current strong {
+  color: var(--signal);
+}
+
+.preset-block .settings-note {
+  /* O aviso de escopo/estado é apoio da seção, não um bloco solto: aqui ele
+     não abre a margem grande que tem nas outras páginas. */
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.preset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.preset-option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  background: var(--surface);
+}
+
+.preset-option.is-current {
+  border-color: color-mix(in srgb, var(--signal) 45%, var(--border));
+}
+
+.preset-option.is-pending {
+  background: color-mix(in srgb, var(--signal) 8%, var(--surface));
+}
+
+.preset-option-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--text-5);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.preset-badge {
+  font-size: var(--text-2);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--signal);
+  border: 1px solid color-mix(in srgb, var(--signal) 45%, var(--border));
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+
+.preset-option-summary {
+  margin: 0;
+  font-size: var(--text-4);
+  color: var(--text);
+}
+
+.preset-option-cost {
+  margin: 0;
+  font-size: var(--text-3);
+  color: var(--muted);
+}
+
+.preset-diff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--signal) 28%, var(--border));
+  border-radius: var(--radius-3);
+  background: color-mix(in srgb, var(--signal) 6%, var(--surface));
+}
+
+.preset-diff-title {
+  font-size: var(--text-4);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.preset-diff-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-4);
+}
+
+.preset-diff-label {
+  color: var(--text);
+}
+
+.preset-diff-from {
+  color: var(--muted);
+}
+
+.preset-diff-to {
+  color: var(--signal);
+}
+
+.preset-diff-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
 .settings-page-actions {
   display: flex;
   justify-content: flex-end;

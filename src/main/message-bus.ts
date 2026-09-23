@@ -88,6 +88,11 @@ import {
   seedBoardContext,
   writeBoardContext,
 } from "./board-context";
+import {
+  resolveTaskDefaultsFromBoard,
+  type BoardTaskDefaults,
+  type TaskDefaultsResolution,
+} from "./board-preset-decision";
 import boardContextSeedJson from "./data/board-context.seed.json";
 import {
   appendTaskContract,
@@ -1124,6 +1129,17 @@ export function createMessageBus(
      * DEFAULT_CONCURRENCY_CAP below. `null`/`undefined` means "use the
      * default", never "zero". */
     getBoardConcurrencyCap: (boardId: string) => number | null | undefined;
+    /**
+     * BOARD PRESETS, FASE 2 — os defaults de CONTRATO do board
+     * (`default_review` / `default_report_schema_json` / `default_allow_commit`),
+     * já lidos/decodificados. `undefined`/`null` = board inexistente ou sem
+     * defaults, que significam a MESMA coisa aqui: nenhum fallback, o
+     * comportamento de antes desta feature.
+     *
+     * Lido no `create_task` quando a chamada OMITE review/reportSchema/
+     * allowCommit. Nunca escreve — quem escreve é a UI do board.
+     */
+    getBoardTaskDefaults?: (boardId: string) => BoardTaskDefaults | null | undefined;
     /** DESIGN-BACKLOG.md item 60, peça 1 — pushed to the renderer every
      * time a board's spawn queue changes (enqueue, dequeue, dispatch,
      * timeout) so a live panel can render position/board/provider without
@@ -4082,11 +4098,26 @@ export function createMessageBus(
           error: `review must be ${TASK_REVIEW_VALUES.map((v) => `"${v}"`).join(" or ")} (or omitted), got "${String(req.review)}" — refusing to create rather than silently dropping the value`,
         };
       }
+      // BOARD PRESETS, FASE 2 (task 83f4cfa3) — o default do board entra AQUI,
+      // entre a resolução do board e o parse do contrato, para que a validação
+      // que já existe seja a ÚNICA porta: o valor efetivo (pedido, ou default
+      // do board) passa pelo mesmo `parseTaskContractInput`. Um default gravado
+      // pela UI já foi validado na escrita, mas revalidar é barato e evita uma
+      // segunda verdade sobre o que é uma forma válida.
+      //
+      // O que NUNCA acontece: campo presente com valor explícito (mesmo `null`)
+      // ser trocado pelo default — ver `resolveTaskDefaultsFromBoard`. Ausência
+      // é `undefined` e só ela cai no board.
+      const taskDefaults: TaskDefaultsResolution = resolveTaskDefaultsFromBoard({
+        request: { review: req.review, reportSchema: req.reportSchema, allowCommit: req.allowCommit },
+        board: boardId ? callbacks.getBoardTaskDefaults?.(boardId) : null,
+        boardId,
+      });
       const contractParse = parseTaskContractInput({
         territory: req.territory,
         gates: req.gates,
-        allowCommit: req.allowCommit,
-        reportSchema: req.reportSchema,
+        allowCommit: taskDefaults.allowCommit,
+        reportSchema: taskDefaults.reportSchema,
       });
       if (!contractParse.ok) {
         return { ok: false, error: contractParse.error, field: contractParse.field };
@@ -4159,7 +4190,10 @@ export function createMessageBus(
         // card/board/repo.
         cwd: cwdDecision.cwd,
         purpose: req.purpose ?? null,
-        review: req.review ?? null,
+        // `taskDefaults.review` (não `req.review`): campo omitido cai no default
+        // do board; presente ganha sempre. `undefined` (nem um nem outro)
+        // continua gravando NULL, como antes.
+        review: taskDefaults.review === undefined ? null : (taskDefaults.review as string),
         territory_json: territoryToSql(contractParse.contract.territory),
         gates_json: gatesToSql(contractParse.contract.gates),
         allow_commit: allowCommitToSql(contractParse.contract.allowCommit),
@@ -4200,6 +4234,21 @@ export function createMessageBus(
         ok: true,
         taskId: id,
         dispatched,
+        // BOARD PRESETS, FASE 2 — QUANDO (e só quando) algum campo veio do
+        // default do board, a resposta DIZ isso: quais, com que valor, e como
+        // sobrepor. Um default silencioso faria o agente achar que declarou um
+        // contrato que não declarou — e é justamente sobre isso que a feature
+        // inteira é (o preset é configuração VISÍVEL). Texto em inglês:
+        // AGENT-FACING, ver `describeBoardDefaultsApplied`.
+        ...(taskDefaults.applied.length > 0
+          ? {
+              boardDefaults: {
+                applied: taskDefaults.applied,
+                values: taskDefaults.values,
+                note: taskDefaults.note,
+              },
+            }
+          : {}),
         // Board sem marca de orquestrador: a escrita passou (comportamento de
         // hoje) e o fato volta nomeado ao chamador, em vez de sumir.
         ...(gatesAuthorship.action === "allow-and-record" ? { warning: gatesAuthorship.note } : {}),

@@ -35,14 +35,14 @@
       "summary": "Board autônomo encadeando tasks, com um card revisor por task.",
       "settings": {
         "autonomous": true,
-        "concurrencyCap": 3,
+        "concurrencyCap": 8,
         "defaultReview": "wanted",
         "defaultReportSchema": null,
         "defaultAllowCommit": false
       },
-      "source": "doc 'Máximo' para autonomia e revisor por task; cap 3 = DEFAULT_CONCURRENCY_CAP do app (a doc diz 'cresce com o paralelismo' e NÃO dá número — não inventei um)",
+      "source": "doc 'Máximo' para autonomia e revisor por task; cap 8 = PLACEHOLDER — owner to confirm (a doc diz 'cresce com o paralelismo' e NÃO dá número; o app tinha 3 = DEFAULT_CONCURRENCY_CAP, MENOR que os 5 do 'Produtivo', o que contradizia o próprio modo — o dono ainda não confirmou o teto)",
       "costNotice": "Alto: execuções multi-agente custam muitas vezes os tokens de um agente só — veja a página dos três jeitos.",
-      "docsPath": "/docs/tres-jeitos-de-trabalhar"
+      "docsUrl": "https://stellar.idyplatform.com/docs/tres-jeitos-de-trabalhar/"
     }
   ]
 }
