@@ -1,0 +1,12 @@
+{
+  "$comment": "PROTOCOLO DE BRIEF do board — DADO, não código (task 04826bdc). É o que o orquestrador repetia à mão em cada brief. Editável: o arquivo por board em userData (`board-context/<boardId>.json`) nasce COPIADO daqui e passa a ser a verdade; editar aqui só afeta boards que ainda não têm arquivo. Texto em TS não é aceito: `tests/unit/board-context.test.ts` varre os fontes e recusa o protocolo fora deste arquivo.",
+  "rules": [
+    { "text": "allowCommit false: não commite nesta árvore — quem commita é o orquestrador." },
+    { "text": "Mutação de teste só em CÓPIA descartável, nunca na árvore compartilhada, e removida depois." },
+    { "text": "NUNCA abra o banco vivo do dono (agent-canvas.db) nem store de CLI: copie, leia a cópia, apague a cópia — mesmo só para leitura." },
+    { "text": "Smoke só em instância isolada (userData e porta próprios), nunca contra a instância do dono." },
+    { "text": "Nada de grep recursivo no $HOME: mire o arquivo declarado." },
+    { "text": "Nada de git reset/checkout/restore/stash/clean nesta árvore compartilhada; precisa de árvore limpa? git worktree add." },
+    { "text": "Relatório UMA vez, com chaves em inglês (filesChanged, decision, evidence, notDone, gatesOutput)." }
+  ]
+}

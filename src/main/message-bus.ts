@@ -2,7 +2,7 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow, ReportIngressChannel, SpawnRow } from "./store";
 import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
 import {
@@ -77,6 +77,16 @@ import {
 } from "./task-dispatch-decision";
 import { appendDepPointer, depIdsFromJson, summarizeReport, type DepPointerSource, type DepReportSummary } from "./dep-pointer-decision";
 import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
+import {
+  appendBoardContextEntry,
+  attachBoardContext,
+  composeBoardContextBlock,
+  ensureBoardContext,
+  readBoardContext,
+  seedBoardContext,
+  writeBoardContext,
+} from "./board-context";
+import boardContextSeedJson from "./data/board-context.seed.json";
 import {
   appendTaskContract,
   contractFromTaskRow,
@@ -3824,6 +3834,12 @@ export function createMessageBus(
         channel: ingressChannel,
         updated_at: now,
       });
+      // SÓ AGORA, com o relatório ACEITO (task 04826bdc): um relatório recusado
+      // não escreve NADA — inclusive contexto de board. A primeira versão desta
+      // ligação gravava a armadilha antes da validação de vínculo, e o teste do
+      // loop pegou isso: um `report` recusado deixava a armadilha no arquivo.
+      // Aqui, aceito é aceito: o efeito colateral acompanha a entrega.
+      recordBoardTraps(stored.report, req.requesterId ?? "");
       // DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
       // todo `report` fecha uma RODADA de participação, tenha `verdict`
       // ou não (`verdict: null` é "esta rodada terminou sem veredito
@@ -5491,26 +5507,120 @@ export function createMessageBus(
   /** DESIGN-BACKLOG.md item 60, peça 1 — the actual dispatch, factored out
    * so both the direct-autonomous path and the queue-drain path share it
    * (previously inlined only in the direct path). */
+  /**
+   * O CONTEXTO DO BOARD (task 04826bdc) mora em arquivo POR BOARD dentro do
+   * `userData` — e `userData` É o diretório do socket: `index.ts` monta
+   * `sockPath = join(app.getPath("userData"), SOCK_BASENAME)`. Ler daqui evita
+   * um callback novo, e faz o harness de teste injetar contexto simplesmente
+   * escrevendo o arquivo no diretório temporário do socket.
+   */
+  const boardContextDir = dirname(sockPath);
+
+  /** O protocolo do board, LIDO DO DADO na carga (nunca literal aqui). */
+  const BOARD_CONTEXT_SEED = seedBoardContext(boardContextSeedJson);
+
+  /**
+   * O BOARD de um spawn/registro: o da TASK quando há task (é a Fila que diz
+   * onde o trabalho nasce), senão o do card que está pedindo. Sem nenhum dos
+   * dois não há board — e sem board não há contexto a anexar (nunca chuta o
+   * DEFAULT_BOARD_ID: um board errado receberia as regras de outro).
+   */
+  function resolveBoardId(requesterId: string, taskId?: string): string | undefined {
+    if (taskId) {
+      const boardId = callbacks.getTask(taskId)?.board_id;
+      if (boardId) return boardId;
+    }
+    return callbacks.getCardBoardId?.(requesterId) ?? undefined;
+  }
+
+  /** Lido em TODO spawn: nunca lança, nunca derruba um spawn por contexto. */
+  function boardContextBlockFor(boardId: string | undefined): string {
+    if (!boardId) return "";
+    try {
+      // `ensureBoardContext`: o arquivo do board NASCE do protocolo (DADO
+      // versionado) na primeira vez e passa a ser a verdade editável. Board sem
+      // arquivo deixa de significar "sem contexto" — significa "ainda com o
+      // protocolo padrão".
+      return composeBoardContextBlock(
+        ensureBoardContext(boardContextDir, boardId, BOARD_CONTEXT_SEED),
+      );
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * A PARTE ALIMENTADA: as armadilhas que um RELATÓRIO trouxer em
+   * `boardTraps` (array de strings) são persistidas no contexto do board e
+   * reaparecem no brief dos spawns seguintes.
+   *
+   * Por que o relatório, e não uma ferramenta nova: "armadilha que um revisor
+   * registra ao concluir uma task" — concluir é reportar. Assim não há
+   * superfície nova para o agente aprender, e a procedência (card que
+   * reportou + task) vem junto.
+   *
+   * Silencioso por contrato: registrar armadilha NUNCA muda o resultado de um
+   * relatório. O relatório é a entrega; isto é efeito colateral dele.
+   */
+  function recordBoardTraps(report: unknown, requesterId: string): void {
+    if (typeof report !== "object" || report === null) return;
+    const payload = report as { boardTraps?: unknown; taskId?: unknown };
+    if (!Array.isArray(payload.boardTraps)) return;
+    const texts = payload.boardTraps.filter(
+      (item): item is string => typeof item === "string" && item.trim() !== "",
+    );
+    if (texts.length === 0) return;
+    const taskId = typeof payload.taskId === "string" ? payload.taskId : undefined;
+    const boardId = resolveBoardId(requesterId, taskId);
+    if (!boardId) return;
+    try {
+      const at = Date.now();
+      let ctx = readBoardContext(boardContextDir, boardId);
+      for (const text of texts) {
+        ctx = appendBoardContextEntry(ctx, "traps", {
+          text,
+          at,
+          addedBy: requesterId,
+          ...(taskId ? { taskId } : {}),
+        });
+      }
+      writeBoardContext(boardContextDir, boardId, ctx);
+    } catch {
+      // Sem contexto persistido o mundo segue: perde-se a armadilha, não a entrega.
+    }
+  }
+
   function dispatchSpawnAgentRequest(
     requestId: string,
     requesterId: string,
     params: SpawnQueueEntry["params"],
     autoApprove: boolean,
   ) {
-    let passedBrief = params.brief;
+    // O BLOCO DE CONTEXTO DO BOARD entra AQUI — no ponto único por onde passam
+    // `spawn_agent({taskId})`, `spawn_agent` com brief livre, o do revisor e o
+    // auto-dispatch (esta função é o split argv-vs-digitado dos três). Anexar ao
+    // brief ENTREGUE, e não ao que o chamador mandou, é o que faz o contexto
+    // valer para todo spawn sem ninguém precisar lembrar de repetir.
+    const deliveredBrief = attachBoardContext(
+      params.brief,
+      boardContextBlockFor(resolveBoardId(requesterId, params.taskId)),
+    );
+    let passedBrief = deliveredBrief;
     let typedBrief: string | undefined;
 
-    const hasBrief = typeof params.brief === "string" && params.brief.length > 0;
+    const hasBrief = typeof deliveredBrief === "string" && deliveredBrief.length > 0;
     // Empírico, não a declaração sozinha: um `briefMechanism` velho que
     // buildArgs não implementa usava setar canArgv=true, pular o fallback de
     // digitação, e largar o brief em silêncio. Sonda o argv de verdade.
     // Declaração ainda responde COMO; isto responde SE.
-    const canArgv = hasBrief ? argvCarriesDeclaredBrief(params.provider, params.brief as string) : false;
+    const canArgv = hasBrief
+      ? argvCarriesDeclaredBrief(params.provider, deliveredBrief as string)
+      : false;
     // 131071 é o ARG_MAX típico do Linux; sobra padding para os outros args/env
-    const isTooLarge = hasBrief ? Buffer.byteLength(params.brief as string, "utf8") > 130000 : false;
+    const isTooLarge = hasBrief ? Buffer.byteLength(deliveredBrief as string, "utf8") > 130000 : false;
     if (hasBrief && (!canArgv || isTooLarge)) {
       passedBrief = undefined;
-      typedBrief = params.brief;
+      typedBrief = deliveredBrief;
     }
     // O fato que a resposta vai ter de dizer (task bf1fb0a7). Guardado ANTES do
     // dispatch porque o caminho da fila autônoma pode levar minutos até existir

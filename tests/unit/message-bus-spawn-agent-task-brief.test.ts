@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
+import { writeBoardContext } from "../../src/main/board-context";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
@@ -77,6 +78,11 @@ describe("message-bus: spawn_agent taskId deriva o brief da task", () => {
 
   function sockPath(): string {
     dir = mkdtempSync(join(tmpdir(), "stellar-spawn-task-brief-"));
+    // O CONTEXTO DO BOARD É ORTOGONAL AQUI (task 04826bdc): desde o protocolo de
+    // brief como DADO, um board SEM arquivo entrega o protocolo junto do brief —
+    // este rig testa o BRIEF, então o board dele tem contexto VAZIO escrito de
+    // propósito (o mesmo que um humano ter esvaziado o arquivo).
+    writeBoardContext(dir, "b1", { rules: [], traps: [] });
     return join(dir, "agent-canvas.sock");
   }
 

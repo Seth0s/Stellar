@@ -7,6 +7,7 @@ import type { StatusWriteDecision } from "../../src/main/status-write-decision";
 import type { ReportRow, TaskRow } from "../../src/main/store";
 import { createTaskWriteFunnel } from "../../src/main/task-write-funnel";
 import { DEP_POINTER_MARKER } from "../../src/main/dep-pointer-decision";
+import { writeBoardContext } from "../../src/main/board-context";
 
 /**
  * `buildTaskDispatchParams` (message-bus.ts) — a dependent's brief now
@@ -103,6 +104,12 @@ describe("message-bus: buildTaskDispatchParams aponta para os pais", () => {
    * the parent as done when the pointer is built — same as production. */
   async function markDone(trigger: string, tasks: TaskRow[], reports: ReportRow[] = []) {
     dir = mkdtempSync(join(tmpdir(), "stellar-dep-pointer-"));
+    // O CONTEXTO DO BOARD É ORTOGONAL AQUI (task 04826bdc): o brief entregue
+    // carrega o protocolo do board quando o arquivo do board não existe. Este
+    // arquivo testa o PONTEIRO de dependência e a regressão "byte a byte" do
+    // prompt — então o board deste rig tem contexto VAZIO, escrito de
+    // propósito, que é o mesmo que um humano ter esvaziado o arquivo.
+    writeBoardContext(dir, "b1", { rules: [], traps: [] });
     const spawnParams: Array<Record<string, unknown>> = [];
     const persistTask = funnelled((task) => applied(task.status), () => bus);
     bus = createMessageBus(
@@ -213,6 +220,12 @@ describe("message-bus: spawn_agent({taskId}) compartilha o ponteiro", () => {
 
   async function spawnFor(task: TaskRow, others: TaskRow[] = [], reports: ReportRow[] = [], req: Partial<BusRequest> = {}) {
     dir = mkdtempSync(join(tmpdir(), "stellar-dep-pointer-spawn-"));
+    // O CONTEXTO DO BOARD É ORTOGONAL AQUI (task 04826bdc): o brief entregue
+    // carrega o protocolo do board quando o arquivo do board não existe. Este
+    // arquivo testa o PONTEIRO de dependência e a regressão "byte a byte" do
+    // prompt — então o board deste rig tem contexto VAZIO, escrito de
+    // propósito, que é o mesmo que um humano ter esvaziado o arquivo.
+    writeBoardContext(dir, "b1", { rules: [], traps: [] });
     const spawned: Array<Record<string, unknown>> = [];
     const all = [task, ...others];
     bus = createMessageBus(
