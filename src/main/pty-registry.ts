@@ -4,6 +4,11 @@ import * as pty from "node-pty";
 import { resolveSpawn, providerInstallCommand, providerById, shouldImposeSessionId, type SpawnOpts } from "./providers";
 import { effectivePath, applyEffectiveLocaleEnv, realNodePath } from "./user-env";
 import { watchForSession, claimSessionId, releaseSessionId, RESUME_TRIGGER_COMMANDS, REARM_ON_INPUT_PROVIDERS, getResumeTargetEvidence } from "./session-watch";
+import {
+  IMPOSITION_GRACE_MS,
+  applyImpositionVerification,
+  decideImpositionVerification,
+} from "./session-imposition-verification";
 import { decideRearmOnLine, CLAIMED_SESSION_STALE_MS } from "./session-rearm-decision";
 import { decideResumeValidity } from "./session-resume-validation";
 import { decideBashCardDiscovery } from "./bash-discovery-decision";
@@ -343,6 +348,9 @@ type Entry = {
   pending: number;
   flushTimer: NodeJS.Timeout | null;
   stopWatch: (() => void) | null;
+  /** A CONFERENCIA do id imposto (task 201bd13b). `null` quando nao ha o que
+   * conferir (spawn sem imposicao), ou depois de disparar/ser limpo. */
+  impositionCheck: NodeJS.Timeout | null;
   seenUrls: Set<string>;
   /** Pre-release audit B5 — the tail of the last flush's ANSI-stripped
    * text that might still be an in-progress (unterminated) URL, carried
@@ -1006,6 +1014,7 @@ export function createPtyRegistry(registryOpts: {
       pending: 0,
       flushTimer: null,
       stopWatch: null,
+      impositionCheck: null,
       seenUrls: new Set(),
       urlCarry: "",
       killTimer: null,
@@ -1082,11 +1091,11 @@ export function createPtyRegistry(registryOpts: {
     // watcher for a different, later-spawned card in the same cwd can
     // "discover" and steal this restored card's own in-use session file,
     // since nothing else ever marks it as belonging to someone.
-    if (imposedSessionId) {
-      // Known at spawn — persist immediately. No watcher.
-      claimSessionId(imposedSessionId);
-      registryOpts.onSessionFound(id, imposedSessionId);
-    } else if (!effectiveSpawnOpts.resumeId) {
+    // O ARMAR do watcher numa closure: o caminho do id IMPOSTO passou a usá-la
+    // também (task 201bd13b). Antes ele pulava a descoberta por completo, e
+    // quando a imposição não pegava o card ficava sem NENHUM canal — apontando
+    // para uma sessão que não existe.
+    const armWatcher = (): void => {
       entry.stopWatch = watchForSession(
         providerId,
         cwd,
@@ -1105,6 +1114,57 @@ export function createPtyRegistry(registryOpts: {
           entry.awaitingResumeAnyInput = false;
         },
       );
+    };
+
+    if (imposedSessionId) {
+      // Known at spawn — persist immediately. SÍNCRONO de propósito: o spawn
+      // NÃO espera conferência nenhuma (o comportamento de hoje, do qual
+      // dependem os testes de claim, fica intacto).
+      claimSessionId(imposedSessionId);
+      registryOpts.onSessionFound(id, imposedSessionId);
+
+      // A CONFERÊNCIA (task 201bd13b, parte 3): o id imposto é uma AFIRMAÇÃO
+      // de `canImposeSessionId`, e até aqui nada a media. Um TIMER depois do
+      // grace, nunca um `await` — o spawn já voltou, e um falso "não pegou"
+      // re-armaria o watcher num card correto.
+      const checkedId = imposedSessionId;
+      entry.impositionCheck = setTimeout(() => {
+        entry.impositionCheck = null;
+        // Card já morto: a limpeza do exit cuidou da claim, não há o que
+        // conferir (e armar watcher de card morto vazaria poller).
+        if (!entries.has(id)) return;
+        let storeRead: ReturnType<typeof getResumeTargetEvidence> = null;
+        try {
+          storeRead = getResumeTargetEvidence(providerId, cwd, checkedId);
+        } catch {
+          // Leitura falhou = SEM CANAL, não "não existe" — vira `unknown`.
+          storeRead = null;
+        }
+        applyImpositionVerification(
+          decideImpositionVerification({
+            imposedId: checkedId,
+            // O timer disparar É o grace ter passado. Não uso `Date.now()`
+            // aqui: com relógio falso (teste) ou suspensão da máquina, a
+            // diferença medida mentiria sobre a janela.
+            elapsedMs: IMPOSITION_GRACE_MS,
+            storeRead,
+          }),
+          {
+            releaseImposedId: (sid) => {
+              if (entry.claimedSessionId !== sid) return;
+              releaseSessionId(sid);
+              entry.claimedSessionId = null;
+            },
+            // O watcher descobre a sessão de verdade e a reivindica ele mesmo
+            // (`claimSessionId` dentro do `watchForSession`).
+            rearmWatcher: armWatcher,
+            logContradiction: (line) => console.warn(line),
+          },
+          { providerId, cardId: id, cwd },
+        );
+      }, IMPOSITION_GRACE_MS);
+    } else if (!effectiveSpawnOpts.resumeId) {
+      armWatcher();
     } else {
       claimSessionId(effectiveSpawnOpts.resumeId);
     }
@@ -1131,6 +1191,9 @@ export function createPtyRegistry(registryOpts: {
       entry.stopWatch?.();
       if (entry.killTimer) clearTimeout(entry.killTimer);
       entry.killTimer = null;
+      // A conferência do id imposto não pode disparar para um card morto.
+      if (entry.impositionCheck) clearTimeout(entry.impositionCheck);
+      entry.impositionCheck = null;
       // RODADA 9 (2026-09-10), achado único — a contagem de referências da
       // RODADA 8 (achado 2) resolvia a troca de sessão via `/resume`, mas
       // nunca liberava a claim de um card FECHADO: `entries.delete` abaixo
