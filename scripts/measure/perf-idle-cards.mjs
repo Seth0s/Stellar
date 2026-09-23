@@ -42,9 +42,59 @@ const RATE = Number(arg("--rate", "10"));
 const JSON_OUT = arg("--json", null);
 const BASELINE = arg("--baseline", null);
 const WITH_BROWSER = process.argv.includes("--browser");
+// Provider REAL (ex.: cline): os cards abrem e ficam OCIOSOS - sem prompt, sem
+// quota - para medir a taxa de PTY que um TUI de verdade produz (task 27e13021,
+// passo 1: calibrar). Sem --provider, o modo e a TUI sintetica em bash.
+const PROVIDER = arg("--provider", "bash");
+const REAL_IDLE = PROVIDER !== "bash";
+// `--exec <cmd>`: comando que cada card BASH roda em primeiro plano (ex.:
+// `exec /home/lucas/.local/bin/cline`). E o caminho para medir a taxa de PTY de
+// uma CLI REAL sem depender do gate de spawn de provider - e sem prompt.
+const EXEC = arg("--exec", null);
+// `--profile`: perfil de CPU do RENDERER por N segundos (padrão 10) mais o delta
+// de métricas do Blink. É o que responde "o que roda a cada frame" com nome e
+// linha, em vez de palpites sobre animações.
+const PROFILE = process.argv.includes("--profile");
+const PROFILE_SECONDS = Number(arg("--profile-seconds", "10"));
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Lê utime+stime (ticks), RSS (kB) e o `--type=` do cmdline de um pid. */
+/**
+ * CPU ocupada da MÁQUINA INTEIRA (todas as linhas `cpu` de /proc/stat), em
+ * "ticks ocupados". Existe porque a primeira rodada deste harness mediu o
+ * baseline a 0,3% e, minutos depois, 20,7% com o MESMO build — outro card
+ * trabalhando na mesma máquina. Sem este número, uma variação de carga vira
+ * "o conserto piorou".
+ */
+function machineBusyTicks() {
+  const line = readFileSync("/proc/stat", "utf8").split("\n")[0];
+  const nums = line.trim().split(/\s+/).slice(1).map(Number);
+  const total = nums.reduce((a, b) => a + b, 0);
+  const idle = (nums[3] ?? 0) + (nums[4] ?? 0); // idle + iowait
+  return { total, busy: total - idle };
+}
+
+/**
+ * `/proc/<pid>/io`: quanto o PROCESSO escreveu no mundo (wchar). É a métrica que
+ * o orquestrador usou na máquina dele, e ela conta arquivo, rede e log — não só
+ * PTY. Medir as duas na MESMA janela é o que separa "a CLI escreve muito" de "a
+ * CLI escreve muito PARA O PTY" (task 27e13021, passo 1).
+ */
+function readProcIo(pid) {
+  const out = { wchar: 0, syscw: 0 };
+  try {
+    const text = readFileSync(`/proc/${pid}/io`, "utf8");
+    for (const line of text.split("\n")) {
+      const [key, value] = line.split(": ");
+      if (key === "wchar") out.wchar = Number(value);
+      if (key === "syscw") out.syscw = Number(value);
+    }
+  } catch {
+    // processo morreu: zero é a resposta honesta para este instante
+  }
+  return out;
+}
+
 function readProc(pid) {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -87,11 +137,88 @@ function treePids(rootPid) {
   return out;
 }
 
+  /** Pids das CLIs reais (filhos do app cujo cmdline cita o binário do provider). */
+  function cliPids(rootPid, provider) {
+    const alvos = provider === "cline" ? ["cline"] : [provider];
+    const out = [];
+    for (const pid of treePids(rootPid)) {
+      try {
+        const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+        if (alvos.some((alvo) => cmdline.includes(alvo))) out.push(pid);
+      } catch {
+        // ignora
+      }
+    }
+    return out;
+  }
+
+/**
+ * Perfil de CPU do renderer + métricas do Blink, pelo CDP. Devolve as funções
+ * por SELF TIME (o que de fato queima CPU, não quem chamou) e o delta das
+ * contagens do Blink na mesma janela.
+ */
+async function profileRenderer(cdpPort, seconds) {
+  const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json();
+  const alvo = list.find((t) => t.type === "page");
+  if (!alvo) throw new Error("nenhum alvo page para perfilar");
+  const ws = new WebSocket(alvo.webSocketDebuggerUrl);
+  await new Promise((r) => ws.addEventListener("open", r, { once: true }));
+  let id = 0;
+  const pend = new Map();
+  ws.addEventListener("message", (ev) => {
+    const msg = JSON.parse(ev.data);
+    const resolver = pend.get(msg.id);
+    if (resolver) {
+      pend.delete(msg.id);
+      resolver(msg.result);
+    }
+  });
+  const send = (method, params) =>
+    new Promise((resolve) => {
+      const msgId = ++id;
+      pend.set(msgId, resolve);
+      ws.send(JSON.stringify({ id: msgId, method, params }));
+    });
+
+  await send("Profiler.enable");
+  await send("Performance.enable");
+  await send("Profiler.setSamplingInterval", { interval: 200 });
+  const antes = (await send("Performance.getMetrics")).metrics;
+  await send("Profiler.start");
+  await new Promise((r) => setTimeout(r, seconds * 1000));
+  const perfil = await send("Profiler.stop");
+  const depois = (await send("Performance.getMetrics")).metrics;
+  ws.close();
+
+  const porNome = new Map();
+  const nodes = new Map(perfil.profile.nodes.map((n) => [n.id, n]));
+  const total = perfil.profile.samples.length || 1;
+  const dt = (perfil.profile.endTime - perfil.profile.startTime) / 1000;
+  for (const amostra of perfil.profile.samples) {
+    const node = nodes.get(amostra);
+    if (!node) continue;
+    const cf = node.callFrame;
+    const chave = `${cf.functionName || "(anon)"} @ ${cf.url.split("/").pop() || "?"}:${cf.lineNumber + 1}`;
+    porNome.set(chave, (porNome.get(chave) ?? 0) + 1);
+  }
+  const top = [...porNome.entries()]
+    .map(([nome, hits]) => ({ nome, selfMs: (hits / total) * dt, pct: (hits / total) * 100 }))
+    .sort((a, b) => b.selfMs - a.selfMs)
+    .slice(0, 12);
+
+  const metric = (lista, chave) => Number((lista.find((m) => m.name === chave) ?? { value: 0 }).value);
+  const delta = {};
+  for (const chave of ["LayoutCount", "RecalcStyleCount", "TaskDuration", "ScriptDuration", "JSHeapUsedSize"]) {
+    delta[chave] = metric(depois, chave) - metric(antes, chave);
+  }
+  return { top, delta, totalSamples: total, seconds: dt };
+}
+
 async function main() {
   if (!existsSync(FIXTURE)) throw new Error(`fixture ausente: ${FIXTURE}`);
   const userDataDir = join(tmpdir(), `stellar-perf-${process.pid}`);
   const cdpPort = await pickFreePort();
-  console.log(`[perf] instância ISOLADA: userData=${userDataDir} cdp=${cdpPort} cards=${CARDS} rate=${RATE}fps`);
+  console.log(`[perf] instância ISOLADA: userData=${userDataDir} cdp=${cdpPort} cards=${CARDS} provider=${PROVIDER}${REAL_IDLE ? " (ocioso, sem prompt)" : ` rate=${RATE}fps`}`);
 
   const app = await startApp({ cdpPort, userDataDir, timeoutMs: 60_000 });
   let page = null;
@@ -121,7 +248,7 @@ async function main() {
         await window.store.upsert({ id: ${JSON.stringify(id)}, provider: "bash", cwd: "/tmp", x: 40 + ${i} * 30, y: 40, w: 700, h: 360,
           updated_at: now, resume_id: null, model: null, system_prompt: null, kind: "terminal", board_id: ${JSON.stringify(boardId)},
           group_id: null, label: ${JSON.stringify(id)}, messages_json: null, archived_at: null, effort: null, created_at: now });
-        await window.pty.spawn(${JSON.stringify(id)}, "bash", "/tmp", 80, 24);
+        await window.pty.spawn(${JSON.stringify(id)}, ${JSON.stringify(PROVIDER)}, "/tmp", 80, 24);
         return true;
       })()`);
     }
@@ -136,10 +263,29 @@ async function main() {
       })()`);
     }
 
+    // ANTES de medir: os cards EXISTEM de verdade? Um card que nao subiu mede
+    // 0,00 KB/s e PARECE um resultado - foi o que aconteceu uma vez aqui.
+    const vivos = await page.evalJs(`window.store.list(${JSON.stringify(boardId)}).then((cs) => cs.map((c) => c.id))`);
+    // Baseline de 0 cards é uma configuração LEGÍTIMA: sem cards, não há o que
+    // verificar (a asserção existe para pegar card que NÃO subiu quando devia).
+    if (CARDS > 0 && (!Array.isArray(vivos) || vivos.length < CARDS)) {
+      throw new Error(`cards nao subiram: esperados ${CARDS}, no store ${JSON.stringify(vivos)}`);
+    }
+    const shells = treePids(app.proc.pid).filter((pid) => {
+      try {
+        return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("bash");
+      } catch {
+        return false;
+      }
+    });
+    if (CARDS > 0 && shells.length === 0) throw new Error("nenhum processo bash filho: os cards nao tem PTY vivo");
+    console.log(`[perf] VERIFICADO: ${vivos.length} card(s) no store, ${shells.length} shell(s) vivo(s)`);
     await delay(4000); // os shells sobem
-    for (let i = 0; i < CARDS; i += 1) {
-      const cmd = `node ${FIXTURE} ${RATE}`;
-      await page.evalJs(`window.pty.write("perf-card-${i}", ${JSON.stringify(cmd + "\r")}, "human").then(() => true)`);
+    if (!REAL_IDLE || EXEC !== null) {
+      for (let i = 0; i < CARDS; i += 1) {
+        const cmd = EXEC ?? `node ${FIXTURE} ${RATE}`;
+        await page.evalJs(`window.pty.write("perf-card-${i}", ${JSON.stringify(cmd + "\r")}, "human").then(() => true)`);
+      }
     }
     await delay(4000); // a TUI sintética começa a repintar
 
@@ -153,8 +299,23 @@ async function main() {
       if (proc) before.set(pid, proc);
     }
     const t0 = Date.now();
+    let perfil = null;
+    if (PROFILE) {
+      perfil = await profileRenderer(cdpPort, PROFILE_SECONDS);
+      console.log(`\n[perf] PERFIL do renderer (${perfil.seconds.toFixed(1)}s, ${perfil.totalSamples} amostras) - top por self time:`);
+      for (const linha of perfil.top) {
+        console.log(`  ${linha.selfMs.toFixed(1).padStart(7)} ms  ${linha.pct.toFixed(1).padStart(5)}%  ${linha.nome}`);
+      }
+      console.log(`[perf] Blink no mesmo intervalo: ${JSON.stringify(perfil.delta)}`);
+    }
+
+    const cliAntes = new Map(cliPids(app.proc.pid, PROVIDER).map((pid) => [pid, readProcIo(pid)]));
+    const cpuT0 = machineBusyTicks();
     await delay(SECONDS * 1000);
     const elapsed = (Date.now() - t0) / 1000;
+    const cpuT1 = machineBusyTicks();
+    const machineBusyPct =
+      cpuT1.total > cpuT0.total ? ((cpuT1.busy - cpuT0.busy) / (cpuT1.total - cpuT0.total)) * 100 : 0;
 
     const rows = [];
     for (const pid of treePids(app.proc.pid)) {
@@ -185,8 +346,48 @@ async function main() {
       console.log(`${row.type.padEnd(14)} ${String(row.count).padStart(2)}  ${row.cpuPct.toFixed(1).padStart(5)}  ${row.rssMb.toFixed(0).padStart(7)}`);
     }
     console.log(`${'TOTAL'.padEnd(14)} ${String(rows.length).padStart(2)}  ${totalCpu.toFixed(1).padStart(5)}  ${totalRss.toFixed(0).padStart(7)}`);
+    // A carga da MÁQUINA, sempre ao lado do resultado: um número sem ela pode
+    // atribuir a outro card o que é do Stellar (ou o contrário).
+    console.log(`[perf] máquina ocupada no mesmo intervalo: ${machineBusyPct.toFixed(1)}% (inclui outros processos)`);
+    // O log de mecanismo é lido ANTES de julgar wchar-vs-PTY: os dois números
+    // saem da MESMA janela de amostragem.
+    const ptyFrameLog = String(app.stderr())
+      .split("\n")
+      .filter((l) => l.includes("[pty-frame]"))
+      .map((l) => l.trim());
+    let cliWcharBytesPerSec = null;
+    let ptyBytesPerSec = null;
+    if (REAL_IDLE) {
+      // wchar do PROCESSO DA CLI vs bytes que o STELLAR recebeu do PTY. Se o
+      // primeiro for enorme e o segundo ~0, a métrica do orquestrador está
+      // medindo outra coisa (log, banco), não o que atravessa o Stellar.
+      let wcharDelta = 0;
+      for (const [pid, antes] of cliAntes) {
+        const depois = readProcIo(pid);
+        wcharDelta += Math.max(0, depois.wchar - antes.wchar);
+      }
+      const ptyBytes = ptyFrameLog
+        .map((l) => Number(/bytes=(\d+)/.exec(l)?.[1] ?? 0))
+        .reduce((a, b) => a + b, 0);
+      cliWcharBytesPerSec = wcharDelta / elapsed;
+      ptyBytesPerSec = ptyBytes / elapsed;
+      console.log(`[perf] CLI (wchar, todo I/O): ${(wcharDelta / elapsed / 1024).toFixed(1)} KB/s`);
+      console.log(`[perf] PTY (bytes que o Stellar recebeu): ${(ptyBytes / elapsed / 1024).toFixed(2)} KB/s`);
+    }
 
-    const result = { cards: CARDS, rate: RATE, seconds: elapsed, withBrowser: WITH_BROWSER, totalCpuPct: totalCpu, totalRssMb: totalRss, byType: [...byType.values()] };
+    const result = {
+      cards: CARDS,
+      rate: RATE,
+      seconds: elapsed,
+      machineBusyPct,
+      withBrowser: WITH_BROWSER,
+      totalCpuPct: totalCpu,
+      totalRssMb: totalRss,
+      byType: [...byType.values()],
+      ...(perfil ? { profile: perfil } : {}),
+      ptyFrameLog,
+      ...(REAL_IDLE ? { cliWcharBytesPerSec, ptyBytesPerSec } : {}),
+    };
     if (BASELINE && existsSync(BASELINE)) {
       const base = JSON.parse(readFileSync(BASELINE, "utf8"));
       const dCards = CARDS - base.cards;
@@ -197,6 +398,17 @@ async function main() {
         console.log(`[perf] CUSTO POR CARD OCIOSO: cpu=${(dCpu / dCards).toFixed(2)}pp  rss=${(dRss / dCards).toFixed(0)} MB`);
         result.perCard = { cpuPct: dCpu / dCards, rssMb: dRss / dCards };
       }
+    }
+    if (process.env.STELLAR_PTY_FRAME_DEBUG === "1" || REAL_IDLE) {
+      // O número de MECANISMO: quantas mensagens `pty:data` por 5 s o main
+      // mandou. É imune a carga de máquina, ao contrário da CPU.
+      const linhas = String(app.stderr())
+        .split("\n")
+        .filter((l) => l.includes("[pty-frame]"));
+      result.ptyFrameLog = linhas.map((l) => l.trim());
+      console.log(`\n[perf] mecanismo (main -> renderer):`);
+      for (const linha of linhas) console.log(`  ${linha.trim()}`);
+      result.ptyFrameLog = linhas.map((l) => l.trim());
     }
     if (JSON_OUT) writeFileSync(JSON_OUT, `${JSON.stringify(result, null, 2)}\n`);
   } finally {
