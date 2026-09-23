@@ -105,6 +105,11 @@ import { saveClipboardImage, saveImageBytes, saveAttachmentBytes, readAttachment
 import { defaultVoiceConfigInput, resolveVoiceConfig, WhisperTranscriber } from "./voice-transcription";
 import { wrapJpegAsPdf } from "./pdf-export";
 import { saveBoardAssetBytes, copyBoardAssetFromPath, resolveBoardAsset } from "./board-assets";
+// BOARD PRESETS, FASE 2 — o dado carregado uma vez, servido à UI por IPC; e a
+// decisão pura que valida o que a UI escreve (nunca o inverso: o main não
+// aplica preset, ele guarda o que o humano escolheu).
+import { BOARD_PRESETS } from "./board-presets";
+import { parseBoardTaskDefaultsInput, readBoardTaskDefaults } from "./board-preset-decision";
 import { PICK_MEDIA_EXTENSIONS, resolvePickedMediaFile } from "./spawn-media-decision";
 import {
   createBrowserRegistry,
@@ -2014,6 +2019,16 @@ function createWindow() {
     // interface de callbacks (message-bus.ts).
     boardExists: (boardId) => store.getBoard(boardId) !== undefined,
     getBoardConcurrencyCap: (boardId) => store.getBoard(boardId)?.concurrency_cap ?? null,
+    // BOARD PRESETS, FASE 2 — os defaults de CONTRATO do board, lidos pelo
+    // `create_task` quando a chamada omite review/reportSchema/allowCommit.
+    // A leitura/decodificação é do módulo puro (`readBoardTaskDefaults`), o
+    // mesmo que a UI usa: o valor que o agente recebe e o que o humano vê no
+    // badge do preset não podem ter duas interpretações. Board inexistente e
+    // board sem defaults caem no mesmo lugar — nenhum fallback.
+    getBoardTaskDefaults: (boardId) => {
+      const board = store.getBoard(boardId);
+      return board ? readBoardTaskDefaults(board) : null;
+    },
     // Pendentes #188 ("delete_card"/"update_card_content") — direct store
     // access, same as getCardBoardId above, for a card that may not be on
     // whichever board is currently loaded.
@@ -2621,6 +2636,28 @@ function createWindow() {
   // (App.tsx's session UI), never from message-bus.ts/mcp-server.ts —
   // there is no `BusRequest` cmd that touches this at all, on purpose.
   ipcMain.handle("store:boards:set-autonomous", (_e, id: string, autonomous: boolean) => store.setBoardAutonomous(id, autonomous));
+  // BOARD PRESETS, FASE 2 (task 83f4cfa3) — os três defaults de CONTRATO do
+  // board (`default_review` / `default_report_schema_json` /
+  // `default_allow_commit`), escritos de uma vez: é o que um preset aplica.
+  //
+  // Mesma garantia do `set-autonomous` logo acima: só a UI do board chega
+  // aqui. Nenhum cmd do `BusRequest` toca nisto (um agente não escolhe o
+  // contrato que vai valer para as tasks dos outros cards), e o caminho
+  // genérico `store:boards:upsert` — um rename — NÃO escreve estas colunas.
+  //
+  // Forma inválida é RECUSADA com o campo nomeado, nunca coagida a null:
+  // gravar lixo num default que passa a valer para TODA task nova do board é
+  // pior que recusar a escrita. `{ok:false}` também é a resposta para board
+  // inexistente — o `store` devolve false e não escreve.
+  ipcMain.handle("store:boards:set-defaults", (_e, id: string, defaults: unknown) => {
+    const parsed = parseBoardTaskDefaultsInput((defaults ?? {}) as Record<string, unknown>);
+    if (!parsed.ok) return { ok: false, error: parsed.error, field: parsed.field };
+    return { ok: store.setBoardDefaults(id, parsed.defaults) };
+  });
+  // A lista de presets atravessa por aqui (e não por um import do renderer) —
+  // ver o comentário de `main/board-presets.ts`. Dado puro, sem segredo e sem
+  // efeito colateral: passivo, como `store:boards:list`.
+  ipcMain.handle("store:board-presets:list", () => BOARD_PRESETS);
   // Board orchestrator mark — UI-only, same narrow write path guarantee
   // as set-autonomous. Never reachable from message-bus/mcp-server.
   ipcMain.handle("store:boards:set-orchestrator-card", (_e, boardId: string, cardId: string | null) =>

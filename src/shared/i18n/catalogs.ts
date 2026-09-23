@@ -196,6 +196,34 @@ export const ptBR = {
   "settings.locale.ptBR": "Português (Brasil)",
   "settings.locale.en": "English",
   "settings.concurrencyHint": "A fila segura o que passar do teto.",
+  // BOARD PRESETS (task 83f4cfa3) — o seletor de preset na aba Maestro. O
+  // "isto vai mudar" vem antes de aplicar: aplicar nunca é uma caixa preta, e
+  // os valores de cada ajuste aparecem antes/depois. Nenhum número de custo é
+  // inventado: o "Máximo" diz que custa muitas vezes mais e linka a doc.
+  "settings.presets.title": "Preset do board",
+  "settings.presets.current": "Este board está em:",
+  "settings.presets.custom": "custom — os ajustes não batem com nenhum preset",
+  "settings.presets.loading": "Lendo…",
+  "settings.presets.badgeCurrent": "atual",
+  "settings.presets.hint":
+    "Um preset é um conjunto de ajustes que você poderia setar à mão. Escolher um mostra o que muda antes de aplicar — e aplicar nunca toca card em execução nem task já criada: vale só para o que vem a seguir.",
+  "settings.presets.willChange": "Isto vai mudar:",
+  "settings.presets.noChange": "O board já está assim — aplicar não escreve nada.",
+  "settings.presets.scopeNote":
+    "Vale só para o que vem a seguir: cards em execução e tasks já criadas ficam como estão.",
+  "settings.presets.apply": "Aplicar",
+  "settings.presets.docsLink": "ver a página dos três jeitos",
+  "settings.presets.setting.autonomous": "Modo autônomo",
+  "settings.presets.setting.concurrencyCap": "Limite de agentes simultâneos",
+  "settings.presets.setting.defaultReview": "Revisor por task (default)",
+  "settings.presets.setting.defaultReportSchema": "Campos do relatório (default)",
+  "settings.presets.setting.defaultAllowCommit": "Commit (default)",
+  "settings.presets.value.unset": "não declarado",
+  "settings.presets.value.on": "ligado",
+  "settings.presets.value.off": "desligado",
+  "settings.presets.value.reviewWanted": "exige revisor",
+  "settings.presets.value.allowCommitTrue": "permitido",
+  "settings.presets.value.allowCommitFalse": "não permitido",
   // Composer global (GlobalComposer.tsx) — barra de input do board: destino,
   // anexo (imagem/documento) e ditado por voz. Anexo vira CAMINHO no texto
   // (ver src/renderer/src/attachments.ts) e a matriz de admissão recusa com
@@ -357,6 +385,10 @@ export const ptBR = {
   "toast.orchestratorOff": "marca de orquestrador removida",
   "toast.concurrencyDefault": "limite de agentes simultâneos: padrão",
   "toast.concurrencyCap": "limite de agentes simultâneos: {cap}",
+  // Um toast por AÇÃO: aplicar um preset mexe em N ajustes, e N toasts fariam o
+  // humano perder justamente o que ele precisa ver (quantos ajustes mudaram).
+  "toast.presetApplied": "preset {preset} aplicado — {count} ajuste(s) mudaram",
+  "toast.presetAlready": "o board já estava em {preset} — nada foi escrito",
   "toast.sessionDeleted": "sessão excluída",
   "toast.cardCreated": "{kind} criado",
   "toast.cardCreatedF": "{kind} criada",
@@ -1216,6 +1248,34 @@ export const en: Record<MessageKey, string> = {
   "settings.locale.ptBR": "Português (Brasil)",
   "settings.locale.en": "English",
   "settings.concurrencyHint": "The queue holds anything over the cap.",
+  // BOARD PRESETS (task 83f4cfa3) — the preset picker on the Maestro tab. The
+  // "this will change" list comes BEFORE applying: applying a preset is never a
+  // black box, and every setting shows its before/after. No cost number is
+  // invented — "Máximo" says it costs many times more and links the docs page.
+  "settings.presets.title": "Board preset",
+  "settings.presets.current": "This board is on:",
+  "settings.presets.custom": "custom — the settings match no preset",
+  "settings.presets.loading": "Loading…",
+  "settings.presets.badgeCurrent": "current",
+  "settings.presets.hint":
+    "A preset is a set of settings you could set by hand. Picking one shows what changes before you apply it — and applying never touches a running card or an existing task: it only affects what comes next.",
+  "settings.presets.willChange": "This will change:",
+  "settings.presets.noChange": "The board is already like this — applying writes nothing.",
+  "settings.presets.scopeNote":
+    "Applies to what comes next only: running cards and existing tasks stay as they are.",
+  "settings.presets.apply": "Apply",
+  "settings.presets.docsLink": "see the page on the three ways of working",
+  "settings.presets.setting.autonomous": "Autonomous mode",
+  "settings.presets.setting.concurrencyCap": "Concurrent agent limit",
+  "settings.presets.setting.defaultReview": "Reviewer per task (default)",
+  "settings.presets.setting.defaultReportSchema": "Report fields (default)",
+  "settings.presets.setting.defaultAllowCommit": "Commit (default)",
+  "settings.presets.value.unset": "undeclared",
+  "settings.presets.value.on": "on",
+  "settings.presets.value.off": "off",
+  "settings.presets.value.reviewWanted": "requires a reviewer",
+  "settings.presets.value.allowCommitTrue": "allowed",
+  "settings.presets.value.allowCommitFalse": "not allowed",
   // Global composer (GlobalComposer.tsx) — the board's input bar: target,
   // attachment (image/document) and voice dictation. An attachment becomes a
   // PATH in the text (see src/renderer/src/attachments.ts) and the admission
@@ -1369,6 +1429,10 @@ export const en: Record<MessageKey, string> = {
   "toast.orchestratorOff": "orchestrator mark removed",
   "toast.concurrencyDefault": "concurrent agent limit: default",
   "toast.concurrencyCap": "concurrent agent limit: {cap}",
+  // One toast per ACTION: applying a preset changes N settings, and N toasts
+  // would drown the one thing the human needs to see (how many changed).
+  "toast.presetApplied": "preset {preset} applied — {count} setting(s) changed",
+  "toast.presetAlready": "the board was already on {preset} — nothing was written",
   "toast.sessionDeleted": "session deleted",
   "toast.cardCreated": "{kind} created",
   "toast.cardCreatedF": "{kind} created",

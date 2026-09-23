@@ -996,6 +996,7 @@ export function App() {
     deleteBoard,
     setBoardAutonomous,
     setBoardConcurrencyCap,
+    applyBoardPreset,
     setBoardOrchestratorCard,
     clearOrchestratorMarkIfCard,
   } = useBoardStore(
@@ -4080,6 +4081,7 @@ export function App() {
           onLocaleOverrideChange={changeLocaleOverride}
           onToggleAutonomous={setBoardAutonomous}
           onSetConcurrencyCap={setBoardConcurrencyCap}
+          onApplyPreset={applyBoardPreset}
         />
       )}
       {radialMenu && (

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 // importa no topo) entra no bundle do preload. Mesmo precedente do renderer,
 // que já importa tipos de `src/main` (ex.: `provider-usage`).
 import type { ProvidersReloadReport } from "../main/providers-dynamic";
+import type { BoardPreset } from "../main/board-preset-decision";
 import type { TaskVerdictReadRule } from "../main/task-verdict-read-decision";
 // A union de purpose vem da FONTE ÚNICA (`src/task-purpose.ts`): uma segunda
 // lista aqui era drift esperando acontecer — o `integrate` (task 095158e9)
@@ -251,6 +252,14 @@ export type BoardRow = {
   /** Board orchestrator mark — at most one card id. UI-only write via
    * `setOrchestratorCard`. `null` = unmarked. */
   orchestrator_card_id: string | null;
+  /** BOARD PRESETS, FASE 2 — defaults de CONTRATO que valem para toda task
+   * criada neste board que OMITA o campo (`create_task`). `null` = não
+   * declarado, nunca "decidido: não". Escrita só pela UI do board
+   * (`boards.setDefaults`) — nenhum agente os declara. Opcionais no tipo: o
+   * renderer monta `BoardRow` à mão ao criar sessão. */
+  default_review?: string | null;
+  default_report_schema_json?: string | null;
+  default_allow_commit?: number | null;
 };
 
 /**
@@ -370,7 +379,20 @@ setActive: (id: string | null): void => ipcRenderer.send("board:active", id),
      * `cap: null` resets to the app-wide default. */
     setConcurrencyCap: (id: string, cap: number | null): Promise<void> =>
       ipcRenderer.invoke("store:boards:set-concurrency-cap", id, cap),
+    /** BOARD PRESETS, FASE 2 — os três defaults de contrato do board, de uma
+     * vez (`review` / `reportSchema` / `allowCommit`). Mesma garantia de
+     * `setAutonomous`: só a UI do board chama. `{ok:false, error, field}` para
+     * forma inválida (o main recusa em vez de coagir) e `{ok:false}` para board
+     * inexistente — o chamador NÃO pode dizer ao humano "aplicado" sem olhar. */
+    setDefaults: (
+      id: string,
+      defaults: { review: "wanted" | null; reportSchema: string[] | null; allowCommit: boolean | null },
+    ): Promise<{ ok: boolean; error?: string; field?: string }> =>
+      ipcRenderer.invoke("store:boards:set-defaults", id, defaults),
   },
+  /** BOARD PRESETS — a lista declarada (`data/board-presets.json`), servida
+   * pelo main para a UI comparar e descrever. Passivo. */
+  boardPresets: (): Promise<BoardPreset[]> => ipcRenderer.invoke("store:board-presets:list"),
   favorites: {
     list: (): Promise<FavoriteRow[]> => ipcRenderer.invoke("store:favorites:list"),
     add: (url: string, title: string): Promise<void> => ipcRenderer.invoke("store:favorites:add", url, title),

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SettingsModal } from "@renderer/SettingsModal";
 import { setLocale } from "../../src/shared/i18n";
+import { parsePresets } from "../../src/main/board-preset-decision";
+import presetsJson from "../../src/main/data/board-presets.json";
 
 const board = {
   id: "board-1",
@@ -18,6 +20,9 @@ function renderSettings(
   const onClose = vi.fn();
   const onToggleAutonomous = vi.fn();
   const onSetConcurrencyCap = vi.fn();
+  // BOARD PRESETS, FASE 2 — o modal pede a lista declarada ao main
+  // (`window.store.boardPresets`) e aplica por callback; o teste fornece os dois.
+  const onApplyPreset = vi.fn();
   const view = render(
     <SettingsModal
       page={page}
@@ -32,10 +37,11 @@ function renderSettings(
       onLocaleOverrideChange={vi.fn()}
       onToggleAutonomous={onToggleAutonomous}
       onSetConcurrencyCap={onSetConcurrencyCap}
+      onApplyPreset={onApplyPreset}
       {...extras}
     />,
   );
-  return { ...view, onPageChange, onClose, onToggleAutonomous, onSetConcurrencyCap };
+  return { ...view, onPageChange, onClose, onToggleAutonomous, onSetConcurrencyCap, onApplyPreset };
 }
 
 beforeEach(() => {
@@ -74,6 +80,12 @@ beforeEach(() => {
       pairNewDevice: vi.fn(async () => ({ id: "", url: "", qrDataUrl: "" })),
       revokeDevice: vi.fn(async () => {}),
       revokeAll: vi.fn(async () => {}),
+    },
+    // BOARD PRESETS, FASE 2 — a lista é DADO servido pelo main; aqui entra a
+    // lista REAL (`data/board-presets.json`), para a UI ser exercitada contra
+    // os mesmos valores que o app usa.
+    store: {
+      boardPresets: vi.fn(async () => parsePresets(presetsJson)),
     },
   });
 });
@@ -146,12 +158,76 @@ describe("SettingsModal", () => {
         onLocaleOverrideChange={vi.fn()}
         onToggleAutonomous={onToggleAutonomous}
         onSetConcurrencyCap={onSetConcurrencyCap}
+        onApplyPreset={vi.fn()}
       />,
     );
 
     const cap = screen.getByLabelText(/Limite de agentes simultâneos/);
     fireEvent.change(cap, { target: { value: "5" } });
     expect(onSetConcurrencyCap).toHaveBeenCalledWith("board-1", 5);
+  });
+
+  // ============ BOARD PRESETS, FASE 2 (task 83f4cfa3) ============
+  // O que a fase 2 acrescenta na UI, travado em jsdom (rápido) além do smoke
+  // CDP que dirige o app REAL: a lista com o custo honesto, o diff ANTES de
+  // aplicar, e a leitura "está em X / custom" sem reivindicar preset nenhum.
+
+  it("Maestro lista os três presets, com custo e o LINK da doc no Máximo", async () => {
+    renderSettings("maestro");
+
+    expect(await screen.findByText("Eficiente")).toBeTruthy();
+    expect(screen.getByText("Produtivo")).toBeTruthy();
+    expect(screen.getByText("Máximo")).toBeTruthy();
+    // Custo dito sem número inventado, e o link é a página dos três jeitos.
+    const docs = document.querySelector("[data-preset-docs='maximo']") as HTMLAnchorElement;
+    expect(docs?.getAttribute("href")).toBe("https://stellar.idyplatform.com/docs/tres-jeitos-de-trabalhar/");
+    expect(document.querySelector("[data-preset-cost='maximo']")?.textContent).not.toMatch(/[0-9]/);
+  });
+
+  it("mostra o DIFF antes de aplicar — e aplicar chama o callback com o preset", async () => {
+    const { onApplyPreset } = renderSettings("maestro");
+    fireEvent.click(await screen.findByText("Máximo"));
+
+    const diff = document.querySelector("[data-preset-diff='maximo']");
+    expect(diff).toBeTruthy();
+    const changed = [...document.querySelectorAll("[data-preset-change]")].map((li) => li.getAttribute("data-preset-change"));
+    expect(changed.sort()).toEqual(["autonomous", "concurrencyCap", "defaultAllowCommit", "defaultReview"]);
+    // O teto entra no diff com antes → depois (8 é o placeholder declarado).
+    expect(document.querySelector("[data-preset-change='concurrencyCap']")?.textContent).toContain("8");
+    // A promessa de escopo, em texto.
+    expect(diff?.textContent).toMatch(/só para o que vem a seguir/);
+
+    fireEvent.click(document.querySelector("[data-preset-apply='maximo']") as HTMLButtonElement);
+    expect(onApplyPreset).toHaveBeenCalledTimes(1);
+    expect(onApplyPreset.mock.calls[0]![0]).toBe("board-1");
+    expect((onApplyPreset.mock.calls[0]![1] as { id: string }).id).toBe("maximo");
+  });
+
+  it("board que já está no preset: nenhuma mudança listada e Aplicar desabilitado", async () => {
+    // 'Eficiente' == autônomo desligado, cap 1, allowCommit false.
+    renderSettings("maestro", {
+      board: { ...board, autonomous: false, concurrency_cap: 1, default_allow_commit: 0 },
+    });
+    // Espera a lista (assíncrona) chegar antes de clicar — o rótulo do badge,
+    // em 'Eficiente', aparece duas vezes; 'Produtivo' é único.
+    await screen.findByText("Produtivo");
+    fireEvent.click(document.querySelector("[data-preset-id='eficiente']") as HTMLButtonElement);
+
+    expect(document.querySelector("[data-preset-no-change]")).toBeTruthy();
+    expect([...document.querySelectorAll("[data-preset-change]")]).toHaveLength(0);
+    expect((document.querySelector("[data-preset-apply='eficiente']") as HTMLButtonElement).disabled).toBe(true);
+    // E o badge diz que é o preset ATUAL — a leitura é do estado real do board.
+    expect(document.querySelector("[data-preset-current]")?.getAttribute("data-preset-current")).toBe("eficiente");
+  });
+
+  it("mexer um ajuste depois já é 'custom' — a UI nunca reivindica um preset que não bate", async () => {
+    renderSettings("maestro", {
+      board: { ...board, autonomous: false, concurrency_cap: 4, default_allow_commit: 0 },
+    });
+
+    await screen.findByText("Eficiente");
+    expect(document.querySelector("[data-preset-current]")?.getAttribute("data-preset-current")).toBe("custom");
+    expect(document.querySelector("[data-preset-current]")?.textContent).toMatch(/custom/);
   });
 
   it("nav switches pages and does not keep a second modal chrome", () => {

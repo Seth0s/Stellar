@@ -6,6 +6,7 @@ import type { LocalIdentity } from "./local-identity-decision";
 import { decideStatusWrite, retainStatusAsk, type StatusWriteActor, type StatusWriteDecision } from "./status-write-decision";
 import { decideSprintClose } from "./sprint-close-decision";
 import { normalizeTaskPurpose, normalizeTaskReview } from "../task-purpose";
+import { boardTaskDefaultsToSql, type BoardTaskDefaults } from "./board-preset-decision";
 import { normalizeDeclaredTaskId } from "./report-task-link-decision";
 import { deriveTaskVerdictReading, type TaskVerdictReading } from "./task-verdict-read-decision";
 import { coerceStoredTaskStatus, deriveTaskStatus } from "../task-status-derive";
@@ -197,6 +198,26 @@ export type BoardRow = {
    * the pointed card is deleted (orphan delegation is forbidden).
    */
   orchestrator_card_id: string | null;
+  /**
+   * BOARD PRESETS, FASE 2 (task 83f4cfa3) — default de CONTRATO por board,
+   * aplicado a toda task criada neste board que OMITA o campo. É a coluna que
+   * faltava: até aqui `review`/`reportSchema`/`allowCommit` só existiam por
+   * task, e "o board está em Máximo" era uma frase sem lugar no banco.
+   *
+   * `null` em todos os três = NÃO DECLARADO (nunca "decidido: não"), e um board
+   * que já existia nasce assim: nenhum backfill, nenhum default inventado.
+   *
+   * Escrita SÓ pela UI do board (`setBoardDefaults`, IPC
+   * `store:boards:set-defaults`) — o caminho que aplica um preset. Nenhum
+   * comando MCP/acbridge escreve nisto: um agente não escolhe o contrato que
+   * vai valer para as tasks dos outros.
+   *
+   * Opcionais no tipo de propósito: `BoardRow` é construído à mão em vários
+   * pontos (renderer incluído) e um campo obrigatório novo quebraria todos.
+   */
+  default_review?: string | null;
+  default_report_schema_json?: string | null;
+  default_allow_commit?: number | null;
 };
 
 export type BoardCounts = { agents: number; active: number };
@@ -842,6 +863,30 @@ function migrate(db: Database.Database) {
   }
   try {
     db.exec(`ALTER TABLE boards ADD COLUMN concurrency_cap INTEGER`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  // BOARD PRESETS, FASE 2 (task 83f4cfa3) — os três defaults de TASK que um
+  // board pode declarar. Antes disto `review`, `reportSchema` e `allowCommit`
+  // só existiam por TASK (medido: nenhuma coluna de board os guardava), então
+  // um preset não tinha onde ser aplicado.
+  //
+  // NULAS e SEM BACKFILL, de propósito: `NULL` aqui é "não declarado" (a mesma
+  // convenção de `concurrency_cap` logo acima), e um board que já existia não
+  // pode receber um contrato que ninguém escolheu. Um DEFAULT no ALTER valeria
+  // para toda linha antiga — seria o app decidindo por quem nunca decidiu.
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN default_review TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN default_report_schema_json TEXT`);
+  } catch (e) {
+    if (!String(e).includes("duplicate column name")) throw e;
+  }
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN default_allow_commit INTEGER`);
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
@@ -1625,14 +1670,20 @@ export function openStore(userDataDir: string) {
   const getConnectorBoardIdStmt = db.prepare("SELECT board_id FROM connectors WHERE id = ?");
 
   const listBoardsStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id FROM boards ORDER BY created_at ASC",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit FROM boards ORDER BY created_at ASC",
   );
   const getBoardStmt = db.prepare(
-    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id FROM boards WHERE id = ?",
+    "SELECT id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit FROM boards WHERE id = ?",
   );
+  // Os três `default_*` entram no INSERT (um board novo nasce com o que o
+  // chamador mandou, normalmente nada) mas NÃO no ON CONFLICT: este `upsert` é
+  // o caminho genérico que um rename/mudança de cwd da UI usa, e um default de
+  // contrato não pode ser zerado por uma edição de nome. Quem escreve os
+  // defaults é `setBoardDefaults` (declaração própria, coluna própria), e só
+  // ele — a mesma separação que `autonomous`/`concurrency_cap` já têm.
   const upsertBoardStmt = db.prepare(`
-    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id)
-    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous, @concurrency_cap, @orchestrator_card_id)
+    INSERT INTO boards (id, name, project, cwd, created_at, updated_at, last_accessed_at, autonomous, concurrency_cap, orchestrator_card_id, default_review, default_report_schema_json, default_allow_commit)
+    VALUES (@id, @name, @project, @cwd, @created_at, @updated_at, @last_accessed_at, @autonomous, @concurrency_cap, @orchestrator_card_id, @default_review, @default_report_schema_json, @default_allow_commit)
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, project = excluded.project, cwd = excluded.cwd,
       updated_at = excluded.updated_at, autonomous = excluded.autonomous, concurrency_cap = excluded.concurrency_cap,
       orchestrator_card_id = excluded.orchestrator_card_id
@@ -1649,6 +1700,14 @@ export function openStore(userDataDir: string) {
   // the input field next to the autonomous checkbox fires this directly,
   // not routed through the general board-edit save.
   const setBoardConcurrencyCapStmt = db.prepare("UPDATE boards SET concurrency_cap = ?, updated_at = ? WHERE id = ?");
+  // BOARD PRESETS, FASE 2 — os três defaults de contrato de uma vez só. Uma
+  // declaração, não três: um preset aplica o CONJUNTO, e escrever campo a campo
+  // deixaria uma janela em que o board tem metade do preset antigo e metade do
+  // novo. Quem passa os valores já os validou (`parseBoardTaskDefaultsInput`) e
+  // já os codificou (`boardTaskDefaultsToSql`) — a coluna é JSON TEXT/INTEGER.
+  const setBoardDefaultsStmt = db.prepare(
+    "UPDATE boards SET default_review = ?, default_report_schema_json = ?, default_allow_commit = ?, updated_at = ? WHERE id = ?",
+  );
   // Board orchestrator mark — UI-only write path (mirrors autonomous).
   // Setting a new card id replaces any previous mark (one level, one
   // column). `null` clears. No MCP surface calls this.
@@ -2988,10 +3047,43 @@ export function openStore(userDataDir: string) {
         autonomous: board.autonomous ? 1 : 0,
         concurrency_cap: board.concurrency_cap ?? null,
         orchestrator_card_id: board.orchestrator_card_id ?? null,
+        // `?? null` (e não `undefined`): better-sqlite3 exige que todo parâmetro
+        // nomeado exista, e um `BoardRow` montado à mão pela UI não traz estes
+        // três. O ON CONFLICT não os lista — ver o comentário do statement.
+        default_review: board.default_review ?? null,
+        default_report_schema_json: board.default_report_schema_json ?? null,
+        default_allow_commit: board.default_allow_commit ?? null,
       }),
     touchBoard: (id: string, at: number) => touchBoardStmt.run(at, id),
     setBoardAutonomous: (id: string, autonomous: boolean) => setBoardAutonomousStmt.run(autonomous ? 1 : 0, Date.now(), id),
     setBoardConcurrencyCap: (id: string, cap: number | null) => setBoardConcurrencyCapStmt.run(cap, Date.now(), id),
+    /**
+     * BOARD PRESETS, FASE 2 — os três defaults de contrato do board, escritos
+     * de uma vez (ver o comentário do statement). Valores JÁ validados e JÁ
+     * codificados por quem chama (a UI, via
+     * `parseBoardTaskDefaultsInput` + `boardTaskDefaultsToSql`): aqui não há
+     * segunda validação, a mesma postura de `upsertBoard`.
+     *
+     * Devolve `false` para board inexistente — e NÃO escreve. Um UPDATE que não
+     * casa nenhuma linha é indistinguível de sucesso em SQLite, e um preset
+     * "aplicado" num board que não existe é exatamente o tipo de mentira que
+     * esta feature existe para não contar.
+     */
+    setBoardDefaults: (id: string, defaults: BoardTaskDefaults): boolean => {
+      if (!getBoardExistsStmt.get(id)) return false;
+      // A codificação (JSON TEXT / 0-1-INTEGER) mora no módulo puro, junto com
+      // a leitura: `false` precisa virar 0 e voltar como `false`, e um dialeto
+      // só deste arquivo seria a próxima coluna lida errado.
+      const sql = boardTaskDefaultsToSql(defaults);
+      setBoardDefaultsStmt.run(
+        sql.default_review,
+        sql.default_report_schema_json,
+        sql.default_allow_commit,
+        Date.now(),
+        id,
+      );
+      return true;
+    },
     /**
      * UI-only orchestrator mark. `cardId: null` clears. Replacing an
      * existing mark is intentional (one level — human points elsewhere).
