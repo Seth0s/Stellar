@@ -219,7 +219,7 @@ describe("message-bus: link_task_card", () => {
     expect(first[1]).not.toContain("work");
   });
 
-  it("NOVO link como reviewer: aviso DIFERENTE — 'revisar', não a ordem de trabalho", async () => {
+  it("NOVO link como reviewer: aviso DIFERENTE — 'to review', não a ordem de trabalho", async () => {
     const writes: Array<[string, string]> = [];
     await run({ taskId: "t-link", cardId: "rev", role: "reviewer" }, { writes });
     await flushDelivery();
@@ -227,7 +227,7 @@ describe("message-bus: link_task_card", () => {
     const [first] = bodies(writes);
     expect(first[1]).toContain("t-link");
     expect(first[1]).toContain("reviewer");
-    expect(first[1]).toContain("revisar");
+    expect(first[1]).toContain("to review");
     expect(first[1]).toContain("get_task");
     expect(first[1]).not.toContain("work");
   });
@@ -255,7 +255,7 @@ describe("message-bus: link_task_card", () => {
 
     expect(res.notice).toBe("queued");
     const [first] = bodies(writes);
-    expect(first[1]).toContain("revisar");
+    expect(first[1]).toContain("to review");
   });
 
   it("card sem leitor (não-terminal): o linkage vale, o aviso é pulado COM MOTIVO", async () => {
