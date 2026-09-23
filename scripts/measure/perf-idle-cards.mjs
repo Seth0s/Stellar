@@ -59,14 +59,22 @@ const PROFILE_SECONDS = Number(arg("--profile-seconds", "10"));
 // `--app-args "--flag1 --flag2"`: passthrough para o Electron. H2 usa isto para
 // abrir o alvo `--inspect` do MAIN e ler `app.getGPUFeatureStatus()`.
 const APP_ARGS = (arg("--app-args", "") || "").split(" ").filter(Boolean);
+// `--profile-main`: perfil de CPU do processo MAIN (alvo `--inspect`) - quem faz
+// as varreduras que continuam rodando sem um byte de PTY.
+const PROFILE_MAIN = process.argv.includes("--profile-main");
 // Pagina do card de navegador: data URL com animacao CSS, para o pipeline de
 // frames ter o que pintar SEM rede (H3).
 // O APP RECUSA `data:` (medido: "the embedded browser only opens http(s) URLs"),
 // então o harness serve a página de teste em 127.0.0.1 — sem rede externa, e com
 // uma animação CSS para o pipeline de frames ter o que pintar.
-const BROWSER_PAGE = `<!doctype html><body style="margin:0;background:#111">
+const BROWSER_PAGE_STATIC = `<!doctype html><body style="margin:0;background:#111">
+<div style="width:120px;height:120px;background:#f80"></div></body>`;
+const BROWSER_PAGE_ANIMATED = `<!doctype html><body style="margin:0;background:#111">
 <div style="width:120px;height:120px;background:#f80;animation:s 1s linear infinite"></div>
 <style>@keyframes s{to{transform:rotate(360deg)}}</style></body>`;
+// `--browser-page static` serve a pagina SEM animacao: o contraste que mostra se o
+// caminho de frames roda quando nada muda na pagina.
+const BROWSER_PAGE = arg("--browser-page", "animated") === "static" ? BROWSER_PAGE_STATIC : BROWSER_PAGE_ANIMATED;
 async function startBrowserServer() {
   const { createServer } = await import("node:http");
   const server = createServer((_req, res) => {
@@ -128,7 +136,15 @@ function readProc(pid) {
     const stime = Number(fields[12]);
     const rssKb = Number(fields[21]);
     const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
-    const type = /--type=([a-z-]+)/.exec(cmdline)?.[1] ?? "main";
+    // ATRIBUICAO (corrigida 2026-09-23): um processo filho SEM `--type=` nao e o
+    // main do Electron - e a CLI do agente (cline/bash), que roda como filho do app
+    // e nao tem marcador nenhum. Antes tudo isso caia no balde "main" e o custo da
+    // CLI aparecia como custo do Stellar (medido: o perfil do main real via --inspect
+    // fica 100% ocioso com 4 clines parados).
+    let type = /--type=([a-z-]+)/.exec(cmdline)?.[1] ?? null;
+    if (type === null) {
+      type = cmdline.includes("out/main/index.js") ? "electron-main" : "cli";
+    }
     return { pid, cpuTicks: utime + stime, rssKb, type };
   } catch {
     return null;
@@ -289,6 +305,61 @@ async function readGpuStatus(inspectPort, exprIndex = 0) {
   }
 }
 
+
+/**
+ * Perfil de CPU do processo MAIN pelo alvo `--inspect`. É o que responde "o que o
+ * main faz sem um byte de PTY": as varreduras periodicamente agendadas
+ * (session-watch, watchdog de idle, card_traces). Devolve self time por função.
+ */
+async function profileMain(inspectPort, seconds) {
+  const alvo = (await (await fetch(`http://127.0.0.1:${inspectPort}/json/list`)).json()).find(
+    (t) => String(t.description || "").includes("node"),
+  );
+  if (!alvo) return null;
+  const ws = new WebSocket(alvo.webSocketDebuggerUrl);
+  await new Promise((r) => ws.addEventListener("open", r, { once: true }));
+  let id = 0;
+  const pend = new Map();
+  ws.addEventListener("message", (ev) => {
+    const msg = JSON.parse(ev.data);
+    const resolver = pend.get(msg.id);
+    if (resolver) {
+      pend.delete(msg.id);
+      resolver(msg.result);
+    }
+  });
+  const send = (method, params) =>
+    new Promise((resolve) => {
+      const msgId = ++id;
+      pend.set(msgId, resolve);
+      ws.send(JSON.stringify({ id: msgId, method, params }));
+    });
+  await send("Profiler.enable");
+  await send("Profiler.setSamplingInterval", { interval: 200 });
+  await send("Profiler.start");
+  await new Promise((r) => setTimeout(r, seconds * 1000));
+  const perfil = await send("Profiler.stop");
+  ws.close();
+  const nodes = new Map(perfil.profile.nodes.map((n) => [n.id, n]));
+  const total = perfil.profile.samples.length || 1;
+  const dt = (perfil.profile.endTime - perfil.profile.startTime) / 1000;
+  const porNome = new Map();
+  for (const amostra of perfil.profile.samples) {
+    const node = nodes.get(amostra);
+    if (!node) continue;
+    const cf = node.callFrame;
+    const chave = `${cf.functionName || "(anon)"} @ ${String(cf.url).split("/").pop() || "?"}:${cf.lineNumber + 1}`;
+    porNome.set(chave, (porNome.get(chave) ?? 0) + 1);
+  }
+  return {
+    seconds: dt,
+    top: [...porNome.entries()]
+      .map(([nome, hits]) => ({ nome, selfMs: (hits / total) * dt }))
+      .sort((a, b) => b.selfMs - a.selfMs)
+      .slice(0, 12),
+  };
+}
+
 async function main() {
   if (!existsSync(FIXTURE)) throw new Error(`fixture ausente: ${FIXTURE}`);
   const userDataDir = join(tmpdir(), `stellar-perf-${process.pid}`);
@@ -394,6 +465,14 @@ async function main() {
         console.log(`  ${linha.selfMs.toFixed(1).padStart(7)} ms  ${linha.pct.toFixed(1).padStart(5)}%  ${linha.nome}`);
       }
       console.log(`[perf] Blink no mesmo intervalo: ${JSON.stringify(perfil.delta)}`);
+    }
+
+    if (PROFILE_MAIN) {
+      const alvoInspect = APP_ARGS.find((a) => a.startsWith("--inspect="));
+      if (!alvoInspect) throw new Error("--profile-main exige --app-args \"--inspect=<porta>\"");
+      const perfilMain = await profileMain(alvoInspect.split("=")[1], PROFILE_SECONDS);
+      console.log(`\n[perf] PERFIL do MAIN (${perfilMain?.seconds?.toFixed(1)}s) - top por self time:`);
+      for (const linha of perfilMain?.top ?? []) console.log(`  ${linha.selfMs.toFixed(1).padStart(7)} ms  ${linha.nome}`);
     }
 
     const inspectArg = APP_ARGS.find((a) => a.startsWith("--inspect="));

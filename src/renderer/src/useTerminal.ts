@@ -564,7 +564,7 @@ export function useTerminal(
     function buildTerminal(withWebgl: boolean) {
       const t = new Terminal({
         fontSize: BASE_FONT_SIZE,
-        cursorBlink: true,
+        cursorBlink: false,
         fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
         theme: buildTerminalTheme(providerId),
         // DESIGN-BACKLOG.md's "ganhos baratos" item — default era 1000
@@ -737,7 +737,7 @@ export function useTerminal(
     function buildTerminalNoWebgl() {
       const t = new Terminal({
         fontSize: BASE_FONT_SIZE,
-        cursorBlink: true,
+        cursorBlink: false,
         fontFamily: '"JetBrains Mono", "PureNerdFont", monospace',
         theme: buildTerminalTheme(providerId),
         scrollback: 10000,
