@@ -105,7 +105,13 @@ describe("message-bus: send e ponteiro de report usam a mesma forma; sem dedupe 
       join(dir, "agent-canvas.sock"),
       callbacksWithOverrides({
         listCards: () => [
-          { id: "spawner-1", kind: "terminal", provider: "claude", cwd: "", label: "MASTER", displayName: "MASTER" },
+          // `spawner-1` é o destino do PONTEIRO de report (roteado pelo
+          // spawner). Ele fica num provider que NÃO marca conteúdo (task
+          // 889dd934) de propósito: é assim que este arquivo continua pinando a
+          // FORMA compartilhada de autoria (`[de: label] …`) entre `send` e os
+          // ponteiros. O caso MARCADO (destino claude) mora em
+          // tests/unit/message-bus-send-pasted-content.test.ts.
+          { id: "spawner-1", kind: "terminal", provider: "cline", cwd: "", label: "MASTER", displayName: "MASTER" },
           { id: "child-1", kind: "terminal", provider: "cursor", cwd: "", label: "aviso-de-report", displayName: "aviso-de-report" },
           { id: "target", kind: "terminal", provider: "claude", cwd: "", label: null, displayName: "Claude" },
         ],
@@ -152,9 +158,16 @@ describe("message-bus: send e ponteiro de report usam a mesma forma; sem dedupe 
     } as BusRequest);
 
     const bodies = await waitForBodies(written, 2);
-    expect(bodies[0]).toBe("[de: aviso-de-report] Fix pronto");
-    expect(bodies[1]).toBe("[de: aviso-de-report] Fix pronto (já carimbado)");
-    expect(bodies[1].match(/\[de:/g)?.length).toBe(1);
+    // task 889dd934: `target` é um card CLAUDE — o único provider cujo harness
+    // produz a convenção de conteúdo —, então o corpo vai marcado e o cabeçalho
+    // fica FORA do bloco, sozinho na primeira linha. O que este teste guarda
+    // continua sendo o mesmo: um carimbo só, nunca dois.
+    expect(bodies[0]!.split("\n")[0]).toBe("[de: aviso-de-report]");
+    expect(bodies[0]).toMatch(/^<pasted_content id="\d+">$/m);
+    expect(bodies[0]).toContain("Fix pronto");
+    expect(bodies[1]!.split("\n")[0]).toBe("[de: aviso-de-report]");
+    expect(bodies[1]).toContain("Fix pronto (já carimbado)");
+    expect(bodies[1]!.match(/\[de:/g)?.length).toBe(1);
   });
 
   it("ponteiro de report e send usam a mesma forma `[de: label] …`", async () => {
