@@ -583,7 +583,23 @@ function parseIdSource(raw: unknown, field: string): StoreParse<SessionIdSource>
     if (strip === null) {
       return { ok: false, reason: refusal(`${field}.strip`, 'the file suffix to remove (e.g. ".jsonl") — required when `from` is "fileName"', raw.strip === undefined ? RECEIVED_NOTHING : raw.strip) };
     }
-    return { ok: true, value: { from: "fileName", strip } };
+    // `afterLast` (task 99f4f263) — o id COMPOSTO no nome, medido no `omp`
+    // (`<timestamp>_<id>.jsonl`). Separador literal DECLARADO em vez de uma
+    // regex: uma regex aqui seria superfície de erro e de ataque num arquivo
+    // que o humano edita — um padrão que não casa daria ausência silenciosa,
+    // e um que casa demais entregaria ao `--resume` um pedaço do timestamp
+    // como se fosse id; um separador só tem as duas respostas honestas
+    // (achou → o pedaço depois dele; não achou → nenhum id). A ordem é
+    // FIXA: `strip` primeiro, `afterLast` depois.
+    let afterLast: string | undefined;
+    if (raw.afterLast !== undefined && raw.afterLast !== null) {
+      const parsed = nonEmptyString(raw.afterLast);
+      if (parsed === null) {
+        return { ok: false, reason: refusal(`${field}.afterLast`, 'a non-empty literal separator whose LAST occurrence the id comes after (e.g. "_" for "<timestamp>_<id>.jsonl") — omit it when the whole stem is the id', raw.afterLast) };
+      }
+      afterLast = parsed;
+    }
+    return { ok: true, value: { from: "fileName", strip, ...(afterLast !== undefined ? { afterLast } : {}) } };
   }
   if (raw.from === "jsonLine") {
     const path = parseJsonPath(raw.path, `${field}.path`);
@@ -1309,12 +1325,13 @@ function capacitySchema(): Record<string, unknown> {
               pattern: asNonEmptyStr('kind="files": glob RELATIVO a `root` que casa o registro (ex.: "*.jsonl"); um `*` é UM segmento de caminho.'),
               id: {
                 type: "object",
-                description: 'kind="files": de onde sai o id da sessão — "fileName" (+strip) do nome do arquivo, "dirName" do diretório que o contém, "jsonLine" (+path) do JSON da 1ª linha.',
+                description: 'kind="files": de onde sai o id da sessão — "fileName" (+strip, +afterLast) do nome do arquivo, "dirName" do diretório que o contém, "jsonLine" (+path) do JSON da primeira das PRIMEIRAS linhas em que o caminho aparece.',
                 required: ["from"],
                 properties: {
                   from: asEnum(SESSION_ID_SOURCES, "where the session id comes from"),
                   strip: asNonEmptyStr('Sufixo a remover do nome (ex.: ".jsonl"); obrigatório com from="fileName".'),
-                  path: { type: "array", items: { type: "string" }, description: 'Caminho JSON até o id (ex.: ["payload", "session_id"]); obrigatório com from="jsonLine".' },
+                  afterLast: asNonEmptyStr('Separador literal: o id é o que vem DEPOIS da ÚLTIMA ocorrência dele no nome já sem o `strip` (ex.: "_" para "<timestamp>_<id>.jsonl"). Sem o separador no nome não há id — ausência, nunca o nome inteiro.'),
+                  path: { type: "array", items: { type: "string" }, description: 'Caminho JSON até o id (ex.: ["payload", "session_id"]); obrigatório com from="jsonLine". A linha 1 nem sempre é o cabeçalho: procura-se o PRIMEIRO da dezena de linhas iniciais em que este caminho existe.' },
                 },
               },
               cwd: {

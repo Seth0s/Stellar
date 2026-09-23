@@ -521,22 +521,61 @@ async function readJsonFile(path: string, cache: JsonCache): Promise<unknown> {
   return value;
 }
 
-/** O JSON da PRIMEIRA linha não-vazia. Lê o arquivo inteiro (como a versão
- * à mão): ler só um prefixo mudaria o comportamento em arquivo truncado,
- * que é exatamente onde esta leitura importa. */
-async function readFirstJsonLine(path: string, cache: JsonCache): Promise<unknown> {
-  const key = `line\u0000${path}`;
+/** O JSON da PRIMEIRA linha não-vazia, sem procurar caminho nenhum, ficou sem
+ * uso quando o `jsonLine` passou a varrer o prefixo procurando o `path`
+ * declarado (task 99f4f263). Foi DELETADA em vez de mantida: duas respostas
+ * para "qual linha é a do cabeçalho" é exatamente a segunda fonte que esta
+ * task veio remover — e quem precisa do cabeçalho pede pelo caminho dele,
+ * `readFirstJsonLineAtPath`. */
+
+
+
+/** Quantas linhas o `jsonLine` varre procurando o CAMINHO declarado (task
+ * 99f4f263). Não é escolha estética: o cabeçalho de um log JSONL pode não ser
+ * a linha 1 — medido, o `omp` grava um `title` de preenchimento na 1ª e o
+ * `session` com `id`/`cwd` na 2ª — e varrer o arquivo INTEIRO parsearia um
+ * log de dezenas de MB para achar o que mora no topo. 20 é folga medida
+ * (o pior caso medido é a linha 2) e é uma constante, não um campo: uma
+ * configuração a mais aqui só criaria uma forma nova de errar. Um caminho
+ * que não aparece no prefixo varrido é AUSÊNCIA — o registro não vira
+ * candidato —, nunca a última linha lida como se fosse a certa. */
+const JSON_LINE_SCAN_LIMIT = 20;
+
+/** A primeira das primeiras linhas não-vazias em que o `path` resolve.
+ * Devolve o valor JÁ navegado (quem chama compara tipo) e `undefined` quando
+ * nenhuma linha do prefixo varrido tem o caminho. */
+async function readFirstJsonLineAtPath(
+  path: string,
+  needle: readonly string[],
+  cache: JsonCache,
+): Promise<unknown> {
+  const key = `line\u0000${needle.join("\u0000")}\u0000${path}`;
   if (cache.has(key)) return cache.get(key);
   const value = await readFile(path, "utf8")
     .then((content) => {
-      const first = content.split("\n").find((line) => line.trim());
-      return first ? (JSON.parse(first) as unknown) : null;
+      const lines = content.split("\n");
+      const limit = Math.min(lines.length, JSON_LINE_SCAN_LIMIT);
+      for (let i = 0; i < limit; i++) {
+        const line = lines[i]!;
+        if (!line.trim()) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line) as unknown;
+        } catch {
+          continue;
+        }
+        const found = valueAt(parsed, needle);
+        if (found !== undefined) return found;
+      }
+      return undefined;
     })
-    .catch(() => null);
+    .catch(() => undefined);
   cache.set(key, value);
   return value;
 }
 
+/** Navega o objeto pelo caminho declarado; `undefined` quando algum passo não
+ * existe (nunca `null` fingindo "achei um vazio"). */
 function valueAt(value: unknown, path: readonly string[]): unknown {
   let current = value;
   for (const key of path) {
@@ -548,11 +587,23 @@ function valueAt(value: unknown, path: readonly string[]): unknown {
 
 /** Id que sai do CAMINHO, sem abrir o arquivo — é o que permite checar
  * `claimedSessionIds` antes de pagar a leitura do conteúdo, a mesma ordem
- * que as funções à mão tinham. `null` quando o id só sai do conteúdo. */
+ * que as funções à mão tinham. `null` quando o id só sai do conteúdo.
+ *
+ * A ordem dos dois cortes é a DECLARADA em `SessionIdSource`: `strip` (o
+ * sufixo) primeiro, `afterLast` (o separador) depois — o `omp` grava
+ * `2026-09-22T12-34-19-909Z_<id>.jsonl`, e é assim que o stem vira `<id>`.
+ * Sem o separador no nome, `null`: ausência, nunca o nome inteiro fingindo
+ * ser id (task 99f4f263). */
 function pathDerivedId(source: SessionIdSource, entryPath: string): string | null {
   if (source.from === "fileName") {
     const name = basename(entryPath);
-    return name.endsWith(source.strip) ? name.slice(0, -source.strip.length) : null;
+    if (!name.endsWith(source.strip)) return null;
+    const stem = name.slice(0, -source.strip.length);
+    if (source.afterLast === undefined) return stem;
+    const cut = stem.lastIndexOf(source.afterLast);
+    if (cut < 0) return null;
+    const tail = stem.slice(cut + source.afterLast.length);
+    return tail.length > 0 ? tail : null;
   }
   if (source.from === "dirName") return basename(dirname(entryPath));
   return null;
@@ -564,8 +615,11 @@ async function contentDerivedId(
   cache: JsonCache,
 ): Promise<string | null> {
   if (source.from !== "jsonLine") return null;
-  const value = valueAt(await readFirstJsonLine(entryPath, cache), source.path);
-  return typeof value === "string" ? value : null;
+  if (source.from === "jsonLine") {
+    const value = await readFirstJsonLineAtPath(entryPath, source.path, cache);
+    return typeof value === "string" ? value : null;
+  }
+  return null;
 }
 
 async function entryTimestamp(
@@ -595,7 +649,7 @@ async function entryMatchesCwd(
     case "json":
       return valueAt(await readJsonFile(entryPath, cache), source.path) === cwd;
     case "jsonLine":
-      return valueAt(await readFirstJsonLine(entryPath, cache), source.path) === cwd;
+      return (await readFirstJsonLineAtPath(entryPath, source.path, cache)) === cwd;
   }
 }
 

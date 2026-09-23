@@ -746,6 +746,16 @@ describe("o store de sessão é declaração validada, não campo livre", () => 
     }
   });
 
+  it("aceita `afterLast` no id por nome de arquivo — o id COMPOSTO medido no omp — e recusa separador vazio nomeando o campo", () => {
+    const ok = parseSessionStore({ ...FILES, id: { from: "fileName", strip: ".jsonl", afterLast: "_" } });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.value).toMatchObject({ id: { from: "fileName", strip: ".jsonl", afterLast: "_" } });
+
+    const bad = parseSessionStore({ ...FILES, id: { from: "fileName", strip: ".jsonl", afterLast: "" } });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.reason).toContain("capacity.session.store.id.afterLast");
+  });
+
   it("aceita id por `dirName` (sem strip) e cwd pelo blob do antigravity — os dois casos que não cabem na forma mais comum", () => {
     const byDir = parseSessionStore({ ...FILES, id: { from: "dirName" }, cwd: { from: "binaryWorkspaceUri" } });
     expect(byDir.ok).toBe(true);
