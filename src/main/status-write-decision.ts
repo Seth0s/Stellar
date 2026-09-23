@@ -203,10 +203,10 @@ export function decideStatusWrite(input: StatusWriteInput): StatusWriteDecision 
  * wording cannot drift from the rule that produced it. Prefixed `[de:
  * stellar]` to match every other automated notice on the board.
  *
- * AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+ * AGENT-FACING — ENGLISH ONLY, not i18n'd (agents have no locale).
  * See `src/shared/i18n/agent-facing.ts`. */
 export function describeStatusHeldWarning(authoritativeStatus: string, proposedStatus: string): string {
-  return `[de: stellar] update_task pediu status "${proposedStatus}" mas o status humano "${authoritativeStatus}" prevalece — divergência sinalizada no quadro Fila. Para pedir a mudança (humano decide no quadro), use request_task_status.`;
+  return `[de: stellar] update_task asked for status "${proposedStatus}" but the human status "${authoritativeStatus}" prevails — divergence flagged on the Fila board. To ask for the change (the human decides on the board), use request_task_status.`;
 }
 
 /**
@@ -327,22 +327,22 @@ export function retainStatusAsk(input: {
   return { ask: input.existing, resolvedBy: null };
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE. Immediate return of request_task_status. */
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd. Immediate return of request_task_status. */
 export function describeStatusAskParked(requestedStatus: string, authoritativeStatus: string): string {
-  return `[de: stellar] pedido de status "${requestedStatus}" registrado — o status humano "${authoritativeStatus}" permanece até alguém decidir no quadro Fila.`;
+  return `[de: stellar] status request "${requestedStatus}" recorded — the human status "${authoritativeStatus}" stands until someone decides on the Fila board.`;
 }
 
 export function describeStatusAskAlready(status: string): string {
-  return `[de: stellar] status já é "${status}" — nada a pedir.`;
+  return `[de: stellar] status is already "${status}" — nothing to ask for.`;
 }
 
 export function describeStatusAskResolved(requestedStatus: string, allowed: boolean): string {
   return allowed
-    ? `[de: stellar] humano aceitou o pedido de status "${requestedStatus}".`
-    : `[de: stellar] humano recusou o pedido de status "${requestedStatus}".`;
+    ? `[de: stellar] the human accepted the status request "${requestedStatus}".`
+    : `[de: stellar] the human refused the status request "${requestedStatus}".`;
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE. Ask closed because a write made it true. */
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd. Ask closed because a write made it true. */
 export function describeStatusAskApplied(requestedStatus: string): string {
-  return `[de: stellar] pedido de status "${requestedStatus}" encerrado — o status já é "${requestedStatus}".`;
+  return `[de: stellar] status request "${requestedStatus}" closed — the status is already "${requestedStatus}".`;
 }

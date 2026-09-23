@@ -152,13 +152,13 @@ describe("message-bus: evidência de gate é do app", () => {
   });
 
   /** O default vive no OBJETO do parâmetro (não num `??` interno): assim
-   * `{ declaredBoardRoot: undefined }` significa "board sem raiz declarada", e
+   * `{ declaredBoardRoot: undefined }` significa "board sem declared root", e
    * não cai de volta no default — foi exatamente esse `??` que fez a primeira
    * versão do teste abaixo passar verde pelo motivo errado. */
   function setup(opts: { declaredBoardRoot?: string } = { declaredBoardRoot: tmpdir() }) {
     dir = mkdtempSync(join(tmpdir(), "stellar-gate-evidence-"));
     store = openStore(dir);
-    // A raiz declarada do board é o `tmpdir`: os `workDir` de cada teste são
+    // A declared root do board é o `tmpdir`: os `workDir` de cada teste são
     // criados DENTRO dela. Sem raiz o runner recusa (2026-09-21), e um teste
     // que não declarasse a sua exercitaria um estado que produção não alcança.
     bus = createMessageBus(join(dir, "a.sock"), callbacksBackedByStore(store, { boardCwd: opts.declaredBoardRoot }));
@@ -267,7 +267,7 @@ describe("message-bus: evidência de gate é do app", () => {
     }
   });
 
-  it("board SEM raiz declarada: o gate NÃO executa, e a evidência nomeia o motivo", async () => {
+  it("board SEM declared root: o gate NÃO executa, e a evidência nomeia o motivo", async () => {
     // DECISÃO DO DONO (2026-09-21) na PORTA DO BUS: `boardDeclaredRoot` devolve
     // indefinido para uma task sem board, e indefinido agora é RECUSA. Antes
     // deste teste o mesmo caminho rodava o gate sem limite de raiz — o resíduo
@@ -288,7 +288,7 @@ describe("message-bus: evidência de gate é do app", () => {
       expect(measured!.ok).toBe(false);
       expect(measured!.commands[0].exitCode).toBeNull();
       expect(measured!.commands[0].stdout).not.toContain("NAO-PODIA-TER-RODADO");
-      expect(measured!.commands[0].stderr).toContain("raiz declarada");
+      expect(measured!.commands[0].stderr).toContain("declared root");
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

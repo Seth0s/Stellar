@@ -375,7 +375,7 @@ const CARD_STATUS_CONTRACT: ToolContractDecl = {
       name: "target",
       required: true,
       schema: z.string().describe("The target card's id or label (see list_cards)"),
-      accepted: "o id ou o label de um card aberto (veja list_cards)",
+      accepted: "the id or the label of an open card (see list_cards)",
     },
   ],
 };
@@ -390,7 +390,7 @@ const REPORT_CONTRACT: ToolContractDecl = {
         .describe(
           "Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it: a registered MCP process is identified by its URL stamp; this body field is not trusted when that stamp is absent, so an external client cannot report as a different card just by naming one here.",
         ),
-      accepted: "o id do seu próprio card (ver AGENT_CANVAS_CARD_ID)",
+      accepted: "your own card id (see AGENT_CANVAS_CARD_ID)",
     },
     {
       name: "report",
@@ -401,7 +401,7 @@ const REPORT_CONTRACT: ToolContractDecl = {
         .describe(
           "Any JSON value. Success: {ok: true, ...}. Retryable failure: {ok: false, ...} — refused in-line while max_retries remain so you can correct in this same session. Terminal failure (accepted immediately, no retry spent): {ok: false, retryable: false, ...}. A payload without ok is accepted and is not a failure. ok and retryable, when present, must be booleans. Pass the payload as a JSON object; a JSON-encoded object string is also accepted and decoded. Do not put a field OF THIS CALL inside the payload — a `verdict` (or `callerCardId`) written here instead of as its own argument is REFUSED by name, because the tool reads those from the call and would otherwise store your verdict as null.",
         ),
-      accepted: "o relatório como objeto JSON (um objeto codificado como string também é aceito)",
+      accepted: "the report as a JSON object (an object encoded as a string is also accepted)",
     },
     {
       name: "verdict",
@@ -410,7 +410,7 @@ const REPORT_CONTRACT: ToolContractDecl = {
         .describe(
           "Formal verdict for a review report — a real, typed field (not just a convention inside `report`'s free JSON). Omit for a plain non-review report. A verdict is judgment, so it passes the SAME gate as update_task's done/failed, and is REFUSED before anything is stored when you are not entitled to judge: a card linked as implementer on this task is refused (an implementer's own 'aprovado' is not a review — it was measured three times in one day, always reproved later), and when the task declares review=\"wanted\" only a linked reviewer may set one. Reviewer and reviewer-less outsider keep writing as before; unknown role is not implementer, so it is not barred. A reviewer's verdict must also carry the task's declared reportSchema keys with real content — absent, empty or placeholder values (\"\", [], {}, \"N/A\", \"TBD\") are REFUSED, because a verdict without evidence is worth less than no review. Stored together with YOUR role on the task (task_cards: implementer/reviewer, or unknown when your card is not linked).",
         ),
-      accepted: 'um dos valores "aprovado" ou "reprovado"',
+      accepted: 'one of "aprovado" or "reprovado"',
     },
   ],
 };
@@ -452,8 +452,8 @@ async function reportPreflight(
   if (!task) return { action: "ok" };
   return decideDeclaredKeys({
     tool: "report",
-    declaredBy: `o reportSchema da task ${taskId}`,
-    accepted: "conteúdo real (a evidência medida: o que foi verificado, a saída do gate, o número)",
+    declaredBy: `the reportSchema of task ${taskId}`,
+    accepted: "real content (the measured evidence: what was verified, the gate output, the number)",
     declared: readReportSchema(task.reportSchema),
     provided: report,
     // `emptyReportSchemaFields` recebe (report, schema) — o contrato pede

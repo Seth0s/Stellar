@@ -131,13 +131,13 @@ describe("tool-contract: campo de chamada dentro do payload", () => {
     expect(decision.action).toBe("refuse");
     const error = decision.action === "refuse" ? decision.error : "";
     expect(error).toContain("`verdict`"); // o campo
-    expect(error).toContain("DENTRO do payload `report`"); // de onde veio
+    expect(error).toContain("came INSIDE the payload `report`"); // de onde veio
     expect(error).toContain('"APROVADO"'); // o que chegou
     expect(error).toContain('"aprovado" ou "reprovado"'); // o que o campo aceita
-    expect(error).toContain("campo próprio da chamada"); // para onde vai
-    expect(error).toContain("nada foi gravado");
+    expect(error).toContain("own field of the call"); // para onde vai
+    expect(error).toContain("nothing was written");
     // Mesma voz das outras recusas do módulo (o leitor é o modelo no turno).
-    expect(error.startsWith("[de: stellar] report recusado:")).toBe(true);
+    expect(error.startsWith("[de: stellar] report refused:")).toBe(true);
   });
 
   it("dois campos deslocados na mesma chamada saem os dois na mesma frase", () => {

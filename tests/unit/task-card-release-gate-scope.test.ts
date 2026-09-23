@@ -148,7 +148,7 @@ describe("gate de liberação escopado À TASK (seq 607)", () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toContain("implementer");
-    expect(res.error).toContain("Nada foi gravado");
+    expect(res.error).toContain("Nothing was written");
     // NADA foi gravado: a linha continua participante viva.
     expect(store.getTaskCards("t1").find((l) => l.card_id === "rc")?.released_at ?? null).toBeNull();
     expect(store.getTask("t1")?.card_id).toBe("rc");
@@ -189,7 +189,7 @@ describe("gate de liberação escopado À TASK (seq 607)", () => {
     // o que a sonda ao vivo mediu. O correto: o principal da task É o
     // implementer de fato (leitura da 1547), e o gate nomeia a regra.
     expect(res.error).toContain("implementer");
-    expect(res.error).toContain("Nada foi gravado");
+    expect(res.error).toContain("Nothing was written");
   });
 
   it("B) principal SEM linha em task_cards (o estado das 7 órfãs) não se auto-libera — a recusa nomeia a regra", async () => {
@@ -219,7 +219,7 @@ describe("gate de liberação escopado À TASK (seq 607)", () => {
     // O que não vale: recusar por ACASO ("not a live participant") — o
     // principal da task É o implementer de fato (mesma leitura da 1547).
     expect(res.error).toContain("implementer");
-    expect(res.error).toContain("Nada foi gravado");
+    expect(res.error).toContain("Nothing was written");
   });
 });
 

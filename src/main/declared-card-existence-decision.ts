@@ -84,12 +84,12 @@ export function decideDeclaredCardExistence(input: {
  */
 export function describeNonexistentDeclaredCardRefusal(declaredCardId: string): string {
   return (
-    `[de: stellar] report recusado: o card que você declara (${declaredCardId}) NÃO existe — nenhum card vivo tem esse id. ` +
-    `Nada foi gravado. ` +
-    `Isto não é um erro do seu payload: a identidade que o seu processo carrega vem do AMBIENTE do processo, e um provider ` +
-    `cujo processo é compartilhado (um daemon que hospeda vários cards, medido no cline) faz todos os cards herdarem o id do ` +
-    `PRIMEIRO card — que pode já ter sido fechado e apagado. Repetir a chamada com este mesmo id não vai funcionar. ` +
-    `Deixe o resultado num arquivo (ou num card que você conseguiu identificar) e avise quem te pediu o trabalho; o vínculo da ` +
-    `task continua existindo, mas o relatório não pode ser atribuído por um id que não é seu.`
+    `[de: stellar] report refused: the card you declare (${declaredCardId}) does NOT exist — no live card has that id. ` +
+    `Nothing was written. ` +
+    `This is not an error in your payload: the identity your process carries comes from the process ENVIRONMENT, and a provider ` +
+    `whose process is shared (one daemon hosting several cards, measured on cline) makes every card inherit the FIRST card's ` +
+    `id — which may already have been closed and deleted. Calling again with this same id will not work. ` +
+    `Leave the result in a file (or in a card you did manage to identify) and tell whoever asked you for the work; the task ` +
+    `link still exists, but the report cannot be attributed by an id that is not yours.`
   );
 }

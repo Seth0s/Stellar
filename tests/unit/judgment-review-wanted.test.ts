@@ -196,7 +196,7 @@ describe("CAMADA 1: review=wanted (store real)", () => {
       requesterId: "orch-1",
     } as BusRequest);
     expect(asOrch.ok).toBe(false);
-    expect(String(asOrch.error)).toContain("orquestrador");
+    expect(String(asOrch.error)).toContain("orchestrator");
     expect(rig.store.getTask("t1")!.status).toBe("pending");
     expect(rig.onTaskDoneCalls).toEqual([]);
   });

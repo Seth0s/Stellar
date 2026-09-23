@@ -255,9 +255,9 @@ export function runTaskGates(input: RunTaskGatesInput): Promise<GateRunEvidence>
  * gates são shell de autoria de agente e NÃO rodam sem confinamento. */
 export function describeSandboxUnavailable(): string {
   return (
-    "[de: stellar] gate NÃO executado: sandbox (bubblewrap/bwrap) indisponível neste sistema. " +
-    "Os gates de uma task são shell de autoria de agente e não rodam sem confinamento — " +
-    "instale o bubblewrap. Nada foi executado."
+    "[de: stellar] gate NOT run: sandbox (bubblewrap/bwrap) is unavailable on this system. " +
+    "A task's gates are agent-authored shell and do not run without confinement — " +
+    "install bubblewrap. Nothing was executed."
   );
 }
 
@@ -268,9 +268,9 @@ export function describeSandboxUnavailable(): string {
  * rodar? Duas redações seriam duas noções outra vez. */
 export function describeNoDeclaredRoot(where: "gate" | "auto-dispatch" = "gate"): string {
   return (
-    `[de: stellar] ${where} NÃO executado: a task não tem raiz declarada (sem board, ou board sem cwd). ` +
-    "Sem raiz declarada não existe lugar autorizado onde o app possa agir em nome de um agente — " +
-    "vincule a task a um board com cwd declarado. Nada foi executado."
+    `[de: stellar] ${where} NOT run: the task has no declared root (no board, or a board without cwd). ` +
+    "Without a declared root there is no authorised place for the app to act on behalf of an agent — " +
+    "link the task to a board with a declared cwd. Nothing was executed."
   );
 }
 

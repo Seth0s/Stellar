@@ -14,7 +14,7 @@ import type { TaskRow } from "../../src/main/store";
  * ITEM 2 (decisão do dono, 2026-09-21) — `gates` são shell que o APP roda
  * (`gate-runner.ts`). A porta MCP aceita `gates` de QUALQUER card; medido no
  * banco real (2026-09-21): 171 tasks com gates, 6 cards distintos autorando,
- * 38 delas no board 118 criadas por cards que NÃO são o orquestrador.
+ * 38 delas no board 118 criadas por cards que NÃO são o orchestrator.
  *
  * A regra pedida, e a razão da sua FORMA:
  *   - board COM marca (`boards.orchestrator_card_id`) → só o card marcado
@@ -132,10 +132,10 @@ describe("decideGatesAuthorship — com marca, sem marca e mudança de conjunto"
     if (decision.action !== "allow-and-record") return;
     expect(decision.note).toContain(BOARD);
     expect(decision.note).toContain(WORKER);
-    expect(decision.note).toContain("orquestrador");
+    expect(decision.note).toContain("orchestrator");
   });
 
-  it("board COM marca: o próprio orquestrador declara", () => {
+  it("board COM marca: o próprio orchestrator declara", () => {
     expect(
       decideGatesAuthorship({
         gates: GATES,
@@ -147,7 +147,7 @@ describe("decideGatesAuthorship — com marca, sem marca e mudança de conjunto"
     ).toBe("allow");
   });
 
-  it("board COM marca: quem NÃO é o orquestrador é RECUSADO nomeando `gates`", () => {
+  it("board COM marca: quem NÃO é o orchestrator é RECUSADO nomeando `gates`", () => {
     const decision = decideGatesAuthorship({
       gates: GATES,
       current: null,
@@ -160,10 +160,10 @@ describe("decideGatesAuthorship — com marca, sem marca e mudança de conjunto"
     expect(decision.error).toContain("`gates`");
     expect(decision.error).toContain(ORCH);
     expect(decision.error).toContain(WORKER);
-    expect(decision.error).toContain("Nada foi gravado");
+    expect(decision.error).toContain("Nothing was written");
   });
 
-  it("board COM marca e chamador ANÔNIMO: recusado — não se presume orquestrador", () => {
+  it("board COM marca e chamador ANÔNIMO: refused — não se presume orchestrator", () => {
     const decision = decideGatesAuthorship({
       gates: GATES,
       current: null,
@@ -177,11 +177,11 @@ describe("decideGatesAuthorship — com marca, sem marca e mudança de conjunto"
   it("o registro do board sem marca nomeia o que fazer", () => {
     const note = describeGatesAuthorshipUndeclaredBoard({ boardId: BOARD, requesterId: null });
     expect(note).toContain(BOARD);
-    expect(note).toContain("anônimo");
+    expect(note).toContain("anonymous");
   });
 });
 
-describe("create_task — autoria de gates passa pelo orquestrador do board", () => {
+describe("create_task — autoria de gates passa pelo orchestrator do board", () => {
   let dir: string;
   let bus: ReturnType<typeof createMessageBus> | null;
   let upserted: TaskRow[];
@@ -220,7 +220,7 @@ describe("create_task — autoria de gates passa pelo orquestrador do board", ()
     return bus;
   }
 
-  it("board COM marca: worker declara gates → recusado nomeando `gates`; NADA gravado", async () => {
+  it("board COM marca: worker declara gates → refused nomeando `gates`; NADA gravado", async () => {
     const b = makeBus(ORCH);
     const res = (await b.handleRequest({
       cmd: "create_task",
@@ -235,7 +235,7 @@ describe("create_task — autoria de gates passa pelo orquestrador do board", ()
     expect(upserted).toEqual([]);
   });
 
-  it("board COM marca: o orquestrador declara gates → grava", async () => {
+  it("board COM marca: o orchestrator declara gates → grava", async () => {
     const b = makeBus(ORCH);
     const res = (await b.handleRequest({
       cmd: "create_task",
@@ -261,7 +261,7 @@ describe("create_task — autoria de gates passa pelo orquestrador do board", ()
 
     expect(res.ok).toBe(true);
     expect(JSON.parse(String(upserted[0].gates_json))).toEqual(GATES);
-    expect(String(res.warning)).toContain("orquestrador");
+    expect(String(res.warning)).toContain("orchestrator");
     expect(warns.join("\n")).toContain(BOARD);
   });
 
@@ -337,7 +337,7 @@ describe("update_task — a MESMA regra na segunda porta", () => {
     expect(upserted).toEqual([]);
   });
 
-  it("o orquestrador troca os gates → grava", async () => {
+  it("o orchestrator troca os gates → grava", async () => {
     const b = makeBus(baseTask({ id: "t1", board_id: BOARD }), ORCH);
     const res = (await b.handleRequest({
       cmd: "update_task",

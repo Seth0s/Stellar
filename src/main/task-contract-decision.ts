@@ -287,13 +287,13 @@ export function decideGatesSandboxAvailability(input: {
  * TEACHES: names the measured fact and the way out. */
 export function describeGatesSandboxUnavailable(input: { tool?: string; gates: readonly string[] }): string {
   return (
-    `[de: stellar] ${input.tool ?? "create_task/update_task"} recusado: \`gates\` são comandos que o APP RODA, ` +
-    `e o app só os roda confinados — neste sistema não há sandbox (bubblewrap/bwrap), então os ` +
-    `${input.gates.length} gate(s) declarados NÃO rodariam. Aceitar isso seria registrar uma promessa que esta ` +
-    `plataforma não pode cumprir: a task correria inteira e a recusa só apareceria no relatório, como "gate NÃO executado". ` +
-    `Declare a task SEM \`gates\` e cubra o mesmo terreno em gatesOutput do relatório, rodando os comandos você mesmo ` +
-    `(o resultado é auto-declarado, mas é honesto e visível), ou rode a task num Linux com bubblewrap instalado. ` +
-    `Nada foi gravado.`
+    `[de: stellar] ${input.tool ?? "create_task/update_task"} refused: \`gates\` are commands the APP RUNS, ` +
+    `and the app only runs them confined — on this system there is no sandbox (bubblewrap/bwrap), so the ` +
+    `declared ${input.gates.length} gate(s) would NOT run. Accepting that would register a promise this ` +
+    `platform cannot keep: the task would run in full and the refusal would only show up in the report, as "gate NOT run". ` +
+    `Declare the task WITHOUT \`gates\` and cover the same ground in the report's gatesOutput, running the commands yourself ` +
+    `(the result is self-declared, but it is honest and visible), or run the task on a Linux with bubblewrap installed. ` +
+    `Nothing was written.`
   );
 }
 
@@ -382,11 +382,11 @@ export function describeGatesAuthorshipRefusal(input: {
 }): string {
   const who = input.requesterId ?? "um chamador anônimo (sem requesterId)";
   return (
-    `[de: stellar] ${input.tool ?? "create_task/update_task"} recusado: \`gates\` são comandos que o APP RODA, ` +
-    `e no board "${input.boardId}" só o card marcado como orquestrador (${input.orchestratorCardId}) os declara — ` +
-    `quem chamou foi ${who}. O conjunto mudaria para ${input.gates.length} comando(s), e nada dele foi gravado. ` +
-    `Chame do card do orquestrador, ou peça ao humano para marcar um orquestrador no board — ` +
-    `se o que você quer é pedir uma mudança, use request_task_status. Nada foi gravado.`
+    `[de: stellar] ${input.tool ?? "create_task/update_task"} refused: \`gates\` are commands the APP RUNS, ` +
+    `and on board "${input.boardId}" only the card marked as orchestrator (${input.orchestratorCardId}) declares them — ` +
+    `the caller was ${who}. The set would change to ${input.gates.length} command(s), and none of it was written. ` +
+    `Call from the orchestrator's card, or ask the human to mark an orchestrator on the board — ` +
+    `if what you want is to request a change, use request_task_status. Nothing was written.`
   );
 }
 
@@ -396,11 +396,11 @@ export function describeGatesAuthorshipUndeclaredBoard(input: {
   boardId: string;
   requesterId: string | null | undefined;
 }): string {
-  const who = input.requesterId ?? "anônimo";
+  const who = input.requesterId ?? "anonymous";
   return (
-    `board "${input.boardId}" não tem orquestrador marcado (boards.orchestrator_card_id NULL): ` +
-    `\`gates\` escritos por ${who} foram ACEITOS (comportamento de hoje) e REGISTRADOS aqui. ` +
-    `Marque um orquestrador no board para que só ele declare gates — sem marca, esta regra não tem a quem recorrer.`
+    `board "${input.boardId}" has no marked orchestrator (boards.orchestrator_card_id NULL): ` +
+    `\`gates\` written by ${who} were ACCEPTED (today's behaviour) and RECORDED here. ` +
+    `Mark an orchestrator on the board so that only it declares gates — without a mark, this rule has nobody to fall back to.`
   );
 }
 

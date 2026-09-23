@@ -12,7 +12,7 @@ import { describeSandboxUnavailable, runTaskGates } from "../../src/main/gate-ru
  * ausência de QUALQUER fallback para shell do host.
  *
  * O que estes testes prendem:
- *   1. o cwd do gate também é confinado à raiz declarada (item 1, na
+ *   1. o cwd do gate também é confinado à declared root (item 1, na
  *      EXECUÇÃO — vale também para uma linha que já está no banco);
  *   2. uma string de gate com forma de injeção continua sendo argv, nunca
  *      shell: o processo do host é SEMPRE o binário do sandbox;
@@ -21,7 +21,7 @@ import { describeSandboxUnavailable, runTaskGates } from "../../src/main/gate-ru
  *      `providers-config-seed.test.ts`.
  */
 
-describe("gate-runner: o cwd do gate é confinado à raiz declarada", () => {
+describe("gate-runner: o cwd do gate é confinado à declared root", () => {
   const dirs: string[] = [];
   afterAll(() => {
     for (const d of dirs) rmSync(d, { recursive: true, force: true });
@@ -32,7 +32,7 @@ describe("gate-runner: o cwd do gate é confinado à raiz declarada", () => {
     return d;
   }
 
-  it("cwd FORA da raiz declarada: nenhum spawn, recusa POR COMANDO nomeando `cwd`", async () => {
+  it("cwd OUTSIDE the board's declared root: nenhum spawn, recusa POR COMANDO nomeando `cwd`", async () => {
     const root = tempDir("stellar-gate-declared-root-");
     const outside = tempDir("stellar-gate-declared-outside-");
     let spawnCalls = 0;
@@ -61,7 +61,7 @@ describe("gate-runner: o cwd do gate é confinado à raiz declarada", () => {
     }
   });
 
-  it("cwd DENTRO da raiz declarada: roda normalmente, no binário do sandbox", async () => {
+  it("cwd DENTRO da declared root: roda normalmente, no binário do sandbox", async () => {
     const root = tempDir("stellar-gate-declared-inside-");
     const inside = join(root, "sub");
     mkdirSync(inside);
@@ -91,7 +91,7 @@ describe("gate-runner: o cwd do gate é confinado à raiz declarada", () => {
     expect(evidence.ok).toBe(true);
   });
 
-  it("SEM raiz declarada o gate NÃO executa — 'rodar sem limite' deixou de existir", async () => {
+  it("SEM declared root o gate NÃO executa — 'rodar sem limite' deixou de existir", async () => {
     // DECISÃO DO DONO (2026-09-21), e ela é CONTRA a simetria que o Revisor A
     // havia validado: "ausência de raiz = ausência de limite" estava certa
     // quando a alternativa era brickar fluxo que funciona. A medição destruiu
@@ -100,7 +100,7 @@ describe("gate-runner: o cwd do gate é confinado à raiz declarada", () => {
     // é mais criável; nenhum board ficou sem `cwd`. O raio é dormente/terminal.
     // Manter um buraco conhecido em EXECUÇÃO de gate por elegância de simetria
     // é a troca errada. Agora não existe caminho para rodar shell de agente
-    // sem uma raiz declarada.
+    // sem uma declared root.
     const dir = tempDir("stellar-gate-no-root-");
     let spawnCalls = 0;
     const spawnSpy = (() => {
@@ -122,8 +122,8 @@ describe("gate-runner: o cwd do gate é confinado à raiz declarada", () => {
     expect(evidence.commands).toHaveLength(2);
     for (const c of evidence.commands) {
       expect(c.exitCode).toBeNull();
-      expect(c.stderr).toContain("raiz declarada");
-      expect(c.stderr).toContain("Nada foi executado");
+      expect(c.stderr).toContain("declared root");
+      expect(c.stderr).toContain("Nothing was executed");
     }
   });
 });
@@ -170,8 +170,8 @@ describe("GATE: nunca existe caminho para shell do host", () => {
   it("sem bwrap a recusa é por comando e nomeia o sandbox (nunca fallback silencioso)", () => {
     const reason = describeSandboxUnavailable();
     expect(reason).toContain("bubblewrap");
-    expect(reason).toContain("não rodam sem confinamento");
-    expect(reason).toContain("Nada foi executado");
+    expect(reason).toContain("do not run without confinement");
+    expect(reason).toContain("Nothing was executed");
   });
 
   it("a FONTE do gate-runner não reintroduz shell do host", () => {
