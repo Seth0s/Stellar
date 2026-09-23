@@ -209,6 +209,23 @@ export function describeStatusHeldWarning(authoritativeStatus: string, proposedS
   return `[de: stellar] update_task asked for status "${proposedStatus}" but the human status "${authoritativeStatus}" prevails — divergence flagged on the Fila board. To ask for the change (the human decides on the board), use request_task_status.`;
 }
 
+/** Answer 3 — a proposed status the WRITTEN domain does not keep. The one
+ * case measured today: `update_task status:"running"` is accepted by the
+ * schema, the store normalizes it to `pending` (`coerceStoredTaskStatus`),
+ * and before this the caller got a bare `{ok:true}` back with no `status`
+ * at all — so the agent believed it had written `running` (task 34e27f66;
+ * same family as the report written under a ghost id: the write door
+ * saying something happened that did not).
+ *
+ * AGENT-FACING — ENGLISH ONLY, not i18n'd (agents have no locale). */
+export function describeStatusNotStored(proposedStatus: string, storedStatus: string): string {
+  return (
+    `[de: stellar] status stored: "${storedStatus}" — your proposal "${proposedStatus}" is not a STORED state, so the row was not written with it. ` +
+    `"running" never lives in the column: it means "a card is on this task right now", which is read from a live card, not written (see get_task/list_tasks ` +
+    `cardAlive). Nothing else about your write was lost.`
+  );
+}
+
 /**
  * Third path between "silent accept" and "held forever": the agent ASKS,
  * the human decides. This module does not invent a consent machine —

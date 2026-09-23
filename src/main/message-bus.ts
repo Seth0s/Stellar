@@ -33,6 +33,7 @@ import {
   describeStatusAskApplied,
   describeStatusAskParked,
   describeStatusHeldWarning,
+  describeStatusNotStored,
   retainStatusAsk,
 } from "./status-write-decision";
 import {
@@ -4671,16 +4672,34 @@ export function createMessageBus(
         proposedStatus: statusProposed ? (req.status ?? null) : null,
         resultingStatus: decision.status,
       });
+      // A RESPOSTA DIZ O QUE FICOU GRAVADO (task 34e27f66). O schema aceita
+      // `status:"running"` e o store o normaliza para `pending`
+      // (`coerceStoredTaskStatus`): antes disto o caller recebia `{ok:true}`
+      // sem `status` nenhum e acreditava ter escrito `running`. Agora a
+      // resposta sempre carrega o valor GRAVADO quando um status foi
+      // proposto, e — quando a proposta não é o que ficou — nomeia a
+      // diferença em vez de deixá-la implícita.
+      const storedStatusReply =
+        statusProposed && req.status !== decision.status
+          ? { status: decision.status, note: describeStatusNotStored(req.status!, decision.status) }
+          : statusProposed
+            ? { status: decision.status }
+            : {};
+      // Uma chave `warning` só: duas mensagens (o gate de autoria e a
+      // proposta não-gravada) não podem se sobrescrever.
+      const warnings = [storedStatusReply.note, gatesAuthorshipNote].filter((w): w is string => !!w);
+      const { note: _drop, ...storedStatusFields } = storedStatusReply;
+      const warningField = warnings.length > 0 ? { warning: warnings.join(" ") } : {};
       if (askAfter.resolvedBy === "applied-ask" && existing.requested_status) {
         return {
           ok: true,
           message: describeStatusAskApplied(existing.requested_status),
-          status: decision.status,
+          ...storedStatusFields,
           ...promptWritten,
-          ...(gatesAuthorshipNote ? { warning: gatesAuthorshipNote } : {}),
+          ...warningField,
         };
       }
-      return { ok: true, ...promptWritten, ...(gatesAuthorshipNote ? { warning: gatesAuthorshipNote } : {}) };
+      return { ok: true, ...storedStatusFields, ...promptWritten, ...warningField };
     }
 
     if (req.cmd === "list_tasks") {
