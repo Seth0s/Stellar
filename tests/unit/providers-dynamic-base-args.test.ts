@@ -172,8 +172,9 @@ describe("baseArgs — o default medido do commandcode", () => {
     // responda o modal, então o Stellar responde pelo que ele causa.
     const commandcode = shippedProviderSpecs().find((entry) => entry.id === "commandcode");
     expect(commandcode?.baseArgs).toContain("--skip-onboarding");
-    // O cline não ganhou nada equivalente — não foi medido para ele.
-    expect(shippedProviderSpecs().find((entry) => entry.id === "cline")?.baseArgs).toBeUndefined();
+    // O cline não ganhou nada equivalente a onboarding — o único baseArg dele é
+    // `--tui` (ver o teste abaixo), que é sobre MODO, não sobre modal.
+    expect(shippedProviderSpecs().find((entry) => entry.id === "cline")?.baseArgs).toEqual(["--tui"]);
   });
 
   it("`--no-session` ficou FORA de propósito: desligaria a persistência e o card perderia o `/resume`", () => {
@@ -188,7 +189,12 @@ describe("baseArgs — o default medido do commandcode", () => {
 
   it("o cline NÃO ganhou flag de permissão: não foi medido equivalente para ele", () => {
     const cline = shippedProviderSpecs().find((entry) => entry.id === "cline");
-    expect(cline?.baseArgs).toBeUndefined();
+    // Só `--tui`, medido 2026-09-23 em cline 3.0.64 num PTY real: com o brief
+    // POSICIONAL e sem `-i/--tui` o cline roda NÃO interativo (saída de texto
+    // corrida, sem caixa de entrada, e sai ao terminar — o card "nasce
+    // quebrado" e não aceita a próxima mensagem); com `-i` abre a TUI
+    // ("Ask anything…") com o brief já enviado. Nenhuma flag de permissão.
+    expect(cline?.baseArgs).toEqual(["--tui"]);
   });
 
   /**
