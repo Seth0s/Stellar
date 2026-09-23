@@ -1,0 +1,48 @@
+{
+  "$comment": "BOARD PRESETS — DADO, não código (task 83f4cfa3). Cada preset é uma LISTA DECLARADA de ajustes que o usuário poderia setar à mão; aplicar não esconde nada. Os valores vêm da página 'Três jeitos de trabalhar' (StellarPage, src/content/docs/tres-jeitos-de-trabalhar.md) — e onde a doc não dá número, o `source` DIZ que veio do default do próprio app em vez de inventar. Custo é texto com link da doc: nenhum número de tokens é inventado aqui.",
+  "presets": [
+    {
+      "id": "eficiente",
+      "label": "Eficiente",
+      "summary": "Um card, um agente, você do lado. Sem Fila, consentimento manual.",
+      "settings": {
+        "autonomous": false,
+        "concurrencyCap": 1,
+        "defaultReview": null,
+        "defaultReportSchema": null,
+        "defaultAllowCommit": false
+      },
+      "source": "doc 'Eficiente': um card de terminal, um agente, sem Fila, sem contrato",
+      "costNotice": "O menor custo dos três: uma cadeia de agente por vez."
+    },
+    {
+      "id": "produtivo",
+      "label": "Produtivo",
+      "summary": "Um orquestrador + 2 a 5 implementadores, cada um no seu território.",
+      "settings": {
+        "autonomous": true,
+        "concurrencyCap": 5,
+        "defaultReview": null,
+        "defaultReportSchema": null,
+        "defaultAllowCommit": false
+      },
+      "source": "doc 'Produtivo': 2 a 5 implementadores, allowCommit false nos implementadores, revisão proporcional ao risco",
+      "costNotice": "Médio: até 5 agentes ao mesmo tempo, cada um gastando tokens próprios."
+    },
+    {
+      "id": "maximo",
+      "label": "Máximo",
+      "summary": "Board autônomo encadeando tasks, com um card revisor por task.",
+      "settings": {
+        "autonomous": true,
+        "concurrencyCap": 3,
+        "defaultReview": "wanted",
+        "defaultReportSchema": null,
+        "defaultAllowCommit": false
+      },
+      "source": "doc 'Máximo' para autonomia e revisor por task; cap 3 = DEFAULT_CONCURRENCY_CAP do app (a doc diz 'cresce com o paralelismo' e NÃO dá número — não inventei um)",
+      "costNotice": "Alto: execuções multi-agente custam muitas vezes os tokens de um agente só — veja a página dos três jeitos.",
+      "docsPath": "/docs/tres-jeitos-de-trabalhar"
+    }
+  ]
+}
