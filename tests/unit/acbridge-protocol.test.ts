@@ -22,7 +22,7 @@ import { createMessageBus } from "../../src/main/message-bus";
 const ACBRIDGE_PATH = resolve(__dirname, "../../resources/bin/acbridge");
 
 describe("checkAcbridgeProtocol", () => {
-  it("sem carimbo = acbridge anterior ao protocolo (ou cliente cru)", () => {
+  it("no protocol stamp = acbridge anterior ao protocol (ou cliente cru)", () => {
     expect(checkAcbridgeProtocol({ cmd: "list" })).toEqual({ kind: "unstamped" });
     expect(checkAcbridgeProtocol(null)).toEqual({ kind: "unstamped" });
     expect(checkAcbridgeProtocol(["cmd"])).toEqual({ kind: "unstamped" });
@@ -34,7 +34,7 @@ describe("checkAcbridgeProtocol", () => {
     expect(checkAcbridgeProtocol({ cmd: "list", protocol: 4 }, 3)).toEqual({ kind: "acbridge-newer", theirs: 4 });
   });
 
-  it("carimbo presente mas inválido é cliente quebrado, não velho", () => {
+  it("carimbo presente mas invalid é cliente quebrado, não velho", () => {
     expect(checkAcbridgeProtocol({ cmd: "list", protocol: "1" })).toEqual({ kind: "malformed", raw: "1" });
     expect(checkAcbridgeProtocol({ cmd: "list", protocol: 0 })).toEqual({ kind: "malformed", raw: 0 });
     expect(checkAcbridgeProtocol({ cmd: "list", protocol: 1.5 })).toEqual({ kind: "malformed", raw: 1.5 });
@@ -47,33 +47,33 @@ describe("decideAcbridgeProtocol — política assimétrica", () => {
     expect(decideAcbridgeProtocol({ kind: "match", theirs: 1 }, 1)).toEqual({ accept: true });
   });
 
-  it("acbridge mais velho / sem carimbo: aceita (subconjunto) e AVISA — card velho vivo não cai", () => {
+  it("acbridge mais velho / no protocol stamp: aceita (subconjunto) e AVISA — card velho vivo não cai", () => {
     const unstamped = decideAcbridgeProtocol({ kind: "unstamped" }, 2);
     expect(unstamped.accept).toBe(true);
-    expect(unstamped.accept && unstamped.warning).toMatch(/sem carimbo/);
-    expect(unstamped.accept && unstamped.warning).toMatch(/protocolo 2/);
+    expect(unstamped.accept && unstamped.warning).toMatch(/no protocol stamp/);
+    expect(unstamped.accept && unstamped.warning).toMatch(/protocol 2/);
 
     const older = decideAcbridgeProtocol({ kind: "acbridge-older", theirs: 1 }, 2);
     expect(older.accept).toBe(true);
-    expect(older.accept && older.warning).toMatch(/protocolo 1, bus no protocolo 2/);
+    expect(older.accept && older.warning).toMatch(/protocol 1, bus on protocol 2/);
   });
 
   it("acbridge mais novo: RECUSA — este bus deixaria cair campos sem saber quais", () => {
     const newer = decideAcbridgeProtocol({ kind: "acbridge-newer", theirs: 3 }, 2);
     expect(newer.accept).toBe(false);
     expect(!newer.accept && newer.error).toMatch(/^protocol mismatch/);
-    expect(!newer.accept && newer.error).toMatch(/protocolo 3, bus no protocolo 2/);
+    expect(!newer.accept && newer.error).toMatch(/protocol 3, bus on protocol 2/);
   });
 
-  it("carimbo inválido: recusa", () => {
+  it("carimbo invalid: recusa", () => {
     const bad = decideAcbridgeProtocol({ kind: "malformed", raw: "x" }, 1);
     expect(bad.accept).toBe(false);
-    expect(!bad.accept && bad.error).toMatch(/inválido/);
+    expect(!bad.accept && bad.error).toMatch(/invalid/);
   });
 });
 
 describe("stripProtocolStamp", () => {
-  it("remove só a chave de protocolo, sem tocar no resto", () => {
+  it("remove só a chave de protocol, sem tocar no resto", () => {
     expect(stripProtocolStamp({ cmd: "report", report: { ok: true }, protocol: 1 })).toEqual({ cmd: "report", report: { ok: true } });
     expect(stripProtocolStamp({ cmd: "list" })).toEqual({ cmd: "list" });
     expect(stripProtocolStamp(null)).toBeNull();
@@ -100,7 +100,7 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
   // isso falhar aqui, não em produção. Ao mudar a forma de um request:
   // bump nos DOIS lados e re-pin. Mudou só saída/mensagem/comentário: o
   // hash não se mexe (linhas fora da superfície não entram).
-  it("mudar a superfície de requests exige bump de protocolo (re-pin consciente)", () => {
+  it("mudar a superfície de requests exige bump de protocol (re-pin consciente)", () => {
     const surface = source
       .split("\n")
       .map((l) => l.trim())
@@ -190,7 +190,7 @@ describe("bus: o socket confere o carimbo antes do dispatcher", () => {
     throw new Error("bus socket never came up");
   }
 
-  it("hello com o mesmo protocolo: devolve o do bus, sem aviso", async () => {
+  it("hello com o mesmo protocol: devolve o do bus, sem aviso", async () => {
     const sock = makeBus();
     await ready(sock);
     const [res] = await roundtrip(sock, [{ cmd: "hello", protocol: ACBRIDGE_PROTOCOL }]);
@@ -211,20 +211,20 @@ describe("bus: o socket confere o carimbo antes do dispatcher", () => {
     expect(accepted).not.toHaveProperty("warning");
   });
 
-  it("request sem carimbo (acbridge instalado antigo, smoke cru): aceito, com `warning` na resposta", async () => {
+  it("request no protocol stamp (acbridge instalado antigo, smoke cru): aceito, com `warning` na resposta", async () => {
     const sock = makeBus();
     await ready(sock);
     const [res] = await roundtrip(sock, [{ cmd: "list" }]);
     expect(res.ok).toBe(true);
     expect(Array.isArray(res.cards)).toBe(true);
-    expect(String(res.warning)).toMatch(/sem carimbo/);
+    expect(String(res.warning)).toMatch(/no protocol stamp/);
   });
 
-  it("carimbo inválido é recusado", async () => {
+  it("carimbo invalid é recusado", async () => {
     const sock = makeBus();
     await ready(sock);
     const [res] = await roundtrip(sock, [{ cmd: "list", protocol: "1" }]);
     expect(res.ok).toBe(false);
-    expect(String(res.error)).toMatch(/inválido/);
+    expect(String(res.error)).toMatch(/invalid/);
   });
 });

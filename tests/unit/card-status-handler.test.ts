@@ -68,7 +68,7 @@ describe("card_status: o estado tem que corresponder à tela", () => {
   it("TUI que repinta e NUNCA declarou turno = unknown (o caso dos cinco cards)", async () => {
     const res = await statusOf({ provider: "claude", lastActivityAt: NOW });
     expect(res.status).toBe("unknown");
-    expect(res.note).toContain("não dá para dizer");
+    expect(res.note).toContain("cannot tell");
   });
 
   it("turno declarado sem saída depois = idle, mesmo com bytes recentes antes", async () => {
@@ -85,7 +85,7 @@ describe("card_status: o estado tem que corresponder à tela", () => {
     const res = await statusOf({ provider: "bash", lastActivityAt: NOW - 10_000 });
     expect(res.status).toBe("at-prompt");
     expect(res.provider).toBe("bash");
-    expect(res.note).toContain("não é um agente");
+    expect(res.note).toContain("not an agent");
   });
 
   it("bash com bytes = unknown, porque um TUI pode estar DENTRO do card", async () => {

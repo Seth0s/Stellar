@@ -47,29 +47,29 @@ export function formatAgentFacingAuthorship(from: string | null | undefined, bod
   return `[de: ${from}] ${text}`;
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n). */
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd. */
 export const REPORT_AVAILABLE_POINTER_BODY =
-  "relatório disponível — chame read_report para ver o resultado.";
+  "report available — call read_report to see the result.";
 
-/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n). */
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd. */
 export function unreportedExitPointerBody(exitCode: number): string {
-  return `saiu (código ${exitCode}) sem chamar report.`;
+  return `exited (code ${exitCode}) without calling report.`;
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd.
  * SINAL 3 — card still alive, idle long enough, never called report. */
 export function unreportedIdlePointerBody(): string {
-  return "idle sem chamar report.";
+  return "idle without calling report.";
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd.
  *
  * A QUARTA FRASE (task d77b524b) — e por que ela existe, já que o enunciado
  * mandava reusar uma das três se servisse. As três são:
  *
- *   1. "relatório disponível — chame read_report…" → o card FALOU e reportou;
- *   2. "saiu (código N) sem chamar report." → o card MORREU;
- *   3. "idle sem chamar report." → o card falou, ficou quieto e devia report.
+ *   1. "relatório disponível — chame read_report…" → the card SPOKE and reported;
+ *   2. "saiu (código N) sem chamar report." → the card DIED;
+ *   3. "idle without calling report." → the card spoke, went quiet and owed a report.
  *
  * Nenhuma das três é verdadeira aqui: o card NÃO morreu (segue vivo), NÃO ficou
  * ocioso depois de trabalhar (nunca produziu um byte), e não há report pendente
@@ -81,13 +81,13 @@ export function unreportedIdlePointerBody(): string {
  * que NÃO foi feito (nada foi encerrado). */
 export function silentBootPointerBody(waitedSec: number): string {
   return (
-    `subiu e não produziu nenhum byte em ${waitedSec}s — o processo está VIVO e calado, e nada foi encerrado. ` +
-    "Pode ser credencial faltando (CLI pendurada antes do primeiro desenho), prompt de login, ou binário preso; " +
-    "confira a tela antes de decidir."
+    `came up and produced no byte at all in ${waitedSec}s — the process is ALIVE and silent, and nothing was terminated. ` +
+    "It may be a missing credential (CLI hanging before its first draw), a login prompt, or a stuck binary; " +
+    "check the screen before deciding."
   );
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd.
  *
  * SINAL 3, a OUTRA frase (task 14b8b224): o card está ocioso e vinculado a uma
  * task, mas não há agente lendo a linha — então "não reportou" seria falso (não
@@ -100,10 +100,10 @@ export function silentBootPointerBody(waitedSec: number): string {
  * frase de cima: acusar quem não tem leitor ensina o orquestrador a ignorar o
  * alarme — e é assim que o sinal verdadeiro morre. */
 export function unreportedNoAgentPointerBody(): string {
-  return "ocioso e sem agente lendo (shell com prompt livre) — suba um agente neste card ou re-vincule a task.";
+  return "idle with no agent reading (shell sitting at a free prompt) — start an agent in this card or re-link the task.";
 }
 
-/** AGENT-FACING — DO NOT TRANSLATE (DESIGN-BACKLOG.md §2.1 i18n).
+/** AGENT-FACING — ENGLISH ONLY, not i18n'd.
  *
  * SINAL 3, a TERCEIRA frase (task 14b8b224, caso (b)): o card tem agente, está
  * vinculado, e ficou quieto além do piso — mas NADA declarou o fim do turno.
@@ -121,5 +121,5 @@ export function unreportedNoAgentPointerBody(): string {
  * aprende a ignorar é o alarme que erra, que é o que esta frase conserta. */
 export function unreportedUnprovenIdlePointerBody(idleMs: number): string {
   const minutes = Math.max(1, Math.round(idleMs / 60_000));
-  return `sem chamar report há ${minutes}min e sem fato de turno — silêncio, não abandono: confira o card antes de retomar.`;
+  return `no report for ${minutes}min and no turn fact — silence, not abandonment: check the card before resuming.`;
 }

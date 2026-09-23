@@ -13,7 +13,7 @@ type ConnectorRow = { kind: string | null; from_card_id: string; to_card_id: str
 
 type FakeReportRow = { card_id: string; seq: number; report_json: string; verdict?: string | null; updated_at: number };
 
-const POINTER_NEEDLE = "relatório disponível — chame read_report";
+const POINTER_NEEDLE = "report available — call read_report";
 
 function callbacksWithOverrides(overrides: Record<string, (...args: never[]) => unknown>): Parameters<typeof createMessageBus>[1] {
   const reportsByCard = new Map<string, FakeReportRow[]>();

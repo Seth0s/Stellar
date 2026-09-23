@@ -36,13 +36,13 @@ function facts(overrides: Partial<CardStatusFacts> = {}): CardStatusFacts {
 
 describe("decideCardStatus", () => {
   describe("o TUI parado que repinta (o caso observado ao vivo)", () => {
-    it("saída fluindo DEPOIS do turno encerrado = running", () => {
+    it("saída fluindo DEPOIS do turn ended = running", () => {
       expect(
         decideCardStatus(facts({ turnEndedAt: NOW - 1_000, lastActivityAt: NOW })),
       ).toBe("running");
     });
 
-    it("turno encerrado e NENHUMA saída desde então = idle, mesmo com o card repintando antes", () => {
+    it("turn ended e NENHUMA saída desde então = idle, mesmo com o card repintando antes", () => {
       // O ponto do fix: `lastActivityAt` recente não segura mais o card em
       // "running" quando o turno já foi declarado encerrado.
       expect(
@@ -118,9 +118,9 @@ describe("decideCardStatus", () => {
 
   describe("a frase de cada estado ENSINA (é o que o agente lê)", () => {
     it("unknown e at-prompt se explicam, e 'at-prompt' diz que não é agente", () => {
-      expect(describeCardStatus("unknown")).toContain("não dá para dizer");
-      expect(describeCardStatus("at-prompt")).toContain("não é um agente");
-      expect(describeCardStatus("idle")).toContain("turno encerrado");
+      expect(describeCardStatus("unknown")).toContain("cannot tell");
+      expect(describeCardStatus("at-prompt")).toContain("not an agent");
+      expect(describeCardStatus("idle")).toContain("turn ended");
     });
   });
 });

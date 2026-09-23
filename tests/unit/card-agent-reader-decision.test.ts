@@ -12,7 +12,7 @@ import {
  *
  * O DEFEITO, medido no board em 2026-09-22: quatro cards `provider: bash`
  * VAZIOS (tela em branco, nem prompt desenhado) foram vinculados a tasks e,
- * minutos depois, os quatro foram acusados de "idle sem chamar report" — por
+ * minutos depois, os quatro foram acusados de "idle without calling report" — por
  * um agente que nunca existiu. No mesmo instante, o aviso de vínculo respondia
  * `"skipped: bash has no agent reading the line"`, ou seja: o app SABIA que não
  * havia leitor e mesmo assim cobrou o report dele. Duas respostas opostas para
