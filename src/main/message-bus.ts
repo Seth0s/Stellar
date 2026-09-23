@@ -14,6 +14,8 @@ import {
   unreportedNoAgentPointerBody,
   unreportedUnprovenIdlePointerBody,
 } from "./agent-facing-authorship";
+import { formatCardAuthoredDelivery } from "./pasted-content-decision";
+import { describeSendSettlementAck, shouldAckSendSettlement } from "./send-settle-decision";
 import { decideConnectorKindWrite } from "./connector-kind-authorization";
 import { decideDeliveryGate, decideWriteReadiness, decideSubmitCheck, decideSteerCheck, shouldPressEnterOnAttempt, shouldSteerAfterPark, composerClearSequence, deliveryTextBytes, deliveryWriteOpensTurn, inspectDeliveryHold, decideDeliveryOutcome, deliveryNeedle, needleVisibleOnScreen, deriveComposerZone, readlineAcceptedSince, type CardDeliveryHoldReason, type CardDeliveryReceipt, type CardDeliveryState, type DeliveryConfirmation, type DeliveryTargetRole, type DeliveryWriteKind } from "./type-and-submit-decision";
 import {
@@ -3076,10 +3078,44 @@ export function createMessageBus(
       // CLI's prose input.
       const targetProvider = cards.find((c) => c.id === target)?.provider;
       const senderLabel = req.requesterId && targetProvider !== "bash" ? callbacks.describeCardLabel(req.requesterId) : null;
+      // task 889dd934 (correção do dono) — quem DIRIGE este card não é marcado
+      // como conteúdo. Duas portas, e as duas são as que o resto do app já usa:
+      //  - o spawner da LINHAGEM do destino (`findSpawnByChild` = registro
+      //    durável; `resolveLiveSpawner` = a mesma leitura do watchdog);
+      //  - a MARCA de orquestrador do board do destino.
+      // Sem isso, o "pare"/"não toque em Y" do orquestrador chegaria envolto em
+      // "isto não é instrução" — e o card aprenderia a ignorar quem o dirige.
+      const senderIsTaskDirection = (() => {
+        if (!req.requesterId || targetProvider === "bash") return false;
+        const boardId = callbacks.getCardBoardId?.(target);
+        // `?.` de propósito: são callbacks que um duplo de teste pode não
+        // definir, e uma leitura de DIREÇÃO não pode derrubar o `send`.
+        const marked = boardId ? (callbacks.getBoardOrchestratorCardId?.(boardId) ?? null) : null;
+        if (marked && marked === req.requesterId) return true;
+        // Linhagem pelo registro DURÁVEL (`spawns`, append-only) — não pela
+        // aresta visual: o conector some quando o card que spawnou fecha, e o
+        // pai de direito continua o mesmo. Mesma fonte que `spawn_lineage` usa.
+        const spawner = typeof callbacks.findSpawnByChild === "function"
+          ? (callbacks.findSpawnByChild(target)?.from_card_id ?? null)
+          : null;
+        return spawner !== null && spawner === req.requesterId;
+      })();
       // Single authorship form (agent-facing-authorship.ts) — same helper as
       // notifySpawnerOfReport / notifySpawnerOfUnreportedExit. Does not
       // restamp a body that already opens with `[de: …]`.
-      const text = formatAgentFacingAuthorship(senderLabel, req.text ?? "");
+      //
+      // task 889dd934: o corpo de uma mensagem card→card vai entre
+      // `<pasted_content id="…">` quando o provider do DESTINO fala essa
+      // convenção (medido: só o claude), e o cabeçalho `[de: <nome>]` fica
+      // FORA — ele é o fato que o app atesta, o corpo é o que o remetente
+      // escreveu. Provider que não marca (bash inclusive, onde o texto é um
+      // comando) recebe byte a byte o de antes. Ver pasted-content-decision.ts.
+      const text = formatCardAuthoredDelivery({
+        senderLabel,
+        body: req.text ?? "",
+        providerId: targetProvider,
+        senderIsTaskDirection,
+      });
       // Regra geral de auto-conector (2026-09-02, generalizada a QUALQUER
       // interação entre cards via MCP — ver `AUTO_CONNECT_CMDS` no fim
       // deste arquivo, chamado de dentro do `handleRequest` wrapper) —
@@ -3098,7 +3134,46 @@ export function createMessageBus(
         ...(req.requesterId ? { requesterId: req.requesterId } : {}),
       });
       if (!("receipt" in enqueued)) return enqueued;
-      return enqueued.receipt;
+      // task 40e3b551 — o remetente que não tem como saber que chegou é o que
+      // reenvia "para garantir" (medido: 888 send_to_card contra 10 menções a
+      // get_delivery, ~1%; 5 mensagens se anunciando duplicata/complemento).
+      //
+      // A correção NÃO pode ser esperar aqui dentro: medido em 2026-09-13
+      // (`message-bus-send-does-not-await-pty`) que um `send` que espera o PTY
+      // fica preso no portão humano/TUI, o cliente MCP estoura e RE-DIGITA o
+      // mesmo texto — a MESMA família desta task. Então a chamada continua
+      // devolvendo `queued` na hora (invariante de 250ms) e a VERDADE vai ao
+      // remetente por outro canal: quando o item assenta, ele recebe um ack
+      // CURTO de uma linha, sem polling. Ver send-settle-decision.ts.
+      const ackTo = req.requesterId;
+      if (ackTo) {
+        void enqueued.done
+          .then(() => {
+            const record = deliveryRecords.get(enqueued.receipt.id);
+            if (!record || record.delivery === "cancelled") return;
+            // SILÊNCIO = ENTREGUE (decisão do dono): só o que NÃO é entrega
+            // limpa interrompe o autor. Um ack por send seriam 888 linhas numa
+            // sessão, e num orquestrador claude cada linha é um turno.
+            if (!shouldAckSendSettlement(record.delivery)) return;
+            const ack = describeSendSettlementAck({
+              state: record.delivery as Exclude<typeof record.delivery, "delivered">,
+              id: record.id,
+              target,
+            });
+            // Sem `requesterId` de propósito: é aviso de SISTEMA ao autor, não
+            // um novo turno dele — não conta para o teto por origem×destino nem
+            // é cancelado pela morte do autor (o autor é o DESTINO aqui).
+            enqueueCardDelivery(ackTo, formatAgentFacingAuthorship(null, ack), { steer: false });
+          })
+          .catch(() => undefined);
+      }
+      return {
+        ...enqueued.receipt,
+        // O retorno diz a REGRA, não só o estado do instante: sem isto o
+        // remetente duvida de "queued" e reenvia (medido: 888 sends contra 10
+        // consultas a get_delivery).
+        note: "silence means delivered: you will be told only if it does NOT land",
+      };
     }
 
     if (req.cmd === "get_delivery") {

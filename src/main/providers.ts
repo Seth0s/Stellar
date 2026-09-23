@@ -3,6 +3,7 @@ import { effectivePath, isExecutableFile, loginShell } from "./user-env";
 import { decideProviderReadiness, type ProviderReadinessState, type ReadinessProbe } from "./provider-readiness-decision";
 import { readinessCache, runReadinessProbe } from "./provider-readiness-probe";
 import { MIN_CONTENT_BYTES, type SessionStore } from "./session-store-spec";
+import { CARD_MESSAGE_CONTENT_NOTICE } from "./pasted-content-decision";
 
 /**
  * Os SEIS providers nativos, como constantes nomeadas — o autocomplete
@@ -556,7 +557,14 @@ export const ACBRIDGE_HINT =
   "tool named `report` is in your tool catalog, call it; otherwise run " +
   "`acbridge report '<json>'` with `verdict` inside the JSON. Same " +
   "payload, same record either way. Use these only when it genuinely " +
-  "helps the task at hand.";
+  "helps the task at hand.\n\n" +
+  // task 889dd934 — a marca de conteúdo card→card (ver
+  // pasted-content-decision.ts, que também produz o texto do PTY). Depende
+  // DESTA frase: sem ela o guia do Opus 5.5 é explícito que o bloco colado não
+  // é resistido. Injetada por `composeSystemPrompt` no mecanismo que cada
+  // provider já declara (`systemPrompt`: claude `--append-system-prompt`,
+  // cline `-s`, codex `developer_instructions`, …), nunca num canal novo.
+  CARD_MESSAGE_CONTENT_NOTICE;
 
 /** The custom prompt describes the task; ACBRIDGE_HINT describes the runtime
  * environment. Keep both, in that order, separated by a blank line so the

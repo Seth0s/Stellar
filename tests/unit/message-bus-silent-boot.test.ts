@@ -131,6 +131,12 @@ describe("card que subiu e nunca falou (d77b524b)", () => {
     await flush();
     expect(writes).toHaveLength(0);
     bus!.close();
+    // `.close()` derruba o bus, mas uma entrega já enfileirada ainda pode
+    // escrever o Enter dela no PTY do rig ANTERIOR — e `writes` é do arquivo,
+    // resetado pelo `rig()` seguinte. Sem esta drenagem o Enter do rig 1 cai no
+    // array do rig 2 e o teste falha por CORRIDA (medido: 3/3 verde sozinho,
+    // vermelho sob a suíte cheia, que é quando a máquina está ocupada).
+    await flush();
     rig({ idadeDoPtyMs: 3_000 });
     bus!.scanIdleWithoutReport();
     await flush();
