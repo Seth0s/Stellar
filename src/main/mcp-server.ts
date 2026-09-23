@@ -1539,11 +1539,23 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           // per-field schema here can't see across fields without a
           // cross-field refinement that would duplicate that same
           // provider table.
+          // O VOCABULÁRIO É DO PROVIDER, NÃO DA PORTA (task 46ba6fc8). Aqui
+          // havia `z.enum(["low","medium","high","xhigh","max"])` — uma
+          // SEGUNDA fonte sobre um fato que é por provider, e mais ESTREITA
+          // que uma declaração que já existe: o `cline` declara
+          // `none/low/medium/high/xhigh`, então `none` (o modo mais barato,
+          // que a UI oferece) era inalcançável para um agente; um harness
+          // real medido (`omp --thinking`) tem oito valores
+          // (`off/minimal/low/medium/high/xhigh/max/auto`). Quem valida é o
+          // ÚNICO lugar que tem `provider` e `effort` juntos:
+          // `decideSpawnProfile` (spawn-profile-decision.ts), contra a faixa
+          // DECLARADA — mesmo desenho de `ProjectEffortValues` na UI (que já
+          // oferece o que o provider declarou, sem lista própria).
           effort: z
-            .enum(["low", "medium", "high", "xhigh", "max"])
+            .string()
             .optional()
             .describe(
-              "Reasoning effort. Only `claude` (its own --effort range: low/medium/high/xhigh/max) and `antigravity` (low/medium/high) honor this field — with antigravity, some of its models (e.g. 'gemini-3.1-pro') REQUIRE one of those alongside `model`, or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. Passing effort with ANY other provider (bash, codex, cursor, opencode) is REFUSED — no spawn — rather than accepted and silently dropped, which is what used to happen (measured 2026-09-15: any effort passed validation for those providers, never became argv, and nobody was told). A value outside the honoring provider's own range is likewise REFUSED, never silently remapped.",
+              "Reasoning effort. The accepted values are the PROVIDER's DECLARED range — claude low/medium/high/xhigh/max, cline none/low/medium/high/xhigh, antigravity low/medium/high, and so on per `capacity.effort` — with antigravity, some of its models (e.g. 'gemini-3.1-pro') REQUIRE one of those alongside `model`, or the CLI silently falls back to a different model with just a warning, never actually running the one you asked for. A value outside the provider's own range, or any effort for a provider that cannot honor it (bash, codex, cursor, opencode), is REFUSED naming `effort` and listing that provider's values — no spawn, never a silent drop or remap (measured 2026-09-15: any effort passed validation for those providers, never became argv, and nobody was told). This field is a free string on purpose: a static enum can only be a second, narrower copy of a per-provider fact.",
             ),
           label: z.string().optional().describe("Name the new card (DESIGN-BACKLOG.md item 62) — same free-text field a human sets by renaming a card's tag. Omit to get the default ordinal-per-provider label instead."),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the registered MCP URL stamp is the only trusted identity and determines real spawn depth/autonomy; this field is not trusted when that stamp is absent."),
