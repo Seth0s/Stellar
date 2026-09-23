@@ -2800,8 +2800,11 @@ export function createMessageBus(
    * módulo), só que aqui a alternativa não é silêncio, é um ponteiro.
    */
   function linkedCardNoticeBody(taskId: string, role: string): string {
-    const alvo = role === TASK_CARD_REVIEWER_ROLE ? "task para você revisar" : "task para você";
-    return `${alvo}: ${taskId} (papel: ${role}) — leia o enunciado com get_task.`;
+    // AGENT-FACING — DO NOT TRANSLATE (task af7c6d8b: as frases que o app
+    // devolve a agentes são em inglês; o leitor é um modelo). Era a última em
+    // português neste caminho.
+    const lead = role === TASK_CARD_REVIEWER_ROLE ? "task for you to review" : "task for you";
+    return `${lead}: ${taskId} (role: ${role}) — read it with get_task.`;
   }
 
   /**
