@@ -194,7 +194,7 @@ describe("CAMADA 4: integrante não julga (store real)", () => {
   });
 
   it("Fila bar without reviewer: same self proposal as before (presentation only)", () => {
-    const proposal = deriveCompletionProposal("running", ["implementer"], [
+    const proposal = deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [
       { cardId: "impl-1", role: "implementer", verdict: "aprovado", at: 10 },
     ]);
     expect(proposal).toEqual({ verdict: "aprovado", origin: "self", cardId: "impl-1", at: 10 });

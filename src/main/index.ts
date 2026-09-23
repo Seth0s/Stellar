@@ -53,7 +53,7 @@ import { describeStatusAskResolved } from "./status-write-decision";
 import { createTaskWriteFunnel } from "./task-write-funnel";
 import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-decision";
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
-import { deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
+import { coerceStoredTaskStatus, deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
 import { checkAgentAvailability, providerById, refreshProviderReadiness, type SpawnOpts } from "./providers";
 import { projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
 import {
@@ -1663,6 +1663,11 @@ function createWindow() {
       }
       const cardAlive = t.card_id ? registry.isAlive(t.card_id) : false;
       const lastActor = lastActorByTask.get(t.id) ?? null;
+      // CAMADA 4 (task b41ac547) — mesmo par de fatos que o MCP publica:
+      // `status` é o que o BANCO diz (nem um `running` legado é
+      // autoritativo), e `cardAlive` é o segundo fato, projetado abaixo com
+      // nome próprio (a Fila JÁ o usava para a varredura de atividade).
+      const storedStatus = coerceStoredTaskStatus(t.status);
       const effectiveStatus = deriveTaskStatus(t.status, cardAlive);
       const { divergedStatus, divergedActor } = deriveParticipationDivergence({
         storedStatus: t.status,
@@ -1675,7 +1680,7 @@ function createWindow() {
         id: t.id,
         prompt: t.prompt,
         provider: t.provider,
-        status: effectiveStatus,
+        status: storedStatus,
         cardId: t.card_id,
         boardId: t.board_id,
         order: t.order,

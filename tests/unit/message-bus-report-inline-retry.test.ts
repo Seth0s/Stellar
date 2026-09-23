@@ -38,7 +38,12 @@ function baseTask(overrides: Partial<TaskRow> = {}): TaskRow {
     id: "task-1",
     prompt: "do the work",
     provider: "claude",
-    status: "running",
+    // PRODUÇÃO-shaped (task b41ac547): `running` nunca é GRAVADO (o store
+    // coage para `pending`), então um rig que passa essa linha testava um
+    // estado que o app não alcança — foi assim que o teto de retry podia ser
+    // desligado sem nenhum teste reclamar. A participação vem de
+    // `isCardAlive` (mais abaixo), que é o fato de verdade.
+    status: "pending",
     card_id: "worker-1",
     board_id: "b1",
     cwd: "/tmp/repo",
@@ -128,7 +133,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     return { bus, live, spawnRequests, upserts, written };
   }
 
-  it("a: declared failure with budget — refuses in-line, task stays running, retry_count rises, no spawn", async () => {
+  it("a: declared failure with budget — refuses in-line, task nao e julgada (`pending`), retry_count rises, no spawn", async () => {
     const { bus: b, live, spawnRequests, written } = harness(baseTask());
     const waiter = b.handleRequest({
       cmd: "get_report",
@@ -159,7 +164,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(res.error).toContain("Attempts remaining: 1");
     expect(res.error?.toLowerCase()).not.toMatch(/fix|corrija|correct the/);
 
-    expect(live.status).toBe("running");
+    expect(live.status).toBe("pending"); // CAMADA 4: a verdade do BANCO — a participação é `isCardAlive`, não o status
     expect(live.retry_count).toBe(1);
     const refused = JSON.parse(live.result_json ?? "{}") as Record<string, unknown>;
     expect(refused[LAST_REFUSED_REPORT_KEY]).toEqual({ ok: false, error: "tests failed" });
@@ -172,7 +177,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     expect(waited.ok).toBe(false);
   });
 
-  it("stash after refusal is not a status: still running, no failureKind", async () => {
+  it("stash after refusal is not a status: still `pending`, no failureKind", async () => {
     const { bus: b, live } = harness(baseTask());
     await b.handleRequest({
       cmd: "report",
@@ -180,7 +185,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
       report: { ok: false, error: "não consegui X porque Y" },
     } as BusRequest);
 
-    expect(live.status).toBe("running");
+    expect(live.status).toBe("pending"); // CAMADA 4: a verdade do BANCO — a participação é `isCardAlive`, não o status
     expect(failureKindFromResultJson(live.result_json)).toBeNull();
     expect(JSON.parse(live.result_json ?? "{}").failureKind).toBeUndefined();
   });
@@ -265,7 +270,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     } as BusRequest)) as { ok: boolean; seq?: number };
     expect(refused.ok).toBe(false);
     expect(refused.seq).toBeUndefined();
-    expect(live.status).toBe("running");
+    expect(live.status).toBe("pending"); // CAMADA 4: a verdade do BANCO — a participação é `isCardAlive`, não o status
     expect(failureKindFromResultJson(live.result_json)).toBeNull();
 
     b.resolveCardExit("worker-1", 129);
@@ -310,7 +315,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
     } as BusRequest)) as { ok: boolean; seq?: number };
     expect(accepted.ok).toBe(true);
     expect(accepted.seq).toBe(1);
-    expect(live.status).toBe("running");
+    expect(live.status).toBe("pending"); // CAMADA 4: a verdade do BANCO — a participação é `isCardAlive`, não o status
     expect(live.result_json).toBeNull();
     expect(failureKindFromResultJson(live.result_json)).toBeNull();
 
@@ -319,7 +324,7 @@ describe("message-bus: report in-line retry (no spawn)", () => {
 
     // Accepted report exists — exit_without_report must not fire, and the
     // old stash must not come back as the cause.
-    expect(live.status).toBe("running");
+    expect(live.status).toBe("pending"); // CAMADA 4: a verdade do BANCO — a participação é `isCardAlive`, não o status
     expect(live.result_json).toBeNull();
     expect(spawnRequests).toHaveLength(0);
   });

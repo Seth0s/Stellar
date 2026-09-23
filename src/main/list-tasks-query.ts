@@ -31,7 +31,15 @@ export type ListedTask = {
   id: string;
   prompt: string;
   provider: string | null;
+  /** O que o BANCO diz (pendente até um julgamento ser escrito). Nunca é
+   * `running` por processo vivo — `running` não é coluna autoritativa
+   * (task b41ac547). */
   status: string;
+  /** O SEGUNDO FATO (task b41ac547): o `cardId` principal está com PTY vivo
+   * AGORA. Mesmo nome/meaning da projeção da Fila em `src/main/index.ts`.
+   * `false` cobre cardId null, card fechado e PTY morto — e não afirma
+   * trabalho: o app não tem esse sinal. */
+  cardAlive: boolean;
   cardId: string | null;
   boardId: string | null;
   cwd: string | null;

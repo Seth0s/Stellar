@@ -231,14 +231,14 @@ function TaskItem({
   const badge = originBadge(task.lastActor);
   const cardRoles = task.cards.map((c) => c.role);
   const purposeChip = derivePurposeChip(task.purpose, task.deps, task.depPurposes, cardRoles);
-  const stage = deriveStage(task.status, task.report !== null);
+  const stage = deriveStage(task, task.report !== null);
   const showStage = Boolean(stage && shouldShowStageTrail(task.purpose, cardRoles));
   // Quem disse "aprovado" importa: a proposta vem de `task_verdicts` (com
   // papel), não do relatório do card principal — ver
   // `deriveCompletionProposal`. `origin: "self"` = implementador sem
   // reviewer na task; a barra diz isso em texto. Com `review="wanted"`
   // sem reviewer, a barra some e `reviewWantedNotice` explica o stall.
-  const proposal = deriveCompletionProposal(task.status, cardRoles, task.verdicts, task.review === "wanted");
+  const proposal = deriveCompletionProposal(task, cardRoles, task.verdicts, task.review === "wanted");
   const proposalChip = proposal
     ? describeVerdictChip(proposal.origin === "self" ? "implementer" : "reviewer", proposal.verdict)
     : null;

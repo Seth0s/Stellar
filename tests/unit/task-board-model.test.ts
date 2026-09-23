@@ -155,14 +155,14 @@ describe("originBadge", () => {
 
 describe("deriveStage", () => {
   it("só existe pra uma task 'running' — qualquer outro status não tem etapa", () => {
-    expect(deriveStage("pending", false)).toBeNull();
-    expect(deriveStage("done", true)).toBeNull();
-    expect(deriveStage("failed", true)).toBeNull();
+    expect(deriveStage({ status: "pending", cardAlive: false }, false)).toBeNull();
+    expect(deriveStage({ status: "done", cardAlive: true }, true)).toBeNull();
+    expect(deriveStage({ status: "failed", cardAlive: true }, true)).toBeNull();
   });
 
   it("running sem relatório ainda é 'implementar'; com relatório (aprovado OU reprovado) é 'review'", () => {
-    expect(deriveStage("running", false)).toBe("implementar");
-    expect(deriveStage("running", true)).toBe("review");
+    expect(deriveStage({ status: "running", cardAlive: true }, false)).toBe("implementar");
+    expect(deriveStage({ status: "running", cardAlive: true }, true)).toBe("review");
   });
 });
 
@@ -236,7 +236,7 @@ describe("deriveCompletionProposal", () => {
   const rev = (verdict: string | null, at: number, cardId = "rev-1") => ({ cardId, role: "reviewer", verdict, at });
 
   it("reviewer 'aprovado' propõe com origem reviewer", () => {
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [impl("aprovado", 1), rev("aprovado", 2)])).toEqual({
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [impl("aprovado", 1), rev("aprovado", 2)])).toEqual({
       verdict: "aprovado",
       origin: "reviewer",
       cardId: "rev-1",
@@ -246,39 +246,39 @@ describe("deriveCompletionProposal", () => {
 
   it("com reviewer vinculado, 'aprovado' do implementer NÃO propõe — nem antes do reviewer falar, nem depois de um reprovado dele", () => {
     // Reviewer vinculado (task_cards) mas ainda sem rodada: review pendente.
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [impl("aprovado", 1)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [impl("aprovado", 1)])).toBeNull();
     // Reviewer reprovou: o "aprovado" do implementer não sobrepõe.
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [impl("aprovado", 1), rev("reprovado", 2)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [impl("aprovado", 1), rev("reprovado", 2)])).toBeNull();
     // Reviewer que reportou sem veredito (ou saiu sem report): nada.
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [impl("aprovado", 1), rev(null, 2)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [impl("aprovado", 1), rev(null, 2)])).toBeNull();
     // Implementer "aprova" DEPOIS do reprovado do reviewer: continua nada —
     // a última palavra do REVIEWER é o que conta, não a última rodada.
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [rev("reprovado", 1), impl("aprovado", 2)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [rev("reprovado", 1), impl("aprovado", 2)])).toBeNull();
   });
 
   it("rodada de reviewer no histórico basta pra impor a regra, mesmo se o papel atual em task_cards já não diz reviewer", () => {
-    expect(deriveCompletionProposal("running", ["implementer"], [impl("aprovado", 1), rev("reprovado", 2)])).toBeNull();
-    expect(deriveCompletionProposal("running", ["implementer"], [impl("aprovado", 1), rev("aprovado", 2)])?.origin).toBe("reviewer");
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [impl("aprovado", 1), rev("reprovado", 2)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [impl("aprovado", 1), rev("aprovado", 2)])?.origin).toBe("reviewer");
   });
 
   it("a ÚLTIMA rodada do reviewer é a que vale (reprovou, depois aprovou → propõe; aprovou, depois reprovou → não)", () => {
-    expect(deriveCompletionProposal("running", ["reviewer"], [rev("reprovado", 1), rev("aprovado", 2)])).toMatchObject({ origin: "reviewer", at: 2 });
-    expect(deriveCompletionProposal("running", ["reviewer"], [rev("aprovado", 1), rev("reprovado", 2)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["reviewer"], [rev("reprovado", 1), rev("aprovado", 2)])).toMatchObject({ origin: "reviewer", at: 2 });
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["reviewer"], [rev("aprovado", 1), rev("reprovado", 2)])).toBeNull();
     // Empate de `at`: a que veio depois na lista (rowid maior) vence.
-    expect(deriveCompletionProposal("running", ["reviewer"], [rev("aprovado", 5), rev("reprovado", 5)])).toBeNull();
-    expect(deriveCompletionProposal("running", ["reviewer"], [rev("reprovado", 5), rev("aprovado", 5)])?.origin).toBe("reviewer");
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["reviewer"], [rev("aprovado", 5), rev("reprovado", 5)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["reviewer"], [rev("reprovado", 5), rev("aprovado", 5)])?.origin).toBe("reviewer");
   });
 
   it("task SEM reviewer: 'aprovado' do implementer propõe com origem 'self' (auto-aprovado, marcado — nunca disfarçado de review)", () => {
-    expect(deriveCompletionProposal("running", ["implementer"], [impl("aprovado", 1)])).toEqual({
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [impl("aprovado", 1)])).toEqual({
       verdict: "aprovado",
       origin: "self",
       cardId: "impl-1",
       at: 1,
     });
     // Última rodada do implementer vale: reprovou a si mesmo depois → nada.
-    expect(deriveCompletionProposal("running", ["implementer"], [impl("aprovado", 1), impl("reprovado", 2)])).toBeNull();
-    expect(deriveCompletionProposal("running", ["implementer"], [impl("reprovado", 1), impl("aprovado", 2, "impl-2")])).toMatchObject({
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [impl("aprovado", 1), impl("reprovado", 2)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [impl("reprovado", 1), impl("aprovado", 2, "impl-2")])).toMatchObject({
       origin: "self",
       cardId: "impl-2",
     });
@@ -286,26 +286,26 @@ describe("deriveCompletionProposal", () => {
 
   it("role desconhecido (fora de implementer/reviewer) nunca propõe, mesmo com 'aprovado'", () => {
     const unknown = { cardId: "x", role: "observer", verdict: "aprovado", at: 1 };
-    expect(deriveCompletionProposal("running", ["observer"], [unknown])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["observer"], [unknown])).toBeNull();
     // Nem sozinho, nem somado a um implementer que não aprovou.
-    expect(deriveCompletionProposal("running", ["implementer", "observer"], [impl("reprovado", 1), unknown])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "observer"], [impl("reprovado", 1), unknown])).toBeNull();
     // E não conta como reviewer: um implementer aprovado numa task com só
     // "observer" continua sendo o caso sem reviewer (self), não reviewer.
-    expect(deriveCompletionProposal("running", ["implementer", "observer"], [impl("aprovado", 1), { ...unknown, verdict: "reprovado" }])?.origin).toBe(
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "observer"], [impl("aprovado", 1), { ...unknown, verdict: "reprovado" }])?.origin).toBe(
       "self",
     );
   });
 
   it("nunca propõe sem 'aprovado' de ninguém, sem rodada nenhuma, ou fora de running", () => {
-    expect(deriveCompletionProposal("running", ["implementer"], [impl("reprovado", 1)])).toBeNull();
-    expect(deriveCompletionProposal("running", ["implementer"], [impl(null, 1)])).toBeNull();
-    expect(deriveCompletionProposal("running", ["implementer"], [])).toBeNull();
-    expect(deriveCompletionProposal("running", [], [])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [impl("reprovado", 1)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [impl(null, 1)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, [], [])).toBeNull();
     // Já concluída (por qualquer caminho) — propor de novo seria ruído,
     // não decisão pendente.
-    expect(deriveCompletionProposal("done", ["reviewer"], [rev("aprovado", 1)])).toBeNull();
-    expect(deriveCompletionProposal("failed", ["implementer"], [impl("aprovado", 1)])).toBeNull();
-    expect(deriveCompletionProposal("pending", ["reviewer"], [rev("aprovado", 1)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "done", cardAlive: false }, ["reviewer"], [rev("aprovado", 1)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "failed", cardAlive: false }, ["implementer"], [impl("aprovado", 1)])).toBeNull();
+    expect(deriveCompletionProposal({ status: "pending", cardAlive: false }, ["reviewer"], [rev("aprovado", 1)])).toBeNull();
   });
 
   // Task 156e6d08 — o consumidor que AGIA sobre o carimbo falso. Antes da
@@ -324,12 +324,12 @@ describe("deriveCompletionProposal", () => {
       declaredTaskId: "outra-task",
       roundLinks: 6,
     };
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [artifact])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [artifact])).toBeNull();
     // E o carimbo não APAGA a rodada de verdade da mesma task: com o aprovado
     // real na lista (antes ou depois do carimbo), a barra continua vindo dele.
     const real = { cardId: "rev-1", role: "reviewer", verdict: "aprovado", at: 1, rule: "declared_this_task" as const };
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [real, artifact])?.at).toBe(1);
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [artifact, real])?.at).toBe(1);
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [real, artifact])?.at).toBe(1);
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [artifact, real])?.at).toBe(1);
   });
 
   it("rodada indecidível (N vínculos, sem nome) também não propõe — 'não sei' nunca vira barra verde", () => {
@@ -342,8 +342,8 @@ describe("deriveCompletionProposal", () => {
       rule: "undeclared_round" as const,
       roundLinks: 8,
     };
-    expect(deriveCompletionProposal("running", ["implementer", "reviewer"], [unknown])).toBeNull();
-    expect(deriveCompletionProposal("running", ["implementer"], [unknown])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer", "reviewer"], [unknown])).toBeNull();
+    expect(deriveCompletionProposal({ status: "running", cardAlive: true }, ["implementer"], [unknown])).toBeNull();
   });
 });
 

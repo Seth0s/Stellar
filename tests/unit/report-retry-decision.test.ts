@@ -15,7 +15,7 @@ import {
 } from "../../src/main/report-retry-decision";
 import { failureKindFromResultJson } from "../../src/main/failure-kind-decision";
 
-const running = { status: "running", retry_count: 0, max_retries: 2 };
+const running = { inParticipation: true, retry_count: 0, max_retries: 2 };
 
 describe("decideReportAcceptance — structural", () => {
   it("names requesterId when the caller id is missing", () => {
@@ -146,7 +146,7 @@ describe("decideReportAcceptance — declared failure", () => {
     const d = decideReportAcceptance({
       requesterId: "c",
       report: { ok: false },
-      linkedTask: { status: "running", retry_count: 2, max_retries: 2 },
+      linkedTask: { inParticipation: true, retry_count: 2, max_retries: 2 },
       defaultMaxRetries: 2,
     });
     expect(d).toEqual({ action: "accept_failure", terminal: false });
@@ -175,7 +175,7 @@ describe("decideReportAcceptance — declared failure", () => {
       decideReportAcceptance({
         requesterId: "c",
         report: { ok: false },
-        linkedTask: { status: "done", retry_count: 0, max_retries: 2 },
+        linkedTask: { inParticipation: false, retry_count: 0, max_retries: 2 },
         defaultMaxRetries: 2,
       }),
     ).toEqual({ action: "accept_failure", terminal: false });

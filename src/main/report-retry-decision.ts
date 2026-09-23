@@ -2,10 +2,18 @@
  * Pure decision for in-session `report` acceptance vs refusal.
  *
  * A declared failure (`ok: false` without `retryable: false`) is refused
- * while the linked running task still has `max_retries` budget. The same
- * agent keeps its context and calls `report` again. The app never judges
- * whether a later correction actually fixed anything — refusal is only
- * the retry mechanic.
+ * while the linked task is STILL IN PARTICIPATION and has `max_retries`
+ * budget. The same agent keeps its context and calls `report` again. The
+ * app never judges whether a later correction actually fixed anything —
+ * refusal is only the retry mechanic.
+ *
+ * `inParticipation` — not `status` (task b41ac547): the fact this decision
+ * needs is "is there a live implementer on this task NOW?", asked by its own
+ * name. It used to arrive folded into `status` as the string `"running"` —
+ * a value production can no longer store (`running` is never authoritative),
+ * so the field could only ever match by accident. Renaming it is what makes
+ * "keep the old field" impossible instead of silently disabling the retry
+ * budget for every agent.
  *
  * Terminal failure (`ok: false` AND `retryable: false`) is the honest
  * exit: accepted immediately, no retry spent. Without that mark, a
@@ -20,7 +28,9 @@
 import { missingReportSchemaField } from "./task-contract-decision";
 
 export type ReportRetryLinkedTask = {
-  status: string;
+  /** Há implementer VIVO nesta task agora (`hasLiveImplementer`) — o
+   * segundo fato, perguntado pelo nome. Não é `status`. */
+  inParticipation: boolean;
   retry_count: number;
   max_retries: number | null;
   /** Declared required top-level keys on the task (`tasks.report_schema_json`). */
@@ -227,7 +237,7 @@ export function decideReportAcceptance(input: {
   }
 
   const task = input.linkedTask;
-  if (!task || task.status !== "running") {
+  if (!task || !task.inParticipation) {
     return { action: "accept_failure", terminal: false };
   }
 
