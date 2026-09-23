@@ -8,6 +8,7 @@
         "posix": "npm install -g cline",
         "windows": "npm install -g cline"
       },
+      "baseArgs": ["--tui"],
       "capacity": {
         "role": "agent",
         "session": {
