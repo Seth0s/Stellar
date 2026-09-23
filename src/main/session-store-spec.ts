@@ -30,11 +30,28 @@
 
 /** De onde sai o ID de uma sessão, num store em arquivos. */
 export type SessionIdSource =
-  /** Nome do próprio registro, sem o sufixo: `<id>.jsonl` → `<id>`. */
-  | { from: "fileName"; strip: string }
+  /** Nome do próprio registro, sem o sufixo: `<id>.jsonl` → `<id>`.
+   *
+   * `afterLast` corta mais fundo, e é o que um nome COMPOSTO exige
+   * (medido, task 99f4f263): o `omp` grava
+   * `2026-09-22T12-34-19-909Z_<id>.jsonl`, e o id é só a parte depois do
+   * `_`. A ordem é DECLARADA e fixa — `strip` primeiro, `afterLast` depois —
+   * para o resultado não depender de qual ponta se corta primeiro. Um nome
+   * sem o separador não rende id nenhum (`null`): ausência, nunca um palpite
+   * com o nome inteiro. Separador DECLARADO, e não uma regex: ver
+   * `parseIdSource` para o que foi recusado e por quê. */
+  | { from: "fileName"; strip: string; afterLast?: string }
   /** Nome do diretório que CONTÉM o registro: `chats/<hash>/<id>/meta.json`. */
   | { from: "dirName" }
-  /** Primeira linha não-vazia do registro, lida como JSON e navegada. */
+  /** O JSON da primeira das PRIMEIRAS linhas não-vazias do registro em que o
+   * `path` resolve (`valueAt(linha, path) !== undefined`), navegado.
+   *
+   * "Primeiras" e não "a primeira" (medido, task 99f4f263): o cabeçalho de um
+   * log JSONL não é necessariamente a linha 1 — o `omp` grava um `title` de
+   * PREENCHIMENTO na 1ª e o `session` com `id` e `cwd` na 2ª. Quem decide
+   * onde parar é o `path` declarado: a busca é por ELE, e a primeira linha
+   * que o tem ganha (determinístico). Nenhuma linha do prefixo varrido com o
+   * caminho ⇒ ausência, nunca a última linha lida como se fosse a certa. */
   | { from: "jsonLine"; path: string[] };
 
 /** Como um registro prova que é DESTE cwd — sem isso o watcher premia o
@@ -42,6 +59,11 @@ export type SessionIdSource =
 export type SessionCwdSource =
   /** A raiz já carrega o cwd (o diretório É o cwd codificado): nada a checar. */
   | { from: "root" }
+  /** O MESMO mecanismo do id (ver `SessionIdSource`): o JSON da primeira das
+   * primeiras linhas em que o `path` resolve. É o que permite tirar o cwd da
+   * LINHA em vez do nome da pasta — medido no `omp`, cuja pasta codifica o
+   * cwd por `dashes` (o encoding que nunca foi medido para espaço, acento e
+   * ponto) enquanto a linha 2 diz o cwd literal. */
   | { from: "jsonLine"; path: string[] }
   /** O próprio registro, lido como JSON e navegado. */
   | { from: "json"; path: string[] }
