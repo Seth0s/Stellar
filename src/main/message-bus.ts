@@ -5202,7 +5202,11 @@ export function createMessageBus(
         model: req.model,
         effort: req.effort,
       });
-      if (!profileDecision.ok) return { ok: false, error: profileDecision.error };
+      // `field` publicado junto da recusa (task 46ba6fc8): a decisão já o
+      // devolve (`spawn-profile-decision.ts`), e as outras portas de recusa
+      // por campo (`report`, `update_task`) o entregam — sem ele, quem
+      // chamou só descobre o campo culpado lendo a prosa.
+      if (!profileDecision.ok) return { ok: false, error: profileDecision.error, field: profileDecision.field };
       // `role` (task_cards.role) — same refuse-don't-remap rule as effort,
       // and checked before depth is spent. `undefined` keeps today's
       // default (implementer); only an unknown string is refused.
