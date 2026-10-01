@@ -77,9 +77,13 @@ export type SpawnOpts = {
   /** Sticky item "spawn_agent effort" (2026-09-03) — Antigravity's CLI
    * requires `--effort` alongside certain models (`--model
    * gemini-3.1-pro` on its own falls back silently to a different model
-   * with a warning, never actually running the one asked for). Range
-   * re-measured 2026-09-12 against `agy --help` (v1.2.2):
-   * `low|medium|high` (was documented as only `low|high`). `model` stays
+   * with a warning, never actually running the one asked for). The range is
+   * MODEL-DEPENDENT and was re-measured at RUNTIME 2026-10-01 (agy v1.2.14,
+   * task 1c4f3b50): the `--help` advertises `low|medium|high|max`, but the
+   * default model honors only `low|high` and `max` is honored by NO model.
+   * The declared range (the one the spawn gate reads) lives on the
+   * provider's `capacity.effort` below — this paragraph is only the
+   * history. `model` stays
    * a plain string on purpose (every other provider only ever takes one)
    * — this is additive and provider-specific, `undefined` for every
    * provider whose `buildArgs` doesn't read it.
@@ -271,11 +275,26 @@ export type SessionCapability = {
 //   substitution class this gate exists for, so claude NOW has a list
 //   here (the 2026-09-10 comment that it "accepts anything callers send
 //   it, so there's nothing to refuse" was empirically false).
-// - `agy --help` (v1.2.2): `--effort` is `low|medium|high`. Passing
-//   `xhigh`/`max` fails with `invalid --effort "…" (valid: low, medium,
-//   high)` — confirmed via `agy --effort xhigh --model <fake>
-//   --print='x'`. The older "available: low, high" error (gemini-3.1-pro
-//   without `--effort`, 2026-09-10) is no longer the CLI's range.
+// - `agy` — re-MEASURED at RUNTIME 2026-10-01, v1.2.14 (task 1c4f3b50).
+//   The `--help` is NOT proof: the GLOBAL flag validator ANNOUNCES
+//   `low|medium|high|max` (an invalid value lists all four), yet the real
+//   range is PER MODEL:
+//     * default (`gemini-3.1-pro`, no `--model`): only `low`/`high` — the
+//       `--effort medium` and `--effort max` runs exit 1 with
+//       "gemini-3.1-pro has no medium/max effort (available: low, high)";
+//     * `medium`: honored by a model whose NAME carries the level
+//       (`gemini-3.8-flash-medium --effort medium` → exit 0);
+//     * `max`: honored by NO model (no `-max` variant in `agy models`; every
+//       `--effort max` errors).
+//   DECISION: `max` is NOT declared — help announcing it is not honoring it,
+//   and nothing honors it. `low|medium|high` stay declared as the levels the
+//   CLI accepts, but `medium` carries the model caveat above (a bare spawn,
+//   no `--model`, cannot honor it): a model-conditional range is not
+//   expressible in this declaration, so the caveat lives here rather than
+//   being silently dropped. (The 2026-09-12 v1.2.2 note listened to the
+//   GLOBAL validator because it passed `--model <fake>` — that is not a real
+//   spawn's range.) Evidence: tests/unit/fixtures/antigravity-effort/
+//   (8 real runs with exit codes).
 //
 // DECISION (documented here, not just in the session report): a
 // `spawn_agent` whose provider has a known range, with an effort outside
@@ -1123,9 +1142,14 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       // `tests/unit/fixtures/one-shot/`.
       oneShot: { mechanism: "argv", args: ["-p", "{prompt}", "--output-format", "json"], result: "stdout-json" },
       acbridgeOnPath: true,
-      // Range re-measured 2026-09-12 against `agy --help` (v1.2.2) — the
-      // full evidence and decision writeup live in the
-      // `EffortCapability` comment above.
+      // MEDIDO em runtime 2026-10-01 (task 1c4f3b50), agy v1.2.14: o `--help`
+      // (validador GLOBAL) anuncia `low|medium|high|max`, mas a faixa real é
+      // POR MODELO. `max` é anunciado e NÃO é honrado por modelo NENHUM — por
+      // isso NÃO entra na declaração. A faixa declarada é o conjunto de níveis
+      // que a CLI aceita, com uma ressalva que o comentário de
+      // `EffortCapability` acima registra: `medium` só é honrado por modelo
+      // cujo NOME carrega o nível (o default `gemini-3.1-pro`, sem `--model`,
+      // recusa `medium`). Evidência: tests/unit/fixtures/antigravity-effort/.
       effort: { mechanism: "flag", flag: "--effort", values: ["low", "medium", "high"] },
       model: { mechanism: "flag", flag: "--model" },
       // Não impõe (medido: ignora um id desconhecido e cunha o seu).
