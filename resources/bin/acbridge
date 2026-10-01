@@ -75,7 +75,7 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // src/main/acbridge-protocol-decision.ts — o vitest trava os dois
 // (tests/unit/acbridge-protocol.test.ts). Bump quando a forma de um
 // request muda (cmd/campo novo), e só então.
-const ACBRIDGE_PROTOCOL = 7;
+const ACBRIDGE_PROTOCOL = 8;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -129,6 +129,7 @@ const USAGE =
   "browser-scroll <cardId> <dx> <dy> [selector] | browser-query <cardId> <selector> | " +
   "browser-snapshot <cardId> | browser-console <cardId> [level] | " +
   "browser-network <cardId> [failed] | browser-wait-for <cardId> <text|selector> <value...> | " +
+  "browser-navigate <cardId> <path|url> [--expect <selector>] | " +
   "browser-eval <cardId> <js...>>";
 
 // DESIGN-BACKLOG.md §2.1 points 3–4 — printed with bare `acbridge` usage.
@@ -534,6 +535,19 @@ if (cmd === "version") {
   }
   const value = valueParts.join(" ");
   request = { cmd: "browser_wait_for", target, ...(kind === "text" ? { text: value } : { selector: value }) };
+} else if (cmd === "browser-navigate") {
+  // `--expect <selector>` é o sinal FORTE de chegada (a tool MCP tem o mesmo
+  // em `expectSelector`) — flags primeiro, resto posicional, mesma forma do
+  // `browser-eval` logo abaixo.
+  const positional = [];
+  let expectSelector;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--expect") expectSelector = rest[++i];
+    else positional.push(rest[i]);
+  }
+  const [target, url] = positional;
+  if (!target || !url) fail("usage: acbridge browser-navigate <cardId> <path|url> [--expect <selector>]");
+  request = { cmd: "browser_navigate", target, url, expectSelector, requesterId: ownCardId };
 } else if (cmd === "browser-eval") {
   const [target, ...jsParts] = rest;
   // `--timeout <ms>` como primeiros pedaços: limite próprio do eval (paridade
@@ -651,6 +665,11 @@ socket.on("close", () => {
     for (const r of res.requests ?? []) console.log(`${r.status ?? r.error ?? "?"}\t${r.method}\t${r.url}`);
   } else if (cmd === "browser-wait-for") {
     console.log(`ok after ${res.waitedMs}ms`);
+  } else if (cmd === "browser-navigate") {
+    // JSON inteiro: a resposta É o veredito medido (arrival/weak/probes/signal,
+    // ou o `code` nomeado da recusa). Um "navigated" seco seria exatamente a
+    // afirmação sem verificação que esta ferramenta existe para não fazer.
+    console.log(JSON.stringify(res));
   } else if (cmd === "card-status") {
     console.log(res.status);
   } else if (cmd === "report") {

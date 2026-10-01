@@ -28,6 +28,15 @@ import {
   describeEvalTimeout,
   normalizeEvalTimeout,
 } from "./browser-eval-timeout-decision";
+import {
+  decideNavigateArrival,
+  decideNavigatePrecheck,
+  navigateInAppSource,
+  normalizeRoute,
+  viewFingerprintSource,
+  type NavigateSignal,
+  type ViewFingerprint,
+} from "./browser-navigate-decision";
 
 /**
  * Formato explícito do payload de `onFrame` (docs/PERF.md §9.4): quem
@@ -2101,6 +2110,145 @@ export function createBrowserRegistry(callbacks: {
     return { ok: false, error: `timed out after ${timeoutMs}ms waiting for ${what} to ${opts.gone ? "disappear" : "appear"}` };
   }
 
+  /** Polling da CHEGADA de `browser_navigate` — separado (e mais curto) que o
+   * de `waitFor`: aqui cada amostra é um `innerText` da página inteira, então
+   * 120ms é o compromisso entre reagir a um router que navega por microtask
+   * (Angular) e não varrer a página 50 vezes por segundo. */
+  const NAV_POLL_MS = 120;
+  const NAV_DEFAULT_TIMEOUT_MS = 4_000;
+  const NAV_MAX_TIMEOUT_MS = 30_000;
+  /** Os três desfechos de `navigateInApp`, e o terceiro é o que importa:
+   * `ok:false` com um `code` NOMEADO. "A URL foi posta e a view não mudou" não
+   * pode sair daqui como sucesso só porque a chamada a `pushState` funcionou. */
+  type NavigateInAppOutcome =
+    | {
+        ok: true;
+        navigated: true;
+        url: string;
+        route: string;
+        arrival: "expect-selector" | "dom-changed";
+        weak: boolean;
+        probes: number;
+        waitedMs: number;
+        signal: NavigateSignal;
+      }
+    | { ok: true; navigated: false; alreadyThere: true; url: string; route: string; note: string }
+    | { ok: false; error: string; code: string; url?: string; observedUrl?: string };
+
+  /**
+   * `browser_navigate` — a navegação IN-APP que o relato do dono pediu (task
+   * 18df327e), com a medição que ele exige. Ver o doc-comment de
+   * `browser-navigate-decision.ts` para o incidente (CIEE: `/estudante/
+   * curriculo` reescrito para `/` por um route guard depois de um `open_url`)
+   * e para as quatro decisões.
+   *
+   * O fluxo aqui é de propósito: AMOSTRA → PRÉ-CHECAGEM → MUTAÇÃO → AMOSTRAS.
+   * A pré-chamada é o que permite recusar URL de outra origem e seletor de
+   * expectativa inválido SEM ter mexido na página — e a amostra "antes" é o
+   * único jeito honesto de dizer "a view mudou", porque `pushState` não avisa
+   * nada.
+   */
+  async function navigateInApp(
+    id: string,
+    opts: { url: string; expectSelector?: string; timeoutMs?: number },
+  ): Promise<NavigateInAppOutcome> {
+    const entry = entries.get(id);
+    if (!entry) return { ok: false, error: `no browser card with id "${id}"`, code: "card-not-found" };
+    const expectSelector = opts.expectSelector ?? null;
+    const timeoutMs = Math.min(Math.max(opts.timeoutMs ?? NAV_DEFAULT_TIMEOUT_MS, NAV_POLL_MS), NAV_MAX_TIMEOUT_MS);
+
+    const beforeSample = await runInPage<ViewFingerprint>(id, null, viewFingerprintSource(expectSelector));
+    if (!beforeSample.ok) return { ok: false, error: beforeSample.error, code: "page-probe-failed" };
+    const before = beforeSample.value;
+
+    const precheck = decideNavigatePrecheck({
+      requested: opts.url,
+      documentHref: before.href,
+      expectSelectorError: before.expectError,
+    });
+    if (precheck.action === "refuse") return { ok: false, error: precheck.error, code: precheck.code };
+    if (precheck.action === "already-there") {
+      return {
+        ok: true,
+        navigated: false,
+        alreadyThere: true,
+        url: before.href,
+        route: precheck.route,
+        note:
+          "the card was already at this route — nothing was navigated (no pushState was issued, and no arrival " +
+          "is claimed). Read the page with browser_query/browser_snapshot to see what is on screen.",
+      };
+    }
+
+    // Token do marcador: identifica ESTA chamada. Se o documento for trocado
+    // no meio, o marcador some e `document-reloaded` sai nomeado.
+    const token = `nav-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const mutation = await runInPage<{ pushed: boolean; href: string; marker: boolean; error?: string }>(
+      id,
+      null,
+      navigateInAppSource(precheck.href, token),
+    );
+    if (!mutation.ok) return { ok: false, error: mutation.error, code: "push-rejected" };
+    if (!mutation.value.pushed) {
+      return {
+        ok: false,
+        error:
+          `browser_navigate: the page refused the history.pushState for ${precheck.route} ` +
+          `(${mutation.value.error ?? "no reason given"}). Nothing was navigated; the page is at ${mutation.value.href}.`,
+        code: "push-rejected",
+        url: precheck.href,
+        observedUrl: mutation.value.href,
+      };
+    }
+
+    const started = Date.now();
+    let probes = 0;
+    for (;;) {
+      if (entries.get(id) !== entry) {
+        return { ok: false, error: `browser card "${id}" closed while navigating`, code: "card-closed" };
+      }
+      probes += 1;
+      const sample = await runInPage<ViewFingerprint>(id, null, viewFingerprintSource(expectSelector, token));
+      if (!sample.ok) return { ok: false, error: sample.error, code: "page-probe-failed" };
+      const elapsedMs = Date.now() - started;
+      const verdict = decideNavigateArrival({
+        requestedRoute: precheck.route,
+        probes,
+        before,
+        now: sample.value,
+        // `null` (sem token na amostra) nunca acontece aqui: as amostras
+        // seguintes sempre levam o token desta chamada.
+        markerSurvived: sample.value.markerSurvived !== false,
+        expectSelector,
+        elapsedMs,
+        timeoutMs,
+      });
+      if (verdict.settled) {
+        if (!verdict.ok) {
+          return {
+            ok: false,
+            error: verdict.error,
+            code: verdict.code,
+            url: precheck.href,
+            observedUrl: verdict.observedUrl,
+          };
+        }
+        return {
+          ok: true,
+          navigated: true,
+          url: sample.value.href,
+          route: normalizeRoute(sample.value.href),
+          arrival: verdict.arrival,
+          weak: verdict.weak,
+          probes,
+          waitedMs: elapsedMs,
+          signal: verdict.signal,
+        };
+      }
+      await new Promise((r) => setTimeout(r, NAV_POLL_MS));
+    }
+  }
+
   /**
    * Achado ao vivo (2026-09-01): "não existe snapshot por árvore de
    * acessibilidade / ref pra mirar um elemento sem já saber o seletor" — o
@@ -2449,6 +2597,7 @@ export function createBrowserRegistry(callbacks: {
     fetchSource,
     getProcessStats,
     waitFor,
+    navigateInApp,
     pageSnapshot,
     refSelector,
     capturePage,

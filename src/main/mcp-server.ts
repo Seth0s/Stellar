@@ -1934,6 +1934,46 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       },
     );
 
+    // Task 18df327e — `open_url` PERDE PARA O ROUTE GUARD DE SPA. O relato do
+    // dono: no CIEE, abrir `/estudante/curriculo` por `open_url` fez a aplicação
+    // reescrever a URL para `/` e renderizar uma página de 78 caracteres —
+    // `open_url` troca `location`, o que REMONTA a SPA, e o router corre num
+    // estado recém-nascido que não reconhece a sessão em memória. A correção é a
+    // navegação IN-APP (`browser-navigate-decision.ts`), e a descrição abaixo
+    // carrega a regra de escolha entre as duas ferramentas — sem ela o próximo
+    // agente erra igual.
+    server.registerTool(
+      "browser_navigate",
+      {
+        description:
+          "Route to a path INSIDE the site already open in a browser card, WITHOUT reloading the document: history.pushState plus a real popstate (and hashchange when the hash moved) — what clicking an in-app link/menu item does. This is the tool for a SPA whose session lives in MEMORY (logged-in app, wizard, dashboard): open_url swaps `location`, which REMOUNTS the app, and a route guard that rebuilt its state from scratch bounces the route to the login/home page — measured live: a requested route came back rewritten to `/` with a 78-character page, which killed the whole automation. RULE OF CHOICE: same site + an in-memory session that must survive → browser_navigate; different site, or a full document load is acceptable → open_url. Cross-origin targets are refused here, naming open_url — nothing is navigated.\n\nARRIVAL IS MEASURED, never assumed: pushState changes the address bar without rendering anything. After the route change the page is sampled (title, text, structure) until the view really changes, or until `expectSelector` (optional; the strongest signal — the element you expect on the new view) matches. Success carries the evidence: `arrival` (\"expect-selector\" | \"dom-changed\"), `weak` (true when only the node count moved — that can be a spinner rather than the new view, so judge before acting), `probes`/`waitedMs`, and `signal` (titleChanged/textChanged/nodesChanged). Failure is NAMED, never a silent no-op: `navigation-refused-by-app` (the page itself rewrote the URL — a route guard rejecting the route; the answer carries the observed URL, and retrying it with open_url hits the same guard, so reach the view via browser_snapshot + browser_click on the menu item), `no-arrival-signal` (the URL changed and the page did NOT react — a router that does not listen to popstate; the old view is still on screen while the URL lies — click the link instead), `document-reloaded` (it turned into a full document load, which is open_url's job), `expect-selector-missing`, `cross-origin`. A refusal happens BEFORE the route change, so the page was not touched at all.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          url: z.string().describe("A path inside the site already open (\"/estudante/curriculo?tab=1\") or a full SAME-ORIGIN http(s) URL. A different origin is refused — that is open_url's job."),
+          expectSelector: z
+            .string()
+            .optional()
+            .describe("CSS selector that must be present on the new view (e.g. \"#curriculo-form\") — the strongest arrival signal. Validated BEFORE the route change: invalid CSS is refused without touching the page. Without it, arrival is decided by the view changing (title/text/structure), which is weaker."),
+          timeoutMs: z
+            .number()
+            .optional()
+            .describe("How long to keep sampling for arrival, in ms (default 4000, floor 120, ceiling 30000). Some routers navigate in a microtask after popstate — do not read a short wait as \"nothing happened\"."),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ target, url, expectSelector, timeoutMs, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "browser_navigate",
+          target,
+          url,
+          expectSelector,
+          timeoutMs,
+          requesterId: caller(callerCardId),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
     server.registerTool(
       "browser_eval",
       {
