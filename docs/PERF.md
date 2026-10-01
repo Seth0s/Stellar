@@ -616,3 +616,87 @@ número de sequência atravessando o IPC.
 pra `shouldCropFrame` — dano minúsculo (cursor), dano pequeno (barra de
 progresso), limiar (94%/95%/100%) e frame de área zero. Suíte inteira:
 1681/1681 verde (era 1675 antes desta rodada).
+
+---
+
+## 11. RAM/VRAM por card: onde mora, medido (2026-10-01, task 5d24ada3)
+
+Contexto: com os shims `stellar-mcp` (523 MB em 7 cards) saindo por outra task,
+o **gpu-process (379 MB) e o renderer (373 MB)** do board VIVO eram os maiores
+alvos. Esta rodada MEDE o custo por card de cada alavanca candidata — sem mudar
+código do app (`src/` intacto).
+
+**Como medir.** `node scripts/measure/perf-idle-cards.mjs --cards N --zoom 15
+--pan-y 80 [--no-webgl] [--browser] [--browser-page static] --seconds 12`
+(instância isolada; RSS de `/proc` por processo da árvore do app; a "máquina
+ocupada" do intervalo sempre registrada — variou de 12% a 90% entre rodadas, e
+é a fonte de ruído principal). O harness ganhou, nesta rodada, `--no-webgl`
+(neutraliza `getContext("webgl"/"webgl2")` na PÁGINA VIVA — o xterm cai no
+renderer DOM, que é o caminho do próprio `catch` do `term.open()`), `--zoom` e
+`--pan-y` (o board empilha card novo PARA CIMA e os antigos saem da viewport;
+sem afastar o zoom o GATE de "todos visíveis" reprova e os cards de fora nem
+criam renderer), e a criação de cards extras passou a usar o MESMO caminho que
+`bootIntoFreshSession` prova (rail → Terminal → `.popover-actions
+button.primary`) — o caminho do picker, que o harness usava, **não materializa
+card nenhum neste build** (medido, com rótulo que casa e que não casa), e o
+`Page.reload` que o harness fazia agora volta pra HOME.
+
+**Números (3 cards de bash ociosos, amostra de ~12s):**
+
+| configuração | renderer | gpu-process | main | total | cpu renderer / gpu |
+|---|---|---|---|---|---|
+| 0 cards (baseline) | 51 MB (1 proc) | 74 MB | 63 MB | 267 MB | 0,5% / 0,7% |
+| 3 terminais (WebGL, default) | 48 MB (1 proc) | 74 MB | 59 MB | 287 MB | 0,6% / 0,2% |
+| 3 terminais (`--no-webgl`) | 51 MB (1 proc) | 77 MB | 63 MB | 297 MB | **5,2% / 5,1%** |
+| 3 terminais + navegador (página ANIMADA) | 76 MB (2 proc) | 80 MB | 73 MB | 337 MB | 4,7% / **8,0%** |
+| 3 terminais + navegador (página ESTÁTICA) | 73 MB (2 proc) | 79 MB | 61 MB | 320 MB | 0,5% / 0,3% |
+
+**Alavanca 1 — `WebglAddon` por card.** Custo em RAM: **neutro** (sem WebGL o
+renderer fica IGUAL ou ~3 MB MAIOR, e o gpu +3 MB — dentro do ruído). Custo em
+CPU: **sem** WebGL o renderer salta de 0,6% para 5,2% e o gpu de 0,2% para 5,1%
+(3 cards) — ~1,5pp de renderer por card. **Conclusão: o WebGL é alavanca de
+CPU/GPU, não de RAM** — removê-lo piora tudo. (É exatamente o "CUIDADO" que o
+repo declara.) O contador `__webglBlocked` provou que a sonda agiu (3 bloqueios
+para 3 cards): um run "sem WebGL" que não bloqueasse nada seria lido como
+"WebGL de graça".
+
+**Alavanca 2 — liberar o contexto WebGL de card não focado / fora da viewport.**
+Como o WebGL custa ~0 de RAM (alavanca 1), liberar não economiza RAM; custa
+recriar contexto + repintar quando o card volta a ficar visível. **Não vale.**
+Nota de código: hoje um card que já foi visto mantém o renderer pelo resto da
+vida (`openedRef`, item 34) — liberar exigiria um caminho de `dispose` + rebuild
+que ainda não existe.
+
+**Alavanca 3 — card de NAVEGADOR (o maior alvo restante).** Um card adiciona um
+**processo renderer INTEIRO** (o Chromium offscreen: renderer 1→2 processos,
+~+25 MB) + ~+5 MB no gpu-process + ~+2 MB no main ≈ **+30 MB de base**. Mas o
+que domina é a PÁGINA ANIMADA: contra uma estática, a animada soma ~+15 MB de RSS
+e **~+18pp de CPU** (4,7% renderer / 8,0% gpu contra 0,5%/0,3%) — é o
+`image.toJPEG(90)` por frame no main + IPC + decode, exatamente o caminho do §7.
+**A alavanca do navegador é dirigida por CONTEÚDO, não por contagem de cards:**
+uma página em repouso já não pinta (o `paint` do Chromium só emite em mudança);
+o custo aparece quando HÁ animação.
+
+**Alavanca 4 — `scrollback: 10000` por card.** Probe dedicado
+(`scripts/measure/scrollback-weight.mjs`, impressão em estágios + `JSHeapUsedSize`
+por CDP): a inclinação é **~485 bytes por linha** (~200 chars/linha), projetando
+**~4,6 MB de heap por card com o buffer cheio**. Pequeno.
+
+**O que estes números NÃO reproduzem (limite honesto):** board VIVO = GPU 379 MB /
+renderer 373 MB; aqui, 3 terminais ociosos + navegador ficam em gpu 74–80 MB e
+renderer 48–76 MB. Ou seja, **terminal ocioso custa ~0**: o grosso do board vivo
+vem dos TUIs de AGENTE reais (atlases de glifo WebGL e buffers grandes) e das
+páginas vivas — não de cards ociosos. Medir o custo por card de um `claude`/
+`codex` REAL fica como próximo passo (§ notDone do relatório da task).
+
+**Recomendação (esforço/risco):**
+1. **Navegador com página em repouso — nada a fazer** (já não pinta). Página
+   animada é custo do CONTEÚDO; a redução certa é cortar frames sem dano real
+   (o §9.3/§9.8 já trata) — esforço médio, risco médio.
+2. **WebGL: manter.** Removê-lo troca 0 MB de RAM por ~1,5pp de CPU por card.
+   Não é alavanca de RAM.
+3. **Liberar WebGL por visibilidade: não fazer** (economia ~0, custo de rebuild).
+4. **`scrollback: 10000`: manter** (~4,6 MB cheio). Baixar para 2.000 salvaria
+   ~4 MB/card — pouco, e perde histórico.
+5. **Próxima medição de verdade:** o custo por card de um provider de AGENTE
+   real (o que de fato domina o board vivo), com o mesmo harness.
