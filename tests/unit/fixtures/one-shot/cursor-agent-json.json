@@ -1,0 +1,1 @@
+{"type":"result","subtype":"success","is_error":false,"duration_ms":10611,"duration_api_ms":10611,"result":"pong","session_id":"be6c4e2b-0817-49a8-9c01-bdb06f1ec3eb","request_id":"015e61f8-4dc3-4f7d-b6e4-2917f66e0e9c","usage":{"inputTokens":15433,"outputTokens":95,"cacheReadTokens":1152,"cacheWriteTokens":0}}
