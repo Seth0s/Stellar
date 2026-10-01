@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { t } from "../shared/i18n";
-import { providerCapacity, which, type McpServerShape } from "./providers";
+import { providerCapacity, which, type McpServerShape, type McpUrlSyntax } from "./providers";
 import { effectivePath } from "./user-env";
 
 const execFileAsync = promisify(execFile);
@@ -145,41 +145,70 @@ export function shimPath(binDir: string): string {
   return join(binDir, "stellar-mcp");
 }
 
-/** As variáveis que o shim lê e que a whitelist do cursor derruba — ver o
- * cabeçalho. Não é a lista inteira de `AGENT_CANVAS_*` de propósito: o
- * shim só consome estas três, e cada uma a mais é mais uma que o cursor
- * entrega como literal fora de um card. */
-const CURSOR_FORWARDED_ENV = ["AGENT_CANVAS_MCP_URL", "AGENT_CANVAS_CARD_ID", "AGENT_CANVAS_NODE"] as const;
+/**
+ * O template da URL para os CLIs que aceitam um servidor REMOTO no próprio
+ * config. A porta do MCP é efêmera e a identidade é POR CARD, então o valor não
+ * pode ser escrito literal: `${env:…}` é resolvido pelo CLI no startup, a
+ * partir do ambiente do processo do card — `pty-registry.ts` injeta os dois
+ * (`AGENT_CANVAS_MCP_URL` e `AGENT_CANVAS_CARD_ID`). É o "caminho preferido"
+ * (task f7a2ac84, rodada 2): servidor HTTP direto = ZERO processo por card.
+ *
+ * Medido (2026-09-13, DESIGN-BACKLOG §4.5, forma ii): o cursor interpola
+ * `${env:…}` no campo `url` e expõe as 44 tools DENTRO de um card. O preço,
+ * declarado e não escondido: FORA de um card o literal `${env:…}` não é
+ * expandido e o cursor mostra uma linha vermelha de URL inválida — era
+ * exatamente por isso que o shim stdio existia. Ativar isto por padrão é uma
+ * decisão do dono; a capacidade fica aqui, derivada da declaração.
+ *
+ * A SINTAXE (`${env:}` vs `{env:}`) não é fixa aqui: vem DECLARADA pelo próprio
+ * provider (`capacity.mcp.urlSyntax`) e `interpolatedMcpUrl` emite a declarada.
+ *
+ * O template da URL na sintaxe DECLARADA pelo provider (`McpUrlSyntax`). Cada
+ * CLI interpola de um jeito, MEDIDO por CLI (task f7a2ac84 R4): cursor usa
+ * `${env:}`, opencode usa `{env:}`. O registrador nunca escolhe a sintaxe —
+ * ele emite a que o provider declarou; inventar uma delas para o outro daria
+ * "Invalid MCP URL" (medido no opencode com `${env:}`).
+ */
+export function interpolatedMcpUrl(syntax: McpUrlSyntax = "dollar-env"): string {
+  return syntax === "brace-env"
+    ? "{env:AGENT_CANVAS_MCP_URL}?card={env:AGENT_CANVAS_CARD_ID}"
+    : "${env:AGENT_CANVAS_MCP_URL}?card=${env:AGENT_CANVAS_CARD_ID}";
+}
+
+/** A sintaxe declarada por ESTE provider (`capacity.mcp.urlSyntax`), com o
+ * fallback conservador `${env:}`. */
+export function declaredUrlSyntax(providerId: string): McpUrlSyntax {
+  const mcp = providerCapacity(providerId)?.mcp;
+  if (mcp?.mechanism !== "global-config") return "dollar-env";
+  return mcp.urlSyntax === "brace-env" ? "brace-env" : "dollar-env";
+}
 
 export type CursorServerEntry = {
-  command: string;
-  env: Record<string, string>;
+  url: string;
   [extra: string]: unknown;
 };
 
-/** A entrada que o Stellar quer ver em `~/.cursor/mcp.json`. Exportada
- * porque é o CONTRATO: o teste de idempotência compara contra ela, e o
- * shim documenta que é daqui que o ambiente dele vem. */
-export function cursorServerEntry(shim: string): CursorServerEntry {
-  const env: Record<string, string> = {};
-  for (const name of CURSOR_FORWARDED_ENV) env[name] = `\${env:${name}}`;
-  return { command: shim, env };
+/** A entrada que o Stellar quer ver em `~/.cursor/mcp.json`. Servidor REMOTO
+ * (`{ "url": <…> }`): some o shim, some o processo filho, some o runtime —
+ * em macOS e Windows inclusive. Exportada porque é o CONTRATO que o teste de
+ * idempotência compara. */
+export function cursorServerEntry(syntax: McpUrlSyntax = "dollar-env"): CursorServerEntry {
+  return { url: interpolatedMcpUrl(syntax) };
 }
 
-/** Igualdade só sobre o que o Stellar escreve (`command` e as chaves de
- * `env` que ele próprio põe). Chaves que o usuário tenha acrescentado à
- * entrada são preservadas e não contam — senão o registro reescreveria a
- * cada spawn, e a regra 3 do cabeçalho existe para isso não acontecer. */
+/** Igualdade só sobre o que o Stellar escreve. Chaves que o usuário tenha
+ * acrescentado à entrada são preservadas e não contam — senão o registro
+ * reescreveria a cada spawn, e a regra 3 do cabeçalho existe para isso não
+ * acontecer. `command`/`env` de uma entrada antiga (stdio) NÃO contam: são
+ * justamente o que esta forma substitui. */
 function cursorEntryIsCurrent(existing: unknown, wanted: CursorServerEntry): boolean {
   if (!existing || typeof existing !== "object") return false;
-  const entry = existing as Partial<CursorServerEntry>;
-  if (entry.command !== wanted.command) return false;
-  const env = entry.env;
-  if (!env || typeof env !== "object") return false;
-  return Object.entries(wanted.env).every(([k, v]) => env[k] === v);
+  const entry = existing as Record<string, unknown>;
+  if (entry.url !== wanted.url) return false;
+  return entry.command === undefined && entry.env === undefined;
 }
 
-export function registerCursor(shim: string): McpRegistrationResult {
+export function registerCursor(syntax: McpUrlSyntax = "dollar-env"): McpRegistrationResult {
   // `~/.cursor/mcp.json` — o caminho global que o próprio `cursor-agent
   // mcp list` nomeia quando não acha nada ("expected in .cursor/mcp.json
   // or ~/.cursor/mcp.json"). O de projeto é deliberadamente ignorado: é o
@@ -195,14 +224,16 @@ export function registerCursor(shim: string): McpRegistrationResult {
     config = {};
   }
   const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
-  const wanted = cursorServerEntry(shim);
+  const wanted = cursorServerEntry(syntax);
   const existing = servers[SERVER_NAME];
   if (cursorEntryIsCurrent(existing, wanted)) return { status: "ok", changed: false };
-  // Uma entrada antiga (só `command`, de antes de 2026-09-13) ou apontando
-  // pra outro caminho é reescrita por cima, preservando o que não é nosso.
-  const base = existing && typeof existing === "object" ? (existing as Record<string, unknown>) : {};
-  const baseEnv = base.env && typeof base.env === "object" ? (base.env as Record<string, string>) : {};
-  servers[SERVER_NAME] = { ...base, command: wanted.command, env: { ...baseEnv, ...wanted.env } };
+  // Reescrita: preserva chaves alheias (o usuário pode ter acrescentado
+  // algo), mas REMOVE `command`/`env` da entrada stdio antiga — manter os
+  // dois deixaria a entrada ambígua (comando E url).
+  const base = existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
+  delete base.command;
+  delete base.env;
+  servers[SERVER_NAME] = { ...base, url: wanted.url };
   config.mcpServers = servers;
   try {
     mkdirSync(dirname(file), { recursive: true });
@@ -240,13 +271,15 @@ async function approveCursor(binary: string): Promise<void> {
 }
 
 /** `~/.config/opencode/opencode.json` — o config global do próprio
- * opencode (confirmado no schema real: chave `mcp`, entradas `{type:
- * "local", command: [...], enabled}` pra stdio). Mesmo cuidado de
- * `registerCursor`: parse defensivo, só mexe na chave `mcp`, preserva
- * `provider`/`$schema`/qualquer outra coisa que já esteja no arquivo
- * (este projeto já usa esse config pro provider `qwen-local` — ver ai
- * memory `qwen-buun-local-server`). */
-function registerOpencode(shim: string): McpRegistrationResult {
+ * opencode. RODADA 4 (task f7a2ac84): passa a escrever um servidor REMOTO
+ * (`{ type: "remote", url }`) em vez de um `{type:"local", command:[shim]}` —
+ * ZERO processo por card, e vale nos 3 SOs. A URL usa a sintaxe DECLARADA pelo
+ * provider (`{env:VAR}`), medida: com `${env:}`, opencode recusa com "Invalid
+ * MCP URL"; com `{env:}`, conecta. Mesmo cuidado de `registerCursor`: parse
+ * defensivo, só mexe na chave `mcp`, preserva `provider`/`$schema`/qualquer
+ * outra coisa que já esteja no arquivo (este projeto usa esse config pro
+ * provider `qwen-local` — ver ai memory `qwen-buun-local-server`). */
+function registerOpencode(syntax: McpUrlSyntax): McpRegistrationResult {
   const file = join(registrationHome(), ".config", "opencode", "opencode.json");
   let config: Record<string, unknown>;
   try {
@@ -254,10 +287,11 @@ function registerOpencode(shim: string): McpRegistrationResult {
   } catch {
     config = {};
   }
-  const servers = (config.mcp ?? {}) as Record<string, { type?: string; command?: string[]; enabled?: boolean }>;
+  const url = interpolatedMcpUrl(syntax);
+  const servers = (config.mcp ?? {}) as Record<string, { type?: string; url?: string; command?: string[]; enabled?: boolean }>;
   const existing = servers[SERVER_NAME];
-  if (existing?.type === "local" && existing.command?.[0] === shim) return { status: "ok", changed: false };
-  servers[SERVER_NAME] = { type: "local", command: [shim], enabled: true };
+  if (existing?.type === "remote" && existing.url === url) return { status: "ok", changed: false };
+  servers[SERVER_NAME] = { type: "remote", url };
   config.mcp = servers;
   try {
     mkdirSync(dirname(file), { recursive: true });
@@ -302,13 +336,13 @@ async function registerAntigravity(binary: string, shim: string): Promise<McpReg
  * porque ele lê `PROVIDERS`, que em unit test são só os nativos.
  */
 export const REGISTRARS: Record<string, (shim: string) => Promise<McpRegistrationResult>> = {
-  cursor: async (shim) => {
-    const result = registerCursor(shim);
+  cursor: async () => {
+    const result = registerCursor(declaredUrlSyntax("cursor"));
     const binary = which(["agent", "cursor-agent"]);
     if (result.status === "ok" && result.changed && binary) await approveCursor(binary);
     return result;
   },
-  opencode: async (shim) => registerOpencode(shim),
+  opencode: async () => registerOpencode(declaredUrlSyntax("opencode")),
   antigravity: async (shim) => {
     const binary = which(["agy"]);
     if (!binary) return { status: "skipped", reason: t("error.agyBinaryMissing") };
@@ -330,21 +364,24 @@ function resolveDeclaredConfigPath(declared: string): string | null {
 /** A entrada que o Stellar quer escrever, na forma que a CLI declarou. Duas
  * formas hoje (ver `McpServerShape`): objeto com `command` (a família
  * `mcpServers` — claude/comandos stdio), ou o `{type:"local", command:[…]}`
- * do opencode. Nada de `${env:…}` aqui: a interpolação de ambiente é o
- * contorno MEDIDO da whitelist do cursor, não uma convenção geral — inventá-la
- * para outra CLI seria declarar uma medição que ninguém fez. */
-function declaredServerEntry(shape: McpServerShape, shim: string): Record<string, unknown> {
+ * do opencode. A forma `http-url` emite a URL na SINTAXE DECLARADA pelo
+ * provider (`urlSyntax`) — um provider só a declara se a CLI dele interpolar o
+ * ambiente no `url` (medição própria): inventar isso para quem não interpola
+ * seria declarar um fato que ninguém mediu. */
+function declaredServerEntry(shape: McpServerShape, shim: string, syntax: McpUrlSyntax): Record<string, unknown> {
   if (shape === "stdio-command") return { command: shim };
+  if (shape === "http-url") return { type: "http", url: interpolatedMcpUrl(syntax) };
   return { type: "local", command: [shim], enabled: true };
 }
 
 /** Igualdade só sobre o que o Stellar escreve. Chaves que o usuário tenha
  * acrescentado à NOSSA entrada são preservadas e não contam — mesma regra do
  * `cursorEntryIsCurrent`, senão o registro reescreveria a cada spawn. */
-function declaredEntryIsCurrent(existing: unknown, shape: McpServerShape, shim: string): boolean {
+function declaredEntryIsCurrent(existing: unknown, shape: McpServerShape, shim: string, syntax: McpUrlSyntax): boolean {
   if (!existing || typeof existing !== "object" || Array.isArray(existing)) return false;
   const entry = existing as Record<string, unknown>;
   if (shape === "stdio-command") return entry.command === shim;
+  if (shape === "http-url") return entry.type === "http" && entry.url === interpolatedMcpUrl(syntax);
   return entry.type === "local" && Array.isArray(entry.command) && entry.command[0] === shim;
 }
 
@@ -413,14 +450,16 @@ export function registerDeclaredProvider(providerId: string, shim: string): McpR
       : {};
 
   const existing = servers[SERVER_NAME];
-  if (declaredEntryIsCurrent(existing, serverShape, shim)) return { status: "ok", changed: false };
+  if (declaredEntryIsCurrent(existing, serverShape, shim, declared.urlSyntax ?? "dollar-env")) {
+    return { status: "ok", changed: false };
+  }
 
   // Preserva o que não é nosso: a entrada antiga (válida ou não) é a base, e
   // só as chaves que o Stellar escreve são sobrescritas.
   const base = existing !== null && typeof existing === "object" && !Array.isArray(existing)
     ? (existing as Record<string, unknown>)
     : {};
-  servers[SERVER_NAME] = { ...base, ...declaredServerEntry(serverShape, shim) };
+  servers[SERVER_NAME] = { ...base, ...declaredServerEntry(serverShape, shim, declared.urlSyntax ?? "dollar-env") };
   config[configKey] = servers;
 
   try {

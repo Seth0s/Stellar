@@ -168,7 +168,28 @@ export type McpServerShape =
    * commandcode-style `mcpServers` entry pointing at the stdio shim. */
   | "stdio-command"
   /** opencode's `{ type: "local", command: [<path>], enabled: true }`. */
-  | "local-array";
+  | "local-array"
+  /**
+   * Servidor REMOTO direto no endpoint HTTP do main — `{ url: <...> }` (cursor)
+   * ou `{ type: "http", url: <...> }` (commandcode/agy/opencode). ZERO processo
+   * por card: some o shim stdio. O `url` é o template que os CLIs interpolam do
+   * ambiente do card (`${env:AGENT_CANVAS_MCP_URL}?card=${env:AGENT_CANVAS_CARD_ID}`),
+   * porque a porta é efêmera e a identidade é por card. Ver `mcp-registration.ts`.
+   */
+  | "http-url";
+
+/**
+ * A SINTAXE com que uma CLI interpola variáveis de ambiente num `url` de
+ * config — MEDIDA por CLI, nunca suposta (task f7a2ac84 R4):
+ *
+ *   - `"dollar-env"` → `${env:VAR}`  (cursor, MEDIDO: 53 tools)
+ *   - `"brace-env"`  → `{env:VAR}`   (opencode, MEDIDO: conecta; o `${env:}`
+ *     dele dá "Invalid MCP URL" — é sintaxe PRÓPRIA, não a do cursor)
+ *
+ * Declarar aqui (e o registrador emitir o que foi declarado) é o que impede o
+ * próximo provider de herdar a sintaxe errada por copiar-e-colar.
+ */
+export type McpUrlSyntax = "dollar-env" | "brace-env";
 
 /** How the stellar MCP server is registered for this provider. */
 export type McpRegistrationCapability =
@@ -190,6 +211,9 @@ export type McpRegistrationCapability =
       configKey?: string;
       /** A forma da entrada — ver `McpServerShape`. */
       serverShape?: McpServerShape;
+      /** A sintaxe de interpolação do `url` DESTA CLI — ver `McpUrlSyntax`.
+       * Só tem efeito nas formas que emitem `url` (`http-url`). */
+      urlSyntax?: McpUrlSyntax;
     }
   | { mechanism: "none" };
 
@@ -946,7 +970,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       // 2026-09-13, documented in mcp-registration.ts. Still insufficient
       // alone for report DISCOVERY (no system-prompt flag) — see
       // deriveReportDiscovery / capacity-contract header.
-      mcp: { mechanism: "global-config" },
+      // `urlSyntax`: MEDIDO (task f7a2ac84 R4) — `agent mcp list-tools stellar`
+      // contra o servidor real devolveu 53 tools com `${env:...}` no url.
+      mcp: { mechanism: "global-config", urlSyntax: "dollar-env" },
       acbridgeOnPath: true,
       // Same honest "unmeasured" as codex above: no effort flag was ever
       // measured for cursor's `agent` CLI, and buildArgs has never sent
@@ -1159,7 +1185,10 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "none" },
-      mcp: { mechanism: "global-config" },
+      // `urlSyntax`: MEDIDO (task f7a2ac84 R4) — o opencode tem sintaxe PRÓPRIA
+      // `{env:VAR}`; com `${env:VAR}` ele recusa com "Invalid MCP URL". Com
+      // `{env:...}` no url, `opencode mcp list` conectou no servidor real.
+      mcp: { mechanism: "global-config", urlSyntax: "brace-env" },
       acbridgeOnPath: true,
       // Measured 2026-09-15 on this machine: `opencode --help`
       // (v1.18.31) has no effort flag at all — nothing to send, so
