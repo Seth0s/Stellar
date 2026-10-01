@@ -14,6 +14,8 @@ import { createServer } from "node:http";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "target", "release", "wry-spike");
+/** Tamanho de página do host (x86_64 Linux = 4096) — só o FALLBACK usa. */
+const PAGE_SIZE_BYTES = 4096;
 
 const arg = (name, def) => {
   const i = process.argv.indexOf(name);
@@ -21,6 +23,8 @@ const arg = (name, def) => {
 };
 const VIEWS = Number(arg("--views", "1"));
 const HOLD_MS = Number(arg("--hold-ms", "9000"));
+/** Sem os dois contornos do WebKit — para separar a atribuição do GBM (R8). */
+const DEFAULT_WEBKIT = process.argv.includes("--default-webkit");
 
 const HTML = `<!doctype html><html><head><title>spike</title><meta charset="utf-8"></head><body>
 SPIKE-MARKER text for eval coverage — acentuação ção.
@@ -37,11 +41,23 @@ const server = createServer((_req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const url = `http://127.0.0.1:${server.address().port}/`;
 
+/**
+ * RSS em kB do processo. CORREÇÃO (review R8, 2026-10-01): `/proc/<pid>/stat`
+ * campo 24 (`rss`) está em PÁGINAS, não em kB — a primeira versão devolvia
+ * páginas cruas e o doc publicou ~4× MENOS (ex.: pid1 stat[24]=5634 vs VmRSS
+ * real 22548 kB; 5634×4=22536). Agora lê `VmRSS` de `/proc/<pid>/status`, que
+ * já vem em kB; o caminho antigo fica como FALLBACK multiplicado pelo tamanho
+ * de página.
+ */
 function readProcRssKb(pid) {
   try {
+    const status = readFileSync(`/proc/${pid}/status`, "utf8");
+    const m = /^VmRSS:\s+(\d+)\s+kB/m.exec(status);
+    if (m) return Number(m[1]);
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const close = stat.lastIndexOf(")");
-    return Number(stat.slice(close + 2).split(" ")[21]);
+    const pages = Number(stat.slice(close + 2).split(" ")[21]);
+    return pages * (PAGE_SIZE_BYTES / 1024);
   } catch {
     return 0;
   }
@@ -82,23 +98,27 @@ function cmdline(pid) {
 
 console.log(`[wry-spike] views=${VIEWS} hold=${HOLD_MS}ms url=${url}`);
 const proc = spawn(BIN, ["--views", String(VIEWS), "--url", url, "--hold-ms", String(HOLD_MS)], {
-  stdio: ["ignore", "pipe", "inherit"],
+  stdio: ["ignore", "pipe", "pipe"],
   // MEDIDO: em Wayland puro o wry 0.57 recusa o handle da janela do tao
   // (`UnsupportedWindowHandle`). Com o backend X11 (XWayland) o build aceita.
   env: {
     ...process.env,
+    // Wayland puro: wry 0.57 recusa a janela (`UnsupportedWindowHandle`).
     GDK_BACKEND: "x11",
-    // MEDIDO: sem isto o WebKitGTK falha o renderer DMA-BUF
-    // ("Failed to create GBM buffer of size …: Argumento inválido") e a página
-    // NUNCA carrega. São os dois contornos documentados do WebKit em ambiente
-    // sem GPU/DMA-BUF utilizável.
-    WEBKIT_DISABLE_DMABUF_RENDERER: "1",
-    WEBKIT_DISABLE_COMPOSITING_MODE: "1",
+    // CONFIG MEDIDA (default): os dois contornos do WebKit. `--default-webkit`
+    // os REMOVE para separar a atribuição (review R8): com eles o stderr fica
+    // LIMPO e a página AINDA não carrega; o `Failed to create GBM buffer` só
+    // aparece no caminho SEM eles.
+    ...(DEFAULT_WEBKIT
+      ? {}
+      : { WEBKIT_DISABLE_DMABUF_RENDERER: "1", WEBKIT_DISABLE_COMPOSITING_MODE: "1" }),
   },
 });
 
 const stages = [];
 let buf = "";
+let stderrText = "";
+proc.stderr.on("data", (d) => (stderrText += d.toString()));
 proc.stdout.on("data", (d) => {
   buf += d.toString();
   let i;
@@ -150,6 +170,8 @@ console.log(
   JSON.stringify(
     {
       views: VIEWS,
+      webkitConfig: DEFAULT_WEBKIT ? "default (so GDK_BACKEND=x11)" : "medida (DMA-BUF + compositor desligados)",
+      gbmErrorLines: (stderrText.match(/GBM buffer/g) || []).length,
       createMs: created?.ms ?? null,
       load: stages.find((s) => s.stage === "load") ?? null,
       uiVmRssKbBoot: boot?.vmRssKb ?? null,
