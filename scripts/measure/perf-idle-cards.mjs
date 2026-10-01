@@ -48,7 +48,12 @@ const SECONDS = Number(arg("--seconds", "30"));
 const RATE = Number(arg("--rate", "10"));
 const JSON_OUT = arg("--json", null);
 const BASELINE = arg("--baseline", null);
-const WITH_BROWSER = process.argv.includes("--browser");
+// `--browser` cria 1; `--browsers N` cria N (custo MARGINAL por card de
+// navegador — task 3dd34f94). O harness já criava o card a partir do store
+// (`upsert` + `browser.create`), que é o único caminho que materializa o
+// webContents offscreen.
+const BROWSERS = Number(arg("--browsers", process.argv.includes("--browser") ? "1" : "0"));
+const WITH_BROWSER = BROWSERS > 0;
 // Provider REAL (ex.: cline): os cards abrem e ficam OCIOSOS - sem prompt, sem
 // quota - para medir a taxa de PTY que um TUI de verdade produz (task 27e13021,
 // passo 1: calibrar). Sem --provider, o modo e a TUI sintetica em bash.
@@ -627,14 +632,17 @@ async function main() {
       browserServer = servidor.server;
       browserUrl = servidor.url;
       await page.evalJs(`(async () => {
-        const now = Date.now();
-        await window.store.upsert({ id: "perf-browser", provider: "browser", cwd: "/tmp", x: 40, y: 420, w: 700, h: 360,
-          updated_at: now, resume_id: null, model: null, system_prompt: null, kind: "browser", board_id: ${JSON.stringify(boardId)},
-          group_id: null, label: "perf-browser", messages_json: null, archived_at: null, effort: null, created_at: now });
-        // O IPC que a UI usa (H3): sem isto o card era so uma LINHA no banco e o
-        // WebContentsView - o que de fato custa frames - nunca nascia. O app RECUSA
-        // o esquema data: ("only opens http(s) URLs"), por isso o harness serve a pagina.
-        await window.browser.create(${JSON.stringify("perf-browser")}, ${JSON.stringify(browserUrl)});
+        for (let i = 0; i < ${BROWSERS}; i += 1) {
+          const id = "perf-browser-" + i;
+          const now = Date.now();
+          await window.store.upsert({ id, provider: "browser", cwd: "/tmp", x: 40 + i * 60, y: 420 + i * 40, w: 700, h: 360,
+            updated_at: now, resume_id: null, model: null, system_prompt: null, kind: "browser", board_id: ${JSON.stringify(boardId)},
+            group_id: null, label: id, messages_json: null, archived_at: null, effort: null, created_at: now });
+          // O IPC que a UI usa (H3): sem isto o card era so uma LINHA no banco e o
+          // WebContentsView - o que de fato custa frames - nunca nascia. O app RECUSA
+          // o esquema data: ("only opens http(s) URLs"), por isso o harness serve a pagina.
+          await window.browser.create(id, ${JSON.stringify(browserUrl)});
+        }
         return true;
       })()`);
     }
