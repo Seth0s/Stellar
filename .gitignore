@@ -9,3 +9,6 @@ DESIGN-BACKLOG.md
 .claude/worktrees/
 .commandcode/
 tmp/
+resources/relay/target/
+resources/bin/stellar-mcp-relay
+resources/bin/stellar-mcp-relay.exe

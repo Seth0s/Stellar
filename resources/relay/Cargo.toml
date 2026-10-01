@@ -1,0 +1,27 @@
+[package]
+name = "stellar-mcp-relay"
+version = "0.1.0"
+edition = "2021"
+# Um FONTE, um BINARIO POR ALVO (`cargo build --release --target <triple>`).
+# "Um fonte" NAO e "um toolchain": ver o plano de build por alvo no cabecalho
+# de src/main.rs — windows exige mingw/MSVC e darwin exige SDK/osxcross.
+
+[[bin]]
+name = "stellar-mcp-relay"
+path = "src/main.rs"
+
+# Tamanho/RSS: o prototipo C ficou em ~13 KB / 1.4 MB. Estas flags mantem o
+# Rust na mesma casa (sem runtime, sem crates no caminho unix).
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Windows nao expoe AF_UNIX em `std` (so `std::os::unix::net`); este crate da o
+# mesmo `UnixStream` no Windows 10 1803+. Dependencia SO de alvo windows: o
+# build unix nao baixa nem compila nada disto. E o unico ponto de plataforma do
+# fonte — sem reescrever Winsock a mao.
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1"

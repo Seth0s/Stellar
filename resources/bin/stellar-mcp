@@ -1,5 +1,5 @@
 #!/bin/sh
-":" //# ; if [ -n "${AGENT_CANVAS_SHIM_REEXEC-}" ]; then echo "stellar: AGENT_CANVAS_NODE='${AGENT_CANVAS_NODE-}' nao e um interpretador node" >&2; exit 127; fi; case "${AGENT_CANVAS_NODE-}" in '${'*) AGENT_CANVAS_NODE=;; esac; AGENT_CANVAS_SHIM_REEXEC=1 ELECTRON_RUN_AS_NODE=1 exec "${AGENT_CANVAS_NODE:-node}" "$0" "$@"
+":" //# ; if [ -n "${AGENT_CANVAS_SHIM_REEXEC-}" ]; then echo "stellar: AGENT_CANVAS_NODE='${AGENT_CANVAS_NODE-}' nao e um interpretador node" >&2; exit 127; fi; case "${AGENT_CANVAS_NODE-}" in '${'*) AGENT_CANVAS_NODE=;; esac; __u=${AGENT_CANVAS_MCP_URL-}; case "$__u" in http://127.0.0.1:*/*) __u=${__u#http://127.0.0.1:}; __u=${__u%%/*}; __s="${TMPDIR:-/tmp}/stellar-mcp-relay-${__u}.sock"; __d=${0%/*}; [ "$__d" = "$0" ] && __d=.; if [ -S "$__s" ] && [ -x "$__d/stellar-mcp-relay" ]; then exec "$__d/stellar-mcp-relay"; fi;; esac; AGENT_CANVAS_SHIM_REEXEC=1 ELECTRON_RUN_AS_NODE=1 exec "${AGENT_CANVAS_NODE:-node}" "$0" "$@"
 // Polyglot sh/node deliberado, não um acidente (2026-09-08), e a ORDEM
 // das duas linhas acima é obrigatória. O shebang `#!/usr/bin/env node`
 // que estava aqui exigia `node` no PATH do processo que lança este
@@ -115,6 +115,28 @@
 
 // Ver a nota da sentinela no topo: fora daqui ela não tem função, e
 // deixá-la no ambiente faria um neto que chame um shim ser recusado.
+// BRIDGE MCP COMPARTILHADO (task f7a2ac84) — a linha 2 ganhou um ramo ANTES do
+// exec do node. Motivo medido (2026-10-01, board vivo): este shim é um node
+// inteiro por card — 7 vivos = 512 MB, ~73 MB cada, contra 52 MB de um node
+// ocioso e 4,0 MB de um relay `socat`. O runtime é o custo.
+//
+// Quando o APP sobe com `AGENT_CANVAS_MCP_RELAY=1`, `mcp-server.ts` abre um
+// Unix socket (caminho DERIVADO da porta que já vem em `AGENT_CANVAS_MCP_URL`;
+// ver `src/main/mcp-relay.ts`). O ramo da linha 2, ao encontrar esse socket,
+// NÃO executa o node: `exec`uta o binário `stellar-mcp-relay` AO LADO deste
+// arquivo (mesmo diretório, empacotado junto), que manda a identidade do card
+// como primeira linha NDJSON e faz `stdio ↔ socket`. É um binário RUST
+// (`resources/relay`, ~319 KB stripped), compilado POR ALVO no empacotamento —
+// SEM `socat` e SEM qualquer ferramenta do host (a rodada que usava `socat`,
+// inexistente em macOS/Windows stock, foi reprovada; o protótipo C foi só a
+// medição). O main faz o resto (o POST
+// HTTP de sempre, mesma rota, mesma identidade `?card=`), então a paridade
+// MCP ↔ acbridge não muda.
+//
+// Sem a flag, sem o socket, ou sem o binário (build local que ainda não o
+// tem), cai no `exec` do node logo abaixo — exatamente o comportamento de
+// antes. Nenhuma fonte de verdade nova: a identidade continua sendo
+// `AGENT_CANVAS_CARD_ID`, só que carimbada pelo stub na primeira linha.
 delete process.env.AGENT_CANVAS_SHIM_REEXEC;
 
 /** Um `${env:VAR}` que o cursor não conseguiu interpolar (variável ausente
