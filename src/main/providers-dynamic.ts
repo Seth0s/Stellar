@@ -43,12 +43,20 @@
  *                                `mcpServers`); SEM flag de prompt de
  *                                sistema; brief posicional.
  *
- * O que este arquivo NÃO faz, de propósito: registrar o MCP. A declaração
- * ganhou `configPath`/`configKey`/`serverShape` (é a fonte que o
- * registrador vai ler), mas quem ESCREVE no arquivo é outra task — este
- * módulo não toca em `~` nenhum. Enquanto isso, um provider dinâmico
- * com `mcp: "global-config"` aparece como canal esperado (`mcp`) sem ter
- * registro de fato; o `acbridge` no PATH continua cobrindo o report.
+ * O QUE ESTE ARQUIVO NÃO FAZ: escrever no config da CLI. A declaração
+ * ganhou `configPath`/`configKey`/`serverShape` e é a ÚNICA fonte de onde,
+ * sob qual chave e com que forma o registro sai — mas quem ESCREVE é
+ * `mcp-registration.ts` (`registerDeclaredProvider`, o caminho declarativo)
+ * quando `ensureMcpRegistered` roda no spawn DAQUELE provider. Este módulo
+ * não toca em `~` nenhum, de propósito (mesma divisão decisão × I/O do
+ * resto do repo).
+ *
+ * MEDIDO (2026-10-01, task cdd66798): um provider dinâmico com
+ * `mcp: "global-config"` NÃO fica sem registro. `deriveReportChannel` diz
+ * `mcp` e o canal é real — a entrada aparece no arquivo que a CLI lê
+ * (`~/.commandcode/mcp.json`) e o shim recebe `AGENT_CANVAS_CARD_ID` +
+ * `AGENT_CANVAS_MCP_URL` no ambiente. O `acbridge` no PATH segue como o
+ * outro canal, não como o único.
  *
  * Divisão de camadas (a mesma do resto do repo, ver `local-identity.ts`):
  * validação/decisão PURA aqui em cima, I/O de arquivo na casca no fim.
