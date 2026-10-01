@@ -4097,7 +4097,14 @@ export function App() {
           void addMediaCardFromPicker();
         }}
         aiBusy={aiBusy}
-        summarizeDisabled={newProvider === "bash"}
+        /* O "Resumir" só é oferecido para quem DECLARA a ação (task
+            efc5b6fd). O critério era `newProvider !== "bash"` — e por isso
+            cline e commandcode viam o botão e a execução mandava flags que
+            aquelas CLIs não têm. O fato vem da projeção
+            (`AgentAvailability.oneShot`), a MESMA que o Rail já usa para o
+            seletor de esforço; ausência da declaração = botão desabilitado com
+            o motivo na tela, nunca um clique que falha. */
+        summarizeDisabled={!availableAgentProviders.some((a) => a.id === newProvider && a.oneShot)}
         onReorganize={aiReorganize}
         onSummarize={summarizeBoard}
         cards={cards.map((c) => ({ id: c.id, kind: c.kind, label: describeCard(c.id) }))}

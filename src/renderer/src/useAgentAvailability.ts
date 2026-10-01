@@ -29,6 +29,11 @@ export type AgentAvailability = {
    * não são equivalentes (`hook` é evento, `screen` é texto), e quem decide o
    * que fazer com cada um é `terminal-turn-signal.ts` / `TerminalCard.tsx`. */
   turnEndSignal: TurnEndProjection;
+  /** PROJEÇÃO de `capacity.oneShot` (ver o handler de `agents:check-availability`
+   * e `main/agent-availability-projection.ts`): `true` = este provider DECLARA a
+   * ação one-shot ("Resumir"). Ausência da declaração = o botão não é oferecido
+   * (task efc5b6fd). */
+  oneShot: boolean;
 };
 
 /**

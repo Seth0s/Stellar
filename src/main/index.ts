@@ -55,7 +55,7 @@ import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-d
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
 import { checkAgentAvailability, providerById, refreshProviderReadiness, type SpawnOpts } from "./providers";
-import { projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
+import { projectOneShot, projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
 import {
   PROVIDERS_CONFIG_SCHEMA_VERSION,
   bootstrapProvidersConfig,
@@ -2411,6 +2411,10 @@ function createWindow() {
       ...agent,
       effortValues: projectEffortValues(providerById(agent.id)?.capacity.effort),
       turnEndSignal: projectTurnEndSignal(providerById(agent.id)?.capacity.delivery.turnEnd),
+      // A ação "Resumir" (task efc5b6fd) — o TERCEIRO fato desta família: o
+      // Rail oferecia pelo id (`!== "bash"`) e o main montava flags por id;
+      // agora os dois lados leem a MESMA declaração.
+      oneShot: projectOneShot(providerById(agent.id)?.capacity.oneShot),
     }));
   });
   ipcMain.handle("spawn:agent-resolve", (_e, requestId: string, result: { ok: true; cardId: string } | { ok: false; error: string }) =>

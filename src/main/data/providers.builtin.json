@@ -113,6 +113,11 @@
             "mechanism": "screen",
             "pattern": "Worked for (?:\\d+h\\s*)?(?:\\d+m\\s*)?\\d+(?:s| seconds?)"
           }
+        },
+        "oneShot": {
+          "mechanism": "argv",
+          "args": ["-p", "{prompt}"],
+          "result": "stdout-text"
         }
       }
     }

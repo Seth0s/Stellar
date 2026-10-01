@@ -1585,6 +1585,19 @@ export type AgentAvailability = {
     | { mechanism: "hook" }
     | { mechanism: "screen"; source: string; flags: string }
     | null;
+  /**
+   * PROJEÇÃO de `capacity.oneShot` (main/providers.ts → a ação "Resumir"):
+   * `true` = este provider DECLARA um one-shot não-interativo que devolve o
+   * texto final, e a UI pode oferecer a ação. `false` = não declara, e a UI
+   * NÃO oferece — oferecer e falhar é o defeito que este campo fecha
+   * (task efc5b6fd: o Rail oferecia para cline e commandcode, e o main montava
+   * flags que aquelas CLIs não têm).
+   *
+   * Booleano de propósito: o renderer não escolhe argv nem lê a saída — quem
+   * faz isso é o main. Ver `projectOneShot` em
+   * `main/agent-availability-projection.ts`.
+   */
+  oneShot: boolean;
 };
 
 /** Achado ao vivo, 2026-09-03 — checagem proativa de CLIs de agente

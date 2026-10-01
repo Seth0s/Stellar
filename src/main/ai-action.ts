@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { t } from "../shared/i18n";
-import { providerById, which } from "./providers";
+import { providerById, which, type OneShotCapability } from "./providers";
 import { effectivePath } from "./user-env";
 
 const TIMEOUT_MS = 60_000;
@@ -58,48 +58,66 @@ function extractJsonResult(stdout: string): string {
 }
 
 /**
+ * O argv do one-shot, MONTADO da declaração — nunca de uma tabela por `id`
+ * (task efc5b6fd). `null` = este provider não declara a ação, e quem chamou
+ * não deveria ter oferecido: a UI lê o MESMO fato (`projectOneShot`) antes de
+ * mostrar o botão.
+ *
+ * Os dois placeholders são os que a declaração pode usar: `{prompt}` (o
+ * pedido do usuário, obrigatório) e `{outFile}` (o arquivo onde CLIs como o
+ * codex escrevem o texto final).
+ */
+export function buildOneShotArgv(
+  spec: { capacity: { oneShot?: OneShotCapability } },
+  prompt: string,
+  outFile: string,
+): string[] | null {
+  const oneShot = spec.capacity.oneShot;
+  if (oneShot === undefined || oneShot.mechanism !== "argv") return null;
+  return oneShot.args.map((arg) => arg.replaceAll("{prompt}", prompt).replaceAll("{outFile}", outFile));
+}
+
+/**
  * One-shot, non-interactive spawn — no node-pty, no board card, no
  * persistence. Separate from pty-registry.ts on purpose: that module's
  * whole design (coalescing, resize, kill) is for a long-lived interactive
  * PTY, which this deliberately isn't.
+ *
+ * A EXECUÇÃO agora é genérica (task efc5b6fd): o argv e o modo de leitura da
+ * saída vêm de `capacity.oneShot`, e a ausência da declaração é RECUSA — não
+ * existe mais o "cai no caminho do claude e manda `-p --output-format`", que
+ * era o que fazia cline e commandcode falharem depois de o botão já ter sido
+ * oferecido.
  */
 export async function runOneShotSummary(providerId: string, cwd: string, prompt: string): Promise<OneShotResult> {
   const provider = providerById(providerId);
   if (!provider || provider.id === "bash") return { error: t("error.invalidAiProvider") };
+  const oneShot = provider.capacity.oneShot;
+  if (oneShot === undefined || oneShot.mechanism !== "argv") {
+    return { error: t("error.oneShotUnsupported", { provider: providerId }) };
+  }
   const binary = which(provider.binaryNames);
   if (!binary) return { error: t("error.providerNotInPath", { provider: providerId }) };
 
+  // O diretório temporário só existe quando a declaração diz que o texto final
+  // vem de arquivo (`result: "out-file"`) — o caso do codex.
+  const needsOutFile = oneShot.result === "out-file";
+  const dir = needsOutFile ? await mkdtemp(join(tmpdir(), "agent-canvas-ai-")) : null;
+  const outFile = dir === null ? "" : join(dir, "result.txt");
+
   try {
-    if (provider.id === "codex") {
-      // codex exec -o writes ONLY the agent's final message to that file —
-      // simplest reliable path, no JSONL event parsing needed.
-      const dir = await mkdtemp(join(tmpdir(), "agent-canvas-ai-"));
-      const outFile = join(dir, "result.txt");
-      try {
-        await execFileNoStdin(binary, ["exec", prompt, "-o", outFile], { cwd, timeout: TIMEOUT_MS, maxBuffer: MAX_BUFFER });
-        const text = await readFile(outFile, "utf8");
-        return { text: text.trim() };
-      } finally {
-        await rm(dir, { recursive: true, force: true });
-      }
-    }
-
-    // opencode's one-shot shape (`run [message] --format json`) is a
-    // JSONL event stream, not a single final-answer object like the other
-    // three below — parsing it right needs its own extractor, not built
-    // here yet. Fails explicit and fast instead of sending it `-p`/
-    // `--output-format`, flags it doesn't have, and silently misbehaving.
-    if (provider.id === "opencode") return { error: t("error.opencodeUnsupported") };
-
-    // claude, cursor-agent, and antigravity (agy) all share the same
-    // -p/--output-format flags (see extractJsonResult's doc comment).
-    const { stdout } = await execFileNoStdin(binary, ["-p", prompt, "--output-format", "json"], {
+    const args = buildOneShotArgv(provider, prompt, outFile) ?? [];
+    const { stdout } = await execFileNoStdin(binary, args, {
       cwd,
       timeout: TIMEOUT_MS,
       maxBuffer: MAX_BUFFER,
     });
-    return { text: extractJsonResult(stdout) };
+    if (oneShot.result === "out-file") return { text: (await readFile(outFile, "utf8")).trim() };
+    if (oneShot.result === "stdout-json") return { text: extractJsonResult(stdout) };
+    return { text: stdout.trim() };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    if (dir !== null) await rm(dir, { recursive: true, force: true });
   }
 }
