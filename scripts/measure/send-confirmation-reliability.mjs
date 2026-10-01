@@ -82,9 +82,26 @@ async function escape(page) {
   await delay(300);
 }
 
+/**
+ * Abre o popover de add-card de forma ROBUSTA. O add-card FICA aberto depois
+ * do 1º card e um novo clique na rail TOGGLA (fecha) — era a causa do
+ * "terminal option not found" na rodada 1 (e do opencode não criar card).
+ */
+async function openAddCard(page) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await escape(page);
+      await openTerminalCreatePopover(page);
+      return;
+    } catch {
+      await delay(700);
+    }
+  }
+  throw new Error("add-card popover não abriu após 4 tentativas");
+}
+
 async function measureProvider(page, url, provider, rows) {
-  await escape(page);
-  await openTerminalCreatePopover(page);
+  await openAddCard(page);
   await clickProviderInPicker(page, provider);
   const cardId = await waitFor(async () => {
     const ids = JSON.parse(
@@ -106,16 +123,33 @@ async function measureProvider(page, url, provider, rows) {
   // A TUI precisa desenhar antes de medir confirmação de TEXTO.
   await delay(8000);
 
-  // `--midturn`: primeiro põe o agente num turno LONGO, e só então mede — é o
-  // regime do relato do orquestrador ("unconfirmed enquanto o agente
-  // trabalhava"). Sem isto, todo envio mede o caminho OCIOSO (o fácil).
+  // `--midturn`: primeiro PÕE o agente num turno longo e PROVA que há turno —
+  // só então mede. A rodada 1 usou `sleep 60` (permissão de ferramenta,
+  // provavelmente não engajou) e mediu sem prova: o confirm saiu attempts=1/
+  // "sent", que é o caminho OCIOSO. Aqui o turno é uma GERAÇÃO longa (sem
+  // ferramenta, sem permissão) e a prova é a TELA MUDAR: um card ocioso tem
+  // tela estática; um card em turno REPINTA. Sem >=4 telas distintas, o
+  // regime NÃO foi atingido e o provider é declarado — nunca medido no escuro.
+  let turnActive = null;
   if (process.argv.includes("--midturn")) {
     await mcpCall(url, "harness", "send_to_card", {
       target: cardId,
-      text: "Execute no shell: sleep 60; depois responda apenas DONE.",
+      text: "Escreva um ensaio longo (pelo menos 1500 palavras) sobre a história da computação, em português. Não use ferramentas.",
       steer: false,
     });
-    await delay(9000);
+    const distinct = new Set();
+    for (let k = 0; k < 24; k++) {
+      await delay(1000);
+      const r = await mcpCall(url, "harness", "read_card", { target: cardId, lines: 200 });
+      if (typeof r?.text === "string") distinct.add(r.text.slice(-4000));
+      if (distinct.size >= 4) break;
+    }
+    turnActive = distinct.size >= 4;
+    console.log(`[sendrel] ${provider}: turno ativo=${turnActive} (${distinct.size} telas distintas em ~24s)`);
+    if (!turnActive) {
+      rows.push({ provider, cardId, note: `mid-turn NÃO atingido (${distinct.size} telas distintas)` });
+      return;
+    }
   }
 
   for (let i = 0; i < N; i++) {
@@ -140,7 +174,7 @@ async function measureProvider(page, url, provider, rows) {
     // A chegada é medida pelo TOKEN (1ª linha), não pelo corpo inteiro: o
     // scrollback quebra linha e um multi-linha nunca casaria literal.
     const arrived = screen.includes(tok);
-    rows.push({ provider, cardId, i, verdict, confirm, arrived });
+    rows.push({ provider, cardId, i, verdict, confirm, arrived, turnActive });
     await delay(1500);
   }
 }
