@@ -228,7 +228,23 @@ const MAX_READINESS: DynamicProviderSpec = {
   },
 };
 
-const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE, MAX_READINESS];
+/**
+ * UMA BASE COM `oneShot` (task efc5b6fd). Mesmo critério do MAX_READINESS: o
+ * gate exige que TODO campo obrigatório/enum do schema seja recusado pelo
+ * parser NOMEANDO o campo, e `oneShot.mechanism/args/result` só são produzíveis
+ * a partir de uma base que DECLARE a ação — tirar subcampo de objeto ausente
+ * não gera recusa nenhuma, e o gate acusa o buraco.
+ */
+const MAX_ONESHOT: DynamicProviderSpec = {
+  ...(structuredClone(MAX_NONE) as DynamicProviderSpec),
+  id: "qa-contract-oneshot",
+  capacity: {
+    ...structuredClone(MAX_NONE).capacity,
+    oneShot: { mechanism: "argv", args: ["-p", "{prompt}"], result: "stdout-text" },
+  },
+};
+
+const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE, MAX_READINESS, MAX_ONESHOT];
 
 describe("anti-drift: o schema publicado não pode divergir do parser", () => {
   it("as bases do teste são válidas pelo próprio validador", () => {

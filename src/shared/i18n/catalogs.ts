@@ -284,7 +284,7 @@ export const ptBR = {
   "rail.autoArrangeDesc": "Arruma os cards soltos numa grade limpa",
   "rail.summarizing": "Resumindo…",
   "rail.summarize": "Resumir sessão numa nota",
-  "rail.summarizeNeedProvider": "Escolha um provider de agente (não bash)",
+  "rail.summarizeNeedProvider": "O provider escolhido não declara resumo em um clique",
   "rail.summarizeDesc": "Cria uma nota com o estado do board",
   "rail.desc.terminal": "Shell local ou agente CLI autônomo",
   "rail.desc.files": "Navegação na árvore do projeto e edição de código",
@@ -1037,8 +1037,8 @@ export const ptBR = {
   "error.processMetric": "métrica de processo ainda não disponível (janela recém-criada)",
   "error.invalidAiProvider": "provider inválido para ação de IA",
   "error.providerNotInPath": "\"{provider}\" não encontrado no PATH",
-  "error.opencodeUnsupported":
-    "ação de IA em um clique ainda não suporta opencode — use o card de terminal diretamente",
+  "error.oneShotUnsupported":
+    "ação de IA em um clique: \"{provider}\" não declara execução one-shot (capacity.oneShot) — use o card de terminal diretamente",
   "error.clipboardNoImage": "clipboard não tem imagem no momento",
   "error.unsupportedImage": "tipo de imagem não suportado: {type}",
   // Anexo/documento (main/clipboard-image.ts) — a recusa é dita, nunca engolida.
@@ -1340,7 +1340,7 @@ export const en: Record<MessageKey, string> = {
   "rail.autoArrangeDesc": "Arrange loose cards into a clean grid",
   "rail.summarizing": "Summarizing…",
   "rail.summarize": "Summarize session in a note",
-  "rail.summarizeNeedProvider": "Pick an agent provider (not bash)",
+  "rail.summarizeNeedProvider": "The chosen provider does not declare a one-shot summary",
   "rail.summarizeDesc": "Creates a note with the board state",
   "rail.desc.terminal": "Local shell or autonomous CLI agent",
   "rail.desc.files": "Project tree navigation and code editing",
@@ -2061,8 +2061,8 @@ export const en: Record<MessageKey, string> = {
   "error.processMetric": "process metric not available yet (window just created)",
   "error.invalidAiProvider": "invalid provider for AI action",
   "error.providerNotInPath": "\"{provider}\" not found in PATH",
-  "error.opencodeUnsupported":
-    "one-click AI action does not support opencode yet — use the terminal card directly",
+  "error.oneShotUnsupported":
+    "one-click AI action: \"{provider}\" does not declare a one-shot run (capacity.oneShot) — use the terminal card directly",
   "error.clipboardNoImage": "clipboard has no image right now",
   "error.unsupportedImage": "unsupported image type: {type}",
   // Attachment/document (main/clipboard-image.ts) — the refusal is spoken, never swallowed.

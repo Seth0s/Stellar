@@ -1,4 +1,4 @@
-import type { EffortCapability, TurnEndSignal } from "./providers";
+import type { EffortCapability, OneShotCapability, TurnEndSignal } from "./providers";
 import type { ProvidersReloadReport } from "./providers-dynamic";
 
 /**
@@ -36,6 +36,31 @@ import type { ProvidersReloadReport } from "./providers-dynamic";
  */
 export function projectEffortValues(effort: EffortCapability | undefined): string[] {
   return effort?.mechanism === "flag" ? [...effort.values] : [];
+}
+
+/**
+ * A AÇÃO ONE-SHOT ("Resumir") — o fato que a UI consome é UM BOOLEANO, e é
+ * este o terceiro campo desta família (task efc5b6fd, depois de `effortValues`
+ * (07b05f43) e `turnEndSignal` (0dd5c145)).
+ *
+ * O DEFEITO QUE ELE FECHA: o Rail oferecia "Resumir" pelo critério
+ * `newProvider !== "bash"` e o main montava o argv por `id` hardcoded — para
+ * cline e commandcode a UI oferecia e a execução mandava flags que aquelas
+ * CLIs não têm (medido: `cline -p` é PLAN mode e `--output-format` não existe
+ * lá; o `--output-format json` do commandcode é stream NDJSON). O usuário
+ * clicava numa coisa que o app sabia que ia falhar.
+ *
+ * `false` = este provider NÃO declara a ação, e a UI NÃO oferece — o botão não
+ * aparece, exatamente como o controle de esforço some com `effortValues`
+ * vazio. Ausência é a resposta, nunca um "ofereço e vejo".
+ *
+ * Por que um BOOLEANO e não o mecanismo: o renderer não escolhe argv nem lê a
+ * saída — quem faz isso é o main. O único fato que a tela usa é "posso
+ * oferecer?"; projetar `args`/`result` acoplaria o renderer ao formato do spec
+ * e vazaria dados que ele não consome (a regra do módulo, no topo).
+ */
+export function projectOneShot(oneShot: OneShotCapability | undefined): boolean {
+  return oneShot?.mechanism === "argv";
 }
 
 /**

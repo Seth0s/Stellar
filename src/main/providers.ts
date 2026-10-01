@@ -335,6 +335,39 @@ export type TurnEndSignal =
   | { mechanism: "hook" }
   | { mechanism: "screen"; pattern: RegExp };
 
+/**
+ * A AÇÃO ONE-SHOT (o "Resumir" do Rail) — declarada, não adivinhada por `id`
+ * (task efc5b6fd). MEDIDO nas CLIs desta máquina (`--help`, 2026-09-23):
+ *
+ *   - claude, cursor-agent, agy: `-p <prompt> --output-format json` → UM
+ *     objeto JSON, com o texto em `.result` (claude/cursor) ou `.response`
+ *     (agy);
+ *   - codex: `exec <prompt> -o <arquivo>` → o texto final cai no arquivo;
+ *   - commandcode: `-p, --print [query]` com o default `--output-format text`
+ *     imprime a resposta e sai. O json dele é "NDJSON event stream", NÃO um
+ *     objeto final — por isso a declaração dele é texto, não json;
+ *   - cline: o prompt é POSICIONAL e `-p` significa `--plan` (não existe
+ *     `--print`); o modo default é act com auto-approve. Não há one-shot
+ *     medido que devolva o texto final;
+ *   - opencode: `run <message> --format json` é stream NDJSON.
+ *
+ * AUSÊNCIA DESTE CAMPO = ESTE PROVIDER NÃO FAZ ONE-SHOT, e a UI não oferece a
+ * ação (regra dura da task: nunca oferecer e falhar). É o mesmo critério do
+ * `effort` com `mechanism: "none"` e do `turnEnd` ausente.
+ *
+ * O nome segue o precedente do repo (`delivery.briefMechanism`,
+ * `session.resumeFlag`): mecanismo + o dado que ele precisa. `args` é o argv
+ * com dois placeholders — `{prompt}` e `{outFile}` — e `result` diz COMO ler a
+ * saída, que é a diferença que o `id` não conseguia expressar.
+ */
+export type OneShotCapability =
+  | { mechanism: "none" }
+  | {
+      mechanism: "argv";
+      args: string[];
+      result: "stdout-json" | "stdout-text" | "out-file";
+    };
+
 export type ProviderCapacity = {
   role: ProviderRole;
   systemPrompt: SystemPromptCapability;
@@ -357,6 +390,12 @@ export type ProviderCapacity = {
    * for every agent CLI; the opencode catalog caveat lives on the
    * provider's own comment. */
   model: ModelCapability;
+
+  /**
+   * A ação one-shot ("Resumir") — ver `OneShotCapability`. AUSENTE = este
+   * provider não a faz, e a UI não a oferece. Declarado só onde foi medido.
+   */
+  oneShot?: OneShotCapability;
 
   /** Como o id de sessão entra no argv — ver `SessionCapability`. O que
    * `shouldImposeSessionId`/`canImposeSessionId` leem (2026-09-19): a
@@ -662,6 +701,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "append-system-prompt" },
+      // MEDIDO: `-p <prompt> --output-format json` → objeto JSON, texto em
+      // `.result` (ver `OneShotCapability`).
+      oneShot: { mechanism: "argv", args: ["-p", "{prompt}", "--output-format", "json"], result: "stdout-json" },
       mcp: { mechanism: "ephemeral-flag" },
       acbridgeOnPath: true,
       // Range re-measured 2026-09-12 against `claude --help` (v2.1.269) —
@@ -799,6 +841,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "developer_instructions" },
+      // MEDIDO: `exec <prompt> -o <arquivo>` → o texto final cai no arquivo
+      // (o `exec` do codex lê stdin quando ele é pipe, daí o stdin fechado).
+      oneShot: { mechanism: "argv", args: ["exec", "{prompt}", "-o", "{outFile}"], result: "out-file" },
       mcp: { mechanism: "ephemeral-flag" },
       acbridgeOnPath: true,
       // NOT "codex has no effort flag" — that was never measured. What is
@@ -891,6 +936,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "none" },
+      // MEDIDO: mesmas flags do claude (`cursor-agent -p ... --output-format
+      // json`), texto em `.result` — ver `OneShotCapability`.
+      oneShot: { mechanism: "argv", args: ["-p", "{prompt}", "--output-format", "json"], result: "stdout-json" },
       // Global ~/.cursor/mcp.json — headless `agent` DOES read it
       // (measured 2026-09-12). Why no cursor card ever saw the tools
       // anyway, and the fix (`env` interpolation in the entry, because
@@ -1024,6 +1072,9 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       role: "agent",
       systemPrompt: { mechanism: "none" },
       mcp: { mechanism: "global-config" },
+      // MEDIDO: mesmas flags, mas o texto vem em `.response` (o extrator lê os
+      // dois campos) — ver `OneShotCapability`.
+      oneShot: { mechanism: "argv", args: ["-p", "{prompt}", "--output-format", "json"], result: "stdout-json" },
       acbridgeOnPath: true,
       // Range re-measured 2026-09-12 against `agy --help` (v1.2.2) — the
       // full evidence and decision writeup live in the

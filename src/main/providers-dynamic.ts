@@ -71,6 +71,7 @@ import {
   composeSystemPrompt,
   registerDynamicProviders,
   type McpServerShape,
+  type OneShotCapability,
   type ProviderDef,
   type ProviderFlagOpts,
   type ProviderId,
@@ -225,6 +226,9 @@ export type DynamicProviderSpec = {
       | { mechanism: "flag"; flag: string; values: string[] }
       | { mechanism: "none"; reason: "shell" | "no-flag" | "unmeasured" };
     model: { mechanism: "flag"; flag: string } | { mechanism: "none"; reason: "shell" };
+    /** A ação one-shot ("Resumir") — ver `OneShotCapability` (task efc5b6fd).
+     * AUSENTE = este provider não a declara, e a UI não a oferece. */
+    oneShot?: OneShotCapability;
     delivery: {
       briefMechanism: "positional" | "flag" | "none";
       briefFlag?: string;
@@ -459,6 +463,10 @@ export const DELIVERY_BRIEF_MECHANISMS = ["positional", "flag", "none"] as const
  * (`appProviders`, reescrito a cada boot). Um `RegExp` serializaria para `{}` e
  * a declaração morreria na ida e volta. Quem compila é `dynamicProviderDef`. */
 export const DELIVERY_TURN_END_MECHANISMS = ["hook", "screen"] as const;
+/** A AÇÃO ONE-SHOT (task efc5b6fd) — ver `OneShotCapability` em providers.ts.
+ * "argv" exige `args` (com `{prompt}`) e `result`; "none" não exige nada. */
+export const ONE_SHOT_MECHANISMS = ["argv", "none"] as const;
+export const ONE_SHOT_RESULTS = ["stdout-json", "stdout-text", "out-file"] as const;
 /** O único `reason` aceito para `model.mechanism: "none"` (espelha
  * `ProviderCapacity.model`). */
 export const MODEL_NONE_REASONS = ["shell"] as const;
@@ -1159,6 +1167,62 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
     }
   }
 
+  // A AÇÃO ONE-SHOT (task efc5b6fd) — OPCIONAL, e AUSENTE é o default honesto
+  // ("este provider não faz one-shot"), que é o que faz a UI não oferecer a
+  // ação. O argv é VALIDADO aqui na porta: uma declaração que não carrega
+  // `{prompt}` seria um argv que roda sem o pedido do usuário — recusa com
+  // motivo, nunca um spawn silencioso e errado.
+  let oneShot: DynamicProviderSpec["capacity"]["oneShot"];
+  if (capacityRaw.oneShot !== undefined) {
+    const rawOneShot = capacityRaw.oneShot;
+    if (!isRecord(rawOneShot)) {
+      return {
+        ok: false,
+        reason: refusal("capacity.oneShot", 'an object with `mechanism` ("argv" or "none")', rawOneShot),
+      };
+    }
+    if (rawOneShot.mechanism === "none") {
+      oneShot = { mechanism: "none" };
+    } else if (rawOneShot.mechanism === "argv") {
+      const args = Array.isArray(rawOneShot.args)
+        ? rawOneShot.args.filter((a): a is string => typeof a === "string" && a !== "")
+        : [];
+      if (args.length === 0 || !args.includes("{prompt}")) {
+        return {
+          ok: false,
+          reason: refusal(
+            "capacity.oneShot.args",
+            'a non-empty array of strings containing "{prompt}" (ex.: ["-p", "{prompt}"])',
+            rawOneShot.args,
+          ),
+        };
+      }
+      if (!(ONE_SHOT_RESULTS as readonly string[]).includes(rawOneShot.result as string)) {
+        return {
+          ok: false,
+          reason: refusal("capacity.oneShot.result", `one of ${acceptedList(ONE_SHOT_RESULTS)}`, rawOneShot.result),
+        };
+      }
+      const result = rawOneShot.result as (typeof ONE_SHOT_RESULTS)[number];
+      if (result === "out-file" && !args.includes("{outFile}")) {
+        return {
+          ok: false,
+          reason: refusal(
+            "capacity.oneShot.args",
+            'result "out-file" requires "{outFile}" in args (ex.: ["exec", "{prompt}", "-o", "{outFile}"])',
+            rawOneShot.args,
+          ),
+        };
+      }
+      oneShot = { mechanism: "argv", args, result };
+    } else {
+      return {
+        ok: false,
+        reason: refusal("capacity.oneShot.mechanism", `one of ${acceptedList(ONE_SHOT_MECHANISMS)}`, rawOneShot.mechanism),
+      };
+    }
+  }
+
   return {
     ok: true,
     spec: {
@@ -1182,6 +1246,7 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
         effort,
         model,
         delivery,
+        ...(oneShot !== undefined ? { oneShot } : {}),
       },
     },
   };
@@ -1450,6 +1515,25 @@ function capacitySchema(): Record<string, unknown> {
         flagDescription: 'Flag que recebe o modelo (ex.: "-m").',
         elseRequired: ["reason"],
         extra: { reason: asEnum(MODEL_NONE_REASONS, 'Único reason aceito no lugar da flag: "shell".') },
+      }),
+      oneShot: mechanismObject({
+        description:
+          'A ação one-shot ("Resumir"). AUSENTE (o default) = este provider não a faz, e a UI NÃO oferece ' +
+          "a ação — oferecer e falhar é o defeito que esta declaração existe para impedir.",
+        mechanisms: ONE_SHOT_MECHANISMS,
+        flagValue: "argv",
+        flagField: "args",
+        flagDescription:
+          'argv da invocação, com os placeholders "{prompt}" (obrigatório) e "{outFile}" — ' +
+          'ex.: ["-p", "{prompt}", "--output-format", "json"].',
+        alsoRequired: ["result"],
+        extra: {
+          result: asEnum(
+            ONE_SHOT_RESULTS,
+            '"stdout-json" = um objeto JSON com o texto em .result/.response; "stdout-text" = a resposta ' +
+              'no stdout; "out-file" = o texto final do arquivo indicado por "{outFile}" em args.',
+          ),
+        },
       }),
       delivery: mechanismObject({
         description:
@@ -2260,6 +2344,23 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
         declared.model.mechanism === "flag"
           ? { mechanism: "flag", flag: declared.model.flag }
           : { mechanism: "none", reason: "shell" },
+      // A AÇÃO ONE-SHOT (task efc5b6fd) — mapeamento CAMPO A CAMPO, como o
+      // `session.store`/`delivery.turnEnd` logo abaixo: o arquivo guarda `argv`
+      // como dado, e sem este `...` o campo passa no schema, passa no validador e
+      // morre aqui em silêncio — a mesma classe que o gate de round-trip pega
+      // (`tests/unit/providers-dynamic-round-trip.test.ts`).
+      ...(declared.oneShot
+        ? {
+            oneShot:
+              declared.oneShot.mechanism === "argv"
+                ? {
+                    mechanism: "argv" as const,
+                    args: [...declared.oneShot.args],
+                    result: declared.oneShot.result,
+                  }
+                : { mechanism: "none" as const },
+          }
+        : {}),
       session: {
         canImposeSessionId: declared.session.canImposeSessionId,
         ...(declared.session.resumeFlag ? { resumeFlag: declared.session.resumeFlag } : {}),
