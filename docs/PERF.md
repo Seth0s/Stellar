@@ -700,3 +700,65 @@ páginas vivas — não de cards ociosos. Medir o custo por card de um `claude`/
    ~4 MB/card — pouco, e perde histórico.
 5. **Próxima medição de verdade:** o custo por card de um provider de AGENTE
    real (o que de fato domina o board vivo), com o mesmo harness.
+
+---
+
+## 12. Custo por card de um PROVIDER DE AGENTE REAL (2026-10-01, task a0e2f41f)
+
+A §11 provou que card OCIOSO custa ~0 e que o board vivo não se explica por
+shells parados. Esta rodada mede o que FALTAVA: N cards de um provider de AGENTE
+REAL, TUI desenhada e SEM tarefa rodando. Mesmo harness, agora com
+`--provider <p>` (cria TODOS os cards pelo caminho rail → Terminal → provider →
+Criar) e `--per-proc` (RSS por processo + cmdline). `--provider` cria todos os
+cards, não só os extras; `bootIntoFreshSession` foi chamado com
+`spawnTerminal:false`.
+
+**Medidos (RSS por bucket; amostra ~10–12s; carga da máquina registrada):**
+
+| provider | N | CLI (bucket) | renderer | gpu | main | total | marginal/card |
+|---|---|---|---|---|---|---|---|
+| bash (ocioso, §11) | 3 | 28 MB | 51 | 78 | 63 | 285 | ~7 MB |
+| claude | 1 | 48 MB | 52 | 78 | 63 | 305 | — |
+| claude | 3 | 147 MB | 54 | 78 | 63 | 407 | **~51 MB/card** |
+| commandcode | 1 | 58 MB | 52 | 75 | 65 | 315 | — |
+| commandcode | 4 | 239 MB | 54 | 79 | 71 | 507 | **~64 MB/card** |
+| cline | 1 | 146 MB | 53 | 78 | 65 | 407 | (~140 MB/card \*) |
+| antigravity | 1 | 85 MB | 48 | 74 | 60 | 331 | — |
+| antigravity | 3 | 261 MB | 54 | 79 | 81 | 540 | **~104 MB/card** |
+
+\* cline de 1 card vs bash de 3: número grosso, não um marginal 1→N medido.
+
+**(3) O que é do Stellar e o que é do CLI.** O bucket `cli` MISTURA os dois — o
+`--per-proc` separou (commandcode, 2 cards):
+
+```
+40 MB  cli   command-code                                             <- a CLI do agente (×2)
+18 MB  cli   /usr/bin/node .../resources/bin/stellar-mcp              <- o SHIM do Stellar (×2)
+```
+
+Ou seja: **por card de commandcode, ~40 MB é a CLI e ~18 MB é o shim
+`stellar-mcp` do Stellar** (o alvo da task f7a2ac84). O lado Stellar DENTRO do
+app cresce pouco: renderer +~1–3 MB/card (§11: buffer de scrollback ~4,6 MB
+cheio, atlas WebGL ~0 de RSS), gpu +~0–2,5 MB/card, main +~0–10 MB/card. **O
+custo por card de um agente é ~90–100% a CLI dele.**
+
+**Conclusão.** O ranking de custo por card é **agy (antigravity) ~104 MB >
+commandcode ~64 MB > claude ~51 MB > bash ~7 MB**; dentro do commandcode, ~18
+MB/card é o shim do próprio Stellar. E o mais importante: **mesmo 3–4 agentes
+IDLE não chegam perto do board VIVO** (renderer 54 MB contra 373; gpu 79 contra
+379) — o grosso do board vivo NÃO é "N cards parados", é estado ACUMULADO (sessão
+longa, buffers de conversa reais, cards de navegador). Atacar "N cards" não move
+esses 373/379 MB.
+
+**Não medidos (dado, não lacuna):**
+- **codex** — o card registrou no xterm, mas **nenhum processo CLI filho
+  sobreviveu** (o binário saiu antes da amostra; o harness aborta com "nenhum
+  processo CLI filho"). Motivo provável: sessão/TTY ou autenticação — não
+  investigado a fundo por ser fora do escopo de medir RSS.
+- **agy** só responde pelo id `antigravity` (o picker mostra "Antigravity", não
+  "agy"); medido por esse id.
+- Não li VRAM dedicada (nvidia-smi): "gpu MB" é o RSS do gpu-process, não VRAM.
+
+**Como reproduzir:**
+`node scripts/measure/perf-idle-cards.mjs --provider <p> --cards N --zoom 15
+--pan-y <200+> --seconds 12 [--per-proc]`.

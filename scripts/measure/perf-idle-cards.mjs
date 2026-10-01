@@ -32,6 +32,7 @@ import {
   connectPage,
   pickFreePort,
   bootIntoFreshSession,
+  clickProviderInPicker,
 } from "../verify/cdp-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -67,6 +68,9 @@ const ZOOM = arg("--zoom", null);
 // `--pan-y <px>`: arrasta o FUNDO do board (área vazia) por N px — junto do
 // zoom, traz pra viewport os cards que o empilhamento deixou acima do topo.
 const PAN_Y = Number(arg("--pan-y", "0"));
+// `--per-proc`: imprime o RSS de CADA processo com o cmdline — é o que separa
+// a CLI do agente do shim `stellar-mcp` do Stellar (os dois são "cli").
+const PER_PROC = process.argv.includes("--per-proc");
 // `--profile`: perfil de CPU do RENDERER por N segundos (padrão 10) mais o delta
 // de métricas do Blink. É o que responde "o que roda a cada frame" com nome e
 // linha, em vez de palpites sobre animações.
@@ -128,15 +132,16 @@ const BROWSER_URL = arg(
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Cria UM terminal pelo caminho que `bootIntoFreshSession` já prova (rail →
- * "Adicionar card" → Terminal → botão primário do popover), SEM picker de
- * provider. MEDIDO 2026-10-01: o caminho do harness antigo
- * (`openTerminalCreatePopover` + `clickProviderInPicker`) NÃO materializa card
- * nenhum neste build — nem com rótulo que casa (commandcode) nem com o
- * fallback por texto; o popover de terminal tem um submit próprio
- * (`.popover-actions button.primary`) que é quem de fato cria o card.
+ * Cria UM terminal do PROVIDER pedido: rail → "Adicionar card" → Terminal →
+ * escolhe o provider no picker → botão primário do popover (é ELE que cria).
+ *
+ * MEDIDO 2026-10-01: o caminho do harness antigo (`openTerminalCreatePopover` +
+ * `clickProviderInPicker`, SEM clicar o Criar) NÃO materializa card nenhum —
+ * clicar o provider só SELECIONA; quem cria é `.popover-actions
+ * button.primary`. E o helper compartilhado casa pelo RÓTULO do main, que para
+ * o bash é "Bash" enquanto a UI mostra "bash" — daí o fallback por TEXTO.
  */
-async function spawnDefaultTerminal(page) {
+async function spawnTerminalOfProvider(page, providerId) {
   const clickSel = async (selector, what) => {
     const coords = await page.evalJs(`
       (() => {
@@ -152,7 +157,36 @@ async function spawnDefaultTerminal(page) {
   };
   await clickSel('[data-role="rail-add-card"]', "rail add-card");
   await clickSel('.popover-row[data-kind="terminal"]', "opcao Terminal no popover");
-  await clickSel(".popover-actions button.primary", "botao criar terminal");
+  let picked = false;
+  try {
+    await clickProviderInPicker(page, providerId);
+    picked = true;
+  } catch {
+    // rótulo do main != texto da UI (bash) — casa pelo texto EXATO do botão.
+  }
+  if (!picked) {
+    const coords = await page.evalJs(`
+      (() => {
+        const alvo = ${JSON.stringify(providerId)}.toLowerCase();
+        const bs = [...document.querySelectorAll(".provider-picker-btn")].filter(
+          (b) => b.textContent.trim().toLowerCase() === alvo,
+        );
+        if (bs.length !== 1) return null;
+        const r = bs[0].getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()
+    `);
+    if (!coords) {
+      const visible = await page.evalJs(
+        `JSON.stringify([...document.querySelectorAll(".provider-picker-btn")].map((b) => b.textContent.trim()))`,
+      );
+      throw new Error(`provider "${providerId}" nao casou no picker (visiveis: ${visible})`);
+    }
+    await page.click(coords.x, coords.y);
+    await delay(250);
+  }
+  await delay(150);
+  await clickSel(".popover-actions button.primary", "botao Criar do popover de terminal");
   await delay(600);
 }
 
@@ -211,7 +245,10 @@ function readProc(pid) {
     if (type === null) {
       type = cmdline.includes("out/main/index.js") ? "electron-main" : "cli";
     }
-    return { pid, cpuTicks: utime + stime, rssKb, type };
+    // `cmd` serve ao `--per-proc`: separar a CLI do AGENTE do shim
+    // `stellar-mcp` do Stellar (os dois caem no balde "cli" — ambos são filhos
+    // sem `--type=`). Sem isto, o custo do shim apareceria como custo da CLI.
+    return { pid, cpuTicks: utime + stime, rssKb, type, cmd: cmdline.split("\0").filter(Boolean).join(" ").slice(0, 90) };
   } catch {
     return null;
   }
@@ -501,37 +538,22 @@ async function main() {
     // connectPage, lia `boards.list()` UMA vez em vez de esperar, e não exigia a
     // prova de registro no xterm (só existência no store).
     await delay(1000);
-    await bootIntoFreshSession(page);
+    // SEM terminal default: TODOS os cards saem do MESMO caminho, com o
+    // `--provider` pedido. O `bootIntoFreshSession` cria um terminal do
+    // provider DEFAULT (bash) e não aceita provider por argumento — medir um
+    // agente real exige criar cada card pelo picker dele.
+    await bootIntoFreshSession(page, undefined, { spawnTerminal: false });
 
-    const terminaisVivos = await waitFor(async () => {
-      const ids = JSON.parse(
-        await page.evalJs(`
-          (async () => {
-            const boards = await window.store.boards.list();
-            if (!boards.length) return JSON.stringify([]);
-            const cards = await window.store.list(boards[0].id);
-            return JSON.stringify(
-              cards.filter((c) => c.kind === "terminal" && window.__getTerminalDims?.(c.id)).map((c) => c.id),
-            );
-          })()
-        `),
-      );
-      return Array.isArray(ids) && ids.length >= 1 ? ids : null;
-    }, { timeoutMs: 15_000, everyMs: 250 });
-    if (!terminaisVivos) {
-      throw new Error("nenhum terminal REGISTRADO no xterm em 15s (a sequencia do smoke nao renderizou)");
-    }
     const boardId = await page.evalJs(
       `window.store.boards.list().then((b) => (b.length > 0 ? b[0].id : null))`,
     );
     if (!boardId) throw new Error("a sessao nao expos um board ativo");
-    console.log(`[perf] terminal registrado no xterm: ${terminaisVivos.join(", ")}`);
 
-    // Cards EXTRAS pela UI (rail → Terminal → Criar), esperando cada um
+    // Cards pela UI (rail → Terminal → provider → Criar), esperando cada um
     // aparecer REGISTRADO no xterm — não apenas no store.
-    let idsCriados = [...terminaisVivos];
-    for (let i = idsCriados.length; i < CARDS; i += 1) {
-      await spawnDefaultTerminal(page);
+    let idsCriados = [];
+    for (let i = 0; i < CARDS; i += 1) {
+      await spawnTerminalOfProvider(page, PROVIDER);
       const novos = await waitFor(async () => {
         const ids = JSON.parse(
           await page.evalJs(`
@@ -545,9 +567,10 @@ async function main() {
           `),
         );
         return Array.isArray(ids) && ids.length > idsCriados.length ? ids : null;
-      }, { timeoutMs: 12_000, everyMs: 250 });
-      if (!novos) throw new Error(`card extra ${i} nao ficou registrado no xterm em 12s`);
+      }, { timeoutMs: 25_000, everyMs: 250 });
+      if (!novos) throw new Error(`card ${i} do provider "${PROVIDER}" nao registrou no xterm em 25s`);
       idsCriados = novos;
+      console.log(`[perf] card ${i + 1}/${CARDS} (${PROVIDER}) registrado no xterm: ${idsCriados.join(", ")}`);
     }
     // `--zoom <pct>`: o board empilha cards novos PARA CIMA e os antigos saem da
     // viewport (medido: card 2 em y=-1849 com 3 cards) — o GATE 2 exige todos
@@ -624,14 +647,14 @@ async function main() {
     if (CARDS > 0 && (!Array.isArray(vivos) || vivos.length < CARDS)) {
       throw new Error(`cards nao subiram: esperados ${CARDS}, no store ${JSON.stringify(vivos)}`);
     }
-    const shells = treePids(app.proc.pid).filter((pid) => {
-      try {
-        return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("bash");
-      } catch {
-        return false;
-      }
-    });
-    if (CARDS > 0 && shells.length === 0) throw new Error("nenhum processo bash filho: os cards nao tem PTY vivo");
+    // PTY vivo, provider-AGNÓSTICO: qualquer filho do app classificado como
+    // "cli" (sem `--type=`, não o main) é a CLI do agente — bash ou agente real.
+    // A versão antiga exigia a string "bash" e abortava para qualquer provider
+    // real (medido 2026-10-01).
+    const shells = treePids(app.proc.pid).filter((pid) => readProc(pid)?.type === "cli");
+    if (CARDS > 0 && shells.length === 0) {
+      throw new Error(`nenhum processo CLI filho do app (provider "${PROVIDER}"): os cards nao tem PTY vivo`);
+    }
     // CONFERE a tela antes de medir.
     // SEM `Page.reload`: os cards criados pela UI já estão vivos e na tela, e o
     // reload hoje volta pra HOME (nenhum board carregado) — medido 2026-10-01: a
@@ -776,6 +799,7 @@ async function main() {
         type: now.type,
         cpuPct: prev ? ((now.cpuTicks - prev.cpuTicks) / (elapsed * CLK_TCK)) * 100 : 0,
         rssMb: now.rssKb / 1024,
+        cmd: now.cmd,
       });
     }
     const byType = new Map();
@@ -795,6 +819,12 @@ async function main() {
       console.log(`${row.type.padEnd(14)} ${String(row.count).padStart(2)}  ${row.cpuPct.toFixed(1).padStart(5)}  ${row.rssMb.toFixed(0).padStart(7)}`);
     }
     console.log(`${'TOTAL'.padEnd(14)} ${String(rows.length).padStart(2)}  ${totalCpu.toFixed(1).padStart(5)}  ${totalRss.toFixed(0).padStart(7)}`);
+    if (PER_PROC) {
+      console.log("\n[perf] PER-PROC (rss desc) — separa a CLI do agente do shim stellar-mcp:");
+      for (const r of [...rows].sort((a, b) => b.rssMb - a.rssMb)) {
+        console.log(`  ${String(Math.round(r.rssMb)).padStart(6)} MB  ${r.type.padEnd(14)} ${r.cmd}`);
+      }
+    }
     // A carga da MÁQUINA, sempre ao lado do resultado: um número sem ela pode
     // atribuir a outro card o que é do Stellar (ou o contrário).
     console.log(`[perf] máquina ocupada no mesmo intervalo: ${machineBusyPct.toFixed(1)}% (inclui outros processos)`);
