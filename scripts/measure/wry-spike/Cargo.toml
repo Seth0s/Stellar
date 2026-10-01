@@ -1,0 +1,12 @@
+[package]
+name = "wry-spike"
+version = "0.0.0"
+edition = "2021"
+# SPIKE descartável (task 3ec0ed3b) — NÃO é dependência do app e NÃO entra no
+# build do Electron. Existe só para MEDIR o custo de uma WebView nativa por card
+# (wry/tao no Linux = WebKitGTK), a cobertura de `eval`, o custo de um snapshot
+# e o que o zoom óptico do board exigiria. Wildcards de propósito: um spike não
+# tem lockfile de produção, e a medição é do engine instalado AGORA.
+[dependencies]
+tao = "*"
+wry = "*"
