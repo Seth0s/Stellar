@@ -226,6 +226,10 @@ export function useBoardStore(
     setOrder([]);
     setConnectors([]);
     resetLiveStatus();
+    // Task cb7244f2 — a Home re-read its badges with whatever `boardCounts`
+    // was left over from boot/`loadBoard`, so a session that had gained or
+    // archived cards since then showed a stale number. Refetch on entry.
+    refreshBoardCounts();
   }
 
   async function createBoard(name: string, cwd: string, template: SessionTemplate = "empty") {
