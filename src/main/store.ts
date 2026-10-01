@@ -56,13 +56,16 @@ export type CardRow = {
    * blob when this column is empty, so an existing chat card from before
    * this migration doesn't lose its history. */
   messages_json: string | null;
-  /** DESIGN-BACKLOG.md item 30 — closing a `chat`-kind card archives it
-   * (this set to a real timestamp) instead of deleting the row, so its
-   * `messages_json` history survives for the sessions sidebar to list
-   * and reopen later. `null` = live, showing on its board — every OTHER
-   * kind (terminal/browser/files/…) never sets this at all, closing them
-   * is still a real `deleteCard` exactly as before; only chat's history
-   * is worth keeping around after the card itself is gone. */
+  /** DESIGN-BACKLOG.md item 30 — closing a card archives it (this set to a
+   * real timestamp) instead of deleting the row. Task 4e4ec327 widened this
+   * from chat-only to EVERY kind: the row is what carries `label`/`kind`/
+   * board, and deleting it left `reports`/`task_cards`/`tasks`/
+   * `task_verdicts` pointing at cards nobody could name any more. The
+   * gesture of closing is not a request to destroy anything.
+   * `null` = live, showing on its board — only an EXPLICIT delete
+   * (`delete_card` via MCP, or the owner's action on an archived list)
+   * removes the row (`decideCardClose`, card-close-decision.ts). Every live
+   * read filters this out: `listCards`/`listAllCards` and `cardCounts`. */
   archived_at: number | null;
   /** Wall-clock birth of THIS incarnation of the short id. Set on INSERT
    * only (ON CONFLICT never rewrites it). `null` on rows that predate the
@@ -1729,11 +1732,19 @@ export function openStore(userDataDir: string) {
   // a real agent card", identical to "agents" for a non-loaded board. The
   // renderer overrides this with real spawnError/exitCode-derived status
   // for whichever board is actually loaded (App.tsx's liveStatus).
+  //
+  // `AND archived_at IS NULL` (task cb7244f2): closing a card ARCHIVES it
+  // (`decideCardClose`, card-close-decision.ts — the row stays so reports/
+  // task_cards/verdicts keep a name), so without this filter every terminal
+  // ever created would count forever and Home would report the session's
+  // ACCUMULATED agents, not the current ones. This is the same criterion
+  // `listStmt`/`listAllStmt` already apply; this query was the one reader
+  // missing it.
   const cardCountsStmt = db.prepare(`
     SELECT board_id,
       SUM(CASE WHEN provider != 'bash' THEN 1 ELSE 0 END) as agents,
       SUM(CASE WHEN provider != 'bash' THEN 1 ELSE 0 END) as active
-    FROM cards WHERE kind = 'terminal' GROUP BY board_id
+    FROM cards WHERE kind = 'terminal' AND archived_at IS NULL GROUP BY board_id
   `);
 
   // Ids are a single global sequence across every board (a PTY id in the
@@ -1741,8 +1752,10 @@ export function openStore(userDataDir: string) {
   // to stay unique app-wide, not just within one board) — this seeds that
   // counter without fetching every board's full rows on boot.
   //
-  // Measured 2026-09-13: closing a non-chat card DELETEs its `cards` row
-  // while `task_cards` / `task_verdicts` / `reports` / `tasks.card_id` /
+  // Measured 2026-09-13, and still the shape after 4e4ec327 (which made the
+  // CLOSE gesture archive instead of delete — see `CardRow.archived_at`): an
+  // explicitly DELETED card loses its `cards` row while `task_cards` /
+  // `task_verdicts` / `reports` / `tasks.card_id` /
   // `task_transitions.card_id` keep the numeric id as history. Seeding
   // from a hand-written UNION then DROPS the max on restart whenever a
   // table is forgotten (review of 5bd45eb: `task_transitions` was the

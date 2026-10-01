@@ -265,9 +265,11 @@ export type BoardRow = {
 /**
  * Quantos cards de AGENTE este board tem abertos (task 49de95ce).
  *
- * `agents` conta cards de terminal com provider != bash — verificado no SQL
- * (`cardCountsStmt`, em `main/store.ts`): uma linha existe em `cards` enquanto
- * o card está aberto (fechar apaga a linha), então isto É verificável.
+ * `agents` conta cards de terminal VIVOS com provider != bash — verificado no
+ * SQL (`cardCountsStmt`, em `main/store.ts`, filtra `archived_at IS NULL`):
+ * fechar um card ARQUIVA desde 4e4ec327 (a linha continua em `cards`, marcada),
+ * então sem esse filtro o número só cresceria e a Home mostraria os agentes
+ * ACUMULADOS da sessão, não os atuais.
  *
  * O CAMPO `active` FOI REMOVIDO, e o motivo é o defeito que a task consertou:
  * ele não era um sinal, era o MESMO número — as duas colunas da consulta eram
