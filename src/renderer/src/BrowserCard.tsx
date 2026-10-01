@@ -395,6 +395,37 @@ function BrowserCardInner({
   // criado uma vez só, `useEffect([id])`).
   const emulatedFrameRef = useRef(emulatedFrame);
   emulatedFrameRef.current = emulatedFrame;
+  /**
+   * ZOOM DE LEITURA do card (task b3237a17, item 1). É um multiplicador `zoom`
+   * CSS aplicado DENTRO da página (`document.documentElement.style.zoom`), não
+   * no content size offscreen: o Chromium re-layoutiza e re-rasteriza o texto
+   * NÍTIDO, e `contentSizeRef`/`applyResize` ficam intocados — o invariante
+   * "resolução offscreen desacoplada do zoom do board"
+   * (`smoke-browser-zoom-resolution.mjs`) continua valendo, porque este zoom é
+   * POR CARD e nunca entra no cálculo do `resize()`. Sem ele, um card num board
+   * a 30% era ilegível e não havia NENHUM jeito de ler (o zoom do board é só
+   * óptico, decisão do usuário).
+   */
+  const [readZoom, setReadZoom] = useState(1);
+  const readZoomRef = useRef(1);
+  readZoomRef.current = readZoom;
+
+  // Aplica o zoom de leitura à página — no mount, a cada mudança e (abaixo, em
+  // `onNavigate`) a cada navegação, porque um documento novo nasce sem o
+  // `style.zoom` que o anterior tinha.
+  useEffect(() => {
+    // `setProperty("zoom", …)` e não `style.zoom = …`: medido — a atribuição
+    // direta era ignorada em silêncio nesta build (a propriedade não aparece no
+    // CSSOM como acessor), enquanto `setProperty` grava e o Chromium aplica.
+    // IIFE de UMA expressão: `browser.evalJs` embrulha a fonte num `await`
+    // (`awaitExpressionSource`) — duas instruções separadas por `;` viram erro
+    // de sintaxe. Medido: a primeira versão falhava em silêncio e o zoom nunca
+    // chegava à página.
+    void window.browser.evalJs(
+      id,
+      `(() => { document.documentElement.style.setProperty("zoom", ${JSON.stringify(String(readZoom))}); return true; })()`,
+    );
+  }, [id, readZoom]);
   // DESIGN-BACKLOG.md §2.1 item 4 — decisão do usuário: a barra de
   // dispositivo (device toolbar) do inspector deixa de ser sempre visível
   // e vira um toggle no address bar (ícone de celular), escondida por
@@ -478,6 +509,14 @@ function BrowserCardInner({
       // Same "console clears on navigate" convention real DevTools uses —
       // counts from the previous page aren't meaningful for this one.
       setConsoleCounts({ error: 0, warning: 0 });
+      // Um documento NOVO nasce sem o `style.zoom` do anterior: reaplica o
+      // zoom de leitura do card na página que acabou de carregar.
+      if (readZoomRef.current !== 1) {
+        void window.browser.evalJs(
+          id,
+          `(() => { document.documentElement.style.setProperty("zoom", ${JSON.stringify(String(readZoomRef.current))}); return true; })()`,
+        );
+      }
     });
     return () => {
       offNav();
@@ -963,6 +1002,10 @@ function BrowserCardInner({
     // arbitrário de página tipo Ctrl+S, que continua sendo encaminhado
     // normalmente abaixo).
     const mod = e.ctrlKey || e.metaKey;
+    // (O atalho de teclado para o zoom de LEITURA foi DESCARTADO: o main
+    // intercepta Ctrl+`=`/`-` no `before-input-event` para redirecionar o zoom
+    // ao BOARD — medido, o keydown nunca chega a este handler. O controle mora
+    // no menu do kebab, `data-role="browser-read-zoom-*"`.)
     if (mod && (e.key === "v" || e.key === "V")) {
       e.preventDefault();
       void window.browser.paste(id);
@@ -1179,6 +1222,7 @@ function BrowserCardInner({
             </button>
             <button
               ref={menuBtnRef}
+              data-role="browser-more-btn"
               title={t("browser.more")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setMenuOpen((v) => !v)}
@@ -1295,6 +1339,22 @@ function BrowserCardInner({
         >
           <Icon name="devTools" size={14} />
           {t("browser.openDevTools")}
+        </button>
+        {/* Zoom de LEITURA do card (task b3237a17, item 1). Símbolo só — sem
+            texto humano novo para a varredura de i18n: `A+`/`A−`/`100%` são
+            legíveis sem tradução, e o mesmo par existe no teclado
+            (Ctrl/Cmd + `=`/`-`/`0` com o canvas focado). */}
+        <button data-role="browser-read-zoom-in" onClick={() => setReadZoom((z) => Math.min(3, Math.round((z + 0.25) * 100) / 100))}>
+          <Icon name="zoomIn" size={14} />
+          A+ {Math.round(readZoom * 100)}%
+        </button>
+        <button data-role="browser-read-zoom-out" onClick={() => setReadZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}>
+          <Icon name="zoomOut" size={14} />
+          A−
+        </button>
+        <button data-role="browser-read-zoom-reset" onClick={() => setReadZoom(1)}>
+          <Icon name="zoomOut" size={14} />
+          100%
         </button>
         {VIEWPORT_PRESETS.map((preset) => (
           <button

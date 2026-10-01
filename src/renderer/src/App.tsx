@@ -1536,6 +1536,27 @@ export function App() {
     return cx >= viewport.x && cx <= viewport.x + viewport.w && cy >= viewport.y && cy <= viewport.y + viewport.h;
   }
 
+  /**
+   * Ctrl/Cmd+wheel NUNCA pode virar ZOOM DE PÁGINA do Chromium (task b3237a17,
+   * item 3). O app é uma SPA de DOM: o Ctrl+wheel nativo escala o DOCUMENTO
+   * inteiro (`visualViewport.scale` cresce), e um `.topbar`/`.titlebar` em
+   * `position:absolute` sai do viewport — o sintoma relatado ("a top bar sobe e
+   * some"). O `onWheel` do board já faz `preventDefault`, mas só quando o
+   * evento CHEGA nele: sobre um CARD, o handler do card encerra a propagação
+   * sem necessariamente cancelar o default, e sobre chrome flutuante o default
+   * corre solto. Um listener em CAPTURA, no `window`, fecha isso para o app
+   * inteiro. O zoom do BOARD segue funcionando (o handler dele roda depois e lê
+   * o mesmo evento); o que morre é o zoom nativo da página. Medido em
+   * `smoke-browser-ctrl-wheel-page-zoom.mjs`.
+   */
+  useEffect(() => {
+    function guardPageZoom(e: WheelEvent) {
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
+    }
+    window.addEventListener("wheel", guardPageZoom, { capture: true, passive: false });
+    return () => window.removeEventListener("wheel", guardPageZoom, { capture: true });
+  }, []);
+
   function addCard(card: Card) {
     // Keep the imperative view current before React renders the queued state
     // update. The task singleton guard can run twice in the same event turn
@@ -1546,17 +1567,15 @@ export function App() {
     setOrder((prev) => [...prev, card.id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
     toast(card.kind === "sticky" ? t("toast.cardCreatedF", { kind: CARD_LABEL[card.kind] }) : t("toast.cardCreated", { kind: CARD_LABEL[card.kind] }));
-    // Pendentes #188 — every spawn path (rail, MCP spawn_card/spawn_agent,
-    // open_url's auto-connect, duplicate) funnels through here, so this is
-    // the one place that fixes "nasce no zoom atual do usuário" for all of
-    // them at once. A card born at, say, 30% zoom reads as illegibly tiny
-    // right when it's most useful to read. `setZoomAbs` anchors on the
-    // current viewport CENTER (same math the zoom-pill already uses), not
-    // on this new card's own rect — a full recenter-on-spawn would yank the
-    // view away from whatever the user is actually looking at, which is
-    // worse than leaving pan alone for a background/orchestrator-driven
-    // spawn the human isn't watching.
-    if (world.zoom !== 1) setZoomAbs(1);
+    // NÃO re-ancorar a câmera aqui (task b3237a17). A versão anterior fazia
+    // `if (world.zoom !== 1) setZoomAbs(1)` — todo spawn (rail, MCP
+    // spawn_card/spawn_agent, open_url, duplicate) empurrava o zoom do board
+    // para 100% ancorado no centro do viewport, MUDANDO a câmera sem o usuário
+    // pedir. Medido: um spawn em background/orquestrado tirava a visão de onde
+    // o humano estava olhando. A câmera agora só se move por gesto do próprio
+    // usuário (zoom-pill, wheel, pan) — quem nasce fora do zoom de leitura se
+    // resolve com o zoom de LEITURA por card (BrowserCard) e com `focusCard`
+    // explícito, não roubando o zoom do board.
   }
 
   /** Ctrl/Cmd+D (below) — clones the topmost card's full config (provider/
@@ -2348,11 +2367,11 @@ export function App() {
     setCards((prev) => [...prev, card]);
     setOrder((prev) => [...prev, id]);
     void window.store.upsert(toRow(card, activeBoardIdRef.current!));
-    // Pendentes #188 — same fix as `addCard`'s, duplicated here since this
-    // path deliberately skips `addCard` (see its own comment above) and a
-    // browser card born from open_url is exactly the "hard to read at the
-    // user's current zoom" case the item calls out.
-    if (world.zoom !== 1) setZoomAbs(1);
+    // NÃO re-ancorar a câmera (task b3237a17) — mesma razão do `addCard`:
+    // `open_url` num spawn autônomo empurrava o zoom do board pra 100% e
+    // levava a visão do humano junto. `focusIfOffscreen` abaixo continua sendo
+    // o ÚNICO reposicionamento, e é explícito (só quando o card nasce fora da
+    // viewport e o chamador pediu).
     // Human-approved spawn_card kind:browser (via spawnCardFor → allowAsk)
     // — same off-screen guard as the rail; never on autonomous autoApprove.
     if (opts?.focusIfOffscreen && !centerInView(rect, visibleRect)) setTimeout(() => focusCard(id), 0);
