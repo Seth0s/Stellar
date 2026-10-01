@@ -3267,6 +3267,23 @@ export function createMessageBus(
         return { ok: false, error: `no open terminal card with id "${req.target}"` };
       }
       const target = req.target;
+      // TEXT VAZIO (task 9c28adde) — RECUSADO, nomeando o campo. Um
+      // `send_to_card` sem corpo enfileirava só o rótulo `[de: <nome>]`: uma
+      // mensagem que o remetente NÃO escreveu, montada por nós. Ausência vira
+      // ausência, nunca conteúdo inventado. E NÃO tratamos vazio como o gesto
+      // de steer: o steer já tem gatilho explícito (`steer:true` sobre uma
+      // entrega PARQUEADA, depois que há texto na caixa), enquanto um vazio é
+      // quase sempre bug do chamador (variável não preenchida) — dar a ele um
+      // segundo sentido escondido seria inventar intenção. Recusar é a única
+      // resposta que não afirma o que não se sabe.
+      if (typeof req.text !== "string" || req.text.trim().length === 0) {
+        return {
+          ok: false,
+          error:
+            "send_to_card: `text` is empty — nothing to type. Pass the message. " +
+            "(To steer a parked turn, send real text: steer defaults to true and presses the provider's steer key after a park.)",
+        };
+      }
       // DESIGN-BACKLOG.md item 61 — prefix with a human-friendly sender
       // label whenever the caller identifies itself. Optional and
       // additive: a caller that doesn't pass `requesterId` still delivers

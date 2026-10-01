@@ -244,7 +244,25 @@ const MAX_ONESHOT: DynamicProviderSpec = {
   },
 };
 
-const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE, MAX_READINESS, MAX_ONESHOT];
+/**
+ * UMA BASE COM `delivery.midTurnQueue` (task 9c28adde). Mesmo critério do
+ * MAX_READINESS/MAX_ONESHOT: `parkedPattern` e `steerKey` são obrigatórios
+ * DENTRO do objeto, e tirar subcampo de um objeto AUSENTE não produz recusa
+ * nenhuma — o gate acusaria o buraco.
+ */
+const MAX_MIDTURN: DynamicProviderSpec = {
+  ...(structuredClone(MAX_NONE) as DynamicProviderSpec),
+  id: "qa-contract-midturn",
+  capacity: {
+    ...structuredClone(MAX_NONE).capacity,
+    delivery: {
+      ...structuredClone(MAX_NONE).capacity.delivery,
+      midTurnQueue: { parkedPattern: "queued messages[\\s\\S]*?enter with empty input to steer", steerKey: "\r" },
+    },
+  },
+};
+
+const BASES = [MAX_FLAG, MAX_NONE, MAX_STORE_SQLITE, MAX_READINESS, MAX_ONESHOT, MAX_MIDTURN];
 
 describe("anti-drift: o schema publicado não pode divergir do parser", () => {
   it("as bases do teste são válidas pelo próprio validador", () => {

@@ -239,6 +239,16 @@ export type DynamicProviderSpec = {
        * `DELIVERY_TURN_END_MECHANISMS` para o porquê).
        */
       turnEnd?: { mechanism: "hook" } | { mechanism: "screen"; pattern: string };
+      /**
+       * A CAIXA DE FILA DE MID-TURN (task 9c28adde) — DADO declarado, como no
+       * cursor (`ProviderCapacity.delivery.midTurnQueue`): `parkedPattern` é a
+       * FONTE da regex (texto — JSON não carrega `RegExp`) da chrome que o
+       * provider desenha quando o input foi ENFILEIRADO em vez de injetado, e
+       * `steerKey` é a tecla que injeta o item na volta. Ausente = este
+       * provider não tem a fila (ou não foi medido) — e a entrega degrada para
+       * o veredito de composer, sem inventar parque.
+       */
+      midTurnQueue?: { parkedPattern: string; steerKey: string };
     };
   };
 };
@@ -1167,6 +1177,60 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
     }
   }
 
+  // A FILA DE MID-TURN (task 9c28adde) — OPCIONAL, e AUSENTE é o default
+  // honesto ("este provider não tem a caixa, ou não foi medida"). A regex é
+  // COMPILADA aqui, na porta, pelo mesmo motivo do `turnEnd`: uma fonte que
+  // não compila vira recusa com motivo, em vez de explodir no registro vivo.
+  if (deliveryRaw.midTurnQueue !== undefined) {
+    const rawQueue = deliveryRaw.midTurnQueue;
+    if (!isRecord(rawQueue)) {
+      return {
+        ok: false,
+        reason: refusal("capacity.delivery.midTurnQueue", "an object with `parkedPattern` and `steerKey`", rawQueue),
+      };
+    }
+    const parkedPattern = nonEmptyString(rawQueue.parkedPattern);
+    if (!parkedPattern) {
+      return {
+        ok: false,
+        reason: refusal(
+          "capacity.delivery.midTurnQueue.parkedPattern",
+          'a non-empty regex SOURCE string (ex.: "queued messages[\\\\s\\\\S]*?enter with empty input to steer")',
+          rawQueue.parkedPattern,
+        ),
+      };
+    }
+    try {
+      new RegExp(parkedPattern);
+    } catch (err) {
+      return {
+        ok: false,
+        reason: refusal(
+          "capacity.delivery.midTurnQueue.parkedPattern",
+          "a source that compiles as a regular expression",
+          `${parkedPattern} (${err instanceof Error ? err.message : String(err)})`,
+        ),
+      };
+    }
+    // A tecla é um CARACTERE DE CONTROLE (`"\r"` = Enter), não texto: um
+    // `trim()` a zeraria. A validação é `string` não-vazia, sem trim — um
+    // `nonEmptyString` aqui recusaria justamente a Enter que o campo existe
+    // para carregar (medido: o cline era recusado com `got "\r"`).
+    const steerKey =
+      typeof rawQueue.steerKey === "string" && rawQueue.steerKey.length > 0 ? rawQueue.steerKey : null;
+    if (!steerKey) {
+      return {
+        ok: false,
+        reason: refusal(
+          "capacity.delivery.midTurnQueue.steerKey",
+          'a non-empty key string (ex.: "\\r" for Enter)',
+          rawQueue.steerKey,
+        ),
+      };
+    }
+    delivery.midTurnQueue = { parkedPattern, steerKey };
+  }
+
   // A AÇÃO ONE-SHOT (task efc5b6fd) — OPCIONAL, e AUSENTE é o default honesto
   // ("este provider não faz one-shot"), que é o que faz a UI não oferecer a
   // ação. O argv é VALIDADO aqui na porta: uma declaração que não carrega
@@ -1548,6 +1612,27 @@ function capacitySchema(): Record<string, unknown> {
         // mecanismo, então o `if/then` do schema exige `pattern` só quando o
         // mecanismo declarado é `screen` (e nenhum quando é `hook`).
         extra: {
+          midTurnQueue: {
+            type: "object",
+            description:
+              "A CAIXA DE FILA DE MID-TURN: quando o provider mostra que o input foi ENFILEIRADO em vez de " +
+              "injetado (cursor: `follow-ups` + `enter steer`; cline: `Queued messages` + `enter with empty input " +
+              "to steer`). AUSENTE = este provider não tem a fila (ou não foi medida) e a entrega cai no veredito " +
+              "de composer — nunca inventamos um parque.",
+            required: ["parkedPattern", "steerKey"],
+            additionalProperties: false,
+            properties: {
+              parkedPattern: asNonEmptyStr(
+                "FONTE da regex, em TEXTO (o arquivo é JSON e não carrega `RegExp`), da chrome de parque — ex.: " +
+                  '"queued messages[\\\\s\\\\S]*?enter with empty input to steer". Compilada pelo parser; fonte que ' +
+                  "não compila é recusada.",
+              ),
+              steerKey: asNonEmptyStr(
+                'Tecla que injeta o item parqueado no turno vivo (cursor e cline: "\\r" — Enter vazio). Pressionada ' +
+                  "UMA vez, e só quando o remetente pede `steer:true`.",
+              ),
+            },
+          },
           turnEnd: mechanismObject({
             description:
               "Como esta CLI sinaliza o FIM de um turno. AUSENTE (o default) = não sinaliza, e a UI não " +
@@ -2394,6 +2479,21 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
                 declared.delivery.turnEnd.mechanism === "hook"
                   ? { mechanism: "hook" as const }
                   : { mechanism: "screen" as const, pattern: new RegExp(declared.delivery.turnEnd.pattern) },
+            }
+          : {}),
+        // A FILA DE MID-TURN (task 9c28adde) — COMPILADA aqui, como o turnEnd:
+        // o arquivo guarda a FONTE, o registro vivo carrega o `RegExp`. Sem
+        // este `...` o campo passaria no schema, no validador e morreria em
+        // silêncio — a classe exata do `session.store`, que o gate de
+        // round-trip pega. Flags `i`: a chrome de parque varia em caixa na
+        // tela e o padrão exige DUAS frases (caixa + a dica de steer), então
+        // a insensibilidade não afrouxa o parque.
+        ...(declared.delivery.midTurnQueue
+          ? {
+              midTurnQueue: {
+                parkedPattern: new RegExp(declared.delivery.midTurnQueue.parkedPattern, "i"),
+                steerKey: declared.delivery.midTurnQueue.steerKey,
+              },
             }
           : {}),
       },

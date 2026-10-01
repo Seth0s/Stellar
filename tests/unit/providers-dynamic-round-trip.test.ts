@@ -23,9 +23,10 @@ import {
  * para os cinco nativos. Nenhum teste pegava, porque nenhum comparava o
  * declarado com o vivo.
  *
- * A REGRA: todo campo DECLARADO chega ao def vivo, com o mesmo valor. A única
- * normalização conhecida é `delivery.turnEnd.pattern`: TEXTO no arquivo (JSON
- * não carrega `RegExp`) e `RegExp` no def.
+ * A REGRA: todo campo DECLARADO chega ao def vivo, com o mesmo valor. As
+ * normalizações conhecidas são as FONTES de regex que o JSON não carrega:
+ * `delivery.turnEnd.pattern` (task 0dd5c145) e `delivery.midTurnQueue.parkedPattern`
+ * (task 9c28adde, compilado com flag `i` — screen chrome varia em caixa).
  */
 
 /** O `capacity` esperado no REGISTRO VIVO, a partir do declarado. */
@@ -35,6 +36,10 @@ function liveCapacity(capacity: DynamicProviderSpec["capacity"]): unknown {
   const turnEnd = delivery.turnEnd as { mechanism: string; pattern?: string } | undefined;
   if (turnEnd?.mechanism === "screen" && turnEnd.pattern !== undefined) {
     delivery.turnEnd = { mechanism: "screen", pattern: new RegExp(turnEnd.pattern) };
+  }
+  const queue = delivery.midTurnQueue as { parkedPattern?: string; steerKey?: string } | undefined;
+  if (queue && queue.parkedPattern !== undefined) {
+    delivery.midTurnQueue = { ...queue, parkedPattern: new RegExp(queue.parkedPattern, "i") };
   }
   return copy;
 }
