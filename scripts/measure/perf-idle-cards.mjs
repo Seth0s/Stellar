@@ -26,7 +26,15 @@ import { readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startApp, stopApp, connectPage, pickFreePort } from "../verify/cdp-client.mjs";
+import {
+  startApp,
+  stopApp,
+  connectPage,
+  pickFreePort,
+  bootIntoFreshSession,
+  openTerminalCreatePopover,
+  clickProviderInPicker,
+} from "../verify/cdp-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(HERE, "fixtures", "idle-tui.mjs");
@@ -51,6 +59,10 @@ const REAL_IDLE = PROVIDER !== "bash";
 // `exec /home/lucas/.local/bin/cline`). E o caminho para medir a taxa de PTY de
 // uma CLI REAL sem depender do gate de spawn de provider - e sem prompt.
 const EXEC = arg("--exec", null);
+// `--focus-cards N`: foca os N primeiros terminais (o blink agora e' so no focado).
+// E' assim que se mede "blink so onde alguem olha" com o MESMO build: foco em 4
+// (todos piscando) contra foco em 1 (so o que o humano ve).
+const FOCUS_CARDS = Number(arg("--focus-cards", "0"));
 // `--profile`: perfil de CPU do RENDERER por N segundos (padrão 10) mais o delta
 // de métricas do Blink. É o que responde "o que roda a cada frame" com nome e
 // linha, em vez de palpites sobre animações.
@@ -360,6 +372,16 @@ async function profileMain(inspectPort, seconds) {
   };
 }
 
+async function waitFor(fn, { timeoutMs = 8000, everyMs = 200 } = {}) {
+  const inicio = Date.now();
+  while (Date.now() - inicio < timeoutMs) {
+    const v = await fn();
+    if (v) return v;
+    await delay(everyMs);
+  }
+  return null;
+}
+
 async function main() {
   if (!existsSync(FIXTURE)) throw new Error(`fixture ausente: ${FIXTURE}`);
   const userDataDir = join(tmpdir(), `stellar-perf-${process.pid}`);
@@ -372,37 +394,116 @@ async function main() {
   let page = null;
   try {
     page = await connectPage(cdpPort);
-    // Uma instância nova não tem board nenhum (o app cria quando o humano abre
-    // uma sessão). Aqui o board é criado pela MESMA API da UI, sem clique: o
-    // benchmark não pode depender de coordenadas de tela para medir CPU.
-    const boardId = await page.evalJs(`(async () => {
-      const existentes = await window.store.boards.list();
-      if (existentes.length > 0) return existentes[0].id;
-      const now = Date.now();
-      const id = "perf-board";
-      await window.store.boards.upsert({ id, name: "Perf", project: "Perf", cwd: "/tmp", created_at: now, updated_at: now,
-        last_accessed_at: now, autonomous: 0, concurrency_cap: null, orchestrator_card_id: null });
-      const depois = await window.store.boards.list();
-      return depois.length > 0 ? depois[0].id : null;
-    })()`);
-    if (!boardId) throw new Error("board não pôde ser criado na instância isolada");
+
 
     let browserUrl = BROWSER_URL;
 
-    // Cards: o MESMO caminho da UI (persistir a linha + subir o PTY), pela API do
-    // renderer — sem consentimento de agente e sem passar pelo bus de mensagens.
-    for (let i = 0; i < CARDS; i += 1) {
-      const id = `perf-card-${i}`;
-      await page.evalJs(`(async () => {
-        const now = Date.now();
-        await window.store.upsert({ id: ${JSON.stringify(id)}, provider: "bash", cwd: "/tmp", x: 40 + ${i} * 30, y: 40, w: 700, h: 360,
-          updated_at: now, resume_id: null, model: null, system_prompt: null, kind: "terminal", board_id: ${JSON.stringify(boardId)},
-          group_id: null, label: ${JSON.stringify(id)}, messages_json: null, archived_at: null, effort: null, created_at: now });
-        await window.pty.spawn(${JSON.stringify(id)}, ${JSON.stringify(PROVIDER)}, "/tmp", 80, 24);
-        return true;
-      })()`);
+    // GATE 1 — O DOCUMENTO É O APP (task 27e13021). MEDIDO: sem isto, todas as
+    // consultas de DOM rodaram contra a página de erro do Chromium
+    // (`chrome-error://chromewebdata/`, com unreachableUrl apontando para
+    // out/renderer/index.html) e TODO gate passou em falso: textareas 0, canvas 0,
+    // enquanto o main respondia store/PTY normalmente. Renderer que não carregou não
+    // tem o que medir — aborta nomeando o motivo, em vez de medir pixels de erro.
+    // O gate é uma ESPERA, não uma foto: no instante do connectPage o renderer
+    // ainda não montou os hooks do app (medido: protocol file: e sem chrome-error,
+    // mas `hooks: false`). Espera até 15 s por um documento que seja o app.
+    const docApp = await waitFor(
+      async () => {
+        const atual = JSON.parse(
+          await page.evalJs(`JSON.stringify({
+            href: location.href,
+            protocol: location.protocol,
+            erro: location.href.includes("chrome-error"),
+            hooks: typeof window.__getTerminalDims === "function" && typeof window.store === "object",
+          })`),
+        );
+        return !atual.erro && atual.protocol === "file:" && atual.hooks ? atual : null;
+      },
+      { timeoutMs: 15_000, everyMs: 250 },
+    );
+    if (!docApp) {
+      const ultimo = await page.evalJs(
+        `JSON.stringify({ href: location.href, protocol: location.protocol, hooks: typeof window.store })`,
+      );
+      throw new Error(
+        `o documento NAO e o app depois de 15s (${ultimo}): o renderer nao carregou — toda medicao seria contra a pagina de erro`,
+      );
     }
 
+    // SEQUÊNCIA COPIADA DO SMOKE `smoke-terminal-scroll-to-end.mjs` (task 27e13021),
+    // que é a prova viva de que este caminho renderiza um xterm:
+    //   connectPage -> delay(1000) -> bootIntoFreshSession (default = com terminal)
+    //   -> waitFor (até 8s, de 200ms) procurando o card de terminal E a prova de que
+    //      o xterm está registrado no renderer (`window.__getTerminalDims(id)`).
+    // As três diferenças que me custaram horas: eu NÃO esperava 1s depois do
+    // connectPage, lia `boards.list()` UMA vez em vez de esperar, e não exigia a
+    // prova de registro no xterm (só existência no store).
+    await delay(1000);
+    await bootIntoFreshSession(page);
+
+    const terminaisVivos = await waitFor(async () => {
+      const ids = JSON.parse(
+        await page.evalJs(`
+          (async () => {
+            const boards = await window.store.boards.list();
+            if (!boards.length) return JSON.stringify([]);
+            const cards = await window.store.list(boards[0].id);
+            return JSON.stringify(
+              cards.filter((c) => c.kind === "terminal" && window.__getTerminalDims?.(c.id)).map((c) => c.id),
+            );
+          })()
+        `),
+      );
+      return Array.isArray(ids) && ids.length >= 1 ? ids : null;
+    }, { timeoutMs: 15_000, everyMs: 250 });
+    if (!terminaisVivos) {
+      throw new Error("nenhum terminal REGISTRADO no xterm em 15s (a sequencia do smoke nao renderizou)");
+    }
+    const boardId = await page.evalJs(
+      `window.store.boards.list().then((b) => (b.length > 0 ? b[0].id : null))`,
+    );
+    if (!boardId) throw new Error("a sessao nao expos um board ativo");
+    console.log(`[perf] terminal registrado no xterm: ${terminaisVivos.join(", ")}`);
+
+    // Cards EXTRAS pelo popover + picker (o par dos smokes), esperando cada um
+    // aparecer REGISTRADO no xterm — nao apenas no store.
+    let idsCriados = [...terminaisVivos];
+    for (let i = idsCriados.length; i < CARDS; i += 1) {
+      await openTerminalCreatePopover(page);
+      await clickProviderInPicker(page, PROVIDER);
+      const novos = await waitFor(async () => {
+        const ids = JSON.parse(
+          await page.evalJs(`
+            (async () => {
+              const boards = await window.store.boards.list();
+              const cards = await window.store.list(boards[0].id);
+              return JSON.stringify(
+                cards.filter((c) => c.kind === "terminal" && window.__getTerminalDims?.(c.id)).map((c) => c.id),
+              );
+            })()
+          `),
+        );
+        return Array.isArray(ids) && ids.length > idsCriados.length ? ids : null;
+      }, { timeoutMs: 12_000, everyMs: 250 });
+      if (!novos) throw new Error(`card extra ${i} nao ficou registrado no xterm em 12s`);
+      idsCriados = novos;
+    }
+
+
+    // A SESSÃO PRECISA ESTAR ABERTA ANTES DOS CARDS (task 27e13021): sem isto o
+    // board não monta, os cards existem no store mas NÃO estão na tela, e todo
+    // número "por card" mede outra coisa. Medido: com 4 cards verificados, o
+    // renderer reportava textareas=0 e canvas=0.
+    // `spawnTerminal: true` quando já se quer UM card: é o caminho que TODO smoke
+    // exercita (abre a sessão e cria um terminal de verdade pela UI). Os cards
+    // extras entram pelo popover + picker abaixo.
+
+    // CARDS PELA UI (task 27e13021). A criacao por API (store.upsert + pty.spawn)
+    // NAO materializa terminal na tela - medido: 4 cards verificados no store com
+    // textareas=0 no DOM, e o harness abortava por isso. Este e' o caminho que os
+    // smokes ja provam: o botao da rail / o popover de tipo, com clique de verdade.
+    // A sessão já pode ter criado o(s) primeiro(s) pelo caminho dos smokes; o
+    // laço só completa o que falta, e o que vale é a contagem final no store.
 
     if (WITH_BROWSER) {
       const servidor = await startBrowserServer();
@@ -416,7 +517,7 @@ async function main() {
         // O IPC que a UI usa (H3): sem isto o card era so uma LINHA no banco e o
         // WebContentsView - o que de fato custa frames - nunca nascia. O app RECUSA
         // o esquema data: ("only opens http(s) URLs"), por isso o harness serve a pagina.
-        await window.browser.create("perf-browser", ${JSON.stringify(browserUrl)});
+        await window.browser.create(${JSON.stringify("perf-browser")}, ${JSON.stringify(browserUrl)});
         return true;
       })()`);
     }
@@ -437,12 +538,56 @@ async function main() {
       }
     });
     if (CARDS > 0 && shells.length === 0) throw new Error("nenhum processo bash filho: os cards nao tem PTY vivo");
+    // O renderer monta o que ele leu do store: recarrega para os cards criados
+    // acima aparecerem de verdade, então CONFERE a tela antes de medir.
+    if (CARDS > 0) {
+      await page.send("Page.reload");
+      await delay(7000);
+    }
+    // GATE 2 — a TELA: cada card precisa estar CONECTADO ao documento, com dims do
+    // xterm, e INTERSECTANDO o viewport. `__getTerminalDims` prova que existe um
+    // objeto Terminal no renderer, não que há pixels na tela; contagem de
+    // `.xterm-helper-textarea` era a asserção errada (o app não a mantém neste
+    // estado) — o que vale é conexão + interseção + dims, por card.
+    const tela = JSON.parse(
+      await page.evalJs(`(() => {
+        const ids = ${JSON.stringify(idsCriados)};
+        const out = [];
+        for (const id of ids) {
+          const el = document.querySelector('[data-card-id="' + id + '"]');
+          const dims = window.__getTerminalDims?.(id) ?? null;
+          if (!el) {
+            out.push({ id, conectado: false, intersecta: false, dims: !!dims });
+            continue;
+          }
+          const r = el.getBoundingClientRect();
+          out.push({
+            id,
+            conectado: el.isConnected,
+            intersecta: r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight,
+            dims: !!dims,
+            rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+          });
+        }
+        return JSON.stringify({ innerW: innerWidth, innerH: innerHeight, cards: out });
+      })()`),
+    );
+    console.log(`[perf] TELA: ${JSON.stringify(tela)}`);
+    if (CARDS > 0) {
+      const ruins = tela.cards.filter((c) => !c.conectado || !c.intersecta || !c.dims);
+      if (ruins.length > 0) {
+        throw new Error(`cards fora da tela: ${JSON.stringify(ruins)}`);
+      }
+    }
+    if (tela.innerW === 0 || tela.innerH === 0) {
+      throw new Error(`viewport sem dimensao (${tela.innerW}x${tela.innerH}): a janela nao esta sendo pintada`);
+    }
     console.log(`[perf] VERIFICADO: ${vivos.length} card(s) no store, ${shells.length} shell(s) vivo(s)`);
     await delay(4000); // os shells sobem
     if (!REAL_IDLE || EXEC !== null) {
-      for (let i = 0; i < CARDS; i += 1) {
+      for (const cardId of idsCriados) {
         const cmd = EXEC ?? `node ${FIXTURE} ${RATE}`;
-        await page.evalJs(`window.pty.write("perf-card-${i}", ${JSON.stringify(cmd + "\r")}, "human").then(() => true)`);
+        await page.evalJs(`window.pty.write(${JSON.stringify(cardId)}, ${JSON.stringify(cmd + "\r")}, "human").then(() => true)`);
       }
     }
     await delay(4000); // a TUI sintética começa a repintar
@@ -450,6 +595,28 @@ async function main() {
     if (process.env.PERF_DEBUG) {
       console.log(`[perf:debug] main=${app.proc.pid} vivos=${app.proc.exitCode === null} arvore=${treePids(app.proc.pid).length}`);
     }
+    if (FOCUS_CARDS > 0) {
+      const focados = await page.evalJs(`(() => {
+        const tas = [...document.querySelectorAll(".xterm-helper-textarea")].slice(0, ${FOCUS_CARDS});
+        for (const ta of tas) ta.focus();
+        const ativo = document.activeElement;
+        return { pedidos: ${FOCUS_CARDS}, focados: tas.length, ativoEhTextarea: !!ativo && ativo.tagName === "TEXTAREA" };
+      })()`);
+      console.log(`[perf] FOCO: ${JSON.stringify(focados)}`);
+    }
+
+    // VISIBILIDADE E DOM, medidos JUNTO do custo (task 27e13021): o Chromium
+    // estrangula pintura de janela ocluída/em segundo plano, e os terminais podem
+    // nem estar no DOM quando estão fora de tela. Sem estes dois números, uma
+    // queda de renderer pode ser "conserto" quando é a janela atrás de outra.
+    const visibilidade = await page.evalJs(`JSON.stringify({
+      hidden: document.hidden,
+      state: document.visibilityState,
+      textareas: document.querySelectorAll(".xterm-helper-textarea").length,
+      canvas: document.querySelectorAll("canvas").length,
+    })`);
+    console.log(`[perf] DOM/visibilidade no momento da amostra: ${visibilidade}`);
+
     const pids = treePids(app.proc.pid);
     const before = new Map();
     for (const pid of pids) {
