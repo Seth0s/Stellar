@@ -32,8 +32,6 @@ import {
   connectPage,
   pickFreePort,
   bootIntoFreshSession,
-  openTerminalCreatePopover,
-  clickProviderInPicker,
 } from "../verify/cdp-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -63,6 +61,12 @@ const EXEC = arg("--exec", null);
 // E' assim que se mede "blink so onde alguem olha" com o MESMO build: foco em 4
 // (todos piscando) contra foco em 1 (so o que o humano ve).
 const FOCUS_CARDS = Number(arg("--focus-cards", "0"));
+// `--zoom <pct>`: afasta o zoom do board depois de criar os cards, pro GATE 2
+// (todos intersectando a viewport) passar com N>1.
+const ZOOM = arg("--zoom", null);
+// `--pan-y <px>`: arrasta o FUNDO do board (área vazia) por N px — junto do
+// zoom, traz pra viewport os cards que o empilhamento deixou acima do topo.
+const PAN_Y = Number(arg("--pan-y", "0"));
 // `--profile`: perfil de CPU do RENDERER por N segundos (padrão 10) mais o delta
 // de métricas do Blink. É o que responde "o que roda a cada frame" com nome e
 // linha, em vez de palpites sobre animações.
@@ -74,6 +78,27 @@ const APP_ARGS = (arg("--app-args", "") || "").split(" ").filter(Boolean);
 // `--profile-main`: perfil de CPU do processo MAIN (alvo `--inspect`) - quem faz
 // as varreduras que continuam rodando sem um byte de PTY.
 const PROFILE_MAIN = process.argv.includes("--profile-main");
+// `--no-webgl`: MEDE o custo do `WebglAddon` SEM mudar o código do app. Injeta
+// um pre-script que faz TODO `getContext("webgl"/"webgl2")` devolver null — o
+// xterm então cai no renderer DOM (o caminho que o próprio `useTerminal.ts` já
+// tem no `catch` de `term.open()`). Rodar `--cards N` contra `--cards N
+// --no-webgl` isola o custo do contexto WebGL por card, com o MESMO build.
+// `__webglBlocked` conta os bloqueios — é a prova de que a sonda AGIU (sem ela,
+// um run "sem WebGL" que não bloqueou nada seria lido como "WebGL de graça").
+const NO_WEBGL = process.argv.includes("--no-webgl");
+const NO_WEBGL_SCRIPT = `
+(() => {
+  window.__webglBlocked = 0;
+  const orig = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+    if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
+      window.__webglBlocked = (window.__webglBlocked || 0) + 1;
+      return null;
+    }
+    return orig.call(this, type, ...args);
+  };
+})();
+`;
 // Pagina do card de navegador: data URL com animacao CSS, para o pipeline de
 // frames ter o que pintar SEM rede (H3).
 // O APP RECUSA `data:` (medido: "the embedded browser only opens http(s) URLs"),
@@ -101,6 +126,35 @@ const BROWSER_URL = arg(
   "data:text/html,<body style='margin:0;background:%23111'><div style='width:120px;height:120px;background:%23f80;animation:s 1s linear infinite'></div><style>@keyframes s{to{transform:rotate(360deg)}}</style></body>",
 );
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Cria UM terminal pelo caminho que `bootIntoFreshSession` já prova (rail →
+ * "Adicionar card" → Terminal → botão primário do popover), SEM picker de
+ * provider. MEDIDO 2026-10-01: o caminho do harness antigo
+ * (`openTerminalCreatePopover` + `clickProviderInPicker`) NÃO materializa card
+ * nenhum neste build — nem com rótulo que casa (commandcode) nem com o
+ * fallback por texto; o popover de terminal tem um submit próprio
+ * (`.popover-actions button.primary`) que é quem de fato cria o card.
+ */
+async function spawnDefaultTerminal(page) {
+  const clickSel = async (selector, what) => {
+    const coords = await page.evalJs(`
+      (() => {
+        const b = document.querySelector(${JSON.stringify(selector)});
+        if (!b) return null;
+        const r = b.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()
+    `);
+    if (!coords) throw new Error(`${what} nao encontrado`);
+    await page.click(coords.x, coords.y);
+    await delay(250);
+  };
+  await clickSel('[data-role="rail-add-card"]', "rail add-card");
+  await clickSel('.popover-row[data-kind="terminal"]', "opcao Terminal no popover");
+  await clickSel(".popover-actions button.primary", "botao criar terminal");
+  await delay(600);
+}
 
 /** Lê utime+stime (ticks), RSS (kB) e o `--type=` do cmdline de um pid. */
 /**
@@ -395,6 +449,14 @@ async function main() {
   try {
     page = await connectPage(cdpPort);
 
+    // Patch na PÁGINA VIVA, ANTES de qualquer terminal montar (o primeiro nasce
+    // no `bootIntoFreshSession` logo abaixo): o xterm decide o renderer na hora
+    // do `term.open()`, então o patch pega todos os cards deste run sem precisar
+    // de documento novo.
+    if (NO_WEBGL) {
+      await page.evalJs(NO_WEBGL_SCRIPT);
+      console.log("[perf] --no-webgl: getContext(webgl/webgl2) neutralizado na pagina viva");
+    }
 
     let browserUrl = BROWSER_URL;
 
@@ -465,12 +527,11 @@ async function main() {
     if (!boardId) throw new Error("a sessao nao expos um board ativo");
     console.log(`[perf] terminal registrado no xterm: ${terminaisVivos.join(", ")}`);
 
-    // Cards EXTRAS pelo popover + picker (o par dos smokes), esperando cada um
-    // aparecer REGISTRADO no xterm — nao apenas no store.
+    // Cards EXTRAS pela UI (rail → Terminal → Criar), esperando cada um
+    // aparecer REGISTRADO no xterm — não apenas no store.
     let idsCriados = [...terminaisVivos];
     for (let i = idsCriados.length; i < CARDS; i += 1) {
-      await openTerminalCreatePopover(page);
-      await clickProviderInPicker(page, PROVIDER);
+      await spawnDefaultTerminal(page);
       const novos = await waitFor(async () => {
         const ids = JSON.parse(
           await page.evalJs(`
@@ -487,6 +548,39 @@ async function main() {
       }, { timeoutMs: 12_000, everyMs: 250 });
       if (!novos) throw new Error(`card extra ${i} nao ficou registrado no xterm em 12s`);
       idsCriados = novos;
+    }
+    // `--zoom <pct>`: o board empilha cards novos PARA CIMA e os antigos saem da
+    // viewport (medido: card 2 em y=-1849 com 3 cards) — o GATE 2 exige todos
+    // INTERSECTANDO, então com N>1 é preciso afastar o zoom pra caberem. Sem
+    // isto, os cards de fora nunca passam por `visible` e nem criam renderer.
+    if (ZOOM !== null) {
+      const zc = await page.evalJs(`(() => { const el = document.querySelector('.zoom-readout'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width/2, y: r.y + r.height/2 }; })()`);
+      if (zc) {
+        await page.click(zc.x, zc.y);
+        await delay(200);
+        const zi = await page.evalJs(`(() => { const el = document.querySelector('.zoom-input'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width/2, y: r.y + r.height/2 }; })()`);
+        if (zi) {
+          await page.click(zi.x, zi.y);
+          await page.evalJs(`(() => { const inp = document.querySelector('.zoom-input'); const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; s.call(inp, ${JSON.stringify(String(ZOOM))}); inp.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+          await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          await delay(500);
+          console.log(`[perf] zoom do board ajustado para ${ZOOM}%`);
+        }
+      }
+    }
+    if (PAN_Y !== 0) {
+      // Arrasta o FUNDO (x=1150 fica à direita dos cards) — o board move junto.
+      const x = 1150;
+      const y0 = 300;
+      await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y: y0, button: "left", clickCount: 1, pointerType: "mouse" });
+      for (let s = 1; s <= 8; s += 1) {
+        await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y: y0 + Math.round((PAN_Y * s) / 8), button: "left", pointerType: "mouse" });
+        await delay(20);
+      }
+      await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y: y0 + PAN_Y, button: "left", clickCount: 1, pointerType: "mouse" });
+      await delay(400);
+      console.log(`[perf] board pan +${PAN_Y}px`);
     }
 
 
@@ -538,11 +632,17 @@ async function main() {
       }
     });
     if (CARDS > 0 && shells.length === 0) throw new Error("nenhum processo bash filho: os cards nao tem PTY vivo");
-    // O renderer monta o que ele leu do store: recarrega para os cards criados
-    // acima aparecerem de verdade, então CONFERE a tela antes de medir.
-    if (CARDS > 0) {
-      await page.send("Page.reload");
-      await delay(7000);
+    // CONFERE a tela antes de medir.
+    // SEM `Page.reload`: os cards criados pela UI já estão vivos e na tela, e o
+    // reload hoje volta pra HOME (nenhum board carregado) — medido 2026-10-01: a
+    // versão que recarregava deixava o card "2" desconectado e abortava o GATE 2.
+    // A injeção do `--no-webgl` é na PÁGINA VIVA (logo após `connectPage`), então
+    // não precisa de documento novo.
+    if (NO_WEBGL) {
+      // A PROVA de que a sonda agiu: sem isto, "sem WebGL" poderia ser um run
+      // normal lido como "o WebGL não custa nada".
+      const blocked = await page.evalJs(`window.__webglBlocked ?? 0`);
+      console.log(`[perf] --no-webgl: getContext(webgl) bloqueado ${blocked} vez(es)`);
     }
     // GATE 2 — a TELA: cada card precisa estar CONECTADO ao documento, com dims do
     // xterm, e INTERSECTANDO o viewport. `__getTerminalDims` prova que existe um
