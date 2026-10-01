@@ -129,6 +129,9 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
       // Protocol 7 — `browser-type` ganhou `--replace` e `browser-eval` ganhou
       // `--timeout <ms>` (tasks 770abd6e e 56624e6b): campo novo na CLI.
       7: "4e0147ad8ba34fea",
+      // Protocol 8 — `browser-navigate` entrou na CLI (task de browser_navigate):
+      // cmd novo é mudança de superfície.
+      8: "de57622e7e65e852",
     };
     expect(
       hash,

@@ -2299,6 +2299,7 @@ function createWindow() {
     browserConsole: (cardId, level, limit) => browserRegistry.getConsole(cardId, level, limit),
     browserNetwork: (cardId, opts) => browserRegistry.getNetwork(cardId, opts),
     browserWaitFor: (cardId, opts) => browserRegistry.waitFor(cardId, opts),
+    browserNavigate: (cardId, opts) => browserRegistry.navigateInApp(cardId, opts),
     // DESIGN-BACKLOG.md item 58, M1 — same request/reply shape as
     // snapshot:rect-request/-reply below: only the renderer holds the
     // live xterm.js buffer for a terminal card, main can't read it

@@ -507,6 +507,14 @@ export type BusRequest =
   | { cmd: "browser_console"; target?: string; level?: string; limit?: number }
   | { cmd: "browser_network"; target?: string; status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }
   | { cmd: "browser_wait_for"; target?: string; selector?: string; text?: string; gone?: boolean; timeoutMs?: number }
+  | {
+      cmd: "browser_navigate";
+      target?: string;
+      url?: string;
+      expectSelector?: string;
+      timeoutMs?: number;
+      requesterId?: string;
+    }
   | { cmd: "read_card"; target?: string; lines?: number }
   // Achado ao vivo (2026-09-01): "o send_to_card só escreve em card de
   // terminal — sticky é editável só por você (SEM LEITURA TAMBEM)".
@@ -967,6 +975,16 @@ export function createMessageBus(
     browserConsole: (cardId: string, level?: string, limit?: number) => BusResponse;
     browserNetwork: (cardId: string, opts: { status?: number; failedOnly?: boolean; urlContains?: string; limit?: number }) => BusResponse;
     browserWaitFor: (cardId: string, opts: { selector?: string; text?: string; gone?: boolean; timeoutMs?: number }) => Promise<BusResponse>;
+    /** `browser_navigate` — navegação IN-APP (pushState+popstate) dentro do
+     * site já aberto, com chegada MEDIDA. Mesma classe de risco das outras
+     * `browser_*` (age só dentro de um card que o humano já aprovou), com uma
+     * diferença que vale nomear: ela MUDA A ROTA da página, então a origem é
+     * recusada em `browser-navigate-decision.ts` — trocar de site continua
+     * sendo `open_url`, e a regra está na descrição das duas ferramentas. */
+    browserNavigate: (
+      cardId: string,
+      opts: { url: string; expectSelector?: string; timeoutMs?: number },
+    ) => Promise<BusResponse>;
 
     /** DESIGN-BACKLOG.md item 58, M1 — only the renderer holds the live
      * xterm.js Terminal instance for a terminal card (main never sees
@@ -3804,6 +3822,16 @@ export function createMessageBus(
         selector: req.selector,
         text: req.text,
         gone: req.gone,
+        timeoutMs: req.timeoutMs,
+      });
+    }
+
+    if (req.cmd === "browser_navigate") {
+      if (!req.target) return { ok: false, error: "missing target cardId" };
+      if (!req.url) return { ok: false, error: "missing url (a path like /estudante/curriculo, or a same-site http(s) URL)" };
+      return callbacks.browserNavigate(req.target, {
+        url: req.url,
+        expectSelector: req.expectSelector,
         timeoutMs: req.timeoutMs,
       });
     }

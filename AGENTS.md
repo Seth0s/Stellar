@@ -75,7 +75,8 @@ Os agentes em execução no Stellar podem interagir com o ambiente e coordenar o
 | `snapshot` | Captura screenshot PNG do board, de um card ou de um recorte retangular | Passivo (Sem prompt) |
 | `get_page_text` | Extrai o texto visível da página aberta num `BrowserCard` | Passivo (Sem prompt) |
 | `send_to_card` | Envia comando/texto com identificação de remetente para um terminal | Moderado |
-| `open_url` | Abre ou navega uma URL num `BrowserCard` | Consentimento humano |
+| `open_url` | Abre ou navega uma URL num `BrowserCard` (troca de DOCUMENTO — trocar de site) | Consentimento humano |
+| `browser_navigate` | Navega uma rota IN-APP (pushState+popstate) dentro do site já aberto, sem remontar a SPA, e MEDE a chegada | Passivo (Sem prompt) |
 | `spawn_agent` | Cria um novo card de terminal com provider especificado (sem prompt — envie com `send_to_card` depois do card subir) | Consentimento humano / Fila autônoma |
 | `spawn_card` | Cria cards auxiliares (`files`, `changes`, `sticky`, `browser`) | Consentimento humano / Fila autônoma |
 | `report_task_status`| Atualiza status, resultado e desbloqueio de dependentes de uma tarefa | Estrutural |

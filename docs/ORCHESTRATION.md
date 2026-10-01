@@ -218,8 +218,8 @@ list_tasks  open_sprint  open_url  read_card  read_report  read_sticky  rename_s
 report  request_task_status  send_to_card  set_connector_kind  set_connector_label
 set_sticky_color  set_sticky_mode  snapshot  spawn_agent  spawn_card  spawn_lineage
 update_card_content  update_task  write_sticky
-browser_click  browser_console  browser_eval  browser_network  browser_query
-browser_scroll  browser_snapshot  browser_type  browser_wait_for
+browser_click  browser_console  browser_eval  browser_network  browser_navigate
+browser_query  browser_scroll  browser_snapshot  browser_type  browser_wait_for
 reach_across_literals  reach_from_hunks
 ```
 
