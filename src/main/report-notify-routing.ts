@@ -150,6 +150,32 @@
  * legível por `read_report` (a RODADA 3 existe para não perder o report
  * quando há alvo; aqui não há alvo conhecido). O que não se faz é entregar a
  * um terceiro.
+ *
+ * RODADA 6 (P0 — report não chega ao orquestrador que RE-ADOTA) — a RODADA 5
+ * foi REVERTIDA no ponto em que ela vetava a diretiva. O furo: `spawns` é
+ * append-only e NUNCA é apagado, então "registro com dono morto" deixa de ser
+ * um estado raro e vira PERMANENTE para todo card que um orquestrador já
+ * spawnou — inclusive depois de o orquestrador fechar e outro RE-ADOTAR o
+ * card via `send_to_card` (o padrão real depois de todo restart, o mesmo
+ * cenário da RODADA 1). Nesse caso a diretiva VIVA de quem re-adotou é o
+ * único sinal que aponta para quem está esperando, e a RODADA 5 a vetava:
+ * report gravado, dono vivo, ninguém avisado. A leitura da RODADA 5
+ * ("linhagem conhecida → alvo conhecido") confundia LINHAGEM com ALVO: o dono
+ * morto não é alvo, é ausência de alvo, e ausência vira ausência (vai para o
+ * fallback de diretiva, ou `none` se não houver diretiva tampouco).
+ *
+ * O que NÃO muda: a proteção anti-sequestro da RODADA 2 — uma aresta visual
+ * `spawned` VIVA continua vencendo a diretiva incondicionalmente — e o mark do
+ * board continua sendo o PRIMEIRO ramo, o alvo estável quando vivo. O que se
+ * aceita perder, dito por inteiro: registro morto + diretiva de um TERCEIRO
+ * (sem aresta viva, sem mark vivo) passa a rotear para o terceiro. É o mesmo
+ * limite do hand-off já declarado desde a RODADA 2; a mitigação é a marca do
+ * orquestrador, e o preço de não a ter é preferir entregar a quem falou por
+ * último a ficar cego.
+ *
+ * Relatórios já GRAVADOS não são tocados: esta função só decide para onde
+ * EMPURRAR; nada aqui reescreve a tabela `reports` nem re-roteia histórico. O
+ * que já foi gravado sob a RODADA 5 continua legível por `read_report`.
  */
 
 /** Minimal connector shape this module needs — matches store.ts's
@@ -213,8 +239,9 @@ export interface ReportRoutingInput {
    * `spawnedById`, from the source that survives the spawner card being
    * closed — the connector is only the visual edge (see this module's
    * RODADA 4 doc and `spawn_lineage`). Consulted only when there is no LIVE
-   * visual spawn edge; still below a live one, still above the directive
-   * fallback.
+   * visual spawn edge, and only while its owner is alive; a DEAD owner is
+   * treated as absence of a target (RODADA 6), so the directive fallback
+   * still applies and a re-adopted card reaches whoever re-adopted it.
    */
   spawnerOfRecordId?: string | null;
   /** Whether `spawnerOfRecordId` is still a live card (`isCardAlive`).
@@ -261,26 +288,31 @@ export function decideReportNotifyTarget(input: ReportRoutingInput): ReportRouti
   if (input.spawnerOfRecordId && input.spawnerOfRecordAlive) {
     return { targetId: input.spawnerOfRecordId, source: "spawned" };
   }
-  // RODADA 5 — a linhagem é CONHECIDA e o dono dela está MORTO: `none`
-  // explícito, e NÃO o fallback de diretiva logo abaixo. É o mesmo argumento
-  // do ramo do mark do board, um degrau abaixo: quando o alvo CORRETO é
-  // conhecido e não está lá, cair para "o último que falou" entrega o report
-  // a um terceiro — o sequestro que a RODADA 2 fechou uma casa acima. Cair
-  // aqui por acidente (porque nenhuma aresta `modified` existe) é o que
-  // acontecia antes; a diferença é que agora não depende do acaso.
+  // RODADA 6 (P0 — report não chega ao orquestrador que RE-ADOTA) — aqui
+  // ficava o ramo `none` da RODADA 5, e ele foi REMOVIDO. O raciocínio dela
+  // ("linhagem conhecida com dono morto é alvo conhecido → entrega a terceiro
+  // seria sequestro") tem um furo medido: `spawns` é append-only e nunca é
+  // apagado, então a linha sobrevive para SEMPRE, mesmo depois de o spawner
+  // fechar. Todo card que um orquestrador já spawnou carrega esse dono morto
+  // permanentemente — e o padrão real depois de todo restart é o orquestrador
+  // RE-ADOTAR o card existente via `send_to_card`, criando uma aresta
+  // `modified` VIVA para quem de fato está esperando. Com o ramo da RODADA 5,
+  // esse dono morto VETAVA a diretiva viva: report gravado, dono vivo,
+  // ninguém avisado — o mesmo desfecho silencioso que motivou este módulo.
   //
-  // Não cai para o mark porque o mark JÁ é o primeiro ramo (logo acima): se
-  // houvesse mark vivo, esta linha nunca seria alcançada.
+  // Dono morto é AUSÊNCIA de alvo, não veto: o fluxo segue para o fallback de
+  // diretiva (abaixo), que é quem re-adotou. Ausência vira ausência.
   //
-  // O dono VIVO da task era a alternativa (c), e foi recusado pelo NÚMERO,
-  // não por elegância: entre os 147 spawns de origem agente, o card que criou
-  // a task coincide com o spawner de registro em 71 (redundante — seria o
-  // mesmo id morto), DIVERGE em 16 e não existe em 60. Um alvo que só
-  // coincide 48% das vezes e falta em 41% não é um fato de roteamento; usá-lo
-  // seria a heurística que este módulo recusa por princípio.
-  if (input.spawnerOfRecordId) {
-    return { targetId: null, source: "none" };
-  }
+  // A proteção anti-sequestro da RODADA 2 continua INTEIRA, no ramo acima: uma
+  // aresta visual `spawned` VIVA segue vencendo a diretiva incondicionalmente.
+  // O que se aceita perder, dito por inteiro: quando o registro existe, o dono
+  // está morto e um TERCEIRO mandou a última diretiva, o report vai para o
+  // terceiro. É o mesmo limite do hand-off que o cabeçalho já declara desde a
+  // RODADA 2 — esta função pura não distingue "terceiro que passou" de "quem
+  // assumiu o card", e prefere entregar a quem falou por último a ficar cego.
+  // A mitigação estável é a MARCA do orquestrador (primeiro ramo): num board
+  // marcado e vivo, é sempre ela o alvo e nada abaixo disto é consultado.
+  //
   // Fallback only: no live spawner on record at all — a card a human opened
   // (never had a `spawned` connector), or one whose spawner card was closed,
   // taking its connectors with it via `deleteConnectorsForCard`. The last
