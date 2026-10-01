@@ -47,7 +47,11 @@
           "flag": "-m"
         },
         "delivery": {
-          "briefMechanism": "positional"
+          "briefMechanism": "positional",
+          "midTurnQueue": {
+            "parkedPattern": "queued messages[\\s\\S]*?enter with empty input to steer",
+            "steerKey": "\r"
+          }
         }
       }
     },
