@@ -20,7 +20,7 @@
     "package": "electron-vite build && electron-builder --dir",
     "prepackage:rpm": "npm run build:relay",
     "prepackage:linux": "npm run build:relay",
-    "prepackage:mac": "npm run build:relay",
+    "prepackage:mac": "node resources/relay/build.mjs --universal",
     "prepackage:win": "npm run build:relay",
     "package:rpm": "electron-vite build && electron-builder --linux rpm",
     "package:linux": "electron-vite build && electron-builder --linux",
