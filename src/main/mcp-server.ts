@@ -1460,30 +1460,53 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "open_url",
       {
         description:
-          "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass). Returns the card's id as `cardId` on approval: pass that straight to get_page_text/browser_click/browser_query/snapshot to act on the page. By default this REUSES your existing browser card (same owner) and navigates it — so repeated open_url calls don't clutter the board. Pass `reuse: false` (or call spawn_card with kind:\"browser\") when you need a SECOND browser open at the same time. list_cards also shows every open browser card (kind: \"browser\", with its url).",
+          "Ask the human to open a URL in an embedded browser card. Requires human approval — this call blocks until they decide (or ~2 minutes pass). Returns the card's id as `cardId` on approval: pass that straight to get_page_text/browser_click/browser_query/snapshot to act on the page. By default this REUSES your existing browser card (same owner) and navigates it — so repeated open_url calls don't clutter the board. Pass `reuse: false` (or call spawn_card with kind:\"browser\") when you need a SECOND browser open at the same time. list_cards also shows every open browser card (kind: \"browser\", with its url). When you own SEVERAL browsers (e.g. a reference prototype AND a logged-in app) the reuse default picks your MOST RECENTLY FOCUSED one, which may not be what you want — pass `cardId` to name the exact card; a bad id FAILS with the reason instead of navigating another card. THIS NAVIGATES THE DOCUMENT — `location` is swapped, so a SPA is REMOUNTED and its in-memory session is gone; a route guard that rebuilt its state will bounce the route to the login/home page. Rule of choice: DIFFERENT site, or a full reload is fine → open_url; a route INSIDE the site already open whose in-memory session must survive (logged-in app, wizard, dashboard) → browser_navigate instead, which does the route change in-app (pushState + popstate, no remount) and tells you whether the view actually changed.",
         inputSchema: {
           url: z.string().describe("The URL to open"),
           reuse: z
             .boolean()
             .optional()
             .describe(
-              "Default true: navigate your existing browser card if you already have one. Set false to open an additional browser card instead (same outcome as spawn_card kind:\"browser\").",
+              "Default true: navigate your existing browser card if you already have one (the most recently focused one when you own several). Set false to open an additional browser card instead (same outcome as spawn_card kind:\"browser\").",
+            ),
+          cardId: z
+            .string()
+            .optional()
+            .describe(
+              "Navigate THIS browser card (an id from list_cards) instead of whichever one your reuse default would pick — the way to choose between two browsers you own. It is honored only if the card exists, is a browser, and is YOURS; otherwise the call FAILS naming why and navigates nothing (it never falls back to a different card). Do not combine with reuse:false.",
             ),
           callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — a registered MCP process is identified by its URL stamp; this body field is not trusted to establish identity when the stamp is absent."),
           reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
         },
       },
-      async ({ url, reuse, callerCardId, reason }) => {
+      async ({ url, reuse, cardId, callerCardId, reason }) => {
         // DESIGN-BACKLOG.md §2.0 item 5 — reuse:false must open a new card,
         // but the open/ask IPC path has no reuse flag (message-bus owned
         // elsewhere this sprint). Route through spawn_card's browser kind,
         // which App.tsx always creates fresh. reuse:true/omitted keep the
         // legacy open cmd (renderer defaults to reuse for a non-null owner).
         const requesterId = caller(callerCardId);
+        // P1 — an explicit target is a NAVIGATE, so it is the opposite of
+        // reuse:false (a new card). Refused here rather than silently
+        // dropping one of the two intentions.
+        if (cardId && reuse === false) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  ok: false,
+                  error:
+                    "cardId names an existing card to navigate, but reuse:false asks for a NEW one — drop one of the two",
+                }),
+              },
+            ],
+          };
+        }
         const res =
           reuse === false
             ? await opts.handleRequest({ cmd: "spawn_card", kind: "browser", url, requesterId, reason })
-            : await opts.handleRequest({ cmd: "open", url, requesterId, reason });
+            : await opts.handleRequest({ cmd: "open", url, requesterId, reason, targetCardId: cardId });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -1665,17 +1688,38 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ),
           anchorCardId: z.string().optional().describe("Place the new card right next to this existing card (see list_cards) instead of the default centered placement"),
           side: z.enum(["left", "right", "top", "bottom"]).optional().describe("Which side of anchorCardId to place the new card on. Defaults to \"right\" when anchorCardId is given. Ignored without anchorCardId."),
+          cardId: z
+            .string()
+            .optional()
+            .describe(
+              "Only meaningful for kind:\"browser\" together with reuse:true (or on its own, which implies it): navigate THIS existing browser card (an id from list_cards) instead of whichever one the reuse default would pick. Honored only if the card exists, is a browser, and is yours; otherwise the call FAILS naming why and navigates nothing. Refused alongside reuse:false.",
+            ),
         },
       },
-      async ({ kind, cwd, url, path, reuse, callerCardId, reason, anchorCardId, side }) => {
+      async ({ kind, cwd, url, path, reuse, cardId, callerCardId, reason, anchorCardId, side }) => {
         const requesterId = caller(callerCardId);
         // DESIGN-BACKLOG.md §2.0 item 5 — spawn_card browser defaults to a
         // fresh card; reuse:true opts into open_url's navigate-existing path.
-        if (kind === "browser" && reuse === true) {
+        // `cardId` (P1) implies that same path and names WHICH browser;
+        // combined with reuse:false it is a contradiction, not a silent win.
+        if (kind === "browser" && (reuse === true || cardId)) {
+          if (reuse === false) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    ok: false,
+                    error: "cardId navigates an existing browser, but reuse:false asks for a NEW one — drop one of the two",
+                  }),
+                },
+              ],
+            };
+          }
           if (!url) {
             return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "url is required when reuse:true" }) }] };
           }
-          const res = await opts.handleRequest({ cmd: "open", url, requesterId, reason });
+          const res = await opts.handleRequest({ cmd: "open", url, requesterId, reason, targetCardId: cardId });
           return { content: [{ type: "text", text: JSON.stringify(res) }] };
         }
         const res = await opts.handleRequest({ cmd: "spawn_card", kind, cwd, url, path, requesterId, reason, anchorCardId, side });

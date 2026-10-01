@@ -689,9 +689,12 @@ const browser = {
   /** `cardId`: qual card de navegador ficou com a URL (achado ao vivo
    * 2026-09-01) — `openBrowserFor` já o retorna e o chamador do MCP
    * precisa dele pra conseguir agir sobre o card que acabou de abrir.
-   * Ausente numa recusa, onde não existe card nenhum. */
-  resolveAsk: (requestId: string, allowed: boolean, cardId?: string): Promise<void> =>
-    ipcRenderer.invoke("browser:ask-resolve", requestId, allowed, cardId),
+   * Ausente numa recusa, onde não existe card nenhum. `error` (P1): o motivo
+   * exato de uma recusa que NÃO é "o humano negou" — um `cardId` pedido que
+   * não existe / não é um navegador / é de outro dono. Chega ao chamador no
+   * lugar do genérico "denied by user". */
+  resolveAsk: (requestId: string, allowed: boolean, cardId?: string, error?: string): Promise<void> =>
+    ipcRenderer.invoke("browser:ask-resolve", requestId, allowed, cardId, error),
   /** DESIGN-BACKLOG.md item 21, ponto 9, achado 5 — page content for an
    * agent, not just pixels (see `snapshot`). Truncated server-side
    * (browser-registry.ts) — `truncated` tells the caller whether that
@@ -751,9 +754,16 @@ const browser = {
     ipcRenderer.on("browser:console-message", listener);
     return () => ipcRenderer.removeListener("browser:console-message", listener);
   },
-  onAskOpen: (cb: (requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) => void) => {
-    const listener = (_e: unknown, requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) =>
-      cb(requestId, requesterId, url, reason, autoApprove);
+  onAskOpen: (cb: (requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean, targetCardId?: string) => void) => {
+    const listener = (
+      _e: unknown,
+      requestId: string,
+      requesterId: string,
+      url: string,
+      reason?: string,
+      autoApprove?: boolean,
+      targetCardId?: string,
+    ) => cb(requestId, requesterId, url, reason, autoApprove, targetCardId);
     ipcRenderer.on("browser:ask-open", listener);
     return () => ipcRenderer.removeListener("browser:ask-open", listener);
   },

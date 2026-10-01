@@ -80,7 +80,7 @@ import { STICKY_FONT_SIZE_DEFAULT, clampStickyFontSize, parseStickyFontSize } fr
 import { CARD_ICON, CARD_LABEL, RAIL_CREATE_ORDER, assertNeverCardKind, defaultCardFields } from "./cards/registry";
 import { getTerminalText } from "./terminal-registry";
 import { decideTaskCardSpawn } from "../../task-card-guard";
-import { decideBrowserReuse } from "../../browser-open-policy";
+import { decideBrowserOpen } from "../../browser-open-policy";
 import { deriveCardDisplayName, type CardIdentitySnapshot } from "../../shared/card-identity";
 import "./app.css";
 
@@ -159,7 +159,16 @@ function cardIdentitySnapshot(card: Card): CardIdentitySnapshot {
 // `requesterId`/`reason`; `kind` picks which extra fields apply and drives
 // allowAsk/denyAsk's branching.
 type PendingAsk =
-  | { kind: "open"; requestId: string; requesterId: string; url: string; reason?: string }
+  | {
+      kind: "open";
+      requestId: string;
+      requesterId: string;
+      url: string;
+      reason?: string;
+      /** Explicit card the caller asked to navigate (`open_url`'s `cardId`).
+       * Absent means "reuse my most recently focused browser". */
+      targetCardId?: string;
+    }
   | {
       kind: "spawn-agent";
       requestId: string;
@@ -1019,7 +1028,28 @@ export function App() {
     const offUrlSeen = window.pty.onUrlSeen((id, url) => {
       setSeenUrls((prev) => (prev[id]?.includes(url) ? prev : { ...prev, [id]: [...(prev[id] ?? []), url] }));
     });
-    const offAskOpen = window.browser.onAskOpen((requestId, requesterId, url, reason, autoApprove) => {
+    const offAskOpen = window.browser.onAskOpen((requestId, requesterId, url, reason, autoApprove, targetCardId) => {
+      // P1 — validate an EXPLICIT target before anything else: an id that
+      // doesn't exist, isn't a browser, or belongs to another card must fail
+      // right here (the caller gets the reason) and never reach the modal or
+      // the autonomous path, where the old code would have navigated some
+      // other card. No target ⇒ nothing to pre-validate.
+      if (targetCardId) {
+        const pre = decideBrowserOpen(
+          requesterId,
+          cardsRef.current.map((c) => ({
+            id: c.id,
+            kind: c.kind,
+            ownerCardId: c.kind === "browser" ? c.ownerCardId : null,
+          })),
+          { targetCardId, order: orderRef.current },
+        );
+        if (pre.action === "refuse") {
+          toast(pre.error);
+          void window.browser.resolveAsk(requestId, false, undefined, pre.error);
+          return;
+        }
+      }
       // DESIGN-BACKLOG.md item 60, peça 5 — modo autônomo completo:
       // same immediate-resolve shape as spawn_agent's autoApprove below,
       // extended to open_url.
@@ -1027,7 +1057,13 @@ export function App() {
         // O id volta pro chamador (achado ao vivo 2026-09-01): sem ele,
         // `open_url` respondia só `{ok:true}` e não havia caminho nenhum
         // até `browser_click`/`get_page_text` daquele card.
-        const cardId = openBrowserFor(requesterId, url);
+        const opened = openBrowserFor(requesterId, url, undefined, { targetCardId });
+        if (!opened.ok) {
+          toast(opened.error);
+          void window.browser.resolveAsk(requestId, false, undefined, opened.error);
+          return;
+        }
+        const cardId = opened.cardId;
         // Achado ao vivo (2026-09-02) — este caminho (autoApprove, modo
         // autônomo) nunca registrava lineage nenhuma; só `spawn_agent`
         // tinha o próprio `addConnector(..., "spawned")` (item 62). Mesmo
@@ -1037,7 +1073,7 @@ export function App() {
         void window.browser.resolveAsk(requestId, true, cardId);
         return;
       }
-      setPendingAsk({ kind: "open", requestId, requesterId, url, reason });
+      setPendingAsk({ kind: "open", requestId, requesterId, url, reason, targetCardId });
     });
     // Pre-release audit S2 — same shape, its own state/modal (not
     // `pendingAsk`/`AgentAskModal` — no agent card is asking here, a
@@ -2286,41 +2322,16 @@ export function App() {
     await createMediaCardFromPath(picked.path, picked.mediaType);
   }
 
-  /** Agent-requested (post-Allow) or a seenUrls chip click confirmed via the
-   * `pendingOpenUrl`/ConfirmModal gate below — both are already-consented
-   * by the time this runs. Reuse is a CALLER choice (DESIGN-BACKLOG.md §2.0
-   * item 5): humans (`ownerCardId === null`) always open a new card; agents
-   * reuse their existing browser by default so repeated `open_url` calls
-   * don't clutter the board — pass `reuse: false` (or use `spawn_card`
-   * kind "browser") for a second window. No toast here — this path isn't
-   * the human "I just clicked +browser" moment the toasts above are for.
-   * Returns the card id — spawn_card's browser variant (below) and the
-   * acbridge/MCP "open" ask flow both need to report which card actually
-   * got used back to the caller. `rectOverride`, when given (anchored
-   * spawn — see `spawnCardFor`), is the IDEAL anchored position, not the
-   * final one: it still goes through `nearestFreeSlot` below so an
-   * anchored browser card doesn't land stacked on whatever already
-   * occupies that spot (2026-09-09 fix, same as the non-browser path). */
-  function openBrowserFor(
+  /** The browser-card creation path, shared by `openBrowserFor` (when the
+   * decision is "new") and `spawnCardFor`'s browser branch. Kept separate so
+   * the spawn path can create a card without going through the target/reuse
+   * decision at all. */
+  function createBrowserCard(
     ownerCardId: string | null,
     url: string,
     rectOverride?: Rect,
-    opts?: { reuse?: boolean; focusIfOffscreen?: boolean },
+    opts?: { focusIfOffscreen?: boolean },
   ): string {
-    if (decideBrowserReuse(ownerCardId, opts?.reuse)) {
-      const existing = cardsRef.current.find((c) => c.kind === "browser" && c.ownerCardId === ownerCardId);
-      if (existing) {
-        void window.browser.navigate(existing.id, url);
-        raise(existing.id);
-        // Achado ao vivo (2026-09-02) + §2.0 item 5 follow-up: reuse used to
-        // only raise() — if the card sat off-screen the navigation happened
-        // invisibly. Same focusCard language the chip ConfirmModal already
-        // used; lifted into this shared path so agent open_url reuse also
-        // moves the camera when needed.
-        if (!isInView(existing.rect, visibleRect)) focusCard(existing.id);
-        return existing.id;
-      }
-    }
     const id = String(nextId.current++);
     const rect = rectOverride
       ? nearestFreeSlot(rectOverride, existingRectsFor(cardsRef.current), visibleRect)
@@ -2346,6 +2357,52 @@ export function App() {
     // — same off-screen guard as the rail; never on autonomous autoApprove.
     if (opts?.focusIfOffscreen && !centerInView(rect, visibleRect)) setTimeout(() => focusCard(id), 0);
     return id;
+  }
+
+  /** P1 (open_url navigated the WRONG card): the target is now decided by
+   * `decideBrowserOpen` instead of "first browser owned by the caller by
+   * insertion order". The caller may name an explicit `targetCardId`; when
+   * that target is missing, is not a browser, or belongs to someone else,
+   * this returns a refusal and navigates NOTHING — the caller surfaces it.
+   * Without a target, the caller's MOST RECENTLY FOCUSED browser is reused
+   * (z-order), falling back to the most recently created.
+   *
+   * `rectOverride`, when given (anchored spawn — see `spawnCardFor`), is the
+   * IDEAL anchored position, not the final one: `createBrowserCard` still
+   * runs it through `nearestFreeSlot` so an anchored browser card doesn't
+   * land stacked on whatever already occupies that spot (2026-09-09 fix). */
+  function openBrowserFor(
+    ownerCardId: string | null,
+    url: string,
+    rectOverride?: Rect,
+    opts?: { reuse?: boolean; focusIfOffscreen?: boolean; targetCardId?: string | null },
+  ): { ok: true; cardId: string } | { ok: false; error: string } {
+    const decision = decideBrowserOpen(
+      ownerCardId,
+      cardsRef.current.map((c) => ({
+        id: c.id,
+        kind: c.kind,
+        ownerCardId: c.kind === "browser" ? c.ownerCardId : null,
+      })),
+      { reuse: opts?.reuse, targetCardId: opts?.targetCardId, order: orderRef.current },
+    );
+    if (decision.action === "refuse") return { ok: false, error: decision.error };
+    if (decision.action === "reuse") {
+      const existing = cardsRef.current.find((c) => c.id === decision.cardId);
+      if (!existing) {
+        return { ok: false, error: `browser card "${decision.cardId}" is no longer on the board` };
+      }
+      void window.browser.navigate(existing.id, url);
+      raise(existing.id);
+      // Achado ao vivo (2026-09-02) + §2.0 item 5 follow-up: reuse used to
+      // only raise() — if the card sat off-screen the navigation happened
+      // invisibly. Same focusCard language the chip ConfirmModal already
+      // used; lifted into this shared path so agent open_url reuse also
+      // moves the camera when needed.
+      if (!isInView(existing.rect, visibleRect)) focusCard(existing.id);
+      return { ok: true, cardId: existing.id };
+    }
+    return { ok: true, cardId: createBrowserCard(ownerCardId, url, rectOverride, opts) };
   }
 
   // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — a second (or third,
@@ -2475,9 +2532,10 @@ export function App() {
     // ponto já estava ocupado por outro card).
     const anchoredBase = anchor && side ? anchoredSlot(anchor.rect, side) : undefined;
     if (kind === "browser") {
+      // spawn_card's browser kind always creates a NEW card — it never names a
+      // target, so it goes straight to the creation path (no reuse decision).
       return {
-        cardId: openBrowserFor(requesterId, url || "about:blank", anchoredBase, {
-          reuse: false,
+        cardId: createBrowserCard(requesterId, url || "about:blank", anchoredBase, {
           focusIfOffscreen: opts?.focusIfOffscreen,
         }),
         reused: false,
@@ -2532,7 +2590,15 @@ export function App() {
     const ask = pendingAsk;
     setPendingAsk(null);
     if (ask.kind === "open") {
-      const cardId = openBrowserFor(ask.requesterId, ask.url);
+      const opened = openBrowserFor(ask.requesterId, ask.url, undefined, { targetCardId: ask.targetCardId });
+      if (!opened.ok) {
+        // Contradiction between the pre-check and this call (card closed in
+        // between): fail the same way, never navigate another card.
+        toast(opened.error);
+        void window.browser.resolveAsk(ask.requestId, false, undefined, opened.error);
+        return;
+      }
+      const cardId = opened.cardId;
       // Achado ao vivo (2026-09-02) — mesma lacuna do autoApprove acima,
       // pro caminho aprovado por um humano.
       if (ask.requesterId) autoConnect(ask.requesterId, cardId, "spawned");
