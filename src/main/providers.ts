@@ -361,11 +361,26 @@ export type TurnEndSignal =
 
 /**
  * A AÇÃO ONE-SHOT (o "Resumir" do Rail) — declarada, não adivinhada por `id`
- * (task efc5b6fd). MEDIDO nas CLIs desta máquina (`--help`, 2026-09-23):
+ * (task efc5b6fd).
+ *
+ * EVIDÊNCIA (task 34887bbc). O R4 de efc5b6fd mostrou que a declaração de
+ * cursor/agy dizia "mesmas flags do claude" — COPIADA, não medida — e o próprio
+ * comentário de `effort` logo abaixo admitia que o cursor nunca tinha sido
+ * medido. Medido de novo em 2026-10-01, em DUAS camadas que o texto antigo
+ * juntava numa só:
+ *   - FLAGS, do `--help` real desta máquina: `cursor-agent` v2026.09.18-9a7762b
+ *     e `agy` v1.2.14 anunciam `-p/--print` (não-interativo) e
+ *     `--output-format` com `json` entre os valores;
+ *   - FORMA do JSON (o `--help` NÃO a prova), de uma EXECUÇÃO real:
+ *     `cursor-agent --mode ask -p "…" --output-format json` devolveu
+ *     `{"type":"result",…,"result":"pong",…}`, e `agy -p "…" --output-format
+ *     json` devolveu `{"…","response":"pong\n",…}`. `.result` (cursor, e claude)
+ *     e `.response` (agy) são exatamente os campos que `extractJsonResult`
+ *     (ai-action.ts) lê. As saídas reais — `--help` e JSON — estão em
+ *     `tests/unit/fixtures/one-shot/` e são presas pelo teste homônimo.
  *
  *   - claude, cursor-agent, agy: `-p <prompt> --output-format json` → UM
- *     objeto JSON, com o texto em `.result` (claude/cursor) ou `.response`
- *     (agy);
+ *     objeto JSON (ver as duas camadas acima), texto em `.result`/`.response`;
  *   - codex: `exec <prompt> -o <arquivo>` → o texto final cai no arquivo;
  *   - commandcode: `-p, --print [query]` com o default `--output-format text`
  *     imprime a resposta e sai. O json dele é "NDJSON event stream", NÃO um
@@ -960,8 +975,11 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
     capacity: {
       role: "agent",
       systemPrompt: { mechanism: "none" },
-      // MEDIDO: mesmas flags do claude (`cursor-agent -p ... --output-format
-      // json`), texto em `.result` — ver `OneShotCapability`.
+      // MEDIDO 2026-10-01 (task 34887bbc), cursor-agent v2026.09.18-9a7762b:
+      // `-p/--print` + `--output-format json` estão no `--help`, e uma
+      // EXECUÇÃO real devolveu JSON com o texto em `.result`. Antes disto o
+      // comentário dizia "mesmas flags do claude" sem medição (R4 de
+      // efc5b6fd) — ver `tests/unit/fixtures/one-shot/`.
       oneShot: { mechanism: "argv", args: ["-p", "{prompt}", "--output-format", "json"], result: "stdout-json" },
       // Global ~/.cursor/mcp.json — headless `agent` DOES read it
       // (measured 2026-09-12). Why no cursor card ever saw the tools
@@ -1098,8 +1116,11 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       role: "agent",
       systemPrompt: { mechanism: "none" },
       mcp: { mechanism: "global-config" },
-      // MEDIDO: mesmas flags, mas o texto vem em `.response` (o extrator lê os
-      // dois campos) — ver `OneShotCapability`.
+      // MEDIDO 2026-10-01 (task 34887bbc), agy v1.2.14: `-p/--print`
+      // ("Run a single prompt non-interactively") + `--output-format json`
+      // estão no `--help`, e uma EXECUÇÃO real devolveu JSON com o texto em
+      // `.response` (o extrator lê `.result`/`.response`) — ver
+      // `tests/unit/fixtures/one-shot/`.
       oneShot: { mechanism: "argv", args: ["-p", "{prompt}", "--output-format", "json"], result: "stdout-json" },
       acbridgeOnPath: true,
       // Range re-measured 2026-09-12 against `agy --help` (v1.2.2) — the
