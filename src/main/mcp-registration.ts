@@ -111,9 +111,35 @@ export type McpRegistrationResult =
   | { status: "skipped"; reason: string }
   | { status: "failed"; error: string };
 
-/** Uma tentativa por provider por execução da app. Um segundo spawn do
- * mesmo provider não repete nem a leitura do arquivo. */
-const attempted = new Map<string, Promise<McpRegistrationResult>>();
+/**
+ * A memória das tentativas — uma por PAR `(provider, declaração de MCP)`,
+ * não uma por provider por execução da app (task cdd66798).
+ *
+ * Um segundo spawn do mesmo provider, com a MESMA declaração, continua não
+ * repetindo nada (nem a leitura do arquivo): a chave bate e a promessa é
+ * reaproveitada. O que muda é a declaração que FOI ALTERADA — e aí a
+ * tentativa DEVE rodar de novo. Sem isso, editar o `mcp` de um provider
+ * dinâmico no `providers.json` (o hot-reload que `providers-dynamic.ts`
+ * promete) recarrega o registro vivo mas NUNCA escreve o arquivo da CLI: a
+ * promessa antiga fica cacheada, o provider continua apontando para o
+ * config velho até o app reiniciar, e o silêncio é total. É a mesma regra
+ * que `deriveReportChannel` já segue — a resposta vem da DECLARAÇÃO de
+ * agora, nunca de uma foto do boot.
+ */
+type AttemptedRegistration = { declaration: string; result: Promise<McpRegistrationResult> };
+const attempted = new Map<string, AttemptedRegistration>();
+
+/**
+ * A parte da declaração que decide o REGISTRO — só o `mcp`. Outros campos
+ * (`effort`, `model`, `session`…) não mudam um byte do arquivo que se
+ * escreve na CLI, então mexer neles não deve reabrir a tentativa. Provider
+ * fora do registro devolve `"none"`, que é o que `needsPersistentMcpRegistration`
+ * lê — os dois não podem divergir (mesma fonte: `providerCapacity`).
+ */
+function registrationDeclaration(providerId: string): string {
+  const mcp = providerCapacity(providerId)?.mcp;
+  return mcp === undefined ? "none" : JSON.stringify(mcp);
+}
 
 export function shimPath(binDir: string): string {
   return join(binDir, "stellar-mcp");
@@ -418,8 +444,11 @@ export function needsPersistentMcpRegistration(providerId: string): boolean {
  * imediato, inclusive `bash`.
  */
 export function ensureMcpRegistered(providerId: string, binDir: string): Promise<McpRegistrationResult> {
+  const declaration = registrationDeclaration(providerId);
   const cached = attempted.get(providerId);
-  if (cached) return cached;
+  // Reaproveita só quando a DECLARAÇÃO é a mesma; uma declaração nova cai
+  // abaixo e roda de verdade (ver o doc de `attempted`).
+  if (cached && cached.declaration === declaration) return cached.result;
 
   const run = (async (): Promise<McpRegistrationResult> => {
     if (!needsPersistentMcpRegistration(providerId)) {
@@ -447,6 +476,6 @@ export function ensureMcpRegistered(providerId: string, binDir: string): Promise
     return { status: "failed", error: `no MCP registrar for provider "${providerId}" declared global-config` };
   })();
 
-  attempted.set(providerId, run);
+  attempted.set(providerId, { declaration, result: run });
   return run;
 }
