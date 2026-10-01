@@ -32,6 +32,13 @@ const VIEWPORT_PRESETS: { label: string; icon: "viewportMobile" | "viewportTable
 const BROWSER_SUPERSAMPLE = 3;
 const BROWSER_MAX_DENSITY = 2;
 
+/** Instantes (ms) em que a altura do corpo é RE-MEDIDA depois de um resize
+ * de rect — ver `resyncBodySize` em `BrowserCardInner`. BOUNDADO de
+ * propósito (para em 1,2s): a caixa assenta ~114ms depois do mount (medido),
+ * e a correção não pode depender do callback do `ResizeObserver`, que a
+ * janela oculta estrangula. Não é um poller. */
+const RESYNC_BODY_DELAYS_MS = [32, 100, 250, 600, 1200] as const;
+
 function keyModifiers(e: React.KeyboardEvent): Array<"shift" | "control" | "alt" | "meta"> {
   const mods: Array<"shift" | "control" | "alt" | "meta"> = [];
   if (e.shiftKey) mods.push("shift");
@@ -677,12 +684,86 @@ function BrowserCardInner({
     setEmulatedFrame(dims ? { width: dims.width, height: dims.height, zoom: dims.zoom } : null);
   }
 
-  useEffect(() => {
-    const w = Math.round(rect.w);
-    const h = Math.round(bodyHeightRef.current ?? rect.h);
+  /**
+   * A altura REAL da caixa de corpo (o `<canvas>`), medida SINCRONAMENTE.
+   *
+   * Medido ao vivo (2026-10-01, task 29d8d5a1) — o `ResizeObserver` abaixo
+   * NÃO pode ser a fonte da correção da altura: a entrega do callback dele
+   * anda junto do ciclo de RENDER da janela, e o Chromium a estrangula
+   * quando a janela está oculta/em segundo plano (medido nesta máquina:
+   * `requestAnimationFrame` a ~2,5 ticks/s com a janela do smoke atrás do
+   * app do dono). Reproduzido: em uma execução o observer disparou 0 vezes
+   * no primeiro 1,5s e o content size real da BrowserWindow offscreen ficou
+   * preso no fallback `rect.h` (header+body juntos) o tempo todo, enquanto
+   * `getBoundingClientRect()` do canvas já mostrava a altura CERTA — o
+   * defeito que o `smoke-browser-zoom-resolution.mjs` pega (chegou a medir
+   * `{w:2680,h:1800}` onde o certo era `{w:2680,h:1704}`). Como o valor é
+   * CORREÇÃO (não um refinamento), ele não pode depender de um callback
+   * assíncrono que o agendador pode adiar sem limite — a caixa real é
+   * legível na hora, e é dela que o resize inicial vem.
+   *
+   * `null` quando o canvas ainda não tem caixa (>0) — quem chama cai no
+   * `bodyHeightRef`/`rect.h`. Durante emulação o corpo NÃO é a caixa do
+   * canvas (é o device frame), então medir aqui valeria o tamanho do frame,
+   * não o do corpo: os chamadores passam `null` nesse caso, preservando o
+   * caminho que o `BrowserInspector` controla.
+   */
+  function measureBodyHeight(): number | null {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    // `clientHeight` (LAYOUT), nunca `getBoundingClientRect().height`: o
+    // `.world` do board aplica `transform: scale(zoom)`, e o
+    // `getBoundingClientRect` JÁ VEM multiplicado pelo zoom do board — medido
+    // ao vivo (task 29d8d5a1): usá-lo fazia a resolução real do navegador
+    // acompanhar o zoom do board e estourar para `h:3428` numa rajada (o
+    // invariante "decoupled do zoom" que o `smoke-browser-zoom-resolution.mjs`
+    // trava). `clientHeight` é a caixa de LAYOUT, imune a transform — o MESMO
+    // espaço do `contentRect` que o `ResizeObserver` já entrega.
+    const h = canvas.clientHeight;
+    return h > 0 ? h : null;
+  }
+
+  /**
+   * Re-mede a caixa de corpo e reaplica se ela MUDOU — a correção que não
+   * pode depender de UM disparo só. Medido ao vivo (task 29d8d5a1): a caixa
+   * de corpo ASSENTA depois do mount — lida 784 no primeiro frame e 852
+   * ~114ms depois (o header decide a altura real quando o layout termina).
+   * A medição síncrona do efeito abaixo pega o primeiro valor (784); quem
+   * corrigia para o assentado (852) era o callback do `ResizeObserver`, e
+   * ESSE callback é estrangulado pela janela oculta — medido: 0 callbacks
+   * em 3s, com o content size real preso em `{w:2680,h:1568}` (`w:2680,
+   * h:1704` é o certo), determinístico em 2 de 3 execuções do
+   * `smoke-browser-zoom-resolution.mjs`. Re-medir aqui, de forma BOUNDADA,
+   * desacopla a correção do callback: o layout assentar é uma mudança REAL,
+   * e uma releitura síncrona na hora certa a enxerga sem depender de
+   * agendador nenhum. Bounded (não um poller): a última tentativa é 1,2s
+   * depois — o suficiente pro assentamento medido, e nada mais.
+   */
+  function resyncBodySize(): void {
+    if (emulatedFrameRef.current) return;
+    const h = measureBodyHeight();
+    if (h === null || h === bodyHeightRef.current) return;
+    bodyHeightRef.current = h;
+    const w = Math.round(rectRef.current.w);
     if (lastSizeRef.current.w === w && lastSizeRef.current.h === h) return;
     lastSizeRef.current = { w, h };
     applyResize(w, h);
+  }
+
+  useEffect(() => {
+    const w = Math.round(rect.w);
+    const measured = emulatedFrameRef.current ? null : measureBodyHeight();
+    if (measured !== null) bodyHeightRef.current = measured;
+    const h = measured ?? Math.round(bodyHeightRef.current ?? rect.h);
+    if (lastSizeRef.current.w !== w || lastSizeRef.current.h !== h) {
+      lastSizeRef.current = { w, h };
+      applyResize(w, h);
+    }
+    const timers = RESYNC_BODY_DELAYS_MS.map((ms) => window.setTimeout(resyncBodySize, ms));
+    return () => {
+      for (const id of timers) window.clearTimeout(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, rect.w, rect.h]);
 
   // Achado ao vivo (2026-09-02, pedido explícito: "não apenas monitor
@@ -705,7 +786,7 @@ function BrowserCardInner({
       if (changedId !== id) return;
       scaleFactorRef.current = scaleFactor;
       const { w, h } = rectRef.current;
-      applyResize(Math.round(w), Math.round(bodyHeightRef.current ?? h));
+      applyResize(Math.round(w), Math.round(measureBodyHeight() ?? bodyHeightRef.current ?? h));
     });
     return () => {
       off();

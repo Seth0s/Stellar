@@ -483,6 +483,15 @@ function isPrivateIpv4([a, b]: [number, number, number, number]): boolean {
  * on `$HOME` / secrets. `data:`/`blob:`/`javascript:`/`vbscript:` stay
  * rejected as execution vectors regardless. Serve a local HTML artifact
  * over `http://` instead.
+ *
+ * E SERVE COM `charset=utf-8` — medido ao vivo (task 29d8d5a1): o MESMO
+ * corpo UTF-8 com `Content-Type: text/html; charset=utf-8` chega com
+ * acento correto ("Ação, coração"), e sem o charset o Chromium decodifica
+ * como latin-1 e o texto vira mojibake ("AÃ§Ã£o, coraÃ§Ã£o"). Não é
+ * preferência do Stellar: é como o Chromium escolhe o encoding quando o
+ * servidor não declara nenhum. O `smoke-browser-local-html-interaction.mjs`
+ * mede os dois lados contra uma fixture HTTP local — é a receita para um
+ * agente que quer abrir um HTML que ele mesmo gerou.
  */
 export function normalizeUrl(raw: string): string {
   const t = raw.trim();
