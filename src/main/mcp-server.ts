@@ -1,5 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createRelayServer, relaySocketPath } from "./mcp-relay";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import * as z from "zod";
@@ -2150,15 +2152,31 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
   // (pty-registry.ts's `registryOpts.mcpUrl` getter, see index.ts) rather
   // than copying the string at construction time, so this update is seen.
   const state = { url: `http://127.0.0.1:${opts.port}/mcp` };
+  let relay: { close: () => void } | null = null;
   httpServer.on("listening", () => {
     const addr = httpServer.address();
     if (addr && typeof addr === "object") {
       state.url = `http://127.0.0.1:${addr.port}/mcp`;
     }
+    // BRIDGE MCP COMPARTILHADO (task f7a2ac84) — opt-in por ambiente do APP:
+    // sem `AGENT_CANVAS_MCP_RELAY=1` nada aqui sobe e o shim node de sempre
+    // continua sendo o único caminho. Com a flag, este socket permite que o
+    // stub por card seja mínimo (o relay roda DENTRO do main); ver mcp-relay.ts.
+    if (process.env.AGENT_CANVAS_MCP_RELAY === "1" && !relay) {
+      const socketPath = relaySocketPath(tmpdir(), state.url);
+      if (socketPath) {
+        relay = createRelayServer({
+          socketPath,
+          getMcpUrl: () => state.url,
+          onError: (err) => console.error("mcp-relay: connection failed:", err),
+        });
+      }
+    }
   });
   httpServer.listen(opts.port);
 
   function close() {
+    relay?.close();
     httpServer.close();
   }
 

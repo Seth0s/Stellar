@@ -12,9 +12,11 @@
 // Interpretação: delta≈0 com N fixo → custo; delta monotônico → vazamento.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
+import { readFileSync, existsSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHIM = join(HERE, "../../resources/bin/stellar-mcp");
@@ -281,8 +283,123 @@ async function measureIsolated() {
   server.close();
 }
 
+/**
+ * Mede o STUB do bridge compartilhado (task f7a2ac84): o mesmo
+ * `resources/bin/stellar-mcp`, agora com o socket do relay presente (o ramo
+ * da linha 2 entra em vez do `exec … node`). O alvo é a RAM POR CARD: aqui o
+ * processo por card é o par sh+socat, não um node inteiro. Um socket Unix mock
+ * responde o handshake — nenhuma app, nenhum card, nada vivo é tocado.
+ *
+ * Emparelhe com a saída default (`measureIsolated`) para o antes/depois.
+ */
+async function measureRelay() {
+  if (!existsSync(SHIM)) throw new Error(`shim missing: ${SHIM}`);
+  const dir = mkdtempSync(join(tmpdir(), "stellar-relay-bench-"));
+  const port = 20000 + (process.pid % 20000);
+  const sock = join(dir, `stellar-mcp-relay-${port}.sock`);
+  console.log(`# relay stub bench shim=${SHIM} sock=${sock} (TMPDIR override)`);
+
+  const server = createNetServer((socket) => {
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg = {};
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        // Primeira linha é o handshake {"card":…} (sem id) — o mock não
+        // responde; o resto é MCP e é respondido como o servidor real faria.
+        if (msg.id === undefined || msg.id === null) continue;
+        let result = {};
+        if (msg.method === "initialize") {
+          result = { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "relay-mock", version: "0" } };
+        } else if (msg.method === "tools/list") {
+          result = { tools: [] };
+        }
+        socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })}\n`);
+      }
+    });
+    socket.on("error", () => {});
+  });
+  await new Promise((resolve) => server.listen(sock, resolve));
+
+  const treePids = (root) => {
+    const byParent = new Map();
+    for (const entry of readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+        const close = stat.lastIndexOf(")");
+        const ppid = Number(stat.slice(close + 2).split(" ")[1]);
+        if (!byParent.has(ppid)) byParent.set(ppid, []);
+        byParent.get(ppid).push(Number(entry));
+      } catch {
+        /* gone */
+      }
+    }
+    const out = [];
+    const walk = (pid) => {
+      for (const child of byParent.get(pid) ?? []) {
+        out.push(child);
+        walk(child);
+      }
+    };
+    walk(root);
+    return out;
+  };
+  const treeRssKb = (root) =>
+    [root, ...treePids(root)].reduce((sum, pid) => sum + (rssKb(pid) ?? 0), 0);
+
+  const child = spawn(SHIM, [], {
+    env: {
+      ...process.env,
+      AGENT_CANVAS_MCP_URL: `http://127.0.0.1:${port}/mcp`,
+      AGENT_CANVAS_CARD_ID: "relay-bench",
+      TMPDIR: dir,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let buffer = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+  });
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })}\n`);
+
+  // Espera a resposta do handshake MCP (prova que o caminho relay respondeu).
+  const deadline = Date.now() + 5000;
+  while (!buffer.includes('"id":1') && Date.now() < deadline) await sleep(100);
+  const ok = buffer.includes('"id":1');
+  await sleep(1500);
+  const totalKb = treeRssKb(child.pid);
+  const pids = [child.pid, ...treePids(child.pid)];
+  console.log(`# relay_stub_total_mb=${(totalKb / 1024).toFixed(1)} pids=${JSON.stringify(pids)} mcp_reply=${ok}`);
+  for (const pid of pids) {
+    const cmd = (() => {
+      try {
+        return readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ").trim().slice(0, 80);
+      } catch {
+        return "";
+      }
+    })();
+    console.log(`  pid=${pid} rss_mb=${((rssKb(pid) ?? 0) / 1024).toFixed(1)} cmd=${cmd}`);
+  }
+  child.kill();
+  server.close();
+  rmSync(dir, { recursive: true, force: true });
+}
+
 if (LIVE) {
   await measureLive();
+} else if (process.argv.includes("--relay")) {
+  await measureRelay();
 } else {
   await measureIsolated();
 }
