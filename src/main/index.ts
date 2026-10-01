@@ -12,7 +12,7 @@ import {
   session,
   shell,
 } from "electron";
-import { appendFileSync, chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -118,7 +118,9 @@ import {
   type BrowserKeyEvent,
   type BrowserContextMenuParams,
 } from "./browser-registry";
-import { createMessageBus, type BusRequest, type StickyResult } from "./message-bus";
+import { createMessageBus, type BusRequest, type BusResponse, type StickyResult } from "./message-bus";
+import { createPrototypeServer } from "./prototype-server";
+import { parseManifest, presetUrl, type PrototypePresetInfo } from "./prototype-presets";
 import { ensureMcpRegistered } from "./mcp-registration";
 import { createMcpServer } from "./mcp-server";
 import { runOneShotSummary } from "./ai-action";
@@ -976,6 +978,64 @@ function createWindow() {
 
   const store = openStore(app.getPath("userData"));
   const secretsStore = createSecretsStore(app.getPath("userData"));
+
+  // Task 326b78e4 — protótipos servidos por http LOCAL (o BrowserCard recusa
+  // `file://`, ver browser-registry.ts::normalizeUrl). Raiz POR BOARD: o
+  // diretório `prototypes/` do cwd daquele board — nunca um diretório global,
+  // e nunca o `cwd` cru (só a subpasta `prototypes`). Sobe ON-DEMAND, loopback,
+  // porta efêmera; ver prototype-server.ts pro desenho completo.
+  const prototypeServer = createPrototypeServer({
+    resolveRoot: (boardId) => {
+      const board = store.getBoard(boardId);
+      return board && board.cwd ? join(board.cwd, "prototypes") : null;
+    },
+  });
+
+  /** A resposta da tool MCP `list_prototypes`: a `baseUrl` do servidor local
+   * (que sobe no primeiro pedido) e os PRESETS DECLARADOS em
+   * `<raiz>/prototypes.json`. Sem manifesto = zero presets, e o agente ainda
+   * monta a URL de um arquivo qualquer por `baseUrl` + caminho relativo. Uma
+   * raiz que não existe é resposta LEGÍTIMA (board sem `prototypes/`): devolve
+   * `ok:true` com `presets: []`, nunca um erro inventado. */
+  async function prototypesInfoForCaller(requesterId: string): Promise<BusResponse> {
+    const boardId = requesterId ? store.getCard(requesterId)?.board_id : undefined;
+    if (!boardId) {
+      return {
+        ok: false,
+        error: "no board resolved for the caller — prototypes are per board (the calling card must belong to one)",
+      };
+    }
+    const board = store.getBoard(boardId);
+    if (!board) return { ok: false, error: `no board "${boardId}"` };
+    const root = join(board.cwd, "prototypes");
+    let port: number;
+    try {
+      port = await prototypeServer.ensureStarted();
+    } catch (err) {
+      return {
+        ok: false,
+        error: `could not start the local prototype server: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    const baseUrl = `http://127.0.0.1:${port}`;
+    let presets: PrototypePresetInfo[] = [];
+    let manifestError: string | undefined;
+    try {
+      const parsed = parseManifest(readFileSync(join(root, "prototypes.json"), "utf8"));
+      if (parsed.ok) {
+        presets = parsed.manifest.presets.map((p) => ({
+          ...p,
+          url: presetUrl(baseUrl, boardId, p.file),
+          exists: existsSync(join(root, p.file)),
+        }));
+      } else {
+        manifestError = parsed.error;
+      }
+    } catch {
+      // Sem `prototypes.json`: sem presets, e ainda serve qualquer arquivo por path.
+    }
+    return { ok: true, boardId, root, baseUrl, presets, ...(manifestError ? { manifestError } : {}) };
+  }
 
   // DESIGN-BACKLOG.md item 12, Fase C — a write_file tool call blocks the
   // provider's own tool loop until the human decides, via the SAME
@@ -1940,6 +2000,7 @@ function createWindow() {
         }
       });
     },
+    prototypesInfo: (requesterId) => prototypesInfoForCaller(requesterId),
     writeToCard: (id, text) => registry.write(id, text, "delivery"),
     writeToCardWithOrigin: (id, text, origin) => registry.write(id, text, origin),
     beginCardDelivery: (id) => registry.beginDelivery(id),
