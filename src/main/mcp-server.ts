@@ -8,6 +8,7 @@ import * as z from "zod";
 import { STICKY_COLORS, type BusRequest, type BusResponse } from "./message-bus";
 import { PROVIDERS, providerById } from "./providers";
 import { resolveCallerCardId } from "./caller-identity";
+import { presetUrl } from "./prototype-presets";
 import { reachFromHunks } from "./reach-from-hunks";
 import { reachAcrossLiterals } from "./reach-across-literals";
 import { suggestQAScope } from "./suggest-qa-scope";
@@ -1510,6 +1511,79 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             ? await opts.handleRequest({ cmd: "spawn_card", kind: "browser", url, requesterId, reason })
             : await opts.handleRequest({ cmd: "open", url, requesterId, reason, targetCardId: cardId });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    // Task 326b78e4 — PROTÓTIPOS POR HTTP LOCAL. O BrowserCard recusa
+    // `file://` por desenho (`browser-registry.ts::normalizeUrl`), então um
+    // HTML que um agente gerou só chega a um browser card por http. Estas duas
+    // tools são a superfície: `list_prototypes` (passiva) devolve a `baseUrl`
+    // do servidor local + os presets DECLARADOS; `open_prototype` abre um
+    // deles num browser card, pelo MESMO gate de consentimento do `open_url`.
+    server.registerTool(
+      "list_prototypes",
+      {
+        description:
+          "List the LOCAL http URLs of this board's prototype files. Stellar serves the board project's `prototypes/` directory over http://127.0.0.1:<port> — the embedded browser REFUSES `file://` by design, so this is how a locally-generated HTML reaches a browser card. Returns `baseUrl` and the board's DECLARED presets from `<prototypes>/prototypes.json` (each `{name, file, url, exists}`); a file NOT in the manifest is still served, at `${baseUrl}/p/<boardId>/<relative-path>`, and path traversal is refused. The server starts ON DEMAND, on loopback, on an OS-assigned port — NEVER hardcode the port, always read `baseUrl` from here (it changes across restarts). Passive: nothing is created, nothing is opened.",
+        inputSchema: {
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ callerCardId }) => {
+        const res = await opts.handleRequest({ cmd: "prototypes_info", requesterId: caller(callerCardId) });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "open_prototype",
+      {
+        description:
+          "Open a prototype from this board's `prototypes/` directory in a browser card, served over local http (see list_prototypes). Pass `name` for a DECLARED preset, or `path` for any file relative to the prototypes root — path traversal is refused, nothing leaves the board's prototypes directory. Requires human approval unless the board is in autonomous mode (same gate as open_url). Returns `{ok, cardId, url}`: `cardId` is the browser card that got the page, `url` the exact local URL.",
+        inputSchema: {
+          name: z.string().optional().describe("A declared preset name (see list_prototypes)"),
+          path: z
+            .string()
+            .optional()
+            .describe('A file relative to the board\'s prototypes root, e.g. "settings-modal.html" (alternative to `name`)'),
+          reason: z.string().optional().describe("Why you want this — shown to the human in the approval dialog"),
+          callerCardId: CALLER_CARD_ID_FIELD,
+        },
+      },
+      async ({ name, path, reason, callerCardId }) => {
+        const requesterId = caller(callerCardId);
+        const info = await opts.handleRequest({ cmd: "prototypes_info", requesterId });
+        if (!info.ok) return { content: [{ type: "text", text: JSON.stringify(info) }] };
+        const presets = (info.presets ?? []) as Array<{ name: string; file: string; url: string }>;
+        let url: string;
+        if (name !== undefined) {
+          const preset = presets.find((p) => p.name === name);
+          if (!preset) {
+            const known = presets.map((p) => p.name).join(", ") || "(none declared)";
+            return {
+              content: [
+                { type: "text", text: JSON.stringify({ ok: false, error: `no prototype preset named "${name}" — declared presets: ${known}` }) },
+              ],
+            };
+          }
+          url = preset.url;
+        } else if (path !== undefined) {
+          try {
+            url = presetUrl(String(info.baseUrl), String(info.boardId), path);
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) }],
+            };
+          }
+        } else {
+          return {
+            content: [
+              { type: "text", text: JSON.stringify({ ok: false, error: "pass `name` (a declared preset) or `path` (a file relative to the prototypes root)" }) },
+            ],
+          };
+        }
+        const res = await opts.handleRequest({ cmd: "open", url, requesterId, reason });
+        return { content: [{ type: "text", text: JSON.stringify({ ...res, url }) }] };
       },
     );
 

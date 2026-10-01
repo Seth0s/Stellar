@@ -477,6 +477,10 @@ export type BusRequest =
    * sempre do board inteiro, e `findingsTruncated` diz quando cortou.
    */
   | { cmd: "unreported_work"; limit?: number }
+  /** Task 326b78e4 — the LOCAL http URLs of the caller's board prototypes
+   * (read-only, no consent: it only mints URLs for a loopback server). The
+   * board comes from `requesterId`'s own card. */
+  | { cmd: "prototypes_info"; requesterId?: string }
   /** `targetCardId` (P1): the browser card the caller asked to navigate
    * explicitly (`open_url`'s `cardId`). Omitted ⇒ reuse the caller's most
    * recently focused browser. An id that doesn't exist / isn't a browser /
@@ -885,6 +889,10 @@ export function createMessageBus(
   sockPath: string,
   callbacks: {
     listCards: () => CardSummary[];
+    /** Task 326b78e4 — prototypes of the caller's board, over the local
+     * static server. `index.ts` owns both the board lookup and the server;
+     * this module only relays. Read-only. */
+    prototypesInfo: (requesterId: string) => Promise<BusResponse>;
     writeToCard: (id: string, text: string) => void;
     /** Internal delivery path: the registry records this write as agent
      * delivery rather than human keystrokes, so the delivery itself cannot
@@ -3240,6 +3248,10 @@ export function createMessageBus(
   async function dispatchRequest(req: BusRequest, ingressChannel: ReportIngressChannel | null): Promise<BusResponse> {
     if (req.cmd === "list") {
       return { ok: true, cards: callbacks.listCards() };
+    }
+
+    if (req.cmd === "prototypes_info") {
+      return callbacks.prototypesInfo(req.requesterId ?? "");
     }
 
     if (req.cmd === "send") {

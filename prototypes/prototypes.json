@@ -1,0 +1,9 @@
+{
+  "presets": [
+    {
+      "name": "settings-modal",
+      "file": "settings-modal.html",
+      "description": "Protótipo do modal de configurações (Rail → engrenagem)."
+    }
+  ]
+}
