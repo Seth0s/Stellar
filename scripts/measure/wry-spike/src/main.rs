@@ -144,9 +144,19 @@ fn main() {
     );
 
     let marker = if text.contains("SPIKE-MARKER") { "yes" } else { "no" };
+    // JSON VÁLIDO: os campos de texto vão entre aspas (a 1ª versão emitia
+    // `"rect":,` com string vazia sem aspas e o `JSON.parse` do driver falhava
+    // — review R8). E, porque o callback do `evaluate_script_with_callback`
+    // volta VAZIO em TODA chamada, o eval é reportado como PROBE QUEBRADO
+    // quando as quatro respostas vêm vazias: um probe quebrado não distingue
+    // "a página não renderizou" de "o eval não entrega" (review R8).
+    let mut probe = "ok";
+    if text.is_empty() && rect.is_empty() && typed.is_empty() && clicked.is_empty() {
+        probe = "broken";
+    }
     println!(
-        "{{\"stage\":\"eval\",\"innerTextBytes\":{},\"hasMarker\":\"{}\",\"rect\":{},\"typed\":{},\"title\":{},\"usText\":{},\"usRect\":{},\"usType\":{},\"usClick\":{}}}",
-        text.len(), marker, rect, typed, clicked, us_text, us_rect, us_type, us_click
+        "{{\"stage\":\"eval\",\"probe\":\"{}\",\"innerTextBytes\":{},\"hasMarker\":\"{}\",\"rect\":\"{}\",\"typed\":\"{}\",\"title\":\"{}\",\"usText\":{},\"usRect\":{},\"usType\":{},\"usClick\":{}}}",
+        probe, text.len(), marker, rect, typed, clicked, us_text, us_rect, us_type, us_click
     );
     println!("{{\"stage\":\"after-eval\",\"vmRssKb\":{}}}", vm_rss_kb());
 

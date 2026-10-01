@@ -49,8 +49,10 @@ DOM de graça. Qualquer opção "fora do DOM" paga exatamente por isso.
 - **O que é:** `wry` embrulha a **WebView NATIVA do SO** (WebKitGTK / WKWebView /
   WebView2); `tao` é a janela. Não traz engine própria.
 - **Maturidade:** alta (ecossistema Tauri), mas é uma WebView por plataforma.
-- **Peso por card:** desconhecido aqui (não medido); WebKitGTK tende a ser mais
-  leve que um Chromium por aba, WebView2 é Chromium (≈ custo de hoje).
+- **Peso por card:** **MEDIDO depois desta investigação** (spike isolado,
+  `docs/WRY_SPIKE.md`): WebKitGTK custa **~93–177 MB/view** com **2 processos por
+  view** (WebProcess + NetworkProcess) — **~3–6× o card de canvas atual**. Onde
+  eu supunha "tende a ser mais leve", o número diz o CONTRÁRIO.
 - **Contrato do card:** muda TUDO o que é controle. `evalJs`/`get_page_text`
   sobrevivem (eval). `snapshot` (PNG do card) exigiria captura nativa (não há
   `paint` offscreen). `browser_click/type/scroll/query/navigate` teriam de ser
@@ -122,7 +124,7 @@ para `snapshot`. Só com esses três números se decide (a) vs (d).
 | (e) fechar cards parados | BAIXO | BAIXO | ~29 MB/card de RAM |
 | (b) addon nativo shared-texture (§7) | MÉDIO (addon Rust/C++ + empacotar 3 SOs) | MÉDIO | CPU em animação; **0 RAM** |
 | (d) WebView nativa + captura | ALTO | ALTO | RAM incerta |
-| (a) wry/tao (WebView do SO em canvas) | ALTO | ALTO | RAM incerta; perde CDP |
+| (a) wry/tao (WebView do SO em canvas) | ALTO | ALTO | **~93–177 MB/view, 2 processos/view (medido — pior que hoje)**; perde CDP |
 | (b') overlay fora do DOM | MUITO ALTO | MUITO ALTO (precedente `addChildView` falhou) | 0 RAM |
 | (c) CEF-Rust OSR | MUITO ALTO | ALTO | CPU em animação; **0 RAM**; +200 MB de binário |
 
@@ -130,9 +132,10 @@ para `snapshot`. Só com esses três números se decide (a) vs (d).
 
 - VRAM por card: **não isolável** nesta máquina (ruído de outros processos >
   sinal; ver §1).
-- Peso de wry/Servo/CEF: **não medido** (não há Rust nem essas libs no repo;
-  medir exigiria instalar e construir cada engine — fora do escopo de uma
-  investigação read-only).
+- **`wry` FOI medido depois** — spike isolado em `scripts/measure/wry-spike/`,
+  resultado em `docs/WRY_SPIKE.md` (números corrigidos no review R8): ~93–177
+  MB/view, 2 processos/view. Servo/CEF seguem **não medidos** (exigiria
+  construir cada engine).
 - Servo: engine experimental; API de embed imatura — não é candidato sério hoje,
   e não medi custo.
 - Custo por card com PÁGINA PESADA real (muitas imagens/JS): não medido (sem
