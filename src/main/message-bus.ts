@@ -2597,9 +2597,12 @@ export function createMessageBus(
 
   /** Feeds `decideReportNotifyTarget` (report-notify-routing.ts) — board
    * orchestrator mark wins when alive; dead mark escalates to human
-   * (`none`); unmarked keeps live `spawned` / DURABLE spawner-of-record /
-   * inbound `modified`. This is the production caller that module exists
-   * for; do not leave the pure function without a feeder again. */
+   * (`none`); unmarked keeps a live `spawned` edge, then a LIVE durable
+   * spawner-of-record, then inbound `modified`. A spawner-of-record whose
+   * owner is DEAD is absence, not a veto (RODADA 6): a card re-adopted after
+   * a restart reaches the directive sender instead of nobody. This is the
+   * production caller that module exists for; do not leave the pure function
+   * without a feeder again. */
   function resolveNotifyTarget(cardId: string): string | null {
     const boardId = callbacks.getCardBoardId(cardId);
     const orchId = boardId ? (callbacks.getBoardOrchestratorCardId(boardId) ?? null) : null;

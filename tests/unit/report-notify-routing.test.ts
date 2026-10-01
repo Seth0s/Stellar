@@ -173,10 +173,10 @@ describe("RODADA 4 — linhagem durável (registro `spawns`) vence o 'último qu
     ).toEqual({ targetId: "aresta-visual", source: "spawned" });
   });
 
-  // RODADA 5 (task 98c99324) — este era o teste do LIMITE DECLARADO pela
-  // RODADA 4 ("registro morto cai pro fallback de diretiva"). O limite foi
-  // fechado: linhagem conhecida com dono morto vira `none` explícito.
-  it("registro MORTO => none explícito (linhagem conhecida manda, não a conversa)", () => {
+  // RODADA 6 — registro morto SEM diretiva nenhuma: não há para onde cair, e
+  // não se entrega a terceiro nenhum. Continua `none` (a RODADA 5 acertava
+  // este caso; o que ela errava era vetar a diretiva VIVA do re-adotador).
+  it("registro MORTO e SEM diretiva => none (nada para onde cair, não se inventa alvo)", () => {
     expect(
       decideReportNotifyTarget({
         ...noOne,
@@ -186,19 +186,24 @@ describe("RODADA 4 — linhagem durável (registro `spawns`) vence o 'último qu
     ).toEqual({ targetId: null, source: "none" });
   });
 
-  it("RODADA 5 = o sequestro: registro MORTO + diretiva VIVA => NÃO vai pro último que falou", () => {
-    // O caso que a RODADA 2 fechou uma casa acima. Um `send_to_card` de um
-    // terceiro cria a aresta `modified`; sem o ramo novo, o report iria pra
-    // ele, que só passou na conversa.
+  // RODADA 6 (P0 — report não chega ao orquestrador que RE-ADOTA): este era o
+  // teste que exigia `none` em "registro morto + diretiva viva". A decisão foi
+  // REVERTIDA. `spawns` é append-only e NUNCA é apagado, então o dono morto
+  // fica na linha para sempre — e vetava a diretiva VIVA de quem re-adotou o
+  // card, que é o padrão real depois de todo restart. Dono morto é AUSÊNCIA de
+  // alvo, não veto: o fluxo cai no fallback de diretiva (RODADA 3). O
+  // sequestro que a RODADA 2 fecha (aresta visual `spawned` VIVA) continua
+  // intocado no ramo acima deste.
+  it("RODADA 6 — re-adoção: registro MORTO + diretiva VIVA => diretiva (quem re-adotou recebe)", () => {
     expect(
       decideReportNotifyTarget({
         ...noOne,
-        directiveFromId: "terceiro-que-falou",
+        directiveFromId: "orquestrador-que-readotou",
         directiveFromAlive: true,
         spawnerOfRecordId: "registro-morto",
         spawnerOfRecordAlive: false,
       }),
-    ).toEqual({ targetId: null, source: "none" });
+    ).toEqual({ targetId: "orquestrador-que-readotou", source: "directive" });
   });
 
   it("registro MORTO com mark VIVO: o mark continua ganhando (o ramo novo não o alcança)", () => {
