@@ -231,9 +231,12 @@ jobs:
 
       - name: Rust (toolchain para o stub do MCP relay)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # universal: os DOIS alvos darwin (o runner é arm64; x64 é add-on).
+          targets: x86_64-apple-darwin, aarch64-apple-darwin
 
-      - name: build MCP relay stub (host target)
-        run: node resources/relay/build.mjs
+      - name: build MCP relay stub (macOS universal: x64 + arm64, lipo)
+        run: node resources/relay/build.mjs --universal
 
       - run: npm run build
 
