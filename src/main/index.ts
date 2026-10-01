@@ -2240,8 +2240,8 @@ function createWindow() {
       if (boardId !== activeBoardId) return;
       safeSend(win, "connector:kind-changed", id, kind);
     },
-    onOpenRequest: (requestId, requesterId, url, reason, autoApprove) =>
-      safeSend(win, "browser:ask-open", requestId, requesterId, url, reason, autoApprove),
+    onOpenRequest: (requestId, requesterId, url, reason, autoApprove, targetCardId) =>
+      safeSend(win, "browser:ask-open", requestId, requesterId, url, reason, autoApprove, targetCardId),
     onCloseCardRequest: (requestId, requesterId, target, reason, autoApprove) =>
       safeSend(win, "card:ask-close", requestId, requesterId, target, reason, autoApprove),
     // Achado ao vivo (2026-09-01): "eu gostaria que o snapshot fosse
@@ -3425,8 +3425,8 @@ function createWindow() {
   ipcMain.on("browser:input-mouse", (_e, id: string, evt: BrowserMouseEvent) => browserRegistry.sendMouseEvent(id, evt));
   ipcMain.on("browser:input-wheel", (_e, id: string, evt: BrowserWheelEvent) => browserRegistry.sendWheelEvent(id, evt));
   ipcMain.on("browser:input-key", (_e, id: string, evt: BrowserKeyEvent) => browserRegistry.sendKeyEvent(id, evt));
-  ipcMain.handle("browser:ask-resolve", (_e, requestId: string, allowed: boolean, cardId?: string) =>
-    messageBus.resolveOpen(requestId, allowed, cardId),
+  ipcMain.handle("browser:ask-resolve", (_e, requestId: string, allowed: boolean, cardId?: string, error?: string) =>
+    messageBus.resolveOpen(requestId, allowed, cardId, error),
   );
   // Item 26, teclado — IME e clipboard real (ver browser-registry.ts).
   ipcMain.handle("browser:insert-text", (_e, id: string, text: string) => browserRegistry.insertText(id, text));

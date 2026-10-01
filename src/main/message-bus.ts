@@ -477,7 +477,12 @@ export type BusRequest =
    * sempre do board inteiro, e `findingsTruncated` diz quando cortou.
    */
   | { cmd: "unreported_work"; limit?: number }
-  | { cmd: "open"; url?: string; requesterId?: string; reason?: string }
+  /** `targetCardId` (P1): the browser card the caller asked to navigate
+   * explicitly (`open_url`'s `cardId`). Omitted ⇒ reuse the caller's most
+   * recently focused browser. An id that doesn't exist / isn't a browser /
+   * belongs to another card is REFUSED by the renderer with the reason —
+   * never silently redirected to a different card. */
+  | { cmd: "open"; url?: string; requesterId?: string; reason?: string; targetCardId?: string }
   | { cmd: "close_card"; target?: string; requesterId?: string; reason?: string }
   | {
       cmd: "snapshot";
@@ -905,7 +910,14 @@ export function createMessageBus(
      * (a real, typed, optional param there); acbridge's CLI never sets it
      * (would need an awkward extra positional arg) — the consent modal
      * just shows nothing for that line when absent. */
-    onOpenRequest: (requestId: string, requesterId: string, url: string, reason?: string, autoApprove?: boolean) => void;
+    onOpenRequest: (
+      requestId: string,
+      requesterId: string,
+      url: string,
+      reason?: string,
+      autoApprove?: boolean,
+      targetCardId?: string,
+    ) => void;
     /** Sticky item "close_card" (2026-09-03) — same ask/consent/resolve
      * shape as `onOpenRequest` above, generalized to closing ANY existing
      * card (not just terminal — a stuck files/browser/sticky card is just
@@ -1514,7 +1526,10 @@ export function createMessageBus(
   // (`openBrowserFor` já o retornava, e o `spawn_card` de navegador já o
   // reportava); ele só era descartado no caminho de volta do `open`. O
   // `cardId` aqui é o que fecha essa lacuna.
-  const pendingOpens = new Map<string, { resolve: (allowed: boolean, cardId?: string) => void; timer: NodeJS.Timeout }>();
+  const pendingOpens = new Map<
+    string,
+    { resolve: (allowed: boolean, cardId?: string, error?: string) => void; timer: NodeJS.Timeout }
+  >();
   const pendingCloseCards = new Map<string, { resolve: (allowed: boolean) => void; timer: NodeJS.Timeout }>();
   const pendingSnapshots = new Map<string, { resolve: (result: SnapshotResult) => void; timer: NodeJS.Timeout }>();
   const pendingPageTexts = new Map<string, { resolve: (result: PageTextResult) => void; timer: NodeJS.Timeout }>();
@@ -3488,18 +3503,24 @@ export function createMessageBus(
           resolve({ ok: false, error: "timed out waiting for a decision" });
         }, OPEN_TIMEOUT_MS);
         pendingOpens.set(requestId, {
-          resolve: (allowed, cardId) => {
+          resolve: (allowed, cardId, error) => {
             clearTimeout(timer);
             pendingOpens.delete(requestId);
             unmarkWaiting(requesterId);
             // `cardId` é opcional na assinatura só por robustez (um
             // renderer antigo, ou uma recusa, não tem id nenhum pra
-            // mandar) — no caminho de permitir ele vem sempre.
-            resolve(allowed ? { ok: true, ...(cardId ? { cardId } : {}) } : { ok: false, error: "denied by user" });
+            // mandar) — no caminho de permitir ele vem sempre. `error`
+            // (P1) nomeia a recusa que NÃO foi "o humano negou" (target
+            // inexistente/de outro dono); sem ele, cai no genérico.
+            resolve(
+              allowed
+                ? { ok: true, ...(cardId ? { cardId } : {}) }
+                : { ok: false, error: error ?? "denied by user" },
+            );
           },
           timer,
         });
-        callbacks.onOpenRequest(requestId, requesterId, req.url as string, req.reason, autonomous);
+        callbacks.onOpenRequest(requestId, requesterId, req.url as string, req.reason, autonomous, req.targetCardId);
       });
     }
 
@@ -5663,8 +5684,8 @@ export function createMessageBus(
     return { ok: false, error: `unknown cmd "${(req as { cmd?: string }).cmd}"` };
   }
 
-  function resolveOpen(requestId: string, allowed: boolean, cardId?: string) {
-    pendingOpens.get(requestId)?.resolve(allowed, cardId);
+  function resolveOpen(requestId: string, allowed: boolean, cardId?: string, error?: string) {
+    pendingOpens.get(requestId)?.resolve(allowed, cardId, error);
   }
 
   function resolveCloseCard(requestId: string, allowed: boolean) {
