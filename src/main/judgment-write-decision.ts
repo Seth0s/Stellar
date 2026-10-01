@@ -504,6 +504,14 @@ export const PROJECT_CODE_EXTS: readonly string[] = [
   ".yml",
   ".sh",
   ".py",
+  // Rust (resources/relay, task f7a2ac84): fonte, manifesto e lockfile da
+  // toolchain do stub do bridge. Sem estas três, o gate anti-drift abaixo
+  // reprova o PRÓPRIO repo depois de o Rust entrar — foi o que aconteceu no
+  // commit que trouxe o relay, e é exatamente a decisão consciente que este
+  // teste existe para forçar.
+  ".rs",
+  ".toml",
+  ".lock",
 ];
 const PROJECT_CODE_EXT_SET = new Set(PROJECT_CODE_EXTS);
 
