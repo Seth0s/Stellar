@@ -7,6 +7,7 @@ import {
   cursorServerEntry,
   declaredUrlSyntax,
   interpolatedMcpUrl,
+  mcpCommandPath,
   needsPersistentMcpRegistration,
   registerCursor,
 } from "../../src/main/mcp-registration";
@@ -116,6 +117,18 @@ describe("mcp-registration: registerCursor idempotency (two directions)", () => 
     writeFileSync(file, "{ not json");
     expect(registerCursor()).toEqual({ status: "ok", changed: true });
     expect(read().mcpServers.stellar).toEqual(cursorServerEntry());
+  });
+});
+
+describe("RODADA 5 — o `command` por plataforma (Windows não tem o polyglot sh)", () => {
+  it("no unix aponta para o shim (`stellar-mcp`); o alvo windows aponta para o `.exe`", () => {
+    if (process.platform === "win32") {
+      expect(mcpCommandPath("C:/bin")).toBe(join("C:/bin", "stellar-mcp-relay.exe"));
+      return;
+    }
+    // Aqui (linux/darwin) o ramo é o shim polyglot; o ramo win32 só é
+    // exercitado num runner Windows — declarado, não fingido.
+    expect(mcpCommandPath("/bin")).toBe(join("/bin", "stellar-mcp"));
   });
 });
 

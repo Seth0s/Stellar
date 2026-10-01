@@ -146,6 +146,23 @@ export function shimPath(binDir: string): string {
 }
 
 /**
+ * O `command` que a CLI deve executar como servidor MCP stdio.
+ *
+ * Unix: `stellar-mcp` — o polyglot `sh` que escolhe relay-nativo-ou-node (a
+ * degradação honesta quando não há socket/binário).
+ *
+ * Windows: NÃO existe `/bin/sh` nem shebang executável, então o polyglot não
+ * roda; o `command` aponta DIRETO para o binário Rust (`stellar-mcp-relay.exe`),
+ * que lê `AGENT_CANVAS_MCP_URL`/`AGENT_CANVAS_CARD_ID` do ambiente e faz
+ * stdio<->socket. Consequência declarada: no Windows o stub depende do bridge
+ * ligado (`AGENT_CANVAS_MCP_RELAY=1` no app); sem socket ele sai sem servir —
+ * não há aqui a queda para o shim node que o unix tem.
+ */
+export function mcpCommandPath(binDir: string): string {
+  return process.platform === "win32" ? join(binDir, "stellar-mcp-relay.exe") : shimPath(binDir);
+}
+
+/**
  * O template da URL para os CLIs que aceitam um servidor REMOTO no próprio
  * config. A porta do MCP é efêmera e a identidade é POR CARD, então o valor não
  * pode ser escrito literal: `${env:…}` é resolvido pelo CLI no startup, a
@@ -494,7 +511,7 @@ export function ensureMcpRegistered(providerId: string, binDir: string): Promise
       return { status: "skipped", reason: t("error.mcpInvoked") };
     }
     const registrar = REGISTRARS[providerId];
-    if (registrar) return registrar(shimPath(binDir));
+    if (registrar) return registrar(mcpCommandPath(binDir));
     // Sem registrador escrito à mão, mas a PRÓPRIA declaração já diz onde e
     // como escrever: é o caminho declarativo (providers dinâmicos — cline,
     // commandcode). Falha visível fica reservada a quem não tem nem código
@@ -507,7 +524,7 @@ export function ensureMcpRegistered(providerId: string, binDir: string): Promise
       declared.configKey &&
       declared.serverShape
     ) {
-      return registerDeclaredProvider(providerId, shimPath(binDir));
+      return registerDeclaredProvider(providerId, mcpCommandPath(binDir));
     }
     // Declarado `global-config` sem registrador: falha VISÍVEL (vai pro
     // console.error do chamador), nunca um skip silencioso que deixaria

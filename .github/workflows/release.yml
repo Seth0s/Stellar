@@ -164,6 +164,12 @@ jobs:
 
       - run: npx tsc --noEmit
 
+      - name: Rust (toolchain para o stub do MCP relay)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: build MCP relay stub (host target)
+        run: node resources/relay/build.mjs
+
       - run: npm run build
 
       - name: gera .deb, .rpm e AppImage (sem publicar em lugar nenhum)
@@ -223,6 +229,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Rust (toolchain para o stub do MCP relay)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: build MCP relay stub (host target)
+        run: node resources/relay/build.mjs
+
       - run: npm run build
 
       - name: gera o .dmg (e o .zip) sem publicar
@@ -276,6 +288,12 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Rust (toolchain para o stub do MCP relay)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: build MCP relay stub (host target)
+        run: node resources/relay/build.mjs
 
       - run: npm run build
 

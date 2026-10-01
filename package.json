@@ -15,7 +15,13 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:relay": "node resources/relay/build.mjs",
+    "prepackage": "npm run build:relay",
     "package": "electron-vite build && electron-builder --dir",
+    "prepackage:rpm": "npm run build:relay",
+    "prepackage:linux": "npm run build:relay",
+    "prepackage:mac": "npm run build:relay",
+    "prepackage:win": "npm run build:relay",
     "package:rpm": "electron-vite build && electron-builder --linux rpm",
     "package:linux": "electron-vite build && electron-builder --linux",
     "package:mac": "electron-vite build && electron-builder --mac",
