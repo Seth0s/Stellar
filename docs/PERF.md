@@ -621,6 +621,12 @@ progresso), limiar (94%/95%/100%) e frame de área zero. Suíte inteira:
 
 ## 11. RAM/VRAM por card: onde mora, medido (2026-10-01, task 5d24ada3)
 
+> **CORREÇÃO DE UNIDADE — 2026-10-02 (review R8).** Todos os RSS desta seção
+> estavam **4× MENORES**: o harness lia o campo 24 de `/proc/<pid>/stat` (que é
+> em PÁGINAS) e o tratava como kB. Re-medido e re-derivado no **§14**. As
+> comparações RELATIVAS (ranking de custo, alavancas) sobrevivem; os ABSOLUTOS
+> mudam ×4 — e a frase "o board vivo não se reproduz" está INVERTIDA.
+
 Contexto: com os shims `stellar-mcp` (523 MB em 7 cards) saindo por outra task,
 o **gpu-process (379 MB) e o renderer (373 MB)** do board VIVO eram os maiores
 alvos. Esta rodada MEDE o custo por card de cada alavanca candidata — sem mudar
@@ -705,6 +711,12 @@ páginas vivas — não de cards ociosos. Medir o custo por card de um `claude`/
 
 ## 12. Custo por card de um PROVIDER DE AGENTE REAL (2026-10-01, task a0e2f41f)
 
+> **CORREÇÃO DE UNIDADE — 2026-10-02 (review R8).** Os RSS desta seção também
+> estavam **4× MENORES** (mesmo bug de `/proc/<pid>/stat`). A tabela corrigida e
+> uma re-medição do `commandcode` estão no **§14**. O RANKING
+> (agy > commandcode > claude > bash) e a conclusão "o custo por card é a CLI"
+> SOBREVIVEM — escalam todos ×4.
+
 A §11 provou que card OCIOSO custa ~0 e que o board vivo não se explica por
 shells parados. Esta rodada mede o que FALTAVA: N cards de um provider de AGENTE
 REAL, TUI desenhada e SEM tarefa rodando. Mesmo harness, agora com
@@ -762,3 +774,212 @@ esses 373/379 MB.
 **Como reproduzir:**
 `node scripts/measure/perf-idle-cards.mjs --provider <p> --cards N --zoom 15
 --pan-y <200+> --seconds 12 [--per-proc]`.
+
+---
+
+## 13. Acúmulo de RAM ao longo do tempo: vazamento × custo (2026-10-01, task d752b50c)
+
+> **CORREÇÃO DE UNIDADE — 2026-10-02 (review R8).** Os RSS desta seção eram
+> **4× MENORES**. A série de HEAP por CDP NÃO foi afetada (é bytes, não RSS) e
+> continua PLANTA. Os RSS re-medidos, o CRASH do ciclo — que esta seção declara
+> como "não medido", quando na verdade o harness ABORTA — e a re-derivação
+> estão no **§14**.
+
+Pergunta que faltava responder: os **~373 MB de renderer / ~379 MB de gpu do
+board VIVO** são VAZAMENTO (cresce sem N mudar) ou CUSTO ACUMULADO (estável, de
+sessão longa)? Consertos diferentes.
+
+**Sonda:** `node scripts/measure/ram-accretion.mjs --cards N --minutes M
+--interval S --cycle K`. Ela amostra, de `N` FIXO, o RSS (árvore de `/proc`) +
+`JSHeapUsedSize` (CDP) + DOM (nós/listeners/xterms), **forçando GC
+(`HeapProfiler.collectGarbage`) antes de cada amostra** — o que sobra depois do
+GC é RETIDO. Se cresce com N fixo, é vazamento.
+
+**(1) CURVA NO TEMPO (N fixo) — PLANA.** Três rodadas, `--cards 3/2/1`:
+
+| rodada | heap retido | renderer RSS | gpu | main | nodes | listeners | xterms |
+|---|---|---|---|---|---|---|---|
+| 3 cards, 3 min | 8,5 → 8,5 MB | 49 → 48 MB | 78 | 63 → 59 | 515 (const) | 608 (const) | 3 (const) |
+| 2 cards, 1 min | 8,1 → 8,1 MB | 48 → 48 MB | 78 | 63 → 59 | 414 (const) | 558 (const) | 2 (const) |
+| 1 card, 1 min | 7,5 → 7,5 MB | 47 → 47 MB | 78 | — | — | — | 1 |
+
+Inclinação do heap RETIDO: **~0,02 MB/min** (≈ zero); renderer: **0 a −0,3
+MB/min**. DOM, listeners e xterms **constantes**. Ou seja: **com N fixo, num
+board de terminais OCIOSOS, nada cresce** — não há vazamento NESTA janela.
+
+**A CORRELAÇÃO (o que o crescimento acompanharia) — nada:** as três séries que
+poderiam explicar um vazamento (nós de DOM, listeners, buffers de xterm) ficaram
+CONSTANTES junto do heap. Não há sinal de buffer crescendo, de listener
+empilhando nem de DOM vazando.
+
+**(3) LADO DA ABERTURA:** cada terminal novo custa **~+0,3–0,4 MB de heap
+retido**, **+~55 nós de DOM** e +1 xterm — é o custo POR CARD (o mesmo que a
+§11/§12 já situavam: card ocioso é barato).
+
+**(2) CICLO ABRIR/FECHAR — o HARNESS ABORTA (não é só "não fechou").**
+Reproduzido em 2026-10-02 (task d752b50c, review R8), `--cards 2 --cycle 2`:
+o ciclo 1 ABRE um 3º card (`xterms` 2→3) mas o fechamento FALHA —
+`[ram] ciclo 1: NAO fechou (botao="")`: o "último botão de `.card-head-inner`"
+tem rótulo VAZIO (não é o close). No ciclo 2 o harness **MORRE**:
+`spawnTerminal()` clica `[data-role="rail-add-card"]` e
+`.popover-row[data-kind="terminal"]` **não aparece** →
+`throw new Error("opcao Terminal nao encontrada")` em `ram-accretion.mjs:97`,
+exit 1 (`at spawnTerminal (ram-accretion.mjs:97)` / `at ram-accretion.mjs:198`).
+Ou seja: o harness não completa o ciclo — a pergunta "volta ao baseline?" segue
+**SEM MEDIÇÃO**, agora com o motivo exato (o alvo do close é o botão errado e, na
+sequência, o popover de adicionar não reabre — observado, causa não isolada).
+Consertar o alvo do close (e reabrir o popover por um caminho robusto) é
+pré-requisito para medir isso; **não** foi feito nesta entrega (medição, não
+conserto).
+
+**DIAGNÓSTICO (o que os números sustentam):**
+
+- **NÃO há vazamento observável** na janela medida (1–3 min, N fixo, GC forçado):
+  heap retido plano (~0,02 MB/min), DOM/listeners/xterms constantes. (Sobrevive
+  após a correção de unidade — o HEAP nunca dependeu dela.)
+- ~~**Os ~373/379 MB do board vivo NÃO se reproduzem** com N terminais ociosos
+  (aqui: renderer 47–49 MB, gpu 78 MB).~~ **INVERTIDO — ver §14.** Aqueles
+  47–49/78 eram 4× baixos; corrigidos são ~190/300 MB, e o BASELINE do app
+  (ZERO cards) já é renderer 192 / gpu 283 / main 251. O board vivo (373/379/303)
+  é, em gpu/main, majoritariamente o **baseline do próprio app** — não "conteúdo
+  acumulado" nem N cards.
+- **A hipótese de VAZAMENTO LENTO em sessão LONGA não foi refutada nem
+  confirmada**: a sonda mede minutos, não horas. O último passo honesto seria
+  rodar a mesma sonda por horas num board REAL (não perfis isolados vazios) —
+  fora do que este harness garante.
+
+**Como reproduzir:** `node scripts/measure/ram-accretion.mjs --cards 3 --minutes
+3 --interval 10`.
+
+---
+
+## 14. CORREÇÃO DE UNIDADE (RSS 4×): re-derivação de §11–§13 e o baseline do app (2026-10-02, task d752b50c, review R8)
+
+### 14.1 O bug e o número real
+
+`scripts/measure/perf-idle-cards.mjs` (`readProc`) e `scripts/measure/ram-accretion.mjs`
+(`readProc`) liam o **campo 24 de `/proc/<pid>/stat`** (`fields[21]`) — que é RSS
+em **PÁGINAS** — e o tratavam como kB (`/1024` para MB). Em x86_64 (página de
+4 KiB) isso publicava **4× MENOS**. O mesmo furo já derrubou o spike do wry
+(`c08bf83`). **Corrigido** nos dois arquivos: `VmRSS` de `/proc/<pid>/status`
+(kB) com o caminho antigo só como fallback `f[21] × (4096/1024)`.
+
+Auto-teste (processo vivo): `field24 = 13129 páginas` → bug **12,8 MB**, correto
+**51,3 MB**, `VmRSS` **51,6 MB** → **fator 4,00**.
+
+### 14.2 RE-MEDIÇÃO com a unidade corrigida
+
+`perf-idle-cards`, 12 s, instância isolada (`--zoom 15 --pan-y 80/320`), RSS por
+processo da árvore; a carga da máquina junto:
+
+| configuração | renderer | gpu | main | cli | total | máquina |
+|---|---|---|---|---|---|---|
+| **0 cards (BASELINE)** | **192** (1 proc) | **283** | **251** | — | 987 | 7,5% |
+| 3 bash WebGL (amostra A) | 209 | 314 | 254 | 167 (6) | 1204 | 13,0% |
+| 3 bash WebGL (amostra B) | 193 | 287 | 237 | — | 1146 | 10,3% |
+| 3 bash `--no-webgl` (A) | 192 | 284 | 238 | 167 (6) | 1142 | 5,4% |
+| 3 bash `--no-webgl` (B) | 194 | 284 | 237 | — | 1143 | 7,3% |
+| 3 bash + browser ESTÁTICO | 294 (2 proc) | 309 | 244 | 166 (6) | 1279 | 6,9% |
+| 3 bash + browser ANIMADO | 299 (2 proc) | 318 | 361 | — | 1412 | 7,1% |
+
+`ram-accretion`, N fixo, GC forçado antes de cada amostra:
+
+| rodada | heap retido | renderer | gpu | main | nodes | listeners | xterms |
+|---|---|---|---|---|---|---|---|
+| 1 card, 2 min, int 15 s | 7,5 → 7,5 (**0,03 MB/min**) | 190 → 188 | 302 → 301 | 253 → 236 | 310 const | 508 const | 1 |
+| 2 cards, 1 min, int 10 s | 8,1 → 8,1 (**0,01 MB/min**) | 194 → 193 | 311 → 310 | 253 → 236 | 414 const | 558 const | 2 |
+
+Provider real (âncora da §12): `--provider commandcode --cards 2` → renderer 199,
+gpu 302, main 240, bucket `cli` **477 MB / 4 procs** (`command-code` ~167 ×2 +
+`stellar-mcp` ~71 ×2), **total 1479** (máquina 5,2%). O lado Stellar fica no
+baseline (≈192/283/251); o custo por card é a CLI.
+
+### 14.3 A correção ×4 se VALIDA contra a re-medição
+
+Não é ajuste de tabela: os números re-medidos batem com os antigos ×4.
+
+- §11 "3 terminais" total 287 ×4 = **1148** ⟷ re-medido **1143–1146**.
+- §11 "browser estático" 73/79/61/320 ×4 = **292/316/244/1280** ⟷ re-medido **294/309/244/1279**.
+- §12 "commandcode 4" total 507 ×4 = **2028** ⟷ 2 cards: baseline 987 + 2×~240 = **~1467** (medido **1479**).
+
+### 14.4 O que MUDA e o que SOBREVIVE
+
+**MUDAM (absolutos, ×4):** todo RSS/VRAM de §11/§12/§13. Exemplos: §11 baseline
+renderer 51→**~204**, gpu 74→**~296**, main 63→**~252**; §12 claude/card 51→**~204**,
+commandcode/card 64→**~256**, agy/card 104→**~416**; §13 renderer 47–49→**~190**.
+
+**SOBREVIVEM (relativos — escala uniforme preserva):**
+- **Card ocioso custa ~0** no lado do app: 3 bash (1143–1146) vs baseline (987) é
+  quase todo o fixture CLI (3×51 MB); renderer+gpu+main fica ~0–17 MB/card, dentro
+  do ruído (amostra A deu +51; B deu ~0). O custo por card **é a CLI**.
+- **Ranking de providers** (agy > commandcode > claude > bash) e a leitura
+  "90–100% do custo por card é a CLI".
+- **WebGL é RAM-neutro** (amostra B: 193/287 com WebGL vs 194/284 sem) — mas agora
+  a margem (±5 MB) é da ordem do ruído entre rodadas; a amostra A divergiu
+  (+16/+27), então isto é "sem sinal claro", não "provado zero".
+- **Browser = um processo renderer inteiro** (~+100 MB renderer) + conteúdo.
+- **§13: heap retido plano e DOM/listeners/xterms constantes** — o HEAP via CDP
+  nunca dependeu da unidade.
+
+**INVERTE:**
+- "o board vivo NÃO se reproduz com terminais ociosos / é custo acumulado de
+  conteúdo real". Com a unidade corrigida, o **baseline do app com ZERO cards** já
+  é renderer **192** / gpu **283** / main **251**. Contra o board vivo
+  (renderer 373 / gpu 379 / main 303), o baseline é **51% / 75% / 83%**. Em
+  **gpu e main**, o board vivo é majoritariamente o **baseline da instância** —
+  não N cards e não (necessariamente) conteúdo acumulado.
+
+### 14.5 Por que o BASELINE do app já é ~300 MB de gpu
+
+Sonda `smaps_rollup` + mapa por região no gpu-process, 0 cards (instância
+isolada):
+
+- **RSS 261 MB, mas PSS 125 MB** — metade do "RSS" é página **compartilhada**
+  (`Shared_Clean` 143 MB). `Private_Dirty` = 72 MB (estado de trabalho do
+  processo GPU).
+- Os maiores residentes são **texto de driver/biblioteca mapeado**, não conteúdo
+  do app: `libnvidia-gpucomp` **37 MB**, `libLLVM` (compilador de shader da
+  NVIDIA) **24 MB**, o binário do Electron **~46 MB**, `libnvidia-eglcore/glcore`
+  **~16 MB**, `libGLESv2` **4 MB**. 1082 mapeamentos no total.
+- `nvidia-smi` no baseline isolado: **109 MiB de VRAM** (contra 805 MiB da
+  instância VIVA do dono, `/opt/Stellar`) — ou seja, o "gpu 379 MB" do board vivo
+  **não** é 379 MB de memória de GPU: é RSS do processo, dominado pela pilha
+  NVIDIA/ANGLE/LLVM mapeada + buffers do compositor. VRAM real cresce com
+  conteúdo; RSS do gpu-process é, em boa parte, driver.
+
+**Resposta:** o `gpu-process` de ~300 MB em repouso é o **custo de base de um
+gpu-process Chromium com aceleração de hardware num sistema NVIDIA/Mesa** —
+bibliotecas de driver residentes (RSS de páginas compartilhadas, PSS ~metade) +
+~72 MB de estado privado. Não é vazamento nem conteúdo do board.
+
+### 14.6 DIAGNÓSTICO: vazamento × custo
+
+- **VAZAMENTO: não observado** na janela (1–2 min, N fixo, GC forçado). Heap
+  retido **plano** (0,01–0,03 MB/min), RSS plano, DOM/listeners/xterms
+  **constantes**.
+- **Os ~373/379 MB do board vivo = majoritariamente CUSTO DE BASE da instância**
+  (app + Chromium + driver NVIDIA), não acúmulo de conteúdo e não vazamento.
+  O resíduo (renderer 373 vs baseline 192 ≈ **+180 MB**) **não** é atribuído por
+  esta medição — os candidatos são conteúdo de sessão longa (buffers de conversa,
+  cards de navegador), declarados como **não determinados**, não como conclusão.
+- **Fonte:** nenhuma fonte de vazamento identificada (não há vazamento a apontar
+  na janela medida).
+
+### 14.7 Limites (não medido nesta rodada)
+
+- **Ciclo abrir/fechar: HARNESS ABORTA** (§13.2 corrigido) — a pergunta "volta ao
+  baseline?" segue sem medição.
+- **Janela de minutos, não horas** — a hipótese de vazamento lento em sessão
+  longa segue nem refutada nem confirmada.
+- **RSS é ruidoso entre rodadas** (~±15 MB em renderer/gpu); o sinal confiável é
+  o HEAP via CDP, que é plano. As amostras A/B de 3 bash divergem justamente aí.
+- `stellar-mcp` medido a **~71 MB/card** (node) — **não** aparece aqui a redução
+  de -97% citada nesta sessão; ou o build sob medição ainda usa o caminho node,
+  ou a redução é de outra métrica/build. Registrado como tensão, não resolvido.
+- **`notDone`:** `codex` (sem CLI viva), VRAM dedicada só por `nvidia-smi`, e o
+  ciclo fechado.
+
+**Como reproduzir:** `node scripts/measure/perf-idle-cards.mjs --cards 0 --seconds
+12` (baseline) e `--cards 3 --zoom 15 --pan-y 80`; `node
+scripts/measure/ram-accretion.mjs --cards 2 --minutes 1 --interval 10` (curva) e
+`--cards 2 --cycle 2` (revela o ABORT).
