@@ -38,6 +38,19 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(HERE, "fixtures", "idle-tui.mjs");
 const CLK_TCK = 100; // Linux: _SC_CLK_TCK. O harness é Linux-only por ora.
+/** Tamanho de página (x86_64 Linux) — só o FALLBACK do parser usa. */
+const PAGE_SIZE_BYTES = 4096;
+
+/** RSS em kB de `/proc/<pid>/status` (`VmRSS`, já em kB). `null` se ilegível.
+ * Ver a correção de unidade em `readProc` (review R8). */
+function rssKbFromStatus(pid) {
+  try {
+    const m = /^VmRSS:\s+(\d+)\s+kB/m.exec(readFileSync(`/proc/${pid}/status`, "utf8"));
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
@@ -239,7 +252,10 @@ function readProc(pid) {
     const fields = stat.slice(close + 2).split(" ");
     const utime = Number(fields[11]);
     const stime = Number(fields[12]);
-    const rssKb = Number(fields[21]);
+    // CORREÇÃO (review R8, 2026-10-01): o campo 24 de `/proc/<pid>/stat`
+    // (`rss`) é em PÁGINAS, não em kB — `fields[21]/1024` publicava ~4× MENOS
+    // (renderer 48 vs real ~195-210 MB). Lê `VmRSS` de `/proc/<pid>/status`.
+    const rssKb = rssKbFromStatus(pid) ?? Number(fields[21]) * (PAGE_SIZE_BYTES / 1024);
     const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
     // ATRIBUICAO (corrigida 2026-09-23): um processo filho SEM `--type=` nao e o
     // main do Electron - e a CLI do agente (cline/bash), que roda como filho do app
