@@ -152,14 +152,13 @@ export function shimPath(binDir: string): string {
  * degradação honesta quando não há socket/binário).
  *
  * Windows: NÃO existe `/bin/sh` nem shebang executável, então o polyglot não
- * roda; o `command` aponta DIRETO para o binário Rust (`stellar-mcp-relay.exe`),
- * que lê `AGENT_CANVAS_MCP_URL`/`AGENT_CANVAS_CARD_ID` do ambiente e faz
- * stdio<->socket. Consequência declarada: no Windows o stub depende do bridge
- * ligado (`AGENT_CANVAS_MCP_RELAY=1` no app); sem socket ele sai sem servir —
- * não há aqui a queda para o shim node que o unix tem.
+ * roda; o `command` aponta para o wrapper `stellar-mcp.cmd`, que PREFERE o
+ * binário Rust (`stellar-mcp-relay.exe`) e, sem ele, cai no shim node (roda o
+ * polyglot sob `node`). Isso é o que garante o fallback TAMBÉM no Windows — e
+ * é pré-requisito para o bridge ser padrão (task 52c895da).
  */
 export function mcpCommandPath(binDir: string): string {
-  return process.platform === "win32" ? join(binDir, "stellar-mcp-relay.exe") : shimPath(binDir);
+  return process.platform === "win32" ? join(binDir, "stellar-mcp.cmd") : shimPath(binDir);
 }
 
 /**

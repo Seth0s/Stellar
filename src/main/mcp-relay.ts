@@ -32,6 +32,25 @@ import { join } from "node:path";
  * executa o shim node de sempre — degradação honesta, sem estado novo.
  */
 
+/**
+ * O bridge é PADRÃO (task 52c895da). MEDIDO: com o relay desligado, cada card
+ * de agente `global-config` sobe um `stellar-mcp` NODE a ~71 MB de RSS; com o
+ * relay, o per-card é o binário Rust a ~2.2 MB — mas só valia com
+ * `AGENT_CANVAS_MCP_RELAY=1`, então na prática TODO card pagava os 71 MB.
+ *
+ * Por que ligar por padrão é seguro: o socket custa ~nada (um listener Unix no
+ * main) e o SHIM só o usa se o BINÁRIO existir ao lado — sem socket ou sem
+ * binário ele cai no shim node de sempre (degradação graciosa, `resources/bin/stellar-mcp`).
+ * Ou seja, o default não adiciona dependência: acelera quando o pacote traz o
+ * binário (todos os 3 alvos) e não muda nada quando não traz.
+ *
+ * `AGENT_CANVAS_MCP_RELAY=0` desliga explicitamente (debug/rollback). Qualquer
+ * outro valor (ausente inclusive) liga.
+ */
+export function relayEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AGENT_CANVAS_MCP_RELAY !== "0";
+}
+
 /** Caminho do socket do bridge, DERIVADO da porta do MCP (que já é o fato
  * que o stub conhece via `AGENT_CANVAS_MCP_URL`). Ambos os lados usam
  * `os.tmpdir()`, então o mesmo par (tmpdir, porta) dá o mesmo arquivo sem
