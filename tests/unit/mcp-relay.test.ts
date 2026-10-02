@@ -10,8 +10,18 @@ import {
   extractJsonLine,
   httpRelayForwarder,
   parseRelayHandshake,
+  relayEnabled,
   relaySocketPath,
 } from "../../src/main/mcp-relay";
+
+describe("relayEnabled — o bridge é PADRÃO (task 52c895da)", () => {
+  it("ausente LIGA; só `0` desliga; qualquer outro valor liga", () => {
+    expect(relayEnabled({})).toBe(true);
+    expect(relayEnabled({ AGENT_CANVAS_MCP_RELAY: "0" })).toBe(false);
+    expect(relayEnabled({ AGENT_CANVAS_MCP_RELAY: "1" })).toBe(true);
+    expect(relayEnabled({ AGENT_CANVAS_MCP_RELAY: "qualquer" })).toBe(true);
+  });
+});
 
 describe("relaySocketPath — derivado da porta do MCP, sem variável nova", () => {
   it("URL local válida => caminho com a porta", () => {

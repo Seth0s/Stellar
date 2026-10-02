@@ -123,7 +123,9 @@ describe("mcp-registration: registerCursor idempotency (two directions)", () => 
 describe("RODADA 5 — o `command` por plataforma (Windows não tem o polyglot sh)", () => {
   it("no unix aponta para o shim (`stellar-mcp`); o alvo windows aponta para o `.exe`", () => {
     if (process.platform === "win32") {
-      expect(mcpCommandPath("C:/bin")).toBe(join("C:/bin", "stellar-mcp-relay.exe"));
+      // Windows sem `sh`: o `command` aponta para o wrapper `.cmd` (que prefere
+      // o binario Rust e cai no shim node) — task 52c895da.
+      expect(mcpCommandPath("C:/bin")).toBe(join("C:/bin", "stellar-mcp.cmd"));
       return;
     }
     // Aqui (linux/darwin) o ramo é o shim polyglot; o ramo win32 só é
