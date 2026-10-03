@@ -81,6 +81,7 @@ import {
 } from "./task-dispatch-decision";
 import { appendDepPointer, depIdsFromJson, summarizeReport, type DepPointerSource, type DepReportSummary } from "./dep-pointer-decision";
 import { briefFromTaskPrompt, resolveSpawnBrief } from "./spawn-brief-decision";
+import { renderSpawnSuggestionLine, resolveSpawnSuggestion, type SpawnProfilesFile } from "./spawn-profiles";
 import {
   appendBoardContextEntry,
   attachBoardContext,
@@ -940,6 +941,12 @@ export type BusRequest =
        * task carries `cwd: null` and spawn falls back to the board root
        * (same as before — declared, not inferred from a repo heuristic). */
       cwd?: string;
+      /** Task d14086f8 (item 9, perna 3) — o NOME de um perfil declarado no
+       * arquivo do usuário (`spawn-profiles.json`). NÃO é autorização nem
+       * default: a task só REFERENCIA um nome, e a ausência dele é ausência
+       * de sugestão. Quem sugere é o arquivo; quem decide continua sendo quem
+       * chama o spawn (e `decideSpawnProfile` valida o par). */
+      spawnProfile?: string;
       deps?: string[];
       maxRetries?: number;
       fallbackProviders?: string[];
@@ -1605,6 +1612,12 @@ export function createMessageBus(
      * pass-through to store.ts (better-sqlite3 is synchronous, no round
      * trip needed here either). */
     listTasks: () => TaskRow[];
+    /** Task d14086f8 — o ARQUIVO do usuário de perfis de spawn, lido uma vez
+     * por montagem de brief. Ausente/ilegível => `{ profiles: [] }` (nenhuma
+     * sugestão; o app não inventa default). */
+    /** Opcional de propósito (source-compatible com as montagens de teste):
+     * sem ele, nenhuma sugestão — que é o mesmo resultado de um arquivo vazio. */
+    getSpawnProfiles?: () => SpawnProfilesFile;
     /** DESIGN-BACKLOG.md §2.1 item 6 — board-scoped counterpart to
      * `listTasks` above, backed by `store.listTasksByBoard`
      * (`idx_tasks_board_id`). Lets `list_tasks` (this file) filter by
@@ -4920,6 +4933,8 @@ export function createMessageBus(
         status: "pending",
         card_id: req.cardId ?? null,
         board_id: boardId,
+        // Referência SOLTA a um nome de perfil; `null` = sem sugestão nenhuma.
+        spawn_profile: req.spawnProfile ?? null,
         // Validado acima: ou cai DENTRO da raiz declarada do board, ou é
         // `null` (raiz do board no dispatch, declarado). Nunca inferido de
         // card/board/repo.
@@ -5904,7 +5919,7 @@ export function createMessageBus(
       }
       const deliveredBrief =
         briefDecision.taskId && role !== TASK_CARD_REVIEWER_ROLE && taskForBrief
-          ? briefForTask(taskForBrief)
+          ? briefForTask(taskForBrief, role)
           : briefDecision.brief;
       const requestId = randomUUID();
       const requesterId = req.requesterId ?? "";
@@ -6714,7 +6729,13 @@ export function createMessageBus(
    * a dependent never opens without knowing it has a parent, whichever
    * path spawned it. Reviewers do not: their brief is the review order. */
   function briefForTask(
-    task: Pick<TaskRow, "id" | "prompt" | "deps_json" | "territory_json" | "gates_json" | "allow_commit" | "report_schema_json">,
+    task: Pick<
+      TaskRow,
+      "id" | "prompt" | "deps_json" | "territory_json" | "gates_json" | "allow_commit" | "report_schema_json" | "spawn_profile"
+    >,
+    /** O papel DESTE spawn. `null`/ausente = não se sabe o papel => nenhuma
+     * sugestão (nunca um palpite). Task d14086f8. */
+    role?: string | null,
   ): string | undefined {
     const contract = contractFromTaskRow(task);
     const withDeps = appendDepPointer(briefFromTaskPrompt(task.prompt), depPointerSources(task));
@@ -6734,9 +6755,24 @@ export function createMessageBus(
         territory: territoryFromSql(t.territory_json),
       })),
     });
-    if (crossings.length === 0) return withContract;
-    const reminder = describeContractCrossing(crossings);
-    return withContract ? `${withContract}\n\n${reminder}` : reminder;
+    const base =
+      crossings.length === 0
+        ? withContract
+        : withContract
+          ? `${withContract}\n\n${describeContractCrossing(crossings)}`
+          : describeContractCrossing(crossings);
+    // Task d14086f8 (item 9, perna 3) — a SUGESTÃO do perfil, e SÓ quando ela
+    // existe. SEM DEFAULT: sem perfil, sem papel, sem entrada no arquivo ou sem
+    // default para aquele papel => linha NENHUMA (o brief não menciona perfil,
+    // nem para dizer que não há — decisão explícita do dono). A linha se
+    // declara sugestão; a autorização continua sendo `decideSpawnProfile`.
+    const profileName = task.spawn_profile ?? null;
+    const knownRole = role === "implementer" || role === "reviewer" ? role : null;
+    if (!profileName || !knownRole || typeof callbacks.getSpawnProfiles !== "function") return base;
+    const suggestion = resolveSpawnSuggestion(callbacks.getSpawnProfiles(), profileName, knownRole);
+    const line = renderSpawnSuggestionLine(profileName, knownRole, suggestion);
+    if (!line) return base;
+    return base ? `${base}\n\n${line}` : line;
   }
 
   function buildTaskDispatchParams(
@@ -6756,7 +6792,7 @@ export function createMessageBus(
       model: undefined,
       effort: undefined,
       label: resolveTaskDispatchLabel(task),
-      brief: briefForTask(task),
+      brief: briefForTask(task, "implementer"),
       taskId: task.id,
       // Same single source as manual spawn_agent — auto-dispatch is still
       // a spawn; the arrow (when a requester exists) must not fall back
