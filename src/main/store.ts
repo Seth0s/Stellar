@@ -1232,6 +1232,110 @@ export type CardTraceRow = {
   kill_requested: number;
 };
 
+/**
+ * Task 86613ff9 (PEÇA 1 de 7) — o EVENTO de rastro, irmão append-only do
+ * `card_traces`.
+ *
+ * Por que DOIS registros, e não uma coluna a mais: `card_traces` é o RETRATO do
+ * fecho — uma linha por card (`card_id` é PK), e ele responde "como este card
+ * terminou". O que a série das 7 peças precisa é o STREAM: "o que aconteceu,
+ * quando, sob qual task". O retrato não tem isso — não tem `task_id`, não tem
+ * `at` de evento, e não tem multiplicidade. Gravar o stream ENCIMA do retrato
+ * obrigaria a reescrever o registro do fecho a cada virada; por isso a tabela é
+ * IRMÃ, não coluna.
+ *
+ * APPEND-ONLY de verdade: a PK é a identidade do evento, então repetir o MESMO
+ * `(task_id, card_id, at)` é idempotente (re-entrega), nunca um segundo fato.
+ * Nenhum evento reescreve outro.
+ *
+ * SEM FK, de propósito, como `card_traces`: o rastro precisa sobreviver ao
+ * `DELETE FROM cards` no caso em que ele é o ÚLTIMO vestígio.
+ */
+export type CardTraceEventKind = "spawn" | "first_output" | "turn_end" | "quota" | "close";
+
+export const CARD_TRACE_EVENT_KINDS: readonly CardTraceEventKind[] = [
+  "spawn",
+  "first_output",
+  "turn_end",
+  "quota",
+  "close",
+];
+
+export type CardTraceEventRow = {
+  task_id: string;
+  card_id: string;
+  /** Marca temporal do EVENTO (não a do fecho) — parte da PK. */
+  at: number;
+  /** Board do evento, ou `null` quando não se sabe. */
+  board_id: string | null;
+  kind: CardTraceEventKind;
+  provider_id: string | null;
+  /** Cauda JÁ redigida por `decideTraceTailForStorage`; vazia = ausência declarada. */
+  tail: string;
+  tail_bytes: number;
+  tail_at_cap: number;
+  redacted: number;
+};
+
+/**
+ * Normaliza/valida um evento prestes a ser gravado. PURA — o idioma desta casa:
+ * a decisão fora do statement, testável sem banco. RECUSA NOMEANDO o campo; não
+ * inventa um evento por defaults silenciosos.
+ *
+ * `tail_bytes` é DERIVADO da cauda AQUI, nunca aceito do chamador: um número
+ * que o emissor informa é um número que pode mentir. A convenção é a mesma de
+ * `card_traces` (`tail_bytes: outputTail.length`, comprimento da string), para
+ * não haver duas definições de "bytes" discordando.
+ */
+export function deriveCardTraceEventRow(input: {
+  taskId?: string | null;
+  cardId?: string | null;
+  at?: number | null;
+  kind?: string | null;
+  boardId?: string | null;
+  providerId?: string | null;
+  tail?: string | null;
+  tailAtCap?: boolean;
+  redacted?: boolean;
+}): { ok: true; row: CardTraceEventRow } | { ok: false; error: string } {
+  const taskId = typeof input.taskId === "string" ? input.taskId.trim() : "";
+  if (!taskId) {
+    return { ok: false, error: "card_trace_events: field `taskId` is required — the primary key is (task_id, card_id, at)" };
+  }
+  const cardId = typeof input.cardId === "string" ? input.cardId.trim() : "";
+  if (!cardId) {
+    return { ok: false, error: "card_trace_events: field `cardId` is required — the primary key is (task_id, card_id, at)" };
+  }
+  const at = input.at;
+  if (typeof at !== "number" || !Number.isFinite(at) || !Number.isInteger(at) || at <= 0) {
+    return { ok: false, error: "card_trace_events: field `at` must be a positive integer timestamp — it is part of the primary key" };
+  }
+  const kind = typeof input.kind === "string" ? input.kind.trim() : "";
+  if (!CARD_TRACE_EVENT_KINDS.includes(kind as CardTraceEventKind)) {
+    return {
+      ok: false,
+      error: `card_trace_events: field \`kind\` must be one of ${CARD_TRACE_EVENT_KINDS.join(", ")} — received ${JSON.stringify(kind)}`,
+    };
+  }
+  const tail = typeof input.tail === "string" ? input.tail : "";
+  const nonEmpty = (v: string | null | undefined): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  return {
+    ok: true,
+    row: {
+      task_id: taskId,
+      card_id: cardId,
+      at,
+      board_id: nonEmpty(input.boardId),
+      kind: kind as CardTraceEventKind,
+      provider_id: nonEmpty(input.providerId),
+      tail,
+      tail_bytes: tail.length,
+      tail_at_cap: input.tailAtCap ? 1 : 0,
+      redacted: input.redacted ? 1 : 0,
+    },
+  };
+}
+
 export function openStore(userDataDir: string) {
   const db = new Database(join(userDataDir, "agent-canvas.db"));
   // Pre-release audit P3 — no journal mode was ever set (SQLite's
@@ -1287,6 +1391,33 @@ export function openStore(userDataDir: string) {
       quota_death INTEGER NOT NULL,
       kill_requested INTEGER NOT NULL
     );
+  `);
+  // Task 86613ff9 (PEÇA 1 de 7) — o STREAM, irmão do retrato acima. Migração
+  // ADITIVA no idioma da casa: `CREATE TABLE IF NOT EXISTS`, nada nullable por
+  // preguiça (as colunas que podem faltar são declaradas TEXT/INTEGER e ficam
+  // NULL), e **sem backfill de histórico** — o passado não ganha eventos
+  // retroativos, porque inventá-los seria fabricar atribuição. Um banco antigo
+  // simplesmente nasce com a tabela vazia.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS card_trace_events (
+      task_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      board_id TEXT,
+      kind TEXT NOT NULL,
+      provider_id TEXT,
+      tail TEXT NOT NULL,
+      tail_bytes INTEGER NOT NULL,
+      tail_at_cap INTEGER NOT NULL,
+      redacted INTEGER NOT NULL,
+      PRIMARY KEY (task_id, card_id, at)
+    );
+  `);
+  // Duas portas de leitura reais (por card e por board) e a de exclusão — os
+  // índices existem para elas, não por simetria.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS card_trace_events_card ON card_trace_events (card_id);
+    CREATE INDEX IF NOT EXISTS card_trace_events_board ON card_trace_events (board_id);
   `);
   db.exec(`
     CREATE TABLE IF NOT EXISTS connectors (
@@ -1702,6 +1833,30 @@ export function openStore(userDataDir: string) {
   const getCardTraceStmt = db.prepare("SELECT * FROM card_traces WHERE card_id = ?");
   const listCardTracesStmt = db.prepare("SELECT * FROM card_traces WHERE board_id = ? ORDER BY closed_at DESC");
   const deleteCardTraceStmt = db.prepare("DELETE FROM card_traces WHERE card_id = ?");
+  // Task 86613ff9 (PEÇA 1 de 7) — o STREAM. `ON CONFLICT` sobre a PK inteira
+  // torna a RE-ENTREGA do mesmo `(task_id, card_id, at)` idempotente: o emissor
+  // que repetir o evento (retry, flush duplo) atualiza a linha, nunca duplica o
+  // fato. Sem FK, de propósito — ver o comentário do tipo.
+  const saveCardTraceEventStmt = db.prepare(`
+    INSERT INTO card_trace_events (task_id, card_id, at, board_id, kind, provider_id, tail, tail_bytes, tail_at_cap, redacted)
+    VALUES (@task_id, @card_id, @at, @board_id, @kind, @provider_id, @tail, @tail_bytes, @tail_at_cap, @redacted)
+    ON CONFLICT(task_id, card_id, at) DO UPDATE SET
+      board_id = excluded.board_id, kind = excluded.kind, provider_id = excluded.provider_id,
+      tail = excluded.tail, tail_bytes = excluded.tail_bytes, tail_at_cap = excluded.tail_at_cap,
+      redacted = excluded.redacted
+  `);
+  const listCardTraceEventsForCardStmt = db.prepare(
+    "SELECT task_id, card_id, at, board_id, kind, provider_id, tail, tail_bytes, tail_at_cap, redacted FROM card_trace_events WHERE card_id = ? ORDER BY at ASC",
+  );
+  const listCardTraceEventsForTaskStmt = db.prepare(
+    "SELECT task_id, card_id, at, board_id, kind, provider_id, tail, tail_bytes, tail_at_cap, redacted FROM card_trace_events WHERE task_id = ? ORDER BY at ASC",
+  );
+  const listCardTraceEventsForBoardStmt = db.prepare(
+    "SELECT task_id, card_id, at, board_id, kind, provider_id, tail, tail_bytes, tail_at_cap, redacted FROM card_trace_events WHERE board_id = ? ORDER BY at ASC",
+  );
+  const deleteCardTraceEventsForCardStmt = db.prepare("DELETE FROM card_trace_events WHERE card_id = ?");
+  const deleteCardTraceEventsForTaskStmt = db.prepare("DELETE FROM card_trace_events WHERE task_id = ?");
+  const countCardTraceEventsStmt = db.prepare("SELECT COUNT(*) AS n FROM card_trace_events");
   const unarchiveCardStmt = db.prepare("UPDATE cards SET archived_at = NULL WHERE id = ?");
 
   const listConnectorsStmt = db.prepare(
@@ -3025,6 +3180,11 @@ export function openStore(userDataDir: string) {
       // rastro. Arquivamento sem caminho de exclusão seria acumulação forçada de
       // dados sobre o trabalho do dono.
       deleteCardTraceStmt.run(id);
+      // Task 86613ff9 (PEÇA 1) — e o STREAM de eventos vai junto. A doutrina
+      // acima ("apagar de verdade tem de apagar o rastro também") vale para
+      // TODA peça do rastro: deixar `card_trace_events` para trás seria a mesma
+      // mentira com o texto do dono dentro, só que em N linhas em vez de uma.
+      deleteCardTraceEventsForCardStmt.run(id);
       deleteStmt.run(id);
     },
     listChatSessions: (): CardRow[] => listChatSessionsStmt.all() as CardRow[],
@@ -3045,6 +3205,26 @@ export function openStore(userDataDir: string) {
     listCardTraces: (boardId: string): CardTraceRow[] =>
       listCardTracesStmt.all(boardId) as CardTraceRow[],
     deleteCardTrace: (cardId: string) => deleteCardTraceStmt.run(cardId),
+    // Task 86613ff9 (PEÇA 1 de 7) — o STREAM de eventos. A validação é a PURA
+    // `deriveCardTraceEventRow` (recusa nomeando o campo); nada é gravado sem
+    // um evento válido, e a gravação é idempotente pela PK.
+    saveCardTraceEvent: (
+      input: Parameters<typeof deriveCardTraceEventRow>[0],
+    ): { ok: true; row: CardTraceEventRow } | { ok: false; error: string } => {
+      const decided = deriveCardTraceEventRow(input);
+      if (!decided.ok) return decided;
+      saveCardTraceEventStmt.run(decided.row);
+      return decided;
+    },
+    getCardTraceEvents: (cardId: string): CardTraceEventRow[] =>
+      listCardTraceEventsForCardStmt.all(cardId) as CardTraceEventRow[],
+    getCardTraceEventsForTask: (taskId: string): CardTraceEventRow[] =>
+      listCardTraceEventsForTaskStmt.all(taskId) as CardTraceEventRow[],
+    getCardTraceEventsForBoard: (boardId: string): CardTraceEventRow[] =>
+      listCardTraceEventsForBoardStmt.all(boardId) as CardTraceEventRow[],
+    countCardTraceEvents: (): number => (countCardTraceEventsStmt.get() as { n: number }).n,
+    deleteCardTraceEvents: (cardId: string) => deleteCardTraceEventsForCardStmt.run(cardId),
+    deleteCardTraceEventsForTask: (taskId: string) => deleteCardTraceEventsForTaskStmt.run(taskId),
     listConnectors: (boardId: string): ConnectorRow[] => listConnectorsStmt.all(boardId) as ConnectorRow[],
     listAllConnectors: (): ConnectorRow[] => listAllConnectorsStmt.all() as ConnectorRow[],
     /** Most recent `send_to_card` auto-connect into `toCardId`, or null.
