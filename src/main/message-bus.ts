@@ -153,7 +153,7 @@ import {
 } from "./report-task-link-decision";
 import { promoteReportVerdict, resolveReporterRole } from "./report-verdict-decision";
 import { decideSpawnIsolation } from "./worktree-isolation-decision";
-import { prepareIsolatedWorktree, removeIsolatedWorktree } from "./worktree-prep";
+import { defaultWorktreeRoot, prepareIsolatedWorktree, removeIsolatedWorktree } from "./worktree-prep";
 import {
   ACBRIDGE_PROTOCOL,
   checkAcbridgeProtocol,
@@ -488,6 +488,29 @@ export function describeContractCrossing(crossings: readonly ContractCrossing[],
     "This is a REMINDER, not a gate: nothing was refused, and nothing was auto-opened.\n" +
     lines.join("\n") +
     (rest > 0 ? `\n… and ${rest} more task(s)` : "")
+  );
+}
+
+/**
+ * FIM DE TASK — item 16 do sticky: hoje são 4 passos manuais (fechar card,
+ * fechar task, remover worktree, podar branch), e a worktree some da vista: ela
+ * só é removida no caminho de FALHA de spawn, nunca no fim de uma task que deu
+ * certo. Este helper NOMEIA o que sobrou — e é só isso que ele faz.
+ *
+ * POR QUE NÃO REMOVE SOZINHO: `removeIsolatedWorktree` é `--force`
+ * (`git worktree remove --force` + `rm -rf` de fallback) — apaga trabalho NÃO
+ * COMMITADO que o agente deixou ali. Remoção automática nesse ponto é decisão
+ * do dono, não deste caminho; e "podar branch" nem se aplica à worktree
+ * isolada, que nasce `--detach` (sem branch própria). Nomear é seguro; apagar
+ * não é. Ver o relatório: os dois passos destrutivos ficaram como pergunta.
+ */
+export function worktreeLeftoverNotice(cwd: string | null | undefined, root: string = defaultWorktreeRoot()): string | null {
+  if (!cwd) return null;
+  const base = root.endsWith("/") ? root.slice(0, -1) : root;
+  if (cwd !== base && !cwd.startsWith(`${base}/`)) return null;
+  return (
+    `this card ran in a disposable worktree (${cwd}); the task is done but the worktree was NOT removed and no branch was pruned — ` +
+    "removal is --force (it would delete uncommitted work), so the app leaves that one step to a human decision."
   );
 }
 
@@ -2231,7 +2254,12 @@ export function createMessageBus(
     if (decision.warnAgent) {
       return { ok: false, warning: describeStatusHeldWarning(decision.status, decision.declaredStatus ?? "done") };
     }
-    return { ok: decision.status === "done" };
+    // Item 16 — a task concluiu, mas a worktree do card (quando houve) fica:
+    // DECLARADA aqui, nunca removida por conta (o remove é --force).
+    const cards = typeof callbacks.listCards === "function" ? callbacks.listCards() ?? [] : [];
+    const cardCwd = cards.find((c) => c.id === requesterId)?.cwd ?? null;
+    const leftover = worktreeLeftoverNotice(cardCwd);
+    return leftover ? { ok: decision.status === "done", warning: leftover } : { ok: decision.status === "done" };
   }
 
   function linkImplementerToTask(
