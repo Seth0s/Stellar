@@ -1251,6 +1251,37 @@ function collectCleanupPendencies(task: TaskRow | undefined, payload: unknown): 
 }
 
 /**
+ * O TRI-ESTADO da ambiguidade de um ponteiro por `card_id` (task 50a4cd40).
+ *
+ * O DEFEITO que isto conserta: `callbacks.listTaskIdsForCard?.(id) ?? []`
+ * transformava a INABILIDADE de responder numa AFIRMAÇÃO — lista vazia =>
+ * `ambiguous: false` ("não é ambíguo") sem ninguém ter medido. É a mesma classe
+ * que esta casa pune (`?? "claude"` que inventa provider, o `0%` sem medição, o
+ * `supported:false` que era timeout disfarçado): ausência NÃO pode ler como
+ * valor definido.
+ *
+ * Agora são TRÊS estados:
+ *   - `taskIds` é uma LISTA  => SABEMOS: `ambiguous` é `true` (>1 task) ou
+ *     `false` (exatamente uma). É o caminho de PRODUÇÃO (o canal é fiado).
+ *   - `taskIds` é `null`     => NÃO SE SABE (o canal de participação não
+ *     existe, ou não respondeu): `ambiguous: null`, `taskIds` OMITIDO (nunca
+ *     `[]`, que leria como "nenhuma") e `ambiguousReason` dizendo o motivo.
+ *     NUNCA `false` — "não sei" não é "não é".
+ *
+ * Pura (sem I/O): os três estados são testáveis sem montar o bus.
+ */
+export function resolveCardAmbiguity(taskIds: readonly string[] | null): {
+  ambiguous: boolean | null;
+  taskIds?: string[];
+  ambiguousReason: string | null;
+} {
+  if (taskIds === null) {
+    return { ambiguous: null, ambiguousReason: "participation-channel-unavailable" };
+  }
+  return { ambiguous: taskIds.length > 1, taskIds: [...taskIds], ambiguousReason: null };
+}
+
+/**
  * A local Unix socket bridge letting a spawned provider CLI act on the
  * board via its own shell tool — none of claude/codex/cursor-agent expose
  * any channel for one session to reach another, so `acbridge` (the CLI
@@ -1745,8 +1776,9 @@ export function createMessageBus(
      * ambiguidade do ponteiro por card, dita em vez de silenciosa). */
     getReportBySeq: (seq: number) => ReportRow | undefined;
     /** Opcional de propósito (source-compatible com as montagens de teste que
-     * não conhecem o conceito): ausente => `[]` => `ambiguous: false`, que é a
-     * verdade de quem não tem como responder. */
+     * não conhecem o conceito). AUSENTE — ou devolvendo não-lista — NÃO vira
+     * `[]`: é "não sei", e `resolveCardAmbiguity` o converte em `ambiguous:
+     * null` + `ambiguousReason`; nunca `false` (task 50a4cd40). */
     listTaskIdsForCard?: (cardId: string) => string[];
     upsertReport: (row: ReportRow) => void;
     /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
@@ -4740,6 +4772,14 @@ export function createMessageBus(
       };
     }
 
+    // Task 50a4cd40 — SÓ UMA LISTA é uma resposta. O callback ausente E um rig
+    // que devolve `undefined` são o MESMO "não sei" — nunca `[]`, que leria
+    // como "nenhuma participação" e viraria um `ambiguous: false` afirmado.
+    function readCardTaskIds(cardId: string): string[] | null {
+      const raw = callbacks.listTaskIdsForCard?.(cardId);
+      return Array.isArray(raw) ? raw : null;
+    }
+
     if (req.cmd === "get_report") {
       // Task d7fa2d58 — DOIS identificadores, e a diferença é o conserto.
       // `seq` é do SERVIDOR: global, monotônica, aponta UMA linha para sempre e
@@ -4754,7 +4794,9 @@ export function createMessageBus(
         if (!bySeq) {
           return { ok: false, error: `no report with seq ${req.seq} — nothing is stored at that identifier` };
         }
-        const seqTaskIds = callbacks.listTaskIdsForCard?.(bySeq.card_id) ?? [];
+        // Task 50a4cd40 — o tri-estado também aqui: a linha do `seq` pertence a
+        // um SLOT, e "não sei" tem de ser `null` (nunca `false`).
+        const seqAmbiguity = resolveCardAmbiguity(readCardTaskIds(bySeq.card_id));
         return {
           ok: true,
           report: decodeReportArgument(JSON.parse(bySeq.report_json)),
@@ -4763,8 +4805,7 @@ export function createMessageBus(
           verdict: bySeq.verdict ?? null,
           role: bySeq.role ?? null,
           authorship: bySeq.authorship ?? null,
-          taskIds: seqTaskIds,
-          ambiguous: seqTaskIds.length > 1,
+          ...seqAmbiguity,
         };
       }
       if (!req.target) return { ok: false, error: "missing target cardId (or pass a `seq` — the non-reusable identifier)" };
@@ -4772,9 +4813,11 @@ export function createMessageBus(
       const afterSeq = req.afterSeq;
       // Sem afterSeq: mais recente. Com afterSeq: próximo (seq > afterSeq),
       // para caminhar histórico append-only depois do fato.
-      // Task d7fa2d58 — as participações do SLOT (a ambiguidade). Ausente no
-      // rig => `[]`, honesto: não há o que afirmar.
-      const cardTaskIds = callbacks.listTaskIdsForCard?.(target) ?? [];
+      // Task d7fa2d58 + 50a4cd40 — as participações do SLOT (a ambiguidade). O
+      // tri-estado: lista => true/false; SEM canal (callback ausente, ou rig
+      // que não conhece o conceito) => `ambiguous: null` — NÃO SE SABE, nunca
+      // `false` (`[]` leria como "nenhuma participação", que é uma afirmação).
+      const cardAmbiguity = resolveCardAmbiguity(readCardTaskIds(target));
       const storedRow = callbacks.getReport(target, afterSeq);
       // Normaliza na LEITURA (task 10cf58d0): as linhas antigas gravadas como
       // string-de-JSON são lidas como o objeto que sempre foram. Conserta o
@@ -4798,12 +4841,12 @@ export function createMessageBus(
           // ou quando está sob um id fantasma conhecido. A linha NÃO é
           // reescrita nem re-atribuída: isto anda ao lado dela.
           authorship: storedRow?.authorship ?? null,
-          // Task d7fa2d58 — o card_id é um SLOT: diz de quais tasks ele já
-          // participou, para quem lê poder CONFERIR. `ambiguous` é o aviso de
-          // que o ponteiro por card_id pode ser de outra task.
+          // Task d7fa2d58 + 50a4cd40 — o card_id é um SLOT: `...cardAmbiguity`
+          // traz `taskIds` + `ambiguous` (true/false) OU, sem canal, `ambiguous:
+          // null` + `ambiguousReason` — "não sei" nunca lê como "não é". Quem
+          // lê CONFERE.
           cardId: target,
-          taskIds: cardTaskIds,
-          ambiguous: cardTaskIds.length > 1,
+          ...cardAmbiguity,
         };
       }
       if (!req.wait) return { ok: false, error: afterSeq === undefined ? "no report yet" : "no report newer than the given sequence yet" };
@@ -4834,8 +4877,7 @@ export function createMessageBus(
               role: stored.role ?? null,
               authorship: callbacks.getReport(target)?.authorship ?? null,
               cardId: target,
-              taskIds: cardTaskIds,
-              ambiguous: cardTaskIds.length > 1,
+              ...cardAmbiguity,
             });
           },
         };
