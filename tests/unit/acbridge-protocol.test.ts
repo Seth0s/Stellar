@@ -132,6 +132,12 @@ describe("lockstep resources/bin/acbridge ↔ acbridge-protocol-decision.ts", ()
       // Protocol 8 — `browser-navigate` entrou na CLI (task de browser_navigate):
       // cmd novo é mudança de superfície.
       8: "de57622e7e65e852",
+      // Protocol 9 — `send` ganhou `--link-task <taskId>` e `--link-role <role>`
+      // (task 23bed0fb): o vínculo card↔task nasce NO ATO da entrega, pela
+      // MESMA porta de autoria do barramento. Campo novo na CLI é mudança de
+      // superfície — sem o bump um bus na 8 descartaria os dois em silêncio e o
+      // cenário que prendeu SEIS tasks continuaria ponta-a-ponta.
+      9: "ceef0d5170318f4b",
     };
     expect(
       hash,

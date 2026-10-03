@@ -40,7 +40,11 @@
  * forma sem bumpar falhe no vitest, não em produção.
  */
 
-export const ACBRIDGE_PROTOCOL = 8;
+// BUMP 8→9 (task 23bed0fb): o `send` ganhou `--link-task`/`--link-role` — a
+// FORMA do request mudou, e um bus na 8 descartaria os dois campos em silêncio
+// (exatamente o que o carimbo existe para impedir). O número mora em DOIS
+// lugares: aqui e em `resources/bin/acbridge` (a constante `ACBRIDGE_PROTOCOL`).
+export const ACBRIDGE_PROTOCOL = 9;
 
 /** Chave carimbada pelo acbridge no JSON do request. Removida antes do
  * dispatch — nenhum cmd do bus a vê. */
