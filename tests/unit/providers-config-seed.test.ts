@@ -69,7 +69,7 @@ describe("planProvidersConfig — a decisão pura", () => {
     const plan = planProvidersConfig({ schemaVersion: PROVIDERS_CONFIG_SCHEMA_VERSION }, v1());
 
     expect(plan.next.providers).toEqual([]);
-    expect((plan.next[PROVIDERS_APP_KEY] as { id: string }[]).map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
+    expect((plan.next[PROVIDERS_APP_KEY] as { id: string }[]).map((spec) => spec.id)).toEqual(["cline", "commandcode", "opencode"]);
     // A declaração publicada é a MESMA que o app usa — não um resumo.
     expect(plan.next[PROVIDERS_APP_KEY]).toEqual(v1());
     expect(Object.keys(plan.next)).toEqual(["$schema", "_notice", "schemaVersion", "providers", PROVIDERS_APP_KEY]);
@@ -125,7 +125,7 @@ describe("ensureProvidersConfigFile — nascimento, idempotência e o que NÃO �
     expect(born.$schema).toBe("./providers.schema.json");
     expect(born.schemaVersion).toBe(PROVIDERS_CONFIG_SCHEMA_VERSION);
     expect(born.providers).toEqual([]);
-    expect(born[PROVIDERS_APP_KEY].map((spec: { id: string }) => spec.id)).toEqual(["cline", "commandcode"]);
+    expect(born[PROVIDERS_APP_KEY].map((spec: { id: string }) => spec.id)).toEqual(["cline", "commandcode", "opencode"]);
     expect(born).not.toHaveProperty("_example");
     // O arquivo inteiro é aceito pelo MESMO validador do usuário.
     expect(parseProviderSpecs(born, { appSpecs: v1() })).toEqual({ specs: [], rejected: [] });
@@ -155,7 +155,7 @@ describe("ensureProvidersConfigFile — nascimento, idempotência e o que NÃO �
 
     const written = readConfig(dir);
     expect(written.providers).toEqual([]);
-    expect(written[PROVIDERS_APP_KEY].map((spec: { id: string }) => spec.id)).toEqual(["cline", "commandcode"]);
+    expect(written[PROVIDERS_APP_KEY].map((spec: { id: string }) => spec.id)).toEqual(["cline", "commandcode", "opencode"]);
     expect(written.$schema).toBe("./providers.schema.json");
   });
 
@@ -197,7 +197,7 @@ describe("ensureProvidersConfigFile — nascimento, idempotência e o que NÃO �
     rmSync(providersConfigPath(dir));
 
     const semArquivo = loadDynamicProviders(dir);
-    expect(semArquivo.registered).toEqual(expect.arrayContaining(["cline", "commandcode"]));
+    expect(semArquivo.registered).toEqual(expect.arrayContaining(["cline", "commandcode", "opencode"]));
     expect(providerById("commandcode")).toBeDefined();
 
     // E o boot seguinte o recria.
@@ -205,6 +205,7 @@ describe("ensureProvidersConfigFile — nascimento, idempotência e o que NÃO �
     expect(readConfig(dir)[PROVIDERS_APP_KEY].map((spec: { id: string }) => spec.id)).toEqual([
       "cline",
       "commandcode",
+      "opencode",
     ]);
   });
 });
@@ -229,7 +230,7 @@ describe("migração: quem já copiou uma declaração inteira continua mandando
     const written = readConfig(dir);
     expect(written.providers).toEqual([copiaDaVersaoAntiga]);
     // E a lista do app foi acrescentada ao lado dela.
-    expect(written[PROVIDERS_APP_KEY].map((spec: { id: string }) => spec.id)).toEqual(["cline", "commandcode"]);
+    expect(written[PROVIDERS_APP_KEY].map((spec: { id: string }) => spec.id)).toEqual(["cline", "commandcode", "opencode"]);
   });
 
   it("MEDIDO: a cópia VENCE a lista do app campo a campo (todos os campos são dela)", () => {

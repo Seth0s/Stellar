@@ -564,7 +564,7 @@ export const PROVIDER_ROLES = ["agent", "shell"] as const;
 const SESSION_FLAG_KEYS = ["resumeFlag", "imposeFlag", "continueFlag"] as const;
 export const SYSTEM_PROMPT_MECHANISMS = ["flag", "none"] as const;
 export const MCP_MECHANISMS = ["global-config", "none"] as const;
-export const MCP_SERVER_SHAPES = ["stdio-command", "local-array"] as const;
+export const MCP_SERVER_SHAPES = ["stdio-command", "local-array", "remote-url"] as const;
 /** Task 2e1bc3be — as sintaxes de interpolação de env MEADAS no `url` de um MCP
  * remoto. `dollar-env` = `${env:VAR}` (default de quem não declara);
  * `brace-env` = `{env:VAR}` (opencode, que RECUSA a outra). */
@@ -1665,7 +1665,9 @@ function capacitySchema(): Record<string, unknown> {
           configKey: asNonEmptyStr('Chave dentro do arquivo que lista os servidores (ex.: "mcpServers").'),
           serverShape: asEnum(
             MCP_SERVER_SHAPES,
-            '"stdio-command" = cada servidor é um objeto com command/args; "local-array" = um array posicional.',
+            '"stdio-command" = cada servidor é um objeto com command/args; "local-array" = um array posicional; ' +
+              '"remote-url" = um servidor REMOTO ({ type: "remote", url }) — a forma do opencode, que usa a sintaxe de ' +
+              "URL declarada em `urlSyntax`. Escolha a forma que a CLI de fato LÊ, nunca uma parecida.",
           ),
         },
       }),

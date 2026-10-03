@@ -1,3 +1,11 @@
+import { mkdtempSync as __dynMkdtemp } from "node:fs";
+import { tmpdir as __dynTmpdir } from "node:os";
+import { join as __dynJoin } from "node:path";
+import { loadDynamicProviders as __loadDynProviders } from "../../src/main/providers-dynamic";
+
+// Task 7d3be060 — opencode agora e GENERICO.
+__loadDynProviders(__dynMkdtemp(__dynJoin(__dynTmpdir(), "stellar-dyn-")));
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +18,7 @@ import {
   mcpCommandPath,
   needsPersistentMcpRegistration,
   registerCursor,
+  registerDeclaredProvider,
 } from "../../src/main/mcp-registration";
 import { PROVIDERS } from "../../src/main/providers";
 
@@ -170,20 +179,26 @@ describe("RODADA 4 — opencode vira servidor REMOTO (zero processo por card)", 
     return JSON.parse(readFileSync(file, "utf8"));
   }
 
-  it("escreve {type:'remote', url:<brace-env>} — a sintaxe MEDIDA do opencode, e NENHUM comando", async () => {
-    expect(await REGISTRARS.opencode("/x/stellar-mcp")).toEqual({ status: "ok", changed: true });
+  // Task 7d3be060 — o opencode virou provider GENÉRICO: NÃO existe mais
+  // `REGISTRARS.opencode`. Quem escreve é o caminho DECLARADO
+  // (`registerDeclaredProvider` + `serverShape: "remote-url"`), e a entrada
+  // produzida é a MESMA. Os dois testes abaixo passaram a exercitar esse
+  // caminho — a garantia (zero-processo, `{type:"remote"}`, nenhum comando)
+  // continua a mesma; mudou QUEM a emite.
+  it("escreve {type:'remote', url:<brace-env>} — a sintaxe MEDIDA do opencode, e NENHUM comando", () => {
+    expect(registerDeclaredProvider("opencode", "/x/stellar-mcp")).toEqual({ status: "ok", changed: true });
     expect(read().mcp.stellar).toEqual({ type: "remote", url: OC_URL });
   });
 
-  it("idempotente na entrada remota; a entrada stdio antiga ({type:'local'}) é reescrita", async () => {
-    await REGISTRARS.opencode("/x/stellar-mcp");
-    expect(await REGISTRARS.opencode("/x/stellar-mcp")).toEqual({ status: "ok", changed: false });
+  it("idempotente na entrada remota; a entrada stdio antiga ({type:'local'}) é reescrita", () => {
+    registerDeclaredProvider("opencode", "/x/stellar-mcp");
+    expect(registerDeclaredProvider("opencode", "/x/stellar-mcp")).toEqual({ status: "ok", changed: false });
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(
       file,
       JSON.stringify({ mcp: { stellar: { type: "local", command: ["/old/stellar-mcp"], enabled: true } } }),
     );
-    expect(await REGISTRARS.opencode("/x/stellar-mcp")).toEqual({ status: "ok", changed: true });
+    expect(registerDeclaredProvider("opencode", "/x/stellar-mcp")).toEqual({ status: "ok", changed: true });
     expect(read().mcp.stellar).toEqual({ type: "remote", url: OC_URL });
   });
 });
@@ -200,12 +215,25 @@ describe("mcp-registration: gate derived from ProviderCapacity, registrars match
     expect(needsPersistentMcpRegistration("no-such-provider")).toBe(false);
   });
 
-  it("every global-config provider has a registrar, and no registrar exists for any other provider", () => {
-    const declared = PROVIDERS.filter((p) => p.capacity.mcp.mechanism === "global-config").map((p) => p.id).sort();
-    expect(Object.keys(REGISTRARS).sort()).toEqual(declared);
+  it("every global-config provider is WRITTEN (registrar OR declared path), and no registrar exists for any other provider", () => {
+    // Task 7d3be060 — a afirmação antiga ("todo global-config tem REGISTRADOR")
+    // deixou de valer: o opencode agora é escrito pelo caminho DECLARADO. A
+    // garantia que este teste protegia era "nenhum global-config fica sem
+    // ESCRITOR, e nenhum registrador existe fora dele" — e é EXATAMENTE isso
+    // que a forma nova afirma, só que reconhecendo as DUAS vias.
+    for (const p of PROVIDERS) {
+      if (p.capacity.mcp.mechanism !== "global-config") continue;
+      const mcp = p.capacity.mcp as { configPath?: string; configKey?: string; serverShape?: string };
+      const hasRegistrar = Object.prototype.hasOwnProperty.call(REGISTRARS, p.id);
+      const declared = !!(mcp.configPath && mcp.configKey && mcp.serverShape);
+      expect(hasRegistrar || declared, `global-config sem escritor: ${p.id}`).toBe(true);
+    }
+    for (const id of Object.keys(REGISTRARS)) {
+      expect(PROVIDERS.find((p) => p.id === id)?.capacity.mcp.mechanism, id).toBe("global-config");
+    }
   });
 
-  it("today that set is cursor, antigravity, opencode (measured against each CLI's --help)", () => {
-    expect(Object.keys(REGISTRARS).sort()).toEqual(["antigravity", "cursor", "opencode"]);
+  it("today the hand-written registrars are cursor and antigravity — opencode moved to the DECLARED path (task 7d3be060)", () => {
+    expect(Object.keys(REGISTRARS).sort()).toEqual(["antigravity", "cursor"]);
   });
 });

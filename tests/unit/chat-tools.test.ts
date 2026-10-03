@@ -1,3 +1,11 @@
+import { mkdtempSync as __dynMkdtemp } from "node:fs";
+import { tmpdir as __dynTmpdir } from "node:os";
+import { join as __dynJoin } from "node:path";
+import { loadDynamicProviders as __loadDynProviders } from "../../src/main/providers-dynamic";
+
+// Task 7d3be060 — o opencode virou GENERICO: sem registro, providerById("opencode") = undefined.
+__loadDynProviders(__dynMkdtemp(__dynJoin(__dynTmpdir(), "stellar-dyn-")));
+
 import { describe, it, expect, vi } from "vitest";
 import { executeTool, DELEGATE_TOOL_NAME, TOOL_PARAMETERS, ChatToolHooks, DelegateProvider } from "../../src/main/chat-tools";
 import { PROVIDERS } from "../../src/main/providers";

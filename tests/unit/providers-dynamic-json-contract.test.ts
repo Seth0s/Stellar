@@ -430,7 +430,7 @@ describe("a receita copiável no schema publicado", () => {
     // resto do arquivo usa contra o parser).
     const items = getAtPath(providersConfigSchema(), "properties.providers.items") as Record<string, unknown>;
     expect(items.examples).toEqual(shippedProviderSpecs());
-    expect(measuredProviderRecipes().map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
+    expect(measuredProviderRecipes().map((spec) => spec.id)).toEqual(["cline", "commandcode", "opencode"]);
   });
 
   it("são CÓPIAS: mutar o que o schema publica não pode mexer no catálogo vivo", () => {
@@ -471,7 +471,7 @@ describe("a receita copiável no schema publicado", () => {
     // Com a sobrescrita parcial o `required` é só `id` — então o `examples`
     // passa a ser o único lugar do schema que mostra uma declaração COMPLETA.
     expect(providersConfigSchema().properties.providers.items).toHaveProperty("examples");
-    expect(measuredProviderRecipes().map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
+    expect(measuredProviderRecipes().map((spec) => spec.id)).toEqual(["cline", "commandcode", "opencode"]);
   });
 
   it("chega ao DISCO com o schema ao lado do arquivo do usuário (é o que o editor lê)", () => {
@@ -483,6 +483,7 @@ describe("a receita copiável no schema publicado", () => {
     expect(onDisk.properties.providers.items.examples.map((spec: { id: string }) => spec.id)).toEqual([
       "cline",
       "commandcode",
+      "opencode",
     ]);
     // E o arquivo do usuário aponta para ele — é assim que o editor acha a
     // instrução sem o usuário procurar.
@@ -502,7 +503,7 @@ describe("o arquivo inicial (primeiro save)", () => {
     // A chave do usuário nasce vazia — o app nunca escreve nela.
     expect(initial.providers).toEqual([]);
     // E a lista do app nasce COMPLETA e visível.
-    expect((initial.appProviders as { id: string }[]).map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
+    expect((initial.appProviders as { id: string }[]).map((spec) => spec.id)).toEqual(["cline", "commandcode", "opencode"]);
     // O `_example` fictício saiu (task 3fe0db6e).
     expect(initial).not.toHaveProperty("_example");
   });

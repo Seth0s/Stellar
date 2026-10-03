@@ -180,7 +180,12 @@ export type McpServerShape =
    * ambiente do card (`${env:AGENT_CANVAS_MCP_URL}?card=${env:AGENT_CANVAS_CARD_ID}`),
    * porque a porta é efêmera e a identidade é por card. Ver `mcp-registration.ts`.
    */
-  | "http-url";
+  | "http-url"
+  /** Task 7d3be060 — a forma REMOTA do `opencode`: `{ type: "remote", url }`
+   * (não `"http"`). Era escrita por uma função à mão; agora é declarada no
+   * catálogo genérico e o caminho DECLARADO a emite. O `url` usa a mesma
+   * interpolação por env, na sintaxe de `urlSyntax`. */
+  | "remote-url";
 
 /**
  * A SINTAXE com que uma CLI interpola variáveis de ambiente num `url` de
@@ -1225,103 +1230,6 @@ const NATIVE_PROVIDERS: readonly ProviderDef[] = [
       // comes from `delivery.briefFlag`, appended by `spawnArgv`. Go
       // `flag` parser (`agy --help`, 2026-09-13): no variadic option at
       // all, and a flag-carried brief cannot be swallowed anyway.
-      return args;
-    },
-  },
-  // Pedido ao vivo (2026-09-04) — worker local (Qwen via llama-server,
-  // ver ai memory `qwen-buun-local-server`) precisava de um agente de
-  // terminal de verdade (tool-calling real) em vez de só chat cru; em
-  // vez de construir um harness próprio, reusa o `opencode` (sst/opencode)
-  // já instalado, que já fala com qualquer endpoint OpenAI-compatible via
-  // `provider` custom em `~/.config/opencode/opencode.json`. Sem flag
-  // efêmera de registro de MCP (confirmado no `--help` real: só
-  // `opencode mcp` persistente) — mesma categoria de cursor/antigravity
-  // acima, registro fica em `mcp-registration.ts`.
-  {
-    id: "opencode",
-    label: "OpenCode",
-    binaryNames: ["opencode"],
-    capacity: {
-      role: "agent",
-      systemPrompt: { mechanism: "none" },
-      // `urlSyntax`: MEDIDO (task f7a2ac84 R4) — o opencode tem sintaxe PRÓPRIA
-      // `{env:VAR}`; com `${env:VAR}` ele recusa com "Invalid MCP URL". Com
-      // `{env:...}` no url, `opencode mcp list` conectou no servidor real.
-      mcp: { mechanism: "global-config", urlSyntax: "brace-env" },
-      acbridgeOnPath: true,
-      // Measured 2026-09-15 on this machine: `opencode --help`
-      // (v1.18.31) has no effort flag at all — nothing to send, so
-      // nothing is invented here either.
-      effort: { mechanism: "none", reason: "no-flag" },
-      model: { mechanism: "flag", flag: "--model" },
-      // Não impõe (medido 2026-09-13: recusa um id desconhecido).
-      session: {
-        canImposeSessionId: false,
-        resumeFlag: "--session",
-        continueFlag: "--continue",
-        store: {
-          kind: "sqlite",
-          db: "~/.local/share/opencode/opencode.db",
-          // `time_created`, NÃO `time_updated`: uma sessão velha recebendo um
-          // turno novo não é prova de que este card recém-rearmado a criou.
-          discovery: { table: "session", idColumn: "id", cwdColumn: "directory", timeColumn: "time_created" },
-          // `time_updated` é o sinal de atividade da própria linha; o
-          // conteúdo real é uma linha em `message` — medido: a linha do
-          // usuário já existe no instante em que a sessão nasce (tokens e
-          // custo só no FIM do turno, e usá-los reprovaria um prompt real).
-          read: {
-            table: "session",
-            idColumn: "id",
-            timeColumn: "time_updated",
-            contentTable: "message",
-            contentColumn: "session_id",
-          },
-        },
-      },
-      delivery: { briefMechanism: "flag", briefFlag: "--prompt", submitStartedPattern: undefined },
-    },
-    installCommand: { posix: "npm install -g opencode-ai", windows: "npm install -g opencode-ai" },
-    // Sem flag de system-prompt: `--prompt`/mensagens são entrada do
-    // usuário; instruções de sistema exigem configuração persistente.
-    // Report discovery → scrollback (derived). MCP via global opencode.json.
-    //
-    // MODEL SPEC (2026-09-15, medido ao vivo — a mesma classe de bug do
-    // esforço silenciosamente largado, agora no model): `--model` é
-    // passado verbatim embaixo, e o valor que a CLI espera é o spec
-    // COMPLETO `<provider>/<id-do-catálogo>`. Para ALGUNS providers o id
-    // do catálogo (`~/.cache/opencode/models.json`) JÁ VEM prefixado — a
-    // chave do modelo em que esta própria sessão rodou é literalmente
-    // `cline-pass/glm-5.3`, então o spec que o opencode resolve é
-    // `cline-pass/cline-pass/glm-5.3`:
-    //
-    //   $ opencode run --model cline-pass/cline-pass/glm-5.3 "responda apenas: ok"
-    //   > build · cline-pass/glm-5.3
-    //   ok
-    //
-    // Com um só nível (`cline-pass/glm-5.3`) o opencode corta no
-    // PRIMEIRO `/`, procura o modelo `glm-5.3` dentro do provider
-    // `cline-pass`, não acha (a chave do catálogo é
-    // `cline-pass/glm-5.3`), e cai num default EM SILÊNCIO — sem erro,
-    // sem aviso, sem nada no scrollback (medido: pedido
-    // cline-pass/glm-5.3, o card subiu em DeepSeek V4.1 Flash). É o
-    // mesmo tipo de queda silenciosa que o antigravity tem com `--model`
-    // sem `--effort` (ver `SpawnOpts.effort`), sem nem o warning. A
-    // listagem confirmada na própria máquina:
-    // `opencode models cline-pass` → `cline-pass/cline-pass/glm-5.3`,
-    // `cline-pass/cline-pass/deepseek-v4.1-flash`, …
-    //
-    // Nenhuma validação pré-spawn acontece aqui, de propósito: checar o
-    // spec contra o catálogo real exigiria um subprocesso
-    // (`opencode models [provider]`, ~1,7s medidos nesta máquina) por
-    // spawn — o desenho foi proposto no relatório da task de 2026-09-15
-    // e NÃO implementado.
-    buildArgs: ({ resumeId, continueLast, model }) => {
-      const args: string[] = [];
-      if (resumeId) args.push("--session", resumeId);
-      else if (continueLast) args.push("--continue");
-      if (model) args.push("--model", model);
-      // `--prompt <brief>` appended by `spawnArgv`. yargs (`opencode
-      // --help`, 2026-09-13): only `--cors` is an array option; unused.
       return args;
     },
   },

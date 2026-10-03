@@ -124,6 +124,52 @@
           "result": "stdout-text"
         }
       }
+    },
+    {
+      "id": "opencode",
+      "label": "OpenCode",
+      "binaryNames": ["opencode"],
+      "installCommand": {
+        "posix": "npm install -g opencode-ai",
+        "windows": "npm install -g opencode-ai"
+      },
+      "capacity": {
+        "role": "agent",
+        "session": {
+          "canImposeSessionId": false,
+          "resumeFlag": "--session",
+          "continueFlag": "--continue",
+          "store": {
+            "kind": "sqlite",
+            "db": "~/.local/share/opencode/opencode.db",
+            "discovery": {
+              "table": "session",
+              "idColumn": "id",
+              "cwdColumn": "directory",
+              "timeColumn": "time_created"
+            },
+            "read": {
+              "table": "session",
+              "idColumn": "id",
+              "timeColumn": "time_updated",
+              "contentTable": "message",
+              "contentColumn": "session_id"
+            }
+          }
+        },
+        "systemPrompt": { "mechanism": "none" },
+        "mcp": {
+          "mechanism": "global-config",
+          "configPath": "~/.config/opencode/opencode.json",
+          "configKey": "mcp",
+          "serverShape": "remote-url",
+          "urlSyntax": "brace-env"
+        },
+        "acbridgeOnPath": true,
+        "effort": { "mechanism": "none", "reason": "no-flag" },
+        "model": { "mechanism": "flag", "flag": "--model" },
+        "delivery": { "briefMechanism": "flag", "briefFlag": "--prompt" }
+      }
     }
   ]
 }
