@@ -75,7 +75,10 @@ const ownTaskId = process.env.AGENT_CANVAS_TASK_ID || "";
 // src/main/acbridge-protocol-decision.ts — o vitest trava os dois
 // (tests/unit/acbridge-protocol.test.ts). Bump quando a forma de um
 // request muda (cmd/campo novo), e só então.
-const ACBRIDGE_PROTOCOL = 8;
+// BUMP 8→9 (task 23bed0fb): `send` ganhou `--link-task`/`--link-role`, ou seja
+// a FORMA do request mudou — um bus na 8 descartaria os campos em silêncio.
+// O número mora em DOIS lugares: aqui e em `src/main/acbridge-protocol-decision.ts`.
+const ACBRIDGE_PROTOCOL = 9;
 
 function fail(msg) {
   process.stderr.write(`acbridge: ${msg}\n`);
@@ -111,7 +114,7 @@ if (!sockPath) {
 }
 
 const USAGE =
-  "usage: acbridge <version | list | send <cardId> <message...> | get-delivery <id> | open <url> | " +
+  "usage: acbridge <version | list | send <cardId> <message...> [--link-task <taskId> --link-role <role>] | get-delivery <id> | open <url> | " +
   "close-card <cardId> [reason...] | delete-card <cardId> [reason...] | " +
   "update-card-content [--append] <cardId> <text...> | " +
   "snapshot [cardId | x y w h] | page-text <cardId> | read-card <cardId> [lines] | " +
@@ -152,14 +155,44 @@ if (cmd === "version") {
 } else if (cmd === "list") {
   request = { cmd: "list" };
 } else if (cmd === "send") {
-  const [target, ...msgParts] = rest;
-  if (!target || msgParts.length === 0) fail("usage: acbridge send <cardId> <message...>");
+  // Task 23bed0fb — PARIDADE com a tool: `--link-task <taskId> --link-role
+  // <role>` vinculam o card NO ATO da entrega, pela MESMA porta de autoria do
+  // barramento (só a marca do board, ou o humano, vincula terceiro). Os dois
+  // vão JUNTOS: um sem o outro é recusa, porque papel NUNCA é inferido.
+  const restSemFlags = [...rest];
+  let linkTaskId;
+  let linkRole;
+  for (let i = 0; i < restSemFlags.length; i++) {
+    if (restSemFlags[i] === "--link-task") {
+      linkTaskId = restSemFlags[i + 1];
+      restSemFlags.splice(i, 2);
+      i--;
+    } else if (restSemFlags[i] === "--link-role") {
+      linkRole = restSemFlags[i + 1];
+      restSemFlags.splice(i, 2);
+      i--;
+    }
+  }
+  const [target, ...msgParts] = restSemFlags;
+  if (!target || msgParts.length === 0) {
+    fail("usage: acbridge send <cardId> <message...> [--link-task <taskId> --link-role implementer|reviewer]");
+  }
+  if ((linkTaskId === undefined) !== (linkRole === undefined)) {
+    fail("send: --link-task and --link-role go TOGETHER — pass both (to link on delivery) or neither (nothing is linked). No role is ever inferred.");
+  }
   // DESIGN-BACKLOG.md item 61 — same auto-fill as `report`'s ownCardId
   // above, no new flag needed: whenever this runs inside a real card
   // (AGENT_CANVAS_CARD_ID set), the delivered text gets a sender label
   // automatically. Omitted (not failed) when unset — unlike `report`,
   // `send` still works from outside a card context, just unprefixed.
-  request = { cmd: "send", target, text: msgParts.join(" "), ...(ownCardId ? { requesterId: ownCardId } : {}) };
+  request = {
+    cmd: "send",
+    target,
+    text: msgParts.join(" "),
+    ...(ownCardId ? { requesterId: ownCardId } : {}),
+    ...(linkTaskId ? { linkTaskId } : {}),
+    ...(linkRole ? { linkRole } : {}),
+  };
 } else if (cmd === "get-delivery") {
   const [id] = rest;
   if (!id) fail("usage: acbridge get-delivery <id>");

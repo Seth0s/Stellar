@@ -576,15 +576,29 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Your own card id (AGENT_CANVAS_CARD_ID env var) — when given, the delivered text is prefixed with a human-friendly sender label so the reader knows who it's from (DESIGN-BACKLOG.md item 61). Ignored for a bash target (would break the command).",
             ),
+          linkTaskId: z
+            .string()
+            .optional()
+            .describe(
+              "Task id to LINK this target card to, as part of the delivery — the fix for reusing an already-alive card to review a task: the brief delivers, the reviewer judges, and WITHOUT the link the verdict write is refused (measured: six tasks stayed pending with the verdict in hand). Creates the card↔task row with the role you DECLARE in `linkRole`. The link is exactly what AUTHORIZES the verdict write on a review=\"wanted\" task — it is NOT a shortcut to bypass the gate: creating it goes through the SAME authorship door as `link_task_card`, so on the task's board only the card marked as orchestrator (or the human) may link a THIRD party, and a card can never self-link as reviewer. Pass this and `linkRole` together, or neither.",
+            ),
+          linkRole: z
+            .enum(["implementer", "reviewer"])
+            .optional()
+            .describe(
+              "The role to link with, DECLARED — never inferred. There is NO role default: with `linkTaskId` and no `linkRole` the whole call is REFUSED naming both fields, and with neither nothing is linked at all (absence stays absence). 'reviewer' is what authorizes the verdict write on a review=\"wanted\" task.",
+            ),
         },
       },
-      async ({ target, text, steer, callerCardId }) => {
+      async ({ target, text, steer, callerCardId, linkTaskId, linkRole }) => {
         const res = await opts.handleRequest({
           cmd: "send",
           target,
           text,
           requesterId: caller(callerCardId),
           ...(steer === undefined ? {} : { steer }),
+          ...(linkTaskId === undefined ? {} : { linkTaskId }),
+          ...(linkRole === undefined ? {} : { linkRole }),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
