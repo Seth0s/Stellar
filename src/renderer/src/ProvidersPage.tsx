@@ -6,6 +6,8 @@ import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { refreshProviderClassification, useProviderClassification } from "./useProviderClassification";
 import { ProviderIcon } from "./provider-icons";
 import type { ProvidersPageRow, ProvidersPageView } from "../../preload/index";
+import { ProviderUsageBadge } from "./ProviderUsageBadge";
+import type { ProviderUsageStats } from "../../main/provider-usage";
 
 /**
  * Settings → Providers: os providers GENÉRICOS (task cebaf3c8) e — desde o
@@ -99,6 +101,85 @@ export function ProvidersPage() {
         skippedIds: classification.skippedIds,
       }).native,
     [available, classification.dynamicIds, classification.skippedIds],
+  );
+
+  // USO/COTA (task b7caf86d). Uma leitura por lista de providers, SEM poll (a
+  // página já recusa poll — ver o doc do topo). `usageNow` congela no instante
+  // da leitura para a idade não "andar" a cada render: a idade é do DADO, não
+  // do relógio da tela. Abrir a página nunca autoriza spawn — a fonte cara do
+  // opencode só roda no gesto explícito ("Medir agora").
+  const [usage, setUsage] = useState<Record<string, ProviderUsageStats>>({});
+  const [usageLoading, setUsageLoading] = useState<Record<string, boolean>>({});
+  const [measuring, setMeasuring] = useState<string | null>(null);
+  const [usageNow, setUsageNow] = useState(() => Date.now());
+
+  const usageIds = useMemo(
+    () => [...natives.map((option) => option.id), ...(view?.rows.map((row) => row.id) ?? [])],
+    [natives, view],
+  );
+  // Chave estável: `usageIds` é um array novo a cada render e dispararia o
+  // efeito para sempre. Os ids são slugs (sem vírgula), então juntar é seguro.
+  const usageIdsKey = usageIds.join(",");
+
+  useEffect(() => {
+    const ids = usageIdsKey ? usageIdsKey.split(",") : [];
+    if (ids.length === 0) return;
+    let cancelled = false;
+    setUsageLoading((prev) => {
+      const next = { ...prev };
+      for (const id of ids) next[id] = true;
+      return next;
+    });
+    void Promise.all(
+      ids.map(async (id) => {
+        try {
+          const stats = await window.providerUsage.get(id);
+          if (!cancelled) setUsage((prev) => ({ ...prev, [id]: stats }));
+        } catch {
+          // Falha de canal NÃO vira leitura: sem `stats`, `decideProviderUsage`
+          // devolve `unavailable` — nunca um 0 fabricado.
+        } finally {
+          if (!cancelled) setUsageLoading((prev) => ({ ...prev, [id]: false }));
+        }
+      }),
+    ).then(() => {
+      if (!cancelled) setUsageNow(Date.now());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [usageIdsKey]);
+
+  const measureUsage = useCallback(async (id: string) => {
+    setMeasuring(id);
+    try {
+      const stats = await window.providerUsage.get(id, { allowSpawn: true });
+      setUsage((prev) => ({ ...prev, [id]: stats }));
+      setUsageNow(Date.now());
+    } finally {
+      setMeasuring(null);
+    }
+  }, []);
+
+  // O "Medir agora" só é oferecido quando a fonte DECLARA que existe e é cara
+  // (`onDemand`) — a decisão de mostrar o botão vem do dado, não do id.
+  const measureHandler = (id: string): (() => void) | undefined => {
+    const stats = usage[id];
+    if (stats !== undefined && stats.supported === false && stats.onDemand === true) {
+      return () => void measureUsage(id);
+    }
+    return undefined;
+  };
+
+  const usageMeter = (id: string) => (
+    <ProviderUsageBadge
+      providerId={id}
+      stats={usage[id]}
+      loading={usageLoading[id] === true}
+      nowMs={usageNow}
+      measuring={measuring === id}
+      onMeasure={measureHandler(id)}
+    />
   );
 
   // Aviso da última releitura externa (task ebe8a79c). Guarda a LINHA já
@@ -336,6 +417,7 @@ export function ProvidersPage() {
                       {t("settings.providers.nativeFlags")}
                     </span>
                   </span>
+                  {usageMeter(option.id)}
                 </div>
               </div>
             ))}
@@ -407,6 +489,7 @@ export function ProvidersPage() {
                     )}
                     {row.skipped && <span className="providers-badge is-warn">{t("settings.providers.skipped")}</span>}
                   </span>
+                  {usageMeter(row.id)}
                 </div>
                 <div className="providers-row-actions">
                   {confirmReset === row.id ? (

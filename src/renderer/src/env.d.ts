@@ -24,6 +24,7 @@ import type {
   SystemApi,
   I18nApi,
   VoiceApi,
+  ProviderUsageApi,
 } from "../../preload/index";
 
 declare global {
@@ -52,6 +53,8 @@ declare global {
     boardAssets: BoardAssetsApi;
     system: SystemApi;
     i18n: I18nApi;
+    /** Uso/cota por provider — `main/provider-usage.ts`. */
+    providerUsage: ProviderUsageApi;
     /** MOTOR DE VOZ local (whisper.cpp) — `main/voice-transcription.ts`. */
     voice: VoiceApi;
   }
