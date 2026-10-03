@@ -75,6 +75,11 @@ export const TASK_DIFF_KEYS = {
   filesTruncated: "task.diff.filesTruncated",
   /** "arquivo novo: o diff do git não tem patch dele" */
   untracked: "task.diff.untracked",
+  /** Rótulo de território POR ARQUIVO (invariante 1: o arquivo sai completo,
+   * com o rótulo ao lado — nunca filtrado). */
+  inside: "task.diff.inside",
+  outside: "task.diff.outside",
+  unlabeled: "task.diff.unlabeled",
 } as const;
 
 export type TaskDiffFileView = {
@@ -99,11 +104,14 @@ export type TaskDiffSummary =
   | { kind: "no-territory"; total: number }
   | { kind: "no-files" };
 
-export const TASK_DIFF_SUMMARY_KEYS: Record<TaskDiffSummary["kind"], string> = {
+// `as const satisfies` (e não `Record<…, string>`): preserva as chaves como
+// LITERAL — `t()` exige a união tipada, e o `string` largo que o `Record`
+// produzia era justamente o que o tsc recusava no call site.
+export const TASK_DIFF_SUMMARY_KEYS = {
   outside: TASK_DIFF_KEYS.outsideSummary,
   "no-territory": TASK_DIFF_KEYS.noTerritory,
   "no-files": TASK_DIFF_KEYS.noFiles,
-};
+} as const satisfies Record<TaskDiffSummary["kind"], string>;
 
 export type TaskDiffView = {
   /** `false` = a task nunca teve evidência de gate: o bloco NÃO existe na

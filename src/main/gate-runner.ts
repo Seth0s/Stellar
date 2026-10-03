@@ -424,6 +424,32 @@ export function describeDiffAuthorship(total: number, outside: number, territory
   );
 }
 
+/**
+ * Extrai `gateRun.diff` de um `result_json` de task (task 7096e8af) — o seam
+ * ON-DEMAND que faltava entre a captura (que já está no HEAD) e a Fila.
+ *
+ * PURO e defensivo: linha antiga, JSON podre, `gateRun` ausente ou sem `diff`
+ * => `null`, e a UI simplesmente não desenha o bloco. NÃO julga o conteúdo (o
+ * shape é o que `captureDiff` gravou); quem DECIDE o que a tela mostra é
+ * `src/renderer/src/task-diff-presentation.ts`. O push do board projeta
+ * `result_json` como NULL DE PROPÓSITO (tamanho), então isto é lido SOB
+ * DEMANDA — nunca por evento.
+ */
+export function parseGateDiffEvidence(resultJson: string | null | undefined): DiffCaptureEvidence | null {
+  if (!resultJson) return null;
+  try {
+    const parsed: unknown = JSON.parse(resultJson);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const gateRun = (parsed as Record<string, unknown>).gateRun;
+    if (typeof gateRun !== "object" || gateRun === null) return null;
+    const diff = (gateRun as Record<string, unknown>).diff;
+    if (typeof diff !== "object" || diff === null) return null;
+    return diff as DiffCaptureEvidence;
+  } catch {
+    return null;
+  }
+}
+
 export async function captureDiff(opts: {
   gitRoot: string | null;
   territory?: readonly string[] | null;

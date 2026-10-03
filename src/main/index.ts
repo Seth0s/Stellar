@@ -122,6 +122,7 @@ import { createMessageBus, type BusRequest, type BusResponse, type StickyResult 
 import { createPrototypeServer } from "./prototype-server";
 import { parseManifest, presetUrl, type PrototypePresetInfo } from "./prototype-presets";
 import { ensureMcpRegistered } from "./mcp-registration";
+import { parseGateDiffEvidence } from "./gate-runner";
 import { createMcpServer } from "./mcp-server";
 import { runOneShotSummary } from "./ai-action";
 import { createRemoteInputSession } from "./remote-input";
@@ -2840,6 +2841,16 @@ function createWindow() {
   // `task:changed` acima cobre toda mudança POSTERIOR a este board estar
   // aberto).
   ipcMain.handle("store:tasks:list-by-board", (_e, boardId: string) => buildTaskBoard(boardId));
+
+  /** O DIFF que o app capturou nesta task (task 7096e8af) — SOB DEMANDA.
+   * O push do board projeta `result_json` como NULL de propósito (tamanho:
+   * medido 1,48 MB/evento); este canal só é aberto quando o modal de detalhe
+   * abre. `null` = a task nunca teve `gateRun.diff` (linha antiga, ou gate sem
+   * repo) — e aí o bloco NÃO existe na tela. NÃO é leitura de autoria: o shape
+   * vem do `captureDiff`, que observa MUDANÇA. */
+  ipcMain.handle("store:tasks:gate-diff", (_e, taskId: string) =>
+    parseGateDiffEvidence(store.getTask(taskId)?.result_json),
+  );
   // DESIGN-BACKLOG.md §2.1 decisões 8/9 — "o app NUNCA marca concluído
   // sozinho": isto é o botão que aceita a PROPOSTA que um `report{verdict:
   // "aprovado"}` já fez (peça 4's barra), nunca um caminho automático —

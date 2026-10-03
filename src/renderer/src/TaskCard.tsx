@@ -52,6 +52,12 @@ import {
   type SprintView,
 } from "./task-board-model";
 import { computeWorkStats, formatCycleMinutes, MIN_COMPARE_N } from "./work-stats";
+import {
+  decideTaskDiffPresentation,
+  TASK_DIFF_KEYS,
+  TASK_DIFF_SUMMARY_KEYS,
+  type TaskDiffView,
+} from "./task-diff-presentation";
 import styles from "./TaskCard.module.css";
 import { getLocale, t } from "../../shared/i18n";
 
@@ -420,6 +426,28 @@ function TaskDetailModal({
   const statusAskNotice = describeStatusAskNotice(task.requestedStatus);
   const humanMoveNotice = describeHumanMoveNotice(task.lastActor, task.cardAlive, task.cardId);
   const waitingOn = waitingOnDep(task.deps, task.depStatuses);
+  // O DIFF capturado pelo app (task 7096e8af) é buscado SOB DEMANDA, quando
+  // ESTE modal abre — o push do board não o carrega (tamanho). `null` do canal
+  // vira o bloco AUSENTE (`present: false`), nunca um "vazio" inventado.
+  const [diff, setDiff] = useState<TaskDiffView | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    // Um duplo de teste (ou um preload antigo) pode não expor o canal: ausência
+    // vira BLOCO AUSENTE, nunca um throw que derruba o modal. Mesmo cuidado dos
+    // `callbacks?.` do main para callbacks que um teste não define.
+    const fetchDiff = window.tasks?.gateDiff;
+    if (typeof fetchDiff !== "function") return;
+    void fetchDiff(task.id)
+      .then((evidence) => {
+        if (!cancelled) setDiff(decideTaskDiffPresentation(evidence));
+      })
+      .catch(() => {
+        if (!cancelled) setDiff(decideTaskDiffPresentation(null));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id]);
 
   async function submitPrompt(mode: "append" | "replace") {
     const trimmed = draft.trim();
@@ -530,6 +558,62 @@ function TaskDetailModal({
             <div className={styles.interruptNotice} data-part="interruption-reason">
               {t("task.interrupted", { reason: task.interruptionReason })}
             </div>
+          )}
+
+          {diff?.present && (
+            <section data-part="task-detail-diff">
+              <div className={styles.detailSectionTitle}>{t(TASK_DIFF_KEYS.sectionTitle)}</div>
+              {/* A frase anti-autoria vem da PRÓPRIA EVIDÊNCIA (o módulo puro
+                  a repassa como veio) — nunca uma segunda redação aqui. */}
+              {diff.note && (
+                <p className={styles.detailHint} data-part="task-diff-note">
+                  {diff.note}
+                </p>
+              )}
+              <div className={styles.detailHint} data-part="task-diff-summary">
+                {diff.summary.kind === "outside"
+                  ? t(TASK_DIFF_SUMMARY_KEYS.outside, { outside: String(diff.summary.outside), total: String(diff.summary.total) })
+                  : diff.summary.kind === "no-territory"
+                    ? t(TASK_DIFF_SUMMARY_KEYS["no-territory"], { total: String(diff.summary.total) })
+                    : t(TASK_DIFF_SUMMARY_KEYS["no-files"])}
+              </div>
+              {/* DOIS truncamentos, avisos PRÓPRIOS (o patch e a LISTA). */}
+              {diff.filesTruncated && (
+                <div className={styles.detailHint} data-part="task-diff-files-truncated">
+                  {t(TASK_DIFF_KEYS.filesTruncated)}
+                </div>
+              )}
+              {diff.files.length > 0 && (
+                <div className={styles.detailList} data-part="task-diff-files">
+                  {diff.files.map((f) => (
+                    <div key={f.path} className={styles.detailVerdict} data-part="task-diff-file" data-territory={f.territory}>
+                      <span className={styles.chipId}>{f.status.trim() || "·"}</span>
+                      <span className={styles.detailVerdictWhen}>{f.path}</span>
+                      <span className={styles.age}>
+                        {f.territory === "inside"
+                          ? t(TASK_DIFF_KEYS.inside)
+                          : f.territory === "outside"
+                            ? t(TASK_DIFF_KEYS.outside)
+                            : t(TASK_DIFF_KEYS.unlabeled)}
+                      </span>
+                      {f.untracked && <span className={styles.age}>{t(TASK_DIFF_KEYS.untracked)}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {diff.patchTruncated && (
+                <div className={styles.detailHint} data-part="task-diff-patch-truncated">
+                  {t(TASK_DIFF_KEYS.patchTruncated)}
+                </div>
+              )}
+              {/* O patch é MOSTRADO como veio (texto cru num <pre>), nunca
+                  re-renderizado como um diff-viewer — "aponte para ele". */}
+              {diff.patch && (
+                <pre className={styles.detailPromptBlock} data-part="task-diff-patch">
+                  {diff.patch}
+                </pre>
+              )}
+            </section>
           )}
 
           <section>
