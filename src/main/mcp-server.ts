@@ -1877,11 +1877,22 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
     server.registerTool(
       "get_page_text",
       {
-        description: "Read a browser card's rendered page text (document.body.innerText, truncated if very long) — cheaper than snapshot when you just need to know what the page says, not see it.",
-        inputSchema: { target: z.string().describe("The browser card's id or label (see list_cards)") },
+        description:
+          "Read a browser card's rendered page text — cheaper than snapshot when you just need to know what the page says, not see it. SCOPE IT: pass `selector` to read ONE element's text; omitting it reads `document.body.innerText` (the whole page), which on a list-heavy page can be thousands of tokens. `maxChars` caps the returned text (default 20000, floor 200, ceiling 200000). The result ALWAYS announces a cut — `truncated: true` plus `totalChars` (the real length) — so never assume the text ends where it stops; narrow with `selector` instead. A `selector` that matches nothing is a NAMED error (nothing was read), never an empty string.",
+        inputSchema: {
+          target: z.string().describe("The browser card's id or label (see list_cards)"),
+          selector: z
+            .string()
+            .optional()
+            .describe('CSS selector — read ONLY this element\'s text instead of the whole page (the scope fix). The answer carries `scope: "selector"`.'),
+          maxChars: z
+            .number()
+            .optional()
+            .describe("Max characters returned (default 20000; clamped to [200, 200000]). The answer says `truncated` + `totalChars` when it cuts."),
+        },
       },
-      async ({ target }) => {
-        const res = await opts.handleRequest({ cmd: "get_page_text", target });
+      async ({ target, selector, maxChars }) => {
+        const res = await opts.handleRequest({ cmd: "get_page_text", target, selector, maxChars });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );

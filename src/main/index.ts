@@ -2354,8 +2354,8 @@ function createWindow() {
     // (see message-bus.ts's PAGE_TEXT_TIMEOUT_MS comment), so this goes
     // straight to browserRegistry instead of round-tripping through a
     // renderer ask/resolve pair like the two below.
-    onPageTextRequest: (requestId, cardId) => {
-      void browserRegistry.getPageText(cardId).then((result) => messageBus!.resolvePageText(requestId, result));
+    onPageTextRequest: (requestId, cardId, selector, maxChars) => {
+      void browserRegistry.getPageText(cardId, selector, maxChars).then((result) => messageBus!.resolvePageText(requestId, result));
     },
     // DESIGN-BACKLOG.md §2.1 — same "no round trip needed" reasoning as
     // onPageTextRequest above: browserRegistry already owns the real

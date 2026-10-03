@@ -23,6 +23,7 @@ import {
   type SnapshotControlFacts,
 } from "./browser-snapshot-target-decision";
 import { decideTypeMode, typeSelectContentSource, typeTargetFactsSource, type TypeTargetFacts } from "./browser-type-mode-decision";
+import { decidePageTextRequest } from "./browser-page-text-decision";
 import {
   awaitExpressionSource,
   describeEvalTimeout,
@@ -1439,15 +1440,50 @@ export function createBrowserRegistry(callbacks: {
   // rather than returned raw: a complex real page's `innerText` can run
   // to hundreds of KB of mostly-nav/footer noise, which is worse than
   // useless stuffed whole into an agent's context.
-  const MAX_PAGE_TEXT_CHARS = 20_000;
-  async function getPageText(id: string): Promise<{ ok: true; text: string; truncated: boolean } | { ok: false; error: string }> {
+  async function getPageText(
+    id: string,
+    selector?: string,
+    maxChars?: number,
+  ): Promise<
+    | {
+        ok: true;
+        text: string;
+        truncated: boolean;
+        /** Total REAL antes do corte — é o número que a frase de truncamento usa. */
+        totalChars: number;
+        scope: "body" | "selector";
+        selector?: string;
+      }
+    | { ok: false; error: string }
+  > {
     const entry = entries.get(id);
     if (!entry) return { ok: false, error: `no browser card with id "${id}"` };
+    const decision = decidePageTextRequest({ selector, maxChars });
+    // LEITURA NUNCA INVENTA: com seletor, um `querySelector` que não casa é
+    // RESPOSTA NOMEADA (não um texto vazio, que pareceria "elemento vazio").
+    const expr =
+      decision.scope.scope === "selector"
+        ? `(() => { const el = document.querySelector(${JSON.stringify(decision.scope.selector)}); if (!el) return null; return el.innerText ?? el.textContent ?? ""; })()`
+        : `(document.body ? document.body.innerText : "")`;
     try {
-      const raw: unknown = await entry.win.webContents.executeJavaScript("document.body ? document.body.innerText : ''");
+      const raw: unknown = await entry.win.webContents.executeJavaScript(expr);
+      if (raw === null) {
+        return {
+          ok: false,
+          error: `no element matches selector ${JSON.stringify((decision.scope as { selector: string }).selector)} — nothing was read`,
+        };
+      }
       const text = typeof raw === "string" ? raw : "";
-      const truncated = text.length > MAX_PAGE_TEXT_CHARS;
-      return { ok: true, text: truncated ? text.slice(0, MAX_PAGE_TEXT_CHARS) : text, truncated };
+      const totalChars = text.length;
+      const truncated = totalChars > decision.cap;
+      return {
+        ok: true,
+        text: truncated ? text.slice(0, decision.cap) : text,
+        truncated,
+        totalChars,
+        scope: decision.scope.scope,
+        ...(decision.scope.scope === "selector" ? { selector: decision.scope.selector } : {}),
+      };
     } catch (err) {
       return { ok: false, error: String(err) };
     }
@@ -1837,6 +1873,10 @@ export function createBrowserRegistry(callbacks: {
   type QueryResult = {
     exists: boolean;
     text?: string;
+    /** O corte do texto do elemento em 2000 chars é ANUNCIADO (task 3d58046c):
+     * um texto truncado sem aviso é a mesma família do snapshot que omite. */
+    textTruncated?: boolean;
+    textTotalChars?: number;
     value?: string;
     href?: string;
     checked?: boolean;
@@ -1853,9 +1893,12 @@ export function createBrowserRegistry(callbacks: {
       id,
       selector,
       `const r = el.getBoundingClientRect();
+       const __t = el.innerText ?? el.textContent ?? "";
        return {
          exists: true,
-         text: (el.innerText ?? el.textContent ?? "").slice(0, 2000),
+         text: __t.slice(0, 2000),
+         textTruncated: __t.length > 2000,
+         textTotalChars: __t.length,
          value: "value" in el ? String(el.value) : undefined,
          href: "href" in el ? String(el.href) : undefined,
          checked: "checked" in el ? Boolean(el.checked) : undefined,

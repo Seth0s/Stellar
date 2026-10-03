@@ -749,7 +749,7 @@ export type BusRequest =
       target?: string;
       rect?: { x: number; y: number; w: number; h: number };
     }
-  | { cmd: "get_page_text"; target?: string }
+  | { cmd: "get_page_text"; target?: string; selector?: string; maxChars?: number }
   // `ref` (achado ao vivo 2026-09-01): um id vindo do `browser_snapshot`,
   // pra mirar um elemento sem já saber um seletor CSS. Tem precedência
   // sobre `selector`; a tradução ref→seletor vive em index.ts, junto do
@@ -1237,7 +1237,10 @@ export function createMessageBus(
     onSnapshotTimeout: (requestId: string) => void;
     /** No consent gate (see PAGE_TEXT_TIMEOUT_MS) — reads an already-open
      * browser card's rendered text, same risk class as `snapshot`. */
-    onPageTextRequest: (requestId: string, cardId: string) => void;
+    /** `selector`/`maxChars` (task 3d58046c, lacuna 1): escopo e teto opcionais
+     * do `get_page_text` — ausentes preservam a leitura da página inteira com
+     * o teto default. A DECISÃO de escopo/teto é pura (browser-page-text-decision). */
+    onPageTextRequest: (requestId: string, cardId: string, selector?: string, maxChars?: number) => void;
     /** DESIGN-BACKLOG.md §2.1 "MCP do Navegador — Orquestração Completa"
      * — the 5 browser control tools, all resolving synchronously (well,
      * async, but 100% local to this process — see the doc comment on
@@ -4127,7 +4130,7 @@ export function createMessageBus(
           },
           timer,
         });
-        callbacks.onPageTextRequest(requestId, req.target as string);
+        callbacks.onPageTextRequest(requestId, req.target as string, req.selector, req.maxChars);
       });
     }
 
