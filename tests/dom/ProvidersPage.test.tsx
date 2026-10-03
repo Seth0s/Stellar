@@ -417,6 +417,30 @@ describe("ProvidersPage", () => {
     ).toContain("deixa de existir");
   });
 
+  // OS ÍCONES (task b3560898). A tela nunca mostrou ícone de provider — nem no
+  // nativo (só leitura) — e este teste prende as três metades: o conhecido com
+  // o SEU desenho, o genérico do app com o seu, e o SEM marca conhecida no
+  // fallback neutro (nunca um quadrado vazio).
+  it("cada linha (nativa e genérica) mostra o ícone do provider — e o sem-marca cai no fallback", async () => {
+    render(<ProvidersPage />);
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-role="providers-row"]').length).toBe(2),
+    );
+    const iconOf = (sel: string) => document.querySelector(`${sel} [data-role="provider-icon"]`);
+
+    // Genérico que o app declara (cline): ícone próprio, cor da marca.
+    expect(iconOf('[data-provider-id="cline"]')?.getAttribute("data-provider-icon")).toBe("cline");
+    expect(iconOf('[data-provider-id="cline"]')?.getAttribute("data-provider-accent")).toBe("--accent-cline");
+
+    // Genérico só do usuário (mycli): SEM marca conhecida → fallback neutro.
+    expect(iconOf('[data-provider-id="mycli"]')?.getAttribute("data-provider-icon")).toBe("generic");
+    expect(iconOf('[data-provider-id="mycli"]')?.getAttribute("data-provider-accent")).toBe("--muted");
+
+    // Nativo: a tela nunca mostrou ícone no nativo — agora mostra.
+    await waitFor(() => expect(iconOf('[data-provider-id="claude"]')).toBeTruthy());
+    expect(iconOf('[data-provider-id="claude"]')?.getAttribute("data-provider-icon")).toBe("claude");
+  });
+
   it("id que colide com um nativo não é editável — a declaração é inerte", async () => {
     const shadow: ProvidersPageRow = {
       id: "claude",
