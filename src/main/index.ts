@@ -1295,7 +1295,10 @@ function createWindow() {
     onSessionFound: (id, sessionId) => {
       // Camada 2: stamp participation BEFORE (and independent of) the
       // renderer write-back. Card DELETE must not erase the id the task
-      // needs to resume. Only resumable providers (claude/cursor).
+      // needs to resume. Since task 11914cc7 the gate is "the CLI exposes an
+      // OBSERVABLE session id AND can resume by it" (participation-session-
+      // decision.ts) — not "can impose an id at spawn": commandcode, agy,
+      // opencode, cline and codex are observable too, and were silently null.
       const provider =
         store.getCard(id)?.provider ??
         store.listTaskCardsForCardHistory(id)[0]?.provider ??
