@@ -814,7 +814,22 @@ function defaultGitLogSince(cwd: string, sinceMs: number, cap: number = CHANGED_
 
 export type BusRequest =
   | { cmd: "list" }
-  | { cmd: "send"; target?: string; text?: string; requesterId?: string; steer?: boolean }
+  | {
+      cmd: "send";
+      target?: string;
+      text?: string;
+      requesterId?: string;
+      steer?: boolean;
+      /** Task 2d74064f — VINCULAR AO ENTREGAR. Um card REUSADO (vivo, sem
+       * linha em `task_cards`) recebia o brief de review, julgava, e era
+       * recusado na hora de gravar: seis tasks ficaram `pending` com o veredito
+       * pronto. Quem entrega declara o par `linkTaskId`+`linkRole` e o vínculo
+       * nasce junto com a entrega — pela MESMA porta de autoria do
+       * `link_task_card` (`decideTaskCardLinkAuthorship`). SEM `linkRole` NADA
+       * é vinculado: papel implícito seria adivinhação. */
+      linkTaskId?: string;
+      linkRole?: string;
+    }
   | { cmd: "get_delivery"; id?: string }
   | { cmd: "list_deliveries"; target?: string; requesterId?: string; delivery?: string }
   | { cmd: "cancel_deliveries"; id?: string; requesterId?: string }
@@ -3787,6 +3802,64 @@ export function createMessageBus(
         return { ok: false, error: `no open terminal card with id "${req.target}"` };
       }
       const target = req.target;
+      // TASK 2d74064f — O VÍNCULO NASCE COM A ENTREGA (opção b, medida).
+      // O caso real: o orquestrador REUSOU um card vivo de review por
+      // `send_to_card` com um brief que NOMEIA a task; o brief entregou, o
+      // reviewer julgou, e o gate de veredito o RECUSOU por não haver linha em
+      // `task_cards` — seis tasks ficaram `pending` com o veredito na mão.
+      //
+      // O conserto NÃO adivinha papel: só age quando quem entrega DECLARA
+      // `linkTaskId` + `linkRole` (um sem o outro é recusa nomeando os dois
+      // campos; sem nenhum, NADA é vinculado — ausência continua sendo dado).
+      // E a criação passa pela PORTA DE AUTORIA QUE JÁ EXISTE
+      // (`decideTaskCardLinkAuthorship`, a mesma do `link_task_card`): só a
+      // MARCA do board da task, ou o humano, vincula TERCEIRO; um card não se
+      // autovincula como reviewer; a reivindicação de órfã continua sendo só
+      // como implementer. ANTI-HIJACK PRESERVADO: ninguém ganha poder de julgar
+      // por este caminho — ganha exatamente quem já podia vincular, pela mesma
+      // decisão, e o vínculo é a única coisa que o gate de veredito sempre
+      // exigiu. Tudo é validado ANTES de qualquer efeito: recusa aqui não
+      // entrega e não vincula.
+      let linked: { taskId: string; role: string } | null = null;
+      if (req.linkTaskId !== undefined || req.linkRole !== undefined) {
+        if (!req.linkTaskId || !req.linkRole) {
+          return {
+            ok: false,
+            error:
+              "send_to_card: `linkTaskId` and `linkRole` go together — pass BOTH to link on delivery, or NEITHER (then nothing is linked). No role is ever inferred.",
+          };
+        }
+        const linkTask = callbacks.getTask(req.linkTaskId);
+        if (!linkTask) {
+          return { ok: false, error: `send_to_card: no such task "${req.linkTaskId}" — nothing was delivered and nothing was linked` };
+        }
+        const linkRole = normalizeTaskCardRole(req.linkRole);
+        if (linkRole === null) {
+          return {
+            ok: false,
+            error: `send_to_card: linkRole must be one of ${TASK_CARD_ROLES.map((r) => `"${r}"`).join(", ")}, got "${String(req.linkRole)}" — refusing to link rather than silently substituting a role`,
+          };
+        }
+        const linkAuthorship = decideTaskCardLinkAuthorship({
+          taskId: req.linkTaskId,
+          role: linkRole,
+          requesterId: req.requesterId,
+          cardId: target,
+          taskCardId: linkTask.card_id,
+          orchestratorCardId: callbacks.getBoardOrchestratorCardId(linkTask.board_id ?? ""),
+        });
+        if (linkAuthorship.action === "refuse") return { ok: false, error: linkAuthorship.error };
+        // Mesma regra do `link_task_card`: um reviewer não é o card principal.
+        if (linkRole === TASK_CARD_REVIEWER_ROLE && linkTask.card_id === target) {
+          return {
+            ok: false,
+            error: `send_to_card: card "${target}" is task "${req.linkTaskId}"'s principal card — detach it first (update_task cardId: null) before linking it as reviewer`,
+          };
+        }
+        const profile = profileFromCardRow(callbacks.getAnyCard(target));
+        callbacks.linkTaskCard(req.linkTaskId, target, linkRole, profile);
+        linked = { taskId: req.linkTaskId, role: linkRole };
+      }
       // TEXT VAZIO (task 9c28adde) — RECUSADO, nomeando o campo. Um
       // `send_to_card` sem corpo enfileirava só o rótulo `[de: <nome>]`: uma
       // mensagem que o remetente NÃO escreveu, montada por nós. Ausência vira
@@ -3932,6 +4005,9 @@ export function createMessageBus(
         // remetente duvida de "queued" e reenvia (medido: 888 sends contra 10
         // consultas a get_delivery).
         note: "silence means delivered: you will be told only if it does NOT land",
+        // Task 2d74064f — diz que o vínculo NASCEU junto (ausente = nada foi
+        // vinculado, porque nada foi declarado).
+        ...(linked ? { linked } : {}),
       };
     }
 
