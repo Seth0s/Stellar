@@ -37,6 +37,39 @@ export type TurnEndReader = {
 /** Rolling window that keeps a split marker intact across `pty:data` chunks. */
 export const TURN_END_BUFFER_MAX = 500;
 
+/**
+ * Alimenta UM chunk do PTY e diz se o marcador de fim de turno apareceu.
+ *
+ * O DEFEITO (task 238388cc; medido no `commandcode` v1.74.1, 2026-10-03): a
+ * implementação antiga cortava ANTES de testar —
+ * `buffer = (buffer + data).slice(-MAX); if (pattern.test(buffer))`. Um frame
+ * de TUI chega como UMA escrita grande (medido na captura real: maior chunk
+ * **2214** chars, média 766), e neste TUI o marcador `✻ Worked for 14s` fica no
+ * MEIO do frame: medi **460 chars DEPOIS dele no mesmo chunk**. Com a janela de
+ * 500 o corte tira o marcador sempre que o que vem depois dele no MESMO chunk
+ * passa de 500 — e aí `turn_complete` NUNCA chega. Sem ele, `signalProven` fica
+ * falso para sempre, cada byte relâmpa a barra e re-arma o timer de 180s
+ * (`terminal-activity-decision.ts`): é o "running eterno / a animação não para"
+ * relatado, e explica por que dói mais no provider cujo rodapé é maior.
+ *
+ * A correção é de ORDEM, não de tamanho: testar o chunk INTEIRO (`tail + data`)
+ * e só DEPOIS encolher a janela. A janela continua fazendo o único trabalho que
+ * ela tem — costurar um marcador PARTIDO entre dois chunks.
+ *
+ * `tail` volta sempre; quem chama guarda. `matched` limpa a cauda (o marcador já
+ * foi consumido; uma sobra não pode re-disparar num turno seguinte).
+ */
+export function feedTurnEndChunk(
+  tail: string,
+  data: string,
+  pattern: RegExp,
+  max: number = TURN_END_BUFFER_MAX,
+): { matched: boolean; tail: string } {
+  const combined = tail + data;
+  if (pattern.test(combined)) return { matched: true, tail: "" };
+  return { matched: false, tail: combined.slice(-max) };
+}
+
 /** Traduz a projeção do main no que o terminal precisa. O `RegExp` é
  * REMONTADO aqui: ele não atravessa IPC, então viaja como `source` + `flags`. */
 export function readTurnEndSignal(signal: TurnEndProjection): TurnEndReader {
