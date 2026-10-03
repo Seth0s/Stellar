@@ -902,10 +902,19 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       "read_report",
       {
         description:
-          "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet. Every report carries a `seq` assigned by the server (never the reporting card) — pass the last `seq` you saw back as `afterSeq` to get the NEXT report (smallest seq strictly greater than that), including after the fact when the card already filed several rounds. Without `afterSeq`, returns the most recent report for that card. Also returns `verdict` ('aprovado'/'reprovado'/null) when the reporter set one, and `role` — the reporter's task_cards role at report time ('implementer'/'reviewer'/null when unknown), so you can tell a review verdict from an implementer judging its own work.",
+          "Read the structured result a card sent via `report`. With wait:true, blocks until one arrives instead of failing immediately when there isn't one yet. Every report carries a `seq` assigned by the server (never the reporting card) — pass the last `seq` you saw back as `afterSeq` to get the NEXT report (smallest seq strictly greater than that), including after the fact when the card already filed several rounds. Without `afterSeq`, returns the most recent report for that card. Also returns `verdict` ('aprovado'/'reprovado'/null) when the reporter set one, and `role` — the reporter's task_cards role at report time ('implementer'/'reviewer'/null when unknown), so you can tell a review verdict from an implementer judging its own work." +
+          " TWO IDENTIFIERS, and the difference matters: `target` is a card id, which is a SLOT the board REUSES (a recycled id keeps resolving and can hand you ANOTHER task's report); `seq` is the server's own global, monotonic id, which never recycles and reads exactly one row. PREFER `seq` whenever you have it — it is the identifier that cannot rot. A `seq` that no longer exists FAILS (ok:false, naming the seq); it never returns something else." +
+          " Reading by `target` always answers with `cardId` plus `taskIds` (every task that slot has participated in) and `ambiguous` (true when there is more than one) — CHECK `ambiguous` before trusting a card-id pointer: when it is true, the report you got may belong to a different task than the one you meant, so match `taskIds` against the task you expect (or re-read by `seq`). Also returns `authorship` when the row's author is doubtful (written after the card closed, or under a known ghost id).",
         inputSchema: {
-          target: z.string().describe("The reporting card's id (see list_cards)"),
-          wait: z.boolean().optional().describe("Block until a report arrives instead of returning ok:false immediately"),
+          target: z
+            .string()
+            .optional()
+            .describe("The reporting card's id (see list_cards) — a REUSABLE slot; check the returned `ambiguous`/`taskIds`. Omit when you pass `seq`"),
+          seq: z
+            .number()
+            .optional()
+            .describe("Read EXACTLY this report by the server-assigned `seq` — the identifier that never recycles. Preferred over `target` when you have it; a missing seq fails instead of resolving to another task's report"),
+          wait: z.boolean().optional().describe("Block until a report arrives instead of returning ok:false immediately when there isn't one yet"),
           timeoutMs: z.number().optional().describe("Override the default wait window (10 minutes) when wait is true"),
           afterSeq: z
             .number()
@@ -913,8 +922,8 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe("Only accept a report with seq strictly greater than this (the `seq` from a previous read_report call) — otherwise you get the same already-seen report back"),
         },
       },
-      async ({ target, wait, timeoutMs, afterSeq }) => {
-        const res = await opts.handleRequest({ cmd: "get_report", target, wait, timeoutMs, afterSeq });
+      async ({ target, seq, wait, timeoutMs, afterSeq }) => {
+        const res = await opts.handleRequest({ cmd: "get_report", target, seq, wait, timeoutMs, afterSeq });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
       },
     );
@@ -990,6 +999,12 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
             .describe(
               "Top-level keys required on a successful report for this task. Missing keys are refused in-line naming the field (same class as report.ok type errors). Failure reports (ok:false) skip this check.",
             ),
+          spawnProfile: z
+            .string()
+            .optional()
+            .describe(
+              "Name of a SPAWN PROFILE declared in the user's own file (`spawn-profiles.json`, hand-editable like providers.json) — it says which provider/model/effort a card of each role usually uses. It is a SUGGESTION, NEVER an authorization: whoever spawns still requests the values explicitly and they go through the same spawn validation as any other (an invalid pair is refused naming the field). There is NO DEFAULT — no profile, no entry for the role, or no file at all means NO suggestion, and the brief says nothing about profiles. Omit unless the task really references one.",
+            ),
           callerCardId: CALLER_CARD_ID_FIELD,
         },
       },
@@ -1009,6 +1024,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
         gates,
         allowCommit,
         reportSchema,
+        spawnProfile,
         callerCardId,
       }) => {
         const res = await opts.handleRequest({
@@ -1028,6 +1044,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           gates,
           allowCommit,
           reportSchema,
+          spawnProfile,
           requesterId: caller(callerCardId),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };
