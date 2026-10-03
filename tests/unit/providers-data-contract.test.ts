@@ -46,7 +46,7 @@ describe("o catálogo do app é DADO — e o dado é conferido campo a campo", (
   });
 
   it("os ids que o app entrega são os que o arquivo declara", () => {
-    expect(shippedProviderSpecs().map((s) => s.id)).toEqual(["cline", "commandcode"]);
+    expect(shippedProviderSpecs().map((s) => s.id)).toEqual(["cline", "commandcode", "opencode"]);
   });
 
   it("o `omp` NÃO está no catálogo do app — `--resume` com o nome inteiro não foi medido", () => {

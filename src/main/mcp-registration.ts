@@ -286,37 +286,13 @@ async function approveCursor(binary: string): Promise<void> {
   });
 }
 
-/** `~/.config/opencode/opencode.json` — o config global do próprio
- * opencode. RODADA 4 (task f7a2ac84): passa a escrever um servidor REMOTO
- * (`{ type: "remote", url }`) em vez de um `{type:"local", command:[shim]}` —
- * ZERO processo por card, e vale nos 3 SOs. A URL usa a sintaxe DECLARADA pelo
- * provider (`{env:VAR}`), medida: com `${env:}`, opencode recusa com "Invalid
- * MCP URL"; com `{env:}`, conecta. Mesmo cuidado de `registerCursor`: parse
- * defensivo, só mexe na chave `mcp`, preserva `provider`/`$schema`/qualquer
- * outra coisa que já esteja no arquivo (este projeto usa esse config pro
- * provider `qwen-local` — ver ai memory `qwen-buun-local-server`). */
-function registerOpencode(syntax: McpUrlSyntax): McpRegistrationResult {
-  const file = join(registrationHome(), ".config", "opencode", "opencode.json");
-  let config: Record<string, unknown>;
-  try {
-    config = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-  } catch {
-    config = {};
-  }
-  const url = interpolatedMcpUrl(syntax);
-  const servers = (config.mcp ?? {}) as Record<string, { type?: string; url?: string; command?: string[]; enabled?: boolean }>;
-  const existing = servers[SERVER_NAME];
-  if (existing?.type === "remote" && existing.url === url) return { status: "ok", changed: false };
-  servers[SERVER_NAME] = { type: "remote", url };
-  config.mcp = servers;
-  try {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  } catch (err) {
-    return { status: "failed", error: t("error.agyWrite", { file, error: String(err) }) };
-  }
-  return { status: "ok", changed: true };
-}
+// Task 7d3be060 — `registerOpencode` SAIU: o opencode agora é um provider
+// GENÉRICO (`data/providers.builtin.json`) e a entrada MCP dele é escrita pelo
+// caminho DECLARADO (`registerDeclaredProvider` + `declaredServerEntry`), com
+// `serverShape: "remote-url"` e `urlSyntax: "brace-env"`. A entrada produzida é
+// a MESMA que a função à mão gravava — `{ type: "remote", url }` com a sintaxe
+// declarada —, e isso é provado por teste (mcp-registration-opencode.test.ts).
+// O comportamento medido não muda: zero-processo, URL `{env:}`.
 
 async function registerAntigravity(binary: string, shim: string): Promise<McpRegistrationResult> {
   // `agy` não expõe o arquivo de config por flag e não documenta uma
@@ -358,7 +334,6 @@ export const REGISTRARS: Record<string, (shim: string) => Promise<McpRegistratio
     if (result.status === "ok" && result.changed && binary) await approveCursor(binary);
     return result;
   },
-  opencode: async () => registerOpencode(declaredUrlSyntax("opencode")),
   antigravity: async (shim) => {
     const binary = which(["agy"]);
     if (!binary) return { status: "skipped", reason: t("error.agyBinaryMissing") };
@@ -387,6 +362,10 @@ function resolveDeclaredConfigPath(declared: string): string | null {
 function declaredServerEntry(shape: McpServerShape, shim: string, syntax: McpUrlSyntax): Record<string, unknown> {
   if (shape === "stdio-command") return { command: shim };
   if (shape === "http-url") return { type: "http", url: interpolatedMcpUrl(syntax) };
+  // Task 7d3be060 — a forma REMOTA do opencode. É a MESMA entrada que o
+  // escritor à mão produzia (`registerOpencode`): `{ type: "remote", url }`
+  // com a sintaxe DECLARADA. A igualdade é provada por teste.
+  if (shape === "remote-url") return { type: "remote", url: interpolatedMcpUrl(syntax) };
   return { type: "local", command: [shim], enabled: true };
 }
 
@@ -398,6 +377,7 @@ function declaredEntryIsCurrent(existing: unknown, shape: McpServerShape, shim: 
   const entry = existing as Record<string, unknown>;
   if (shape === "stdio-command") return entry.command === shim;
   if (shape === "http-url") return entry.type === "http" && entry.url === interpolatedMcpUrl(syntax);
+  if (shape === "remote-url") return entry.type === "remote" && entry.url === interpolatedMcpUrl(syntax);
   return entry.type === "local" && Array.isArray(entry.command) && entry.command[0] === shim;
 }
 
@@ -475,7 +455,21 @@ export function registerDeclaredProvider(providerId: string, shim: string): McpR
   const base = existing !== null && typeof existing === "object" && !Array.isArray(existing)
     ? (existing as Record<string, unknown>)
     : {};
-  servers[SERVER_NAME] = { ...base, ...declaredServerEntry(serverShape, shim, declared.urlSyntax ?? "dollar-env") };
+  // TROCA DE FORMA não pode deixar chave da forma ANTIGA. Medido ao migrar o
+  // opencode (local → remote, task 7d3be060): o merge `{...base, ...entrada}`
+  // preservava `command`/`enabled` de uma entrada stdio anterior, produzindo um
+  // servidor `{type:"remote", url, command, enabled}` — ambíguo. O registrador
+  // à mão trocava a entrada inteira e não tinha esse defeito; aqui a mesma
+  // limpeza que `registerCursor` já faz (`delete command/env`) é aplicada às
+  // formas de URL.
+  const next: Record<string, unknown> = { ...base };
+  if (serverShape === "remote-url" || serverShape === "http-url") {
+    delete next.command;
+    delete next.env;
+    delete next.args;
+    delete next.enabled;
+  }
+  servers[SERVER_NAME] = { ...next, ...declaredServerEntry(serverShape, shim, declared.urlSyntax ?? "dollar-env") };
   config[configKey] = servers;
 
   try {

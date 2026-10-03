@@ -91,7 +91,10 @@ describe("provider dinâmico: o MCP é registrado, dirigido pela declaração", 
     const declared = shippedProviderSpecs().filter((s) => s.capacity.mcp.mechanism === "global-config");
     // O catálogo embarcado de hoje — se um terceiro entrar, ele é exercitado
     // automaticamente (nada aqui é uma lista de ids escrita à mão).
-    expect(declared.map((s) => s.id).sort()).toEqual(["cline", "commandcode"]);
+    // Task 7d3be060 — o opencode virou dinâmico: o catálogo embarcado de
+    // `global-config` passou a ter TRÊS, e ele é escrito pelo caminho declarado
+    // (`serverShape: "remote-url"`), exercitado pelo loop abaixo como os outros.
+    expect(declared.map((s) => s.id).sort()).toEqual(["cline", "commandcode", "opencode"]);
 
     registerDynamicProviders(declared.map(dynamicProviderDef));
     for (const s of declared) {
@@ -102,7 +105,20 @@ describe("provider dinâmico: o MCP é registrado, dirigido pela declaração", 
       const first = await ensureMcpRegistered(s.id, BIN_DIR);
       expect(first.status, s.id).toBe("ok");
       expect(existsSync(file), `${s.id}: ${file} não foi escrito`).toBe(true);
-      expect(readConfig(file).mcpServers.stellar.command, s.id).toBe(SHIM);
+      // Task 7d3be060 — a asserção era `mcpServers.stellar.command`, que
+      // codificava DOIS fatos do provider padrão: a CHAVE do arquivo e a FORMA
+      // stdio. Agora o loop inclui o opencode (chave `mcp`, forma `remote-url`),
+      // então ela passa a ler a DECLARAÇÃO — e a garantia que ela protegia fica
+      // MAIS forte: a entrada é escrita na forma que o provider declara, e uma
+      // forma de URL não carrega `command` nenhum (zero-processo).
+      const shape = s.capacity.mcp.serverShape;
+      const entry = readConfig(file)[s.capacity.mcp.configKey].stellar as Record<string, unknown>;
+      if (shape === "remote-url" || shape === "http-url") {
+        expect(entry.type, s.id).toBe(shape === "remote-url" ? "remote" : "http");
+        expect(entry.command, s.id).toBeUndefined();
+      } else {
+        expect(entry.command, s.id).toBe(SHIM);
+      }
 
       // Declaração inalterada: a tentativa é reaproveitada — mesmo
       // resultado, e o arquivo NÃO é reescrito (bytes idênticos).

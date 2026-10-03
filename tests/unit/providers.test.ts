@@ -1,3 +1,11 @@
+import { mkdtempSync as __dynMkdtemp } from "node:fs";
+import { tmpdir as __dynTmpdir } from "node:os";
+import { join as __dynJoin } from "node:path";
+import { loadDynamicProviders as __loadDynProviders } from "../../src/main/providers-dynamic";
+
+// Task 7d3be060 — o opencode virou GENERICO: sem registro, providerById("opencode") = undefined.
+__loadDynProviders(__dynMkdtemp(__dynJoin(__dynTmpdir(), "stellar-dyn-")));
+
 import { describe, it, expect } from "vitest";
 import { shippedProviderSpecs } from "../../src/main/providers-dynamic";
 import {
@@ -233,8 +241,13 @@ describe("providers: deriveReportChannel (from capacity.mcp, never a list)", () 
     const cursor = providerCapacity("cursor")!;
     expect(cursor.delivery.midTurnQueue?.parkedPattern).toBeInstanceOf(RegExp);
     expect(cursor.delivery.midTurnQueue?.steerKey).toBe("\r");
+    // Task 7d3be060 — o catálogo embarcado entra no registro: `cline` TAMBÉM
+    // declara a fila de mid-turn (medido, em providers.builtin.json). A
+    // garantia do teste — "só declara quem foi medido" — segue de pé; o
+    // conjunto MEDIDO é {cursor, cline}, e é ele que fica explícito aqui.
+    const withMidTurnQueue = new Set(["cursor", "cline"]);
     for (const p of PROVIDERS) {
-      if (p.id === "cursor") continue;
+      if (withMidTurnQueue.has(p.id)) continue;
       expect(p.capacity.delivery.midTurnQueue, p.id).toBeUndefined();
     }
   });
