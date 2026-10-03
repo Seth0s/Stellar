@@ -512,6 +512,11 @@ export const PROJECT_CODE_EXTS: readonly string[] = [
   ".rs",
   ".toml",
   ".lock",
+  // Windows: o wrapper `resources/bin/stellar-mcp.cmd` (task 52c895da, commit
+  // 7a1c687) — batch que PREFERE o relay Rust e cai no shim node. Sem esta
+  // linha o gate anti-drift abaixo reprova a própria árvore por causa de um
+  // arquivo rastreado (medido: `.cmd` sozinho no vermelho antes desta entrada).
+  ".cmd",
 ];
 const PROJECT_CODE_EXT_SET = new Set(PROJECT_CODE_EXTS);
 
