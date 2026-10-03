@@ -77,11 +77,46 @@ describe("message-bus: create_task valida boardId", () => {
     const upserted: Array<{ board_id: string | null }> = [];
     const b = makeBus([], upserted); // nenhum board existe
 
-    const res = (await b.handleRequest({ cmd: "create_task", prompt: "x" } as BusRequest)) as { ok: boolean; error?: string };
+    const res = (await b.handleRequest({ cmd: "create_task", prompt: "x" } as BusRequest)) as {
+      ok: boolean;
+      error?: string;
+      field?: string;
+    };
 
     expect(res.ok).toBe(false);
     expect(res.error).toBe(TASK_BOARD_UNDECLARED_REASON);
+    // A recusa NOMEIA os DOIS campos que o chamador podia ter passado, e
+    // carrega o `field` canônico — a MESMA classe das outras recusas deste
+    // handler (`cwd`, `gates`, o contrato), sem um segundo idioma de erro.
+    expect(res.error).toContain("boardId");
+    expect(res.error).toContain("cardId");
+    expect(res.field).toBe("boardId");
     expect(upserted).toHaveLength(0);
+  });
+
+  it("cardId cujo board EXISTE: aceito, grava o board inferido do card", async () => {
+    const upserted: Array<{ board_id: string | null }> = [];
+    dir = mkdtempSync(join(tmpdir(), "stellar-bus-create-task-card-"));
+    const sockPath = join(dir, "agent-canvas.sock");
+    bus = createMessageBus(
+      sockPath,
+      callbacksWithOverrides({
+        boardExists: (id: string) => id === "b-card",
+        upsertTask: (task: unknown) => {
+          upserted.push(task as { board_id: string | null });
+          return { status: "pending", statusChanged: true, divergedStatus: null, divergedActor: null, recordDeclaration: false, warnAgent: false, declaredStatus: null };
+        },
+        getCardBoardId: (id: string) => (id === "card-live" ? "b-card" : undefined),
+      }),
+    );
+
+    const res = (await bus.handleRequest({ cmd: "create_task", prompt: "x", cardId: "card-live" } as BusRequest)) as {
+      ok: boolean;
+    };
+
+    expect(res.ok).toBe(true);
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0].board_id).toBe("b-card");
   });
 
   it("cardId cujo board não resolve: o board do CARD CHAMADOR (requesterId) é inferido — contexto que existia e não era lido", async () => {
