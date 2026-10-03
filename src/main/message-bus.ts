@@ -108,9 +108,10 @@ import {
   gatesFromSql,
   reportSchemaToSql,
   allowCommitToSql,
+  normalizeStringList,
 } from "./task-contract-decision";
 import { isSandboxAvailable } from "./sandbox";
-import { decideTerritoryConflict, type ActiveTaskTerritory } from "./territory-conflict-decision";
+import { decideTerritoryConflict, territoryEntriesOverlap, type ActiveTaskTerritory } from "./territory-conflict-decision";
 import { profileFromSpawnArgs, profileFromCardRow } from "./participation-profile-decision";
 import { sessionResumeOutlook } from "./participation-session-decision";
 import {
@@ -418,6 +419,75 @@ export function describeOutOfTerritoryWrites(w: OutOfTerritoryWrites): string {
   return (
     `${w.count} of ${w.total} changed file(s) are OUTSIDE the territory this task declared: ${w.files.join(", ")}. ` +
     "The tree is shared and the app observes CHANGE, never authorship — this is a declaration of fact (post-hoc diff), not a verdict."
+  );
+}
+
+/**
+ * CONTRATO QUE ATRAVESSA — item 15 do sticky: quando um território casa o de
+ * OUTRA task, o lado consumidor tem de ser LEMBRADO no despacho (a task do
+ * lado que ainda espera o contrato velho). Dois incidentes reais: um endpoint
+ * que passou a responder `event_ended` com o consumidor ainda no texto antigo,
+ * e a ponte feita À MÃO pelo orquestrador — que quase se perdeu.
+ *
+ * O QUE É DADO E O QUE É AVISO (decidido, não inferido):
+ *  - DADO: os `territory` DECLARADOS das duas tasks. Nada é inferido de
+ *    arquivo tocado — a task declara onde mexe, e o cruzamento é a interseção
+ *    declarada (mesmo comparador do guard de colisão: `territoryEntriesOverlap`).
+ *  - AVISO: a lista de tasks cujo território CRUZA, anexada ao brief do
+ *    despacho. É AVISO, nunca recusa — o guard de recusa continua sendo só o de
+ *    `decideTerritoryConflict`, e só para task ATIVA. Aqui não se recusa nada:
+ *    um falso positivo custa uma linha no brief, não um despacho barrado.
+ *  - NÃO DERIVÁVEL HOJE (dito, não fingido): ABRIR automaticamente a task do
+ *    consumidor exige DUAS coisas que o modelo não tem — (i) uma declaração
+ *    "esta task É uma mudança de contrato" (não há `purpose`/campo para isso) e
+ *    (ii) um registro contrato→tasks consumidoras. Sem os dois, "abrir sozinho"
+ *    seria detecção mágica. Por isso o item entrega o LEMBRETE; a abertura
+ *    automática fica como pergunta aberta.
+ *
+ * Ausência de território é DADO: sem território declarado de um dos lados, não
+ * há cruzamento e nada é dito — nunca se inventa contrato.
+ */
+export type ContractCrossing = { taskId: string; mine: string; theirs: string };
+
+export function decideContractCrossing(input: {
+  taskId: string;
+  territory: string[] | null;
+  others: { taskId: string; territory: string[] | null }[];
+}): ContractCrossing[] {
+  const mineList = normalizeStringList(input.territory);
+  if (!mineList) return [];
+  const out: ContractCrossing[] = [];
+  for (const other of input.others) {
+    if (other.taskId === input.taskId) continue;
+    const theirsList = normalizeStringList(other.territory);
+    if (!theirsList) continue;
+    let hit: ContractCrossing | null = null;
+    for (const mine of mineList) {
+      for (const theirs of theirsList) {
+        if (territoryEntriesOverlap(mine, theirs)) {
+          hit = { taskId: other.taskId, mine, theirs };
+          break;
+        }
+      }
+      if (hit) break;
+    }
+    if (hit) out.push(hit);
+  }
+  return out;
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. O lembrete do contrato que atravessa.
+ * Capado: o brief não vira catálogo; o resto fica nomeado por contagem. */
+export function describeContractCrossing(crossings: readonly ContractCrossing[], cap = 4): string {
+  const shown = crossings.slice(0, cap);
+  const rest = crossings.length - shown.length;
+  const lines = shown.map((c) => `- task ${c.taskId}: your "${c.mine}" overlaps its declared "${c.theirs}"`);
+  return (
+    `[de: stellar] CONTRACT CROSSING — this task's declared territory overlaps ${crossings.length} other task(s) on this board. ` +
+    "If what you change here is a contract (API shape, schema, an event name), the OTHER side has to be checked — the consumer may still expect the old value. " +
+    "This is a REMINDER, not a gate: nothing was refused, and nothing was auto-opened.\n" +
+    lines.join("\n") +
+    (rest > 0 ? `\n… and ${rest} more task(s)` : "")
   );
 }
 
@@ -6597,9 +6667,30 @@ export function createMessageBus(
    * paths (`spawn_agent({taskId})` and auto-dispatch) go through here so
    * a dependent never opens without knowing it has a parent, whichever
    * path spawned it. Reviewers do not: their brief is the review order. */
-  function briefForTask(task: Pick<TaskRow, "prompt" | "deps_json" | "territory_json" | "gates_json" | "allow_commit" | "report_schema_json">): string | undefined {
+  function briefForTask(
+    task: Pick<TaskRow, "id" | "prompt" | "deps_json" | "territory_json" | "gates_json" | "allow_commit" | "report_schema_json">,
+  ): string | undefined {
+    const contract = contractFromTaskRow(task);
     const withDeps = appendDepPointer(briefFromTaskPrompt(task.prompt), depPointerSources(task));
-    return appendTaskContract(withDeps, contractFromTaskRow(task));
+    const withContract = appendTaskContract(withDeps, contract);
+    // Item 15 do sticky — o CONTRATO QUE ATRAVESSA: quando o território desta
+    // task cruza o de OUTRA task do board, o brief LEMBRA o lado consumidor.
+    // É só lembrete: nunca recusa (a recusa é do guard de colisão, e só para
+    // task ativa), e ausência de território de um dos lados é dado — nada é dito.
+    const crossings = decideContractCrossing({
+      taskId: task.id,
+      territory: contract.territory,
+      // Rig de teste pode não prover `listTasks` (a produção sempre provê): sem
+      // a lista não há "outra task" — ausência é dado, nunca erro que derruba o
+      // despacho.
+      others: (typeof callbacks.listTasks === "function" ? callbacks.listTasks() ?? [] : []).map((t) => ({
+        taskId: t.id,
+        territory: territoryFromSql(t.territory_json),
+      })),
+    });
+    if (crossings.length === 0) return withContract;
+    const reminder = describeContractCrossing(crossings);
+    return withContract ? `${withContract}\n\n${reminder}` : reminder;
   }
 
   function buildTaskDispatchParams(
