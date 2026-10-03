@@ -1049,10 +1049,28 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           // `pending` (`coerceStoredTaskStatus`): `running` nunca é coluna
           // autoritativa, participação se lê de card vivo, não de status.
           status: z
-            .enum(["pending", "running", "done", "failed"])
+            .enum(["pending", "running", "done", "failed", "blocked"])
             .optional()
             .describe(
-              "New status — one of: pending, running, done, failed. `running` is accepted but never stored (the row keeps `pending`; whether a card is on it right now is a separate fact, `cardAlive`).",
+              "New status — one of: pending, running, done, failed, blocked. `running` is accepted but never stored (the row keeps `pending`; whether a card is on it right now is a separate fact, `cardAlive`). `blocked` REQUIRES `question` (see below) — a blocked task with no question is refused, because a silent hang is exactly what `blocked` exists to eliminate.",
+            ),
+          question: z
+            .object({
+              text: z.string().describe("The decision you need from the human — one or two sentences, in the language they read"),
+              options: z
+                .array(
+                  z.object({
+                    id: z.string().describe("Stable id you will get back in the answer"),
+                    label: z.string().describe("Human-readable choice shown on the Fila card"),
+                    description: z.string().optional().describe("Optional one-line elaboration"),
+                  }),
+                )
+                .min(2)
+                .describe("The choices — at least two. A question with one option is not a choice."),
+            })
+            .optional()
+            .describe(
+              "Structured question carried by status \"blocked\" (text + at least two options), rendered on the Fila task card so the HUMAN answers directly — and readable/answerable by an agent via get_task / answer_blocked_task. Required when status is \"blocked\"; when you move OUT of blocked it is cleared. The answer comes back into your terminal through the same delivery path as send_to_card.",
             ),
           cardId: z.string().nullable().optional().describe("New card working on it, or null to detach once its own card closed — omit to leave unchanged"),
           cwd: z
@@ -1111,6 +1129,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
       async ({
         taskId,
         status,
+        question,
         cardId,
         cwd,
         result,
@@ -1130,6 +1149,7 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           cmd: "update_task",
           taskId,
           status,
+          question,
           cardId,
           cwd,
           result,
@@ -1170,6 +1190,33 @@ export function createMcpServer(opts: { port: number; handleRequest: (req: BusRe
           taskId,
           status,
           reason,
+          requesterId: caller(callerCardId),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(res) }] };
+      },
+    );
+
+    server.registerTool(
+      "answer_blocked_task",
+      {
+        description:
+          "Answer the structured question of a task in status `blocked` (read it with get_task — `blockedQuestion`). Clears the question, returns the status to `pending`, and DELIVERS your answer into the task's card through the same path as send_to_card. Use this as the orchestrator to unblock an agent that asked a decision; a human answers the same question directly on the Fila task card. Refused when the task is not blocked on a question, or when `optionId` is not one of the offered options — nothing is invented.",
+        inputSchema: {
+          taskId: z.string().describe("The blocked task's id (get_task shows its `blockedQuestion`)"),
+          optionId: z.string().optional().describe("The id of the chosen option — MUST be one of the question's options"),
+          note: z
+            .string()
+            .optional()
+            .describe("Free text: adds detail to the chosen option, or — with no optionId — is the whole answer"),
+          callerCardId: z.string().optional().describe("Your own card id (AGENT_CANVAS_CARD_ID env var). Normally omit it — the server knows your identity from the MCP URL registered for your process."),
+        },
+      },
+      async ({ taskId, optionId, note, callerCardId }) => {
+        const res = await opts.handleRequest({
+          cmd: "answer_blocked",
+          taskId,
+          optionId,
+          note,
           requesterId: caller(callerCardId),
         });
         return { content: [{ type: "text", text: JSON.stringify(res) }] };

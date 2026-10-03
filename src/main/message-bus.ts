@@ -252,6 +252,148 @@ export function describeUndecodableReportEnvelope(raw: unknown): string | null {
   );
 }
 
+/**
+ * STATUS `blocked` COM PERGUNTA ESTRUTURADA (item 12 do sticky, task 22f0a649).
+ *
+ * O problema medido: quatro vezes numa sessão um agente parou numa decisão que
+ * era do DONO e ficou IDLE até o orquestrador perceber e fazer a ponte à mão.
+ * Aqui o agente DECLARA a pergunta (`update_task({status:"blocked",question})`),
+ * ela é renderizada na Fila (card `task`) para o humano responder DIRETO, e o
+ * MESMO ciclo é legível/respondível por MCP. A resposta VOLTA ao card pelo
+ * caminho de entrega que já existe (`enqueueCardDelivery` — o mesmo do
+ * `send_to_card`).
+ *
+ * ONDE MORA (decisão (a)): em `result_json.blockedQuestion`, o MESMO envelope
+ * que `failureKind`/`gateRun` já usam — NENHUMA coluna nova. A pergunta é
+ * autoria do AGENTE (ele pergunta), então `result_json` é o campo existente que
+ * serve; o app só NORMALIZA e guarda. `carryBlockedQuestion` a protege do
+ * mesmo apagamento silencioso que `carryGateEvidence` fechou para o gateRun.
+ *
+ * AUSÊNCIA DE PERGUNTA EM `blocked` É RECUSADA (regra dura): um `blocked` sem
+ * pergunta é só um travamento mudo — exatamente o que o item 12 existe para
+ * eliminar.
+ */
+export const BLOCKED_STATUS = "blocked";
+export const BLOCKED_QUESTION_KEY = "blockedQuestion";
+
+export type BlockedQuestionOption = { id: string; label: string; description?: string };
+export type BlockedQuestion = {
+  text: string;
+  options: BlockedQuestionOption[];
+  askedAt: number;
+  by: string | null;
+};
+
+function parseResultObjectLocal(json: string | null | undefined): Record<string, unknown> {
+  if (!json) return {};
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { ...(parsed as Record<string, unknown>) };
+    }
+    return { _raw: json };
+  } catch {
+    return { _raw: json };
+  }
+}
+
+/** Normaliza a pergunta declarada. `null` = inválida (e aí `blocked` é
+ * recusado). Exige texto e **≥ 2 opções** com id/label únicos — "opções"
+ * (plural) é o que transforma um travamento num pedido respondível. */
+export function normalizeBlockedQuestion(raw: unknown, at: number, by: string | null): BlockedQuestion | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  const text = typeof obj.text === "string" ? obj.text.trim() : "";
+  if (text.length === 0) return null;
+  const rawOptions = Array.isArray(obj.options) ? obj.options : [];
+  const options: BlockedQuestionOption[] = [];
+  const seen = new Set<string>();
+  for (const entry of rawOptions) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const e = entry as Record<string, unknown>;
+    const id = typeof e.id === "string" ? e.id.trim() : "";
+    const label = typeof e.label === "string" ? e.label.trim() : "";
+    if (id.length === 0 || label.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    const description = typeof e.description === "string" && e.description.trim().length > 0 ? e.description.trim() : undefined;
+    options.push(description ? { id, label, description } : { id, label });
+  }
+  if (options.length < 2) return null;
+  const askedAt = typeof obj.askedAt === "number" && Number.isFinite(obj.askedAt) ? obj.askedAt : at;
+  const askedBy = typeof obj.by === "string" && obj.by.trim().length > 0 ? obj.by.trim() : by;
+  return { text, options, askedAt, by: askedBy };
+}
+
+/** A pergunta gravada no `result_json` — `null` quando não há (ou é podre). */
+export function blockedQuestionFromResultJson(json: string | null | undefined): BlockedQuestion | null {
+  const raw = parseResultObjectLocal(json)[BLOCKED_QUESTION_KEY];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return normalizeBlockedQuestion(raw, 0, null);
+}
+
+export function stampBlockedQuestionJson(existingJson: string | null | undefined, question: BlockedQuestion): string {
+  const base = parseResultObjectLocal(existingJson);
+  base[BLOCKED_QUESTION_KEY] = question;
+  return JSON.stringify(base);
+}
+
+export function clearBlockedQuestionJson(existingJson: string | null | undefined): string {
+  const base = parseResultObjectLocal(existingJson);
+  delete base[BLOCKED_QUESTION_KEY];
+  return JSON.stringify(base);
+}
+
+/** A resposta dada à pergunta, guardada na task — para o card estar morto a
+ * resposta não sumir com a entrega. */
+export const BLOCKED_ANSWER_KEY = "blockedAnswer";
+export type BlockedAnswer = { optionId: string | null; note: string | null; answer: string; by: string; at: number };
+
+export function stampBlockedAnswerJson(existingJson: string | null | undefined, answer: BlockedAnswer): string {
+  const base = parseResultObjectLocal(existingJson);
+  base[BLOCKED_ANSWER_KEY] = answer;
+  return JSON.stringify(base);
+}
+
+/** Mesmo remédio do `carryGateEvidence`: um `update_task.result` posterior não
+ * pode APAGAR a pergunta que o agente declarou enquanto a task segue blocked. */
+export function carryBlockedQuestion(
+  previousJson: string | null | undefined,
+  nextJson: string | null | undefined,
+): string | null {
+  const previous = blockedQuestionFromResultJson(previousJson);
+  if (!previous) return nextJson ?? null;
+  if (blockedQuestionFromResultJson(nextJson)) return nextJson ?? null;
+  return stampBlockedQuestionJson(nextJson, previous);
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. Recusa de `blocked` sem pergunta. */
+export function describeBlockedWithoutQuestion(): string {
+  return (
+    'status "blocked" requires a structured question: pass `question: { text, options: [{ id, label }, …] }` ' +
+    "(at least two options). A blocked task without a question is just a mute hang — nothing to answer, nobody told."
+  );
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. A escolha que volta para o card. */
+export function describeBlockedAnswer(question: BlockedQuestion, optionId: string, note: string | null): string {
+  const chosen = question.options.find((o) => o.id === optionId) ?? null;
+  const answer = chosen ? chosen.label : `free-form: ${note ?? ""}`;
+  const detail = note && chosen ? ` — ${note}` : "";
+  return (
+    `[de: stellar] Answer to your blocked question "${question.text}": ${answer}${detail}. ` +
+    "Proceed; if you need another decision, ask again the same way (update_task status:blocked with a question)."
+  );
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. O ponteiro do aviso de "ninguém respondeu". */
+export function describeBlockedNotice(taskId: string, question: BlockedQuestion, waitedMs: number): string {
+  const waited = waitedMs <= 0 ? "just now" : `~${Math.max(1, Math.round(waitedMs / 60_000))} min`;
+  return (
+    `[de: stellar] task ${taskId} is BLOCKED (${waited}) on a question: "${question.text}". ` +
+    "A human can answer it on the Fila task card, or you can via answer_blocked_task. It will NOT unblock by itself."
+  );
+}
+
 const OPEN_TIMEOUT_MS = 120_000;
 // Shorter than OPEN_TIMEOUT_MS on purpose — a snapshot needs no human
 // decision, just a renderer round-trip + a capturePage() call. If it's
@@ -741,6 +883,26 @@ export type BusRequest =
       gates?: string[] | null;
       allowCommit?: boolean | null;
       reportSchema?: string[] | null;
+      /** Pergunta estruturada do status `blocked` (task 22f0a649):
+       * `{ text, options: [{ id, label, description? }] }` (≥ 2 opções).
+       * OBRIGATÓRIA quando `status:"blocked"` — sem ela a escrita é RECUSADA.
+       * Omitida em qualquer outro status = não mexe; ao SAIR de `blocked`, a
+       * pergunta é limpa. */
+      question?: unknown;
+    }
+  | {
+      /** Responde a pergunta de uma task `blocked` (task 22f0a649) — pelo
+       * MESMO caminho serve o MCP (`answer_blocked_task`) e a Fila (IPC
+       * humano). Limpa a pergunta, devolve o status a `pending` e ENTREGA a
+       * resposta ao card da task pelo caminho do `send_to_card`
+       * (`enqueueCardDelivery`). */
+      cmd: "answer_blocked";
+      taskId?: string;
+      /** Id da opção escolhida — validada contra as opções DA pergunta. */
+      optionId?: string;
+      /** Texto livre (complemento ou, sem `optionId`, a resposta inteira). */
+      note?: string;
+      requesterId?: string;
     }
   // DESIGN-BACKLOG.md §2.1 item 6 — `boardId` opcional: omitido, devolve
   // exatamente a lista sem filtro de sempre (nenhum comportamento
@@ -2130,6 +2292,10 @@ export function createMessageBus(
       requestedReason: row.requested_reason ?? null,
       requestedBy: row.requested_by ?? null,
       requestedAt: row.requested_at ?? null,
+      // Task 22f0a649 — a pergunta estruturada de `blocked`, lida do
+      // `result_json` (nenhuma coluna nova). `null` = não há pergunta; um
+      // `blocked` sem isto é RECUSADO na escrita, então não deveria existir.
+      blockedQuestion: blockedQuestionFromResultJson(row.result_json),
       // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — membership vivo.
       sprintId: row.sprint_id ?? null,
       // DESIGN-BACKLOG.md §2.1 "no get_task, por exemplo" — só presentes
@@ -2841,6 +3007,74 @@ export function createMessageBus(
     if (!listTerminalCards().some((c) => c.id === spawnerId)) return;
     const label = callbacks.describeCardLabel(cardId);
     enqueueCardDelivery(spawnerId, formatAgentFacingAuthorship(label, body));
+  }
+
+  /**
+   * Task 22f0a649, decisão (c) — `blocked` NÃO pode virar silêncio. Avisa UMA
+   * vez por PERGUNTA (chave `taskId → askedAt`: uma pergunta nova volta a
+   * avisar) quem spawna/dirige o card, para o orquestrador saber sem ter de
+   * farejar. A Fila mostra a idade da pergunta para o humano responder direto.
+   */
+  const blockedQuestionNotifiedAt = new Map<string, number>();
+  function notifyBlockedQuestion(taskCardId: string | null, taskId: string, question: BlockedQuestion): void {
+    if (blockedQuestionNotifiedAt.get(taskId) === question.askedAt) return;
+    blockedQuestionNotifiedAt.set(taskId, question.askedAt);
+    if (!taskCardId) return; // task sem card (ex.: criada por humano sem agente): a Fila é o canal
+    const target = resolveNotifyTarget(taskCardId);
+    if (!target) return;
+    if (!listTerminalCards().some((c) => c.id === target)) return;
+    const label = callbacks.describeCardLabel(taskCardId);
+    enqueueCardDelivery(target, formatAgentFacingAuthorship(label, describeBlockedNotice(taskId, question, 0)));
+  }
+
+  /**
+   * Task 22f0a649 — RESPONDE a pergunta de uma task `blocked`. UM corpo serve
+   * os dois consumidores: o MCP (`answer_blocked` → actor `orchestrator`) e a
+   * Fila (`store:tasks:answer-blocked` → actor `human`). Faz três coisas:
+   *   1. limpa a pergunta do `result_json`;
+   *   2. devolve o status a `pending` (responder NÃO é julgamento);
+   *   3. ENTREGA a resposta ao card da task pelo caminho do `send_to_card`
+   *      (`enqueueCardDelivery`) — se o card morreu, `delivered:false` e a
+   *      resposta fica registrada no `result_json.blockedAnswer`.
+   */
+  function answerBlockedTask(
+    taskId: string,
+    input: { optionId?: string; note?: string },
+    actor: StatusActor,
+  ):
+    | { ok: true; taskId: string; answer: string; delivered: boolean; status: string }
+    | { ok: false; error: string } {
+    const existing = callbacks.getTask(taskId);
+    if (!existing) return { ok: false, error: `no such task "${taskId}"` };
+    const question = blockedQuestionFromResultJson(existing.result_json);
+    if (!question) return { ok: false, error: `task "${taskId}" is not blocked on a question — nothing to answer` };
+    const optionId = typeof input.optionId === "string" ? input.optionId.trim() : "";
+    const note = typeof input.note === "string" && input.note.trim().length > 0 ? input.note.trim() : "";
+    if (!optionId && !note) return { ok: false, error: "an answer needs an `optionId` and/or a `note`" };
+    if (optionId && !question.options.some((o) => o.id === optionId)) {
+      return {
+        ok: false,
+        error: `unknown option "${optionId}" — the question offers: ${question.options.map((o) => o.id).join(", ")}`,
+      };
+    }
+    const answer = describeBlockedAnswer(question, optionId, note || null);
+    // Registra a resposta ANTES de limpar a pergunta: se o card estiver morto,
+    // a resposta não some — vira fato da task.
+    const withAnswer = stampBlockedAnswerJson(existing.result_json, { optionId: optionId || null, note: note || null, answer, by: actor, at: Date.now() });
+    const updated: TaskRow = {
+      ...existing,
+      status: "pending",
+      result_json: clearBlockedQuestionJson(withAnswer),
+      updated_at: Date.now(),
+      actor,
+    };
+    const decision = callbacks.upsertTask(updated);
+    let delivered = false;
+    if (existing.card_id && callbacks.isCardAlive(existing.card_id)) {
+      enqueueCardDelivery(existing.card_id, answer);
+      delivered = true;
+    }
+    return { ok: true, taskId, answer, delivered, status: decision.status };
   }
 
   /**
@@ -4690,7 +4924,24 @@ export function createMessageBus(
       if (statusProposed && req.status === "failed") {
         result_json = stampFailureKindJson(result_json, decideFailureKind("explicit_failed"));
       }
+      // Task 22f0a649 — a pergunta estruturada. A pergunta declarada é
+      // preservada como o gateRun (um `result` posterior não a apaga), e a
+      // REGRA DURA: `blocked` SEM pergunta é RECUSADO — é o travamento mudo
+      // que o item 12 existe para eliminar.
+      result_json = carryBlockedQuestion(existing.result_json, result_json) ?? result_json;
       const now = Date.now();
+      let blockedQuestionWritten: BlockedQuestion | null = null;
+      if (statusProposed && req.status === BLOCKED_STATUS) {
+        blockedQuestionWritten =
+          normalizeBlockedQuestion(req.question, now, req.requesterId ?? null) ??
+          blockedQuestionFromResultJson(existing.result_json);
+        if (!blockedQuestionWritten) return { ok: false, error: describeBlockedWithoutQuestion() };
+        result_json = stampBlockedQuestionJson(result_json, blockedQuestionWritten);
+      } else if (statusProposed) {
+        // Sair de `blocked` (ou para qualquer outro status) encerra a pergunta;
+        // uma pergunta órfã num status que não é `blocked` seria lixo na Fila.
+        result_json = clearBlockedQuestionJson(result_json);
+      }
       let prompt = existing.prompt;
       if (req.prompt !== undefined) {
         const mode = req.promptMode ?? "append";
@@ -4846,6 +5097,14 @@ export function createMessageBus(
       // também seria despachar duas vezes. The app never reassigns or
       // respawns on fail.
       const decision = callbacks.upsertTask(updated);
+      // Task 22f0a649 — `blocked` NÃO pode virar silêncio (decisão (c)):
+      // ao ENTRAR no status com uma pergunta, avisa UMA vez quem spawna/dirige
+      // o card. A Fila também mostra a idade da pergunta.
+      if (blockedQuestionWritten && decision.status === BLOCKED_STATUS) {
+        notifyBlockedQuestion(existing.card_id, req.taskId, blockedQuestionWritten);
+      }
+      const blockedQuestionField =
+        blockedQuestionWritten && decision.status === BLOCKED_STATUS ? { blockedQuestion: blockedQuestionWritten } : {};
       const promptWritten = req.prompt !== undefined ? { prompt } : {};
       if (decision.warnAgent) {
         const warning = describeStatusHeldWarning(decision.status, decision.declaredStatus ?? req.status ?? decision.status);
@@ -4855,7 +5114,7 @@ export function createMessageBus(
         // fact — and when requesterId is missing the code already
         // fell through to this JSON alone, which is the proof it
         // suffices. Do not type.
-        return { ok: true, warning, status: decision.status, divergedStatus: decision.divergedStatus, ...promptWritten };
+        return { ok: true, warning, status: decision.status, divergedStatus: decision.divergedStatus, ...promptWritten, ...blockedQuestionField };
       }
       // Same retainStatusAsk the store already ran: a live request for X
       // plus a write that made X authoritative closes the question.
@@ -4896,9 +5155,10 @@ export function createMessageBus(
           ...storedStatusFields,
           ...promptWritten,
           ...warningField,
+          ...blockedQuestionField,
         };
       }
-      return { ok: true, ...storedStatusFields, ...promptWritten, ...warningField };
+      return { ok: true, ...storedStatusFields, ...promptWritten, ...warningField, ...blockedQuestionField };
     }
 
     if (req.cmd === "list_tasks") {
@@ -5121,6 +5381,13 @@ export function createMessageBus(
       const profile = profileFromCardRow(callbacks.getAnyCard(cardId));
       linkImplementerToTask(task, cardId, "agent", profile);
       return { ok: true, taskId, cardId, role, notice: decideNotice() };
+    }
+
+    if (req.cmd === "answer_blocked") {
+      if (!req.taskId) return { ok: false, error: "missing taskId" };
+      // Quem responde por MCP é o orquestrador (delegação). A Fila chama o
+      // MESMO corpo pelo método exposto no objeto da bus, com actor `human`.
+      return answerBlockedTask(req.taskId, { optionId: req.optionId, note: req.note }, "orchestrator");
     }
 
     if (req.cmd === "request_task_status") {
@@ -7106,6 +7373,9 @@ export function createMessageBus(
     scanIdleWithoutReport,
     notifyConcurrencyCapChanged,
     notifyHumanMovedTask,
+    /** Task 22f0a649 — a Fila (IPC humano) responde pelo MESMO corpo do MCP,
+     * com `actor:"human"`. Ver o doc de `answerBlockedTask`. */
+    answerBlockedTask,
     // Dependents engine entry point for the write funnel (index.ts →
     // task-write-funnel.ts): the funnel detects `done` from the store's
     // decision, this runs the dispatch. Same "avisa o motor" surface as

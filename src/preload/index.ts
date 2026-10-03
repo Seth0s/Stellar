@@ -1070,6 +1070,15 @@ export type TaskBoardItem = {
   requestedReason: string | null;
   requestedBy: string | null;
   requestedAt: number | null;
+  /** Task 22f0a649 — a pergunta estruturada de `blocked`, que a Fila renderiza
+   * para o humano responder direto. `null` = a task não está bloqueada numa
+   * pergunta. */
+  blockedQuestion: {
+    text: string;
+    options: { id: string; label: string; description?: string }[];
+    askedAt: number;
+    by: string | null;
+  } | null;
   /** RODADA 4 — `task_verdicts` (append-only), LIDA pela regra de
    * `task-verdict-read-decision.ts` (task 156e6d08). `provider` do card no
    * momento da leitura (LEFT JOIN); null se o card foi deletado.
@@ -1113,6 +1122,13 @@ const tasks = {
     ipcRenderer.invoke("store:tasks:approve-completion", taskId),
   respondStatusAsk: (taskId: string, allowed: boolean): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke("store:tasks:respond-status-ask", taskId, allowed),
+  /** Task 22f0a649 — o humano responde a pergunta de `blocked` na Fila. */
+  answerBlocked: (
+    taskId: string,
+    optionId: string | null,
+    note: string | null,
+  ): Promise<{ ok: true; answer: string; delivered: boolean } | { ok: false; error: string }> =>
+    ipcRenderer.invoke("store:tasks:answer-blocked", taskId, optionId, note),
   /** RODADA 4 — criar task pela UI (coluna "a fazer"). `actor: "human"`
    * no main — ver `store:tasks:create` em index.ts. */
   create: (boardId: string, prompt: string): Promise<{ ok: true; taskId: string } | { ok: false; error: string }> =>
