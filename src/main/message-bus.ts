@@ -924,7 +924,7 @@ export type BusRequest =
   // só resolve quando existir um relatório de sequência MAIOR que essa
   // (nunca o que já estava lá). Omitido, comportamento de sempre: devolve
   // o último já presente.
-  | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number; afterSeq?: number }
+  | { cmd: "get_report"; target?: string; wait?: boolean; timeoutMs?: number; afterSeq?: number; seq?: number }
   | {
       cmd: "create_task";
       prompt?: string;
@@ -1740,6 +1740,14 @@ export function createMessageBus(
      * store.ts (append-only por `seq`; `getReport` sem `afterSeq` = mais
      * recente; com `afterSeq` = próximo). */
     getReport: (cardId: string, afterSeq?: number) => ReportRow | undefined;
+    /** Task d7fa2d58 — leitura EXATA por `seq` (o identificador do servidor,
+     * que não recicla) e o conjunto de tasks de um SLOT de card_id (a
+     * ambiguidade do ponteiro por card, dita em vez de silenciosa). */
+    getReportBySeq: (seq: number) => ReportRow | undefined;
+    /** Opcional de propósito (source-compatible com as montagens de teste que
+     * não conhecem o conceito): ausente => `[]` => `ambiguous: false`, que é a
+     * verdade de quem não tem como responder. */
+    listTaskIdsForCard?: (cardId: string) => string[];
     upsertReport: (row: ReportRow) => void;
     /** DESIGN-BACKLOG.md §2.1 "Histórico de veredito por participação" —
      * pass-through síncrono pro `store.ts`'s `recordParticipationRound`
@@ -4733,11 +4741,40 @@ export function createMessageBus(
     }
 
     if (req.cmd === "get_report") {
-      if (!req.target) return { ok: false, error: "missing target cardId" };
+      // Task d7fa2d58 — DOIS identificadores, e a diferença é o conserto.
+      // `seq` é do SERVIDOR: global, monotônica, aponta UMA linha para sempre e
+      // NUNCA recicla. `target` é um card_id — um SLOT, que o board reusa (92
+      // ids já reusados no banco vivo; um deles participou de 54 tasks), então
+      // um ponteiro por card_id pode resolver para o relatório de OUTRA task.
+      // A leitura por `seq` não apodrece; a leitura por `target` continua
+      // existindo, mas agora DIZ a que tasks aquele slot pertenceu (`taskIds`)
+      // e marca `ambiguous` quando há mais de uma — o silêncio acaba.
+      if (req.seq !== undefined) {
+        const bySeq = callbacks.getReportBySeq(req.seq);
+        if (!bySeq) {
+          return { ok: false, error: `no report with seq ${req.seq} — nothing is stored at that identifier` };
+        }
+        const seqTaskIds = callbacks.listTaskIdsForCard?.(bySeq.card_id) ?? [];
+        return {
+          ok: true,
+          report: decodeReportArgument(JSON.parse(bySeq.report_json)),
+          seq: bySeq.seq,
+          cardId: bySeq.card_id,
+          verdict: bySeq.verdict ?? null,
+          role: bySeq.role ?? null,
+          authorship: bySeq.authorship ?? null,
+          taskIds: seqTaskIds,
+          ambiguous: seqTaskIds.length > 1,
+        };
+      }
+      if (!req.target) return { ok: false, error: "missing target cardId (or pass a `seq` — the non-reusable identifier)" };
       const target = req.target;
       const afterSeq = req.afterSeq;
       // Sem afterSeq: mais recente. Com afterSeq: próximo (seq > afterSeq),
       // para caminhar histórico append-only depois do fato.
+      // Task d7fa2d58 — as participações do SLOT (a ambiguidade). Ausente no
+      // rig => `[]`, honesto: não há o que afirmar.
+      const cardTaskIds = callbacks.listTaskIdsForCard?.(target) ?? [];
       const storedRow = callbacks.getReport(target, afterSeq);
       // Normaliza na LEITURA (task 10cf58d0): as linhas antigas gravadas como
       // string-de-JSON são lidas como o objeto que sempre foram. Conserta o
@@ -4761,6 +4798,12 @@ export function createMessageBus(
           // ou quando está sob um id fantasma conhecido. A linha NÃO é
           // reescrita nem re-atribuída: isto anda ao lado dela.
           authorship: storedRow?.authorship ?? null,
+          // Task d7fa2d58 — o card_id é um SLOT: diz de quais tasks ele já
+          // participou, para quem lê poder CONFERIR. `ambiguous` é o aviso de
+          // que o ponteiro por card_id pode ser de outra task.
+          cardId: target,
+          taskIds: cardTaskIds,
+          ambiguous: cardTaskIds.length > 1,
         };
       }
       if (!req.wait) return { ok: false, error: afterSeq === undefined ? "no report yet" : "no report newer than the given sequence yet" };
@@ -4790,6 +4833,9 @@ export function createMessageBus(
               verdict: stored.verdict ?? null,
               role: stored.role ?? null,
               authorship: callbacks.getReport(target)?.authorship ?? null,
+              cardId: target,
+              taskIds: cardTaskIds,
+              ambiguous: cardTaskIds.length > 1,
             });
           },
         };
