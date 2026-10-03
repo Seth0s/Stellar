@@ -17,7 +17,7 @@ import {
   type TerminalActivityEvent,
   type XtermOutgoingSource,
 } from "./terminal-activity-decision";
-import { TURN_END_BUFFER_MAX, readTurnEndSignal, type TurnEndReader } from "./terminal-turn-signal";
+import { TURN_END_BUFFER_MAX, feedTurnEndChunk, readTurnEndSignal, type TurnEndReader } from "./terminal-turn-signal";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { decideTerminalFit } from "./terminal-fit-decision";
 
@@ -453,9 +453,13 @@ export function useTerminal(
       setHasReceivedOutput(true);
       const turnEndPattern = turnEndRef.current.pattern;
       if (turnEndPattern) {
-        turnEndBufferRef.current = (turnEndBufferRef.current + data).slice(-TURN_END_BUFFER_MAX);
-        if (turnEndPattern.test(turnEndBufferRef.current)) {
-          turnEndBufferRef.current = "";
+        // TESTA O CHUNK INTEIRO, e só então encolhe a janela — cortar antes
+        // perdia o marcador quando ele ficava a mais de TURN_END_BUFFER_MAX do
+        // fim do MESMO frame (medido: 460 depois dele num chunk de 574, com
+        // frame de até 2214). Ver `feedTurnEndChunk`.
+        const fed = feedTurnEndChunk(turnEndBufferRef.current, data, turnEndPattern, TURN_END_BUFFER_MAX);
+        turnEndBufferRef.current = fed.tail;
+        if (fed.matched) {
           // Pattern-match é o sinal deste provider — prova capacidade.
           markTurnSignalSeen();
           return;
