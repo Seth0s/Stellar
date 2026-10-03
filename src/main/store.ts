@@ -1857,6 +1857,13 @@ export function openStore(userDataDir: string) {
   const deleteCardTraceEventsForCardStmt = db.prepare("DELETE FROM card_trace_events WHERE card_id = ?");
   const deleteCardTraceEventsForTaskStmt = db.prepare("DELETE FROM card_trace_events WHERE task_id = ?");
   const countCardTraceEventsStmt = db.prepare("SELECT COUNT(*) AS n FROM card_trace_events");
+  // Task 86613ff9 — a CHAVE da virada. O evento é chaveado por `task_id`, e um
+  // card pode participar de mais de uma task; a participação VIVA (`released_at
+  // IS NULL`) vem primeiro, senão a mais recente. Sem vínculo => sem chave, e a
+  // ausência é declarada (o evento não nasce) em vez de inventada.
+  const getLatestTaskCardForCardStmt = db.prepare(
+    "SELECT task_id, role FROM task_cards WHERE card_id = ? ORDER BY (released_at IS NULL) DESC, linked_at DESC LIMIT 1",
+  );
   const unarchiveCardStmt = db.prepare("UPDATE cards SET archived_at = NULL WHERE id = ?");
 
   const listConnectorsStmt = db.prepare(
@@ -3223,6 +3230,11 @@ export function openStore(userDataDir: string) {
     getCardTraceEventsForBoard: (boardId: string): CardTraceEventRow[] =>
       listCardTraceEventsForBoardStmt.all(boardId) as CardTraceEventRow[],
     countCardTraceEvents: (): number => (countCardTraceEventsStmt.get() as { n: number }).n,
+    /** Task 86613ff9 — a task sob a qual um card está participando AGORA (a
+     * viva vence a liberada). `undefined` = sem vínculo; quem emite trata a
+     * ausência como "não há chave", nunca como um id inventado. */
+    getLatestTaskCardForCard: (cardId: string): { task_id: string; role: string } | undefined =>
+      getLatestTaskCardForCardStmt.get(cardId) as { task_id: string; role: string } | undefined,
     deleteCardTraceEvents: (cardId: string) => deleteCardTraceEventsForCardStmt.run(cardId),
     deleteCardTraceEventsForTask: (taskId: string) => deleteCardTraceEventsForTaskStmt.run(taskId),
     listConnectors: (boardId: string): ConnectorRow[] => listConnectorsStmt.all(boardId) as ConnectorRow[],
