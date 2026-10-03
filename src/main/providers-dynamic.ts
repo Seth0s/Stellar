@@ -1893,6 +1893,16 @@ export function providersConfigSchema(): Record<string, unknown> {
           "declarações reais vêm em `appProviders`), e o app NUNCA a remove de um arquivo que já a tenha — use-a " +
           "como suas notas; o loader a ignora por não estar em `providers`.",
       },
+      _notice: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "O AVISO do arquivo, escrito pelo app (task 4987a540): um 'comentário' em JSON — a chave `_` sobrevive ao " +
+          "parse e o loader a ignora. Entra quando falta, entre as PRIMEIRAS linhas do arquivo, e o app NUNCA " +
+          "sobrescreve um `_notice` SEU (edite-o à vontade: ele é seu). O que ele diz importa: NÃO copie uma entrada " +
+          "inteira de `appProviders` — um id igual VENCE o do app e CONGELA na cópia, e você para de receber as " +
+          "correções dele.",
+      },
     },
   };
 }
@@ -1994,13 +2004,60 @@ export type ProvidersSeedPlan = {
 };
 
 /**
+ * O AVISO QUE VIAJA COM O ARQUIVO (task 4987a540) — a chave que faz o
+ * comentário existir num JSON.
+ *
+ * O PROBLEMA MEDIDO: o aviso mais importante do `providers.json` (NÃO copie
+ * uma entrada inteira — um id igual ao de `appProviders` VENCE o do app e
+ * CONGELA na cópia, e você para de receber as correções dele) vivia SÓ nas
+ * `description` do `providers.schema.json`. Um editor schema-aware (VS Code com
+ * o `$schema` resolvido) mostra isso; o editor PADRÃO do SO que o
+ * `shell.openPath` abre (gedit, Bloco de Notas, TextEdit) não entende
+ * `$schema` — o dono via quatro linhas de JSON e nada mais.
+ *
+ * POR QUE NÃO UM COMENTÁRIO: JSON puro não tem comentário, e o arquivo é lido
+ * com `JSON.parse` (`loadDynamicProviders` / `ensureProvidersConfigFile`) — um
+ * `//` QUEBRARIA o arquivo do usuário. Suportá-lo exigiria mais um PARSER (uma
+ * segunda verdade de leitura, que este repo recusa por princípio) e um escritor
+ * que preservasse comentários. Nenhum dos dois se paga.
+ *
+ * POR QUE UMA CHAVE `_`: a convenção `_` (a mesma do `_example` legado) é o
+ * comentário que SOBREVIVE ao parse — o loader ignora chaves desconhecidas e
+ * `planProvidersConfig` as preserva. É TEXTO no próprio arquivo, então aparece
+ * em QUALQUER editor, sem depender de `$schema` nem de a UI ter avisado antes.
+ *
+ * O QUE O `planProvidersConfig` GARANTE: a chave entra SÓ quando falta (como
+ * `$schema`/`schemaVersion`) e NUNCA por cima de um valor do usuário — quem
+ * editar o PRÓPRIO `_notice` fica com o texto dele. Idempotente por construção
+ * (segunda passada byte a byte igual ⇒ o `ensureProvidersConfigFile` não escreve).
+ *
+ * O CUSTO, dito por inteiro: ~4 linhas de texto no arquivo de quem já sabe o
+ * que faz. É menor que o custo do defeito — copiar o exemplo e congelar o
+ * provider em silêncio, com o sintoma aparecendo meses depois.
+ */
+export const PROVIDERS_FILE_NOTICE_KEY = "_notice";
+
+/** As linhas do aviso. Um ARRAY (um item por linha) de propósito: o
+ * `renderProvidersConfig` usa `JSON.stringify(..., 2)`, que põe cada item na
+ * PRÓPRIA linha — legível no editor padrão. Uma única string com `\n` sairia
+ * como escapes `\n` visíveis, que é pior que não ter aviso. Sem aspas duplas
+ * dentro do texto, pelo mesmo motivo (virariam `\"`). */
+export const PROVIDERS_FILE_NOTICE: readonly string[] = [
+  "LEIA ANTES DE EDITAR. `providers` é SUA — o app NUNCA escreve nela. `appProviders` é DO APP: reescrita inteira a cada boot, não edite (a mudança some no próximo boot).",
+  "Para MUDAR um provider que o app já entrega (cline, commandcode), escreva em `providers` SÓ os campos que quer trocar — ex.: o id e o baseArgs com as suas flags. Todo o resto continua vindo do app, e continua recebendo as correções dele.",
+  "NÃO copie a entrada inteira: um id igual ao de `appProviders` VENCE o do app e CONGELA na cópia — você PARA de receber as correções dele.",
+  "Para USAR o que o app já entrega não é preciso escrever nada aqui.",
+];
+
+/**
  * A DECISÃO desta task, pura: dado o arquivo como ele está e o catálogo deste
  * build, o que deve ir para o disco? Sem fs, sem relógio, sem merge de listas.
  *
  * `providers` é do usuário e passa INTACTA (é a chave que o app nunca escreve —
  * nem para "consertar"); `appProviders` é reescrita por inteiro a partir do
- * catálogo; e as chaves de instrução entram só quando faltam. Nada do usuário é
- * removido: chaves desconhecidas, entradas próprias e o `_example` legado ficam.
+ * catálogo; e as chaves de instrução (`$schema`, `_notice`, `schemaVersion`)
+ * entram só quando faltam. Nada do usuário é removido: chaves desconhecidas,
+ * entradas próprias e o `_example` legado ficam.
  */
 export function planProvidersConfig(
   raw: Record<string, unknown>,
@@ -2017,6 +2074,13 @@ export function planProvidersConfig(
   // chaves do usuário, na ordem dele; `providers` e `appProviders` fecham.
   if (!("$schema" in raw)) addedKeys.push("$schema");
   next.$schema = "$schema" in raw ? raw.$schema : PROVIDERS_SCHEMA_REF;
+  // O AVISO VISÍVEL (task 4987a540) — o "comentário" que sobrevive ao parse.
+  // Logo depois do `$schema`, para estar entre as PRIMEIRAS linhas que o dono
+  // vê ao abrir. Só quando falta: um `_notice` do usuário fica com ele.
+  if (!(PROVIDERS_FILE_NOTICE_KEY in raw)) {
+    addedKeys.push(PROVIDERS_FILE_NOTICE_KEY);
+    next[PROVIDERS_FILE_NOTICE_KEY] = structuredClone(PROVIDERS_FILE_NOTICE);
+  }
   for (const [key, value] of Object.entries(raw)) {
     if (key === "$schema" || key === "providers" || key === PROVIDERS_APP_KEY) continue;
     next[key] = value;
@@ -2118,12 +2182,13 @@ export function ensureProvidersSchemaFile(userDataDir: string): EnsureProvidersS
 
 /**
  * As chaves de INSTRUÇÃO do arquivo, na ordem em que entram quando faltam.
- * `$schema` é o que faz o editor autocompletar e validar; `schemaVersion` é o
- * que o próprio loader exige (um arquivo sem ela é recusado NO TOPO — e, agora
- * que o app escreve as declarações, deixá-la faltando seria escrever num
- * arquivo que o loader descarta inteiro).
+ * `$schema` é o que faz o editor autocompletar e validar; `_notice` é o aviso
+ * em texto que qualquer editor mostra (task 4987a540); `schemaVersion` é o que
+ * o próprio loader exige (um arquivo sem ela é recusado NO TOPO — e, agora que
+ * o app escreve as declarações, deixá-la faltando seria escrever num arquivo
+ * que o loader descarta inteiro).
  */
-export const PROVIDERS_INSTRUCTION_KEYS = ["$schema", "schemaVersion"] as const;
+export const PROVIDERS_INSTRUCTION_KEYS = ["$schema", PROVIDERS_FILE_NOTICE_KEY, "schemaVersion"] as const;
 
 
 export type EnsureProvidersConfigResult = {
