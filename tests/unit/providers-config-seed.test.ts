@@ -72,7 +72,7 @@ describe("planProvidersConfig — a decisão pura", () => {
     expect((plan.next[PROVIDERS_APP_KEY] as { id: string }[]).map((spec) => spec.id)).toEqual(["cline", "commandcode"]);
     // A declaração publicada é a MESMA que o app usa — não um resumo.
     expect(plan.next[PROVIDERS_APP_KEY]).toEqual(v1());
-    expect(Object.keys(plan.next)).toEqual(["$schema", "schemaVersion", "providers", PROVIDERS_APP_KEY]);
+    expect(Object.keys(plan.next)).toEqual(["$schema", "_notice", "schemaVersion", "providers", PROVIDERS_APP_KEY]);
   });
 
   it("`providers` (a chave do usuário) passa INTACTA — byte a byte, ordem incluída", () => {
@@ -103,7 +103,7 @@ describe("planProvidersConfig — a decisão pura", () => {
   it("as chaves de instrução entram só quando faltam, e um `$schema` do usuário é preservado", () => {
     const plan = planProvidersConfig({ providers: [], $schema: "./meu-schema.json" }, v1());
 
-    expect(plan.addedKeys).toEqual(["schemaVersion"]);
+    expect(plan.addedKeys).toEqual(["_notice", "schemaVersion"]);
     expect(plan.next.$schema).toBe("./meu-schema.json");
   });
 

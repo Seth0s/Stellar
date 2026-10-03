@@ -359,8 +359,16 @@ describe("o schema publicado", () => {
     expect(schema.type).toBe("object");
     // As DUAS listas com dono explícito (task 3fe0db6e): `providers` é do
     // usuário, `appProviders` é do app. `_example` é legado mantido por
-    // compatibilidade de leitura (nunca removido de um arquivo que o tenha).
-    expect(Object.keys(schema.properties)).toEqual(["$schema", "schemaVersion", "providers", "appProviders", "_example"]);
+    // compatibilidade de leitura (nunca removido de um arquivo que o tenha), e
+    // `_notice` é o aviso em texto que o app escreve (task 4987a540).
+    expect(Object.keys(schema.properties)).toEqual([
+      "$schema",
+      "schemaVersion",
+      "providers",
+      "appProviders",
+      "_example",
+      "_notice",
+    ]);
     expect(schema.properties.schemaVersion.const).toBe(1);
     // A origem é a LISTA em que a entrada está — e é isso que o schema diz.
     expect(schema.properties.appProviders.description).toContain("DO APP");
