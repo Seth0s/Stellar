@@ -172,7 +172,7 @@ A tela de login é a primeira coisa que o usuário vê e deve ser a **última** 
 | 3 | Estatística local — prova o valor sem servidor | ✅ `59e5cd9` |
 | 4 | **Identidade local real** (decisão 4 acima — `user_id` pessoa + `install_id` máquina, anônimo-local desde o primeiro run; não depende de nada, torna a etapa 8 barata) | ✅ `_______` |
 | 5 | **Política de segredos** (decisão 1 acima) | ✅ **DECIDIDA (2026-10-03): a credencial não viaja** — o usuário redigita em cada máquina. O sync carrega a referência e o NOME do que precisa de credencial, nunca o valor. **Destrava a etapa 6.** |
-| 6 | Sync de config de providers, com remap de caminho | o produto de portabilidade de verdade |
+| 6 | Sync de config de providers, com remap de caminho | 🟡 formato + transform puros (§9, task dd94912c) — falta o TRANSPORTE (etapa 8) |
 | 7 | Board do Stellar como camada secundária, com estratégia de conflito | depende de 6 |
 | 8 | Backend, login, team | depende de tudo acima |
 
@@ -191,6 +191,73 @@ Cada etapa entrega algo sozinha. Na ordem inversa, constroem-se meses de servido
 - **Não prometer "igual em qualquer PC" antes de decidir os segredos.** A exceção existe e é obrigatória.
 - **Não competir em kanban.** É a única frente onde o produto chega atrasado e pior.
 - **Não inventar sujeito onde não há.** As 143 participações órfãs não sabem quem foi; atribuir trabalho a card reciclado é pior que admitir a ausência.
+
+---
+
+## 9. Etapa 6 — sync da config de providers: o desenho (2026-10-03)
+
+Implementado o que **coube sem servidor**: o FORMATO do que viaja e as duas
+transformações puras. Módulo: `src/main/provider-config-sync.ts`; provas:
+`tests/unit/provider-config-sync.test.ts`.
+
+### (a) O que VIAJA, e só isso
+
+1. `providers[]` — as **declarações do usuário** (o que ele escreveu à mão no
+   `providers.json`). É a casa dele, em dado.
+2. `schemaVersion` — a versão do formato de origem, para a chegada saber o que
+   está lendo (sem ela, empacotar **recusa** em vez de "assumir 1").
+3. `credentialsRequired` — os **NOMES** das credenciais que a casa usa.
+
+### (b) O que NÃO viaja, e por quê
+
+- **Nenhum VALOR de segredo** — decisão do dono (§6.1). O módulo é puro e nem
+  recebe valores: `credentialNamesFromSecrets` é a fronteira que devolve só as
+  CHAVES do arquivo de segredos. O teste prova o descarte com um valor **falso**
+  (`sk-test-DO-NOT-SHIP`), e a prova por mutação mostra o teste ficando VERMELHO
+  quando a extração vaza o valor.
+- **`appProviders`** — é do APP, reescrito inteiro a cada boot a partir do
+  binário. Carregá-lo **congelaria o catálogo** na versão copiada.
+- **`$schema` / `_notice`** — chaves de instrução que a chegada recria sozinha.
+- **Estado de máquina** (socket, Singleton, porta MCP, PID, pan/zoom) — nunca
+  esteve no `providers.json`, e o inventário (§E de `WORK_HOME_INVENTORY.md`) já
+  o lista como "FICA".
+
+### (c) Como o caminho absoluto é remapeado
+
+Caminho sob a home vira o marcador de TEXTO `{home}` no pacote (e não `~`, que
+é do shell e não expande dentro de JSON); a chegada expande para a home LOCAL.
+Só o **prefixo** é templatizado — uma barra no meio de uma flag (`--path=/x/y`)
+não é caminho e fica intacta. Caminho absoluto que **não** estava sob a home
+viaja cru e é **DENUNCIADO** na chegada (`unmapped`), nunca tratado como
+portável — é o §8 ("não sincronizar `cwd` absoluto sem remap"), com a saída
+honesta: dizer o que aponta para fora em vez de fingir que chegou.
+
+### (d) Conflito: o que esta etapa resolve, e o que fica para a 7
+
+- **Resolve (lado calmo da §3.5):** a declaração de provider é `{id, campos}` —
+  DADO, não documento colaborativo. A chegada mescla por id pelo caminho de
+  escrita que **já existe** (nenhum segundo caminho de escrita é inventado).
+  Sync disto é "levar um arquivo", sem CRDT.
+- **Deixa para a 7:** o conflito DURO — posição/tamanho de card, texto de
+  sticky, `tasks.status`, metadados de board. É o canvas/kanban da §3.5, e não
+  é tocado aqui.
+
+### Pode sem backend?
+
+**Sim** — o formato e as transformações são puros e offline. O que falta é
+TRANSPORTE e a política de merge de duas máquinas: isso é a etapa 7 (board) / 8
+(backend/login/team). Este módulo é a INTERFACE que aquelas etapas vão carregar;
+não é um serviço, e não guarda nem transporta segredo.
+
+### O que este desenho NÃO cobre (dito, não escondido)
+
+As **configs de TERCEIROS** (B2 `~/.claude/settings.json`, B15
+`~/.codex/config.toml` com `[projects."/home/…"]`, B12 `trustedFolders.json`…)
+têm o mesmo problema de caminho absoluto e **não** foram incluídas — é uma
+superfície maior (formato por CLI) e merece fatia própria. O `credentialsRequired`
+cobre os segredos DO STELLAR (`secrets.json`); o login/Auth de cada CLI continua
+fora do controle do Stellar (o próprio inventário diz que "redigitar" é o
+caminho para esses também).
 
 ---
 
