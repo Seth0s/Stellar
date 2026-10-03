@@ -71,6 +71,7 @@ describe("message-bus: send não espera PTY (regressão do timeout MCP)", () => 
     const spawnedAtMs = opts.quiet === false ? Date.now() : Date.now() - 1_000;
     const writes: string[] = [];
     let lastActivity = spawnedAtMs;
+    let reads = 0;
     const callbacks = {
       listCards: () => [{ id: "target-1", kind: "terminal", provider: "claude" }],
       isCardAlive: () => true,
@@ -84,7 +85,11 @@ describe("message-bus: send não espera PTY (regressão do timeout MCP)", () => 
       }),
       getCardLastActivityAt: () => lastActivity,
       onReadCardRequest: (requestId: string) => {
-        if (!hangDelivery) bus?.resolveReadCard(requestId, { ok: true, text: "Working" });
+        if (hangDelivery) return;
+        // Contagem de "Working" SUBINDO por leitura = evidência POSITIVA de
+        // turno iniciado (exigida por `sent` desde e256d946); a tela constante
+        // de antes só "confirmava" pelo fallback fraco, que era o defeito.
+        bus?.resolveReadCard(requestId, { ok: true, text: "Working ".repeat(++reads) });
       },
       writeToCard: () => undefined,
       writeToCardWithOrigin: (_id: string, text: string) => {

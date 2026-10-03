@@ -117,7 +117,10 @@ describe("message-bus: send_to_card abre o turno uma vez", () => {
       }),
       notifyCardInput: (id: string) => inputs.push(id),
       onReadCardRequest: (requestId: string) => {
-        bus?.resolveReadCard(requestId, { ok: true, text: confirmAttempt++ === 0 ? "Working" : "Working" });
+        // Baseline (leitura ANTES da escrita) = tela SEM turno; a confirmação
+        // seguinte vê "Working" NOVO — a evidência POSITIVA que o veredito
+        // exige desde e256d946 (antes o fallback devolvia `sent` sem ela).
+        bus?.resolveReadCard(requestId, { ok: true, text: confirmAttempt++ === 0 ? "" : "Working" });
       },
       nextReportSeqSeed: () => 0,
     } as unknown as Parameters<typeof createMessageBus>[1];

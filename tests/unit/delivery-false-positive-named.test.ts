@@ -3,23 +3,20 @@ import { readFileSync } from "node:fs";
 import { decideSubmitCheck } from "../../src/main/type-and-submit-decision";
 
 /**
- * O "FALSO POSITIVO DE MENSAGEM ENVIADA" — NOMEADO, NÃO SILENCIADO (task 238388cc).
+ * O "FALSO POSITIVO DE MENSAGEM ENVIADA" — NOMEADO (238388cc) e CORRIGIDO
+ * (e256d946).
  *
- * O dono achou que este defeito já tinha sido resolvido. O que foi resolvido
- * (f2559b9b) foi a ATRIBUIÇÃO de report — parente, NÃO a confirmação de envio.
- * A confirmação de envio é `decideSubmitCheck` (`type-and-submit-decision.ts`) e
- * ela NÃO tem evidência positiva de submit para o provider GENÉRICO: o
- * `commandcode` NÃO declara `submitStartedPattern` (lido da declaração abaixo),
- * então a checagem afirmativa de "começou um turno" é PULADA ("Regra do Vazio",
- * doc do módulo) e o veredito `"sent"` cai em `agulha ausente + houve atividade`
- * — dois fatos que também são verdadeiros quando o Enter foi engolido e o
- * composer foi limpo por uma repintura. É este o falso positivo que continua de
- * pé, e o teste abaixo grava a FORMA exata dele para não voltar em silêncio.
+ * A task 238388cc NOMEOU o defeito: o que tinha sido resolvido antes (f2559b9b)
+ * era a ATRIBUIÇÃO de report — parente, NÃO a confirmação de envio. A confirmação
+ * é `decideSubmitCheck`: o `commandcode` é GENÉRICO e não declara
+ * `submitStartedPattern`, então a checagem AFIRMATIVA era PULADA ("Regra do
+ * Vazio") e o veredito caía em `agulha ausente + houve atividade` — DOIS fatos
+ * que também são verdadeiros quando o Enter foi engolido e uma repintura limpou
+ * o composer — AFIRMANDO `sent`.
  *
- * Sintoma (a) (card preso em running) e sintoma (b) (falso "enviada") NÃO são a
- * mesma raiz: (a) mora no reconhecimento do fim de turno
- * (`terminal-turn-signal.ts`); (b) mora na confirmação da entrega
- * (`type-and-submit-decision.ts`). Foi o (a) que este trabalho consertou.
+ * A correção (e256d946) INVERTE A POLARIDADE: `sent` exige evidência POSITIVA de
+ * submit; sem ela, `unknown`. Os casos abaixo nasceram VERMELHOS contra o código
+ * anterior (devolviam `sent`) e ficam verdes com a inversão.
  */
 function declared(providerId: string): Record<string, unknown> {
   const json = JSON.parse(readFileSync(new URL("../../src/main/data/providers.builtin.json", import.meta.url), "utf8")) as {
@@ -30,7 +27,7 @@ function declared(providerId: string): Record<string, unknown> {
   return p;
 }
 
-describe("(b) o falso positivo de 'mensagem enviada' — a forma, lida da declaração", () => {
+describe("(b) o falso positivo de 'mensagem enviada' — a forma e o veredito NOVO", () => {
   it("commandcode (GENÉRICO) não declara `submitStartedPattern` — a checagem afirmativa é pulada", () => {
     const delivery = declared("commandcode").capacity as Record<string, unknown> | undefined;
     const d = (delivery?.delivery ?? {}) as Record<string, unknown>;
@@ -40,7 +37,7 @@ describe("(b) o falso positivo de 'mensagem enviada' — a forma, lida da declar
     expect(JSON.stringify(d.turnEnd)).toContain("Worked for");
   });
 
-  it("o veredito `sent` é alcançado SEM nenhuma evidência POSITIVA de submit", () => {
+  it("Enter engolido + composer limpo por repintura ⇒ `unknown`, NUNCA `sent`", () => {
     const sentNeedle = "resuma o estado do board".slice(0, 24);
     const result = decideSubmitCheck({
       // Composer limpo e agulha ausente — o que TAMBÉM é o estado depois de uma
@@ -53,12 +50,13 @@ describe("(b) o falso positivo de 'mensagem enviada' — a forma, lida da declar
       // Sem `submitStartedPattern` e sem `midTurnParkedPattern`: a forma
       // declarada do commandcode.
     });
-    expect(result).toBe("sent");
+    // O defeito: os dois fatos FRACOS não provam que o prompt foi aceito. Sem
+    // evidência positiva, a resposta honesta é "não sei".
+    expect(result).toBe("unknown");
+  });
 
-    // E são EXATAMENTE dois fatos (ausência da agulha + atividade nova): tirar
-    // a atividade derruba para `unknown`. Nenhum deles é evidência de que o
-    // PROMPT FOI ACEITO — a evidência positiva é o que um
-    // `submitStartedPattern` daria, e o commandcode não declara nenhum.
+  it("o veredito NÃO depende de 'houve atividade': sem ela, também `unknown`", () => {
+    const sentNeedle = "resuma o estado do board".slice(0, 24);
     const withoutActivity = decideSubmitCheck({
       screenText: "trabalho anterior do agente\nrégua\n❯ \nrégua\natalhos",
       screenTextBeforeWrite: "❯ \n",
@@ -66,7 +64,25 @@ describe("(b) o falso positivo de 'mensagem enviada' — a forma, lida da declar
       hasNewActivitySinceWrite: false,
       targetRole: "agent",
     });
+    // Antes: com atividade dava `sent` espúrio e sem atividade dava `unknown`.
+    // Agora os DOIS são `unknown` — a ausência de evidência positiva é o que
+    // decide, não a atividade.
     expect(withoutActivity).toBe("unknown");
+  });
+
+  it("o caso LEGÍTIMO segue `sent`: com evidência POSITIVA de que o turno começou", () => {
+    const sentNeedle = "resuma o estado do board".slice(0, 24);
+    const result = decideSubmitCheck({
+      screenTextBeforeWrite: "❯ \n",
+      // O início de turno apareceu NOVO vs baseline — a ÚNICA evidência
+      // positiva de que o prompt foi aceito.
+      screenText: "resuma o estado do board\n✻ Thinking…\n❯ \n",
+      sentNeedle,
+      hasNewActivitySinceWrite: true,
+      targetRole: "agent",
+      submitStartedPattern: /\b(Thinking|Working|esc to interrupt)\b/i,
+    });
+    expect(result).toBe("sent");
   });
 
   it("com a agulha AINDA visível o veredito é `unsent` (o caminho honesto continua funcionando)", () => {
