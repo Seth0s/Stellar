@@ -47,6 +47,7 @@ import { deriveCardDisplayName } from "../shared/card-identity";
 import { t, setLocale, resolveLocale, isLocale, type Locale } from "../shared/i18n";
 import { createLocalePrefs } from "./locale-prefs";
 import { openStore, type CardRow, type ConnectorRow, type BoardRow, type TaskRow } from "./store";
+import { readSpawnProfiles } from "./spawn-profiles";
 import type { TaskVerdictReadRule } from "./task-verdict-read-decision";
 import { decideFailureKind, stampFailureKindJson, interruptionReasonFromResultJson } from "./failure-kind-decision";
 import { describeStatusAskResolved } from "./status-write-decision";
@@ -55,6 +56,7 @@ import { applyTaskPromptWrite, type TaskPromptWriteMode } from "../task-prompt-d
 import { normalizeTaskPurpose, normalizeTaskReview, type TaskPurpose } from "../task-purpose";
 import { coerceStoredTaskStatus, deriveParticipationDivergence, deriveTaskStatus, type TaskParticipationStatus } from "../task-status-derive";
 import { checkAgentAvailability, providerById, refreshProviderReadiness, type SpawnOpts } from "./providers";
+import { getProviderUsage } from "./provider-usage";
 import { projectOneShot, projectEffortValues, projectTurnEndSignal, providersReloadNotices } from "./agent-availability-projection";
 import {
   PROVIDERS_CONFIG_SCHEMA_VERSION,
@@ -2170,6 +2172,11 @@ function createWindow() {
         .listCards(boardId)
         .filter((c) => c.kind === "terminal" && c.provider !== "bash" && registry.isAlive(c.id)).length,
     listTasks: () => store.listTasks(),
+    // Task d14086f8 (item 9, perna 3) — o arquivo do USUÁRIO
+    // (`spawn-profiles.json`), relido a cada montagem de brief: editar à mão
+    // deve valer no próximo spawn, sem reiniciar. Ausente/malformado => vazio
+    // (nenhuma sugestão — o app não inventa default).
+    getSpawnProfiles: () => readSpawnProfiles(app.getPath("userData")),
     // DESIGN-BACKLOG.md §2.1 item 6 — the indexed counterpart, wired now
     // that this file is no longer locked by another agent's work.
     listTasksByBoard: (boardId) => store.listTasksByBoard(boardId),
@@ -2987,6 +2994,7 @@ function createWindow() {
       provider: null,
       status: "pending",
       card_id: null,
+      spawn_profile: null,
       board_id: boardId,
       cwd: null,
       result_json: null,
@@ -4402,6 +4410,20 @@ app.whenReady().then(async () => {
   /** Ler JÁ recarrega o registro (hot-reload do loader, item 4 do
    * briefing): é o mesmo gesto que o usuário faria ao voltar do editor. */
   ipcMain.handle("app:read-providers-config", () => providersPageView());
+
+  /**
+   * Uso/cota de UM provider (task b7caf86d). Pass-through para
+   * `provider-usage.ts` — a leitura (arquivo com TTL, e spawn só de fontes
+   * CARAS) vive lá, uma fonte só. `allowSpawn` chega `true` apenas do gesto
+   * explícito "Medir agora": abrir a tela de providers nunca sobe processo,
+   * porque o custo medido do `opencode stats` (5,3–13,6 s, ~440 MB) é
+   * exatamente o que a task proíbe pagar em poll.
+   */
+  ipcMain.handle(
+    "providers:usage",
+    (_event, providerId: string, opts?: { allowSpawn?: boolean }) =>
+      getProviderUsage(providerId, { allowSpawn: opts?.allowSpawn === true }),
+  );
 
   /**
    * Adiciona (ou reedita) um provider dinâmico. O form manda só o que ele

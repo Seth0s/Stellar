@@ -252,6 +252,11 @@ export type TaskRow = {
    * cwd, now declared on the task instead of hardcoded `undefined` in
    * `onTaskDone`. No repo-heuristic fill-in. */
   cwd: string | null;
+  /** Task d14086f8 (item 9, perna 3) — o NOME do perfil de spawn que esta task
+   * referencia, ou `null`. Referência SOLTA a um arquivo do usuário
+   * (`spawn-profiles.json`), não a uma linha: o app não guarda perfis, só o
+   * nome. `null` = sem sugestão NENHUMA (nunca um default herdado). */
+  spawn_profile: string | null;
   result_json: string | null;
   deps_json: string | null;
   /**
@@ -916,7 +921,12 @@ function migrate(db: Database.Database) {
   } catch (e) {
     if (!String(e).includes("duplicate column name")) throw e;
   }
-  for (const col of ["retry_count INTEGER NOT NULL DEFAULT 0", "attempted_providers_json TEXT"]) {
+  // Task d14086f8 (item 9, perna 3) — o NOME do perfil de spawn que a task
+  // referencia. Nullable e SEM BACKFILL: tasks antigas e tasks que não
+  // referenciam nada ficam NULL, e NULL é "sem sugestão", nunca um default.
+  // Não é FK de propósito: a fonte de verdade do perfil é o ARQUIVO do usuário
+  // (`spawn-profiles.json`), não uma tabela — o nome é uma referência solta.
+  for (const col of ["retry_count INTEGER NOT NULL DEFAULT 0", "attempted_providers_json TEXT", "spawn_profile TEXT"]) {
     try {
       db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`);
     } catch (e) {
@@ -2018,7 +2028,7 @@ export function openStore(userDataDir: string) {
   // reviewer-em-done. Não inventar lock que só cobre um processo.
   const maxIdStmt = db.prepare(buildMaxShortIdSql(db));
 
-  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
+  const TASK_COLUMNS = `id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, spawn_profile, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at`;
   // PERF (task c9db1d86, medido na 41813ab3 seq 447) — a listagem que
   // alimenta `list_tasks` com `view:"summary"` pagava o SELECT inteiro e
   // só descartava `prompt`/`result_json` no fim (`projectListedTask`), ou
@@ -2110,14 +2120,15 @@ export function openStore(userDataDir: string) {
   // see TaskRow.purpose. `review` IS on ON CONFLICT (mutable) — risk
   // can escalate mid-flight; see TaskRow.review.
   const upsertTaskStmt = db.prepare(`
-    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
-    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @review, @territory_json, @gates_json, @allow_commit, @report_schema_json, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
+    INSERT INTO tasks (id, prompt, provider, status, card_id, board_id, cwd, result_json, deps_json, purpose, review, territory_json, gates_json, allow_commit, report_schema_json, spawn_profile, retry_count, attempted_providers_json, max_retries, fallback_providers_json, "order", suggested_order, implicit_order, diverged_status, diverged_actor, requested_status, requested_reason, requested_by, requested_at, sprint_id, created_at, updated_at)
+    VALUES (@id, @prompt, @provider, @status, @card_id, @board_id, @cwd, @result_json, @deps_json, @purpose, @review, @territory_json, @gates_json, @allow_commit, @report_schema_json, @spawn_profile, @retry_count, @attempted_providers_json, @max_retries, @fallback_providers_json, @order, @suggested_order, @implicit_order, @diverged_status, @diverged_actor, @requested_status, @requested_reason, @requested_by, @requested_at, @sprint_id, @created_at, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       prompt = excluded.prompt, provider = excluded.provider, status = excluded.status,
       card_id = excluded.card_id, board_id = excluded.board_id, cwd = excluded.cwd, result_json = excluded.result_json, deps_json = excluded.deps_json,
       review = excluded.review,
       territory_json = excluded.territory_json, gates_json = excluded.gates_json,
       allow_commit = excluded.allow_commit, report_schema_json = excluded.report_schema_json,
+      spawn_profile = excluded.spawn_profile,
       retry_count = excluded.retry_count, attempted_providers_json = excluded.attempted_providers_json,
       max_retries = excluded.max_retries, fallback_providers_json = excluded.fallback_providers_json,
       "order" = excluded."order", suggested_order = excluded.suggested_order, implicit_order = excluded.implicit_order,
@@ -2490,6 +2501,12 @@ export function openStore(userDataDir: string) {
       gates_json: rest.gates_json ?? null,
       allow_commit: rest.allow_commit ?? null,
       report_schema_json: rest.report_schema_json ?? null,
+      // Task d14086f8 — o NOME do perfil de spawn (referência solta ao arquivo
+      // do usuário). Mesma convenção dos campos de contrato acima: `null`
+      // limpa; quem atualiza re-passa a linha existente. O `?? null` também é
+      // o que mantém o parâmetro NOMEADO sempre presente no statement, mesmo
+      // para quem constrói a linha por um caminho antigo.
+      spawn_profile: rest.spawn_profile ?? null,
       status: decision.status,
       diverged_status: divergedStatus,
       diverged_actor: divergedActor,
