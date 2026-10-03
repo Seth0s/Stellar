@@ -188,7 +188,13 @@ export const ptBR = {
   // edf3b047 — "com ajustes seus" / "sem correção do app" — e não um terceiro.
   "settings.providers.resetOverrideHint":
     "Isto tira a sua entrada de \"{id}\" do providers.json: os ajustes que você escreveu por cima (o \"baseArgs\", por exemplo) somem, e o provider volta a vir da declaração do app — com correção do app de novo.",
+  // NÃO é a mesma ação na linha SÓ DO USUÁRIO (ponto 5 do enunciado): o id dela
+  // não existe em `appProviders`, então não há "padrão do app" para voltar — o
+  // reset REMOVE o provider. Reusar "Voltar ao padrão do app" ali prometeria um
+  // default que não existe; por isso a chave própria, e não a mesma palavra.
+  "settings.providers.remove": "Remover provider",
   "settings.providers.resetConfirm": "Voltar ao padrão",
+  "settings.providers.removeConfirm": "Remover",
   "settings.providers.restored": "Padrão declarado de \"{id}\" restaurado.",
   "settings.general.localeHint": "Detectado do sistema; a escolha fica salva",
   "settings.general.scopeNote":
@@ -1260,7 +1266,13 @@ export const en: Record<MessageKey, string> = {
   // both what is lost and what comes back.
   "settings.providers.resetOverrideHint":
     "This removes your \"{id}\" entry from providers.json: the changes you wrote over the app's declaration (\"baseArgs\", for example) are gone, and the provider comes from the app's declaration again — receiving app fixes once more.",
+  // NOT the same action for a user-only row (enunciado item 5): its id is not in
+  // `appProviders`, so there is no "app default" to restore — the reset REMOVES
+  // the provider. Reusing "Restore app default" there would promise a default
+  // that does not exist.
+  "settings.providers.remove": "Remove provider",
   "settings.providers.resetConfirm": "Restore default",
+  "settings.providers.removeConfirm": "Remove",
   "settings.providers.restored": "Declared default for \"{id}\" restored.",
   "settings.general.localeHint": "Detected from the system; the choice is saved",
   "settings.general.scopeNote":
