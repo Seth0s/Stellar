@@ -1105,6 +1105,10 @@ export type TaskBoardItem = {
  * fica pra depois, ver DESIGN-BACKLOG.md). */
 const tasks = {
   listByBoard: (boardId: string): Promise<TaskBoardItem[]> => ipcRenderer.invoke("store:tasks:list-by-board", boardId),
+  /** O diff capturado pelo app nesta task (task 7096e8af) — SOB DEMANDA (o
+   * board não o carrega no push, por tamanho). `null` = sem evidência. */
+  gateDiff: (taskId: string): Promise<import("../main/gate-runner").DiffCaptureEvidence | null> =>
+    ipcRenderer.invoke("store:tasks:gate-diff", taskId),
   approveCompletion: (taskId: string): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke("store:tasks:approve-completion", taskId),
   respondStatusAsk: (taskId: string, allowed: boolean): Promise<{ ok: true } | { ok: false; error: string }> =>
