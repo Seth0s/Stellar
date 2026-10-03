@@ -71,6 +71,7 @@ import {
   composeSystemPrompt,
   registerDynamicProviders,
   type McpServerShape,
+  type McpUrlSyntax,
   type OneShotCapability,
   type ProviderDef,
   type ProviderFlagOpts,
@@ -219,7 +220,19 @@ export type DynamicProviderSpec = {
      * sabe montar o JSON de config de UMA CLI desconhecida — isso é
      * `buildArgs` à mão, como nos nativos. */
     mcp:
-      | { mechanism: "global-config"; configPath: string; configKey: string; serverShape: McpServerShape }
+      | {
+          mechanism: "global-config";
+          configPath: string;
+          configKey: string;
+          serverShape: McpServerShape;
+          /** Task 2e1bc3be — a SINTAXE de interpolação de env que ESTA CLI
+           * aceita no `url` (`McpUrlSyntax`). Era o único campo que o nativo do
+           * opencode tinha e o genérico NÃO sabia declarar: sem ele,
+           * `declaredUrlSyntax` cai no fallback `dollar-env`, o opencode recebe
+           * `${env:}` e RECUSA com "Invalid MCP URL" — derrubando o
+           * zero-processo. Ausente = a CLI aceita o default (`${env:}`). */
+          urlSyntax?: McpUrlSyntax;
+        }
       | { mechanism: "none" };
     acbridgeOnPath: boolean;
     effort:
@@ -552,6 +565,10 @@ const SESSION_FLAG_KEYS = ["resumeFlag", "imposeFlag", "continueFlag"] as const;
 export const SYSTEM_PROMPT_MECHANISMS = ["flag", "none"] as const;
 export const MCP_MECHANISMS = ["global-config", "none"] as const;
 export const MCP_SERVER_SHAPES = ["stdio-command", "local-array"] as const;
+/** Task 2e1bc3be — as sintaxes de interpolação de env MEADAS no `url` de um MCP
+ * remoto. `dollar-env` = `${env:VAR}` (default de quem não declara);
+ * `brace-env` = `{env:VAR}` (opencode, que RECUSA a outra). */
+export const MCP_URL_SYNTAXES = ["dollar-env", "brace-env"] as const;
 export const EFFORT_MECHANISMS = ["flag", "none"] as const;
 export const EFFORT_NONE_REASONS = ["shell", "no-flag", "unmeasured"] as const;
 export const MODEL_MECHANISMS = ["flag", "none"] as const;
@@ -1117,7 +1134,22 @@ export function parseProviderSpec(value: unknown): { ok: true; spec: DynamicProv
     if (!isOneOf(serverShape, MCP_SERVER_SHAPES)) {
       return { ok: false, reason: refusal("capacity.mcp.serverShape", `one of ${acceptedList(MCP_SERVER_SHAPES)}`, serverShape) };
     }
-    mcp = { mechanism: "global-config", configPath, configKey, serverShape };
+    // Task 2e1bc3be — a sintaxe do `url`, quando a CLI tem uma própria. Só os
+    // dois valores MEDIDOS entram; qualquer outro é recusa, nunca um palpite.
+    const urlSyntaxRaw = mcpRaw.urlSyntax;
+    if (urlSyntaxRaw !== undefined && !isOneOf(urlSyntaxRaw, MCP_URL_SYNTAXES)) {
+      return {
+        ok: false,
+        reason: refusal("capacity.mcp.urlSyntax", `one of ${acceptedList(MCP_URL_SYNTAXES)}`, urlSyntaxRaw),
+      };
+    }
+    mcp = {
+      mechanism: "global-config",
+      configPath,
+      configKey,
+      serverShape,
+      ...(urlSyntaxRaw !== undefined ? { urlSyntax: urlSyntaxRaw as McpUrlSyntax } : {}),
+    };
   } else {
     return {
       ok: false,
@@ -2575,6 +2607,10 @@ export function dynamicProviderDef(spec: DynamicProviderSpec): ProviderDef {
               configPath: declared.mcp.configPath,
               configKey: declared.mcp.configKey,
               serverShape: declared.mcp.serverShape,
+              // Task 2e1bc3be — CAMPO A CAMPO: sem este `...` o `urlSyntax`
+              // passaria no schema e no validador e MORRERIA aqui, que é a
+              // classe exata que o round-trip do catálogo existe para pegar.
+              ...(declared.mcp.urlSyntax ? { urlSyntax: declared.mcp.urlSyntax } : {}),
             }
           : { mechanism: "none" },
       acbridgeOnPath: declared.acbridgeOnPath,
