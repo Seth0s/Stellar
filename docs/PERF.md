@@ -268,6 +268,14 @@ dado, não suposição.** `SHARED_TEXTURE_AVAILABLE = false` registra isso, e o
 caminho `shared-texture` (60fps, zero encode) já está modelado na decisão para
 o dia em que o consumidor nativo existir.
 
+> **CORRIGIDO em §15 (task dc01030b, 2026-10-03).** A premissa "exige módulo
+> nativo no consumidor" é **FALSA** para o Electron 42.3.0: existe consumidor de
+> primeira classe (`sharedTexture.setSharedTextureReceiver` →
+> `importedSharedTexture.getVideoFrame()` → `VideoFrame` → `drawImage`), e ele
+> está presente em runtime nesta instalação. O que fecha a rota NESTA máquina é
+> o GPU — Wayland não fala Vulkan e a superfície de shared image não inicializa
+> —, **não** a ausência de consumidor. A medição completa está em §15.
+
 ### 7.3 O que mudou
 
 Módulo puro novo, no idioma de `update-feed-decision.ts`: dado
@@ -350,7 +358,7 @@ usasse X" não precisar reabrir a discussão.
 | rota | veredito | número | prova |
 |---|---|---|---|
 | `WebContentsView` nativo (`contentView.addChildView`) | **não compõe** — testado em Wayland, X11 e `--disable-gpu`; quatro estímulos isolados (views recém-criadas, `invalidate()`, mutação DOM, mover+recolorir), nenhum destrava | 0 pixels da cor-assinatura contidos no bbox da janela hospedeira em nenhum estímulo | commits `7ccac8e`, `377f40a`, `9e40f93`; `scripts/probe/out/wayland/result.json` |
-| `useSharedTexture` | exige módulo nativo no consumidor — hoje é `<canvas>` 2D (`BrowserCard.tsx:567-582`, `createImageBitmap`→`drawImage`), sem addon nativo no `package.json` | — | `src/main/browser-frame-decision.ts:20-33` (doc comment), §7.2 |
+| `useSharedTexture` | ~~exige módulo nativo no consumidor~~ — **razão ERRADA** (ver §15): o consumidor de primeira classe existe. O que fecha a rota **nesta máquina** é o GPU: com `useSharedTexture:true` a janela offscreen não pinta (e às vezes nem carrega), GPU: "wayland is not compatible with Vulkan" + "Unable to initialize SkSurface"; 6 combinações de switch não resgataram | 0 texturas em **0 paints** (baseline clássico: 60 frames, **2,6 ms/frame**) | `scripts/probe/out/shared-texture/result-wayland.json`, §15 |
 | bitmap cru **transferível** | **não existe na API** — `MessagePortMain.postMessage(message, transfer?: MessagePortMain[])` (`electron.d.ts:9704`) só aceita portas no array de transfer; `UtilityProcess.postMessage` tem a **mesma assinatura** (`electron.d.ts:15701`) — reconfirmado nesta rodada (§9.2) | erro observado: `Port at index 0 is not a valid port` | commit `00f511c`; `scripts/probe/out/wayland/result.json` (`rawBitmapRoutes`) |
 | bitmap cru **por cópia** (clone estruturado) | pior que o JPEG atual — o bitmap precisa atravessar inteiro, e a cópia custa mais que o encode que ela tentaria evitar | `toJPEG(90)` = **5,307 ms** de thread principal × `toBitmap()+MessageChannelMain` = **5,947 ms** de thread principal (+8,519 ms de round-trip, 5,7 MB) | commit `00f511c`; `scripts/probe/out/bitmap-route/result.json` |
 
@@ -983,3 +991,123 @@ bibliotecas de driver residentes (RSS de páginas compartilhadas, PSS ~metade) +
 12` (baseline) e `--cards 3 --zoom 15 --pan-y 80`; `node
 scripts/measure/ram-accretion.mjs --cards 2 --minutes 1 --interval 10` (curva) e
 `--cards 2 --cycle 2` (revela o ABORT).
+
+## 15. Sonda 5: shared texture do Electron 42 — a rota NÃO funciona nesta máquina (2026-10-03, task dc01030b)
+
+Sonda: `scripts/probe/shared-texture.js`. Rodar (da raiz, sem subir o Stellar):
+
+```
+node_modules/.bin/electron scripts/probe/shared-texture.js                 # wayland (o caso real)
+PROBE_OZONE=x11 node_modules/.bin/electron scripts/probe/shared-texture.js
+```
+
+Evidência: `scripts/probe/out/shared-texture/result-wayland.json` (+ stdout, onde
+o stderr do GPU aparece). Instância ISOLADA (`--user-data-dir` próprio em `/tmp`).
+
+### 15.1 A conclusão anterior estava ERRADA — e o motivo importa
+
+§7.2 e a tabela de §9.1 fecharam esta rota com "exige módulo nativo no
+consumidor". **A razão está errada.** O Electron 42.3.0 tem consumidor de
+primeira classe para o handle de textura, e ele existe **em runtime nesta
+instalação** (checado com `require("electron")` num processo isolado):
+
+- main: `sharedTexture` → `{ subtle, importSharedTexture, sendSharedTexture }`
+- `sharedTexture.subtle` → `{ importSharedTexture, finishTransferSharedTexture }`
+- renderer: `sharedTexture` → `{ subtle, setSharedTextureReceiver }`
+
+O fluxo é `importSharedTexture({textureInfo})` →
+`sendSharedTexture({frame, importedSharedTexture})` no main, e no renderer
+`setSharedTextureReceiver(async (data) => data.importedSharedTexture.getVideoFrame())`
+→ **`VideoFrame`** → `drawImage` num canvas 2D — o MESMO tipo de consumidor que
+o Stellar já tem (`BrowserCard.tsx`, `createImageBitmap`→`drawImage`). **Não é
+preciso addon nativo.** A porta foi fechada por leitura de documentação mais
+velha que a API, não por medição; quem reler §7.2 não pode reusar esse motivo.
+
+### 15.2 O veredito: não funciona AQUI — e é outro motivo
+
+Isolamento mínimo (`scripts/probe`, mesma página, só muda o `webPreferences`):
+
+| modo | paints em 2,5 s | texturas no `paint` |
+|---|---|---|
+| `offscreen: true` (clássico, o de hoje) | 1 (página estática) | — |
+| `offscreen: { useSharedTexture: true }` | **0** (a página nem carrega) | **0** |
+
+Com `useSharedTexture: true` a janela **falha**: `ERR_FAILED (-2)` ao carregar,
+em wayland E x11, e em **seis** combinações de switch de GPU
+(`disable-features=Vulkan`, `use-gl=egl`, `use-angle=gl`,
+`use-angle=swiftshader`, `disable-gpu-sandbox`, `in-process-gpu`) — nenhuma
+resgata. A sonda completa (baseline clássico + fases de textura) confirma o
+mesmo: `paintsTotal = 0`, `paintsWithTexture = 0`.
+
+### 15.3 O erro real (stderr do GPU, literal)
+
+```
+ERROR:ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc:252]
+'--ozone-platform=wayland' is not compatible with Vulkan. Consider switching to
+'--ozone-platform=x11' or disabling Vulkan
+ERROR:gpu/command_buffer/service/shared_image/shared_image_representation.cc:408]
+Unable to initialize SkSurface
+```
+
+O caminho de shared texture depende de uma **shared image surface** no
+`gpu-process`; é exatamente ela que não inicializa. Em x11 (XWayland) piora: o
+GPU morre em laço (`GPU process exited unexpectedly: exit_code=139`, SIGSEGV) e
+`Failed to create shared context for virtualization`. Não é erro de uso da API
+pela sonda — a página nem chega a ser carregada.
+
+### 15.4 O que NÃO foi medido (e por quê)
+
+As cinco perguntas do pedido, e onde cada uma parou:
+
+1. **Funciona ponta a ponta (pixel)?** NÃO MEDIDO — a textura nunca chega, então
+   não há o que importar/enviar/desenhar. A prova por pixel está implementada
+   (fonte sólida `#3366CC`, receptor lê o pixel de volta) e roda sozinha no dia
+   em que houver textura.
+2. **Custo na thread principal?** Só o **baseline** pôde ser medido, e no estado
+   limpo (a janela de textura deixa o GPU quebrado, então o baseline roda
+   PRIMEIRO de propósito): `toJPEG(90)` = **2,639 ms/frame** (60 frames, página
+   animada, ~16,5 KB/frame) nesta máquina/sessão. O custo do caminho de textura
+   **não tem número** — não houve frame.
+3. **Idle / resize / visível?** NÃO MEDIDO (sem textura). As três fases existem e
+   ficam `skipped`.
+4. **Vários cards / limite de texturas?** NÃO MEDIDO (sem textura).
+5. **Limpeza / `release()`?** NÃO MEDIDO. O código da fase existe (compara
+   `allReferencesReleased` com e sem `release()` do main), mas sem textura não há
+   referência para vazar.
+
+### 15.5 Método (o que foi de fato feito)
+
+- Instância **isolada** (`--user-data-dir` próprio em `/tmp`); NÃO sobe o Stellar;
+  não escreve no DB do dono.
+- **RSS de `VmRSS`** (`/proc/<pid>/status`) — nunca o campo de páginas de
+  `/proc/<pid>/stat` (é o erro de unidade de §14.1). A sonda já lê assim.
+- **Árvore de processos por PPid** (`rssAtStart`/`rssAfter` no `result.json`).
+- Teto global por fase e por chamada: API experimental não é garantia de timeout
+  (a primeira versão desta sonda pendurou e deixou processo órfão; corrigido).
+
+### 15.6 Ceticismo e limites
+
+- **`@experimental` em cada membro** desta API (`electron.d.ts`). Para um app
+  empacotado e distribuído isso é decisivo: uma minor do Electron pode mudar
+  assinatura ou remover o caminho sem aviso — não é uma fundação para uma feature
+  do produto sem um plano de fallback medido.
+- **Só Linux/Wayland foi testado.** macOS (`IOSurfaceRef`) e Windows (NT HANDLE
+  de D3D11) ficaram **SEM teste** — e é plausível que funcionem lá, porque o
+  obstáculo observado aqui é a superfície de shared image do Linux (DMA-BUF),
+  não a API. O `addChildView` já enganou exatamente neste ponto (funcionava "em
+  teoria" e não compunha na prática): conclusão aqui vale para Linux/Wayland, o
+  caso real desta máquina.
+- A falha observada é de **plataforma/GPU**, não da forma como a sonda usa a API
+  (a mesma forma é a dos exemplos: importar o `textureInfo` do `paint`, enviar,
+  desenhar o `VideoFrame`).
+
+### 15.7 Recomendação
+
+**Não perseguir shared texture como otimização do card de navegador nesta
+máquina.** Ela não chega a produzir um frame: fechar a porta por "não funciona
+aqui" é o veredito medido, com o erro real acima. A rota só deve ser reaberta com
+uma das duas mudanças de premissa: (a) o GPU do Linux/Wayland desta máquina passar
+a inicializar a shared image surface (troca de driver/sessão — re-rodar a sonda é
+barato e ela já fala), ou (b) medição nos outros dois sistemas, onde o handle é
+outro. A alternativa que JÁ tem número e não depende de nada disto continua a de
+§9.3 (recorte por `dirty`) e o teto de 30fps de §7.
