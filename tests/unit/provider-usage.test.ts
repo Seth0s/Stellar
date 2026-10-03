@@ -111,7 +111,11 @@ describe("getProviderUsage", () => {
   });
 
   it("honestly reports unsupported CLI providers with their dashboard URLs", async () => {
-    const providers = ["codex", "cursor", "antigravity", "cline", "commandcode"];
+    // `commandcode` SAIU desta lista (task 36034ff2): ele passou a ter fonte de
+    // PERCENTUAL por HTTP (`/alpha/billing/credits`) — ver
+    // `provider-usage-commandcode.test.ts`. Aqui ficam só os que seguem sem
+    // número (o teste não pode depender de rede nem do auth do usuário).
+    const providers = ["codex", "cursor", "antigravity", "cline"];
     for (const p of providers) {
       const res = await getProviderUsage(p);
       expect(res.supported).toBe(false);

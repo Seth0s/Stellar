@@ -23,7 +23,7 @@ export type ProviderUsageStats =
   | {
       provider: string;
       supported: true;
-      source: "cli-stats" | "local-cache";
+      source: "cli-stats" | "local-cache" | "http";
       costUSD?: number;
       inputTokens?: number;
       outputTokens?: number;
@@ -245,6 +245,99 @@ export async function readOpencodeStats(): Promise<ProviderUsageStats> {
   }
 }
 
+/**
+ * COTA % REAL POR HTTP — Command Code (a única fonte de PERCENTUAL que existe
+ * hoje, medido 2026-10-03). O CLI do próprio provider bate neste endpoint com
+ * o `apiKey` de `~/.commandcode/auth.json` (extraído do bundle: base
+ * `https://api.commandcode.ai`, rota `/alpha/billing/credits`, header
+ * `Authorization: Bearer <apiKey>`). Resposta MEDIDA (HTTP 200, ~0,48 s,
+ * 386 B): `windowLimits.fiveHour{used,cap,resetAt}` e
+ * `windowLimits.weekly{used,cap,resetAt}` — numerador E denominador, o que
+ * autoriza percentual. É o caminho HTTP (2º na ordem de custo), sem spawn.
+ */
+export const COMMANDCODE_CREDITS_URL = "https://api.commandcode.ai/alpha/billing/credits";
+export const COMMANDCODE_CREDITS_TIMEOUT_MS = 5_000;
+
+type CommandcodeWindow = { used?: unknown; cap?: unknown; resetAt?: unknown };
+
+/**
+ * Puro: mapeia a resposta de `/alpha/billing/credits` em segmentos com
+ * PERCENTUAL MEDIDO. Regras: só emite segmento quando `used` e `cap` são
+ * números finitos e `cap > 0` (sem denominador não há %); `resetAt` (epoch ms)
+ * vira `resetsAtMs`. Nunca inventa janela nem deriva % de um total solto —
+ * resposta sem `windowLimits` devolve `null` (ausência, não zero).
+ */
+export function parseCommandcodeCredits(json: unknown): { segments: UsageSegment[] } | null {
+  const w = (json as { windowLimits?: { fiveHour?: CommandcodeWindow; weekly?: CommandcodeWindow } } | null)
+    ?.windowLimits;
+  if (!w) return null;
+
+  const segments: UsageSegment[] = [];
+  const add = (key: string, win: CommandcodeWindow | undefined): void => {
+    if (!win) return;
+    const used = typeof win.used === "number" ? win.used : Number.NaN;
+    const cap = typeof win.cap === "number" ? win.cap : Number.NaN;
+    if (!Number.isFinite(used) || !Number.isFinite(cap) || cap <= 0) return;
+    // Uma casa decimal: a UI não mostra "36.232382499999996%".
+    const segment: UsageSegment = { key, percent: Math.round((used / cap) * 1000) / 10 };
+    if (typeof win.resetAt === "number" && Number.isFinite(win.resetAt)) {
+      segment.resetsAtMs = win.resetAt;
+    }
+    segments.push(segment);
+  };
+  add("session", w.fiveHour); // janela de 5h → o rótulo "sessão (5h)" da UI
+  add("week", w.weekly); // janela semanal → "semana (7d)"
+
+  return segments.length > 0 ? { segments } : null;
+}
+
+export async function readCommandcodeCredits(
+  opts: { authPath?: string; fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+): Promise<ProviderUsageStats> {
+  const authPath = opts.authPath ?? join(homedir(), ".commandcode", "auth.json");
+  const doFetch = opts.fetchImpl ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? COMMANDCODE_CREDITS_TIMEOUT_MS;
+
+  try {
+    const auth = JSON.parse(await readFile(authPath, "utf-8"));
+    const apiKey = typeof auth?.apiKey === "string" ? auth.apiKey : "";
+    if (!apiKey) throw new Error("auth.json sem apiKey");
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await doFetch(COMMANDCODE_CREDITS_URL, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const parsed = parseCommandcodeCredits(await res.json());
+    if (!parsed) throw new Error("resposta sem windowLimits");
+
+    return {
+      provider: "commandcode",
+      supported: true,
+      source: "http",
+      segments: parsed.segments,
+      capturedAtMs: Date.now(),
+    };
+  } catch (err) {
+    // Ausência honesta: o motivo nomeia a causa real (auth ausente, HTTP, timeout).
+    return {
+      provider: "commandcode",
+      supported: false,
+      reason: `Cota da Command Code indisponível: ${err instanceof Error ? err.message : String(err)}`,
+      dashboardUrl: PROVIDER_DASHBOARDS.commandcode,
+    };
+  }
+}
+
 export type ProviderUsageOptions = {
   /**
    * Autoriza fontes que SPAWNAM um processo. `false` (padrão) mantém o custo
@@ -253,14 +346,23 @@ export type ProviderUsageOptions = {
   allowSpawn?: boolean;
   /** Injetável para teste; defaults para `Date.now()`. */
   nowMs?: number;
+  /** Injetáveis para teste das fontes HTTP (nunca rede/auth reais na suíte). */
+  fetchImpl?: typeof fetch;
+  commandcodeAuthPath?: string;
 };
 
 /**
  * Leitura por provider. Ordem de preferência da task: arquivo/cache (barato)
- * → HTTP → sessão já viva; spawn é a ÚLTIMA e só sob pedido. Nenhum provider
- * entrega percentual de cota por arquivo/CLI hoje (medido 2026-10-03): o do
- * claude vive no JSON que a CLI passa por stdin ao statusLine, fora do disco —
- * por isso o invariante "sem número ⇒ não disponível" é o caminho comum.
+ * → HTTP → sessão já viva; spawn é a ÚLTIMA e só sob pedido.
+ *
+ * PERCENTUAL (medido 2026-10-03): a ÚNICA fonte é o COMMANDCODE, por HTTP
+ * (`/alpha/billing/credits` — numerador E denominador por janela). O CLAUDE tem
+ * `rate_limits.*.used_percentage`, mas só no JSON que a CLI injeta por STDIN no
+ * statusLine: NÃO há arquivo (o transcript guarda apenas o EVENTO 429
+ * `quotaLimits{status,resetsAt,rateLimitType}`, sem %) e NÃO há endpoint
+ * standalone (a cota chega nos HEADERS `anthropic-ratelimit-unified-*` de uma
+ * chamada de API). Os demais não expõem número — então "sem fonte ⇒ não
+ * disponível" segue sendo o caminho comum, por decisão, não por omissão.
  */
 export async function getProviderUsage(
   providerId: string,
@@ -292,6 +394,13 @@ export async function getProviderUsage(
         };
   } else if (norm === "claude") {
     result = await readClaudeStats();
+  } else if (norm === "commandcode") {
+    // A única fonte de PERCENTUAL: HTTP com o apiKey do próprio CLI. Sem
+    // spawn; o cache de TTL acima evita repetir a chamada a cada montagem.
+    result = await readCommandcodeCredits({
+      authPath: opts.commandcodeAuthPath,
+      fetchImpl: opts.fetchImpl,
+    });
   } else {
     // Providers sem API CLI de uso desacoplada.
     const reasons: Record<string, string> = {
@@ -299,7 +408,6 @@ export async function getProviderUsage(
       cursor: "Cursor é um aplicativo de desktop Electron sem interface CLI para consulta de fast requests/cota.",
       antigravity: "Antigravity CLI (agy) opera sob cotas da API Gemini sem comando desacoplado de telemetria.",
       cline: "Cline atua como agente BYOK/OpenRouter sem cota unificada no CLI.",
-      commandcode: "Command Code possui apenas slash command interativo (/usage) na TUI.",
     };
     result = {
       provider: norm,
