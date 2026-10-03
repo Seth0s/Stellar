@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMessageBus, type BusRequest } from "../../src/main/message-bus";
+import { createMessageBus, resolveCardAmbiguity, type BusRequest } from "../../src/main/message-bus";
 import { openStore, type CardRow, type ReportRow, type TaskRow } from "../../src/main/store";
 
 /**
@@ -117,6 +117,58 @@ describe("get_report: o SLOT diz a que tasks pertence (task d7fa2d58)", () => {
     const res = (await bus!.handleRequest({ cmd: "get_report" } as BusRequest)) as { ok: boolean; error: string };
     expect(res.ok).toBe(false);
     expect(res.error).toContain("seq");
+  });
+
+  // TRI-ESTADO (task 50a4cd40): `true` / `false` / `null`. O terceiro existe
+  // para o `?? []` NÃO transformar a INABILIDADE de responder numa AFIRMAÇÃO.
+  type AmbiguityShape = { ambiguous: boolean | null; taskIds?: string[]; ambiguousReason: string | null };
+
+  it("TRI-ESTADO `true`: o slot tem >1 task — SEI que é ambíguo", async () => {
+    makeBus({ getReport: () => row("97924064", 700), listTaskIdsForCard: () => ["t-a", "t-b"] });
+    const res = (await bus!.handleRequest({ cmd: "get_report", target: "97924064" } as BusRequest)) as AmbiguityShape;
+    expect(res.ambiguous).toBe(true);
+    expect(res.ambiguousReason).toBeNull();
+    expect(res.taskIds).toEqual(["t-a", "t-b"]);
+  });
+
+  it("TRI-ESTADO `false`: o slot tem UMA task — SEI que NÃO é ambíguo", async () => {
+    makeBus({ getReport: () => row("98600001", 1), listTaskIdsForCard: () => ["t-unica"] });
+    const res = (await bus!.handleRequest({ cmd: "get_report", target: "98600001" } as BusRequest)) as AmbiguityShape;
+    expect(res.ambiguous).toBe(false);
+    expect(res.ambiguousReason).toBeNull();
+    expect(res.taskIds).toEqual(["t-unica"]);
+  });
+
+  it("TRI-ESTADO `null`: SEM o canal de participação — NÃO SE SABE (nunca `false`)", async () => {
+    // O rig padrão devolve `undefined` para um callback que não conhece — o
+    // MESMO "não sei" que antes virava `false` por causa do `?? []`.
+    makeBus({ getReport: () => row("98600002", 2) });
+    const res = (await bus!.handleRequest({ cmd: "get_report", target: "98600002" } as BusRequest)) as AmbiguityShape;
+    // Os DOIS estados "eu sei" NÃO podem aparecer aqui.
+    expect(res.ambiguous).not.toBe(true);
+    expect(res.ambiguous).not.toBe(false);
+    expect(res.ambiguous).toBeNull();
+    expect(res.ambiguousReason).toBe("participation-channel-unavailable");
+    // `taskIds` OMITIDO (nunca `[]`, que leria como "nenhuma participação").
+    expect("taskIds" in res).toBe(false);
+  });
+
+  it("TRI-ESTADO `null` também na leitura por `seq` (a linha também pertence a um slot)", async () => {
+    makeBus({ getReportBySeq: () => row("98600003", 3) });
+    const res = (await bus!.handleRequest({ cmd: "get_report", seq: 3 } as BusRequest)) as AmbiguityShape;
+    expect(res.ambiguous).toBeNull();
+    expect(res.ambiguousReason).toBe("participation-channel-unavailable");
+  });
+});
+
+describe("resolveCardAmbiguity — o tri-estado, puro (task 50a4cd40)", () => {
+  it("lista => true/false com taskIds; null => null + motivo, SEM taskIds", () => {
+    expect(resolveCardAmbiguity(["a", "b"])).toEqual({ ambiguous: true, taskIds: ["a", "b"], ambiguousReason: null });
+    expect(resolveCardAmbiguity(["a"])).toEqual({ ambiguous: false, taskIds: ["a"], ambiguousReason: null });
+    expect(resolveCardAmbiguity([])).toEqual({ ambiguous: false, taskIds: [], ambiguousReason: null });
+    const unknown = resolveCardAmbiguity(null);
+    expect(unknown).toEqual({ ambiguous: null, ambiguousReason: "participation-channel-unavailable" });
+    expect("taskIds" in unknown).toBe(false);
   });
 });
 
