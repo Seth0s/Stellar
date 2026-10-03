@@ -1071,6 +1071,11 @@ export function createPtyRegistry(registryOpts: {
     };
     adoptEntry(id, entry);
     if (providerId === "opencode") openOpencodeCardIds.add(id);
+    if (process.env.STELLAR_PTY_WRITE_DEBUG === "1") {
+      process.stderr.write(
+        `[pty-spawn] card=${id} provider=${providerId} resume=${effectiveSpawnOpts.resumeId ?? "-"} invalid=${resumeInvalidReason ?? "-"}\n`,
+      );
+    }
 
     // Review adversarial (2026-09-11), achado 4 — isto disparava via
     // `registryOpts.onData(id, banner)` antes, bytes crus no pty. Trocado
@@ -1493,6 +1498,13 @@ export function createPtyRegistry(registryOpts: {
     // Só origem humana alimenta o buffer/relógio do porteiro — `delivery`
     // e `auto` não podem renovar o idle e segurar a fila dos outros.
     if (renewsHumanInputGateClock(origin)) recordHumanInput(id, entry, data);
+    // DIAGNÓSTICO opt-in (task ce5b224f): o ÚNICO ponto por onde bytes entram
+    // no PTY. `JSON.stringify` escapa `\x1b` etc., então dá para ver EXATAMENTE
+    // o que a app escreveu (e comparar com o que o CLI ecoa). Desligado por
+    // padrão; nada no caminho quente quando a env não está setada.
+    if (process.env.STELLAR_PTY_WRITE_DEBUG === "1") {
+      process.stderr.write(`[pty-write] card=${id} origin=${origin} data=${JSON.stringify(data)}\n`);
+    }
     entry.proc.write(data);
   }
 
