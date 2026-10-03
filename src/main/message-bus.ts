@@ -116,6 +116,7 @@ import { sessionResumeOutlook } from "./participation-session-decision";
 import {
   carryGateEvidence,
   describeNoDeclaredRoot,
+  parseGateDiffEvidence,
   runTaskGates,
   stampGateEvidenceJson,
   stripAgentGateEvidence,
@@ -382,6 +383,41 @@ export function describeBlockedAnswer(question: BlockedQuestion, optionId: strin
   return (
     `[de: stellar] Answer to your blocked question "${question.text}": ${answer}${detail}. ` +
     "Proceed; if you need another decision, ask again the same way (update_task status:blocked with a question)."
+  );
+}
+
+/**
+ * A ESCRITA FORA DO TERRITÓRIO DECLARADO — item 6 do sticky, mecanismo (a).
+ *
+ * ONDE ISTO É APLICÁVEL (medido ANTES de escolher o mecanismo): NÃO existe hook
+ * de `git add` e NÃO existe watch de filesystem — `task-contract-decision.ts`
+ * veda os dois ("never intercept `git add`, never judge gate output"). O que JÁ
+ * existe é a verificação PÓS-HOC do `gate-runner`: ele resolve o git root e
+ * rotula CADA arquivo do diff com `inTerritory`/`outsideTerritory`. Este módulo
+ * NÃO cria fonte nova — só NOMEIA o que já foi medido, para a task CARREGAR a
+ * declaração em vez de deixá-la enterrada no blob do diff.
+ *
+ * Ausência de território continua sendo DADO: sem território declarado não há
+ * rótulo dentro/fora, e nada é declarado — nunca se inventa uma violação.
+ */
+export type OutOfTerritoryWrites = { count: number; files: string[]; total: number };
+
+export function outOfTerritoryWritesFromResultJson(
+  resultJson: string | null | undefined,
+): OutOfTerritoryWrites | null {
+  const diff = parseGateDiffEvidence(resultJson);
+  if (!diff || diff.files.length === 0) return null;
+  // Nem um arquivo rotulado = a task não declarou território: ausência é dado.
+  if (!diff.files.some((f) => f.territoryDeclared)) return null;
+  const files = diff.files.filter((f) => !f.inTerritory).map((f) => f.path);
+  return { count: files.length, files, total: diff.total };
+}
+
+/** AGENT-FACING — DO NOT TRANSLATE. A declaração legível, quando há escrita fora. */
+export function describeOutOfTerritoryWrites(w: OutOfTerritoryWrites): string {
+  return (
+    `${w.count} of ${w.total} changed file(s) are OUTSIDE the territory this task declared: ${w.files.join(", ")}. ` +
+    "The tree is shared and the app observes CHANGE, never authorship — this is a declaration of fact (post-hoc diff), not a verdict."
   );
 }
 
@@ -2296,6 +2332,10 @@ export function createMessageBus(
       // `result_json` (nenhuma coluna nova). `null` = não há pergunta; um
       // `blocked` sem isto é RECUSADO na escrita, então não deveria existir.
       blockedQuestion: blockedQuestionFromResultJson(row.result_json),
+      // Item 6 do sticky — a escrita FORA do território declarado, nomeada a
+      // partir do diff que o gate-runner já capturou (nenhuma fonte nova).
+      // `null` = sem território declarado, ou diff ainda não capturado.
+      outOfTerritoryWrites: outOfTerritoryWritesFromResultJson(row.result_json),
       // DESIGN-BACKLOG.md §2.1 "Historico de sprints" — membership vivo.
       sprintId: row.sprint_id ?? null,
       // DESIGN-BACKLOG.md §2.1 "no get_task, por exemplo" — só presentes
