@@ -2240,6 +2240,11 @@ function createWindow() {
     // DESIGN-BACKLOG.md §2.1 "cardReports vive só em memória" — direct
     // store pass-through, mesmo padrão das 3 linhas de tasks acima.
     getReport: (cardId, afterSeq) => store.getReport(cardId, afterSeq),
+    // Task d7fa2d58 — a leitura que NÃO apodrece (`seq`, o id do servidor) e a
+    // ambiguidade de um SLOT (`card_id`), para o `get_report` poder DIZER a que
+    // task o relatório pertence em vez de devolver o de outra em silêncio.
+    getReportBySeq: (seq) => store.getReportBySeq(seq),
+    listTaskIdsForCard: (cardId) => store.listTaskIdsForCard(cardId),
     // Fase 2, peça 4 — um relatório novo pode fazer a task PROPOR conclusão
     // (barra de "aprovado") sem que `status` mude nenhum bit — só gravar
     // (`store.upsertReport`, intocado) não bastava, o board aberto

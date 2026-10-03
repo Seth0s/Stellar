@@ -3098,6 +3098,18 @@ export function openStore(userDataDir: string) {
   const getReportAfterStmt = db.prepare(
     "SELECT card_id, seq, report_json, verdict, role, channel, updated_at FROM reports WHERE card_id = ? AND seq > ? ORDER BY seq ASC LIMIT 1",
   );
+  // Task d7fa2d58 — o identificador NÃO-REUSÁVEL. `seq` é do SERVIDOR, global e
+  // monotônica: aponta UMA linha para sempre, enquanto `card_id` é SLOT (92 ids
+  // já reusados no banco vivo, um deles em 54 tasks). É esta a leitura que não
+  // apodrece; a de card_id continua existindo, mas passa a DIZER a que tasks
+  // aquele slot pertenceu (ver `listTaskIdsForCard`).
+  const getReportBySeqStmt = db.prepare(
+    "SELECT card_id, seq, report_json, verdict, role, channel, updated_at FROM reports WHERE seq = ?",
+  );
+  // As participações de um SLOT — a ambiguidade, medida e dita. Um card_id em
+  // >1 task significa que um ponteiro por card_id resolve para o relatório de
+  // OUTRA task; quem lê precisa ver esse conjunto para poder conferir.
+  const listTaskIdsForCardStmt = db.prepare("SELECT DISTINCT task_id FROM task_cards WHERE card_id = ? ORDER BY task_id ASC");
   // Append-only — INSERT puro. O nome `upsertReport` permanece porque é o
   // choke point já wired em message-bus/index; a semântica de conflito
   // (slot) foi a causa do bug.
@@ -3726,6 +3738,26 @@ export function openStore(userDataDir: string) {
         }),
       };
     },
+    /** Task d7fa2d58 — leitura EXATA por `seq` (o id do servidor). Não resolve
+     * por slot, não recicla, não devolve "outra coisa": ou é a linha daquele
+     * seq, ou `undefined`. Mesma decoração de autoria do `getReport`. */
+    getReportBySeq: (seq: number): ReportRow | undefined => {
+      const row = getReportBySeqStmt.get(seq) as ReportRow | undefined;
+      if (!row) return undefined;
+      const trace = getCardTraceStmt.get(row.card_id) as CardTraceRow | undefined;
+      return {
+        ...row,
+        authorship: deriveReportAuthorship({
+          cardId: row.card_id,
+          reportUpdatedAt: row.updated_at,
+          cardClosedAt: trace?.closed_at ?? null,
+        }),
+      };
+    },
+    /** Os task_id em que este `card_id` já participou. `[]` = nunca vinculado;
+     * `>1` = o slot foi REUSADO, e um ponteiro por card_id é ambíguo. */
+    listTaskIdsForCard: (cardId: string): string[] =>
+      (listTaskIdsForCardStmt.all(cardId) as { task_id: string }[]).map((r) => r.task_id),
     upsertReport: (row: ReportRow) => {
       // `authorship` é LEITURA (derivada em `getReport`), nunca coluna: tirá-lo
       // daqui garante que uma linha vinda de volta do `getReport` não tente
