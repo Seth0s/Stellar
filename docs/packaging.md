@@ -200,3 +200,47 @@ alteração"):
 
 Qualquer um destes exige nota de release explícita — e, uma vez que haja
 usuários reais, script ou instruções de migração.
+
+---
+
+## 8. Buildar de árvore compartilhada suja — o que acontece, e a receita (2026-10-01)
+
+**Defeito medido (2026-10-01):** `npm run package:rpm` morreu dentro do
+`electron-vite build` com erro de **sintaxe JSX** em
+`src/renderer/src/App.tsx:4040` — um comentário `{/* … */}` na **lista de
+atributos** de um elemento. Em posição de atributo o `{` é lido como *spread*,
+e o esbuild responde `Expected "..." but found "}"` (o `tsc`, para o mesmo
+defeito, diz `error TS1005: '...' expected.`). **Não era o `electron-builder`
+nem o `fpm`** — nenhum dos dois chegou a rodar: o `&&` parou antes. A causa foi
+edição **em voo de outro card** na árvore compartilhada — o arquivo estava pela
+metade no instante do build.
+
+Esta árvore é compartilhada por vários agentes ao mesmo tempo (ver `AGENTS.md`
+§3). Um empacotamento lê o que estiver **no disco naquele instante**, não o
+HEAD — então pode pegar a metade de um card que ainda está escrevendo.
+
+**Endurecido:** o caminho de empacotamento agora roda o **mesmo gate de tipos
+do CI** (`npm run check:types` = `npx tsc --noEmit`) **antes** do relay e do
+`electron-vite build`, nos hooks `prepackage` e
+`prepackage:{rpm,linux,mac,win}`. Um arquivo pela metade que não parseia falha
+de imediato com `arquivo(linha,coluna): error TS1005: ...` — sem `cargo`, sem
+`electron-builder`, sem `fpm`, e sem a mensagem se perder no meio do log. Não
+entra dependência nova: é o `tsc` que o `verify:ci` já usava (agora com uma
+única definição, `check:types`).
+
+**A receita certa pra empacotar sem pegar a edição alheia pela metade:**
+
+1. **Worktree isolado no HEAD (preferido).** Builda o commit, não o disco
+   sujo: `git worktree add /tmp/stellar-pkg HEAD`, rode o `npm run package:*`
+   lá dentro e remova depois (`git worktree remove /tmp/stellar-pkg`). O
+   worktree precisa de dependências — ou `npm ci` nele, ou um symlink do
+   `node_modules` do checkout principal enquanto durar o build (`ln -s
+   <checkout>/node_modules /tmp/stellar-pkg/node_modules`). Nunca commite nem
+   rode comando destrutivo na árvore compartilhada.
+2. **Ou confirme a árvore antes.** `git status` limpo **e** `npx tsc --noEmit`
+   limpo (o gate de empacotamento agora faz a segunda parte sozinho). Combinado
+   com outros cards vivos, "limpo agora" não garante "limpo no segundo
+   seguinte" — é por isso que o worktree (item 1) é o caminho forte.
+
+Nada disso autoriza "limpar" o que é de outro card: nesta árvore não se roda
+`reset`/`checkout`/`restore`/`stash`/`clean` (`AGENTS.md` §3).
