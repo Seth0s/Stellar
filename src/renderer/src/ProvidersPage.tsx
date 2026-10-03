@@ -4,6 +4,7 @@ import { toast } from "./useToast";
 import { buildProviderGroups } from "./provider-groups";
 import { useAvailableAgentProviders } from "./useAgentAvailability";
 import { refreshProviderClassification, useProviderClassification } from "./useProviderClassification";
+import { ProviderIcon } from "./provider-icons";
 import type { ProvidersPageRow, ProvidersPageView } from "../../preload/index";
 
 /**
@@ -316,6 +317,7 @@ export function ProvidersPage() {
                 data-provider-id={option.id}
               >
                 <div className="providers-row-main">
+                  <ProviderIcon id={option.id} size={16} />
                   <span className="providers-row-name">{option.label}</span>
                   <span className="providers-row-meta">
                     <code>{option.id}</code>
@@ -350,6 +352,7 @@ export function ProvidersPage() {
             view.rows.map((row) => (
               <div className="providers-row" key={row.id} data-role="providers-row" data-provider-id={row.id}>
                 <div className="providers-row-main">
+                  <ProviderIcon id={row.id} size={16} />
                   <span className="providers-row-name">{row.label}</span>
                   <span className="providers-row-meta">
                     <code>{row.binaryNames[0]}</code>

@@ -1,25 +1,16 @@
 import { t, type MessageKey } from "../../shared/i18n";
-import { Icon, type IconName } from "./icons";
 import { useProviderClassification } from "./useProviderClassification";
 import type { ProviderGroups, ProviderOption } from "./provider-groups";
-
-const PROVIDER_ICON: Record<string, IconName> = {
-  bash: "providerBash",
-  claude: "providerClaude",
-  codex: "providerCodex",
-  cursor: "providerCursor",
-  antigravity: "providerAntigravity",
-  opencode: "providerOpencode",
-};
+import { ProviderIcon } from "./provider-icons";
 
 /**
  * DESIGN-BACKLOG.md item 12, achado 5 — the terminal-creation popover's
  * native `<select>` (bash/claude/codex/cursor as a plain text list)
  * becomes icon buttons, one per provider, generic enough to reuse
  * anywhere else in the app that needs to pick from this same provider
- * set. Falls back to a bare terminal glyph for any provider not in
- * `PROVIDER_ICON` — a provider id is a plain `string`, not a fixed
- * union, so a new provider still renders something instead of crashing.
+ * set. O ícone vem de `ProviderIcon` (task b3560898): um desenho PRÓPRIO por
+ * provider, na cor do token `--accent-<id>`, e um id SEM desenho conhecido cai
+ * no glifo GENÉRICO em `--muted` — a lista nunca fica sem ícone.
  *
  * NATIVO × GENÉRICO (2026-09-20, relato do dono): a lista era UMA só, com os
  * CLIs embutidos e os que o usuário declarou indistinguíveis. Os grupos vêm
@@ -96,7 +87,7 @@ export function ProviderPicker({
                     title={title}
                     onClick={() => onChange(option.id)}
                   >
-                    <Icon name={PROVIDER_ICON[option.id] ?? "providerBash"} size={18} />
+                    <ProviderIcon id={option.id} size={18} />
                     <span>{option.label}</span>
                   </button>
                 );

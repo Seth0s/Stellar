@@ -364,6 +364,16 @@
      cores acima. */
   --accent-antigravity: #4f7fc9;
   --accent-antigravity-dark: #0b1626;
+  /* Ícones de provider (task b3560898): `opencode` é NATIVO e, como os
+     genéricos `cline`/`commandcode`, não tinha acento nenhum — os três caíam
+     no cinza do bash e ficavam indistinguíveis de relance. Cores declaradas
+     aqui, na MESMA família `--accent-<id>` que o card e o ícone já consomem;
+     nenhuma reusa um papel de STATUS (`--good`/`--warn`/`--danger` seguem
+     sendo só status). Tema claro/escuro troca o VALOR, não o nome — os ícones
+     leem o token, então seguem o tema sem hex nenhum fora daqui. */
+  --accent-opencode: #b579d6;
+  --accent-cline: #2fb6a8;
+  --accent-commandcode: #e56aa6;
   --accent-files: var(--violet);
   --accent-changes: var(--warn);
   --accent-browser: var(--foam);
