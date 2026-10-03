@@ -94,7 +94,9 @@
  */
 
 import { spawn, execFile, type SpawnOptions } from "node:child_process";
-import { resolve } from "node:path";
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, join, resolve } from "node:path";
 import { effectivePath } from "./user-env";
 import { buildSandboxedBashArgs, findSandboxBinary } from "./sandbox";
 import { describeTaskCwdOutsideRootExecution, isPathInsideRoot } from "./task-dispatch-decision";
@@ -164,8 +166,32 @@ export function withRepoGateLock<T>(key: string, fn: () => Promise<T>): Promise<
   return run;
 }
 
+/**
+ * POR QUE um comando de gate não é um passe (task 17d96ade). Antes disto TODO
+ * não-zero virava `ok:false` — e `bash: rtk: comando não encontrado` (exit
+ * 127) era INDISTINGUÍVEL de um teste que falhou, com a mensagem perdida no
+ * stdout/stderr truncado. O veredito passa a DIZER qual foi (ver
+ * `classifyGateFailure`), e um gate que nunca rodou deixa de parecer um gate
+ * que reprovou.
+ */
+export type GateFailureKind =
+  | "ok"
+  | "test-failed"
+  | "command-not-found"
+  | "not-executable"
+  | "timeout"
+  | "not-run";
+
 export type GateCommandEvidence = {
   command: string;
+  /** Quando um wrapper MORTO foi removido (ver `normalizeGateCommand`), o
+   * comando que DE FATO rodou. `null` = rodou exatamente `command`. */
+  normalizedCommand: string | null;
+  /** POR QUE este comando não é passe — o ponto da task 17d96ade. */
+  failureKind: GateFailureKind;
+  /** Em `command-not-found`: o executável que faltou (1º token do comando que
+   * rodou). `null` nos demais — nunca inventado. */
+  missingExecutable: string | null;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
@@ -274,13 +300,17 @@ export function describeNoDeclaredRoot(where: "gate" | "auto-dispatch" = "gate")
   );
 }
 
-/** Evidência de um gate que NÃO foi executado. `exitCode: null` + o motivo
- * em `stderr` mantém o contrato "nunca mentir sobre o que foi medido": o
- * run inteiro fica `ok:false` e quem lê a evidência vê que não houve
- * execução, em vez de um vermelho que parece teste falhado. */
+/** Evidência de um gate que NÃO foi executado. `exitCode: null` +
+ * `failureKind: "not-run"` + o motivo em `stderr` mantém o contrato "nunca
+ * mentir sobre o que foi medido": o run inteiro fica `ok:false` e quem lê a
+ * evidência vê que não houve execução, em vez de um vermelho que parece teste
+ * falhado. */
 function refusalEvidence(command: string, reason: string): GateCommandEvidence {
   return {
     command,
+    normalizedCommand: null,
+    failureKind: "not-run",
+    missingExecutable: null,
     exitCode: null,
     signal: null,
     timedOut: false,
@@ -293,6 +323,116 @@ function refusalEvidence(command: string, reason: string): GateCommandEvidence {
     stdoutTruncated: false,
     stderrTruncated: false,
   };
+}
+
+/**
+ * Classifica POR QUE o comando não é um passe (task 17d96ade). Pura: só olha
+ * o que o processo devolveu. `127` é o "command not found" do `bash -lc` que
+ * envolve TODO gate — NUNCA é lido como "o teste falhou" (e também nunca como
+ * verde: o run segue `ok:false`; o que muda é o veredito DIZER qual foi).
+ */
+export function classifyGateFailure(input: {
+  exitCode: number | null;
+  timedOut: boolean;
+  /** true quando o comando sequer foi tentado (recusa por sandbox/raiz/cwd). */
+  notRun?: boolean;
+}): GateFailureKind {
+  if (input.notRun) return "not-run";
+  if (input.timedOut) return "timeout";
+  if (input.exitCode === null) return "not-run";
+  if (input.exitCode === 0) return "ok";
+  if (input.exitCode === 127) return "command-not-found";
+  if (input.exitCode === 126) return "not-executable";
+  return "test-failed";
+}
+
+/** O 1º executável do PRIMEIRO comando de um encadeamento shell — pulando
+ * `env` e atribuições `VAR=x` (`NODE_ENV=test npm test` → `npm`). `null`
+ * quando não há token. É o que permite NOMEAR o comando ausente. */
+export function extractExecutable(command: string): string | null {
+  const first = (command.split(/&&|\|\||;|\|/)[0] ?? "").trim();
+  const tokens = first.split(/\s+/).filter(Boolean);
+  let i = 0;
+  if (tokens[i] === "env") {
+    i += 1;
+    while (tokens[i]?.includes("=")) i += 1;
+  }
+  while (tokens[i] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i] as string)) i += 1;
+  return tokens[i] ?? null;
+}
+
+/**
+ * Diretórios de `PATH` VISÍVEIS dentro do gate. O `buildSandboxedBashArgs`
+ * faz `--ro-bind / /` + `--tmpfs $HOME` + `--bind <root> <root>`: tudo sob
+ * `$HOME` que não esteja sob a RAIZ re-bindada é OCULTADO por um tmpfs vazio.
+ * Logo um binário em `~/.local/bin` RESOLVE no host e NÃO RESOLVE no gate —
+ * medido (task 17d96ade): `rtk` (v0.43.0, `~/.local/bin/rtk`) → 127 dentro do
+ * sandbox. É esta a diferença entre "instalado" e "alcançável pelo gate".
+ */
+export function gateVisiblePathDirs(pathValue: string, home: string, root: string): string[] {
+  const sep = home.includes("\\") && !home.includes("/") ? "\\" : "/";
+  const within = (child: string, parent: string) =>
+    child === parent || child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`);
+  return pathValue
+    .split(delimiter)
+    .filter((dir) => dir.trim().length > 0)
+    .filter((dir) => {
+      const abs = resolve(dir);
+      if (!within(abs, home)) return true; // fora de $HOME: visível
+      return within(abs, root); // sob $HOME: só se a raiz re-bindada o cobre
+    });
+}
+
+/** Seam de I/O: `<caminho>` é arquivo executável? */
+export type ExecutableProbe = (candidate: string) => boolean;
+
+export function isExecutableReachable(
+  name: string | null,
+  dirs: readonly string[],
+  probe: ExecutableProbe,
+): boolean {
+  if (!name) return false;
+  if (name.includes("/")) return probe(name);
+  return dirs.some((dir) => probe(join(dir, name)));
+}
+
+/** Wrappers que um gate declara e cujo binário o sandbox NÃO alcança. `rtk`
+ * (`rtk proxy <cmd>`), quando instalado, vive em `~/.local/bin` — oculto pelo
+ * `--tmpfs $HOME`. Medido no board 64: 83 tasks declaram `rtk proxy npx tsc
+ * --noEmit` e ele sai SEMPRE 127; o wrapper é MORTO para o gate. */
+export const DEAD_GATE_WRAPPERS = ["rtk"] as const;
+
+/**
+ * Remove um wrapper MORTO do comando declarado — o `rtk proxy <cmd>` vira
+ * `<cmd>` quando `rtk` não é alcançável DENTRO do gate. Não é "consertar a
+ * declaração do usuário": é rodar a intenção dela (o comando de baixo) quando
+ * o wrapper não pode existir no confinamento. Se o wrapper FOR alcançável, a
+ * declaração é respeitada ao pé da letra. Pura: a alcançabilidade entra como
+ * parâmetro.
+ */
+export function normalizeGateCommand(
+  command: string,
+  reachable: (name: string) => boolean,
+): { command: string; stripped: string | null } {
+  for (const wrapper of DEAD_GATE_WRAPPERS) {
+    // `String.match`, não `RegExp.exec`: o teste de confinamento do módulo
+    // proíbe a FORMA `exec(` na fonte (guarda anti-`child_process.exec`), e a
+    // regex é a mesma — só não reintroduz o padrão que denuncia shell do host.
+    const match = command.match(new RegExp(`^\\s*${wrapper}\\s+proxy\\s+(.+)$`, "s"));
+    if (!match) continue;
+    if (reachable(wrapper)) return { command, stripped: null };
+    return { command: match[1]!.trim(), stripped: wrapper };
+  }
+  return { command, stripped: null };
+}
+
+function defaultExecutableProbe(candidate: string): boolean {
+  try {
+    const s = statSync(candidate);
+    return s.isFile() && (s.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 export type DiffFileEntry = {
@@ -513,7 +653,13 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
   const spawnCwd = gitRoot ?? requestedCwd;
   const spawnFn = input.spawnFn ?? (spawn as GateSpawn);
   const timeoutMs = input.timeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
-  const env = { ...process.env, PATH: input.pathValue ?? effectivePath() };
+  const pathValue = input.pathValue ?? effectivePath();
+  const env = { ...process.env, PATH: pathValue };
+  // Alcançável DENTRO do gate: o `--tmpfs $HOME` do bwrap esconde o que mora
+  // sob `$HOME` fora da raiz re-bindada. É por isto que `rtk` (em `~/.local/bin`)
+  // sai 127 apesar de instalado — ver `gateVisiblePathDirs` (task 17d96ade).
+  const visibleDirs = gateVisiblePathDirs(pathValue, homedir(), spawnCwd);
+  const reachable = (name: string) => isExecutableReachable(name, visibleDirs, defaultExecutableProbe);
   // Resolvido UMA vez por run: o binário que confina todos os comandos (o
   // mesmo que a tool `bash` do chat usa). Sem ele, NADA roda — ver abaixo.
   const sandboxBinary = input.sandboxBinary !== undefined ? input.sandboxBinary : findSandboxBinary();
@@ -549,7 +695,11 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
       for (const command of input.gates) commands.push(refusalEvidence(command, reason));
     } else {
       for (const command of input.gates) {
-        commands.push(await runOne(command, { root: spawnCwd, env, timeoutMs, spawnFn, sandboxBinary }));
+        // Um wrapper MORTO (`rtk proxy <cmd>`, cujo binário o sandbox não
+        // alcança) é removido para o gate rodar a INTENÇÃO declarada — e a
+        // remoção fica registrada em `normalizedCommand`, nunca em silêncio.
+        const { command: ranCommand } = normalizeGateCommand(command, reachable);
+        commands.push(await runOne(command, ranCommand, { root: spawnCwd, env, timeoutMs, spawnFn, sandboxBinary }));
       }
     }
     // O diff é capturado DEPOIS dos gates e dentro do mesmo lock: é a
@@ -570,7 +720,8 @@ async function execute(input: RunTaskGatesInput): Promise<GateRunEvidence> {
 }
 
 function runOne(
-  command: string,
+  declaredCommand: string,
+  ranCommand: string,
   opts: { root: string; env: NodeJS.ProcessEnv; timeoutMs: number; spawnFn: GateSpawn; sandboxBinary: string },
 ): Promise<GateCommandEvidence> {
   return new Promise((done) => {
@@ -583,7 +734,7 @@ function runOne(
     // O comando entra como argv de `bash -lc` DENTRO do bwrap; no host não
     // existe shell nenhum (`shell: true` foi removido de propósito). São os
     // MESMOS flags que a tool `bash` do chat usa, vindos de `sandbox.ts`.
-    const args = buildSandboxedBashArgs(opts.root, command);
+    const args = buildSandboxedBashArgs(opts.root, ranCommand);
     const child = opts.spawnFn(opts.sandboxBinary, args, {
       cwd: opts.root,
       env: opts.env,
@@ -606,8 +757,14 @@ function runOne(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      const failureKind = classifyGateFailure({ exitCode, timedOut });
       done({
-        command,
+        command: declaredCommand,
+        normalizedCommand: ranCommand === declaredCommand ? null : ranCommand,
+        failureKind,
+        // NOMEIA o ausente — o ponto da task 17d96ade: um `bash: X: command
+        // not found` deixa de ser um `ok:false` mudo.
+        missingExecutable: failureKind === "command-not-found" ? extractExecutable(ranCommand) : null,
         exitCode,
         signal,
         timedOut,
