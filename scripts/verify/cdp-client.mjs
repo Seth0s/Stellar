@@ -389,7 +389,62 @@ process.on("exit", () => {
  * URL real que um card navegue (google.com, fixture http://127.0.0.1:PORT/)
  * jamais teria. Prefere esse match; cai pro `.find` antigo (primeiro
  * `page` da lista) só se nada bater, por segurança. */
-export async function connectPage(cdpPort) {
+/**
+ * GATE COMPARTILHADO — O DOCUMENTO É O APP? (task 60478803)
+ *
+ * MEDIDO 2026-09-23 (task 27e13021): uma instância isolada carregou
+ * `chrome-error://chromewebdata/` (o `out/` COMPARTILHADO foi reconstruído por
+ * OUTRO card enquanto ela carregava: `unreachableUrl file:///.../out/renderer/index.html`)
+ * e TODAS as checagens main-side (store, PTYs, sockets) passaram do mesmo
+ * jeito — o smoke passou VAZIO, medindo a página de erro do Chromium. Não havia
+ * uma linha em `scripts/verify/*.mjs` afirmando que o documento era o app.
+ *
+ * Aqui, num lugar só (e por isso nenhum smoke precisa de edição): ESPERA com
+ * teto até o documento ser o app — protocolo `file:`, sem `chrome-error`, e os
+ * hooks do renderer presentes — e ABORTA NOMEANDO a URL observada. Quem chama
+ * `connectPage`/`bootIntoFreshSession` já recebe o gate.
+ *
+ * `AGENT_CANVAS_APP_DOC_TIMEOUT_MS` ajusta o teto; o default (15 s) é o mesmo
+ * que o perf-idle-cards já usava à mão para este mesmo gate.
+ */
+const APP_DOC_TIMEOUT_MS = Number(process.env.AGENT_CANVAS_APP_DOC_TIMEOUT_MS) || 15_000;
+
+export async function assertAppDocument(evalJs, { timeoutMs = APP_DOC_TIMEOUT_MS } = {}) {
+  const started = Date.now();
+  let last = null;
+  for (;;) {
+    try {
+      last = JSON.parse(
+        await evalJs(`JSON.stringify({
+          href: location.href,
+          protocol: location.protocol,
+          erro: location.href.startsWith("chrome-error://"),
+          hooks: typeof window.__getTerminalDims === "function" && typeof window.store === "object",
+        })`),
+      );
+    } catch (err) {
+      // O documento pode estar no meio de uma navegação: a leitura falha, e
+      // isso é "ainda não sei" — nunca um veredito. Segue esperando até o teto.
+      last = { href: `(leitura falhou: ${String(err).slice(0, 80)})`, protocol: "?", erro: false, hooks: false };
+    }
+    if (!last.erro && last.protocol === "file:" && last.hooks) return;
+    if (Date.now() - started >= timeoutMs) break;
+    await delay(250);
+  }
+  const problemas = [
+    last?.erro ? "carregou a página de erro do Chromium" : null,
+    last?.protocol !== "file:" ? `protocolo "${last?.protocol}" (esperado file:)` : null,
+    last?.hooks === false ? "hooks do renderer ausentes (`window.store`/`__getTerminalDims`)" : null,
+  ].filter(Boolean);
+  throw new Error(
+    `o documento NÃO é o app — o smoke mediria a página errada e passaria vazio. ` +
+      `URL observada: ${last?.href ?? "(sem leitura)"}; ${problemas.join("; ")}. ` +
+      `Causa comum: o \`out/\` COMPARTILHADO foi reconstruído no meio do load (ou o renderer não montou). ` +
+      `Enquanto o gate existe, este smoke ABORTA em vez de medir outra coisa.`,
+  );
+}
+
+export async function connectPageRaw(cdpPort) {
   const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json();
   const target = list.find((t) => t.type === "page" && t.url.endsWith("renderer/index.html")) ?? list.find((t) => t.type === "page");
   if (!target) throw new Error("no page target found");
@@ -444,6 +499,16 @@ export async function connectPage(cdpPort) {
   }
 
   return { ws, send, evalJs, click, onEvent, close: () => ws.close() };
+}
+
+/** Conexão à página COM o gate compartilhado (task 60478803): quem chama
+ * `connectPage` nunca mede a página de erro do Chromium por acidente. Quem
+ * precisa conectar SEM o gate (o próprio `startApp`, que o roda explicitamente
+ * e com retry) usa `connectPageRaw`. */
+export async function connectPage(cdpPort) {
+  const page = await connectPageRaw(cdpPort);
+  await assertAppDocument(page.evalJs);
+  return page;
 }
 
 /** DESIGN-BACKLOG.md item 8 — the app now always boots to the Home screen
