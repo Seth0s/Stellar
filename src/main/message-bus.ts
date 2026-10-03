@@ -1,7 +1,7 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { unlinkSync, statSync, linkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { TaskCardRow, TaskRow, ConnectorRow, ReportRow, ReportIngressChannel, SpawnRow } from "./store";
 import { decideReportNotifyTarget, pickLatestDirectiveSender } from "./report-notify-routing";
@@ -462,6 +462,83 @@ export type SpawnCardResult = { ok: true; cardId: string } | { ok: false; error:
  * não era lido). Exportado pra teste e pra Fila ler o motivo sem copiar. */
 export const TASK_BOARD_UNDECLARED_REASON =
   "board não resolvido: sem boardId, sem cardId e sem um card chamador em board (requesterId), a task nasceria fora da Fila e não existe delete_task — passe boardId, ou um cardId/requesterId cujo board exista";
+
+/**
+ * O QUE MUDOU NO REPO DESDE A ÚLTIMA VEZ QUE ESTE CARD RODOU (item 11 do
+ * sticky). REUSAR um card é bom — ele volta com o contexto adquirido — mas
+ * volta com o MAPA MENTAL de quando saiu. Caso real: um card decidiu não tocar
+ * uma função "pra não conflitar com uma branch" que JÁ tinha entrado em main —
+ * decisão errada por informação DESATUALIZADA.
+ *
+ * O dado é barato e o app JÁ o tem: o `cwd` do card (`listCards`) e o instante
+ * da última atividade (`getCardLastActivityAt`, pty-registry). Aqui só se
+ * FORMATA — a leitura do git é a MESMA observação pós-hoc que o `gate-runner`
+ * já faz; nenhuma fonte nova, nenhuma interceptação.
+ *
+ * AUSÊNCIA É AUSÊNCIA: card que nunca rodou (sem `lastActivityAt`), `cwd` que
+ * não é repo, git indisponível ou zero commits => SEM bloco. Nunca um cabeçalho
+ * vazio prometendo commits que não existem.
+ *
+ * TETO HONESTO: `CHANGED_SINCE_CAP` linhas; o corte é DITO. O git devolve no
+ * máximo `cap + 1` linhas, então "há mais" é fato observado, não estimativa.
+ */
+export const CHANGED_SINCE_CAP = 20;
+
+/** Formata o bloco a partir do texto cru do `git log --oneline`. PURO. */
+export function formatChangedSinceBrief(
+  logText: string | null | undefined,
+  sinceMs: number,
+  cap: number = CHANGED_SINCE_CAP,
+): string | undefined {
+  const lines = String(logText ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return undefined;
+  const shown = lines.slice(0, cap);
+  const more = lines.length > shown.length ? `\n… (more commits landed since then — showing the ${shown.length} most recent)` : "";
+  return (
+    `[what changed in this repository since this card last ran (${new Date(sinceMs).toISOString()}) — ` +
+    `the tree may ALREADY contain work you were avoiding; check before deciding NOT to touch something]\n` +
+    shown.join("\n") +
+    more
+  );
+}
+
+/** `git log --since=<ISO> --oneline` no `cwd` do card, com teto e timeout
+ * curtos. Best-effort: QUALQUER falha (sem repo, sem git, timeout) => `null` —
+ * o `send` nunca quebra nem espera mais que `timeoutMs` por causa disto. */
+function defaultGitLogSince(cwd: string, sinceMs: number, cap: number = CHANGED_SINCE_CAP): Promise<string | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v: string | null) => {
+      if (done) return;
+      done = true;
+      resolve(v);
+    };
+    let child;
+    try {
+      child = spawn("git", ["log", `--since=${new Date(sinceMs).toISOString()}`, "--oneline", "-n", String(cap + 1)], {
+        cwd,
+      });
+    } catch {
+      finish(null);
+      return;
+    }
+    let out = "";
+    child.stdout.on("data", (d: Buffer) => (out += d.toString()));
+    child.on("error", () => finish(null));
+    child.on("close", (code: number | null) => finish(code === 0 ? out : null));
+    setTimeout(() => {
+      try {
+        child?.kill("SIGKILL");
+      } catch {
+        /* já morreu */
+      }
+      finish(null);
+    }, 1500);
+  });
+}
 
 export type BusRequest =
   | { cmd: "list" }
@@ -1025,6 +1102,11 @@ export function createMessageBus(
      * PTY entry (never spawned/exited/error), matching `isCardAlive`'s
      * own "no entry" convention. */
     getCardLastActivityAt: (cardId: string) => number | null;
+    /** Item 11 do sticky — o que mudou no repo do card desde `sinceMs`
+     * (`git log --since --oneline`, texto cru), ou `null` quando não há repo /
+     * git / dados. OPCIONAL de propósito: o default é o git real
+     * (`defaultGitLogSince`, aqui no módulo) e um teste injeta o seu. */
+    getChangesSince?: (cwd: string, sinceMs: number) => Promise<string | null>;
     /**
      * O FATO DE TURNO (task 4245c6f5) — quando o card declarou `turn_complete`,
      * ou `null` se nunca declarou. `null` é resposta: é o que faz
@@ -3337,12 +3419,34 @@ export function createMessageBus(
       // FORA — ele é o fato que o app atesta, o corpo é o que o remetente
       // escreveu. Provider que não marca (bash inclusive, onde o texto é um
       // comando) recebe byte a byte o de antes. Ver pasted-content-decision.ts.
-      const text = formatCardAuthoredDelivery({
+      // ITEM 11 — o card VOLTA com o mapa mental de quando saiu. Reusar é bom,
+      // mas ele não sabe o que mudou embaixo dele; injeta o que o repo ganhou
+      // desde a última execução. Só para alvo AGENTE (bash recebe COMANDO), só
+      // quando o card JÁ rodou (`lastActivityAt !== null`) e só quando há
+      // `cwd` — qualquer ausência => SEM bloco (nenhuma promessa vazia). Um
+      // card ativo tem `lastActivityAt` de segundos atrás, então o git devolve
+      // zero commits e nada é injetado: o bloco só aparece em RE-ENGAJAMENTO.
+      let changedSinceBrief: string | undefined;
+      if (targetProvider !== "bash") {
+        const lastActivityAt = callbacks.getCardLastActivityAt(target);
+        const targetCwd = callbacks.listCards().find((c) => c.id === target)?.cwd?.trim();
+        // `typeof === "number"` (e não `!== null`): um duplo que devolva
+        // `undefined` NÃO pode virar `new Date(undefined)` => Invalid Date.
+        if (typeof lastActivityAt === "number" && targetCwd) {
+          const getChanges = callbacks.getChangesSince ?? defaultGitLogSince;
+          const log = await getChanges(targetCwd, lastActivityAt).catch(() => null);
+          changedSinceBrief = formatChangedSinceBrief(log, lastActivityAt);
+        }
+      }
+      const authored = formatCardAuthoredDelivery({
         senderLabel,
         body: req.text ?? "",
         providerId: targetProvider,
         senderIsTaskDirection,
       });
+      // Contexto PRIMEIRO, depois quem fala o quê: o bloco é o que o card
+      // precisa saber antes de agir sobre a mensagem.
+      const text = changedSinceBrief ? `${changedSinceBrief}\n\n${authored}` : authored;
       // Regra geral de auto-conector (2026-09-02, generalizada a QUALQUER
       // interação entre cards via MCP — ver `AUTO_CONNECT_CMDS` no fim
       // deste arquivo, chamado de dentro do `handleRequest` wrapper) —
