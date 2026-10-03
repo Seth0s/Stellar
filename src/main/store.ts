@@ -747,7 +747,86 @@ export type ReportRow = {
   role?: string | null;
   channel?: ReportIngressChannel | null;
   updated_at: number;
+  /** Task f2559b9b — o que se pode concluir sobre QUEM escreveu esta linha.
+   * Anda AO LADO da linha, nunca a substitui: nada é apagado nem
+   * re-atribuído. Ver `deriveReportAuthorship`. */
+  authorship?: ReportAuthorship;
 };
+
+/**
+ * DE QUEM É UM REPORT — a regra de LEITURA (task f2559b9b).
+ *
+ * O caso medido: 22 reports (seq 666..687) ficaram gravados sob o card
+ * 97924181, um card `cline` que o dono abriu e fechou em 2026-09-22 — mas
+ * foram escritos por PELO MENOS 4 cards diferentes (tasks cujos principais são
+ * 97924186, 97924195, 97924182, 97924141) através do hub `cline`
+ * compartilhado. Apresentá-los como "do card 97924181" é uma atribuição falsa;
+ * apagá-los ou re-atribuí-los destruiria a única prova do defeito.
+ *
+ * DOIS MARCADORES, e por que cada um:
+ *  - O GERAL, de dado: `reports.updated_at > card_traces.closed_at` para o
+ *    MESMO `card_id` = a linha foi escrita DEPOIS do card fechar. Medido nesta
+ *    máquina (2026-10-03, cópia do banco): alcança 295 de 977 reports (30%) e
+ *    hoje dispara **0 vezes** — é a regra certa com cobertura vazia, e é por
+ *    isso que ela sozinha não basta: não se afirma um marcador "sólido" sem
+ *    número.
+ *  - A LISTA DATADA, declarada, para onde o marcador NÃO alcança: 97924181
+ *    fechou ANTES do `card_traces` existir (0 traces hoje), então o marcador
+ *    não o pega. A entrada carrega a data e o motivo medidos.
+ *
+ * O que NÃO é marcador: `card_id NOT IN cards`. Medido: 573 de 977 reports têm
+ * isso (58%) porque fechar um card APAGA a linha dele — é história normal, não
+ * fantasma. Usar aquilo marcaria mais da metade do arquivo.
+ */
+export type ReportAuthorshipRule =
+  /** O card ainda era vivo (ou não há evidência do contrário): a linha é dele. */
+  | "attributable"
+  /** Escrita DEPOIS de o card fechar (`card_traces.closed_at`). */
+  | "written_after_card_closed"
+  /** Id fantasma CONHECIDO, declarado e datado — onde o marcador não alcança. */
+  | "known_ghost_card";
+
+export type ReportAuthorship = {
+  authorship: "attributable" | "unattributable";
+  rule: ReportAuthorshipRule;
+  /** O `card_id` sob o qual a linha está — quando `unattributable`, é o fantasma. */
+  ghostCardId: string | null;
+  /** `card_traces.closed_at` do card, quando houve trace. */
+  cardClosedAt: number | null;
+};
+
+/** Id fantasma DECLARADO, com a medição que o sustenta. `since` é o primeiro
+ * `updated_at` observado na janela — a lista é datada de propósito. */
+export type KnownGhostCard = { cardId: string; since: number; note: string };
+
+export const KNOWN_GHOST_CARDS: readonly KnownGhostCard[] = [
+  {
+    cardId: "97924181",
+    since: 1790092391478,
+    note:
+      "medido 2026-09-23 (task 34e27f66, sobre cópia do banco): 22 reports (seq 666..687) gravados sob este card `cline`, " +
+      "aberto e fechado em 2026-09-22, foram escritos por ao menos 4 cards diferentes (principais 97924186, 97924195, 97924182, 97924141) " +
+      "pelo hub `cline` compartilhado; o card fechou ANTES do `card_traces` existir (0 traces), então o marcador geral não o alcança.",
+  },
+];
+
+export function deriveReportAuthorship(input: {
+  cardId: string;
+  reportUpdatedAt: number;
+  /** `card_traces.closed_at` do card, ou `null` quando não há trace. */
+  cardClosedAt?: number | null;
+  knownGhostCards?: readonly KnownGhostCard[];
+}): ReportAuthorship {
+  const cardClosedAt = input.cardClosedAt ?? null;
+  if (cardClosedAt !== null && input.reportUpdatedAt > cardClosedAt) {
+    return { authorship: "unattributable", rule: "written_after_card_closed", ghostCardId: input.cardId, cardClosedAt };
+  }
+  const known = (input.knownGhostCards ?? KNOWN_GHOST_CARDS).find((g) => g.cardId === input.cardId);
+  if (known) {
+    return { authorship: "unattributable", rule: "known_ghost_card", ghostCardId: input.cardId, cardClosedAt };
+  }
+  return { authorship: "attributable", rule: "attributable", ghostCardId: null, cardClosedAt };
+}
 
 // Cap de contagem TOTAL de LINHAS (não "um por card"). Generoso o bastante
 // pra uso normal (KB * 1000 ainda é trivial pro SQLite) e existir só como
@@ -3420,13 +3499,31 @@ export function openStore(userDataDir: string) {
     /** Ator da 1ª transição `kind:'status'` — `human` ⇒ criada pela UI. */
     listFirstActorsForBoard: (boardId: string): { task_id: string; first_actor: TaskActor | null }[] =>
       firstActorsForBoardStmt.all(boardId) as { task_id: string; first_actor: TaskActor | null }[],
-    getReport: (cardId: string, afterSeq?: number): ReportRow | undefined =>
-      (afterSeq === undefined
+    getReport: (cardId: string, afterSeq?: number): ReportRow | undefined => {
+      const row = (afterSeq === undefined
         ? getLatestReportStmt.get(cardId)
-        : getReportAfterStmt.get(cardId, afterSeq)) as ReportRow | undefined,
-    upsertReport: (row: ReportRow) => {
-      upsertReportStmt.run({
+        : getReportAfterStmt.get(cardId, afterSeq)) as ReportRow | undefined;
+      if (!row) return undefined;
+      // Task f2559b9b — a AUTORIA apresentada junto da linha. O marcador geral
+      // é o `card_traces` (mesma chave, PK indexada); onde ele não alcança, a
+      // lista datada decide. Nada é reescrito: a coluna continua como está.
+      const trace = getCardTraceStmt.get(cardId) as CardTraceRow | undefined;
+      return {
         ...row,
+        authorship: deriveReportAuthorship({
+          cardId,
+          reportUpdatedAt: row.updated_at,
+          cardClosedAt: trace?.closed_at ?? null,
+        }),
+      };
+    },
+    upsertReport: (row: ReportRow) => {
+      // `authorship` é LEITURA (derivada em `getReport`), nunca coluna: tirá-lo
+      // daqui garante que uma linha vinda de volta do `getReport` não tente
+      // gravar um campo que a tabela não tem.
+      const { authorship: _readOnlyAuthorship, ...persisted } = row;
+      upsertReportStmt.run({
+        ...persisted,
         verdict: row.verdict ?? null,
         role: row.role ?? null,
         channel: row.channel ?? null,

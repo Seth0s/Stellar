@@ -4709,7 +4709,18 @@ export function createMessageBus(
         ? { report: decodeReportArgument(JSON.parse(storedRow.report_json)), seq: storedRow.seq, verdict: storedRow.verdict ?? null, role: storedRow.role ?? null }
         : undefined;
       if (current) {
-        return { ok: true, report: current.report, seq: current.seq, verdict: current.verdict ?? null, role: current.role ?? null };
+        return {
+          ok: true,
+          report: current.report,
+          seq: current.seq,
+          verdict: current.verdict ?? null,
+          role: current.role ?? null,
+          // Task f2559b9b — DE QUEM É este report. `unattributable` quando a
+          // linha foi escrita depois de o card fechar (marcador `card_traces`)
+          // ou quando está sob um id fantasma conhecido. A linha NÃO é
+          // reescrita nem re-atribuída: isto anda ao lado dela.
+          authorship: storedRow?.authorship ?? null,
+        };
       }
       if (!req.wait) return { ok: false, error: afterSeq === undefined ? "no report yet" : "no report newer than the given sequence yet" };
       const timeoutMs = req.timeoutMs ?? DEFAULT_REPORT_TIMEOUT_MS;
@@ -4731,7 +4742,14 @@ export function createMessageBus(
           afterSeq: threshold,
           resolve: (stored: StoredReport) => {
             clearTimeout(timer);
-            resolve({ ok: true, report: stored.report, seq: stored.seq, verdict: stored.verdict ?? null, role: stored.role ?? null });
+            resolve({
+              ok: true,
+              report: stored.report,
+              seq: stored.seq,
+              verdict: stored.verdict ?? null,
+              role: stored.role ?? null,
+              authorship: callbacks.getReport(target)?.authorship ?? null,
+            });
           },
         };
         const waiters = pendingReportWaiters.get(target) ?? [];
