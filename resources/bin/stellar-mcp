@@ -152,6 +152,23 @@ function fromEnv(name) {
 const mcpUrl = fromEnv("AGENT_CANVAS_MCP_URL");
 const cardId = fromEnv("AGENT_CANVAS_CARD_ID");
 
+// NOME DO PROCESSO por agente (task 817daa3e) — ver docs/PROCESS_NAMING.md.
+// Sem isto o shim aparece no monitor como `node`, indistinguível entre cards.
+// `process.title` mexe no `comm` (TASK_COMM_LEN = 15 chars, truncado pelo SO)
+// E reaproveita o argv0, então o `cmdline` também passa a dizer o provider.
+// A regra vem PRONTA do app (`AGENT_CANVAS_PROC_NAME`, calculada em
+// process-name-decision.ts) e aqui só é APLICADA — uma regra, não duas. Sem a
+// variável (shim rodando fora de um card), NÃO renomeia: um nome genérico é
+// melhor que um inventado.
+const procName = fromEnv("AGENT_CANVAS_PROC_NAME");
+if (procName) {
+  try {
+    process.title = procName;
+  } catch {
+    // plataforma sem `process.title`: segue com o nome do runtime.
+  }
+}
+
 function log(msg) {
   process.stderr.write(`stellar-mcp: ${msg}\n`);
 }

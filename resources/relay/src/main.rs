@@ -43,6 +43,39 @@ fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
+/// Aplica `AGENT_CANVAS_PROC_NAME` ao `comm` deste processo (task 817daa3e).
+///
+/// Linux: `prctl(PR_SET_NAME)` — muda o `comm` (o kernel trunca em
+/// `TASK_COMM_LEN` - 1 = 15 chars) e NAO o `cmdline`; e o `comm` que o monitor
+/// de processos mostra (o `cmdline` continua sendo o caminho deste binario,
+/// que ja e NOSSO). A regra do nome vem PRONTA do app
+/// (`process-name-decision.ts`, injetada por `pty-registry.ts`) e aqui so e
+/// APLICADA — uma regra, nao duas. Sem a variavel, NAO renomeia.
+///
+/// `extern "C"` direto (sem o crate `libc`) mantem o "zero crate no caminho
+/// unix" que o Cargo.toml declara: `prctl` e da libc que o binario ja linka.
+#[cfg(target_os = "linux")]
+fn apply_process_name() {
+    const PR_SET_NAME: i32 = 15;
+    extern "C" {
+        fn prctl(option: i32, arg2: usize, arg3: usize, arg4: usize, arg5: usize) -> i32;
+    }
+    if let Some(name) = env_nonempty("AGENT_CANVAS_PROC_NAME") {
+        if let Ok(cname) = std::ffi::CString::new(name) {
+            unsafe {
+                prctl(PR_SET_NAME, cname.as_ptr() as usize, 0, 0, 0);
+            }
+        }
+    }
+}
+
+/// macOS/Windows: o `comm` E o proprio nome do executavel e nao ha API
+/// portavel para sobrescreve-lo (no macOS `pthread_setname_np` mexe so na
+/// thread; no Windows o nome do processo vem do image file). Degradacao
+/// honesta: o processo continua identificavel pelo binario `stellar-mcp-relay`.
+#[cfg(not(target_os = "linux"))]
+fn apply_process_name() {}
+
 /// Deriva `<tmpdir>/stellar-mcp-relay-<porta>.sock` de
 /// `http://127.0.0.1:<porta>/...`. Mesma regra do `relaySocketPath` (TS) e do
 /// ramo `sh` do shim: so a rota local, porta obrigatoria. `None` = nada a
@@ -63,6 +96,10 @@ fn relay_socket_path() -> Option<PathBuf> {
 }
 
 fn main() -> ExitCode {
+    // Antes de qualquer I/O: o nome e barato e vale para a vida inteira do
+    // processo, inclusive se ele morrer no handshake.
+    apply_process_name();
+
     let path = match relay_socket_path() {
         Some(p) => p,
         None => {

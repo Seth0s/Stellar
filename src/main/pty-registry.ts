@@ -13,6 +13,7 @@ import { decideRearmOnLine, CLAIMED_SESSION_STALE_MS } from "./session-rearm-dec
 import { decideResumeValidity } from "./session-resume-validation";
 import { decideBashCardDiscovery } from "./bash-discovery-decision";
 import { decideCardIdentityEnv } from "./card-spawn-env-decision";
+import { agentProcessName } from "./process-name-decision";
 import {
   renewsHumanInputGateClock,
   initialBracketedPasteModeState,
@@ -933,6 +934,16 @@ export function createPtyRegistry(registryOpts: {
       ...applyEffectiveLocaleEnv(inheritedEnv),
       AGENT_CANVAS_SOCK: registryOpts.sockPath,
       AGENT_CANVAS_CARD_ID: id,
+      // NOME DO PROCESSO por agente (task 817daa3e). O shim/stub é NOSSO mas
+      // herda nome genérico (`node`/`stellar-mcp-rel`) e some numa pilha de
+      // `stellar`/`node-22`/`agy`. `agentProcessName` (regra única, testada em
+      // tests/unit/process-name-decision.test.ts) devolve `st:<provider>` —
+      // o relay Rust aplica via `prctl(PR_SET_NAME)` (mexe no `comm`) e o shim
+      // node via `process.title` (mexe em `comm` E no `cmdline`). Chega aos
+      // dois pela mesma herança que já entrega AGENT_CANVAS_CARD_ID. Ver
+      // docs/PROCESS_NAMING.md para o esquema, o teto de 15 chars e o que NÃO
+      // dá para fazer no CLI de terceiro.
+      AGENT_CANVAS_PROC_NAME: agentProcessName(providerId),
       // DESIGN-BACKLOG.md item 21, ponto 9, achado 1 — fork-bomb guard.
       // `spawnOpts.spawnDepth` is only ever set for an agent-initiated
       // spawn (main/index.ts's onSpawnAgentRequest handler); every human-
